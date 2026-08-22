@@ -515,6 +515,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
             "time2",
             "fixed_scale",
             "distribution_parameter",
+            "penalty_matrix",
         ],
         "predict_survreg": [
             "covariates",
@@ -615,6 +616,9 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
         "log_likelihood",
         "convergence_flag",
         "score_vector",
+        "penalty_matrix",
+        "penalty",
+        "penalized_log_likelihood",
     }
     assert _pyi_class_property_names(stub_path, "SurvregPrediction") == {
         "predictions",

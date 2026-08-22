@@ -424,6 +424,7 @@ pub(crate) fn bootstrap_survreg(
         None,
         None,
         None,
+        None,
     )?;
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
@@ -446,6 +447,7 @@ pub(crate) fn bootstrap_survreg(
                 Some(DEFAULT_MAX_ITER),
                 Some(1e-5),
                 Some(1e-9),
+                None,
                 None,
                 None,
                 None,

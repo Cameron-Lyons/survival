@@ -180,6 +180,10 @@ baselines, optional starting-state mixtures, and conditional start times.
 Formula fits support `tt(...)` time-varying coefficient terms for right-censored
 and counting-process responses, including R's default O'Brien rank transform
 and custom `tt(x, time, riskset, weights)` callables.
+Both `coxph` and `survreg` formula fits accept `ridge(...)` and `pspline(...)`
+penalties, including fixed smoothing, target degrees of freedom, and AIC-based
+P-spline selection. The native optimizers expose the fitted quadratic penalty,
+penalized likelihood, smoothing history, and effective degrees of freedom.
 `clogit("case ~ exposure + strata(set)", data=...)` fits matched case-control
 models through the exact stratified Cox likelihood; `method="approximate"`
 maps to Breslow handling as it does in R.

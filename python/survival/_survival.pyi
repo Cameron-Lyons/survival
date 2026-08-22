@@ -3744,6 +3744,9 @@ class SurvivalFit:
     log_likelihood: float
     convergence_flag: int
     score_vector: list[float]
+    penalty_matrix: list[list[float]]
+    penalty: float
+    penalized_log_likelihood: float
     def predict(
         self,
         covariates: list[list[float]] | None = None,
@@ -7547,6 +7550,7 @@ def survreg(
     time2: list[float] | None = None,
     fixed_scale: float | None = None,
     distribution_parameter: float | None = None,
+    penalty_matrix: list[list[float]] | None = None,
 ) -> SurvivalFit: ...
 def predict_survreg(
     covariates: list[list[float]],

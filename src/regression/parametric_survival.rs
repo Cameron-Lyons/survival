@@ -125,6 +125,12 @@ pub struct SurvivalFit {
     pub convergence_flag: i32,
     #[pyo3(get)]
     pub score_vector: Vec<f64>,
+    #[pyo3(get)]
+    pub penalty_matrix: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub penalty: f64,
+    #[pyo3(get)]
+    pub penalized_log_likelihood: f64,
 }
 
 impl DistributionType {
@@ -795,6 +801,79 @@ fn validate_covariate_values(covariates: &[Vec<f64>], nvar: usize) -> PyResult<(
     Ok(())
 }
 
+fn validate_penalty_matrix(values: &[Vec<f64>], nvar: usize) -> PyResult<Array2<f64>> {
+    if values.len() != nvar || values.iter().any(|row| row.len() != nvar) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "penalty_matrix must have shape ({nvar}, {nvar})"
+        )));
+    }
+    for (row_index, row) in values.iter().enumerate() {
+        validate_finite_values(&format!("penalty_matrix[{row_index}]"), row)?;
+    }
+
+    let scale = values
+        .iter()
+        .flatten()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    let tolerance = 1e-10 * scale.max(f64::MIN_POSITIVE);
+    let mut matrix = Array2::zeros((nvar, nvar));
+    for row in 0..nvar {
+        for column in 0..nvar {
+            let left = values[row][column];
+            let right = values[column][row];
+            if (left - right).abs() > tolerance {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "penalty_matrix must be symmetric",
+                ));
+            }
+            matrix[(row, column)] = 0.5 * (left + right);
+        }
+    }
+
+    // A diagonally pivoted LDL decomposition admits rank-deficient difference
+    // penalties while still rejecting indefinite quadratic forms.
+    let mut factor = matrix.clone();
+    for pivot_index in 0..nvar {
+        let largest_diagonal = (pivot_index..nvar)
+            .max_by(|&left, &right| factor[(left, left)].total_cmp(&factor[(right, right)]))
+            .unwrap_or(pivot_index);
+        if largest_diagonal != pivot_index {
+            for column in 0..nvar {
+                factor.swap((pivot_index, column), (largest_diagonal, column));
+            }
+            for row in 0..nvar {
+                factor.swap((row, pivot_index), (row, largest_diagonal));
+            }
+        }
+        let pivot = factor[(pivot_index, pivot_index)];
+        if pivot < -tolerance {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "penalty_matrix must be positive semidefinite",
+            ));
+        }
+        if pivot <= tolerance {
+            if (pivot_index..nvar).any(|row| {
+                (pivot_index..nvar).any(|column| factor[(row, column)].abs() > tolerance)
+            }) {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "penalty_matrix must be positive semidefinite",
+                ));
+            }
+            continue;
+        }
+        for row in (pivot_index + 1)..nvar {
+            for column in row..nvar {
+                let updated = factor[(row, column)]
+                    - factor[(row, pivot_index)] * factor[(column, pivot_index)] / pivot;
+                factor[(row, column)] = updated;
+                factor[(column, row)] = updated;
+            }
+        }
+    }
+    Ok(matrix)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum DistributionType {
@@ -817,7 +896,7 @@ pub enum DistributionType {
 const DEFAULT_SURVREG_DISTRIBUTION: DistributionType = DistributionType::Weibull;
 
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None, distribution_parameter=None))]
+#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None, distribution_parameter=None, penalty_matrix=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survreg(
     time: Vec<f64>,
@@ -834,6 +913,7 @@ pub fn survreg(
     time2: Option<Vec<f64>>,
     fixed_scale: Option<f64>,
     distribution_parameter: Option<f64>,
+    penalty_matrix: Option<Vec<Vec<f64>>>,
 ) -> PyResult<SurvivalFit> {
     let requested_distribution_key = distribution.map(|name| name.to_lowercase().replace('-', "_"));
     let dist_type = parse_distribution_type(distribution)?;
@@ -884,6 +964,10 @@ pub fn survreg(
         )));
     }
     validate_covariate_values(&covariate_rows, nvar)?;
+    let penalty_matrix = penalty_matrix
+        .as_deref()
+        .map(|values| validate_penalty_matrix(values, nvar))
+        .transpose()?;
     let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
     let offsets_vec = offsets.unwrap_or_else(|| vec![0.0; n]);
     let has_strata = strata.is_some();
@@ -976,6 +1060,7 @@ pub fn survreg(
         distribution: distribution_type,
         distribution_parameter,
         fixed_scale,
+        penalty_matrix: penalty_matrix.as_ref(),
     })
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
     let variance_matrix = result
@@ -1025,8 +1110,44 @@ pub fn survreg(
         log_likelihood: result.log_likelihood,
         convergence_flag: result.convergence_flag,
         score_vector: result.score_vector,
+        penalty_matrix: penalty_matrix
+            .as_ref()
+            .map(|matrix| {
+                matrix
+                    .outer_iter()
+                    .map(|row| row.iter().copied().collect())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        penalty: result.penalty,
+        penalized_log_likelihood: result.penalized_log_likelihood,
     })
 }
+
+fn apply_quadratic_penalty(
+    likelihood: &mut SurvivalLikelihood,
+    beta: &[f64],
+    penalty: Option<&Array2<f64>>,
+) -> f64 {
+    let Some(penalty) = penalty else {
+        return 0.0;
+    };
+    let width = penalty.nrows();
+    let mut quadratic = 0.0;
+    for row in 0..width {
+        let penalty_score = (0..width)
+            .map(|column| penalty[(row, column)] * beta[column])
+            .sum::<f64>();
+        likelihood.u[row] -= penalty_score;
+        quadratic += beta[row] * penalty_score;
+        for column in 0..width {
+            likelihood.imat[(row, column)] += penalty[(row, column)];
+            likelihood.jj[(row, column)] += penalty[(row, column)];
+        }
+    }
+    0.5 * quadratic
+}
+
 fn compute_survreg(
     input: ComputeSurvregInput<'_>,
 ) -> Result<SurvivalFitComputed, Box<dyn std::error::Error>> {
@@ -1045,6 +1166,7 @@ fn compute_survreg(
         distribution,
         distribution_parameter,
         fixed_scale,
+        penalty_matrix,
     } = input;
     let n = y.nrows();
     let ny = y.ncols();
@@ -1097,8 +1219,10 @@ fn compute_survreg(
         covariates,
         frailty: &frailty,
     };
-    let initial_likelihood = calculate_likelihood(&input)?;
+    let mut initial_likelihood = calculate_likelihood(&input)?;
     let mut loglik = initial_likelihood.loglik;
+    let mut penalty_value = apply_quadratic_penalty(&mut initial_likelihood, &beta, penalty_matrix);
+    let mut penalized_loglik = loglik - penalty_value;
     let mut imat = initial_likelihood.imat;
     let mut jj = initial_likelihood.jj;
     let mut u = initial_likelihood.u;
@@ -1106,7 +1230,7 @@ fn compute_survreg(
     let mut iter = 0;
     let mut converged = false;
     while iter < max_iter {
-        let old_loglik = loglik;
+        let old_penalized_loglik = penalized_loglik;
         let mut accepted = None;
         let observed_delta = is_positive_definite(&imat, tol_chol)
             .then(|| regularized_lu_solve(&imat, &u).ok())
@@ -1144,15 +1268,21 @@ fn compute_survreg(
                     covariates,
                     frailty: &frailty,
                 };
-                let candidate = calculate_likelihood(&candidate_input)?;
-                if candidate.loglik.is_finite()
-                    && candidate.loglik >= old_loglik
+                let mut candidate = calculate_likelihood(&candidate_input)?;
+                let candidate_loglik = candidate.loglik;
+                let candidate_penalty =
+                    apply_quadratic_penalty(&mut candidate, &candidate_beta, penalty_matrix);
+                let candidate_penalized_loglik = candidate_loglik - candidate_penalty;
+                if candidate_penalized_loglik.is_finite()
+                    && candidate_penalized_loglik >= old_penalized_loglik
                     && (!uses_observed_information
                         || is_positive_definite(&candidate.imat, tol_chol))
                 {
                     accepted = Some((
                         candidate_beta,
-                        candidate.loglik,
+                        candidate_loglik,
+                        candidate_penalty,
+                        candidate_penalized_loglik,
                         candidate.imat,
                         candidate.jj,
                         candidate.u,
@@ -1166,18 +1296,27 @@ fn compute_survreg(
             }
         }
 
-        if let Some((candidate_beta, candidate_loglik, candidate_imat, candidate_jj, candidate_u)) =
-            accepted
+        if let Some((
+            candidate_beta,
+            candidate_loglik,
+            candidate_penalty,
+            candidate_penalized_loglik,
+            candidate_imat,
+            candidate_jj,
+            candidate_u,
+        )) = accepted
         {
             beta = candidate_beta;
             loglik = candidate_loglik;
+            penalty_value = candidate_penalty;
+            penalized_loglik = candidate_penalized_loglik;
             imat = candidate_imat;
             jj = candidate_jj;
             u = candidate_u;
             usave.assign(&u);
             iter += 1;
 
-            if check_convergence(old_loglik, loglik, eps) {
+            if check_convergence(old_penalized_loglik, penalized_loglik, eps) {
                 converged = true;
                 break;
             }
@@ -1192,6 +1331,8 @@ fn compute_survreg(
         iterations: iter,
         variance_matrix: variance,
         log_likelihood: loglik,
+        penalty: penalty_value,
+        penalized_log_likelihood: penalized_loglik,
         convergence_flag,
         score_vector: usave.to_vec(),
     })
@@ -1201,6 +1342,8 @@ pub(crate) struct SurvivalFitComputed {
     iterations: usize,
     variance_matrix: Array2<f64>,
     log_likelihood: f64,
+    penalty: f64,
+    penalized_log_likelihood: f64,
     convergence_flag: i32,
     score_vector: Vec<f64>,
 }
@@ -1220,6 +1363,7 @@ struct ComputeSurvregInput<'a> {
     distribution: DistributionType,
     distribution_parameter: Option<f64>,
     fixed_scale: Option<f64>,
+    penalty_matrix: Option<&'a Array2<f64>>,
 }
 
 #[cfg(test)]
@@ -1343,6 +1487,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(gaussian.is_ok());
 
@@ -1362,8 +1507,94 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(weibull.is_err());
+    }
+
+    #[test]
+    fn quadratic_penalty_matches_reference_pspline_survreg_fit() {
+        let time = vec![
+            4.0, 7.0, 9.0, 12.0, 15.0, 18.0, 22.0, 25.0, 30.0, 36.0, 43.0, 51.0,
+        ];
+        let status = vec![1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+        let x = vec![
+            -2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5,
+        ];
+        let (basis, _) = crate::core::pspline::pspline_basis_core(&x, 4, 3, (-2.0, 3.5))
+            .expect("P-spline basis should be valid");
+        let covariates = basis
+            .into_iter()
+            .map(|row| {
+                std::iter::once(1.0)
+                    .chain(row.into_iter().skip(1))
+                    .collect()
+            })
+            .collect();
+        let difference_penalty = [
+            [5.0, -4.0, 1.0, 0.0, 0.0, 0.0],
+            [-4.0, 6.0, -4.0, 1.0, 0.0, 0.0],
+            [1.0, -4.0, 6.0, -4.0, 1.0, 0.0],
+            [0.0, 1.0, -4.0, 6.0, -4.0, 1.0],
+            [0.0, 0.0, 1.0, -4.0, 5.0, -2.0],
+            [0.0, 0.0, 0.0, 1.0, -2.0, 1.0],
+        ];
+        let penalty = (0..7)
+            .map(|row| {
+                (0..7)
+                    .map(|column| {
+                        if row == 0 || column == 0 {
+                            0.0
+                        } else {
+                            difference_penalty[row - 1][column - 1]
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let fit = survreg(
+            time,
+            status,
+            covariates,
+            None,
+            None,
+            None,
+            None,
+            Some("weibull"),
+            Some(100),
+            Some(1e-9),
+            Some(1e-10),
+            None,
+            None,
+            None,
+            Some(penalty),
+        )
+        .expect("quadratic-penalized survreg fit should succeed");
+
+        let expected = [
+            -1.531_895_335_731_6,
+            3.388_173_860_008_563_6,
+            3.961_988_359_190_023,
+            4.574_463_494_434_461,
+            4.950_961_917_375_609,
+            5.505_539_175_918_376,
+            5.867_096_525_333_904,
+        ];
+        for (actual, expected) in fit.location_coefficients.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-8);
+        }
+        assert!((fit.scale - 0.004_673_727_601_541_054).abs() < 1e-10);
+        assert!((fit.penalty - 4.023_383_511_207_064).abs() < 1e-8);
+        assert!((fit.log_likelihood - fit.penalized_log_likelihood - fit.penalty).abs() < 1e-12);
+    }
+
+    #[test]
+    fn quadratic_penalty_validation_rejects_invalid_matrices() {
+        assert!(validate_penalty_matrix(&[vec![1.0, -1.0], vec![-1.0, 1.0]], 2).is_ok());
+        assert!(validate_penalty_matrix(&[vec![1.0], vec![0.0]], 2).is_err());
+        assert!(validate_penalty_matrix(&[vec![1.0, 0.0], vec![1.0, 1.0]], 2).is_err());
+        assert!(validate_penalty_matrix(&[vec![1.0, 2.0], vec![2.0, 1.0]], 2).is_err());
     }
 
     #[test]
@@ -1425,6 +1656,7 @@ mod tests {
             distribution: DistributionType::Weibull,
             distribution_parameter: None,
             fixed_scale: None,
+            penalty_matrix: None,
         });
 
         assert!(result.is_ok());
@@ -1461,6 +1693,7 @@ mod tests {
             distribution: DistributionType::Weibull,
             distribution_parameter: None,
             fixed_scale: None,
+            penalty_matrix: None,
         });
 
         assert!(result.is_ok());
@@ -1497,6 +1730,7 @@ mod tests {
             distribution: DistributionType::LogNormal,
             distribution_parameter: None,
             fixed_scale: None,
+            penalty_matrix: None,
         });
 
         assert!(result.is_ok());
@@ -1532,6 +1766,7 @@ mod tests {
             distribution: DistributionType::LogLogistic,
             distribution_parameter: None,
             fixed_scale: None,
+            penalty_matrix: None,
         });
 
         assert!(result.is_ok());
@@ -1572,6 +1807,7 @@ mod tests {
             distribution: DistributionType::Weibull,
             distribution_parameter: None,
             fixed_scale: None,
+            penalty_matrix: None,
         });
 
         assert!(result.is_ok());
@@ -1607,6 +1843,7 @@ mod tests {
             distribution: DistributionType::Gaussian,
             distribution_parameter: None,
             fixed_scale: None,
+            penalty_matrix: None,
         })
         .unwrap();
 
@@ -1647,6 +1884,7 @@ mod tests {
             distribution: DistributionType::Weibull,
             distribution_parameter: None,
             fixed_scale: None,
+            penalty_matrix: None,
         });
 
         assert!(result.is_ok());
@@ -1682,6 +1920,7 @@ mod tests {
             distribution: DistributionType::Weibull,
             distribution_parameter: None,
             fixed_scale: Some(1.25),
+            penalty_matrix: None,
         });
 
         assert!(result.is_ok());
@@ -1700,6 +1939,8 @@ mod tests {
             iterations: 10,
             variance_matrix: Array2::zeros((2, 2)),
             log_likelihood: -50.0,
+            penalty: 0.25,
+            penalized_log_likelihood: -50.25,
             convergence_flag: 0,
             score_vector: vec![0.001, 0.002],
         };

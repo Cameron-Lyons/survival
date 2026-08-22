@@ -11641,8 +11641,6 @@ def test_coxph_formula_pspline_rejects_unsupported_or_invalid_options():
             data=data,
             penalty_matrix=[[1.0] * 5 for _ in range(5)],
         )
-    with pytest.raises(NotImplementedError, match="supported only by coxph"):
-        survival.survreg("Surv(time,status) ~ pspline(x,theta=.5)", data=data)
 
 
 def test_coxph_formula_ridge_defaults_to_half_the_term_width():
@@ -18728,6 +18726,201 @@ def test_low_level_survreg_omitted_distribution_matches_explicit_weibull():
     assert default.iterations == explicit.iterations
     assert extreme.distribution == "extreme_value"
     assert extreme.log_likelihood != pytest.approx(default.log_likelihood)
+
+
+def test_low_level_survreg_quadratic_penalty_validates_and_reports_objective():
+    fit = survival.regression.survreg(
+        time=[2.0, 3.0, 5.0, 7.0, 11.0, 13.0],
+        status=[1.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+        covariates=[[1.0, value] for value in (-1.0, -0.5, 0.0, 0.5, 1.0, 1.5)],
+        distribution="weibull",
+        penalty_matrix=[[0.0, 0.0], [0.0, 0.4]],
+        max_iter=100,
+        eps=1e-9,
+    )
+
+    assert fit.penalty_matrix == [[0.0, 0.0], [0.0, 0.4]]
+    assert fit.penalty >= 0.0
+    assert fit.penalized_log_likelihood == pytest.approx(fit.log_likelihood - fit.penalty)
+    with pytest.raises(ValueError, match="shape"):
+        survival.regression.survreg(
+            time=[2.0, 3.0],
+            status=[1.0, 1.0],
+            covariates=[[1.0, 0.0], [1.0, 1.0]],
+            penalty_matrix=[[1.0]],
+        )
+    with pytest.raises(ValueError, match="symmetric"):
+        survival.regression.survreg(
+            time=[2.0, 3.0],
+            status=[1.0, 1.0],
+            covariates=[[1.0, 0.0], [1.0, 1.0]],
+            penalty_matrix=[[1.0, 0.0], [1.0, 1.0]],
+        )
+    with pytest.raises(ValueError, match="positive semidefinite"):
+        survival.regression.survreg(
+            time=[2.0, 3.0],
+            status=[1.0, 1.0],
+            covariates=[[1.0, 0.0], [1.0, 1.0]],
+            penalty_matrix=[[1.0, 2.0], [2.0, 1.0]],
+        )
+
+
+def test_survreg_formula_pspline_fixed_and_target_df_match_reference():
+    n = 48
+    index = list(range(n))
+    x = [((value * 17) % 49) / 10.0 - 2.4 for value in index]
+    noise = [((value * 13) % 11 - 5) / 20.0 for value in index]
+    data = {
+        "time": [
+            math.exp(2.4 + 0.22 * value - 0.08 * value**2 + error)
+            for value, error in zip(x, noise, strict=True)
+        ],
+        "status": [int(value % 5 != 0) for value in index],
+        "x": x,
+    }
+    control = survival.survreg_control(maxiter=100, outer_max=25)
+
+    fixed_term = "pspline(x,theta=.5,nterm=6)"
+    fixed = survival.survreg(
+        f"Surv(time,status) ~ {fixed_term}",
+        data=data,
+        control=control,
+    )
+    assert fixed.location_coefficients == pytest.approx(
+        [
+            1.08304865326958,
+            0.387946072216282,
+            0.93040175850637,
+            1.19521771943437,
+            1.46264285628329,
+            1.54983598150699,
+            1.58166222783296,
+            1.49071735256442,
+            0.999190737033382,
+        ],
+        abs=1e-11,
+    )
+    assert fixed.scale == pytest.approx(0.146830072700599, abs=1e-12)
+    assert fixed.penalty == pytest.approx(0.156025696981009, abs=1e-12)
+    assert fixed.term_degrees_of_freedom[fixed_term] == pytest.approx(
+        5.46884963424033,
+        abs=1e-10,
+    )
+    assert fixed.effective_degrees_of_freedom == pytest.approx(
+        6.711146188830356,
+        abs=1e-9,
+    )
+
+    target_term = "pspline(x,df=4,nterm=6)"
+    target = survival.survreg(
+        f"Surv(time,status) ~ {target_term}",
+        data=data,
+        control=control,
+    )
+    assert target.location_coefficients == pytest.approx(
+        [
+            1.04258547960487,
+            0.468979824921562,
+            0.938339035911159,
+            1.25715933735649,
+            1.48789879771544,
+            1.60333064954198,
+            1.61117384007867,
+            1.51417159595924,
+            1.35035439653465,
+        ],
+        abs=1e-9,
+    )
+    assert target.scale == pytest.approx(0.147868917301435, abs=1e-10)
+    assert target.penalty == pytest.approx(0.286013905524226, abs=5e-9)
+    assert target.term_degrees_of_freedom[target_term] == pytest.approx(
+        4.07556514426807,
+        abs=2e-8,
+    )
+    assert target.history[target_term]["theta"] == pytest.approx(
+        0.896143433527726,
+        abs=2e-9,
+    )
+    assert target.history[target_term]["done"] is True
+
+
+def test_survreg_formula_pspline_aic_and_ridge_match_reference():
+    n = 48
+    index = list(range(n))
+    x = [((value * 17) % 49) / 10.0 - 2.4 for value in index]
+    z = [((value * 7) % 47) / 13.0 - 1.8 for value in index]
+    noise = [((value * 13) % 11 - 5) / 20.0 for value in index]
+    data = {
+        "time": [
+            math.exp(2.4 + 0.22 * xv - 0.08 * xv**2 + 0.15 * zv + error)
+            for xv, zv, error in zip(x, z, noise, strict=True)
+        ],
+        "status": [int(value % 5 != 0) for value in index],
+        "x": x,
+        "z": z,
+    }
+    aic_data = {
+        **data,
+        "time": [
+            math.exp(2.4 + 0.22 * value - 0.08 * value**2 + error)
+            for value, error in zip(x, noise, strict=True)
+        ],
+    }
+    control = survival.survreg_control(maxiter=100, outer_max=25)
+
+    aic_term = "pspline(x,df=0)"
+    aic = survival.survreg(
+        f"Surv(time,status) ~ {aic_term}",
+        data=aic_data,
+        control=control,
+    )
+    assert aic.location_coefficients == pytest.approx(
+        [
+            1.42894200078435,
+            0.151416279731373,
+            0.302847228855692,
+            0.452809683205717,
+            0.595717814216171,
+            0.726995331998452,
+            0.846037366231281,
+            0.950146304877149,
+            1.03608721905761,
+            1.10355200003575,
+            1.15305916845205,
+            1.18597733575767,
+            1.20401249199607,
+            1.20793866347867,
+            1.20259661012098,
+            1.19194773834792,
+            1.17793516545864,
+            1.1632510297958,
+        ],
+        abs=2e-7,
+    )
+    assert aic.history[aic_term]["done"] is True
+    assert len(aic.history[aic_term]["history"]) >= 10
+    assert survival.r_api._parse_pspline_formula_term(aic_term).eps == pytest.approx(1e-5)
+
+    ridge_term = "ridge(x,z,df=1,eps=1e-8)"
+    ridge = survival.survreg(
+        f"Surv(time,status) ~ {ridge_term}",
+        data=data,
+        control=control,
+    )
+    assert ridge.location_coefficients == pytest.approx(
+        [2.39654910462346, 0.116111125071113, 0.0965659135801235],
+        abs=1e-10,
+    )
+    assert ridge.scale == pytest.approx(0.225385567723961, abs=1e-12)
+    assert ridge.penalty == pytest.approx(7.22143350217532, abs=1e-10)
+    assert ridge.term_degrees_of_freedom[ridge_term] == pytest.approx(
+        1.00000000010252,
+        abs=1e-9,
+    )
+    assert ridge.history[ridge_term]["theta"] == pytest.approx(
+        373.352124962237,
+        abs=1e-8,
+    )
 
 
 def test_survreg_formula_matches_low_level_binding():
