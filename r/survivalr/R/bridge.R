@@ -11598,14 +11598,116 @@ residuals.survival_py_model <- function(object, ..., type = "martingale") {
   .as_residual_result(object, result, type, terms = dots[["terms"]])
 }
 
+.survreg_anova_heading <- function(object) {
+  response <- as.character(formula(object))[[2L]]
+  fixed_scale <- nrow(vcov(object)) == length(coef(object))
+  scale_line <- if (fixed_scale) {
+    metadata <- .call_r_api("model_summary", object)
+    paste("Scale fixed at", format(as.numeric(metadata$scale)[[1L]], digits = getOption("digits")), "\n")
+  } else {
+    "Scale estimated\n"
+  }
+  c(
+    "Analysis of Deviance Table\n",
+    " distribution with  link\n",
+    paste0("Response: ", response, "\n"),
+    scale_line,
+    "Terms added sequentially (first to last)"
+  )
+}
+
+.survreg_anova_difference <- function(labels, index) {
+  first <- labels[[1L]]
+  second <- labels[[2L]]
+  first_match <- match(first, second, FALSE)
+  second_match <- match(second, first, FALSE)
+  if (all(first_match)) {
+    if (all(second_match)) {
+      "="
+    } else {
+      paste(c("", second[-first_match]), collapse = "+")
+    }
+  } else if (all(second_match)) {
+    paste(c("", first[-second_match]), collapse = "-")
+  } else {
+    paste(index - 1L, index, sep = " vs. ")
+  }
+}
+
+.as_survreg_anova <- function(result, fits, test) {
+  frame <- as.data.frame(result, optional = TRUE)
+  loglik <- as.numeric(frame$loglik)
+  fitted_df <- as.numeric(frame$df)
+  residual_df <- vapply(fits, df.residual, numeric(1L))
+
+  if (length(fits) == 1L) {
+    residual_df <- nobs(fits[[1L]]) - fitted_df
+    table <- data.frame(
+      Df = c(NA_real_, diff(fitted_df)),
+      Deviance = c(NA_real_, 2 * diff(loglik)),
+      `Resid. Df` = residual_df,
+      `-2*LL` = -2 * loglik,
+      row.names = as.character(frame$model),
+      check.names = FALSE
+    )
+    heading <- .survreg_anova_heading(fits[[1L]])
+    if (!identical(test, "none")) {
+      p_value <- as.numeric(frame$p)
+      p_value[is.nan(p_value)] <- NA_real_
+      table[["Pr(>Chi)"]] <- p_value
+    }
+    attr(table, "heading") <- heading
+    class(table) <- c("anova", "data.frame")
+    return(table)
+  }
+
+  formulas <- vapply(fits, function(fit) as.character(formula(fit))[[3L]], character(1L))
+  term_labels <- lapply(fits, labels)
+  effects <- character(length(fits))
+  if (length(fits) > 1L) {
+    for (index in 2:length(fits)) {
+      effects[[index]] <- .survreg_anova_difference(term_labels[c(index - 1L, index)], index)
+    }
+  }
+  table <- data.frame(
+    Terms = formulas,
+    `Resid. Df` = residual_df,
+    `-2*LL` = -2 * loglik,
+    Test = effects,
+    Df = c(NA_real_, -diff(residual_df)),
+    Deviance = c(NA_real_, 2 * diff(loglik)),
+    check.names = FALSE
+  )
+  if (!identical(test, "none")) {
+    p_value <- as.numeric(frame$p)
+    p_value[is.nan(p_value)] <- NA_real_
+    table[["Pr(>Chi)"]] <- p_value
+  } else {
+    attr(table, "heading") <- c(
+      "Analysis of Deviance Table",
+      paste0("\nResponse: ", as.character(formula(fits[[1L]]))[[2L]], "\n")
+    )
+    class(table) <- c("anova", "data.frame")
+  }
+  table
+}
+
 anova.survival_py_model <- function(object, ..., test = "Chisq") {
-  .call_r_api(
+  fits <- list(object, ...)
+  if (inherits(object, "survival_py_survreg")) {
+    test <- match.arg(test, c("Chisq", "none"))
+  }
+  result <- .call_r_api(
     "anova",
     object,
     ...,
     test = test,
     .wrap = c("survival_py_anova", "survival_py_object")
   )
+  if (inherits(object, "survival_py_survreg")) {
+    return(.as_survreg_anova(result, fits, test))
+  }
+  result
 }
 
 summary.survival_py_survfit <- function(object, times, censored = FALSE, scale = 1,

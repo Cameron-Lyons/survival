@@ -247,7 +247,9 @@ including fixed or stratified scales and interval-censored responses.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
-Cox and `survreg` models.
+Cox and `survreg` models. Analysis-of-deviance comparisons support sequential
+term refits and nested models for both families, including fractional degrees
+of freedom from penalized `survreg` fits.
 Common result objects can be converted to column-oriented tables with
 `as_data_frame(...)`; the experimental R bridge exposes the same path through
 `as.data.frame(...)`, `summary(...)`, and `print(...)` methods.
