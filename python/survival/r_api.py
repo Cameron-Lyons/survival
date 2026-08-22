@@ -18989,6 +18989,9 @@ def _survdiff_result_from_components(components: Any, rho: float) -> Any:
     variance = (
         float(components.variance[0][0]) if components.variance and components.variance[0] else 0.0
     )
+    variance_diagonal = [
+        float(row[idx]) for idx, row in enumerate(components.variance) if idx < len(row)
+    ]
     return _core.LogRankResult(
         statistic,
         p_value,
@@ -18997,6 +19000,7 @@ def _survdiff_result_from_components(components: Any, rho: float) -> Any:
         [float(value) for value in components.expected],
         variance,
         _survdiff_weight_type(rho),
+        variance_diagonal,
     )
 
 
@@ -22173,8 +22177,11 @@ def _survdiff_frame(result: Any) -> dict[str, list[Any]]:
     expected = [float(value) for value in result.expected]
     if len(observed) != len(expected):
         raise ValueError("survdiff observed and expected lengths differ")
+    variance_diagonal = getattr(result, "variance_diagonal", None)
     variance = getattr(result, "variance", None)
-    if isinstance(variance, int | float):
+    if variance_diagonal is not None and len(variance_diagonal) == len(observed):
+        variance_diag = [float(value) for value in variance_diagonal]
+    elif isinstance(variance, int | float):
         variance_diag = [float(variance)] * len(observed)
     elif variance is not None:
         variance_diag = [float(row[idx]) for idx, row in enumerate(variance)]

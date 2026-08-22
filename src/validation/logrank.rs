@@ -23,11 +23,24 @@ pub struct LogRankResult {
     #[pyo3(get)]
     pub variance: f64,
     #[pyo3(get)]
+    pub variance_diagonal: Vec<f64>,
+    #[pyo3(get)]
     pub weight_type: String,
 }
 #[pymethods]
 impl LogRankResult {
     #[new]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        statistic,
+        p_value,
+        df,
+        observed,
+        expected,
+        variance,
+        weight_type,
+        variance_diagonal=None
+    ))]
     fn new(
         statistic: f64,
         p_value: f64,
@@ -36,7 +49,9 @@ impl LogRankResult {
         expected: Vec<f64>,
         variance: f64,
         weight_type: String,
+        variance_diagonal: Option<Vec<f64>>,
     ) -> Self {
+        let variance_diagonal = variance_diagonal.unwrap_or_else(|| vec![variance; observed.len()]);
         Self {
             statistic,
             p_value,
@@ -44,6 +59,7 @@ impl LogRankResult {
             observed,
             expected,
             variance,
+            variance_diagonal,
             weight_type,
         }
     }
@@ -100,6 +116,7 @@ pub fn weighted_logrank_test_with_entry_times(
             observed: vec![],
             expected: vec![],
             variance: 0.0,
+            variance_diagonal: vec![],
             weight_type: weight_name(&weight_type),
         };
     }
@@ -115,6 +132,7 @@ pub fn weighted_logrank_test_with_entry_times(
             observed: vec![0.0; n_groups],
             expected: vec![0.0; n_groups],
             variance: 0.0,
+            variance_diagonal: vec![0.0; n_groups],
             weight_type: weight_name(&weight_type),
         };
     }
@@ -207,6 +225,9 @@ pub fn weighted_logrank_test_with_entry_times(
     let (statistic, df) =
         logrank_statistic_from_flat_covariance(&observed, &expected, &variance, n_groups);
     let p_value = chi2_sf(statistic, df);
+    let variance_diagonal = (0..n_groups)
+        .map(|group| variance[group * n_groups + group])
+        .collect();
     LogRankResult {
         statistic,
         p_value,
@@ -214,6 +235,7 @@ pub fn weighted_logrank_test_with_entry_times(
         observed,
         expected,
         variance: variance.first().copied().unwrap_or(0.0),
+        variance_diagonal,
         weight_type: weight_name(&weight_type),
     }
 }
@@ -569,6 +591,10 @@ mod tests {
         assert!((result.expected[1] - 2.25).abs() < 1e-12);
         assert!((result.expected[2] - 2.75).abs() < 1e-12);
         assert!((result.variance - 0.6825396825396826).abs() < 1e-12);
+        assert_eq!(result.variance_diagonal.len(), 3);
+        assert!((result.variance_diagonal[0] - 0.6825396825396826).abs() < 1e-12);
+        assert!((result.variance_diagonal[1] - 1.318452380952381).abs() < 1e-12);
+        assert!((result.variance_diagonal[2] - 1.3462301587301588).abs() < 1e-12);
         assert!((result.statistic - 1.5105257668985863).abs() < 1e-12);
         assert!((result.p_value - 0.4698870729581883).abs() < 1e-9);
     }

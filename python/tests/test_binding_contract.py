@@ -11263,6 +11263,7 @@ def test_validation_statistical_bindings_are_typed_to_runtime_surface():
             "observed",
             "expected",
             "variance",
+            "variance_diagonal",
             "weight_type",
         },
         "ProportionalityTest": {
@@ -11305,6 +11306,7 @@ def test_validation_statistical_bindings_are_typed_to_runtime_surface():
             "expected",
             "variance",
             "weight_type",
+            "variance_diagonal",
         ],
         "ProportionalityTest": [
             "self",

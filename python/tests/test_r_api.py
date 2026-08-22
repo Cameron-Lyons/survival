@@ -7619,6 +7619,17 @@ def test_logrank_multigroup_matches_r_survdiff_chisquare():
         assert result.statistic == pytest.approx(1.5105257668985863)
         assert result.p_value == pytest.approx(0.4698870729581883)
 
+    expected_variance_diagonal = [
+        0.6825396825396826,
+        1.318452380952381,
+        1.3462301587301588,
+    ]
+    assert direct.variance_diagonal == pytest.approx(expected_variance_diagonal)
+    assert formula.variance_diagonal == pytest.approx(expected_variance_diagonal)
+    assert survival.as_data_frame(formula)["variance"] == pytest.approx(
+        expected_variance_diagonal
+    )
+
 
 def test_survdiff_formula_accepts_general_rho():
     data = _toy_data()

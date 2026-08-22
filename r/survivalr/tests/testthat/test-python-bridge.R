@@ -12416,6 +12416,25 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
   )
   expect_survdiff_equal(bridged_stratified_diff, reference_stratified_diff)
 
+  multigroup_diff_data <- data.frame(
+    time = c(1, 2, 3, 2, 4, 6, 3, 5, 7),
+    status = c(1, 1, 0, 1, 0, 1, 1, 1, 0),
+    group = rep(c("A", "B", "C"), each = 3)
+  )
+  bridged_multigroup_diff <- survdiff(
+    Surv(time, status) ~ group,
+    data = multigroup_diff_data
+  )
+  reference_multigroup_diff <- survival::survdiff(
+    survival::Surv(time, status) ~ group,
+    data = multigroup_diff_data
+  )
+  expect_equal(
+    as.data.frame(bridged_multigroup_diff)$variance,
+    unname(diag(reference_multigroup_diff$var)),
+    tolerance = 1e-06
+  )
+
   offset_diff_data <- data.frame(
     time = c(1, 2, 3, 4),
     status = c(1, 0, 1, 1),
