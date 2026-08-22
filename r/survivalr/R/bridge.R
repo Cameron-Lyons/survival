@@ -239,6 +239,24 @@ if (getRversion() >= "2.15.1") {
   data
 }
 
+.formula_environment_data <- function(formula, enclos) {
+  formula_environment <- environment(formula)
+  if (is.null(formula_environment)) {
+    formula_environment <- enclos
+  }
+  variables <- unique(all.vars(formula))
+  values <- lapply(variables, function(name) {
+    eval(as.name(name), formula_environment)
+  })
+  names(values) <- variables
+  as.data.frame(
+    values,
+    optional = TRUE,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}
+
 .eval_formula_dots <- function(dots, data, env, vector_args = character()) {
   if (is.null(dots) || length(dots) == 0L) {
     return(list())
@@ -4815,26 +4833,29 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
     direct_start <- formula
   }
   if (is.null(direct_start)) {
-    if (missing(formula) || missing(data) || is.null(data) || !inherits(formula, "formula")) {
-      call <- match.call()
-      call[[1L]] <- quote(survival::finegray)
-      return(eval.parent(call))
+    if (missing(formula)) {
+      stop("A formula argument is required", call. = FALSE)
     }
     env <- parent.frame()
+    formula_data <- if (missing(data) || is.null(data)) {
+      .formula_environment_data(formula, env)
+    } else {
+      data
+    }
     weight_values <- .eval_formula_arg(
-      substitute(weights), missing(weights), data, env, vector = TRUE
+      substitute(weights), missing(weights), formula_data, env, vector = TRUE
     )
     subset_values <- .as_python_formula_subset(
-      .eval_formula_arg(substitute(subset), missing(subset), data, env),
-      data
+      .eval_formula_arg(substitute(subset), missing(subset), formula_data, env),
+      formula_data
     )
     id_values <- .eval_formula_arg(
-      substitute(id), missing(id), data, env, vector = TRUE
+      substitute(id), missing(id), formula_data, env, vector = TRUE
     )
     result <- .call_r_api(
       "finegray",
       .as_formula_string(formula),
-      data = .as_python_data(data),
+      data = .as_python_data(formula_data),
       weights = weight_values,
       subset = subset_values,
       `na_action` = .as_na_action(na.action),
