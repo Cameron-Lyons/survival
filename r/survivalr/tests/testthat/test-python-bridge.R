@@ -4581,6 +4581,104 @@ test_that("multi-score influence covariance matches reference shape", {
   expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
 })
 
+test_that("stratified multi-score assembly matches reference behavior", {
+  data <- data.frame(
+    time = rep(c(1, 2, 3), 2),
+    status = rep(c(1, 0, 1), 2),
+    x = seq_len(6) / 6,
+    z = rev(seq_len(6)) / 6,
+    group = rep(c("a", "b"), each = 3)
+  )
+  score_matrix <- as.matrix(data[c("x", "z")])
+  dimension_error <- "length of 'dimnames' [1] not equal to array extent"
+
+  for (time_weight in c("n", "S", "S/G", "n/G2", "I")) {
+    expect_error(
+      concordancefit(
+        Surv(data$time, data$status),
+        score_matrix,
+        strata = data$group,
+        timewt = time_weight,
+        keepstrata = TRUE
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordancefit(
+        survival::Surv(data$time, data$status),
+        score_matrix,
+        strata = data$group,
+        timewt = time_weight,
+        keepstrata = TRUE
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+    expect_error(
+      concordance(
+        Surv(time, status) ~ x + z + strata(group),
+        data = data,
+        timewt = time_weight,
+        keepstrata = TRUE
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordance(
+        survival::Surv(time, status) ~ x + z + strata(group),
+        data = data,
+        timewt = time_weight,
+        keepstrata = TRUE
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+  }
+
+  large_data <- data.frame(
+    group = rep(seq_len(11), each = 2),
+    time = rep(c(1, 2), 11),
+    status = rep(c(1, 0), 11),
+    x = seq_len(22) / 22,
+    z = rev(seq_len(22)) / 22
+  )
+  large_scores <- as.matrix(large_data[c("x", "z")])
+  for (time_weight in c("n", "I")) {
+    bridged_fit <- concordancefit(
+      Surv(large_data$time, large_data$status),
+      large_scores,
+      strata = large_data$group,
+      timewt = time_weight
+    )
+    reference_fit <- survival::concordancefit(
+      survival::Surv(large_data$time, large_data$status),
+      large_scores,
+      strata = large_data$group,
+      timewt = time_weight
+    )
+    expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
+
+    bridged_formula <- concordance(
+      Surv(time, status) ~ x + z + strata(group),
+      data = large_data,
+      timewt = time_weight
+    )
+    reference_formula <- survival::concordance(
+      survival::Surv(time, status) ~ x + z + strata(group),
+      data = large_data,
+      timewt = time_weight
+    )
+    fields <- setdiff(names(reference_formula), "call")
+    expect_equal(
+      unclass(bridged_formula)[fields],
+      unclass(reference_formula)[fields],
+      tolerance = 1e-12
+    )
+  }
+})
+
 test_that("collapsed single-score strata match reference behavior", {
   data <- data.frame(
     time = c(1, 2, 1, 2),

@@ -12000,6 +12000,20 @@ concordance <- function(object, ..., formula) {
   invisible(NULL)
 }
 
+.concordance_multi_score_strata_check <- function(n_scores, n_strata, timewt) {
+  if (n_scores <= 1L || n_strata <= 1L) {
+    return(invisible(NULL))
+  }
+  time_weight <- match.arg(timewt, c("n", "S", "S/G", "n/G2", "I"))
+  if (n_strata > 10L && time_weight %in% c("n", "I")) {
+    return(invisible(NULL))
+  }
+  count <- matrix(numeric(n_strata * n_scores * 6L), ncol = 6L, byrow = TRUE)
+  count <- count[, seq_len(5L), drop = FALSE]
+  dimnames(count) <- list(seq_len(n_scores), seq_len(5L))
+  invisible(NULL)
+}
+
 .concordance_translate_counting_timewt_error <- function(condition, timewt) {
   backend_message <- "S/G and n/G2 timewt options are not supported for counting-process data"
   if (grepl(backend_message, conditionMessage(condition), fixed = TRUE)) {
@@ -12156,9 +12170,18 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     } else {
       10
     }
+    formula_n_scores <- length(
+      .as_numeric_vector(.result_field(result, "concordance"))
+    )
+    formula_strata_count <- .concordance_formula_strata_count(formula, formula_frame)
+    .concordance_multi_score_strata_check(
+      formula_n_scores,
+      formula_strata_count,
+      formula_timewt
+    )
     .concordance_collapsed_strata_check(
-      length(.as_numeric_vector(.result_field(result, "concordance"))),
-      .concordance_formula_strata_count(formula, formula_frame),
+      formula_n_scores,
+      formula_strata_count,
       formula_keepstrata,
       formula_timewt
     )
@@ -12690,25 +12713,31 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     `_row_names` = row.names(.as_native_surv(y))
   )
 
+  concordance <- .as_numeric_vector(.result_field(result, "concordance"))
+  n_scores <- length(concordance)
   input_strata_count <- if (missing(strata) || length(strata) == 0L) {
     1L
   } else {
     length(unique(strata))
   }
   .concordance_disabled_standard_error_check(
-    length(.as_numeric_vector(.result_field(result, "concordance"))),
+    n_scores,
     input_strata_count,
     timewt,
     std.err
   )
+  .concordance_multi_score_strata_check(
+    n_scores,
+    input_strata_count,
+    timewt
+  )
   .concordance_collapsed_strata_check(
-    length(.as_numeric_vector(.result_field(result, "concordance"))),
+    n_scores,
     input_strata_count,
     keepstrata,
     timewt
   )
 
-  concordance <- .as_numeric_vector(.result_field(result, "concordance"))
   multi_score <- length(concordance) > 1L
   score_names <- if (!is.null(input_score_names) && length(input_score_names) == length(concordance)) {
     as.character(input_score_names)

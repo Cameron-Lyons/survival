@@ -8712,6 +8712,25 @@ def test_concordance_multi_score_without_standard_errors_remains_available_in_py
     assert result.ranks is None
 
 
+def test_concordance_stratified_multi_score_remains_available_in_python():
+    result = survival.concordancefit(
+        survival.Surv([1, 2, 3, 1, 2, 3], [1, 0, 1, 1, 0, 1]),
+        {
+            "x": [1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6, 1],
+            "z": [1, 5 / 6, 4 / 6, 3 / 6, 2 / 6, 1 / 6],
+        },
+        strata=["a", "a", "a", "b", "b", "b"],
+        influence=3,
+    )
+
+    assert result is not None
+    assert result.score_names == ["x", "z"]
+    assert result.concordance == pytest.approx([1.0, 0.0])
+    assert result.comparable == pytest.approx([4.0, 4.0])
+    assert result.conditional_variance == pytest.approx([1 / 12, 1 / 12])
+    assert result.variance == [[0.0, 0.0], [0.0, 0.0]]
+
+
 def test_concordance_collapsed_single_score_strata_remain_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 1, 2], [1, 0, 1, 0]),
