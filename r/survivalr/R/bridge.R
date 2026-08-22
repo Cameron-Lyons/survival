@@ -12021,6 +12021,29 @@ concordance <- function(object, ..., formula) {
   invisible(NULL)
 }
 
+.concordance_disabled_standard_error_strata_values <- function(
+    result, n_scores, std.err) {
+  disabled <- length(std.err) == 1L &&
+    (is.logical(std.err) || is.numeric(std.err)) &&
+    !is.na(std.err) &&
+    !as.logical(std.err)
+  if (!disabled || n_scores != 1L || !is.matrix(result$count)) {
+    return(result)
+  }
+
+  count_names <- colnames(result$count)
+  strata_names <- rownames(result$count)
+  count <- matrix(as.vector(t(result$count)), ncol = 6L, byrow = TRUE)
+  totals <- colSums(count)
+  comparable <- sum(totals[seq_len(3L)])
+  result$concordance <- (
+    1 + (totals[[1L]] - totals[[2L]]) / comparable
+  ) / 2
+  result$count <- count[, seq_len(5L), drop = FALSE]
+  dimnames(result$count) <- list(strata_names, count_names)
+  result
+}
+
 .concordance_multi_score_strata_check <- function(n_scores, n_strata, timewt) {
   if (n_scores <= 1L || n_strata <= 1L) {
     return(invisible(NULL))
@@ -12928,6 +12951,11 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     concordance = if (length(concordance) == 1L) concordance[[1L]] else concordance,
     count = .concordancefit_count(result, if (multi_score) score_names else NULL),
     n = as.integer(.result_field(result, "n"))
+  )
+  out <- .concordance_disabled_standard_error_strata_values(
+    out,
+    n_scores,
+    std.err
   )
   variance <- .result_field(result, "variance")
   conditional_variance <- .as_numeric_vector(.result_field(result, "conditional_variance"))

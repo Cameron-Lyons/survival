@@ -8730,6 +8730,26 @@ def test_concordance_multi_score_without_standard_errors_remains_available_in_py
     assert result.ranks is None
 
 
+def test_concordance_strata_without_standard_errors_remain_available_in_python():
+    result = survival.concordancefit(
+        survival.Surv([4, 6, 5, 7, 2, 5, 4, 2, 2, 4], [0, 0, 1, 0, 1, 0, 1, 0, 0, 0]),
+        [-0.5, -0.5, -1, 1, 0.5, -0.5, 0, -0.5, -1, 0.5],
+        strata=[1, 3, 1, 2, 2, 1, 3, 3, 1, 2],
+        ymax=4,
+        keepstrata=True,
+        std_err=False,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx(0.5)
+    assert result.strata_counts == [
+        [0, 0, 0, 0, 0],
+        [1, 0, 1, 0, 0],
+        [0, 1, 0, 0, 0],
+    ]
+    assert result.variance is None
+
+
 def test_concordance_stratified_multi_score_remains_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 3, 1, 2, 3], [1, 0, 1, 1, 0, 1]),
