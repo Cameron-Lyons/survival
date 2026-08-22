@@ -4698,9 +4698,16 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
         include_y = y
       ))
     }
-    call <- match.call()
-    call[[1L]] <- quote(survival::pyears)
-    return(eval.parent(call))
+    if (missing(formula) || !inherits(formula, "formula")) {
+      base::stop("A formula argument is required", call. = FALSE)
+    }
+    if (!missing(rmap) && missing(ratetable)) {
+      base::stop("No rate table specified", call. = FALSE)
+    }
+    if (!missing(ratetable) && inherits(ratetable, c("coxph", "survival_py_coxph"))) {
+      base::stop("Cox rate models are not supported by pyears", call. = FALSE)
+    }
+    base::stop("Invalid rate table", call. = FALSE)
   }
   if (!missing(ratetable) && !is.null(ratetable)) {
     stop("direct pyears bridge does not yet support ratetable; use formula pyears for R ratetables", call. = FALSE)
