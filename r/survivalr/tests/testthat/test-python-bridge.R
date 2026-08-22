@@ -4226,6 +4226,37 @@ test_that("right-censored concordance includes censors at the death time", {
   expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
 })
 
+test_that("concordance censoring weights use the post-death risk set", {
+  data <- data.frame(
+    time = c(1, 2, 2, 3, 4),
+    status = c(1, 1, 0, 1, 0),
+    x = c(0.1, 0.2, 0.2, 0.8, 0.4),
+    w = c(1, 2, 3, 1, 2)
+  )
+
+  for (time_weight in c("S/G", "n/G2")) {
+    bridged_fit <- concordancefit(
+      Surv(data$time, data$status),
+      data$x,
+      weights = data$w,
+      timewt = time_weight,
+      influence = 3,
+      ranks = TRUE
+    )
+    reference_fit <- survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      data$x,
+      weights = data$w,
+      timewt = time_weight,
+      influence = 3,
+      ranks = TRUE
+    )
+
+    expect_identical(names(bridged_fit), names(reference_fit))
+    expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
+  }
+})
+
 test_that("stratified concordance results match reference shapes and diagnostics", {
   right_data <- data.frame(
     y = c(1, 3, 2, 4, 4, 2),

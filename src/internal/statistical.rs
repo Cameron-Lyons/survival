@@ -674,8 +674,9 @@ fn right_censored_time_weight_multipliers(
                 survival *= ((nrisk - death_weight) / nrisk).max(0.0);
             }
         }
-        if censor_weight > 0.0 && nrisk > 0.0 {
-            censoring_survival *= ((nrisk - censor_weight) / nrisk).max(0.0);
+        let censoring_risk = (nrisk - death_weight).max(0.0);
+        if censor_weight > 0.0 && censoring_risk > 0.0 {
+            censoring_survival *= ((censoring_risk - censor_weight) / censoring_risk).max(0.0);
         }
         nrisk -= group_weight;
         group_start = group_end;
@@ -1545,6 +1546,22 @@ mod tests {
 
             assert_concordance_summary_close(near, exact);
             assert_concordance_summary_close(near, near_quadratic);
+        }
+    }
+
+    #[test]
+    fn test_censoring_weights_remove_same_time_deaths_before_censors() {
+        let time = [1.0, 2.0, 2.0, 3.0, 4.0];
+        let event = [1, 1, 0, 1, 0];
+        let weights = [1.0, 2.0, 3.0, 1.0, 2.0];
+
+        for time_weight in [
+            ConcordanceTimeWeight::SOverG,
+            ConcordanceTimeWeight::NOverG2,
+        ] {
+            let multipliers =
+                right_censored_time_weight_multipliers(&time, &event, Some(&weights), time_weight);
+            assert_eq!(multipliers, vec![(1.0, 1.0), (2.0, 1.0), (3.0, 4.0)]);
         }
     }
 

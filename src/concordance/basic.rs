@@ -351,8 +351,9 @@ fn right_concordance_time_weight_multipliers_by(
                 survival *= ((nrisk - death_weight) / nrisk).max(0.0);
             }
         }
-        if censor_weight > 0.0 && nrisk > 0.0 {
-            censoring_survival *= ((nrisk - censor_weight) / nrisk).max(0.0);
+        let censoring_risk = (nrisk - death_weight).max(0.0);
+        if censor_weight > 0.0 && censoring_risk > 0.0 {
+            censoring_survival *= ((censoring_risk - censor_weight) / censoring_risk).max(0.0);
         }
         nrisk = (nrisk - group_weight).max(0.0);
         group_start = group_end;
@@ -2484,6 +2485,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(unweighted, unit_weighted);
+    }
+
+    #[test]
+    fn right_concordance_censoring_weights_use_post_death_risk_set() {
+        let time = [1.0, 2.0, 2.0, 3.0, 4.0];
+        let status = [1, 1, 0, 1, 0];
+        let weights = [1.0, 2.0, 3.0, 1.0, 2.0];
+
+        for time_weight in [
+            ConcordanceTimeWeight::SOverG,
+            ConcordanceTimeWeight::NOverG2,
+        ] {
+            let multipliers = right_concordance_time_weight_multipliers(
+                &time,
+                &status,
+                Some(&weights),
+                time_weight,
+            );
+            assert_eq!(multipliers, vec![(1.0, 1.0), (2.0, 1.0), (3.0, 4.0)]);
+        }
     }
 
     #[test]
