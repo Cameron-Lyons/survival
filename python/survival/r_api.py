@@ -222,12 +222,52 @@ class _FactorEncoding:
 
 
 @dataclass(frozen=True)
+class _NumericFormulaLiteral:
+    value: float
+
+
+@dataclass(frozen=True)
+class _NumericFormulaColumn:
+    name: str
+
+
+@dataclass(frozen=True)
+class _NumericFormulaUnary:
+    operator: str
+    operand: _NumericFormulaExpression
+
+
+@dataclass(frozen=True)
+class _NumericFormulaBinary:
+    operator: str
+    left: _NumericFormulaExpression
+    right: _NumericFormulaExpression
+
+
+@dataclass(frozen=True)
+class _NumericFormulaCall:
+    function: str
+    arguments: tuple[_NumericFormulaExpression, ...]
+    option: float | int | bool | None = None
+
+
+_NumericFormulaExpression = (
+    _NumericFormulaLiteral
+    | _NumericFormulaColumn
+    | _NumericFormulaUnary
+    | _NumericFormulaBinary
+    | _NumericFormulaCall
+)
+
+
+@dataclass(frozen=True)
 class _CovariateTerm:
     column: str
     categorical: bool = False
     categorical_wrapper: str | None = None
     transform: str | None = None
     arithmetic: str | None = None
+    numeric_expression: _NumericFormulaExpression | None = None
     factor_options: _FactorFormulaOptions | None = None
     formula_label: str | None = None
 
@@ -3103,6 +3143,67 @@ def _offset_columns(terms: Sequence[_CovariateTerm]) -> list[str]:
     return columns
 
 
+_NUMERIC_FORMULA_UNARY_CALLS = frozenset(
+    {
+        "abs",
+        "acos",
+        "acosh",
+        "as.numeric",
+        "asin",
+        "asinh",
+        "atan",
+        "atanh",
+        "ceiling",
+        "cos",
+        "cosh",
+        "exp",
+        "expm1",
+        "floor",
+        "identity",
+        "log1p",
+        "log2",
+        "log10",
+        "sign",
+        "sin",
+        "sinh",
+        "sqrt",
+        "tan",
+        "tanh",
+        "trunc",
+    }
+)
+_NUMERIC_FORMULA_CALLS = _NUMERIC_FORMULA_UNARY_CALLS | {
+    "atan2",
+    "log",
+    "pmax",
+    "pmin",
+    "round",
+    "signif",
+}
+_NUMERIC_FORMULA_UNARY_FUNCTIONS = MappingProxyType(
+    {
+        "acos": math.acos,
+        "acosh": math.acosh,
+        "asin": math.asin,
+        "asinh": math.asinh,
+        "atan": math.atan,
+        "atanh": math.atanh,
+        "cos": math.cos,
+        "cosh": math.cosh,
+        "exp": math.exp,
+        "expm1": math.expm1,
+        "log1p": math.log1p,
+        "log2": math.log2,
+        "log10": math.log10,
+        "sin": math.sin,
+        "sinh": math.sinh,
+        "sqrt": math.sqrt,
+        "tan": math.tan,
+        "tanh": math.tanh,
+    }
+)
+
+
 def _arithmetic_literal(value: str) -> float | None:
     try:
         literal = float(value)
@@ -3111,6 +3212,377 @@ def _arithmetic_literal(value: str) -> float | None:
     if not math.isfinite(literal):
         raise ValueError("formula arithmetic literals must be finite")
     return literal
+
+
+def _numeric_formula_call_parts(expression: str) -> tuple[str, list[str]] | None:
+    value = expression.strip()
+    for function in _NUMERIC_FORMULA_CALLS:
+        prefix = f"{function}("
+        if value.startswith(prefix) and value.endswith(")"):
+            return function, _formula_response_parts(value[len(prefix) : -1])
+    return None
+
+
+def _numeric_formula_bound_arguments(
+    function: str,
+    parts: Sequence[str],
+    formals: Sequence[str],
+) -> list[str | None]:
+    arguments: dict[str, str] = {}
+    positional: list[str] = []
+    for part in parts:
+        option = _formula_named_option(part)
+        if option is None:
+            positional.append(part)
+            continue
+        raw_name, raw_value = option
+        normalized = raw_name.strip().lower().replace("_", ".")
+        if not normalized:
+            raise ValueError(f"unsupported {function}() formula option: {raw_name}")
+        matches = [name for name in formals if name.lower().startswith(normalized)]
+        if normalized in {name.lower() for name in formals}:
+            matches = [name for name in formals if name.lower() == normalized]
+        if not matches:
+            raise ValueError(f"unsupported {function}() formula option: {raw_name}")
+        if len(matches) > 1:
+            raise ValueError(f"ambiguous {function}() formula option: {raw_name}")
+        name = matches[0]
+        if name in arguments:
+            raise ValueError(f"{function}() contains multiple {name}= arguments")
+        arguments[name] = raw_value
+
+    available = [name for name in formals if name not in arguments]
+    if len(positional) > len(available):
+        raise ValueError(f"{function}() received too many arguments")
+    for name, value in zip(available, positional, strict=False):
+        arguments[name] = value
+    return [arguments.get(name) for name in formals]
+
+
+def _numeric_formula_bool_literal(value: str, name: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"true", "t"}:
+        return True
+    if normalized in {"false", "f"}:
+        return False
+    raise ValueError(f"{name} must be TRUE or FALSE")
+
+
+def _numeric_formula_integer_literal(value: str, name: str) -> int:
+    literal = _arithmetic_literal(value.strip().removesuffix("L").removesuffix("l"))
+    if literal is None or not literal.is_integer():
+        raise ValueError(f"{name} must be an integer")
+    return int(literal)
+
+
+def _numeric_formula_literal(value: str) -> float | None:
+    text = value.strip()
+    lowered = text.lower()
+    if lowered in {"true", "t"}:
+        return 1.0
+    if lowered in {"false", "f"}:
+        return 0.0
+    if lowered == "pi":
+        return math.pi
+    if lowered in {"na", "na_real_", "na_integer_", "nan"}:
+        return math.nan
+    if lowered in {"inf", "infinity"}:
+        return math.inf
+    if len(text) > 1 and text[-1] in {"l", "L"} and text[-2].isdigit():
+        text = text[:-1]
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _numeric_formula_call_expression(
+    function: str,
+    parts: Sequence[str],
+) -> _NumericFormulaCall:
+    if function in _NUMERIC_FORMULA_UNARY_CALLS:
+        (argument,) = _numeric_formula_bound_arguments(function, parts, ("x",))
+        if argument is None:
+            raise ValueError(f"{function}() requires one numeric argument")
+        return _NumericFormulaCall(function, (_parse_numeric_formula_expression(argument),))
+
+    if function == "atan2":
+        y_value, x_value = _numeric_formula_bound_arguments(function, parts, ("y", "x"))
+        if y_value is None or x_value is None:
+            raise ValueError("atan2() requires y and x arguments")
+        return _NumericFormulaCall(
+            function,
+            (
+                _parse_numeric_formula_expression(y_value),
+                _parse_numeric_formula_expression(x_value),
+            ),
+        )
+
+    if function == "log":
+        value, base = _numeric_formula_bound_arguments(function, parts, ("x", "base"))
+        if value is None:
+            raise ValueError("log() requires one numeric argument")
+        base_expression = (
+            _NumericFormulaLiteral(math.e)
+            if base is None
+            else _parse_numeric_formula_expression(base)
+        )
+        return _NumericFormulaCall(
+            function,
+            (_parse_numeric_formula_expression(value), base_expression),
+        )
+
+    if function in {"round", "signif"}:
+        value, digits = _numeric_formula_bound_arguments(function, parts, ("x", "digits"))
+        if value is None:
+            raise ValueError(f"{function}() requires one numeric argument")
+        default_digits = 0 if function == "round" else 6
+        digits_value = (
+            default_digits
+            if digits is None
+            else _numeric_formula_integer_literal(digits, f"{function} digits")
+        )
+        if function == "signif" and digits_value < 1:
+            raise ValueError("signif digits must be positive")
+        return _NumericFormulaCall(
+            function,
+            (_parse_numeric_formula_expression(value),),
+            digits_value,
+        )
+
+    if function in {"pmin", "pmax"}:
+        arguments: list[_NumericFormulaExpression] = []
+        na_rm = False
+        saw_na_rm = False
+        for part in parts:
+            option = _formula_named_option(part)
+            if option is None:
+                arguments.append(_parse_numeric_formula_expression(part))
+                continue
+            raw_name, raw_value = option
+            normalized = raw_name.strip().lower().replace("_", ".")
+            if normalized == "na.rm":
+                if saw_na_rm:
+                    raise ValueError(f"{function}() contains multiple na.rm= arguments")
+                na_rm = _numeric_formula_bool_literal(raw_value, f"{function} na.rm")
+                saw_na_rm = True
+            else:
+                arguments.append(_parse_numeric_formula_expression(raw_value))
+        if not arguments:
+            raise ValueError(f"{function}() requires at least one numeric argument")
+        return _NumericFormulaCall(function, tuple(arguments), na_rm)
+
+    raise ValueError(f"unsupported formula numeric call {function!r}")
+
+
+@lru_cache(maxsize=2048)
+def _parse_numeric_formula_expression(expression: str) -> _NumericFormulaExpression:
+    value = _strip_outer_formula_parentheses(expression)
+    if not value:
+        raise ValueError("formula numeric expressions must not be empty")
+
+    split = _find_top_level_arithmetic_operator(value, {"+", "-"})
+    if split is None:
+        split = _find_top_level_arithmetic_operator(value, {"*", "/"})
+    if split is not None:
+        left, operator, right = split
+        return _NumericFormulaBinary(
+            operator,
+            _parse_numeric_formula_expression(left),
+            _parse_numeric_formula_expression(right),
+        )
+
+    if value.startswith(("+", "-")):
+        return _NumericFormulaUnary(value[0], _parse_numeric_formula_expression(value[1:]))
+
+    split = _find_top_level_power_operator(value)
+    if split is not None:
+        left, operator, right = split
+        return _NumericFormulaBinary(
+            operator,
+            _parse_numeric_formula_expression(left),
+            _parse_numeric_formula_expression(right),
+        )
+
+    literal = _numeric_formula_literal(value)
+    if literal is not None:
+        return _NumericFormulaLiteral(literal)
+
+    call = _numeric_formula_call_parts(value)
+    if call is not None:
+        return _numeric_formula_call_expression(*call)
+
+    column, quoted = _formula_name(value)
+    if _unsupported_formula_name(column, quoted):
+        raise ValueError(f"unsupported formula numeric expression: {value}")
+    return _NumericFormulaColumn(column)
+
+
+def _numeric_formula_expression_columns(expression: _NumericFormulaExpression) -> list[str]:
+    if isinstance(expression, _NumericFormulaLiteral):
+        return []
+    if isinstance(expression, _NumericFormulaColumn):
+        return [expression.name]
+    if isinstance(expression, _NumericFormulaUnary):
+        return _numeric_formula_expression_columns(expression.operand)
+    if isinstance(expression, _NumericFormulaBinary):
+        columns = _numeric_formula_expression_columns(expression.left)
+        _append_unique(columns, _numeric_formula_expression_columns(expression.right))
+        return columns
+    columns: list[str] = []
+    for argument in expression.arguments:
+        _append_unique(columns, _numeric_formula_expression_columns(argument))
+    return columns
+
+
+def _numeric_formula_unary_value(function: str, value: float) -> float:
+    if math.isnan(value):
+        return math.nan
+    if function in {"as.numeric", "identity"}:
+        return value
+    if function == "abs":
+        return abs(value)
+    if function == "sign":
+        return -1.0 if value < 0.0 else 1.0 if value > 0.0 else 0.0
+    if function == "ceiling":
+        return value if math.isinf(value) else float(math.ceil(value))
+    if function == "floor":
+        return value if math.isinf(value) else float(math.floor(value))
+    if function == "trunc":
+        return value if math.isinf(value) else float(math.trunc(value))
+    if function in {"log2", "log10"} and value == 0.0:
+        return -math.inf
+    if function == "log1p" and value == -1.0:
+        return -math.inf
+    if function == "atanh" and abs(value) == 1.0:
+        return math.copysign(math.inf, value)
+
+    operation = _NUMERIC_FORMULA_UNARY_FUNCTIONS[function]
+    try:
+        return float(operation(value))
+    except ValueError:
+        return math.nan
+    except OverflowError:
+        if function == "sinh":
+            return math.copysign(math.inf, value)
+        return math.inf
+
+
+def _numeric_formula_binary_value(operator: str, left: float, right: float) -> float:
+    if math.isnan(left) or math.isnan(right):
+        return math.nan
+    if operator == "+":
+        return left + right
+    if operator == "-":
+        return left - right
+    if operator == "*":
+        return left * right
+    if operator == "/":
+        if right == 0.0:
+            if left == 0.0:
+                return math.nan
+            sign = math.copysign(1.0, left) * math.copysign(1.0, right)
+            return math.copysign(math.inf, sign)
+        return left / right
+    try:
+        return math.pow(left, right)
+    except ValueError:
+        return math.nan
+    except OverflowError:
+        return math.inf
+
+
+def _numeric_formula_signif(value: float, digits: int) -> float:
+    if value == 0.0 or not math.isfinite(value):
+        return value
+    places = digits - int(math.floor(math.log10(abs(value)))) - 1
+    return float(round(value, places))
+
+
+def _numeric_formula_call_values(
+    expression: _NumericFormulaCall,
+    arguments: Sequence[Sequence[float]],
+    n: int,
+) -> list[float]:
+    function = expression.function
+    if function in _NUMERIC_FORMULA_UNARY_CALLS:
+        return [_numeric_formula_unary_value(function, value) for value in arguments[0]]
+    if function == "atan2":
+        return [
+            math.atan2(y_value, x_value)
+            if not (math.isnan(y_value) or math.isnan(x_value))
+            else math.nan
+            for y_value, x_value in zip(arguments[0], arguments[1], strict=True)
+        ]
+    if function == "log":
+        result: list[float] = []
+        for value, base in zip(arguments[0], arguments[1], strict=True):
+            if math.isnan(value) or math.isnan(base) or value < 0.0 or base <= 0.0 or base == 1.0:
+                result.append(math.nan)
+            elif value == 0.0:
+                result.append(-math.inf)
+            else:
+                result.append(math.log(value) / math.log(base))
+        return result
+    if function in {"round", "signif"}:
+        digits = int(cast(int, expression.option))
+        if function == "round":
+            return [float(round(value, digits)) for value in arguments[0]]
+        return [_numeric_formula_signif(value, digits) for value in arguments[0]]
+    if function in {"pmin", "pmax"}:
+        na_rm = bool(expression.option)
+        operation = min if function == "pmin" else max
+        result = []
+        for idx in range(n):
+            values = [argument[idx] for argument in arguments]
+            present = [value for value in values if not math.isnan(value)]
+            if (not na_rm and len(present) != len(values)) or not present:
+                result.append(math.nan)
+            else:
+                result.append(float(operation(present)))
+        return result
+    raise ValueError(f"unsupported formula numeric call {function!r}")
+
+
+def _numeric_formula_expression_values(
+    data: Any,
+    expression: _NumericFormulaExpression,
+    n: int,
+) -> list[float]:
+    if isinstance(expression, _NumericFormulaLiteral):
+        return [expression.value] * n
+    if isinstance(expression, _NumericFormulaColumn):
+        values = _column(data, expression.name)
+        if len(values) != n:
+            raise ValueError("formula columns must have the same length as the Surv response")
+        result: list[float] = []
+        for value in values:
+            if _is_missing_value(value):
+                result.append(math.nan)
+                continue
+            try:
+                result.append(float(value))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"formula numeric column {expression.name!r} requires numeric values"
+                ) from exc
+        return result
+    if isinstance(expression, _NumericFormulaUnary):
+        return [
+            value if expression.operator == "+" else -value
+            for value in _numeric_formula_expression_values(data, expression.operand, n)
+        ]
+    if isinstance(expression, _NumericFormulaBinary):
+        left = _numeric_formula_expression_values(data, expression.left, n)
+        right = _numeric_formula_expression_values(data, expression.right, n)
+        return [
+            _numeric_formula_binary_value(expression.operator, left_value, right_value)
+            for left_value, right_value in zip(left, right, strict=True)
+        ]
+    arguments = [
+        _numeric_formula_expression_values(data, argument, n) for argument in expression.arguments
+    ]
+    return _numeric_formula_call_values(expression, arguments, n)
 
 
 def _is_formula_arithmetic_expression(expression: str) -> bool:
@@ -3214,6 +3686,8 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
 
 
 def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
+    if term.numeric_expression is not None:
+        return _numeric_formula_expression_columns(term.numeric_expression)
     if term.arithmetic is not None:
         return _arithmetic_expression_columns(term.arithmetic)
     return [term.column]
@@ -3278,7 +3752,14 @@ def _apply_formula_na_action(
             if any(column in excluded for column in term_columns):
                 continue
             declared_levels = _formula_declared_factor_levels(data, term)
-            if term.categorical_wrapper is not None:
+            if term.numeric_expression is not None:
+                transformed_columns.append(
+                    (
+                        _covariate_term_name(term),
+                        _numeric_formula_expression_values(data, term.numeric_expression, n),
+                    )
+                )
+            elif term.categorical_wrapper is not None:
                 values = _term_raw_values(data, term, n)
                 if declared_levels is not None and term.factor_options is None:
                     transformed = _factor_normalized_values(
@@ -3421,6 +3902,17 @@ def _previous_non_space(text: str, idx: int) -> str | None:
     return None
 
 
+def _is_scientific_notation_sign(text: str, idx: int) -> bool:
+    if idx < 2 or text[idx] not in {"+", "-"} or text[idx - 1] not in {"e", "E"}:
+        return False
+    cursor = idx - 2
+    saw_digit = False
+    while cursor >= 0 and (text[cursor].isdigit() or text[cursor] == "."):
+        saw_digit = saw_digit or text[cursor].isdigit()
+        cursor -= 1
+    return saw_digit and (cursor < 0 or text[cursor] in "+-*/(^,=")
+
+
 def _find_top_level_arithmetic_operator(
     expression: str,
     operators: set[str],
@@ -3441,6 +3933,8 @@ def _find_top_level_arithmetic_operator(
             depth -= 1
             continue
         if depth == 0 and char in operators:
+            if _is_scientific_notation_sign(expression, idx):
+                continue
             previous = _previous_non_space(expression, idx)
             if previous is None or previous in "+-*/(^":
                 continue
@@ -3753,6 +4247,22 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
             if _is_formula_arithmetic_expression(expression):
                 _arithmetic_expression_columns(expression)
                 return _CovariateTerm(expression, transform=wrapper, arithmetic=expression)
+
+    numeric_call = _numeric_formula_call_parts(term)
+    if numeric_call is not None:
+        function, parts = numeric_call
+        if function in {"log", "sqrt", "exp", "identity", "as.numeric"} and len(parts) == 1:
+            option = _formula_named_option(parts[0])
+            if option is None:
+                column, quoted = _formula_name(parts[0])
+                if not _unsupported_formula_name(column, quoted):
+                    return _CovariateTerm(column, transform=function)
+        expression = _parse_numeric_formula_expression(term)
+        return _CovariateTerm(
+            term,
+            numeric_expression=expression,
+            formula_label=term,
+        )
 
     transform_items = _transform_column_items(term)
     if transform_items is not None:
@@ -4789,6 +5299,8 @@ def _numeric_term_values(values: list[Any], term: _CovariateTerm) -> list[float]
 
 
 def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
+    if term.numeric_expression is not None:
+        return _numeric_formula_expression_values(data, term.numeric_expression, n)
     if term.arithmetic is not None:
         return _arithmetic_expression_values(data, term.arithmetic, n)
     values = _column(data, term.column)
@@ -4864,7 +5376,11 @@ def _formula_declared_factor_levels(
     data: Any,
     term: _CovariateTerm,
 ) -> Any | None:
-    if term.arithmetic is not None or (term.transform is not None and not term.categorical):
+    if (
+        term.numeric_expression is not None
+        or term.arithmetic is not None
+        or (term.transform is not None and not term.categorical)
+    ):
         return None
     categories = _mstate_categories(_column_source(data, term.column))
     if categories is None:
@@ -22989,10 +23505,10 @@ def _cox_reference_centers(
     n: int,
     newdata: Any | None,
 ) -> list[float]:
-    if reference == "zero":
-        return [0.0] * n
     beta = _cox_beta(fit)
     offset_center = _cox_training_offset_center(fit, beta)
+    if reference == "zero":
+        return [offset_center] * n
     if reference != "strata":
         return [_cox_reference_center(fit, reference)] * n
 
@@ -23017,9 +23533,9 @@ def _cox_training_offset_center(fit: Any, beta: list[float]) -> float:
 
 
 def _cox_reference_center(fit: Any, reference: str) -> float:
-    if reference == "zero":
-        return 0.0
     beta = _cox_beta(fit)
+    if reference == "zero":
+        return _cox_training_offset_center(fit, beta)
     means = _cox_reference_means(fit, reference)
     return sum(
         value * coefficient for value, coefficient in zip(means, beta, strict=True)
@@ -25478,11 +25994,10 @@ def predict(
         if include_se and predict_type in {"lp", "risk"}
         else None
     )
-    if reference_name != "zero":
-        centers = _cox_reference_centers(fit, reference_name, len(linear_predictors), newdata)
-        linear_predictors = [
-            value - center for value, center in zip(linear_predictors, centers, strict=True)
-        ]
+    centers = _cox_reference_centers(fit, reference_name, len(linear_predictors), newdata)
+    linear_predictors = [
+        value - center for value, center in zip(linear_predictors, centers, strict=True)
+    ]
     if predict_type == "lp":
         if include_se:
             return PredictResult(
