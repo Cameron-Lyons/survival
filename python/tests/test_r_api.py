@@ -8564,6 +8564,7 @@ def test_concordance_includes_same_time_censors_in_multi_score_diagnostics():
     assert low_level.influence == result.influence
     assert low_level.ranks == result.ranks
 
+
     tied_summary = survival.core.concordance_summary(
         [1.0, 1.0],
         [1, 0],
@@ -8573,6 +8574,58 @@ def test_concordance_includes_same_time_censors_in_multi_score_diagnostics():
     assert tied_summary["concordance"] == pytest.approx(0.5)
     assert tied_summary["comparable"] == pytest.approx(6.0)
     assert tied_summary["tied_x"] == pytest.approx(6.0)
+
+
+@pytest.mark.parametrize("timewt", ["S/G", "n/G2"])
+def test_concordance_censoring_weights_use_post_death_risk_set(timewt):
+    result = survival.concordancefit(
+        survival.Surv([1, 2, 2, 3, 4], [1, 1, 0, 1, 0]),
+        [0.1, 0.2, 0.2, 0.8, 0.4],
+        weights=[1, 2, 3, 1, 2],
+        timewt=timewt,
+        influence=3,
+        ranks=True,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx(0.607142857142857)
+    assert result.count == pytest.approx(
+        {
+            "concordant": 14.0,
+            "discordant": 8.0,
+            "tied.x": 6.0,
+            "tied.y": 0.0,
+            "tied.xy": 0.0,
+        }
+    )
+    assert result.var == pytest.approx(0.0461689139941691)
+    assert result.cvar == pytest.approx(0.0196109693877551)
+    assert result.dfbeta == pytest.approx(
+        [
+            0.112244897959184,
+            0.0892857142857143,
+            0.0191326530612245,
+            -0.131377551020408,
+            -0.0892857142857143,
+        ]
+    )
+    expected_influence = [
+        [8.0, 0.0, 0.0, 0.0, 0.0],
+        [4.0, 0.0, 3.0, 0.0, 0.0],
+        [1.0, 0.0, 2.0, 0.0, 0.0],
+        [3.0, 8.0, 0.0, 0.0, 0.0],
+        [3.0, 4.0, 0.0, 0.0, 0.0],
+    ]
+    assert result.influence is not None
+    for actual, expected in zip(result.influence, expected_influence, strict=True):
+        assert actual == pytest.approx(expected)
+    assert result.ranks is not None
+    assert [row["time"] for row in result.ranks] == pytest.approx([1.0, 2.0, 3.0])
+    assert [row["rank"] for row in result.ranks] == pytest.approx(
+        [0.888888888888889, 0.375, -0.666666666666667]
+    )
+    assert [row["timewt"] for row in result.ranks] == pytest.approx([9.0, 8.0, 12.0])
+    assert [row["casewt"] for row in result.ranks] == pytest.approx([1.0, 2.0, 1.0])
 
 
 def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
