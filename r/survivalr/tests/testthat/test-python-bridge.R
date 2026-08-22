@@ -4936,6 +4936,36 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(bridged_pyears_formula$n, reference_pyears_formula$n)
   expect_equal(bridged_pyears_formula$event, reference_pyears_formula$event)
   expect_s3_class(bridged_pyears_formula$terms, "terms")
+  pyears_environment_fixture <- local({
+    time <- c(10, 20, 30, 40)
+    status <- c(1, 0, 1, 1)
+    group <- factor(c("treated", "treated", "control", "control"))
+    wt <- c(1, 2, 3, 4)
+    list(
+      formula = Surv(time, status) ~ group,
+      weights = wt
+    )
+  })
+  bridged_pyears_environment <- pyears(
+    pyears_environment_fixture$formula,
+    weights = pyears_environment_fixture$weights,
+    scale = 1,
+    data.frame = TRUE
+  )
+  reference_pyears_environment <- survival::pyears(
+    pyears_environment_fixture$formula,
+    weights = pyears_environment_fixture$weights,
+    scale = 1,
+    data.frame = TRUE
+  )
+  expect_equal(
+    bridged_pyears_environment$data,
+    reference_pyears_environment$data
+  )
+  expect_equal(
+    bridged_pyears_environment$offtable,
+    reference_pyears_environment$offtable
+  )
   pyears_order_data <- data.frame(
     time = c(10, 20, 30, 40),
     status = c(1, 0, 1, 1),
@@ -5341,6 +5371,39 @@ test_that("data-prep helpers match R survival shapes", {
     age = c(45, 55, 65, 75) * 365.25,
     sex = factor(c("male", "female", "male", "female")),
     year = as.Date(c("1995-03-01", "2000-07-01", "2005-11-01", "2010-01-01"))
+  )
+  pyears_ratetable_environment <- local({
+    time <- pyears_ratetable_data$time
+    status <- pyears_ratetable_data$status
+    group <- pyears_ratetable_data$group
+    age <- pyears_ratetable_data$age
+    sex <- pyears_ratetable_data$sex
+    year <- pyears_ratetable_data$year
+    survival::Surv(time, status) ~ group
+  })
+  bridged_pyears_ratetable_environment <- pyears(
+    pyears_ratetable_environment,
+    ratetable = survival::survexp.us,
+    scale = 365.25
+  )
+  reference_pyears_ratetable_environment <- survival::pyears(
+    pyears_ratetable_environment,
+    ratetable = survival::survexp.us,
+    scale = 365.25
+  )
+  expect_equal(
+    bridged_pyears_ratetable_environment$pyears,
+    reference_pyears_ratetable_environment$pyears,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_pyears_ratetable_environment$expected,
+    reference_pyears_ratetable_environment$expected,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_pyears_ratetable_environment$event,
+    reference_pyears_ratetable_environment$event
   )
   for (expected_scale in c("event", "pyears")) {
     bridged_ratetable <- pyears(
