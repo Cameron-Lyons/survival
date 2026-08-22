@@ -2,6 +2,7 @@ use crate::constants::{
     CONVERGENCE_FLAG, COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, EXP_CLAMP_MAX,
     EXP_CLAMP_MIN,
 };
+use crate::internal::statistical::ln_gamma;
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_detail_module::CoxphDetail;
 use crate::regression::coxph_support::StratifiedBaselineLookup;
@@ -18,6 +19,16 @@ enum Ties {
 enum FrailtyDistribution {
     Gaussian,
     Gamma,
+    StudentT(f64),
+}
+
+fn student_t_location_terms(value: f64, denominator: f64) -> (f64, f64) {
+    let scaled_square = value * value / denominator;
+    let temp = 1.0 + scaled_square;
+    (
+        value / temp,
+        1.0 / temp - 2.0 * scaled_square / (temp * temp),
+    )
 }
 
 #[pyclass(skip_from_py_object)]
@@ -39,6 +50,8 @@ pub struct CoxPHFrailtyFit {
     pub theta: f64,
     #[pyo3(get)]
     pub distribution: String,
+    #[pyo3(get)]
+    pub tdf: Option<f64>,
     #[pyo3(get)]
     pub offset: Vec<f64>,
     diagnostic_fit: CoxPHFit,
@@ -488,6 +501,17 @@ impl SparseFrailtySolver {
                         / frailty.len() as f64)
                         .ln()
             }
+            FrailtyDistribution::StudentT(degrees_of_freedom) => {
+                let denominator = self.theta * (degrees_of_freedom - 2.0);
+                let (first_sum, second_sum) =
+                    frailty
+                        .iter()
+                        .fold((0.0, 0.0), |(first_sum, second_sum), &value| {
+                            let (first, second) = student_t_location_terms(value, denominator);
+                            (first_sum + first, second_sum + second)
+                        });
+                first_sum / second_sum
+            }
         };
         for value in frailty {
             *value -= center;
@@ -502,6 +526,17 @@ impl SparseFrailtySolver {
                 .iter()
                 .map(|value| value.exp() * precision)
                 .collect(),
+            FrailtyDistribution::StudentT(degrees_of_freedom) => {
+                let denominator = self.theta * (degrees_of_freedom - 2.0);
+                let scale = (degrees_of_freedom + 1.0) / denominator;
+                frailty
+                    .iter()
+                    .map(|value| {
+                        let (_, second) = student_t_location_terms(*value, denominator);
+                        scale * second
+                    })
+                    .collect()
+            }
         }
     }
 
@@ -546,6 +581,21 @@ impl SparseFrailtySolver {
                     .sum::<f64>()
             }
             FrailtyDistribution::Gamma => -frailty.iter().sum::<f64>() / self.theta,
+            FrailtyDistribution::StudentT(degrees_of_freedom) => {
+                let denominator = self.theta * (degrees_of_freedom - 2.0);
+                let constant = 0.5 * (std::f64::consts::PI * denominator).ln()
+                    + ln_gamma(degrees_of_freedom / 2.0)
+                    - ln_gamma((degrees_of_freedom + 1.0) / 2.0);
+                frailty
+                    .iter()
+                    .map(|value| {
+                        constant
+                            + 0.5
+                                * (degrees_of_freedom + 1.0)
+                                * (1.0 + value * value / denominator).ln()
+                    })
+                    .sum()
+            }
         }
     }
 
@@ -721,6 +771,15 @@ impl SparseFrailtySolver {
                     let relative_risk = frailty[group].exp();
                     score[group] -= (relative_risk - 1.0) * precision;
                     group_diagonal[group] += relative_risk * precision;
+                }
+            }
+            FrailtyDistribution::StudentT(degrees_of_freedom) => {
+                let denominator = self.theta * (degrees_of_freedom - 2.0);
+                let scale = (degrees_of_freedom + 1.0) / denominator;
+                for group in 0..nfrail {
+                    let (first, second) = student_t_location_terms(frailty[group], denominator);
+                    score[group] -= scale * first;
+                    group_diagonal[group] += scale * second;
                 }
             }
         }
@@ -1242,7 +1301,7 @@ fn validate_penalty(values: Option<Vec<Vec<f64>>>, nvar: usize) -> PyResult<Arra
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None, entry_times=None, distribution=None))]
+#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None, entry_times=None, distribution=None, tdf=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_frailty_fit(
     time: Vec<f64>,
@@ -1263,6 +1322,7 @@ pub fn coxph_frailty_fit(
     penalty_matrix: Option<Vec<Vec<f64>>>,
     entry_times: Option<Vec<f64>>,
     distribution: Option<&str>,
+    tdf: Option<f64>,
 ) -> PyResult<CoxPHFrailtyFit> {
     let n = time.len();
     if n == 0 {
@@ -1384,11 +1444,34 @@ pub fn coxph_frailty_fit(
         .to_ascii_lowercase()
         .as_str()
     {
-        "gaussian" => FrailtyDistribution::Gaussian,
-        "gamma" => FrailtyDistribution::Gamma,
+        "gaussian" => {
+            if tdf.is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "tdf is only valid for Student-t frailty",
+                ));
+            }
+            FrailtyDistribution::Gaussian
+        }
+        "gamma" => {
+            if tdf.is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "tdf is only valid for Student-t frailty",
+                ));
+            }
+            FrailtyDistribution::Gamma
+        }
+        "t" => {
+            let degrees_of_freedom = tdf.unwrap_or(5.0);
+            if !degrees_of_freedom.is_finite() || degrees_of_freedom <= 2.0 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "tdf must be a finite value greater than 2",
+                ));
+            }
+            FrailtyDistribution::StudentT(degrees_of_freedom)
+        }
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "distribution must be 'gaussian' or 'gamma'",
+                "distribution must be 'gaussian', 'gamma', or 't'",
             ));
         }
     };
@@ -1541,8 +1624,13 @@ pub fn coxph_frailty_fit(
         distribution: match distribution {
             FrailtyDistribution::Gaussian => "gaussian",
             FrailtyDistribution::Gamma => "gamma",
+            FrailtyDistribution::StudentT(_) => "t",
         }
         .to_string(),
+        tdf: match distribution {
+            FrailtyDistribution::StudentT(degrees_of_freedom) => Some(degrees_of_freedom),
+            FrailtyDistribution::Gaussian | FrailtyDistribution::Gamma => None,
+        },
         offset,
         diagnostic_fit,
     })
@@ -1551,6 +1639,29 @@ pub fn coxph_frailty_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn student_t_penalty_derivatives_match_finite_differences() {
+        let theta = 0.7;
+        let degrees_of_freedom = 5.0;
+        let denominator = theta * (degrees_of_freedom - 2.0);
+        let scale = (degrees_of_freedom + 1.0) / denominator;
+        let value = 0.4;
+        let first_step = 1e-5;
+        let second_step = 1e-4;
+        let penalty = |point: f64| {
+            0.5 * (degrees_of_freedom + 1.0) * (1.0 + point * point / denominator).ln()
+        };
+        let (first, second) = student_t_location_terms(value, denominator);
+        let numeric_first =
+            (penalty(value + first_step) - penalty(value - first_step)) / (2.0 * first_step);
+        let numeric_second = (penalty(value + second_step) - 2.0 * penalty(value)
+            + penalty(value - second_step))
+            / (second_step * second_step);
+
+        assert!((scale * first - numeric_first).abs() < 1e-10);
+        assert!((scale * second - numeric_second).abs() < 1e-6);
+    }
 
     #[test]
     fn specialized_factorization_solves_diagonal_dense_system() {
@@ -1611,6 +1722,7 @@ mod tests {
                 11.0, 9.0,
             ]),
             None,
+            None,
         )
         .expect("counting-process frailty fit should compute");
 
@@ -1646,6 +1758,7 @@ mod tests {
             None,
             None,
             Some("gamma"),
+            None,
         )
         .expect("fixed gamma frailty fit should compute");
 

@@ -7958,3 +7958,38 @@ test_that("ordinary istate inputs match R model-frame semantics", {
   expect_length(fit_istate_name, 1L)
   expect_equal(as.character(bridged_fit_frame[[fit_istate_name]]), as.character(data$state))
 })
+
+test_that("Student-t frailty formulas match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 2:19,
+    status = c(1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1),
+    x = c(-1.2, -0.8, -0.4, 0, 0.4, 0.8, 1.2, -1, -0.6, -0.2, 0.2, 0.6, 1, 1.4, -1.4, -0.9, 0.1, 0.9),
+    g = factor(rep(letters[1:6], each = 3))
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ x + frailty(g, distribution = "t", theta = 0.5, tdf = 5, method = "fixed"),
+    data = data,
+    ties = "breslow",
+    control = coxph.control(iter.max = 50L, eps = 1e-10, toler.chol = 1e-13)
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x + survival::frailty(g, distribution = "t", theta = 0.5, tdf = 5, method = "fixed"),
+    data = data,
+    ties = "breslow",
+    control = survival::coxph.control(iter.max = 50L, eps = 1e-10, toler.chol = 1e-13)
+  )
+
+  expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+  expect_equal(bridged$frailty, reference$frail, tolerance = 1e-12)
+  expect_equal(bridged$frailty_variance, reference$fvar, tolerance = 1e-12)
+  expect_equal(bridged$log_likelihood, reference$loglik, tolerance = 1e-12)
+  expect_equal(
+    unname(unlist(bridged$term_degrees_of_freedom)),
+    unname(reference$df),
+    tolerance = 1e-12
+  )
+})

@@ -262,6 +262,7 @@ class _ModelPSplineTerm:
 class _FrailtyFormulaTerm:
     term: _CovariateTerm
     distribution: str
+    tdf: float | None
     theta: float | None
     target_df: float | None
     eps: float
@@ -388,6 +389,7 @@ class _PSplinePenaltyBlock:
 class _FrailtyPenaltyBlock:
     label: str
     distribution: str
+    tdf: float | None
     columns: tuple[int, ...]
     theta: float | None
     target_df: float | None
@@ -3553,6 +3555,7 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
     distribution = "gamma"
     theta: float | None = None
     df: float | None = None
+    tdf: float | None = None
     method: str | None = None
     sparse: bool | None = None
     eps: float | None = None
@@ -3581,6 +3584,8 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
             theta = _finite_float(value, "frailty theta")
         elif name == "df":
             df = _finite_float(value, "frailty df")
+        elif name == "tdf":
+            tdf = _finite_float(value, "frailty tdf")
         elif name == "method":
             method = str(value).lower()
         elif name == "sparse":
@@ -3592,10 +3597,12 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
 
     if column is None:
         raise ValueError("frailty() requires one column")
-    if distribution not in {"gaussian", "gamma"}:
+    if distribution not in {"gaussian", "gamma", "t"}:
         raise NotImplementedError(
-            "frailty() formulas currently support gamma or Gaussian distributions"
+            "frailty() formulas currently support gamma, Gaussian, or Student-t distributions"
         )
+    if distribution != "t" and tdf is not None:
+        raise ValueError("frailty tdf is only valid for the Student-t distribution")
     if distribution == "gamma":
         if theta is not None and df is not None:
             raise ValueError("gamma frailty cannot include both theta and df")
@@ -3622,9 +3629,58 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
         return _FrailtyFormulaTerm(
             term=_CovariateTerm(column, transform="frailty"),
             distribution=distribution,
+            tdf=None,
             theta=theta,
             target_df=None,
             eps=1e-5 if eps is None else eps,
+            selection=selection,
+            sparse=sparse,
+            label=term,
+        )
+    if distribution == "t":
+        if tdf is None:
+            tdf = 5.0
+        if tdf <= 2.0:
+            raise ValueError("Student-t frailty tdf must be greater than 2")
+        if theta is not None and df is not None:
+            raise ValueError("Student-t frailty cannot include both theta and df")
+        if method is None:
+            method = "fixed" if theta is not None else "aic" if df in {None, 0.0} else "df"
+        if eps is not None and eps <= 0.0:
+            raise ValueError("frailty eps must be positive")
+        if method == "fixed":
+            if theta is None:
+                raise ValueError("fixed Student-t frailty requires theta")
+            if df is not None:
+                raise ValueError("fixed Student-t frailty cannot include df")
+            selection = "fixed"
+        elif method == "df":
+            if df is None:
+                raise ValueError("target-df Student-t frailty requires df")
+            if df <= 0.0:
+                raise ValueError("frailty df must be positive")
+            selection = "df"
+        elif method == "aic":
+            if theta is not None:
+                raise ValueError("AIC Student-t frailty cannot include theta")
+            if df not in {None, 0.0}:
+                raise ValueError("AIC Student-t frailty df must be zero")
+            selection = "aic"
+        else:
+            raise NotImplementedError(
+                "Student-t frailty formulas support fixed theta, target df, or AIC"
+            )
+        if theta is not None and theta <= 0.0:
+            raise ValueError("frailty theta must be positive")
+        if eps is None:
+            eps = 0.1 if selection == "df" else 1e-5
+        return _FrailtyFormulaTerm(
+            term=_CovariateTerm(column, transform="frailty"),
+            distribution=distribution,
+            tdf=tdf,
+            theta=theta,
+            target_df=df if selection == "df" else None,
+            eps=eps,
             selection=selection,
             sparse=sparse,
             label=term,
@@ -3673,6 +3729,7 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
     return _FrailtyFormulaTerm(
         term=_CovariateTerm(column, transform="frailty"),
         distribution=distribution,
+        tdf=None,
         theta=theta,
         target_df=df if selection == "df" else None,
         eps=eps,
@@ -4569,12 +4626,13 @@ def _frailty_formula_blocks(
                 else:
                     target_df = term.formula.target_df
                     if target_df is None:
-                        raise AssertionError("Gaussian frailty smoothing target is missing")
+                        raise AssertionError("frailty smoothing target is missing")
                     initial_theta = 3.0 * target_df / n
             blocks.append(
                 _FrailtyPenaltyBlock(
                     label=term.formula.label,
                     distribution=term.formula.distribution,
+                    tdf=term.formula.tdf,
                     columns=tuple(range(cursor, cursor + width)),
                     theta=term.formula.theta,
                     target_df=term.formula.target_df,
@@ -23704,9 +23762,10 @@ def coxph(
         if len(sparse_blocks) > 1:
             raise ValueError("coxph formulas support at most one sparse frailty term")
         if any(
-            block.distribution == "gamma" and not block.sparse for block in formula_frailty_blocks
+            block.distribution in {"gamma", "t"} and not block.sparse
+            for block in formula_frailty_blocks
         ):
-            raise NotImplementedError("gamma frailty currently requires sparse=True")
+            raise NotImplementedError("gamma and Student-t frailty currently require sparse=True")
         sparse_formula_frailty_block = sparse_blocks[0] if sparse_blocks else None
         sparse_formula_frailty_index = (
             formula_frailty_blocks.index(sparse_formula_frailty_block)
@@ -23950,6 +24009,7 @@ def coxph(
                 penalty_matrix=quadratic_penalty,
                 entry_times=entry_times,
                 distribution=sparse_formula_frailty_block.distribution,
+                tdf=sparse_formula_frailty_block.tdf,
             )
         return _core.coxph_fit(
             fit_times,
@@ -24181,9 +24241,7 @@ def coxph(
                 block = formula_frailty_blocks[block_index]
                 target = block.target_df
                 if target is None:
-                    raise AssertionError(
-                        "Gaussian frailty calibration requires a quadratic penalty"
-                    )
+                    raise AssertionError("frailty smoothing target is missing")
                 term_df = (
                     float(fit.frailty_degrees_of_freedom)
                     if block.sparse

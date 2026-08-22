@@ -10473,6 +10473,11 @@ def test_coxph_formula_frailty_rejects_unsupported_modes():
         ("distribution='gaussian',method='aic',theta=.5", ValueError, "cannot include theta"),
         ("distribution='gaussian',method='aic',df=2", ValueError, "must be zero"),
         ("distribution='gaussian',df=6,sparse=False", ValueError, "between"),
+        ("distribution='t',theta=.5,tdf=2", ValueError, "greater than 2"),
+        ("distribution='t',theta=.5,sparse=False", NotImplementedError, "sparse=True"),
+        ("distribution='t',method='fixed'", ValueError, "requires theta"),
+        ("distribution='t',method='reml'", NotImplementedError, "fixed theta"),
+        ("distribution='gaussian',theta=.5,tdf=5", ValueError, "only valid"),
     ):
         with pytest.raises(exception, match=message):
             survival.coxph(f"Surv(time,status) ~ frailty(g,{option})", data=data)
@@ -10491,6 +10496,142 @@ def test_coxph_formula_frailty_rejects_unsupported_modes():
             'Surv(time,status) ~ frailty(g,distribution="gaussian",theta=.5,sparse=False)',
             data=data,
         )
+
+
+@pytest.mark.parametrize(
+    (
+        "frailty_term",
+        "coefficient",
+        "loglik",
+        "x_df",
+        "frailty_df",
+        "theta",
+        "first_effect",
+    ),
+    [
+        (
+            'frailty(g,distribution="t",theta=.5,tdf=5,method="fixed")',
+            -0.19743147930125,
+            -19.9806323372429,
+            0.981376565411526,
+            1.63990825488468,
+            0.5,
+            0.426144390050408,
+        ),
+        (
+            'frailty(g,distribution="t",df=2,tdf=5,method="df")',
+            -0.190407075472797,
+            -19.1417404372198,
+            0.976067230723378,
+            2.05699039361143,
+            0.64210145918238,
+            0.569256434797679,
+        ),
+    ],
+)
+def test_coxph_formula_student_t_frailty_matches_reference(
+    frailty_term,
+    coefficient,
+    loglik,
+    x_df,
+    frailty_df,
+    theta,
+    first_effect,
+):
+    data = {
+        "time": [float(value) for value in range(2, 20)],
+        "status": [1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [
+            -1.2,
+            -0.8,
+            -0.4,
+            0.0,
+            0.4,
+            0.8,
+            1.2,
+            -1.0,
+            -0.6,
+            -0.2,
+            0.2,
+            0.6,
+            1.0,
+            1.4,
+            -1.4,
+            -0.9,
+            0.1,
+            0.9,
+        ],
+        "g": [level for level in "abcdef" for _ in range(3)],
+    }
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x + {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10, "toler.chol": 1e-13},
+    )
+
+    assert fit.coefficients[0] == pytest.approx([coefficient], abs=1e-12)
+    assert fit.frailty[0] == pytest.approx(first_effect, abs=1e-12)
+    assert fit.log_likelihood == pytest.approx([-23.6901985559574, loglik], abs=1e-12)
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"x": x_df, frailty_term: frailty_df},
+        abs=1e-12,
+    )
+    assert fit.history[frailty_term]["theta"] == pytest.approx(theta, abs=1e-12)
+    assert fit.history[frailty_term]["done"] is True
+
+
+def test_coxph_formula_student_t_frailty_selects_variance_by_aic_reference():
+    group = [level for level in "abcdefgh" for _ in range(8)]
+    within_group = list(range(1, 9)) * 8
+    scales = [scale for scale in (1.0, 1.2, 1.5, 1.9, 2.4, 3.0, 3.8, 4.8) for _ in range(8)]
+    data = {
+        "time": [value * scale for value, scale in zip(within_group, scales, strict=True)],
+        "status": [1] * 64,
+        "g": group,
+    }
+    frailty_term = 'frailty(g,distribution="t",tdf=5,method="aic",eps=1e-7)'
+    fit = survival.coxph(
+        f"Surv(time,status) ~ {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10, "toler.chol": 1e-13},
+    )
+
+    assert fit.coefficients[0] == []
+    assert fit.frailty == pytest.approx(
+        [
+            1.30137042268428,
+            0.976780652387157,
+            0.618335062643476,
+            0.239187000816398,
+            -0.175741099680022,
+            -0.549327075649645,
+            -0.981891152145677,
+            -1.54111611341539,
+        ],
+        abs=1e-5,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-206.196936338164, -186.924830886573],
+        abs=3e-5,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx({frailty_term: 7.35973447609057}, abs=3e-5)
+    history = fit.history[frailty_term]
+    assert history["theta"] == pytest.approx(2.86960257431007, abs=4e-4)
+    assert history["done"] is True
+    assert len(history["history"]) == 11
+
+
+def test_student_t_frailty_formula_defaults_match_r_selection():
+    parsed = survival.r_api._parse_frailty_formula_term('frailty(g,distribution="t")')
+
+    assert parsed.distribution == "t"
+    assert parsed.tdf == pytest.approx(5.0)
+    assert parsed.selection == "aic"
+    assert parsed.theta is None
+    assert parsed.target_df is None
+    assert parsed.eps == pytest.approx(1e-5)
 
 
 def test_coxph_formula_gaussian_frailty_calibrates_target_df_reference():
