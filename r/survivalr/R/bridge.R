@@ -5729,11 +5729,153 @@ Surv2data <- function(formula, data, subset, id) {
   mf2
 }
 
+.yates_lm_factor <- function(fit, term, population, levels, levels_missing,
+                             test, predict, method) {
+  if (!inherits(fit, "lm") || inherits(fit, "glm") ||
+      !is.character(term) || length(term) != 1L ||
+      !is.character(population) || length(population) == 0L ||
+      !is.character(test) || length(test) == 0L ||
+      !is.character(predict) || length(predict) != 1L ||
+      !is.character(method) || length(method) == 0L) {
+    return(NULL)
+  }
+  population_value <- match.arg(
+    tolower(population[[1L]]),
+    c("data", "factorial", "sas", "empirical", "yates")
+  )
+  test_value <- match.arg(test[[1L]], c("global", "trend", "pairwise"))
+  method_value <- match.arg(tolower(method[[1L]]), c("direct", "sgtt"))
+  if (!(population_value %in% c("data", "empirical")) ||
+      test_value != "global" || predict != "linear" || method_value != "direct") {
+    return(NULL)
+  }
+
+  Terms <- try(stats::delete.response(stats::terms(fit)), silent = TRUE)
+  if (inherits(Terms, "try-error")) {
+    return(NULL)
+  }
+  factor_names <- row.names(attr(Terms, "factors"))
+  model_frame <- fit$model
+  if (is.null(model_frame)) {
+    model_frame <- stats::model.frame(fit)
+  }
+  if (!(term %in% factor_names) || !(term %in% names(model_frame)) ||
+      !(is.factor(model_frame[[term]]) || is.character(model_frame[[term]]))) {
+    return(NULL)
+  }
+
+  fit_levels <- fit$xlevels[[term]]
+  if (is.null(fit_levels)) {
+    return(NULL)
+  }
+  contrast_levels <- if (levels_missing) {
+    fit_levels
+  } else if (is.atomic(levels) && is.null(dim(levels))) {
+    unique(as.character(levels))
+  } else {
+    return(NULL)
+  }
+  if (length(contrast_levels) < 2L || anyNA(match(contrast_levels, fit_levels))) {
+    return(NULL)
+  }
+
+  beta <- stats::coef(fit)
+  if (anyNA(beta)) {
+    return(NULL)
+  }
+  old_matrix <- stats::model.matrix(fit)
+  if (!identical(names(beta), colnames(old_matrix))) {
+    return(NULL)
+  }
+  weights <- stats::model.weights(model_frame)
+  if (!is.null(weights) &&
+      (length(weights) != nrow(model_frame) || !is.finite(sum(weights)) || sum(weights) == 0)) {
+    return(NULL)
+  }
+
+  mean_design <- function(level) {
+    profile <- model_frame
+    profile[[term]] <- factor(
+      rep(level, nrow(profile)),
+      levels = fit_levels,
+      ordered = is.ordered(model_frame[[term]])
+    )
+    design <- stats::model.matrix(
+      Terms,
+      profile,
+      contrasts.arg = fit$contrasts,
+      xlev = fit$xlevels
+    )
+    if (!identical(colnames(design), names(beta))) {
+      return(NULL)
+    }
+    if (is.null(weights)) {
+      colMeans(design)
+    } else {
+      colSums(design * weights) / sum(weights)
+    }
+  }
+  design_rows <- lapply(contrast_levels, mean_design)
+  if (any(vapply(design_rows, is.null, logical(1)))) {
+    return(NULL)
+  }
+  cmat <- do.call(rbind, design_rows)
+  colnames(cmat) <- names(beta)
+
+  variance <- stats::vcov(fit)
+  estimate_values <- drop(cmat %*% beta)
+  mean_variance <- cmat %*% variance %*% t(cmat)
+  contrast <- diag(length(contrast_levels))
+  contrast[, length(contrast_levels)] <- -1
+  contrast <- contrast[-length(contrast_levels), , drop = FALSE]
+  contrast_estimate <- drop(contrast %*% estimate_values)
+  contrast_variance <- contrast %*% mean_variance %*% t(contrast)
+  test_result <- coxph.wtest(contrast_variance, as.list(contrast_estimate))
+  chisq <- unname(test_result$test[[1L]])
+  sigma2 <- summary(fit)$sigma^2
+
+  estimate <- data.frame(
+    level = as.character(contrast_levels),
+    pmm = estimate_values,
+    std = sqrt(diag(mean_variance)),
+    stringsAsFactors = FALSE
+  )
+  names(estimate)[[1L]] <- term
+  list(
+    estimate = estimate,
+    test = matrix(
+      c(chisq, test_result$df, chisq * sigma2),
+      nrow = 1L,
+      dimnames = list("global", c("chisq", "df", "ss"))
+    ),
+    mvar = mean_variance,
+    cmat = cmat
+  )
+}
+
 yates <- function(fit, term, population = c("data", "factorial", "sas"),
                   levels, test = c("global", "trend", "pairwise"),
                   predict = "linear", options, nsim = 200,
                   method = c("direct", "sgtt")) {
   call <- match.call()
+  if (!missing(fit) && !missing(term)) {
+    local_result <- .yates_lm_factor(
+      fit = fit,
+      term = term,
+      population = population,
+      levels = if (missing(levels)) NULL else levels,
+      levels_missing = missing(levels),
+      test = test,
+      predict = predict,
+      method = method
+    )
+    if (!is.null(local_result)) {
+      call[[1L]] <- quote(survival::yates)
+      local_result$call <- call
+      class(local_result) <- "yates"
+      return(local_result)
+    }
+  }
   call[[1L]] <- quote(survival::yates)
   eval.parent(call)
 }
