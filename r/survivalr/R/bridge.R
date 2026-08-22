@@ -11999,7 +11999,7 @@ concordance <- function(object, ..., formula) {
 }
 
 .concordance_disabled_standard_error_check <- function(
-    response, n_scores, n_strata, timewt, std.err) {
+    response, n_scores, n_strata, timewt, std.err, strata = NULL) {
   disabled <- length(std.err) == 1L &&
     (is.logical(std.err) || is.numeric(std.err)) &&
     !is.na(std.err) &&
@@ -12016,13 +12016,24 @@ concordance <- function(object, ..., formula) {
   } else {
     survival_response <- inherits(response, "Surv") ||
       inherits(response, "survival_py_surv")
-    count_width <- if (survival_response && ncol(.as_native_surv(response)) == 3L) {
+    native_response <- if (survival_response) .as_native_surv(response) else NULL
+    count_width <- if (!is.null(native_response) && ncol(native_response) == 3L) {
       6L
     } else {
       5L
     }
+    count_length <- n_strata * n_scores * count_width
+    if (!is.null(native_response) && !is.null(strata) && count_width < 6L) {
+      status <- native_response[, ncol(native_response)]
+      event_counts <- vapply(
+        split(status, droplevels(as.factor(strata))),
+        sum,
+        numeric(1)
+      )
+      count_length <- count_length + n_scores * sum(event_counts == 0)
+    }
     count <- matrix(
-      numeric(n_strata * n_scores * count_width),
+      numeric(count_length),
       ncol = 6L,
       byrow = TRUE
     )
@@ -12972,7 +12983,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     n_scores,
     input_strata_count,
     timewt,
-    std.err
+    std.err,
+    input_strata
   )
   .concordance_multi_score_strata_check(
     n_scores,

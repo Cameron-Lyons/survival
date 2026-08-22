@@ -4558,6 +4558,45 @@ test_that("disabled standard errors with multiple scores match reference errors"
     fixed = TRUE
   )
 
+  sparse_y <- Surv(seq_len(6), c(1, 0, 0, 0, 1, 0))
+  reference_sparse_y <- survival::Surv(seq_len(6), c(1, 0, 0, 0, 1, 0))
+  sparse_x <- cbind(s1 = seq_len(6), s2 = rev(seq_len(6)))
+  sparse_strata <- rep(seq_len(3), each = 2)
+  sparse_warning <- paste(
+    "data length [32] is not a sub-multiple or multiple",
+    "of the number of rows [6]"
+  )
+  expect_warning(
+    expect_error(
+      concordancefit(
+        sparse_y,
+        sparse_x,
+        strata = sparse_strata,
+        timewt = "S",
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    ),
+    sparse_warning,
+    fixed = TRUE
+  )
+  expect_warning(
+    expect_error(
+      survival::concordancefit(
+        reference_sparse_y,
+        sparse_x,
+        strata = sparse_strata,
+        timewt = "S",
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    ),
+    sparse_warning,
+    fixed = TRUE
+  )
+
   counting_y <- Surv(
     c(4, 3, 0, 1, 3, 2, 3),
     c(6, 6, 1, 4, 4, 5, 4),
