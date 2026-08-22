@@ -1348,6 +1348,7 @@ class SurvfitMultiStateResult:
     influence_chaz: list[list[float]] | None = None
     influence_auc: list[list[float]] | None = None
     cox_model: bool = False
+    cox_source: bool = False
 
     def __iter__(self):
         yield self.time
@@ -1390,10 +1391,13 @@ class SurvfitMultiStateCoxResult:
 
     curves: tuple[SurvfitMultiStateResult, ...]
     model: dict[str, Any] | None = None
+    curve_labels: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.curves:
             raise ValueError("multi-state Cox curves require at least one covariate profile")
+        if self.curve_labels is not None and len(self.curve_labels) != len(self.curves):
+            raise ValueError("multi-state Cox curve labels must match covariate profiles")
         first = self.curves[0]
         for curve in self.curves:
             if not curve.cox_model:
@@ -13971,6 +13975,7 @@ def _survfit0_multistate_result(
         influence_chaz=result.influence_chaz,
         influence_auc=result.influence_auc,
         cox_model=result.cox_model,
+        cox_source=result.cox_source or result.cox_model,
     )
 
 
@@ -13979,7 +13984,11 @@ def _survfit0_multistate_cox_result(
     t0: float | None = None,
 ) -> SurvfitMultiStateCoxResult:
     curves = tuple(_survfit0_multistate_result(curve, t0) for curve in result.curves)
-    return result if curves == result.curves else SurvfitMultiStateCoxResult(curves, result.model)
+    return (
+        result
+        if curves == result.curves
+        else SurvfitMultiStateCoxResult(curves, result.model, result.curve_labels)
+    )
 
 
 def _survfit0_cox_result(
@@ -14323,11 +14332,16 @@ def aggregate_survfit_result(
                     influence_chaz=None,
                     influence_auc=None,
                     cox_model=aggregate_count > 1,
+                    cox_source=True,
                 )
             )
         if aggregate_count == 1:
             return aggregate_curves[0]
-        return SurvfitMultiStateCoxResult(tuple(aggregate_curves), result.model)
+        return SurvfitMultiStateCoxResult(
+            tuple(aggregate_curves),
+            result.model,
+            tuple(str(index + 1) for index in range(aggregate_count)),
+        )
 
     if not isinstance(result, CoxSurvfitResult):
         raise TypeError("survfit object does not have a 'data' margin")
@@ -18672,10 +18686,12 @@ def _subset_survfit_multistate(
             p0_fixed=curve.p0_fixed,
             timefix=curve.timefix,
             cox_model=curve.cox_model,
+            cox_source=curve.cox_source or curve.cox_model,
         )
 
     source_curves = result.curves if isinstance(result, SurvfitMultiStateCoxResult) else (result,)
     if curve_indices is None:
+        selected_curve_indices = list(range(len(source_curves)))
         selected_curves = list(source_curves)
     else:
         selected_curve_indices = [
@@ -18691,7 +18707,16 @@ def _subset_survfit_multistate(
     subset_curves = tuple(subset_curve(curve) for curve in selected_curves)
     if len(subset_curves) == 1:
         return subset_curves[0]
-    return SurvfitMultiStateCoxResult(curves=subset_curves, model=result.model)
+    curve_labels = (
+        None
+        if not isinstance(result, SurvfitMultiStateCoxResult) or result.curve_labels is None
+        else tuple(result.curve_labels[index] for index in selected_curve_indices)
+    )
+    return SurvfitMultiStateCoxResult(
+        curves=subset_curves,
+        model=result.model,
+        curve_labels=curve_labels,
+    )
 
 
 def _survfit_multistate_structure(
@@ -18700,9 +18725,11 @@ def _survfit_multistate_structure(
     batch_curves: tuple[SurvfitMultiStateResult, ...] | None = None
     grouped_batches: list[tuple[Any, SurvfitMultiStateCoxResult]] | None = None
     cox_curve_count = 1
+    cox_curve_names: tuple[str, ...] | None = None
     if isinstance(result, SurvfitMultiStateCoxResult):
         batch_curves = result.curves
         cox_curve_count = result.curve_count
+        cox_curve_names = result.curve_labels
         curves = [(None, result.curves[0])]
         grouped = False
     elif isinstance(result, SurvfitMultiStateResult):
@@ -18724,6 +18751,9 @@ def _survfit_multistate_structure(
         cox_curve_count = grouped_batches[0][1].curve_count
         if any(batch.curve_count != cox_curve_count for _label, batch in grouped_batches):
             raise ValueError("stratified multi-state Cox results must share a data dimension")
+        cox_curve_names = grouped_batches[0][1].curve_labels
+        if any(batch.curve_labels != cox_curve_names for _label, batch in grouped_batches):
+            raise ValueError("stratified multi-state Cox results must share data labels")
         curves = [(label, batch.curves[0]) for label, batch in grouped_batches]
         grouped = True
     else:
@@ -18841,9 +18871,12 @@ def _survfit_multistate_structure(
             "t0": first.t0,
             "_transition_names": transition_names,
             "_cox_model": first.cox_model,
+            "_cox_source": first.cox_source or first.cox_model,
             "_cox_curve_count": cox_curve_count,
         }
     )
+    if cox_curve_names is not None:
+        structure["_cox_curve_names"] = list(cox_curve_names)
     if first.oldstate is not None:
         structure["oldstate"] = list(first.oldstate)
     return structure
@@ -22295,6 +22328,7 @@ def _cox_multistate_survfit_result(
                 cumhaz=[[float(value) for value in row] for row in profile_cumhaz],
                 model=model_frame,
                 cox_model=True,
+                cox_source=True,
             )
             for profile_pstate, profile_cumhaz in profile_curves
         )
