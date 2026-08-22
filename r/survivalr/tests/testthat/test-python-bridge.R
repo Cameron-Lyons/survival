@@ -3953,6 +3953,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(vcov(formula_concordance), vcov(reference_formula_concordance))
   expect_equal(coef(multi_formula_concordance), coef(reference_multi_formula_concordance), tolerance = 1e-12)
   expect_equal(vcov(multi_formula_concordance), vcov(reference_multi_formula_concordance), tolerance = 1e-12)
+  expect_identical(class(multi_formula_concordance), "concordance")
+  expect_equal(
+    unclass(multi_formula_concordance)[setdiff(names(multi_formula_concordance), "call")],
+    unclass(reference_multi_formula_concordance)[setdiff(names(reference_multi_formula_concordance), "call")],
+    tolerance = 1e-12
+  )
   expect_equal(named_formula_concordance_frame$concordance, formula_concordance_frame$concordance)
   expect_equal(named_formula_concordance_frame$variance, formula_concordance_frame$variance)
   expect_equal(direct_concordance_frame$concordance, 1 - formula_concordance_frame$concordance)
@@ -3960,6 +3966,57 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(symbol_concordance_frame$variance, string_column_concordance_frame$variance)
   expect_equal(subset_symbol_concordance_frame$concordance, as.numeric(reference_subset_symbol_concordance$concordance))
   expect_equal(subset_symbol_concordance_frame$variance, as.numeric(reference_subset_symbol_concordance$var))
+
+  default_na_data <- data
+  default_na_data$x[[2L]] <- NA_real_
+  old_na_action <- options(na.action = "na.omit")
+  on.exit(options(old_na_action), add = TRUE)
+  default_na_concordance <- concordance(
+    Surv(time, status) ~ x,
+    data = default_na_data,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_default_na_concordance <- survival::concordance(
+    survival::Surv(time, status) ~ x,
+    data = default_na_data,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_identical(class(default_na_concordance), "concordance")
+  expect_identical(
+    formals(survivalr:::concordance.formula),
+    formals(survival:::concordance.formula)
+  )
+  expect_identical(names(default_na_concordance), names(reference_default_na_concordance))
+  expect_equal(
+    unclass(default_na_concordance)[setdiff(names(default_na_concordance), "call")],
+    unclass(reference_default_na_concordance)[setdiff(names(reference_default_na_concordance), "call")],
+    tolerance = 1e-12
+  )
+  expect_identical(
+    as.character(default_na_concordance$call[[1L]]),
+    "concordance.formula"
+  )
+  expect_identical(default_na_concordance$na.action, reference_default_na_concordance$na.action)
+  default_na_print <- capture.output(print(default_na_concordance))
+  expect_true(any(grepl("Call:", default_na_print, fixed = TRUE)))
+  expect_true(any(grepl("observation deleted due to missingness", default_na_print, fixed = TRUE)))
+  expect_true(any(grepl("Concordance=", default_na_print, fixed = TRUE)))
+
+  excluded_concordance <- concordance(
+    Surv(time, status) ~ x,
+    data = default_na_data,
+    na.action = stats::na.exclude
+  )
+  reference_excluded_concordance <- survival::concordance(
+    survival::Surv(time, status) ~ x,
+    data = default_na_data,
+    na.action = stats::na.exclude
+  )
+  expect_identical(excluded_concordance$na.action, reference_excluded_concordance$na.action)
+  expect_identical(class(excluded_concordance$na.action), "exclude")
+
   near_risk <- c(0.5, 0.5 + 5e-13, 0.1, 0.8)
   near_risk_concordance <- concordancefit(
     response,
