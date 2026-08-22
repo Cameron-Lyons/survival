@@ -19008,10 +19008,63 @@ def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
     return tuple(_core.timefix_vectors(list(vectors), _SURVFIT_TIME_EPSILON))
 
 
-def _survdiff_result_from_components(components: Any, rho: float) -> Any:
+def _survdiff_singular_pivot(components: Any) -> int | None:
+    active = [idx for idx, value in enumerate(components.expected) if float(value) > 0.0]
+    size = len(active) - 1
+    if size <= 0:
+        return None
+    retained = active[1:]
+    matrix = [
+        [float(components.variance[row][column]) for column in retained]
+        for row in retained
+    ]
+    scale = max((abs(value) for row in matrix for value in row), default=0.0)
+    pivot_tolerance = math.ulp(scale) * max(size, 1) * 4.0
+    for column in range(size):
+        pivot_row = max(range(column, size), key=lambda row: abs(matrix[row][column]))
+        if abs(matrix[pivot_row][column]) <= pivot_tolerance:
+            return column + 1
+        if pivot_row != column:
+            matrix[column], matrix[pivot_row] = matrix[pivot_row], matrix[column]
+        pivot = matrix[column][column]
+        for row in range(column + 1, size):
+            factor = matrix[row][column] / pivot
+            matrix[row][column] = 0.0
+            for inner in range(column + 1, size):
+                matrix[row][inner] -= factor * matrix[column][inner]
+    return None
+
+
+def _survdiff_result_from_components(
+    components: Any,
+    rho: float,
+    reference_degenerate: bool = False,
+    emit_warnings: bool = True,
+) -> Any:
     statistic = float(components.chi_squared)
-    df = int(components.degrees_of_freedom)
-    p_value = 1.0 if df == 0 else float(_core.lrt_test(statistic / 2.0, 0.0, df).p_value)
+    if reference_degenerate:
+        df = sum(float(value) > 0.0 for value in components.expected) - 1
+        pivot = _survdiff_singular_pivot(components)
+        if pivot is not None:
+            raise ValueError(
+                f"Lapack routine dgesv: system is exactly singular: U[{pivot},{pivot}] = 0"
+            )
+        if df < 0:
+            if emit_warnings:
+                warnings.warn("NaNs produced", RuntimeWarning, stacklevel=3)
+            p_value = math.nan
+            df = 0
+        else:
+            p_value = (
+                1.0
+                if df == 0
+                else float(_core.lrt_test(statistic / 2.0, 0.0, df).p_value)
+            )
+    else:
+        df = int(components.degrees_of_freedom)
+        p_value = 1.0 if df == 0 else float(
+            _core.lrt_test(statistic / 2.0, 0.0, df).p_value
+        )
     variance = (
         float(components.variance[0][0]) if components.variance and components.variance[0] else 0.0
     )
@@ -19089,6 +19142,7 @@ def _stratified_survdiff(
     rho: float,
     timefix: bool,
     group_levels: Sequence[Any] | None = None,
+    emit_warnings: bool = True,
 ) -> Any:
     n = len(response)
     group_codes = _encode_groups(group, n, levels=group_levels)
@@ -19104,7 +19158,12 @@ def _stratified_survdiff(
             rho,
             timefix,
         )
-        return _survdiff_result_from_components(components, rho)
+        return _survdiff_result_from_components(
+            components,
+            rho,
+            reference_degenerate=response.start is None,
+            emit_warnings=emit_warnings,
+        )
 
     components = _core.stratified_logrank_components(
         times,
@@ -19114,7 +19173,12 @@ def _stratified_survdiff(
         rho,
         timefix,
     )
-    return _survdiff_result_from_components(components, rho)
+    return _survdiff_result_from_components(
+        components,
+        rho,
+        reference_degenerate=True,
+        emit_warnings=emit_warnings,
+    )
 
 
 def survdiff(
@@ -19132,6 +19196,7 @@ def survdiff(
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     timefix = _pop_dotted_keyword(kwargs, "time.fix", "timefix", timefix, True)
+    emit_warnings = _normalize_bool_option(kwargs.pop("_emit_warnings", True), "_emit_warnings")
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"survdiff got unexpected keyword argument(s): {unexpected}")
@@ -19192,6 +19257,7 @@ def survdiff(
             rho_value,
             core_timefix,
             formula_group_levels,
+            emit_warnings,
         )
 
     groups = _encode_groups(group, len(response), levels=formula_group_levels)
@@ -19215,7 +19281,12 @@ def survdiff(
             rho_value,
             core_timefix,
         )
-    return _survdiff_result_from_components(components, rho_value)
+    return _survdiff_result_from_components(
+        components,
+        rho_value,
+        reference_degenerate=response.start is None,
+        emit_warnings=emit_warnings,
+    )
 
 
 def _coxph_wtest_b_matrix(b: Any) -> tuple[list[list[float | None]], bool]:

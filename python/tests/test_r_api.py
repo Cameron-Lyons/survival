@@ -10543,6 +10543,42 @@ def test_survdiff_timefix_uses_aeq_surv_tolerance():
     assert exact.statistic != pytest.approx(fixed.statistic)
 
 
+def test_survdiff_matches_degenerate_reference_results():
+    all_censored = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [0, 0, 0, 0],
+        "group": [1, 1, 2, 2],
+    }
+    tied_events = {**all_censored, "time": [1.0] * 4, "status": [1] * 4}
+    disconnected_strata = {
+        "time": [5.0, 3.0, 5.0, 3.0, 8.0, 4.0, 1.0],
+        "status": [1, 1, 1, 1, 1, 0, 1],
+        "group": ["g4", "g1", "g2", "g2", "g3", "g1", "g3"],
+        "site": ["s3", "s3", "s1", "s1", "s2", "s2", "s1"],
+    }
+
+    with pytest.warns(RuntimeWarning, match="NaNs produced"):
+        result = survival.survdiff("Surv(time, status) ~ group", data=all_censored)
+
+    assert result.statistic == 0.0
+    assert math.isnan(result.p_value)
+    assert result.df == 0
+    with pytest.raises(
+        ValueError,
+        match=r"Lapack routine dgesv: system is exactly singular: U\[1,1\] = 0",
+    ):
+        survival.survdiff("Surv(time, status) ~ group", data=tied_events)
+    with pytest.raises(
+        ValueError,
+        match=r"Lapack routine dgesv: system is exactly singular: U\[2,2\] = 0",
+    ):
+        survival.survdiff(
+            "Surv(time, status) ~ group + strata(site)",
+            data=disconnected_strata,
+            rho=2.0,
+        )
+
+
 def test_survdiff_formula_accepts_dotted_na_action_alias():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],

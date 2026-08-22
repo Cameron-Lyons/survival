@@ -12472,6 +12472,36 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
   )
   expect_survdiff_equal(bridged_near_tie_diff, reference_near_tie_diff)
 
+  degenerate_diff_data <- data.frame(
+    time = 1:4,
+    status = rep(0, 4),
+    group = rep(c(1, 2), each = 2)
+  )
+  expect_warning(
+    bridged_degenerate_diff <- survdiff(
+      Surv(time, status) ~ group,
+      data = degenerate_diff_data
+    ),
+    "NaNs produced"
+  )
+  expect_warning(
+    reference_degenerate_diff <- survival::survdiff(
+      survival::Surv(time, status) ~ group,
+      data = degenerate_diff_data
+    ),
+    "NaNs produced"
+  )
+  expect_true(is.nan(as.numeric(bridged_degenerate_diff$p_value)))
+  expect_true(is.nan(reference_degenerate_diff$pvalue))
+  expect_error(
+    survdiff(
+      Surv(time, status) ~ group,
+      data = transform(degenerate_diff_data, time = rep(1, 4), status = rep(1, 4))
+    ),
+    "Lapack routine dgesv: system is exactly singular: U[1,1] = 0",
+    fixed = TRUE
+  )
+
   offset_diff_data <- data.frame(
     time = c(1, 2, 3, 4),
     status = c(1, 0, 1, 1),

@@ -10827,23 +10827,41 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
   )
 }
 
+.survdiff_translate_singular_error <- function(condition) {
+  pattern <- "Lapack routine dgesv: system is exactly singular: U\\[[0-9]+,[0-9]+\\] = 0"
+  message <- conditionMessage(condition)
+  location <- regexpr(pattern, message)
+  if (location[[1L]] > 0L) {
+    stop(regmatches(message, location), call. = FALSE)
+  }
+  stop(condition)
+}
+
 survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
                      rho = 0, timefix = TRUE, ..., group = NULL) {
   env <- parent.frame()
   group_values <- .eval_formula_arg(substitute(group), missing(group), data, env, vector = TRUE)
   subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
-  .call_r_api(
-    "survdiff",
-    response = .as_formula_string(formula),
-    data = .as_python_data(data),
-    group = group_values,
-    subset = subset_values,
-    `na.action` = .as_na_action(na.action),
-    rho = rho,
-    timefix = timefix,
-    ...,
-    .wrap = c("survival_py_survdiff", "survival_py_object")
+  result <- tryCatch(
+    .call_r_api(
+      "survdiff",
+      response = .as_formula_string(formula),
+      data = .as_python_data(data),
+      group = group_values,
+      subset = subset_values,
+      `na.action` = .as_na_action(na.action),
+      rho = rho,
+      timefix = timefix,
+      `_emit_warnings` = FALSE,
+      ...,
+      .wrap = c("survival_py_survdiff", "survival_py_object")
+    ),
+    error = .survdiff_translate_singular_error
   )
+  if (isTRUE(is.nan(as.numeric(result$p_value)))) {
+    warning("NaNs produced", call. = FALSE)
+  }
+  result
 }
 
 .survcheck_events <- function(status, id, states) {
