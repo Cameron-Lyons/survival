@@ -10521,6 +10521,28 @@ def test_survdiff_timefix_false_uses_exact_event_times():
     assert exact.expected == pytest.approx(low_level.expected)
 
 
+def test_survdiff_timefix_uses_aeq_surv_tolerance():
+    data = {
+        "time": [4.0, 1.0, 5.0, 1.0 + 5e-9, 1.0],
+        "status": [0, 1, 1, 1, 0],
+        "group": [20, 10, 20, 10, 10],
+    }
+
+    fixed = survival.survdiff("Surv(time, status) ~ group", data=data, rho=-0.5)
+    exact = survival.survdiff(
+        "Surv(time, status) ~ group",
+        data=data,
+        rho=-0.5,
+        timefix=False,
+    )
+
+    assert fixed.observed == pytest.approx([2.0, 1.29099444873581])
+    assert fixed.expected == pytest.approx([1.2, 2.09099444873581])
+    assert fixed.variance_diagonal == pytest.approx([0.36, 0.36])
+    assert fixed.statistic == pytest.approx(1.77777777777778)
+    assert exact.statistic != pytest.approx(fixed.statistic)
+
+
 def test_survdiff_formula_accepts_dotted_na_action_alias():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],

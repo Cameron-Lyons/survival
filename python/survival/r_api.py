@@ -19178,6 +19178,10 @@ def survdiff(
     fix_time = _normalize_bool_option(timefix, "timefix")
     if formula_offsets is not None:
         return _survdiff_offset_result(response, formula_offsets, rho_value)
+    core_timefix = fix_time
+    if fix_time and response.type == "right":
+        response = aeqSurv(response)
+        core_timefix = False
     if group is None:
         raise ValueError("group is required")
     if formula_strata is not None:
@@ -19186,7 +19190,7 @@ def survdiff(
             group,
             formula_strata,
             rho_value,
-            fix_time,
+            core_timefix,
             formula_group_levels,
         )
 
@@ -19200,7 +19204,7 @@ def survdiff(
             list(response.start),
             None,
             rho_value,
-            fix_time,
+            core_timefix,
         )
     else:
         components = _core.survdiff2(
@@ -19209,7 +19213,7 @@ def survdiff(
             group_codes,
             None,
             rho_value,
-            fix_time,
+            core_timefix,
         )
     return _survdiff_result_from_components(components, rho_value)
 
