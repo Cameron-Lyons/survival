@@ -12542,7 +12542,16 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (any(is.na(x)) || any(is.na(y))) {
     return(NULL)
   }
-  input_score_names <- if (is.matrix(x) || is.data.frame(x)) colnames(x) else NULL
+  input_score_names <- if (is.matrix(x) || is.data.frame(x)) {
+    matrix_names <- colnames(x)
+    if (is.null(matrix_names) && ncol(x) > 1L) {
+      paste0("X", seq_len(ncol(x)))
+    } else {
+      matrix_names
+    }
+  } else {
+    NULL
+  }
   timewt <- match.arg(timewt)
   influence <- as.integer(influence)
   if (!isTRUE(std.err)) {

@@ -4354,6 +4354,35 @@ test_that("one-event concordance ranks match reference dimensions", {
   )
 })
 
+test_that("unnamed concordance score matrices use reference names", {
+  score_matrix <- matrix(
+    c(0.2, 0.6, 0.4, 0.9, 0.3, 0.8, 0.1, 0.5, 0.2, 0.7),
+    ncol = 2
+  )
+  fixtures <- list(
+    list(time = c(1, 2, 3, 4, 5), status = c(1, 1, 0, 1, 0)),
+    list(time = c(1, 2, 3, 4, 5), status = c(1, 0, 0, 0, 0))
+  )
+
+  for (fixture in fixtures) {
+    bridged_fit <- concordancefit(
+      Surv(fixture$time, fixture$status),
+      score_matrix,
+      influence = 3,
+      ranks = TRUE
+    )
+    reference_fit <- survival::concordancefit(
+      survival::Surv(fixture$time, fixture$status),
+      score_matrix,
+      influence = 3,
+      ranks = TRUE
+    )
+
+    expect_identical(names(bridged_fit), names(reference_fit))
+    expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
+  }
+})
+
 test_that("stratified concordance results match reference shapes and diagnostics", {
   right_data <- data.frame(
     y = c(1, 3, 2, 4, 4, 2),
