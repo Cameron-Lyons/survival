@@ -3601,21 +3601,31 @@ def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
             raise ValueError("gamma frailty cannot include both theta and df")
         if method is None:
             method = "fixed" if theta is not None else "em"
-        if method != "fixed" or theta is None:
-            raise NotImplementedError(
-                "gamma frailty currently supports fixed theta with sparse=True"
-            )
-        if theta <= 0.0:
-            raise ValueError("frailty theta must be positive")
         if eps is not None and eps <= 0.0:
             raise ValueError("frailty eps must be positive")
+        if method == "fixed":
+            if theta is None:
+                raise ValueError("fixed gamma frailty requires theta")
+            if df is not None:
+                raise ValueError("fixed gamma frailty cannot include df")
+            selection = "fixed"
+        elif method == "em":
+            if theta is not None or df is not None:
+                raise ValueError("EM gamma frailty cannot include theta or df")
+            selection = "em"
+        else:
+            raise NotImplementedError(
+                "gamma frailty formulas currently support fixed theta or EM with sparse=True"
+            )
+        if theta is not None and theta <= 0.0:
+            raise ValueError("frailty theta must be positive")
         return _FrailtyFormulaTerm(
             term=_CovariateTerm(column, transform="frailty"),
             distribution=distribution,
             theta=theta,
             target_df=None,
-            eps=0.1 if eps is None else eps,
-            selection="fixed",
+            eps=1e-5 if eps is None else eps,
+            selection=selection,
             sparse=sparse,
             label=term,
         )
@@ -4544,6 +4554,8 @@ def _frailty_formula_blocks(
             if initial_theta is None:
                 if term.formula.selection == "aic":
                     initial_theta = 0.1
+                elif term.formula.selection == "em":
+                    initial_theta = 0.0
                 elif term.formula.selection == "reml":
                     initial_theta = 1.0
                 else:
@@ -4589,6 +4601,8 @@ def _formula_penalty_matrix(
             for local_column, column in enumerate(block.columns):
                 penalty[row][column] += smoothing * block.penalty[local_row][local_column]
     for block, theta in zip(frailty_blocks, frailty_thetas, strict=True):
+        if not block.columns:
+            continue
         precision = 1.0 / theta
         for column in block.columns:
             penalty[column][column] += precision
@@ -4879,7 +4893,7 @@ def _frailty_brent(
     maximum = max(y)
     best = [index for index, value in enumerate(y) if value == maximum]
     if len(best) != 1:
-        raise ValueError("AIC smoothing search encountered tied optima")
+        raise ValueError("frailty smoothing search encountered tied optima")
     center = best[0]
     if center == 0:
         new_theta = x[0] - 3.0 * (x[1] - x[0])
@@ -4910,6 +4924,86 @@ def _frailty_brent(
             return local_x[1] - 0.38 * (local_x[1] - local_x[0])
         return local_x[1] + 0.32 * (local_x[2] - local_x[1])
     return new_theta
+
+
+def _gamma_frailty_correction(event_counts: Sequence[int], theta: float) -> float:
+    """Return the integrated gamma-frailty log-likelihood correction."""
+
+    if theta == 0.0:
+        return 0.0
+    if theta < 0.0 or not math.isfinite(theta):
+        raise ValueError("gamma frailty theta must be finite and non-negative")
+    if any(count < 0 for count in event_counts):
+        raise ValueError("gamma frailty event counts must be non-negative")
+    maximum = max(event_counts, default=0)
+    if maximum == 0:
+        return 0.0
+
+    precision = 1.0 / theta
+    if precision > 1e7 * maximum:
+        first = math.fsum(count * count for count in event_counts) / precision
+    else:
+        first = math.fsum(
+            count + precision * math.log(precision / (precision + count)) for count in event_counts
+        )
+
+    frequencies = [0] * (maximum + 1)
+    for count in event_counts:
+        frequencies[count] += 1
+    at_least = 0
+    second = 0.0
+    for count in range(maximum, 0, -1):
+        at_least += frequencies[count]
+        second += at_least * math.log(precision + count - 1.0)
+        second -= frequencies[count] * count * math.log(precision + count)
+    return first + second
+
+
+def _gamma_frailty_history_row(
+    theta: float,
+    penalized_log_likelihood: float,
+    status: Sequence[int],
+    groups: Sequence[int],
+) -> dict[str, float]:
+    if len(status) != len(groups):
+        raise ValueError("gamma frailty status and groups must have equal lengths")
+    group_count = max(groups, default=-1) + 1
+    events = [0] * group_count
+    for event, group in zip(status, groups, strict=True):
+        if group < 0 or group >= group_count:
+            raise ValueError("gamma frailty group codes must be non-negative and contiguous")
+        events[group] += int(event)
+    correction = _gamma_frailty_correction(events, theta)
+    return {
+        "theta": theta,
+        "loglik": penalized_log_likelihood,
+        "c.loglik": penalized_log_likelihood + correction,
+    }
+
+
+def _gamma_frailty_em_next_theta(
+    eps: float,
+    history: Sequence[Mapping[str, float]],
+) -> tuple[float, bool]:
+    iteration = len(history)
+    if iteration == 1:
+        return 1.0, False
+
+    theta = [float(row["theta"]) for row in history]
+    criterion = [float(row["c.loglik"]) for row in history]
+    if iteration == 2:
+        if criterion[1] < criterion[0] + 1.0:
+            return math.fsum(theta[:2]) / 2.0, False
+        return 2.0 * theta[1], False
+
+    previous = criterion[-2]
+    converged = previous != 0.0 and abs(1.0 - criterion[-1] / previous) < eps
+    if criterion[-1] == max(criterion) and theta[-1] == max(theta):
+        next_theta = 2.0 * max(theta)
+    else:
+        root_theta = [math.sqrt(value) for value in theta]
+        next_theta = _frailty_brent(root_theta, criterion, 0.0, None) ** 2
+    return next_theta, converged
 
 
 def _pspline_aic_next_theta(
@@ -23809,6 +23903,24 @@ def coxph(
         if sparse_formula_frailty_block is not None:
             if sparse_theta is None:
                 raise AssertionError("sparse frailty variance is missing")
+            if sparse_theta == 0.0:
+                return _core.coxph_fit(
+                    fit_times,
+                    list(response.event),
+                    rows,
+                    strata=fit_strata,
+                    weights=fit_weights,
+                    offset=fit_offset,
+                    initial_beta=start,
+                    max_iter=max_iter,
+                    eps=eps,
+                    toler=toler,
+                    method=method_name,
+                    entry_times=entry_times,
+                    nocenter=nocenter_values,
+                    ridge_penalty=diagonal_penalty,
+                    penalty_matrix=quadratic_penalty,
+                )
             if diagonal_penalty is not None:
                 quadratic_penalty = _diagonal_penalty_matrix(diagonal_penalty)
             return _core.coxph_frailty_fit(
@@ -23864,6 +23976,9 @@ def coxph(
     aic_frailty_blocks = [
         index for index, block in enumerate(formula_frailty_blocks) if block.selection == "aic"
     ]
+    em_frailty_blocks = [
+        index for index, block in enumerate(formula_frailty_blocks) if block.selection == "em"
+    ]
     reml_frailty_blocks = [
         index for index, block in enumerate(formula_frailty_blocks) if block.selection == "reml"
     ]
@@ -23875,6 +23990,7 @@ def coxph(
         or aic_pspline_blocks
         or target_frailty_blocks
         or aic_frailty_blocks
+        or em_frailty_blocks
         or reml_frailty_blocks
     ):
         ridge_histories = [
@@ -23894,6 +24010,9 @@ def coxph(
         frailty_aic_histories: list[list[dict[str, float]]] = [
             [] for _block in formula_frailty_blocks
         ]
+        frailty_em_histories: list[list[dict[str, float]]] = [
+            [] for _block in formula_frailty_blocks
+        ]
         frailty_reml_histories: list[list[dict[str, float]]] = [
             [] for _block in formula_frailty_blocks
         ]
@@ -23908,6 +24027,31 @@ def coxph(
         sparse_start = None
         initial_log_likelihood = None
         fit = None
+        if em_frailty_blocks:
+            if em_frailty_blocks != [sparse_formula_frailty_index]:
+                raise AssertionError("gamma EM requires exactly one sparse frailty term")
+            block_index = em_frailty_blocks[0]
+            block = formula_frailty_blocks[block_index]
+            preliminary_fit = run_fit(
+                fit_ridge_penalty,
+                fit_penalty_matrix,
+                start,
+                0.0,
+            )
+            initial_log_likelihood = float(preliminary_fit.log_likelihood[0]) - (
+                _frailty_loglik_constant(formula_frailty_blocks, frailty_thetas)
+            )
+            frailty_em_histories[block_index].append(
+                _gamma_frailty_history_row(
+                    0.0,
+                    float(preliminary_fit.log_likelihood[-1]),
+                    list(response.event),
+                    block.groups,
+                )
+            )
+            frailty_thetas[block_index] = 1.0
+            reported_frailty_thetas[block_index] = 1.0
+            start = [float(value) for value in preliminary_fit.coefficients[0]]
         for outer_iteration in range(1, outer_max + 1):
             fitted_ridge_thetas = list(ridge_thetas)
             fitted_pspline_thetas = list(pspline_thetas)
@@ -24080,6 +24224,23 @@ def coxph(
                 next_reported_frailty_thetas[block_index] = next_theta
                 next_frailty_thetas[block_index] = max(next_theta, 1e-12)
                 frailty_done[block_index] = converged
+            for block_index in em_frailty_blocks:
+                block = formula_frailty_blocks[block_index]
+                frailty_em_histories[block_index].append(
+                    _gamma_frailty_history_row(
+                        fitted_frailty_thetas[block_index],
+                        float(fit.penalized_log_likelihood),
+                        list(response.event),
+                        block.groups,
+                    )
+                )
+                next_theta, converged = _gamma_frailty_em_next_theta(
+                    block.eps,
+                    frailty_em_histories[block_index],
+                )
+                next_reported_frailty_thetas[block_index] = next_theta
+                next_frailty_thetas[block_index] = max(next_theta, 1e-12)
+                frailty_done[block_index] = converged
             for block_index in reml_frailty_blocks:
                 block = formula_frailty_blocks[block_index]
                 frailty_reml_histories[block_index].append(
@@ -24116,7 +24277,7 @@ def coxph(
             pspline_thetas = next_pspline_thetas
             frailty_thetas = next_frailty_thetas
             start = [float(value) for value in fit.coefficients[0]]
-            if sparse_formula_frailty_block is not None:
+            if sparse_formula_frailty_block is not None and hasattr(fit, "frailty"):
                 sparse_start = [float(value) for value in fit.frailty]
         if fit is None:
             raise AssertionError("penalty calibration did not run")
@@ -24214,10 +24375,19 @@ def coxph(
                             {
                                 "theta": reported_frailty_thetas[index],
                                 "done": frailty_done[index],
-                                "history": frailty_reml_histories[index],
+                                "history": frailty_em_histories[index],
+                                "c.loglik": frailty_em_histories[index][-1]["c.loglik"],
                             }
-                            if block.selection == "reml"
-                            else {"theta": frailty_thetas[index], "done": True}
+                            if block.selection == "em"
+                            else (
+                                {
+                                    "theta": reported_frailty_thetas[index],
+                                    "done": frailty_done[index],
+                                    "history": frailty_reml_histories[index],
+                                }
+                                if block.selection == "reml"
+                                else {"theta": frailty_thetas[index], "done": True}
+                            )
                         )
                     )
                 )
