@@ -189,7 +189,28 @@ if (getRversion() >= "2.15.1") {
   } else {
     factor_values <- as.list(factor_values)
   }
-  .python_attr("_r_factor")(factor_values, as.list(levels(value)))
+  contrast_matrix <- tryCatch(
+    stats::contrasts(value),
+    error = function(condition) NULL
+  )
+  contrast_values <- if (is.null(contrast_matrix)) {
+    NULL
+  } else {
+    lapply(seq_len(nrow(contrast_matrix)), function(index) {
+      as.list(as.numeric(contrast_matrix[index, , drop = TRUE]))
+    })
+  }
+  contrast_names <- if (is.null(contrast_matrix) || is.null(colnames(contrast_matrix))) {
+    NULL
+  } else {
+    as.list(colnames(contrast_matrix))
+  }
+  .python_attr("_r_factor")(
+    factor_values,
+    as.list(levels(value)),
+    contrast_values,
+    contrast_names
+  )
 }
 
 .as_python_vector <- function(value) {
