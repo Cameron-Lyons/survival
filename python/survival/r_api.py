@@ -9740,6 +9740,25 @@ def _yates_risk_profiles(
     return {"estimate": estimate, "covariance": covariance}
 
 
+def _yates_link_profiles(
+    x: Any,
+    beta: Any,
+    draws: Any,
+    n_levels: Any,
+    link: str,
+) -> dict[str, list[float] | list[list[float]]]:
+    """Aggregate standard-link GLM profiles for observed and simulated coefficients."""
+
+    estimate, covariance = _core.yates_link_profiles(
+        _as_rows(x, "x"),
+        _float_vector(beta, "beta"),
+        _as_rows(draws, "draws"),
+        _integer_scalar(n_levels, "n_levels"),
+        str(link),
+    )
+    return {"estimate": estimate, "covariance": covariance}
+
+
 def _scalar_or_vector_with_flag(values: Any, name: str) -> tuple[list[Any], bool]:
     try:
         return _materialize_1d(values, name), False

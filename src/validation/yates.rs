@@ -294,11 +294,79 @@ pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResul
     })
 }
 
-fn risk_profile_means(
+#[derive(Clone, Copy)]
+enum ProfileTransform {
+    CoxRisk,
+    Identity,
+    Log,
+    Inverse,
+    Sqrt,
+    InverseSquare,
+    Logit,
+    Probit,
+    Cauchit,
+    Cloglog,
+}
+
+impl ProfileTransform {
+    fn from_link(link: &str) -> PyResult<Self> {
+        match link {
+            "identity" => Ok(Self::Identity),
+            "log" => Ok(Self::Log),
+            "inverse" => Ok(Self::Inverse),
+            "sqrt" => Ok(Self::Sqrt),
+            "1/mu^2" => Ok(Self::InverseSquare),
+            "logit" => Ok(Self::Logit),
+            "probit" => Ok(Self::Probit),
+            "cauchit" => Ok(Self::Cauchit),
+            "cloglog" => Ok(Self::Cloglog),
+            _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "link must be one of 'identity', 'log', 'inverse', 'sqrt', '1/mu^2', 'logit', 'probit', 'cauchit', or 'cloglog'",
+            )),
+        }
+    }
+
+    fn apply(self, eta: f64) -> f64 {
+        const LOWER: f64 = f64::EPSILON;
+        const UPPER: f64 = 1.0 - f64::EPSILON;
+        match self {
+            Self::CoxRisk => eta.exp(),
+            Self::Identity => eta,
+            Self::Log => eta.exp().max(LOWER),
+            Self::Inverse => eta.recip(),
+            Self::Sqrt => eta * eta,
+            Self::InverseSquare => eta.sqrt().recip(),
+            Self::Logit => {
+                let value = if eta >= 0.0 {
+                    1.0 / (1.0 + (-eta).exp())
+                } else {
+                    let exp_eta = eta.exp();
+                    exp_eta / (1.0 + exp_eta)
+                };
+                value.clamp(LOWER, UPPER)
+            }
+            Self::Probit => {
+                let value = 0.5 * (1.0 + libm::erf(eta / std::f64::consts::SQRT_2));
+                value.clamp(LOWER, UPPER)
+            }
+            Self::Cauchit => {
+                let value = 0.5 + eta.atan() / std::f64::consts::PI;
+                value.clamp(LOWER, UPPER)
+            }
+            Self::Cloglog => {
+                let value = -(-eta.exp()).exp_m1();
+                value.clamp(LOWER, UPPER)
+            }
+        }
+    }
+}
+
+fn profile_means(
     x: &[Vec<f64>],
     beta: &[f64],
     n_levels: usize,
     center: &[f64],
+    transform: ProfileTransform,
 ) -> Option<Vec<f64>> {
     let rows_per_level = x.len() / n_levels;
     let mut means = Vec::with_capacity(n_levels);
@@ -313,24 +381,24 @@ fn risk_profile_means(
                 .zip(beta)
                 .map(|((&value, &mean), &coefficient)| (value - mean) * coefficient)
                 .sum::<f64>();
-            let risk = eta.exp();
-            if !risk.is_finite() {
+            let prediction = transform.apply(eta);
+            if !prediction.is_finite() {
                 return None;
             }
-            total += risk;
+            total += prediction;
         }
         means.push(total / rows_per_level as f64);
     }
     Some(means)
 }
 
-#[pyfunction]
-pub fn yates_risk_profiles(
-    x: Vec<Vec<f64>>,
-    beta: Vec<f64>,
-    draws: Vec<Vec<f64>>,
+fn yates_profile_summary(
+    x: &[Vec<f64>],
+    beta: &[f64],
+    draws: &[Vec<f64>],
     n_levels: usize,
-    center: Vec<f64>,
+    center: &[f64],
+    transform: ProfileTransform,
 ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
     if n_levels < 2 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -360,8 +428,8 @@ pub fn yates_risk_profiles(
     }
     if x.iter()
         .flatten()
-        .chain(&beta)
-        .chain(&center)
+        .chain(beta)
+        .chain(center)
         .any(|value| !value.is_finite())
         || draws.iter().flatten().any(|value| !value.is_finite())
     {
@@ -370,18 +438,18 @@ pub fn yates_risk_profiles(
         ));
     }
 
-    let Some(estimate) = risk_profile_means(&x, &beta, n_levels, &center) else {
+    let Some(estimate) = profile_means(x, beta, n_levels, center, transform) else {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "risk profile means are non-finite",
+            "profile means are non-finite",
         ));
     };
     let simulated = draws
         .par_iter()
-        .map(|draw| risk_profile_means(&x, draw, n_levels, &center))
+        .map(|draw| profile_means(x, draw, n_levels, center, transform))
         .collect::<Vec<_>>();
     if simulated.iter().any(Option::is_none) {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "simulated risk profile means are non-finite",
+            "simulated profile means are non-finite",
         ));
     }
     let simulated = simulated.into_iter().flatten().collect::<Vec<_>>();
@@ -406,6 +474,37 @@ pub fn yates_risk_profiles(
         .collect::<Vec<_>>();
 
     Ok((estimate, covariance))
+}
+
+#[pyfunction]
+pub fn yates_risk_profiles(
+    x: Vec<Vec<f64>>,
+    beta: Vec<f64>,
+    draws: Vec<Vec<f64>>,
+    n_levels: usize,
+    center: Vec<f64>,
+) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+    yates_profile_summary(
+        &x,
+        &beta,
+        &draws,
+        n_levels,
+        &center,
+        ProfileTransform::CoxRisk,
+    )
+}
+
+#[pyfunction]
+pub fn yates_link_profiles(
+    x: Vec<Vec<f64>>,
+    beta: Vec<f64>,
+    draws: Vec<Vec<f64>>,
+    n_levels: usize,
+    link: &str,
+) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+    let transform = ProfileTransform::from_link(link)?;
+    let center = vec![0.0; beta.len()];
+    yates_profile_summary(&x, &beta, &draws, n_levels, &center, transform)
 }
 
 #[derive(Debug, Clone)]
@@ -653,5 +752,64 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("at least two rows"));
+    }
+
+    #[test]
+    fn test_yates_link_profiles() {
+        let log_three = 3.0_f64.ln();
+        let (estimate, covariance) = yates_link_profiles(
+            vec![vec![0.0], vec![0.0], vec![1.0], vec![1.0]],
+            vec![log_three],
+            vec![vec![-log_three], vec![0.0], vec![log_three]],
+            2,
+            "logit",
+        )
+        .unwrap();
+
+        assert_eq!(estimate, vec![0.5, 0.75]);
+        assert_eq!(covariance[0], vec![0.0, 0.0]);
+        assert_eq!(covariance[1][0], 0.0);
+        assert!((covariance[1][1] - 0.0625).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_standard_glm_inverse_links() {
+        let cases = [
+            ("identity", -2.0, -2.0),
+            ("log", 0.0, 1.0),
+            ("inverse", 2.0, 0.5),
+            ("sqrt", -2.0, 4.0),
+            ("1/mu^2", 4.0, 0.5),
+            ("logit", 0.0, 0.5),
+            ("probit", 1.0, 0.841_344_746_068_542_9),
+            ("cauchit", 1.0, 0.75),
+            ("cloglog", 0.0, 1.0 - (-1.0_f64).exp()),
+        ];
+
+        for (link, eta, expected) in cases {
+            let transform = ProfileTransform::from_link(link).unwrap();
+            assert!((transform.apply(eta) - expected).abs() < 1e-14, "{link}");
+        }
+        assert_eq!(
+            ProfileTransform::from_link("logit").unwrap().apply(-1e3),
+            f64::EPSILON
+        );
+        assert_eq!(
+            ProfileTransform::from_link("cloglog").unwrap().apply(1e3),
+            1.0 - f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn test_yates_link_profiles_rejects_unknown_link() {
+        let error = yates_link_profiles(
+            vec![vec![0.0], vec![1.0]],
+            vec![0.0],
+            vec![vec![0.0], vec![1.0]],
+            2,
+            "custom",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("link must be one of"));
     }
 }

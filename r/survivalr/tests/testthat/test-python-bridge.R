@@ -626,7 +626,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
   glm_yates_data <- transform(
     yates_population_data,
     outcome = c(0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1),
-    count = c(1, 2, 1, 3, 2, 4, 1, 3, 5, 2, 4, 6, 3, 5, 4, 7, 6, 8)
+    count = c(1, 2, 1, 3, 2, 4, 1, 3, 5, 2, 4, 6, 3, 5, 4, 7, 6, 8),
+    positive = c(
+      0.7, 1.4, 0.9, 1.8, 1.2, 2.1,
+      1.1, 2.0, 2.8, 1.5, 2.4, 3.2,
+      1.9, 3.0, 2.6, 3.8, 3.4, 4.2
+    )
   )
   binomial_yates_fit <- stats::glm(
     outcome ~ group + x,
@@ -677,6 +682,114 @@ test_that("R formula wrappers delegate to the Python survival package", {
       ),
       tolerance = 1e-12
     )
+  }
+  inverse_gaussian_n <- 90L
+  inverse_gaussian_data <- data.frame(
+    group = factor(rep(c("A", "B", "C"), each = inverse_gaussian_n / 3L)),
+    x = rep(seq(-1, 1, length.out = inverse_gaussian_n / 3L), 3L)
+  )
+  inverse_gaussian_eta <- 0.7 +
+    c(A = 0.05, B = 0.1, C = 0.15)[inverse_gaussian_data$group] +
+    0.05 * inverse_gaussian_data$x
+  inverse_gaussian_data$positive <-
+    1 / sqrt(inverse_gaussian_eta) + 0.02 * sin(seq_len(inverse_gaussian_n))
+  response_yates_fits <- suppressWarnings(list(
+    logit = stats::glm(
+      outcome ~ group + x,
+      data = glm_yates_data,
+      family = stats::binomial("logit"),
+      model = TRUE
+    ),
+    probit = stats::glm(
+      outcome ~ group + x,
+      data = glm_yates_data,
+      family = stats::binomial("probit"),
+      model = TRUE
+    ),
+    cauchit = stats::glm(
+      outcome ~ group + x,
+      data = glm_yates_data,
+      family = stats::binomial("cauchit"),
+      model = TRUE
+    ),
+    cloglog = stats::glm(
+      outcome ~ group + x,
+      data = glm_yates_data,
+      family = stats::binomial("cloglog"),
+      model = TRUE
+    ),
+    log = stats::glm(
+      count ~ group + x,
+      data = glm_yates_data,
+      weights = wt,
+      family = stats::poisson("log"),
+      model = TRUE
+    ),
+    sqrt = stats::glm(
+      count ~ group + x,
+      data = glm_yates_data,
+      family = stats::poisson("sqrt"),
+      model = TRUE
+    ),
+    identity = stats::glm(
+      positive ~ group + x,
+      data = glm_yates_data,
+      family = stats::gaussian("identity"),
+      model = TRUE
+    ),
+    inverse = stats::glm(
+      positive ~ group + x,
+      data = glm_yates_data,
+      family = stats::Gamma("inverse"),
+      model = TRUE
+    ),
+    `1/mu^2` = stats::glm(
+      positive ~ group + x,
+      data = inverse_gaussian_data,
+      family = stats::inverse.gaussian("1/mu^2"),
+      model = TRUE
+    )
+  ))
+  set.seed(20260822)
+  response_probe <- .yates_model_term(
+    fit = response_yates_fits$logit,
+    term = "group",
+    population = "data",
+    levels = NULL,
+    levels_missing = TRUE,
+    test = "global",
+    predict = "response",
+    method = "direct",
+    nsim = 40
+  )
+  expect_type(response_probe, "list")
+  expect_false("cmat" %in% names(response_probe))
+  for (fit_name in names(response_yates_fits)) {
+    test_names <- if (fit_name == "logit") c("global", "pairwise") else "global"
+    for (test_name in test_names) {
+      set.seed(20260822)
+      expected <- suppressWarnings(survival::yates(
+        response_yates_fits[[fit_name]],
+        "group",
+        predict = "response",
+        test = test_name,
+        nsim = 200
+      ))
+      set.seed(20260822)
+      actual <- suppressWarnings(yates(
+        response_yates_fits[[fit_name]],
+        "group",
+        predict = "response",
+        test = test_name,
+        nsim = 200
+      ))
+      expect_equal(
+        actual,
+        expected,
+        tolerance = 2e-10,
+        info = paste(fit_name, test_name)
+      )
+    }
   }
 
   yates_cox_data <- data.frame(

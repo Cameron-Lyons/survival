@@ -6679,6 +6679,13 @@ def yates_contrast(
     predict_type: str | None = None,
 ) -> YatesResult: ...
 def yates_pairwise(yates_result: YatesResult) -> YatesPairwiseResult: ...
+def yates_link_profiles(
+    x: list[list[float]],
+    beta: list[float],
+    draws: list[list[float]],
+    n_levels: int,
+    link: str,
+) -> tuple[list[float], list[list[float]]]: ...
 def yates_risk_profiles(
     x: list[list[float]],
     beta: list[float],
