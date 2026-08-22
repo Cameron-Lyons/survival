@@ -5193,6 +5193,40 @@ test_that("stratified concordance rank errors follow stratum order", {
   )
 })
 
+test_that("multi-score rank errors finish stratum construction first", {
+  time <- c(6, 7, 1, 2)
+  status <- c(1, 1, 0, 0)
+  scores <- cbind(
+    x = c(0.2, 0.8, 0.4, 0.6),
+    z = c(0.9, 0.1, 0.3, 0.7)
+  )
+  groups <- c(1, 1, 2, 2)
+  null_error <- "'data' must be of a vector type, was 'NULL'"
+
+  expect_error(
+    concordancefit(
+      Surv(time, status),
+      scores,
+      strata = groups,
+      ymax = 5,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(time, status),
+      scores,
+      strata = groups,
+      ymax = 5,
+      ranks = TRUE
+    ),
+    null_error,
+    fixed = TRUE
+  )
+})
+
 test_that("clustered concordance dfbeta matches reference order and names", {
   data <- data.frame(
     time = c(2, 3, 4, 5, 2),

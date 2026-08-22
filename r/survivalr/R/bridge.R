@@ -12136,11 +12136,11 @@ concordance <- function(object, ..., formula) {
   rank_status <- status
   if (!is.null(ymax)) rank_status[event_time > ymax] <- 0
   rank_counts <- vapply(split(rank_status, groups), sum, numeric(1))
+  if (n_scores > 1L && any(event_counts == 0)) {
+    array(NULL, dim = c(0L, n_scores))
+  }
   for (index in seq_along(event_counts)) {
     if (event_counts[[index]] == 0) {
-      if (n_scores > 1L) {
-        array(NULL, dim = c(0L, n_scores))
-      }
       if (n_strata > 1L) {
         stop(
           "number of items to replace is not a multiple of replacement length",
