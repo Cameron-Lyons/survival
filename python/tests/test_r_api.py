@@ -4763,6 +4763,30 @@ def test_yates_risk_profiles_and_formula_levels():
     assert survival.r_api._model_xlevels(interaction_fit) == {"group": ["C", "A", "B"]}
 
 
+def test_yates_standard_link_profiles():
+    log_three = math.log(3.0)
+    result = survival.r_api._yates_link_profiles(
+        [[0.0], [0.0], [1.0], [1.0]],
+        [log_three],
+        [[-log_three], [0.0], [log_three]],
+        2,
+        "logit",
+    )
+
+    assert result["estimate"] == pytest.approx([0.5, 0.75])
+    assert [value for row in result["covariance"] for value in row] == pytest.approx(
+        [0.0, 0.0, 0.0, 0.0625]
+    )
+    with pytest.raises(ValueError, match="link must be one of"):
+        survival.r_api._yates_link_profiles(
+            [[0.0], [1.0]],
+            [0.0],
+            [[0.0], [1.0]],
+            2,
+            "custom",
+        )
+
+
 def test_r_style_nsk_wraps_native_spline_basis():
     basis = survival.nsk([1.0, 2.0, 3.0, 4.0, 5.0], df=3)
     intercept_basis = survival.nsk(

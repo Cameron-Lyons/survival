@@ -1042,6 +1042,7 @@ BINDINGS = (
     "wlw_model",
     "yates",
     "yates_contrast",
+    "yates_link_profiles",
     "yates_pairwise",
     "yates_risk_profiles",
 )

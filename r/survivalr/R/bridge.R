@@ -5846,6 +5846,7 @@ Surv2data <- function(formula, data, subset, id) {
                               test, predict, method, nsim) {
   cox_fit <- inherits(fit, c("coxph", "survival_py_coxph"))
   linear_fit <- inherits(fit, "lm")
+  glm_fit <- inherits(fit, "glm")
   if ((!linear_fit && !cox_fit) || .is_multistate_cox_fit(fit) ||
       !is.character(term) || length(term) != 1L ||
       !is.character(test) || length(test) == 0L ||
@@ -5865,7 +5866,13 @@ Surv2data <- function(formula, data, subset, id) {
   }
   test_value <- match.arg(test[[1L]], c("global", "trend", "pairwise"))
   method_value <- match.arg(tolower(method[[1L]]), c("direct", "sgtt"))
-  allowed_predictions <- if (cox_fit) c("linear", "lp", "risk") else c("linear", "link")
+  allowed_predictions <- if (cox_fit) {
+    c("linear", "lp", "risk")
+  } else if (glm_fit) {
+    c("linear", "link", "response")
+  } else {
+    c("linear", "link")
+  }
   if (test_value == "trend" || !(predict %in% allowed_predictions) ||
       method_value != "direct") {
     return(NULL)
@@ -5992,11 +5999,21 @@ Surv2data <- function(formula, data, subset, id) {
 
   variance <- stats::vcov(fit)
   risk_scale <- cox_fit && identical(predict, "risk")
+  response_scale <- glm_fit && identical(predict, "response")
+  response_link <- if (response_scale) stats::family(fit)$link else NULL
+  standard_links <- c(
+    "identity", "log", "inverse", "sqrt", "1/mu^2",
+    "logit", "probit", "cauchit", "cloglog"
+  )
+  if (response_scale && !(response_link %in% standard_links)) {
+    return(NULL)
+  }
+  nonlinear_scale <- risk_scale || response_scale
   center <- if (cox_fit) as.numeric(fit$means) else numeric(length(beta))
   if (length(center) != length(beta) || any(!is.finite(center))) {
     return(NULL)
   }
-  if (risk_scale) {
+  if (nonlinear_scale) {
     nsim_value <- suppressWarnings(as.integer(nsim))
     if (length(nsim) != 1L || length(nsim_value) != 1L ||
         is.na(nsim_value) || nsim_value < 2L || nsim_value != nsim) {
@@ -6013,16 +6030,27 @@ Surv2data <- function(formula, data, subset, id) {
     Rmat <- t(ev$vectors %*% (t(ev$vectors) * sqrt(ev$values)))
     bmat <- matrix(stats::rnorm(nsim_value * ncol(variance)), nrow = nsim_value) %*% Rmat
     bmat <- bmat + rep(beta, each = nsim_value)
-    risk_result <- .call_r_api(
-      "_yates_risk_profiles",
-      x = do.call(rbind, design_matrices),
-      beta = beta,
-      draws = bmat,
-      n_levels = length(contrast_levels),
-      center = center
-    )
-    estimate_values <- .as_numeric_vector(.result_field(risk_result, "estimate"))
-    mean_variance <- .as_numeric_matrix(.result_field(risk_result, "covariance"))
+    profile_result <- if (risk_scale) {
+      .call_r_api(
+        "_yates_risk_profiles",
+        x = do.call(rbind, design_matrices),
+        beta = beta,
+        draws = bmat,
+        n_levels = length(contrast_levels),
+        center = center
+      )
+    } else {
+      .call_r_api(
+        "_yates_link_profiles",
+        x = do.call(rbind, design_matrices),
+        beta = beta,
+        draws = bmat,
+        n_levels = length(contrast_levels),
+        link = response_link
+      )
+    }
+    estimate_values <- .as_numeric_vector(.result_field(profile_result, "estimate"))
+    mean_variance <- .as_numeric_matrix(.result_field(profile_result, "covariance"))
   } else {
     estimate_values <- drop(cmat %*% beta)
     if (cox_fit) {
@@ -6048,7 +6076,7 @@ Surv2data <- function(formula, data, subset, id) {
     test_matrix <- matrix(
       test_values,
       nrow = 1L,
-      dimnames = list(if (risk_scale) term else "global", names(test_values))
+      dimnames = list(if (nonlinear_scale) term else "global", names(test_values))
     )
   } else {
     pairs <- utils::combn(seq_along(contrast_levels), 2L)
@@ -6074,7 +6102,7 @@ Surv2data <- function(formula, data, subset, id) {
     test = test_matrix,
     mvar = mean_variance
   )
-  if (!risk_scale) result$cmat <- cmat
+  if (!nonlinear_scale) result$cmat <- cmat
   result
 }
 
