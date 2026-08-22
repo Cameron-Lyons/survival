@@ -5534,6 +5534,34 @@ test_that("zero-pair concordance diagnostics match reference values", {
   }
 })
 
+test_that("zero-pair conditional variance preserves infinite ratios", {
+  start <- c(2, 3, 0, 2, 4)
+  stop <- c(5, 6, 1, 4, 5)
+  status <- c(1, 0, 0, 0, 1)
+  scores <- c(0, 0.5, 1, 1, 1)
+  groups <- c(2, 1, 1, 1, 2)
+
+  bridged <- concordancefit(
+    Surv(start, stop, status),
+    scores,
+    strata = groups,
+    ymax = 5,
+    timewt = "S",
+    influence = 2
+  )
+  reference <- survival::concordancefit(
+    survival::Surv(start, stop, status),
+    scores,
+    strata = groups,
+    ymax = 5,
+    timewt = "S",
+    influence = 2
+  )
+
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+  expect_true(is.infinite(bridged$cvar))
+})
+
 test_that("collapsed single-score strata match reference behavior", {
   data <- data.frame(
     time = c(1, 2, 1, 2),
