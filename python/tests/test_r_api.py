@@ -8817,6 +8817,29 @@ def test_concordance_collapsed_single_score_strata_remain_available_in_python():
     assert [row["time"] for row in result.ranks] == pytest.approx([1.0, 0.5, 1.0, 0.5])
 
 
+def test_concordance_many_strata_ranks_remain_available_in_python():
+    n = 22
+    scores = {
+        "s1": list(range(1, n + 1)),
+        "s2": list(range(n, 0, -1)),
+        "s3": [0, 1] * 11,
+    }
+    result = survival.concordancefit(
+        survival.Surv([0] * n, [1, 2] * 11, ([1, 0, 0, 0] * 6)[:n]),
+        scores,
+        strata=[value for value in range(1, 12) for _ in range(2)],
+        timewt="I",
+        ranks=True,
+        reverse=True,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx([0.0, 1.0, 0.0])
+    assert result.ranks is not None
+    assert [len(rows) for rows in result.ranks] == [6, 6, 6]
+    assert [row["time"] for row in result.ranks[0]][:3] == pytest.approx([1, 9, 17])
+
+
 def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
     data = {
         "y": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],

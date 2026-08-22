@@ -25997,6 +25997,41 @@ def _retain_concordance_strata(keepstrata: Any, n_strata: int, n_scores: int) ->
     return n_strata <= _finite_float(keepstrata, "keepstrata")
 
 
+def _collapse_concordance_strata(
+    response: Surv,
+    strata: _ConcordanceStrata | None,
+    timewt: str,
+    retain_strata: bool,
+    ymin: float | None,
+) -> tuple[Surv, _ConcordanceStrata | None, float | None]:
+    if strata is None or len(strata.levels) <= 10 or timewt not in {"n", "I"} or retain_strata:
+        return response, strata, ymin
+
+    strata_codes = strata.codes(len(response))
+    stop = list(response.time)
+    if ymin is not None:
+        stop = [max(value, ymin) for value in stop]
+    status = list(response.event)
+    if response.type == "right":
+        delta = max(stop) + 2.0
+        start = [-1.0 + code * delta for code in strata_codes]
+    elif response.type == "counting" and response.start is not None:
+        start = list(response.start)
+        delta = 2.0 + max(stop) - min(start)
+        start = [value + code * delta for value, code in zip(start, strata_codes, strict=True)]
+    else:
+        return response, strata, ymin
+    stop = [value + code * delta for value, code in zip(stop, strata_codes, strict=True)]
+    collapsed = Surv._from_normalized(
+        time=stop,
+        event=status,
+        start=start,
+        time2=None,
+        surv_type="counting",
+    )
+    return collapsed, None, None
+
+
 def _concordance_strata_label(value: Any) -> str:
     if isinstance(value, tuple):
         return ", ".join(_strata_value_label(part) for part in value)
@@ -26094,6 +26129,7 @@ class _CountingConcordanceData:
     start: list[float]
     stop: list[float]
     status: list[int]
+    display_offset: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -26254,11 +26290,22 @@ def _counting_concordance_data(
 
     start = list(response.start)
     stop = list(response.time)
+    display_offset = max(0.0, -min(start))
+    if display_offset > 0.0:
+        start = [value + display_offset for value in start]
+        stop = [value + display_offset for value in stop]
     if preapply_timefix and timefix:
         start, stop = _timefix_vectors(start, stop)
     status = list(response.event)
-    stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
-    return _CountingConcordanceData(start, stop, status)
+    bounded_ymin = None if ymin is None else ymin + display_offset
+    bounded_ymax = None if ymax is None else ymax + display_offset
+    stop, status = _concordance_bounded_times_and_status(
+        stop,
+        status,
+        bounded_ymin,
+        bounded_ymax,
+    )
+    return _CountingConcordanceData(start, stop, status, display_offset)
 
 
 def _single_concordance_ranks(
@@ -26308,10 +26355,11 @@ def _single_concordance_ranks(
             False,
             order_scores,
         )
-        return (
-            _concordance_rank_row_dicts(rows),
-            [int(index) for index in indices],
-        )
+        rank_rows = _concordance_rank_row_dicts(rows)
+        if data.display_offset > 0.0:
+            for row in rank_rows:
+                row["time"] -= data.display_offset
+        return rank_rows, [int(index) for index in indices]
     return _unsupported_concordance_response()
 
 
@@ -26365,22 +26413,23 @@ def _concordance_ranks(
             ymax,
             preapply_timefix=True,
         )
-        return (
-            _concordance_rank_row_dicts(
-                _core.stratified_counting_concordance_rank_rows(
-                    data.start,
-                    data.stop,
-                    data.status,
-                    risk_values,
-                    strata_codes,
-                    case_weights,
-                    timewt,
-                    False,
-                    order_scores,
-                )
-            ),
-            None,
+        rank_rows = _concordance_rank_row_dicts(
+            _core.stratified_counting_concordance_rank_rows(
+                data.start,
+                data.stop,
+                data.status,
+                risk_values,
+                strata_codes,
+                case_weights,
+                timewt,
+                False,
+                order_scores,
+            )
         )
+        if data.display_offset > 0.0:
+            for row in rank_rows:
+                row["time"] -= data.display_offset
+        return rank_rows, None
     return _unsupported_concordance_response()
 
 
@@ -27009,6 +27058,13 @@ def concordance(
         len(strata_values.levels) if strata_values is not None else 0,
         len(score_columns),
     )
+    response, strata_values, lower_bound = _collapse_concordance_strata(
+        response,
+        strata_values,
+        time_weight,
+        retain_strata,
+        lower_bound,
+    )
 
     if len(score_columns) == 1:
         result = _single_score_concordance_result(
@@ -27205,6 +27261,13 @@ def concordancefit(
         keepstrata,
         len(strata_values.levels) if strata_values is not None else 0,
         len(score_columns),
+    )
+    response, strata_values, lower_bound = _collapse_concordance_strata(
+        response,
+        strata_values,
+        time_weight,
+        retain_strata,
+        lower_bound,
     )
 
     if len(score_columns) == 1:
