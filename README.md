@@ -161,6 +161,9 @@ They support right-censored `Surv(time, event)` data and counting-process
 `Surv(start, stop, event)` data with delayed-entry risk sets. Direct and
 formula `Surv(...)` calls also accept R-style named aliases including `time=`,
 `time1=`, `start=`, `time2=`, `stop=`, `event=`, and `status=`.
+`concordance(...)` formulas additionally accept numeric and logical outcomes,
+ordered factors, and two-level unordered factors, with rank weighting for these
+non-survival responses.
 Left- and interval-censored curves use a native Turnbull EM fit with the
 reference support-point rules, weighted redistribution, robust or Greenwood
 uncertainty, and all supported confidence transformations.

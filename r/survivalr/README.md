@@ -12,6 +12,8 @@ Bridged models support standard R generics including `coef`, `vcov`, `confint`,
 Common result objects such as `survfit`, `basehaz`, `survdiff`, `concordance`,
 `cox.zph`, `coxph.detail`, and `anova` outputs can also be converted with
 `as.data.frame`.
+`concordance` formulas accept numeric and logical outcomes as well as ordered
+or two-level factors, matching the upstream rank-weighted interpretation.
 Multi-state `survfit` objects with retained model frames support native-shaped
 influence residuals and pseudo-values for state probabilities, cumulative
 transition hazards, and integrated state occupancy.
