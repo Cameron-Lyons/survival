@@ -511,6 +511,28 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   yates_fit <- stats::lm(y ~ group, data = yates_data, model = TRUE)
   expect_equal(yates(yates_fit, "group"), survival::yates(yates_fit, "group"))
+  weighted_yates_data <- transform(
+    yates_data,
+    y = c(1, 2.4, 2.8, 4.7, 5.1, 6.5),
+    x = c(-2, -1, 0, 1, 2, 3),
+    wt = c(1, 3, 2, 1, 4, 2)
+  )
+  weighted_yates_fit <- stats::lm(
+    y ~ group + x,
+    data = weighted_yates_data,
+    weights = wt,
+    model = TRUE
+  )
+  expect_equal(
+    yates(weighted_yates_fit, "group"),
+    survival::yates(weighted_yates_fit, "group"),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    yates(weighted_yates_fit, "group", levels = c("C", "A")),
+    survival::yates(weighted_yates_fit, "group", levels = c("C", "A")),
+    tolerance = 1e-12
+  )
 
   yates_cox_data <- data.frame(
     time = c(5, 8, 6, 9, 7, 10, 4, 11, 12, 13),
