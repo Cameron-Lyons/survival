@@ -887,6 +887,52 @@ test_that("R formula wrappers delegate to the Python survival package", {
       )
     }
   }
+  formula_yates_cox_data <- transform(
+    yates_cox_model_data,
+    sex_factor = factor(sex, labels = c("male", "female"))
+  )
+  native_formula_yates_fit <- survival::coxph(
+    survival::Surv(time, status) ~ group * sex_factor + age + ph.ecog,
+    data = formula_yates_cox_data,
+    model = TRUE,
+    x = TRUE
+  )
+  local_formula_yates_fit <- coxph(
+    Surv(time, status) ~ group * sex_factor + age + ph.ecog,
+    data = formula_yates_cox_data,
+    model = TRUE,
+    x = TRUE
+  )
+  formula_yates_cases <- list(
+    formula = list(term = ~group),
+    interaction = list(term = "group:sex_factor", test = "pairwise"),
+    mixed = list(term = ~group + age, levels = list(age = c(50, 70))),
+    selected = list(
+      term = ~group + sex_factor,
+      levels = data.frame(
+        group = c("C", "A"),
+        sex_factor = c("female", "male")
+      )
+    ),
+    numeric = list(term = 1L)
+  )
+  for (case_name in names(formula_yates_cases)) {
+    arguments <- formula_yates_cases[[case_name]]
+    expected <- do.call(
+      survival::yates,
+      c(list(fit = native_formula_yates_fit), arguments)
+    )
+    compare_yates(
+      do.call(yates, c(list(fit = native_formula_yates_fit), arguments)),
+      expected,
+      tolerance = 1e-12
+    )
+    compare_yates(
+      do.call(yates, c(list(fit = local_formula_yates_fit), arguments)),
+      expected,
+      tolerance = 1e-8
+    )
+  }
   sas_yates_cox_expected <- survival::yates(
     native_yates_cox_fit,
     "group",
