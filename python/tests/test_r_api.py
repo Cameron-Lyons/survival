@@ -8181,6 +8181,24 @@ def test_concordance_cluster_collapses_dfbeta_for_robust_variance():
         assert clustered_row == pytest.approx(unclustered_row)
 
 
+def test_concordance_cluster_dfbeta_uses_r_group_order():
+    result = survival.concordancefit(
+        survival.Surv([2, 3, 4, 5, 2], [0, 1, 1, 0, 1]),
+        [-1, 0, 1, 0, 1],
+        cluster=[2, 1, 1, 2, 3],
+        ymin=3,
+        timewt="S",
+        influence=3,
+        timefix=False,
+    )
+
+    assert result is not None
+    assert result.cluster_names == ["1", "2", "3"]
+    assert result.dfbeta == pytest.approx(
+        [0.168888888888889, -0.128888888888889, -0.04]
+    )
+
+
 def test_concordance_accepts_case_weights():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],

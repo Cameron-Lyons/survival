@@ -4868,6 +4868,70 @@ test_that("uneven stratified concordance ranks match reference errors", {
   }
 })
 
+test_that("clustered concordance dfbeta matches reference order and names", {
+  data <- data.frame(
+    time = c(2, 3, 4, 5, 2),
+    status = c(0, 1, 1, 0, 1),
+    x = c(-1, 0, 1, 0, 1),
+    z = c(1, -1, 0, 0.5, 1),
+    cluster = c(2, 1, 1, 2, 3)
+  )
+
+  for (scores in list(data$x, as.matrix(data[c("x", "z")]))) {
+    bridged <- concordancefit(
+      Surv(data$time, data$status),
+      scores,
+      cluster = data$cluster,
+      ymin = 3,
+      timewt = "S",
+      influence = 3,
+      timefix = FALSE
+    )
+    reference <- survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      scores,
+      cluster = data$cluster,
+      ymin = 3,
+      timewt = "S",
+      influence = 3,
+      timefix = FALSE
+    )
+    expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+  }
+
+  formulas <- list(Surv(time, status) ~ x, Surv(time, status) ~ x + z)
+  reference_formulas <- list(
+    survival::Surv(time, status) ~ x,
+    survival::Surv(time, status) ~ x + z
+  )
+  for (index in seq_along(formulas)) {
+    bridged <- concordance(
+      formulas[[index]],
+      data = data,
+      cluster = data$cluster,
+      ymin = 3,
+      timewt = "S",
+      influence = 3,
+      timefix = FALSE
+    )
+    reference <- survival::concordance(
+      reference_formulas[[index]],
+      data = data,
+      cluster = data$cluster,
+      ymin = 3,
+      timewt = "S",
+      influence = 3,
+      timefix = FALSE
+    )
+    fields <- setdiff(names(reference), "call")
+    expect_equal(
+      unclass(bridged)[fields],
+      unclass(reference)[fields],
+      tolerance = 1e-12
+    )
+  }
+})
+
 test_that("empty concordance rank strata match reference diagnostics", {
   data <- data.frame(
     time = c(1, 2, 1, 2),

@@ -935,6 +935,7 @@ class ConcordanceResult:
     score_names: list[str] | None = None
     strata_counts: list[list[float]] | None = None
     strata_names: list[str] | None = None
+    cluster_names: list[str] | None = None
 
     @property
     def c_index(self) -> float | list[float]:
@@ -26145,6 +26146,16 @@ class _ConcordanceStrata:
         return [_concordance_strata_label(value) for value in self.levels]
 
 
+@dataclass(frozen=True)
+class _ConcordanceCluster:
+    values: list[Any]
+    levels: tuple[Any, ...]
+
+    @property
+    def names(self) -> list[str]:
+        return [_concordance_strata_label(value) for value in self.levels]
+
+
 @lru_cache(maxsize=512)
 def _concordance_formula_response_spec(formula: str) -> _ConcordanceFormulaResponseSpec:
     lhs, separator, _rhs = formula.partition("~")
@@ -26546,26 +26557,31 @@ def _concordance_influence(
     return _unsupported_concordance_response()
 
 
-def _concordance_cluster_values(cluster: Any, n: int) -> list[Any]:
+def _concordance_cluster_values(cluster: Any, n: int) -> _ConcordanceCluster:
     values = _materialize_labels(cluster, "cluster")
     if len(values) != n:
         raise ValueError("cluster must have the same length as the Surv response")
-    _label_levels(values, "cluster")
-    return values
+    declared = _mstate_categories(cluster)
+    if declared is None:
+        levels = _r_formula_ordered_levels(values, "cluster")
+    else:
+        observed = {_factor_value_key(value) for value in values}
+        levels = tuple(
+            level
+            for level in _materialize_1d(declared, "cluster levels")
+            if _factor_value_key(level) in observed
+        )
+    return _ConcordanceCluster(values, levels)
 
 
 def _clustered_concordance_dfbeta(
     dfbeta: list[float],
-    cluster: list[Any],
+    cluster: _ConcordanceCluster,
 ) -> tuple[list[float], float]:
-    collapsed: dict[Any, float] = {}
-    order: list[Any] = []
-    for label, value in zip(cluster, dfbeta, strict=True):
-        if label not in collapsed:
-            collapsed[label] = 0.0
-            order.append(label)
-        collapsed[label] += value
-    cluster_dfbeta = [collapsed[label] for label in order]
+    collapsed = {_factor_value_key(level): 0.0 for level in cluster.levels}
+    for label, value in zip(cluster.values, dfbeta, strict=True):
+        collapsed[_factor_value_key(label)] += value
+    cluster_dfbeta = [collapsed[_factor_value_key(level)] for level in cluster.levels]
     return cluster_dfbeta, math.fsum(value * value for value in cluster_dfbeta)
 
 
@@ -26689,7 +26705,7 @@ def _single_score_concordance_result(
     score_values: list[float],
     weight_values: list[float] | None,
     strata_values: _ConcordanceStrata | None,
-    cluster_values: list[Any] | None,
+    cluster_values: _ConcordanceCluster | None,
     reverse_scores: bool,
     fix_time: bool,
     time_weight: str,
@@ -26771,6 +26787,7 @@ def _single_score_concordance_result(
             else None
         ),
         strata_names=strata_names if retain_strata else None,
+        cluster_names=cluster_values.names if cluster_values is not None else None,
     )
 
 
@@ -26780,7 +26797,7 @@ def _multi_score_concordance_result(
     score_names: list[str],
     weight_values: list[float] | None,
     strata_values: _ConcordanceStrata | None,
-    cluster_values: list[Any] | None,
+    cluster_values: _ConcordanceCluster | None,
     reverse_scores: bool,
     fix_time: bool,
     time_weight: str,
@@ -26840,6 +26857,7 @@ def _multi_score_concordance_result(
             for result in results
         ],
         score_names=score_names,
+        cluster_names=results[0].cluster_names if results else None,
     )
 
 
@@ -26881,6 +26899,7 @@ def _public_concordance_result(
         score_names=result.score_names,
         strata_counts=result.strata_counts,
         strata_names=result.strata_names,
+        cluster_names=result.cluster_names,
     )
 
 
@@ -27104,6 +27123,7 @@ def concordance(
                 score_names=score_names,
                 strata_counts=result.strata_counts,
                 strata_names=result.strata_names,
+                cluster_names=result.cluster_names,
             )
         return _public_concordance_result(result, weight_values)
 
@@ -27245,7 +27265,7 @@ def concordancefit(
     if cluster is not None:
         candidate = _materialize_labels(cluster, "cluster")
         if candidate:
-            cluster_values = _concordance_cluster_values(candidate, len(response))
+            cluster_values = _concordance_cluster_values(cluster, len(response))
 
     time_weight = _normalize_concordance_timewt(timewt)
     influence_value = _normalize_concordance_influence(influence)
@@ -27332,6 +27352,7 @@ def concordancefit(
         score_names=score_names if len(score_columns) > 1 else None,
         strata_counts=computed.strata_counts,
         strata_names=computed.strata_names,
+        cluster_names=computed.cluster_names,
     )
 
 

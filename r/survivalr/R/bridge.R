@@ -12523,11 +12523,19 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
   if (identical(name, "dfbeta")) {
     value <- .result_field(object, name)
     if (is.null(value)) return(NULL)
+    cluster_names <- as.character(.result_field(object, "cluster_names"))
     if (multi_score) {
       matrix_value <- do.call(cbind, lapply(value, .as_numeric_vector))
+      if (length(cluster_names) == nrow(matrix_value)) {
+        rownames(matrix_value) <- cluster_names
+      }
       return(matrix_value)
     }
-    return(.as_numeric_vector(value))
+    vector_value <- .as_numeric_vector(value)
+    if (length(cluster_names) == length(vector_value)) {
+      names(vector_value) <- cluster_names
+    }
+    return(vector_value)
   }
 
   if (identical(name, "influence")) {
@@ -12924,6 +12932,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   variance <- .result_field(result, "variance")
   conditional_variance <- .as_numeric_vector(.result_field(result, "conditional_variance"))
   dfbeta <- .result_field(result, "dfbeta")
+  cluster_names <- as.character(.result_field(result, "cluster_names"))
   dfbeta_matrix <- NULL
   if (multi_score && !is.null(dfbeta)) {
     dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
@@ -12932,6 +12941,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       stop("concordance dfbeta values must be rectangular", call. = FALSE)
     }
     dfbeta_matrix <- do.call(cbind, dfbeta_columns)
+    if (length(cluster_names) == nrow(dfbeta_matrix)) {
+      rownames(dfbeta_matrix) <- cluster_names
+    }
   }
   if (isTRUE(std.err) && !is.null(variance)) {
     if (multi_score) {
@@ -12954,7 +12966,11 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       out$dfbeta <- if (multi_score && !is.null(dfbeta_matrix)) {
         dfbeta_matrix
       } else {
-        .as_numeric_vector(dfbeta)
+        dfbeta_vector <- .as_numeric_vector(dfbeta)
+        if (length(cluster_names) == length(dfbeta_vector)) {
+          names(dfbeta_vector) <- cluster_names
+        }
+        dfbeta_vector
       }
     }
   }
