@@ -26521,6 +26521,7 @@ def _concordance_ranks(
     timewt: str,
     ymin: float | None,
     ymax: float | None,
+    reverse_recycled_ranks: bool = False,
 ) -> tuple[list[dict[str, float]], list[int] | None]:
     if strata is None:
         return _single_concordance_ranks(
@@ -26534,6 +26535,9 @@ def _concordance_ranks(
             ymax,
         )
     strata_codes = strata.codes(len(response))
+    recycled_risk_values = (
+        [-value for value in risk_values] if reverse_recycled_ranks else risk_values
+    )
     if response.type == "right":
         data = _right_concordance_data(response, timefix, ymin, ymax)
         inputs = _right_concordance_inputs(
@@ -26544,21 +26548,25 @@ def _concordance_ranks(
             timewt,
             strata_codes,
         )
-        return (
-            _concordance_rank_row_dicts(
-                _core.stratified_concordance_rank_rows(
-                    inputs.times,
-                    inputs.status,
-                    inputs.risk,
-                    cast(list[int], inputs.strata),
-                    inputs.weights,
-                    timewt,
-                    [*order_scores, *([0.0] * inputs.padding_count)],
-                    inputs.display_times,
-                ),
+        rank_rows = _concordance_rank_row_dicts(
+            _core.stratified_concordance_rank_rows(
+                inputs.times,
+                inputs.status,
+                [
+                    *recycled_risk_values,
+                    *([0.0] * inputs.padding_count),
+                ],
+                cast(list[int], inputs.strata),
+                inputs.weights,
+                timewt,
+                [*order_scores, *([0.0] * inputs.padding_count)],
+                inputs.display_times,
             ),
-            None,
         )
+        if reverse_recycled_ranks:
+            for row in rank_rows:
+                row["rank"] = -row["rank"]
+        return rank_rows, None
     if response.type == "counting":
         data = _counting_concordance_data(
             response,
@@ -26581,7 +26589,10 @@ def _concordance_ranks(
                 inputs.start,
                 inputs.stop,
                 inputs.status,
-                inputs.risk,
+                [
+                    *recycled_risk_values,
+                    *([0.0] * inputs.padding_count),
+                ],
                 cast(list[int], inputs.strata),
                 inputs.weights,
                 timewt,
@@ -26590,6 +26601,9 @@ def _concordance_ranks(
                 inputs.display_stop,
             )
         )
+        if reverse_recycled_ranks:
+            for row in rank_rows:
+                row["rank"] = -row["rank"]
         return rank_rows, None
     return _unsupported_concordance_response()
 
@@ -26912,6 +26926,7 @@ def _single_score_concordance_result(
     row_names: list[str] | None = None,
     retain_strata: bool = False,
     strata_names: list[str] | None = None,
+    reverse_recycled_ranks: bool = False,
 ) -> ConcordanceResult:
     if len(score_values) != len(response):
         raise ValueError("scores must have the same length as the Surv response")
@@ -26943,6 +26958,7 @@ def _single_score_concordance_result(
             time_weight,
             lower_bound,
             upper_bound,
+            reverse_recycled_ranks,
         )
     rank_names = (
         [row_names[index] for index in rank_indices]
@@ -27002,6 +27018,7 @@ def _multi_score_concordance_result(
     influence_value: int,
     include_ranks: bool,
     row_names: list[str] | None = None,
+    reverse_recycled_ranks: bool = False,
 ) -> ConcordanceResult:
     # The reference fit always computes dfbeta values for standard errors,
     # even when the caller does not request that diagnostic in the result.
@@ -27020,6 +27037,7 @@ def _multi_score_concordance_result(
             3,
             include_ranks,
             row_names,
+            reverse_recycled_ranks=reverse_recycled_ranks,
         )
         for score_values in score_columns
     ]
@@ -27298,6 +27316,7 @@ def concordance(
             row_names,
             retain_strata,
             strata_values.names if strata_values is not None else None,
+            reverse_recycled_ranks=reverse_scores,
         )
         if score_names is not None:
             result = ConcordanceResult(
@@ -27339,6 +27358,7 @@ def concordance(
             influence_value,
             include_ranks,
             row_names,
+            reverse_recycled_ranks=reverse_scores,
         ),
         weight_values,
     )
@@ -27503,6 +27523,7 @@ def concordancefit(
             row_names,
             retain_strata,
             strata_values.names if strata_values is not None else None,
+            reverse_recycled_ranks=reverse_value,
         )
     else:
         computed = _multi_score_concordance_result(
@@ -27520,6 +27541,7 @@ def concordancefit(
             internal_influence,
             include_ranks,
             row_names,
+            reverse_recycled_ranks=reverse_value,
         )
 
     dfbeta = _concordancefit_dfbeta(computed.dfbeta)

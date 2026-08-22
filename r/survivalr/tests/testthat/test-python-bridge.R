@@ -5121,6 +5121,44 @@ test_that("stratified concordance rank recycling uses display times", {
   expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
 })
 
+test_that("reversed stratified counting ranks flip after recycling", {
+  start <- c(0, 4, 3, 1, 3, 1, 2)
+  stop <- c(2, 8, 7, 5, 7, 3, 5)
+  status <- c(1, 0, 0, 0, 1, 0, 1)
+  scores <- c(1, 0.5, 1, 0.5, -1, 0, -0.5)
+  groups <- c(1, 1, 1, 2, 1, 2, 2)
+  weights <- c(1.5, 1.5, 0.5, 1.5, 1, 1.5, 0.5)
+
+  bridged <- concordancefit(
+    Surv(start, stop, status),
+    scores,
+    strata = groups,
+    weights = weights,
+    ymin = 2,
+    timewt = "I",
+    influence = 2,
+    ranks = TRUE,
+    reverse = TRUE,
+    timefix = FALSE,
+    keepstrata = 10
+  )
+  reference <- survival::concordancefit(
+    survival::Surv(start, stop, status),
+    scores,
+    strata = groups,
+    weights = weights,
+    ymin = 2,
+    timewt = "I",
+    influence = 2,
+    ranks = TRUE,
+    reverse = TRUE,
+    timefix = FALSE,
+    keepstrata = 10
+  )
+
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+})
+
 test_that("stratified concordance rank errors follow stratum order", {
   start <- rep(0, 6)
   stop <- c(1, 2, 6, 2, 1, 2)
