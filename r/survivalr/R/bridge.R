@@ -11895,21 +11895,50 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
                                 weights = NULL, cluster = NULL, subset = NULL, na.action = "fail") {
   formula <- object
   env <- parent.frame()
-  score_values <- .eval_formula_arg(substitute(scores), missing(scores), data, env, vector = TRUE)
-  risk_score_values <- .eval_formula_arg(
-    substitute(risk.scores),
-    missing(risk.scores),
-    data,
+  formula_data <- if (is.null(data) && inherits(formula, "formula")) {
+    .formula_environment_data(formula, env)
+  } else {
+    data
+  }
+  score_values <- .eval_formula_arg(
+    substitute(scores),
+    missing(scores),
+    formula_data,
     env,
     vector = TRUE
   )
-  weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env, vector = TRUE)
-  cluster_values <- .eval_formula_arg(substitute(cluster), missing(cluster), data, env, vector = TRUE)
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
+  risk_score_values <- .eval_formula_arg(
+    substitute(risk.scores),
+    missing(risk.scores),
+    formula_data,
+    env,
+    vector = TRUE
+  )
+  weight_values <- .eval_formula_arg(
+    substitute(weights),
+    missing(weights),
+    formula_data,
+    env,
+    vector = TRUE
+  )
+  cluster_values <- .eval_formula_arg(
+    substitute(cluster),
+    missing(cluster),
+    formula_data,
+    env,
+    vector = TRUE
+  )
+  subset_values <- .eval_formula_arg(
+    substitute(subset),
+    missing(subset),
+    formula_data,
+    env,
+    vector = TRUE
+  )
   .call_r_api(
     "concordance",
     response = .as_formula_string(formula),
-    data = .as_python_data(data),
+    data = .as_python_data(formula_data),
     scores = score_values,
     risk_scores = risk_score_values,
     weights = weight_values,

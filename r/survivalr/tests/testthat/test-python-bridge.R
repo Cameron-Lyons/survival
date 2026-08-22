@@ -4154,6 +4154,106 @@ test_that("interval-censored curves match weighted Turnbull reference fits", {
   }
 })
 
+test_that("concordance formulas accept numeric and orderable outcomes", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    y = c(1, 3, 2, 4, 4, 2),
+    x = c(0.2, 0.9, 0.4, 0.7, 0.7, 0.1),
+    z = c(1, 0.2, 0.5, 0.8, 0.3, 0.6),
+    w = c(1, 2, 1.5, 0.5, 3, 2.5)
+  )
+  data$binary <- factor(data$y >= 3)
+  data$ordinal <- ordered(
+    c("low", "high", "mid", "high", "high", "mid"),
+    levels = c("low", "mid", "high")
+  )
+
+  expect_concordance_equal <- function(formula, ...) {
+    args <- c(list(formula, data = data), list(...))
+    bridged <- do.call(concordance, args)
+    reference <- do.call(survival::concordance, args)
+    bridged_frame <- as.data.frame(bridged)
+    strict_concordant <- bridged_frame$concordant - 0.5 * bridged_frame$tied.x
+    bridged_count <- cbind(
+      concordant = strict_concordant,
+      discordant = bridged_frame$comparable - strict_concordant - bridged_frame$tied.x,
+      tied.x = bridged_frame$tied.x,
+      tied.y = bridged_frame$tied.y,
+      tied.xy = bridged_frame$tied.xy
+    )
+    reference_count <- if (is.matrix(reference$count)) {
+      reference$count
+    } else {
+      matrix(as.numeric(reference$count), nrow = 1L)
+    }
+
+    expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+    expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-12)
+    expect_equal(
+      unname(bridged_count),
+      unname(reference_count),
+      tolerance = 1e-12
+    )
+    invisible(bridged)
+  }
+
+  numeric_fit <- expect_concordance_equal(
+    y ~ x,
+    weights = data$w,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(coef(numeric_fit), 0.753246753246753, tolerance = 1e-12)
+  expect_equal(
+    as.numeric(vcov(numeric_fit)),
+    0.0112321292487896,
+    tolerance = 1e-12
+  )
+  expect_concordance_equal(y ~ x + z, weights = data$w, influence = 3)
+  expect_concordance_equal(I(y >= 3) ~ x)
+  expect_concordance_equal(binary ~ x)
+  expect_concordance_equal(ordinal ~ x)
+  expect_concordance_equal(log(y + 1) ~ x)
+
+  forced_rank_weights <- concordance(y ~ x, data = data, timewt = "S")
+  ordinary_rank_weights <- concordance(y ~ x, data = data, timewt = "n")
+  expect_equal(coef(forced_rank_weights), coef(ordinary_rank_weights))
+  expect_equal(vcov(forced_rank_weights), vcov(ordinary_rank_weights))
+
+  bridged_environment_fit <- local({
+    y <- data$y
+    x <- data$x
+    concordance(y ~ x)
+  })
+  reference_environment_fit <- local({
+    y <- data$y
+    x <- data$x
+    survival::concordance(y ~ x)
+  })
+  expect_equal(
+    coef(bridged_environment_fit),
+    coef(reference_environment_fit),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    vcov(bridged_environment_fit),
+    vcov(reference_environment_fit),
+    tolerance = 1e-12
+  )
+
+  data$unordered <- factor(c("a", "b", "c", "a", "b", "c"))
+  expect_error(
+    concordance(unordered ~ x, data = data),
+    "orderable factor"
+  )
+})
+
 test_that("tmerge matches native interval, metadata, and class semantics", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

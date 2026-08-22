@@ -304,6 +304,13 @@ class _CovariateTerm:
 
 
 @dataclass(frozen=True)
+class _ConcordanceFormulaResponseSpec:
+    columns: tuple[str, ...]
+    numeric_expression: _NumericFormulaExpression | None = None
+    factor_term: _CovariateTerm | None = None
+
+
+@dataclass(frozen=True)
 class _InteractionTerm:
     factors: tuple[_CovariateTerm, ...]
 
@@ -3509,7 +3516,9 @@ def _parse_numeric_formula_expression(expression: str) -> _NumericFormulaExpress
     if not value:
         raise ValueError("formula numeric expressions must not be empty")
 
-    split = _find_top_level_arithmetic_operator(value, {"+", "-"})
+    split = _find_top_level_comparison_operator(value)
+    if split is None:
+        split = _find_top_level_arithmetic_operator(value, {"+", "-"})
     if split is None:
         split = _find_top_level_arithmetic_operator(value, {"*", "/"})
     if split is not None:
@@ -3599,6 +3608,18 @@ def _numeric_formula_unary_value(function: str, value: float) -> float:
 def _numeric_formula_binary_value(operator: str, left: float, right: float) -> float:
     if math.isnan(left) or math.isnan(right):
         return math.nan
+    if operator == "<":
+        return float(left < right)
+    if operator == "<=":
+        return float(left <= right)
+    if operator == ">":
+        return float(left > right)
+    if operator == ">=":
+        return float(left >= right)
+    if operator == "==":
+        return float(left == right)
+    if operator == "!=":
+        return float(left != right)
     if operator == "+":
         return left + right
     if operator == "-":
@@ -3973,14 +3994,16 @@ def _formula_transform_states(
     formula: str,
     data: Any,
     n: int,
+    response_columns: Sequence[str] | None = None,
 ) -> tuple[
     _ScaleFormulaStates,
     tuple[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, float], int]], ...],
     tuple[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]], ...],
 ]:
-    response_spec = _formula_response_spec(formula)
+    if response_columns is None:
+        response_columns = _formula_response_spec(formula).columns
     _lhs, _sep, rhs = formula.partition("~")
-    terms = _split_terms(rhs, _dot_terms(data, list(response_spec.columns)))
+    terms = _split_terms(rhs, _dot_terms(data, list(response_columns)))
     formula_terms = [
         *(term for spec in terms.covariates for term in _covariate_factors(spec)),
         *terms.offsets,
@@ -4052,23 +4075,34 @@ def _formula_transform_states(
     return tuple(fitted_scale_states.items()), tuple(ns_states), tuple(poly_states)
 
 
-def _formula_state_data(formula: str, data: Any, n: int) -> Any:
+def _formula_state_data(
+    formula: str,
+    data: Any,
+    n: int,
+    response_columns: Sequence[str] | None = None,
+) -> Any:
     if isinstance(data, _FormulaSubsetData):
         return data
-    scale_states, ns_states, poly_states = _formula_transform_states(formula, data, n)
+    scale_states, ns_states, poly_states = _formula_transform_states(
+        formula,
+        data,
+        n,
+        response_columns,
+    )
     if not scale_states and not ns_states and not poly_states:
         return data
     return _FormulaSubsetData(data, scale_states, ns_states, poly_states)
 
 
-def _subset_formula_inputs(
+def _subset_formula_inputs_for_columns(
     formula: str,
     data: Any,
     subset: Any,
+    response_columns: Sequence[str],
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any]]:
-    n = len(_column(data, _formula_response_args(formula)[0]))
-    data = _formula_state_data(formula, data, n)
+    n = len(_column(data, response_columns[0]))
+    data = _formula_state_data(formula, data, n, response_columns)
     indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
@@ -4077,11 +4111,29 @@ def _subset_formula_inputs(
     return _subset_data(data, indices), filtered
 
 
-def _apply_formula_na_action(
+def _subset_formula_inputs(
+    formula: str,
+    data: Any,
+    subset: Any,
+    **row_aligned: Any,
+) -> tuple[Any, dict[str, Any]]:
+    response_columns = _formula_response_spec(formula).columns
+    return _subset_formula_inputs_for_columns(
+        formula,
+        data,
+        subset,
+        response_columns,
+        **row_aligned,
+    )
+
+
+def _apply_formula_na_action_for_columns(
     formula: str,
     data: Any,
     na_action: str | None,
+    response_columns: Sequence[str],
     *,
+    response_values: Sequence[tuple[str, Sequence[Any]]] = (),
     exclude_columns: Sequence[str] = (),
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any]]:
@@ -4089,18 +4141,17 @@ def _apply_formula_na_action(
     if action == "pass":
         return data, row_aligned
 
-    response_spec = _formula_response_spec(formula)
-    n = len(_column(data, response_spec.columns[0]))
-    data = _formula_state_data(formula, data, n)
+    n = len(_column(data, response_columns[0]))
+    data = _formula_state_data(formula, data, n, response_columns)
     excluded = set(exclude_columns)
     _lhs, _sep, rhs = formula.partition("~")
-    terms = _split_terms(rhs, _dot_terms(data, list(response_spec.columns)))
+    terms = _split_terms(rhs, _dot_terms(data, list(response_columns)))
     raw_columns = [
-        *response_spec.columns,
+        *response_columns,
         *_offset_columns(terms.offsets),
         *terms.clusters,
     ]
-    transformed_columns: list[tuple[str, Sequence[Any]]] = []
+    transformed_columns: list[tuple[str, Sequence[Any]]] = list(response_values)
     evaluated_strata: set[_CovariateTerm] = set()
     for spec in terms.covariates:
         for term in _covariate_factors(spec):
@@ -4171,6 +4222,27 @@ def _apply_formula_na_action(
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
     return _subset_data(data, keep), filtered
+
+
+def _apply_formula_na_action(
+    formula: str,
+    data: Any,
+    na_action: str | None,
+    *,
+    exclude_columns: Sequence[str] = (),
+    **row_aligned: Any,
+) -> tuple[Any, dict[str, Any]]:
+    if _normalize_na_action(na_action) == "pass":
+        return data, row_aligned
+    response_columns = _formula_response_spec(formula).columns
+    return _apply_formula_na_action_for_columns(
+        formula,
+        data,
+        na_action,
+        response_columns,
+        exclude_columns=exclude_columns,
+        **row_aligned,
+    )
 
 
 def _data_column_names(data: Any) -> list[Any] | None:
@@ -4294,6 +4366,55 @@ def _is_scientific_notation_sign(text: str, idx: int) -> bool:
         saw_digit = saw_digit or text[cursor].isdigit()
         cursor -= 1
     return saw_digit and (cursor < 0 or text[cursor] in "+-*/(^,=")
+
+
+def _find_top_level_comparison_operator(
+    expression: str,
+) -> tuple[str, str, str] | None:
+    depth = 0
+    in_backtick = False
+    match: tuple[int, str] | None = None
+    idx = 0
+    operators = ("<=", ">=", "==", "!=", "<", ">")
+
+    while idx < len(expression):
+        char = expression[idx]
+        if char == "`":
+            in_backtick = not in_backtick
+            idx += 1
+            continue
+        if in_backtick:
+            idx += 1
+            continue
+        if char == "(":
+            depth += 1
+            idx += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            idx += 1
+            continue
+        if depth == 0:
+            operator = next(
+                (candidate for candidate in operators if expression.startswith(candidate, idx)),
+                None,
+            )
+            if operator is not None:
+                match = (idx, operator)
+                idx += len(operator)
+                continue
+        idx += 1
+
+    if in_backtick:
+        raise ValueError("unterminated backtick in formula")
+    if match is None:
+        return None
+    split_idx, operator = match
+    left = expression[:split_idx].strip()
+    right = expression[split_idx + len(operator) :].strip()
+    if not left or not right:
+        raise ValueError("formula comparison terms require both operands")
+    return left, operator, right
 
 
 def _find_top_level_arithmetic_operator(
@@ -25917,6 +26038,116 @@ class _CountingConcordanceData:
     status: list[int]
 
 
+@lru_cache(maxsize=512)
+def _concordance_formula_response_spec(formula: str) -> _ConcordanceFormulaResponseSpec:
+    lhs, separator, _rhs = formula.partition("~")
+    if not separator:
+        raise ValueError("formula must contain '~'")
+    expression_text = _strip_outer_formula_parentheses(lhs.strip())
+    if expression_text.startswith("I(") and expression_text.endswith(")"):
+        expression_text = expression_text[2:-1]
+
+    factor_term = _parse_factor_formula_term(expression_text)
+    if factor_term is not None:
+        return _ConcordanceFormulaResponseSpec(
+            tuple(_covariate_term_columns(factor_term)),
+            factor_term=factor_term,
+        )
+
+    expression = _parse_numeric_formula_expression(expression_text)
+    columns = tuple(_numeric_formula_expression_columns(expression))
+    if not columns:
+        raise ValueError("formula response must contain a data column")
+    return _ConcordanceFormulaResponseSpec(columns, numeric_expression=expression)
+
+
+def _concordance_factor_is_ordered(source: Any) -> bool:
+    if bool(getattr(source, "ordered", False)):
+        return True
+    return bool(getattr(getattr(source, "dtype", None), "ordered", False))
+
+
+def _concordance_factor_codes(
+    values: Sequence[Any],
+    levels: Sequence[Any],
+    ordered: bool,
+) -> list[float]:
+    normalized_levels = [
+        value for value in levels if value is not _FACTOR_NA_LEVEL and not _is_missing_value(value)
+    ]
+    if not ordered and len(normalized_levels) != 2:
+        raise ValueError(
+            "left hand side of the formula must be a numeric vector,\n"
+            " survival object, or an orderable factor"
+        )
+    level_indices = {
+        _factor_value_key(level): float(index + 1) for index, level in enumerate(normalized_levels)
+    }
+    result: list[float] = []
+    for value in values:
+        if value is _FACTOR_NA_LEVEL or _is_missing_value(value):
+            result.append(math.nan)
+            continue
+        try:
+            result.append(level_indices[_factor_value_key(value)])
+        except KeyError as exc:
+            raise ValueError(f"factor response contains undeclared level {value!r}") from exc
+    return result
+
+
+def _concordance_formula_response_values(
+    data: Any,
+    spec: _ConcordanceFormulaResponseSpec,
+) -> list[float]:
+    n = len(_column(data, spec.columns[0]))
+    if spec.factor_term is not None:
+        term = spec.factor_term
+        values = _term_raw_values(data, term, n)
+        encoding = _factor_encoding(data, term, values)
+        source = _column_source(data, term.column)
+        ordered = (
+            False
+            if term.categorical_wrapper == "as.factor"
+            else (
+                _concordance_factor_is_ordered(source)
+                if term.factor_options is None or term.factor_options.ordered is None
+                else term.factor_options.ordered
+            )
+        )
+        return _concordance_factor_codes(encoding.values, encoding.levels, ordered)
+
+    expression = cast(_NumericFormulaExpression, spec.numeric_expression)
+    if isinstance(expression, _NumericFormulaColumn):
+        source = _column_source(data, expression.name)
+        categories = _mstate_categories(source)
+        if categories is not None:
+            values = _factor_normalized_values(source, _column(data, expression.name))
+            levels = _materialize_1d(categories, f"{expression.name} categories")
+            return _concordance_factor_codes(
+                values,
+                levels,
+                _concordance_factor_is_ordered(source),
+            )
+    try:
+        return _numeric_formula_expression_values(data, expression, n)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "left hand side of the formula must be a numeric vector,\n"
+            " survival object, or an orderable factor"
+        ) from exc
+
+
+def _parse_concordance_formula(
+    formula: str,
+    data: Any,
+    spec: _ConcordanceFormulaResponseSpec,
+) -> tuple[Surv, _FormulaTerms]:
+    _lhs, _separator, rhs = formula.partition("~")
+    response = Surv(_concordance_formula_response_values(data, spec))
+    terms = _split_terms(rhs, _dot_terms(data, list(spec.columns)))
+    return response, terms
+
+
 def _unsupported_concordance_response() -> NoReturn:
     raise NotImplementedError(
         "concordance currently supports right-censored and counting Surv responses"
@@ -26347,22 +26578,18 @@ def _single_score_concordance_result(
         if include_ranks
         else None
     )
-    influence_rows = None
-    dfbeta = None
-    variance = None
-    if influence_value or cluster_values is not None:
-        influence_rows, dfbeta, variance = _concordance_influence(
-            response,
-            risk_values,
-            weight_values,
-            strata_values,
-            fix_time,
-            time_weight,
-            lower_bound,
-            upper_bound,
-        )
-        if cluster_values is not None and dfbeta is not None:
-            dfbeta, variance = _clustered_concordance_dfbeta(dfbeta, cluster_values)
+    influence_rows, dfbeta, variance = _concordance_influence(
+        response,
+        risk_values,
+        weight_values,
+        strata_values,
+        fix_time,
+        time_weight,
+        lower_bound,
+        upper_bound,
+    )
+    if cluster_values is not None:
+        dfbeta, variance = _clustered_concordance_dfbeta(dfbeta, cluster_values)
     return ConcordanceResult(
         concordance=float(summary["concordance"]),
         n=len(response),
@@ -26376,7 +26603,7 @@ def _single_score_concordance_result(
         ranks=rank_rows,
         dfbeta=dfbeta if influence_value in {1, 3} else None,
         influence=influence_rows if influence_value in {2, 3} else None,
-        variance=variance if influence_value or cluster_values is not None else None,
+        variance=variance,
         conditional_variance=float(summary["conditional_variance"]),
     )
 
@@ -26426,11 +26653,7 @@ def _multi_score_concordance_result(
         ranks=[result.ranks for result in results] if include_ranks else None,
         dfbeta=[result.dfbeta for result in results] if influence_value in {1, 3} else None,
         influence=[result.influence for result in results] if influence_value in {2, 3} else None,
-        variance=(
-            [result.variance for result in results]
-            if influence_value or cluster_values is not None
-            else None
-        ),
+        variance=[result.variance for result in results],
         conditional_variance=[
             float(result.conditional_variance)
             if isinstance(result.conditional_variance, int | float)
@@ -26490,30 +26713,75 @@ def concordance(
         effective_reverse_scores = not reverse_scores
         if external_scores is not None:
             raise ValueError("concordance formula input cannot be combined with scores")
+        lhs = response.partition("~")[0].strip()
+        surv_formula = lhs.startswith("Surv(") or lhs.startswith("survival::Surv(")
+        concordance_response_spec = (
+            None if surv_formula else _concordance_formula_response_spec(response)
+        )
         weights = _formula_weight_values(data, weights)
         cluster = _formula_cluster_values(data, cluster)
         if subset is not None:
-            data, aligned = _subset_formula_inputs(
-                response,
-                data,
-                subset,
-                weights=weights,
-                cluster=cluster,
-            )
+            if concordance_response_spec is None:
+                data, aligned = _subset_formula_inputs(
+                    response,
+                    data,
+                    subset,
+                    weights=weights,
+                    cluster=cluster,
+                )
+            else:
+                data, aligned = _subset_formula_inputs_for_columns(
+                    response,
+                    data,
+                    subset,
+                    concordance_response_spec.columns,
+                    weights=weights,
+                    cluster=cluster,
+                )
             weights = aligned["weights"]
             cluster = aligned["cluster"]
             subset = None
-        data, aligned = _apply_formula_na_action(
-            response,
-            data,
-            na_action,
-            weights=weights,
-            cluster=cluster,
-        )
+        if concordance_response_spec is None:
+            data, aligned = _apply_formula_na_action(
+                response,
+                data,
+                na_action,
+                weights=weights,
+                cluster=cluster,
+            )
+        else:
+            n = len(_column(data, concordance_response_spec.columns[0]))
+            data = _formula_state_data(
+                response,
+                data,
+                n,
+                concordance_response_spec.columns,
+            )
+            response_values = _concordance_formula_response_values(
+                data,
+                concordance_response_spec,
+            )
+            data, aligned = _apply_formula_na_action_for_columns(
+                response,
+                data,
+                na_action,
+                concordance_response_spec.columns,
+                response_values=(("formula response", response_values),),
+                weights=weights,
+                cluster=cluster,
+            )
         weights = aligned["weights"]
         cluster = aligned["cluster"]
         na_action = "pass"
-        response, terms = _parse_formula(response, data)
+        if concordance_response_spec is None:
+            response, terms = _parse_formula(response, data)
+        else:
+            response, terms = _parse_concordance_formula(
+                response,
+                data,
+                concordance_response_spec,
+            )
+            time_weight = "n"
         if terms.clusters:
             if cluster is not None:
                 raise ValueError("use only one of formula cluster(...) or cluster")

@@ -8478,6 +8478,123 @@ def test_concordance_formula_returns_one_result_per_score_column():
     assert result.n_event == sum(data["status"])
 
 
+def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
+    data = {
+        "y": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],
+        "x": [0.2, 0.9, 0.4, 0.7, 0.7, 0.1],
+        "z": [1.0, 0.2, 0.5, 0.8, 0.3, 0.6],
+        "w": [1.0, 2.0, 1.5, 0.5, 3.0, 2.5],
+    }
+
+    fitted = survival.concordance(
+        "y ~ x",
+        data=data,
+        weights="w",
+        influence=3,
+        ranks=True,
+    )
+    expected = survival.concordance(
+        survival.Surv(data["y"]),
+        scores=data["x"],
+        weights=data["w"],
+        reverse=True,
+        influence=3,
+        ranks=True,
+    )
+    multi = survival.concordance("y ~ x + z", data=data, weights="w", influence=3)
+    transformed = survival.concordance("log(y + 1) ~ x", data=data)
+    forced_rank_weights = survival.concordance("y ~ x", data=data, timewt="S")
+    ordinary_rank_weights = survival.concordance("y ~ x", data=data)
+
+    assert fitted.concordance == pytest.approx(0.753246753246753)
+    assert fitted.concordance == pytest.approx(expected.concordance)
+    assert fitted.count == pytest.approx(expected.count)
+    assert fitted.conditional_variance == pytest.approx(0.0268217769926587)
+    assert fitted.dfbeta == pytest.approx(expected.dfbeta)
+    for actual, reference in zip(fitted.influence, expected.influence, strict=True):
+        assert actual == pytest.approx(reference)
+    for actual, reference in zip(fitted.ranks, expected.ranks, strict=True):
+        assert actual == pytest.approx(reference)
+    assert fitted.n == fitted.n_event == len(data["y"])
+    assert multi.score_names == ["x", "z"]
+    assert multi.concordance == pytest.approx([0.753246753246753, 0.233766233766234])
+    assert transformed.concordance == pytest.approx(0.769230769230769)
+    assert transformed.variance == pytest.approx(0.00238086901719127)
+    assert forced_rank_weights.concordance == pytest.approx(ordinary_rank_weights.concordance)
+    assert forced_rank_weights.count == pytest.approx(ordinary_rank_weights.count)
+
+
+def test_concordance_formula_accepts_logical_and_orderable_factor_outcomes():
+    x = [0.2, 0.9, 0.4, 0.7, 0.7, 0.1]
+    numeric_y = [1.0, 3.0, 2.0, 4.0, 4.0, 2.0]
+    logical = survival.concordance(
+        "y ~ x",
+        data={"y": [False, True, False, True, True, False], "x": x},
+    )
+    logical_expression = survival.concordance(
+        "I(y >= 3) ~ x",
+        data={"y": numeric_y, "x": x},
+    )
+    binary = survival.r_api._r_factor(
+        ["FALSE", "TRUE", "FALSE", "TRUE", "TRUE", "FALSE"],
+        ["FALSE", "TRUE"],
+        codes=[1, 2, 1, 2, 2, 1],
+    )
+    binary_fit = survival.concordance("y ~ x", data={"y": binary, "x": x})
+    ordered = survival.r_api._r_factor(
+        ["low", "high", "mid", "high", "high", "mid"],
+        ["low", "mid", "high"],
+        ordered=True,
+        codes=[1, 3, 2, 3, 3, 2],
+    )
+    ordered_fit = survival.concordance("y ~ x", data={"y": ordered, "x": x})
+    constructed = survival.concordance(
+        'factor(y, levels=c("low", "mid", "high"), ordered=TRUE) ~ x',
+        data={"y": ["low", "high", "mid", "high", "high", "mid"], "x": x},
+    )
+
+    assert logical.concordance == pytest.approx(1.0)
+    assert logical.variance == pytest.approx(0.0)
+    assert logical.count == pytest.approx(
+        {"concordant": 9.0, "discordant": 0.0, "tied.x": 0.0, "tied.y": 5.0, "tied.xy": 1.0}
+    )
+    assert logical_expression.concordance == pytest.approx(logical.concordance)
+    assert logical_expression.count == pytest.approx(logical.count)
+    assert binary_fit.concordance == pytest.approx(logical.concordance)
+    assert binary_fit.count == pytest.approx(logical.count)
+    assert ordered_fit.concordance == pytest.approx(0.909090909090909)
+    assert ordered_fit.count == pytest.approx(
+        {"concordant": 10.0, "discordant": 1.0, "tied.x": 0.0, "tied.y": 3.0, "tied.xy": 1.0}
+    )
+    assert constructed.concordance == pytest.approx(ordered_fit.concordance)
+
+    unordered = survival.r_api._r_factor(
+        ["a", "b", "c", "a", "b", "c"],
+        ["a", "b", "c"],
+        codes=[1, 2, 3, 1, 2, 3],
+    )
+    with pytest.raises(ValueError, match="orderable factor"):
+        survival.concordance("y ~ x", data={"y": unordered, "x": x})
+
+
+def test_numeric_concordance_formula_applies_subset_na_action_and_dot_exclusion():
+    data = {
+        "y": [1.0, None, 2.0, 4.0, 5.0],
+        "x": [0.2, 0.9, None, 0.7, 0.8],
+        "z": [1.0, 0.2, 0.5, 0.8, 0.3],
+    }
+    fitted = survival.concordance(
+        "y ~ .",
+        data=data,
+        subset=[0, 1, 2, 3],
+        na_action="omit",
+    )
+
+    assert fitted.n == fitted.n_event == 2
+    assert fitted.score_names == ["x", "z"]
+    assert fitted.concordance == pytest.approx([1.0, 0.0])
+
+
 def test_concordance_matrix_scores_return_parallel_cluster_variances():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
