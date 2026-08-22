@@ -710,6 +710,7 @@ class SurvfitMultiStateResult:
     influence_state0: list[float] | None
     influence_chaz: list[list[float]] | None
     influence_auc: list[list[float]] | None
+    cox_model: bool
     def __iter__(self): ...
     @property
     def surv(self) -> list[list[float]]: ...

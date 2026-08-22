@@ -8775,6 +8775,9 @@ survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, 
 }
 
 survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRUE) {
+  if (missing(se.fit) && .is_multistate_cox_fit(formula)) {
+    se.fit <- FALSE
+  }
   .call_r_api(
     "survfit",
     response = formula,
@@ -11363,6 +11366,8 @@ summary.survival_py_anova <- function(object, ...) {
 
 .as_survival_py_multistate_list <- function(x) {
   fields <- .call_r_api("_survfit_multistate_structure", x)
+  cox_model <- isTRUE(as.logical(fields[["_cox_model"]])[[1L]])
+  fields[["_cox_model"]] <- NULL
   states <- as.character(fields[["states"]])
   transition_names <- as.character(fields[["_transition_names"]])
   fields[["_transition_names"]] <- NULL
@@ -11381,6 +11386,9 @@ summary.survival_py_anova <- function(object, ...) {
     ),
     names(fields)
   )
+  if (cox_model) {
+    state_matrices <- setdiff(state_matrices, "pstate")
+  }
   for (name in state_matrices) {
     values <- .as_numeric_matrix(fields[[name]])
     colnames(values) <- states
@@ -11398,6 +11406,9 @@ summary.survival_py_anova <- function(object, ...) {
     c("n.transition", "cumhaz"),
     names(fields)
   )
+  if (cox_model) {
+    transition_matrices <- setdiff(transition_matrices, "cumhaz")
+  }
   for (name in transition_matrices) {
     values <- .as_numeric_matrix(fields[[name]])
     colnames(values) <- transition_names
@@ -11408,6 +11419,23 @@ summary.survival_py_anova <- function(object, ...) {
     values <- .as_numeric_matrix(fields[["std.chaz"]])
     dimnames(values) <- NULL
     fields[["std.chaz"]] <- values
+  }
+
+  if (cox_model) {
+    pstate <- .as_numeric_matrix(fields[["pstate"]])
+    fields[["pstate"]] <- array(
+      as.numeric(pstate),
+      dim = c(nrow(pstate), 1L, ncol(pstate)),
+      dimnames = list(NULL, NULL, states)
+    )
+    if (!is.null(fields[["cumhaz"]])) {
+      cumhaz <- .as_numeric_matrix(fields[["cumhaz"]])
+      fields[["cumhaz"]] <- array(
+        as.numeric(cumhaz),
+        dim = c(nrow(cumhaz), 1L, ncol(cumhaz)),
+        dimnames = list(NULL, NULL, transition_names)
+      )
+    }
   }
 
   if (is.null(strata_names)) {
@@ -11572,6 +11600,9 @@ dim.survival_py_survfit <- function(x) {
     state_count <- length(.survival_py_multistate_states(x))
     if (.is_grouped_survival_py_survfit(x)) {
       return(c(strata = length(unclass(x)), states = state_count))
+    }
+    if (isTRUE(.result_field(x, "cox_model"))) {
+      return(c(data = 1L, states = state_count))
     }
     return(c(states = state_count))
   }

@@ -8135,6 +8135,80 @@ test_that("single-formula multi-state Cox models match survival", {
     tolerance = 1e-12
   )
 
+  default_curve <- survfit(
+    bridged,
+    newdata = data.frame(x = 0.5),
+    time0 = TRUE
+  )
+  reference_default_curve <- survival::survfit(
+    reference,
+    newdata = data.frame(x = 0.5),
+    se.fit = FALSE,
+    time0 = TRUE
+  )
+  default_curve_list <- as.list(default_curve)
+  expect_equal(default_curve_list$time, reference_default_curve$time, tolerance = 1e-12)
+  expect_equal(
+    default_curve_list$pstate,
+    reference_default_curve$pstate,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    default_curve_list$cumhaz,
+    reference_default_curve$cumhaz,
+    tolerance = 1e-12
+  )
+  expect_equal(dim(default_curve), c(data = 1L, states = 3L))
+
+  for (curve_style in 1:2) {
+    bridged_curve <- as.list(survfit(
+      bridged,
+      newdata = data.frame(x = 0.5),
+      stype = curve_style,
+      se.fit = FALSE,
+      time0 = TRUE
+    ))
+    reference_curve <- survival::survfit(
+      reference,
+      newdata = data.frame(x = 0.5),
+      stype = curve_style,
+      se.fit = FALSE,
+      time0 = TRUE
+    )
+
+    for (field in c(
+      "time", "pstate", "cumhaz", "n.risk", "n.event", "n.censor",
+      "n.transition", "p0", "states", "transitions"
+    )) {
+      expect_equal(
+        bridged_curve[[field]],
+        reference_curve[[field]],
+        tolerance = 1e-12,
+        info = paste("stype", curve_style, "field", field)
+      )
+    }
+  }
+
+  bridged_mixed_start <- as.list(survfit(
+    bridged,
+    newdata = data.frame(x = 0.5),
+    p0 = c(0.5, 0.5, 0),
+    se.fit = FALSE,
+    time0 = TRUE
+  ))
+  reference_mixed_start <- survival::survfit(
+    reference,
+    newdata = data.frame(x = 0.5),
+    p0 = c(0.5, 0.5, 0),
+    se.fit = FALSE,
+    time0 = TRUE
+  )
+  expect_equal(
+    bridged_mixed_start$pstate,
+    reference_mixed_start$pstate,
+    tolerance = 1e-12
+  )
+
   histories <- data.frame(
     id = c(1, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7, 8, 9, 9, 10),
     start = c(0, 1, 0, 2, 0, 0, 0, 1.5, 0, 2.5, 0, 3, 0, 0, 2.2, 0),
@@ -8173,4 +8247,27 @@ test_that("single-formula multi-state Cox models match survival", {
     predict(reference_histories, type = "lp"),
     tolerance = 1e-12
   )
+
+  bridged_history_curve <- as.list(survfit(
+    bridged_histories,
+    newdata = data.frame(x = 0.75),
+    time0 = TRUE
+  ))
+  reference_history_curve <- survival::survfit(
+    reference_histories,
+    newdata = data.frame(x = 0.75),
+    se.fit = FALSE,
+    time0 = TRUE
+  )
+  for (field in c(
+    "time", "pstate", "cumhaz", "n.risk", "n.event", "n.censor",
+    "n.transition", "p0", "states", "transitions"
+  )) {
+    expect_equal(
+      bridged_history_curve[[field]],
+      reference_history_curve[[field]],
+      tolerance = 1e-12,
+      info = paste("counting field", field)
+    )
+  }
 })

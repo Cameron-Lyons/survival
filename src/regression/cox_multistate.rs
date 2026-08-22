@@ -19,6 +19,15 @@ pub struct MultiStateCoxStack {
     pub transition_indices: Vec<usize>,
 }
 
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct MultiStateCoxCurve {
+    #[pyo3(get)]
+    pub pstate: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub cumhaz: Vec<Vec<f64>>,
+}
+
 fn validate_parallel_length(name: &str, actual: usize, expected: usize) -> PyResult<()> {
     if actual != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -144,6 +153,176 @@ pub fn cox_multistate_stack(
     })
 }
 
+fn identity_matrix(size: usize) -> Vec<Vec<f64>> {
+    let mut result = vec![vec![0.0; size]; size];
+    for (index, row) in result.iter_mut().enumerate() {
+        row[index] = 1.0;
+    }
+    result
+}
+
+fn matrix_product(left: &[Vec<f64>], right: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let size = left.len();
+    let mut result = vec![vec![0.0; size]; size];
+    for (left_row, result_row) in left.iter().zip(result.iter_mut()) {
+        for (middle, &left_value) in left_row.iter().enumerate() {
+            if left_value == 0.0 {
+                continue;
+            }
+            for (column, result_value) in result_row.iter_mut().enumerate() {
+                *result_value += left_value * right[middle][column];
+            }
+        }
+    }
+    result
+}
+
+fn matrix_infinity_norm(matrix: &[Vec<f64>]) -> f64 {
+    matrix
+        .iter()
+        .map(|row| row.iter().map(|value| value.abs()).sum::<f64>())
+        .fold(0.0, f64::max)
+}
+
+fn matrix_exponential(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let size = matrix.len();
+    let norm = matrix_infinity_norm(matrix);
+    if norm == 0.0 {
+        return identity_matrix(size);
+    }
+    let squarings = if norm <= 0.5 {
+        0
+    } else {
+        (norm / 0.5).log2().ceil() as u32
+    };
+    let scale = 2.0_f64.powi(-(squarings as i32));
+    let scaled = matrix
+        .iter()
+        .map(|row| row.iter().map(|value| value * scale).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let mut result = identity_matrix(size);
+    let mut term = identity_matrix(size);
+    for order in 1..=128 {
+        term = matrix_product(&term, &scaled);
+        let divisor = order as f64;
+        for row in &mut term {
+            for value in row {
+                *value /= divisor;
+            }
+        }
+        for (result_row, term_row) in result.iter_mut().zip(&term) {
+            for (result_value, term_value) in result_row.iter_mut().zip(term_row) {
+                *result_value += term_value;
+            }
+        }
+        if matrix_infinity_norm(&term) <= 1e-16 * matrix_infinity_norm(&result).max(1.0) {
+            break;
+        }
+    }
+    for _ in 0..squarings {
+        result = matrix_product(&result, &result);
+    }
+    result
+}
+
+/// Apply direct or matrix-exponential transition updates to a starting state mixture.
+#[pyfunction]
+#[pyo3(signature = (hazard_increments, transitions, risk, p0, exponential=true))]
+pub fn cox_multistate_curve(
+    hazard_increments: Vec<Vec<f64>>,
+    transitions: Vec<Vec<usize>>,
+    risk: Vec<f64>,
+    p0: Vec<f64>,
+    exponential: bool,
+) -> PyResult<MultiStateCoxCurve> {
+    let transition_count = transitions.len();
+    validate_parallel_length("risk", risk.len(), transition_count)?;
+    if transitions.iter().any(|transition| transition.len() != 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "each transition must contain source and target state indices",
+        ));
+    }
+    if p0.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "p0 must contain at least one state probability",
+        ));
+    }
+    if p0.iter().any(|value| !value.is_finite() || *value < 0.0)
+        || (p0.iter().sum::<f64>() - 1.0).abs() > 1e-8
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "p0 must contain non-negative finite probabilities that sum to 1",
+        ));
+    }
+    if risk.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "risk must contain non-negative finite values",
+        ));
+    }
+    for (transition_idx, transition) in transitions.iter().enumerate() {
+        if transition[0] >= p0.len() || transition[1] >= p0.len() || transition[0] == transition[1]
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "transition {transition_idx} contains invalid state indices"
+            )));
+        }
+    }
+    if hazard_increments
+        .iter()
+        .any(|row| row.len() != transition_count)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "hazard_increments must have one column per transition",
+        ));
+    }
+    if hazard_increments
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "hazard_increments must contain non-negative finite values",
+        ));
+    }
+
+    let state_count = p0.len();
+    let mut probabilities = p0;
+    let mut cumulative_hazard = vec![0.0; transition_count];
+    let mut pstate = Vec::with_capacity(hazard_increments.len());
+    let mut cumhaz = Vec::with_capacity(hazard_increments.len());
+    for increments in hazard_increments {
+        let mut generator = vec![vec![0.0; state_count]; state_count];
+        for (transition_idx, transition) in transitions.iter().enumerate() {
+            let increment = increments[transition_idx] * risk[transition_idx];
+            cumulative_hazard[transition_idx] += increment;
+            generator[transition[0]][transition[1]] += increment;
+            generator[transition[0]][transition[0]] -= increment;
+        }
+        let update = if exponential {
+            matrix_exponential(&generator)
+        } else {
+            let mut direct = identity_matrix(state_count);
+            for (direct_row, generator_row) in direct.iter_mut().zip(generator) {
+                for (direct_value, generator_value) in direct_row.iter_mut().zip(generator_row) {
+                    *direct_value += generator_value;
+                }
+            }
+            direct
+        };
+        let mut next = vec![0.0; state_count];
+        for (source, probability) in probabilities.iter().enumerate() {
+            for (target, value) in next.iter_mut().enumerate() {
+                *value += probability * update[source][target];
+            }
+        }
+        probabilities = next;
+        pstate.push(probabilities.clone());
+        cumhaz.push(cumulative_hazard.clone());
+    }
+
+    Ok(MultiStateCoxCurve { pstate, cumhaz })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +376,38 @@ mod tests {
         assert_eq!(result.status, vec![1, 0, 0]);
         assert_eq!(result.strata, vec![0, 1, 3]);
         assert_eq!(result.source_rows, vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn direct_curve_applies_transition_increment_matrix() {
+        let result = cox_multistate_curve(
+            vec![vec![0.1, 0.2]],
+            vec![vec![0, 1], vec![0, 2]],
+            vec![1.0, 1.0],
+            vec![1.0, 0.0, 0.0],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.pstate, vec![vec![0.7, 0.1, 0.2]]);
+        assert_eq!(result.cumhaz, vec![vec![0.1, 0.2]]);
+    }
+
+    #[test]
+    fn exponential_curve_preserves_probability_mass() {
+        let result = cox_multistate_curve(
+            vec![vec![0.1, 0.2]],
+            vec![vec![0, 1], vec![0, 2]],
+            vec![1.0, 1.0],
+            vec![1.0, 0.0, 0.0],
+            true,
+        )
+        .unwrap();
+
+        let remaining = (-0.3_f64).exp();
+        assert!((result.pstate[0][0] - remaining).abs() < 1e-14);
+        assert!((result.pstate[0][1] - (1.0 - remaining) / 3.0).abs() < 1e-14);
+        assert!((result.pstate[0][2] - 2.0 * (1.0 - remaining) / 3.0).abs() < 1e-14);
+        assert!((result.pstate[0].iter().sum::<f64>() - 1.0).abs() < 1e-14);
     }
 }
