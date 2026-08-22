@@ -4693,6 +4693,94 @@ test_that("disabled standard errors recycle retained strata counts like referenc
   expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
 })
 
+test_that("single-event strata use unweighted time counts like reference", {
+  data <- data.frame(
+    time = c(4, 6, 4, 4, 7, 2, 5, 3, 5, 3),
+    status = c(0, 1, 1, 0, 0, 1, 0, 0, 0, 0),
+    x = c(0.5, -1, -0.5, 1, 1, -0.5, 0, 0.5, 1, 0.5),
+    group = c(1, 2, 2, 2, 1, 1, 1, 3, 3, 3)
+  )
+
+  bridged <- concordancefit(
+    Surv(data$time, data$status),
+    data$x,
+    strata = data$group,
+    timewt = "I",
+    reverse = TRUE,
+    keepstrata = TRUE,
+    influence = 3
+  )
+  reference <- survival::concordancefit(
+    survival::Surv(data$time, data$status),
+    data$x,
+    strata = data$group,
+    timewt = "I",
+    reverse = TRUE,
+    keepstrata = TRUE,
+    influence = 3
+  )
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+
+  warning_message <- paste(
+    "data length [16] is not a sub-multiple or multiple",
+    "of the number of rows [3]"
+  )
+  bridged_no_error <- NULL
+  expect_warning(
+    bridged_no_error <- concordancefit(
+      Surv(data$time, data$status),
+      data$x,
+      strata = data$group,
+      timewt = "I",
+      reverse = TRUE,
+      keepstrata = TRUE,
+      std.err = FALSE
+    ),
+    warning_message,
+    fixed = TRUE
+  )
+  reference_no_error <- NULL
+  expect_warning(
+    reference_no_error <- survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      data$x,
+      strata = data$group,
+      timewt = "I",
+      reverse = TRUE,
+      keepstrata = TRUE,
+      std.err = FALSE
+    ),
+    warning_message,
+    fixed = TRUE
+  )
+  expect_equal(
+    unclass(bridged_no_error),
+    unclass(reference_no_error),
+    tolerance = 1e-12
+  )
+
+  bridged_formula <- concordance(
+    Surv(time, status) ~ x + strata(group),
+    data = data,
+    timewt = "I",
+    keepstrata = TRUE,
+    influence = 3
+  )
+  reference_formula <- survival::concordance(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = data,
+    timewt = "I",
+    keepstrata = TRUE,
+    influence = 3
+  )
+  fields <- setdiff(names(reference_formula), "call")
+  expect_equal(
+    unclass(bridged_formula)[fields],
+    unclass(reference_formula)[fields],
+    tolerance = 1e-12
+  )
+})
+
 test_that("disabled standard errors warn before collapsed strata errors", {
   data <- data.frame(
     time = c(3, 2, 1, 1, 1, 3, 1, 4),
