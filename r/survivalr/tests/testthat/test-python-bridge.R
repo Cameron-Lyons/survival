@@ -5036,6 +5036,112 @@ test_that("numeric formula calls match R designs and prediction rebuilding", {
   )
 })
 
+test_that("stratum-specific Cox effects match R designs and predictions", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- survival::lung[
+    stats::complete.cases(
+      survival::lung[, c("time", "status", "wt.loss", "age", "sex", "ph.ecog")]
+    ),
+    c("time", "status", "wt.loss", "age", "sex", "ph.ecog")
+  ]
+  data$status <- as.integer(data$status == 2L)
+  bridged <- coxph(
+    Surv(time, status) ~ wt.loss + age * strata(sex) + strata(ph.ecog),
+    data = data,
+    x = TRUE,
+    max_iter = 150,
+    eps = 1e-09,
+    toler = 1e-10
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ wt.loss + age * strata(sex) + strata(ph.ecog),
+    data = data,
+    x = TRUE,
+    control = survival::coxph.control(
+      iter.max = 150,
+      eps = 1e-09,
+      toler.chol = 1e-10
+    )
+  )
+
+  bridged_matrix <- model.matrix(bridged)
+  reference_matrix <- stats::model.matrix(reference)
+  expect_identical(colnames(bridged_matrix), colnames(reference_matrix))
+  expect_identical(attr(bridged_matrix, "assign"), attr(reference_matrix, "assign"))
+  expect_equal(as.vector(bridged_matrix), as.vector(reference_matrix), tolerance = 1e-12)
+  expect_identical(attr(terms(bridged), "term.labels"), attr(terms(reference), "term.labels"))
+  expect_equal(unname(coef(bridged)), unname(coef(reference)), tolerance = 2e-07)
+
+  newdata <- expand.grid(
+    wt.loss = 0,
+    age = c(45, 65),
+    sex = 1:2,
+    ph.ecog = 0:2
+  )
+  expect_equal(
+    unname(predict(bridged, newdata = newdata, type = "lp", reference = "zero")),
+    unname(suppressWarnings(
+      stats::predict(reference, newdata = newdata, type = "lp", reference = "zero")
+    )),
+    tolerance = 3e-07
+  )
+
+  curve_data <- data.frame(
+    wt.loss = c(0, 0),
+    age = c(45, 65),
+    sex = c(1, 1),
+    ph.ecog = c(0, 0)
+  )
+  bridged_curves <- as.data.frame(survfit(bridged, newdata = curve_data, se.fit = FALSE))
+  reference_curves <- survival::survfit(reference, newdata = curve_data, se.fit = FALSE)
+  expect_equal(bridged_curves$time, reference_curves$time, tolerance = 1e-12)
+  expect_equal(bridged_curves$surv, reference_curves$surv, tolerance = 3e-07)
+  expect_equal(as.integer(table(bridged_curves$curve)), unname(reference_curves$strata))
+})
+
+test_that("strata interactions match R contrast expansion across formula shapes", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  row <- seq_len(18L)
+  data <- data.frame(
+    time = as.numeric(row),
+    status = rep(c(1L, 0L), 9L),
+    x = as.numeric(row),
+    z = as.numeric((row - 1L) %% 5L + 1L),
+    g = factor(rep(c("a", "b", "c"), 6L), levels = c("a", "b", "c")),
+    h = factor(rep(c("u", "v"), 9L), levels = c("u", "v"))
+  )
+  formulas <- list(
+    Surv(time, status) ~ x * strata(g),
+    Surv(time, status) ~ x:strata(g),
+    Surv(time, status) ~ strata(g) * x,
+    Surv(time, status) ~ strata(g):(x + z),
+    Surv(time, status) ~ x:strata(g, h)
+  )
+
+  for (formula in formulas) {
+    bridged <- coxph(formula, data = data, x = TRUE, max_iter = 0)
+    reference <- survival::coxph(
+      formula,
+      data = data,
+      x = TRUE,
+      control = survival::coxph.control(iter.max = 0)
+    )
+    bridged_matrix <- model.matrix(bridged)
+    reference_matrix <- stats::model.matrix(reference)
+
+    expect_identical(colnames(bridged_matrix), colnames(reference_matrix))
+    expect_identical(attr(bridged_matrix, "assign"), attr(reference_matrix, "assign"))
+    expect_equal(as.vector(bridged_matrix), as.vector(reference_matrix), tolerance = 1e-12)
+    expect_identical(attr(terms(bridged), "term.labels"), attr(terms(reference), "term.labels"))
+  }
+})
+
 test_that("polynomial formula terms match R designs and prediction rebuilding", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
