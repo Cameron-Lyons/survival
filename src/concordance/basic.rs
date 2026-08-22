@@ -988,6 +988,7 @@ fn counting_concordance_rank_rows_for_vectors(
 fn reassemble_stratified_rank_rows(
     n: usize,
     groups: Vec<Vec<usize>>,
+    display_times: Option<&[f64]>,
     mut compute_group: impl FnMut(&[usize]) -> IndexedConcordanceRankRows,
 ) -> PyResult<ConcordanceRankRows> {
     let mut result = vec![[0.0; 4]; n];
@@ -998,10 +999,11 @@ fn reassemble_stratified_rank_rows(
                 "number of items to replace is not a multiple of replacement length",
             ));
         }
+        let group_indices = &indices;
         let source: Vec<f64> = (0..4)
             .flat_map(|column| {
                 group_rows.iter().map(move |row| match column {
-                    0 => row.1,
+                    0 => display_times.map_or(row.1, |values| values[group_indices[row.0]]),
                     1 => row.2,
                     2 => row.3,
                     _ => row.4,
@@ -1037,6 +1039,7 @@ fn split_indexed_rank_rows(rows: IndexedConcordanceRankRows) -> ConcordanceRankR
     (values, indices)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stratified_right_concordance_rank_rows(
     time: &[f64],
     status: &[i32],
@@ -1045,23 +1048,29 @@ fn stratified_right_concordance_rank_rows(
     strata: &[i32],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
+    display_times: Option<&[f64]>,
 ) -> PyResult<ConcordanceRankRows> {
-    reassemble_stratified_rank_rows(time.len(), strata_groups(strata), |indices| {
-        let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
-        let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
-        let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
-        let group_order: Vec<f64> = indices.iter().map(|&idx| order_scores[idx]).collect();
-        let group_weights: Option<Vec<f64>> =
-            weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
-        right_concordance_rank_rows_for_vectors(
-            &group_time,
-            &group_status,
-            &group_risk,
-            &group_order,
-            group_weights.as_deref(),
-            time_weight,
-        )
-    })
+    reassemble_stratified_rank_rows(
+        time.len(),
+        strata_groups(strata),
+        display_times,
+        |indices| {
+            let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
+            let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
+            let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
+            let group_order: Vec<f64> = indices.iter().map(|&idx| order_scores[idx]).collect();
+            let group_weights: Option<Vec<f64>> =
+                weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
+            right_concordance_rank_rows_for_vectors(
+                &group_time,
+                &group_status,
+                &group_risk,
+                &group_order,
+                group_weights.as_deref(),
+                time_weight,
+            )
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1074,8 +1083,9 @@ fn stratified_counting_concordance_rank_rows_for_strata(
     strata: &[i32],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
+    display_stop: Option<&[f64]>,
 ) -> PyResult<ConcordanceRankRows> {
-    reassemble_stratified_rank_rows(stop.len(), strata_groups(strata), |indices| {
+    reassemble_stratified_rank_rows(stop.len(), strata_groups(strata), display_stop, |indices| {
         let group_start: Vec<f64> = indices.iter().map(|&idx| start[idx]).collect();
         let group_stop: Vec<f64> = indices.iter().map(|&idx| stop[idx]).collect();
         let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
@@ -1788,7 +1798,8 @@ pub fn concordance_rank_rows(
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, risk_scores, strata, weights=None, timewt="n".to_string(), order_scores=None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (time, status, risk_scores, strata, weights=None, timewt="n".to_string(), order_scores=None, display_times=None))]
 pub fn stratified_concordance_rank_rows(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -1797,6 +1808,7 @@ pub fn stratified_concordance_rank_rows(
     weights: Option<Vec<f64>>,
     timewt: String,
     order_scores: Option<Vec<f64>>,
+    display_times: Option<Vec<f64>>,
 ) -> PyResult<ConcordanceRankRows> {
     validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
     validate_strata_length(time.len(), &strata, "time")?;
@@ -1806,6 +1818,14 @@ pub fn stratified_concordance_rank_rows(
     {
         return Err(PyValueError::new_err(
             "order_scores must have the same length as time",
+        ));
+    }
+    if display_times
+        .as_ref()
+        .is_some_and(|values| values.len() != time.len())
+    {
+        return Err(PyValueError::new_err(
+            "display_times must have the same length as time",
         ));
     }
     let time_weight = parse_concordance_time_weight(&timewt)?;
@@ -1818,6 +1838,7 @@ pub fn stratified_concordance_rank_rows(
         &strata,
         weights.as_deref(),
         time_weight,
+        display_times.as_deref(),
     )
 }
 
@@ -2071,7 +2092,7 @@ pub fn counting_concordance_rank_rows(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (start, stop, status, risk_scores, strata, weights=None, timewt="n".to_string(), timefix=None, order_scores=None))]
+#[pyo3(signature = (start, stop, status, risk_scores, strata, weights=None, timewt="n".to_string(), timefix=None, order_scores=None, display_stop=None))]
 pub fn stratified_counting_concordance_rank_rows(
     start: Vec<f64>,
     stop: Vec<f64>,
@@ -2082,6 +2103,7 @@ pub fn stratified_counting_concordance_rank_rows(
     timewt: String,
     timefix: Option<bool>,
     order_scores: Option<Vec<f64>>,
+    display_stop: Option<Vec<f64>>,
 ) -> PyResult<ConcordanceRankRows> {
     let (start, stop) = prepare_counting_concordance_times(&start, &stop, timefix);
     validate_counting_concordance_inputs(
@@ -2101,6 +2123,14 @@ pub fn stratified_counting_concordance_rank_rows(
             "order_scores must have the same length as start",
         ));
     }
+    if display_stop
+        .as_ref()
+        .is_some_and(|values| values.len() != start.len())
+    {
+        return Err(PyValueError::new_err(
+            "display_stop must have the same length as start",
+        ));
+    }
     let time_weight = parse_counting_concordance_time_weight(&timewt)?;
     let order_scores = order_scores.as_deref().unwrap_or(&risk_scores);
     stratified_counting_concordance_rank_rows_for_strata(
@@ -2112,6 +2142,7 @@ pub fn stratified_counting_concordance_rank_rows(
         &strata,
         weights.as_deref(),
         time_weight,
+        display_stop.as_deref(),
     )
 }
 
@@ -2979,6 +3010,7 @@ mod tests {
             None,
             "n".to_string(),
             None,
+            None,
         )
         .unwrap();
 
@@ -2994,6 +3026,36 @@ mod tests {
     }
 
     #[test]
+    fn stratified_concordance_rank_rows_recycle_display_times() {
+        initialize_python();
+
+        let rows = stratified_concordance_rank_rows(
+            vec![2e-9, 4e-9, 6e-9, 2e-9, 0.0, 6e-9, 4e-9],
+            vec![1, 0, 1, 0, 0, 1, 0],
+            vec![0.5, 0.5, -1.0, 0.5, 0.0, 0.5, 1.0],
+            vec![0, 0, 0, 1, 1, 1, 0],
+            Some(vec![1.5, 1.5, 0.5, 1.5, 1.0, 1.5, 0.5]),
+            "n/G2".to_string(),
+            None,
+            Some(vec![2.0, 6.0, 7.0, 2.0, 1.0, 7.0, 6.0]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                (2.0, 4.0, 2.0, 4.0),
+                (7.0, 12.499999999999998, 7.0, 12.499999999999998),
+                (0.0, 1.5, 0.0, 1.5),
+                (7.0, 1.5, 1.5, 0.0),
+                (0.0, 7.0, 1.5, 1.5),
+                (1.5, 0.0, 7.0, 1.5),
+                (0.0, 0.5, 0.0, 0.5),
+            ]
+        );
+    }
+
+    #[test]
     fn stratified_concordance_rank_rows_reject_empty_stratum_residuals() {
         initialize_python();
 
@@ -3004,6 +3066,7 @@ mod tests {
             vec![0, 0, 1, 1],
             None,
             "n".to_string(),
+            None,
             None,
         )
         .unwrap_err();
@@ -3027,6 +3090,7 @@ mod tests {
             vec![0, 0, 1, 1],
             None,
             "n".to_string(),
+            None,
             None,
             None,
         )
@@ -3055,6 +3119,7 @@ mod tests {
             vec![0, 0, 0, 0, 1, 1, 1, 1],
             Some(vec![1.0, 2.0, 1.5, 0.5, 3.0, 1.0, 2.5, 2.0]),
             "n".to_string(),
+            None,
             None,
             None,
         )
