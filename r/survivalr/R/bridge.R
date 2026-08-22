@@ -11885,7 +11885,18 @@ brier <- function(fit, times, newdata, ties = TRUE, detail = FALSE,
 concordance <- function(object, ..., formula) {
   if (missing(object)) {
     if (!missing(formula)) {
-      return(concordance(formula, ...))
+      Call <- match.call()
+      bridge_call <- Call
+      bridge_call[[1L]] <- quote(.concordance_formula_bridge)
+      bridge_call$object <- bridge_call$formula
+      bridge_call$formula <- NULL
+      result <- eval(
+        bridge_call,
+        envir = list(.concordance_formula_bridge = concordance.formula),
+        enclos = parent.frame()
+      )
+      result$call <- Call
+      return(result)
     }
   }
   UseMethod("concordance")
@@ -11919,9 +11930,61 @@ concordance <- function(object, ..., formula) {
   tryCatch(explicit_row_names(.as_native_surv(object)), error = function(condition) NULL)
 }
 
+.concordance_model_frame <- function(formula, data, weights, cluster, subset, na.action) {
+  action <- .as_na_action(na.action)
+  action <- switch(
+    action,
+    fail = stats::na.fail,
+    omit = stats::na.omit,
+    exclude = stats::na.exclude,
+    pass = stats::na.pass,
+    action
+  )
+  args <- list(formula = formula, na.action = action)
+  if (!is.null(data)) args$data <- data
+  if (!is.null(weights)) args$weights <- weights
+  if (!is.null(cluster)) args$cluster <- cluster
+  if (!is.null(subset)) args$subset <- subset
+  do.call(stats::model.frame, args)
+}
+
+.as_native_concordance <- function(result, Call, na.action = NULL) {
+  concordance <- .as_numeric_vector(.result_field(result, "concordance"))
+  score_names <- as.character(.result_field(result, "score_names"))
+  multi_score <- length(concordance) > 1L
+  if (multi_score && length(score_names) == length(concordance)) {
+    names(concordance) <- score_names
+  }
+  variance <- .result_field(result, "variance")
+  conditional_variance <- .as_numeric_vector(
+    .result_field(result, "conditional_variance")
+  )
+  out <- list(
+    concordance = if (multi_score) concordance else concordance[[1L]],
+    count = .survival_py_concordance_component(result, "count"),
+    n = as.integer(.result_field(result, "n")),
+    var = if (multi_score) .as_numeric_matrix(variance) else as.numeric(variance)[[1L]],
+    cvar = if (length(conditional_variance) == 1L) {
+      conditional_variance[[1L]]
+    } else {
+      conditional_variance
+    }
+  )
+  for (name in c("dfbeta", "influence", "ranks")) {
+    value <- .survival_py_concordance_component(result, name)
+    if (!is.null(value)) out[[name]] <- value
+  }
+  if (length(na.action)) out$na.action <- na.action
+  out$call <- Call
+  class(out) <- "concordance"
+  out
+}
+
 concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.scores = NULL,
                                 weights = NULL, cluster = NULL, subset = NULL, na.action = "fail") {
+  Call <- match.call()
   formula <- object
+  formula_input <- inherits(formula, "formula")
   env <- parent.frame()
   formula_data <- if (is.null(data) && inherits(formula, "formula")) {
     .formula_environment_data(formula, env)
@@ -11963,8 +12026,27 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     env,
     vector = TRUE
   )
+  effective_na_action <- if (formula_input && missing(na.action)) {
+    getOption("na.action")
+  } else {
+    na.action
+  }
+  formula_frame <- if (formula_input) {
+    .concordance_model_frame(
+      formula,
+      data,
+      weight_values,
+      cluster_values,
+      subset_values,
+      effective_na_action
+    )
+  } else {
+    NULL
+  }
   source_row_names <- .concordance_source_row_names(formula, formula_data, env)
-  .call_r_api(
+  python_na_action <- .as_na_action(effective_na_action)
+  if (is.null(python_na_action)) python_na_action <- "pass"
+  result <- .call_r_api(
     "concordance",
     response = .as_formula_string(formula),
     data = .as_python_data(formula_data),
@@ -11973,11 +12055,32 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     weights = weight_values,
     cluster = cluster_values,
     subset = subset_values,
-    `na.action` = .as_na_action(na.action),
+    `na.action` = python_na_action,
     `_row_names` = source_row_names,
     ...,
     .wrap = c("survival_py_concordance", "survival_py_object")
   )
+  if (formula_input) {
+    return(.as_native_concordance(result, Call, attr(formula_frame, "na.action")))
+  }
+  result
+}
+
+concordance.formula <- function(object, data, weights, subset, na.action, cluster,
+                                ymin, ymax,
+                                timewt = c("n", "S", "S/G", "n/G2", "I"),
+                                influence = 0, ranks = FALSE, reverse = FALSE,
+                                timefix = TRUE, keepstrata = 10, ...) {
+  Call <- match.call()
+  bridge_call <- Call
+  bridge_call[[1L]] <- quote(.concordance_default_bridge)
+  result <- eval(
+    bridge_call,
+    envir = list(.concordance_default_bridge = concordance.default),
+    enclos = parent.frame()
+  )
+  result$call <- Call
+  result
 }
 
 .model_concordance_response <- function(object, newdata) {
@@ -13843,6 +13946,39 @@ as.data.frame.survival_py_survdiff <- function(x, row.names = NULL, optional = F
 
 as.data.frame.survival_py_concordance <- function(x, row.names = NULL, optional = FALSE, ...) {
   .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
+}
+
+as.data.frame.concordance <- function(x, row.names = NULL, optional = FALSE, ...) {
+  concordance <- as.numeric(x$concordance)
+  n_scores <- length(concordance)
+  count <- x$count
+  if (n_scores == 1L) {
+    count <- if (is.matrix(count)) colSums(count) else as.numeric(count)
+    count <- matrix(count, nrow = 1L)
+  } else {
+    count <- as.matrix(count)
+  }
+  variance <- if (is.matrix(x$var)) diag(x$var) else rep(as.numeric(x$var), n_scores)
+  score_names <- names(x$concordance)
+  if (is.null(score_names)) {
+    score_names <- if (n_scores == 1L) "score" else paste0("score", seq_len(n_scores))
+  }
+  frame <- data.frame(
+    score = score_names,
+    concordance = concordance,
+    concordant = count[, 1L],
+    comparable = rowSums(count[, seq_len(3L), drop = FALSE]),
+    tied.x = count[, 3L],
+    tied.y = count[, 4L],
+    tied.xy = count[, 5L],
+    n = rep(x$n, n_scores),
+    n.event = rep(NA_integer_, n_scores),
+    variance = variance,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  if (!is.null(row.names)) row.names(frame) <- row.names
+  frame
 }
 
 as.data.frame.survival_py_cox_zph <- function(x, row.names = NULL, optional = FALSE, ...) {

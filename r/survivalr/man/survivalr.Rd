@@ -106,6 +106,7 @@
 \alias{brier}
 \alias{concordance}
 \alias{concordance.default}
+\alias{concordance.formula}
 \alias{concordance.survival_py_model}
 \alias{concordancefit}
 \alias{survConcordance}
@@ -296,6 +297,7 @@
 \alias{as.data.frame.survival_py_basehaz}
 \alias{as.data.frame.survival_py_survdiff}
 \alias{as.data.frame.survival_py_concordance}
+\alias{as.data.frame.concordance}
 \alias{as.data.frame.survival_py_cox_zph}
 \alias{as.data.frame.survival_py_coxph_detail}
 \alias{as.data.frame.survival_py_anova}
