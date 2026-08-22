@@ -244,9 +244,12 @@ expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
 term contributions, and quantile predictions via `type="quantile"`.
 The AFT optimizer uses positive-definite observed-information Newton steps when
-available and falls back to the stable outer-product system otherwise. The R
-bridge also routes built-in `survreg.fit` matrix calls through this kernel,
-including fixed or stratified scales and interval-censored responses.
+available and falls back to the stable outer-product system otherwise. Formula
+fits retry from weighted transformed-time starts when a zero start exhausts the
+standard iteration budget. The R bridge also routes built-in `survreg.fit`
+matrix calls through this kernel, including fixed or stratified scales and
+interval-censored responses. Formula factors retain their declared level order,
+including unused levels represented by aliased coefficients.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
