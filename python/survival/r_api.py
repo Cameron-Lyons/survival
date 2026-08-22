@@ -15330,10 +15330,6 @@ def survfit(
         if etype is not None or istate is not None:
             raise ValueError("etype and istate are only supported for Surv or formula inputs")
         if is_multistate_cox_fit:
-            if computation.ctype != 1:
-                raise NotImplementedError(
-                    "ctype=2 is not implemented for multi-state Cox survival curves"
-                )
             if reverse_curve:
                 raise ValueError("reverse survfit is not supported for multi-state Cox models")
             if subset is not None:
@@ -15352,6 +15348,11 @@ def survfit(
                 raise ValueError("id and entry are not used for fitted multi-state Cox models")
             rows, offsets = _prediction_inputs(response, newdata)
             curve_style = 2 if stype is None and type is None else computation.stype
+            curve_ctype = (
+                2
+                if type is None and ctype is None and response.method == "efron"
+                else computation.ctype
+            )
             return _cox_multistate_survfit_result(
                 response,
                 rows,
@@ -15362,6 +15363,7 @@ def survfit(
                 include_time0=include_time0,
                 include_censor=include_censor,
                 stype=curve_style,
+                ctype=curve_ctype,
                 conf_level=normalized_conf_level,
                 conf_type="none",
                 keep_model=keep_model,
@@ -22058,163 +22060,77 @@ def _select_multistate_curve_times(
     )
 
 
-def _cox_multistate_baseline_increments(
+def _cox_multistate_profile_linear_predictors(
     fit: _FormulaFit,
-    times: Sequence[float],
-    start_time: float,
-    user_stratum: int = 0,
-    row: Sequence[float] | None = None,
-    offset: float = 0.0,
+    rows: Sequence[Sequence[float]],
+    offsets: Sequence[float],
 ) -> list[list[float]]:
     metadata = fit.multi_state
     if metadata is None:
         raise AssertionError("multi-state Cox metadata is missing")
-    base_times, base_hazards, base_strata = fit.fit.basehaz_with_strata(False)
-    baselines = _cox_baselines_by_stratum(base_times, base_hazards, base_strata)
-    cumulative_by_transition: list[list[float]] = []
-    for transition_idx in range(len(metadata.transitions)):
-        stratum = metadata.baseline_map[transition_idx] * metadata.user_strata_count + user_stratum
-        transition_times, transition_hazards = baselines.get(stratum, ([], []))
-        at_start = _core.step_values_at(
-            transition_times,
-            transition_hazards,
-            [start_time],
-            0.0,
-        )[0]
-        cumulative_by_transition.append(
-            [
-                max(float(value) - float(at_start), 0.0)
-                for value in _core.step_values_at(
-                    transition_times,
-                    transition_hazards,
-                    list(times),
-                    0.0,
-                )
-            ]
-        )
-
-    baseline_groups: dict[int, list[int]] = {}
-    for transition_idx, baseline in enumerate(metadata.baseline_map):
-        baseline_groups.setdefault(baseline, []).append(transition_idx)
-    shared_groups = [indices for indices in baseline_groups.values() if len(indices) > 1]
-    if shared_groups:
-        if row is None:
-            raise ValueError("shared multi-state baselines require a covariate profile")
-        beta = _cox_beta(fit)
-        response = metadata.normalized_response
-        training_start = list(response.start) if response.start is not None else None
-        training_stop = list(response.time)
-        training_event = list(response.event)
-        weights = fit.case_weights or [1.0] * len(training_stop)
-        strata_codes = (
-            _encode_groups(metadata.original_strata, len(training_stop))
-            if metadata.original_strata is not None
-            else [0] * len(training_stop)
-        )
-        for transition_indices in shared_groups:
-            event_weights: dict[float, float] = {}
-            for row_idx, event_time in enumerate(training_stop):
-                if strata_codes[row_idx] != user_stratum:
-                    continue
-                if any(
-                    metadata.current_states[row_idx] == metadata.transitions[index][0]
-                    and training_event[row_idx] == metadata.transitions[index][1] + 1
-                    for index in transition_indices
-                ):
-                    event_weights[event_time] = event_weights.get(event_time, 0.0) + float(
-                        weights[row_idx]
-                    )
-            event_times = sorted(event_weights)
-            risk_rows: list[tuple[float | None, float, float]] = []
-            for transition_idx in transition_indices:
-                source = metadata.transitions[transition_idx][0]
-                ph_coefficient = metadata.ph_coefficient_map[transition_idx]
-                for row_idx in range(len(training_stop)):
-                    if (
-                        strata_codes[row_idx] != user_stratum
-                        or metadata.current_states[row_idx] != source
-                    ):
-                        continue
-                    linear_predictor = metadata.original_offsets[row_idx] - float(offset)
-                    for column, coefficient_idx in enumerate(
-                        metadata.coefficient_map[transition_idx]
-                    ):
-                        if coefficient_idx >= 0:
-                            linear_predictor += (
-                                metadata.original_rows[row_idx][column] - float(row[column])
-                            ) * beta[coefficient_idx]
-                    if ph_coefficient >= 0:
-                        linear_predictor += beta[ph_coefficient]
-                    risk_rows.append(
-                        (
-                            None if training_start is None else training_start[row_idx],
-                            training_stop[row_idx],
-                            float(weights[row_idx]) * _safe_exp(linear_predictor),
-                        )
-                    )
-            cumulative = [0.0] * len(transition_indices)
-            cumulative_rows: list[list[float]] = []
-            for event_time in event_times:
-                numerator = event_weights[event_time]
-                denominator = math.fsum(
-                    risk
-                    for entry, stop, risk in risk_rows
-                    if stop >= event_time and (entry is None or entry < event_time)
-                )
-                if denominator <= 0.0:
-                    raise ValueError("shared multi-state baseline has an empty risk set")
-                shared_increment = numerator / denominator
-                for position, transition_idx in enumerate(transition_indices):
-                    ph_coefficient = metadata.ph_coefficient_map[transition_idx]
-                    scale = _safe_exp(beta[ph_coefficient]) if ph_coefficient >= 0 else 1.0
-                    cumulative[position] += shared_increment * scale
-                cumulative_rows.append(list(cumulative))
-            for position, transition_idx in enumerate(transition_indices):
-                values = [values[position] for values in cumulative_rows]
-                at_start = _core.step_values_at(event_times, values, [start_time], 0.0)[0]
-                cumulative_by_transition[transition_idx] = [
-                    max(value - at_start, 0.0)
-                    for value in _core.step_values_at(event_times, values, list(times), 0.0)
-                ]
-
-    previous = [0.0] * len(metadata.transitions)
-    increments: list[list[float]] = []
-    for time_idx in range(len(times)):
-        row = [
-            max(cumulative_by_transition[index][time_idx] - previous[index], 0.0)
-            for index in range(len(metadata.transitions))
+    beta = _cox_beta(fit)
+    return [
+        [
+            float(offset)
+            + math.fsum(
+                float(row[column]) * beta[coefficient_idx]
+                for column, coefficient_idx in enumerate(metadata.coefficient_map[transition_idx])
+                if coefficient_idx >= 0
+            )
+            for transition_idx in range(len(metadata.transitions))
         ]
-        increments.append(row)
-        previous = [cumulative_by_transition[index][time_idx] for index in range(len(previous))]
-    return increments
+        for row, offset in zip(rows, offsets, strict=True)
+    ]
 
 
-def _cox_multistate_curve_risk(
+def _cox_multistate_hazard_increments(
     fit: _FormulaFit,
-    row: Sequence[float],
-    offset: float,
-) -> list[float]:
+    rows: Sequence[Sequence[float]],
+    offsets: Sequence[float],
+    times: Sequence[float],
+    t0: float,
+    user_stratum: int,
+    ctype: int,
+) -> list[list[list[float]]]:
     metadata = fit.multi_state
     if metadata is None:
         raise AssertionError("multi-state Cox metadata is missing")
     beta = _cox_beta(fit)
-    baseline_counts = {
-        baseline: metadata.baseline_map.count(baseline) for baseline in metadata.baseline_map
-    }
-    risks: list[float] = []
-    for transition_idx in range(len(metadata.transitions)):
-        if baseline_counts[metadata.baseline_map[transition_idx]] > 1:
-            risks.append(1.0)
-            continue
-        linear_predictor = float(offset)
-        for column, coefficient_idx in enumerate(metadata.coefficient_map[transition_idx]):
-            if coefficient_idx >= 0:
-                linear_predictor += float(row[column]) * beta[coefficient_idx]
+    training_predictors = [float(value) for value in fit.fit.linear_predictors]
+    if len(training_predictors) != len(metadata.transition_indices):
+        raise ValueError("multi-state Cox fitted rows are inconsistent")
+    for row_index, transition_idx in enumerate(metadata.transition_indices):
         ph_coefficient = metadata.ph_coefficient_map[transition_idx]
         if ph_coefficient >= 0:
-            linear_predictor += beta[ph_coefficient]
-        risks.append(_safe_exp(linear_predictor))
-    return risks
+            training_predictors[row_index] -= beta[ph_coefficient]
+    ph_scales = [
+        _safe_exp(beta[coefficient]) if coefficient >= 0 else 1.0
+        for coefficient in metadata.ph_coefficient_map
+    ]
+    hazards = _core.cox_multistate_hazards(
+        [float(value) for value in fit.fit.event_times],
+        [int(value) for value in fit.fit.status],
+        [float(value) for value in fit.fit.weights],
+        [int(value) for value in fit.fit.strata],
+        training_predictors,
+        [int(value) for value in metadata.transition_indices],
+        [int(value) for value in metadata.baseline_map],
+        ph_scales,
+        _cox_multistate_profile_linear_predictors(fit, rows, offsets),
+        [float(value) for value in times],
+        user_stratum,
+        metadata.user_strata_count,
+        ctype,
+        (None if fit.fit.entry_times is None else [float(value) for value in fit.fit.entry_times]),
+    )
+    increments = [
+        [[float(value) for value in row] for row in profile] for profile in hazards.increments
+    ]
+    for profile in increments:
+        for time_index, time in enumerate(times):
+            if time <= t0:
+                profile[time_index] = [0.0] * len(metadata.transitions)
+    return increments
 
 
 def _cox_multistate_survfit_result(
@@ -22228,6 +22144,7 @@ def _cox_multistate_survfit_result(
     include_time0: bool,
     include_censor: bool,
     stype: int,
+    ctype: int,
     conf_level: float,
     conf_type: str,
     keep_model: bool,
@@ -22268,15 +22185,12 @@ def _cox_multistate_survfit_result(
         model_frame=None,
     )
     model_frame = _cox_survfit_model_frame(fit, newdata) if keep_model else None
-    risks = [
-        _cox_multistate_curve_risk(fit, row, offset)
-        for row, offset in zip(rows, row_offsets, strict=True)
-    ]
 
     def fit_shell(
         shell: SurvfitMultiStateResult,
         user_stratum: int,
     ) -> SurvfitMultiStateResult | SurvfitMultiStateCoxResult:
+        keep: list[int] | None = None
         if not include_censor:
             transition_counts = shell.n_transition_count or shell.n_transition
             keep = [
@@ -22287,53 +22201,40 @@ def _cox_multistate_survfit_result(
                 if any(value > 0.0 for value in counts)
                 or (include_time0 and math.isclose(time, shell.t0, rel_tol=0.0, abs_tol=1e-12))
             ]
-            shell = _select_multistate_curve_times(shell, keep)
 
-        shared_baselines = len(set(metadata.baseline_map)) < len(metadata.baseline_map)
-        if shared_baselines:
-            native_profile_curves = [
-                _core.cox_multistate_curve(
-                    _cox_multistate_baseline_increments(
-                        fit,
-                        shell.time,
-                        shell.t0,
-                        user_stratum,
-                        row,
-                        offset,
-                    ),
-                    [list(transition) for transition in metadata.transitions],
-                    risk,
-                    shell.p0,
-                    stype == 2,
-                )
-                for row, offset, risk in zip(rows, row_offsets, risks, strict=True)
-            ]
-            profile_curves = [(curve.pstate, curve.cumhaz) for curve in native_profile_curves]
-        else:
-            increments = _cox_multistate_baseline_increments(
-                fit,
-                shell.time,
-                shell.t0,
-                user_stratum,
-            )
-            native_curves = _core.cox_multistate_curves(
+        profile_increments = _cox_multistate_hazard_increments(
+            fit,
+            rows,
+            row_offsets,
+            shell.time,
+            shell.t0,
+            user_stratum,
+            ctype,
+        )
+        native_profile_curves = [
+            _core.cox_multistate_curve(
                 increments,
                 [list(transition) for transition in metadata.transitions],
-                risks,
+                [1.0] * len(metadata.transitions),
                 shell.p0,
                 stype == 2,
             )
-            profile_curves = list(zip(native_curves.pstate, native_curves.cumhaz, strict=True))
+            for increments in profile_increments
+        ]
+        profile_curves = [(curve.pstate, curve.cumhaz) for curve in native_profile_curves]
         curves = tuple(
-            replace(
-                shell,
-                pstate=[[float(value) for value in row] for row in profile_pstate],
-                cumhaz=[[float(value) for value in row] for row in profile_cumhaz],
-                model=model_frame,
-                cox_model=True,
-                cox_source=True,
+            (curve if keep is None else _select_multistate_curve_times(curve, keep))
+            for curve in (
+                replace(
+                    shell,
+                    pstate=[[float(value) for value in row] for row in profile_pstate],
+                    cumhaz=[[float(value) for value in row] for row in profile_cumhaz],
+                    model=model_frame,
+                    cox_model=True,
+                    cox_source=True,
+                )
+                for profile_pstate, profile_cumhaz in profile_curves
             )
-            for profile_pstate, profile_cumhaz in profile_curves
         )
         if len(curves) == 1:
             return curves[0]

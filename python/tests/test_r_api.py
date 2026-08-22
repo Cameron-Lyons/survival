@@ -13695,6 +13695,125 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     }.intersection(explicit_se_structure)
 
 
+@pytest.mark.parametrize(
+    ("method", "expected_coefficient", "expected_default_ctype", "expected"),
+    [
+        (
+            "breslow",
+            [-12.2551968587369, -6.71297035841965],
+            1,
+            {
+                1: (
+                    [
+                        [0.0, 0.0],
+                        [0.0104986104235232, 0.0333522104612063],
+                        [0.0104986104235232, 0.533266851524898],
+                        [16.3996882164622, 0.533266851524898],
+                        [16.3996882164622, 29.0965272120644],
+                        [13140.5899147505, 29.0965272120644],
+                    ],
+                    [0.0, 0.590829769997601, 0.409170230002399],
+                ),
+                2: (
+                    [
+                        [0.0, 0.0],
+                        [0.0116855016355243, 0.0333522104612063],
+                        [0.0116855016355243, 0.538576530958038],
+                        [18.2539072870543, 0.538576530958038],
+                        [18.2539072870543, 30.1425046966965],
+                        [13142.4441338211, 30.1425046966965],
+                    ],
+                    [0.0, 0.588224907529507, 0.411775092470493],
+                ),
+            },
+        ),
+        (
+            "efron",
+            [-13.309723344251, -7.40344129774352],
+            2,
+            {
+                1: (
+                    [
+                        [0.0, 0.0],
+                        [0.00717202971497316, 0.0270670209139645],
+                        [0.00717202971497316, 0.526073540999972],
+                        [21.0860964896476, 0.526073540999972],
+                        [21.0860964896476, 43.4157657787263],
+                        [31578.768104325, 43.4157657787263],
+                    ],
+                    [0.0, 0.593748344334161, 0.406251655665839],
+                ),
+                2: (
+                    [
+                        [0.0, 0.0],
+                        [0.00803184287903991, 0.0270670209139645],
+                        [0.00803184287903991, 0.539435424157959],
+                        [23.6140873356248, 0.539435424157959],
+                        [23.6140873356248, 45.628401790551],
+                        [31581.2960951709, 45.628401790551],
+                    ],
+                    [0.0, 0.586305445546166, 0.413694554453834],
+                ),
+            },
+        ),
+    ],
+)
+def test_coxph_multistate_tied_curve_ctypes_match_r_reference(
+    method,
+    expected_coefficient,
+    expected_default_ctype,
+    expected,
+):
+    pandas = pytest.importorskip("pandas")
+    data = pandas.DataFrame(
+        {
+            "id": list(range(1, 16)),
+            "time": [time for time in range(1, 6) for _ in range(3)],
+            "status": pandas.Categorical(
+                ["a", "a", "b", "b", "0", "b", "a", "a", "0", "b", "b", "0", "a", "0", "0"],
+                categories=["0", "a", "b"],
+            ),
+            "x": [index / 10.0 for index in range(1, 16)],
+        }
+    )
+    fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        id="id",
+        method=method,
+        max_iter=40,
+        eps=1e-10,
+    )
+    assert survival.coef(fit) == pytest.approx(expected_coefficient, abs=1e-12)
+
+    curves = {
+        ctype: survival.survfit(
+            fit,
+            newdata=pandas.DataFrame({"x": [0.5]}),
+            ctype=ctype,
+            time0=True,
+        )
+        for ctype in (1, 2)
+    }
+    default_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+        time0=True,
+    )
+
+    for ctype, curve in curves.items():
+        expected_cumhaz, expected_pstate = expected[ctype]
+        assert curve.time == pytest.approx([0, 1, 2, 3, 4, 5])
+        for actual, reference in zip(curve.cumhaz, expected_cumhaz, strict=True):
+            assert actual == pytest.approx(reference, rel=1e-9, abs=1e-9)
+        assert curve.pstate[-1] == pytest.approx(expected_pstate, abs=1e-12)
+    expected_default = curves[expected_default_ctype]
+    for actual, reference in zip(default_curve.cumhaz, expected_default.cumhaz, strict=True):
+        assert actual == pytest.approx(reference, rel=1e-13, abs=1e-13)
+    for actual, reference in zip(default_curve.pstate, expected_default.pstate, strict=True):
+        assert actual == pytest.approx(reference, abs=1e-13)
+
+
 def test_coxph_multistate_formula_lists_match_r_reference():
     pandas = pytest.importorskip("pandas")
     data = pandas.DataFrame(

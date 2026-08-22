@@ -1184,6 +1184,10 @@ class MultiStateCoxCurves:
     @property
     def cumhaz(self) -> list[list[list[float]]]: ...
 
+class MultiStateCoxHazards:
+    @property
+    def increments(self) -> list[list[list[float]]]: ...
+
 class CoxPHFit:
     @property
     def coefficients(self) -> list[list[float]]: ...
@@ -7348,6 +7352,22 @@ def cox_multistate_curves(
     p0: list[float],
     exponential: bool = True,
 ) -> MultiStateCoxCurves: ...
+def cox_multistate_hazards(
+    stop: list[float],
+    status: list[int],
+    weights: list[float],
+    strata: list[int],
+    linear_predictors: list[float],
+    transition_indices: list[int],
+    baseline_map: list[int],
+    ph_scales: list[float],
+    profile_linear_predictors: list[list[float]],
+    times: list[float],
+    user_stratum: int,
+    user_strata_count: int,
+    ctype: int,
+    entry: list[float] | None = None,
+) -> MultiStateCoxHazards: ...
 def coxph_fit(
     time: list[float],
     status: list[int],
