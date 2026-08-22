@@ -10012,6 +10012,7 @@ def test_core_utility_bindings_are_typed():
         "SplineBasisResult",
         "PSpline",
         "nsk",
+        "ns_basis",
         "poly_basis",
         "pspline_basis",
         "scale_values",
@@ -10051,6 +10052,7 @@ def test_core_utility_bindings_are_typed():
 
     expected_args = {
         "nsk": ["x", "df", "knots", "boundary_knots"],
+        "ns_basis": ["x", "df", "knots", "boundary_knots", "intercept"],
         "poly_basis": ["x", "degree", "raw", "alpha", "norm2"],
         "pspline_basis": ["x", "nterm", "degree", "boundary_knots"],
         "scale_values": ["x", "center", "scale", "center_value", "scale_value"],
@@ -10189,6 +10191,13 @@ def test_core_utility_bindings_are_typed():
     default_basis = core.nsk([1.0, 2.0, 3.0, 4.0, 5.0], None, None, None)
     basis = core.nsk([1.0, 2.0, 3.0, 4.0, 5.0], 3, None, None)
     explicit_basis = core.nsk([1.0, 2.0, 3.0, 4.0], None, [2.0, 3.0], (1.0, 4.0))
+    natural_basis = core.ns_basis(
+        [-2.0, 0.0, 0.5, 1.5, 3.0, 5.0, 8.0, 13.0],
+        None,
+        [1.0, 4.0, 7.0],
+        (0.0, 8.0),
+        False,
+    )
     spline = core.NaturalSplineKnot([2.0, 3.0], (1.0, 4.0), None, False)
     spline_basis = spline.basis([1.0, 2.0, 3.0])
     pspline = core.PSpline([1.0, 2.0, 3.0, 4.0], 3, 0.1, 1e-6, "GCV", (0.0, 5.0), False, False)
@@ -10219,6 +10228,13 @@ def test_core_utility_bindings_are_typed():
         1.0 if row > 0 and row - 1 == col else 0.0 for row in range(4) for col in range(3)
     ]
     assert explicit_basis.basis == pytest.approx(expected_identity)
+    assert natural_basis.n_cols == 4
+    assert natural_basis.knots == [1.0, 4.0, 7.0]
+    assert natural_basis.boundary_knots == (0.0, 8.0)
+    assert natural_basis.basis[:4] == pytest.approx(
+        [0.0, 0.181568259800641, -0.907841299003203, 0.726273039202563],
+        abs=2e-14,
+    )
     assert spline.df == 3
     assert spline.intercept is False
     assert spline_basis.n_rows == 3

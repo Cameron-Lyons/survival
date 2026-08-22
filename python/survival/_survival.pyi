@@ -7720,6 +7720,13 @@ def nsk(
     knots: list[float] | None = None,
     boundary_knots: tuple[float, float] | None = None,
 ) -> SplineBasisResult: ...
+def ns_basis(
+    x: list[float],
+    df: int | None = None,
+    knots: list[float] | None = None,
+    boundary_knots: tuple[float, float] | None = None,
+    intercept: bool = False,
+) -> SplineBasisResult: ...
 def pspline_basis(
     x: list[float],
     nterm: int,

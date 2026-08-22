@@ -1,4 +1,5 @@
 use crate::constants::STRICT_EPSILON;
+use crate::core::bspline::{basis_row, derivative_row};
 use crate::internal::matrix::lu_solve;
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyValueError;
@@ -89,62 +90,6 @@ fn validate_positive_scalar(value: f64, field: &str) -> PyResult<()> {
     Ok(())
 }
 
-fn r_pspline_basis_row(knots: &[f64], x: f64, order: usize) -> Vec<f64> {
-    let n_basis = knots.len() - order;
-    let mut values = vec![0.0; knots.len() - 1];
-    for idx in 0..knots.len() - 1 {
-        if (knots[idx] <= x && x < knots[idx + 1])
-            || (x == knots[knots.len() - 1] && knots[idx] <= x && x <= knots[idx + 1])
-        {
-            values[idx] = 1.0;
-        }
-    }
-
-    for current_order in 2..=order {
-        let mut next_values = vec![0.0; knots.len() - current_order];
-        for idx in 0..next_values.len() {
-            let left_denominator = knots[idx + current_order - 1] - knots[idx];
-            let right_denominator = knots[idx + current_order] - knots[idx + 1];
-            let left = if left_denominator == 0.0 {
-                0.0
-            } else {
-                (x - knots[idx]) / left_denominator * values[idx]
-            };
-            let right = if right_denominator == 0.0 {
-                0.0
-            } else {
-                (knots[idx + current_order] - x) / right_denominator * values[idx + 1]
-            };
-            next_values[idx] = left + right;
-        }
-        values = next_values;
-    }
-    values.truncate(n_basis);
-    values
-}
-
-fn r_pspline_basis_derivative_row(knots: &[f64], x: f64, order: usize) -> Vec<f64> {
-    let lower_order = r_pspline_basis_row(knots, x, order - 1);
-    let n_basis = knots.len() - order;
-    (0..n_basis)
-        .map(|idx| {
-            let left_denominator = knots[idx + order - 1] - knots[idx];
-            let right_denominator = knots[idx + order] - knots[idx + 1];
-            let left = if left_denominator == 0.0 {
-                0.0
-            } else {
-                (order - 1) as f64 / left_denominator * lower_order[idx]
-            };
-            let right = if right_denominator == 0.0 {
-                0.0
-            } else {
-                (order - 1) as f64 / right_denominator * lower_order[idx + 1]
-            };
-            left - right
-        })
-        .collect()
-}
-
 fn r_pspline_knots(boundary_knots: (f64, f64), nterm: usize, degree: usize) -> PyResult<Vec<f64>> {
     let knot_count = nterm
         .checked_add(
@@ -218,10 +163,10 @@ pub(crate) fn pspline_basis_core(
     }
 
     let order = degree + 1;
-    let left_basis = r_pspline_basis_row(&knots, lower, order);
-    let left_derivative = r_pspline_basis_derivative_row(&knots, lower, order);
-    let right_basis = r_pspline_basis_row(&knots, upper, order);
-    let right_derivative = r_pspline_basis_derivative_row(&knots, upper, order);
+    let left_basis = basis_row(&knots, lower, order);
+    let left_derivative = derivative_row(&knots, lower, order, 1);
+    let right_basis = basis_row(&knots, upper, order);
+    let right_derivative = derivative_row(&knots, upper, order, 1);
     let basis = x
         .par_iter()
         .map(|value| {
@@ -240,7 +185,7 @@ pub(crate) fn pspline_basis_core(
                     .map(|(basis, derivative)| basis + (value - upper) * derivative)
                     .collect()
             } else {
-                r_pspline_basis_row(&knots, *value, order)
+                basis_row(&knots, *value, order)
             }
         })
         .collect();

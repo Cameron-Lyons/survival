@@ -138,7 +138,10 @@ multi-column bases through an O(n d) native recurrence and retain the fitted
 orthogonalization coefficients for new-data prediction. Stateful `scale(...)`
 terms use an O(n) native path, accept R's logical or numeric `center=` and
 `scale=` options, fit before row subsetting or missing-data omission, and reuse
-their fitted state for ordinary new-data model reconstruction.
+their fitted state for ordinary new-data model reconstruction. Formula
+`ns(...)` terms use a parallel O(n k) natural-spline basis matching R's
+`splines::ns`, including fitted knots and boundaries, linear extrapolation,
+interactions, nested numeric expressions, and pre-subset transform state.
 Formula calls also accept `subset=` as a boolean mask or zero-based row indices
 and `na_action="omit"` for row-wise missing-data omission across formula
 columns and external row-aligned arrays such as `weights`, `offset`, and

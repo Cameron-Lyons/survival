@@ -229,6 +229,14 @@ class _PolyFormulaOptions:
 
 
 @dataclass(frozen=True)
+class _NSFormulaOptions:
+    df: int | None
+    knots: tuple[float, ...] | None
+    intercept: bool
+    boundary_knots: tuple[float, float] | None
+
+
+@dataclass(frozen=True)
 class _NumericFormulaLiteral:
     value: float
 
@@ -281,6 +289,7 @@ class _CovariateTerm:
     factor_options: _FactorFormulaOptions | None = None
     formula_label: str | None = None
     poly_options: _PolyFormulaOptions | None = None
+    ns_options: _NSFormulaOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -433,6 +442,15 @@ class _PolyDesignTerm:
 
 
 @dataclass(frozen=True)
+class _NSDesignTerm:
+    term: _CovariateTerm
+    knots: tuple[float, ...]
+    boundary_knots: tuple[float, float]
+    width: int
+    scale_states: _ScaleFormulaStates = ()
+
+
+@dataclass(frozen=True)
 class _CategoricalDesignTerm:
     term: _CovariateTerm
     levels: tuple[Any, ...]
@@ -442,7 +460,7 @@ class _CategoricalDesignTerm:
     full: bool = False
 
 
-_SingleDesignTerm = _NumericDesignTerm | _PolyDesignTerm | _CategoricalDesignTerm
+_SingleDesignTerm = _NumericDesignTerm | _PolyDesignTerm | _NSDesignTerm | _CategoricalDesignTerm
 
 
 @dataclass(frozen=True)
@@ -497,6 +515,10 @@ class _FormulaDesign:
 class _FormulaSubsetData:
     data: Any
     scale_states: _ScaleFormulaStates
+    ns_states: tuple[
+        tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, float], int]],
+        ...,
+    ]
     poly_states: tuple[
         tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]],
         ...,
@@ -2140,6 +2162,7 @@ def _subset_data(data: Any, indices: list[int]) -> Any:
         return _FormulaSubsetData(
             _subset_data(data.data, indices),
             data.scale_states,
+            data.ns_states,
             data.poly_states,
         )
     if isinstance(data, Mapping):
@@ -3905,12 +3928,32 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
+def _fit_ns_basis(values: list[float], options: _NSFormulaOptions) -> Any:
+    minimum_df = 1 + int(options.intercept)
+    df = options.df
+    if options.knots is None and df is not None and df < minimum_df:
+        warnings.warn(
+            f"'df' was too small; have used {minimum_df}",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+        df = minimum_df
+    return _core.ns_basis(
+        values,
+        df,
+        None if options.knots is None else list(options.knots),
+        options.boundary_knots,
+        options.intercept,
+    )
+
+
 def _formula_transform_states(
     formula: str,
     data: Any,
     n: int,
 ) -> tuple[
     _ScaleFormulaStates,
+    tuple[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, float], int]], ...],
     tuple[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]], ...],
 ]:
     response_spec = _formula_response_spec(formula)
@@ -3923,6 +3966,7 @@ def _formula_transform_states(
     unique_terms: list[_CovariateTerm] = []
     _append_unique(unique_terms, formula_terms)
     fitted_scale_states: dict[_NumericFormulaCall, _ScaleFormulaState] = {}
+    ns_states: list[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, float], int]]] = []
     poly_states: list[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]]] = []
     for term in unique_terms:
         expression = term.numeric_expression
@@ -3934,14 +3978,33 @@ def _formula_transform_states(
                 tuple(fitted_scale_states.items()),
             )
             fitted_scale_states.update(scale_states)
-        options = term.poly_options
-        if options is None or options.raw:
-            continue
         scale_states = (
             ()
             if expression is None
             else _expression_scale_states(expression, tuple(fitted_scale_states.items()))
         )
+        if term.ns_options is not None:
+            values = _numeric_term_values(
+                _term_raw_values(data, term, n, scale_states),
+                term,
+            )
+            basis = _fit_ns_basis(values, term.ns_options)
+            ns_states.append(
+                (
+                    term,
+                    (
+                        tuple(float(value) for value in basis.knots),
+                        (
+                            float(basis.boundary_knots[0]),
+                            float(basis.boundary_knots[1]),
+                        ),
+                        int(basis.n_cols),
+                    ),
+                )
+            )
+        options = term.poly_options
+        if options is None or options.raw:
+            continue
         values = _numeric_term_values(
             _term_raw_values(data, term, n, scale_states),
             term,
@@ -3964,16 +4027,16 @@ def _formula_transform_states(
                 ),
             )
         )
-    return tuple(fitted_scale_states.items()), tuple(poly_states)
+    return tuple(fitted_scale_states.items()), tuple(ns_states), tuple(poly_states)
 
 
 def _formula_state_data(formula: str, data: Any, n: int) -> Any:
     if isinstance(data, _FormulaSubsetData):
         return data
-    scale_states, poly_states = _formula_transform_states(formula, data, n)
-    if not scale_states and not poly_states:
+    scale_states, ns_states, poly_states = _formula_transform_states(formula, data, n)
+    if not scale_states and not ns_states and not poly_states:
         return data
-    return _FormulaSubsetData(data, scale_states, poly_states)
+    return _FormulaSubsetData(data, scale_states, ns_states, poly_states)
 
 
 def _subset_formula_inputs(
@@ -4128,7 +4191,15 @@ def _split_top_level(segment: str, separator: str) -> list[str]:
             depth += 1
         elif not in_backtick and char == ")":
             depth = max(0, depth - 1)
-        elif char == separator and not in_backtick and depth == 0:
+        elif (
+            char == separator
+            and not in_backtick
+            and depth == 0
+            and not (
+                separator == ":"
+                and ((idx > 0 and segment[idx - 1] == ":") or segment[idx + 1 :].startswith(":"))
+            )
+        ):
             parts.append(segment[start:idx].strip())
             start = idx + 1
 
@@ -4540,6 +4611,55 @@ def _parse_poly_formula_term(term: str) -> _CovariateTerm | None:
     )
 
 
+def _parse_ns_formula_term(term: str) -> _CovariateTerm | None:
+    local_term = "ns(" + term[len("splines::ns(") :] if term.startswith("splines::ns(") else term
+    if not (local_term.startswith("ns(") and local_term.endswith(")")):
+        return None
+
+    parts = _formula_response_parts(local_term[3:-1])
+    value, df, knots, intercept, boundary_knots = _numeric_formula_bound_arguments(
+        "ns",
+        parts,
+        ("x", "df", "knots", "intercept", "Boundary.knots"),
+    )
+    if value is None:
+        raise ValueError("ns() requires one numeric argument")
+    df_value = (
+        None
+        if df is None or df.strip().lower() == "null"
+        else _numeric_formula_integer_literal(df, "ns df")
+    )
+    knots_value = (
+        None
+        if knots is None or knots.strip().lower() == "null"
+        else _parse_formula_numeric_vector(knots, "ns knots")
+    )
+    intercept_value = (
+        False if intercept is None else _numeric_formula_bool_literal(intercept, "ns intercept")
+    )
+    boundary_value: tuple[float, float] | None = None
+    if boundary_knots is not None:
+        if boundary_knots.strip().lower() == "null":
+            raise ValueError("ns Boundary.knots must contain two numeric values")
+        parsed_boundary = _parse_formula_numeric_vector(boundary_knots, "ns Boundary.knots")
+        if len(parsed_boundary) != 2:
+            raise ValueError("ns Boundary.knots must contain two numeric values")
+        boundary_value = (parsed_boundary[0], parsed_boundary[1])
+    expression = _parse_numeric_formula_expression(value)
+    return _CovariateTerm(
+        value.strip(),
+        transform="ns",
+        numeric_expression=expression,
+        formula_label=term,
+        ns_options=_NSFormulaOptions(
+            df=df_value,
+            knots=knots_value,
+            intercept=intercept_value,
+            boundary_knots=boundary_value,
+        ),
+    )
+
+
 def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if not term:
         raise ValueError("formula interaction terms must not be empty")
@@ -4551,6 +4671,10 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     poly_term = _parse_poly_formula_term(term)
     if poly_term is not None:
         return poly_term
+
+    ns_term = _parse_ns_formula_term(term)
+    if ns_term is not None:
+        return ns_term
 
     for wrapper in ("I", "identity"):
         prefix = f"{wrapper}("
@@ -4569,10 +4693,10 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
                 column, quoted = _formula_name(parts[0])
                 if not _unsupported_formula_name(column, quoted):
                     return _CovariateTerm(column, transform=function)
-        expression = _parse_numeric_formula_expression(term)
+        numeric_expression = _parse_numeric_formula_expression(term)
         return _CovariateTerm(
             term,
-            numeric_expression=expression,
+            numeric_expression=numeric_expression,
             formula_label=term,
         )
 
@@ -4615,7 +4739,11 @@ def _parse_offset_term(expression: str) -> _CovariateTerm:
         _arithmetic_expression_columns(expression)
         return _CovariateTerm(expression, arithmetic=expression)
     offset_term = _parse_covariate_atom(expression)
-    if offset_term.categorical or offset_term.poly_options is not None:
+    if (
+        offset_term.categorical
+        or offset_term.poly_options is not None
+        or offset_term.ns_options is not None
+    ):
         raise ValueError("offset() requires a numeric column or transform")
     return offset_term
 
@@ -5597,6 +5725,7 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
         "I",
         "identity",
         "as.numeric",
+        "ns",
         "poly",
         "ridge",
         "pspline",
@@ -5650,6 +5779,7 @@ def _term_prediction_scale_states(
     expression = term.numeric_expression
     if (
         term.poly_options is not None
+        or term.ns_options is not None
         or not isinstance(expression, _NumericFormulaCall)
         or expression.function != "scale"
     ):
@@ -6094,9 +6224,36 @@ def _fit_single_design_term(
     evaluation_scale_states = _term_scale_states(data, term, n)
     prediction_scale_states = _term_prediction_scale_states(term, evaluation_scale_states)
     values = _term_raw_values(data, term, n, evaluation_scale_states)
+    if term.ns_options is not None:
+        numeric = _numeric_term_values(values, term)
+        ns_stored_state = (
+            next(
+                (state for stored_term, state in data.ns_states if stored_term == term),
+                None,
+            )
+            if isinstance(data, _FormulaSubsetData)
+            else None
+        )
+        if ns_stored_state is None:
+            basis = _fit_ns_basis(numeric, term.ns_options)
+            knots = tuple(float(value) for value in basis.knots)
+            boundary_knots = (
+                float(basis.boundary_knots[0]),
+                float(basis.boundary_knots[1]),
+            )
+            width = int(basis.n_cols)
+        else:
+            knots, boundary_knots, width = ns_stored_state
+        return _NSDesignTerm(
+            term=term,
+            knots=knots,
+            boundary_knots=boundary_knots,
+            width=width,
+            scale_states=evaluation_scale_states,
+        )
     if term.poly_options is not None:
         numeric = _numeric_term_values(values, term)
-        stored_state = (
+        poly_stored_state = (
             next(
                 (state for stored_term, state in data.poly_states if stored_term == term),
                 None,
@@ -6104,7 +6261,7 @@ def _fit_single_design_term(
             if isinstance(data, _FormulaSubsetData)
             else None
         )
-        if stored_state is None:
+        if poly_stored_state is None:
             _rows, alpha, norm2 = _core.poly_basis(
                 numeric,
                 term.poly_options.degree,
@@ -6113,7 +6270,7 @@ def _fit_single_design_term(
                 None,
             )
         else:
-            alpha, norm2 = stored_state
+            alpha, norm2 = poly_stored_state
         return _PolyDesignTerm(
             term=term,
             alpha=tuple(float(value) for value in alpha),
@@ -6428,11 +6585,12 @@ def _single_design_columns(
         if len(values) != n:
             raise ValueError("tt transform result must match the expanded risk-set rows")
         return [values]
-    prediction_scale_states = (
-        spec.scale_states
-        if prediction and isinstance(spec, _NumericDesignTerm | _PolyDesignTerm)
-        else None
-    )
+    if isinstance(spec, _NSDesignTerm):
+        prediction_scale_states = () if prediction else spec.scale_states
+    elif prediction and isinstance(spec, _NumericDesignTerm | _PolyDesignTerm):
+        prediction_scale_states = spec.scale_states
+    else:
+        prediction_scale_states = None
     values = _term_raw_values(
         data,
         spec.term,
@@ -6440,22 +6598,40 @@ def _single_design_columns(
         prediction_scale_states,
         fit_scales=prediction,
     )
+    if isinstance(spec, _NSDesignTerm):
+        ns_options = cast(_NSFormulaOptions, spec.term.ns_options)
+        basis = _core.ns_basis(
+            _numeric_term_values(values, spec.term),
+            None,
+            list(spec.knots),
+            spec.boundary_knots,
+            ns_options.intercept,
+        )
+        if int(basis.n_cols) != spec.width:
+            raise ValueError("ns() basis width changed during formula reconstruction")
+        rows = [
+            basis.basis[index : index + spec.width]
+            for index in range(0, len(basis.basis), spec.width)
+        ]
+        if len(rows) != n:
+            raise ValueError("ns() basis row count must match formula data")
+        return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _PolyDesignTerm):
-        options = cast(_PolyFormulaOptions, spec.term.poly_options)
-        recompute = options.simple and prediction
-        alpha = None if options.raw or recompute else list(spec.alpha)
-        norm2 = None if options.raw or recompute else list(spec.norm2)
+        poly_options = cast(_PolyFormulaOptions, spec.term.poly_options)
+        recompute = poly_options.simple and prediction
+        alpha = None if poly_options.raw or recompute else list(spec.alpha)
+        norm2 = None if poly_options.raw or recompute else list(spec.norm2)
         rows, _alpha, _norm2 = _core.poly_basis(
             _numeric_term_values(values, spec.term),
-            options.degree,
-            options.raw,
+            poly_options.degree,
+            poly_options.raw,
             alpha,
             norm2,
         )
         if len(rows) != n:
             raise ValueError("poly() basis row count must match formula data")
         if not rows:
-            return [[] for _ in range(options.degree)]
+            return [[] for _ in range(poly_options.degree)]
         return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _NumericDesignTerm):
         return [_numeric_term_values(values, spec.term)]
@@ -7319,6 +7495,9 @@ def _design_term_name(spec: _DesignTerm) -> str:
 
 def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
     term = spec.term
+    if isinstance(spec, _NSDesignTerm):
+        prefix = _covariate_term_name(term)
+        return [f"{prefix}{index}" for index in range(1, spec.width + 1)]
     if isinstance(spec, _PolyDesignTerm):
         options = cast(_PolyFormulaOptions, term.poly_options)
         prefix = _covariate_term_name(term)
