@@ -8628,6 +8628,45 @@ def test_concordance_censoring_weights_use_post_death_risk_set(timewt):
     assert [row["casewt"] for row in result.ranks] == pytest.approx([1.0, 2.0, 1.0])
 
 
+def test_concordance_one_event_keeps_complete_python_rank_rows():
+    response = survival.Surv([1, 2, 3], [1, 0, 0])
+    single = survival.concordancefit(
+        response,
+        [0.2, 0.6, 0.4],
+        ranks=True,
+    )
+    multiple = survival.concordancefit(
+        response,
+        {
+            "x": [0.2, 0.6, 0.4],
+            "z": [0.8, 0.1, 0.5],
+        },
+        ranks=True,
+    )
+
+    assert single is not None
+    assert single.ranks == [
+        {"time": 1.0, "rank": 2.0 / 3.0, "timewt": 3.0, "casewt": 1.0}
+    ]
+    assert multiple is not None
+    assert multiple.score_names == ["x", "z"]
+    assert multiple.ranks == [
+        [{"time": 1.0, "rank": 2.0 / 3.0, "timewt": 3.0, "casewt": 1.0}],
+        [{"time": 1.0, "rank": -2.0 / 3.0, "timewt": 3.0, "casewt": 1.0}],
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="number of items to replace is not a multiple of replacement length",
+    ):
+        survival.concordancefit(
+            survival.Surv([1, 2, 1, 2], [1, 0, 0, 0]),
+            [0.2, 0.6, 0.4, 0.8],
+            strata=["a", "a", "b", "b"],
+            ranks=True,
+        )
+
+
 def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
     data = {
         "y": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],

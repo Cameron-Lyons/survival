@@ -4257,6 +4257,103 @@ test_that("concordance censoring weights use the post-death risk set", {
   }
 })
 
+test_that("one-event concordance ranks match reference dimensions", {
+  data <- data.frame(
+    time = c(1, 2, 3),
+    status = c(1, 0, 0),
+    x = c(0.2, 0.6, 0.4),
+    z = c(0.8, 0.1, 0.5),
+    q = c(0.3, 0.4, 0.9)
+  )
+  bridged_response <- Surv(data$time, data$status)
+  reference_response <- survival::Surv(data$time, data$status)
+  score_sets <- list(
+    data$x,
+    as.matrix(data[c("x", "z")]),
+    as.matrix(data[c("x", "z", "q")])
+  )
+
+  for (scores in score_sets) {
+    bridged_fit <- concordancefit(bridged_response, scores, ranks = TRUE)
+    reference_fit <- survival::concordancefit(reference_response, scores, ranks = TRUE)
+    expect_identical(names(bridged_fit), names(reference_fit))
+    expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
+  }
+
+  bridged_formula <- concordance(
+    Surv(time, status) ~ x + z,
+    data = data,
+    ranks = TRUE
+  )
+  reference_formula <- survival::concordance(
+    survival::Surv(time, status) ~ x + z,
+    data = data,
+    ranks = TRUE
+  )
+  formula_fields <- setdiff(names(reference_formula), "call")
+  expect_equal(
+    unclass(bridged_formula)[formula_fields],
+    unclass(reference_formula)[formula_fields],
+    tolerance = 1e-12
+  )
+
+  expect_error(
+    concordancefit(bridged_response, data$x, ranks = TRUE, reverse = TRUE),
+    "undefined columns selected"
+  )
+  expect_error(
+    survival::concordancefit(
+      reference_response,
+      data$x,
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected"
+  )
+  expect_error(
+    concordance(
+      Surv(time, status) ~ x,
+      data = data,
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected"
+  )
+  expect_error(
+    survival::concordance(
+      survival::Surv(time, status) ~ x,
+      data = data,
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected"
+  )
+
+  stratified_response <- Surv(c(1, 2, 1, 2), c(1, 0, 0, 0))
+  reference_stratified_response <- survival::Surv(c(1, 2, 1, 2), c(1, 0, 0, 0))
+  stratified_scores <- c(0.2, 0.6, 0.4, 0.8)
+  stratified_groups <- c("a", "a", "b", "b")
+  replacement_error <- "number of items to replace is not a multiple of replacement length"
+  expect_error(
+    concordancefit(
+      stratified_response,
+      stratified_scores,
+      strata = stratified_groups,
+      ranks = TRUE
+    ),
+    replacement_error
+  )
+  expect_error(
+    survival::concordancefit(
+      reference_stratified_response,
+      stratified_scores,
+      strata = stratified_groups,
+      ranks = TRUE
+    ),
+    replacement_error
+  )
+})
+
 test_that("stratified concordance results match reference shapes and diagnostics", {
   right_data <- data.frame(
     y = c(1, 3, 2, 4, 4, 2),

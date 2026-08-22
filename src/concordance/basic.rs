@@ -981,7 +981,9 @@ fn reassemble_stratified_rank_rows(
     for indices in groups {
         let group_rows = compute_group(&indices);
         if group_rows.is_empty() {
-            return Err(PyValueError::new_err("replacement has length zero"));
+            return Err(PyValueError::new_err(
+                "number of items to replace is not a multiple of replacement length",
+            ));
         }
         let source: Vec<f64> = (0..4)
             .flat_map(|column| {
@@ -2941,6 +2943,28 @@ mod tests {
                 (1.0, 2.0, 1.0, 2.0),
                 (-0.5, 1.0, -0.5, 1.0),
             ]
+        );
+    }
+
+    #[test]
+    fn stratified_concordance_rank_rows_reject_empty_stratum_residuals() {
+        initialize_python();
+
+        let error = stratified_concordance_rank_rows(
+            vec![1.0, 2.0, 1.0, 2.0],
+            vec![1, 0, 0, 0],
+            vec![0.2, 0.6, 0.4, 0.8],
+            vec![0, 0, 1, 1],
+            None,
+            "n".to_string(),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .ends_with("number of items to replace is not a multiple of replacement length")
         );
     }
 
