@@ -12435,6 +12435,26 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
     tolerance = 1e-06
   )
 
+  ordered_diff_data <- data.frame(
+    time = c(5, 4, 1, 5, 6, 1, 3),
+    status = c(0, 0, 0, 1, 0, 0, 0),
+    group = factor(
+      c("g2", "g3", "g4", "g1", "g3", "g2", "g1"),
+      levels = c("g4", "g3", "g2", "g1", "unused")
+    )
+  )
+  bridged_ordered_diff <- survdiff(
+    Surv(time, status) ~ group,
+    data = ordered_diff_data,
+    rho = 0.5
+  )
+  reference_ordered_diff <- survival::survdiff(
+    survival::Surv(time, status) ~ group,
+    data = ordered_diff_data,
+    rho = 0.5
+  )
+  expect_survdiff_equal(bridged_ordered_diff, reference_ordered_diff)
+
   offset_diff_data <- data.frame(
     time = c(1, 2, 3, 4),
     status = c(1, 0, 1, 1),

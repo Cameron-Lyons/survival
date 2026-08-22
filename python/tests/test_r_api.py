@@ -7631,6 +7631,25 @@ def test_logrank_multigroup_matches_r_survdiff_chisquare():
     )
 
 
+def test_survdiff_formula_preserves_declared_factor_group_order():
+    data = {
+        "time": [5.0, 4.0, 1.0, 5.0, 6.0, 1.0, 3.0],
+        "status": [0, 0, 0, 1, 0, 0, 0],
+        "group": survival.r_api._r_factor(
+            ["g2", "g3", "g4", "g1", "g3", "g2", "g1"],
+            ["g4", "g3", "g2", "g1", "unused"],
+        ),
+    }
+
+    result = survival.survdiff("Surv(time, status) ~ group", data=data, rho=0.5)
+
+    assert result.observed == pytest.approx([0.0, 0.0, 0.0, 1.0])
+    assert result.expected == pytest.approx([0.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0])
+    assert survival.as_data_frame(result)["variance"] == pytest.approx(
+        [0.0, 2.0 / 9.0, 2.0 / 9.0, 2.0 / 9.0]
+    )
+
+
 def test_survdiff_formula_accepts_general_rho():
     data = _toy_data()
     result = survival.survdiff("Surv(time, status) ~ group", data=data, rho=0.5)

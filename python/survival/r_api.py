@@ -18914,6 +18914,30 @@ def _survdiff_r_ordered_levels(values: list[Any]) -> tuple[Any, ...]:
     return _r_formula_ordered_levels(values, "survdiff formula groups")
 
 
+def _survdiff_declared_group_levels(
+    data: Any,
+    terms: _FormulaTerms,
+    values: list[Any],
+) -> tuple[Any, ...] | None:
+    if len(terms.covariates) != 1 or not isinstance(terms.covariates[0], _CovariateTerm):
+        return None
+    term = terms.covariates[0]
+    if term.factor_options is not None:
+        return None
+    declared = _formula_declared_factor_levels(data, term)
+    if declared is None:
+        return None
+    observed = {
+        _factor_value_key(value) for value in values if not _is_missing_value(value)
+    }
+    ordered: list[Any] = []
+    for level in declared:
+        normalized = _factor_level_value(level)
+        if _factor_value_key(normalized) in observed:
+            ordered.append(normalized)
+    return tuple(ordered)
+
+
 def _survdiff_formula_groups(
     data: Any,
     terms: _FormulaTerms,
@@ -18924,7 +18948,9 @@ def _survdiff_formula_groups(
             raise ValueError("survdiff formula has no groups to test")
         raise ValueError("survdiff formula requires at least one grouping term")
     group = _combined_formula_groups(data, [], terms.covariates, n)
-    group_levels = _survdiff_r_ordered_levels(group)
+    group_levels = _survdiff_declared_group_levels(data, terms, group)
+    if group_levels is None:
+        group_levels = _survdiff_r_ordered_levels(group)
     strata = _combined_columns(data, terms.strata, n) if terms.strata else None
     return group, group_levels, strata
 
