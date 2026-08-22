@@ -5729,24 +5729,133 @@ Surv2data <- function(formula, data, subset, id) {
   mf2
 }
 
-.yates_lm_factor <- function(fit, term, population, levels, levels_missing,
-                             test, predict, method) {
+.yates_factorial_population <- function(model_frame, adjustment_names, fit) {
+  if (length(adjustment_names) == 0L) {
+    out <- model_frame[1L, , drop = FALSE]
+    row.names(out) <- NULL
+    return(out)
+  }
+  grid_values <- fit$xlevels[adjustment_names]
+  if (length(grid_values) != length(adjustment_names) ||
+      any(vapply(grid_values, is.null, logical(1)))) {
+    return(NULL)
+  }
+  grid <- do.call(
+    expand.grid,
+    c(grid_values, KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
+  )
+  out <- model_frame[rep(1L, nrow(grid)), , drop = FALSE]
+  row.names(out) <- NULL
+  for (name in adjustment_names) {
+    source <- model_frame[[name]]
+    out[[name]] <- if (is.factor(source)) {
+      factor(
+        grid[[name]],
+        levels = fit$xlevels[[name]],
+        ordered = is.ordered(source)
+      )
+    } else {
+      grid[[name]]
+    }
+  }
+  out
+}
+
+.yates_lm_population <- function(population, population_value, model_frame,
+                                 Terms, term, fit) {
+  if (inherits(population, "data.frame")) {
+    if (nrow(population) == 0L) {
+      return(NULL)
+    }
+    return(list(frame = population, weights = NULL))
+  }
+  if (population_value %in% c("data", "empirical")) {
+    weights <- stats::model.weights(model_frame)
+    if (!is.null(weights) &&
+        (length(weights) != nrow(model_frame) ||
+          !is.finite(sum(weights)) || sum(weights) == 0)) {
+      return(NULL)
+    }
+    return(list(frame = model_frame, weights = weights))
+  }
+
+  factor_names <- row.names(attr(Terms, "factors"))
+  adjustment_names <- setdiff(factor_names, term)
+  if (any(!(adjustment_names %in% names(model_frame)))) {
+    return(NULL)
+  }
+  categorical <- vapply(adjustment_names, function(name) {
+    is.factor(model_frame[[name]]) || is.character(model_frame[[name]])
+  }, logical(1))
+  if (population_value %in% c("factorial", "yates")) {
+    if (any(!categorical)) {
+      return(NULL)
+    }
+    frame <- .yates_factorial_population(model_frame, adjustment_names, fit)
+    return(if (is.null(frame)) NULL else list(frame = frame, weights = NULL))
+  }
+  if (population_value != "sas") {
+    return(NULL)
+  }
+  if (all(categorical)) {
+    frame <- .yates_factorial_population(model_frame, adjustment_names, fit)
+    return(if (is.null(frame)) NULL else list(frame = frame, weights = NULL))
+  }
+  if (!any(categorical)) {
+    return(list(frame = model_frame, weights = NULL))
+  }
+
+  categorical_names <- adjustment_names[categorical]
+  continuous_names <- adjustment_names[!categorical]
+  categorical_frame <- .yates_factorial_population(
+    model_frame,
+    categorical_names,
+    fit
+  )
+  if (is.null(categorical_frame)) {
+    return(NULL)
+  }
+  n_observations <- nrow(model_frame)
+  frame <- categorical_frame[
+    rep(seq_len(nrow(categorical_frame)), each = n_observations),
+    ,
+    drop = FALSE
+  ]
+  source_rows <- rep(seq_len(n_observations), nrow(categorical_frame))
+  row.names(frame) <- NULL
+  for (name in continuous_names) {
+    source <- model_frame[[name]]
+    frame[[name]] <- if (is.matrix(source)) {
+      source[source_rows, , drop = FALSE]
+    } else {
+      source[source_rows]
+    }
+  }
+  list(frame = frame, weights = NULL)
+}
+
+.yates_lm_term <- function(fit, term, population, levels, levels_missing,
+                           test, predict, method) {
   if (!inherits(fit, "lm") || inherits(fit, "glm") ||
       !is.character(term) || length(term) != 1L ||
-      !is.character(population) || length(population) == 0L ||
       !is.character(test) || length(test) == 0L ||
       !is.character(predict) || length(predict) != 1L ||
       !is.character(method) || length(method) == 0L) {
     return(NULL)
   }
-  population_value <- match.arg(
-    tolower(population[[1L]]),
-    c("data", "factorial", "sas", "empirical", "yates")
-  )
+  population_value <- if (inherits(population, "data.frame")) {
+    "frame"
+  } else if (is.character(population) && length(population) > 0L) {
+    match.arg(
+      tolower(population[[1L]]),
+      c("data", "factorial", "sas", "empirical", "yates")
+    )
+  } else {
+    return(NULL)
+  }
   test_value <- match.arg(test[[1L]], c("global", "trend", "pairwise"))
   method_value <- match.arg(tolower(method[[1L]]), c("direct", "sgtt"))
-  if (!(population_value %in% c("data", "empirical")) ||
-      test_value == "trend" || predict != "linear" || method_value != "direct") {
+  if (test_value == "trend" || predict != "linear" || method_value != "direct") {
     return(NULL)
   }
 
@@ -5759,23 +5868,32 @@ Surv2data <- function(formula, data, subset, id) {
   if (is.null(model_frame)) {
     model_frame <- stats::model.frame(fit)
   }
-  if (!(term %in% factor_names) || !(term %in% names(model_frame)) ||
-      !(is.factor(model_frame[[term]]) || is.character(model_frame[[term]]))) {
+  if (!(term %in% factor_names) || !(term %in% names(model_frame))) {
     return(NULL)
   }
 
-  fit_levels <- fit$xlevels[[term]]
-  if (is.null(fit_levels)) {
+  target <- model_frame[[term]]
+  categorical_target <- is.factor(target) || is.character(target)
+  numeric_target <- is.numeric(target) && is.null(dim(target))
+  if (!categorical_target && !numeric_target) {
     return(NULL)
   }
-  contrast_levels <- if (levels_missing) {
+  if (!levels_missing && (!is.atomic(levels) || !is.null(dim(levels)))) {
+    return(NULL)
+  }
+  fit_levels <- if (categorical_target) fit$xlevels[[term]] else NULL
+  contrast_levels <- if (categorical_target && levels_missing) {
     fit_levels
-  } else if (is.atomic(levels) && is.null(dim(levels))) {
+  } else if (categorical_target) {
     unique(as.character(levels))
+  } else if (!levels_missing) {
+    unique(levels)
   } else {
-    return(NULL)
+    NULL
   }
-  if (length(contrast_levels) < 2L || anyNA(match(contrast_levels, fit_levels))) {
+  if (length(contrast_levels) < 2L || anyNA(contrast_levels) ||
+      (categorical_target &&
+        (is.null(fit_levels) || anyNA(match(contrast_levels, fit_levels))))) {
     return(NULL)
   }
 
@@ -5787,19 +5905,31 @@ Surv2data <- function(formula, data, subset, id) {
   if (!identical(names(beta), colnames(old_matrix))) {
     return(NULL)
   }
-  weights <- stats::model.weights(model_frame)
-  if (!is.null(weights) &&
-      (length(weights) != nrow(model_frame) || !is.finite(sum(weights)) || sum(weights) == 0)) {
+  population_data <- .yates_lm_population(
+    population,
+    population_value,
+    model_frame,
+    Terms,
+    term,
+    fit
+  )
+  if (is.null(population_data)) {
     return(NULL)
   }
+  averaging_frame <- population_data$frame
+  weights <- population_data$weights
 
   mean_design <- function(level) {
-    profile <- model_frame
-    profile[[term]] <- factor(
-      rep(level, nrow(profile)),
-      levels = fit_levels,
-      ordered = is.ordered(model_frame[[term]])
-    )
+    profile <- averaging_frame
+    profile[[term]] <- if (categorical_target) {
+      factor(
+        rep(level, nrow(profile)),
+        levels = fit_levels,
+        ordered = is.ordered(target)
+      )
+    } else {
+      rep(level, nrow(profile))
+    }
     design <- stats::model.matrix(
       Terms,
       profile,
@@ -5855,7 +5985,7 @@ Surv2data <- function(formula, data, subset, id) {
   }
 
   estimate <- data.frame(
-    level = as.character(contrast_levels),
+    level = if (categorical_target) as.character(contrast_levels) else contrast_levels,
     pmm = estimate_values,
     std = sqrt(diag(mean_variance)),
     stringsAsFactors = FALSE
@@ -5875,7 +6005,7 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
                   method = c("direct", "sgtt")) {
   call <- match.call()
   if (!missing(fit) && !missing(term)) {
-    local_result <- .yates_lm_factor(
+    local_result <- .yates_lm_term(
       fit = fit,
       term = term,
       population = population,

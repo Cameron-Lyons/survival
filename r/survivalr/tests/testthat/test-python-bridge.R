@@ -553,6 +553,76 @@ test_that("R formula wrappers delegate to the Python survival package", {
     ),
     tolerance = 1e-12
   )
+  yates_population_data <- data.frame(
+    y = c(
+      0.2, 1.1, -0.4, 0.8, 1.7, 0.5,
+      1.3, 0.1, 1.9, 0.6, 2.1, 1.2,
+      2.4, 1.5, 2.8, 1.8, 3.0, 2.2
+    ),
+    group = factor(rep(c("A", "B", "C"), each = 6L)),
+    z = factor(rep(c("u", "v"), 9L)),
+    x = seq(-2, 2, length.out = 18L),
+    wt = rep(c(1, 2, 3), 6L)
+  )
+  factorial_yates_fit <- stats::lm(
+    y ~ group * z,
+    data = yates_population_data,
+    weights = wt,
+    model = TRUE
+  )
+  for (population_name in c("factorial", "yates")) {
+    expect_equal(
+      yates(factorial_yates_fit, "group", population = population_name),
+      survival::yates(
+        factorial_yates_fit,
+        "group",
+        population = population_name
+      ),
+      tolerance = 1e-12
+    )
+  }
+  sas_yates_fit <- stats::lm(
+    y ~ group * z + x,
+    data = yates_population_data,
+    weights = wt,
+    model = TRUE
+  )
+  expect_equal(
+    yates(sas_yates_fit, "group", population = "sas"),
+    survival::yates(sas_yates_fit, "group", population = "sas"),
+    tolerance = 1e-12
+  )
+  yates_population <- data.frame(
+    z = factor(c("u", "v", "v"), levels = levels(yates_population_data$z)),
+    x = c(-1, 0.5, 2)
+  )
+  expect_equal(
+    yates(sas_yates_fit, "group", population = yates_population),
+    survival::yates(
+      sas_yates_fit,
+      "group",
+      population = yates_population
+    ),
+    tolerance = 1e-12
+  )
+  numeric_yates_fit <- stats::lm(
+    y ~ x + z,
+    data = yates_population_data,
+    weights = wt,
+    model = TRUE
+  )
+  for (test_name in c("global", "pairwise")) {
+    expect_equal(
+      yates(numeric_yates_fit, "x", levels = c(-1, 0, 1), test = test_name),
+      survival::yates(
+        numeric_yates_fit,
+        "x",
+        levels = c(-1, 0, 1),
+        test = test_name
+      ),
+      tolerance = 1e-12
+    )
+  }
 
   yates_cox_data <- data.frame(
     time = c(5, 8, 6, 9, 7, 10, 4, 11, 12, 13),
