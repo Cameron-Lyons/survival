@@ -1043,6 +1043,7 @@ BINDINGS = (
     "yates",
     "yates_contrast",
     "yates_pairwise",
+    "yates_risk_profiles",
 )
 
 BINDING_NAMES = frozenset(BINDINGS)

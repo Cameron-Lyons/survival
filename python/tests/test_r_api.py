@@ -4726,6 +4726,43 @@ def test_r_style_yates_direct_helpers_wrap_rust_kernels():
         survival.yates([1.0], ["a"], conf_level=1.0)
 
 
+def test_yates_risk_profiles_and_formula_levels():
+    result = survival.r_api._yates_risk_profiles(
+        [[0.0], [0.0], [1.0], [1.0]],
+        [math.log(2.0)],
+        [[0.0], [math.log(2.0)], [math.log(4.0)]],
+        2,
+        [0.0],
+    )
+
+    assert result["estimate"] == pytest.approx([1.0, 2.0])
+    assert [value for row in result["covariance"] for value in row] == pytest.approx(
+        [0.0, 0.0, 0.0, 7.0 / 3.0]
+    )
+
+    fit = survival.coxph(
+        "Surv(time, status) ~ group + x",
+        data={
+            "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "status": [1, 1, 0, 1, 0, 1],
+            "group": ["C", "A", "B", "C", "A", "B"],
+            "x": [0.0, 1.0, 0.5, 1.5, 2.0, 2.5],
+        },
+    )
+    assert survival.r_api._model_xlevels(fit) == {"group": ["C", "A", "B"]}
+
+    interaction_fit = survival.coxph(
+        "Surv(time, status) ~ group:x",
+        data={
+            "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "status": [1, 1, 0, 1, 0, 1],
+            "group": ["C", "A", "B", "C", "A", "B"],
+            "x": [0.0, 1.0, 0.5, 1.5, 2.0, 2.5],
+        },
+    )
+    assert survival.r_api._model_xlevels(interaction_fit) == {"group": ["C", "A", "B"]}
+
+
 def test_r_style_nsk_wraps_native_spline_basis():
     basis = survival.nsk([1.0, 2.0, 3.0, 4.0, 5.0], df=3)
     intercept_basis = survival.nsk(
