@@ -5737,6 +5737,140 @@ Surv2data <- function(formula, data, subset, id) {
   if (is.null(values)) list() else as.list(values)
 }
 
+.yates_term_spec <- function(Terms, model_frame, xlevels, term, levels,
+                             levels_missing) {
+  term_labels <- attr(Terms, "term.labels")
+  term_formula <- if (is.character(term) && length(term) == 1L) {
+    try(stats::as.formula(paste("~", term)), silent = TRUE)
+  } else if (is.numeric(term) && length(term) > 0L &&
+             all(term == floor(term) & term > 0L &
+               term < length(term_labels))) {
+    try(
+      stats::as.formula(
+        paste("~", paste(term_labels[as.integer(term)], collapse = "+"))
+      ),
+      silent = TRUE
+    )
+  } else if (inherits(term, "formula")) {
+    term
+  } else {
+    NULL
+  }
+  if (is.null(term_formula) || inherits(term_formula, "try-error")) {
+    return(NULL)
+  }
+  term_terms <- try(
+    stats::delete.response(stats::terms(term_formula)),
+    silent = TRUE
+  )
+  if (inherits(term_terms, "try-error")) {
+    return(NULL)
+  }
+  target_names <- all.vars(attr(term_terms, "variables"))
+  if (length(target_names) == 0L || anyDuplicated(target_names)) {
+    return(NULL)
+  }
+
+  model_variables <- as.list(attr(Terms, "variables"))[-1L]
+  variable_keys <- vapply(model_variables, function(variable) {
+    names <- all.vars(variable)
+    if (length(names) == 0L) "" else names[[1L]]
+  }, character(1L))
+  part_names <- row.names(attr(Terms, "factors"))
+  parts <- part_names[match(target_names, variable_keys)]
+  if (anyNA(parts) || !identical(target_names, unname(parts)) ||
+      any(!(target_names %in% names(model_frame)))) {
+    return(NULL)
+  }
+  categorical <- vapply(target_names, function(name) {
+    value <- model_frame[[name]]
+    is.factor(value) || is.character(value)
+  }, logical(1L))
+  numeric <- vapply(target_names, function(name) {
+    value <- model_frame[[name]]
+    is.numeric(value) && is.null(dim(value))
+  }, logical(1L))
+  if (any(!(categorical | numeric))) {
+    return(NULL)
+  }
+
+  if (levels_missing) {
+    level_values <- xlevels[target_names]
+    if (length(level_values) != length(target_names) ||
+        any(vapply(level_values, is.null, logical(1L)))) {
+      return(NULL)
+    }
+    level_frame <- do.call(
+      expand.grid,
+      c(level_values, KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
+    )
+  } else if (is.data.frame(levels) || is.list(levels)) {
+    if (is.null(names(levels))) {
+      return(NULL)
+    }
+    level_values <- vector("list", length(target_names))
+    names(level_values) <- target_names
+    for (name in target_names) {
+      if (name %in% names(levels)) {
+        level_values[[name]] <- levels[[name]]
+      } else if (!is.null(xlevels[[name]])) {
+        level_values[[name]] <- xlevels[[name]]
+      } else {
+        return(NULL)
+      }
+    }
+    level_frame <- do.call(
+      expand.grid,
+      c(level_values, KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
+    )
+  } else if (is.matrix(levels)) {
+    if (ncol(levels) != length(target_names)) {
+      return(NULL)
+    }
+    column_names <- colnames(levels)
+    if (is.null(column_names)) {
+      if (ncol(levels) > 1L) {
+        return(NULL)
+      }
+    } else {
+      order <- match(target_names, column_names)
+      if (anyNA(order)) {
+        return(NULL)
+      }
+      levels <- levels[, order, drop = FALSE]
+    }
+    level_frame <- data.frame(levels, stringsAsFactors = FALSE)
+    names(level_frame) <- target_names
+  } else if (length(target_names) == 1L && is.atomic(levels) &&
+             is.null(dim(levels))) {
+    level_frame <- data.frame(
+      unique(levels),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    names(level_frame) <- target_names
+  } else {
+    return(NULL)
+  }
+  if (nrow(level_frame) < 2L || anyDuplicated(level_frame) ||
+      anyNA(level_frame)) {
+    return(NULL)
+  }
+  for (index in which(categorical)) {
+    name <- target_names[[index]]
+    valid_levels <- xlevels[[name]]
+    if (is.null(valid_levels) ||
+        anyNA(match(as.character(level_frame[[name]]), valid_levels))) {
+      return(NULL)
+    }
+  }
+  list(
+    names = target_names,
+    levels = level_frame,
+    categorical = categorical
+  )
+}
+
 .yates_factorial_population <- function(model_frame, adjustment_names, xlevels) {
   if (length(adjustment_names) == 0L) {
     out <- model_frame[1L, , drop = FALSE]
@@ -5770,7 +5904,7 @@ Surv2data <- function(formula, data, subset, id) {
 }
 
 .yates_model_population <- function(population, population_value, model_frame,
-                                    Terms, term, xlevels, fit_weights) {
+                                    Terms, target_names, xlevels, fit_weights) {
   if (inherits(population, "data.frame")) {
     if (nrow(population) == 0L) {
       return(NULL)
@@ -5788,7 +5922,7 @@ Surv2data <- function(formula, data, subset, id) {
   }
 
   factor_names <- row.names(attr(Terms, "factors"))
-  adjustment_names <- setdiff(factor_names, term)
+  adjustment_names <- setdiff(factor_names, target_names)
   if (any(!(adjustment_names %in% names(model_frame)))) {
     return(NULL)
   }
@@ -5945,7 +6079,6 @@ Surv2data <- function(formula, data, subset, id) {
   linear_fit <- inherits(fit, "lm")
   glm_fit <- inherits(fit, "glm")
   if ((!linear_fit && !cox_fit) || .is_multistate_cox_fit(fit) ||
-      !is.character(term) || length(term) != 1L ||
       !is.character(test) || length(test) == 0L ||
       !is.character(predict) || length(predict) != 1L ||
       !is.character(method) || length(method) == 0L) {
@@ -5979,7 +6112,6 @@ Surv2data <- function(formula, data, subset, id) {
   if (inherits(Terms, "try-error")) {
     return(NULL)
   }
-  factor_names <- row.names(attr(Terms, "factors"))
   model_frame <- if (inherits(fit, "survival_py_model")) {
     stats::model.frame(fit)
   } else {
@@ -5988,33 +6120,28 @@ Surv2data <- function(formula, data, subset, id) {
   if (is.null(model_frame)) {
     model_frame <- stats::model.frame(fit)
   }
-  if (!(term %in% factor_names) || !(term %in% names(model_frame))) {
-    return(NULL)
-  }
   xlevels <- .yates_model_xlevels(fit)
-
-  target <- model_frame[[term]]
-  categorical_target <- is.factor(target) || is.character(target)
-  numeric_target <- is.numeric(target) && is.null(dim(target))
-  if (!categorical_target && !numeric_target) {
+  term_spec <- .yates_term_spec(
+    Terms,
+    model_frame,
+    xlevels,
+    term,
+    levels,
+    levels_missing
+  )
+  if (is.null(term_spec)) {
     return(NULL)
   }
-  if (!levels_missing && (!is.atomic(levels) || !is.null(dim(levels)))) {
-    return(NULL)
-  }
-  fit_levels <- if (categorical_target) xlevels[[term]] else NULL
-  contrast_levels <- if (categorical_target && levels_missing) {
-    fit_levels
-  } else if (categorical_target) {
-    unique(as.character(levels))
-  } else if (!levels_missing) {
-    unique(levels)
-  } else {
-    NULL
-  }
-  if (length(contrast_levels) < 2L || anyNA(contrast_levels) ||
-      (categorical_target &&
-        (is.null(fit_levels) || anyNA(match(contrast_levels, fit_levels))))) {
+  target_names <- term_spec$names
+  contrast_levels <- term_spec$levels
+  categorical_target <- term_spec$categorical
+  if (length(target_names) > 1L &&
+      !(
+        identical(predict, "linear") ||
+          (cox_fit && identical(predict, "lp")) ||
+          (glm_fit && identical(predict, "link")) ||
+          (linear_fit && identical(predict, "link"))
+      )) {
     return(NULL)
   }
 
@@ -6035,7 +6162,7 @@ Surv2data <- function(formula, data, subset, id) {
     population_value,
     model_frame,
     Terms,
-    term,
+    target_names,
     xlevels,
     fit_weights
   )
@@ -6046,16 +6173,21 @@ Surv2data <- function(formula, data, subset, id) {
   weights <- population_data$weights
 
   fit_contrasts <- tryCatch(fit$contrasts, error = function(condition) NULL)
-  profile_design <- function(level) {
+  profile_design <- function(level_index) {
     profile <- averaging_frame
-    profile[[term]] <- if (categorical_target) {
-      factor(
-        rep(level, nrow(profile)),
-        levels = fit_levels,
-        ordered = is.ordered(target)
-      )
-    } else {
-      rep(level, nrow(profile))
+    for (target_index in seq_along(target_names)) {
+      name <- target_names[[target_index]]
+      target <- model_frame[[name]]
+      level <- contrast_levels[[name]][[level_index]]
+      profile[[name]] <- if (categorical_target[[target_index]]) {
+        factor(
+          rep(level, nrow(profile)),
+          levels = xlevels[[name]],
+          ordered = is.ordered(target)
+        )
+      } else {
+        rep(level, nrow(profile))
+      }
     }
     design <- tryCatch(
       stats::model.matrix(
@@ -6079,7 +6211,7 @@ Surv2data <- function(formula, data, subset, id) {
     }
     design
   }
-  design_matrices <- lapply(contrast_levels, profile_design)
+  design_matrices <- lapply(seq_len(nrow(contrast_levels)), profile_design)
   if (any(vapply(design_matrices, is.null, logical(1)))) {
     return(NULL)
   }
@@ -6139,7 +6271,7 @@ Surv2data <- function(formula, data, subset, id) {
         x = do.call(rbind, design_matrices),
         beta = beta,
         draws = bmat,
-        n_levels = length(contrast_levels),
+        n_levels = nrow(contrast_levels),
         center = center
       )
     } else if (response_scale) {
@@ -6148,7 +6280,7 @@ Surv2data <- function(formula, data, subset, id) {
         x = do.call(rbind, design_matrices),
         beta = beta,
         draws = bmat,
-        n_levels = length(contrast_levels),
+        n_levels = nrow(contrast_levels),
         link = response_link
       )
     } else {
@@ -6157,7 +6289,7 @@ Surv2data <- function(formula, data, subset, id) {
         x = do.call(rbind, design_matrices),
         beta = beta,
         draws = bmat,
-        n_levels = length(contrast_levels),
+        n_levels = nrow(contrast_levels),
         center = center,
         cumulative_hazard = survival_baseline$cumulative_hazard,
         intervals = survival_baseline$intervals
@@ -6182,21 +6314,25 @@ Surv2data <- function(formula, data, subset, id) {
     if (is.null(sigma2)) out else c(out, ss = chisq * sigma2)
   }
 
-  if (test_value == "global" || length(contrast_levels) == 2L) {
-    contrast <- diag(length(contrast_levels))
-    contrast[, length(contrast_levels)] <- -1
-    contrast <- contrast[-length(contrast_levels), , drop = FALSE]
+  n_levels <- nrow(contrast_levels)
+  if (test_value == "global" || n_levels == 2L) {
+    contrast <- diag(n_levels)
+    contrast[, n_levels] <- -1
+    contrast <- contrast[-n_levels, , drop = FALSE]
     test_values <- evaluate_contrast(contrast)
     test_matrix <- matrix(
       test_values,
       nrow = 1L,
-      dimnames = list(if (nonlinear_scale) term else "global", names(test_values))
+      dimnames = list(
+        if (nonlinear_scale) target_names else "global",
+        names(test_values)
+      )
     )
   } else {
-    pairs <- utils::combn(seq_along(contrast_levels), 2L)
+    pairs <- utils::combn(seq_len(n_levels), 2L)
     test_width <- if (is.null(sigma2)) 2L else 3L
     test_matrix <- t(vapply(seq_len(ncol(pairs)), function(index) {
-      contrast <- numeric(length(contrast_levels))
+      contrast <- numeric(n_levels)
       contrast[pairs[1L, index]] <- 1
       contrast[pairs[2L, index]] <- -1
       evaluate_contrast(matrix(contrast, nrow = 1L))
@@ -6204,13 +6340,12 @@ Surv2data <- function(formula, data, subset, id) {
     row.names(test_matrix) <- paste(pairs[1L, ], "vs", pairs[2L, ])
   }
 
-  estimate <- data.frame(
-    level = if (categorical_target) as.character(contrast_levels) else contrast_levels,
-    pmm = estimate_values,
-    std = sqrt(diag(mean_variance)),
-    stringsAsFactors = FALSE
-  )
-  names(estimate)[[1L]] <- term
+  estimate <- contrast_levels
+  for (index in which(categorical_target)) {
+    estimate[[index]] <- as.character(estimate[[index]])
+  }
+  estimate$pmm <- estimate_values
+  estimate$std <- sqrt(diag(mean_variance))
   result <- list(
     estimate = estimate,
     test = test_matrix,
