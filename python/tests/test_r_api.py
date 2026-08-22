@@ -8667,6 +8667,26 @@ def test_concordance_one_event_keeps_complete_python_rank_rows():
         )
 
 
+def test_concordance_reversed_multi_score_ranks_remain_available_in_python():
+    result = survival.concordancefit(
+        survival.Surv([1, 2, 3, 4, 5], [1, 1, 0, 1, 0]),
+        {
+            "x": [0.2, 0.6, 0.4, 0.9, 0.3],
+            "z": [0.8, 0.1, 0.5, 0.2, 0.7],
+        },
+        ranks=True,
+        reverse=True,
+    )
+
+    assert result is not None
+    assert result.score_names == ["x", "z"]
+    assert result.ranks is not None
+    assert [row["rank"] for row in result.ranks[0]] == pytest.approx([-0.8, 0.25, 0.5])
+    assert [row["rank"] for row in result.ranks[1]] == pytest.approx(
+        [0.8, -0.75, -0.5]
+    )
+
+
 def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
     data = {
         "y": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],

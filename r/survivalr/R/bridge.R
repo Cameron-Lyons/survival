@@ -11974,7 +11974,7 @@ concordance <- function(object, ..., formula) {
   }
   if (!is.null(out$ranks) &&
       !isTRUE(.result_field(result, "reverse")) &&
-      identical(names(out$ranks), "fit.resid")) {
+      !("rank" %in% names(out$ranks))) {
     out$ranks[, "rank"] <- -out$ranks[, "rank"]
   }
   if (length(na.action)) out$na.action <- na.action
@@ -12204,7 +12204,10 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
   if (!missing(ymax)) {
     fit_args$ymax <- ymax
   }
-  result <- do.call(concordancefit, fit_args)
+  result <- do.call(
+    .concordancefit_impl,
+    c(fit_args, list(.allow_multi_rank_reverse = nfit > 1L))
+  )
   if (isTRUE(ranks) && nfit > 1L && !is.null(result$ranks)) {
     rank_columns <- c("time", "rank", "timewt", "casewt")
     rank_frames <- lapply(seq_len(nfit), function(index) {
@@ -12539,6 +12542,16 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
                            cluster, influence = 0, ranks = FALSE,
                            reverse = FALSE, timefix = TRUE, keepstrata = 10,
                            std.err = TRUE) {
+  Call <- match.call()
+  Call[[1L]] <- .concordancefit_impl
+  eval(Call, parent.frame())
+}
+
+.concordancefit_impl <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
+                                 timewt = c("n", "S", "S/G", "n/G2", "I"),
+                                 cluster, influence = 0, ranks = FALSE,
+                                 reverse = FALSE, timefix = TRUE, keepstrata = 10,
+                                 std.err = TRUE, .allow_multi_rank_reverse = FALSE) {
   if (any(is.na(x)) || any(is.na(y))) {
     return(NULL)
   }
@@ -12658,7 +12671,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       row_names = rank_names,
       score_names = if (multi_score) score_names else NULL
     )
-    if (isTRUE(reverse) && identical(names(out$ranks), "fit.resid")) {
+    if (isTRUE(reverse) &&
+        !isTRUE(.allow_multi_rank_reverse) &&
+        !("rank" %in% names(out$ranks))) {
       out$ranks[, "rank"] <- -out$ranks[, "rank"]
     }
   }
