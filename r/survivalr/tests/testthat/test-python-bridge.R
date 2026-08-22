@@ -4809,6 +4809,65 @@ test_that("many concordance strata collapse before rank assembly", {
   )
 })
 
+test_that("uneven stratified concordance ranks match reference errors", {
+  data <- data.frame(
+    time = c(1, 2, 3, 1, 2, 3),
+    status = c(1, 1, 0, 1, 1, 1),
+    x = seq_len(6),
+    z = rev(seq_len(6)),
+    group = rep(c("a", "b"), each = 3)
+  )
+  replacement_error <- "number of items to replace is not a multiple of replacement length"
+
+  for (scores in list(data$x, as.matrix(data[c("x", "z")]))) {
+    expect_error(
+      concordancefit(
+        Surv(data$time, data$status),
+        scores,
+        strata = data$group,
+        ranks = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordancefit(
+        survival::Surv(data$time, data$status),
+        scores,
+        strata = data$group,
+        ranks = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+  }
+
+  formulas <- list(
+    Surv(time, status) ~ x + strata(group),
+    Surv(time, status) ~ x + z + strata(group)
+  )
+  reference_formulas <- list(
+    survival::Surv(time, status) ~ x + strata(group),
+    survival::Surv(time, status) ~ x + z + strata(group)
+  )
+  for (index in seq_along(formulas)) {
+    expect_error(
+      concordance(formulas[[index]], data = data, ranks = TRUE),
+      replacement_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordance(
+        reference_formulas[[index]],
+        data = data,
+        ranks = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+  }
+})
+
 test_that("empty concordance rank strata match reference diagnostics", {
   data <- data.frame(
     time = c(1, 2, 1, 2),

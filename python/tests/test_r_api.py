@@ -8840,6 +8840,19 @@ def test_concordance_many_strata_ranks_remain_available_in_python():
     assert [row["time"] for row in result.ranks[0]][:3] == pytest.approx([1, 9, 17])
 
 
+def test_concordance_uneven_stratified_ranks_report_the_replacement_error():
+    with pytest.raises(
+        ValueError,
+        match="number of items to replace is not a multiple of replacement length",
+    ):
+        survival.concordancefit(
+            survival.Surv([1, 2, 3, 1, 2, 3], [1, 1, 0, 1, 1, 1]),
+            {"x": list(range(1, 7)), "z": list(range(6, 0, -1))},
+            strata=["a"] * 3 + ["b"] * 3,
+            ranks=True,
+        )
+
+
 def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
     data = {
         "y": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],
