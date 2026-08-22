@@ -260,6 +260,22 @@ class _ModelPSplineTerm:
 
 
 @dataclass(frozen=True)
+class _NSKFormulaTerm:
+    term: _CovariateTerm
+    df: int | None
+    knots: tuple[float, ...] | None
+    intercept: bool
+    b: float
+    boundary_knots: _MissingArgument | bool | tuple[float, ...] | None
+    label: str
+
+
+@dataclass(frozen=True)
+class _ModelNSKTerm:
+    nsk: _NSKFormulaTerm
+
+
+@dataclass(frozen=True)
 class _FrailtyFormulaTerm:
     term: _CovariateTerm
     distribution: str
@@ -284,6 +300,7 @@ _FormulaModelTerm = (
     | _ModelClusterTerm
     | _ModelRidgeTerm
     | _ModelPSplineTerm
+    | _ModelNSKTerm
     | _ModelFrailtyTerm
 )
 
@@ -296,6 +313,7 @@ class _FormulaTerms:
     clusters: list[str]
     ridge: list[_RidgeFormulaTerm] = field(default_factory=list)
     pspline: list[_PSplineFormulaTerm] = field(default_factory=list)
+    nsk: list[_NSKFormulaTerm] = field(default_factory=list)
     frailty: list[_FrailtyFormulaTerm] = field(default_factory=list)
     model_terms: list[_FormulaModelTerm] = field(default_factory=list)
     intercept: bool = True
@@ -309,6 +327,7 @@ class _CachedFormulaTerms:
     clusters: tuple[str, ...]
     ridge: tuple[_RidgeFormulaTerm, ...] = ()
     pspline: tuple[_PSplineFormulaTerm, ...] = ()
+    nsk: tuple[_NSKFormulaTerm, ...] = ()
     frailty: tuple[_FrailtyFormulaTerm, ...] = ()
     model_terms: tuple[_FormulaModelTerm, ...] = ()
     intercept: bool = True
@@ -341,13 +360,27 @@ class _PSplineDesignTerm:
 
 
 @dataclass(frozen=True)
+class _NSKDesignTerm:
+    formula: _NSKFormulaTerm
+    knots: tuple[float, ...]
+    boundary_knots: tuple[float, float]
+    width: int
+
+
+@dataclass(frozen=True)
 class _FrailtyDesignTerm:
     formula: _FrailtyFormulaTerm
     levels: tuple[str, ...]
     sparse: bool
 
 
-_DesignTerm = _SingleDesignTerm | _InteractionDesignTerm | _PSplineDesignTerm | _FrailtyDesignTerm
+_DesignTerm = (
+    _SingleDesignTerm
+    | _InteractionDesignTerm
+    | _PSplineDesignTerm
+    | _NSKDesignTerm
+    | _FrailtyDesignTerm
+)
 
 
 @dataclass(frozen=True)
@@ -3703,6 +3736,88 @@ def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
     )
 
 
+def _parse_formula_numeric_vector(value: str, name: str) -> tuple[float, ...]:
+    text = value.strip()
+    parts = (
+        _formula_response_parts(text[2:-1])
+        if text.startswith("c(") and text.endswith(")")
+        else [text]
+    )
+    result: list[float] = []
+    for part in parts:
+        parsed = _parse_formula_literal(part)
+        if isinstance(parsed, bool):
+            raise TypeError(f"{name} must be numeric")
+        result.append(_finite_float(parsed, name))
+    return tuple(result)
+
+
+def _parse_nsk_formula_term(term: str) -> _NSKFormulaTerm:
+    parts = _formula_response_parts(term[4:-1])
+    column: str | None = None
+    df: int | None = None
+    knots: tuple[float, ...] | None = None
+    intercept = False
+    b = 0.05
+    boundary_knots: Any = _MISSING
+    saw_option = False
+    seen_options: set[str] = set()
+    for part in parts:
+        option = _formula_named_option(part)
+        if option is None:
+            if saw_option or column is not None:
+                raise ValueError("nsk() requires one column before named options")
+            column, quoted = _formula_name(part)
+            if _unsupported_formula_name(column, quoted):
+                raise ValueError(f"unsupported nsk() formula column: {column}")
+            continue
+
+        saw_option = True
+        name, raw_value = option
+        name = name.lower().replace("_", ".")
+        if name in seen_options:
+            raise ValueError(f"nsk() contains multiple {name}= options")
+        seen_options.add(name)
+        if name == "df":
+            df = _integer_scalar(_parse_formula_literal(raw_value), "nsk df")
+            if df <= 0:
+                raise ValueError("nsk df must be positive")
+        elif name == "knots":
+            knots = _parse_formula_numeric_vector(raw_value, "nsk knots")
+        elif name == "intercept":
+            intercept = _normalize_bool_option(
+                _parse_formula_literal(raw_value),
+                "nsk intercept",
+            )
+        elif name == "b":
+            b = _finite_float(_parse_formula_literal(raw_value), "nsk b")
+            if b < 0.0 or b > 1.0:
+                raise ValueError("nsk b must be between 0 and 1")
+        elif name == "boundary.knots":
+            lowered = raw_value.strip().lower()
+            boundary_knots = (
+                None
+                if lowered == "null"
+                else _parse_formula_literal(raw_value)
+                if lowered in {"true", "t", "false", "f"}
+                else _parse_formula_numeric_vector(raw_value, "nsk Boundary.knots")
+            )
+        else:
+            raise ValueError(f"unsupported nsk() formula option: {name}")
+
+    if column is None:
+        raise ValueError("nsk() requires one column")
+    return _NSKFormulaTerm(
+        term=_CovariateTerm(column, transform="nsk"),
+        df=df,
+        knots=knots,
+        intercept=intercept,
+        b=b,
+        boundary_knots=boundary_knots,
+        label=term,
+    )
+
+
 def _parse_frailty_formula_term(term: str) -> _FrailtyFormulaTerm:
     parts = _formula_response_parts(term[8:-1])
     column: str | None = None
@@ -3920,6 +4035,7 @@ def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
         clusters=list(terms.clusters),
         ridge=list(terms.ridge),
         pspline=list(terms.pspline),
+        nsk=list(terms.nsk),
         frailty=list(terms.frailty),
         model_terms=list(terms.model_terms),
         intercept=terms.intercept,
@@ -3937,6 +4053,7 @@ def _split_terms_cached(
     clusters: list[str] = []
     ridge: list[_RidgeFormulaTerm] = []
     pspline: list[_PSplineFormulaTerm] = []
+    nsk_terms: list[_NSKFormulaTerm] = []
     frailty: list[_FrailtyFormulaTerm] = []
     model_terms: list[_FormulaModelTerm] = []
     unsupported: list[str] = []
@@ -3992,6 +4109,23 @@ def _split_terms_cached(
             else:
                 _append_unique(covariates, [covariate_term])
                 _append_unique(pspline, [pspline_term])
+                _append_unique(model_terms, [model_item])
+            continue
+        if term.startswith("nsk(") and term.endswith(")"):
+            nsk_term = _parse_nsk_formula_term(term)
+            if any(
+                existing.term == nsk_term.term and existing != nsk_term for existing in nsk_terms
+            ):
+                raise ValueError("nsk() formula terms must not reuse a column")
+            model_item = _ModelNSKTerm(nsk_term)
+            covariate_term = nsk_term.term
+            if op == "-":
+                _remove_values(covariates, [covariate_term])
+                _remove_values(nsk_terms, [nsk_term])
+                _remove_values(model_terms, [model_item])
+            else:
+                _append_unique(covariates, [covariate_term])
+                _append_unique(nsk_terms, [nsk_term])
                 _append_unique(model_terms, [model_item])
             continue
         if term.startswith("frailty(") and term.endswith(")"):
@@ -4075,6 +4209,7 @@ def _split_terms_cached(
         clusters=tuple(clusters),
         ridge=tuple(ridge),
         pspline=tuple(pspline),
+        nsk=tuple(nsk_terms),
         frailty=tuple(frailty),
         model_terms=tuple(model_terms),
         intercept=intercept,
@@ -4284,7 +4419,7 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
         return [math.sqrt(value) for value in values]
     if transform == "exp":
         return [math.exp(value) for value in values]
-    if transform in {"I", "identity", "as.numeric", "ridge", "pspline", "tt"}:
+    if transform in {"I", "identity", "as.numeric", "ridge", "pspline", "nsk", "tt"}:
         return values
     raise ValueError(f"unsupported formula transform {transform!r}")
 
@@ -4418,7 +4553,7 @@ def _formula_model_term_degree(term: _FormulaModelTerm) -> int:
         return len(_covariate_factors(term.term))
     if isinstance(
         term,
-        _ModelStrataTerm | _ModelRidgeTerm | _ModelPSplineTerm | _ModelFrailtyTerm,
+        _ModelStrataTerm | _ModelRidgeTerm | _ModelPSplineTerm | _ModelNSKTerm | _ModelFrailtyTerm,
     ):
         return 1
     return 0
@@ -4432,6 +4567,8 @@ def _formula_model_term_label(
         return term.ridge.label
     if isinstance(term, _ModelPSplineTerm):
         return term.pspline.label
+    if isinstance(term, _ModelNSKTerm):
+        return term.nsk.label
     if isinstance(term, _ModelFrailtyTerm):
         return term.frailty.label
     if isinstance(term, _ModelCovariateTerm):
@@ -4449,6 +4586,42 @@ def _fit_pspline_design_term(
     if not values or any(not math.isfinite(value) for value in values):
         raise ValueError("pspline() formula columns must contain finite values")
     return _PSplineDesignTerm(formula, (min(values), max(values)))
+
+
+def _fit_nsk_design_term(
+    data: Any,
+    formula: _NSKFormulaTerm,
+    n: int,
+) -> _NSKDesignTerm:
+    values = _numeric_term_values(_term_raw_values(data, formula.term, n), formula.term)
+    if not values or any(not math.isfinite(value) for value in values):
+        raise ValueError("nsk() formula columns must contain finite values")
+    normalized_knots = None if formula.knots is None else list(formula.knots)
+    boundary_knots, core_knots = _normalize_nsk_boundary_knots(
+        values,
+        normalized_knots,
+        formula.b,
+        formula.boundary_knots,
+    )
+    if not normalized_knots and core_knots is None:
+        core_knots = _computed_nsk_knots(
+            values,
+            boundary_knots,
+            formula.df,
+            formula.intercept,
+        )
+    basis = _core.NaturalSplineKnot(
+        core_knots,
+        boundary_knots,
+        formula.df,
+        formula.intercept,
+    ).basis(values)
+    return _NSKDesignTerm(
+        formula=formula,
+        knots=tuple(float(value) for value in basis.knots),
+        boundary_knots=tuple(float(value) for value in basis.boundary_knots),
+        width=int(basis.n_cols),
+    )
 
 
 def _fit_frailty_design_term(
@@ -4529,6 +4702,7 @@ def _fit_formula_design(
                 | _ModelStrataTerm
                 | _ModelRidgeTerm
                 | _ModelPSplineTerm
+                | _ModelNSKTerm
                 | _ModelFrailtyTerm,
             )
         ),
@@ -4543,6 +4717,8 @@ def _fit_formula_design(
                 term_assignments[ridge_term] = term_index
         elif isinstance(model_term, _ModelPSplineTerm):
             term_assignments[model_term.pspline.term] = term_index
+        elif isinstance(model_term, _ModelNSKTerm):
+            term_assignments[model_term.nsk.term] = term_index
         elif isinstance(model_term, _ModelFrailtyTerm):
             term_assignments[model_term.frailty.term] = term_index
     contrast_intercept = terms.intercept if include_intercept else True
@@ -4550,10 +4726,13 @@ def _fit_formula_design(
     promoted_no_intercept_factor = contrast_intercept
     design_terms: list[_DesignTerm] = []
     pspline_terms = {formula.term: formula for formula in terms.pspline}
+    nsk_terms = {formula.term: formula for formula in terms.nsk}
     frailty_terms = {formula.term: formula for formula in terms.frailty}
     for term in ordered_terms:
         if isinstance(term, _CovariateTerm) and term in pspline_terms:
             fitted_term = _fit_pspline_design_term(data, pspline_terms[term], n)
+        elif isinstance(term, _CovariateTerm) and term in nsk_terms:
+            fitted_term = _fit_nsk_design_term(data, nsk_terms[term], n)
         elif isinstance(term, _CovariateTerm) and term in frailty_terms:
             fitted_term = _fit_frailty_design_term(data, frailty_terms[term], n)
         else:
@@ -4653,6 +4832,22 @@ def _design_term_columns(
         if not spec.formula.intercept:
             matrix = [row[1:] for row in matrix]
         return [list(column) for column in zip(*matrix, strict=True)]
+    if isinstance(spec, _NSKDesignTerm):
+        values = _numeric_term_values(
+            _term_raw_values(data, spec.formula.term, n),
+            spec.formula.term,
+        )
+        basis = _core.NaturalSplineKnot(
+            list(spec.knots) or None,
+            spec.boundary_knots,
+            None,
+            spec.formula.intercept,
+        ).basis(values)
+        rows = [
+            basis.basis[index : index + spec.width]
+            for index in range(0, len(basis.basis), spec.width)
+        ]
+        return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _InteractionDesignTerm):
         factor_columns = [
             _single_design_columns(data, factor, n, time_transform_values)
@@ -5416,6 +5611,8 @@ def _design_term_name(spec: _DesignTerm) -> str:
         return spec.formula.label
     if isinstance(spec, _PSplineDesignTerm):
         return spec.formula.label
+    if isinstance(spec, _NSKDesignTerm):
+        return spec.formula.label
     if isinstance(spec, _InteractionDesignTerm):
         return ":".join(_display_single_design_term(factor) for factor in spec.factors)
     return _display_single_design_term(spec)
@@ -5442,6 +5639,8 @@ def _design_term_output_names(spec: _DesignTerm) -> list[str]:
             width -= 1
         start = 1 if spec.formula.intercept else 3
         return [f"ps({spec.formula.term.column}){index}" for index in range(start, start + width)]
+    if isinstance(spec, _NSKDesignTerm):
+        return [f"{spec.formula.label}{index}" for index in range(1, spec.width + 1)]
     if isinstance(spec, _InteractionDesignTerm):
         factor_names = [_single_design_term_output_names(factor) for factor in spec.factors]
         return [":".join(reversed(combo)) for combo in product(*reversed(factor_names))]
@@ -5452,6 +5651,8 @@ def _design_term_columns_used(spec: _DesignTerm) -> list[str]:
     if isinstance(spec, _FrailtyDesignTerm):
         return [spec.formula.term.column]
     if isinstance(spec, _PSplineDesignTerm):
+        return [spec.formula.term.column]
+    if isinstance(spec, _NSKDesignTerm):
         return [spec.formula.term.column]
     if isinstance(spec, _InteractionDesignTerm):
         columns: list[str] = []
@@ -18380,6 +18581,8 @@ def _formula_model_term_factors(term: _FormulaModelTerm) -> list[str]:
         return [_covariate_term_name(factor) for factor in term.ridge.terms]
     if isinstance(term, _ModelPSplineTerm):
         return [_covariate_term_name(term.pspline.term)]
+    if isinstance(term, _ModelNSKTerm):
+        return [_covariate_term_name(term.nsk.term)]
     if isinstance(term, _ModelFrailtyTerm):
         return [_covariate_term_name(term.frailty.term)]
     if isinstance(term, _ModelStrataTerm):

@@ -186,6 +186,9 @@ P-spline selection. The native optimizers expose the fitted quadratic penalty,
 penalized likelihood, smoothing history, and effective degrees of freedom;
 `survreg` model summaries and information criteria retain the fractional
 per-term degrees of freedom used by R.
+Both formula paths also accept `nsk(...)` natural-spline terms with automatic
+or explicit knots and retain the fitted knots and boundaries for new-data
+prediction.
 `clogit("case ~ exposure + strata(set)", data=...)` fits matched case-control
 models through the exact stratified Cox likelihood; `method="approximate"`
 maps to Breslow handling as it does in R.
