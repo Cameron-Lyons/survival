@@ -430,7 +430,7 @@ attrassign <- function(object, tt) {
     if (ncol(value) == 2L) {
       return(.wrap_python(
         .python_attr("Surv")(
-          as.numeric(value[, 1L]),
+          as.list(as.numeric(value[, 1L])),
           .as_python_factor(event),
           type = "mstate"
         ),
@@ -440,8 +440,8 @@ attrassign <- function(object, tt) {
     if (ncol(value) == 3L) {
       return(.wrap_python(
         .python_attr("Surv")(
-          as.numeric(value[, 1L]),
-          as.numeric(value[, 2L]),
+          as.list(as.numeric(value[, 1L])),
+          as.list(as.numeric(value[, 2L])),
           .as_python_factor(event),
           type = "mstate"
         ),
@@ -451,22 +451,55 @@ attrassign <- function(object, tt) {
   }
   if (ncol(value) == 2L) {
     return(.wrap_python(
-      .python_attr("Surv")(as.numeric(value[, 1L]), as.numeric(value[, 2L]), type = surv_type),
+      .python_attr("Surv")(
+        as.list(as.numeric(value[, 1L])),
+        as.list(as.numeric(value[, 2L])),
+        type = surv_type
+      ),
       c("survival_py_surv", "survival_py_object")
     ))
   }
   if (ncol(value) == 3L) {
     return(.wrap_python(
       .python_attr("Surv")(
-        as.numeric(value[, 1L]),
-        as.numeric(value[, 2L]),
-        as.numeric(value[, 3L]),
+        as.list(as.numeric(value[, 1L])),
+        as.list(as.numeric(value[, 2L])),
+        as.list(as.numeric(value[, 3L])),
         type = surv_type
       ),
       c("survival_py_surv", "survival_py_object")
     ))
   }
   stop("unsupported Surv matrix shape", call. = FALSE)
+}
+
+.as_python_surv2 <- function(value) {
+  if (inherits(value, "survival_py_surv2")) {
+    return(value)
+  }
+  if (!inherits(value, "Surv2") || !is.matrix(value) || ncol(value) != 2L) {
+    return(value)
+  }
+  event_attributes <- attr(value, "inputAttributes")[["event"]]
+  event_levels <- event_attributes[["levels"]]
+  if (is.null(event_levels)) {
+    event_levels <- c("(s0)", attr(value, "states"))
+  }
+  status <- as.integer(value[, 2L])
+  event_values <- rep(NA_character_, length(status))
+  observed <- !is.na(status)
+  event_values[observed] <- event_levels[status[observed] + 1L]
+  event <- factor(event_values, levels = event_levels)
+  repeated <- attr(value, "repeated")
+  if (is.null(repeated)) repeated <- FALSE
+  .wrap_python(
+    .python_attr("Surv2")(
+      as.list(as.numeric(value[, 1L])),
+      .as_python_factor(event),
+      repeated = repeated
+    ),
+    c("survival_py_surv2", "survival_py_object")
+  )
 }
 
 .survsplit_arg_label <- function(expr, name = "") {
@@ -10083,37 +10116,118 @@ statefig <- function(layout, connect, margin = 0.03, box = TRUE, cex = 1,
   invisible(coords)
 }
 
-survSplit <- function(formula, data, subset, na.action = na.pass, cut,
-                      start = "tstart", id, zero = 0, episode,
-                      end = "tstop", event = "event", added) {
-  if (missing(formula)) {
+survSplit <- function(formula, data, subset, na.action = na.pass, id, cut,
+                      zero = 0, episode, start = "tstart", end = "tstop",
+                      event = "event", added, timefix = TRUE) {
+  call <- match.call()
+  char_id <- FALSE
+  if (missing(formula) || is.data.frame(formula)) {
+    if (!missing(id)) {
+      id_name <- id
+      char_id <- TRUE
+    }
+    if (missing(data)) {
+      if (missing(formula)) {
+        stop("a data frame is required", call. = FALSE)
+      }
+      names(call)[[2L]] <- "data"
+      data <- formula
+    }
+    if (missing(end) || missing(event)) {
+      stop("either a formula or the end and event arguments are required", call. = FALSE)
+    }
+    if (!(is.character(event) && length(event) == 1L && event %in% names(data))) {
+      stop("'event' must be a variable name in the data set", call. = FALSE)
+    }
+    if (!(is.character(end) && length(end) == 1L && end %in% names(data))) {
+      stop("'end' must be a variable name in the data set", call. = FALSE)
+    }
+    if (!(is.character(start) && length(start) == 1L)) {
+      stop("'start' must be a variable name", call. = FALSE)
+    }
+    response_columns <- if (start %in% names(data)) {
+      paste(start, end, event, sep = ",")
+    } else {
+      paste(end, event, sep = ",")
+    }
+    formula <- stats::as.formula(
+      paste0("Surv(", response_columns, ") ~ ."),
+      env = parent.frame()
+    )
+  } else if (!inherits(formula, "formula")) {
     stop("either a formula or the end and event arguments are required", call. = FALSE)
+  }
+  if (!char_id && !missing(id)) {
+    id_name <- try(id, silent = TRUE)
+    if (!inherits(id_name, "try-error") && length(id_name) == 1L) {
+      if (is.character(id_name)) {
+        char_id <- TRUE
+      } else {
+        stop("invalid value for id", call. = FALSE)
+      }
+    }
   }
   if (missing(cut)) {
     stop("cut must be supplied", call. = FALSE)
   }
-  call <- match.call()
-  model_formula <- formula
-  if (inherits(model_formula, "formula")) {
-    model_env <- new.env(parent = environment(model_formula))
-    model_env$Surv <- .survsplit_model_frame_surv
-    environment(model_formula) <- model_env
+  if (!is.numeric(cut) || any(!is.finite(cut))) {
+    stop("cut must be a vector of finite numbers", call. = FALSE)
   }
-  keep <- match(c("data", "subset"), names(call), nomatch = 0L)
+  if (!is.logical(timefix) || length(timefix) != 1L || is.na(timefix)) {
+    stop("invalid value for timefix option", call. = FALSE)
+  }
+  episode_name <- NULL
+  if (!missing(episode)) {
+    if (!is.character(episode)) {
+      stop("episode must be a character string", call. = FALSE)
+    }
+    episode_name <- make.names(episode)
+  }
+  added_name <- NULL
+  if (!missing(added)) {
+    if (!is.character(added)) {
+      stop("added must be a character string", call. = FALSE)
+    }
+    added_name <- make.names(added)
+  }
+  if (match("data", names(call), nomatch = 0L) == 0L) {
+    stop("a data argument is required", call. = FALSE)
+  }
+
+  model_formula <- formula
+  model_env <- new.env(parent = environment(model_formula))
+  model_env$Surv <- .survsplit_model_frame_surv
+  environment(model_formula) <- model_env
+  model_arguments <- if (char_id) {
+    c("data", "subset", "na.action")
+  } else {
+    c("data", "subset", "na.action", "id")
+  }
+  keep <- match(model_arguments, names(call), nomatch = 0L)
   model_call <- call[c(1L, keep)]
   model_call$formula <- model_formula
-  model_call$na.action <- na.action
+  if (missing(na.action)) model_call$na.action <- quote(stats::na.pass)
   model_call[[1L]] <- quote(stats::model.frame)
   model_frame <- eval.parent(model_call)
   response <- stats::model.response(model_frame)
-  py_response <- .as_python_surv(response)
-  if (!is.Surv(py_response)) {
-    stop("the model must have a Surv object as the response", call. = FALSE)
+  is_surv2 <- inherits(response, "Surv2")
+  if (!(inherits(response, "Surv") || is_surv2)) {
+    stop("the model must have a Surv or Surv2 object as the response", call. = FALSE)
   }
+  if (inherits(response, "Surv") && !(attr(response, "type") %in% c(
+    "right", "mright", "counting", "mcounting"
+  ))) {
+    stop("not valid for ", attr(response, "type"), " censored survival data", call. = FALSE)
+  }
+
   response_names <- .survsplit_response_names(formula, response)
-  counting_response <- length(response_names) >= 3L
-  start_name <- if (missing(start) && counting_response) response_names[[1L]] else start
-  end_name <- if (missing(end) && length(response_names) >= 2L) {
+  counting_response <- !is_surv2 && ncol(response) == 3L
+  start_name <- if (missing(start) && (counting_response || is_surv2)) {
+    response_names[[1L]]
+  } else {
+    start
+  }
+  end_name <- if (!is_surv2 && missing(end) && length(response_names) >= 2L) {
     response_names[[if (counting_response) 2L else 1L]]
   } else {
     end
@@ -10123,7 +10237,20 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
   } else {
     event
   }
-  covariates <- model_frame[-1L]
+
+  right_dot <- is.name(formula[[3L]]) && formula[[3L]] == as.name(".") &&
+    nrow(model_frame) == nrow(data)
+  if (char_id && !(id_name %in% names(data)) && inherits(response, "Surv") &&
+      identical(attr(response, "type"), "right")) {
+    data[[id_name]] <- seq_len(nrow(data))
+    model_frame[[id_name]] <- seq_len(nrow(model_frame))
+  }
+  covariates <- if (right_dot) data else model_frame[-1L]
+  subject_id <- if (is_surv2) stats::model.extract(model_frame, "id") else NULL
+  if (is_surv2 && is.null(subject_id)) {
+    stop("an id statement is required", call. = FALSE)
+  }
+  py_response <- if (is_surv2) .as_python_surv2(response) else .as_python_surv(response)
   result <- .call_r_api(
     "survSplit",
     response = py_response,
@@ -10132,9 +10259,11 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     start = start_name,
     end = end_name,
     event = event_name,
-    episode = if (missing(episode)) NULL else as.character(episode),
-    id = if (missing(id)) NULL else as.character(id),
-    zero = zero
+    episode = episode_name,
+    zero = zero,
+    added = added_name,
+    timefix = timefix,
+    subject_id = if (is.null(subject_id)) NULL else .as_python_vector(subject_id)
   )
   output <- .restore_r_column_classes(
     as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE),
@@ -10142,9 +10271,6 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
   )
   states <- attr(response, "states")
   if (!is.null(states)) {
-    if (!missing(id)) {
-      output[[as.character(id)]] <- NULL
-    }
     output[[event_name]] <- factor(
       as.integer(output[[event_name]]),
       levels = 0:length(states),

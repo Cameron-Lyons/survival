@@ -11966,8 +11966,55 @@ def _survsplit_data_columns(data: Any | None, n: int) -> dict[str, list[Any]]:
     return columns
 
 
+def _survsplit_timefix(
+    start: list[float],
+    stop: list[float],
+    cut: list[float],
+    *,
+    counting: bool,
+) -> tuple[list[float], list[float], list[float]]:
+    if not counting:
+        adjusted_cut, adjusted_stop = _aeq_adjust_time_columns((cut, stop), None)
+        return start, adjusted_stop, adjusted_cut
+
+    observed_start = [value for value in start if not math.isnan(value)]
+    synthetic_start = [min(observed_start)] * len(cut) if observed_start else []
+    adjusted_synthetic, adjusted_cut, adjusted_start, adjusted_stop = _aeq_adjust_time_columns(
+        (synthetic_start, cut, start, stop),
+        None,
+    )
+    _raise_if_aeq_zero_interval(
+        synthetic_start,
+        cut,
+        adjusted_synthetic,
+        adjusted_cut,
+    )
+    _raise_if_aeq_zero_interval(start, stop, adjusted_start, adjusted_stop)
+    return adjusted_start, adjusted_stop, adjusted_cut
+
+
+def _survsplit_surv2_intervals(
+    times: Sequence[float],
+    subject_id: Any,
+) -> tuple[list[float], list[float]]:
+    subjects = _materialize_labels(subject_id, "subject_id")
+    if len(subjects) != len(times):
+        raise ValueError("subject_id must have the same length as the Surv2 response")
+    if any(_is_missing_value(value) for value in subjects):
+        raise ValueError("subject_id must not contain missing values")
+
+    subject_codes = _encode_labels(subjects, "subject_id")
+    start = list(times)
+    stop = list(start)
+    order = sorted(range(len(times)), key=lambda idx: (subject_codes[idx], start[idx], idx))
+    for current, following in zip(order, order[1:], strict=False):
+        if subject_codes[current] == subject_codes[following]:
+            stop[current] = start[following]
+    return start, stop
+
+
 def survSplit(
-    response: Surv,
+    response: Surv | Surv2,
     data: Any | None = None,
     *,
     cut: Any,
@@ -11977,38 +12024,83 @@ def survSplit(
     episode: str | None = None,
     id: str | None = None,
     zero: Any = 0,
+    added: str | None = None,
+    timefix: Any = True,
+    subject_id: Any | None = None,
 ) -> dict[str, list[Any]]:
-    """Split right or counting-process survival data at fixed cut points."""
+    """Split survival intervals or ``Surv2`` timelines at fixed cut points."""
 
-    if not isinstance(response, Surv):
-        raise TypeError("survSplit response must be a Surv object")
-    if response.type not in {"right", "mright", "counting", "mcounting"}:
+    if not isinstance(response, Surv | Surv2):
+        raise TypeError("survSplit response must be a Surv or Surv2 object")
+    if isinstance(response, Surv) and response.type not in {
+        "right",
+        "mright",
+        "counting",
+        "mcounting",
+    }:
         raise ValueError(f"not valid for {response.type} censored survival data")
 
     cut_values = _float_vector(cut, "cut")
     if any(not math.isfinite(value) for value in cut_values):
         raise ValueError("cut must be a vector of finite numbers")
+    cut_values = sorted(set(cut_values))
+    timefix_value = _normalize_bool_option(timefix, "timefix")
     start_name = _survsplit_output_name(start, "start")
     end_name = _survsplit_output_name(end, "end")
     event_name = _survsplit_output_name(event, "event")
     episode_name = _survsplit_output_name(episode, "episode") if episode is not None else None
     id_name = _survsplit_output_name(id, "id") if id is not None else None
+    added_name = _survsplit_output_name(added, "added") if added is not None else None
 
     n = len(response)
     frame = _survsplit_data_columns(data, n)
     if id_name is not None and id_name in frame:
         raise ValueError("the suggested id name is already present")
 
-    if response.start is None:
+    is_surv2 = isinstance(response, Surv2)
+    if is_surv2:
+        if subject_id is None:
+            raise ValueError("subject_id is required for a Surv2 response")
+        start_values = list(response.time)
+        if timefix_value:
+            cut_values, start_values = _aeq_adjust_time_columns((cut_values, start_values), None)
+        start_values, stop_values = _survsplit_surv2_intervals(
+            start_values,
+            subject_id,
+        )
+        original_status = list(response.status)
+    elif response.start is None:
         zero_value = _finite_float(zero, "zero")
         stop_values = list(response.time)
         observed_times = [value for value in stop_values if not math.isnan(value)]
         if any(value <= zero_value for value in observed_times):
             raise ValueError("'zero' parameter must be less than any observed times")
         start_values = [zero_value] * n
+        if timefix_value:
+            start_values, stop_values, cut_values = _survsplit_timefix(
+                start_values,
+                stop_values,
+                cut_values,
+                counting=False,
+            )
+        original_status = list(response.event)
     else:
         start_values = list(response.start)
         stop_values = list(response.time)
+        if timefix_value:
+            start_values, stop_values, cut_values = _survsplit_timefix(
+                start_values,
+                stop_values,
+                cut_values,
+                counting=True,
+            )
+        original_status = list(response.event)
+
+    if not is_surv2 and any(
+        not math.isnan(left) and not math.isnan(right) and left >= right
+        for left, right in zip(start_values, stop_values, strict=True)
+    ):
+        raise ValueError("start time must be < stop time")
 
     split = _core.survsplit(start_values, stop_values, cut_values)
     row_indices = [int(row) - 1 for row in split.row]
@@ -12019,15 +12111,36 @@ def survSplit(
     if id_name is not None:
         result[id_name] = [row_idx + 1 for row_idx in row_indices]
 
-    original_status = list(response.event)
     result[start_name] = [float(value) for value in split.start]
-    result[end_name] = [float(value) for value in split.end]
-    result[event_name] = [
-        0 if censor else int(original_status[row_idx])
-        for censor, row_idx in zip(split.censor, row_indices, strict=True)
-    ]
+    if not is_surv2:
+        result[end_name] = [float(value) for value in split.end]
+    if is_surv2:
+        seen_rows: set[int] = set()
+        output_status: list[int | None] = []
+        for row_idx in row_indices:
+            status_value = original_status[row_idx]
+            output_status.append(
+                None
+                if status_value is None
+                else int(status_value)
+                if row_idx not in seen_rows
+                else 0
+            )
+            seen_rows.add(row_idx)
+        result[event_name] = output_status
+    else:
+        result[event_name] = [
+            None
+            if original_status[row_idx] is None
+            else 0
+            if censor
+            else int(original_status[row_idx])
+            for censor, row_idx in zip(split.censor, row_indices, strict=True)
+        ]
     if episode_name is not None:
         result[episode_name] = [int(value) for value in split.interval]
+    if added_name is not None:
+        result[added_name] = [bool(value) for value in split.censor]
     return result
 
 

@@ -194,6 +194,9 @@ covariance sweeps stay in Rust; Python performs only formula preparation and
 result labeling.
 R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
 in the bridge and pass named control lists through to the Python API.
+`survSplit` handles formula or data-frame inputs, near-tie correction, added-row
+markers, delayed-entry episode numbering, and `Surv2` subject timelines through
+the native split plan.
 Time-dependent start/stop data can be built with the R-compatible `tmerge`
 workflow. Its update builders preserve R's `(tstart, tstop]` boundary rules,
 event placement, cumulative updates, missing-value handling, and classification

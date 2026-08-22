@@ -647,9 +647,9 @@ survfit_confint(p, se, logse = TRUE, conf.type, conf.int = 0.95,
 
 pseudo(fit, times, type, collapse = TRUE, data.frame = FALSE, ...)
 
-survSplit(formula, data, subset, na.action = na.pass, cut,
-  start = "tstart", id, zero = 0, episode, end = "tstop",
-  event = "event", added)
+survSplit(formula, data, subset, na.action = na.pass, id, cut,
+  zero = 0, episode, start = "tstart", end = "tstop",
+  event = "event", added, timefix = TRUE)
 
 survcondense(formula, data, subset, weights, na.action = na.pass,
   id, start = "tstart", end = "tstop", event = "event")
@@ -1027,8 +1027,8 @@ input.}
 \code{nostutter}. \code{censor} also controls whether
 \code{points.survival_py_survfit} marks censoring rows instead of event rows.}
 \item{episode, end, added}{Output column controls for
-\code{survSplit} and \code{survcondense}; \code{added} is accepted for R API
-compatibility.}
+\code{survSplit} and \code{survcondense}; \code{added} marks rows introduced
+at a split point.}
 \item{tt, special, order}{Term-object inputs for \code{attrassign} and
 special-term inputs for \code{untangle.specials}.}
 \item{formula}{Formula, formula string, bridged \code{Surv} response, or

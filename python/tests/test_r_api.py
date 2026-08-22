@@ -447,6 +447,87 @@ def test_survSplit_splits_right_and_counting_surv_responses_like_r():
         survival.survSplit(right, cut=[math.inf])
 
 
+def test_survSplit_matches_current_timefix_added_episode_and_surv2_semantics():
+    class Factor(list):
+        def __init__(self, values, levels):
+            super().__init__(values)
+            self.categories = levels
+
+    right = survival.Surv([1.0], [1])
+    fixed = survival.survSplit(
+        right,
+        {"x": [9]},
+        cut=[1.0 - 1e-9],
+        end="time",
+        event="status",
+        added="made",
+    )
+    exact = survival.survSplit(
+        right,
+        {"x": [9]},
+        cut=[1.0 - 1e-9],
+        end="time",
+        event="status",
+        added="made",
+        timefix=False,
+    )
+    assert fixed == {
+        "x": [9],
+        "tstart": [0.0],
+        "time": [1.0 - 1e-9],
+        "status": [1],
+        "made": [False],
+    }
+    assert exact["tstart"] == pytest.approx([0.0, 1.0 - 1e-9])
+    assert exact["time"] == pytest.approx([1.0 - 1e-9, 1.0])
+    assert exact["status"] == [0, 1]
+    assert exact["made"] == [True, False]
+
+    delayed = survival.survSplit(
+        survival.Surv([5.0], [10.0], [1]),
+        cut=[3.0, 7.0],
+        start="start",
+        end="stop",
+        event="status",
+        episode="episode",
+    )
+    assert delayed["episode"] == [2, 3]
+
+    with pytest.raises(ValueError, match="effective length 0"):
+        survival.survSplit(
+            survival.Surv([0.0], [1.0], [1]),
+            cut=[1e-9],
+            timefix=True,
+        )
+    with pytest.raises(TypeError, match="timefix"):
+        survival.survSplit(right, cut=[0.5], timefix=1)
+
+    timeline = survival.Surv2(
+        [0.0, 2.0, 5.0, 0.0, 4.0],
+        Factor(["a", "b", "b", "a", "b"], ["a", "b"]),
+    )
+    timeline_split = survival.survSplit(
+        timeline,
+        {"x": [1, 2, 3, 4, 5], "(id)": [1, 1, 1, 2, 2]},
+        cut=[1.0, 3.0],
+        start="time",
+        event="event",
+        episode="ep",
+        added="add",
+        subject_id=[1, 1, 1, 2, 2],
+    )
+    assert timeline_split == {
+        "x": [1, 1, 2, 2, 3, 4, 4, 4, 5],
+        "(id)": [1, 1, 1, 1, 1, 2, 2, 2, 2],
+        "time": [0.0, 1.0, 2.0, 3.0, 5.0, 0.0, 1.0, 3.0, 4.0],
+        "event": [0, 0, 1, 0, 1, 0, 0, 0, 1],
+        "ep": [1, 2, 2, 3, 3, 1, 2, 3, 3],
+        "add": [True, False, True, False, False, True, True, False, False],
+    }
+    with pytest.raises(ValueError, match="subject_id is required"):
+        survival.survSplit(timeline, cut=[1.0])
+
+
 def test_survcheck_accepts_formula_direct_and_legacy_inputs():
     counting = survival.Surv([0.0, 1.0, 0.0], [1.0, 2.0, 2.0], [0, 1, 1])
     direct = survival.survcheck(counting, id=[1, 1, 2])

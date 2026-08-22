@@ -152,7 +152,7 @@ def test_survsplit_public_api_and_validation():
     assert result.censor == [True, True, False]
 
     assert boundary_result.row == [1, 1]
-    assert boundary_result.interval == [1, 2]
+    assert boundary_result.interval == [2, 3]
     assert boundary_result.start == pytest.approx([0.0, 3.0])
     assert boundary_result.end == pytest.approx([3.0, 10.0])
     assert boundary_result.censor == [True, False]

@@ -837,13 +837,27 @@ test_that("R formula wrappers delegate to the Python survival package", {
     episode = "episode",
     id = "rowid"
   )
-  expect_equal(names(counting_split), c("group", "rowid", "start", "stop", "status", "episode"))
+  expect_equal(names(counting_split), c("group", "start", "stop", "status", "episode"))
   expect_equal(counting_split$group, c("a", "a", "b", "b", "b"))
-  expect_equal(as.integer(counting_split$rowid), c(1L, 1L, 2L, 2L, 2L))
   expect_equal(as.numeric(counting_split$start), c(0, 3, 2, 3, 6))
   expect_equal(as.numeric(counting_split$stop), c(3, 5, 3, 6, 8))
   expect_equal(as.integer(counting_split$status), c(0L, 1L, 0L, 0L, 0L))
   expect_equal(as.integer(counting_split$episode), c(1L, 2L, 1L, 2L, 3L))
+  reference_counting_split_formula <- Surv(start, stop, status) ~ group
+  environment(reference_counting_split_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  expect_equal(
+    counting_split,
+    survival::survSplit(
+      reference_counting_split_formula,
+      data = split_counting,
+      cut = c(3, 6),
+      episode = "episode",
+      id = "rowid"
+    )
+  )
 
   split_multistate <- data.frame(
     time = c(1, 3, 4),
@@ -897,6 +911,127 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = "subject"
   )
   expect_equal(multistate_counting_split, reference_multistate_counting_split)
+
+  expect_identical(names(formals(survSplit)), names(formals(survival::survSplit)))
+  near_tie_split_data <- data.frame(time = 1, status = 1, x = 9)
+  reference_near_tie_formula <- Surv(time, status) ~ x
+  environment(reference_near_tie_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  for (fix_times in c(TRUE, FALSE)) {
+    bridged_near_tie <- survSplit(
+      Surv(time, status) ~ x,
+      data = near_tie_split_data,
+      cut = 1 - 1e-9,
+      added = "made",
+      timefix = fix_times
+    )
+    reference_near_tie <- survival::survSplit(
+      reference_near_tie_formula,
+      data = near_tie_split_data,
+      cut = 1 - 1e-9,
+      added = "made",
+      timefix = fix_times
+    )
+    expect_equal(bridged_near_tie, reference_near_tie, tolerance = 1e-12)
+  }
+
+  bridged_frame_split <- survSplit(
+    near_tie_split_data,
+    cut = 0.5,
+    end = "time",
+    event = "status",
+    id = "rowid",
+    added = "made"
+  )
+  reference_frame_split <- survival::survSplit(
+    near_tie_split_data,
+    cut = 0.5,
+    end = "time",
+    event = "status",
+    id = "rowid",
+    added = "made"
+  )
+  expect_equal(bridged_frame_split, reference_frame_split)
+  sanitized_split <- survSplit(
+    near_tie_split_data,
+    cut = 0.5,
+    end = "time",
+    event = "status",
+    episode = "split index",
+    added = "inserted row"
+  )
+  expect_true(all(c("split.index", "inserted.row") %in% names(sanitized_split)))
+  expect_error(
+    survSplit(
+      near_tie_split_data,
+      cut = 0.5,
+      end = "time",
+      event = "status",
+      episode = 1
+    ),
+    "episode must be a character string"
+  )
+  expect_error(
+    survSplit(
+      near_tie_split_data,
+      cut = 0.5,
+      end = "time",
+      event = "status",
+      added = 1
+    ),
+    "added must be a character string"
+  )
+
+  delayed_split_data <- data.frame(start = 5, stop = 10, status = 1)
+  reference_delayed_split_formula <- Surv(start, stop, status) ~ 1
+  environment(reference_delayed_split_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  bridged_delayed_split <- survSplit(
+    Surv(start, stop, status) ~ 1,
+    data = delayed_split_data,
+    cut = c(3, 7),
+    episode = "episode"
+  )
+  reference_delayed_split <- survival::survSplit(
+    reference_delayed_split_formula,
+    data = delayed_split_data,
+    cut = c(3, 7),
+    episode = "episode"
+  )
+  expect_equal(bridged_delayed_split, reference_delayed_split)
+
+  timeline_split_data <- data.frame(
+    id = c(1, 1, 1, 2, 2),
+    time = c(0, 2, 5, 0, 4),
+    event = factor(c("a", "b", "b", "a", "b"), levels = c("a", "b")),
+    x = 1:5
+  )
+  reference_timeline_split_formula <- Surv2(time, event) ~ x
+  environment(reference_timeline_split_formula) <- list2env(
+    list(Surv2 = survival::Surv2),
+    parent = parent.frame()
+  )
+  bridged_timeline_split <- survSplit(
+    Surv2(time, event) ~ x,
+    data = timeline_split_data,
+    id = id,
+    cut = c(1, 3),
+    episode = "ep",
+    added = "add"
+  )
+  reference_timeline_split <- survival::survSplit(
+    reference_timeline_split_formula,
+    data = timeline_split_data,
+    id = id,
+    cut = c(1, 3),
+    episode = "ep",
+    added = "add"
+  )
+  expect_equal(bridged_timeline_split, reference_timeline_split)
 
   check_data <- data.frame(
     id = c(1, 1, 2),
