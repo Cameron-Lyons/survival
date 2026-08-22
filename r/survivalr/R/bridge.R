@@ -12882,13 +12882,11 @@ survConcordance.fit <- function(y, x, strata, weight) {
   if (!multi_score) {
     result$concordance[] <- NaN
     if (!is.null(result$var)) result$var[] <- NaN
-    if (!is.null(result$cvar)) result$cvar[] <- NaN
     if (!is.null(result$dfbeta)) result$dfbeta[] <- NaN
     return(result)
   }
 
   result$concordance[empty] <- NaN
-  if (!is.null(result$cvar)) result$cvar[empty] <- NaN
   if (!is.null(result$var)) {
     result$var[empty, ] <- NaN
     result$var[, empty] <- NaN

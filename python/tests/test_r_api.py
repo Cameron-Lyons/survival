@@ -8952,6 +8952,25 @@ def test_concordance_zero_pair_diagnostics_remain_finite_in_python():
     assert all(value == 0.0 for column in result.dfbeta for value in column)
 
 
+def test_stratified_counting_zero_pair_conditional_variance_is_infinite():
+    result = survival.concordancefit(
+        survival.Surv(
+            [2, 3, 0, 2, 4],
+            [5, 6, 1, 4, 5],
+            [1, 0, 0, 0, 1],
+        ),
+        [0, 0.5, 1, 1, 1],
+        strata=[2, 1, 1, 1, 2],
+        ymax=5,
+        timewt="S",
+        influence=2,
+    )
+
+    assert result is not None
+    assert result.comparable == 0
+    assert math.isinf(result.conditional_variance)
+
+
 def test_concordance_collapsed_single_score_strata_remain_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 1, 2], [1, 0, 1, 0]),
