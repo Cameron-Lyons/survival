@@ -26690,6 +26690,44 @@ def _multi_score_concordance_result(
     )
 
 
+def _scaled_concordance_variance(
+    variance: float | list[float | None] | list[list[float]] | None,
+) -> float | list[float | None] | list[list[float]] | None:
+    if variance is None:
+        return None
+    if isinstance(variance, int | float):
+        return 4.0 * float(variance)
+    if variance and isinstance(variance[0], list):
+        covariance = cast(list[list[float]], variance)
+        return [[4.0 * float(value) for value in row] for row in covariance]
+    values = cast(list[float | None], variance)
+    return [None if value is None else 4.0 * float(value) for value in values]
+
+
+def _public_concordance_result(
+    result: ConcordanceResult,
+    weights: list[float] | None,
+) -> ConcordanceResult:
+    n_scores = len(result.concordance) if isinstance(result.concordance, list) else 1
+    return ConcordanceResult(
+        concordance=result.concordance,
+        n=result.n,
+        n_event=result.n_event,
+        reverse=result.reverse,
+        concordant=result.concordant,
+        comparable=result.comparable,
+        tied_x=result.tied_x,
+        tied_y=result.tied_y,
+        tied_xy=result.tied_xy,
+        ranks=result.ranks,
+        dfbeta=_concordancefit_dfbeta(result.dfbeta),
+        influence=_concordancefit_influence(result.influence, weights, n_scores),
+        variance=_scaled_concordance_variance(result.variance),
+        conditional_variance=result.conditional_variance,
+        score_names=result.score_names,
+    )
+
+
 def concordance(
     response: Surv | str,
     data: Any | None = None,
@@ -26862,8 +26900,8 @@ def concordance(
             influence_value,
             include_ranks,
         )
-        return (
-            ConcordanceResult(
+        if score_names is not None:
+            result = ConcordanceResult(
                 concordance=result.concordance,
                 n=result.n,
                 n_event=result.n_event,
@@ -26880,24 +26918,25 @@ def concordance(
                 conditional_variance=result.conditional_variance,
                 score_names=score_names,
             )
-            if score_names is not None
-            else result
-        )
+        return _public_concordance_result(result, weight_values)
 
-    return _multi_score_concordance_result(
-        response,
-        score_columns,
-        score_names or [f"score{idx + 1}" for idx in range(len(score_columns))],
+    return _public_concordance_result(
+        _multi_score_concordance_result(
+            response,
+            score_columns,
+            score_names or [f"score{idx + 1}" for idx in range(len(score_columns))],
+            weight_values,
+            strata_values,
+            cluster_values,
+            effective_reverse_scores,
+            fix_time,
+            time_weight,
+            lower_bound,
+            upper_bound,
+            influence_value,
+            include_ranks,
+        ),
         weight_values,
-        strata_values,
-        cluster_values,
-        effective_reverse_scores,
-        fix_time,
-        time_weight,
-        lower_bound,
-        upper_bound,
-        influence_value,
-        include_ranks,
     )
 
 

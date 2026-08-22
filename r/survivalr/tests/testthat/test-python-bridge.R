@@ -4174,6 +4174,7 @@ test_that("concordance formulas accept numeric and orderable outcomes", {
     c("low", "high", "mid", "high", "high", "mid"),
     levels = c("low", "mid", "high")
   )
+  data$group <- factor(c("a", "a", "b", "b", "b", "a"))
 
   expect_concordance_equal <- function(formula, ...) {
     args <- c(list(formula, data = data), list(...))
@@ -4216,6 +4217,64 @@ test_that("concordance formulas accept numeric and orderable outcomes", {
     0.0112321292487896,
     tolerance = 1e-12
   )
+
+  expect_diagnostics_equal <- function(bridged, reference) {
+    bridged_dfbeta <- survivalr:::.as_numeric_vector(
+      survivalr:::.result_field(bridged, "dfbeta")
+    )
+    bridged_influence <- survivalr:::.as_numeric_matrix(
+      survivalr:::.result_field(bridged, "influence")
+    )
+    expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+    expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-12)
+    expect_equal(bridged_dfbeta, as.numeric(reference$dfbeta), tolerance = 1e-12)
+    expect_equal(
+      unname(bridged_influence),
+      unname(reference$influence),
+      tolerance = 1e-12
+    )
+  }
+
+  stratified_formula <- y ~ x + strata(group)
+  expect_diagnostics_equal(
+    concordance(
+      stratified_formula,
+      data = data,
+      weights = data$w,
+      influence = 3
+    ),
+    survival::concordance(
+      stratified_formula,
+      data = data,
+      weights = data$w,
+      influence = 3
+    )
+  )
+
+  counting_data <- data.frame(
+    start = c(0, 0, 1, 2.5, 0, 0, 0.5, 2),
+    stop = c(2, 4, 3, 5, 1, 4, 3, 5),
+    status = c(1, 0, 1, 1, 1, 1, 0, 1),
+    score = c(0.8, 0.2, 0.5, 0.1, 0.3, 0.9, 0.4, 0.6),
+    w = c(1, 2, 1.5, 0.5, 3, 1, 2.5, 2),
+    group = factor(c("a", "a", "a", "a", "b", "b", "b", "b"))
+  )
+  counting_formula <- Surv(start, stop, status) ~ score + strata(group)
+  expect_diagnostics_equal(
+    concordance(
+      counting_formula,
+      data = counting_data,
+      weights = counting_data$w,
+      influence = 3
+    ),
+    survival::concordance(
+      counting_formula,
+      data = counting_data,
+      weights = counting_data$w,
+      influence = 3
+    )
+  )
+
   expect_concordance_equal(y ~ x + z, weights = data$w)
   expect_concordance_equal(y ~ x + z, weights = data$w, cluster = data$cluster)
   expect_concordance_equal(I(y >= 3) ~ x)
