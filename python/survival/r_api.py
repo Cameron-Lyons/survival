@@ -222,6 +222,13 @@ class _FactorEncoding:
 
 
 @dataclass(frozen=True)
+class _PolyFormulaOptions:
+    degree: int
+    raw: bool = False
+    simple: bool = False
+
+
+@dataclass(frozen=True)
 class _NumericFormulaLiteral:
     value: float
 
@@ -270,6 +277,7 @@ class _CovariateTerm:
     numeric_expression: _NumericFormulaExpression | None = None
     factor_options: _FactorFormulaOptions | None = None
     formula_label: str | None = None
+    poly_options: _PolyFormulaOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -413,6 +421,13 @@ class _NumericDesignTerm:
 
 
 @dataclass(frozen=True)
+class _PolyDesignTerm:
+    term: _CovariateTerm
+    alpha: tuple[float, ...]
+    norm2: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class _CategoricalDesignTerm:
     term: _CovariateTerm
     levels: tuple[Any, ...]
@@ -422,7 +437,7 @@ class _CategoricalDesignTerm:
     full: bool = False
 
 
-_SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm
+_SingleDesignTerm = _NumericDesignTerm | _PolyDesignTerm | _CategoricalDesignTerm
 
 
 @dataclass(frozen=True)
@@ -471,6 +486,27 @@ class _FormulaDesign:
     strata_levels: tuple[Any, ...] = ()
     ridge: tuple[_RidgeFormulaTerm, ...] = ()
     intercept: bool = False
+
+
+@dataclass(frozen=True)
+class _FormulaSubsetData:
+    data: Any
+    poly_states: tuple[
+        tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]],
+        ...,
+    ]
+
+    @property
+    def columns(self) -> Sequence[Any]:
+        if isinstance(self.data, Mapping):
+            return tuple(self.data)
+        columns = getattr(self.data, "columns", None)
+        if columns is None:
+            raise AttributeError("formula data does not expose column names")
+        return cast(Sequence[Any], columns)
+
+    def __getitem__(self, name: str) -> Any:
+        return self.data[name]
 
 
 @dataclass(frozen=True)
@@ -2094,6 +2130,11 @@ def _subset_optional_sequence(
 
 
 def _subset_data(data: Any, indices: list[int]) -> Any:
+    if isinstance(data, _FormulaSubsetData):
+        return _FormulaSubsetData(
+            _subset_data(data.data, indices),
+            data.poly_states,
+        )
     if isinstance(data, Mapping):
         return {
             key: _subset_sequence(
@@ -3707,6 +3748,40 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
+def _formula_subset_poly_states(
+    formula: str,
+    data: Any,
+    n: int,
+) -> tuple[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]], ...]:
+    response_spec = _formula_response_spec(formula)
+    _lhs, _sep, rhs = formula.partition("~")
+    terms = _split_terms(rhs, _dot_terms(data, list(response_spec.columns)))
+    states: list[tuple[_CovariateTerm, tuple[tuple[float, ...], tuple[float, ...]]]] = []
+    for spec in terms.covariates:
+        for term in _covariate_factors(spec):
+            options = term.poly_options
+            if options is None or options.raw or any(existing == term for existing, _ in states):
+                continue
+            values = _numeric_term_values(_term_raw_values(data, term, n), term)
+            _rows, alpha, norm2 = _core.poly_basis(
+                values,
+                options.degree,
+                False,
+                None,
+                None,
+            )
+            states.append(
+                (
+                    term,
+                    (
+                        tuple(float(value) for value in alpha),
+                        tuple(float(value) for value in norm2),
+                    ),
+                )
+            )
+    return tuple(states)
+
+
 def _subset_formula_inputs(
     formula: str,
     data: Any,
@@ -3714,12 +3789,16 @@ def _subset_formula_inputs(
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any]]:
     n = len(_column(data, _formula_response_args(formula)[0]))
+    poly_states = _formula_subset_poly_states(formula, data, n)
     indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
         for name, values in row_aligned.items()
     }
-    return _subset_data(data, indices), filtered
+    subset_data = _subset_data(data, indices)
+    if poly_states:
+        subset_data = _FormulaSubsetData(subset_data, poly_states)
+    return subset_data, filtered
 
 
 def _apply_formula_na_action(
@@ -3752,7 +3831,11 @@ def _apply_formula_na_action(
             if any(column in excluded for column in term_columns):
                 continue
             declared_levels = _formula_declared_factor_levels(data, term)
-            if term.numeric_expression is not None:
+            if term.poly_options is not None and not term.poly_options.raw:
+                values = _term_raw_values(data, term, n)
+                if any(_is_missing_value(value) for value in values):
+                    raise ValueError("missing values are not allowed in orthogonal poly")
+            elif term.numeric_expression is not None:
                 transformed_columns.append(
                     (
                         _covariate_term_name(term),
@@ -4232,6 +4315,39 @@ def _dot_covariate_terms(dot_terms: Sequence[str] | None) -> list[_CovariateSpec
     return [_CovariateTerm(column) for column in dot_terms]
 
 
+def _parse_poly_formula_term(term: str) -> _CovariateTerm | None:
+    if not (term.startswith("poly(") and term.endswith(")")):
+        return None
+
+    parts = _formula_response_parts(term[5:-1])
+    value, degree, coefs, raw, simple = _numeric_formula_bound_arguments(
+        "poly",
+        parts,
+        ("x", "degree", "coefs", "raw", "simple"),
+    )
+    if value is None:
+        raise ValueError("poly() requires one numeric argument")
+    degree_value = 1 if degree is None else _numeric_formula_integer_literal(degree, "poly degree")
+    if degree_value < 1:
+        raise ValueError("poly degree must be at least 1")
+    if coefs is not None and coefs.strip().lower() != "null":
+        raise ValueError("poly() formula terms do not accept explicit coefs")
+    raw_value = False if raw is None else _numeric_formula_bool_literal(raw, "poly raw")
+    simple_value = False if simple is None else _numeric_formula_bool_literal(simple, "poly simple")
+    expression = _parse_numeric_formula_expression(value)
+    return _CovariateTerm(
+        value.strip(),
+        transform="poly",
+        numeric_expression=expression,
+        formula_label=term,
+        poly_options=_PolyFormulaOptions(
+            degree=degree_value,
+            raw=raw_value,
+            simple=simple_value,
+        ),
+    )
+
+
 def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if not term:
         raise ValueError("formula interaction terms must not be empty")
@@ -4239,6 +4355,10 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     factor_term = _parse_factor_formula_term(term)
     if factor_term is not None:
         return factor_term
+
+    poly_term = _parse_poly_formula_term(term)
+    if poly_term is not None:
+        return poly_term
 
     for wrapper in ("I", "identity"):
         prefix = f"{wrapper}("
@@ -4303,7 +4423,7 @@ def _parse_offset_term(expression: str) -> _CovariateTerm:
         _arithmetic_expression_columns(expression)
         return _CovariateTerm(expression, arithmetic=expression)
     offset_term = _parse_covariate_atom(expression)
-    if offset_term.categorical:
+    if offset_term.categorical or offset_term.poly_options is not None:
         raise ValueError("offset() requires a numeric column or transform")
     return offset_term
 
@@ -5281,7 +5401,16 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
         return [math.sqrt(value) for value in values]
     if transform == "exp":
         return [math.exp(value) for value in values]
-    if transform in {"I", "identity", "as.numeric", "ridge", "pspline", "nsk", "tt"}:
+    if transform in {
+        "I",
+        "identity",
+        "as.numeric",
+        "poly",
+        "ridge",
+        "pspline",
+        "nsk",
+        "tt",
+    }:
         return values
     raise ValueError(f"unsupported formula transform {transform!r}")
 
@@ -5704,6 +5833,31 @@ def _fit_single_design_term(
     n: int,
 ) -> _SingleDesignTerm:
     values = _term_raw_values(data, term, n)
+    if term.poly_options is not None:
+        numeric = _numeric_term_values(values, term)
+        stored_state = (
+            next(
+                (state for stored_term, state in data.poly_states if stored_term == term),
+                None,
+            )
+            if isinstance(data, _FormulaSubsetData)
+            else None
+        )
+        if stored_state is None:
+            _rows, alpha, norm2 = _core.poly_basis(
+                numeric,
+                term.poly_options.degree,
+                term.poly_options.raw,
+                None,
+                None,
+            )
+        else:
+            alpha, norm2 = stored_state
+        return _PolyDesignTerm(
+            term=term,
+            alpha=tuple(float(value) for value in alpha),
+            norm2=tuple(float(value) for value in norm2),
+        )
     declared_levels = _formula_declared_factor_levels(data, term)
     if declared_levels is not None and term.factor_options is None:
         source = _column_source(data, term.column)
@@ -6000,6 +6154,8 @@ def _single_design_columns(
     spec: _SingleDesignTerm,
     n: int,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+    *,
+    prediction: bool = False,
 ) -> list[list[float]]:
     if (
         isinstance(spec, _NumericDesignTerm)
@@ -6011,6 +6167,23 @@ def _single_design_columns(
             raise ValueError("tt transform result must match the expanded risk-set rows")
         return [values]
     values = _term_raw_values(data, spec.term, n)
+    if isinstance(spec, _PolyDesignTerm):
+        options = cast(_PolyFormulaOptions, spec.term.poly_options)
+        recompute = options.simple and prediction
+        alpha = None if options.raw or recompute else list(spec.alpha)
+        norm2 = None if options.raw or recompute else list(spec.norm2)
+        rows, _alpha, _norm2 = _core.poly_basis(
+            _numeric_term_values(values, spec.term),
+            options.degree,
+            options.raw,
+            alpha,
+            norm2,
+        )
+        if len(rows) != n:
+            raise ValueError("poly() basis row count must match formula data")
+        if not rows:
+            return [[] for _ in range(options.degree)]
+        return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _NumericDesignTerm):
         return [_numeric_term_values(values, spec.term)]
 
@@ -6035,6 +6208,8 @@ def _design_term_columns(
     spec: _DesignTerm,
     n: int,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+    *,
+    prediction: bool = False,
 ) -> list[list[float]]:
     if isinstance(spec, _FrailtyDesignTerm):
         if spec.sparse:
@@ -6080,7 +6255,13 @@ def _design_term_columns(
         return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _InteractionDesignTerm):
         factor_columns = [
-            _single_design_columns(data, factor, n, time_transform_values)
+            _single_design_columns(
+                data,
+                factor,
+                n,
+                time_transform_values,
+                prediction=prediction,
+            )
             for factor in spec.factors
         ]
         interaction_columns: list[list[float]] = []
@@ -6090,7 +6271,13 @@ def _design_term_columns(
                 [math.prod(column[idx] for column in column_combo) for idx in range(n)]
             )
         return interaction_columns
-    return _single_design_columns(data, spec, n, time_transform_values)
+    return _single_design_columns(
+        data,
+        spec,
+        n,
+        time_transform_values,
+        prediction=prediction,
+    )
 
 
 def _design_rows_from_spec(
@@ -6099,11 +6286,18 @@ def _design_rows_from_spec(
     n: int,
     *,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+    prediction: bool = False,
 ) -> list[list[float]]:
     columns = [
         column
         for term in design.covariates
-        for column in _design_term_columns(data, term, n, time_transform_values)
+        for column in _design_term_columns(
+            data,
+            term,
+            n,
+            time_transform_values,
+            prediction=prediction,
+        )
     ]
     if design.intercept:
         columns.insert(0, [1.0] * n)
@@ -6852,6 +7046,10 @@ def _design_term_name(spec: _DesignTerm) -> str:
 
 def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
     term = spec.term
+    if isinstance(spec, _PolyDesignTerm):
+        options = cast(_PolyFormulaOptions, term.poly_options)
+        prefix = _covariate_term_name(term)
+        return [f"{prefix}{index}" for index in range(1, options.degree + 1)]
     if isinstance(spec, _CategoricalDesignTerm):
         prefix = _covariate_term_name(term)
         if spec.full:
@@ -23602,7 +23800,9 @@ def _prediction_inputs(
                     f"newdata column {sparse_frailty.formula.term.column!r} contains unknown level "
                     f"{unknown!r}"
                 )
-        return _design_rows_from_spec(newdata, design, n), (offsets if any(offsets) else None)
+        return _design_rows_from_spec(newdata, design, n, prediction=True), (
+            offsets if any(offsets) else None
+        )
     coefficient_names = getattr(fit, "coefficient_names", None)
     if coefficient_names is not None and (
         isinstance(newdata, Mapping) or hasattr(newdata, "columns")

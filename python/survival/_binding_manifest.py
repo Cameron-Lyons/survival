@@ -858,6 +858,7 @@ BINDINGS = (
     "perform_survexp_fit",
     "permutation_importance",
     "ph_test",
+    "poly_basis",
     "power_logrank",
     "power_survival",
     "predict_bounded_cumulative_hazard",

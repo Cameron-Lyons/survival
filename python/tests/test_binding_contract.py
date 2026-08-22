@@ -10012,6 +10012,7 @@ def test_core_utility_bindings_are_typed():
         "SplineBasisResult",
         "PSpline",
         "nsk",
+        "poly_basis",
         "pspline_basis",
         "cox_score_residuals",
         "schoenfeld_residuals",
@@ -10049,6 +10050,7 @@ def test_core_utility_bindings_are_typed():
 
     expected_args = {
         "nsk": ["x", "df", "knots", "boundary_knots"],
+        "poly_basis": ["x", "degree", "raw", "alpha", "norm2"],
         "pspline_basis": ["x", "nterm", "degree", "boundary_knots"],
         "cox_score_residuals": ["y", "strata", "covar", "score", "weights", "nvar", "method"],
         "schoenfeld_residuals": ["y", "score", "strata", "covar", "nvar", "method"],
@@ -10068,6 +10070,26 @@ def test_core_utility_bindings_are_typed():
     assert all(math.isnan(value) for value in constant_basis[1])
     assert constant_basis[2] == pytest.approx(constant_basis[0])
     assert constant_knots == pytest.approx([2.0] * 12)
+
+    poly_rows, poly_alpha, poly_norm2 = core.poly_basis(
+        [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        3,
+    )
+    rebuilt_poly, rebuilt_alpha, rebuilt_norm2 = core.poly_basis(
+        [10.0, 11.0, 15.0],
+        3,
+        False,
+        poly_alpha,
+        poly_norm2,
+    )
+    assert poly_rows[0] == pytest.approx(
+        [-0.5400617248673217, 0.5400617248673216, -0.4308202184276644]
+    )
+    assert poly_alpha == pytest.approx([1.5, 1.5, 1.5])
+    assert poly_norm2 == pytest.approx([1.0, 8.0, 42.0, 168.0, 594.0])
+    assert rebuilt_poly[0] == pytest.approx([1.31157847467778, 5.16916222373008, 21.9718311398109])
+    assert rebuilt_alpha == pytest.approx(poly_alpha)
+    assert rebuilt_norm2 == pytest.approx(poly_norm2)
 
     assert _pyi_class_annotation_names(stub_path, "CovariateMatrix") == {
         "values",

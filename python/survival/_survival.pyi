@@ -7726,6 +7726,13 @@ def pspline_basis(
     degree: int,
     boundary_knots: tuple[float, float],
 ) -> tuple[list[list[float]], list[float]]: ...
+def poly_basis(
+    x: list[float],
+    degree: int,
+    raw: bool = False,
+    alpha: list[float] | None = None,
+    norm2: list[float] | None = None,
+) -> tuple[list[list[float]], list[float], list[float]]: ...
 def cox_score_residuals(
     y: list[float],
     strata: list[int],

@@ -3,9 +3,11 @@ pub(crate) mod coxcount1_module;
 pub(crate) mod coxscho;
 #[path = "nsk.rs"]
 pub(crate) mod nsk_module;
+pub(crate) mod poly;
 pub(crate) mod pspline;
 
 pub use coxcount1_module::{CoxCountOutput, coxcount1, coxcount2};
 pub use coxscho::schoenfeld_residuals;
 pub use nsk_module::{NaturalSplineKnot, SplineBasisResult, nsk};
+pub use poly::poly_basis;
 pub use pspline::{PSpline, pspline_basis};
