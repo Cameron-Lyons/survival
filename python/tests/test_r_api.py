@@ -2348,9 +2348,13 @@ def _manual_right_concordance_counts(time, status, scores, weights=None, timewt=
     multipliers = _manual_right_time_multipliers(time, status, weights, timewt)
     for left in range(len(time)):
         for right in range(left + 1, len(time)):
-            if status[left] == 1 and time[left] < time[right]:
+            if status[left] == 1 and (
+                time[left] < time[right] or (time[left] == time[right] and status[right] != 1)
+            ):
                 event_idx, risk_idx = left, right
-            elif status[right] == 1 and time[right] < time[left]:
+            elif status[right] == 1 and (
+                time[right] < time[left] or (time[right] == time[left] and status[left] != 1)
+            ):
                 event_idx, risk_idx = right, left
             else:
                 continue
@@ -8498,6 +8502,77 @@ def test_concordance_formula_returns_one_result_per_score_column():
     )
     assert result.n == len(data["time"])
     assert result.n_event == sum(data["status"])
+
+
+def test_concordance_includes_same_time_censors_in_multi_score_diagnostics():
+    data = {
+        "time": [1.0, 3.0, 2.0, 4.0, 4.0, 5.0],
+        "status": [1, 0, 1, 1, 0, 1],
+        "x": [0.2, 0.9, 0.4, 0.7, 0.7, 0.1],
+        "z": [0.8, 0.3, 0.5, 0.2, 0.6, 0.4],
+    }
+    result = survival.concordance(
+        "Surv(time, status) ~ x + z",
+        data=data,
+        influence=3,
+        ranks=True,
+    )
+    low_level = survival.concordancefit(
+        survival.Surv(data["time"], data["status"]),
+        {"x": data["x"], "z": data["z"]},
+        influence=3,
+        ranks=True,
+    )
+
+    assert low_level is not None
+    assert result.concordance == pytest.approx([0.681818181818182, 0.272727272727273])
+    assert result.count[0] == pytest.approx(
+        {"concordant": 7.0, "discordant": 3.0, "tied.x": 1.0, "tied.y": 0.0, "tied.xy": 0.0}
+    )
+    assert result.count[1] == pytest.approx(
+        {"concordant": 3.0, "discordant": 8.0, "tied.x": 0.0, "tied.y": 0.0, "tied.xy": 0.0}
+    )
+    assert result.conditional_variance == pytest.approx([0.0432506887052342, 0.0461432506887052])
+    for actual, expected in zip(
+        result.variance,
+        [
+            [0.0458302028549962, -0.0116453794139745],
+            [-0.0116453794139745, 0.0375657400450789],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert result.dfbeta[0] == pytest.approx(
+        [
+            0.0537190082644628,
+            0.0578512396694215,
+            0.0537190082644628,
+            -0.0206611570247934,
+            0.0413223140495868,
+            -0.18595041322314,
+        ]
+    )
+    assert result.influence[0][3] == pytest.approx([2.0, 1.0, 1.0, 0.0, 0.0])
+    assert result.influence[0][4] == pytest.approx([2.0, 0.0, 1.0, 0.0, 0.0])
+    assert [row["rank"] for row in result.ranks[0]] == pytest.approx([0.5, 0.4, -1.0 / 3.0, 0.0])
+    assert low_level.concordance == pytest.approx(result.concordance)
+    assert low_level.count == result.count
+    for actual, expected in zip(low_level.variance, result.variance, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(low_level.dfbeta, result.dfbeta, strict=True):
+        assert actual == pytest.approx(expected)
+    assert low_level.influence == result.influence
+    assert low_level.ranks == result.ranks
+
+    tied_summary = survival.core.concordance_summary(
+        [1.0, 1.0],
+        [1, 0],
+        [0.5, 0.5],
+        weights=[2.0, 3.0],
+    )
+    assert tied_summary["concordance"] == pytest.approx(0.5)
+    assert tied_summary["comparable"] == pytest.approx(6.0)
+    assert tied_summary["tied_x"] == pytest.approx(6.0)
 
 
 def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():

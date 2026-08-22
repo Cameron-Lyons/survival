@@ -470,6 +470,18 @@ fn right_concordance_tie_counts_for_vectors(
             group_end += 1;
         }
 
+        for &idx in &time_order[group_start..group_end] {
+            if status[idx] != 1 {
+                add_conditional_variance_observation(
+                    &mut at_risk,
+                    &risk_levels,
+                    risk_scores[idx],
+                    concordance_case_weight(weights, idx),
+                    &mut z2,
+                );
+            }
+        }
+
         let multiplier = exact_multiplier_at(&multipliers, event_time);
         if multiplier > 0.0 {
             let event_indices: Vec<usize> = time_order[group_start..group_end]
@@ -500,6 +512,9 @@ fn right_concordance_tie_counts_for_vectors(
 
         let mut death_weight = 0.0;
         for &idx in &time_order[group_start..group_end] {
+            if status[idx] != 1 {
+                continue;
+            }
             let weight = concordance_case_weight(weights, idx);
             add_conditional_variance_observation(
                 &mut at_risk,
@@ -1130,14 +1145,19 @@ fn right_concordance_influence_rows_for_vectors(
                 continue;
             }
 
-            let (event_idx, risk_idx) =
-                if status[left] == 1 && concordance_time_precedes(time[left], time[right]) {
-                    (left, right)
-                } else if status[right] == 1 && concordance_time_precedes(time[right], time[left]) {
-                    (right, left)
-                } else {
-                    continue;
-                };
+            let (event_idx, risk_idx) = if status[left] == 1
+                && (concordance_time_precedes(time[left], time[right])
+                    || (status[right] != 1 && same_time(time[left], time[right])))
+            {
+                (left, right)
+            } else if status[right] == 1
+                && (concordance_time_precedes(time[right], time[left])
+                    || (status[left] != 1 && same_time(time[right], time[left])))
+            {
+                (right, left)
+            } else {
+                continue;
+            };
             let multiplier = multiplier_at(&multipliers, time[event_idx]);
             let pair_weight = concordance_case_weight(case_weights, event_idx)
                 * concordance_case_weight(case_weights, risk_idx)
@@ -2693,6 +2713,53 @@ mod tests {
         assert!((counts.tied_x - 20.0 / 9.0).abs() < 1e-12);
         assert!((counts.tied_xy - 2.0 / 3.0).abs() < 1e-12);
         assert_eq!(counts.tied_y, 0.0);
+    }
+
+    #[test]
+    fn right_concordance_counts_same_time_censored_pairs() {
+        let (counts, numerator, comparable_pair_weight) = right_concordance_tie_counts_for_vectors(
+            &[1.0, 1.0],
+            &[1, 0],
+            &[0.5, 0.5],
+            Some(&[2.0, 3.0]),
+            ConcordanceTimeWeight::N,
+        );
+
+        assert_eq!(counts.tied_x, 6.0);
+        assert_eq!(counts.tied_y, 0.0);
+        assert_eq!(counts.tied_xy, 0.0);
+        assert_eq!(numerator, 0.0);
+        assert_eq!(comparable_pair_weight, 6.0);
+    }
+
+    #[test]
+    fn right_concordance_same_time_censor_influence_matches_pair_counts() {
+        let (influence, dfbeta, variance) = right_concordance_influence_rows_for_vectors(
+            &[1.0, 1.0],
+            &[1, 0],
+            &[0.5, 0.5],
+            Some(&[2.0, 3.0]),
+            ConcordanceTimeWeight::N,
+        );
+
+        assert_eq!(influence[0], vec![0.0, 0.0, 3.0, 0.0, 0.0]);
+        assert_eq!(influence[1], vec![0.0, 0.0, 3.0, 0.0, 0.0]);
+        assert_eq!(dfbeta, vec![0.0, 0.0]);
+        assert_eq!(variance, 0.0);
+    }
+
+    #[test]
+    fn right_concordance_same_time_censor_remains_in_rank_risk_set() {
+        let rows = right_concordance_rank_rows_for_vectors(
+            &[1.0, 1.0],
+            &[1, 0],
+            &[0.2, 0.8],
+            &[0.2, 0.8],
+            Some(&[2.0, 3.0]),
+            ConcordanceTimeWeight::N,
+        );
+
+        assert_eq!(rows, vec![(0, 1.0, -0.6, 5.0, 2.0)]);
     }
 
     #[test]

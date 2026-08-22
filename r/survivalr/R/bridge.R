@@ -11907,15 +11907,9 @@ concordance <- function(object, ..., formula) {
     if (is.null(value) || is.null(attr(value, "row.names"))) {
       return(NULL)
     }
-    if (.row_names_info(value, type = 1L) < 0L) {
-      return(NULL)
-    }
     row.names(value)
   }
   if (inherits(object, "formula") || is.character(object)) {
-    if (is.data.frame(data)) {
-      return(explicit_row_names(data))
-    }
     formula <- if (inherits(object, "formula")) {
       object
     } else {
@@ -11925,6 +11919,10 @@ concordance <- function(object, ..., formula) {
       stats::model.frame(formula, data = data, na.action = stats::na.pass),
       error = function(condition) NULL
     )
+    response <- tryCatch(stats::model.response(frame), error = function(condition) NULL)
+    if (is.null(response) || !inherits(response, "Surv")) {
+      return(NULL)
+    }
     return(explicit_row_names(frame))
   }
   tryCatch(explicit_row_names(.as_native_surv(object)), error = function(condition) NULL)

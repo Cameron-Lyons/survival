@@ -415,13 +415,15 @@ fn concordance_summary_quadratic(
     for i in 0..n {
         for j in (i + 1)..n {
             let i_comparable = event[i] == 1
-                && concordance_time_precedes(time[i], time[j])
+                && (concordance_time_precedes(time[i], time[j])
+                    || (event[j] != 1 && same_time(time[i], time[j])))
                 && match horizon {
                     Some(h) => concordance_at_or_before_horizon(time[i], h),
                     None => true,
                 };
             let j_comparable = event[j] == 1
-                && concordance_time_precedes(time[j], time[i])
+                && (concordance_time_precedes(time[j], time[i])
+                    || (event[i] != 1 && same_time(time[j], time[i])))
                 && match horizon {
                     Some(h) => concordance_at_or_before_horizon(time[j], h),
                     None => true,
@@ -518,6 +520,13 @@ fn concordance_summary_ranked(
             group_end += 1;
         }
 
+        for &idx in &time_order[group_start..group_end] {
+            if event[idx] != 1 {
+                let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                at_risk.update(rank, observation_weight(weights, idx));
+            }
+        }
+
         let at_risk_total = at_risk.total();
         let event_time_multiplier = if time_weight == ConcordanceTimeWeight::N {
             1.0
@@ -540,6 +549,9 @@ fn concordance_summary_ranked(
         }
 
         for &idx in &time_order[group_start..group_end] {
+            if event[idx] != 1 {
+                continue;
+            }
             let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
             at_risk.update(rank, observation_weight(weights, idx));
         }
@@ -1462,6 +1474,33 @@ mod tests {
 
             assert_concordance_summary_close(near, exact);
             assert_concordance_summary_close(near, near_quadratic);
+        }
+    }
+
+    #[test]
+    fn test_right_censored_concordance_compares_same_time_censors() {
+        let exact_time = [1.0, 1.0];
+        let near_time = [1.0, 1.0 + TIME_EPSILON / 2.0];
+        let event = [1, 0];
+
+        for time in [&exact_time, &near_time] {
+            let tied = concordance_summary_with_horizon(&[0.5, 0.5], time, &event, None);
+            assert_eq!(tied.concordant, 0.5);
+            assert_eq!(tied.comparable, 1.0);
+
+            let concordant = concordance_summary_with_horizon(&[0.8, 0.2], time, &event, None);
+            assert_eq!(concordant.concordant, 1.0);
+            assert_eq!(concordant.comparable, 1.0);
+
+            let weighted = concordance_summary_with_horizon_and_weights(
+                &[0.2, 0.8],
+                time,
+                &event,
+                Some(&[2.0, 3.0]),
+                None,
+            );
+            assert_eq!(weighted.concordant, 0.0);
+            assert_eq!(weighted.comparable, 6.0);
         }
     }
 
