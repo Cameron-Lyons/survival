@@ -623,6 +623,61 @@ test_that("R formula wrappers delegate to the Python survival package", {
       tolerance = 1e-12
     )
   }
+  glm_yates_data <- transform(
+    yates_population_data,
+    outcome = c(0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1),
+    count = c(1, 2, 1, 3, 2, 4, 1, 3, 5, 2, 4, 6, 3, 5, 4, 7, 6, 8)
+  )
+  binomial_yates_fit <- stats::glm(
+    outcome ~ group + x,
+    data = glm_yates_data,
+    family = stats::binomial(),
+    model = TRUE
+  )
+  for (predict_name in c("linear", "link")) {
+    for (test_name in c("global", "pairwise")) {
+      expect_equal(
+        yates(
+          binomial_yates_fit,
+          "group",
+          predict = predict_name,
+          test = test_name
+        ),
+        survival::yates(
+          binomial_yates_fit,
+          "group",
+          predict = predict_name,
+          test = test_name
+        ),
+        tolerance = 1e-12
+      )
+    }
+  }
+  poisson_yates_fit <- stats::glm(
+    count ~ group + z + x,
+    data = glm_yates_data,
+    family = stats::poisson(),
+    model = TRUE
+  )
+  for (test_name in c("global", "pairwise")) {
+    expect_equal(
+      yates(
+        poisson_yates_fit,
+        "group",
+        population = "sas",
+        predict = "link",
+        test = test_name
+      ),
+      survival::yates(
+        poisson_yates_fit,
+        "group",
+        population = "sas",
+        predict = "link",
+        test = test_name
+      ),
+      tolerance = 1e-12
+    )
+  }
 
   yates_cox_data <- data.frame(
     time = c(5, 8, 6, 9, 7, 10, 4, 11, 12, 13),

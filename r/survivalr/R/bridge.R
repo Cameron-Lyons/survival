@@ -5761,8 +5761,8 @@ Surv2data <- function(formula, data, subset, id) {
   out
 }
 
-.yates_lm_population <- function(population, population_value, model_frame,
-                                 Terms, term, fit) {
+.yates_model_population <- function(population, population_value, model_frame,
+                                    Terms, term, fit) {
   if (inherits(population, "data.frame")) {
     if (nrow(population) == 0L) {
       return(NULL)
@@ -5834,9 +5834,9 @@ Surv2data <- function(formula, data, subset, id) {
   list(frame = frame, weights = NULL)
 }
 
-.yates_lm_term <- function(fit, term, population, levels, levels_missing,
-                           test, predict, method) {
-  if (!inherits(fit, "lm") || inherits(fit, "glm") ||
+.yates_model_term <- function(fit, term, population, levels, levels_missing,
+                              test, predict, method) {
+  if (!inherits(fit, "lm") ||
       !is.character(term) || length(term) != 1L ||
       !is.character(test) || length(test) == 0L ||
       !is.character(predict) || length(predict) != 1L ||
@@ -5855,7 +5855,8 @@ Surv2data <- function(formula, data, subset, id) {
   }
   test_value <- match.arg(test[[1L]], c("global", "trend", "pairwise"))
   method_value <- match.arg(tolower(method[[1L]]), c("direct", "sgtt"))
-  if (test_value == "trend" || predict != "linear" || method_value != "direct") {
+  if (test_value == "trend" || !(predict %in% c("linear", "link")) ||
+      method_value != "direct") {
     return(NULL)
   }
 
@@ -5905,7 +5906,7 @@ Surv2data <- function(formula, data, subset, id) {
   if (!identical(names(beta), colnames(old_matrix))) {
     return(NULL)
   }
-  population_data <- .yates_lm_population(
+  population_data <- .yates_model_population(
     population,
     population_value,
     model_frame,
@@ -5955,32 +5956,35 @@ Surv2data <- function(formula, data, subset, id) {
   variance <- stats::vcov(fit)
   estimate_values <- drop(cmat %*% beta)
   mean_variance <- cmat %*% variance %*% t(cmat)
-  sigma2 <- summary(fit)$sigma^2
+  sigma2 <- if (identical(class(fit)[[1L]], "lm")) summary(fit)$sigma^2 else NULL
   evaluate_contrast <- function(contrast) {
     contrast_estimate <- drop(contrast %*% estimate_values)
     contrast_variance <- contrast %*% mean_variance %*% t(contrast)
     test_result <- coxph.wtest(contrast_variance, as.list(contrast_estimate))
     chisq <- unname(test_result$test[[1L]])
-    c(chisq = chisq, df = test_result$df, ss = chisq * sigma2)
+    out <- c(chisq = chisq, df = test_result$df)
+    if (is.null(sigma2)) out else c(out, ss = chisq * sigma2)
   }
 
   if (test_value == "global" || length(contrast_levels) == 2L) {
     contrast <- diag(length(contrast_levels))
     contrast[, length(contrast_levels)] <- -1
     contrast <- contrast[-length(contrast_levels), , drop = FALSE]
+    test_values <- evaluate_contrast(contrast)
     test_matrix <- matrix(
-      evaluate_contrast(contrast),
+      test_values,
       nrow = 1L,
-      dimnames = list("global", c("chisq", "df", "ss"))
+      dimnames = list("global", names(test_values))
     )
   } else {
     pairs <- utils::combn(seq_along(contrast_levels), 2L)
+    test_width <- if (is.null(sigma2)) 2L else 3L
     test_matrix <- t(vapply(seq_len(ncol(pairs)), function(index) {
       contrast <- numeric(length(contrast_levels))
       contrast[pairs[1L, index]] <- 1
       contrast[pairs[2L, index]] <- -1
       evaluate_contrast(matrix(contrast, nrow = 1L))
-    }, numeric(3)))
+    }, numeric(test_width)))
     row.names(test_matrix) <- paste(pairs[1L, ], "vs", pairs[2L, ])
   }
 
@@ -6005,7 +6009,7 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
                   method = c("direct", "sgtt")) {
   call <- match.call()
   if (!missing(fit) && !missing(term)) {
-    local_result <- .yates_lm_term(
+    local_result <- .yates_model_term(
       fit = fit,
       term = term,
       population = population,
