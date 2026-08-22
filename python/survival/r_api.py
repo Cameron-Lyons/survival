@@ -6847,9 +6847,27 @@ def nsk(
     return spline.basis(x_values)
 
 
-def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:
-    """Carry the last non-missing value forward within each id, like R's ``lvcf``."""
+def _lvcf_first_default(source: Any, values: Sequence[Any]) -> Any:
+    dtype = getattr(source, "dtype", None)
+    if hasattr(source, "categories") or hasattr(dtype, "categories"):
+        return _MISSING
 
+    dtype_kind = getattr(dtype, "kind", None)
+    observed = [value for value in values if not _is_missing_value(value)]
+    if dtype_kind == "b" or observed and all(isinstance(value, bool) for value in observed):
+        return False
+    if (dtype_kind in {"i", "u", "f"} or bool(observed)) and all(
+        isinstance(value, Real) and not isinstance(value, bool) and float(value) in {0.0, 1.0}
+        for value in observed
+    ):
+        return 0
+    return _MISSING
+
+
+def lvcf(id: Any, x: Any, time: Any | None = None, first: Any = True) -> list[Any]:
+    """Carry values within each id, including R's optional first-value initialization."""
+
+    first_value = _normalize_bool_option(first, "first")
     id_values = _lvcf_vector(id, "id", labels=True)
     result = _lvcf_vector(x, "x")
     if len(result) != len(id_values):
@@ -6864,17 +6882,21 @@ def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]:
             if numeric_ids_are_exact
             else _core.lvcf_indices(_lvcf_id_ranks(id, id_values)[1], missing)
         )
-        return [result[row_idx] for row_idx in source]
-
-    time_values, time_order = _lvcf_time_order(time)
-    if len(time_values) != len(id_values):
-        raise ValueError("time must have the same length as id")
-    time_ranks = _lvcf_time_ranks(time_order)
-    source = (
-        _core.lvcf_numeric_indices(id_values, missing, time_ranks)
-        if numeric_ids_are_exact
-        else _core.lvcf_indices(_lvcf_id_ranks(id, id_values)[1], missing, time_ranks)
-    )
+    else:
+        time_values, time_order = _lvcf_time_order(time)
+        if len(time_values) != len(id_values):
+            raise ValueError("time must have the same length as id")
+        time_ranks = _lvcf_time_ranks(time_order)
+        source = (
+            _core.lvcf_numeric_indices(id_values, missing, time_ranks)
+            if numeric_ids_are_exact
+            else _core.lvcf_indices(_lvcf_id_ranks(id, id_values)[1], missing, time_ranks)
+        )
+    default = _lvcf_first_default(x, result) if first_value else _MISSING
+    if default is not _MISSING:
+        for row_idx, source_idx in enumerate(source):
+            if missing[row_idx] and source_idx == row_idx:
+                result[row_idx] = default
     return [result[row_idx] for row_idx in source]
 
 

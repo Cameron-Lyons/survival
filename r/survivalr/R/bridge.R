@@ -3259,12 +3259,27 @@ cipoisson <- function(k, time = 1, p = 0.95, method = c("exact", "anscombe")) {
   out
 }
 
-lvcf <- function(id, x, time) {
+lvcf <- function(id, x, time, first = TRUE) {
+  python_first <- if (length(first) == 1L && !is.na(first)) {
+    as.logical(first)
+  } else {
+    first
+  }
+  python_x <- x
+  # Reticulate erases the storage type of an all-missing atomic vector.
+  if (isTRUE(python_first) && length(x) > 0L && all(is.na(x))) {
+    if (is.logical(x)) {
+      python_x[] <- FALSE
+    } else if (is.numeric(x)) {
+      python_x[] <- if (is.integer(x)) 0L else 0
+    }
+  }
   result <- .call_r_api(
     "lvcf",
     id = .as_python_vector(id),
-    x = .as_python_vector(x),
-    time = if (missing(time)) NULL else .as_python_vector(time)
+    x = .as_python_vector(python_x),
+    time = if (missing(time)) NULL else .as_python_vector(time),
+    first = python_first
   )
   if (is.factor(x)) {
     return(factor(.as_nullable_character_vector(result), levels = levels(x)))
