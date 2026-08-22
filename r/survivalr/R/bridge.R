@@ -11946,18 +11946,27 @@ concordance <- function(object, ..., formula) {
   do.call(stats::model.frame, args)
 }
 
-.concordance_formula_strata_count <- function(formula, frame) {
+.concordance_formula_strata_values <- function(formula, frame) {
   Terms <- stats::terms(formula, specials = c("strata", "cluster"))
   strata_terms <- untangle.specials(Terms, "strata", 1L)
   if (length(strata_terms$vars) == 0L) {
-    return(1L)
+    return(NULL)
   }
-  values <- if (length(strata_terms$vars) == 1L) {
+  if (length(strata_terms$vars) == 1L) {
     frame[[strata_terms$vars]]
   } else {
     strata(frame[, strata_terms$vars, drop = FALSE], shortlabel = TRUE)
   }
-  length(unique(values))
+}
+
+.concordance_formula_score_count <- function(formula, frame) {
+  Terms <- stats::terms(formula, specials = c("strata", "cluster"))
+  strata_terms <- untangle.specials(Terms, "strata", 1L)
+  if (length(strata_terms$terms) > 0L) Terms <- Terms[-strata_terms$terms]
+  cluster_terms <- untangle.specials(Terms, "cluster", seq_len(10L))
+  if (length(cluster_terms$terms) > 0L) Terms <- Terms[-cluster_terms$terms]
+  design <- stats::model.matrix(Terms, frame)[, -1L, drop = FALSE]
+  ncol(design)
 }
 
 .concordance_collapsed_strata_check <- function(n_scores, n_strata, keepstrata, timewt) {
@@ -12014,6 +12023,59 @@ concordance <- function(object, ..., formula) {
   invisible(NULL)
 }
 
+.concordance_empty_rank_strata_check <- function(response, n_scores, strata, ranks, timewt) {
+  survival_response <- inherits(response, "Surv") || inherits(response, "survival_py_surv")
+  if (!isTRUE(ranks) || !survival_response) {
+    return(invisible(NULL))
+  }
+  native_response <- .as_native_surv(response)
+  status <- native_response[, ncol(native_response)]
+  strata_values <- if (is.null(strata) || length(strata) == 0L) {
+    rep(1L, length(status))
+  } else {
+    strata
+  }
+  n_strata <- length(unique(strata_values))
+  time_weight <- match.arg(timewt, c("n", "S", "S/G", "n/G2", "I"))
+  if (n_strata > 10L && time_weight %in% c("n", "I")) {
+    strata_values <- rep(1L, length(status))
+    n_strata <- 1L
+  }
+  event_counts <- vapply(
+    split(status, droplevels(as.factor(strata_values))),
+    sum,
+    numeric(1)
+  )
+  if (!any(event_counts == 0)) {
+    return(invisible(NULL))
+  }
+  if (n_scores > 1L) {
+    array(NULL, dim = c(0L, n_scores))
+  }
+  if (n_strata > 1L) {
+    stop(
+      "number of items to replace is not a multiple of replacement length",
+      call. = FALSE
+    )
+  }
+  invisible(NULL)
+}
+
+.concordance_translate_empty_rank_error <- function(
+    condition, response, n_scores, strata, ranks, timewt) {
+  replacement_message <- "number of items to replace is not a multiple of replacement length"
+  if (grepl(replacement_message, conditionMessage(condition), fixed = TRUE)) {
+    .concordance_empty_rank_strata_check(
+      response,
+      n_scores,
+      strata,
+      ranks,
+      timewt
+    )
+  }
+  invisible(NULL)
+}
+
 .concordance_translate_counting_timewt_error <- function(condition, timewt) {
   backend_message <- "S/G and n/G2 timewt options are not supported for counting-process data"
   if (grepl(backend_message, conditionMessage(condition), fixed = TRUE)) {
@@ -12024,14 +12086,26 @@ concordance <- function(object, ..., formula) {
       call. = FALSE
     )
   }
-  stop(condition)
+  invisible(NULL)
 }
 
-.concordance_call_with_timewt_translation <- function(method, diagnostic_timewt, ...) {
+.concordance_call_with_timewt_translation <- function(
+    method, diagnostic_timewt, rank_context = NULL, ...) {
   tryCatch(
     .call_r_api(method, ...),
     error = function(condition) {
       .concordance_translate_counting_timewt_error(condition, diagnostic_timewt)
+      if (!is.null(rank_context)) {
+        .concordance_translate_empty_rank_error(
+          condition,
+          rank_context$response,
+          rank_context$n_scores,
+          rank_context$strata,
+          rank_context$ranks,
+          rank_context$timewt
+        )
+      }
+      stop(condition)
     }
   )
 }
@@ -12137,13 +12211,44 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
   } else {
     NULL
   }
+  formula_response <- if (formula_input) stats::model.response(formula_frame) else NULL
+  formula_strata <- if (formula_input) {
+    .concordance_formula_strata_values(formula, formula_frame)
+  } else {
+    NULL
+  }
   source_row_names <- .concordance_source_row_names(formula, formula_data, env)
   python_na_action <- .as_na_action(effective_na_action)
   if (is.null(python_na_action)) python_na_action <- "pass"
   requested_timewt <- if ("timewt" %in% names(dots)) dots[["timewt"]] else "n"
+  formula_survival_response <- inherits(formula_response, "Surv") ||
+    inherits(formula_response, "survival_py_surv")
+  formula_timewt <- if (formula_input && !formula_survival_response) {
+    "n"
+  } else {
+    requested_timewt
+  }
+  requested_ranks <- "ranks" %in% names(dots) && isTRUE(dots[["ranks"]])
+  formula_rank_n_scores <- if (formula_input && requested_ranks) {
+    .concordance_formula_score_count(formula, formula_frame)
+  } else {
+    0L
+  }
+  formula_rank_context <- if (formula_input && requested_ranks) {
+    list(
+      response = formula_response,
+      n_scores = formula_rank_n_scores,
+      strata = formula_strata,
+      ranks = requested_ranks,
+      timewt = formula_timewt
+    )
+  } else {
+    NULL
+  }
   result <- .concordance_call_with_timewt_translation(
     "concordance",
     requested_timewt,
+    rank_context = formula_rank_context,
     response = .as_formula_string(formula),
     data = .as_python_data(formula_data),
     scores = score_values,
@@ -12157,14 +12262,6 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     .wrap = c("survival_py_concordance", "survival_py_object")
   )
   if (formula_input) {
-    formula_response <- stats::model.response(formula_frame)
-    formula_timewt <- if (!inherits(formula_response, "Surv")) {
-      "n"
-    } else if ("timewt" %in% names(dots)) {
-      requested_timewt
-    } else {
-      "n"
-    }
     formula_keepstrata <- if ("keepstrata" %in% names(dots)) {
       dots[["keepstrata"]]
     } else {
@@ -12173,7 +12270,18 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     formula_n_scores <- length(
       .as_numeric_vector(.result_field(result, "concordance"))
     )
-    formula_strata_count <- .concordance_formula_strata_count(formula, formula_frame)
+    formula_strata_count <- if (is.null(formula_strata)) {
+      1L
+    } else {
+      length(unique(formula_strata))
+    }
+    .concordance_empty_rank_strata_check(
+      formula_response,
+      formula_n_scores,
+      formula_strata,
+      requested_ranks,
+      formula_timewt
+    )
     .concordance_multi_score_strata_check(
       formula_n_scores,
       formula_strata_count,
@@ -12693,9 +12801,18 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     influence <- 0L
   }
   internal_influence <- if (isTRUE(std.err) && influence == 0L) 1L else influence
+  input_n_scores <- if (is.matrix(x) || is.data.frame(x)) ncol(x) else 1L
+  input_strata <- if (missing(strata)) NULL else strata
   result <- .concordance_call_with_timewt_translation(
     "concordancefit",
     timewt,
+    rank_context = list(
+      response = y,
+      n_scores = input_n_scores,
+      strata = input_strata,
+      ranks = ranks,
+      timewt = timewt
+    ),
     .as_python_surv(y),
     .as_python_optional_vector(x),
     strata = if (missing(strata)) NULL else .as_python_vector(strata),
@@ -12720,6 +12837,13 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   } else {
     length(unique(strata))
   }
+  .concordance_empty_rank_strata_check(
+    y,
+    n_scores,
+    input_strata,
+    ranks,
+    timewt
+  )
   .concordance_disabled_standard_error_check(
     n_scores,
     input_strata_count,
