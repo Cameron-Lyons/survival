@@ -1,3 +1,4 @@
+use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,13 @@ pub struct MultiStateCoxCurves {
     pub pstate: Vec<Vec<Vec<f64>>>,
     #[pyo3(get)]
     pub cumhaz: Vec<Vec<Vec<f64>>>,
+}
+
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct MultiStateCoxHazards {
+    #[pyo3(get)]
+    pub increments: Vec<Vec<Vec<f64>>>,
 }
 
 fn validate_parallel_length(name: &str, actual: usize, expected: usize) -> PyResult<()> {
@@ -253,6 +261,304 @@ pub fn cox_multistate_stack(
         source_rows,
         transition_indices,
     })
+}
+
+/// Compute profile-specific multi-state Cox hazard increments.
+///
+/// The fitted data are already transition-stacked. Risk-set denominators are
+/// accumulated once per transition and output time, then combined across
+/// shared baselines for every requested covariate profile. `ctype=2` follows
+/// the effective Efron denominator used by R's multi-state curve routine.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    stop,
+    status,
+    weights,
+    strata,
+    linear_predictors,
+    transition_indices,
+    baseline_map,
+    ph_scales,
+    profile_linear_predictors,
+    times,
+    user_stratum,
+    user_strata_count,
+    ctype,
+    entry=None,
+))]
+pub fn cox_multistate_hazards(
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    weights: Vec<f64>,
+    strata: Vec<i32>,
+    linear_predictors: Vec<f64>,
+    transition_indices: Vec<usize>,
+    baseline_map: Vec<usize>,
+    ph_scales: Vec<f64>,
+    profile_linear_predictors: Vec<Vec<f64>>,
+    times: Vec<f64>,
+    user_stratum: usize,
+    user_strata_count: usize,
+    ctype: usize,
+    entry: Option<Vec<f64>>,
+) -> PyResult<MultiStateCoxHazards> {
+    let n = stop.len();
+    validate_parallel_length("status", status.len(), n)?;
+    validate_parallel_length("weights", weights.len(), n)?;
+    validate_parallel_length("strata", strata.len(), n)?;
+    validate_parallel_length("linear_predictors", linear_predictors.len(), n)?;
+    validate_parallel_length("transition_indices", transition_indices.len(), n)?;
+    if let Some(values) = entry.as_ref() {
+        validate_parallel_length("entry", values.len(), n)?;
+    }
+    if user_strata_count == 0 || user_stratum >= user_strata_count {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "user_stratum must identify one of the user strata",
+        ));
+    }
+    if ctype != 1 && ctype != 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "ctype must be 1 or 2",
+        ));
+    }
+    if baseline_map.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "baseline_map must contain at least one transition",
+        ));
+    }
+    let transition_count = baseline_map.len();
+    validate_parallel_length("ph_scales", ph_scales.len(), transition_count)?;
+    if profile_linear_predictors.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "profile_linear_predictors must contain at least one profile",
+        ));
+    }
+    if profile_linear_predictors
+        .iter()
+        .any(|profile| profile.len() != transition_count)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "profile_linear_predictors rows must have length {transition_count}"
+        )));
+    }
+    if transition_indices
+        .iter()
+        .any(|&transition| transition >= transition_count)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "transition_indices contains an out-of-range transition",
+        ));
+    }
+    let baseline_count = baseline_map.iter().max().copied().unwrap_or(0) + 1;
+    let mut present_baselines = vec![false; baseline_count];
+    for &baseline in &baseline_map {
+        present_baselines[baseline] = true;
+    }
+    if let Some(missing) = present_baselines.iter().position(|value| !value) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "baseline_map does not contain baseline {missing}"
+        )));
+    }
+    if stop.iter().any(|value| !value.is_finite())
+        || weights
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        || linear_predictors.iter().any(|value| !value.is_finite())
+        || ph_scales
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        || profile_linear_predictors
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+        || times.iter().any(|value| !value.is_finite())
+        || strata.iter().any(|value| *value < 0)
+        || status.iter().any(|value| !matches!(value, 0 | 1))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "multi-state hazard inputs must be finite and valid",
+        ));
+    }
+    if times.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "times must be sorted in non-decreasing order",
+        ));
+    }
+    if let Some(values) = entry.as_ref()
+        && values
+            .iter()
+            .zip(&stop)
+            .any(|(start, end)| !start.is_finite() || start >= end)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "entry times must be finite and less than stop times",
+        ));
+    }
+
+    let row_risk = linear_predictors
+        .iter()
+        .zip(&weights)
+        .map(|(&predictor, &weight)| weight * predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
+        .collect::<Vec<_>>();
+    let mut event_weights = vec![vec![0.0; transition_count]; times.len()];
+    let mut denominators = vec![vec![0.0; transition_count]; times.len()];
+
+    for transition in 0..transition_count {
+        let rows = (0..n)
+            .filter(|&row| {
+                transition_indices[row] == transition
+                    && strata[row] as usize % user_strata_count == user_stratum
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
+        }
+
+        let mut stop_order = rows.clone();
+        stop_order.sort_by(|&left, &right| {
+            stop[left]
+                .total_cmp(&stop[right])
+                .then_with(|| left.cmp(&right))
+        });
+        let mut event_order = rows
+            .iter()
+            .copied()
+            .filter(|&row| status[row] == 1)
+            .collect::<Vec<_>>();
+        event_order.sort_by(|&left, &right| {
+            stop[left]
+                .total_cmp(&stop[right])
+                .then_with(|| left.cmp(&right))
+        });
+        let mut entry_order = entry.as_ref().map(|values| {
+            let mut order = rows.clone();
+            order.sort_by(|&left, &right| {
+                values[left]
+                    .total_cmp(&values[right])
+                    .then_with(|| left.cmp(&right))
+            });
+            order
+        });
+
+        let mut active_risk = if entry.is_none() {
+            rows.iter().map(|&row| row_risk[row]).sum::<f64>()
+        } else {
+            0.0
+        };
+        let mut entry_position = 0;
+        let mut stop_position = 0;
+        let mut event_position = 0;
+        let mut raw_denominators = vec![0.0; times.len()];
+        let mut transition_event_risks = vec![0.0; times.len()];
+        let mut transition_deaths = vec![0_usize; times.len()];
+
+        for (time_index, &time) in times.iter().enumerate() {
+            if let (Some(entries), Some(order)) = (entry.as_ref(), entry_order.as_mut()) {
+                while entry_position < order.len() && entries[order[entry_position]] < time {
+                    active_risk += row_risk[order[entry_position]];
+                    entry_position += 1;
+                }
+            }
+            while stop_position < stop_order.len() && stop[stop_order[stop_position]] < time {
+                active_risk -= row_risk[stop_order[stop_position]];
+                stop_position += 1;
+            }
+            if active_risk < 0.0 && active_risk.abs() <= 1e-12 {
+                active_risk = 0.0;
+            }
+
+            while event_position < event_order.len() && stop[event_order[event_position]] < time {
+                event_position += 1;
+            }
+            let event_start = event_position;
+            while event_position < event_order.len() && stop[event_order[event_position]] == time {
+                event_position += 1;
+            }
+            let event_rows = &event_order[event_start..event_position];
+            let deaths = event_rows.len();
+            let event_weight = event_rows.iter().map(|&row| weights[row]).sum::<f64>();
+            let event_risk = event_rows.iter().map(|&row| row_risk[row]).sum::<f64>();
+            event_weights[time_index][transition] = event_weight;
+            raw_denominators[time_index] = active_risk;
+            transition_event_risks[time_index] = event_risk;
+            transition_deaths[time_index] = deaths;
+        }
+
+        if ctype == 1 {
+            for (time_index, denominator) in raw_denominators.into_iter().enumerate() {
+                denominators[time_index][transition] = denominator;
+            }
+        } else {
+            let mut effective_denominator = 0.0;
+            for time_index in (0..times.len()).rev() {
+                let deaths = transition_deaths[time_index];
+                let denominator = raw_denominators[time_index];
+                if deaths <= 1 {
+                    effective_denominator = denominator;
+                } else {
+                    let mean_event_risk =
+                        transition_event_risks[time_index] / (deaths as f64 * deaths as f64);
+                    for step in 0..deaths {
+                        effective_denominator += denominator - step as f64 * mean_event_risk;
+                    }
+                    effective_denominator /= deaths as f64;
+                }
+                denominators[time_index][transition] = effective_denominator;
+            }
+        }
+    }
+
+    let transitions_by_baseline = (0..baseline_count)
+        .map(|baseline| {
+            baseline_map
+                .iter()
+                .enumerate()
+                .filter_map(|(transition, &value)| (value == baseline).then_some(transition))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let increments = profile_linear_predictors
+        .iter()
+        .map(|profile| {
+            times
+                .iter()
+                .enumerate()
+                .map(|(time_index, _)| {
+                    let mut row = vec![0.0; transition_count];
+                    for members in &transitions_by_baseline {
+                        let numerator = members
+                            .iter()
+                            .map(|&transition| event_weights[time_index][transition])
+                            .sum::<f64>();
+                        if numerator == 0.0 {
+                            continue;
+                        }
+                        let denominator = members
+                            .iter()
+                            .map(|&transition| {
+                                denominators[time_index][transition]
+                                    * (-profile[transition])
+                                        .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
+                                        .exp()
+                                    * ph_scales[transition]
+                            })
+                            .sum::<f64>();
+                        if denominator <= 0.0 {
+                            continue;
+                        }
+                        let shared_increment = numerator / denominator;
+                        for &transition in members {
+                            row[transition] = shared_increment * ph_scales[transition];
+                        }
+                    }
+                    row
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    Ok(MultiStateCoxHazards { increments })
 }
 
 fn identity_matrix(size: usize) -> Vec<Vec<f64>> {
@@ -572,6 +878,79 @@ mod tests {
                 vec![2.0, 20.0],
             ]
         );
+    }
+
+    #[test]
+    fn hazards_match_multistate_efron_effective_denominator() {
+        let result = cox_multistate_hazards(
+            vec![1.0, 1.0, 2.0],
+            vec![1, 1, 0],
+            vec![1.0; 3],
+            vec![0; 3],
+            vec![4.0_f64.ln(), 2.0_f64.ln(), 0.0],
+            vec![0; 3],
+            vec![0],
+            vec![1.0],
+            vec![vec![0.0], vec![2.0_f64.ln()]],
+            vec![1.0, 2.0],
+            0,
+            1,
+            2,
+            None,
+        )
+        .unwrap();
+
+        let expected = 2.0 / 6.75;
+        assert!((result.increments[0][0][0] - expected).abs() < 1e-14);
+        assert_eq!(result.increments[0][1][0], 0.0);
+        assert!((result.increments[1][0][0] - 2.0 * expected).abs() < 1e-14);
+    }
+
+    #[test]
+    fn hazards_combine_shared_baselines_and_ph_scales() {
+        let result = cox_multistate_hazards(
+            vec![1.0, 1.0],
+            vec![1, 1],
+            vec![1.0, 1.0],
+            vec![0, 0],
+            vec![0.0, 0.0],
+            vec![0, 1],
+            vec![0, 0],
+            vec![1.0, 2.0],
+            vec![vec![0.0, 0.0]],
+            vec![1.0],
+            0,
+            1,
+            1,
+            None,
+        )
+        .unwrap();
+
+        assert!((result.increments[0][0][0] - 2.0 / 3.0).abs() < 1e-14);
+        assert!((result.increments[0][0][1] - 4.0 / 3.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn hazards_respect_entry_times_and_user_strata() {
+        let result = cox_multistate_hazards(
+            vec![1.0, 2.0, 1.0, 2.0],
+            vec![1, 0, 1, 0],
+            vec![1.0; 4],
+            vec![0, 0, 1, 1],
+            vec![0.0; 4],
+            vec![0; 4],
+            vec![0],
+            vec![1.0],
+            vec![vec![0.0]],
+            vec![1.0, 2.0],
+            1,
+            2,
+            1,
+            Some(vec![0.0, 0.0, 0.5, 1.5]),
+        )
+        .unwrap();
+
+        assert_eq!(result.increments[0], vec![vec![1.0], vec![0.0]]);
     }
 
     #[test]

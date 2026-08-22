@@ -8759,3 +8759,184 @@ test_that("single-formula multi-state Cox models match survival", {
     )
   }
 })
+
+test_that("multi-state Cox tied curve types match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  tied <- data.frame(
+    id = seq_len(15L),
+    time = rep(seq_len(5L), each = 3L),
+    status = factor(
+      c("a", "a", "b", "b", "0", "b", "a", "a", "0", "b", "b", "0", "a", "0", "0"),
+      levels = c("0", "a", "b")
+    ),
+    x = seq_len(15L) / 10,
+    wt = c(1, 2, 1.5, 0.5, 1.2, 2.2, 1.1, 0.8, 1.4, 2.5, 0.7, 1.3, 1.8, 0.9, 1.6)
+  )
+
+  for (method in c("breslow", "efron")) {
+    bridged <- coxph(
+      Surv(time, status) ~ x,
+      data = tied,
+      id = id,
+      ties = method,
+      control = coxph.control(iter.max = 40L, eps = 1e-10)
+    )
+    reference <- survival::coxph(
+      survival::Surv(time, status) ~ x,
+      data = tied,
+      id = id,
+      ties = method,
+      control = survival::coxph.control(iter.max = 40L, eps = 1e-10)
+    )
+    expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+
+    for (curve_type in 1:2) {
+      bridged_curve <- as.list(survfit(
+        bridged,
+        newdata = data.frame(x = 0.5),
+        ctype = curve_type,
+        time0 = TRUE
+      ))
+      reference_curve <- survival::survfit(
+        reference,
+        newdata = data.frame(x = 0.5),
+        ctype = curve_type,
+        se.fit = FALSE,
+        time0 = TRUE
+      )
+      expect_equal(
+        bridged_curve$cumhaz,
+        reference_curve$cumhaz,
+        tolerance = 1e-9,
+        info = paste(method, "ctype", curve_type, "cumulative hazard")
+      )
+      expect_equal(
+        bridged_curve$pstate,
+        reference_curve$pstate,
+        tolerance = 1e-12,
+        info = paste(method, "ctype", curve_type, "state probability")
+      )
+    }
+
+    bridged_default <- as.list(survfit(
+      bridged,
+      newdata = data.frame(x = 0.5),
+      time0 = TRUE
+    ))
+    reference_default <- survival::survfit(
+      reference,
+      newdata = data.frame(x = 0.5),
+      se.fit = FALSE,
+      time0 = TRUE
+    )
+    expect_equal(bridged_default$cumhaz, reference_default$cumhaz, tolerance = 1e-9)
+    expect_equal(bridged_default$pstate, reference_default$pstate, tolerance = 1e-12)
+  }
+
+  bridged_weighted <- coxph(
+    Surv(time, status) ~ x,
+    data = tied,
+    id = id,
+    weights = wt,
+    ties = "efron",
+    control = coxph.control(iter.max = 40L, eps = 1e-10)
+  )
+  reference_weighted <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = tied,
+    id = id,
+    weights = wt,
+    ties = "efron",
+    control = survival::coxph.control(iter.max = 40L, eps = 1e-10)
+  )
+  expect_equal(coef(bridged_weighted), coef(reference_weighted), tolerance = 1e-12)
+  for (curve_type in 1:2) {
+    bridged_curve <- as.list(survfit(
+      bridged_weighted,
+      newdata = data.frame(x = 0.5),
+      ctype = curve_type,
+      time0 = TRUE
+    ))
+    reference_curve <- survival::survfit(
+      reference_weighted,
+      newdata = data.frame(x = 0.5),
+      ctype = curve_type,
+      se.fit = FALSE,
+      time0 = TRUE
+    )
+    expect_equal(bridged_curve$cumhaz, reference_curve$cumhaz, tolerance = 1e-9)
+    expect_equal(bridged_curve$pstate, reference_curve$pstate, tolerance = 1e-12)
+  }
+
+  bridged_shared <- coxph(
+    list(Surv(time, status) ~ 1, 1:2 + 1:3 ~ x / shared),
+    data = tied,
+    id = id,
+    control = coxph.control(iter.max = 40L, eps = 1e-10)
+  )
+  reference_shared <- survival::coxph(
+    list(survival::Surv(time, status) ~ 1, 1:2 + 1:3 ~ x / shared),
+    data = tied,
+    id = id,
+    control = survival::coxph.control(iter.max = 40L, eps = 1e-10)
+  )
+  expect_equal(coef(bridged_shared), coef(reference_shared), tolerance = 1e-12)
+  for (curve_type in 1:2) {
+    bridged_curve <- as.list(survfit(
+      bridged_shared,
+      newdata = data.frame(x = 0.5),
+      ctype = curve_type,
+      time0 = TRUE
+    ))
+    reference_curve <- survival::survfit(
+      reference_shared,
+      newdata = data.frame(x = 0.5),
+      ctype = curve_type,
+      se.fit = FALSE,
+      time0 = TRUE
+    )
+    expect_equal(bridged_curve$cumhaz, reference_curve$cumhaz, tolerance = 1e-9)
+    expect_equal(bridged_curve$pstate, reference_curve$pstate, tolerance = 1e-12)
+  }
+
+  stratified <- rbind(
+    transform(tied, g = "g1"),
+    transform(tied, id = id + 15L, x = x + 0.05, g = "g2")
+  )
+  stratified$g <- factor(stratified$g)
+  bridged_stratified <- coxph(
+    Surv(time, status) ~ x + strata(g),
+    data = stratified,
+    id = id,
+    ties = "efron",
+    control = coxph.control(iter.max = 40L, eps = 1e-10)
+  )
+  reference_stratified <- survival::coxph(
+    survival::Surv(time, status) ~ x + strata(g),
+    data = stratified,
+    id = id,
+    ties = "efron",
+    control = survival::coxph.control(iter.max = 40L, eps = 1e-10)
+  )
+  expect_equal(coef(bridged_stratified), coef(reference_stratified), tolerance = 1e-12)
+  for (curve_type in 1:2) {
+    bridged_curve <- as.list(survfit(
+      bridged_stratified,
+      newdata = data.frame(x = 0.5),
+      ctype = curve_type,
+      time0 = TRUE
+    ))
+    reference_curve <- survival::survfit(
+      reference_stratified,
+      newdata = data.frame(x = 0.5),
+      ctype = curve_type,
+      se.fit = FALSE,
+      time0 = TRUE
+    )
+    expect_equal(bridged_curve$cumhaz, reference_curve$cumhaz, tolerance = 1e-9)
+    expect_equal(bridged_curve$pstate, reference_curve$pstate, tolerance = 1e-12)
+  }
+})
