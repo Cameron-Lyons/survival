@@ -13044,7 +13044,11 @@ def test_anova_coxph_single_formula_model_refits_terms_sequentially():
 
 def test_anova_coxph_single_formula_model_preserves_offsets():
     data = _toy_data()
-    fit = survival.coxph("Surv(time, status) ~ x1 + x2 + offset(offset)", data=data)
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + offset(offset)",
+        data=data,
+        x=True,
+    )
     first_term = survival.regression.coxph_fit(
         time=data["time"],
         status=data["status"],
@@ -13057,6 +13061,107 @@ def test_anova_coxph_single_formula_model_preserves_offsets():
     assert [row.model_name for row in result.rows] == ["NULL", "x1", "x2"]
     assert result.rows[1].loglik == pytest.approx(first_term.log_likelihood[-1])
     assert result.rows[2].loglik == pytest.approx(fit.log_likelihood[-1])
+
+
+def test_anova_coxph_reduced_refits_match_r_storage_semantics():
+    data = _toy_data()
+    weighted = {**data, "weights": [1, 2, 1, 2, 1, 2, 1, 2]}
+    unweighted_x1 = survival.regression.coxph_fit(
+        time=data["time"],
+        status=data["status"],
+        covariates=[[value] for value in data["x1"]],
+    )
+    weighted_fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2",
+        data=weighted,
+        weights=weighted["weights"],
+    )
+    offset_fit = survival.coxph(
+        "Surv(time, status) ~ x1 + x2 + offset(offset)",
+        data=data,
+    )
+
+    weighted_result = survival.anova(weighted_fit)
+    offset_result = survival.anova(offset_fit)
+
+    assert weighted_result.rows[1].loglik == pytest.approx(unweighted_x1.log_likelihood[-1])
+    assert offset_result.rows[1].loglik == pytest.approx(unweighted_x1.log_likelihood[-1])
+    assert weighted_result.rows[-1].loglik == pytest.approx(weighted_fit.log_likelihood[-1])
+    assert offset_result.rows[-1].loglik == pytest.approx(offset_fit.log_likelihood[-1])
+
+
+def test_anova_coxph_time_transform_refits_the_expanded_response_without_strata():
+    data = _toy_data()
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + tt(x2)",
+        data=data,
+        tt=lambda x, time, riskset, weights: [
+            value * math.log(event_time) for value, event_time in zip(x, time, strict=True)
+        ],
+        x=True,
+    )
+    first_term = survival.regression.coxph_fit(
+        time=fit.event_times,
+        status=fit.status,
+        covariates=[[row[0]] for row in fit.covariates],
+    )
+
+    result = survival.anova(fit)
+
+    assert [row.model_name for row in result.rows] == ["NULL", "x1", "tt(x2)"]
+    assert result.rows[1].loglik == pytest.approx(first_term.log_likelihood[-1])
+    assert result.rows[-1].loglik == pytest.approx(fit.log_likelihood[-1])
+
+
+def test_anova_coxph_includes_sparse_frailty_as_a_sequential_term():
+    data = {
+        "time": [float(value) for value in range(2, 20)],
+        "status": [1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "x": [
+            -1.2,
+            -0.8,
+            -0.4,
+            0.0,
+            0.4,
+            0.8,
+            1.2,
+            -1.0,
+            -0.6,
+            -0.2,
+            0.2,
+            0.6,
+            1.0,
+            1.4,
+            -1.4,
+            -0.9,
+            0.1,
+            0.9,
+        ],
+        "z": [0, 1] * 9,
+        "g": [level for level in "abcdef" for _ in range(3)],
+    }
+    frailty_term = "frailty(g,distribution='gaussian',theta=.5,sparse=True)"
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x + {frailty_term} + z",
+        data=data,
+    )
+
+    result = survival.anova(fit)
+
+    assert [row.model_name for row in result.rows] == [
+        "NULL",
+        "x",
+        frailty_term,
+        "z",
+    ]
+    assert [row.df for row in result.rows] == pytest.approx(
+        [0.0, 1.0, 2.0, 3.9488253265922464],
+        abs=2e-8,
+    )
+    assert [row.loglik for row in result.rows] == pytest.approx(
+        [-23.690198555957362, -23.49662920106851, -7.08886458533118, -18.690207888785487],
+        abs=2e-8,
+    )
 
 
 def test_anova_coxph_compares_nested_models():
@@ -13073,6 +13178,50 @@ def test_anova_coxph_compares_nested_models():
     assert result.rows[1].chisq == pytest.approx(
         2.0 * (fit_full.log_likelihood[-1] - fit_x1.log_likelihood[-1])
     )
+
+    reverse = survival.anova(fit_full, fit_x1)
+    assert reverse.rows[1].chisq == pytest.approx(result.rows[1].chisq)
+    assert reverse.rows[1].p_value == pytest.approx(result.rows[1].p_value)
+
+
+def test_anova_coxph_validates_robust_and_nested_model_inputs():
+    data = _toy_data()
+    fit_x1 = survival.coxph("Surv(time, status) ~ x1", data=data)
+    fit_full = survival.coxph("Surv(time, status) ~ x1 + x2", data=data)
+
+    robust = survival.coxph(
+        "Surv(time, status) ~ x1 + cluster(group)",
+        data=data,
+    )
+    with pytest.raises(ValueError, match="robust variances"):
+        survival.anova(robust)
+    with pytest.raises(ValueError, match="robust variances"):
+        survival.anova(fit_x1, robust)
+
+    exact = survival.coxph("Surv(time, status) ~ x1", data=data, ties="exact")
+    with pytest.raises(ValueError, match="same ties option"):
+        survival.anova(fit_x1, exact)
+
+    response_data = {**data, "other_time": list(data["time"])}
+    other_response = survival.coxph(
+        "Surv(other_time, status) ~ x1",
+        data=response_data,
+    )
+    with pytest.warns(RuntimeWarning, match="different response"):
+        filtered = survival.anova(fit_x1, other_response)
+    assert [row.model_name for row in filtered.rows] == ["NULL", "x1"]
+
+    smaller = {name: values[:-1] for name, values in data.items()}
+    smaller_fit = survival.coxph("Surv(time, status) ~ x1", data=smaller)
+    with pytest.raises(ValueError, match="same size dataset"):
+        survival.anova(fit_x1, smaller_fit)
+
+    stratified = survival.coxph(
+        "Surv(time, status) ~ x1 + strata(group)",
+        data=data,
+    )
+    with pytest.raises(ValueError, match="same strata"):
+        survival.anova(fit_full, stratified)
 
 
 def test_anova_coxph_accepts_r_style_test_aliases_and_prefixes():

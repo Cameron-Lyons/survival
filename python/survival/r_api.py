@@ -407,6 +407,7 @@ class _SparseFrailtyFitMetadata:
     formula: _FrailtyFormulaTerm
     levels: tuple[str, ...]
     effects: tuple[float, ...]
+    groups: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -493,6 +494,7 @@ class _FormulaFit:
     n_observations: int | None = None
     sparse_frailty: _SparseFrailtyFitMetadata | None = None
     multi_state: _MultiStateCoxFitMetadata | None = None
+    time_transform_expanded: bool = False
 
     def __getattr__(self, name: str) -> Any:
         if self.conditional_logistic and name in {
@@ -19552,8 +19554,54 @@ def _anova_result(
     return _core.AnovaCoxphResult(rows, test_name)
 
 
-def _cox_design_groups(fit: Any, n_columns: int) -> list[tuple[str, int]]:
-    return [(name, len(columns)) for name, columns in _cox_predict_term_groups(fit, n_columns)]
+def _cox_anova_design(
+    fit: Any,
+    model: Any,
+    n_columns: int,
+) -> tuple[list[list[float]], list[tuple[str, int]]]:
+    rows = _cox_training_rows(model, n_columns)
+    sparse = fit.sparse_frailty if isinstance(fit, _FormulaFit) else None
+    if sparse is None:
+        groups = [
+            (name, len(columns)) for name, columns in _cox_predict_term_groups(fit, n_columns)
+        ]
+        return rows, groups
+
+    if not isinstance(fit, _FormulaFit) or fit.design is None:
+        raise ValueError("sparse frailty anova requires formula design metadata")
+    if len(sparse.groups) != len(rows):
+        raise ValueError("sparse frailty groups do not match the fitted observations")
+
+    expanded_rows = [[] for _row in rows]
+    grouped_columns: dict[int, list[int]] = {}
+    source_column = 0
+    for term, assignment in zip(
+        fit.design.covariates,
+        fit.design.term_assignments,
+        strict=True,
+    ):
+        if isinstance(term, _FrailtyDesignTerm) and term.sparse:
+            target_column = len(expanded_rows[0]) if expanded_rows else 0
+            for row, group in zip(expanded_rows, sparse.groups, strict=True):
+                row.append(float(group + 1))
+            grouped_columns.setdefault(assignment, []).append(target_column)
+            continue
+
+        width = len(_design_term_output_names(term))
+        target_start = len(expanded_rows[0]) if expanded_rows else 0
+        for target, source in zip(expanded_rows, rows, strict=True):
+            target.extend(source[source_column : source_column + width])
+        grouped_columns.setdefault(assignment, []).extend(range(target_start, target_start + width))
+        source_column += width
+    if source_column != n_columns:
+        raise ValueError("sparse frailty design does not match fitted covariates")
+
+    groups = [
+        (label, len(grouped_columns[assignment]))
+        for assignment, label in enumerate(fit.design.term_labels, start=1)
+        if assignment in grouped_columns
+    ]
+    return expanded_rows, groups
 
 
 def _cox_fit_offset(fit: Any, beta: list[float]) -> list[float] | None:
@@ -19580,17 +19628,18 @@ def _cox_fit_offset(fit: Any, beta: list[float]) -> list[float] | None:
 
 def _cox_refit_loglik_and_df(
     fit: Any,
-    width: int,
+    rows: Sequence[Sequence[float]],
     offset: list[float] | None,
+    strata: Sequence[int] | None,
 ) -> tuple[float, float | int]:
-    rows = [[float(value) for value in row[:width]] for row in fit.covariates]
+    refit_rows = [[float(value) for value in row] for row in rows]
     nocenter = getattr(fit, "nocenter", None)
     refit = _core.coxph_fit(
         [float(value) for value in fit.event_times],
         [int(value) for value in fit.status],
-        rows,
-        strata=[int(value) for value in fit.strata] if hasattr(fit, "strata") else None,
-        weights=[float(value) for value in fit.weights] if hasattr(fit, "weights") else None,
+        refit_rows,
+        strata=[int(value) for value in strata] if strata is not None else None,
+        weights=None,
         offset=offset,
         initial_beta=None,
         max_iter=None,
@@ -19607,8 +19656,17 @@ def _cox_refit_loglik_and_df(
     return _cox_full_loglik(refit), _cox_degrees_of_freedom(refit)
 
 
-def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
+def _require_nonrobust_cox_anova(fit: Any) -> Any:
     model = _require_coxph_fit(fit)
+    if isinstance(fit, _FormulaFit) and fit.multi_state is not None:
+        raise ValueError("anova not yet available for multistate")
+    if isinstance(fit, _FormulaFit) and fit.robust_variance is not None:
+        raise ValueError("cannot create anova tables with robust variances")
+    return model
+
+
+def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
+    model = _require_nonrobust_cox_anova(fit)
     beta = _cox_beta(model)
     n_columns = len(beta)
     names = ["NULL"]
@@ -19617,8 +19675,20 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
     if n_columns == 0:
         return _anova_result(logliks, dfs, names, test_name, with_tests)
 
-    groups = _cox_design_groups(fit, n_columns)
-    offset = _cox_fit_offset(model, beta)
+    rows, groups = _cox_anova_design(fit, model, n_columns)
+    offset = (
+        _cox_fit_offset(model, beta)
+        if not isinstance(fit, _FormulaFit) or fit.x_matrix is not None
+        else None
+    )
+    refit_strata = (
+        None
+        if isinstance(fit, _FormulaFit)
+        and fit.time_transform_expanded
+        and fit.design is not None
+        and not fit.design.strata
+        else getattr(model, "strata", None)
+    )
     width = 0
     for idx, (name, group_width) in enumerate(groups):
         width += group_width
@@ -19627,18 +19697,106 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
             logliks.append(_cox_full_loglik(model))
             dfs.append(_cox_degrees_of_freedom(fit))
         else:
-            refit_loglik, refit_df = _cox_refit_loglik_and_df(model, width, offset)
+            refit_rows = [row[:width] for row in rows]
+            refit_loglik, refit_df = _cox_refit_loglik_and_df(
+                model,
+                refit_rows,
+                offset,
+                refit_strata,
+            )
             logliks.append(refit_loglik)
             dfs.append(refit_df)
     return _anova_result(logliks, dfs, names, test_name, with_tests)
 
 
+def _cox_anova_response_name(fit: Any) -> str | None:
+    if not isinstance(fit, _FormulaFit) or fit.formula is None:
+        return None
+    response, separator, _rhs = fit.formula.partition("~")
+    return "".join(response.split()) if separator else None
+
+
+def _same_cox_anova_response(left: Any, right: Any) -> bool:
+    left_name = _cox_anova_response_name(left)
+    right_name = _cox_anova_response_name(right)
+    if left_name is not None and right_name is not None:
+        return left_name == right_name
+
+    left_model = _require_coxph_fit(left)
+    right_model = _require_coxph_fit(right)
+    return (
+        list(left_model.event_times) == list(right_model.event_times)
+        and list(left_model.status) == list(right_model.status)
+        and list(getattr(left_model, "entry_times", []) or [])
+        == list(getattr(right_model, "entry_times", []) or [])
+    )
+
+
+def _cox_anova_strata_terms(fit: Any) -> tuple[str, ...]:
+    if isinstance(fit, _FormulaFit) and fit.design is not None:
+        return fit.design.strata
+    return ()
+
+
+def _anova_multiple_coxph_result(
+    logliks: list[float],
+    dfs: list[float | int],
+    names: list[str],
+    test_name: str,
+    with_tests: bool,
+) -> Any:
+    if not with_tests:
+        return _anova_result(logliks, dfs, names, test_name, False)
+
+    rows = [_core.AnovaRow(names[0], logliks[0], dfs[0], None, None)]
+    for model_index in range(1, len(logliks)):
+        chisq = abs(2.0 * (logliks[model_index] - logliks[model_index - 1]))
+        df = abs(float(dfs[model_index]) - float(dfs[model_index - 1]))
+        if df == 0.0:
+            p_value = 1.0 if chisq <= 0.0 else 0.0
+        else:
+            p_value = float(_core.chi_square_survival(chisq, df))
+        rows.append(
+            _core.AnovaRow(
+                names[model_index],
+                logliks[model_index],
+                dfs[model_index],
+                chisq,
+                p_value,
+            )
+        )
+    return _core.AnovaCoxphResult(rows, test_name)
+
+
 def _anova_multiple_coxph(fits: tuple[Any, ...], test_name: str, with_tests: bool) -> Any:
-    models = [_require_coxph_fit(fit) for fit in fits]
+    models = [_require_nonrobust_cox_anova(fit) for fit in fits]
+    methods = [str(getattr(model, "method", "breslow")) for model in models]
+    if any(method != methods[0] for method in methods[1:]):
+        raise ValueError("all Cox models must use the same ties option")
+    same_response = [True, *[_same_cox_anova_response(fits[0], fit) for fit in fits[1:]]]
+    if not all(same_response):
+        warnings.warn(
+            "Cox models with a different response were removed",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        fits = tuple(fit for fit, keep in zip(fits, same_response, strict=True) if keep)
+        models = [model for model, keep in zip(models, same_response, strict=True) if keep]
+    if len(fits) == 1:
+        return _anova_single_coxph(fits[0], test_name, with_tests)
+    row_counts = [_model_row_count(fit) for fit in fits]
+    if any(count != row_counts[0] for count in row_counts[1:]):
+        raise ValueError("Cox models must use the same size dataset")
+    strata_terms = [_cox_anova_strata_terms(fit) for fit in fits]
+    if any(terms != strata_terms[0] for terms in strata_terms[1:]):
+        raise ValueError("Cox models must use the same strata")
+    strata_values = [list(getattr(model, "strata", [])) for model in models]
+    if any(values != strata_values[0] for values in strata_values[1:]):
+        raise ValueError("Cox models must use the same strata")
     logliks = [_cox_full_loglik(model) for model in models]
     dfs = [_cox_degrees_of_freedom(fit) for fit in fits]
     names = [f"Model {idx + 1}" for idx in range(len(models))]
-    return _anova_result(logliks, dfs, names, test_name, with_tests)
+    return _anova_multiple_coxph_result(logliks, dfs, names, test_name, with_tests)
 
 
 def _survreg_anova_test(test: str | None) -> tuple[str, bool]:
@@ -26842,6 +27000,7 @@ def coxph(
             sparse_design_term.formula,
             native_formula_frailty_block.levels,
             tuple(float(value) for value in fit.frailty),
+            native_formula_frailty_block.groups,
         )
     if (
         formula_design is not None
@@ -26892,6 +27051,7 @@ def coxph(
             ),
             sparse_frailty=sparse_frailty_metadata,
             multi_state=multi_state_metadata,
+            time_transform_expanded=time_transform_expanded,
         )
     return fit
 

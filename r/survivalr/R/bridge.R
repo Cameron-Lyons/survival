@@ -11692,22 +11692,142 @@ residuals.survival_py_model <- function(object, ..., type = "martingale") {
   table
 }
 
+.coxph_anova_response <- function(object) {
+  as.character(formula(object))[[2L]]
+}
+
+.as_coxph_anova <- function(result, fits, test) {
+  frame <- as.data.frame(result, optional = TRUE)
+  loglik <- as.numeric(frame$loglik)
+  fitted_df <- as.numeric(frame$df)
+  chisq <- c(NA_real_, abs(2 * diff(loglik)))
+  df <- c(NA_real_, abs(diff(fitted_df)))
+
+  if (length(fits) == 1L) {
+    chisq <- c(NA_real_, 2 * diff(loglik))
+    df <- c(NA_real_, diff(fitted_df))
+    table <- data.frame(
+      loglik = loglik,
+      Chisq = chisq,
+      Df = df,
+      row.names = as.character(frame$model),
+      check.names = FALSE
+    )
+    if (length(test) > 0L && identical(test[[1L]], "Chisq")) {
+      table[["Pr(>|Chi|)"]] <- stats::pchisq(chisq, df, lower.tail = FALSE)
+    }
+    heading <- paste0(
+      "Analysis of Deviance Table\n Cox model: response is ",
+      .coxph_anova_response(fits[[1L]]),
+      "\nTerms added sequentially (first to last)\n"
+    )
+    return(structure(table, heading = heading, class = c("anova", "data.frame")))
+  }
+
+  table <- data.frame(
+    loglik = loglik,
+    Chisq = chisq,
+    Df = df,
+    row.names = as.character(seq_along(fits)),
+    check.names = FALSE
+  )
+  if (length(test) > 0L) {
+    table[["Pr(>|Chi|)"]] <- stats::pchisq(chisq, df, lower.tail = FALSE)
+  }
+  variables <- vapply(
+    fits,
+    function(fit) {
+      paste(
+        as.character(stats::delete.response(stats::terms(stats::formula(fit)))),
+        collapse = " "
+      )
+    },
+    character(1L)
+  )
+  title <- paste0(
+    "Analysis of Deviance Table\n Cox model: response is  ",
+    .coxph_anova_response(fits[[1L]])
+  )
+  topnote <- paste(
+    " Model ",
+    format(seq_along(fits)),
+    ": ",
+    variables,
+    sep = "",
+    collapse = "\n"
+  )
+  structure(table, heading = c(title, topnote), class = c("anova", "data.frame"))
+}
+
 anova.survival_py_model <- function(object, ..., test = "Chisq") {
-  fits <- list(object, ...)
+  dots <- list(...)
+  fits <- c(list(object), unname(dots))
   if (inherits(object, "survival_py_survreg")) {
     test <- match.arg(test, c("Chisq", "none"))
-  }
-  result <- .call_r_api(
-    "anova",
-    object,
-    ...,
-    test = test,
-    .wrap = c("survival_py_anova", "survival_py_object")
-  )
-  if (inherits(object, "survival_py_survreg")) {
+    result <- do.call(
+      .call_r_api,
+      c(
+        list(name = "anova"),
+        fits,
+        list(
+          test = test,
+          .wrap = c("survival_py_anova", "survival_py_object")
+        )
+      )
+    )
     return(.as_survreg_anova(result, fits, test))
   }
-  result
+
+  named <- if (is.null(names(dots))) {
+    rep(FALSE, length(dots))
+  } else {
+    names(dots) != ""
+  }
+  if (any(named)) {
+    warning(
+      paste(
+        "The following arguments to anova.coxph(..) are invalid and dropped:",
+        paste(deparse(dots[named]), collapse = ", ")
+      ),
+      call. = FALSE
+    )
+    dots <- dots[!named]
+    fits <- c(list(object), unname(dots))
+  }
+  if (length(fits) > 1L) {
+    responses <- vapply(fits, .coxph_anova_response, character(1L))
+    same_response <- responses == responses[[1L]]
+    if (!all(same_response)) {
+      warning(
+        paste(
+          "Models with response",
+          paste(responses[!same_response], collapse = ", "),
+          "removed because response differs from model 1"
+        ),
+        call. = FALSE
+      )
+      fits <- fits[same_response]
+    }
+  }
+  python_test <- if (length(test) == 0L) {
+    "none"
+  } else if (length(fits) > 1L || identical(test[[1L]], "Chisq")) {
+    "Chisq"
+  } else {
+    "none"
+  }
+  result <- do.call(
+    .call_r_api,
+    c(
+      list(name = "anova"),
+      fits,
+      list(
+        test = python_test,
+        .wrap = c("survival_py_anova", "survival_py_object")
+      )
+    )
+  )
+  .as_coxph_anova(result, fits, test)
 }
 
 summary.survival_py_survfit <- function(object, times, censored = FALSE, scale = 1,
