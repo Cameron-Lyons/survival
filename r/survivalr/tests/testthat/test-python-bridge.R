@@ -4383,6 +4383,53 @@ test_that("unnamed concordance score matrices use reference names", {
   }
 })
 
+test_that("reversed multi-score concordance ranks match reference errors", {
+  data <- data.frame(
+    time = c(1, 2, 3, 4, 5),
+    status = c(1, 1, 0, 1, 0),
+    x = c(0.2, 0.6, 0.4, 0.9, 0.3),
+    z = c(0.8, 0.1, 0.5, 0.2, 0.7)
+  )
+  score_matrix <- as.matrix(data[c("x", "z")])
+
+  expect_error(
+    concordancefit(
+      Surv(data$time, data$status),
+      score_matrix,
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected"
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      score_matrix,
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected"
+  )
+  expect_error(
+    concordance(
+      Surv(time, status) ~ x + z,
+      data = data,
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected"
+  )
+  expect_error(
+    survival::concordance(
+      survival::Surv(time, status) ~ x + z,
+      data = data,
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected"
+  )
+})
+
 test_that("stratified concordance results match reference shapes and diagnostics", {
   right_data <- data.frame(
     y = c(1, 3, 2, 4, 4, 2),
