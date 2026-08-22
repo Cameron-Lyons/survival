@@ -5227,6 +5227,41 @@ test_that("multi-score rank errors finish stratum construction first", {
   )
 })
 
+test_that("retained many-strata rank errors preserve stratum order", {
+  time <- c(1, 2, 7, 3, rep(c(1, 2), 9))
+  status <- c(1, 0, 1, 0, rep(0, 18))
+  scores <- seq_along(time)
+  groups <- rep(seq_len(11), each = 2)
+  replacement_error <- "replacement has length zero"
+
+  expect_error(
+    concordancefit(
+      Surv(time, status),
+      scores,
+      strata = groups,
+      ymax = 5,
+      timewt = "n",
+      ranks = TRUE,
+      keepstrata = TRUE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(time, status),
+      scores,
+      strata = groups,
+      ymax = 5,
+      timewt = "n",
+      ranks = TRUE,
+      keepstrata = TRUE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+})
+
 test_that("clustered concordance dfbeta matches reference order and names", {
   data <- data.frame(
     time = c(2, 3, 4, 5, 2),

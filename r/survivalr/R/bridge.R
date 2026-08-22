@@ -12112,7 +12112,7 @@ concordance <- function(object, ..., formula) {
 }
 
 .concordance_empty_rank_strata_check <- function(
-    response, n_scores, strata, ranks, timewt, ymax = NULL) {
+    response, n_scores, strata, ranks, timewt, ymax = NULL, keepstrata = 10) {
   survival_response <- inherits(response, "Surv") || inherits(response, "survival_py_surv")
   if (!isTRUE(ranks) || !survival_response) {
     return(invisible(NULL))
@@ -12127,7 +12127,15 @@ concordance <- function(object, ..., formula) {
   }
   n_strata <- length(unique(strata_values))
   time_weight <- match.arg(timewt, c("n", "S", "S/G", "n/G2", "I"))
-  if (n_strata > 10L && time_weight %in% c("n", "I")) {
+  retain_strata <- if (is.logical(keepstrata) && length(keepstrata) == 1L) {
+    isTRUE(keepstrata)
+  } else if (is.numeric(keepstrata) && length(keepstrata) == 1L) {
+    n_strata <= keepstrata
+  } else {
+    FALSE
+  }
+  if (n_scores > 1L || n_strata == 1L) retain_strata <- FALSE
+  if (n_strata > 10L && time_weight %in% c("n", "I") && !retain_strata) {
     strata_values <- rep(1L, length(status))
     n_strata <- 1L
   }
@@ -12157,7 +12165,8 @@ concordance <- function(object, ..., formula) {
 }
 
 .concordance_translate_empty_rank_error <- function(
-    condition, response, n_scores, strata, ranks, timewt, ymax = NULL) {
+    condition, response, n_scores, strata, ranks, timewt, ymax = NULL,
+    keepstrata = 10) {
   replacement_message <- "number of items to replace is not a multiple of replacement length"
   if (grepl(replacement_message, conditionMessage(condition), fixed = TRUE)) {
     .concordance_empty_rank_strata_check(
@@ -12166,7 +12175,8 @@ concordance <- function(object, ..., formula) {
       strata,
       ranks,
       timewt,
-      ymax
+      ymax,
+      keepstrata
     )
     stop(replacement_message, call. = FALSE)
   }
@@ -12200,7 +12210,8 @@ concordance <- function(object, ..., formula) {
           rank_context$strata,
           rank_context$ranks,
           rank_context$timewt,
-          rank_context$ymax
+          rank_context$ymax,
+          rank_context$keepstrata
         )
       }
       stop(condition)
@@ -12330,6 +12341,11 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
   }
   requested_ranks <- "ranks" %in% names(dots) && isTRUE(dots[["ranks"]])
   requested_ymax <- if ("ymax" %in% names(dots)) dots[["ymax"]] else NULL
+  requested_keepstrata <- if ("keepstrata" %in% names(dots)) {
+    dots[["keepstrata"]]
+  } else {
+    10
+  }
   formula_rank_n_scores <- if (formula_input && requested_ranks) {
     .concordance_formula_score_count(formula, formula_frame)
   } else {
@@ -12342,7 +12358,8 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
       strata = formula_strata,
       ranks = requested_ranks,
       timewt = formula_timewt,
-      ymax = requested_ymax
+      ymax = requested_ymax,
+      keepstrata = requested_keepstrata
     )
   } else {
     NULL
@@ -12364,11 +12381,6 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     .wrap = c("survival_py_concordance", "survival_py_object")
   )
   if (formula_input) {
-    formula_keepstrata <- if ("keepstrata" %in% names(dots)) {
-      dots[["keepstrata"]]
-    } else {
-      10
-    }
     formula_n_scores <- length(
       .as_numeric_vector(.result_field(result, "concordance"))
     )
@@ -12383,7 +12395,8 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
       formula_strata,
       requested_ranks,
       formula_timewt,
-      requested_ymax
+      requested_ymax,
+      requested_keepstrata
     )
     .concordance_multi_score_strata_check(
       formula_n_scores,
@@ -12393,7 +12406,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     .concordance_collapsed_strata_check(
       formula_n_scores,
       formula_strata_count,
-      formula_keepstrata,
+      requested_keepstrata,
       formula_timewt
     )
     return(.as_native_concordance(result, Call, attr(formula_frame, "na.action")))
@@ -12975,7 +12988,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       strata = input_strata,
       ranks = ranks,
       timewt = timewt,
-      ymax = ymax
+      ymax = ymax,
+      keepstrata = keepstrata
     ),
     .as_python_surv(y),
     .as_python_optional_vector(x),
@@ -13007,7 +13021,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     input_strata,
     ranks,
     timewt,
-    ymax
+    ymax,
+    keepstrata
   )
   .concordance_disabled_standard_error_check(
     y,
