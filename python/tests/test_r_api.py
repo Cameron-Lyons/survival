@@ -13607,6 +13607,128 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
         survival.survfit(fit, newdata=pandas.DataFrame({"x": [0.5]}), se_fit=True)
 
 
+def test_coxph_multistate_formula_lists_match_r_reference():
+    pandas = pytest.importorskip("pandas")
+    data = pandas.DataFrame(
+        {
+            "id": list(range(1, 13)),
+            "time": list(range(1, 13)),
+            "status": pandas.Categorical(
+                ["a", "b", "0", "a", "0", "b", "a", "b", "0", "a", "b", "0"],
+                categories=["0", "a", "b"],
+            ),
+            "x": [0.2, 0.8, 0.3, 1.1, 0.4, 1.4, 0.6, 1.6, 0.7, 1.8, 1.0, 2.0],
+            "z": [0.9, -0.2, 0.4, 1.3, -0.5, 0.7, 1.1, -0.8, 0.2, 1.7, -1.2, 0.6],
+        }
+    )
+
+    common_fit = survival.coxph(
+        ["Surv(time, status) ~ 1", "1:2 + 1:3 ~ x / common"],
+        data=data,
+        id="id",
+        max_iter=20,
+        eps=1e-9,
+    )
+    assert survival.coef_names(common_fit) == ["x"]
+    assert survival.coef(common_fit) == pytest.approx([-0.9110719558534591], abs=1e-12)
+    assert common_fit.log_likelihood == pytest.approx(
+        [-14.218893499868114, -13.405027864921383], abs=1e-12
+    )
+    for actual, expected in zip(
+        survival.predict(common_fit, newdata=data.iloc[:2], type="lp"),
+        [
+            [0.7212652983839886, 0.7212652983839886],
+            [0.17462212487191298, 0.17462212487191298],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-12)
+
+    selective_fit = survival.coxph(
+        ["Surv(time, status) ~ x + z", "1:2 ~ -z"],
+        data=data,
+        id="id",
+        max_iter=20,
+        eps=1e-9,
+    )
+    assert survival.coef_names(selective_fit) == ["x_1:2", "x_1:3", "z"]
+    assert survival.coef(selective_fit) == pytest.approx(
+        [-1.4144189628444992, -0.061213445388027525, -0.5655883618417852],
+        abs=1e-12,
+    )
+    for actual, expected in zip(
+        survival.predict(selective_fit, newdata=data.iloc[:2], type="lp"),
+        [
+            [1.1197483455852286, -0.26261295474746005],
+            [0.271096967878529, 0.3228061760456871],
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-12)
+
+    shared_fit = survival.coxph(
+        ["Surv(time, status) ~ 1", "1:2 + 1:3 ~ x / shared"],
+        data=data,
+        id="id",
+        max_iter=20,
+        eps=1e-9,
+    )
+    assert survival.coef_names(shared_fit) == ["x_1:2", "x_1:3", "ph(1:3/1:2)"]
+    assert survival.coef(shared_fit) == pytest.approx(
+        [-1.466647683417733, -0.4392519639108706, -1.085336872157014],
+        abs=1e-12,
+    )
+    shared_curve = survival.survfit(
+        shared_fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+    )
+    assert shared_curve.pstate[-1] == pytest.approx(
+        [0.02188049734230766, 0.7311468787816935, 0.2469726238759988],
+        abs=1e-12,
+    )
+    assert shared_curve.cumhaz[-1] == pytest.approx(
+        [2.85707424616317, 0.9650853250707014],
+        abs=1e-12,
+    )
+
+    state_data = pandas.DataFrame({"state": ["(s0)", "a", "b"], "absorbing": [0, 1, 1]})
+    selected_common_fit = survival.coxph(
+        [
+            "Surv(time, status) ~ 1",
+            'state("(s0)"):absorbing(1) ~ x / common',
+        ],
+        data=data,
+        id="id",
+        statedata=state_data,
+        max_iter=20,
+        eps=1e-9,
+    )
+    assert survival.coef_names(selected_common_fit) == ["x"]
+    assert survival.coef(selected_common_fit) == pytest.approx(survival.coef(common_fit), abs=1e-12)
+
+    shared_baseline_fit = survival.coxph(
+        ["Surv(time, status) ~ x", "1:2 + 1:3 ~ 1 / common"],
+        data=data,
+        id="id",
+        max_iter=20,
+        eps=1e-9,
+    )
+    shared_baseline_curve = survival.survfit(
+        shared_baseline_fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+    )
+    assert shared_baseline_curve.cumhaz[-1] == pytest.approx(
+        [1.6994484072911114, 1.6994484072911114], abs=1e-12
+    )
+
+    with pytest.raises(ValueError, match="only valid for a multi-state"):
+        survival.coxph(
+            ["Surv(time, status == 'a') ~ 1", "1:2 ~ x"],
+            data=data,
+            id="id",
+        )
+
+
 def test_coxph_multistate_counting_histories_match_r_reference():
     pandas = pytest.importorskip("pandas")
     data = pandas.DataFrame(

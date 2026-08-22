@@ -1154,7 +1154,7 @@ def cch(
     **kwargs: Any,
 ) -> CchModelResult: ...
 def coxph(
-    response: Surv | str,
+    response: Surv | str | Sequence[str],
     data: Any | None = None,
     *,
     x: Any | None = None,

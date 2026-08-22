@@ -51,10 +51,21 @@ fn validate_parallel_length(name: &str, actual: usize, expected: usize) -> PyRes
 /// Each observed interval is copied once for every modeled transition whose
 /// source matches the row's current state. Covariates are placed in a
 /// transition-specific block so the ordinary stratified Cox optimizer can fit
-/// the same separate coefficients and baselines as a single-formula
-/// multi-state model.
+/// separate, omitted, or shared coefficients and baselines. When maps are not
+/// supplied, each transition receives its own coefficient block and baseline.
 #[pyfunction]
-#[pyo3(signature = (start, stop, event, current_state, covariates, transitions, strata=None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    start,
+    stop,
+    event,
+    current_state,
+    covariates,
+    transitions,
+    strata=None,
+    coefficient_map=None,
+    baseline_map=None,
+))]
 pub fn cox_multistate_stack(
     start: Option<Vec<f64>>,
     stop: Vec<f64>,
@@ -63,6 +74,8 @@ pub fn cox_multistate_stack(
     covariates: Vec<Vec<f64>>,
     transitions: Vec<Vec<usize>>,
     strata: Option<Vec<usize>>,
+    coefficient_map: Option<Vec<Vec<i64>>>,
+    baseline_map: Option<Vec<usize>>,
 ) -> PyResult<MultiStateCoxStack> {
     let n = stop.len();
     validate_parallel_length("event", event.len(), n)?;
@@ -107,13 +120,90 @@ pub fn cox_multistate_stack(
         }
     }
 
+    let coefficient_map = match coefficient_map {
+        Some(values) => values,
+        None => {
+            let expanded_width = width.checked_mul(transitions.len()).ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("expanded Cox design width is too large")
+            })?;
+            i64::try_from(expanded_width).map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err("expanded Cox design width is too large")
+            })?;
+            (0..transitions.len())
+                .map(|transition_idx| {
+                    (0..width)
+                        .map(|column| (transition_idx * width + column) as i64)
+                        .collect()
+                })
+                .collect()
+        }
+    };
+    validate_parallel_length("coefficient_map", coefficient_map.len(), transitions.len())?;
+    let mut largest_coefficient = None;
+    for (transition_idx, map) in coefficient_map.iter().enumerate() {
+        if map.len() != width {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "coefficient_map row {transition_idx} must have length {width}; got {}",
+                map.len()
+            )));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for &coefficient in map {
+            if coefficient < -1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "coefficient_map values must be -1 or non-negative",
+                ));
+            }
+            if coefficient >= 0 {
+                let coefficient = coefficient as usize;
+                if !seen.insert(coefficient) {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "coefficient_map row {transition_idx} maps multiple inputs to coefficient {coefficient}"
+                    )));
+                }
+                largest_coefficient = Some(
+                    largest_coefficient
+                        .map_or(coefficient, |largest: usize| largest.max(coefficient)),
+                );
+            }
+        }
+    }
+    let expanded_width = largest_coefficient.map_or(0, |largest| largest + 1);
+    if expanded_width > 0 {
+        let mut present = vec![false; expanded_width];
+        for &coefficient in coefficient_map.iter().flatten() {
+            if coefficient >= 0 {
+                present[coefficient as usize] = true;
+            }
+        }
+        if let Some(missing) = present.iter().position(|value| !value) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "coefficient_map does not contain coefficient {missing}"
+            )));
+        }
+    }
+
+    let baseline_map = baseline_map.unwrap_or_else(|| (0..transitions.len()).collect());
+    validate_parallel_length("baseline_map", baseline_map.len(), transitions.len())?;
+    let baseline_count = baseline_map
+        .iter()
+        .max()
+        .copied()
+        .map_or(0, |largest| largest + 1);
+    let mut present_baselines = vec![false; baseline_count];
+    for &baseline in &baseline_map {
+        present_baselines[baseline] = true;
+    }
+    if let Some(missing) = present_baselines.iter().position(|value| !value) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "baseline_map does not contain baseline {missing}"
+        )));
+    }
+
     let user_strata = strata.as_deref();
     let user_strata_count = user_strata
         .and_then(|values| values.iter().max().copied())
         .map_or(1, |maximum| maximum + 1);
-    let expanded_width = width.checked_mul(transitions.len()).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err("expanded Cox design width is too large")
-    })?;
     let capacity = n.checked_mul(transitions.len()).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("expanded Cox row count is too large")
     })?;
@@ -129,7 +219,6 @@ pub fn cox_multistate_stack(
     for (transition_idx, transition) in transitions.iter().enumerate() {
         let source = transition[0];
         let target = transition[1];
-        let column_start = transition_idx * width;
         for row_idx in 0..n {
             if current_state[row_idx] != source {
                 continue;
@@ -140,10 +229,14 @@ pub fn cox_multistate_stack(
             expanded_stop.push(stop[row_idx]);
             expanded_status.push(i32::from(event[row_idx] == (target + 1) as i32));
             let mut row = vec![0.0; expanded_width];
-            row[column_start..column_start + width].copy_from_slice(&covariates[row_idx]);
+            for (column, &coefficient) in coefficient_map[transition_idx].iter().enumerate() {
+                if coefficient >= 0 {
+                    row[coefficient as usize] = covariates[row_idx][column];
+                }
+            }
             expanded_covariates.push(row);
             expanded_strata.push(
-                transition_idx * user_strata_count
+                baseline_map[transition_idx] * user_strata_count
                     + user_strata.map_or(0, |values| values[row_idx]),
             );
             source_rows.push(row_idx);
@@ -409,6 +502,8 @@ mod tests {
             vec![vec![1.0], vec![2.0], vec![3.0]],
             vec![vec![0, 1], vec![0, 2]],
             None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -440,6 +535,8 @@ mod tests {
             vec![vec![1.0], vec![2.0], vec![3.0]],
             vec![vec![0, 1], vec![1, 2]],
             Some(vec![0, 1, 1]),
+            None,
+            None,
         )
         .unwrap();
 
@@ -448,6 +545,33 @@ mod tests {
         assert_eq!(result.status, vec![1, 0, 0]);
         assert_eq!(result.strata, vec![0, 1, 3]);
         assert_eq!(result.source_rows, vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn stacks_with_omitted_and_shared_coefficients_and_baselines() {
+        let result = cox_multistate_stack(
+            None,
+            vec![1.0, 2.0],
+            vec![2, 3],
+            vec![0, 0],
+            vec![vec![1.0, 10.0], vec![2.0, 20.0]],
+            vec![vec![0, 1], vec![0, 2]],
+            Some(vec![0, 1]),
+            Some(vec![vec![0, -1], vec![0, 1]]),
+            Some(vec![0, 0]),
+        )
+        .unwrap();
+
+        assert_eq!(result.strata, vec![0, 1, 0, 1]);
+        assert_eq!(
+            result.covariates,
+            vec![
+                vec![1.0, 0.0],
+                vec![2.0, 0.0],
+                vec![1.0, 10.0],
+                vec![2.0, 20.0],
+            ]
+        );
     }
 
     #[test]
