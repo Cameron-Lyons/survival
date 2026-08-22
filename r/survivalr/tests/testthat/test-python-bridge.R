@@ -7139,6 +7139,108 @@ test_that("penalized survreg model metadata matches survival", {
   expect_equal(AIC(bridged), AIC(reference), tolerance = 1e-08)
 })
 
+test_that("survreg analysis of deviance matches survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  n <- 48L
+  index <- 0:(n - 1L)
+  x <- ((index * 17L) %% 49L) / 10 - 2.4
+  z <- ((index * 7L) %% 47L) / 13 - 1.8
+  noise <- ((index * 13L) %% 11L - 5L) / 20
+  data <- data.frame(
+    time = exp(2.4 + 0.22 * x - 0.08 * x^2 + 0.15 * z + noise),
+    status = as.integer(index %% 5L != 0L),
+    x = x,
+    z = z
+  )
+  null_formula <- Surv(time, status) ~ 1
+  spline_formula <- Surv(time, status) ~ pspline(x, theta = 0.5, nterm = 6)
+  full_formula <- Surv(time, status) ~ pspline(x, theta = 0.5, nterm = 6) + z
+  bridged_null <- survreg(null_formula, data = data)
+  bridged_spline <- survreg(
+    spline_formula,
+    data = data,
+    control = survreg.control(maxiter = 100L, outer.max = 25L)
+  )
+  bridged_full <- survreg(
+    full_formula,
+    data = data,
+    control = survreg.control(maxiter = 100L, outer.max = 25L)
+  )
+  reference_control <- survival::survreg.control(maxiter = 100L, outer.max = 25L)
+  reference_null <- do.call(
+    survival::survreg,
+    list(formula = null_formula, data = data)
+  )
+  reference_spline <- do.call(
+    survival::survreg,
+    list(formula = spline_formula, data = data, control = reference_control)
+  )
+  reference_full <- do.call(
+    survival::survreg,
+    list(formula = full_formula, data = data, control = reference_control)
+  )
+
+  expect_equal(anova(bridged_full), anova(reference_full), tolerance = 2e-08)
+  expect_equal(
+    anova(bridged_full, test = "none"),
+    anova(reference_full, test = "none"),
+    tolerance = 2e-08
+  )
+  expect_equal(
+    anova(bridged_null, bridged_spline, bridged_full),
+    anova(reference_null, reference_spline, reference_full),
+    tolerance = 2e-08
+  )
+
+  adaptive_terms <- c(
+    "pspline(x, df = 4, nterm = 6)",
+    "pspline(x, df = 0, nterm = 6)",
+    "ridge(x, df = .7, eps = 1e-8)"
+  )
+  for (adaptive_term in adaptive_terms) {
+    adaptive_formula <- as.formula(paste(
+      "Surv(time, status) ~",
+      adaptive_term,
+      "+ z"
+    ))
+    bridged_adaptive <- survreg(
+      adaptive_formula,
+      data = data,
+      control = survreg.control(maxiter = 100L, outer.max = 25L)
+    )
+    reference_adaptive <- do.call(
+      survival::survreg,
+      list(
+        formula = adaptive_formula,
+        data = data,
+        control = reference_control
+      )
+    )
+    expect_equal(
+      anova(bridged_adaptive),
+      anova(reference_adaptive),
+      tolerance = 3e-08
+    )
+  }
+
+  data$group <- factor(rep(c("a", "b"), each = n / 2L))
+  strata_formula <- Surv(time, status) ~ x + z + strata(group)
+  bridged_strata <- survreg(strata_formula, data = data)
+  reference_strata <- do.call(
+    survival::survreg,
+    list(formula = strata_formula, data = data)
+  )
+  expect_equal(
+    anova(bridged_strata),
+    anova(reference_strata),
+    tolerance = 2e-08
+  )
+  expect_error(anova(bridged_full, test = "F"), "arg.*Chisq.*none")
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

@@ -13098,7 +13098,7 @@ def test_anova_coxph_accepts_r_style_test_aliases_and_prefixes():
         survival.anova(fit_x1, fit_full, test="wald")
 
 
-def test_anova_coxph_can_omit_tests_and_rejects_non_cox_models():
+def test_anova_coxph_can_omit_tests():
     data = _toy_data()
     fit_x1 = survival.coxph("Surv(time, status) ~ x1", data=data)
     fit_full = survival.coxph("Surv(time, status) ~ x1 + x2", data=data)
@@ -13108,14 +13108,164 @@ def test_anova_coxph_can_omit_tests_and_rejects_non_cox_models():
     assert without_tests.rows[0].chisq is None
     assert without_tests.rows[1].p_value is None
 
-    aft = survival.survreg(
-        "Surv(time, status) ~ x1",
+
+def test_anova_survreg_single_formula_model_refits_terms_sequentially():
+    data = _toy_data()
+    null_fit = survival.survreg("Surv(time, status) ~ 1", data=data, dist="weibull")
+    fit_x1 = survival.survreg("Surv(time, status) ~ x1", data=data, dist="weibull")
+    fit_full = survival.survreg(
+        "Surv(time, status) ~ x1 + x2",
         data=data,
         dist="weibull",
-        max_iter=5,
     )
-    with pytest.raises(TypeError, match="anova requires fitted Cox model objects"):
-        survival.anova(aft)
+
+    result = survival.anova(fit_full)
+
+    assert result.test_type == "Chisq"
+    assert [row.model_name for row in result.rows] == ["NULL", "x1", "x2"]
+    assert [row.df for row in result.rows] == pytest.approx([2.0, 3.0, 4.0])
+    assert result.rows[0].loglik == pytest.approx(survival.loglik(null_fit))
+    assert result.rows[1].loglik == pytest.approx(survival.loglik(fit_x1))
+    assert result.rows[2].loglik == pytest.approx(survival.loglik(fit_full))
+    assert result.rows[1].chisq == pytest.approx(
+        2.0 * (survival.loglik(fit_x1) - survival.loglik(null_fit))
+    )
+    assert result.rows[2].chisq == pytest.approx(
+        2.0 * (survival.loglik(fit_full) - survival.loglik(fit_x1))
+    )
+    assert 0.0 <= result.rows[1].p_value <= 1.0
+
+    stratified = survival.survreg(
+        "Surv(time, status) ~ x1 + x2 + strata(group)",
+        data=data,
+    )
+    stratified_result = survival.anova(stratified)
+    assert [row.model_name for row in stratified_result.rows] == [
+        "NULL",
+        "x1",
+        "x2",
+        "strata(group)",
+    ]
+    assert stratified_result.rows[-1].loglik == pytest.approx(survival.loglik(stratified))
+    assert stratified_result.rows[-1].df == pytest.approx(survival.degrees_freedom(stratified))
+
+
+def test_anova_survreg_compares_nested_models_and_validates_inputs():
+    data = _toy_data()
+    null_fit = survival.survreg("Surv(time, status) ~ 1", data=data)
+    fit_x1 = survival.survreg("Surv(time, status) ~ x1", data=data)
+    fit_full = survival.survreg("Surv(time, status) ~ x1 + x2", data=data)
+
+    result = survival.anova(null_fit, fit_x1, fit_full)
+    without_tests = survival.anova(null_fit, fit_x1, fit_full, test=None)
+
+    assert [row.model_name for row in result.rows] == ["Model 1", "Model 2", "Model 3"]
+    assert [row.df for row in result.rows] == pytest.approx([2.0, 3.0, 4.0])
+    assert result.rows[1].chisq == pytest.approx(
+        2.0 * (survival.loglik(fit_x1) - survival.loglik(null_fit))
+    )
+    assert without_tests.test_type == "none"
+    assert all(row.chisq is None for row in without_tests.rows)
+
+    with pytest.raises(ValueError, match="survreg anova test"):
+        survival.anova(fit_full, test="wald")
+    with pytest.raises(TypeError, match="fitted survreg model"):
+        survival.anova(fit_x1, survival.coxph("Surv(time, status) ~ x1", data=data))
+
+    changed_data = dict(data)
+    changed_data["time"] = [value + 0.25 for value in data["time"]]
+    changed_fit = survival.survreg("Surv(time, status) ~ x1", data=changed_data)
+    with pytest.raises(ValueError, match="same response"):
+        survival.anova(fit_x1, changed_fit)
+
+
+def test_anova_survreg_preserves_penalized_fractional_degrees_of_freedom():
+    n = 48
+    index_values = list(range(n))
+    x = [((idx * 17) % 49) / 10.0 - 2.4 for idx in index_values]
+    z = [((idx * 7) % 47) / 13.0 - 1.8 for idx in index_values]
+    noise = [((idx * 13) % 11 - 5) / 20.0 for idx in index_values]
+    data = {
+        "time": [
+            math.exp(2.4 + 0.22 * x_value - 0.08 * x_value**2 + 0.15 * z_value + error)
+            for x_value, z_value, error in zip(x, z, noise, strict=True)
+        ],
+        "status": [int(idx % 5 != 0) for idx in index_values],
+        "x": x,
+        "z": z,
+    }
+    fit = survival.survreg(
+        "Surv(time, status) ~ pspline(x, theta=0.5, nterm=6) + z",
+        data=data,
+        control={"maxiter": 100, "outer.max": 25},
+    )
+
+    result = survival.anova(fit)
+    frame = survival.as_data_frame(result)
+
+    assert [row.model_name for row in result.rows] == [
+        "NULL",
+        "pspline(x, theta=0.5, nterm=6)",
+        "z",
+    ]
+    assert [row.df for row in result.rows] == pytest.approx(
+        [2.0, 6.34922955698307, 7.68639873873253],
+        abs=2e-8,
+    )
+    assert frame["df"] == pytest.approx([row.df for row in result.rows])
+    assert frame["df"][1] != int(frame["df"][1])
+    assert result.rows[-1].df == pytest.approx(survival.degrees_freedom(fit))
+
+
+@pytest.mark.parametrize(
+    ("term", "expected_df", "expected_loglik"),
+    [
+        (
+            "pspline(x, df=4, nterm=6)",
+            [2.0, 5.426064473109215, 6.4052974132180545],
+            [-112.90856098151008, -91.27636452850504, -79.14793977568978],
+        ),
+        (
+            "pspline(x, df=0, nterm=6)",
+            [2.0, 3.8262565737781644, 5.034510026138323],
+            [-112.90856098151008, -92.14834312568165, -79.71139930292581],
+        ),
+        (
+            "ridge(x, df=.7, eps=1e-8)",
+            [2.0, 2.65771102775366, 3.6490191399886958],
+            [-112.90856098151008, -97.93122464303099, -91.68558731963486],
+        ),
+    ],
+)
+def test_anova_survreg_reselects_adaptive_penalties(
+    term,
+    expected_df,
+    expected_loglik,
+):
+    n = 48
+    index_values = list(range(n))
+    x = [((idx * 17) % 49) / 10.0 - 2.4 for idx in index_values]
+    z = [((idx * 7) % 47) / 13.0 - 1.8 for idx in index_values]
+    noise = [((idx * 13) % 11 - 5) / 20.0 for idx in index_values]
+    data = {
+        "time": [
+            math.exp(2.4 + 0.22 * x_value - 0.08 * x_value**2 + 0.15 * z_value + error)
+            for x_value, z_value, error in zip(x, z, noise, strict=True)
+        ],
+        "status": [int(idx % 5 != 0) for idx in index_values],
+        "x": x,
+        "z": z,
+    }
+    fit = survival.survreg(
+        f"Surv(time, status) ~ {term} + z",
+        data=data,
+        control={"maxiter": 100, "outer.max": 25},
+    )
+
+    result = survival.anova(fit)
+
+    assert [row.df for row in result.rows] == pytest.approx(expected_df, abs=3e-8)
+    assert [row.loglik for row in result.rows] == pytest.approx(expected_loglik, abs=3e-8)
 
 
 def test_coxph_detail_exposes_r_style_event_contributions():
