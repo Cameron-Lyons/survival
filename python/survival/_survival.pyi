@@ -7834,6 +7834,7 @@ def concordance_rank_rows(
     risk_scores: list[float],
     weights: list[float] | None = None,
     timewt: str = "n",
+    order_scores: list[float] | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def stratified_concordance_rank_rows(
     time: list[float],
@@ -7842,6 +7843,7 @@ def stratified_concordance_rank_rows(
     strata: list[int],
     weights: list[float] | None = None,
     timewt: str = "n",
+    order_scores: list[float] | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def concordance_influence_rows(
     time: list[float],
@@ -7894,6 +7896,7 @@ def counting_concordance_rank_rows(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    order_scores: list[float] | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def stratified_counting_concordance_rank_rows(
     start: list[float],
@@ -7904,6 +7907,7 @@ def stratified_counting_concordance_rank_rows(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    order_scores: list[float] | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def counting_concordance_influence_rows(
     start: list[float],

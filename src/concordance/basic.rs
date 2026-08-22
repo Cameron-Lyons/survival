@@ -18,12 +18,25 @@ use std::collections::BTreeMap;
 
 type ConcordanceRankRows = Vec<(f64, f64, f64, f64)>;
 type ConcordanceInfluenceOutput = (Vec<Vec<f64>>, Vec<f64>, f64);
+type ConcordanceCountRows = Vec<[f64; 5]>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct ConcordanceTieCounts {
     tied_x: f64,
     tied_y: f64,
     tied_xy: f64,
+}
+
+fn concordance_count_row(summary: ConcordanceSummary, ties: ConcordanceTieCounts) -> [f64; 5] {
+    let concordant = summary.concordant - 0.5 * ties.tied_x;
+    let discordant = summary.comparable - concordant - ties.tied_x;
+    [
+        concordant,
+        discordant.max(0.0),
+        ties.tied_x,
+        ties.tied_y,
+        ties.tied_xy,
+    ]
 }
 
 fn validate_right_concordance_inputs(
@@ -601,7 +614,7 @@ fn counting_concordance_conditional_variance_numerator(
     risk_scores: &[f64],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> (f64, f64) {
+) -> (ConcordanceTieCounts, f64, f64) {
     let multipliers =
         counting_concordance_time_weight_multipliers(start, stop, status, weights, time_weight);
     let mut event_indices: Vec<usize> = status
@@ -634,6 +647,7 @@ fn counting_concordance_conditional_variance_numerator(
     let mut at_risk = FenwickTree::new(risk_levels.len());
     let mut active = vec![false; stop.len()];
     let mut z2 = 0.0;
+    let mut counts = ConcordanceTieCounts::default();
     let mut numerator = 0.0;
     let mut comparable_pair_weight = 0.0;
     let mut start_cursor = 0usize;
@@ -681,12 +695,55 @@ fn counting_concordance_conditional_variance_numerator(
         let risk_weight = at_risk.total();
         let multiplier = multiplier_at(&multipliers, event_time);
         if risk_weight > 0.0 && multiplier > 0.0 {
+            let event_group = &event_indices[event_group_start..event_group_end];
+            let mut events_by_risk = event_group.to_vec();
+            events_by_risk.sort_by(|&left, &right| {
+                risk_scores[left]
+                    .total_cmp(&risk_scores[right])
+                    .then_with(|| left.cmp(&right))
+            });
+            let mut risk_group_start = 0;
+            while risk_group_start < events_by_risk.len() {
+                let mut risk_group_end = risk_group_start + 1;
+                while risk_group_end < events_by_risk.len()
+                    && risk_scores[events_by_risk[risk_group_end]]
+                        == risk_scores[events_by_risk[risk_group_start]]
+                {
+                    risk_group_end += 1;
+                }
+                let event_tied_weight: f64 = events_by_risk[risk_group_start..risk_group_end]
+                    .iter()
+                    .map(|&idx| concordance_case_weight(weights, idx))
+                    .sum();
+                for &event_idx in &events_by_risk[risk_group_start..risk_group_end] {
+                    let lower_end =
+                        risk_levels.partition_point(|&risk| risk < risk_scores[event_idx]);
+                    let tied_end =
+                        risk_levels.partition_point(|&risk| risk <= risk_scores[event_idx]);
+                    let active_tied = rank_prefix_weight_before(&at_risk, tied_end)
+                        - rank_prefix_weight_before(&at_risk, lower_end);
+                    counts.tied_x += concordance_case_weight(weights, event_idx)
+                        * (active_tied - event_tied_weight).max(0.0)
+                        * multiplier;
+                }
+                risk_group_start = risk_group_end;
+            }
+
+            if event_group.len() > 1 {
+                let event_weights: Vec<f64> = event_group
+                    .iter()
+                    .map(|&idx| concordance_case_weight(weights, idx))
+                    .collect();
+                let tied_xy = tied_event_risk_pairs(event_group, risk_scores, weights);
+                counts.tied_xy += tied_xy * multiplier;
+                counts.tied_y += (weighted_pairs(&event_weights) - tied_xy).max(0.0) * multiplier;
+            }
             numerator += death_weight * multiplier * z2 / risk_weight;
             comparable_pair_weight += death_weight * (risk_weight - death_weight) * multiplier;
         }
         event_group_start = event_group_end;
     }
-    (numerator, comparable_pair_weight)
+    (counts, numerator, comparable_pair_weight)
 }
 
 fn rank_from_active_risk_set(
@@ -720,6 +777,7 @@ fn right_concordance_rank_rows_for_vectors(
     time: &[f64],
     status: &[i32],
     risk_scores: &[f64],
+    order_scores: &[f64],
     case_weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceRankRows {
@@ -733,7 +791,8 @@ fn right_concordance_rank_rows_for_vectors(
     event_indices.sort_by(|&left, &right| {
         time[left]
             .total_cmp(&time[right])
-            .then_with(|| left.cmp(&right))
+            .then_with(|| order_scores[right].total_cmp(&order_scores[left]))
+            .then_with(|| right.cmp(&left))
     });
 
     let mut risk_levels = risk_scores.to_vec();
@@ -799,6 +858,7 @@ fn counting_concordance_rank_rows_for_vectors(
     stop: &[f64],
     status: &[i32],
     risk_scores: &[f64],
+    order_scores: &[f64],
     case_weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceRankRows {
@@ -817,7 +877,8 @@ fn counting_concordance_rank_rows_for_vectors(
     event_indices.sort_by(|&left, &right| {
         stop[left]
             .total_cmp(&stop[right])
-            .then_with(|| left.cmp(&right))
+            .then_with(|| order_scores[right].total_cmp(&order_scores[left]))
+            .then_with(|| right.cmp(&left))
     });
 
     let mut risk_levels = risk_scores.to_vec();
@@ -891,65 +952,102 @@ fn counting_concordance_rank_rows_for_vectors(
     rows
 }
 
-fn sort_rank_rows_by_time(rows: &mut ConcordanceRankRows) {
-    rows.sort_by(|left, right| left.0.total_cmp(&right.0));
+fn reassemble_stratified_rank_rows(
+    n: usize,
+    groups: Vec<Vec<usize>>,
+    mut compute_group: impl FnMut(&[usize]) -> ConcordanceRankRows,
+) -> PyResult<ConcordanceRankRows> {
+    let mut result = vec![[0.0; 4]; n];
+    for indices in groups {
+        let group_rows = compute_group(&indices);
+        if group_rows.is_empty() {
+            return Err(PyValueError::new_err("replacement has length zero"));
+        }
+        let source: Vec<f64> = (0..4)
+            .flat_map(|column| {
+                group_rows.iter().map(move |row| match column {
+                    0 => row.0,
+                    1 => row.1,
+                    2 => row.2,
+                    _ => row.3,
+                })
+            })
+            .collect();
+        let target_len = indices.len() * 4;
+        if target_len % source.len() != 0 {
+            return Err(PyValueError::new_err(
+                "number of items to replace is not a multiple of replacement length",
+            ));
+        }
+        for column in 0..4 {
+            for (local_idx, &original_idx) in indices.iter().enumerate() {
+                result[original_idx][column] =
+                    source[(column * indices.len() + local_idx) % source.len()];
+            }
+        }
+    }
+    Ok(result
+        .into_iter()
+        .map(|row| (row[0], row[1], row[2], row[3]))
+        .collect())
 }
 
 fn stratified_right_concordance_rank_rows(
     time: &[f64],
     status: &[i32],
     risk_scores: &[f64],
+    order_scores: &[f64],
     strata: &[i32],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> ConcordanceRankRows {
-    let mut rows = Vec::new();
-    for indices in strata_groups(strata) {
+) -> PyResult<ConcordanceRankRows> {
+    reassemble_stratified_rank_rows(time.len(), strata_groups(strata), |indices| {
         let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
         let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
         let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
+        let group_order: Vec<f64> = indices.iter().map(|&idx| order_scores[idx]).collect();
         let group_weights: Option<Vec<f64>> =
             weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
-        rows.extend(right_concordance_rank_rows_for_vectors(
+        right_concordance_rank_rows_for_vectors(
             &group_time,
             &group_status,
             &group_risk,
+            &group_order,
             group_weights.as_deref(),
             time_weight,
-        ));
-    }
-    sort_rank_rows_by_time(&mut rows);
-    rows
+        )
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stratified_counting_concordance_rank_rows_for_strata(
     start: &[f64],
     stop: &[f64],
     status: &[i32],
     risk_scores: &[f64],
+    order_scores: &[f64],
     strata: &[i32],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> ConcordanceRankRows {
-    let mut rows = Vec::new();
-    for indices in strata_groups(strata) {
+) -> PyResult<ConcordanceRankRows> {
+    reassemble_stratified_rank_rows(stop.len(), strata_groups(strata), |indices| {
         let group_start: Vec<f64> = indices.iter().map(|&idx| start[idx]).collect();
         let group_stop: Vec<f64> = indices.iter().map(|&idx| stop[idx]).collect();
         let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
         let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
+        let group_order: Vec<f64> = indices.iter().map(|&idx| order_scores[idx]).collect();
         let group_weights: Option<Vec<f64>> =
             weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
-        rows.extend(counting_concordance_rank_rows_for_vectors(
+        counting_concordance_rank_rows_for_vectors(
             &group_start,
             &group_stop,
             &group_status,
             &group_risk,
+            &group_order,
             group_weights.as_deref(),
             time_weight,
-        ));
-    }
-    sort_rank_rows_by_time(&mut rows);
-    rows
+        )
+    })
 }
 
 fn add_influence_pair(
@@ -1112,7 +1210,7 @@ fn counting_concordance_influence_rows_for_vectors(
                 }
                 continue;
             }
-            if !(start[risk_idx] < event_time && event_time < stop[risk_idx]) {
+            if !(start[risk_idx] < event_time && event_time <= stop[risk_idx]) {
                 continue;
             }
 
@@ -1274,22 +1372,6 @@ fn counting_concordance_summary_for_vectors(
     }
 }
 
-fn build_concordance_summary_with_events_dict(
-    summary: ConcordanceSummary,
-    n_event: f64,
-    conditional_variance: f64,
-) -> PyResult<Py<PyDict>> {
-    Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("concordance", summary.c_index())?;
-        dict.set_item("concordant", summary.concordant)?;
-        dict.set_item("comparable", summary.comparable)?;
-        dict.set_item("n_event", n_event)?;
-        dict.set_item("conditional_variance", conditional_variance)?;
-        Ok(dict.into())
-    })
-}
-
 fn stratified_right_concordance_summary_counts(
     time: &[f64],
     status: &[i32],
@@ -1297,11 +1379,19 @@ fn stratified_right_concordance_summary_counts(
     strata: &[i32],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> (ConcordanceSummary, ConcordanceTieCounts, f64, f64, f64) {
+) -> (
+    ConcordanceSummary,
+    ConcordanceTieCounts,
+    f64,
+    f64,
+    f64,
+    ConcordanceCountRows,
+) {
     let mut total = ConcordanceSummary::default();
     let mut ties = ConcordanceTieCounts::default();
     let mut conditional_variance_numerator = 0.0;
     let mut comparable_pair_weight = 0.0;
+    let mut strata_counts = Vec::new();
     for indices in strata_groups(strata) {
         let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
         let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
@@ -1328,6 +1418,7 @@ fn stratified_right_concordance_summary_counts(
         ties.tied_x += group_ties.tied_x;
         ties.tied_y += group_ties.tied_y;
         ties.tied_xy += group_ties.tied_xy;
+        strata_counts.push(concordance_count_row(summary, group_ties));
         conditional_variance_numerator += group_conditional_variance_numerator;
         comparable_pair_weight += group_comparable_pair_weight;
     }
@@ -1338,6 +1429,7 @@ fn stratified_right_concordance_summary_counts(
         n_event,
         conditional_variance_numerator,
         comparable_pair_weight,
+        strata_counts,
     )
 }
 
@@ -1349,10 +1441,19 @@ fn stratified_counting_concordance_summary_counts(
     strata: &[i32],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> (ConcordanceSummary, f64, f64, f64) {
+) -> (
+    ConcordanceSummary,
+    ConcordanceTieCounts,
+    f64,
+    f64,
+    f64,
+    ConcordanceCountRows,
+) {
     let mut total = ConcordanceSummary::default();
+    let mut ties = ConcordanceTieCounts::default();
     let mut conditional_variance_numerator = 0.0;
     let mut comparable_pair_weight = 0.0;
+    let mut strata_counts = Vec::new();
     for indices in strata_groups(strata) {
         let group_start: Vec<f64> = indices.iter().map(|&idx| start[idx]).collect();
         let group_stop: Vec<f64> = indices.iter().map(|&idx| stop[idx]).collect();
@@ -1370,7 +1471,7 @@ fn stratified_counting_concordance_summary_counts(
         );
         total.concordant += summary.concordant;
         total.comparable += summary.comparable;
-        let (group_conditional_variance_numerator, group_comparable_pair_weight) =
+        let (group_ties, group_conditional_variance_numerator, group_comparable_pair_weight) =
             counting_concordance_conditional_variance_numerator(
                 &group_start,
                 &group_stop,
@@ -1379,15 +1480,21 @@ fn stratified_counting_concordance_summary_counts(
                 group_weights.as_deref(),
                 time_weight,
             );
+        ties.tied_x += group_ties.tied_x;
+        ties.tied_y += group_ties.tied_y;
+        ties.tied_xy += group_ties.tied_xy;
+        strata_counts.push(concordance_count_row(summary, group_ties));
         conditional_variance_numerator += group_conditional_variance_numerator;
         comparable_pair_weight += group_comparable_pair_weight;
     }
     let n_event = status.iter().filter(|&&event| event == 1).count() as f64;
     (
         total,
+        ties,
         n_event,
         conditional_variance_numerator,
         comparable_pair_weight,
+        strata_counts,
     )
 }
 
@@ -1477,25 +1584,12 @@ fn conditional_variance_from_numerator(numerator: f64, comparable: f64) -> f64 {
     numerator / (4.0 * comparable * comparable)
 }
 
-fn build_concordance_summary_dict(
-    summary: ConcordanceSummary,
-    conditional_variance: f64,
-) -> PyResult<Py<PyDict>> {
-    Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("concordance", summary.c_index())?;
-        dict.set_item("concordant", summary.concordant)?;
-        dict.set_item("comparable", summary.comparable)?;
-        dict.set_item("conditional_variance", conditional_variance)?;
-        Ok(dict.into())
-    })
-}
-
 fn build_right_concordance_summary_dict(
     summary: ConcordanceSummary,
     ties: ConcordanceTieCounts,
     n_event: Option<f64>,
     conditional_variance: f64,
+    strata_counts: Option<ConcordanceCountRows>,
 ) -> PyResult<Py<PyDict>> {
     Python::attach(|py| {
         let dict = PyDict::new(py);
@@ -1508,6 +1602,9 @@ fn build_right_concordance_summary_dict(
         dict.set_item("conditional_variance", conditional_variance)?;
         if let Some(value) = n_event {
             dict.set_item("n_event", value)?;
+        }
+        if let Some(value) = strata_counts {
+            dict.set_item("strata_counts", value)?;
         }
         Ok(dict.into())
     })
@@ -1542,7 +1639,7 @@ pub fn concordance_summary(
         );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_right_concordance_summary_dict(summary, ties, None, conditional_variance)
+    build_right_concordance_summary_dict(summary, ties, None, conditional_variance, None)
 }
 
 #[pyfunction]
@@ -1558,42 +1655,65 @@ pub fn stratified_concordance_summary(
     validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
     validate_strata_length(time.len(), &strata, "time")?;
     let time_weight = parse_concordance_time_weight(&timewt)?;
-    let (summary, ties, n_event, conditional_variance_numerator, comparable_pair_weight) =
-        stratified_right_concordance_summary_counts(
-            &time,
-            &status,
-            &risk_scores,
-            &strata,
-            weights.as_deref(),
-            time_weight,
-        );
+    let (
+        summary,
+        ties,
+        n_event,
+        conditional_variance_numerator,
+        comparable_pair_weight,
+        strata_counts,
+    ) = stratified_right_concordance_summary_counts(
+        &time,
+        &status,
+        &risk_scores,
+        &strata,
+        weights.as_deref(),
+        time_weight,
+    );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_right_concordance_summary_dict(summary, ties, Some(n_event), conditional_variance)
+    build_right_concordance_summary_dict(
+        summary,
+        ties,
+        Some(n_event),
+        conditional_variance,
+        Some(strata_counts),
+    )
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string()))]
+#[pyo3(signature = (time, status, risk_scores, weights=None, timewt="n".to_string(), order_scores=None))]
 pub fn concordance_rank_rows(
     time: Vec<f64>,
     status: Vec<i32>,
     risk_scores: Vec<f64>,
     weights: Option<Vec<f64>>,
     timewt: String,
+    order_scores: Option<Vec<f64>>,
 ) -> PyResult<ConcordanceRankRows> {
     validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
+    if order_scores
+        .as_ref()
+        .is_some_and(|values| values.len() != time.len())
+    {
+        return Err(PyValueError::new_err(
+            "order_scores must have the same length as time",
+        ));
+    }
     let time_weight = parse_concordance_time_weight(&timewt)?;
+    let order_scores = order_scores.as_deref().unwrap_or(&risk_scores);
     Ok(right_concordance_rank_rows_for_vectors(
         &time,
         &status,
         &risk_scores,
+        order_scores,
         weights.as_deref(),
         time_weight,
     ))
 }
 
 #[pyfunction]
-#[pyo3(signature = (time, status, risk_scores, strata, weights=None, timewt="n".to_string()))]
+#[pyo3(signature = (time, status, risk_scores, strata, weights=None, timewt="n".to_string(), order_scores=None))]
 pub fn stratified_concordance_rank_rows(
     time: Vec<f64>,
     status: Vec<i32>,
@@ -1601,18 +1721,29 @@ pub fn stratified_concordance_rank_rows(
     strata: Vec<i32>,
     weights: Option<Vec<f64>>,
     timewt: String,
+    order_scores: Option<Vec<f64>>,
 ) -> PyResult<ConcordanceRankRows> {
     validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
     validate_strata_length(time.len(), &strata, "time")?;
+    if order_scores
+        .as_ref()
+        .is_some_and(|values| values.len() != time.len())
+    {
+        return Err(PyValueError::new_err(
+            "order_scores must have the same length as time",
+        ));
+    }
     let time_weight = parse_concordance_time_weight(&timewt)?;
-    Ok(stratified_right_concordance_rank_rows(
+    let order_scores = order_scores.as_deref().unwrap_or(&risk_scores);
+    stratified_right_concordance_rank_rows(
         &time,
         &status,
         &risk_scores,
+        order_scores,
         &strata,
         weights.as_deref(),
         time_weight,
-    ))
+    )
 }
 
 #[pyfunction]
@@ -1727,7 +1858,7 @@ pub fn counting_concordance_summary(
         weights.as_deref(),
         time_weight,
     );
-    let (conditional_variance_numerator, comparable_pair_weight) =
+    let (ties, conditional_variance_numerator, comparable_pair_weight) =
         counting_concordance_conditional_variance_numerator(
             &start,
             &stop,
@@ -1738,7 +1869,7 @@ pub fn counting_concordance_summary(
         );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_concordance_summary_dict(summary, conditional_variance)
+    build_right_concordance_summary_dict(summary, ties, None, conditional_variance, None)
 }
 
 #[pyfunction]
@@ -1765,23 +1896,36 @@ pub fn stratified_counting_concordance_summary(
     )?;
     validate_strata_length(start.len(), &strata, "start")?;
     let time_weight = parse_counting_concordance_time_weight(&timewt)?;
-    let (summary, n_event, conditional_variance_numerator, comparable_pair_weight) =
-        stratified_counting_concordance_summary_counts(
-            &start,
-            &stop,
-            &status,
-            &risk_scores,
-            &strata,
-            weights.as_deref(),
-            time_weight,
-        );
+    let (
+        summary,
+        ties,
+        n_event,
+        conditional_variance_numerator,
+        comparable_pair_weight,
+        strata_counts,
+    ) = stratified_counting_concordance_summary_counts(
+        &start,
+        &stop,
+        &status,
+        &risk_scores,
+        &strata,
+        weights.as_deref(),
+        time_weight,
+    );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_concordance_summary_with_events_dict(summary, n_event, conditional_variance)
+    build_right_concordance_summary_dict(
+        summary,
+        ties,
+        Some(n_event),
+        conditional_variance,
+        Some(strata_counts),
+    )
 }
 
 #[pyfunction]
-#[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string(), timefix=None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (start, stop, status, risk_scores, weights=None, timewt="n".to_string(), timefix=None, order_scores=None))]
 pub fn counting_concordance_rank_rows(
     start: Vec<f64>,
     stop: Vec<f64>,
@@ -1790,6 +1934,7 @@ pub fn counting_concordance_rank_rows(
     weights: Option<Vec<f64>>,
     timewt: String,
     timefix: Option<bool>,
+    order_scores: Option<Vec<f64>>,
 ) -> PyResult<ConcordanceRankRows> {
     let (start, stop) = prepare_counting_concordance_times(&start, &stop, timefix);
     validate_counting_concordance_inputs(
@@ -1800,12 +1945,22 @@ pub fn counting_concordance_rank_rows(
         weights.as_deref(),
         timefix,
     )?;
+    if order_scores
+        .as_ref()
+        .is_some_and(|values| values.len() != start.len())
+    {
+        return Err(PyValueError::new_err(
+            "order_scores must have the same length as start",
+        ));
+    }
     let time_weight = parse_counting_concordance_time_weight(&timewt)?;
+    let order_scores = order_scores.as_deref().unwrap_or(&risk_scores);
     Ok(counting_concordance_rank_rows_for_vectors(
         &start,
         &stop,
         &status,
         &risk_scores,
+        order_scores,
         weights.as_deref(),
         time_weight,
     ))
@@ -1813,7 +1968,7 @@ pub fn counting_concordance_rank_rows(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (start, stop, status, risk_scores, strata, weights=None, timewt="n".to_string(), timefix=None))]
+#[pyo3(signature = (start, stop, status, risk_scores, strata, weights=None, timewt="n".to_string(), timefix=None, order_scores=None))]
 pub fn stratified_counting_concordance_rank_rows(
     start: Vec<f64>,
     stop: Vec<f64>,
@@ -1823,6 +1978,7 @@ pub fn stratified_counting_concordance_rank_rows(
     weights: Option<Vec<f64>>,
     timewt: String,
     timefix: Option<bool>,
+    order_scores: Option<Vec<f64>>,
 ) -> PyResult<ConcordanceRankRows> {
     let (start, stop) = prepare_counting_concordance_times(&start, &stop, timefix);
     validate_counting_concordance_inputs(
@@ -1834,16 +1990,26 @@ pub fn stratified_counting_concordance_rank_rows(
         timefix,
     )?;
     validate_strata_length(start.len(), &strata, "start")?;
+    if order_scores
+        .as_ref()
+        .is_some_and(|values| values.len() != start.len())
+    {
+        return Err(PyValueError::new_err(
+            "order_scores must have the same length as start",
+        ));
+    }
     let time_weight = parse_counting_concordance_time_weight(&timewt)?;
-    Ok(stratified_counting_concordance_rank_rows_for_strata(
+    let order_scores = order_scores.as_deref().unwrap_or(&risk_scores);
+    stratified_counting_concordance_rank_rows_for_strata(
         &start,
         &stop,
         &status,
         &risk_scores,
+        order_scores,
         &strata,
         weights.as_deref(),
         time_weight,
-    ))
+    )
 }
 
 #[pyfunction]
@@ -2133,6 +2299,7 @@ mod tests {
             vec![0.9, 0.6, 0.4, 0.1],
             Some(vec![2.0, 1.0, 3.0, 1.0]),
             "n".to_string(),
+            None,
         )
         .unwrap();
 
@@ -2155,6 +2322,7 @@ mod tests {
             risk.clone(),
             weights.clone(),
             "S".to_string(),
+            None,
         )
         .unwrap();
         let near = concordance_rank_rows(
@@ -2163,6 +2331,7 @@ mod tests {
             risk,
             weights,
             "S".to_string(),
+            None,
         )
         .unwrap();
 
@@ -2187,10 +2356,18 @@ mod tests {
             risk.clone(),
             None,
             "S".to_string(),
+            None,
         )
         .unwrap();
-        let unit_weighted =
-            concordance_rank_rows(time, status, risk, Some(vec![1.0; 4]), "S".to_string()).unwrap();
+        let unit_weighted = concordance_rank_rows(
+            time,
+            status,
+            risk,
+            Some(vec![1.0; 4]),
+            "S".to_string(),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(unweighted, unit_weighted);
 
@@ -2206,6 +2383,7 @@ mod tests {
             None,
             "S".to_string(),
             None,
+            None,
         )
         .unwrap();
         let unit_weighted = counting_concordance_rank_rows(
@@ -2215,6 +2393,7 @@ mod tests {
             risk,
             Some(vec![1.0; 4]),
             "S".to_string(),
+            None,
             None,
         )
         .unwrap();
@@ -2232,6 +2411,7 @@ mod tests {
             vec![0.2, 0.9, 0.5, 0.1, 0.8],
             Some(vec![1.0, 2.0, 3.0, 1.0, 4.0]),
             "n".to_string(),
+            None,
         )
         .unwrap();
 
@@ -2261,6 +2441,7 @@ mod tests {
             vec![0.9, 0.7, 0.4, 0.1],
             None,
             "n".to_string(),
+            None,
             None,
         )
         .unwrap();
@@ -2309,6 +2490,7 @@ mod tests {
             Some(vec![2.0, 1.0, 3.0, 0.5, 4.0]),
             "S".to_string(),
             None,
+            None,
         )
         .unwrap();
 
@@ -2335,20 +2517,25 @@ mod tests {
     fn stratified_concordance_summary_counts_within_strata() {
         initialize_python();
 
-        let (summary, ties, n_event, _, _) = stratified_right_concordance_summary_counts(
-            &[1.0, 2.0, 1.0, 2.0],
-            &[1, 0, 1, 0],
-            &[0.9, 0.1, 0.2, 0.8],
-            &[0, 0, 1, 1],
-            None,
-            ConcordanceTimeWeight::N,
-        );
+        let (summary, ties, n_event, _, _, strata_counts) =
+            stratified_right_concordance_summary_counts(
+                &[1.0, 2.0, 1.0, 2.0],
+                &[1, 0, 1, 0],
+                &[0.9, 0.1, 0.2, 0.8],
+                &[0, 0, 1, 1],
+                None,
+                ConcordanceTimeWeight::N,
+            );
 
         assert_eq!(n_event, 2.0);
         assert_eq!(summary.concordant, 1.0);
         assert_eq!(summary.comparable, 2.0);
         assert_eq!(summary.c_index(), 0.5);
         assert_eq!(ties, ConcordanceTieCounts::default());
+        assert_eq!(
+            strata_counts,
+            vec![[1.0, 0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0, 0.0]]
+        );
     }
 
     #[test]
@@ -2433,7 +2620,7 @@ mod tests {
         let stop = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
         let status = [1, 1, 1, 1, 0, 1, 0];
         let risk = [0.9, 0.2, 0.7, 0.4, 0.1, 0.8, 0.3];
-        let (numerator, comparable_pair_weight) =
+        let (_ties, numerator, comparable_pair_weight) =
             counting_concordance_conditional_variance_numerator(
                 &start,
                 &stop,
@@ -2448,23 +2635,101 @@ mod tests {
     }
 
     #[test]
+    fn counting_concordance_same_time_pairs_match_reference() {
+        let start = [0.0; 5];
+        let stop = [1.0, 1.0, 2.0, 2.0, 3.0];
+        let status = [1, 1, 1, 0, 1];
+        let risk = [0.9, 0.2, 0.7, 0.1, 0.8];
+        let weights = [2.0, 1.0, 3.0, 0.5, 4.0];
+        let summary = counting_concordance_summary_for_vectors(
+            &start,
+            &stop,
+            &status,
+            &risk,
+            Some(&weights),
+            ConcordanceTimeWeight::S,
+        );
+        let (ties, numerator, pair_weight) = counting_concordance_conditional_variance_numerator(
+            &start,
+            &stop,
+            &status,
+            &risk,
+            Some(&weights),
+            ConcordanceTimeWeight::S,
+        );
+
+        assert_eq!(summary.concordant, 17.0);
+        assert_eq!(summary.comparable, 36.0);
+        assert!((summary.c_index() - 17.0 / 36.0).abs() < 1e-12);
+        assert_eq!(
+            ties,
+            ConcordanceTieCounts {
+                tied_x: 0.0,
+                tied_y: 2.0,
+                tied_xy: 0.0,
+            }
+        );
+        assert!(
+            (conditional_variance_from_numerator(numerator, pair_weight) - 0.0279348544973545)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
     fn stratified_counting_concordance_summary_counts_within_strata() {
         initialize_python();
 
-        let (summary, n_event, _, _) = stratified_counting_concordance_summary_counts(
-            &[0.0, 0.0, 0.0, 0.0],
-            &[1.0, 2.0, 1.0, 2.0],
-            &[1, 0, 1, 0],
-            &[0.9, 0.1, 0.2, 0.8],
-            &[0, 0, 1, 1],
-            None,
-            ConcordanceTimeWeight::N,
-        );
+        let (summary, ties, n_event, _, _, strata_counts) =
+            stratified_counting_concordance_summary_counts(
+                &[0.0, 0.0, 0.0, 0.0],
+                &[1.0, 2.0, 1.0, 2.0],
+                &[1, 0, 1, 0],
+                &[0.9, 0.1, 0.2, 0.8],
+                &[0, 0, 1, 1],
+                None,
+                ConcordanceTimeWeight::N,
+            );
 
         assert_eq!(n_event, 2.0);
         assert_eq!(summary.concordant, 1.0);
         assert_eq!(summary.comparable, 2.0);
         assert_eq!(summary.c_index(), 0.5);
+        assert_eq!(ties, ConcordanceTieCounts::default());
+        assert_eq!(
+            strata_counts,
+            vec![[1.0, 0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn weighted_stratified_count_rows_match_reference() {
+        let (_, _, _, _, _, right_counts) = stratified_right_concordance_summary_counts(
+            &[1.0, 3.0, 2.0, 4.0, 4.0, 2.0],
+            &[1, 1, 1, 1, 1, 1],
+            &[-0.2, -0.9, -0.4, -0.7, -0.7, -0.1],
+            &[0, 0, 1, 1, 1, 0],
+            Some(&[1.0, 2.0, 1.5, 0.5, 3.0, 2.5]),
+            ConcordanceTimeWeight::N,
+        );
+        let (_, _, _, _, _, counting_counts) = stratified_counting_concordance_summary_counts(
+            &[0.0, 0.0, 1.0, 2.5, 0.0, 0.0, 0.5, 2.0],
+            &[2.0, 4.0, 3.0, 5.0, 1.0, 4.0, 3.0, 5.0],
+            &[1, 0, 1, 1, 1, 1, 0, 1],
+            &[-0.8, -0.2, -0.5, -0.1, -0.3, -0.9, -0.4, -0.6],
+            &[0, 0, 0, 0, 1, 1, 1, 1],
+            Some(&[1.0, 2.0, 1.5, 0.5, 3.0, 1.0, 2.5, 2.0]),
+            ConcordanceTimeWeight::N,
+        );
+
+        assert_eq!(
+            right_counts,
+            vec![[7.0, 2.5, 0.0, 0.0, 0.0], [5.25, 0.0, 0.0, 0.0, 1.5]]
+        );
+        assert_eq!(
+            counting_counts,
+            vec![[0.0, 7.25, 0.0, 0.0, 0.0], [10.5, 2.0, 0.0, 0.0, 0.0]]
+        );
     }
 
     #[test]
@@ -2478,10 +2743,19 @@ mod tests {
             vec![0, 0, 1, 1],
             None,
             "n".to_string(),
+            None,
         )
         .unwrap();
 
-        assert_eq!(rows, vec![(1.0, 0.5, 2.0, 1.0), (1.0, -0.5, 2.0, 1.0)]);
+        assert_eq!(
+            rows,
+            vec![
+                (1.0, 2.0, 1.0, 2.0),
+                (0.5, 1.0, 0.5, 1.0),
+                (1.0, 2.0, 1.0, 2.0),
+                (-0.5, 1.0, -0.5, 1.0),
+            ]
+        );
     }
 
     #[test]
@@ -2497,10 +2771,43 @@ mod tests {
             None,
             "n".to_string(),
             None,
+            None,
         )
         .unwrap();
 
-        assert_eq!(rows, vec![(1.0, 0.5, 2.0, 1.0), (1.0, -0.5, 2.0, 1.0)]);
+        assert_eq!(
+            rows,
+            vec![
+                (1.0, 2.0, 1.0, 2.0),
+                (0.5, 1.0, 0.5, 1.0),
+                (1.0, 2.0, 1.0, 2.0),
+                (-0.5, 1.0, -0.5, 1.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn stratified_counting_rank_rows_reject_non_recyclable_residuals() {
+        initialize_python();
+
+        let error = stratified_counting_concordance_rank_rows(
+            vec![0.0, 0.0, 1.0, 2.5, 0.0, 0.0, 0.5, 2.0],
+            vec![2.0, 4.0, 3.0, 5.0, 1.0, 4.0, 3.0, 5.0],
+            vec![1, 0, 1, 1, 1, 1, 0, 1],
+            vec![-0.8, -0.2, -0.5, -0.1, -0.3, -0.9, -0.4, -0.6],
+            vec![0, 0, 0, 0, 1, 1, 1, 1],
+            Some(vec![1.0, 2.0, 1.5, 0.5, 3.0, 1.0, 2.5, 2.0]),
+            "n".to_string(),
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .ends_with("number of items to replace is not a multiple of replacement length")
+        );
     }
 
     #[test]
@@ -2742,5 +3049,43 @@ mod tests {
         assert!((dfbeta[0] - 0.08).abs() < 1e-12);
         assert!((dfbeta[1] + 0.08).abs() < 1e-12);
         assert!((variance - dfbeta.iter().map(|value| value * value).sum::<f64>()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn counting_concordance_same_time_influence_matches_reference() {
+        initialize_python();
+
+        let (influence, dfbeta, variance) = counting_concordance_influence_rows(
+            vec![0.0; 5],
+            vec![1.0, 1.0, 2.0, 2.0, 3.0],
+            vec![1, 1, 1, 0, 1],
+            vec![0.9, 0.2, 0.7, 0.1, 0.8],
+            Some(vec![2.0, 1.0, 3.0, 0.5, 4.0]),
+            "S".to_string(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            influence,
+            vec![
+                vec![7.5, 0.0, 0.0, 1.0, 0.0],
+                vec![0.25, 3.5, 0.0, 1.0, 0.0],
+                vec![3.75, 7.5, 0.0, 0.0, 0.0],
+                vec![1.5, 0.0, 0.0, 0.0, 0.0],
+                vec![4.0, 8.0, 0.0, 0.0, 0.0],
+            ]
+        );
+        let expected = [
+            0.1099537037037035,
+            -0.04224537037037035,
+            -0.0434027777777778,
+            0.02199074074074075,
+            -0.0462962962962963,
+        ];
+        for (actual, expected) in dfbeta.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert!((variance - 0.018385229123799725).abs() < 1e-12);
     }
 }

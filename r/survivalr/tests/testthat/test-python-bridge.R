@@ -4120,6 +4120,186 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("stratified concordance results match reference shapes and diagnostics", {
+  right_data <- data.frame(
+    y = c(1, 3, 2, 4, 4, 2),
+    x = c(0.2, 0.9, 0.4, 0.7, 0.7, 0.1),
+    w = c(1, 2, 1.5, 0.5, 3, 2.5),
+    group = c("a", "a", "b", "b", "b", "a")
+  )
+  bridged_right <- concordance(
+    y ~ x + strata(group),
+    data = right_data,
+    weights = w,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_right <- survival::concordance(
+    y ~ x + strata(group),
+    data = right_data,
+    weights = w,
+    influence = 3,
+    ranks = TRUE
+  )
+
+  expect_equal(bridged_right$count, reference_right$count, tolerance = 1e-12)
+  expect_equal(bridged_right$ranks, reference_right$ranks, tolerance = 1e-12)
+  expect_equal(bridged_right$dfbeta, reference_right$dfbeta, tolerance = 1e-12)
+  expect_equal(bridged_right$influence, reference_right$influence, tolerance = 1e-12)
+  expect_equal(vcov(bridged_right), vcov(reference_right), tolerance = 1e-12)
+
+  multi_data <- transform(
+    right_data,
+    z = c(0.8, 0.3, 0.5, 0.2, 0.6, 0.4)
+  )
+  bridged_multi <- concordance(
+    y ~ x + z,
+    data = multi_data,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_multi <- survival::concordance(
+    y ~ x + z,
+    data = multi_data,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(bridged_multi$count, reference_multi$count, tolerance = 1e-12)
+  expect_equal(bridged_multi$ranks, reference_multi$ranks, tolerance = 1e-12)
+  expect_equal(bridged_multi$dfbeta, reference_multi$dfbeta, tolerance = 1e-12)
+  expect_equal(bridged_multi$influence, reference_multi$influence, tolerance = 1e-12)
+
+  collapsed_right <- concordance(
+    y ~ x + strata(group),
+    data = right_data,
+    weights = w,
+    keepstrata = FALSE
+  )
+  expect_equal(
+    collapsed_right$count,
+    colSums(reference_right$count),
+    tolerance = 1e-12
+  )
+
+  right_response <- Surv(right_data$y, rep(1L, nrow(right_data)))
+  reference_right_response <- survival::Surv(
+    right_data$y,
+    rep(1L, nrow(right_data))
+  )
+  bridged_fit <- concordancefit(
+    right_response,
+    right_data$x,
+    strata = right_data$group,
+    weights = right_data$w,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_fit <- survival::concordancefit(
+    reference_right_response,
+    right_data$x,
+    strata = right_data$group,
+    weights = right_data$w,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(bridged_fit$count, reference_fit$count, tolerance = 1e-12)
+  expect_equal(bridged_fit$ranks, reference_fit$ranks, tolerance = 1e-12)
+  expect_equal(bridged_fit$dfbeta, reference_fit$dfbeta, tolerance = 1e-12)
+  expect_equal(bridged_fit$influence, reference_fit$influence, tolerance = 1e-12)
+
+  score_matrix <- cbind(x = right_data$x, z = rev(right_data$x))
+  bridged_multi_fit <- concordancefit(
+    right_response,
+    score_matrix,
+    weights = right_data$w,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_multi_fit <- survival::concordancefit(
+    reference_right_response,
+    score_matrix,
+    weights = right_data$w,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(bridged_multi_fit$count, reference_multi_fit$count, tolerance = 1e-12)
+  expect_equal(bridged_multi_fit$ranks, reference_multi_fit$ranks, tolerance = 1e-12)
+  expect_equal(bridged_multi_fit$dfbeta, reference_multi_fit$dfbeta, tolerance = 1e-12)
+  expect_equal(bridged_multi_fit$influence, reference_multi_fit$influence, tolerance = 1e-12)
+
+  counting_data <- data.frame(
+    start = c(0, 0, 1, 2.5, 0, 0, 0.5, 2),
+    stop = c(2, 4, 3, 5, 1, 4, 3, 5),
+    status = c(1, 0, 1, 1, 1, 1, 0, 1),
+    score = c(0.8, 0.2, 0.5, 0.1, 0.3, 0.9, 0.4, 0.6),
+    w = c(1, 2, 1.5, 0.5, 3, 1, 2.5, 2),
+    group = c("a", "a", "a", "a", "b", "b", "b", "b")
+  )
+  bridged_counting <- concordance(
+    Surv(start, stop, status) ~ score + strata(group),
+    data = counting_data,
+    weights = w,
+    influence = 3
+  )
+  reference_counting <- survival::concordance(
+    survival::Surv(start, stop, status) ~ score + strata(group),
+    data = counting_data,
+    weights = w,
+    influence = 3
+  )
+  expect_equal(bridged_counting$count, reference_counting$count, tolerance = 1e-12)
+  expect_equal(bridged_counting$dfbeta, reference_counting$dfbeta, tolerance = 1e-12)
+  expect_equal(bridged_counting$influence, reference_counting$influence, tolerance = 1e-12)
+  expect_equal(vcov(bridged_counting), vcov(reference_counting), tolerance = 1e-12)
+  expect_error(
+    concordance(
+      Surv(start, stop, status) ~ score + strata(group),
+      data = counting_data,
+      weights = w,
+      ranks = TRUE
+    ),
+    "number of items to replace is not a multiple of replacement length"
+  )
+
+  tied_response <- Surv(
+    rep(0, 5),
+    c(1, 1, 2, 2, 3),
+    c(1, 1, 1, 0, 1)
+  )
+  reference_tied_response <- survival::Surv(
+    rep(0, 5),
+    c(1, 1, 2, 2, 3),
+    c(1, 1, 1, 0, 1)
+  )
+  tied_score <- c(0.9, 0.2, 0.7, 0.1, 0.8)
+  tied_weight <- c(2, 1, 3, 0.5, 4)
+  bridged_tied <- concordancefit(
+    tied_response,
+    tied_score,
+    weights = tied_weight,
+    timewt = "S",
+    reverse = TRUE,
+    influence = 3,
+    ranks = TRUE
+  )
+  reference_tied <- survival::concordancefit(
+    reference_tied_response,
+    tied_score,
+    weights = tied_weight,
+    timewt = "S",
+    reverse = TRUE,
+    influence = 3,
+    ranks = TRUE
+  )
+  expect_equal(bridged_tied$count, reference_tied$count, tolerance = 1e-12)
+  expect_equal(bridged_tied$concordance, reference_tied$concordance, tolerance = 1e-12)
+  expect_equal(bridged_tied$var, reference_tied$var, tolerance = 1e-12)
+  expect_equal(bridged_tied$cvar, reference_tied$cvar, tolerance = 1e-12)
+  expect_equal(bridged_tied$dfbeta, reference_tied$dfbeta, tolerance = 1e-12)
+  expect_equal(bridged_tied$influence, reference_tied$influence, tolerance = 1e-12)
+  expect_equal(bridged_tied$ranks, reference_tied$ranks, tolerance = 1e-12)
+})
+
 test_that("interval-censored curves match weighted Turnbull reference fits", {
   turnbull_data <- data.frame(
     time = rep(1:4, each = 3L),

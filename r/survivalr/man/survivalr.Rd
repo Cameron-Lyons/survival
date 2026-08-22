@@ -276,6 +276,8 @@
 \alias{summary.survival_py_basehaz}
 \alias{summary.survival_py_survdiff}
 \alias{summary.survival_py_concordance}
+\alias{$.survival_py_concordance}
+\alias{[[.survival_py_concordance}
 \alias{summary.survival_py_cox_zph}
 \alias{[.survival_py_cox_zph}
 \alias{plot.survival_py_cox_zph}
@@ -869,6 +871,10 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 \method{summary}{survival_py_survdiff}(object, ...)
 
 \method{summary}{survival_py_concordance}(object, ...)
+
+\method{$}{survival_py_concordance}(x, name)
+
+\method{[[}{survival_py_concordance}(x, i, ..., exact = TRUE)
 
 \method{summary}{survival_py_cox_zph}(object, ...)
 
