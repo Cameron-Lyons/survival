@@ -9721,6 +9721,25 @@ def yates_pairwise(result: YatesResult) -> YatesPairwiseResult:
     return _core.yates_pairwise(result)
 
 
+def _yates_risk_profiles(
+    x: Any,
+    beta: Any,
+    draws: Any,
+    n_levels: Any,
+    center: Any,
+) -> dict[str, list[float] | list[list[float]]]:
+    """Aggregate Cox risk profiles for observed and simulated coefficients."""
+
+    estimate, covariance = _core.yates_risk_profiles(
+        _as_rows(x, "x"),
+        _float_vector(beta, "beta"),
+        _as_rows(draws, "draws"),
+        _integer_scalar(n_levels, "n_levels"),
+        _float_vector(center, "center"),
+    )
+    return {"estimate": estimate, "covariance": covariance}
+
+
 def _scalar_or_vector_with_flag(values: Any, name: str) -> tuple[list[Any], bool]:
     try:
         return _materialize_1d(values, name), False
@@ -18044,6 +18063,20 @@ def model_formula(fit: Any) -> str:
     if isinstance(fit, _FormulaFit) and fit.formula is not None:
         return fit.formula
     raise TypeError("model_formula requires a formula-based fitted model")
+
+
+def _model_xlevels(fit: Any) -> dict[str, list[Any]]:
+    """Return categorical formula levels needed to rebuild model profiles."""
+
+    _require_model_fit(fit, "_model_xlevels")
+    design = _formula_design_for_fit(fit)
+    if design is None:
+        return {}
+    return {
+        factor.term.column: list(factor.levels)
+        for term in design.covariates
+        for factor in _categorical_design_factors(term)
+    }
 
 
 def model_term_names(fit: Any, terms: Any | None = None) -> list[str]:

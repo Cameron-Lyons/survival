@@ -5729,13 +5729,21 @@ Surv2data <- function(formula, data, subset, id) {
   mf2
 }
 
-.yates_factorial_population <- function(model_frame, adjustment_names, fit) {
+.yates_model_xlevels <- function(fit) {
+  values <- tryCatch(fit$xlevels, error = function(condition) NULL)
+  if (is.null(values) && inherits(fit, "survival_py_model")) {
+    values <- .call_r_api("_model_xlevels", fit)
+  }
+  if (is.null(values)) list() else as.list(values)
+}
+
+.yates_factorial_population <- function(model_frame, adjustment_names, xlevels) {
   if (length(adjustment_names) == 0L) {
     out <- model_frame[1L, , drop = FALSE]
     row.names(out) <- NULL
     return(out)
   }
-  grid_values <- fit$xlevels[adjustment_names]
+  grid_values <- xlevels[adjustment_names]
   if (length(grid_values) != length(adjustment_names) ||
       any(vapply(grid_values, is.null, logical(1)))) {
     return(NULL)
@@ -5751,7 +5759,7 @@ Surv2data <- function(formula, data, subset, id) {
     out[[name]] <- if (is.factor(source)) {
       factor(
         grid[[name]],
-        levels = fit$xlevels[[name]],
+        levels = xlevels[[name]],
         ordered = is.ordered(source)
       )
     } else {
@@ -5762,7 +5770,7 @@ Surv2data <- function(formula, data, subset, id) {
 }
 
 .yates_model_population <- function(population, population_value, model_frame,
-                                    Terms, term, fit) {
+                                    Terms, term, xlevels, fit_weights) {
   if (inherits(population, "data.frame")) {
     if (nrow(population) == 0L) {
       return(NULL)
@@ -5770,7 +5778,7 @@ Surv2data <- function(formula, data, subset, id) {
     return(list(frame = population, weights = NULL))
   }
   if (population_value %in% c("data", "empirical")) {
-    weights <- stats::model.weights(model_frame)
+    weights <- fit_weights
     if (!is.null(weights) &&
         (length(weights) != nrow(model_frame) ||
           !is.finite(sum(weights)) || sum(weights) == 0)) {
@@ -5791,14 +5799,14 @@ Surv2data <- function(formula, data, subset, id) {
     if (any(!categorical)) {
       return(NULL)
     }
-    frame <- .yates_factorial_population(model_frame, adjustment_names, fit)
+    frame <- .yates_factorial_population(model_frame, adjustment_names, xlevels)
     return(if (is.null(frame)) NULL else list(frame = frame, weights = NULL))
   }
   if (population_value != "sas") {
     return(NULL)
   }
   if (all(categorical)) {
-    frame <- .yates_factorial_population(model_frame, adjustment_names, fit)
+    frame <- .yates_factorial_population(model_frame, adjustment_names, xlevels)
     return(if (is.null(frame)) NULL else list(frame = frame, weights = NULL))
   }
   if (!any(categorical)) {
@@ -5810,7 +5818,7 @@ Surv2data <- function(formula, data, subset, id) {
   categorical_frame <- .yates_factorial_population(
     model_frame,
     categorical_names,
-    fit
+    xlevels
   )
   if (is.null(categorical_frame)) {
     return(NULL)
@@ -5835,8 +5843,10 @@ Surv2data <- function(formula, data, subset, id) {
 }
 
 .yates_model_term <- function(fit, term, population, levels, levels_missing,
-                              test, predict, method) {
-  if (!inherits(fit, "lm") ||
+                              test, predict, method, nsim) {
+  cox_fit <- inherits(fit, c("coxph", "survival_py_coxph"))
+  linear_fit <- inherits(fit, "lm")
+  if ((!linear_fit && !cox_fit) || .is_multistate_cox_fit(fit) ||
       !is.character(term) || length(term) != 1L ||
       !is.character(test) || length(test) == 0L ||
       !is.character(predict) || length(predict) != 1L ||
@@ -5855,7 +5865,8 @@ Surv2data <- function(formula, data, subset, id) {
   }
   test_value <- match.arg(test[[1L]], c("global", "trend", "pairwise"))
   method_value <- match.arg(tolower(method[[1L]]), c("direct", "sgtt"))
-  if (test_value == "trend" || !(predict %in% c("linear", "link")) ||
+  allowed_predictions <- if (cox_fit) c("linear", "lp", "risk") else c("linear", "link")
+  if (test_value == "trend" || !(predict %in% allowed_predictions) ||
       method_value != "direct") {
     return(NULL)
   }
@@ -5865,13 +5876,18 @@ Surv2data <- function(formula, data, subset, id) {
     return(NULL)
   }
   factor_names <- row.names(attr(Terms, "factors"))
-  model_frame <- fit$model
+  model_frame <- if (inherits(fit, "survival_py_model")) {
+    stats::model.frame(fit)
+  } else {
+    tryCatch(fit$model, error = function(condition) NULL)
+  }
   if (is.null(model_frame)) {
     model_frame <- stats::model.frame(fit)
   }
   if (!(term %in% factor_names) || !(term %in% names(model_frame))) {
     return(NULL)
   }
+  xlevels <- .yates_model_xlevels(fit)
 
   target <- model_frame[[term]]
   categorical_target <- is.factor(target) || is.character(target)
@@ -5882,7 +5898,7 @@ Surv2data <- function(formula, data, subset, id) {
   if (!levels_missing && (!is.atomic(levels) || !is.null(dim(levels)))) {
     return(NULL)
   }
-  fit_levels <- if (categorical_target) fit$xlevels[[term]] else NULL
+  fit_levels <- if (categorical_target) xlevels[[term]] else NULL
   contrast_levels <- if (categorical_target && levels_missing) {
     fit_levels
   } else if (categorical_target) {
@@ -5906,13 +5922,18 @@ Surv2data <- function(formula, data, subset, id) {
   if (!identical(names(beta), colnames(old_matrix))) {
     return(NULL)
   }
+  fit_weights <- stats::model.weights(model_frame)
+  if (is.null(fit_weights) && inherits(fit, "survival_py_model")) {
+    fit_weights <- stats::weights(fit)
+  }
   population_data <- .yates_model_population(
     population,
     population_value,
     model_frame,
     Terms,
     term,
-    fit
+    xlevels,
+    fit_weights
   )
   if (is.null(population_data)) {
     return(NULL)
@@ -5920,7 +5941,8 @@ Surv2data <- function(formula, data, subset, id) {
   averaging_frame <- population_data$frame
   weights <- population_data$weights
 
-  mean_design <- function(level) {
+  fit_contrasts <- tryCatch(fit$contrasts, error = function(condition) NULL)
+  profile_design <- function(level) {
     profile <- averaging_frame
     profile[[term]] <- if (categorical_target) {
       factor(
@@ -5931,31 +5953,83 @@ Surv2data <- function(formula, data, subset, id) {
     } else {
       rep(level, nrow(profile))
     }
-    design <- stats::model.matrix(
-      Terms,
-      profile,
-      contrasts.arg = fit$contrasts,
-      xlev = fit$xlevels
+    design <- tryCatch(
+      stats::model.matrix(
+        Terms,
+        profile,
+        contrasts.arg = fit_contrasts,
+        xlev = xlevels
+      ),
+      error = function(condition) NULL
     )
-    if (!identical(colnames(design), names(beta))) {
+    if (is.null(design)) {
       return(NULL)
     }
+    if (cox_fit) {
+      if (!all(names(beta) %in% colnames(design))) {
+        return(NULL)
+      }
+      design <- design[, names(beta), drop = FALSE]
+    } else if (!identical(colnames(design), names(beta))) {
+      return(NULL)
+    }
+    design
+  }
+  design_matrices <- lapply(contrast_levels, profile_design)
+  if (any(vapply(design_matrices, is.null, logical(1)))) {
+    return(NULL)
+  }
+  mean_design <- function(design) {
     if (is.null(weights)) {
       colMeans(design)
     } else {
       colSums(design * weights) / sum(weights)
     }
   }
-  design_rows <- lapply(contrast_levels, mean_design)
-  if (any(vapply(design_rows, is.null, logical(1)))) {
-    return(NULL)
-  }
+  design_rows <- lapply(design_matrices, mean_design)
   cmat <- do.call(rbind, design_rows)
   colnames(cmat) <- names(beta)
 
   variance <- stats::vcov(fit)
-  estimate_values <- drop(cmat %*% beta)
-  mean_variance <- cmat %*% variance %*% t(cmat)
+  risk_scale <- cox_fit && identical(predict, "risk")
+  center <- if (cox_fit) as.numeric(fit$means) else numeric(length(beta))
+  if (length(center) != length(beta) || any(!is.finite(center))) {
+    return(NULL)
+  }
+  if (risk_scale) {
+    nsim_value <- suppressWarnings(as.integer(nsim))
+    if (length(nsim) != 1L || length(nsim_value) != 1L ||
+        is.na(nsim_value) || nsim_value < 2L || nsim_value != nsim) {
+      return(NULL)
+    }
+    tol <- sqrt(.Machine$double.eps)
+    if (!isSymmetric(variance, tol = tol, check.attributes = FALSE)) {
+      stop("variance matrix of the coefficients is not symmetric", call. = FALSE)
+    }
+    ev <- eigen(variance, symmetric = TRUE)
+    if (!all(ev$values >= -tol * abs(ev$values[[1L]]))) {
+      warning("variance matrix is numerically not positive definite", call. = FALSE)
+    }
+    Rmat <- t(ev$vectors %*% (t(ev$vectors) * sqrt(ev$values)))
+    bmat <- matrix(stats::rnorm(nsim_value * ncol(variance)), nrow = nsim_value) %*% Rmat
+    bmat <- bmat + rep(beta, each = nsim_value)
+    risk_result <- .call_r_api(
+      "_yates_risk_profiles",
+      x = do.call(rbind, design_matrices),
+      beta = beta,
+      draws = bmat,
+      n_levels = length(contrast_levels),
+      center = center
+    )
+    estimate_values <- .as_numeric_vector(.result_field(risk_result, "estimate"))
+    mean_variance <- .as_numeric_matrix(.result_field(risk_result, "covariance"))
+  } else {
+    estimate_values <- drop(cmat %*% beta)
+    if (cox_fit) {
+      estimate_values <- estimate_values - sum(center * beta)
+    }
+    mean_variance <- cmat %*% variance %*% t(cmat)
+  }
   sigma2 <- if (identical(class(fit)[[1L]], "lm")) summary(fit)$sigma^2 else NULL
   evaluate_contrast <- function(contrast) {
     contrast_estimate <- drop(contrast %*% estimate_values)
@@ -5974,7 +6048,7 @@ Surv2data <- function(formula, data, subset, id) {
     test_matrix <- matrix(
       test_values,
       nrow = 1L,
-      dimnames = list("global", names(test_values))
+      dimnames = list(if (risk_scale) term else "global", names(test_values))
     )
   } else {
     pairs <- utils::combn(seq_along(contrast_levels), 2L)
@@ -5995,12 +6069,13 @@ Surv2data <- function(formula, data, subset, id) {
     stringsAsFactors = FALSE
   )
   names(estimate)[[1L]] <- term
-  list(
+  result <- list(
     estimate = estimate,
     test = test_matrix,
-    mvar = mean_variance,
-    cmat = cmat
+    mvar = mean_variance
   )
+  if (!risk_scale) result$cmat <- cmat
+  result
 }
 
 yates <- function(fit, term, population = c("data", "factorial", "sas"),
@@ -6017,7 +6092,8 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
       levels_missing = missing(levels),
       test = test,
       predict = predict,
-      method = method
+      method = method,
+      nsim = nsim
     )
     if (!is.null(local_result)) {
       call[[1L]] <- quote(survival::yates)

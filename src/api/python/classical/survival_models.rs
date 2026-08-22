@@ -67,6 +67,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(yates, m)?)?;
     m.add_function(wrap_pyfunction!(yates_contrast, m)?)?;
     m.add_function(wrap_pyfunction!(yates_pairwise, m)?)?;
+    m.add_function(wrap_pyfunction!(yates_risk_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(uno_c_index, m)?)?;
     m.add_function(wrap_pyfunction!(compare_uno_c_indices, m)?)?;
     m.add_function(wrap_pyfunction!(c_index_decomposition, m)?)?;

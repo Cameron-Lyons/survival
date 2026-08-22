@@ -137,4 +137,6 @@ pub use uno_c_index_module::{
     CIndexDecompositionResult, ConcordanceComparisonResult, GonenHellerResult, UnoCIndexResult,
     c_index_decomposition, compare_uno_c_indices, gonen_heller_concordance, uno_c_index,
 };
-pub use yates_module::{YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_pairwise};
+pub use yates_module::{
+    YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_pairwise, yates_risk_profiles,
+};

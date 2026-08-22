@@ -717,6 +717,154 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_null(yates_setup(yates_py_cox_fit, predict = "lp"))
   expect_equal(yates_setup(yates_py_cox_fit, predict = "risk")(c(-1, 0, 1), NULL), exp(c(-1, 0, 1)))
 
+  compare_yates <- function(actual, expected, tolerance = 1e-9) {
+    fields <- setdiff(names(expected), "call")
+    expect_setequal(setdiff(names(actual), "call"), fields)
+    for (field in fields) {
+      expect_equal(actual[[field]], expected[[field]], tolerance = tolerance, info = field)
+    }
+    expect_s3_class(actual, "yates")
+  }
+  yates_cox_model_data <- survival::lung[
+    stats::complete.cases(survival::lung[, c("time", "status", "age", "sex", "ph.ecog")]),
+    c("time", "status", "age", "sex", "ph.ecog")
+  ]
+  yates_cox_model_data$status <- as.integer(yates_cox_model_data$status == 2L)
+  yates_cox_model_data$group <- factor(
+    rep(c("A", "B", "C"), length.out = nrow(yates_cox_model_data))
+  )
+  native_yates_cox_fit <- survival::coxph(
+    survival::Surv(time, status) ~ group + age + sex + ph.ecog,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  local_yates_cox_fit <- coxph(
+    Surv(time, status) ~ group + age + sex + ph.ecog,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  for (predict_name in c("linear", "lp")) {
+    for (test_name in c("global", "pairwise")) {
+      expected <- survival::yates(
+        native_yates_cox_fit,
+        "group",
+        predict = predict_name,
+        test = test_name
+      )
+      compare_yates(
+        yates(
+          native_yates_cox_fit,
+          "group",
+          predict = predict_name,
+          test = test_name
+        ),
+        expected,
+        tolerance = 1e-12
+      )
+      compare_yates(
+        yates(
+          local_yates_cox_fit,
+          "group",
+          predict = predict_name,
+          test = test_name
+        ),
+        expected
+      )
+    }
+  }
+  sas_yates_cox_expected <- survival::yates(
+    native_yates_cox_fit,
+    "group",
+    population = "sas"
+  )
+  compare_yates(
+    yates(native_yates_cox_fit, "group", population = "sas"),
+    sas_yates_cox_expected,
+    tolerance = 1e-12
+  )
+  compare_yates(
+    yates(local_yates_cox_fit, "group", population = "sas"),
+    sas_yates_cox_expected
+  )
+  yates_cox_model_data$sex_factor <- factor(
+    yates_cox_model_data$sex,
+    labels = c("male", "female")
+  )
+  native_factorial_cox_fit <- survival::coxph(
+    survival::Surv(time, status) ~ group + sex_factor,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  local_factorial_cox_fit <- coxph(
+    Surv(time, status) ~ group + sex_factor,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  compare_yates(
+    yates(local_factorial_cox_fit, "group", population = "factorial"),
+    survival::yates(native_factorial_cox_fit, "group", population = "factorial")
+  )
+  for (test_name in c("global", "pairwise")) {
+    set.seed(20260822)
+    expected <- survival::yates(
+      native_yates_cox_fit,
+      "group",
+      predict = "risk",
+      test = test_name,
+      nsim = 400
+    )
+    set.seed(20260822)
+    compare_yates(
+      yates(
+        native_yates_cox_fit,
+        "group",
+        predict = "risk",
+        test = test_name,
+        nsim = 400
+      ),
+      expected,
+      tolerance = 1e-10
+    )
+    set.seed(20260822)
+    compare_yates(
+      yates(
+        local_yates_cox_fit,
+        "group",
+        predict = "risk",
+        test = test_name,
+        nsim = 400
+      ),
+      expected,
+      tolerance = 1e-8
+    )
+  }
+  set.seed(20260822)
+  selected_risk_expected <- survival::yates(
+    native_yates_cox_fit,
+    "group",
+    levels = c("C", "A"),
+    test = "pairwise",
+    predict = "risk",
+    nsim = 400
+  )
+  set.seed(20260822)
+  compare_yates(
+    yates(
+      local_yates_cox_fit,
+      "group",
+      levels = c("C", "A"),
+      test = "pairwise",
+      predict = "risk",
+      nsim = 400
+    ),
+    selected_risk_expected,
+    tolerance = 1e-8
+  )
+
   compare_aareg <- function(actual, expected) {
     fields <- setdiff(names(expected), "call")
     expect_setequal(setdiff(names(actual), "call"), fields)

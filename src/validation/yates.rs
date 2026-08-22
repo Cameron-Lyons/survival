@@ -4,6 +4,7 @@ use crate::internal::validation::{
     validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -293,6 +294,120 @@ pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResul
     })
 }
 
+fn risk_profile_means(
+    x: &[Vec<f64>],
+    beta: &[f64],
+    n_levels: usize,
+    center: &[f64],
+) -> Option<Vec<f64>> {
+    let rows_per_level = x.len() / n_levels;
+    let mut means = Vec::with_capacity(n_levels);
+    for level in 0..n_levels {
+        let start = level * rows_per_level;
+        let end = start + rows_per_level;
+        let mut total = 0.0;
+        for row in &x[start..end] {
+            let eta = row
+                .iter()
+                .zip(center)
+                .zip(beta)
+                .map(|((&value, &mean), &coefficient)| (value - mean) * coefficient)
+                .sum::<f64>();
+            let risk = eta.exp();
+            if !risk.is_finite() {
+                return None;
+            }
+            total += risk;
+        }
+        means.push(total / rows_per_level as f64);
+    }
+    Some(means)
+}
+
+#[pyfunction]
+pub fn yates_risk_profiles(
+    x: Vec<Vec<f64>>,
+    beta: Vec<f64>,
+    draws: Vec<Vec<f64>>,
+    n_levels: usize,
+    center: Vec<f64>,
+) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+    if n_levels < 2 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "n_levels must be at least 2",
+        ));
+    }
+    if x.is_empty() || !x.len().is_multiple_of(n_levels) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x must contain the same positive number of rows for every level",
+        ));
+    }
+    let n_vars = beta.len();
+    if n_vars == 0 || center.len() != n_vars {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "beta and center must have the same positive length",
+        ));
+    }
+    if x.iter().any(|row| row.len() != n_vars) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "every x row must have one value per coefficient",
+        ));
+    }
+    if draws.len() < 2 || draws.iter().any(|draw| draw.len() != n_vars) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "draws must contain at least two rows with one value per coefficient",
+        ));
+    }
+    if x.iter()
+        .flatten()
+        .chain(&beta)
+        .chain(&center)
+        .any(|value| !value.is_finite())
+        || draws.iter().flatten().any(|value| !value.is_finite())
+    {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "x, beta, draws, and center must be finite",
+        ));
+    }
+
+    let Some(estimate) = risk_profile_means(&x, &beta, n_levels, &center) else {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "risk profile means are non-finite",
+        ));
+    };
+    let simulated = draws
+        .par_iter()
+        .map(|draw| risk_profile_means(&x, draw, n_levels, &center))
+        .collect::<Vec<_>>();
+    if simulated.iter().any(Option::is_none) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "simulated risk profile means are non-finite",
+        ));
+    }
+    let simulated = simulated.into_iter().flatten().collect::<Vec<_>>();
+    let draw_means = (0..n_levels)
+        .map(|level| simulated.iter().map(|row| row[level]).sum::<f64>() / simulated.len() as f64)
+        .collect::<Vec<_>>();
+    let denominator = (simulated.len() - 1) as f64;
+    let covariance = (0..n_levels)
+        .map(|left| {
+            (0..n_levels)
+                .map(|right| {
+                    simulated
+                        .iter()
+                        .map(|row| {
+                            (row[left] - draw_means[left]) * (row[right] - draw_means[right])
+                        })
+                        .sum::<f64>()
+                        / denominator
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    Ok((estimate, covariance))
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct YatesPairwiseResult {
@@ -508,5 +623,35 @@ mod tests {
 
         assert_eq!(pairwise.level1.len(), 3);
         assert_eq!(pairwise.difference[0], -1.0);
+    }
+
+    #[test]
+    fn test_yates_risk_profiles() {
+        let (estimate, covariance) = yates_risk_profiles(
+            vec![vec![0.0], vec![0.0], vec![1.0], vec![1.0]],
+            vec![2.0_f64.ln()],
+            vec![vec![0.0], vec![2.0_f64.ln()], vec![4.0_f64.ln()]],
+            2,
+            vec![0.0],
+        )
+        .unwrap();
+
+        assert_eq!(estimate, vec![1.0, 2.0]);
+        assert_eq!(covariance[0], vec![0.0, 0.0]);
+        assert_eq!(covariance[1][0], 0.0);
+        assert!((covariance[1][1] - 7.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_yates_risk_profiles_rejects_malformed_draws() {
+        let error = yates_risk_profiles(
+            vec![vec![0.0], vec![1.0]],
+            vec![0.0],
+            vec![vec![0.0]],
+            2,
+            vec![0.0],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("at least two rows"));
     }
 }

@@ -6679,6 +6679,13 @@ def yates_contrast(
     predict_type: str | None = None,
 ) -> YatesResult: ...
 def yates_pairwise(yates_result: YatesResult) -> YatesPairwiseResult: ...
+def yates_risk_profiles(
+    x: list[list[float]],
+    beta: list[float],
+    draws: list[list[float]],
+    n_levels: int,
+    center: list[float],
+) -> tuple[list[float], list[list[float]]]: ...
 def create_simple_ratetable(
     age_breaks: list[float],
     year_breaks: list[float],
