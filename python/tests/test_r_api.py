@@ -8825,6 +8825,35 @@ def test_bounded_concordance_time_weights_use_the_original_event_count():
     assert right.influence[4] == pytest.approx([0.5, 7 / 18, 1 / 18, 0, 0])
 
 
+def test_stratified_concordance_rank_recycling_uses_display_times():
+    result = survival.concordancefit(
+        survival.Surv([2, 6, 7, 2, 1, 7, 6], [1, 0, 1, 0, 0, 1, 0]),
+        [0.5, 0.5, -1, 0.5, 0, 0.5, 1],
+        strata=[1, 1, 1, 2, 2, 2, 1],
+        weights=[1.5, 1.5, 0.5, 1.5, 1, 1.5, 0.5],
+        ymin=1,
+        timewt="n/G2",
+        influence=3,
+        ranks=True,
+        timefix=False,
+        keepstrata=True,
+    )
+
+    assert result is not None
+    assert result.ranks is not None
+    expected = [
+        [2, 4, 2, 4],
+        [7, 12.5, 7, 12.5],
+        [0, 1.5, 0, 1.5],
+        [7, 1.5, 1.5, 0],
+        [0, 7, 1.5, 1.5],
+        [1.5, 0, 7, 1.5],
+        [0, 0.5, 0, 0.5],
+    ]
+    for row, values in zip(result.ranks, expected, strict=True):
+        assert list(row.values()) == pytest.approx(values)
+
+
 def test_concordance_stratified_multi_score_remains_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 3, 1, 2, 3], [1, 0, 1, 1, 0, 1]),

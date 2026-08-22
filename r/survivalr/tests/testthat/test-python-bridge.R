@@ -5087,6 +5087,74 @@ test_that("uneven stratified concordance ranks match reference errors", {
   }
 })
 
+test_that("stratified concordance rank recycling uses display times", {
+  time <- c(2, 6, 7, 2, 1, 7, 6)
+  status <- c(1, 0, 1, 0, 0, 1, 0)
+  scores <- c(0.5, 0.5, -1, 0.5, 0, 0.5, 1)
+  groups <- c(1, 1, 1, 2, 2, 2, 1)
+  weights <- c(1.5, 1.5, 0.5, 1.5, 1, 1.5, 0.5)
+
+  bridged <- concordancefit(
+    Surv(time, status),
+    scores,
+    strata = groups,
+    weights = weights,
+    ymin = 1,
+    timewt = "n/G2",
+    influence = 3,
+    ranks = TRUE,
+    timefix = FALSE,
+    keepstrata = TRUE
+  )
+  reference <- survival::concordancefit(
+    survival::Surv(time, status),
+    scores,
+    strata = groups,
+    weights = weights,
+    ymin = 1,
+    timewt = "n/G2",
+    influence = 3,
+    ranks = TRUE,
+    timefix = FALSE,
+    keepstrata = TRUE
+  )
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+})
+
+test_that("stratified concordance rank errors follow stratum order", {
+  start <- rep(0, 6)
+  stop <- c(1, 2, 6, 2, 1, 2)
+  status <- c(1, 0, 1, 0, 0, 0)
+  scores <- seq_len(6)
+  groups <- rep(seq_len(3), each = 2)
+  replacement_error <- "replacement has length zero"
+
+  expect_error(
+    concordancefit(
+      Surv(start, stop, status),
+      scores,
+      strata = groups,
+      ymax = 5,
+      timewt = "S",
+      ranks = TRUE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(start, stop, status),
+      scores,
+      strata = groups,
+      ymax = 5,
+      timewt = "S",
+      ranks = TRUE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+})
+
 test_that("clustered concordance dfbeta matches reference order and names", {
   data <- data.frame(
     time = c(2, 3, 4, 5, 2),

@@ -9823,6 +9823,7 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "order_scores",
+        "display_times",
     ]
     assert _pyi_function_arg_names(stub_path, "concordance_influence_rows") == [
         "time",
@@ -9897,6 +9898,7 @@ def test_counting_concordance_binding_is_typed():
         "timewt",
         "timefix",
         "order_scores",
+        "display_stop",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_influence_rows") == [
         "start",

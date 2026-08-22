@@ -26122,6 +26122,7 @@ def _concordance_rank_row_dicts(
 class _RightConcordanceData:
     times: list[float]
     status: list[int]
+    display_times: list[float]
     display_by_core_time: dict[float, float] | None
 
 
@@ -26140,6 +26141,7 @@ class _RightConcordanceInputs:
     risk: list[float]
     weights: list[float] | None
     strata: list[int] | None
+    display_times: list[float]
     padding_count: int
 
 
@@ -26151,6 +26153,7 @@ class _CountingConcordanceInputs:
     risk: list[float]
     weights: list[float] | None
     strata: list[int] | None
+    display_stop: list[float]
     padding_count: int
 
 
@@ -26215,6 +26218,7 @@ def _right_concordance_inputs(
         strata,
     )
     padding_count = len(padding)
+    dummy_display_time = max(data.display_times, default=0.0) + 1.0
     return _RightConcordanceInputs(
         [*data.times, *([max(data.times, default=0.0) + 1.0] * padding_count)],
         [*data.status, *([1] * padding_count)],
@@ -26225,6 +26229,7 @@ def _right_concordance_inputs(
             if strata is None
             else [*strata, *(int(group) for group in padding)]
         ),
+        [*data.display_times, *([dummy_display_time] * padding_count)],
         padding_count,
     )
 
@@ -26256,6 +26261,10 @@ def _counting_concordance_inputs(
             if strata is None
             else [*strata, *(int(group) for group in padding)]
         ),
+        [
+            *(value - data.display_offset for value in data.stop),
+            *([dummy_stop - data.display_offset] * padding_count),
+        ],
         padding_count,
     )
 
@@ -26409,7 +26418,7 @@ def _right_concordance_data(
     status = list(response.event)
     times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
     core_times, display_by_core_time = _concordance_core_time_values(times, timefix)
-    return _RightConcordanceData(core_times, status, display_by_core_time)
+    return _RightConcordanceData(core_times, status, times, display_by_core_time)
 
 
 def _counting_concordance_data(
@@ -26545,8 +26554,8 @@ def _concordance_ranks(
                     inputs.weights,
                     timewt,
                     [*order_scores, *([0.0] * inputs.padding_count)],
+                    inputs.display_times,
                 ),
-                data.display_by_core_time,
             ),
             None,
         )
@@ -26578,11 +26587,9 @@ def _concordance_ranks(
                 timewt,
                 False,
                 [*order_scores, *([0.0] * inputs.padding_count)],
+                inputs.display_stop,
             )
         )
-        if data.display_offset > 0.0:
-            for row in rank_rows:
-                row["time"] -= data.display_offset
         return rank_rows, None
     return _unsupported_concordance_response()
 
