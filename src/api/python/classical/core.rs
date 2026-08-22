@@ -88,6 +88,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cipoisson_anscombe, m)?)?;
     m.add_function(wrap_pyfunction!(poly_basis, m)?)?;
     m.add_function(wrap_pyfunction!(pspline_basis, m)?)?;
+    m.add_function(wrap_pyfunction!(scale_values, m)?)?;
     m.add_function(wrap_pyfunction!(crate::concordance::basic::concordance, m)?)?;
     m.add_function(wrap_pyfunction!(agexact, m)?)?;
     m.add_function(wrap_pyfunction!(compute_baseline_survival_steps, m)?)?;

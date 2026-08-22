@@ -923,6 +923,7 @@ BINDINGS = (
     "sample_size_survival",
     "sample_size_survival_freedman",
     "scale_schoenfeld_residuals",
+    "scale_values",
     "schoenfeld_residuals",
     "score_test_py",
     "secure_aggregate",
