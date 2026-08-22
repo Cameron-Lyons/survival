@@ -3656,6 +3656,8 @@ def _parse_pspline_formula_term(term: str) -> _PSplineFormulaTerm:
         raise ValueError("pspline fixed theta cannot be combined with df=0 or method='aic'")
     if aic_selection:
         nterm = 15
+        if "eps" not in seen_options:
+            eps = 1e-5
     else:
         if df <= 0.0:
             raise ValueError("pspline df must be positive")
@@ -4495,7 +4497,9 @@ def _fit_formula_design(
     allow_frailty: bool = False,
 ) -> _FormulaDesign:
     if terms.pspline and not allow_pspline:
-        raise NotImplementedError("pspline() formula terms are currently supported only by coxph")
+        raise NotImplementedError(
+            "pspline() formula terms are currently supported only by coxph and survreg"
+        )
     if terms.frailty and not allow_frailty:
         raise NotImplementedError("frailty() formula terms are currently supported only by coxph")
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
@@ -4868,15 +4872,17 @@ def _quadratic_term_degrees_of_freedom(
     penalty: Sequence[Sequence[float]],
     columns: Sequence[int],
 ) -> float:
-    variance = [[float(value) for value in row] for row in fit.information_matrix]
-    width = len(variance)
+    matrix = getattr(fit, "information_matrix", None)
+    if matrix is None:
+        matrix = getattr(fit, "variance_matrix", None)
+    if matrix is None:
+        raise ValueError("quadratic fit does not expose a covariance matrix")
+    width = len(penalty)
+    full_variance = [[float(value) for value in row] for row in matrix]
+    variance = [row[:width] for row in full_variance[:width]]
     if not columns:
         return 0.0
-    if (
-        len(penalty) != width
-        or any(len(row) != width for row in penalty)
-        or any(len(row) != width for row in variance)
-    ):
+    if any(len(row) != width for row in penalty) or any(len(row) != width for row in variance):
         raise ValueError("quadratic fit returned inconsistent covariance dimensions")
     if list(columns) == list(range(width)):
         trace = math.fsum(
@@ -4928,7 +4934,7 @@ def _quadratic_formula_term_degrees_of_freedom(
         output_count = len(_design_term_output_names(term))
         grouped_columns.setdefault(assignment, []).extend(range(cursor, cursor + output_count))
         cursor += output_count
-    if cursor != width:
+    if cursor > width:
         raise ValueError("formula metadata does not match the fitted covariance matrix")
     return {
         (
@@ -5062,7 +5068,7 @@ def _ridge_control_next_theta(
     x = [value[0] for value in ordered]
     y = [value[1] for value in ordered]
     adjusted_target = target
-    if (x[0] - x[1]) * (y[0] - y[1]) <= 0.0:
+    if (history[0][0] - history[1][0]) * (history[0][1] - history[1][1]) <= 0.0:
         y = [-value for value in y]
         adjusted_target = -target
 
@@ -12553,10 +12559,10 @@ def _apply_survreg_control(
     max_iter: int | None,
     eps: float | None,
     tol_chol: float | None,
-) -> tuple[int | None, float | None, float | None]:
+) -> tuple[int | None, float | None, float | None, int]:
     values = _control_mapping(control, "survreg control")
     if not values:
-        return max_iter, eps, tol_chol
+        return max_iter, eps, tol_chol, 10
 
     max_iter_value, name = _pop_control_alias(
         values,
@@ -12589,9 +12595,16 @@ def _apply_survreg_control(
         tol_chol = _finite_float(tol_chol_value, f"control.{name}")
 
     _pop_finite_control_value(values, ("debug",), positive=False)
-    _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
+    outer_max_value = _pop_finite_control_value(
+        values,
+        ("outer.max", "outer_max"),
+        positive=True,
+    )
+    outer_max = 10 if outer_max_value is None else int(outer_max_value)
+    if outer_max < 1:
+        raise ValueError("control.outer.max must be positive")
     _reject_unknown_control_options(values, "survreg")
-    return max_iter, eps, tol_chol
+    return max_iter, eps, tol_chol, outer_max
 
 
 def _normalize_survfit_type(
@@ -21028,7 +21041,7 @@ def survreg_fit(
         strata_values = [value - 1 for value in raw_strata]
 
     distribution, distribution_parameter = _survreg_fit_distribution(dist, parms)
-    max_iter, eps, tol_chol = _apply_survreg_control(
+    max_iter, eps, tol_chol, _outer_max = _apply_survreg_control(
         survreg_control() if controlvals is None else controlvals,
         None,
         None,
@@ -26706,7 +26719,12 @@ def survreg(
     robust_requested = None if robust is None else _normalize_bool_option(robust, "robust")
     if max_iter is not None:
         max_iter = _integer_scalar(max_iter, "max_iter")
-    max_iter, eps, tol_chol = _apply_survreg_control(control, max_iter, eps, tol_chol)
+    max_iter, eps, tol_chol, outer_max = _apply_survreg_control(
+        control,
+        max_iter,
+        eps,
+        tol_chol,
+    )
 
     formula_rows: list[list[float]] | None = None
     formula_design: _FormulaDesign | None = None
@@ -26714,6 +26732,8 @@ def survreg(
     formula_x_matrix: list[list[float]] | None = None
     formula_model_data: Any | None = None
     formula_cluster_columns: tuple[str, ...] = ()
+    formula_ridge_blocks: list[_RidgePenaltyBlock] = []
+    formula_pspline_blocks: list[_PSplinePenaltyBlock] = []
     direct_coefficient_names: tuple[str, ...] | None = None
     matrix_input = response is None and time is not None and status is not None
     if matrix_input:
@@ -26840,7 +26860,14 @@ def survreg(
                 terms,
                 len(response),
                 include_intercept=True,
+                allow_pspline=True,
             )
+            formula_ridge_blocks = _ridge_formula_blocks(
+                data,
+                formula_design,
+                len(response),
+            )
+            formula_pspline_blocks = _pspline_formula_blocks(formula_design)
             formula_rows = (
                 _design_rows_from_spec(data, formula_design, len(response))
                 if terms.covariates or formula_design.intercept
@@ -27010,22 +27037,248 @@ def survreg(
         if exponential_fixed_scale
         else (scale_value if scale_value > 0.0 else None)
     )
-    fit = _core.survreg(
-        response_time,
-        response_status,
-        rows,
-        weights=weight_values,
-        offsets=offset_values,
-        initial_beta=initial_values,
-        strata=strata_values,
-        distribution=distribution_name,
-        max_iter=max_iter,
-        eps=eps,
-        tol_chol=tol_chol,
-        time2=response_time2,
-        fixed_scale=fixed_scale,
-        distribution_parameter=distribution_parameter,
-    )
+
+    def run_fit(
+        penalty: list[list[float]] | None,
+        start: list[float] | None,
+    ) -> Any:
+        return _core.survreg(
+            response_time,
+            response_status,
+            rows,
+            weights=weight_values,
+            offsets=offset_values,
+            initial_beta=start,
+            strata=strata_values,
+            distribution=distribution_name,
+            max_iter=max_iter,
+            eps=eps,
+            tol_chol=tol_chol,
+            time2=response_time2,
+            fixed_scale=fixed_scale,
+            distribution_parameter=distribution_parameter,
+            penalty_matrix=penalty,
+        )
+
+    fit_penalty_matrix: list[list[float]] | None = None
+    penalty_history: dict[str, dict[str, Any]] | None = None
+    term_degrees_of_freedom: dict[str, float] | None = None
+    effective_degrees_of_freedom: float | None = None
+    if formula_ridge_blocks or formula_pspline_blocks:
+        width = len(rows[0]) if rows else 0
+        ridge_thetas = [
+            block.theta if block.theta is not None else 1.0 for block in formula_ridge_blocks
+        ]
+        pspline_thetas = [block.initial_theta for block in formula_pspline_blocks]
+        reported_ridge_thetas = list(ridge_thetas)
+        reported_pspline_thetas = list(pspline_thetas)
+        target_ridge_blocks = [
+            index for index, block in enumerate(formula_ridge_blocks) if block.target_df is not None
+        ]
+        target_pspline_blocks = [
+            index
+            for index, block in enumerate(formula_pspline_blocks)
+            if block.target_df is not None
+        ]
+        aic_pspline_blocks = [
+            index for index, block in enumerate(formula_pspline_blocks) if block.selection == "aic"
+        ]
+        ridge_histories = [
+            [(0.0, float(len(block.columns)))] if block.target_df is not None else []
+            for block in formula_ridge_blocks
+        ]
+        pspline_histories = [
+            [(1.0, 1.0), (0.0, block.maximum_df)] if block.target_df is not None else []
+            for block in formula_pspline_blocks
+        ]
+        pspline_aic_histories: list[list[dict[str, float]]] = [
+            [] for _block in formula_pspline_blocks
+        ]
+        ridge_halves = [0] * len(formula_ridge_blocks)
+        pspline_halves = [0] * len(formula_pspline_blocks)
+        ridge_done = [block.target_df is None for block in formula_ridge_blocks]
+        pspline_done = [block.selection == "fixed" for block in formula_pspline_blocks]
+        start = initial_values
+        adaptive = bool(target_ridge_blocks or target_pspline_blocks or aic_pspline_blocks)
+        fit = None
+        fit_count = outer_max if adaptive else 1
+        for outer_iteration in range(1, fit_count + 1):
+            fitted_ridge_thetas = list(ridge_thetas)
+            fitted_pspline_thetas = list(pspline_thetas)
+            fit_penalty_matrix = _formula_penalty_matrix(
+                width,
+                formula_ridge_blocks,
+                fitted_ridge_thetas,
+                formula_pspline_blocks,
+                fitted_pspline_thetas,
+                (),
+                (),
+            )
+            fit = run_fit(fit_penalty_matrix, start)
+            full_width = len(fit.variance_matrix)
+            full_penalty = [
+                [
+                    fit_penalty_matrix[row][column] if row < width and column < width else 0.0
+                    for column in range(full_width)
+                ]
+                for row in range(full_width)
+            ]
+            next_ridge_thetas = list(fitted_ridge_thetas)
+            next_pspline_thetas = list(fitted_pspline_thetas)
+            next_reported_pspline_thetas = list(fitted_pspline_thetas)
+            for block_index in target_ridge_blocks:
+                block = formula_ridge_blocks[block_index]
+                target = block.target_df
+                if target is None:
+                    raise AssertionError("ridge smoothing target is missing")
+                term_df = _quadratic_term_degrees_of_freedom(
+                    fit,
+                    full_penalty,
+                    block.columns,
+                )
+                ridge_histories[block_index].append((fitted_ridge_thetas[block_index], term_df))
+                next_theta, converged, half = _ridge_control_next_theta(
+                    target,
+                    block.eps,
+                    outer_iteration,
+                    ridge_histories[block_index],
+                    ridge_halves[block_index],
+                )
+                next_ridge_thetas[block_index] = next_theta
+                reported_ridge_thetas[block_index] = next_theta
+                ridge_done[block_index] = converged
+                ridge_halves[block_index] = half
+            for block_index in target_pspline_blocks:
+                block = formula_pspline_blocks[block_index]
+                target = block.target_df
+                if target is None:
+                    raise AssertionError("P-spline smoothing target is missing")
+                term_df = _quadratic_term_degrees_of_freedom(
+                    fit,
+                    full_penalty,
+                    block.columns,
+                )
+                pspline_histories[block_index].append((fitted_pspline_thetas[block_index], term_df))
+                next_theta, converged, half = _ridge_control_next_theta(
+                    target,
+                    block.eps,
+                    outer_iteration,
+                    pspline_histories[block_index],
+                    pspline_halves[block_index],
+                )
+                next_reported_pspline_thetas[block_index] = next_theta
+                next_pspline_thetas[block_index] = min(max(next_theta, 0.0), 1.0 - 1e-12)
+                pspline_done[block_index] = converged
+                pspline_halves[block_index] = half
+            event_count = sum(value == 1.0 for value in response_status)
+            for block_index in aic_pspline_blocks:
+                block = formula_pspline_blocks[block_index]
+                term_df = _quadratic_term_degrees_of_freedom(
+                    fit,
+                    full_penalty,
+                    block.columns,
+                )
+                pspline_aic_histories[block_index].append(
+                    _penalty_aic_history_row(
+                        fitted_pspline_thetas[block_index],
+                        float(fit.log_likelihood),
+                        term_df,
+                        event_count,
+                    )
+                )
+                next_theta, converged = _pspline_aic_next_theta(
+                    block.eps,
+                    outer_iteration,
+                    pspline_aic_histories[block_index],
+                )
+                next_reported_pspline_thetas[block_index] = next_theta
+                next_pspline_thetas[block_index] = min(max(next_theta, 0.0), 1.0 - 1e-12)
+                pspline_done[block_index] = converged
+            reported_pspline_thetas = next_reported_pspline_thetas
+            ridge_thetas = fitted_ridge_thetas
+            pspline_thetas = fitted_pspline_thetas
+            if all(ridge_done) and all(pspline_done):
+                break
+            if outer_iteration == outer_max:
+                warnings.warn(
+                    "penalty smoothing did not converge within control.outer.max iterations",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                break
+            ridge_thetas = next_ridge_thetas
+            pspline_thetas = next_pspline_thetas
+            start = [float(value) for value in fit.coefficients]
+        if fit is None or fit_penalty_matrix is None:
+            raise AssertionError("penalized survreg fit did not run")
+        penalty_history = {
+            block.label: (
+                {
+                    "theta": reported_ridge_thetas[index],
+                    "done": ridge_done[index],
+                    "history": [{"theta": theta, "df": df} for theta, df in ridge_histories[index]],
+                    "half": ridge_halves[index],
+                }
+                if block.target_df is not None
+                else {"theta": ridge_thetas[index], "done": True}
+            )
+            for index, block in enumerate(formula_ridge_blocks)
+        }
+        penalty_history.update(
+            {
+                block.label: (
+                    {
+                        "theta": reported_pspline_thetas[index],
+                        "done": pspline_done[index],
+                        "history": [
+                            {"theta": theta, "df": df} for theta, df in pspline_histories[index]
+                        ],
+                        "half": pspline_halves[index],
+                    }
+                    if block.target_df is not None
+                    else (
+                        {
+                            "theta": reported_pspline_thetas[index],
+                            "done": pspline_done[index],
+                            "history": pspline_aic_histories[index],
+                        }
+                        if block.selection == "aic"
+                        else {"theta": pspline_thetas[index], "done": True}
+                    )
+                )
+                for index, block in enumerate(formula_pspline_blocks)
+            }
+        )
+        full_width = len(fit.variance_matrix)
+        full_penalty = [
+            [
+                fit_penalty_matrix[row][column] if row < width and column < width else 0.0
+                for column in range(full_width)
+            ]
+            for row in range(full_width)
+        ]
+        if formula_design is None:
+            raise AssertionError("formula penalties require design metadata")
+        term_degrees_of_freedom = _quadratic_formula_term_degrees_of_freedom(
+            fit,
+            full_penalty,
+            formula_design,
+        )
+        effective_degrees_of_freedom = math.fsum(term_degrees_of_freedom.values())
+        if formula_design.intercept:
+            effective_degrees_of_freedom += _quadratic_term_degrees_of_freedom(
+                fit,
+                full_penalty,
+                (0,),
+            )
+        if full_width > width:
+            effective_degrees_of_freedom += _quadratic_term_degrees_of_freedom(
+                fit,
+                full_penalty,
+                tuple(range(width, full_width)),
+            )
+    else:
+        fit = run_fit(None, initial_values)
     robust_cluster = cluster_values_for_validation
     if robust_value and robust_cluster is None:
         robust_cluster = list(range(n))
@@ -27052,6 +27305,10 @@ def survreg(
             y_response=response if keep_y else None,
             model_frame=model_frame,
             score_values=score_values,
+            history=penalty_history,
+            effective_degrees_of_freedom=effective_degrees_of_freedom,
+            term_degrees_of_freedom=term_degrees_of_freedom,
+            penalty_matrix=fit_penalty_matrix,
         )
         if (
             formula_design is not None

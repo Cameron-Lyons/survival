@@ -1223,6 +1223,7 @@ mod survreg_bench {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("benchmark Weibull survreg fit should converge");
             black_box(fit);
@@ -1252,6 +1253,7 @@ mod survreg_bench {
                 Some(30),
                 Some(1e-7),
                 Some(1e-9),
+                None,
                 None,
                 None,
                 None,
