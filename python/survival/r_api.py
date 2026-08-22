@@ -12221,6 +12221,7 @@ def coxph_control(
     toler_inf: Any | None = None,
     outer_max: Any = 10,
     timefix: Any = True,
+    survcheckallow: Any = "gap",
 ) -> dict[str, Any]:
     """Construct validated Cox fit controls using R-compatible names and defaults."""
 
@@ -12256,6 +12257,7 @@ def coxph_control(
         "toler.inf": toler_inf_value,
         "outer.max": outer_max_value,
         "timefix": timefix_value,
+        "survcheckallow": survcheckallow,
     }
 
 
@@ -12353,10 +12355,10 @@ def _apply_coxph_control(
     max_iter: int,
     eps: float | None,
     toler: float | None,
-) -> tuple[int, float | None, float | None, bool, int]:
+) -> tuple[int, float | None, float | None, bool, int, Any]:
     values = _control_mapping(control, "coxph control")
     if not values:
-        return max_iter, eps, toler, True, 10
+        return max_iter, eps, toler, True, 10, "gap"
 
     max_iter_value, name = _pop_control_alias(
         values,
@@ -12400,8 +12402,15 @@ def _apply_coxph_control(
     outer_max = 10 if outer_max_value is None else int(outer_max_value)
     if outer_max < 1:
         raise ValueError("control.outer.max must be positive")
+    survcheck_allow, _ = _pop_control_alias(
+        values,
+        ("survcheckallow", "survcheck_allow"),
+        "survcheckallow",
+        "gap",
+        "gap",
+    )
     _reject_unknown_control_options(values, "coxph")
-    return max_iter, eps, toler, fix_time, outer_max
+    return max_iter, eps, toler, fix_time, outer_max, survcheck_allow
 
 
 def _apply_survreg_control(
@@ -14679,6 +14688,8 @@ def _survfit_multistate_state_data(
     id_values: list[Any] | None,
     istate: Any | None,
     timefix: bool,
+    *,
+    survcheck_allow: Any = _MISSING,
 ) -> tuple[Surv, list[int], tuple[str, ...], list[Any]]:
     n = len(response)
     ids = list(range(n)) if id_values is None else id_values
@@ -14719,16 +14730,52 @@ def _survfit_multistate_state_data(
         if any(left >= right for left, right in zip(start, stop, strict=True)):
             raise ValueError("timefix produced an empty multi-state interval")
 
-    current_states = list(
-        _core.survfit_subject_history(
-            start,
-            stop,
-            mapped_events,
-            id_codes,
-            provided_states,
-            _SURVFIT_TIME_EPSILON if timefix else 0.0,
+    if survcheck_allow is _MISSING:
+        current_states = list(
+            _core.survfit_subject_history(
+                start,
+                stop,
+                mapped_events,
+                id_codes,
+                provided_states,
+                _SURVFIT_TIME_EPSILON if timefix else 0.0,
+            )
         )
-    )
+    else:
+        if any(event is None for event in mapped_events):
+            raise ValueError("missing values in multi-state Cox inputs")
+        event_codes = [cast(int, event) for event in mapped_events]
+        check = _core.survcheck(
+            id_codes,
+            [0.0] * n if start is None else start,
+            stop,
+            event_codes,
+            None if provided_states is None else [state + 1 for state in provided_states],
+        )
+        issue_names = ("overlap", "gap", "jump", "teleport")
+        if survcheck_allow is None:
+            candidates: list[Any] = []
+        elif isinstance(survcheck_allow, str):
+            candidates = [survcheck_allow]
+        else:
+            try:
+                candidates = _materialize_1d(survcheck_allow, "control.survcheckallow")
+            except (TypeError, ValueError):
+                candidates = [survcheck_allow]
+        allowed = {
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, str) and candidate in issue_names
+        }
+        # R selects flag[-match(..., nomatch = 0)]; with no matched names,
+        # that selection is empty and no named issue class is rejected.
+        rejected = bool(check.invalid_rows) or (
+            bool(allowed)
+            and any(name not in allowed and getattr(check, f"{name}_rows") for name in issue_names)
+        )
+        if rejected:
+            raise ValueError("data set fails survcheck for one or more subjects")
+        current_states = [0 if state == 0 else int(state) - 1 for state in check.current_states]
 
     normalized = Surv._from_normalized(
         time=stop,
@@ -24422,7 +24469,9 @@ def _cox_low_level_fit(
     if initial is not None and len(initial) != nvar:
         raise ValueError("Wrong length for initial parameters")
 
-    max_iter, eps, toler, _, _outer_max = _apply_coxph_control(control, 20, None, None)
+    max_iter, eps, toler, _, _outer_max, _survcheck_allow = _apply_coxph_control(
+        control, 20, None, None
+    )
     if max_iter < 0:
         raise ValueError("control.iter.max must be non-negative")
     if eps is not None and eps <= 0.0:
@@ -25190,7 +25239,7 @@ def coxph(
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
     max_iter = _integer_scalar(max_iter, "max_iter")
-    max_iter, eps, toler, fix_time, outer_max = _apply_coxph_control(
+    max_iter, eps, toler, fix_time, outer_max, survcheck_allow = _apply_coxph_control(
         control,
         max_iter,
         eps,
@@ -25535,6 +25584,7 @@ def coxph(
             id_values,
             istate_values,
             fix_time,
+            survcheck_allow=survcheck_allow,
         )
         transitions = _cox_multistate_transitions(normalized, current_states)
         formula_maps = (

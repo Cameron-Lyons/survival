@@ -1455,9 +1455,13 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
 
   cox_control <- coxph.control(iter.max = 0, eps = 1e-05, toler.chol = 1e-08, timefix = FALSE)
-  expect_named(cox_control, c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix"))
+  expect_named(
+    cox_control,
+    c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix", "survcheckallow")
+  )
   expect_equal(cox_control[["iter.max"]], 0L)
   expect_false(cox_control[["timefix"]])
+  expect_equal(cox_control[["survcheckallow"]], "gap")
   expect_error(coxph.control(iter.max = -1), "iter.max")
   cox_fit_data <- data.frame(
     time = c(1, 2, 3, 4, 5, 6),
@@ -8758,6 +8762,79 @@ test_that("single-formula multi-state Cox models match survival", {
       info = paste("counting field", field)
     )
   }
+})
+
+test_that("multi-state Cox history controls match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  histories <- data.frame(
+    id = rep(seq_len(4L), each = 2L),
+    start = c(0, 2, 0, 1, 0, 1, 0, 1),
+    stop = c(1, 3, 1, 2, 1, 2, 1, 2),
+    event = factor(
+      c("a", "0", "a", "0", "a", "0", "a", "0"),
+      levels = c("0", "a", "b")
+    ),
+    x = rep(0:3, each = 2L)
+  )
+  bridged_gap <- coxph(
+    Surv(start, stop, event) ~ x,
+    data = histories,
+    id = id,
+    control = coxph.control(iter.max = 0L)
+  )
+  reference_gap <- survival::coxph(
+    survival::Surv(start, stop, event) ~ x,
+    data = histories,
+    id = id,
+    control = survival::coxph.control(iter.max = 0L)
+  )
+  expect_equal(coef(bridged_gap), coef(reference_gap), tolerance = 1e-12)
+  expect_error(
+    coxph(
+      Surv(start, stop, event) ~ x,
+      data = histories,
+      id = id,
+      control = coxph.control(iter.max = 0L, survcheckallow = "overlap")
+    ),
+    "data set fails survcheck"
+  )
+
+  overlapping <- histories
+  overlapping$start[2L] <- 0.5
+  expect_error(
+    coxph(
+      Surv(start, stop, event) ~ x,
+      data = overlapping,
+      id = id,
+      control = coxph.control(iter.max = 0L)
+    ),
+    "data set fails survcheck"
+  )
+  expect_error(
+    survival::coxph(
+      survival::Surv(start, stop, event) ~ x,
+      data = overlapping,
+      id = id,
+      control = survival::coxph.control(iter.max = 0L)
+    ),
+    "data set fails survcheck"
+  )
+  bridged_overlap <- coxph(
+    Surv(start, stop, event) ~ x,
+    data = overlapping,
+    id = id,
+    control = coxph.control(iter.max = 0L, survcheckallow = "overlap")
+  )
+  reference_overlap <- survival::coxph(
+    survival::Surv(start, stop, event) ~ x,
+    data = overlapping,
+    id = id,
+    control = survival::coxph.control(iter.max = 0L, survcheckallow = "overlap")
+  )
+  expect_equal(coef(bridged_overlap), coef(reference_overlap), tolerance = 1e-12)
 })
 
 test_that("multi-state Cox tied curve types match survival", {

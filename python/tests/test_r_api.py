@@ -14174,6 +14174,57 @@ def test_coxph_multistate_counting_histories_match_r_reference():
     assert all(sum(row) == pytest.approx(1.0, abs=1e-12) for row in model_curve.pstate)
 
 
+def test_coxph_multistate_honors_survcheckallow_history_policy():
+    pandas = pytest.importorskip("pandas")
+    data = pandas.DataFrame(
+        {
+            "id": [1, 1, 2, 2, 3, 3, 4, 4],
+            "start": [0.0, 2.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            "stop": [1.0, 3.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+            "event": pandas.Categorical(
+                ["a", "0", "a", "0", "a", "0", "a", "0"],
+                categories=["0", "a", "b"],
+            ),
+            "x": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+        }
+    )
+
+    gap_fit = survival.coxph(
+        "Surv(start, stop, event) ~ x",
+        data=data,
+        id="id",
+        max_iter=0,
+    )
+    assert gap_fit.n == len(data)
+    assert gap_fit.multi_state.current_states == (0, 1, 0, 1, 0, 1, 0, 1)
+    with pytest.raises(ValueError, match="data set fails survcheck"):
+        survival.coxph(
+            "Surv(start, stop, event) ~ x",
+            data=data,
+            id="id",
+            max_iter=0,
+            control={"survcheckallow": "overlap"},
+        )
+
+    overlapping = data.copy()
+    overlapping.loc[1, "start"] = 0.5
+    with pytest.raises(ValueError, match="data set fails survcheck"):
+        survival.coxph(
+            "Surv(start, stop, event) ~ x",
+            data=overlapping,
+            id="id",
+            max_iter=0,
+        )
+    overlap_fit = survival.coxph(
+        "Surv(start, stop, event) ~ x",
+        data=overlapping,
+        id="id",
+        max_iter=0,
+        control={"survcheck_allow": "overlap"},
+    )
+    assert overlap_fit.n == len(overlapping)
+
+
 def test_survfit_accepts_simple_coxph_model():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10)
@@ -16860,6 +16911,7 @@ def test_r_style_control_constructors_match_reference_defaults_and_feed_fits():
         "toler.inf": pytest.approx(math.sqrt(1e-9)),
         "outer.max": 10,
         "timefix": True,
+        "survcheckallow": "gap",
     }
     custom_cox_control = survival.coxph_control(
         eps=1e-8,
@@ -16868,9 +16920,11 @@ def test_r_style_control_constructors_match_reference_defaults_and_feed_fits():
         toler_inf=2e-4,
         outer_max=4.9,
         timefix=False,
+        survcheckallow="overlap",
     )
     assert custom_cox_control["iter.max"] == 3
     assert custom_cox_control["outer.max"] == 4
+    assert custom_cox_control["survcheckallow"] == "overlap"
     fit = survival.coxph(
         "Surv(time, status) ~ x1",
         data=_toy_data(),

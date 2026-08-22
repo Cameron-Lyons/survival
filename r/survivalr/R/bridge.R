@@ -8371,7 +8371,7 @@ aeqSurv <- function(x, tolerance = sqrt(.Machine$double.eps)) {
 
 coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
                           iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
-                          timefix = TRUE) {
+                          timefix = TRUE, survcheckallow = "gap") {
   eps <- .as_finite_scalar(eps, "eps", positive = TRUE)
   toler.chol <- .as_finite_scalar(toler.chol, "toler.chol", positive = TRUE)
   iter.max <- .as_integer_scalar(iter.max, "iter.max", nonnegative = TRUE)
@@ -8384,7 +8384,8 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     iter.max = iter.max,
     toler.inf = toler.inf,
     outer.max = outer.max,
-    timefix = timefix
+    timefix = timefix,
+    survcheckallow = survcheckallow
   )
 }
 
