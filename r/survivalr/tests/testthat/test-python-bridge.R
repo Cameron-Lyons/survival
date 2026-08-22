@@ -8424,8 +8424,49 @@ test_that("single-formula multi-state Cox models match survival", {
 
   formula_data <- transform(
     competing,
-    z = c(0.9, -0.2, 0.4, 1.3, -0.5, 0.7, 1.1, -0.8, 0.2, 1.7, -1.2, 0.6)
+    z = c(0.9, -0.2, 0.4, 1.3, -0.5, 0.7, 1.1, -0.8, 0.2, 1.7, -1.2, 0.6),
+    q = factor(
+      c("u", "v", "w", "u", "u", "v", "w", "u", "u", "v", "w", "u"),
+      levels = c("u", "v", "w")
+    )
   )
+  compare_multistate_zph <- function(bridged_fit, reference_fit) {
+    for (group_terms in c(TRUE, FALSE)) {
+      bridged_zph <- cox.zph(
+        bridged_fit,
+        transform = "rank",
+        terms = group_terms
+      )
+      reference_zph <- survival::cox.zph(
+        reference_fit,
+        transform = "rank",
+        terms = group_terms
+      )
+      bridged_frame <- as.data.frame(bridged_zph)
+
+      expect_equal(bridged_frame$name, rownames(reference_zph$table))
+      expect_equal(bridged_frame$df, as.integer(reference_zph$table[, "df"]))
+      expect_equal(
+        bridged_frame$chisq,
+        unname(reference_zph$table[, "chisq"]),
+        tolerance = 1e-09
+      )
+      expect_equal(
+        bridged_frame$p,
+        unname(reference_zph$table[, "p"]),
+        tolerance = 1e-09
+      )
+      expect_equal(bridged_zph$x, reference_zph$x, tolerance = 1e-12)
+      expect_equal(bridged_zph$time, reference_zph$time, tolerance = 1e-12)
+      expect_equal(as.character(bridged_zph$transform), reference_zph$transform)
+      expect_equal(
+        as.integer(bridged_zph$strata),
+        as.integer(reference_zph$strata)
+      )
+    }
+  }
+  compare_multistate_zph(bridged, reference)
+
   bridged_common <- coxph(
     list(
       Surv(time, status) ~ 1,
@@ -8474,6 +8515,7 @@ test_that("single-formula multi-state Cox models match survival", {
     predict(reference_common, newdata = formula_data[1:2, ], type = "lp"),
     tolerance = 1e-12
   )
+  compare_multistate_zph(bridged_common, reference_common)
 
   bridged_selective <- coxph(
     list(
@@ -8507,6 +8549,21 @@ test_that("single-formula multi-state Cox models match survival", {
     predict(reference_selective, newdata = formula_data[1:2, ], type = "lp"),
     tolerance = 1e-12
   )
+  compare_multistate_zph(bridged_selective, reference_selective)
+
+  bridged_factor_zph <- coxph(
+    Surv(time, status) ~ x + q,
+    data = formula_data,
+    id = id,
+    control = coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  reference_factor_zph <- survival::coxph(
+    survival::Surv(time, status) ~ x + q,
+    data = formula_data,
+    id = id,
+    control = survival::coxph.control(iter.max = 20L, eps = 1e-9)
+  )
+  compare_multistate_zph(bridged_factor_zph, reference_factor_zph)
 
   bridged_shared <- coxph(
     list(

@@ -16366,7 +16366,9 @@ def cox_zph(
     event_strata_codes = [row_strata[idx] for idx in event_indices]
     design = _formula_design_for_fit(fit)
     event_strata = None
-    if (design is not None and design.strata) or len(set(row_strata)) > 1:
+    if isinstance(fit, _FormulaFit) and fit.multi_state is not None:
+        event_strata = [value + 1 for value in event_strata_codes]
+    elif (design is not None and design.strata) or len(set(row_strata)) > 1:
         event_strata = _cox_strata_labels_for_fit(fit, event_strata_codes)
         if event_strata is None:
             event_strata = event_strata_codes
@@ -17087,6 +17089,8 @@ def _cox_zph_column_groups(
     nvar: int,
     terms: bool,
 ) -> list[tuple[str, list[int]]]:
+    if isinstance(fit, _FormulaFit) and fit.multi_state is not None:
+        return _cox_zph_multistate_column_groups(fit, nvar, terms)
     design = _formula_design_for_fit(fit)
     if design is None:
         return [(f"var{idx}", [idx]) for idx in range(nvar)]
@@ -17104,6 +17108,51 @@ def _cox_zph_column_groups(
     if cursor != nvar:
         return [(f"var{idx}", [idx]) for idx in range(nvar)]
     return groups
+
+
+def _cox_zph_multistate_column_groups(
+    fit: _FormulaFit,
+    nvar: int,
+    terms: bool,
+) -> list[tuple[str, list[int]]]:
+    metadata = fit.multi_state
+    if metadata is None:
+        raise AssertionError("multi-state Cox diagnostic metadata is missing")
+    coefficient_names = (
+        list(fit.coefficient_names)
+        if fit.coefficient_names is not None and len(fit.coefficient_names) == nvar
+        else _fallback_coef_names(nvar)
+    )
+    if not terms:
+        return [(name, [idx]) for idx, name in enumerate(coefficient_names)]
+
+    assignments = _model_matrix_assignments(fit, metadata.original_width)
+    design_names = _model_matrix_column_names(fit, metadata.original_width)
+    transition_names = _coxph_multistate_transition_names(metadata)
+    groups: dict[str, list[int]] = {}
+    seen: set[int] = set()
+
+    for transition, transition_name in enumerate(transition_names):
+        for column, coefficient in enumerate(metadata.coefficient_map[transition]):
+            if coefficient < 0 or coefficient in seen:
+                continue
+            assignment = assignments[column]
+            if fit.design is not None and 0 < assignment <= len(fit.design.term_labels):
+                term_name = fit.design.term_labels[assignment - 1]
+            else:
+                term_name = design_names[column]
+            groups.setdefault(f"{term_name}_{transition_name}", []).append(coefficient)
+            seen.add(coefficient)
+
+        ph_coefficient = metadata.ph_coefficient_map[transition]
+        if ph_coefficient >= 0 and ph_coefficient not in seen:
+            groups[coefficient_names[ph_coefficient]] = [ph_coefficient]
+            seen.add(ph_coefficient)
+
+    for coefficient, name in enumerate(coefficient_names):
+        if coefficient not in seen:
+            groups[name] = [coefficient]
+    return list(groups.items())
 
 
 def _cox_zph_active_groups(
