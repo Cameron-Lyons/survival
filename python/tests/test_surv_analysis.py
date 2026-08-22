@@ -1428,22 +1428,14 @@ def test_ridge_fit_matches_weighted_reference_fits():
     assert unscaled.coefficients == pytest.approx(
         [-3.17278910503507, 0.0281103888695528], rel=2e-9, abs=5e-11
     )
-    assert unscaled.std_err == pytest.approx(
-        [1.47525463986159, 0.978155747150241], rel=2e-9
-    )
+    assert unscaled.std_err == pytest.approx([1.47525463986159, 0.978155747150241], rel=2e-9)
     assert unscaled.df == pytest.approx(1.37336701637676, rel=2e-9)
     assert unscaled.scale_factors is None
 
-    assert scaled.coefficients == pytest.approx(
-        [-3.81767201833844, 0.113752966479022], rel=2e-9
-    )
-    assert scaled.std_err == pytest.approx(
-        [1.78317401451112, 1.08563381793622], rel=2e-9
-    )
+    assert scaled.coefficients == pytest.approx([-3.81767201833844, 0.113752966479022], rel=2e-9)
+    assert scaled.std_err == pytest.approx([1.78317401451112, 1.08563381793622], rel=2e-9)
     assert scaled.df == pytest.approx(1.52004107720074, rel=2e-9)
-    assert scaled.scale_factors == pytest.approx(
-        [0.804340901430659, 0.539179270479018], rel=2e-9
-    )
+    assert scaled.scale_factors == pytest.approx([0.804340901430659, 0.539179270479018], rel=2e-9)
 
 
 def test_anova_and_basehaz_public_apis():

@@ -409,6 +409,19 @@ class _SparseFrailtyFitMetadata:
 
 
 @dataclass(frozen=True)
+class _MultiStateCoxFitMetadata:
+    states: tuple[str, ...]
+    transitions: tuple[tuple[int, int], ...]
+    source_rows: tuple[int, ...]
+    transition_indices: tuple[int, ...]
+    original_rows: tuple[tuple[float, ...], ...]
+    original_offsets: tuple[float, ...]
+    row_names: tuple[str, ...]
+    original_width: int
+    reported_means: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class _FormulaFit:
     fit: Any
     design: _FormulaDesign | None
@@ -433,6 +446,7 @@ class _FormulaFit:
     conditional_logistic: bool = False
     n_observations: int | None = None
     sparse_frailty: _SparseFrailtyFitMetadata | None = None
+    multi_state: _MultiStateCoxFitMetadata | None = None
 
     def __getattr__(self, name: str) -> Any:
         if self.conditional_logistic and name in {
@@ -468,6 +482,14 @@ class _FormulaFit:
             return self.score_values
         if name == "n" and self.n_observations is not None:
             return self.n_observations
+        if name == "means" and self.multi_state is not None:
+            return list(self.multi_state.reported_means)
+        if name == "linear_predictors" and self.multi_state is not None:
+            beta = _cox_beta(self.fit)
+            center = math.fsum(
+                float(mean) * value for mean, value in zip(self.fit.means, beta, strict=True)
+            )
+            return [float(value) - center for value in self.fit.linear_predictors]
         if name == "scaled_schoenfeld_residuals" and hasattr(self.fit, "schoenfeld_residuals"):
             return self._cox_scaled_schoenfeld_residuals
         if name == "dfbeta" and hasattr(self.fit, "score_residuals"):
@@ -17355,6 +17377,14 @@ def model_matrix(fit: Any) -> dict[str, Any]:
     """Return the training design matrix and column names for a fitted model."""
 
     _require_model_fit(fit, "model_matrix")
+    if isinstance(fit, _FormulaFit) and fit.multi_state is not None:
+        matrix = [list(row) for row in fit.multi_state.original_rows]
+        width = fit.multi_state.original_width
+        return {
+            "data": matrix,
+            "columns": _model_matrix_column_names(fit, width),
+            "assign": _model_matrix_assignments(fit, width),
+        }
     rows = getattr(fit, "covariates", None)
     if rows is None:
         rows = getattr(fit, "x", None)
@@ -20547,6 +20577,83 @@ def _linear_predictors_for_fit(
     return linear_predictors
 
 
+def _cox_multistate_predictions(
+    fit: _FormulaFit,
+    rows: list[list[float]] | None,
+    offsets: list[float] | None,
+    predict_type: str,
+    reference: str,
+    include_se: bool,
+) -> list[list[float]] | PredictResult:
+    metadata = fit.multi_state
+    if metadata is None:
+        raise AssertionError("multi-state prediction metadata is missing")
+    if predict_type not in {"lp", "risk"}:
+        raise ValueError(
+            "multi-state Cox prediction is currently defined only for linear predictors and risk"
+        )
+
+    prediction_rows = (
+        [list(row) for row in metadata.original_rows]
+        if rows is None
+        else [[float(value) for value in row] for row in rows]
+    )
+    if any(len(row) != metadata.original_width for row in prediction_rows):
+        raise ValueError(f"newdata must have {metadata.original_width} columns")
+    prediction_offsets = (
+        list(metadata.original_offsets)
+        if rows is None
+        else ([0.0] * len(prediction_rows) if offsets is None else list(offsets))
+    )
+    if len(prediction_offsets) != len(prediction_rows):
+        raise ValueError("newdata offset columns must match prediction rows")
+
+    beta = _cox_beta(fit)
+    transition_count = len(metadata.transitions)
+    if len(beta) != metadata.original_width * transition_count:
+        raise ValueError("multi-state coefficient width does not match transition metadata")
+    center_values = (
+        [0.0] * metadata.original_width if reference == "zero" else list(metadata.reported_means)
+    )
+    offset_center = (
+        0.0
+        if reference == "zero" or not metadata.original_offsets
+        else math.fsum(metadata.original_offsets) / len(metadata.original_offsets)
+    )
+    variance = vcov(fit) if include_se else None
+    predictions: list[list[float]] = []
+    standard_errors: list[list[float]] = []
+    for row, row_offset in zip(prediction_rows, prediction_offsets, strict=True):
+        centered_row = [float(value) - center_values[column] for column, value in enumerate(row)]
+        prediction_row: list[float] = []
+        se_row: list[float] = []
+        for transition_idx in range(transition_count):
+            first = transition_idx * metadata.original_width
+            coefficients = beta[first : first + metadata.original_width]
+            value = (
+                math.fsum(
+                    covariate * coefficient
+                    for covariate, coefficient in zip(centered_row, coefficients, strict=True)
+                )
+                + float(row_offset)
+                - offset_center
+            )
+            prediction = _safe_exp(value) if predict_type == "risk" else value
+            prediction_row.append(prediction)
+            if variance is not None:
+                block = [
+                    values[first : first + metadata.original_width]
+                    for values in variance[first : first + metadata.original_width]
+                ]
+                se = math.sqrt(max(_quadratic_form(centered_row, block), 0.0))
+                se_row.append(se * prediction if predict_type == "risk" else se)
+        predictions.append(prediction_row)
+        if variance is not None:
+            standard_errors.append(se_row)
+
+    return PredictResult(predictions, standard_errors) if include_se else predictions
+
+
 def _cox_prediction_offset_vector(fit: Any, n: int) -> list[float]:
     beta = _cox_beta(fit)
     offsets = _cox_fit_offset(_unwrap_formula_fit(fit), beta)
@@ -22484,6 +22591,19 @@ def predict(
         return result.predictions
 
     reference_name = _normalize_predict_reference(reference, centered_value, predict_type)
+    if isinstance(fit, _FormulaFit) and fit.multi_state is not None:
+        if not _collapse_is_false(collapse):
+            raise ValueError("collapse is not supported for multi-state Cox predictions")
+        if times is not None or p is not None or quantiles is not None or terms is not None:
+            raise ValueError("multi-state Cox predictions do not use times, quantiles, or terms")
+        return _cox_multistate_predictions(
+            fit,
+            rows,
+            offsets,
+            predict_type,
+            reference_name,
+            include_se,
+        )
 
     if predict_type == "survival":
         if not hasattr(fit, "survival_curve"):
@@ -23621,6 +23741,60 @@ def agexact_fit(
     return replace(computation.result, method="coxph")
 
 
+def _cox_multistate_transitions(
+    response: Surv,
+    current_states: Sequence[int],
+) -> tuple[tuple[int, int], ...]:
+    return tuple(
+        sorted(
+            {
+                (int(source), int(event) - 1)
+                for source, event in zip(current_states, response.event, strict=True)
+                if event
+            },
+            key=lambda transition: (transition[1], transition[0]),
+        )
+    )
+
+
+def _cox_multistate_coefficient_names(
+    names: Sequence[str],
+    transitions: Sequence[tuple[int, int]],
+) -> tuple[str, ...]:
+    return tuple(
+        f"{name}_{source + 1}:{target + 1}" for source, target in transitions for name in names
+    )
+
+
+def _cox_multistate_reported_means(
+    rows: Sequence[Sequence[float]],
+    nocenter: Sequence[float] | None,
+) -> tuple[float, ...]:
+    if not rows:
+        return ()
+    width = len(rows[0])
+    means = tuple(
+        math.fsum(float(row[column]) for row in rows) / len(rows) for column in range(width)
+    )
+    if not nocenter:
+        return means
+    return tuple(
+        0.0
+        if all(any(float(row[column]) == value for value in nocenter) for row in rows)
+        else means[column]
+        for column in range(width)
+    )
+
+
+def _cox_multistate_expand(
+    values: Sequence[Any] | None,
+    source_rows: Sequence[int],
+) -> list[Any] | None:
+    if values is None:
+        return None
+    return [values[index] for index in source_rows]
+
+
 def coxph(
     response: Surv | str,
     data: Any | None = None,
@@ -23657,6 +23831,9 @@ def coxph(
 
     case_weight_column = kwargs.pop("_weights_column", None)
     id_column = kwargs.pop("_id_column", None)
+    row_names = kwargs.pop("_row_names", None)
+    if row_names is not None:
+        row_names = [str(value) for value in _materialize_1d(row_names, "_row_names")]
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     singular_ok = _pop_dotted_keyword(
         kwargs,
@@ -23669,6 +23846,7 @@ def coxph(
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"coxph got unexpected keyword argument(s): {unexpected}")
 
+    method_was_missing = method is None and ties is None
     method_name = _cox_tie_method(method, ties)
     robust_value = _normalize_optional_bool_option(robust, "robust")
     explicit_weights = weights is not None
@@ -23733,6 +23911,7 @@ def coxph(
                 cluster=cluster,
                 id=id_arg,
                 istate=istate,
+                row_names=row_names,
             )
             weights = aligned["weights"]
             offset = aligned["offset"]
@@ -23740,6 +23919,7 @@ def coxph(
             cluster = aligned["cluster"]
             id_arg = aligned["id"]
             istate = aligned["istate"]
+            row_names = aligned["row_names"]
             subset = None
         data, aligned = _apply_formula_na_action(
             response,
@@ -23751,6 +23931,7 @@ def coxph(
             cluster=cluster,
             id=id_arg,
             istate=istate,
+            row_names=row_names,
         )
         weights = aligned["weights"]
         offset = aligned["offset"]
@@ -23758,6 +23939,7 @@ def coxph(
         cluster = aligned["cluster"]
         id_arg = aligned["id"]
         istate = aligned["istate"]
+        row_names = aligned["row_names"]
         na_action = "pass"
         if x is not None:
             if not _is_bool_like(x):
@@ -23835,6 +24017,7 @@ def coxph(
         cluster = _subset_optional_sequence(cluster, indices, "cluster")
         id_arg = _subset_optional_sequence(id_arg, indices, "id")
         istate = _subset_optional_sequence(istate, indices, "istate")
+        row_names = _subset_optional_sequence(row_names, indices, "_row_names")
     response, aligned = _apply_surv_na_action(
         response,
         na_action,
@@ -23846,6 +24029,7 @@ def coxph(
         cluster=cluster,
         id=id_arg,
         istate=istate,
+        row_names=row_names,
     )
     x = aligned["x"]
     weights = aligned["weights"]
@@ -23854,11 +24038,26 @@ def coxph(
     cluster = aligned["cluster"]
     id_arg = aligned["id"]
     istate = aligned["istate"]
-    if response.type not in {"right", "counting"}:
+    row_names = aligned["row_names"]
+    is_multistate = response.type in {"mright", "mcounting"}
+    if response.type not in {"right", "counting", "mright", "mcounting"}:
         raise NotImplementedError(
-            "coxph currently supports right-censored and counting Surv responses"
+            "coxph supports right-censored, counting, and multi-state Surv responses"
         )
+    if is_multistate:
+        if id_arg is None:
+            raise ValueError("an id statement is required for multi-state models")
+        if method_was_missing:
+            method_name = "breslow"
+        if method_name == "exact":
+            raise ValueError("ties='exact' is not supported for multi-state models")
+        if formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks:
+            raise ValueError("multi-state models do not support penalized formula terms")
+        if ridge_penalty is not None or penalty_matrix is not None:
+            raise ValueError("multi-state models do not support coefficient penalties")
     if time_transform_terms:
+        if is_multistate:
+            raise ValueError("tt() transforms are not implemented for multi-state models")
         if formula_design is None or formula_model_data is None:
             raise AssertionError("tt terms require formula design metadata")
         time_transform_observed_n = len(response)
@@ -23954,6 +24153,10 @@ def coxph(
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
     fit_offset = _optional_float_vector(offset, "offset", n)
+    stored_response = response
+    stored_id_values = id_values
+    stored_n = n
+    multi_state_metadata: _MultiStateCoxFitMetadata | None = None
     model_frame = None
     if keep_model:
         model_frame = (
@@ -23987,6 +24190,84 @@ def coxph(
                 and istate_column not in model_frame
             ):
                 model_frame[istate_column] = _column(formula_model_data, istate_column)
+
+    if is_multistate:
+        if id_values is None:
+            raise AssertionError("multi-state id values were not retained")
+        normalized, current_states, states, _history_ids = _survfit_multistate_state_data(
+            response,
+            id_values,
+            istate_values,
+            fix_time,
+        )
+        transitions = _cox_multistate_transitions(normalized, current_states)
+        stack = _core.cox_multistate_stack(
+            normalized.start,
+            list(normalized.time),
+            list(normalized.event),
+            current_states,
+            rows,
+            [list(transition) for transition in transitions],
+            fit_strata,
+        )
+        source_rows = [int(index) for index in stack.source_rows]
+        original_width = width
+        design_names = (
+            _formula_design_output_names(formula_design)
+            if formula_design is not None
+            else (
+                list(direct_coefficient_names)
+                if direct_coefficient_names is not None
+                else _fallback_coef_names(original_width)
+            )
+        )
+        if len(design_names) != original_width:
+            design_names = _fallback_coef_names(original_width)
+        direct_coefficient_names = _cox_multistate_coefficient_names(
+            design_names,
+            transitions,
+        )
+        multi_state_metadata = _MultiStateCoxFitMetadata(
+            states=states,
+            transitions=transitions,
+            source_rows=tuple(source_rows),
+            transition_indices=tuple(int(index) for index in stack.transition_indices),
+            original_rows=tuple(tuple(float(value) for value in row) for row in rows),
+            original_offsets=tuple(
+                [0.0] * len(rows) if fit_offset is None else map(float, fit_offset)
+            ),
+            row_names=tuple(row_names or (str(index + 1) for index in range(len(rows)))),
+            original_width=original_width,
+            reported_means=_cox_multistate_reported_means(rows, nocenter_values),
+        )
+        response = Surv._from_normalized(
+            time=stack.stop,
+            event=stack.status,
+            start=stack.start,
+            time2=None,
+            surv_type="counting" if stack.start is not None else "right",
+            states=(),
+        )
+        rows = [[float(value) for value in row] for row in stack.covariates]
+        fit_strata = [int(value) for value in stack.strata]
+        fit_weights = cast(
+            list[float] | None,
+            _cox_multistate_expand(fit_weights, source_rows),
+        )
+        fit_offset = cast(
+            list[float] | None,
+            _cox_multistate_expand(fit_offset, source_rows),
+        )
+        id_values = cast(
+            list[Any],
+            _cox_multistate_expand(id_values, source_rows),
+        )
+        cluster = _cox_multistate_expand(
+            None if cluster is None else _materialize_labels(cluster, "cluster"),
+            source_rows,
+        )
+        n = len(response)
+        width = len(rows[0]) if rows else 0
 
     fit_times = list(response.time)
     entry_times = list(response.start) if response.start is not None else None
@@ -24619,7 +24900,9 @@ def coxph(
         response,
         id_values,
     )
-    automatically_robust = cluster is not None or has_fractional_weights or has_repeated_event_id
+    automatically_robust = (
+        is_multistate or cluster is not None or has_fractional_weights or has_repeated_event_id
+    )
     use_robust_variance = automatically_robust if robust_value is None else robust_value
     if cluster is not None and not use_robust_variance:
         warnings.warn(
@@ -24678,6 +24961,7 @@ def coxph(
         or case_weights is not None
         or robust_variance is not None
         or model_frame is not None
+        or multi_state_metadata is not None
     ):
         return _FormulaFit(
             fit,
@@ -24689,10 +24973,14 @@ def coxph(
             robust_variance=robust_variance,
             naive_variance=naive_variance,
             cluster=cluster_values,
-            id_values=id_values,
+            id_values=stored_id_values,
             id_column=id_column,
             x_matrix=formula_x_matrix,
-            y_response=response if formula_design is not None and keep_y else None,
+            y_response=(
+                stored_response
+                if keep_y and (formula_design is not None or multi_state_metadata is not None)
+                else None
+            ),
             model_frame=model_frame,
             history=ridge_history,
             effective_degrees_of_freedom=effective_degrees_of_freedom,
@@ -24711,8 +24999,11 @@ def coxph(
                     )
                 )
             ),
-            n_observations=time_transform_observed_n,
+            n_observations=(
+                stored_n if multi_state_metadata is not None else time_transform_observed_n
+            ),
             sparse_frailty=sparse_frailty_metadata,
+            multi_state=multi_state_metadata,
         )
     return fit
 

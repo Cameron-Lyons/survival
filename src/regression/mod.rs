@@ -11,6 +11,7 @@ pub(crate) mod cause_specific_cox_module;
 pub(crate) mod cch;
 pub(crate) mod clogit;
 pub(crate) mod cox_frailty;
+pub(crate) mod cox_multistate;
 pub(crate) mod cox_optimizer;
 pub(crate) mod coxph;
 #[path = "coxph_detail.rs"]
@@ -53,6 +54,7 @@ pub use cause_specific_cox_module::{
 pub use cch::{CchFitResult, CchMethod, CohortData, cch_borgan_fit, cch_fit};
 pub use clogit::{ClogitDataSet, ConditionalLogisticRegression};
 pub use cox_frailty::{CoxPHFrailtyFit, coxph_frailty_fit};
+pub use cox_multistate::{MultiStateCoxStack, cox_multistate_stack};
 pub use coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
 pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};
 pub use coxph_diagnostics::{
