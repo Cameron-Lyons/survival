@@ -11972,6 +11972,11 @@ concordance <- function(object, ..., formula) {
     value <- .survival_py_concordance_component(result, name)
     if (!is.null(value)) out[[name]] <- value
   }
+  if (!is.null(out$ranks) &&
+      !isTRUE(.result_field(result, "reverse")) &&
+      identical(names(out$ranks), "fit.resid")) {
+    out$ranks[, "rank"] <- -out$ranks[, "rank"]
+  }
   if (length(na.action)) out$na.action <- na.action
   out$call <- Call
   class(out) <- "concordance"
@@ -12252,14 +12257,11 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
     value <- .result_field(object, name)
     if (is.null(value)) return(NULL)
     rank_names <- .result_field(object, "rank_names")
-    if (multi_score) {
-      frames <- lapply(value, .concordancefit_rows, row_names = rank_names)
-      for (index in seq_along(frames)) {
-        names(frames[[index]]) <- paste0(names(frames[[index]]), ".", score_names[[index]])
-      }
-      return(do.call(cbind, frames))
-    }
-    return(.concordancefit_rows(value, row_names = rank_names))
+    return(.concordancefit_rank_result(
+      value,
+      row_names = rank_names,
+      score_names = if (multi_score) score_names else NULL
+    ))
   }
 
   if (identical(name, "dfbeta")) {
@@ -12498,6 +12500,40 @@ survConcordance.fit <- function(y, x, strata, weight) {
   frame
 }
 
+.concordancefit_rank_result <- function(rows, row_names = NULL, score_names = NULL) {
+  multi_score <- !is.null(score_names) && length(score_names) > 1L
+  if (multi_score) {
+    one_row_per_score <- is.list(rows) &&
+      length(rows) == length(score_names) &&
+      all(vapply(rows, function(value) is.list(value) && length(value) == 1L, logical(1)))
+    if (one_row_per_score) {
+      rank_columns <- c("time", "rank", "timewt", "casewt")
+      flattened <- unlist(lapply(rows, function(value) {
+        vapply(rank_columns, function(name) {
+          as.numeric(value[[1L]][[name]])[[1L]]
+        }, numeric(1))
+      }), use.names = FALSE)
+      values <- flattened[seq_along(score_names)]
+      names(values) <- score_names
+      return(data.frame(fit.resid = values, check.names = FALSE))
+    }
+
+    frames <- lapply(rows, .concordancefit_rows, row_names = row_names)
+    for (index in seq_along(frames)) {
+      names(frames[[index]]) <- paste0(names(frames[[index]]), ".", score_names[[index]])
+    }
+    return(do.call(cbind, frames))
+  }
+
+  frame <- .concordancefit_rows(rows, row_names = row_names)
+  if (!is.null(frame) && nrow(frame) == 1L) {
+    values <- as.numeric(frame[1L, ])
+    names(values) <- names(frame)
+    return(data.frame(fit.resid = values, check.names = FALSE))
+  }
+  frame
+}
+
 concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
                            timewt = c("n", "S", "S/G", "n/G2", "I"),
                            cluster, influence = 0, ranks = FALSE,
@@ -12608,14 +12644,13 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (isTRUE(ranks)) {
     rank_rows <- .result_field(result, "ranks")
     rank_names <- .result_field(result, "rank_names")
-    out$ranks <- if (multi_score) {
-      frames <- lapply(rank_rows, .concordancefit_rows, row_names = rank_names)
-      for (index in seq_along(frames)) {
-        names(frames[[index]]) <- paste0(names(frames[[index]]), ".", score_names[[index]])
-      }
-      do.call(cbind, frames)
-    } else {
-      .concordancefit_rows(rank_rows, row_names = rank_names)
+    out$ranks <- .concordancefit_rank_result(
+      rank_rows,
+      row_names = rank_names,
+      score_names = if (multi_score) score_names else NULL
+    )
+    if (isTRUE(reverse) && identical(names(out$ranks), "fit.resid")) {
+      out$ranks[, "rank"] <- -out$ranks[, "rank"]
     }
   }
   out
