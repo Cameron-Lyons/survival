@@ -11946,6 +11946,38 @@ concordance <- function(object, ..., formula) {
   do.call(stats::model.frame, args)
 }
 
+.concordance_formula_strata_count <- function(formula, frame) {
+  Terms <- stats::terms(formula, specials = c("strata", "cluster"))
+  strata_terms <- untangle.specials(Terms, "strata", 1L)
+  if (length(strata_terms$vars) == 0L) {
+    return(1L)
+  }
+  values <- if (length(strata_terms$vars) == 1L) {
+    frame[[strata_terms$vars]]
+  } else {
+    strata(frame[, strata_terms$vars, drop = FALSE], shortlabel = TRUE)
+  }
+  length(unique(values))
+}
+
+.concordance_collapsed_strata_check <- function(n_scores, n_strata, keepstrata, timewt) {
+  if (n_scores != 1L || n_strata <= 1L) {
+    return(invisible(NULL))
+  }
+  retain_strata <- if (is.logical(keepstrata) && length(keepstrata) == 1L) {
+    isTRUE(keepstrata)
+  } else if (is.numeric(keepstrata) && length(keepstrata) == 1L) {
+    n_strata <= keepstrata
+  } else {
+    return(invisible(NULL))
+  }
+  time_weight <- match.arg(timewt, c("n", "S", "S/G", "n/G2", "I"))
+  if (!retain_strata && !(n_strata > 10L && time_weight %in% c("n", "I"))) {
+    colSums(numeric())
+  }
+  invisible(NULL)
+}
+
 .as_native_concordance <- function(result, Call, na.action = NULL) {
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
   score_names <- as.character(.result_field(result, "score_names"))
@@ -11986,6 +12018,7 @@ concordance <- function(object, ..., formula) {
 concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.scores = NULL,
                                 weights = NULL, cluster = NULL, subset = NULL, na.action = "fail") {
   Call <- match.call()
+  dots <- list(...)
   formula <- object
   formula_input <- inherits(formula, "formula")
   env <- parent.frame()
@@ -12064,6 +12097,25 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     .wrap = c("survival_py_concordance", "survival_py_object")
   )
   if (formula_input) {
+    formula_response <- stats::model.response(formula_frame)
+    formula_timewt <- if (!inherits(formula_response, "Surv")) {
+      "n"
+    } else if ("timewt" %in% names(dots)) {
+      dots[["timewt"]]
+    } else {
+      "n"
+    }
+    formula_keepstrata <- if ("keepstrata" %in% names(dots)) {
+      dots[["keepstrata"]]
+    } else {
+      10
+    }
+    .concordance_collapsed_strata_check(
+      length(.as_numeric_vector(.result_field(result, "concordance"))),
+      .concordance_formula_strata_count(formula, formula_frame),
+      formula_keepstrata,
+      formula_timewt
+    )
     return(.as_native_concordance(result, Call, attr(formula_frame, "na.action")))
   }
   result
@@ -12589,6 +12641,18 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     keepstrata = keepstrata,
     std_err = isTRUE(std.err),
     `_row_names` = row.names(.as_native_surv(y))
+  )
+
+  input_strata_count <- if (missing(strata) || length(strata) == 0L) {
+    1L
+  } else {
+    length(unique(strata))
+  }
+  .concordance_collapsed_strata_check(
+    length(.as_numeric_vector(.result_field(result, "concordance"))),
+    input_strata_count,
+    keepstrata,
+    timewt
   )
 
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))

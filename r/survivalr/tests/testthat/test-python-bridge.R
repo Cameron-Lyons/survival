@@ -4430,6 +4430,114 @@ test_that("reversed multi-score concordance ranks match reference errors", {
   )
 })
 
+test_that("collapsed single-score strata match reference behavior", {
+  data <- data.frame(
+    time = c(1, 2, 1, 2),
+    status = c(1, 0, 1, 0),
+    x = c(0.2, 0.6, 0.4, 0.8),
+    group = c("a", "a", "b", "b")
+  )
+  dimension_error <- "'x' must be an array of at least two dimensions"
+
+  for (keep in list(FALSE, 1)) {
+    expect_error(
+      concordancefit(
+        Surv(data$time, data$status),
+        data$x,
+        strata = data$group,
+        keepstrata = keep
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordancefit(
+        survival::Surv(data$time, data$status),
+        data$x,
+        strata = data$group,
+        keepstrata = keep
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+    expect_error(
+      concordance(
+        Surv(time, status) ~ x + strata(group),
+        data = data,
+        keepstrata = keep
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordance(
+        survival::Surv(time, status) ~ x + strata(group),
+        data = data,
+        keepstrata = keep
+      ),
+      dimension_error,
+      fixed = TRUE
+    )
+  }
+
+  for (keep in list(TRUE, 2)) {
+    bridged_fit <- concordancefit(
+      Surv(data$time, data$status),
+      data$x,
+      strata = data$group,
+      keepstrata = keep
+    )
+    reference_fit <- survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      data$x,
+      strata = data$group,
+      keepstrata = keep
+    )
+    expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
+
+    bridged_formula <- concordance(
+      Surv(time, status) ~ x + strata(group),
+      data = data,
+      keepstrata = keep
+    )
+    reference_formula <- survival::concordance(
+      survival::Surv(time, status) ~ x + strata(group),
+      data = data,
+      keepstrata = keep
+    )
+    fields <- setdiff(names(reference_formula), "call")
+    expect_equal(
+      unclass(bridged_formula)[fields],
+      unclass(reference_formula)[fields],
+      tolerance = 1e-12
+    )
+  }
+
+  large_data <- data.frame(
+    group = rep(seq_len(11), each = 2),
+    time = rep(c(1, 2), 11),
+    status = rep(c(1, 0), 11),
+    x = seq_len(22) / 22
+  )
+  for (time_weight in c("n", "I")) {
+    bridged_fit <- concordancefit(
+      Surv(large_data$time, large_data$status),
+      large_data$x,
+      strata = large_data$group,
+      keepstrata = FALSE,
+      timewt = time_weight
+    )
+    reference_fit <- survival::concordancefit(
+      survival::Surv(large_data$time, large_data$status),
+      large_data$x,
+      strata = large_data$group,
+      keepstrata = FALSE,
+      timewt = time_weight
+    )
+    expect_equal(unclass(bridged_fit), unclass(reference_fit), tolerance = 1e-12)
+  }
+})
+
 test_that("stratified concordance results match reference shapes and diagnostics", {
   right_data <- data.frame(
     y = c(1, 3, 2, 4, 4, 2),
@@ -4588,16 +4696,26 @@ test_that("stratified concordance results match reference shapes and diagnostics
     tolerance = 1e-12
   )
 
-  collapsed_right <- concordance(
-    y ~ x + strata(group),
-    data = right_data,
-    weights = w,
-    keepstrata = FALSE
+  collapsed_error <- "'x' must be an array of at least two dimensions"
+  expect_error(
+    concordance(
+      y ~ x + strata(group),
+      data = right_data,
+      weights = w,
+      keepstrata = FALSE
+    ),
+    collapsed_error,
+    fixed = TRUE
   )
-  expect_equal(
-    collapsed_right$count,
-    colSums(reference_right$count),
-    tolerance = 1e-12
+  expect_error(
+    survival::concordance(
+      y ~ x + strata(group),
+      data = right_data,
+      weights = w,
+      keepstrata = FALSE
+    ),
+    collapsed_error,
+    fixed = TRUE
   )
 
   right_response <- Surv(right_data$y, rep(1L, nrow(right_data)))
