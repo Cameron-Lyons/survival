@@ -12184,6 +12184,7 @@ concordance <- function(object, ..., formula) {
       !("rank" %in% names(out$ranks))) {
     out$ranks[, "rank"] <- -out$ranks[, "rank"]
   }
+  out <- .concordance_zero_pair_values(out)
   out <- .concordance_empty_rank_values(out)
   if (length(na.action)) out$na.action <- na.action
   out$call <- Call
@@ -12805,6 +12806,42 @@ survConcordance.fit <- function(y, x, strata, weight) {
   result
 }
 
+.concordance_zero_pair_values <- function(result) {
+  if (is.null(result$count) || length(result$count) == 0L) {
+    return(result)
+  }
+
+  multi_score <- length(result$concordance) > 1L
+  comparable <- if (multi_score && is.matrix(result$count)) {
+    rowSums(result$count[, seq_len(3L), drop = FALSE])
+  } else if (is.matrix(result$count)) {
+    sum(result$count[, seq_len(3L), drop = FALSE])
+  } else {
+    sum(result$count[seq_len(3L)])
+  }
+  empty <- comparable == 0
+  if (!any(empty)) {
+    return(result)
+  }
+
+  if (!multi_score) {
+    result$concordance[] <- NaN
+    if (!is.null(result$var)) result$var[] <- NaN
+    if (!is.null(result$cvar)) result$cvar[] <- NaN
+    if (!is.null(result$dfbeta)) result$dfbeta[] <- NaN
+    return(result)
+  }
+
+  result$concordance[empty] <- NaN
+  if (!is.null(result$cvar)) result$cvar[empty] <- NaN
+  if (!is.null(result$var)) {
+    result$var[empty, ] <- NaN
+    result$var[, empty] <- NaN
+  }
+  if (!is.null(result$dfbeta)) result$dfbeta[, empty] <- NaN
+  result
+}
+
 .concordancefit_rank_result <- function(rows, row_names = NULL, score_names = NULL) {
   multi_score <- !is.null(score_names) && length(score_names) > 1L
   if (multi_score) {
@@ -13040,6 +13077,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       out$ranks[, "rank"] <- -out$ranks[, "rank"]
     }
   }
+  out <- .concordance_zero_pair_values(out)
   .concordance_empty_rank_values(out)
 }
 

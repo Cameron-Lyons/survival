@@ -5232,6 +5232,62 @@ test_that("empty concordance rank tables match reference shapes", {
   }
 })
 
+test_that("zero-pair concordance diagnostics match reference values", {
+  data <- data.frame(
+    time = c(4, 1, 6, 5, 2, 6, 5),
+    status = c(0, 0, 0, 1, 0, 1, 0),
+    x = c(1, 0, 0.5, 0, 0, 1, 1),
+    z = c(0, -0.5, -0.5, 1, 0.5, 0, -1)
+  )
+  score_sets <- list(as.matrix(data["x"]), as.matrix(data[c("x", "z")]))
+
+  for (scores in score_sets) {
+    bridged <- concordancefit(
+      Surv(data$time, data$status),
+      scores,
+      ymax = 4,
+      timewt = "S/G",
+      influence = 3
+    )
+    reference <- survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      scores,
+      ymax = 4,
+      timewt = "S/G",
+      influence = 3
+    )
+    expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+  }
+
+  formulas <- list(Surv(time, status) ~ x, Surv(time, status) ~ x + z)
+  reference_formulas <- list(
+    survival::Surv(time, status) ~ x,
+    survival::Surv(time, status) ~ x + z
+  )
+  for (index in seq_along(formulas)) {
+    bridged <- concordance(
+      formulas[[index]],
+      data = data,
+      ymax = 4,
+      timewt = "S/G",
+      influence = 3
+    )
+    reference <- survival::concordance(
+      reference_formulas[[index]],
+      data = data,
+      ymax = 4,
+      timewt = "S/G",
+      influence = 3
+    )
+    fields <- setdiff(names(reference), "call")
+    expect_equal(
+      unclass(bridged)[fields],
+      unclass(reference)[fields],
+      tolerance = 1e-12
+    )
+  }
+})
+
 test_that("collapsed single-score strata match reference behavior", {
   data <- data.frame(
     time = c(1, 2, 1, 2),
