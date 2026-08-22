@@ -15209,6 +15209,8 @@ def survfit(
     if _is_clogit_fit(response):
         raise ValueError("predicted survival curves are not defined for a clogit model")
 
+    is_multistate_cox_fit = isinstance(response, _FormulaFit) and response.multi_state is not None
+
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, None)
     conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
     if "se.fit" in kwargs:
@@ -15216,7 +15218,9 @@ def survfit(
             raise ValueError("use only one of se_fit or se.fit")
         se_fit = kwargs.pop("se.fit")
     if se_fit is _MISSING:
-        se_fit = not (isinstance(response, _FormulaFit) and response.multi_state is not None)
+        se_fit = not is_multistate_cox_fit
+    elif is_multistate_cox_fit:
+        se_fit = False
     start_time = _pop_dotted_keyword(kwargs, "start.time", "start_time", start_time, None)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     timefix = _pop_dotted_keyword(kwargs, "time.fix", "timefix", timefix, True)
@@ -15316,7 +15320,6 @@ def survfit(
             group = _combined_formula_groups(data, terms.strata, terms.covariates, len(response))
             formula_group_levels = _r_formula_ordered_levels(group, "survfit formula groups")
 
-    is_multistate_cox_fit = isinstance(response, _FormulaFit) and response.multi_state is not None
     if p0 is not None and not (
         (isinstance(response, Surv) and response.type in {"mright", "mcounting"})
         or is_multistate_cox_fit
@@ -15327,10 +15330,6 @@ def survfit(
         if etype is not None or istate is not None:
             raise ValueError("etype and istate are only supported for Surv or formula inputs")
         if is_multistate_cox_fit:
-            if include_se:
-                raise NotImplementedError(
-                    "standard errors are not implemented for multi-state Cox survival curves"
-                )
             if computation.ctype != 1:
                 raise NotImplementedError(
                     "ctype=2 is not implemented for multi-state Cox survival curves"
@@ -15364,7 +15363,7 @@ def survfit(
                 include_censor=include_censor,
                 stype=curve_style,
                 conf_level=normalized_conf_level,
-                conf_type=normalized_conf_type,
+                conf_type="none",
                 keep_model=keep_model,
             )
         if not computation.is_kaplan_meier:
@@ -18823,6 +18822,7 @@ def _survfit_multistate_structure(
     )
     if grouped:
         structure["strata"] = {str(label): len(curve.time) for label, curve in curves}
+    uncertainty_present = False
     for field_name, attribute in (
         ("std.err", "std_err"),
         ("std.chaz", "std_chaz"),
@@ -18831,7 +18831,9 @@ def _survfit_multistate_structure(
         values = combined_matrix(attribute)
         if values is not None and (field_name != "std.chaz" or first.transitions):
             structure[field_name] = values
-    structure["logse"] = False
+            uncertainty_present = True
+    if uncertainty_present:
+        structure["logse"] = False
 
     if first.transitions:
         target_states = list(dict.fromkeys(target for _source, target in first.transitions))
@@ -18862,10 +18864,11 @@ def _survfit_multistate_structure(
         values = combined_matrix(attribute)
         if values is not None:
             structure[field_name] = values
+    if uncertainty_present:
+        structure["conf.type"] = first.conf_type
+        structure["conf.int"] = first.conf_level
     structure.update(
         {
-            "conf.type": first.conf_type,
-            "conf.int": first.conf_level,
             "states": list(first.states),
             "type": first.surv_type,
             "t0": first.t0,

@@ -8160,6 +8160,44 @@ test_that("single-formula multi-state Cox models match survival", {
   )
   expect_equal(dim(default_curve), c(data = 1L, states = 3L))
 
+  explicit_se_curve <- expect_warning(
+    survfit(
+      bridged,
+      newdata = data.frame(x = 0.5),
+      se.fit = TRUE,
+      time0 = TRUE
+    ),
+    NA
+  )
+  reference_explicit_se_curve <- expect_warning(
+    survival::survfit(
+      reference,
+      newdata = data.frame(x = 0.5),
+      se.fit = TRUE,
+      time0 = TRUE
+    ),
+    NA
+  )
+  explicit_se_list <- as.list(explicit_se_curve)
+  expect_named(
+    explicit_se_list,
+    setdiff(names(reference_explicit_se_curve), c("start.time", "newdata", "call"))
+  )
+  expect_equal(
+    explicit_se_list$pstate,
+    reference_explicit_se_curve$pstate,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    explicit_se_list$cumhaz,
+    reference_explicit_se_curve$cumhaz,
+    tolerance = 1e-12
+  )
+  expect_false(any(c(
+    "std.err", "std.chaz", "std.auc", "logse", "lower", "upper",
+    "conf.type", "conf.int"
+  ) %in% names(explicit_se_list)))
+
   for (curve_style in 1:2) {
     bridged_curve <- as.list(survfit(
       bridged,

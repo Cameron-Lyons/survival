@@ -2530,6 +2530,17 @@ def test_survfit_multistate_matches_r_aalen_johansen_fixture():
     assert without_se.std_chaz is None
     assert without_se.conf_lower is None
     assert without_se.conf_upper is None
+    without_se_structure = survival.r_api._survfit_multistate_structure(without_se)
+    assert not {
+        "std.err",
+        "std.chaz",
+        "std.auc",
+        "logse",
+        "lower",
+        "upper",
+        "conf.type",
+        "conf.int",
+    }.intersection(without_se_structure)
 
     zero_weight = survival.survfit(response, weights=[1.0, 0.0, 1.0, 1.0, 1.0, 1.0])
     assert zero_weight.n_risk[0] == pytest.approx([5.0, 0.0, 0.0])
@@ -13655,8 +13666,33 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
         survival.predict(fit, type="terms")
     with pytest.raises(ValueError, match="newdata is required"):
         survival.survfit(fit, se_fit=False)
-    with pytest.raises(NotImplementedError, match="standard errors"):
-        survival.survfit(fit, newdata=pandas.DataFrame({"x": [0.5]}), se_fit=True)
+    explicit_se_curve = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5]}),
+        se_fit=True,
+        time0=True,
+    )
+    assert explicit_se_curve.time == pytest.approx(model_curve.time)
+    for actual, expected in zip(explicit_se_curve.pstate, model_curve.pstate, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-12)
+    for actual, expected in zip(explicit_se_curve.cumhaz, model_curve.cumhaz, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-12)
+    assert explicit_se_curve.std_err is None
+    assert explicit_se_curve.std_chaz is None
+    assert explicit_se_curve.conf_lower is None
+    assert explicit_se_curve.conf_upper is None
+    assert explicit_se_curve.conf_type == "none"
+    explicit_se_structure = survival.r_api._survfit_multistate_structure(explicit_se_curve)
+    assert not {
+        "std.err",
+        "std.chaz",
+        "std.auc",
+        "logse",
+        "lower",
+        "upper",
+        "conf.type",
+        "conf.int",
+    }.intersection(explicit_se_structure)
 
 
 def test_coxph_multistate_formula_lists_match_r_reference():
