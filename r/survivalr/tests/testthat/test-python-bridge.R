@@ -7994,6 +7994,49 @@ test_that("Student-t frailty formulas match survival", {
   )
 })
 
+test_that("dense non-Gaussian frailty formulas match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 2:19,
+    status = c(1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1),
+    x = c(-1.2, -0.8, -0.4, 0, 0.4, 0.8, 1.2, -1, -0.6, -0.2, 0.2, 0.6, 1, 1.4, -1.4, -0.9, 0.1, 0.9),
+    g = factor(rep(letters[1:6], each = 3))
+  )
+  terms <- c(
+    'frailty(g, distribution = "gamma", theta = 0.5, sparse = FALSE)',
+    'frailty(g, distribution = "t", theta = 0.5, tdf = 5, method = "fixed", sparse = FALSE)'
+  )
+
+  for (term in terms) {
+    bridged <- coxph(
+      stats::as.formula(paste("Surv(time, status) ~ x +", term)),
+      data = data,
+      ties = "breslow",
+      control = coxph.control(iter.max = 50L, eps = 1e-10, toler.chol = 1e-13)
+    )
+    reference <- survival::coxph(
+      stats::as.formula(
+        paste("survival::Surv(time, status) ~ x +", paste0("survival::", term))
+      ),
+      data = data,
+      ties = "breslow",
+      control = survival::coxph.control(iter.max = 50L, eps = 1e-10, toler.chol = 1e-13)
+    )
+
+    expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+    expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-12)
+    expect_equal(bridged$log_likelihood, reference$loglik, tolerance = 1e-12)
+    expect_equal(
+      unname(unlist(bridged$term_degrees_of_freedom)),
+      unname(reference$df),
+      tolerance = 1e-12
+    )
+  }
+})
+
 test_that("gamma frailty target degrees of freedom match survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
@@ -8027,7 +8070,11 @@ test_that("gamma frailty target degrees of freedom match survival", {
     unname(reference$df),
     tolerance = 1e-12
   )
-  expect_equal(bridged$history[[1L]]$theta, reference$history[[1L]]$theta, tolerance = 1e-12)
+  expect_equal(
+    unname(bridged$history[[1L]]$theta),
+    unname(reference$history[[1L]]$theta),
+    tolerance = 1e-12
+  )
   expect_equal(
     bridged$history[[1L]]$c.loglik,
     reference$history[[1L]]$c.loglik,

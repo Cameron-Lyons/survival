@@ -3,10 +3,11 @@ use crate::constants::{
     EXP_CLAMP_MIN,
 };
 use crate::internal::statistical::ln_gamma;
+use crate::regression::cox_optimizer::{CoxFit, CoxFrailtyPenalty, Method as CoxMethod};
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_detail_module::CoxphDetail;
 use crate::regression::coxph_support::StratifiedBaselineLookup;
-use ndarray::Array2;
+use ndarray::{Array1, Array2};
 use pyo3::prelude::*;
 
 #[derive(Clone, Copy)]
@@ -52,6 +53,12 @@ pub struct CoxPHFrailtyFit {
     pub distribution: String,
     #[pyo3(get)]
     pub tdf: Option<f64>,
+    #[pyo3(get)]
+    pub penalty_matrix: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub dense: bool,
+    #[pyo3(get)]
+    pub frailty_columns: Vec<usize>,
     #[pyo3(get)]
     pub offset: Vec<f64>,
     diagnostic_fit: CoxPHFit,
@@ -1300,8 +1307,257 @@ fn validate_penalty(values: Option<Vec<Vec<f64>>>, nvar: usize) -> PyResult<Arra
     Ok(matrix)
 }
 
+fn dense_term_degrees_of_freedom(
+    covariance: &Array2<f64>,
+    naive_covariance: &Array2<f64>,
+    columns: &[usize],
+) -> f64 {
+    if columns.is_empty() {
+        return 0.0;
+    }
+    let width = columns.len();
+    let term_covariance = Array2::from_shape_fn((width, width), |(row, column)| {
+        covariance[(columns[row], columns[column])]
+    });
+    let term_naive = Array2::from_shape_fn((width, width), |(row, column)| {
+        naive_covariance[(columns[row], columns[column])]
+    });
+    let Some(inverse) = invert_symmetric(&term_covariance) else {
+        return 0.0;
+    };
+    (0..width)
+        .map(|row| {
+            (0..width)
+                .map(|column| inverse[(row, column)] * term_naive[(column, row)])
+                .sum::<f64>()
+        })
+        .sum::<f64>()
+        .clamp(0.0, width as f64)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dense_coxph_frailty_fit(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    groups: Vec<usize>,
+    theta: f64,
+    strata: Vec<i32>,
+    weights: Vec<f64>,
+    offset: Vec<f64>,
+    initial_beta: Vec<f64>,
+    max_iter: usize,
+    eps: f64,
+    toler: f64,
+    ties: Ties,
+    nocenter: Vec<f64>,
+    ordinary_penalty: Array2<f64>,
+    entry_times: Option<Vec<f64>>,
+    distribution: FrailtyDistribution,
+    frailty_columns: Vec<usize>,
+) -> PyResult<CoxPHFrailtyFit> {
+    let n = time.len();
+    let nvar = covariates.first().map_or(0, Vec::len);
+    let mut seen_columns = vec![false; nvar];
+    for (group, &column) in frailty_columns.iter().enumerate() {
+        if column >= nvar || seen_columns[column] {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "frailty_columns must contain unique valid covariate indices",
+            ));
+        }
+        seen_columns[column] = true;
+        for (row, values) in covariates.iter().enumerate() {
+            let expected = usize::from(groups[row] == group) as f64;
+            if values[column] != expected {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "dense frailty covariates must be full one-hot group indicators",
+                ));
+            }
+        }
+    }
+    let penalty_distribution = match distribution {
+        FrailtyDistribution::Gamma => CoxFrailtyPenalty::Gamma,
+        FrailtyDistribution::StudentT(degrees_of_freedom) => {
+            CoxFrailtyPenalty::StudentT(degrees_of_freedom)
+        }
+        FrailtyDistribution::Gaussian => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "dense grouped fitting is only needed for gamma and Student-t frailty",
+            ));
+        }
+    };
+
+    let mut order = (0..n).collect::<Vec<_>>();
+    order.sort_by(|&left, &right| {
+        strata[left]
+            .cmp(&strata[right])
+            .then_with(|| time[left].total_cmp(&time[right]))
+            .then_with(|| left.cmp(&right))
+    });
+    let sorted_time = order.iter().map(|&index| time[index]).collect::<Vec<_>>();
+    let sorted_status = order.iter().map(|&index| status[index]).collect::<Vec<_>>();
+    let sorted_offset = order.iter().map(|&index| offset[index]).collect::<Vec<_>>();
+    let sorted_weights = order
+        .iter()
+        .map(|&index| weights[index])
+        .collect::<Vec<_>>();
+    let sorted_entry_times = entry_times
+        .as_ref()
+        .map(|values| order.iter().map(|&index| values[index]).collect::<Vec<_>>());
+    let mut strata_boundaries = vec![0; n];
+    for sorted in 0..n {
+        if sorted + 1 == n || strata[order[sorted + 1]] != strata[order[sorted]] {
+            strata_boundaries[sorted] = 1;
+        }
+    }
+    let sorted_covariates =
+        Array2::from_shape_fn((n, nvar), |(row, column)| covariates[order[row]][column]);
+    let doscale = (0..nvar)
+        .map(|column| {
+            !covariates
+                .iter()
+                .all(|row| nocenter.iter().any(|value| row[column] == *value))
+        })
+        .collect::<Vec<_>>();
+    let method = match ties {
+        Ties::Breslow => CoxMethod::Breslow,
+        Ties::Efron => CoxMethod::Efron,
+    };
+    let mut cox_fit = CoxFit::new_with_entry_times(
+        Array1::from_vec(sorted_time),
+        Array1::from_vec(sorted_status),
+        sorted_covariates,
+        sorted_entry_times.map(Array1::from_vec),
+        Array1::from_vec(strata_boundaries),
+        Array1::from_vec(sorted_offset),
+        Array1::from_vec(sorted_weights),
+        method,
+        max_iter,
+        eps,
+        toler,
+        doscale,
+        initial_beta,
+    )
+    .map_err(|error| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "dense frailty fit initialization failed: {error}"
+        ))
+    })?;
+    cox_fit.set_frailty_penalty(
+        &ordinary_penalty,
+        frailty_columns.clone(),
+        theta,
+        penalty_distribution,
+    );
+    cox_fit.fit().map_err(|error| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!("dense frailty fit failed: {error}"))
+    })?;
+    let penalized_log_likelihood = cox_fit.penalized_log_likelihood();
+    let penalty = cox_fit.penalty_hessian();
+    let (beta, means, score, covariance, log_likelihood, score_test, flag, iterations) =
+        cox_fit.results();
+    let covariance_penalty = covariance.dot(&penalty);
+    let naive_covariance = &covariance - &covariance_penalty.dot(&covariance);
+    let frailty_degrees_of_freedom =
+        dense_term_degrees_of_freedom(&covariance, &naive_covariance, &frailty_columns);
+    let covariate_degrees_of_freedom = (0..nvar)
+        .map(|column| {
+            if seen_columns[column] || covariance[(column, column)] <= 0.0 {
+                0.0
+            } else {
+                (naive_covariance[(column, column)] / covariance[(column, column)]).clamp(0.0, 1.0)
+            }
+        })
+        .collect::<Vec<_>>();
+    let degrees_of_freedom =
+        covariate_degrees_of_freedom.iter().sum::<f64>() + frailty_degrees_of_freedom;
+    let frailty = frailty_columns
+        .iter()
+        .map(|&column| beta[column])
+        .collect::<Vec<_>>();
+    let frailty_variance = frailty_columns
+        .iter()
+        .map(|&column| covariance[(column, column)])
+        .collect::<Vec<_>>();
+    let linear_predictors = covariates
+        .iter()
+        .zip(&offset)
+        .map(|(row, offset)| {
+            offset
+                + row
+                    .iter()
+                    .zip(&beta)
+                    .map(|(value, coefficient)| value * coefficient)
+                    .sum::<f64>()
+        })
+        .collect::<Vec<_>>();
+    let covariance = covariance
+        .outer_iter()
+        .map(|row| row.to_vec())
+        .collect::<Vec<_>>();
+    let naive_information_matrix = naive_covariance
+        .outer_iter()
+        .map(|row| row.to_vec())
+        .collect::<Vec<_>>();
+    let penalty_matrix = penalty
+        .outer_iter()
+        .map(|row| row.to_vec())
+        .collect::<Vec<_>>();
+    let method = match ties {
+        Ties::Breslow => "breslow",
+        Ties::Efron => "efron",
+    }
+    .to_string();
+    let diagnostic_fit = CoxPHFit {
+        coefficients: vec![beta],
+        means,
+        score_vector: score,
+        information_matrix: covariance,
+        degrees_of_freedom,
+        log_likelihood: log_likelihood.to_vec(),
+        score_test,
+        convergence_flag: flag,
+        iterations,
+        risk_scores: Vec::new(),
+        event_times: time,
+        status,
+        linear_predictors,
+        entry_times,
+        weights,
+        covariates,
+        strata,
+        method,
+        nocenter,
+    };
+    Ok(CoxPHFrailtyFit {
+        frailty,
+        naive_information_matrix,
+        frailty_variance,
+        covariate_degrees_of_freedom,
+        frailty_degrees_of_freedom,
+        penalized_log_likelihood,
+        theta,
+        distribution: match distribution {
+            FrailtyDistribution::Gamma => "gamma",
+            FrailtyDistribution::StudentT(_) => "t",
+            FrailtyDistribution::Gaussian => unreachable!(),
+        }
+        .to_string(),
+        tdf: match distribution {
+            FrailtyDistribution::StudentT(degrees_of_freedom) => Some(degrees_of_freedom),
+            FrailtyDistribution::Gamma => None,
+            FrailtyDistribution::Gaussian => unreachable!(),
+        },
+        penalty_matrix,
+        dense: true,
+        frailty_columns,
+        offset,
+        diagnostic_fit,
+    })
+}
+
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None, entry_times=None, distribution=None, tdf=None))]
+#[pyo3(signature = (time, status, covariates, groups, theta, strata=None, weights=None, offset=None, initial_beta=None, initial_frailty=None, max_iter=None, eps=None, toler=None, method=None, nocenter=None, penalty_matrix=None, entry_times=None, distribution=None, tdf=None, dense=false, frailty_columns=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_frailty_fit(
     time: Vec<f64>,
@@ -1323,6 +1579,8 @@ pub fn coxph_frailty_fit(
     entry_times: Option<Vec<f64>>,
     distribution: Option<&str>,
     tdf: Option<f64>,
+    dense: bool,
+    frailty_columns: Option<Vec<usize>>,
 ) -> PyResult<CoxPHFrailtyFit> {
     let n = time.len();
     if n == 0 {
@@ -1415,6 +1673,7 @@ pub fn coxph_frailty_fit(
         )));
     }
     validate_finite("initial_beta", &beta)?;
+    let has_initial_frailty = initial_frailty.is_some();
     let frailty = initial_frailty.unwrap_or_else(|| vec![0.0; nfrail]);
     if frailty.len() != nfrail {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -1481,6 +1740,49 @@ pub fn coxph_frailty_fit(
     let nocenter = nocenter.unwrap_or_else(|| vec![-1.0, 0.0, 1.0]);
     validate_finite("nocenter", &nocenter)?;
     let ordinary_penalty = validate_penalty(penalty_matrix, nvar)?;
+
+    if dense {
+        if has_initial_frailty {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "initial_frailty is not used for a dense frailty fit; include effects in initial_beta",
+            ));
+        }
+        let frailty_columns = frailty_columns.ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(
+                "frailty_columns is required for a dense frailty fit",
+            )
+        })?;
+        if frailty_columns.len() != nfrail {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "frailty_columns must contain one column per observed group",
+            ));
+        }
+        return dense_coxph_frailty_fit(
+            time,
+            status,
+            covariates,
+            groups,
+            theta,
+            strata,
+            weights,
+            offset,
+            beta,
+            max_iter.unwrap_or(COX_MAX_ITER),
+            eps,
+            toler,
+            ties,
+            nocenter,
+            ordinary_penalty,
+            entry_times,
+            distribution,
+            frailty_columns,
+        );
+    }
+    if frailty_columns.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "frailty_columns is only valid for a dense frailty fit",
+        ));
+    }
 
     let doscale = (0..nvar)
         .map(|column| {
@@ -1631,6 +1933,9 @@ pub fn coxph_frailty_fit(
             FrailtyDistribution::StudentT(degrees_of_freedom) => Some(degrees_of_freedom),
             FrailtyDistribution::Gaussian | FrailtyDistribution::Gamma => None,
         },
+        penalty_matrix: Vec::new(),
+        dense: false,
+        frailty_columns: Vec::new(),
         offset,
         diagnostic_fit,
     })
@@ -1723,6 +2028,8 @@ mod tests {
             ]),
             None,
             None,
+            false,
+            None,
         )
         .expect("counting-process frailty fit should compute");
 
@@ -1759,6 +2066,8 @@ mod tests {
             None,
             Some("gamma"),
             None,
+            false,
+            None,
         )
         .expect("fixed gamma frailty fit should compute");
 
@@ -1773,5 +2082,58 @@ mod tests {
         assert!((fit.frailty[1] - 0.320013468117002).abs() < 1e-12);
         assert!((fit.frailty_degrees_of_freedom - 2.1898681329284).abs() < 1e-12);
         assert!((fit.log_likelihood()[1] - -22.045263541983).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dense_gamma_fit_matches_full_coefficient_reference() {
+        let groups = (0..6)
+            .flat_map(|group| std::iter::repeat_n(group, 3))
+            .collect::<Vec<_>>();
+        let x = [
+            -1.2, -0.8, -0.4, 0.0, 0.4, 0.8, 1.2, -1.0, -0.6, -0.2, 0.2, 0.6, 1.0, 1.4, -1.4, -0.9,
+            0.1, 0.9,
+        ];
+        let covariates = x
+            .into_iter()
+            .enumerate()
+            .map(|(row, value)| {
+                let mut values = vec![value];
+                values.extend((0..6).map(|group| if groups[row] == group { 1.0 } else { 0.0 }));
+                values
+            })
+            .collect::<Vec<_>>();
+        let fit = coxph_frailty_fit(
+            (2..=19).map(f64::from).collect(),
+            vec![1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+            covariates,
+            groups,
+            0.5,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(50),
+            Some(1e-10),
+            Some(1e-13),
+            Some("breslow"),
+            None,
+            None,
+            None,
+            Some("gamma"),
+            None,
+            true,
+            Some((1..7).collect()),
+        )
+        .expect("dense gamma frailty fit should compute");
+
+        assert!(fit.dense);
+        assert_eq!(fit.frailty_columns, (1..7).collect::<Vec<_>>());
+        assert_eq!(fit.coefficients()[0].len(), 7);
+        assert!((fit.coefficients()[0][0] - -0.180646448984096).abs() < 1e-12);
+        assert!((fit.coefficients()[0][1] - 0.543042196697236).abs() < 1e-12);
+        assert!((fit.information_matrix()[0][0] - 0.131919318665047).abs() < 1e-12);
+        assert!((fit.frailty_degrees_of_freedom - 2.15598303424186).abs() < 1e-12);
+        assert!((fit.log_likelihood()[1] - -17.9422229283244).abs() < 1e-12);
     }
 }

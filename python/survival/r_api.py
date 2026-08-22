@@ -4686,7 +4686,7 @@ def _formula_penalty_matrix(
             for local_column, column in enumerate(block.columns):
                 penalty[row][column] += smoothing * block.penalty[local_row][local_column]
     for block, theta in zip(frailty_blocks, frailty_thetas, strict=True):
-        if not block.columns:
+        if not block.columns or block.distribution in {"gamma", "t"}:
             continue
         precision = 1.0 / theta
         for column in block.columns:
@@ -4697,12 +4697,24 @@ def _formula_penalty_matrix(
 def _frailty_loglik_constant(
     blocks: Sequence[_FrailtyPenaltyBlock],
     thetas: Sequence[float],
+    already_included: _FrailtyPenaltyBlock | None = None,
 ) -> float:
-    return 0.5 * math.fsum(
-        len(block.columns) * math.log(2.0 * math.pi * theta)
-        for block, theta in zip(blocks, thetas, strict=True)
-        if not block.sparse
-    )
+    total = 0.0
+    for block, theta in zip(blocks, thetas, strict=True):
+        if block.sparse or block is already_included:
+            continue
+        if block.distribution == "gaussian":
+            total += 0.5 * len(block.columns) * math.log(2.0 * math.pi * theta)
+        elif block.distribution == "t":
+            if block.tdf is None:
+                raise AssertionError("Student-t frailty degrees of freedom are missing")
+            denominator = theta * (block.tdf - 2.0)
+            total += len(block.columns) * (
+                0.5 * math.log(math.pi * denominator)
+                + math.lgamma(block.tdf / 2.0)
+                - math.lgamma((block.tdf + 1.0) / 2.0)
+            )
+    return total
 
 
 def _diagonal_penalty_matrix(penalty: Sequence[float]) -> list[list[float]]:
@@ -4790,7 +4802,24 @@ def _quadratic_formula_term_degrees_of_freedom(
     }
 
 
-def _sparse_formula_term_degrees_of_freedom(
+def _variance_term_degrees_of_freedom(
+    fit: Any,
+    columns: Sequence[int],
+) -> float:
+    if not columns:
+        return 0.0
+    variance = [[float(value) for value in row] for row in fit.information_matrix]
+    naive = [[float(value) for value in row] for row in fit.naive_information_matrix]
+    term_variance = [[variance[row][column] for column in columns] for row in columns]
+    term_naive = [[naive[row][column] for column in columns] for row in columns]
+    rhs = [
+        [term_naive[row][column] for row in range(len(columns))] for column in range(len(columns))
+    ]
+    _tests, _rank, solve = _core.coxph_wtest(term_variance, rhs, 1e-9)
+    return math.fsum(solve[index][index] for index in range(len(columns)))
+
+
+def _native_formula_term_degrees_of_freedom(
     fit: Any,
     design: _FormulaDesign,
 ) -> dict[str, float]:
@@ -4798,7 +4827,7 @@ def _sparse_formula_term_degrees_of_freedom(
     naive = [[float(value) for value in row] for row in fit.naive_information_matrix]
     width = len(variance)
     if len(naive) != width or any(len(row) != width for row in [*variance, *naive]):
-        raise ValueError("sparse frailty fit returned inconsistent covariance dimensions")
+        raise ValueError("grouped frailty fit returned inconsistent covariance dimensions")
 
     cursor = 1 if design.intercept else 0
     grouped_columns: dict[int, list[int]] = {}
@@ -4810,20 +4839,13 @@ def _sparse_formula_term_degrees_of_freedom(
             sparse_assignments.add(assignment)
         cursor += output_count
     if cursor != width:
-        raise ValueError("formula metadata does not match the sparse frailty covariance matrix")
+        raise ValueError("formula metadata does not match the grouped frailty covariance matrix")
 
     result: dict[str, float] = {}
     for assignment, columns in grouped_columns.items():
         value = float(fit.frailty_degrees_of_freedom) if assignment in sparse_assignments else 0.0
         if columns:
-            term_variance = [[variance[row][column] for column in columns] for row in columns]
-            term_naive = [[naive[row][column] for column in columns] for row in columns]
-            rhs = [
-                [term_naive[row][column] for row in range(len(columns))]
-                for column in range(len(columns))
-            ]
-            _tests, _rank, solve = _core.coxph_wtest(term_variance, rhs, 1e-9)
-            value += math.fsum(solve[index][index] for index in range(len(columns)))
+            value += _variance_term_degrees_of_freedom(fit, columns)
         label = (
             design.term_labels[assignment - 1]
             if 0 < assignment <= len(design.term_labels)
@@ -5254,7 +5276,8 @@ def _design_term_output_names(spec: _DesignTerm) -> list[str]:
     if isinstance(spec, _FrailtyDesignTerm):
         if spec.sparse:
             return []
-        return [f"gauss:{level}" for level in spec.levels]
+        prefix = {"gamma": "gamma", "gaussian": "gauss", "t": "t"}[spec.formula.distribution]
+        return [f"{prefix}:{level}" for level in spec.levels]
     if isinstance(spec, _PSplineDesignTerm):
         width = spec.formula.nterm + spec.formula.degree
         if not spec.formula.intercept:
@@ -23682,8 +23705,8 @@ def coxph(
     formula_ridge_blocks: list[_RidgePenaltyBlock] = []
     formula_pspline_blocks: list[_PSplinePenaltyBlock] = []
     formula_frailty_blocks: list[_FrailtyPenaltyBlock] = []
-    sparse_formula_frailty_block: _FrailtyPenaltyBlock | None = None
-    sparse_formula_frailty_index: int | None = None
+    native_formula_frailty_block: _FrailtyPenaltyBlock | None = None
+    native_formula_frailty_index: int | None = None
     direct_coefficient_names: tuple[str, ...] | None = None
     time_transform_terms: list[_CovariateTerm] = []
     time_transform_functions: list[Any | None] = []
@@ -23777,18 +23800,17 @@ def coxph(
             formula_design,
             len(response),
         )
-        sparse_blocks = [block for block in formula_frailty_blocks if block.sparse]
-        if len(sparse_blocks) > 1:
-            raise ValueError("coxph formulas support at most one sparse frailty term")
-        if any(
-            block.distribution in {"gamma", "t"} and not block.sparse
+        native_blocks = [
+            block
             for block in formula_frailty_blocks
-        ):
-            raise NotImplementedError("gamma and Student-t frailty currently require sparse=True")
-        sparse_formula_frailty_block = sparse_blocks[0] if sparse_blocks else None
-        sparse_formula_frailty_index = (
-            formula_frailty_blocks.index(sparse_formula_frailty_block)
-            if sparse_formula_frailty_block is not None
+            if block.sparse or block.distribution in {"gamma", "t"}
+        ]
+        if len(native_blocks) > 1:
+            raise ValueError("coxph formulas support at most one grouped frailty term")
+        native_formula_frailty_block = native_blocks[0] if native_blocks else None
+        native_formula_frailty_index = (
+            formula_frailty_blocks.index(native_formula_frailty_block)
+            if native_formula_frailty_block is not None
             else None
         )
         if (formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks) and (
@@ -23843,16 +23865,16 @@ def coxph(
         expansion = _cox_time_transform_expansion(response, strata, fix_time)
         source_indices = expansion.source_indices
         expanded_n = len(source_indices)
-        if sparse_formula_frailty_block is not None:
-            if sparse_formula_frailty_index is None:
-                raise AssertionError("sparse frailty index is missing")
-            sparse_formula_frailty_block = replace(
-                sparse_formula_frailty_block,
+        if native_formula_frailty_block is not None:
+            if native_formula_frailty_index is None:
+                raise AssertionError("grouped frailty index is missing")
+            native_formula_frailty_block = replace(
+                native_formula_frailty_block,
                 groups=tuple(
-                    sparse_formula_frailty_block.groups[index] for index in source_indices
+                    native_formula_frailty_block.groups[index] for index in source_indices
                 ),
             )
-            formula_frailty_blocks[sparse_formula_frailty_index] = sparse_formula_frailty_block
+            formula_frailty_blocks[native_formula_frailty_index] = native_formula_frailty_block
         expanded_data = _subset_data(formula_model_data, source_indices)
         weights = _subset_optional_sequence(weights, source_indices, "weights")
         offset = _subset_optional_sequence(offset, source_indices, "offset")
@@ -23978,34 +24000,73 @@ def coxph(
         if init is not None or initial_beta is not None
         else None
     )
+    native_dense_columns = (
+        tuple(native_formula_frailty_block.columns)
+        if native_formula_frailty_block is not None and not native_formula_frailty_block.sparse
+        else ()
+    )
+
+    def without_native_dense_columns(values: Sequence[Any]) -> list[Any]:
+        excluded = set(native_dense_columns)
+        return [value for index, value in enumerate(values) if index not in excluded]
+
+    def without_native_dense_penalty(
+        penalty: list[list[float]] | None,
+    ) -> list[list[float]] | None:
+        if penalty is None:
+            return None
+        excluded = set(native_dense_columns)
+        return [
+            [value for column, value in enumerate(row) if column not in excluded]
+            for row_index, row in enumerate(penalty)
+            if row_index not in excluded
+        ]
+
+    def expand_native_dense_start(values: Sequence[float]) -> list[float]:
+        excluded = set(native_dense_columns)
+        iterator = iter(values)
+        return [0.0 if column in excluded else float(next(iterator)) for column in range(width)]
 
     def run_fit(
         diagonal_penalty: list[float] | None,
         quadratic_penalty: list[list[float]] | None,
         start: list[float] | None,
-        sparse_theta: float | None = None,
-        sparse_start: list[float] | None = None,
+        frailty_theta: float | None = None,
+        frailty_start: list[float] | None = None,
     ) -> Any:
-        if sparse_formula_frailty_block is not None:
-            if sparse_theta is None:
-                raise AssertionError("sparse frailty variance is missing")
-            if sparse_theta == 0.0:
+        if native_formula_frailty_block is not None:
+            if frailty_theta is None:
+                raise AssertionError("grouped frailty variance is missing")
+            if frailty_theta == 0.0:
+                zero_rows = rows
+                zero_start = start
+                zero_diagonal = diagonal_penalty
+                zero_quadratic = quadratic_penalty
+                if native_dense_columns:
+                    zero_rows = [without_native_dense_columns(row) for row in rows]
+                    zero_start = without_native_dense_columns(start) if start is not None else None
+                    zero_diagonal = (
+                        without_native_dense_columns(diagonal_penalty)
+                        if diagonal_penalty is not None
+                        else None
+                    )
+                    zero_quadratic = without_native_dense_penalty(quadratic_penalty)
                 return _core.coxph_fit(
                     fit_times,
                     list(response.event),
-                    rows,
+                    zero_rows,
                     strata=fit_strata,
                     weights=fit_weights,
                     offset=fit_offset,
-                    initial_beta=start,
+                    initial_beta=zero_start,
                     max_iter=max_iter,
                     eps=eps,
                     toler=toler,
                     method=method_name,
                     entry_times=entry_times,
                     nocenter=nocenter_values,
-                    ridge_penalty=diagonal_penalty,
-                    penalty_matrix=quadratic_penalty,
+                    ridge_penalty=zero_diagonal,
+                    penalty_matrix=zero_quadratic,
                 )
             if diagonal_penalty is not None:
                 quadratic_penalty = _diagonal_penalty_matrix(diagonal_penalty)
@@ -24013,13 +24074,13 @@ def coxph(
                 fit_times,
                 list(response.event),
                 rows,
-                list(sparse_formula_frailty_block.groups),
-                sparse_theta,
+                list(native_formula_frailty_block.groups),
+                frailty_theta,
                 strata=fit_strata,
                 weights=fit_weights,
                 offset=fit_offset,
                 initial_beta=start,
-                initial_frailty=sparse_start,
+                initial_frailty=(frailty_start if native_formula_frailty_block.sparse else None),
                 max_iter=max_iter,
                 eps=eps,
                 toler=toler,
@@ -24027,8 +24088,10 @@ def coxph(
                 nocenter=nocenter_values,
                 penalty_matrix=quadratic_penalty,
                 entry_times=entry_times,
-                distribution=sparse_formula_frailty_block.distribution,
-                tdf=sparse_formula_frailty_block.tdf,
+                distribution=native_formula_frailty_block.distribution,
+                tdf=native_formula_frailty_block.tdf,
+                dense=not native_formula_frailty_block.sparse,
+                frailty_columns=(list(native_dense_columns) if native_dense_columns else None),
             )
         return _core.coxph_fit(
             fit_times,
@@ -24115,8 +24178,8 @@ def coxph(
         initial_log_likelihood = None
         fit = None
         if em_frailty_blocks:
-            if em_frailty_blocks != [sparse_formula_frailty_index]:
-                raise AssertionError("gamma EM requires exactly one sparse frailty term")
+            if em_frailty_blocks != [native_formula_frailty_index]:
+                raise AssertionError("gamma EM requires exactly one grouped frailty term")
             block_index = em_frailty_blocks[0]
             block = formula_frailty_blocks[block_index]
             preliminary_fit = run_fit(
@@ -24139,6 +24202,8 @@ def coxph(
             frailty_thetas[block_index] = 1.0
             reported_frailty_thetas[block_index] = 1.0
             start = [float(value) for value in preliminary_fit.coefficients[0]]
+            if native_dense_columns:
+                start = expand_native_dense_start(start)
         for outer_iteration in range(1, outer_max + 1):
             fitted_ridge_thetas = list(ridge_thetas)
             fitted_pspline_thetas = list(pspline_thetas)
@@ -24164,8 +24229,8 @@ def coxph(
                 fit_penalty_matrix,
                 start,
                 (
-                    fitted_frailty_thetas[sparse_formula_frailty_index]
-                    if sparse_formula_frailty_index is not None
+                    fitted_frailty_thetas[native_formula_frailty_index]
+                    if native_formula_frailty_index is not None
                     else None
                 ),
                 sparse_start,
@@ -24174,6 +24239,7 @@ def coxph(
                 initial_log_likelihood = float(fit.log_likelihood[0]) - _frailty_loglik_constant(
                     formula_frailty_blocks,
                     fitted_frailty_thetas,
+                    native_formula_frailty_block if native_dense_columns else None,
                 )
             next_ridge_thetas = list(fitted_ridge_thetas)
             next_pspline_thetas = list(fitted_pspline_thetas)
@@ -24186,16 +24252,20 @@ def coxph(
                 if target is None:
                     continue
                 term_df = (
-                    _quadratic_term_degrees_of_freedom(
-                        fit,
-                        fit_penalty_matrix,
-                        block.columns,
-                    )
-                    if fit_penalty_matrix is not None
-                    else _ridge_term_degrees_of_freedom(
-                        fit,
-                        fit_ridge_penalty,
-                        block.columns,
+                    _variance_term_degrees_of_freedom(fit, block.columns)
+                    if native_formula_frailty_block is not None
+                    else (
+                        _quadratic_term_degrees_of_freedom(
+                            fit,
+                            fit_penalty_matrix,
+                            block.columns,
+                        )
+                        if fit_penalty_matrix is not None
+                        else _ridge_term_degrees_of_freedom(
+                            fit,
+                            fit_ridge_penalty,
+                            block.columns,
+                        )
                     )
                 )
                 ridge_histories[block_index].append((fitted_ridge_thetas[block_index], term_df))
@@ -24214,10 +24284,14 @@ def coxph(
                 target = block.target_df
                 if target is None or fit_penalty_matrix is None:
                     raise AssertionError("P-spline calibration requires a quadratic penalty")
-                term_df = _quadratic_term_degrees_of_freedom(
-                    fit,
-                    fit_penalty_matrix,
-                    block.columns,
+                term_df = (
+                    _variance_term_degrees_of_freedom(fit, block.columns)
+                    if native_formula_frailty_block is not None
+                    else _quadratic_term_degrees_of_freedom(
+                        fit,
+                        fit_penalty_matrix,
+                        block.columns,
+                    )
                 )
                 pspline_histories[block_index].append((fitted_pspline_thetas[block_index], term_df))
                 next_theta, converged, half = _ridge_control_next_theta(
@@ -24235,10 +24309,14 @@ def coxph(
                 block = formula_pspline_blocks[block_index]
                 if fit_penalty_matrix is None:
                     raise AssertionError("P-spline AIC selection requires a quadratic penalty")
-                term_df = _quadratic_term_degrees_of_freedom(
-                    fit,
-                    fit_penalty_matrix,
-                    block.columns,
+                term_df = (
+                    _variance_term_degrees_of_freedom(fit, block.columns)
+                    if native_formula_frailty_block is not None
+                    else _quadratic_term_degrees_of_freedom(
+                        fit,
+                        fit_penalty_matrix,
+                        block.columns,
+                    )
                 )
                 pspline_aic_histories[block_index].append(
                     _penalty_aic_history_row(
@@ -24262,8 +24340,12 @@ def coxph(
                 if target is None:
                     raise AssertionError("frailty smoothing target is missing")
                 term_df = (
-                    float(fit.frailty_degrees_of_freedom)
-                    if block.sparse
+                    (
+                        float(fit.frailty_degrees_of_freedom)
+                        if block.sparse
+                        else _variance_term_degrees_of_freedom(fit, block.columns)
+                    )
+                    if block_index == native_formula_frailty_index
                     else _quadratic_term_degrees_of_freedom(
                         fit,
                         fit_penalty_matrix,
@@ -24285,8 +24367,12 @@ def coxph(
             for block_index in aic_frailty_blocks:
                 block = formula_frailty_blocks[block_index]
                 term_df = (
-                    float(fit.frailty_degrees_of_freedom)
-                    if block.sparse
+                    (
+                        float(fit.frailty_degrees_of_freedom)
+                        if block.sparse
+                        else _variance_term_degrees_of_freedom(fit, block.columns)
+                    )
+                    if block_index == native_formula_frailty_index
                     else _quadratic_term_degrees_of_freedom(
                         fit,
                         fit_penalty_matrix,
@@ -24362,7 +24448,11 @@ def coxph(
             pspline_thetas = next_pspline_thetas
             frailty_thetas = next_frailty_thetas
             start = [float(value) for value in fit.coefficients[0]]
-            if sparse_formula_frailty_block is not None and hasattr(fit, "frailty"):
+            if (
+                native_formula_frailty_block is not None
+                and native_formula_frailty_block.sparse
+                and hasattr(fit, "frailty")
+            ):
                 sparse_start = [float(value) for value in fit.frailty]
         if fit is None:
             raise AssertionError("penalty calibration did not run")
@@ -24391,15 +24481,19 @@ def coxph(
             fit_penalty_matrix,
             initial_values,
             (
-                frailty_thetas[sparse_formula_frailty_index]
-                if sparse_formula_frailty_index is not None
+                frailty_thetas[native_formula_frailty_index]
+                if native_formula_frailty_index is not None
                 else None
             ),
         )
         if formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks:
             reported_log_likelihood = [
                 float(fit.log_likelihood[0])
-                - _frailty_loglik_constant(formula_frailty_blocks, frailty_thetas),
+                - _frailty_loglik_constant(
+                    formula_frailty_blocks,
+                    frailty_thetas,
+                    native_formula_frailty_block if native_dense_columns else None,
+                ),
                 float(fit.log_likelihood[-1]),
             ]
             ridge_history = {
@@ -24494,8 +24588,8 @@ def coxph(
     if (
         formula_ridge_blocks or formula_pspline_blocks or formula_frailty_blocks
     ) and formula_design is not None:
-        if sparse_formula_frailty_block is not None:
-            term_degrees_of_freedom = _sparse_formula_term_degrees_of_freedom(
+        if native_formula_frailty_block is not None:
+            term_degrees_of_freedom = _native_formula_term_degrees_of_freedom(
                 fit,
                 formula_design,
             )
@@ -24563,7 +24657,11 @@ def coxph(
             robust_cluster,
         )
     sparse_frailty_metadata = None
-    if sparse_formula_frailty_block is not None and formula_design is not None:
+    if (
+        native_formula_frailty_block is not None
+        and native_formula_frailty_block.sparse
+        and formula_design is not None
+    ):
         sparse_design_term = next(
             term
             for term in formula_design.covariates
@@ -24571,7 +24669,7 @@ def coxph(
         )
         sparse_frailty_metadata = _SparseFrailtyFitMetadata(
             sparse_design_term.formula,
-            sparse_formula_frailty_block.levels,
+            native_formula_frailty_block.levels,
             tuple(float(value) for value in fit.frailty),
         )
     if (
@@ -24601,12 +24699,16 @@ def coxph(
             term_degrees_of_freedom=term_degrees_of_freedom,
             reported_log_likelihood=reported_log_likelihood,
             penalty_matrix=(
-                fit_penalty_matrix
-                if fit_penalty_matrix is not None
+                [list(row) for row in fit.penalty_matrix]
+                if native_dense_columns
                 else (
-                    [[float(value)] * len(fit_ridge_penalty) for value in fit_ridge_penalty]
-                    if fit_ridge_penalty is not None
-                    else None
+                    fit_penalty_matrix
+                    if fit_penalty_matrix is not None
+                    else (
+                        [[float(value)] * len(fit_ridge_penalty) for value in fit_ridge_penalty]
+                        if fit_ridge_penalty is not None
+                        else None
+                    )
                 )
             ),
             n_observations=time_transform_observed_n,
