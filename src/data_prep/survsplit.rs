@@ -16,11 +16,11 @@ pub struct SplitResult {
 }
 
 fn interior_cut_bounds(cutpoints: &[f64], start: f64, stop: f64) -> (usize, usize) {
+    let first = cutpoints.partition_point(|&cutpoint| cutpoint <= start);
     if start >= stop {
-        return (0, 0);
+        return (first, first);
     }
 
-    let first = cutpoints.partition_point(|&cutpoint| cutpoint <= start);
     let last = cutpoints.partition_point(|&cutpoint| cutpoint < stop);
     (first, last)
 }
@@ -86,8 +86,8 @@ pub fn survsplit(tstart: Vec<f64>, tstop: Vec<f64>, cut: Vec<f64>) -> PyResult<S
             continue;
         }
         let mut current = current_start;
-        let mut interval_num = 1;
         let (first, last) = interior_cut_bounds(&cutpoints, current_start, current_stop);
+        let mut interval_num = first + 1;
         for &cutpoint in &cutpoints[first..last] {
             result.row.push(i + 1);
             result.interval.push(interval_num);
@@ -156,10 +156,19 @@ mod tests {
         let result = survsplit(vec![0.0], vec![10.0], vec![0.0, 3.0, 10.0]).unwrap();
 
         assert_eq!(result.row, vec![1, 1]);
-        assert_eq!(result.interval, vec![1, 2]);
+        assert_eq!(result.interval, vec![2, 3]);
         assert_eq!(result.start, vec![0.0, 3.0]);
         assert_eq!(result.end, vec![3.0, 10.0]);
         assert_eq!(result.censor, vec![true, false]);
+    }
+
+    #[test]
+    fn episode_numbers_account_for_cuts_before_interval_entry() {
+        let result = survsplit(vec![5.0], vec![10.0], vec![3.0, 7.0]).unwrap();
+
+        assert_eq!(result.interval, vec![2, 3]);
+        assert_eq!(result.start, vec![5.0, 7.0]);
+        assert_eq!(result.end, vec![7.0, 10.0]);
     }
 
     #[test]
@@ -167,7 +176,7 @@ mod tests {
         let result = survsplit(vec![5.0, 2.0], vec![5.0, 1.0], vec![1.5, 3.0, 4.0]).unwrap();
 
         assert_eq!(result.row, vec![1, 2]);
-        assert_eq!(result.interval, vec![1, 1]);
+        assert_eq!(result.interval, vec![4, 2]);
         assert_eq!(result.start, vec![5.0, 2.0]);
         assert_eq!(result.end, vec![5.0, 1.0]);
         assert_eq!(result.censor, vec![false, false]);

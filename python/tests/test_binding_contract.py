@@ -12788,7 +12788,20 @@ def test_r_api_stub_tracks_survsplit_public_signature():
     survival = importlib.import_module("survival")
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
-    expected = ["response", "data", "cut", "start", "end", "event", "episode", "id", "zero"]
+    expected = [
+        "response",
+        "data",
+        "cut",
+        "start",
+        "end",
+        "event",
+        "episode",
+        "id",
+        "zero",
+        "added",
+        "timefix",
+        "subject_id",
+    ]
     runtime_params = inspect.signature(survival.r_api.survSplit).parameters
     assert list(runtime_params) == expected
     assert runtime_params["cut"].kind is inspect.Parameter.KEYWORD_ONLY

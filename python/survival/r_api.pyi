@@ -1248,7 +1248,7 @@ def survcondense(
     **kwargs: Any,
 ) -> Any: ...
 def survSplit(
-    response: Surv,
+    response: Surv | Surv2,
     data: Any | None = None,
     *,
     cut: Any,
@@ -1258,6 +1258,9 @@ def survSplit(
     episode: str | None = None,
     id: str | None = None,
     zero: Any = 0,
+    added: str | None = None,
+    timefix: Any = True,
+    subject_id: Any | None = None,
 ) -> dict[str, list[Any]]: ...
 def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]: ...
 def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> list[Any]: ...
