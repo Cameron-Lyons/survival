@@ -7994,6 +7994,219 @@ test_that("implicit formula factors use R level ordering after subsetting", {
   )
 })
 
+test_that("formula factor arguments match survival model construction", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  row <- seq_len(48L)
+  code <- c(9L, rep(c(3L, 1L, 2L), length.out = 47L))
+  x <- ((row * 11L) %% 43L) / 10 - 2.1
+  noise <- ((row * 13L) %% 11L - 5L) / 20
+  data <- data.frame(
+    time = exp(2.3 + 0.2 * x + 0.16 * (code == 1L) - 0.12 * (code == 2L) + noise),
+    status = as.integer(row %% 5L != 0L),
+    code = code,
+    x = x
+  )
+  keep <- row > 1L
+  prediction_data <- data.frame(code = c(3L, 1L, 2L), x = c(-0.7, 0.2, 1.1))
+
+  bridged_cox <- coxph(
+    Surv(time, status) ~ factor(
+      code,
+      levels = c(3L, 1L, 2L),
+      labels = c("third", "first", "second")
+    ) + x,
+    data = data,
+    subset = keep,
+    ties = "breslow",
+    max_iter = 50L,
+    eps = 1e-09
+  )
+  reference_cox <- survival::coxph(
+    survival::Surv(time, status) ~ factor(
+      code,
+      levels = c(3L, 1L, 2L),
+      labels = c("third", "first", "second")
+    ) + x,
+    data = data,
+    subset = keep,
+    ties = "breslow",
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 50L, eps = 1e-09)
+  )
+  expect_equal(names(coef(bridged_cox)), names(coef(reference_cox)))
+  expect_equal(coef(bridged_cox), coef(reference_cox), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_cox)),
+    as.vector(reference_cox$x),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    unname(predict(bridged_cox, newdata = prediction_data, type = "lp")),
+    unname(stats::predict(reference_cox, newdata = prediction_data, type = "lp")),
+    tolerance = 1e-08
+  )
+
+  bridged_aft <- survreg(
+    Surv(time, status) ~ factor(code, levels = c(1L, 2L, 3L), ordered = TRUE) + x,
+    data = data,
+    subset = keep,
+    dist = "weibull"
+  )
+  reference_aft <- survival::survreg(
+    survival::Surv(time, status) ~ factor(
+      code,
+      levels = c(1L, 2L, 3L),
+      ordered = TRUE
+    ) + x,
+    data = data,
+    subset = keep,
+    dist = "weibull"
+  )
+  expect_equal(names(coef(bridged_aft)), names(coef(reference_aft)))
+  expect_equal(coef(bridged_aft), coef(reference_aft), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_aft)),
+    as.vector(model.matrix(reference_aft)),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    unname(predict(bridged_aft, newdata = prediction_data, type = "lp")),
+    unname(stats::predict(reference_aft, newdata = prediction_data, type = "lp")),
+    tolerance = 1e-08
+  )
+})
+
+test_that("formula factor exclusions and reconstruction match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  row <- seq_len(48L)
+  x <- ((row * 7L) %% 41L) / 10 - 2
+  group <- rep(c("b", "a", "b", "a"), length.out = 48L)
+  group[c(7L, 19L)] <- NA_character_
+  data <- data.frame(
+    time = exp(2.1 + 0.18 * x + 0.14 * (group == "a") + (row %% 9L - 4L) / 25),
+    status = as.integer(row %% 5L != 0L),
+    code = rep(c(1L, 2L, 3L, 4L), length.out = 48L),
+    group = group,
+    x = x
+  )
+  data$group <- factor(data$group, levels = c("c", "b", "a", "unused"))
+  contrasts(data$group) <- stats::contr.sum(4L)
+
+  bridged_excluded <- coxph(
+    Surv(time, status) ~ factor(code, levels = c(1L, 2L, 3L), exclude = 3L) + x,
+    data = data,
+    na.action = na.omit,
+    max_iter = 0L,
+    model = TRUE
+  )
+  reference_excluded <- survival::coxph(
+    survival::Surv(time, status) ~ factor(
+      code,
+      levels = c(1L, 2L, 3L),
+      exclude = 3L
+    ) + x,
+    data = data,
+    na.action = na.omit,
+    iter = 0L,
+    x = TRUE,
+    model = TRUE
+  )
+  expect_equal(names(coef(bridged_excluded)), names(coef(reference_excluded)))
+  expect_equal(nrow(model.frame(bridged_excluded)), nrow(model.frame(reference_excluded)))
+  expect_equal(
+    as.vector(model.matrix(bridged_excluded)),
+    as.vector(reference_excluded$x),
+    tolerance = 1e-12
+  )
+
+  for (rhs in c("factor(group) + x", "as.factor(group) + x")) {
+    bridged_formula <- stats::as.formula(paste("Surv(time, status) ~", rhs))
+    reference_formula <- stats::as.formula(paste("survival::Surv(time, status) ~", rhs))
+    bridged <- coxph(
+      bridged_formula,
+      data = data,
+      na.action = na.omit,
+      max_iter = 0L
+    )
+    reference <- survival::coxph(
+      reference_formula,
+      data = data,
+      na.action = na.omit,
+      iter = 0L,
+      x = TRUE
+    )
+    expect_equal(names(coef(bridged)), names(coef(reference)))
+    expect_equal(
+      as.vector(model.matrix(bridged)),
+      as.vector(reference$x),
+      tolerance = 1e-12
+    )
+  }
+
+  missing_data <- transform(data, code = replace(code, c(8L, 20L), NA_integer_))
+  bridged_missing <- coxph(
+    Surv(time, status) ~ factor(code, exclude = NULL) + x,
+    data = missing_data,
+    na.action = na.omit,
+    max_iter = 0L,
+    model = TRUE
+  )
+  reference_missing <- survival::coxph(
+    survival::Surv(time, status) ~ factor(code, exclude = NULL) + x,
+    data = missing_data,
+    na.action = na.omit,
+    iter = 0L,
+    x = TRUE,
+    model = TRUE
+  )
+  expect_equal(names(coef(bridged_missing)), names(coef(reference_missing)))
+  expect_equal(nrow(model.frame(bridged_missing)), nrow(model.frame(reference_missing)))
+  expect_equal(
+    as.vector(model.matrix(bridged_missing)),
+    as.vector(reference_missing$x),
+    tolerance = 1e-12
+  )
+
+  na_level_data <- data.frame(
+    time = exp(2.2 + 0.18 * x + (row %% 9L - 4L) / 25),
+    status = as.integer(row %% 5L != 0L),
+    group = factor(rep(c("a", NA_character_, "b"), length.out = 48L), exclude = NULL),
+    x = x
+  )
+  for (rhs in c("group + x", "factor(group) + x", "as.factor(group) + x")) {
+    bridged_formula <- stats::as.formula(paste("Surv(time, status) ~", rhs))
+    reference_formula <- stats::as.formula(paste("survival::Surv(time, status) ~", rhs))
+    bridged <- coxph(
+      bridged_formula,
+      data = na_level_data,
+      na.action = na.omit,
+      max_iter = 0L,
+      model = TRUE
+    )
+    reference <- survival::coxph(
+      reference_formula,
+      data = na_level_data,
+      na.action = na.omit,
+      iter = 0L,
+      x = TRUE,
+      model = TRUE
+    )
+    expect_equal(names(coef(bridged)), names(coef(reference)))
+    expect_equal(nrow(model.frame(bridged)), nrow(model.frame(reference)))
+    expect_equal(
+      as.vector(model.matrix(bridged)),
+      as.vector(reference$x),
+      tolerance = 1e-12
+    )
+  }
+})
+
 test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

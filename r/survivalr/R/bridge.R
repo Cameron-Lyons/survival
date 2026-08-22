@@ -189,6 +189,14 @@ if (getRversion() >= "2.15.1") {
   } else {
     factor_values <- as.list(factor_values)
   }
+  factor_levels <- levels(value)
+  if (anyNA(factor_levels)) {
+    factor_levels <- lapply(factor_levels, function(item) {
+      if (is.na(item)) reticulate::py_none() else item
+    })
+  } else {
+    factor_levels <- as.list(factor_levels)
+  }
   contrast_matrix <- tryCatch(
     stats::contrasts(value),
     error = function(condition) NULL
@@ -205,11 +213,21 @@ if (getRversion() >= "2.15.1") {
   } else {
     as.list(colnames(contrast_matrix))
   }
+  factor_codes <- as.integer(value)
+  if (anyNA(factor_codes)) {
+    factor_codes <- lapply(factor_codes, function(item) {
+      if (is.na(item)) reticulate::py_none() else item
+    })
+  } else {
+    factor_codes <- as.list(factor_codes)
+  }
   .python_attr("_r_factor")(
     factor_values,
-    as.list(levels(value)),
+    factor_levels,
     contrast_values,
-    contrast_names
+    contrast_names,
+    is.ordered(value),
+    factor_codes
   )
 }
 
@@ -12447,8 +12465,37 @@ model.matrix.survival_py_model <- function(object, ...) {
   result
 }
 
+.as_model_frame_column <- function(value) {
+  if (!is.list(value)) {
+    return(value)
+  }
+  missing <- vapply(value, function(item) is.null(item) || length(item) == 0L, logical(1))
+  if (!any(missing)) {
+    return(value)
+  }
+  observed <- value[!missing]
+  if (length(observed) == 0L) {
+    return(rep(NA, length(value)))
+  }
+  probe <- observed[[1L]]
+  if (is.logical(probe)) {
+    return(.as_nullable_logical_vector(value))
+  }
+  if (is.integer(probe)) {
+    return(as.integer(.as_nullable_numeric_vector(value)))
+  }
+  if (is.numeric(probe)) {
+    return(.as_nullable_numeric_vector(value))
+  }
+  if (is.character(probe)) {
+    return(.as_nullable_character_vector(value))
+  }
+  value
+}
+
 model.frame.survival_py_model <- function(formula, ...) {
   columns <- .call_r_api("model_frame", formula, ...)
+  columns <- lapply(columns, .as_model_frame_column)
   as.data.frame(columns, ...)
 }
 
@@ -12461,6 +12508,7 @@ model.frame.survival_py_survfit <- function(formula, ...) {
     object <- unclass(object)[[1L]]
   }
   columns <- .call_r_api("model_frame", object, ...)
+  columns <- lapply(columns, .as_model_frame_column)
   as.data.frame(columns, ...)
 }
 

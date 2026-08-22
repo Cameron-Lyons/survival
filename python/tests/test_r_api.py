@@ -7264,9 +7264,9 @@ def test_survfit_formula_accepts_factor_wrapper_for_numeric_groups():
     grouped = survival.survfit("Surv(time, status) ~ factor(dose)", data=data)
     direct = survival.survfit(survival.Surv(data["time"], data["status"]), group=data["dose"])
 
-    assert list(grouped) == list(direct)
+    assert list(grouped) == ["0", "1", "2"]
     for label in grouped:
-        assert grouped[label].estimate == pytest.approx(direct[label].estimate)
+        assert grouped[label].estimate == pytest.approx(direct[int(label)].estimate)
 
 
 def test_survfit_formula_groups_by_numeric_transform():
@@ -7438,19 +7438,20 @@ def test_survfit_formula_accepts_interaction_groups():
         group=[(data["dose"][idx], math.sqrt(data["x1"][idx])) for idx in range(len(data["time"]))],
     )
     expected_order = [
-        (0, math.sqrt(0.2)),
-        (0, math.sqrt(0.4)),
-        (0, math.sqrt(0.6)),
-        (1, math.sqrt(0.1)),
-        (1, math.sqrt(0.8)),
-        (1, math.sqrt(1.4)),
-        (2, math.sqrt(1.0)),
-        (2, math.sqrt(1.2)),
+        ("0", math.sqrt(0.2)),
+        ("0", math.sqrt(0.4)),
+        ("0", math.sqrt(0.6)),
+        ("1", math.sqrt(0.1)),
+        ("1", math.sqrt(0.8)),
+        ("1", math.sqrt(1.4)),
+        ("2", math.sqrt(1.0)),
+        ("2", math.sqrt(1.2)),
     ]
 
     assert list(interaction) == expected_order
     for key in direct:
-        assert interaction[key].estimate == pytest.approx(direct[key].estimate)
+        factor_key = (str(key[0]), key[1])
+        assert interaction[factor_key].estimate == pytest.approx(direct[key].estimate)
 
 
 def test_survdiff_formula_uses_logrank_binding():
@@ -16137,6 +16138,156 @@ def test_formula_factors_preserve_declared_contrast_matrices():
         survival.coxph("Surv(time,status) ~ group + x", data=malformed_data)
 
 
+def test_formula_factor_arguments_control_levels_labels_and_prediction_design():
+    data = _factor_data()
+    formula = 'Surv(time,status) ~ factor(dose, levels=c(2,0,1), labels=c("high","low","medium"))'
+    prefix = 'factor(dose, levels=c(2,0,1), labels=c("high","low","medium"))'
+
+    fit = survival.coxph(formula, data=data, max_iter=0)
+
+    assert survival.coef_names(fit) == [f"{prefix}low", f"{prefix}medium"]
+    assert survival.model_matrix(fit)["data"] == [
+        [1.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+        [0.0, 1.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+    ]
+    assert survival.r_api._design_rows_from_spec(
+        {"dose": [2, 0, 1]},
+        fit.design,
+        3,
+    ) == [
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+    ]
+    with pytest.raises(ValueError, match="unknown level 4"):
+        survival.predict(fit, {"dose": [4]}, type="lp")
+
+
+def test_formula_factor_ordered_and_collapsed_labels_match_r_contrasts():
+    data = _factor_data()
+    ordered_formula = "Surv(time,status) ~ factor(dose, ordered=TRUE)"
+    ordered = survival.coxph(ordered_formula, data=data, max_iter=0)
+    root_two = math.sqrt(2.0)
+    root_six = math.sqrt(6.0)
+    expected_rows = [
+        [-1.0 / root_two, 1.0 / root_six],
+        [0.0, -2.0 / root_six],
+        [1.0 / root_two, 1.0 / root_six],
+    ]
+
+    assert survival.coef_names(ordered) == [
+        "factor(dose, ordered=TRUE).L",
+        "factor(dose, ordered=TRUE).Q",
+    ]
+    for actual, expected in zip(
+        survival.model_matrix(ordered)["data"],
+        [expected_rows[index] for index in data["dose"]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-15)
+
+    collapsed_formula = 'Surv(time,status) ~ factor(dose, labels=c("same","same","other"))'
+    collapsed = survival.coxph(collapsed_formula, data=data, max_iter=0)
+    assert survival.coef_names(collapsed) == ['factor(dose, labels=c("same","same","other"))other']
+    assert survival.model_matrix(collapsed)["data"] == [
+        [0.0],
+        [0.0],
+        [0.0],
+        [0.0],
+        [1.0],
+        [1.0],
+        [0.0],
+        [0.0],
+    ]
+
+
+def test_formula_factor_rebuilds_existing_factors_while_as_factor_preserves_them():
+    values = ["b", "a", "b", "a", "b", "a", "b", "a"]
+    levels = ["c", "b", "a", "unused"]
+    contrasts = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [-1.0, -1.0, -1.0],
+    ]
+    data = {
+        **_factor_data(),
+        "group": survival.r_api._r_factor(values, levels, contrasts, ["1", "2", "3"]),
+    }
+
+    rebuilt = survival.coxph("Surv(time,status) ~ factor(group)", data=data, max_iter=0)
+    preserved = survival.coxph("Surv(time,status) ~ as.factor(group)", data=data, max_iter=0)
+    ordered = survival.coxph(
+        "Surv(time,status) ~ factor(group, ordered=TRUE)",
+        data=data,
+        max_iter=0,
+    )
+
+    assert survival.coef_names(rebuilt) == ["factor(group)a"]
+    assert survival.model_matrix(rebuilt)["data"] == [
+        [0.0],
+        [1.0],
+        [0.0],
+        [1.0],
+        [0.0],
+        [1.0],
+        [0.0],
+        [1.0],
+    ]
+    assert survival.coef_names(preserved) == [
+        "as.factor(group)1",
+        "as.factor(group)2",
+        "as.factor(group)3",
+    ]
+    assert survival.model_matrix(preserved)["data"][0] == [0.0, 1.0, 0.0]
+    assert survival.model_matrix(preserved)["data"][1] == [0.0, 0.0, 1.0]
+    assert survival.coef_names(ordered) == ["factor(group, ordered=TRUE).L"]
+
+
+def test_formula_factor_exclusions_and_na_labels_drive_row_filtering():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "group": [1, 2, 3, None, 1, 2, 3, 4],
+    }
+
+    excluded = survival.coxph(
+        "Surv(time,status) ~ factor(group, levels=c(1,2,3), exclude=3)",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+        model=True,
+    )
+    assert survival.model_frame(excluded)["time"] == [1.0, 2.0, 5.0, 6.0]
+    assert survival.model_matrix(excluded)["data"] == [[0.0], [1.0], [0.0], [1.0]]
+
+    missing_level = survival.coxph(
+        "Surv(time,status) ~ factor(group, exclude=NULL)",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+        model=True,
+    )
+    assert survival.model_frame(missing_level)["time"] == data["time"]
+    assert survival.coef_names(missing_level)[-1] == "factor(group, exclude=NULL)NA"
+
+    missing_label = survival.coxph(
+        "Surv(time,status) ~ factor(group, levels=c(1,2,3), "
+        'labels=c("low",NA,"high"), exclude=NULL)',
+        data=data,
+        na_action="omit",
+        max_iter=0,
+        model=True,
+    )
+    assert survival.model_frame(missing_label)["time"] == [1.0, 2.0, 3.0, 5.0, 6.0, 7.0]
+
+
 def test_cox_zph_drops_aliased_columns_like_explicitly_reduced_fit():
     data = {
         "time": [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0],
@@ -22837,8 +22988,26 @@ def test_r_api_rejects_unsupported_formula_features():
     with pytest.raises(ValueError, match="unterminated backtick"):
         survival.survfit("Surv(time, status) ~ `group", data=_toy_data())
 
-    with pytest.raises(ValueError, match=r"factor\(\) requires exactly one column"):
+    with pytest.raises(ValueError, match="factor levels must use"):
         survival.coxph("Surv(time, status) ~ factor(x1, x2)", data=_toy_data())
+
+    with pytest.raises(ValueError, match="duplicate"):
+        survival.coxph(
+            "Surv(time, status) ~ factor(x1, levels=c(1,1))",
+            data=_toy_data(),
+        )
+
+    with pytest.raises(ValueError, match="factor labels must have length"):
+        survival.coxph(
+            'Surv(time, status) ~ factor(x1, labels=c("a","b"))',
+            data=_toy_data(),
+        )
+
+    with pytest.raises(ValueError, match="ambiguous factor.*option"):
+        survival.coxph(
+            "Surv(time, status) ~ factor(group, l=c(1,2))",
+            data=_toy_data(),
+        )
 
     with pytest.raises(ValueError, match=r"log\(\) requires exactly one column"):
         survival.coxph("Surv(time, status) ~ log(x1, x2)", data=_toy_data())
