@@ -4169,6 +4169,115 @@ test_that("stratified concordance results match reference shapes and diagnostics
   expect_equal(bridged_multi$dfbeta, reference_multi$dfbeta, tolerance = 1e-12)
   expect_equal(bridged_multi$influence, reference_multi$influence, tolerance = 1e-12)
 
+  named_data <- transform(
+    multi_data,
+    time = y,
+    status = c(1L, 0L, 1L, 1L, 0L, 1L),
+    start = 0,
+    keep = c(TRUE, TRUE, FALSE, TRUE, TRUE, TRUE)
+  )
+  row.names(named_data) <- paste0("case-", c(11, 22, 33, 44, 55, 66))
+  bridged_named <- concordance(
+    Surv(time, status) ~ x + z,
+    data = named_data,
+    ranks = TRUE
+  )
+  reference_named <- survival::concordance(
+    survival::Surv(time, status) ~ x + z,
+    data = named_data,
+    ranks = TRUE
+  )
+  expect_equal(bridged_named$ranks, reference_named$ranks, tolerance = 1e-12)
+
+  bridged_named_counting <- concordance(
+    Surv(start, time, status) ~ x,
+    data = named_data,
+    ranks = TRUE
+  )
+  reference_named_counting <- survival::concordance(
+    survival::Surv(start, time, status) ~ x,
+    data = named_data,
+    ranks = TRUE
+  )
+  expect_equal(
+    bridged_named_counting$ranks,
+    reference_named_counting$ranks,
+    tolerance = 1e-12
+  )
+
+  bridged_named_subset <- concordance(
+    Surv(time, status) ~ x,
+    data = named_data,
+    subset = keep,
+    ranks = TRUE
+  )
+  reference_named_subset <- survival::concordance(
+    survival::Surv(time, status) ~ x,
+    data = named_data,
+    subset = keep,
+    ranks = TRUE
+  )
+  expect_equal(
+    bridged_named_subset$ranks,
+    reference_named_subset$ranks,
+    tolerance = 1e-12
+  )
+
+  missing_named_data <- named_data
+  missing_named_data$x[[6L]] <- NA_real_
+  bridged_named_omit <- concordance(
+    Surv(time, status) ~ x,
+    data = missing_named_data,
+    na.action = stats::na.omit,
+    ranks = TRUE
+  )
+  reference_named_omit <- survival::concordance(
+    survival::Surv(time, status) ~ x,
+    data = missing_named_data,
+    na.action = stats::na.omit,
+    ranks = TRUE
+  )
+  expect_equal(
+    bridged_named_omit$ranks,
+    reference_named_omit$ranks,
+    tolerance = 1e-12
+  )
+
+  named_response <- survival::Surv(named_data$time, named_data$status)
+  rownames(named_response) <- row.names(named_data)
+  reference_named_response <- survival::Surv(named_data$time, named_data$status)
+  rownames(reference_named_response) <- row.names(named_data)
+  bridged_named_fit <- concordancefit(named_response, named_data$x, ranks = TRUE)
+  reference_named_fit <- survival::concordancefit(
+    reference_named_response,
+    named_data$x,
+    ranks = TRUE
+  )
+  expect_equal(bridged_named_fit$ranks, reference_named_fit$ranks, tolerance = 1e-12)
+
+  stratified_named_data <- data.frame(
+    time = c(1, 2, 1, 2),
+    status = c(1L, 0L, 1L, 0L),
+    x = c(0.9, 0.1, 0.2, 0.8),
+    group = c("a", "a", "b", "b"),
+    row.names = paste0("stratum-case-", seq_len(4L))
+  )
+  bridged_stratified_named <- concordance(
+    Surv(time, status) ~ x + strata(group),
+    data = stratified_named_data,
+    ranks = TRUE
+  )
+  reference_stratified_named <- survival::concordance(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = stratified_named_data,
+    ranks = TRUE
+  )
+  expect_equal(
+    bridged_stratified_named$ranks,
+    reference_stratified_named$ranks,
+    tolerance = 1e-12
+  )
+
   collapsed_right <- concordance(
     y ~ x + strata(group),
     data = right_data,

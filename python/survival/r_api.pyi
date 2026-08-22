@@ -478,6 +478,7 @@ class ConcordanceResult:
     tied_y: float | list[float]
     tied_xy: float | list[float]
     ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None
+    rank_names: list[str] | None
     dfbeta: list[float] | list[list[float] | None] | None
     influence: list[list[float]] | list[list[list[float]] | None] | None
     variance: float | list[float | None] | list[list[float]] | None
