@@ -4733,6 +4733,82 @@ test_that("stratified multi-score assembly matches reference behavior", {
   }
 })
 
+test_that("many concordance strata collapse before rank assembly", {
+  n <- 22L
+  data <- data.frame(
+    start = rep(0, n),
+    stop = rep(c(1, 2), 11),
+    status = rep(c(1, 0, 0, 0), length.out = n),
+    group = rep(seq_len(11), each = 2)
+  )
+  score_matrix <- cbind(
+    s1 = seq_len(n),
+    s2 = rev(seq_len(n)),
+    s3 = rep(c(0, 1), 11)
+  )
+  data[c("s1", "s2", "s3")] <- as.data.frame(score_matrix)
+  response <- Surv(data$start, data$stop, data$status)
+  reference_response <- survival::Surv(data$start, data$stop, data$status)
+
+  bridged <- concordancefit(
+    response,
+    score_matrix,
+    strata = data$group,
+    timewt = "I",
+    ranks = TRUE
+  )
+  reference <- survival::concordancefit(
+    reference_response,
+    score_matrix,
+    strata = data$group,
+    timewt = "I",
+    ranks = TRUE
+  )
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+
+  formula <- Surv(start, stop, status) ~ s1 + s2 + s3 + strata(group)
+  reference_formula <- survival::Surv(start, stop, status) ~
+    s1 + s2 + s3 + strata(group)
+  bridged_formula <- concordance(formula, data = data, timewt = "I", ranks = TRUE)
+  reference_formula_result <- survival::concordance(
+    reference_formula,
+    data = data,
+    timewt = "I",
+    ranks = TRUE
+  )
+  fields <- setdiff(names(reference_formula_result), "call")
+  expect_equal(
+    unclass(bridged_formula)[fields],
+    unclass(reference_formula_result)[fields],
+    tolerance = 1e-12
+  )
+
+  expect_error(
+    concordancefit(
+      response,
+      score_matrix,
+      strata = data$group,
+      timewt = "I",
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected",
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      reference_response,
+      score_matrix,
+      strata = data$group,
+      timewt = "I",
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected",
+    fixed = TRUE
+  )
+})
+
 test_that("empty concordance rank strata match reference diagnostics", {
   data <- data.frame(
     time = c(1, 2, 1, 2),
