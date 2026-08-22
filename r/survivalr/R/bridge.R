@@ -11607,7 +11607,17 @@ dim.survival_py_survfit <- function(x) {
   if (.is_survival_py_multistate_survfit(x)) {
     state_count <- length(.survival_py_multistate_states(x))
     if (.is_grouped_survival_py_survfit(x)) {
-      return(c(strata = length(unclass(x)), states = state_count))
+      curves <- unclass(x)
+      first <- curves[[1L]]
+      if (isTRUE(.result_field(first, "cox_model"))) {
+        data_count <- as.integer(.result_field(first, "curve_count"))[[1L]]
+        return(c(
+          strata = length(curves),
+          data = data_count,
+          states = state_count
+        ))
+      }
+      return(c(strata = length(curves), states = state_count))
     }
     if (isTRUE(.result_field(x, "cox_model"))) {
       data_count <- as.integer(.result_field(x, "curve_count"))[[1L]]
@@ -11827,21 +11837,69 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
   invisible(NULL)
 }
 
-`[.survival_py_survfit` <- function(x, i, j, ..., drop = TRUE) {
+`[.survival_py_survfit` <- function(x, i, j, k, ..., drop = TRUE) {
   if (length(list(...)) > 0L) {
     stop("incorrect number of dimensions", call. = FALSE)
   }
   call_names <- names(match.call(expand.dots = FALSE))
   has_second_dimension <- !missing(j) ||
     (nargs() >= 3L && missing(j) && !("drop" %in% call_names))
-  if (missing(i) && missing(j)) {
+  has_third_dimension <- !missing(k) ||
+    (nargs() >= 4L && missing(k) && !("drop" %in% call_names))
+  if (missing(i) && missing(j) && missing(k)) {
     return(x)
   }
   if (.is_survival_py_multistate_survfit(x)) {
     states <- .survival_py_multistate_states(x)
     dimensions <- dim(x)
     data_count <- if ("data" %in% names(dimensions)) dimensions[["data"]] else NULL
+    if (.is_grouped_survival_py_survfit(x) && !is.null(data_count)) {
+      if (!has_third_dimension) {
+        stop(
+          paste(
+            "three index subscripts are required for a survfit object",
+            "with strata, data, and state dimensions"
+          ),
+          call. = FALSE
+        )
+      }
+      curves <- unclass(x)
+      strata_selector <- if (missing(i)) seq_along(curves) else i
+      data_selector <- if (missing(j)) seq_len(data_count) else j
+      state_selector <- if (missing(k)) seq_along(states) else k
+      strata_indices <- .survival_py_survfit_group_indices(
+        strata_selector,
+        names(curves)
+      )
+      data_indices <- .survival_py_survfit_group_indices(
+        data_selector,
+        seq_len(data_count),
+        dimension = "data"
+      )
+      state_indices <- .survival_py_survfit_group_indices(
+        state_selector,
+        states,
+        dimension = "states"
+      )
+      selected <- lapply(curves[strata_indices], function(curve) {
+        .wrap_python(
+          .python_attr("_subset_survfit_multistate")(
+            curve,
+            as.list(as.integer(state_indices - 1L)),
+            as.list(as.integer(data_indices - 1L))
+          ),
+          c("survival_py_survfit", "survival_py_object")
+        )
+      })
+      return(structure(
+        selected,
+        class = c("survival_py_survfit", "survival_py_object", "list")
+      ))
+    }
     if (!is.null(data_count)) {
+      if (has_third_dimension) {
+        stop("incorrect number of dimensions", call. = FALSE)
+      }
       if (!has_second_dimension) {
         stop(
           paste(
@@ -11892,6 +11950,9 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
       )
     }
     if (.is_grouped_survival_py_survfit(x)) {
+      if (has_third_dimension) {
+        stop("incorrect number of dimensions", call. = FALSE)
+      }
       if (!has_second_dimension) {
         stop(
           paste(

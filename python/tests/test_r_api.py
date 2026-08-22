@@ -13510,6 +13510,62 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
         survival.r_api.aggregate_survfit_result(aggregate_source, groups=[1])
     with pytest.raises(ValueError, match="positive integer"):
         survival.r_api.aggregate_survfit_result(aggregate_source, groups=[0, 1, 1])
+    stratified_data = data.assign(
+        g=pandas.Categorical(["g1"] * 6 + ["g2"] * 6),
+    )
+    stratified_fit = survival.coxph(
+        "Surv(time, status) ~ x + strata(g)",
+        data=stratified_data,
+        id="id",
+        max_iter=20,
+        eps=1e-9,
+    )
+    assert survival.coef(stratified_fit) == pytest.approx(
+        [-1.0317081235160794, -0.4847370380673689],
+        abs=1e-12,
+    )
+    stratified_curves = survival.survfit(
+        stratified_fit,
+        newdata=pandas.DataFrame({"x": [0.5, 1.5]}),
+        time0=True,
+    )
+    assert list(stratified_curves) == ["g1", "g2"]
+    assert all(
+        isinstance(curve, survival.SurvfitMultiStateCoxResult)
+        for curve in stratified_curves.values()
+    )
+    assert stratified_curves["g1"].time == pytest.approx(list(range(7)))
+    assert stratified_curves["g2"].time == pytest.approx([0, 7, 8, 9, 10, 11, 12])
+    assert stratified_curves["g1"].pstate[0][-1] == pytest.approx(
+        [0.08632813976911419, 0.42612488659895686, 0.4875469736319289],
+        abs=1e-12,
+    )
+    assert stratified_curves["g2"].pstate[1][-1] == pytest.approx(
+        [0.32630515678228655, 0.31765547564010083, 0.35603936757761256],
+        abs=1e-12,
+    )
+    assert stratified_curves["g1"].cumhaz[1][-1] == pytest.approx(
+        [0.24090235858391046, 1.0923263551568523],
+        abs=1e-12,
+    )
+    stratified_structure = survival.r_api._survfit_multistate_structure(stratified_curves)
+    assert stratified_structure["strata"] == {"g1": 7, "g2": 7}
+    assert stratified_structure["_cox_curve_count"] == 2
+    assert len(stratified_structure["pstate"]) == 28
+    stratified_average = survival.r_api.aggregate_survfit_result(stratified_curves)
+    assert list(stratified_average) == ["g1", "g2"]
+    for label in stratified_curves:
+        assert stratified_average[label].pstate[-1] == pytest.approx(
+            [
+                sum(values) / 2.0
+                for values in zip(
+                    stratified_curves[label].pstate[0][-1],
+                    stratified_curves[label].pstate[1][-1],
+                    strict=True,
+                )
+            ],
+            abs=1e-12,
+        )
     selected_curve = survival.r_api._subset_survfit_multistate(batched_curve, [0, 2], [1])
     assert isinstance(selected_curve, survival.SurvfitMultiStateResult)
     assert selected_curve.cox_model is True

@@ -612,7 +612,7 @@ survfitKM(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
 
 \method{[[}{survival_py_survfit}(x, i, ..., exact = TRUE)
 
-\method{[}{survival_py_survfit}(x, i, j, ..., drop = TRUE)
+\method{[}{survival_py_survfit}(x, i, j, k, ..., drop = TRUE)
 
 \method{$}{survival_py_survfit}(x, name)
 
@@ -1180,9 +1180,10 @@ Cox coefficient tables.}
 compatibility.}
 \item{quote}{Logical flag controlling whether printed survival-time labels are
 quoted.}
-\item{i, j, rows, cols, name, exact, drop}{Row and column subset controls for
-native \code{Surv}, \code{Surv2}, and \code{ratetable2} objects, plus
-list-field extraction controls for Python-backed \code{survfit} objects.}
+\item{i, j, rows, cols, name, exact, drop}{Row and column subset controls
+for native \code{Surv}, \code{Surv2}, and \code{ratetable2} objects, plus
+strata, data, and state subset and list-field extraction controls for
+Python-backed \code{survfit} objects.}
 \item{centered}{Logical flag for centered baseline hazards.}
 \item{rho}{Fleming--Harrington weight exponent for \code{survdiff}.}
 \item{riskmat, rorder}{Logical risk-matrix request and data/time row-order
@@ -1223,8 +1224,9 @@ logical flag controlling whether \code{ridge} scales the penalty by column
 variance. It also scales \code{aareg} summary coefficients.}
 \item{maxtime}{Optional upper time limit for \code{aareg} summaries and
 cumulative-coefficient plots.}
-\item{k}{Penalty multiplier for \code{extractAIC}, or observed Poisson event
-count for \code{cipoisson}.}
+\item{k}{Penalty multiplier for \code{extractAIC}, observed Poisson event
+count for \code{cipoisson}, or the state-dimension selector for stratified
+model-based multi-state \code{survfit} curves.}
 \item{test}{Test name for bridged model analysis of variance, \code{aareg}
 test selector, or contrast test selector for \code{yates}.}
 \item{...}{Additional arguments passed to the Python API. For \code{tmerge},

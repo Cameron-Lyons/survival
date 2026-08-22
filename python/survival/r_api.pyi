@@ -878,10 +878,15 @@ def survfitkm_counting_influence(
 ) -> Any: ...
 def survfit0(x: Any, *args: Any, **kwargs: Any) -> Any: ...
 def aggregate_survfit_result(
-    result: CoxSurvfitResult | SurvfitMultiStateCoxResult,
+    result: CoxSurvfitResult | SurvfitMultiStateCoxResult | Mapping[Any, Any],
     groups: Any | None = None,
     weights: Any | None = None,
-) -> CoxSurvfitResult | SurvfitMultiStateResult | SurvfitMultiStateCoxResult: ...
+) -> (
+    CoxSurvfitResult
+    | SurvfitMultiStateResult
+    | SurvfitMultiStateCoxResult
+    | dict[Any, SurvfitMultiStateResult | SurvfitMultiStateCoxResult]
+): ...
 def survfit_confint(
     p: Any,
     se: Any,
