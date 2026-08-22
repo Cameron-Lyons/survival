@@ -252,6 +252,8 @@ if (getRversion() >= "2.15.1") {
       value <- .as_python_vector(column)
       if (is.factor(column)) {
         value
+      } else if (is.character(column)) {
+        .python_attr("_r_character")(as.list(value))
       } else {
         as.list(value)
       }

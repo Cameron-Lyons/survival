@@ -7897,6 +7897,103 @@ test_that("formula factors retain ordered and custom contrasts", {
   )
 })
 
+test_that("implicit formula factors use R level ordering after subsetting", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  row <- seq_len(48L)
+  x <- ((row * 11L) %% 43L) / 10 - 2.1
+  noise <- ((row * 13L) %% 11L - 5L) / 20
+  group <- c("zz_unused", rep(c("z", "a", "m"), length.out = 47L))
+  code <- c(99L, rep(c(3L, 1L, 2L), length.out = 47L))
+  data <- data.frame(
+    time = exp(
+      2.3 + 0.2 * x + 0.1 * (group == "z") - 0.15 * (code == 3L) + noise
+    ),
+    status = as.integer(row %% 5L != 0L),
+    group = group,
+    code = code,
+    x = x
+  )
+  keep <- row > 1L
+
+  bridged_character <- coxph(
+    Surv(time, status) ~ group + x,
+    data = data,
+    subset = keep,
+    ties = "breslow",
+    max_iter = 50L,
+    eps = 1e-09
+  )
+  reference_character <- survival::coxph(
+    survival::Surv(time, status) ~ group + x,
+    data = data,
+    subset = keep,
+    ties = "breslow",
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 50L, eps = 1e-09)
+  )
+  expect_equal(names(coef(bridged_character)), names(coef(reference_character)))
+  expect_equal(coef(bridged_character), coef(reference_character), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_character)),
+    as.vector(reference_character$x),
+    tolerance = 1e-12
+  )
+
+  prediction_data <- data.frame(group = c("m", "z", "a"), x = c(-0.7, 0.2, 1.1))
+  expect_equal(
+    unname(predict(bridged_character, newdata = prediction_data, type = "lp")),
+    unname(stats::predict(reference_character, newdata = prediction_data, type = "lp")),
+    tolerance = 1e-08
+  )
+
+  bridged_factor <- coxph(
+    Surv(time, status) ~ factor(code) + x,
+    data = data,
+    subset = keep,
+    ties = "breslow",
+    max_iter = 50L,
+    eps = 1e-09
+  )
+  reference_factor <- survival::coxph(
+    survival::Surv(time, status) ~ factor(code) + x,
+    data = data,
+    subset = keep,
+    ties = "breslow",
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 50L, eps = 1e-09)
+  )
+  expect_equal(names(coef(bridged_factor)), names(coef(reference_factor)))
+  expect_equal(coef(bridged_factor), coef(reference_factor), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_factor)),
+    as.vector(reference_factor$x),
+    tolerance = 1e-12
+  )
+
+  bridged_aft <- survreg(
+    Surv(time, status) ~ as.factor(code) + x,
+    data = data,
+    subset = keep,
+    dist = "weibull"
+  )
+  reference_aft <- survival::survreg(
+    survival::Surv(time, status) ~ as.factor(code) + x,
+    data = data,
+    subset = keep,
+    dist = "weibull"
+  )
+  expect_equal(names(coef(bridged_aft)), names(coef(reference_aft)))
+  expect_equal(coef(bridged_aft), coef(reference_aft), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_aft)),
+    as.vector(model.matrix(reference_aft)),
+    tolerance = 1e-12
+  )
+})
+
 test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

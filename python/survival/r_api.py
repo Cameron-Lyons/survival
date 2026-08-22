@@ -1577,22 +1577,13 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
     return result
 
 
-class _RFactorVector:
-    """Iterable factor values with level metadata preserved across reticulate."""
+class _BridgeVector:
+    """Compact iterable storage for values carrying boundary metadata."""
 
-    def __init__(
-        self,
-        values: Any,
-        levels: Any,
-        contrasts: Any | None = None,
-        contrast_names: Any | None = None,
-    ):
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Any):
         self._values = tuple(values)
-        self.categories = tuple(levels)
-        self.contrasts = None if contrasts is None else tuple(tuple(row) for row in contrasts)
-        self.contrast_names = (
-            None if contrast_names is None else tuple(str(name) for name in contrast_names)
-        )
 
     def __iter__(self):
         return iter(self._values)
@@ -1604,6 +1595,26 @@ class _RFactorVector:
         return self._values[item]
 
 
+class _RFactorVector(_BridgeVector):
+    """Iterable factor values with level metadata preserved across reticulate."""
+
+    __slots__ = ("categories", "contrasts", "contrast_names")
+
+    def __init__(
+        self,
+        values: Any,
+        levels: Any,
+        contrasts: Any | None = None,
+        contrast_names: Any | None = None,
+    ):
+        super().__init__(values)
+        self.categories = tuple(levels)
+        self.contrasts = None if contrasts is None else tuple(tuple(row) for row in contrasts)
+        self.contrast_names = (
+            None if contrast_names is None else tuple(str(name) for name in contrast_names)
+        )
+
+
 def _r_factor(
     values: Any,
     levels: Any,
@@ -1611,6 +1622,30 @@ def _r_factor(
     contrast_names: Any | None = None,
 ) -> _RFactorVector:
     return _RFactorVector(values, levels, contrasts, contrast_names)
+
+
+class _RCharacterVector(_BridgeVector):
+    """Iterable character values whose R origin survives row filtering."""
+
+    __slots__ = ("factor_source",)
+
+    def __init__(self, values: Any, factor_source: Any | None = None):
+        super().__init__(values)
+        self.factor_source = self._values if factor_source is None else factor_source
+
+
+def _r_character(values: Any) -> _RCharacterVector:
+    return _RCharacterVector(values)
+
+
+class _RowSubsetVector(_BridgeVector):
+    """Iterable filtered values that retain pre-filter factor inputs."""
+
+    __slots__ = ("factor_source",)
+
+    def __init__(self, values: Any, factor_source: Any):
+        super().__init__(values)
+        self.factor_source = factor_source
 
 
 def _materialize_1d(values: Any, name: str) -> list[Any]:
@@ -1925,7 +1960,13 @@ def _subset_indices(subset: Any, n: int) -> list[int]:
     return indices
 
 
-def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
+def _subset_sequence(
+    values: Any,
+    indices: list[int],
+    name: str,
+    *,
+    preserve_factor_source: bool = False,
+) -> Any:
     materialized = _coerce_array_like(values, name)
     if indices and max(indices) >= len(materialized):
         raise ValueError(f"{name} must have enough rows for subset")
@@ -1934,7 +1975,12 @@ def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
     if categories is not None:
         contrasts, contrast_names = _factor_contrasts(values)
         return _RFactorVector(subsetted, categories, contrasts, contrast_names)
-    return subsetted
+    if isinstance(values, _RCharacterVector):
+        return _RCharacterVector(subsetted, values.factor_source)
+    if not preserve_factor_source:
+        return subsetted
+    factor_source = getattr(values, "factor_source", materialized)
+    return _RowSubsetVector(subsetted, factor_source)
 
 
 def _subset_optional_sequence(
@@ -1949,7 +1995,15 @@ def _subset_optional_sequence(
 
 def _subset_data(data: Any, indices: list[int]) -> Any:
     if isinstance(data, Mapping):
-        return {key: _subset_sequence(value, indices, str(key)) for key, value in data.items()}
+        return {
+            key: _subset_sequence(
+                value,
+                indices,
+                str(key),
+                preserve_factor_source=True,
+            )
+            for key, value in data.items()
+        }
     if hasattr(data, "iloc"):
         return data.iloc[indices]
     if hasattr(data, "take"):
@@ -4517,7 +4571,7 @@ def _term_columns(
         if numeric is not None:
             return [numeric]
 
-    levels = _categorical_levels(values, term.column)
+    levels = _formula_inferred_categorical_levels(data, term, values)
     return _categorical_columns(values, levels)
 
 
@@ -4620,6 +4674,31 @@ def _categorical_levels(
     return levels
 
 
+def _formula_inferred_categorical_levels(
+    data: Any,
+    term: _CovariateTerm,
+    values: Sequence[Any],
+) -> tuple[Any, ...]:
+    source = _column_source(data, term.column)
+    r_style_levels = term.categorical_wrapper is not None or isinstance(
+        source,
+        _RCharacterVector,
+    )
+    if not r_style_levels:
+        return _categorical_levels(values, term.column)
+    factor_values = (
+        getattr(source, "factor_source", values) if term.categorical_wrapper is not None else values
+    )
+    levels = _categorical_levels(
+        [value for value in factor_values if not _is_missing_value(value)],
+        term.column,
+    )
+    try:
+        return tuple(sorted(levels))
+    except TypeError:
+        return tuple(sorted(levels, key=lambda value: (type(value).__name__, str(value))))
+
+
 def _fit_single_design_term(
     data: Any,
     term: _CovariateTerm,
@@ -4646,7 +4725,10 @@ def _fit_single_design_term(
             pass
         else:
             return _NumericDesignTerm(term)
-    return _CategoricalDesignTerm(term, _categorical_levels(values, term.column))
+    return _CategoricalDesignTerm(
+        term,
+        _formula_inferred_categorical_levels(data, term, values),
+    )
 
 
 def _fit_design_term(

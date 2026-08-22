@@ -12844,6 +12844,69 @@ def test_formula_metadata_preserves_categorical_spelling_and_assignments():
     assert aft_matrix["assign"] == [0, 1, 1, 2, 2, 3, 3, 4]
 
 
+@pytest.mark.parametrize("wrapper", ["factor", "as.factor"])
+def test_formula_factor_wrappers_sort_inferred_levels_after_subset(wrapper):
+    data = _factor_data()
+    data["dose"] = [9, None, 3, 1, 2, 3, 1, 2]
+    subset = list(range(1, len(data["time"])))
+    kept = subset[1:]
+    fit = survival.coxph(
+        f"Surv(time, status) ~ {wrapper}(dose) + x1",
+        data=data,
+        subset=subset,
+        na_action="omit",
+        max_iter=0,
+    )
+    matrix = survival.model_matrix(fit)
+    prefix = f"{wrapper}(dose)"
+
+    assert matrix["columns"] == [f"{prefix}2", f"{prefix}3", f"{prefix}9", "x1"]
+    for actual, expected in zip(
+        matrix["data"],
+        (
+            [
+                float(data["dose"][idx] == 2),
+                float(data["dose"][idx] == 3),
+                0.0,
+                data["x1"][idx],
+            ]
+            for idx in kept
+        ),
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+
+
+def test_r_character_formula_terms_sort_levels_after_subset():
+    data = _factor_data()
+    groups = ["zz_unused", "z", "a", "m", "z", "a", "m", "z"]
+    subset = list(range(1, len(data["time"])))
+    r_data = {**data, "group": survival.r_api._r_character(groups)}
+    plain_data = {**data, "group": groups}
+
+    r_fit = survival.coxph(
+        "Surv(time, status) ~ group + x1",
+        data=r_data,
+        subset=subset,
+        max_iter=0,
+    )
+    plain_fit = survival.coxph(
+        "Surv(time, status) ~ group + x1",
+        data=plain_data,
+        subset=subset,
+        max_iter=0,
+    )
+
+    assert survival.coef_names(r_fit) == ["groupm", "groupz", "x1"]
+    assert survival.coef_names(plain_fit) == ["groupa", "groupm", "x1"]
+    for actual, expected in zip(
+        survival.model_matrix(r_fit)["data"],
+        ([float(groups[idx] == "m"), float(groups[idx] == "z"), data["x1"][idx]] for idx in subset),
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+
+
 def test_model_matrix_assignments_keep_strata_term_positions():
     data = _factor_data()
     data["group"] = ["A", "A", "B", "B", "A", "B", "A", "B"]
