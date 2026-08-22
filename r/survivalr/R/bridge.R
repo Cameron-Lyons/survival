@@ -534,6 +534,41 @@ attrassign <- function(object, tt) {
   }, character(1))
 }
 
+.survsplit_unique_name <- function(reserved, stem) {
+  candidate <- stem
+  while (candidate %in% reserved) candidate <- paste0(candidate, ".")
+  candidate
+}
+
+.survsplit_named_response <- function(start, end, event, counting, source_names) {
+  if (!counting) event <- as.factor(event)
+  if (!is.null(source_names)) names(event) <- source_names
+  if (is.factor(event)) {
+    event_attributes <- attributes(event)
+    attribute_order <- c(
+      intersect(c("names", "levels", "class"), names(event_attributes)),
+      setdiff(names(event_attributes), c("names", "levels", "class"))
+    )
+    attributes(event) <- event_attributes[attribute_order]
+  }
+  if (!counting) return(Surv2(as.numeric(start), event))
+
+  factor_event <- is.factor(event)
+  out <- cbind(
+    start = as.numeric(start),
+    stop = as.numeric(end),
+    status = if (factor_event) as.integer(event) - 1L else as.numeric(event)
+  )
+  attr(out, "type") <- if (factor_event) "mcounting" else "counting"
+  if (factor_event) attr(out, "states") <- levels(event)[-1L]
+  event_attributes <- attributes(event)
+  if (length(event_attributes) > 0L) {
+    attr(out, "inputAttributes") <- list(event = event_attributes)
+  }
+  class(out) <- "Surv"
+  out
+}
+
 .survsplit_minimal_surv <- function(args) {
   surv_type <- args[["type"]]
   origin <- args[["origin"]]
@@ -10235,6 +10270,8 @@ survSplit <- function(formula, data, subset, na.action = na.pass, id, cut,
     stop("not valid for ", attr(response, "type"), " censored survival data", call. = FALSE)
   }
 
+  named_response <- is.name(formula[[2L]])
+  response_name <- if (named_response) as.character(formula[[2L]]) else NULL
   response_names <- .survsplit_response_names(formula, response)
   counting_response <- !is_surv2 && ncol(response) == 3L
   start_name <- if (missing(start) && (counting_response || is_surv2)) {
@@ -10261,6 +10298,23 @@ survSplit <- function(formula, data, subset, na.action = na.pass, id, cut,
     model_frame[[id_name]] <- seq_len(nrow(model_frame))
   }
   covariates <- if (right_dot) data else model_frame[-1L]
+  base_names <- names(covariates)
+  source_column <- NULL
+  split_start_name <- start_name
+  split_end_name <- end_name
+  split_event_name <- event_name
+  if (named_response) {
+    if (response_name %in% names(covariates)) covariates[[response_name]] <- NULL
+    reserved <- c(names(covariates), response_name, episode_name, added_name)
+    source_column <- .survsplit_unique_name(reserved, "..survsplit.source")
+    reserved <- c(reserved, source_column)
+    split_start_name <- .survsplit_unique_name(reserved, "..survsplit.start")
+    reserved <- c(reserved, split_start_name)
+    split_end_name <- .survsplit_unique_name(reserved, "..survsplit.end")
+    reserved <- c(reserved, split_end_name)
+    split_event_name <- .survsplit_unique_name(reserved, "..survsplit.event")
+    covariates[[source_column]] <- seq_len(nrow(model_frame))
+  }
   subject_id <- if (is_surv2) stats::model.extract(model_frame, "id") else NULL
   if (is_surv2 && is.null(subject_id)) {
     stop("an id statement is required", call. = FALSE)
@@ -10271,9 +10325,9 @@ survSplit <- function(formula, data, subset, na.action = na.pass, id, cut,
     response = py_response,
     data = .as_python_data(covariates),
     cut = as.list(as.numeric(cut)),
-    start = start_name,
-    end = end_name,
-    event = event_name,
+    start = split_start_name,
+    end = split_end_name,
+    event = split_event_name,
     episode = episode_name,
     zero = zero,
     added = added_name,
@@ -10286,11 +10340,40 @@ survSplit <- function(formula, data, subset, na.action = na.pass, id, cut,
   )
   states <- attr(response, "states")
   if (!is.null(states)) {
-    output[[event_name]] <- factor(
-      as.integer(output[[event_name]]),
+    output[[split_event_name]] <- factor(
+      as.integer(output[[split_event_name]]),
       levels = 0:length(states),
       labels = c("censor", states)
     )
+  }
+  if (named_response) {
+    source_rows <- as.integer(output[[source_column]])
+    response_row_names <- rownames(response)
+    source_names <- if (is.null(response_row_names)) {
+      NULL
+    } else {
+      response_row_names[source_rows]
+    }
+    response_column <- .survsplit_named_response(
+      output[[split_start_name]],
+      if (is_surv2) NULL else output[[split_end_name]],
+      output[[split_event_name]],
+      counting_response,
+      source_names
+    )
+    episode_values <- if (is.null(episode_name)) NULL else output[[episode_name]]
+    added_values <- if (is.null(added_name)) NULL else output[[added_name]]
+    output <- output[, setdiff(base_names, response_name), drop = FALSE]
+    output[[response_name]] <- response_column
+    response_order <- if (response_name %in% base_names) {
+      base_names
+    } else {
+      c(base_names, response_name)
+    }
+    output <- output[response_order]
+    if (!is.null(episode_name)) output[[episode_name]] <- episode_values
+    if (!is.null(added_name)) output[[added_name]] <- added_values
+    row.names(output) <- NULL
   }
   output
 }
