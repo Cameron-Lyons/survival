@@ -1,5 +1,6 @@
 import math
 import random
+import statistics
 from bisect import bisect_right
 from dataclasses import replace
 from datetime import date
@@ -4785,6 +4786,28 @@ def test_yates_standard_link_profiles():
             2,
             "custom",
         )
+
+
+def test_yates_survival_profiles():
+    log_two = math.log(2.0)
+    result = survival.r_api._yates_survival_profiles(
+        [[0.0], [0.0], [1.0], [1.0]],
+        [log_two],
+        [[0.0], [log_two], [math.log(4.0)]],
+        2,
+        [0.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+    )
+
+    simulated = [1.0 + math.exp(-risk) for risk in (1.0, 2.0, 4.0)]
+    expected_variance = statistics.variance(simulated)
+    assert result["estimate"] == pytest.approx([1.0 + math.exp(-1.0), 1.0 + math.exp(-2.0)])
+    assert [value for row in result["covariance"] for value in row] == pytest.approx(
+        [0.0, 0.0, 0.0, expected_variance]
+    )
+    assert result["profile_mean"][1][0] == pytest.approx(statistics.mean(simulated))
+    assert result["profile_variance"][1][0] == pytest.approx(expected_variance)
 
 
 def test_r_style_nsk_wraps_native_spline_basis():

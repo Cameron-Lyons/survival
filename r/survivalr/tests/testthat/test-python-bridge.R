@@ -978,6 +978,145 @@ test_that("R formula wrappers delegate to the Python survival package", {
     tolerance = 1e-8
   )
 
+  native_survival_setup <- yates_setup(
+    yates_cox_fit,
+    predict = "survival",
+    options = list(rmean = 9)
+  )
+  reference_survival_setup <- survival::yates_setup(
+    yates_cox_fit,
+    predict = "survival",
+    options = list(rmean = 9)
+  )
+  expect_equal(
+    native_survival_setup$predict(c(-1, 0, 1)),
+    reference_survival_setup$predict(c(-1, 0, 1)),
+    tolerance = 1e-12
+  )
+  survival_probe <- .yates_model_term(
+    fit = native_yates_cox_fit,
+    term = "group",
+    population = "data",
+    levels = NULL,
+    levels_missing = TRUE,
+    test = "global",
+    predict = "survival",
+    method = "direct",
+    nsim = 20,
+    options = list(rmean = 365)
+  )
+  expect_false(is.null(survival_probe))
+
+  for (test_name in c("global", "pairwise")) {
+    set.seed(20260822)
+    survival_expected <- survival::yates(
+      native_yates_cox_fit,
+      "group",
+      predict = "survival",
+      options = list(rmean = 365),
+      test = test_name,
+      nsim = 200
+    )
+    set.seed(20260822)
+    compare_yates(
+      yates(
+        native_yates_cox_fit,
+        "group",
+        predict = "survival",
+        options = list(rmean = 365),
+        test = test_name,
+        nsim = 200
+      ),
+      survival_expected,
+      tolerance = 2e-10
+    )
+    set.seed(20260822)
+    compare_yates(
+      yates(
+        local_yates_cox_fit,
+        "group",
+        predict = "survival",
+        options = list(rmean = 365),
+        test = test_name,
+        nsim = 200
+      ),
+      survival_expected,
+      tolerance = 2e-8
+    )
+  }
+
+  weighted_survival_data <- transform(
+    yates_cox_model_data,
+    weight = 1 + (seq_len(nrow(yates_cox_model_data)) %% 5L) / 10
+  )
+  weighted_survival_fit <- survival::coxph(
+    survival::Surv(time, status) ~ group + age + sex + ph.ecog,
+    data = weighted_survival_data,
+    weights = weight,
+    model = TRUE,
+    x = TRUE
+  )
+  set.seed(20260823)
+  weighted_survival_expected <- survival::yates(
+    weighted_survival_fit,
+    "group",
+    predict = "survival",
+    options = list(rmean = 400),
+    nsim = 100
+  )
+  set.seed(20260823)
+  compare_yates(
+    yates(
+      weighted_survival_fit,
+      "group",
+      predict = "survival",
+      options = list(rmean = 400),
+      nsim = 100
+    ),
+    weighted_survival_expected,
+    tolerance = 2e-10
+  )
+
+  counting_survival_data <- data.frame(
+    start = c(0, 0, 1, 2, 0, 3, 4, 0),
+    stop = c(2, 3, 4, 5, 6, 7, 8, 9),
+    status = c(1, 0, 1, 1, 0, 1, 1, 0),
+    x = c(0, 0.2, -0.1, 0.5, 0.8, -0.3, 0.1, 0.4),
+    group = factor(rep(c("A", "B"), 4L))
+  )
+  native_counting_survival_fit <- survival::coxph(
+    survival::Surv(start, stop, status) ~ group + x,
+    data = counting_survival_data,
+    model = TRUE,
+    x = TRUE
+  )
+  local_counting_survival_fit <- coxph(
+    Surv(start, stop, status) ~ group + x,
+    data = counting_survival_data,
+    model = TRUE,
+    x = TRUE
+  )
+  set.seed(20260824)
+  counting_survival_expected <- survival::yates(
+    native_counting_survival_fit,
+    "group",
+    predict = "survival",
+    options = list(rmean = 6),
+    nsim = 60
+  )
+  set.seed(20260824)
+  compare_yates(
+    yates(
+      local_counting_survival_fit,
+      "group",
+      predict = "survival",
+      options = list(rmean = 6),
+      nsim = 60
+    ),
+    counting_survival_expected,
+    tolerance = 1e-7
+  )
+
   compare_aareg <- function(actual, expected) {
     fields <- setdiff(names(expected), "call")
     expect_setequal(setdiff(names(actual), "call"), fields)

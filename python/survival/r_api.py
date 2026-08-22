@@ -9759,6 +9759,34 @@ def _yates_link_profiles(
     return {"estimate": estimate, "covariance": covariance}
 
 
+def _yates_survival_profiles(
+    x: Any,
+    beta: Any,
+    draws: Any,
+    n_levels: Any,
+    center: Any,
+    cumulative_hazard: Any,
+    intervals: Any,
+) -> dict[str, list[float] | list[list[float]]]:
+    """Aggregate Cox restricted means and survival curves across coefficient draws."""
+
+    estimate, covariance, profile_mean, profile_variance = _core.yates_survival_profiles(
+        _as_rows(x, "x"),
+        _float_vector(beta, "beta"),
+        _as_rows(draws, "draws"),
+        _integer_scalar(n_levels, "n_levels"),
+        _float_vector(center, "center"),
+        _float_vector(cumulative_hazard, "cumulative_hazard"),
+        _float_vector(intervals, "intervals"),
+    )
+    return {
+        "estimate": estimate,
+        "covariance": covariance,
+        "profile_mean": profile_mean,
+        "profile_variance": profile_variance,
+    }
+
+
 def _scalar_or_vector_with_flag(values: Any, name: str) -> tuple[list[Any], bool]:
     try:
         return _materialize_1d(values, name), False

@@ -139,5 +139,5 @@ pub use uno_c_index_module::{
 };
 pub use yates_module::{
     YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_link_profiles, yates_pairwise,
-    yates_risk_profiles,
+    yates_risk_profiles, yates_survival_profiles,
 };

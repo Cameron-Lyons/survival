@@ -6693,6 +6693,20 @@ def yates_risk_profiles(
     n_levels: int,
     center: list[float],
 ) -> tuple[list[float], list[list[float]]]: ...
+def yates_survival_profiles(
+    x: list[list[float]],
+    beta: list[float],
+    draws: list[list[float]],
+    n_levels: int,
+    center: list[float],
+    cumulative_hazard: list[float],
+    intervals: list[float],
+) -> tuple[
+    list[float],
+    list[list[float]],
+    list[list[float]],
+    list[list[float]],
+]: ...
 def create_simple_ratetable(
     age_breaks: list[float],
     year_breaks: list[float],
