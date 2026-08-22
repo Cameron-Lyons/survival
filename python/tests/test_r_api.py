@@ -8687,6 +8687,33 @@ def test_concordance_reversed_multi_score_ranks_remain_available_in_python():
     )
 
 
+def test_concordance_collapsed_single_score_strata_remain_available_in_python():
+    result = survival.concordancefit(
+        survival.Surv([1, 2, 1, 2], [1, 0, 1, 0]),
+        [0.2, 0.6, 0.4, 0.8],
+        strata=["a", "a", "b", "b"],
+        keepstrata=False,
+        influence=3,
+        ranks=True,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx(1.0)
+    assert result.count == pytest.approx(
+        {
+            "concordant": 2.0,
+            "discordant": 0.0,
+            "tied.x": 0.0,
+            "tied.y": 0.0,
+            "tied.xy": 0.0,
+        }
+    )
+    assert result.strata_counts is None
+    assert result.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
+    assert result.ranks is not None
+    assert [row["time"] for row in result.ranks] == pytest.approx([1.0, 0.5, 1.0, 0.5])
+
+
 def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
     data = {
         "y": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],
