@@ -12090,6 +12090,7 @@ concordance <- function(object, ..., formula) {
       timewt,
       ymax
     )
+    stop(replacement_message, call. = FALSE)
   }
   invisible(NULL)
 }
