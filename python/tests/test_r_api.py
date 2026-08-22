@@ -9980,6 +9980,98 @@ def test_coxph_formula_pspline_matches_fixed_theta_reference():
     )
 
 
+def test_nsk_formula_matches_coxph_and_survreg_reference():
+    data = {
+        "time": [float(value) for value in range(1, 13)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+        "z": [-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, -1.2, 0.2, 0.8, 1.1, -0.8, 0.4],
+        "x": [1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1.0],
+    }
+    formula = "Surv(time,status) ~ z + nsk(x,df=3)"
+    newdata = {"z": [0.3, -0.2], "x": [0.8, 1.6]}
+
+    cox = survival.coxph(
+        formula,
+        data=data,
+        ties="breslow",
+        max_iter=50,
+        eps=1e-10,
+    )
+    assert survival.coef_names(cox) == [
+        "z",
+        "nsk(x,df=3)1",
+        "nsk(x,df=3)2",
+        "nsk(x,df=3)3",
+    ]
+    assert survival.coef(cox) == pytest.approx(
+        [
+            -0.032055463191578946,
+            -0.9619760894043042,
+            -0.6212001426371484,
+            -0.9383567152874416,
+        ],
+        abs=5e-14,
+    )
+    assert cox.log_likelihood == pytest.approx(
+        [-12.619505923287514, -12.230167166350261],
+        abs=5e-14,
+    )
+    assert survival.model_matrix(cox)["assign"] == [1, 2, 2, 2]
+    profile_matrix = survival.r_api._model_matrix_newdata(cox, newdata)
+    expected_profiles = [
+        [0.3, 0.8462937414123753, 0.24240262889598907, -0.026399229235954964],
+        [-0.2, -0.038055800111472374, 0.11752076386386934, 0.9149491199888664],
+    ]
+    for actual, expected in zip(profile_matrix["data"], expected_profiles, strict=True):
+        assert actual == pytest.approx(expected, abs=2e-14)
+
+    aft = survival.survreg(
+        formula,
+        data=data,
+        distribution="weibull",
+        max_iter=100,
+    )
+    assert survival.coef_names(aft) == [
+        "(Intercept)",
+        "z",
+        "nsk(x,df=3)1",
+        "nsk(x,df=3)2",
+        "nsk(x,df=3)3",
+    ]
+    assert survival.coef(aft) == pytest.approx(
+        [
+            1.9231933459806592,
+            0.04847927053439184,
+            0.5013499047813755,
+            0.18244883231318443,
+            0.6557779117226469,
+        ],
+        abs=6e-9,
+    )
+    assert survival.predict(aft, newdata, type="lp") == pytest.approx(
+        [2.388940458987422, 2.515863169489804],
+        abs=6e-9,
+    )
+
+    fixed_knots = survival.coxph(
+        "Surv(time,status) ~ nsk(x,knots=c(.7,1.1),Boundary.knots=c(.2,1.8))",
+        data=data,
+        ties="breslow",
+        max_iter=50,
+        eps=1e-10,
+    )
+    fixed_profiles = survival.r_api._model_matrix_newdata(
+        fixed_knots,
+        {"x": [0.2, 0.7, 1.1, 1.8]},
+    )["data"]
+    for actual, expected in zip(
+        fixed_profiles,
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=2e-14)
+
+
 def test_coxph_formula_combines_ridge_and_pspline_penalties():
     data = {
         "time": [float(value) for value in range(1, 13)],

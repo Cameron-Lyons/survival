@@ -988,6 +988,33 @@ test_that("R formula wrappers delegate to the Python survival package", {
     spline_risk_expected,
     tolerance = 1e-7
   )
+  native_nsk_yates_fit <- survival::coxph(
+    survival::Surv(time, status) ~ nsk(age, df = 3) + sex + ph.ecog,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  local_nsk_yates_fit <- coxph(
+    Surv(time, status) ~ nsk(age, df = 3) + sex + ph.ecog,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  expect_equal(
+    coef(local_nsk_yates_fit),
+    coef(native_nsk_yates_fit),
+    tolerance = 1e-8
+  )
+  expect_equal(
+    unname(model.matrix(local_nsk_yates_fit)),
+    unname(model.matrix(native_nsk_yates_fit)),
+    tolerance = 1e-12
+  )
+  compare_yates(
+    yates(local_nsk_yates_fit, "age", levels = spline_yates_levels),
+    survival::yates(native_nsk_yates_fit, "age", levels = spline_yates_levels),
+    tolerance = 1e-7
+  )
   sas_yates_cox_expected <- survival::yates(
     native_yates_cox_fit,
     "group",
@@ -8220,6 +8247,45 @@ test_that("survreg bridge agrees with R survival distributions", {
       tolerance = if (identical(resid_type, "working")) 1e-02 else 5e-03
     )
   }
+})
+
+test_that("nsk survreg formulas retain their fitted basis", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 1:12,
+    status = c(1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1),
+    z = c(-1, -0.5, 0, 0.5, 1, 1.5, -1.2, 0.2, 0.8, 1.1, -0.8, 0.4),
+    x = c(1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1)
+  )
+  newdata <- data.frame(z = c(0.3, -0.2), x = c(0.8, 1.6))
+  bridged <- survreg(
+    Surv(time, status) ~ z + nsk(x, df = 3),
+    data = data,
+    dist = "weibull",
+    max_iter = 100L
+  )
+  reference <- survival::survreg(
+    survival::Surv(time, status) ~ z + nsk(x, df = 3),
+    data = data,
+    dist = "weibull",
+    control = survival::survreg.control(maxiter = 100L)
+  )
+
+  expect_equal(coef(bridged), coef(reference), tolerance = 1e-08)
+  expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-08)
+  expect_equal(
+    unname(model.matrix(bridged)),
+    unname(model.matrix(reference)),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    unname(predict(bridged, newdata, type = "lp")),
+    unname(stats::predict(reference, newdata, type = "lp")),
+    tolerance = 1e-08
+  )
 })
 
 test_that("penalized survreg model metadata matches survival", {
