@@ -1145,20 +1145,21 @@ fn remap_stratified_influence(
     groups: Vec<Vec<usize>>,
     mut compute_group: impl FnMut(&[usize]) -> ConcordanceInfluenceOutput,
 ) -> ConcordanceInfluenceOutput {
-    let mut influence_rows = vec![vec![0.0; 5]; n];
-    let mut dfbeta = vec![0.0; n];
-    let mut variance = 0.0;
+    let mut influence_rows = vec![[0.0; 5]; n];
 
     for indices in groups {
-        let (group_influence, group_dfbeta, group_variance) = compute_group(&indices);
+        let (group_influence, _group_dfbeta, _group_variance) = compute_group(&indices);
         for (local_idx, &original_idx) in indices.iter().enumerate() {
-            influence_rows[original_idx] = group_influence[local_idx].clone();
-            dfbeta[original_idx] = group_dfbeta[local_idx];
+            influence_rows[original_idx].copy_from_slice(&group_influence[local_idx]);
         }
-        variance += group_variance;
     }
 
-    (influence_rows, dfbeta, variance)
+    let concordant = influence_rows.iter().map(|row| row[0] + 0.5 * row[2]).sum();
+    let comparable = influence_rows
+        .iter()
+        .map(|row| row[0] + row[1] + row[2])
+        .sum();
+    influence_from_rows(influence_rows, concordant, comparable)
 }
 
 fn stratified_right_concordance_influence_rows(
@@ -2520,8 +2521,8 @@ mod tests {
         assert_eq!(influence[1], vec![0.5, 0.0, 0.0, 0.0, 0.0]);
         assert_eq!(influence[2], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
         assert_eq!(influence[3], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
-        assert_eq!(dfbeta, vec![0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(variance, 0.0);
+        assert_eq!(dfbeta, vec![0.125, 0.125, -0.125, -0.125]);
+        assert_eq!(variance, 0.0625);
     }
 
     #[test]
@@ -2544,8 +2545,72 @@ mod tests {
         assert_eq!(influence[1], vec![0.5, 0.0, 0.0, 0.0, 0.0]);
         assert_eq!(influence[2], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
         assert_eq!(influence[3], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
-        assert_eq!(dfbeta, vec![0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(variance, 0.0);
+        assert_eq!(dfbeta, vec![0.125, 0.125, -0.125, -0.125]);
+        assert_eq!(variance, 0.0625);
+    }
+
+    #[test]
+    fn stratified_concordance_influence_uses_global_ratio() {
+        initialize_python();
+
+        let (influence, dfbeta, variance) = stratified_concordance_influence_rows(
+            vec![1.0, 3.0, 2.0, 4.0, 4.0, 2.0],
+            vec![1, 1, 1, 1, 1, 1],
+            vec![-0.2, -0.9, -0.4, -0.7, -0.7, -0.1],
+            vec![0, 0, 1, 1, 1, 0],
+            Some(vec![1.0, 2.0, 1.5, 0.5, 3.0, 2.5]),
+            "n".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(influence[0], vec![1.0, 1.25, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[3], vec![0.375, 0.0, 0.0, 0.0, 0.75]);
+        let expected = [
+            -0.058891123240448,
+            0.0402183280666475,
+            0.03016374604998565,
+            0.004309106578569375,
+            0.02585463947141625,
+            -0.04165469692617065,
+        ];
+        for (actual, expected) in dfbeta.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert!((variance - 0.008417674442479675).abs() < 1e-12);
+    }
+
+    #[test]
+    fn stratified_counting_concordance_influence_uses_global_ratio() {
+        initialize_python();
+
+        let (influence, dfbeta, variance) = stratified_counting_concordance_influence_rows(
+            vec![0.0, 0.0, 1.0, 2.5, 0.0, 0.0, 0.5, 2.0],
+            vec![2.0, 4.0, 3.0, 5.0, 1.0, 4.0, 3.0, 5.0],
+            vec![1, 0, 1, 1, 1, 1, 0, 1],
+            vec![-0.8, -0.2, -0.5, -0.1, -0.3, -0.9, -0.4, -0.6],
+            vec![0, 0, 0, 0, 1, 1, 1, 1],
+            Some(vec![1.0, 2.0, 1.5, 0.5, 3.0, 1.0, 2.5, 2.0]),
+            "n".to_string(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(influence[0], vec![0.0, 1.75, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[4], vec![5.25, 0.0, 0.0, 0.0, 0.0]);
+        let expected = [
+            -0.04710783528280725,
+            -0.0672969075468675,
+            -0.070661752924211,
+            -0.0100945361320301,
+            0.124499278961705,
+            0.0086524595417401,
+            0.088928056401218,
+            -0.026918763018747,
+        ];
+        for (actual, expected) in dfbeta.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert!((variance - 0.03605075943231025).abs() < 1e-12);
     }
 
     #[test]

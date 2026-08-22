@@ -12086,7 +12086,7 @@ coef.survival_py_concordance <- function(object, ...) {
 vcov.survival_py_concordance <- function(object, ...) {
   frame <- as.data.frame(object)
   if (nrow(frame) == 1L) {
-    return(4 * as.numeric(frame$variance)[[1L]])
+    return(as.numeric(frame$variance)[[1L]])
   }
   variance <- .result_field(object, "variance")
   if (is.matrix(variance) || (
@@ -12097,11 +12097,11 @@ vcov.survival_py_concordance <- function(object, ...) {
     if (!identical(dim(covariance), c(nrow(frame), nrow(frame)))) {
       stop("concordance covariance must match the score count", call. = FALSE)
     }
-    return(4 * covariance)
+    return(covariance)
   }
   dfbeta <- .result_field(object, "dfbeta")
   if (is.null(dfbeta)) {
-    values <- 4 * as.numeric(frame$variance)
+    values <- as.numeric(frame$variance)
     return(diag(values, nrow = length(values)))
   }
   dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
@@ -12110,7 +12110,7 @@ vcov.survival_py_concordance <- function(object, ...) {
     stop("concordance dfbeta values must be rectangular", call. = FALSE)
   }
   dfbeta_matrix <- do.call(cbind, dfbeta_columns)
-  4 * crossprod(dfbeta_matrix)
+  crossprod(dfbeta_matrix)
 }
 
 coef.concordance <- function(object, ...) {
@@ -12313,9 +12313,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   }
   if (isTRUE(std.err) && !is.null(variance)) {
     if (multi_score && !is.null(dfbeta_matrix)) {
-      out$var <- 4 * crossprod(dfbeta_matrix)
+      out$var <- crossprod(dfbeta_matrix)
     } else {
-      out$var <- 4 * .as_numeric_vector(variance)
+      out$var <- .as_numeric_vector(variance)
     }
     out$cvar <- if (length(conditional_variance) == 1L) {
       conditional_variance[[1L]]
@@ -12326,9 +12326,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (influence %in% c(1L, 3L)) {
     if (!is.null(dfbeta)) {
       out$dfbeta <- if (multi_score && !is.null(dfbeta_matrix)) {
-        2 * dfbeta_matrix
+        dfbeta_matrix
       } else {
-        2 * .as_numeric_vector(dfbeta)
+        .as_numeric_vector(dfbeta)
       }
     }
   }
@@ -12342,7 +12342,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
           stop("concordance influence values must be rectangular", call. = FALSE)
         }
         out$influence <- array(
-          2 * unlist(influence_matrices, use.names = FALSE),
+          unlist(influence_matrices, use.names = FALSE),
           dim = c(matrix_dims[[1L]], length(influence_matrices))
         )
         dimnames(out$influence) <- list(
@@ -12351,7 +12351,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
           score_names
         )
       } else {
-        out$influence <- 2 * .as_numeric_matrix(influence_rows)
+        out$influence <- .as_numeric_matrix(influence_rows)
         colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
       }
     }

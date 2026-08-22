@@ -8054,7 +8054,22 @@ def test_concordance_influence_modes_return_r_style_diagnostics():
         influence=3,
         reverse=True,
     )
+    reference = survival.concordancefit(
+        response,
+        data["score"],
+        weights=data["wt"],
+        influence=3,
+        reverse=True,
+    )
+    reversed_reference = survival.concordancefit(
+        response,
+        data["score"],
+        weights=data["wt"],
+        influence=3,
+    )
 
+    assert reference is not None
+    assert reversed_reference is not None
     assert dfbeta_only.dfbeta is not None
     assert dfbeta_only.influence is None
     assert influence_only.dfbeta is None
@@ -8067,15 +8082,20 @@ def test_concordance_influence_modes_return_r_style_diagnostics():
         assert both_row == pytest.approx(influence_row)
     assert both.variance == pytest.approx(sum(value * value for value in both.dfbeta))
     assert both.var == pytest.approx(both.variance)
-    assert [sum(row[col] for row in both.influence) for col in range(5)] == pytest.approx(
-        [both.concordant, both.comparable - both.concordant, 0.0, 0.0, 0.0]
-    )
+    assert both.dfbeta == pytest.approx(reference.dfbeta)
+    assert both.variance == pytest.approx(reference.variance)
+    for actual, expected in zip(both.influence, reference.influence, strict=True):
+        assert actual == pytest.approx(expected)
     assert sum(both.dfbeta) == pytest.approx(0.0)
     assert reversed_both.concordance == pytest.approx(1.0 - both.concordance)
     assert reversed_both.dfbeta == pytest.approx([-value for value in both.dfbeta])
-    assert [sum(row[col] for row in reversed_both.influence) for col in range(5)] == pytest.approx(
-        [both.comparable - both.concordant, both.concordant, 0.0, 0.0, 0.0]
-    )
+    assert reversed_both.variance == pytest.approx(reversed_reference.variance)
+    for actual, expected in zip(
+        reversed_both.influence,
+        reversed_reference.influence,
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
 
 
 def test_concordance_cluster_collapses_dfbeta_for_robust_variance():
@@ -8523,17 +8543,17 @@ def test_concordance_formula_accepts_numeric_outcomes_and_forces_rank_weights():
     for actual, reference in zip(
         multi.variance,
         [
-            [0.0028080323121974, -0.00284354488705543],
-            [-0.00284354488705543, 0.0048698240644387],
+            [0.0112321292487896, -0.0113741795482217],
+            [-0.0113741795482217, 0.0194792962577548],
         ],
         strict=True,
     ):
         assert actual == pytest.approx(reference)
     assert survival.as_data_frame(multi)["variance"] == pytest.approx(
-        [0.0028080323121974, 0.0048698240644387]
+        [0.0112321292487896, 0.0194792962577548]
     )
     assert transformed.concordance == pytest.approx(0.769230769230769)
-    assert transformed.variance == pytest.approx(0.00238086901719127)
+    assert transformed.variance == pytest.approx(0.009523476068765096)
     assert forced_rank_weights.concordance == pytest.approx(ordinary_rank_weights.concordance)
     assert forced_rank_weights.count == pytest.approx(ordinary_rank_weights.count)
 
@@ -8756,13 +8776,99 @@ def test_concordance_formula_accepts_strata_wrapper():
         {"time": 4.0, "rank": 0.0, "timewt": 1.0, "casewt": 1.0},
     ]
     assert influential.influence == [
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
     ]
     assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
     assert influential.variance == pytest.approx(0.0)
+
+
+def test_weighted_stratified_concordance_diagnostics_match_reference():
+    data = {
+        "y": [1.0, 3.0, 2.0, 4.0, 4.0, 2.0],
+        "x": [0.2, 0.9, 0.4, 0.7, 0.7, 0.1],
+        "w": [1.0, 2.0, 1.5, 0.5, 3.0, 2.5],
+        "group": ["a", "a", "b", "b", "b", "a"],
+    }
+
+    result = survival.concordance(
+        "y ~ x + strata(group)",
+        data=data,
+        weights="w",
+        influence=3,
+    )
+
+    assert result.concordance == pytest.approx(0.830508474576271)
+    assert result.variance == pytest.approx(0.0336706977699187)
+    assert result.conditional_variance == pytest.approx(0.0332845838447677)
+    assert result.dfbeta == pytest.approx(
+        [
+            -0.117782246480896,
+            0.080436656133295,
+            0.0603274920999713,
+            0.00861821315713875,
+            0.0517092789428325,
+            -0.0833093938523413,
+        ]
+    )
+    expected_influence = [
+        [2.0, 2.5, 0.0, 0.0, 0.0],
+        [3.5, 0.0, 0.0, 0.0, 0.0],
+        [3.5, 0.0, 0.0, 0.0, 0.0],
+        [1.5, 0.0, 0.0, 0.0, 3.0],
+        [1.5, 0.0, 0.0, 0.0, 0.5],
+        [2.0, 1.0, 0.0, 0.0, 0.0],
+    ]
+    for actual, expected in zip(result.influence, expected_influence, strict=True):
+        assert actual == pytest.approx(expected)
+
+
+def test_weighted_stratified_counting_concordance_diagnostics_match_reference():
+    data = {
+        "start": [0.0, 0.0, 1.0, 2.5, 0.0, 0.0, 0.5, 2.0],
+        "stop": [2.0, 4.0, 3.0, 5.0, 1.0, 4.0, 3.0, 5.0],
+        "status": [1, 0, 1, 1, 1, 1, 0, 1],
+        "score": [0.8, 0.2, 0.5, 0.1, 0.3, 0.9, 0.4, 0.6],
+        "w": [1.0, 2.0, 1.5, 0.5, 3.0, 1.0, 2.5, 2.0],
+        "group": ["a", "a", "a", "a", "b", "b", "b", "b"],
+    }
+
+    result = survival.concordance(
+        "Surv(start, stop, status) ~ score + strata(group)",
+        data=data,
+        weights="w",
+        influence=3,
+    )
+
+    assert result.concordance == pytest.approx(0.531645569620253)
+    assert result.variance == pytest.approx(0.144203037729241)
+    assert result.conditional_variance == pytest.approx(0.0320040345276686)
+    assert result.dfbeta == pytest.approx(
+        [
+            -0.0942156705656145,
+            -0.134593815093735,
+            -0.141323505848422,
+            -0.0201890722640602,
+            0.24899855792341,
+            0.0173049190834802,
+            0.177856112802436,
+            -0.053837526037494,
+        ]
+    )
+    expected_influence = [
+        [0.0, 3.5, 0.0, 0.0, 0.0],
+        [0.0, 2.5, 0.0, 0.0, 0.0],
+        [0.0, 3.5, 0.0, 0.0, 0.0],
+        [0.0, 1.5, 0.0, 0.0, 0.0],
+        [3.5, 0.0, 0.0, 0.0, 0.0],
+        [3.0, 2.0, 0.0, 0.0, 0.0],
+        [3.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+    ]
+    for actual, expected in zip(result.influence, expected_influence, strict=True):
+        assert actual == pytest.approx(expected)
 
 
 def test_concordance_formula_strata_ranks_support_counting_process_response():
@@ -8790,13 +8896,13 @@ def test_concordance_formula_strata_ranks_support_counting_process_response():
         {"time": 1.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
     ]
     assert influential.influence == [
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0, 0.0],
     ]
-    assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
-    assert influential.variance == pytest.approx(0.0)
+    assert influential.dfbeta == pytest.approx([-0.25, -0.25, 0.25, 0.25])
+    assert influential.variance == pytest.approx(0.25)
 
 
 def test_concordance_counting_process_uses_delayed_entry_risk_sets():
@@ -8901,7 +9007,14 @@ def test_concordance_counting_process_influence_uses_delayed_entry_risk_sets():
         data=data,
         influence=3,
     )
+    reference = survival.concordancefit(
+        response,
+        data["score"],
+        influence=3,
+        reverse=True,
+    )
 
+    assert reference is not None
     assert result.dfbeta is not None
     assert result.influence is not None
     assert exact.dfbeta is not None
@@ -8911,9 +9024,9 @@ def test_concordance_counting_process_influence_uses_delayed_entry_risk_sets():
     assert result.influence is not None
     for formula_row, result_row in zip(formula.influence, formula_direction.influence, strict=True):
         assert formula_row == pytest.approx(result_row)
-    assert [sum(row[col] for row in result.influence) for col in range(5)] == pytest.approx(
-        [result.concordant, result.comparable - result.concordant, 0.0, 0.0, 0.0]
-    )
+    assert result.dfbeta == pytest.approx(reference.dfbeta)
+    for actual, expected in zip(result.influence, reference.influence, strict=True):
+        assert actual == pytest.approx(expected)
     assert result.variance == pytest.approx(sum(value * value for value in result.dfbeta))
     assert exact.variance == pytest.approx(sum(value * value for value in exact.dfbeta))
 
@@ -9227,7 +9340,16 @@ def test_counting_concordance_duplicate_event_times_share_survival_weight():
         ranks=True,
         influence=3,
     )
+    reference = survival.concordancefit(
+        response,
+        data["score"],
+        weights=data["wt"],
+        timewt="S",
+        influence=3,
+        reverse=True,
+    )
 
+    assert reference is not None
     assert result.concordant == pytest.approx(concordant)
     assert result.comparable == pytest.approx(comparable)
     assert result.concordance == pytest.approx(concordant / comparable)
@@ -9245,13 +9367,9 @@ def test_counting_concordance_duplicate_event_times_share_survival_weight():
         ]
     )
     assert result.influence is not None
-    column_sums = [sum(row[col] for row in result.influence) for col in range(5)]
-    tied_event_weight = data["wt"][0] * data["wt"][1] * multipliers[1.0]
-    assert column_sums[0] == pytest.approx(concordant)
-    assert column_sums[1] == pytest.approx(comparable - concordant)
-    assert column_sums[2] == pytest.approx(0.0)
-    assert column_sums[3] == pytest.approx(tied_event_weight)
-    assert column_sums[4] == pytest.approx(0.0)
+    assert result.dfbeta == pytest.approx(reference.dfbeta)
+    for actual, expected in zip(result.influence, reference.influence, strict=True):
+        assert actual == pytest.approx(expected)
     assert result.variance == pytest.approx(sum(value * value for value in result.dfbeta))
 
 
