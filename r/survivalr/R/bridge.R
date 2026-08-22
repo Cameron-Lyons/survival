@@ -5746,7 +5746,7 @@ Surv2data <- function(formula, data, subset, id) {
   test_value <- match.arg(test[[1L]], c("global", "trend", "pairwise"))
   method_value <- match.arg(tolower(method[[1L]]), c("direct", "sgtt"))
   if (!(population_value %in% c("data", "empirical")) ||
-      test_value != "global" || predict != "linear" || method_value != "direct") {
+      test_value == "trend" || predict != "linear" || method_value != "direct") {
     return(NULL)
   }
 
@@ -5825,14 +5825,34 @@ Surv2data <- function(formula, data, subset, id) {
   variance <- stats::vcov(fit)
   estimate_values <- drop(cmat %*% beta)
   mean_variance <- cmat %*% variance %*% t(cmat)
-  contrast <- diag(length(contrast_levels))
-  contrast[, length(contrast_levels)] <- -1
-  contrast <- contrast[-length(contrast_levels), , drop = FALSE]
-  contrast_estimate <- drop(contrast %*% estimate_values)
-  contrast_variance <- contrast %*% mean_variance %*% t(contrast)
-  test_result <- coxph.wtest(contrast_variance, as.list(contrast_estimate))
-  chisq <- unname(test_result$test[[1L]])
   sigma2 <- summary(fit)$sigma^2
+  evaluate_contrast <- function(contrast) {
+    contrast_estimate <- drop(contrast %*% estimate_values)
+    contrast_variance <- contrast %*% mean_variance %*% t(contrast)
+    test_result <- coxph.wtest(contrast_variance, as.list(contrast_estimate))
+    chisq <- unname(test_result$test[[1L]])
+    c(chisq = chisq, df = test_result$df, ss = chisq * sigma2)
+  }
+
+  if (test_value == "global" || length(contrast_levels) == 2L) {
+    contrast <- diag(length(contrast_levels))
+    contrast[, length(contrast_levels)] <- -1
+    contrast <- contrast[-length(contrast_levels), , drop = FALSE]
+    test_matrix <- matrix(
+      evaluate_contrast(contrast),
+      nrow = 1L,
+      dimnames = list("global", c("chisq", "df", "ss"))
+    )
+  } else {
+    pairs <- utils::combn(seq_along(contrast_levels), 2L)
+    test_matrix <- t(vapply(seq_len(ncol(pairs)), function(index) {
+      contrast <- numeric(length(contrast_levels))
+      contrast[pairs[1L, index]] <- 1
+      contrast[pairs[2L, index]] <- -1
+      evaluate_contrast(matrix(contrast, nrow = 1L))
+    }, numeric(3)))
+    row.names(test_matrix) <- paste(pairs[1L, ], "vs", pairs[2L, ])
+  }
 
   estimate <- data.frame(
     level = as.character(contrast_levels),
@@ -5843,11 +5863,7 @@ Surv2data <- function(formula, data, subset, id) {
   names(estimate)[[1L]] <- term
   list(
     estimate = estimate,
-    test = matrix(
-      c(chisq, test_result$df, chisq * sigma2),
-      nrow = 1L,
-      dimnames = list("global", c("chisq", "df", "ss"))
-    ),
+    test = test_matrix,
     mvar = mean_variance,
     cmat = cmat
   )
