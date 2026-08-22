@@ -3701,6 +3701,225 @@ blog <- function(edge = 0.05) {
   }
 }
 
+.survexp_formula_cox <- function(Call, evaluation_env, fit,
+                                 times_missing, method_missing,
+                                 cohort_missing, conditional_missing,
+                                 se_fit_missing, method, cohort,
+                                 conditional, scale, se_fit, model, x, y) {
+  model_args <- match(
+    c("formula", "data", "weights", "subset", "na.action"),
+    names(Call),
+    nomatch = 0L
+  )
+  if (model_args[[1L]] == 0L) {
+    stop("A formula argument is required", call. = FALSE)
+  }
+  model_call <- Call[c(1L, model_args)]
+  model_call[[1L]] <- quote(stats::model.frame)
+  formula_value <- eval(Call$formula, evaluation_env)
+  Terms <- if ("data" %in% names(Call)) {
+    stats::terms(formula_value, data = eval(Call$data, evaluation_env))
+  } else {
+    stats::terms(formula_value)
+  }
+
+  rate_call <- if ("rmap" %in% names(Call)) Call$rmap else NULL
+  if (!is.null(rate_call) && (!is.call(rate_call) || rate_call[[1L]] != as.name("list"))) {
+    stop("Invalid rate-call argument", call. = FALSE)
+  }
+  rate_terms <- stats::delete.response(stats::terms(fit))
+  varlist <- all.vars(rate_terms)
+  mapped <- match(names(rate_call)[-1L], varlist)
+  if (any(is.na(mapped))) {
+    stop(
+      "Variable not found in the ratetable: ",
+      names(rate_call)[-1L][is.na(mapped)],
+      call. = FALSE
+    )
+  }
+  if (any(!(varlist %in% names(rate_call)))) {
+    missing_vars <- varlist[!(varlist %in% names(rate_call))]
+    additions <- paste(paste(missing_vars, missing_vars, sep = "="), collapse = ",")
+    if (is.null(rate_call)) {
+      rate_call <- parse(text = paste0("list(", additions, ")"))[[1L]]
+    } else {
+      rate_call <- parse(text = paste0(
+        "c(", paste(deparse(rate_call), collapse = ""),
+        ",list(", additions, "))"
+      ))[[1L]]
+    }
+  }
+  new_variables <- all.vars(rate_call)
+  if (length(new_variables) > 0L) {
+    expanded_formula <- paste(
+      paste(deparse(Terms), collapse = ""),
+      paste(new_variables, collapse = "+"),
+      sep = "+"
+    )
+    model_call$formula <- stats::as.formula(
+      expanded_formula,
+      environment(Terms)
+    )
+  }
+
+  model_frame <- eval(model_call, evaluation_env)
+  n <- nrow(model_frame)
+  if (n == 0L) {
+    stop("Data set has 0 rows", call. = FALSE)
+  }
+  if (!se_fit_missing && isTRUE(se_fit)) {
+    warning("se.fit value ignored")
+  }
+  weights <- stats::model.weights(model_frame)
+  if (length(weights) == 0L) {
+    weights <- rep(1, n)
+  }
+  if (any(attr(Terms, "order") > 1L)) {
+    stop("Survexp cannot have interaction terms", call. = FALSE)
+  }
+
+  requested_times <- if (times_missing) NULL else as.numeric(eval(Call$times, evaluation_env))
+  if (!times_missing) {
+    if (any(requested_times < 0)) {
+      stop("Invalid time point requested", call. = FALSE)
+    }
+    if (length(requested_times) > 1L && any(diff(requested_times) < 0)) {
+      stop("Times must be in increasing order", call. = FALSE)
+    }
+  }
+  response <- stats::model.response(model_frame)
+  no_response <- is.null(response)
+  if (!no_response) {
+    if (is.matrix(response)) {
+      if (inherits(response, "Surv") && attr(response, "type") == "right") {
+        response <- response[, 1L]
+      } else {
+        stop("Illegal response value", call. = FALSE)
+      }
+    }
+    if (any(response < 0)) {
+      stop("Negative follow up time", call. = FALSE)
+    }
+  }
+
+  if (!method_missing) {
+    method <- match.arg(method, c(
+      "ederer", "hakulinen", "conditional", "individual.h", "individual.s"
+    ))
+  } else {
+    method <- if (!conditional_missing && isTRUE(conditional)) {
+      "conditional"
+    } else if (no_response) {
+      "ederer"
+    } else {
+      "hakulinen"
+    }
+    if (!cohort_missing && !isTRUE(cohort)) {
+      method <- "individual.s"
+    }
+  }
+  if (no_response && method != "ederer") {
+    stop("a response is required in the formula unless method='ederer'", call. = FALSE)
+  }
+
+  output_variables <- attr(Terms, "term.labels")
+  rate_data <- data.frame(eval(rate_call, model_frame), stringsAsFactors = TRUE)
+  groups <- if (length(output_variables) == 0L) {
+    rep(1L, n)
+  } else {
+    for (variable in output_variables) {
+      if (inherits(model_frame[[variable]], "tcut")) {
+        stop("Can't use tcut variables in expected survival", call. = FALSE)
+      }
+    }
+    strata(model_frame[output_variables])
+  }
+  raw <- .call_r_api(
+    "_survexp_cox_fit",
+    fit,
+    .as_python_data(rate_data),
+    followup = as.list(.as_python_vector(
+      if (no_response) rep(Inf, n) else response
+    )),
+    group = as.list(as.integer(groups)),
+    method = if (startsWith(method, "individual")) "individual" else method,
+    weights = as.list(.as_python_vector(weights))
+  )
+
+  if (startsWith(method, "individual")) {
+    values <- if (method == "individual.s") {
+      .as_numeric_vector(.result_field(raw, "surv"))
+    } else {
+      .as_numeric_vector(.result_field(raw, "cumhaz"))
+    }
+    names(values) <- row.names(model_frame)
+    omitted <- attr(model_frame, "na.action")
+    return(if (length(omitted)) stats::naresid(omitted, values) else values)
+  }
+
+  raw_time <- .as_numeric_vector(.result_field(raw, "time"))
+  raw_survival <- lapply(.result_field(raw, "surv"), .as_numeric_vector)
+  survival <- do.call(cbind, raw_survival)
+  n_risk <- .result_field(raw, "n")
+  if (!is.null(n_risk)) {
+    n_risk <- if (n == 1L) {
+      as.integer(n_risk)
+    } else {
+      matrix(
+        rep(as.integer(.as_numeric_vector(n_risk)), each = length(raw_time)),
+        nrow = length(raw_time)
+      )
+    }
+  }
+  if (times_missing) {
+    new_time <- raw_time
+  } else {
+    keep <- stats::approx(
+      raw_time,
+      seq_along(raw_time),
+      xout = requested_times,
+      yleft = 0,
+      method = "constant",
+      f = 0,
+      rule = 2
+    )$y
+    survival <- rbind(1, survival)[keep + 1L, , drop = FALSE]
+    if (!is.null(n_risk)) {
+      n_risk <- if (is.matrix(n_risk)) {
+        n_risk[pmax(1L, keep), , drop = FALSE]
+      } else {
+        n_risk[pmax(1L, keep)]
+      }
+    }
+    new_time <- requested_times
+  }
+  new_time <- new_time / scale
+  if (length(output_variables) > 0L) {
+    dimnames(survival) <- list(NULL, levels(groups))
+  }
+  out <- list(
+    call = Call,
+    surv = drop(survival),
+    n.risk = if (is.null(n_risk)) NULL else drop(n_risk),
+    time = new_time
+  )
+  if (model) {
+    out$model <- model_frame
+  } else {
+    if (x) out$x <- groups
+    if (y) out$y <- if (no_response) rep(Inf, n) else response
+  }
+  out$method <- if (no_response) {
+    "Ederer"
+  } else if (isTRUE(conditional)) {
+    "conditional"
+  } else {
+    "cohort"
+  }
+  class(out) <- c("survexp", "survfit")
+  out
+}
+
 survexp <- function(formula, data, weights, subset, na.action, rmap, times,
                     method = c(
                       "ederer", "hakulinen", "conditional", "individual.h",
@@ -3726,6 +3945,27 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
         Call = match.call(),
         evaluation_env = parent.frame(),
         ratetable = formula_ratetable,
+        times_missing = missing(times),
+        method_missing = missing(method),
+        cohort_missing = missing(cohort),
+        conditional_missing = missing(conditional),
+        se_fit_missing = missing(se.fit),
+        method = method,
+        cohort = cohort,
+        conditional = conditional,
+        scale = scale,
+        se_fit = if (missing(se.fit)) NULL else se.fit,
+        model = model,
+        x = x,
+        y = y
+      ))
+    }
+    if (inherits(formula_ratetable, "survival_py_coxph") &&
+        !.is_multistate_cox_fit(formula_ratetable)) {
+      return(.survexp_formula_cox(
+        Call = match.call(),
+        evaluation_env = parent.frame(),
+        fit = formula_ratetable,
         times_missing = missing(times),
         method_missing = missing(method),
         cohort_missing = missing(cohort),

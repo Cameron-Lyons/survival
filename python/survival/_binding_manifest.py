@@ -966,6 +966,7 @@ BINDINGS = (
     "survcondense_plan",
     "survdiff2",
     "survexp",
+    "survexp_cox_aggregate",
     "survexp_from_coords",
     "survexp_individual",
     "survexp_individual_from_coords",

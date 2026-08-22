@@ -8268,6 +8268,85 @@ def survexp_individual(
     ]
 
 
+def _survexp_cox_fit(
+    fit: Any,
+    data: Any,
+    followup: Any,
+    group: Any,
+    method: str,
+    weights: Any,
+) -> dict[str, Any]:
+    """Aggregate expected-survival curves from a fitted Cox model."""
+
+    followup_values = _float_vector(followup, "followup")
+    group_values = _int_vector(group, "group")
+    weight_values = _float_vector(weights, "weights")
+    n = len(followup_values)
+    if len(group_values) != n or len(weight_values) != n:
+        raise ValueError("followup, group, and weights must have the same length")
+    if any(value < 1 for value in group_values):
+        raise ValueError("group values must be positive integers")
+    if any(not math.isfinite(value) for value in weight_values):
+        raise ValueError("weights must be finite")
+    if method not in {"ederer", "hakulinen", "conditional", "individual"}:
+        raise ValueError("unsupported Cox survexp method")
+
+    rows, offsets = _prediction_inputs(fit, data)
+    if rows is None or len(rows) != n:
+        raise ValueError("Cox survexp data must match followup rows")
+    result = _cox_survfit_result(
+        fit,
+        rows,
+        offsets,
+        True,
+        data,
+        include_censor=False,
+        compute_confidence=False,
+    )
+    if len(result.surv) != n or len(result.cumhaz) != n:
+        raise ValueError("Cox survival curves do not match followup rows")
+
+    if method == "individual":
+        survival = [
+            _core.step_values_at(result.time, curve, [time], 1.0)[0]
+            for curve, time in zip(result.surv, followup_values, strict=True)
+        ]
+        cumulative_hazard = [
+            _core.step_values_at(result.time, curve, [time], 0.0)[0]
+            for curve, time in zip(result.cumhaz, followup_values, strict=True)
+        ]
+        return {
+            "time": [],
+            "surv": survival,
+            "cumhaz": cumulative_hazard,
+            "n": None,
+        }
+
+    if n == 1:
+        return {
+            "time": list(result.time),
+            "surv": [list(result.surv[0])],
+            "cumhaz": None,
+            "n": _model_row_count(fit),
+        }
+
+    survival_by_group, group_sizes = _core.survexp_cox_aggregate(
+        result.time,
+        result.surv,
+        result.cumhaz,
+        followup_values,
+        group_values,
+        weight_values,
+        method,
+    )
+    return {
+        "time": list(result.time),
+        "surv": survival_by_group,
+        "cumhaz": None,
+        "n": group_sizes,
+    }
+
+
 def _pyears_response_from_direct(
     response: Any,
     *,
