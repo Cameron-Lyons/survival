@@ -12069,9 +12069,111 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
     fit_args$ymax <- ymax
   }
   result <- do.call(concordancefit, fit_args)
+  if (isTRUE(ranks) && nfit > 1L && !is.null(result$ranks)) {
+    rank_columns <- c("time", "rank", "timewt", "casewt")
+    rank_frames <- lapply(seq_len(nfit), function(index) {
+      column_indices <- (length(rank_columns) * (index - 1L) + 1L):
+        (length(rank_columns) * index)
+      frame <- result$ranks[, column_indices, drop = FALSE]
+      names(frame) <- rank_columns
+      data.frame(
+        fit = rep(fit_names[[index]], nrow(frame)),
+        frame,
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      )
+    })
+    result$ranks <- do.call(rbind, rank_frames)
+    rownames(result$ranks) <- NULL
+  }
   result$call <- Call
   class(result) <- "concordance"
   result
+}
+
+.survival_py_concordance_component <- function(object, name) {
+  concordance_values <- .as_numeric_vector(.result_field(object, "concordance"))
+  multi_score <- length(concordance_values) > 1L
+  score_names <- as.character(.result_field(object, "score_names"))
+  count_names <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+
+  if (identical(name, "count")) {
+    strata_counts <- .result_field(object, "strata_counts")
+    if (!is.null(strata_counts)) {
+      count <- .as_numeric_matrix(strata_counts)
+      colnames(count) <- count_names
+      rownames(count) <- as.character(.result_field(object, "strata_names"))
+      return(count)
+    }
+    value <- .result_field(object, "count")
+    if (multi_score) {
+      count <- .as_numeric_matrix(value)
+      colnames(count) <- count_names
+      rownames(count) <- score_names
+      return(count)
+    }
+    count <- .as_numeric_vector(value)
+    names(count) <- count_names
+    return(count)
+  }
+
+  if (identical(name, "ranks")) {
+    value <- .result_field(object, name)
+    if (is.null(value)) return(NULL)
+    if (multi_score) {
+      frames <- lapply(value, .concordancefit_rows)
+      for (index in seq_along(frames)) {
+        names(frames[[index]]) <- paste0(names(frames[[index]]), ".", score_names[[index]])
+      }
+      return(do.call(cbind, frames))
+    }
+    return(.concordancefit_rows(value))
+  }
+
+  if (identical(name, "dfbeta")) {
+    value <- .result_field(object, name)
+    if (is.null(value)) return(NULL)
+    if (multi_score) {
+      matrix_value <- do.call(cbind, lapply(value, .as_numeric_vector))
+      return(matrix_value)
+    }
+    return(.as_numeric_vector(value))
+  }
+
+  if (identical(name, "influence")) {
+    value <- .result_field(object, name)
+    if (is.null(value)) return(NULL)
+    if (multi_score) {
+      matrices <- lapply(value, .as_numeric_matrix)
+      dimensions <- dim(matrices[[1L]])
+      result <- array(
+        unlist(matrices, use.names = FALSE),
+        dim = c(dimensions, length(matrices))
+      )
+      dimnames(result) <- list(NULL, count_names, score_names)
+      return(result)
+    }
+    matrix_value <- .as_numeric_matrix(value)
+    colnames(matrix_value) <- count_names
+    return(matrix_value)
+  }
+
+  value <- .result_field(object, name)
+  if (multi_score && name %in% c("variance", "var") && !is.null(value)) {
+    return(.as_numeric_matrix(value))
+  }
+  value
+}
+
+`$.survival_py_concordance` <- function(x, name) {
+  .survival_py_concordance_component(x, name)
+}
+
+`[[.survival_py_concordance` <- function(x, i, ..., exact = TRUE) {
+  if (is.character(i) && length(i) == 1L) {
+    return(.survival_py_concordance_component(x, i))
+  }
+  NextMethod("[[")
 }
 
 coef.survival_py_concordance <- function(object, ...) {
@@ -12200,6 +12302,13 @@ survConcordance.fit <- function(y, x, strata, weight) {
 }
 
 .concordancefit_count <- function(result, score_names = NULL) {
+  strata_counts <- .result_field(result, "strata_counts")
+  if (!is.null(strata_counts)) {
+    count <- .as_numeric_matrix(strata_counts)
+    colnames(count) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+    rownames(count) <- as.character(.result_field(result, "strata_names"))
+    return(count)
+  }
   concordant <- .as_numeric_vector(.result_field(result, "concordant"))
   comparable <- .as_numeric_vector(.result_field(result, "comparable"))
   tied_x <- .as_numeric_vector(.result_field(result, "tied_x"))
@@ -12268,9 +12377,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   }
   internal_influence <- if (isTRUE(std.err) && influence == 0L) 1L else influence
   result <- .call_r_api(
-    "concordance",
+    "concordancefit",
     .as_python_surv(y),
-    scores = .as_python_optional_vector(x),
+    .as_python_optional_vector(x),
     strata = if (missing(strata)) NULL else .as_python_vector(strata),
     weights = if (missing(weights)) NULL else .as_python_vector(weights),
     ymin = ymin,
@@ -12279,9 +12388,10 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     cluster = if (missing(cluster)) NULL else .as_python_vector(cluster),
     influence = internal_influence,
     ranks = ranks,
-    reverse = !isTRUE(reverse),
+    reverse = isTRUE(reverse),
     timefix = timefix,
-    keepstrata = keepstrata
+    keepstrata = keepstrata,
+    std_err = isTRUE(std.err)
   )
 
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
@@ -12359,7 +12469,11 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (isTRUE(ranks)) {
     rank_rows <- .result_field(result, "ranks")
     out$ranks <- if (multi_score) {
-      do.call(rbind, Map(.concordancefit_rows, rank_rows, score_names))
+      frames <- lapply(rank_rows, .concordancefit_rows)
+      for (index in seq_along(frames)) {
+        names(frames[[index]]) <- paste0(names(frames[[index]]), ".", score_names[[index]])
+      }
+      do.call(cbind, frames)
     } else {
       .concordancefit_rows(rank_rows)
     }

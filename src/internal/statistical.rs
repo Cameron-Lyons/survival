@@ -274,14 +274,12 @@ pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
             event_time_multiplier_at(&event_time_multipliers, event_time)
         };
 
-        while stop_cursor < n && stop[stop_order[stop_cursor]] <= event_time {
-            let idx = stop_order[stop_cursor];
+        for &idx in &event_order[event_group_start..event_group_end] {
             if active[idx] {
                 let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
                 at_risk.update(rank, -observation_weight(weights, idx));
                 active[idx] = false;
             }
-            stop_cursor += 1;
         }
 
         let at_risk_total = at_risk.total();
@@ -355,7 +353,10 @@ fn counting_process_concordance_summary_quadratic(
             if risk_idx == event_idx {
                 continue;
             }
-            if start[risk_idx] < event_time && stop[risk_idx] > event_time {
+            if event[risk_idx] == 1 && stop[risk_idx] == event_time {
+                continue;
+            }
+            if start[risk_idx] < event_time && stop[risk_idx] >= event_time {
                 let pair_weight = observation_weight(weights, event_idx)
                     * observation_weight(weights, risk_idx)
                     * event_time_multiplier;

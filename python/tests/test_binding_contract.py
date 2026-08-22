@@ -9801,6 +9801,7 @@ def test_counting_concordance_binding_is_typed():
         "risk_scores",
         "weights",
         "timewt",
+        "order_scores",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_concordance_rank_rows") == [
         "time",
@@ -9809,6 +9810,7 @@ def test_counting_concordance_binding_is_typed():
         "strata",
         "weights",
         "timewt",
+        "order_scores",
     ]
     assert _pyi_function_arg_names(stub_path, "concordance_influence_rows") == [
         "time",
@@ -9861,6 +9863,7 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "order_scores",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_counting_concordance_rank_rows") == [
         "start",
@@ -9871,6 +9874,7 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "order_scores",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_influence_rows") == [
         "start",
@@ -9996,17 +10000,31 @@ def test_counting_concordance_binding_is_typed():
         True,
     )
     assert exact["concordance"] == pytest.approx(0.5)
-    assert fixed["comparable"] == pytest.approx(1.0)
+    assert fixed["comparable"] == pytest.approx(2.0)
     assert stratified_right["concordance"] == pytest.approx(0.5)
     assert stratified_right["n_event"] == pytest.approx(2.0)
-    assert stratified_right_ranks == pytest.approx([(1.0, 0.5, 2.0, 1.0), (1.0, -0.5, 2.0, 1.0)])
+    assert stratified_right_ranks == pytest.approx(
+        [
+            (1.0, 2.0, 1.0, 2.0),
+            (0.5, 1.0, 0.5, 1.0),
+            (1.0, 2.0, 1.0, 2.0),
+            (-0.5, 1.0, -0.5, 1.0),
+        ]
+    )
     assert len(stratified_right_influence) == 4
     assert stratified_right_variance == pytest.approx(
         sum(value * value for value in stratified_right_dfbeta)
     )
     assert stratified_counting["concordance"] == pytest.approx(0.5)
     assert stratified_counting["n_event"] == pytest.approx(2.0)
-    assert stratified_counting_ranks == pytest.approx([(1.0, 0.5, 2.0, 1.0), (1.0, -0.5, 2.0, 1.0)])
+    assert stratified_counting_ranks == pytest.approx(
+        [
+            (1.0, 2.0, 1.0, 2.0),
+            (0.5, 1.0, 0.5, 1.0),
+            (1.0, 2.0, 1.0, 2.0),
+            (-0.5, 1.0, -0.5, 1.0),
+        ]
+    )
     assert len(stratified_counting_influence) == 4
     assert stratified_counting_variance == pytest.approx(
         sum(value * value for value in stratified_counting_dfbeta)

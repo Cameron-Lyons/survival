@@ -136,17 +136,19 @@ def test_counting_concordance_summary_handles_duplicate_event_times():
     weights = [1.0, 0.0, 2.0, 1.5, 0.5, 3.0, 1.0]
 
     summary = survival.core.counting_concordance_summary(start, stop, status, risk)
-    assert summary["concordant"] == pytest.approx(6.0)
-    assert summary["comparable"] == pytest.approx(8.0)
-    assert summary["concordance"] == pytest.approx(0.75)
+    assert summary["concordant"] == pytest.approx(8.0)
+    assert summary["comparable"] == pytest.approx(10.0)
+    assert summary["concordance"] == pytest.approx(0.8)
+    assert summary["tied_y"] == pytest.approx(3.0)
     assert summary["conditional_variance"] == pytest.approx(0.075)
 
     weighted = survival.core.counting_concordance_summary(
         start, stop, status, risk, weights=weights
     )
-    assert weighted["concordant"] == pytest.approx(7.5)
-    assert weighted["comparable"] == pytest.approx(12.0)
-    assert weighted["concordance"] == pytest.approx(0.625)
+    assert weighted["concordant"] == pytest.approx(11.25)
+    assert weighted["comparable"] == pytest.approx(15.75)
+    assert weighted["concordance"] == pytest.approx(5.0 / 7.0)
+    assert weighted["tied_y"] == pytest.approx(2.0)
     assert weighted["conditional_variance"] == pytest.approx(0.0472411186696901)
 
 
