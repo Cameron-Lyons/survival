@@ -4057,7 +4057,7 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
 }
 
 .pyears_formula_python_eligible <- function(formula, data, rmap, ratetable) {
-  if (!inherits(formula, "formula") || missing(data) || is.null(data)) {
+  if (!inherits(formula, "formula")) {
     return(FALSE)
   }
   if (!missing(ratetable)) {
@@ -4283,13 +4283,22 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
   expect <- match.arg(expect)
   if (is.null(direct_time) && missing(start) && missing(stop)) {
     if (!missing(formula) && .pyears_formula_python_eligible(formula, data, rmap, ratetable)) {
-      output_terms <- stats::terms(formula, data = data)
+      environment_data <- missing(data) || is.null(data)
+      output_terms <- if (environment_data) {
+        stats::terms(formula)
+      } else {
+        stats::terms(formula, data = data)
+      }
       has_ratetable <- !missing(ratetable)
       model_formula <- formula
       model_env <- new.env(parent = environment(model_formula))
       model_env$Surv <- .survsplit_model_frame_surv
       environment(model_formula) <- model_env
-      formula_terms <- stats::terms(model_formula, data = data)
+      formula_terms <- if (environment_data) {
+        stats::terms(model_formula)
+      } else {
+        stats::terms(model_formula, data = data)
+      }
       if (any(attr(formula_terms, "order") > 1L)) {
         stop("Pyears cannot have interaction terms", call. = FALSE)
       }
@@ -4332,10 +4341,15 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
             paste(new_variables, collapse = "+"),
             sep = "+"
           )
-          formula_terms <- stats::terms(
-            stats::as.formula(expanded_formula, environment(formula_terms)),
-            data = data
+          expanded_formula <- stats::as.formula(
+            expanded_formula,
+            environment(formula_terms)
           )
+          formula_terms <- if (environment_data) {
+            stats::terms(expanded_formula)
+          } else {
+            stats::terms(expanded_formula, data = data)
+          }
         }
       }
       model_call <- match.call()[c(1L, match(
