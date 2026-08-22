@@ -26561,6 +26561,7 @@ def _concordance_ranks(
                 timewt,
                 [*order_scores, *([0.0] * inputs.padding_count)],
                 inputs.display_times,
+                len(response),
             ),
         )
         if reverse_recycled_ranks:
@@ -26599,6 +26600,7 @@ def _concordance_ranks(
                 False,
                 [*order_scores, *([0.0] * inputs.padding_count)],
                 inputs.display_stop,
+                len(response),
             )
         )
         if reverse_recycled_ranks:

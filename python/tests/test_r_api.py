@@ -8888,6 +8888,40 @@ def test_reversed_stratified_counting_ranks_flip_after_recycling():
         assert list(row.values()) == pytest.approx(values)
 
 
+def test_bounded_stratified_counting_ranks_exclude_time_weight_padding():
+    result = survival.concordancefit(
+        survival.Surv(
+            [2, 1, 1, 2, 0, 4],
+            [6, 3, 4, 4, 4, 7],
+            [0, 1, 1, 0, 0, 1],
+        ),
+        [-1, -0.5, 1, -1, 0, 0],
+        strata=[1, 2, 1, 2, 2, 1],
+        weights=[1, 0.5, 2, 0.5, 0.5, 1],
+        ymin=3,
+        ymax=5,
+        timewt="I",
+        cluster=[2, 1, 3, 3, 1, 2],
+        ranks=True,
+        reverse=True,
+        timefix=False,
+        keepstrata=True,
+    )
+
+    assert result is not None
+    assert result.ranks is not None
+    expected = [
+        [4, -2, 1, -1 / 3],
+        [3, -0.5, 1.5, 0],
+        [-1 / 3, -4, 2, 1],
+        [0, -3, 0.5, 1.5],
+        [1.5, 0, 3, 0.5],
+        [1, 1 / 3, 4, 2],
+    ]
+    for row, values in zip(result.ranks, expected, strict=True):
+        assert list(row.values()) == pytest.approx(values)
+
+
 def test_concordance_stratified_multi_score_remains_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 3, 1, 2, 3], [1, 0, 1, 1, 0, 1]),

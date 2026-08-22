@@ -5159,6 +5159,47 @@ test_that("reversed stratified counting ranks flip after recycling", {
   expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
 })
 
+test_that("bounded stratified ranks exclude time-weight padding rows", {
+  start <- c(2, 1, 1, 2, 0, 4)
+  stop <- c(6, 3, 4, 4, 4, 7)
+  status <- c(0, 1, 1, 0, 0, 1)
+  scores <- c(-1, -0.5, 1, -1, 0, 0)
+  groups <- c(1, 2, 1, 2, 2, 1)
+  weights <- c(1, 0.5, 2, 0.5, 0.5, 1)
+  clusters <- c(2, 1, 3, 3, 1, 2)
+
+  bridged <- concordancefit(
+    Surv(start, stop, status),
+    scores,
+    strata = groups,
+    weights = weights,
+    ymin = 3,
+    ymax = 5,
+    timewt = "I",
+    cluster = clusters,
+    ranks = TRUE,
+    reverse = TRUE,
+    timefix = FALSE,
+    keepstrata = TRUE
+  )
+  reference <- survival::concordancefit(
+    survival::Surv(start, stop, status),
+    scores,
+    strata = groups,
+    weights = weights,
+    ymin = 3,
+    ymax = 5,
+    timewt = "I",
+    cluster = clusters,
+    ranks = TRUE,
+    reverse = TRUE,
+    timefix = FALSE,
+    keepstrata = TRUE
+  )
+
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+})
+
 test_that("stratified concordance rank errors follow stratum order", {
   start <- rep(0, 6)
   stop <- c(1, 2, 6, 2, 1, 2)

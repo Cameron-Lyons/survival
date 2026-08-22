@@ -9765,6 +9765,7 @@ def test_counting_concordance_binding_is_typed():
     assert "timewt" in inspect.signature(core.stratified_concordance_summary).parameters
     assert "timewt" in inspect.signature(core.concordance_rank_rows).parameters
     assert "timewt" in inspect.signature(core.stratified_concordance_rank_rows).parameters
+    assert "output_len" in inspect.signature(core.stratified_concordance_rank_rows).parameters
     assert "timewt" in inspect.signature(core.concordance_influence_rows).parameters
     assert "timewt" in inspect.signature(core.stratified_concordance_influence_rows).parameters
     assert "timewt" in inspect.signature(core.counting_concordance_index).parameters
@@ -9772,6 +9773,10 @@ def test_counting_concordance_binding_is_typed():
     assert "timewt" in inspect.signature(core.stratified_counting_concordance_summary).parameters
     assert "timewt" in inspect.signature(core.counting_concordance_rank_rows).parameters
     assert "timewt" in inspect.signature(core.stratified_counting_concordance_rank_rows).parameters
+    assert (
+        "output_len"
+        in inspect.signature(core.stratified_counting_concordance_rank_rows).parameters
+    )
     assert "timewt" in inspect.signature(core.counting_concordance_influence_rows).parameters
     assert (
         "timewt"
@@ -9824,6 +9829,7 @@ def test_counting_concordance_binding_is_typed():
         "timewt",
         "order_scores",
         "display_times",
+        "output_len",
     ]
     assert _pyi_function_arg_names(stub_path, "concordance_influence_rows") == [
         "time",
@@ -9899,6 +9905,7 @@ def test_counting_concordance_binding_is_typed():
         "timefix",
         "order_scores",
         "display_stop",
+        "output_len",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_influence_rows") == [
         "start",
