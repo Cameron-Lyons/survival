@@ -4430,6 +4430,83 @@ test_that("reversed multi-score concordance ranks match reference errors", {
   )
 })
 
+test_that("disabled standard errors with multiple scores match reference errors", {
+  y <- Surv(c(5, 4, 4, 3, 3, 6), c(0, 1, 1, 0, 1, 1))
+  reference_y <- survival::Surv(c(5, 4, 4, 3, 3, 6), c(0, 1, 1, 0, 1, 1))
+  x <- cbind(
+    s1 = c(-1, 0, 1, 0.5, 0.5, 0),
+    s2 = c(0.5, -0.5, 1, 0, -0.5, -0.5)
+  )
+
+  for (reverse_value in c(FALSE, TRUE)) {
+    expect_error(
+      concordancefit(
+        y,
+        x,
+        timewt = "I",
+        influence = 2,
+        ranks = TRUE,
+        reverse = reverse_value,
+        keepstrata = 1,
+        std.err = FALSE
+      ),
+      "subscript out of bounds",
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordancefit(
+        reference_y,
+        x,
+        timewt = "I",
+        influence = 2,
+        ranks = TRUE,
+        reverse = reverse_value,
+        keepstrata = 1,
+        std.err = FALSE
+      ),
+      "subscript out of bounds",
+      fixed = TRUE
+    )
+  }
+
+  strata_values <- rep(c("a", "b"), each = 3)
+  dimension_error <- "length of 'dimnames' [1] not equal to array extent"
+  length_warning <- paste(
+    "data length [20] is not a sub-multiple or multiple",
+    "of the number of columns [6]"
+  )
+  expect_warning(
+    expect_error(
+      concordancefit(
+        y,
+        x,
+        strata = strata_values,
+        timewt = "S",
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    ),
+    length_warning,
+    fixed = TRUE
+  )
+  expect_warning(
+    expect_error(
+      survival::concordancefit(
+        reference_y,
+        x,
+        strata = strata_values,
+        timewt = "S",
+        std.err = FALSE
+      ),
+      dimension_error,
+      fixed = TRUE
+    ),
+    length_warning,
+    fixed = TRUE
+  )
+})
+
 test_that("collapsed single-score strata match reference behavior", {
   data <- data.frame(
     time = c(1, 2, 1, 2),

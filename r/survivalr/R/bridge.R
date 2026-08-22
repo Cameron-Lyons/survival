@@ -11978,6 +11978,28 @@ concordance <- function(object, ..., formula) {
   invisible(NULL)
 }
 
+.concordance_disabled_standard_error_check <- function(n_scores, n_strata, timewt, std.err) {
+  disabled <- length(std.err) == 1L &&
+    (is.logical(std.err) || is.numeric(std.err)) &&
+    !is.na(std.err) &&
+    !as.logical(std.err)
+  if (!disabled || n_scores <= 1L) {
+    return(invisible(NULL))
+  }
+  time_weight <- match.arg(timewt, c("n", "S", "S/G", "n/G2", "I"))
+  if (n_strata > 10L && time_weight %in% c("n", "I")) {
+    n_strata <- 1L
+  }
+  if (n_strata <= 1L) {
+    matrix(numeric(n_scores * 5L), nrow = n_scores, ncol = 5L)[, 6L]
+  } else {
+    count <- matrix(numeric(n_strata * n_scores * 5L), ncol = 6L, byrow = TRUE)
+    count <- count[, seq_len(5L), drop = FALSE]
+    dimnames(count) <- list(seq_len(n_scores), seq_len(5L))
+  }
+  invisible(NULL)
+}
+
 .as_native_concordance <- function(result, Call, na.action = NULL) {
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
   score_names <- as.character(.result_field(result, "score_names"))
@@ -12648,6 +12670,12 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   } else {
     length(unique(strata))
   }
+  .concordance_disabled_standard_error_check(
+    length(.as_numeric_vector(.result_field(result, "concordance"))),
+    input_strata_count,
+    timewt,
+    std.err
+  )
   .concordance_collapsed_strata_check(
     length(.as_numeric_vector(.result_field(result, "concordance"))),
     input_strata_count,

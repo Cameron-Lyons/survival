@@ -8687,6 +8687,31 @@ def test_concordance_reversed_multi_score_ranks_remain_available_in_python():
     )
 
 
+def test_concordance_multi_score_without_standard_errors_remains_available_in_python():
+    result = survival.concordancefit(
+        survival.Surv([5, 4, 4, 3, 3, 6], [0, 1, 1, 0, 1, 1]),
+        {
+            "s1": [-1, 0, 1, 0.5, 0.5, 0],
+            "s2": [0.5, -0.5, 1, 0, -0.5, -0.5],
+        },
+        timewt="I",
+        influence=2,
+        ranks=True,
+        reverse=True,
+        keepstrata=1,
+        std_err=False,
+    )
+
+    assert result is not None
+    assert result.score_names == ["s1", "s2"]
+    assert result.concordance == pytest.approx([0.7954545454545454, 0.4318181818181818])
+    assert result.variance is None
+    assert result.conditional_variance is None
+    assert result.dfbeta is None
+    assert result.influence is None
+    assert result.ranks is None
+
+
 def test_concordance_collapsed_single_score_strata_remain_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 1, 2], [1, 0, 1, 0]),
