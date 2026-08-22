@@ -4120,6 +4120,40 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("interval-censored curves match weighted Turnbull reference fits", {
+  turnbull_data <- data.frame(
+    time = rep(1:4, each = 3L),
+    status = rep(c(1L, 0L, 2L), 4L),
+    weight = c(12, 3, 2, 6, 2, 4, 2, 0, 2, 3, 3, 5)
+  )
+  formula <- Surv(time, time, status, type = "interval") ~ 1
+  reference_formula <- survival::Surv(time, time, status, type = "interval") ~ 1
+
+  for (robust in c(TRUE, FALSE)) {
+    bridged <- as.list(survfit(
+      formula,
+      data = turnbull_data,
+      weights = weight,
+      robust = robust
+    ))
+    reference <- survival::survfit(
+      reference_formula,
+      data = turnbull_data,
+      weights = weight,
+      robust = robust
+    )
+
+    expect_equal(bridged$time, reference$time, tolerance = 1e-12)
+    expect_equal(bridged$n.risk, reference$n.risk, tolerance = 1e-12)
+    expect_equal(bridged$n.event, reference$n.event, tolerance = 1e-12)
+    expect_equal(bridged$n.censor, reference$n.censor, tolerance = 1e-12)
+    expect_equal(bridged$surv, reference$surv, tolerance = 1e-12)
+    expect_equal(bridged$std.err, reference$std.err, tolerance = 1e-12)
+    expect_equal(bridged$lower, reference$lower, tolerance = 2e-9)
+    expect_equal(bridged$upper, reference$upper, tolerance = 2e-9)
+  }
+})
+
 test_that("tmerge matches native interval, metadata, and class semantics", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

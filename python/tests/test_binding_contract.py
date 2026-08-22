@@ -4049,6 +4049,9 @@ def test_turnbull_estimator_weights_are_typed():
         "max_iter",
         "tol",
         "weights",
+        "robust",
+        "conf_level",
+        "conf_type",
     ]
     assert list(inspect.signature(core.turnbull_estimator_grouped).parameters) == [
         "left",
@@ -4057,6 +4060,9 @@ def test_turnbull_estimator_weights_are_typed():
         "max_iter",
         "tol",
         "weights",
+        "robust",
+        "conf_level",
+        "conf_type",
     ]
     assert _pyi_function_arg_names(stub_path, "turnbull_estimator_grouped") == [
         "left",
@@ -4065,15 +4071,25 @@ def test_turnbull_estimator_weights_are_typed():
         "max_iter",
         "tol",
         "weights",
+        "robust",
+        "conf_level",
+        "conf_type",
     ]
     assert _pyi_class_property_names(stub_path, "GroupedTurnbullResult") == {
         "groups",
         "time_points",
+        "n_risk",
+        "n_event",
+        "n_censor",
         "survival",
+        "std_err",
         "survival_lower",
         "survival_upper",
         "n_iter",
         "converged",
+        "logse",
+        "conf_level",
+        "conf_type",
     }
     raw_left = [0.0, 1.0, 2.0, 0.0, 2.0, 3.0]
     raw_right = [1.0, 3.0, float("inf"), 2.0, 2.0, 5.0]
@@ -4095,7 +4111,11 @@ def test_turnbull_estimator_weights_are_typed():
             weights=[raw_weights[idx] for idx in indices],
         )
         assert grouped.time_points[curve_idx] == pytest.approx(expected.time_points)
+        assert grouped.n_risk[curve_idx] == pytest.approx(expected.n_risk)
+        assert grouped.n_event[curve_idx] == pytest.approx(expected.n_event)
+        assert grouped.n_censor[curve_idx] == pytest.approx(expected.n_censor)
         assert grouped.survival[curve_idx] == pytest.approx(expected.survival)
+        assert grouped.std_err[curve_idx] == pytest.approx(expected.std_err)
         assert grouped.survival_lower[curve_idx] == pytest.approx(expected.survival_lower)
         assert grouped.survival_upper[curve_idx] == pytest.approx(expected.survival_upper)
         assert grouped.n_iter[curve_idx] == expected.n_iter

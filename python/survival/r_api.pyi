@@ -763,6 +763,13 @@ class TurnbullSurvfitResult:
     survival_upper: list[float]
     n_iter: int
     converged: bool
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+    std_err: list[float]
+    logse: bool
+    conf_level: float
+    conf_type: str
     model: dict[str, Any] | None
 
 def concordance(

@@ -1,5 +1,8 @@
-use crate::constants::{PARALLEL_THRESHOLD_XLARGE, clamped_normal_ci_bounds_95};
+use crate::constants::PARALLEL_THRESHOLD_XLARGE;
 use crate::internal::statistical::erf;
+use crate::surv_analysis::{
+    KaplanMeierConfig, SurvFitKMOutput, compute_robust_survfitkm_with_timefix, compute_survfitkm,
+};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -353,7 +356,15 @@ pub struct TurnbullResult {
     #[pyo3(get)]
     pub time_points: Vec<f64>,
     #[pyo3(get)]
+    pub n_risk: Vec<f64>,
+    #[pyo3(get)]
+    pub n_event: Vec<f64>,
+    #[pyo3(get)]
+    pub n_censor: Vec<f64>,
+    #[pyo3(get)]
     pub survival: Vec<f64>,
+    #[pyo3(get)]
+    pub std_err: Vec<f64>,
     #[pyo3(get)]
     pub survival_lower: Vec<f64>,
     #[pyo3(get)]
@@ -362,6 +373,12 @@ pub struct TurnbullResult {
     pub n_iter: usize,
     #[pyo3(get)]
     pub converged: bool,
+    #[pyo3(get)]
+    pub logse: bool,
+    #[pyo3(get)]
+    pub conf_level: f64,
+    #[pyo3(get)]
+    pub conf_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -372,7 +389,15 @@ pub struct GroupedTurnbullResult {
     #[pyo3(get)]
     pub time_points: Vec<Vec<f64>>,
     #[pyo3(get)]
+    pub n_risk: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_event: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub n_censor: Vec<Vec<f64>>,
+    #[pyo3(get)]
     pub survival: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub std_err: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub survival_lower: Vec<Vec<f64>>,
     #[pyo3(get)]
@@ -381,6 +406,12 @@ pub struct GroupedTurnbullResult {
     pub n_iter: Vec<usize>,
     #[pyo3(get)]
     pub converged: Vec<bool>,
+    #[pyo3(get)]
+    pub logse: Vec<bool>,
+    #[pyo3(get)]
+    pub conf_level: f64,
+    #[pyo3(get)]
+    pub conf_type: String,
 }
 
 impl GroupedTurnbullResult {
@@ -389,42 +420,65 @@ impl GroupedTurnbullResult {
         let mut output = Self {
             groups: Vec::with_capacity(curve_count),
             time_points: Vec::with_capacity(curve_count),
+            n_risk: Vec::with_capacity(curve_count),
+            n_event: Vec::with_capacity(curve_count),
+            n_censor: Vec::with_capacity(curve_count),
             survival: Vec::with_capacity(curve_count),
+            std_err: Vec::with_capacity(curve_count),
             survival_lower: Vec::with_capacity(curve_count),
             survival_upper: Vec::with_capacity(curve_count),
             n_iter: Vec::with_capacity(curve_count),
             converged: Vec::with_capacity(curve_count),
+            logse: Vec::with_capacity(curve_count),
+            conf_level: curves.first().map_or(0.95, |(_, curve)| curve.conf_level),
+            conf_type: curves
+                .first()
+                .map_or_else(|| "log".to_string(), |(_, curve)| curve.conf_type.clone()),
         };
         for (group, curve) in curves {
             output.groups.push(group);
             output.time_points.push(curve.time_points);
+            output.n_risk.push(curve.n_risk);
+            output.n_event.push(curve.n_event);
+            output.n_censor.push(curve.n_censor);
             output.survival.push(curve.survival);
+            output.std_err.push(curve.std_err);
             output.survival_lower.push(curve.survival_lower);
             output.survival_upper.push(curve.survival_upper);
             output.n_iter.push(curve.n_iter);
             output.converged.push(curve.converged);
+            output.logse.push(curve.logse);
         }
         output
     }
 }
 
-#[inline]
-fn turnbull_case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
-    weights.map_or(1.0, |values| values[index])
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TurnbullCensoring {
+    Right,
+    Exact,
+    Left,
+    Interval,
 }
 
-#[inline]
-fn turnbull_support_range(all_points: &[f64], left: f64, right: f64) -> (usize, usize) {
-    if left.is_nan() || right.is_nan() {
-        return (0, 0);
-    }
-    let start = all_points.partition_point(|&time| time < left);
-    let end = if right == f64::INFINITY {
-        all_points.len()
+#[derive(Clone, Copy, Debug)]
+struct TurnbullObservation {
+    left: f64,
+    right: f64,
+    censoring: TurnbullCensoring,
+    weight: f64,
+}
+
+fn turnbull_censoring(left: f64, right: f64) -> TurnbullCensoring {
+    if left == right {
+        TurnbullCensoring::Exact
+    } else if right == f64::INFINITY {
+        TurnbullCensoring::Right
+    } else if left == f64::NEG_INFINITY {
+        TurnbullCensoring::Left
     } else {
-        all_points.partition_point(|&time| time <= right)
-    };
-    (start, end.max(start))
+        TurnbullCensoring::Interval
+    }
 }
 
 fn validate_turnbull_inputs(left: &[f64], right: &[f64], weights: Option<&[f64]>) -> PyResult<()> {
@@ -433,6 +487,23 @@ fn validate_turnbull_inputs(left: &[f64], right: &[f64], weights: Option<&[f64]>
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "left and right must have same length",
         ));
+    }
+    for (idx, (&left_value, &right_value)) in left.iter().zip(right).enumerate() {
+        if left_value.is_nan() || right_value.is_nan() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "left and right must not contain NaN; invalid interval at index {}",
+                idx
+            )));
+        }
+        if left_value == f64::INFINITY
+            || right_value == f64::NEG_INFINITY
+            || left_value > right_value
+        {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "left must be less than or equal to right at index {}",
+                idx
+            )));
+        }
     }
     let weights_ref = weights;
     if let Some(values) = weights_ref {
@@ -466,136 +537,417 @@ fn validate_turnbull_inputs(left: &[f64], right: &[f64], weights: Option<&[f64]>
     Ok(())
 }
 
+fn turnbull_support_points(observations: &[TurnbullObservation]) -> Vec<f64> {
+    let mut endpoints = Vec::with_capacity(observations.len() * 2);
+    let mut exact = Vec::new();
+    for observation in observations {
+        match observation.censoring {
+            TurnbullCensoring::Exact => {
+                endpoints.push((observation.left, 0_u8));
+                exact.push(observation.left);
+            }
+            TurnbullCensoring::Left => endpoints.push((observation.right, 1_u8)),
+            TurnbullCensoring::Right => endpoints.push((observation.left, 2_u8)),
+            TurnbullCensoring::Interval => {
+                endpoints.push((observation.left, 2_u8));
+                endpoints.push((observation.right, 1_u8));
+            }
+        }
+    }
+    endpoints.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    for pair in endpoints.windows(2) {
+        if pair[0].1 != 1 && pair[1].1 == 1 {
+            exact.push(pair[0].0 + (pair[1].0 - pair[0].0) / 2.0);
+        }
+    }
+    exact.sort_by(f64::total_cmp);
+    exact.dedup();
+    exact
+}
+
+fn turnbull_support_ranges(
+    observations: &[TurnbullObservation],
+    support: &[f64],
+) -> (Vec<(usize, usize)>, Vec<f64>) {
+    let mut ranges = Vec::new();
+    let mut weights = Vec::new();
+    for observation in observations {
+        let range = match observation.censoring {
+            TurnbullCensoring::Left => Some((
+                0,
+                support.partition_point(|&time| time <= observation.right),
+            )),
+            TurnbullCensoring::Interval => Some((
+                support.partition_point(|&time| time <= observation.left),
+                support.partition_point(|&time| time <= observation.right),
+            )),
+            TurnbullCensoring::Right | TurnbullCensoring::Exact => None,
+        };
+        if let Some((start, end)) = range {
+            ranges.push((start, end));
+            weights.push(observation.weight);
+        }
+    }
+    if ranges.is_empty() && !support.is_empty() {
+        ranges.push((0, support.len()));
+        weights.push(1.0);
+    }
+    (ranges, weights)
+}
+
+fn turnbull_range_totals(values: &[f64], ranges: &[(usize, usize)]) -> Vec<f64> {
+    let mut prefix = Vec::with_capacity(values.len() + 1);
+    prefix.push(0.0);
+    for value in values {
+        prefix.push(prefix.last().copied().unwrap_or(0.0) + value);
+    }
+    ranges
+        .iter()
+        .map(|&(start, end)| prefix[end] - prefix[start])
+        .collect()
+}
+
+fn turnbull_initial_mass(support_len: usize, ranges: &[(usize, usize)]) -> Vec<f64> {
+    let mut difference = vec![0.0; support_len + 1];
+    for &(start, end) in ranges {
+        difference[start] += 1.0;
+        difference[end] -= 1.0;
+    }
+    let mut active = 0.0;
+    let mut mass = Vec::with_capacity(support_len);
+    for delta in difference.into_iter().take(support_len) {
+        active += delta;
+        mass.push(active);
+    }
+    let total: f64 = mass.iter().sum();
+    if total > 0.0 {
+        for value in &mut mass {
+            *value /= total;
+        }
+    }
+    mass
+}
+
+fn turnbull_redistributed_weights(
+    jumps: &[f64],
+    ranges: &[(usize, usize)],
+    case_weights: &[f64],
+) -> Vec<f64> {
+    let totals = turnbull_range_totals(jumps, ranges);
+    let mut difference = vec![0.0; jumps.len() + 1];
+    for ((&(start, end), &case_weight), &total) in ranges.iter().zip(case_weights).zip(&totals) {
+        if total > 0.0 {
+            let contribution = case_weight / total;
+            difference[start] += contribution;
+            difference[end] -= contribution;
+        }
+    }
+    let mut active = 0.0;
+    jumps
+        .iter()
+        .zip(difference)
+        .map(|(&jump, delta)| {
+            active += delta;
+            jump * active
+        })
+        .collect()
+}
+
+fn turnbull_loglik(jumps: &[f64], ranges: &[(usize, usize)]) -> f64 {
+    turnbull_range_totals(jumps, ranges)
+        .into_iter()
+        .try_fold(0.0, |total, value| {
+            (value > 0.0 && value.is_finite()).then(|| total + value.ln())
+        })
+        .unwrap_or(f64::NEG_INFINITY)
+}
+
+fn turnbull_artificial_data(
+    observations: &[TurnbullObservation],
+    support: &[f64],
+    redistributed: &[f64],
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let real_count = observations
+        .iter()
+        .filter(|observation| {
+            matches!(
+                observation.censoring,
+                TurnbullCensoring::Right | TurnbullCensoring::Exact
+            )
+        })
+        .count();
+    let mut time = Vec::with_capacity(real_count + support.len());
+    let mut status = Vec::with_capacity(real_count + support.len());
+    let mut weights = Vec::with_capacity(real_count + support.len());
+    for observation in observations {
+        match observation.censoring {
+            TurnbullCensoring::Right => {
+                time.push(observation.left);
+                status.push(0.0);
+                weights.push(observation.weight);
+            }
+            TurnbullCensoring::Exact => {
+                time.push(observation.left);
+                status.push(1.0);
+                weights.push(observation.weight);
+            }
+            TurnbullCensoring::Left | TurnbullCensoring::Interval => {}
+        }
+    }
+    time.extend_from_slice(support);
+    status.extend(std::iter::repeat_n(1.0, support.len()));
+    weights.extend_from_slice(redistributed);
+    (time, status, weights)
+}
+
+fn turnbull_survival_at_support(curve: &SurvFitKMOutput, support: &[f64]) -> Vec<f64> {
+    let mut output = Vec::with_capacity(support.len());
+    let mut curve_idx = 0;
+    let mut survival = 1.0;
+    for &time in support {
+        while curve_idx < curve.time.len() && curve.time[curve_idx] <= time {
+            survival = curve.estimate[curve_idx];
+            curve_idx += 1;
+        }
+        output.push(survival);
+    }
+    output
+}
+
+fn turnbull_final_curve(
+    observations: &[TurnbullObservation],
+    support: &[f64],
+    redistributed: &[f64],
+    robust: bool,
+    config: &KaplanMeierConfig,
+) -> SurvFitKMOutput {
+    let (time, status, weights) = turnbull_artificial_data(observations, support, redistributed);
+    if robust {
+        let clusters: Vec<i32> = (0..time.len()).map(|index| index as i32).collect();
+        compute_robust_survfitkm_with_timefix(&time, &status, &weights, &clusters, config, true)
+    } else {
+        compute_survfitkm(&time, &status, &weights, None, &vec![0; time.len()], config)
+    }
+}
+
 fn compute_turnbull_estimator(
     left: &[f64],
     right: &[f64],
     max_iter: usize,
     tol: f64,
     weights: Option<&[f64]>,
+    robust: bool,
+    config: &KaplanMeierConfig,
 ) -> TurnbullResult {
-    let n = left.len();
-    let total_weight = weights.map_or(n as f64, |values| values.iter().sum());
-
-    let mut all_points: Vec<f64> = Vec::new();
-    for i in 0..n {
-        if left[i] > 0.0 {
-            all_points.push(left[i]);
-        }
-        if right[i] < f64::INFINITY && right[i] > left[i] {
-            all_points.push(right[i]);
+    let mut observations: Vec<TurnbullObservation> = left
+        .iter()
+        .zip(right)
+        .enumerate()
+        .map(|(index, (&left, &right))| TurnbullObservation {
+            left,
+            right,
+            censoring: turnbull_censoring(left, right),
+            weight: weights.map_or(1.0, |values| values[index]),
+        })
+        .collect();
+    let mut support = turnbull_support_points(&observations);
+    let original_minimum = support.first().copied().unwrap_or(f64::INFINITY);
+    for observation in &mut observations {
+        if observation.censoring == TurnbullCensoring::Left && observation.right < original_minimum
+        {
+            observation.left = observation.right;
+            observation.censoring = TurnbullCensoring::Exact;
+            support.push(observation.right);
         }
     }
-    all_points.sort_by(f64::total_cmp);
-    all_points.dedup();
+    support.sort_by(f64::total_cmp);
+    support.dedup();
 
-    if all_points.is_empty() {
+    if support.is_empty() {
         return TurnbullResult {
             time_points: vec![],
+            n_risk: vec![],
+            n_event: vec![],
+            n_censor: vec![],
             survival: vec![],
+            std_err: vec![],
             survival_lower: vec![],
             survival_upper: vec![],
             n_iter: 0,
             converged: true,
+            logse: !robust,
+            conf_level: config.conf_level,
+            conf_type: config.conf_type.clone(),
         };
     }
-
-    let m = all_points.len();
-    let support_ranges: Vec<(usize, usize)> = left
-        .iter()
-        .zip(right)
-        .map(|(&left, &right)| turnbull_support_range(&all_points, left, right))
-        .collect();
-    let mut p = vec![1.0 / m as f64; m];
-
+    let (ranges, interval_weights) = turnbull_support_ranges(&observations, &support);
+    let initial_mass = turnbull_initial_mass(support.len(), &ranges);
+    let mut old_survival = Vec::with_capacity(support.len());
+    let mut cumulative = 0.0;
+    for &mass in &initial_mass {
+        cumulative += mass;
+        old_survival.push((1.0 - cumulative).max(0.0));
+    }
+    let mut current_survival = old_survival.clone();
+    let mut redistributed = initial_mass.clone();
     let mut converged = false;
     let mut n_iter = 0;
+    let mut jump1 = vec![0.0; support.len()];
+    let mut jump2 = vec![0.0; support.len()];
+    let mut aitken1 = vec![0.0; support.len()];
+    let iteration_config = KaplanMeierConfig {
+        conf_type: "none".to_string(),
+        ..config.clone()
+    };
 
-    for iter in 0..max_iter {
-        n_iter = iter + 1;
-        let p_old = p.clone();
-
-        let mut p_new = vec![0.0; m];
-
-        for (i, &(start, end)) in support_ranges.iter().enumerate() {
-            let case_weight = turnbull_case_weight(weights, i);
-            if case_weight == 0.0 {
-                continue;
-            }
-            let mut sum_p = 0.0;
-            for &probability in &p[start..end] {
-                sum_p += probability;
-            }
-
-            if sum_p > 0.0 {
-                for j in start..end {
-                    let w = p[j] / sum_p;
-                    p_new[j] += case_weight * w;
-                }
-            }
+    for iteration in 1..=max_iter {
+        n_iter = iteration;
+        let mut jumps = Vec::with_capacity(support.len());
+        let mut previous = 1.0;
+        for &survival in &current_survival {
+            jumps.push((previous - survival).max(0.0));
+            previous = survival;
         }
 
-        let total: f64 = p_new.iter().sum();
-        if total > 0.0 {
-            for j in 0..m {
-                p[j] = p_new[j] / total;
+        let aitken2 = aitken1.clone();
+        for index in 0..jumps.len() {
+            aitken1[index] = jumps[index] - jump1[index];
+        }
+        let saved_jumps = jumps.clone();
+        if iteration % 5 == 0 {
+            let old_loglik = turnbull_loglik(&jumps, &ranges);
+            for index in 0..jumps.len() {
+                let denominator = aitken1[index] - aitken2[index];
+                let candidate = jump2[index] - aitken2[index] * aitken2[index] / denominator;
+                jumps[index] =
+                    if candidate > 8.0 * f64::EPSILON && candidate < 1.0 && candidate.is_finite() {
+                        candidate
+                    } else {
+                        saved_jumps[index]
+                    };
+            }
+            if turnbull_loglik(&jumps, &ranges) < old_loglik {
+                jumps.clone_from(&saved_jumps);
             }
         }
+        jump2 = jump1;
+        jump1 = saved_jumps;
 
-        let max_diff: f64 = p
+        redistributed = turnbull_redistributed_weights(&jumps, &ranges, &interval_weights);
+        let (time, status, artificial_weights) =
+            turnbull_artificial_data(&observations, &support, &redistributed);
+        let curve = compute_survfitkm(
+            &time,
+            &status,
+            &artificial_weights,
+            None,
+            &vec![0; time.len()],
+            &iteration_config,
+        );
+        current_survival = turnbull_survival_at_support(&curve, &support);
+        if iteration % 5 >= 2 {
+            let difference = old_survival
+                .iter()
+                .zip(&current_survival)
+                .map(|(&old, &new)| (old - new).abs())
+                .fold(0.0, f64::max);
+            if difference <= tol {
+                converged = true;
+                break;
+            }
+        }
+        old_survival.clone_from(&current_survival);
+    }
+    let mut curve = turnbull_final_curve(&observations, &support, &redistributed, robust, config);
+    for index in 0..curve.time.len() {
+        if curve.time[index] < original_minimum && curve.n_event[index] > 0.0 {
+            curve.n_event[index] = 0.0;
+        }
+        if curve.estimate[index] <= 0.0 {
+            curve.estimate[index] = 0.0;
+            curve.std_err[index] = 0.0;
+            if !curve.conf_lower.is_empty() {
+                curve.conf_lower[index] = 0.0;
+                curve.conf_upper[index] = 0.0;
+            }
+        }
+    }
+    let std_err = if robust {
+        curve.std_err
+    } else {
+        curve
+            .std_err
             .iter()
-            .zip(p_old.iter())
-            .map(|(&a, &b)| (a - b).abs())
-            .fold(0.0, f64::max);
-
-        if max_diff < tol {
-            converged = true;
-            break;
-        }
-    }
-
-    let mut survival = Vec::with_capacity(m);
-    let mut cum_prob = 0.0;
-    for &prob in &p {
-        cum_prob += prob;
-        survival.push((1.0 - cum_prob).clamp(0.0, 1.0));
-    }
-
-    let se: Vec<f64> = p
-        .iter()
-        .map(|&prob| (prob * (1.0 - prob) / total_weight).sqrt())
-        .collect();
-
-    let (survival_lower, survival_upper) = clamped_normal_ci_bounds_95(&survival, &se, 0.0, 1.0);
+            .zip(&curve.estimate)
+            .map(|(&standard_error, &survival)| {
+                if survival > 0.0 {
+                    standard_error / survival
+                } else {
+                    standard_error
+                }
+            })
+            .collect()
+    };
 
     TurnbullResult {
-        time_points: all_points,
-        survival,
-        survival_lower,
-        survival_upper,
+        time_points: curve.time,
+        n_risk: curve.n_risk,
+        n_event: curve.n_event,
+        n_censor: curve.n_censor,
+        survival: curve.estimate,
+        std_err,
+        survival_lower: curve.conf_lower,
+        survival_upper: curve.conf_upper,
         n_iter,
         converged,
+        logse: !robust,
+        conf_level: config.conf_level,
+        conf_type: config.conf_type.clone(),
     }
 }
 
 #[pyfunction]
-#[pyo3(signature = (left, right, max_iter=1000, tol=1e-6, weights=None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (left, right, max_iter=1000, tol=5e-5, weights=None, robust=true, conf_level=0.95, conf_type="log".to_string()))]
 pub fn turnbull_estimator(
     left: Vec<f64>,
     right: Vec<f64>,
     max_iter: usize,
     tol: f64,
     weights: Option<Vec<f64>>,
+    robust: bool,
+    conf_level: f64,
+    conf_type: String,
 ) -> PyResult<TurnbullResult> {
     validate_turnbull_inputs(&left, &right, weights.as_deref())?;
+    if max_iter == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "max_iter must be positive",
+        ));
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "tol must be finite and positive",
+        ));
+    }
+    let config =
+        KaplanMeierConfig::create(Some(false), Some(0), Some(conf_level), Some(conf_type))?;
     Ok(compute_turnbull_estimator(
         &left,
         &right,
         max_iter,
         tol,
         weights.as_deref(),
+        robust,
+        &config,
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_grouped_turnbull(
     left: &[f64],
     right: &[f64],
@@ -603,6 +955,8 @@ fn compute_grouped_turnbull(
     weights: &[f64],
     max_iter: usize,
     tol: f64,
+    robust: bool,
+    config: &KaplanMeierConfig,
 ) -> GroupedTurnbullResult {
     let mut indices_by_group: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (idx, &group) in groups.iter().enumerate() {
@@ -621,6 +975,8 @@ fn compute_grouped_turnbull(
                 max_iter,
                 tol,
                 Some(&group_weights),
+                robust,
+                config,
             ),
         )
     };
@@ -633,7 +989,8 @@ fn compute_grouped_turnbull(
 }
 
 #[pyfunction]
-#[pyo3(signature = (left, right, groups, max_iter=1000, tol=1e-6, weights=None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (left, right, groups, max_iter=1000, tol=5e-5, weights=None, robust=true, conf_level=0.95, conf_type="log".to_string()))]
 pub fn turnbull_estimator_grouped(
     py: Python<'_>,
     left: Vec<f64>,
@@ -642,6 +999,9 @@ pub fn turnbull_estimator_grouped(
     max_iter: usize,
     tol: f64,
     weights: Option<Vec<f64>>,
+    robust: bool,
+    conf_level: f64,
+    conf_type: String,
 ) -> PyResult<GroupedTurnbullResult> {
     validate_turnbull_inputs(&left, &right, weights.as_deref())?;
     if groups.len() != left.len() {
@@ -649,6 +1009,18 @@ pub fn turnbull_estimator_grouped(
             "groups must have same length as left and right",
         ));
     }
+    if max_iter == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "max_iter must be positive",
+        ));
+    }
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "tol must be finite and positive",
+        ));
+    }
+    let config =
+        KaplanMeierConfig::create(Some(false), Some(0), Some(conf_level), Some(conf_type))?;
     let weights = weights.unwrap_or_else(|| vec![1.0; left.len()]);
     let mut group_has_positive_weight = BTreeMap::new();
     for (&group, &weight) in groups.iter().zip(&weights) {
@@ -663,11 +1035,11 @@ pub fn turnbull_estimator_grouped(
         ));
     }
 
-    Ok(
-        py.detach(move || {
-            compute_grouped_turnbull(&left, &right, &groups, &weights, max_iter, tol)
-        }),
-    )
+    Ok(py.detach(move || {
+        compute_grouped_turnbull(
+            &left, &right, &groups, &weights, max_iter, tol, robust, &config,
+        )
+    }))
 }
 
 #[pyfunction]
@@ -676,13 +1048,46 @@ pub fn npmle_interval(
     right: Vec<f64>,
     weights: Option<Vec<f64>>,
 ) -> PyResult<TimeSurvivalCurve> {
-    turnbull_estimator(left, right, 1000, 1e-6, weights)
-        .map(|result| (result.time_points, result.survival))
+    turnbull_estimator(
+        left,
+        right,
+        1000,
+        5e-5,
+        weights,
+        true,
+        0.95,
+        "log".to_string(),
+    )
+    .map(|result| (result.time_points, result.survival))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn turnbull_config() -> KaplanMeierConfig {
+        KaplanMeierConfig::default()
+    }
+
+    fn fit_turnbull(
+        left: Vec<f64>,
+        right: Vec<f64>,
+        max_iter: usize,
+        tol: f64,
+        weights: Option<Vec<f64>>,
+    ) -> TurnbullResult {
+        turnbull_estimator(
+            left,
+            right,
+            max_iter,
+            tol,
+            weights,
+            true,
+            0.95,
+            "log".to_string(),
+        )
+        .unwrap()
+    }
 
     #[test]
     fn test_weibull_cdf() {
@@ -696,38 +1101,73 @@ mod tests {
         let left = vec![1.0, 2.0, 3.0, 1.0, 2.0];
         let right = vec![2.0, 3.0, 5.0, 4.0, f64::INFINITY];
 
-        let result = turnbull_estimator(left, right, 100, 1e-4, None).unwrap();
+        let result = fit_turnbull(left, right, 100, 1e-4, None);
         assert!(!result.time_points.is_empty());
         assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
     }
 
     #[test]
-    fn test_turnbull_support_range_matches_interval_membership() {
-        let points = vec![-1.0, 1.0, 2.0, 3.0, 5.0, f64::INFINITY];
-        let cases = [
-            (0.0, 1.0),
-            (2.0, 3.0),
-            (3.0, f64::INFINITY),
-            (4.0, 2.0),
-            (f64::NEG_INFINITY, f64::INFINITY),
-            (f64::INFINITY, f64::INFINITY),
-            (f64::NEG_INFINITY, f64::NEG_INFINITY),
-            (f64::NAN, f64::INFINITY),
-            (0.0, f64::NAN),
-        ];
-
-        for (left, right) in cases {
-            let (start, end) = turnbull_support_range(&points, left, right);
-            let actual: Vec<usize> = (start..end).collect();
-            let expected: Vec<usize> = points
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, &time)| {
-                    (time >= left && (right == f64::INFINITY || time <= right)).then_some(idx)
-                })
-                .collect();
-            assert_eq!(actual, expected);
+    fn test_turnbull_matches_reference_weighted_interval_fit() {
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for time in 1..=4 {
+            let value = time as f64;
+            left.extend([value, value, f64::NEG_INFINITY]);
+            right.extend([value, f64::INFINITY, value]);
         }
+        let weights = vec![12.0, 3.0, 2.0, 6.0, 2.0, 4.0, 2.0, 0.0, 2.0, 3.0, 3.0, 5.0];
+        let result = fit_turnbull(left, right, 1000, 5e-5, Some(weights));
+
+        assert_eq!(result.time_points, vec![1.0, 2.0, 3.0, 4.0]);
+        for (actual, expected) in result.survival.iter().zip([
+            0.537567714669201,
+            0.294594032546376,
+            0.209760214997243,
+            0.0948457531854178,
+        ]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        for (actual, expected) in result.std_err.iter().zip([
+            0.202635155653773,
+            0.146753572309286,
+            0.127982471861457,
+            0.0915918887134962,
+        ]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert_eq!(result.n_censor, vec![3.0, 2.0, 0.0, 3.0]);
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_turnbull_support_uses_exact_times_and_open_closed_midpoints() {
+        let observations = vec![
+            TurnbullObservation {
+                left: 1.0,
+                right: 1.0,
+                censoring: TurnbullCensoring::Exact,
+                weight: 1.0,
+            },
+            TurnbullObservation {
+                left: 2.0,
+                right: 4.0,
+                censoring: TurnbullCensoring::Interval,
+                weight: 1.0,
+            },
+            TurnbullObservation {
+                left: 5.0,
+                right: f64::INFINITY,
+                censoring: TurnbullCensoring::Right,
+                weight: 1.0,
+            },
+            TurnbullObservation {
+                left: f64::NEG_INFINITY,
+                right: 6.0,
+                censoring: TurnbullCensoring::Left,
+                weight: 1.0,
+            },
+        ];
+        assert_eq!(turnbull_support_points(&observations), vec![1.0, 3.0, 5.5]);
     }
 
     #[test]
@@ -735,8 +1175,8 @@ mod tests {
         let left = vec![1.0, 2.0, 3.0, 1.0, 2.0];
         let right = vec![2.0, 3.0, 5.0, 4.0, f64::INFINITY];
 
-        let unweighted = turnbull_estimator(left.clone(), right.clone(), 100, 1e-8, None).unwrap();
-        let unit_weighted = turnbull_estimator(left, right, 100, 1e-8, Some(vec![1.0; 5])).unwrap();
+        let unweighted = fit_turnbull(left.clone(), right.clone(), 100, 1e-8, None);
+        let unit_weighted = fit_turnbull(left, right, 100, 1e-8, Some(vec![1.0; 5]));
 
         assert_eq!(unweighted.time_points, unit_weighted.time_points);
         assert_eq!(unweighted.survival, unit_weighted.survival);
@@ -752,13 +1192,11 @@ mod tests {
         let right = vec![1.0, 3.0, f64::INFINITY];
         let weights = vec![2.0, 1.0, 3.0];
 
-        let weighted =
-            turnbull_estimator(left.clone(), right.clone(), 100, 1e-8, Some(weights)).unwrap();
+        let weighted = fit_turnbull(left.clone(), right.clone(), 100, 1e-8, Some(weights));
 
         let replicated_left = vec![0.0, 0.0, 1.0, 2.0, 2.0, 2.0];
         let replicated_right = vec![1.0, 1.0, 3.0, f64::INFINITY, f64::INFINITY, f64::INFINITY];
-        let replicated =
-            turnbull_estimator(replicated_left, replicated_right, 100, 1e-8, None).unwrap();
+        let replicated = fit_turnbull(replicated_left, replicated_right, 100, 1e-8, None);
 
         assert_eq!(weighted.time_points, replicated.time_points);
         for (actual, expected) in weighted.survival.iter().zip(replicated.survival.iter()) {
@@ -773,7 +1211,9 @@ mod tests {
         let groups = vec![7, 3, 7, 3, 7, 3, 7, 3];
         let weights = vec![1.0, 0.5, 1.5, 2.0, 0.75, 1.25, 2.5, 1.0];
 
-        let grouped = compute_grouped_turnbull(&left, &right, &groups, &weights, 1000, 1e-6);
+        let config = turnbull_config();
+        let grouped =
+            compute_grouped_turnbull(&left, &right, &groups, &weights, 1000, 1e-6, true, &config);
         assert_eq!(grouped.groups, vec![3, 7]);
 
         for (curve_idx, &group) in grouped.groups.iter().enumerate() {
@@ -791,6 +1231,8 @@ mod tests {
                 1000,
                 1e-6,
                 Some(&group_weights),
+                true,
+                &config,
             );
 
             assert_eq!(grouped.time_points[curve_idx], expected.time_points);
