@@ -9423,6 +9423,88 @@ def _survobrien_event_sets(
     )
 
 
+def _survobrien_expand_columns(
+    stop: Any,
+    status: Any,
+    continuous: Mapping[str, Any],
+    *,
+    start: Any | None = None,
+    strata: Any | None = None,
+    transform: Any | None = None,
+) -> dict[str, Any]:
+    """Expand evaluated formula columns over O'Brien risk sets."""
+
+    stop_values = _float_vector(stop, "stop")
+    status_values = _integer_code_vector(status, "status", "0/1 event coding")
+    if len(status_values) != len(stop_values):
+        raise ValueError("status must have the same length as stop")
+    if any(value not in {0, 1} for value in status_values):
+        raise ValueError("status must use 0/1 event coding")
+
+    if start is None:
+        response = Surv(stop_values, status_values)
+    else:
+        start_values = _float_vector(start, "start")
+        if len(start_values) != len(stop_values):
+            raise ValueError("start must have the same length as stop")
+        response = Surv(start_values, stop_values, status_values)
+
+    strata_values = None if strata is None else _materialize_labels(strata, "strata")
+    if strata_values is not None and len(strata_values) != len(stop_values):
+        raise ValueError("strata must have the same length as stop")
+
+    continuous_columns: list[tuple[str, list[float]]] = []
+    for name, values in continuous.items():
+        column = _float_vector(values, str(name))
+        if len(column) != len(stop_values):
+            raise ValueError(f"{name} must have the same length as stop")
+        if any(not math.isfinite(value) for value in column):
+            raise ValueError(f"{name} must be finite")
+        continuous_columns.append((str(name), column))
+    if not continuous_columns:
+        raise ValueError("No continuous variables to modify")
+
+    row_indices, group_sizes, event_times, set_numbers = _survobrien_event_sets(
+        response,
+        strata_values,
+    )
+    if transform is None:
+        transformed_values = _core.survobrien_transform_groups(
+            [values for _name, values in continuous_columns],
+            row_indices,
+            group_sizes,
+        )
+    else:
+        transformed_values = []
+        for _name, values in continuous_columns:
+            output: list[float] = []
+            offset = 0
+            for group_size in group_sizes:
+                group_rows = row_indices[offset : offset + group_size]
+                output.extend(
+                    _survobrien_transform_values(
+                        [values[row] for row in group_rows],
+                        transform,
+                    )
+                )
+                offset += group_size
+            transformed_values.append(output)
+
+    return {
+        "row": row_indices,
+        "event_time": event_times,
+        "set": set_numbers,
+        "transformed": {
+            name: values
+            for (name, _source), values in zip(
+                continuous_columns,
+                transformed_values,
+                strict=True,
+            )
+        },
+    }
+
+
 def _survobrien_formula_frame(
     formula: str,
     data: Any,
@@ -9442,10 +9524,16 @@ def _survobrien_formula_frame(
     n = len(response)
     keepers, continuous = _survobrien_formula_terms(data, terms, n)
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else None
-    row_indices, group_sizes, event_times, set_numbers = _survobrien_event_sets(
-        response,
-        strata_values,
+    expanded = _survobrien_expand_columns(
+        response.time,
+        response.event,
+        dict(continuous),
+        start=response.start,
+        strata=strata_values,
+        transform=transform,
     )
+    row_indices = expanded["row"]
+    event_times = expanded["event_time"]
 
     frame: dict[str, list[Any]] = {}
     if response.type == "counting":
@@ -9464,32 +9552,10 @@ def _survobrien_formula_frame(
     if not terms.clusters:
         frame[".id."] = [idx + 1 for idx in row_indices]
 
-    if transform is None:
-        transformed_columns = _core.survobrien_transform_groups(
-            [values for _name, values in continuous],
-            row_indices,
-            group_sizes,
-        )
-        for (name, _values), output in zip(
-            continuous,
-            transformed_columns,
-            strict=True,
-        ):
-            frame[name] = output
-    else:
-        for name, values in continuous:
-            output = [0.0] * len(row_indices)
-            offset = 0
-            for group_size in group_sizes:
-                positions = range(offset, offset + group_size)
-                transformed = _survobrien_transform_values(
-                    [values[row_indices[pos]] for pos in positions],
-                    transform,
-                )
-                output[offset : offset + group_size] = transformed
-                offset += group_size
-            frame[name] = output
-    frame[".strata."] = set_numbers
+    transformed_columns = expanded["transformed"]
+    for name, _values in continuous:
+        frame[name] = transformed_columns[name]
+    frame[".strata."] = expanded["set"]
     return frame
 
 

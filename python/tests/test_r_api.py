@@ -4511,6 +4511,32 @@ def test_survobrien_group_transform_matches_python_reference():
             assert actual_column == pytest.approx(expected_column)
 
 
+def test_survobrien_expands_evaluated_formula_columns():
+    from survival.r_api import _survobrien_expand_columns
+
+    expanded = _survobrien_expand_columns(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 1],
+        {"x": [0.1, 0.4, 0.2, 0.8], "log(x)": [-2.0, -1.0, -1.5, -0.2]},
+    )
+
+    assert expanded["row"] == [0, 1, 2, 3, 2, 3, 3]
+    assert expanded["event_time"] == pytest.approx([1, 1, 1, 1, 3, 3, 4])
+    assert expanded["set"] == [1, 1, 1, 1, 2, 2, 3]
+    assert expanded["transformed"]["x"] == pytest.approx(
+        [
+            -1.9459101490553135,
+            0.5108256237659907,
+            -0.5108256237659907,
+            1.9459101490553132,
+            -1.0986122886681098,
+            1.0986122886681098,
+            0.0,
+        ]
+    )
+    assert len(expanded["transformed"]["log(x)"]) == 7
+
+
 def test_survobrien_event_sets_match_python_reference():
     def reference(
         stop: list[float],

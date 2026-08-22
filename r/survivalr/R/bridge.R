@@ -4885,47 +4885,168 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
   )
 }
 
-.survobrien_result_frame <- function(result, data) {
-  frame <- as.data.frame(result, check.names = TRUE, stringsAsFactors = FALSE)
-  if (ncol(frame) > 0L || length(result) == 0L) {
-    return(frame)
+.survobrien_formula_frame <- function(call, formula, data, data_missing,
+                                      transform, transform_missing, enclos) {
+  if (!transform_missing && length(transform(seq_len(10L))) != 10L) {
+    stop("Transform function must be 1 to 1", call. = FALSE)
   }
-  empty_columns <- lapply(names(result), function(column) {
-    if (column %in% names(data)) {
-      return(data[[column]][integer()])
-    }
-    if (column %in% c("status", ".id.", ".strata.")) {
-      return(integer())
-    }
-    numeric()
-  })
-  names(empty_columns) <- names(result)
-  as.data.frame(empty_columns, check.names = TRUE, stringsAsFactors = FALSE)
-}
 
-.survobrien_restore_row_names <- function(frame, call, formula, data, enclos) {
-  if (nrow(frame) <= 1L || !".id." %in% names(frame) ||
-      anyDuplicated(frame[[".id."]])) {
-    return(frame)
-  }
-  model_args <- match(
+  model_indices <- match(
     c("formula", "data", "subset", "na.action"),
     names(call),
     nomatch = 0L
   )
-  model_call <- call[c(1L, model_args[model_args > 0L])]
+  model_call <- call[c(1L, model_indices[model_indices > 0L])]
   model_call[[1L]] <- quote(stats::model.frame)
-  model_call$formula <- stats::terms(
-    formula,
-    c("strata", "cluster", "tt"),
-    data = data
-  )
-  model_rows <- row.names(eval(model_call, enclos))
-  output_rows <- model_rows[as.integer(frame[[".id."]])]
-  if (!identical(output_rows, as.character(seq_len(nrow(frame))))) {
-    row.names(frame) <- output_rows
+  specials <- c("strata", "cluster", "tt")
+  model_call$formula <- if (data_missing) {
+    stats::terms(formula, specials)
+  } else {
+    stats::terms(formula, specials, data = data)
   }
-  frame
+  model <- eval(model_call, enclos)
+  if (nrow(model) == 0L) {
+    stop("No (non-missing) observations", call. = FALSE)
+  }
+
+  terms <- attr(model, "terms")
+  response <- stats::model.response(model)
+  if (!inherits(response, "Surv")) {
+    stop("Response must be a survival object", call. = FALSE)
+  }
+  if (!attr(response, "type") %in% c("right", "counting")) {
+    stop("Response must be right censored or (start, stop] data", call. = FALSE)
+  }
+
+  cluster_terms <- untangle.specials(terms, "cluster")
+  if (length(cluster_terms$terms) > 0L) {
+    if (length(cluster_terms$terms) > 1L) {
+      stop("Can have only 1 cluster term", call. = FALSE)
+    }
+    idvar <- model[[cluster_terms$vars]]
+    terms_without_specials <- terms[-cluster_terms$tvar]
+  } else {
+    idvar <- seq_len(nrow(model))
+    terms_without_specials <- terms
+  }
+
+  strata_keep <- NULL
+  strata_terms <- NULL
+  if (length(attr(terms, "specials")$strata) > 0L) {
+    strata_terms <- untangle.specials(terms_without_specials, "strata", 1L)
+    if (length(strata_terms$terms) > 0L) {
+      terms_without_specials <- terms_without_specials[-strata_terms$terms]
+    }
+    strata_keep <- if (length(strata_terms$vars) == 1L) {
+      model[[strata_terms$vars]]
+    } else {
+      strata(model[, strata_terms$vars], shortlabel = TRUE)
+    }
+  }
+
+  if (any(attr(terms_without_specials, "order") > 1L)) {
+    stop("This function cannot deal with iteraction terms", call. = FALSE)
+  }
+  term_names <- attr(terms_without_specials, "term.labels")
+  factors <- vapply(model[term_names], is.factor, logical(1))
+  protected <- vapply(
+    model[term_names],
+    function(value) inherits(value, "AsIs"),
+    logical(1)
+  )
+  keepers <- factors | protected
+  if (all(keepers)) {
+    stop("No continuous variables to modify", call. = FALSE)
+  }
+
+  continuous_names <- term_names[!keepers]
+  response_columns <- ncol(response)
+  expanded <- .call_r_api(
+    "_survobrien_expand_columns",
+    stop = .as_python_vector(response[, response_columns - 1L]),
+    status = .as_python_vector(response[, response_columns]),
+    continuous = .as_python_data(model[continuous_names]),
+    start = if (response_columns == 3L) {
+      .as_python_vector(response[, 1L])
+    } else {
+      NULL
+    },
+    strata = if (is.null(strata_keep)) NULL else .as_python_vector(strata_keep),
+    transform = if (transform_missing) NULL else transform
+  )
+  row_indices <- as.integer(.result_field(expanded, "row")) + 1L
+  event_times <- as.numeric(.result_field(expanded, "event_time"))
+
+  if (response_columns == 3L) {
+    newdata <- list(response[row_indices, 1L], response[row_indices, 2L])
+    newdata <- c(newdata, list(as.integer(
+      newdata[[2L]] == event_times & response[row_indices, 3L] == 1
+    )))
+  } else {
+    newdata <- list(response[row_indices, 1L])
+    newdata <- c(newdata, list(as.integer(
+      newdata[[1L]] == event_times & response[row_indices, 2L] == 1
+    )))
+  }
+  names(newdata) <- dimnames(response)[[2L]]
+
+  formula_environment <- environment(formula)
+  if (is.null(formula_environment)) {
+    formula_environment <- enclos
+  }
+  keeper_names <- if (any(keepers)) {
+    unlist(lapply(term_names[keepers], function(term) {
+      all.vars(parse(text = term))
+    }))
+  } else {
+    NULL
+  }
+  if (length(strata_keep) > 0L) {
+    keeper_names <- c(keeper_names, unlist(lapply(
+      names(model)[strata_terms$vars],
+      function(term) all.vars(parse(text = term))
+    )))
+  }
+  if (length(keeper_names) > 0L) {
+    source <- if (data_missing) {
+      values <- lapply(keeper_names, function(name) {
+        eval(as.name(name), formula_environment)
+      })
+      names(values) <- keeper_names
+      values
+    } else {
+      data[keeper_names]
+    }
+    newdata <- c(newdata, lapply(source, function(value) value[row_indices]))
+  }
+  if (length(cluster_terms$vars) > 0L) {
+    cluster_names <- all.vars(parse(text = names(model)[cluster_terms$vars]))
+    if (length(cluster_names) > 0L) {
+      source <- if (data_missing) {
+        values <- lapply(cluster_names, function(name) {
+          eval(as.name(name), formula_environment)
+        })
+        names(values) <- cluster_names
+        values
+      } else {
+        data[cluster_names]
+      }
+      newdata <- c(newdata, lapply(source, function(value) value[row_indices]))
+    }
+  } else {
+    newdata <- c(newdata, list(.id. = idvar[row_indices]))
+  }
+
+  transformed <- .result_field(expanded, "transformed")
+  transformed_columns <- lapply(continuous_names, function(name) {
+    as.numeric(transformed[[name]])
+  })
+  names(transformed_columns) <- continuous_names
+  data.frame(c(
+    newdata,
+    transformed_columns,
+    list(.strata. = as.integer(.result_field(expanded, "set")))
+  ))
 }
 
 survobrien <- function(formula, data, subset, na.action, transform,
@@ -4938,27 +5059,18 @@ survobrien <- function(formula, data, subset, na.action, transform,
     direct_time <- formula
   }
   if (is.null(direct_time)) {
-    if (.survobrien_formula_python_eligible(formula, data)) {
-      result <- .call_r_api(
-        "survobrien",
-        .as_formula_string(formula),
-        data = .as_python_data(data),
-        subset = if (missing(subset)) NULL else subset,
-        `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
-        transform = if (missing(transform)) NULL else transform
-      )
-      frame <- .survobrien_result_frame(result, data)
-      frame <- .survobrien_restore_row_names(
-        frame,
-        call,
-        formula,
-        data,
-        parent.frame()
-      )
-      return(.restore_r_column_classes(frame, data))
+    if (missing(formula)) {
+      stop("A formula argument is required", call. = FALSE)
     }
-    call[[1L]] <- quote(survival::survobrien)
-    return(eval.parent(call))
+    return(.survobrien_formula_frame(
+      call,
+      formula,
+      if (missing(data)) NULL else data,
+      missing(data),
+      if (missing(transform)) NULL else transform,
+      missing(transform),
+      parent.frame()
+    ))
   }
   if (missing(status) || missing(covariate)) {
     stop("direct survobrien bridge requires time, status, and covariate", call. = FALSE)
@@ -4979,68 +5091,6 @@ survobrien <- function(formula, data, subset, na.action, transform,
     expected = as.numeric(.result_field(result, "expected")),
     variance = as.numeric(.result_field(result, "variance"))
   )
-}
-
-.survobrien_formula_supported_term <- function(label, data) {
-  if (label %in% names(data)) {
-    value <- data[[label]]
-    return(is.factor(value) || (is.numeric(value) && !inherits(value, "AsIs")))
-  }
-  match <- regexec(
-    paste0(
-      "^(log|sqrt|exp|identity|as\\.numeric|factor|as\\.factor)",
-      "\\(([[:space:]]*[^()]+[[:space:]]*)\\)$"
-    ),
-    label
-  )
-  pieces <- regmatches(label, match)[[1L]]
-  if (length(pieces) == 0L) {
-    return(FALSE)
-  }
-  transform <- pieces[[2L]]
-  column <- trimws(pieces[[3L]])
-  if (transform %in% c("factor", "as.factor")) {
-    return(
-      column %in% names(data) &&
-        (is.factor(data[[column]]) ||
-          is.character(data[[column]]) ||
-          is.numeric(data[[column]]) ||
-          is.logical(data[[column]]))
-    )
-  }
-  column %in% names(data) && is.numeric(data[[column]]) && !is.factor(data[[column]])
-}
-
-.survobrien_formula_python_eligible <- function(formula, data) {
-  if (!inherits(formula, "formula") || missing(data) || is.null(data)) {
-    return(FALSE)
-  }
-  terms <- stats::terms(formula, specials = c("strata", "cluster", "tt"), data = data)
-  if (any(attr(terms, "order") > 1L)) {
-    return(FALSE)
-  }
-  specials <- attr(terms, "specials")
-  if (length(specials$cluster) > 1L || length(specials$tt) > 0L) {
-    return(FALSE)
-  }
-  labels <- attr(terms, "term.labels")
-  labels <- labels[!grepl("^(strata|cluster)\\(", labels)]
-  if (length(labels) == 0L) {
-    return(FALSE)
-  }
-  factor_terms <- vapply(
-    labels,
-    function(label) {
-      (label %in% names(data) && is.factor(data[[label]])) ||
-        grepl("^(factor|as\\.factor)\\(", label)
-    },
-    logical(1)
-  )
-  if (any(factor_terms) && length(specials$strata) > 0L &&
-      length(specials$cluster) > 0L) {
-    return(FALSE)
-  }
-  all(vapply(labels, .survobrien_formula_supported_term, logical(1), data = data))
 }
 
 fromtimeline <- function(formula, data, subset, id, repeated = FALSE,
