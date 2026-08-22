@@ -12023,13 +12023,15 @@ concordance <- function(object, ..., formula) {
   invisible(NULL)
 }
 
-.concordance_empty_rank_strata_check <- function(response, n_scores, strata, ranks, timewt) {
+.concordance_empty_rank_strata_check <- function(
+    response, n_scores, strata, ranks, timewt, ymax = NULL) {
   survival_response <- inherits(response, "Surv") || inherits(response, "survival_py_surv")
   if (!isTRUE(ranks) || !survival_response) {
     return(invisible(NULL))
   }
   native_response <- .as_native_surv(response)
   status <- native_response[, ncol(native_response)]
+  event_time <- native_response[, ncol(native_response) - 1L]
   strata_values <- if (is.null(strata) || length(strata) == 0L) {
     rep(1L, length(status))
   } else {
@@ -12041,28 +12043,31 @@ concordance <- function(object, ..., formula) {
     strata_values <- rep(1L, length(status))
     n_strata <- 1L
   }
-  event_counts <- vapply(
-    split(status, droplevels(as.factor(strata_values))),
-    sum,
-    numeric(1)
-  )
-  if (!any(event_counts == 0)) {
+  groups <- droplevels(as.factor(strata_values))
+  event_counts <- vapply(split(status, groups), sum, numeric(1))
+  if (any(event_counts == 0)) {
+    if (n_scores > 1L) {
+      array(NULL, dim = c(0L, n_scores))
+    }
+    if (n_strata > 1L) {
+      stop(
+        "number of items to replace is not a multiple of replacement length",
+        call. = FALSE
+      )
+    }
     return(invisible(NULL))
   }
-  if (n_scores > 1L) {
-    array(NULL, dim = c(0L, n_scores))
-  }
-  if (n_strata > 1L) {
-    stop(
-      "number of items to replace is not a multiple of replacement length",
-      call. = FALSE
-    )
+  rank_status <- status
+  if (!is.null(ymax)) rank_status[event_time > ymax] <- 0
+  rank_counts <- vapply(split(rank_status, groups), sum, numeric(1))
+  if (n_strata > 1L && any(rank_counts == 0)) {
+    stop("replacement has length zero", call. = FALSE)
   }
   invisible(NULL)
 }
 
 .concordance_translate_empty_rank_error <- function(
-    condition, response, n_scores, strata, ranks, timewt) {
+    condition, response, n_scores, strata, ranks, timewt, ymax = NULL) {
   replacement_message <- "number of items to replace is not a multiple of replacement length"
   if (grepl(replacement_message, conditionMessage(condition), fixed = TRUE)) {
     .concordance_empty_rank_strata_check(
@@ -12070,7 +12075,8 @@ concordance <- function(object, ..., formula) {
       n_scores,
       strata,
       ranks,
-      timewt
+      timewt,
+      ymax
     )
   }
   invisible(NULL)
@@ -12102,7 +12108,8 @@ concordance <- function(object, ..., formula) {
           rank_context$n_scores,
           rank_context$strata,
           rank_context$ranks,
-          rank_context$timewt
+          rank_context$timewt,
+          rank_context$ymax
         )
       }
       stop(condition)
@@ -12141,6 +12148,7 @@ concordance <- function(object, ..., formula) {
       !("rank" %in% names(out$ranks))) {
     out$ranks[, "rank"] <- -out$ranks[, "rank"]
   }
+  out <- .concordance_empty_rank_values(out)
   if (length(na.action)) out$na.action <- na.action
   out$call <- Call
   class(out) <- "concordance"
@@ -12229,6 +12237,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     requested_timewt
   }
   requested_ranks <- "ranks" %in% names(dots) && isTRUE(dots[["ranks"]])
+  requested_ymax <- if ("ymax" %in% names(dots)) dots[["ymax"]] else NULL
   formula_rank_n_scores <- if (formula_input && requested_ranks) {
     .concordance_formula_score_count(formula, formula_frame)
   } else {
@@ -12240,7 +12249,8 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
       n_scores = formula_rank_n_scores,
       strata = formula_strata,
       ranks = requested_ranks,
-      timewt = formula_timewt
+      timewt = formula_timewt,
+      ymax = requested_ymax
     )
   } else {
     NULL
@@ -12280,7 +12290,8 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
       formula_n_scores,
       formula_strata,
       requested_ranks,
-      formula_timewt
+      formula_timewt,
+      requested_ymax
     )
     .concordance_multi_score_strata_check(
       formula_n_scores,
@@ -12706,16 +12717,25 @@ survConcordance.fit <- function(y, x, strata, weight) {
 }
 
 .concordancefit_rows <- function(rows, fit = NULL, row_names = NULL) {
-  if (is.null(rows) || !is.list(rows) || length(rows) == 0L) {
+  if (is.null(rows) || !is.list(rows)) {
     return(NULL)
   }
-  frame <- data.frame(
-    time = .as_numeric_vector(lapply(rows, `[[`, "time")),
-    rank = .as_numeric_vector(lapply(rows, `[[`, "rank")),
-    timewt = .as_numeric_vector(lapply(rows, `[[`, "timewt")),
-    casewt = .as_numeric_vector(lapply(rows, `[[`, "casewt"))
-  )
-  if (!is.null(row_names)) {
+  frame <- if (length(rows) == 0L) {
+    data.frame(
+      time = numeric(),
+      rank = numeric(),
+      timewt = numeric(),
+      casewt = numeric()
+    )
+  } else {
+    data.frame(
+      time = .as_numeric_vector(lapply(rows, `[[`, "time")),
+      rank = .as_numeric_vector(lapply(rows, `[[`, "rank")),
+      timewt = .as_numeric_vector(lapply(rows, `[[`, "timewt")),
+      casewt = .as_numeric_vector(lapply(rows, `[[`, "casewt"))
+    )
+  }
+  if (!is.null(row_names) && (nrow(frame) > 0L || length(row_names) > 0L)) {
     if (length(row_names) != nrow(frame)) {
       stop("concordance rank names must match the rank rows", call. = FALSE)
     }
@@ -12730,6 +12750,15 @@ survConcordance.fit <- function(y, x, strata, weight) {
     )
   }
   frame
+}
+
+.concordance_empty_rank_values <- function(result) {
+  if (is.data.frame(result$ranks) && nrow(result$ranks) == 0L) {
+    result$concordance[] <- NaN
+    if (!is.null(result$var)) result$var[] <- NaN
+    if (!is.null(result$cvar)) result$cvar[] <- NaN
+  }
+  result
 }
 
 .concordancefit_rank_result <- function(rows, row_names = NULL, score_names = NULL) {
@@ -12811,7 +12840,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       n_scores = input_n_scores,
       strata = input_strata,
       ranks = ranks,
-      timewt = timewt
+      timewt = timewt,
+      ymax = ymax
     ),
     .as_python_surv(y),
     .as_python_optional_vector(x),
@@ -12842,7 +12872,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     n_scores,
     input_strata,
     ranks,
-    timewt
+    timewt,
+    ymax
   )
   .concordance_disabled_standard_error_check(
     n_scores,
@@ -12951,7 +12982,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       out$ranks[, "rank"] <- -out$ranks[, "rank"]
     }
   }
-  out
+  .concordance_empty_rank_values(out)
 }
 
 cox.zph <- function(fit, transform = "km", terms = TRUE, singledf = FALSE,

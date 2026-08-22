@@ -8755,6 +8755,41 @@ def test_concordance_empty_multi_score_ranks_remain_available_in_python():
         )
 
 
+def test_concordance_zero_weight_rank_tables_remain_available_in_python():
+    response = survival.Surv([4, 1, 6, 5, 2, 6, 5], [0, 0, 0, 1, 0, 1, 0])
+    scores = {
+        "x": [1, 0, 0.5, 0, 0, 1, 1],
+        "z": [0, -0.5, -0.5, 1, 0.5, 0, -1],
+    }
+    result = survival.concordancefit(
+        response,
+        scores,
+        ymax=4,
+        timewt="S/G",
+        ranks=True,
+        reverse=True,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx([0.5, 0.5])
+    assert result.ranks == [[], []]
+
+    with pytest.raises(
+        ValueError,
+        match="number of items to replace is not a multiple of replacement length",
+    ):
+        survival.concordancefit(
+            survival.Surv([1, 5, 2, 6], [0, 1, 0, 1]),
+            {
+                "x": [0.1, 0.4, 0.2, 0.8],
+                "z": [0.8, 0.2, 0.6, 0.1],
+            },
+            strata=["a", "a", "b", "b"],
+            ymax=4,
+            ranks=True,
+        )
+
+
 def test_concordance_collapsed_single_score_strata_remain_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 1, 2], [1, 0, 1, 0]),
