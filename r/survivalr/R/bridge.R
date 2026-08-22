@@ -12000,6 +12000,28 @@ concordance <- function(object, ..., formula) {
   invisible(NULL)
 }
 
+.concordance_translate_counting_timewt_error <- function(condition, timewt) {
+  backend_message <- "S/G and n/G2 timewt options are not supported for counting-process data"
+  if (grepl(backend_message, conditionMessage(condition), fixed = TRUE)) {
+    time_weight <- match.arg(timewt, c("n", "S", "S/G", "n/G2", "I"))
+    stop(
+      time_weight,
+      " timewt option not supported for (time1, time2) data",
+      call. = FALSE
+    )
+  }
+  stop(condition)
+}
+
+.concordance_call_with_timewt_translation <- function(method, diagnostic_timewt, ...) {
+  tryCatch(
+    .call_r_api(method, ...),
+    error = function(condition) {
+      .concordance_translate_counting_timewt_error(condition, diagnostic_timewt)
+    }
+  )
+}
+
 .as_native_concordance <- function(result, Call, na.action = NULL) {
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
   score_names <- as.character(.result_field(result, "score_names"))
@@ -12104,8 +12126,10 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
   source_row_names <- .concordance_source_row_names(formula, formula_data, env)
   python_na_action <- .as_na_action(effective_na_action)
   if (is.null(python_na_action)) python_na_action <- "pass"
-  result <- .call_r_api(
+  requested_timewt <- if ("timewt" %in% names(dots)) dots[["timewt"]] else "n"
+  result <- .concordance_call_with_timewt_translation(
     "concordance",
+    requested_timewt,
     response = .as_formula_string(formula),
     data = .as_python_data(formula_data),
     scores = score_values,
@@ -12123,7 +12147,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     formula_timewt <- if (!inherits(formula_response, "Surv")) {
       "n"
     } else if ("timewt" %in% names(dots)) {
-      dots[["timewt"]]
+      requested_timewt
     } else {
       "n"
     }
@@ -12646,8 +12670,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     influence <- 0L
   }
   internal_influence <- if (isTRUE(std.err) && influence == 0L) 1L else influence
-  result <- .call_r_api(
+  result <- .concordance_call_with_timewt_translation(
     "concordancefit",
+    timewt,
     .as_python_surv(y),
     .as_python_optional_vector(x),
     strata = if (missing(strata)) NULL else .as_python_vector(strata),
