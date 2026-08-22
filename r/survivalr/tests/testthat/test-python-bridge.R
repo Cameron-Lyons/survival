@@ -5820,7 +5820,6 @@ test_that("data-prep helpers match R survival shapes", {
     keeper = factor(group, levels = c("b", "a"))
   )
   factor_formula <- survival::Surv(time, status) ~ x + keeper
-  expect_true(.survobrien_formula_python_eligible(factor_formula, obrien_factor_data))
   bridged_obrien_factor <- survobrien(factor_formula, data = obrien_factor_data)
   reference_obrien_factor <- survival::survobrien(
     factor_formula,
@@ -5830,10 +5829,6 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(levels(bridged_obrien_factor$keeper), c("b", "a"))
   expect_equal(bridged_obrien_factor, reference_obrien_factor)
   factor_strata_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
-  expect_true(.survobrien_formula_python_eligible(
-    factor_strata_formula,
-    obrien_factor_data
-  ))
   expect_equal(
     survobrien(factor_strata_formula, data = obrien_factor_data),
     survival::survobrien(factor_strata_formula, data = obrien_factor_data)
@@ -5842,7 +5837,6 @@ test_that("data-prep helpers match R survival shapes", {
     wrapper_formula <- stats::as.formula(paste0(
       "survival::Surv(time, status) ~ x + ", wrapper, "(group) + strata(group)"
     ))
-    expect_true(.survobrien_formula_python_eligible(wrapper_formula, obrien_factor_data))
     expect_equal(
       survobrien(wrapper_formula, data = obrien_factor_data),
       survival::survobrien(wrapper_formula, data = obrien_factor_data)
@@ -5885,12 +5879,6 @@ test_that("data-prep helpers match R survival shapes", {
   )
   obrien_counting_data$keeper <- factor(c("a", "a", "b", "b"))
   counting_factor_formula <- survival::Surv(start, stop, status) ~ x + keeper
-  expect_true(
-    .survobrien_formula_python_eligible(
-      counting_factor_formula,
-      obrien_counting_data
-    )
-  )
   expect_equal(
     survobrien(counting_factor_formula, data = obrien_counting_data),
     survival::survobrien(counting_factor_formula, data = obrien_counting_data)
@@ -5918,16 +5906,86 @@ test_that("data-prep helpers match R survival shapes", {
   )
   counting_factor_strata_formula <-
     survival::Surv(start, stop, status) ~ x + keeper + strata(group)
-  expect_true(.survobrien_formula_python_eligible(
-    counting_factor_strata_formula,
-    obrien_counting_strata_data
-  ))
   expect_equal(
     survobrien(counting_factor_strata_formula, data = obrien_counting_strata_data),
     survival::survobrien(
       counting_factor_strata_formula,
       data = obrien_counting_strata_data
     )
+  )
+  obrien_expression_formula <-
+    survival::Surv(time, status) ~ x + I(off^2)
+  expect_equal(
+    survobrien(obrien_expression_formula, data = obrien_factor_data),
+    survival::survobrien(obrien_expression_formula, data = obrien_factor_data)
+  )
+  obrien_combined_formula <-
+    survival::Surv(time, status) ~ x + keeper + strata(group) + cluster(id)
+  expect_equal(
+    survobrien(obrien_combined_formula, data = obrien_factor_data),
+    survival::survobrien(obrien_combined_formula, data = obrien_factor_data)
+  )
+  obrien_na_data <- obrien_factor_data
+  obrien_na_data$off[[3L]] <- NA_real_
+  expect_equal(
+    survobrien(
+      obrien_expression_formula,
+      data = obrien_na_data,
+      subset = time != 2,
+      na.action = stats::na.omit
+    ),
+    survival::survobrien(
+      obrien_expression_formula,
+      data = obrien_na_data,
+      subset = time != 2,
+      na.action = stats::na.omit
+    )
+  )
+  obrien_environment_result <- local({
+    time <- obrien_data$time
+    status <- obrien_data$status
+    x <- obrien_data$x
+    formula <- survival::Surv(time, status) ~ sqrt(x)
+    list(
+      bridged = survobrien(formula),
+      reference = survival::survobrien(formula)
+    )
+  })
+  expect_equal(
+    obrien_environment_result$bridged,
+    obrien_environment_result$reference
+  )
+
+  obrien_error <- function(expression) {
+    tryCatch(force(expression), error = function(condition) conditionMessage(condition))
+  }
+  invalid_obrien_formulas <- list(
+    survival::Surv(time, status) ~ x * off,
+    survival::Surv(time, status) ~ x + cluster(id) + cluster(group),
+    survival::Surv(time, status) ~ keeper,
+    time ~ x,
+    survival::Surv(time, status, type = "left") ~ x
+  )
+  for (invalid_formula in invalid_obrien_formulas) {
+    expect_identical(
+      obrien_error(survobrien(invalid_formula, data = obrien_factor_data)),
+      obrien_error(survival::survobrien(
+        invalid_formula,
+        data = obrien_factor_data
+      ))
+    )
+  }
+  expect_identical(
+    obrien_error(survobrien(
+      survival::Surv(time, status) ~ x,
+      data = obrien_data,
+      transform = function(value) value[[1L]]
+    )),
+    obrien_error(survival::survobrien(
+      survival::Surv(time, status) ~ x,
+      data = obrien_data,
+      transform = function(value) value[[1L]]
+    ))
   )
 
   condense_data <- data.frame(
