@@ -13478,6 +13478,38 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     assert padded_batch.time[0] == pytest.approx(0.0)
     assert padded_batch.pstate[0][0] == pytest.approx([1.0, 0.0, 0.0])
     assert padded_batch.pstate[1][0] == pytest.approx([1.0, 0.0, 0.0])
+    aggregate_source = survival.survfit(
+        fit,
+        newdata=pandas.DataFrame({"x": [0.5, 1.5, 2.0]}),
+        time0=True,
+    )
+    averaged_curve = survival.r_api.aggregate_survfit_result(aggregate_source)
+    assert isinstance(averaged_curve, survival.SurvfitMultiStateResult)
+    assert averaged_curve.cox_model is False
+    assert averaged_curve.pstate[-1] == pytest.approx(
+        [0.22713617194521979, 0.36661942336069081, 0.4062444046940894],
+        abs=1e-12,
+    )
+    assert averaged_curve.cumhaz == [[] for _ in averaged_curve.time]
+    assert averaged_curve.n_risk == aggregate_source.n_risk
+    grouped_curve = survival.r_api.aggregate_survfit_result(
+        aggregate_source,
+        groups=[1, 2, 1],
+    )
+    assert isinstance(grouped_curve, survival.SurvfitMultiStateCoxResult)
+    assert grouped_curve.curve_count == 2
+    assert grouped_curve.pstate[0][-1] == pytest.approx(
+        [0.21304991590588035, 0.40057642090756906, 0.38637366318655059],
+        abs=1e-12,
+    )
+    assert grouped_curve.pstate[1][-1] == pytest.approx(
+        [0.25530868402389867, 0.29870542826693436, 0.44598588770916708],
+        abs=1e-12,
+    )
+    with pytest.raises(ValueError, match="same length"):
+        survival.r_api.aggregate_survfit_result(aggregate_source, groups=[1])
+    with pytest.raises(ValueError, match="positive integer"):
+        survival.r_api.aggregate_survfit_result(aggregate_source, groups=[0, 1, 1])
     selected_curve = survival.r_api._subset_survfit_multistate(batched_curve, [0, 2], [1])
     assert isinstance(selected_curve, survival.SurvfitMultiStateResult)
     assert selected_curve.cox_model is True
