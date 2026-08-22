@@ -8750,6 +8750,34 @@ def test_concordance_strata_without_standard_errors_remain_available_in_python()
     assert result.variance is None
 
 
+def test_concordance_single_event_strata_use_unweighted_time_counts():
+    result = survival.concordancefit(
+        survival.Surv(
+            [4, 6, 4, 4, 7, 2, 5, 3, 5, 3],
+            [0, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+        ),
+        [0.5, -1, -0.5, 1, 1, -0.5, 0, 0.5, 1, 0.5],
+        strata=[1, 2, 2, 2, 1, 1, 1, 3, 3, 3],
+        timewt="I",
+        reverse=True,
+        keepstrata=True,
+        influence=3,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx(1 / 11)
+    assert result.strata_counts is not None
+    expected_counts = [
+        [0, 3, 0, 0, 0],
+        [1 / 3, 1 / 3, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+    ]
+    for actual, expected in zip(result.strata_counts, expected_counts, strict=True):
+        assert actual == pytest.approx(expected)
+    assert result.variance == pytest.approx(0.01980739020558704)
+    assert result.conditional_variance == pytest.approx(0.10950413223140498)
+
+
 def test_concordance_stratified_multi_score_remains_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 3, 1, 2, 3], [1, 0, 1, 1, 0, 1]),

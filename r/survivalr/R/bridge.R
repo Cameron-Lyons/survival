@@ -11969,8 +11969,33 @@ concordance <- function(object, ..., formula) {
   ncol(design)
 }
 
+.concordance_zero_event_strata <- function(response, strata, n_strata) {
+  survival_response <- inherits(response, "Surv") ||
+    inherits(response, "survival_py_surv")
+  if (!survival_response || is.null(strata)) {
+    return(rep(FALSE, n_strata))
+  }
+  native_response <- .as_native_surv(response)
+  status <- native_response[, ncol(native_response)]
+  event_counts <- vapply(
+    split(status, droplevels(as.factor(strata))),
+    sum,
+    numeric(1)
+  )
+  event_counts == 0
+}
+
+.concordance_disabled_count_length <- function(
+    response, strata, n_strata, n_scores = 1L) {
+  n_scores * (
+    n_strata * 5L +
+      sum(.concordance_zero_event_strata(response, strata, n_strata))
+  )
+}
+
 .concordance_collapsed_strata_check <- function(
-    n_scores, n_strata, keepstrata, timewt, response = NULL, std.err = TRUE) {
+    n_scores, n_strata, keepstrata, timewt, response = NULL,
+    std.err = TRUE, strata = NULL) {
   if (n_scores != 1L || n_strata <= 1L) {
     return(invisible(NULL))
   }
@@ -11987,11 +12012,13 @@ concordance <- function(object, ..., formula) {
       (is.logical(std.err) || is.numeric(std.err)) &&
       !is.na(std.err) &&
       !as.logical(std.err)
-    survival_response <- inherits(response, "Surv") ||
-      inherits(response, "survival_py_surv")
-    counting_response <- survival_response && ncol(.as_native_surv(response)) == 3L
-    if (disabled && !counting_response) {
-      matrix(numeric(n_strata * 5L), ncol = 6L, byrow = TRUE)
+    if (disabled) {
+      count_length <- .concordance_disabled_count_length(
+        response,
+        strata,
+        n_strata
+      )
+      matrix(numeric(count_length), ncol = 6L, byrow = TRUE)
     }
     colSums(numeric())
   }
@@ -12014,24 +12041,12 @@ concordance <- function(object, ..., formula) {
   if (n_strata <= 1L) {
     matrix(numeric(n_scores * 5L), nrow = n_scores, ncol = 5L)[, 6L]
   } else {
-    survival_response <- inherits(response, "Surv") ||
-      inherits(response, "survival_py_surv")
-    native_response <- if (survival_response) .as_native_surv(response) else NULL
-    count_width <- if (!is.null(native_response) && ncol(native_response) == 3L) {
-      6L
-    } else {
-      5L
-    }
-    count_length <- n_strata * n_scores * count_width
-    if (!is.null(native_response) && !is.null(strata) && count_width < 6L) {
-      status <- native_response[, ncol(native_response)]
-      event_counts <- vapply(
-        split(status, droplevels(as.factor(strata))),
-        sum,
-        numeric(1)
-      )
-      count_length <- count_length + n_scores * sum(event_counts == 0)
-    }
+    count_length <- .concordance_disabled_count_length(
+      response,
+      strata,
+      n_strata,
+      n_scores
+    )
     count <- matrix(
       numeric(count_length),
       ncol = 6L,
@@ -12044,7 +12059,7 @@ concordance <- function(object, ..., formula) {
 }
 
 .concordance_disabled_standard_error_strata_values <- function(
-    result, n_scores, std.err) {
+    result, n_scores, std.err, response = NULL, strata = NULL, reverse = FALSE) {
   disabled <- length(std.err) == 1L &&
     (is.logical(std.err) || is.numeric(std.err)) &&
     !is.na(std.err) &&
@@ -12055,13 +12070,29 @@ concordance <- function(object, ..., formula) {
 
   count_names <- colnames(result$count)
   strata_names <- rownames(result$count)
-  count <- matrix(as.vector(t(result$count)), ncol = 6L, byrow = TRUE)
+  raw_count <- result$count
+  if (isTRUE(reverse)) {
+    raw_count <- raw_count[, c(2L, 1L, 3L, 4L, 5L), drop = FALSE]
+  }
+  append_sixth <- .concordance_zero_event_strata(
+    response,
+    strata,
+    nrow(raw_count)
+  )
+  count_values <- unlist(lapply(seq_len(nrow(raw_count)), function(index) {
+    c(raw_count[index, ], if (append_sixth[[index]]) 0)
+  }), use.names = FALSE)
+  count <- matrix(count_values, ncol = 6L, byrow = TRUE)
   totals <- colSums(count)
   comparable <- sum(totals[seq_len(3L)])
   result$concordance <- (
     1 + (totals[[1L]] - totals[[2L]]) / comparable
   ) / 2
+  if (isTRUE(reverse)) result$concordance <- 1 - result$concordance
   result$count <- count[, seq_len(5L), drop = FALSE]
+  if (isTRUE(reverse)) {
+    result$count <- result$count[, c(2L, 1L, 3L, 4L, 5L), drop = FALSE]
+  }
   dimnames(result$count) <- list(strata_names, count_names)
   result
 }
@@ -12997,7 +13028,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     keepstrata,
     timewt,
     y,
-    std.err
+    std.err,
+    input_strata
   )
 
   multi_score <- length(concordance) > 1L
@@ -13017,7 +13049,10 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   out <- .concordance_disabled_standard_error_strata_values(
     out,
     n_scores,
-    std.err
+    std.err,
+    y,
+    input_strata,
+    reverse
   )
   variance <- .result_field(result, "variance")
   conditional_variance <- .as_numeric_vector(.result_field(result, "conditional_variance"))

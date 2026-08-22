@@ -236,6 +236,17 @@ fn concordance_time_weight_multiplier(
     }
 }
 
+fn effective_concordance_time_weight(
+    status: &[i32],
+    time_weight: ConcordanceTimeWeight,
+) -> ConcordanceTimeWeight {
+    if status.iter().sum::<i32>() < 2 {
+        ConcordanceTimeWeight::N
+    } else {
+        time_weight
+    }
+}
+
 fn multiplier_at(multipliers: &[(f64, f64)], time: f64) -> f64 {
     match multipliers.binary_search_by(|(candidate, _)| candidate.total_cmp(&time)) {
         Ok(idx) => multipliers[idx].1,
@@ -292,6 +303,7 @@ fn right_concordance_time_weight_multipliers_by(
     time_weight: ConcordanceTimeWeight,
     times_match: impl Fn(f64, f64) -> bool,
 ) -> Vec<(f64, f64)> {
+    let time_weight = effective_concordance_time_weight(status, time_weight);
     if time_weight == ConcordanceTimeWeight::N {
         let mut values: Vec<f64> = time
             .iter()
@@ -549,6 +561,7 @@ fn counting_concordance_time_weight_multipliers(
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> Vec<(f64, f64)> {
+    let time_weight = effective_concordance_time_weight(status, time_weight);
     let mut event_indices: Vec<usize> = status
         .iter()
         .enumerate()
@@ -1355,6 +1368,7 @@ fn right_concordance_summary_for_vectors(
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceSummary {
+    let time_weight = effective_concordance_time_weight(status, time_weight);
     if time_weight == ConcordanceTimeWeight::N {
         match weights {
             Some(values) => concordance_summary_with_horizon_and_weights(
@@ -1386,6 +1400,7 @@ fn counting_concordance_summary_for_vectors(
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceSummary {
+    let time_weight = effective_concordance_time_weight(status, time_weight);
     if time_weight == ConcordanceTimeWeight::N {
         match weights {
             Some(values) => counting_process_concordance_summary_with_weights(
@@ -2507,6 +2522,38 @@ mod tests {
             );
             assert_eq!(multipliers, vec![(1.0, 1.0), (2.0, 1.0), (3.0, 4.0)]);
         }
+    }
+
+    #[test]
+    fn single_event_concordance_uses_unweighted_time_counts() {
+        let time = [4.0, 7.0, 2.0, 5.0];
+        let status = [0, 0, 1, 0];
+        let risk = [0.5, 1.0, -0.5, 0.0];
+        let unweighted = right_concordance_summary_for_vectors(
+            &time,
+            &status,
+            &risk,
+            None,
+            ConcordanceTimeWeight::N,
+        );
+        let importance = right_concordance_summary_for_vectors(
+            &time,
+            &status,
+            &risk,
+            None,
+            ConcordanceTimeWeight::I,
+        );
+
+        assert_eq!(importance, unweighted);
+        assert_eq!(
+            right_concordance_time_weight_multipliers(
+                &time,
+                &status,
+                None,
+                ConcordanceTimeWeight::I,
+            ),
+            vec![(2.0, 1.0)]
+        );
     }
 
     #[test]
