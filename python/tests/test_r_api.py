@@ -17863,6 +17863,182 @@ def test_coxph_formula_accepts_categorical_interactions():
 
 
 @pytest.mark.parametrize(
+    ("rhs", "columns", "assign"),
+    [
+        (
+            "x * strata(g)",
+            ["x", "x:strata(g)b", "x:strata(g)c"],
+            [1, 3, 3],
+        ),
+        (
+            "x:strata(g)",
+            ["x:strata(g)a", "x:strata(g)b", "x:strata(g)c"],
+            [1, 1, 1],
+        ),
+        (
+            "strata(g) * x",
+            ["x", "strata(g)b:x", "strata(g)c:x"],
+            [2, 3, 3],
+        ),
+        (
+            "strata(g):(x+z)",
+            [
+                "strata(g)a:x",
+                "strata(g)b:x",
+                "strata(g)c:x",
+                "strata(g)a:z",
+                "strata(g)b:z",
+                "strata(g)c:z",
+            ],
+            [1, 1, 1, 2, 2, 2],
+        ),
+        (
+            "x:strata(g,h)",
+            [
+                "x:strata(g,h)a, u",
+                "x:strata(g,h)a, v",
+                "x:strata(g,h)b, u",
+                "x:strata(g,h)b, v",
+                "x:strata(g,h)c, u",
+                "x:strata(g,h)c, v",
+            ],
+            [1, 1, 1, 1, 1, 1],
+        ),
+    ],
+)
+def test_coxph_strata_interactions_match_r_model_matrix(rhs, columns, assign):
+    data = {
+        "time": [float(index) for index in range(1, 19)],
+        "status": [1, 0] * 9,
+        "x": [float(index) for index in range(1, 19)],
+        "z": [float(index % 5 + 1) for index in range(18)],
+        "g": ["a", "b", "c"] * 6,
+        "h": ["u", "v"] * 9,
+    }
+    fit = survival.coxph(
+        f"Surv(time,status) ~ {rhs}",
+        data=data,
+        max_iter=0,
+    )
+    matrix = survival.model_matrix(fit)
+
+    assert matrix["columns"] == columns
+    assert matrix["assign"] == assign
+    for row_idx, actual in enumerate(matrix["data"]):
+        expected = []
+        for column in columns:
+            value = data["z"][row_idx] if column.endswith(":z") else data["x"][row_idx]
+            if "strata" not in column or column == "x":
+                expected.append(value)
+                continue
+            level = data["g"][row_idx]
+            if ", " in column:
+                active = column.endswith(f"{level}, {data['h'][row_idx]}")
+            else:
+                active = f"){level}" in column
+            expected.append(value if active else 0.0)
+        assert actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("term", "columns"),
+    [
+        ("strata(code)", ["x:strata(code)code=1", "x:strata(code)code=2"]),
+        ("strata(site=g)", ["x:strata(site=g)site=a", "x:strata(site=g)site=b"]),
+        (
+            "strata(code,shortlabel=TRUE)",
+            ["x:strata(code,shortlabel=TRUE)1", "x:strata(code,shortlabel=TRUE)2"],
+        ),
+        (
+            'strata(g,h,sep="|")',
+            [
+                'x:strata(g,h,sep="|")a|u',
+                'x:strata(g,h,sep="|")a|v',
+                'x:strata(g,h,sep="|")b|u',
+                'x:strata(g,h,sep="|")b|v',
+            ],
+        ),
+    ],
+)
+def test_strata_formula_options_match_r_factor_labels(term, columns):
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 0, 1, 0],
+        "x": [1.0, 2.0, 3.0, 4.0],
+        "g": ["a", "a", "b", "b"],
+        "h": ["u", "v", "u", "v"],
+        "code": [1, 2, 1, 2],
+    }
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x:{term}",
+        data=data,
+        max_iter=0,
+    )
+
+    assert survival.coef_names(fit) == columns
+
+
+def test_strata_formula_na_group_controls_formula_row_omission():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 0, 1, 0, 1, 0],
+        "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "g": ["a", None, "b", "a", None, "b"],
+    }
+    omitted = survival.coxph(
+        "Surv(time,status) ~ x:strata(g)",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+    )
+    grouped = survival.coxph(
+        "Surv(time,status) ~ x:strata(g,na.group=TRUE)",
+        data=data,
+        na_action="fail",
+        max_iter=0,
+    )
+
+    assert len(omitted.covariates) == 4
+    assert len(grouped.covariates) == 6
+    assert survival.coef_names(grouped)[-1] == "x:strata(g,na.group=TRUE)NA"
+    with pytest.raises(ValueError, match="missing values in formula data"):
+        survival.coxph(
+            "Surv(time,status) ~ x:strata(g)",
+            data=data,
+            na_action="fail",
+            max_iter=0,
+        )
+
+
+def test_strata_interaction_prediction_reuses_fitted_levels_and_namespace():
+    data = {
+        "time": [float(index) for index in range(1, 10)],
+        "status": [1, 0, 1, 0, 1, 0, 1, 0, 1],
+        "x": [float(index) for index in range(1, 10)],
+        "g": ["c", "b", "a"] * 3,
+    }
+    fit = survival.coxph(
+        "Surv(time,status) ~ x * survival::strata(g)",
+        data=data,
+        max_iter=2,
+    )
+    newdata = {"x": [2.0, 3.0, 4.0], "g": ["a", "b", "c"]}
+    rows, offsets = survival.r_api._prediction_inputs(fit, newdata)
+
+    assert offsets is None
+    assert rows is not None
+    for actual, expected in zip(
+        rows,
+        [[2.0, 0.0, 0.0], [3.0, 3.0, 0.0], [4.0, 0.0, 4.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert len(survival.predict(fit, newdata, reference="strata")) == 3
+    with pytest.raises(ValueError, match="unknown level"):
+        survival.predict(fit, {"x": [1.0], "g": ["new"]})
+
+
+@pytest.mark.parametrize(
     ("rhs", "columns"),
     [
         ("g:x", ["gA:x", "gB:x", "gC:x"]),

@@ -237,6 +237,16 @@ class _NSFormulaOptions:
 
 
 @dataclass(frozen=True)
+class _StrataFormulaOptions:
+    columns: tuple[str, ...]
+    labels: tuple[str, ...]
+    na_group: bool = False
+    shortlabel: bool | None = None
+    sep: str = ", "
+    named_variables: bool = False
+
+
+@dataclass(frozen=True)
 class _NumericFormulaLiteral:
     value: float
 
@@ -290,6 +300,7 @@ class _CovariateTerm:
     formula_label: str | None = None
     poly_options: _PolyFormulaOptions | None = None
     ns_options: _NSFormulaOptions | None = None
+    strata_options: _StrataFormulaOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +319,7 @@ class _ModelCovariateTerm:
 @dataclass(frozen=True)
 class _ModelStrataTerm:
     columns: tuple[str, ...]
+    factor: _CovariateTerm | None = None
 
 
 @dataclass(frozen=True)
@@ -506,6 +518,7 @@ class _FormulaDesign:
     term_assignments: tuple[int, ...] = ()
     term_labels: tuple[str, ...] = ()
     strata: tuple[str, ...] = ()
+    strata_factors: tuple[_CovariateTerm, ...] = ()
     strata_levels: tuple[Any, ...] = ()
     ridge: tuple[_RidgeFormulaTerm, ...] = ()
     intercept: bool = False
@@ -3907,6 +3920,8 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
 
 
 def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
+    if term.strata_options is not None:
+        return list(term.strata_options.columns)
     if term.numeric_expression is not None:
         return _numeric_formula_expression_columns(term.numeric_expression)
     if term.arithmetic is not None:
@@ -4075,15 +4090,20 @@ def _apply_formula_na_action(
     terms = _split_terms(rhs, _dot_terms(data, list(response_spec.columns)))
     raw_columns = [
         *response_spec.columns,
-        *terms.strata,
         *_offset_columns(terms.offsets),
         *terms.clusters,
     ]
     transformed_columns: list[tuple[str, Sequence[Any]]] = []
+    evaluated_strata: set[_CovariateTerm] = set()
     for spec in terms.covariates:
         for term in _covariate_factors(spec):
             term_columns = _covariate_term_columns(term)
             if any(column in excluded for column in term_columns):
+                continue
+            if term.strata_options is not None:
+                factor = _strata_formula_factor(data, term.strata_options, n)
+                transformed_columns.append((_covariate_term_name(term), factor.labels))
+                evaluated_strata.add(term)
                 continue
             declared_levels = _formula_declared_factor_levels(data, term)
             if term.poly_options is not None and not term.poly_options.raw:
@@ -4117,6 +4137,16 @@ def _apply_formula_na_action(
                 )
             else:
                 raw_columns.extend(term_columns)
+
+    for term in _formula_model_strata_factors(terms.model_terms):
+        if term in evaluated_strata:
+            continue
+        term_columns = _covariate_term_columns(term)
+        if any(column in excluded for column in term_columns):
+            continue
+        options = cast(_StrataFormulaOptions, term.strata_options)
+        factor = _strata_formula_factor(data, options, n)
+        transformed_columns.append((_covariate_term_name(term), factor.labels))
 
     raw_columns = [column for column in dict.fromkeys(raw_columns) if column not in excluded]
     missing = _missing_row_indices(
@@ -4660,6 +4690,96 @@ def _parse_ns_formula_term(term: str) -> _CovariateTerm | None:
     )
 
 
+def _complete_formula_call_inner(term: str, names: Sequence[str]) -> str | None:
+    value = term.strip()
+    prefix = next((f"{name}(" for name in names if value.startswith(f"{name}(")), None)
+    if prefix is None:
+        return None
+
+    depth = 0
+    in_backtick = False
+    quote: str | None = None
+    for idx, char in enumerate(value[len(prefix) - 1 :], start=len(prefix) - 1):
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'} and not in_backtick:
+            quote = char
+        elif char == "`":
+            in_backtick = not in_backtick
+        elif not in_backtick and char == "(":
+            depth += 1
+        elif not in_backtick and char == ")":
+            depth -= 1
+            if depth == 0:
+                return value[len(prefix) : -1] if idx == len(value) - 1 else None
+            if depth < 0:
+                break
+    raise ValueError(f"malformed {names[0]}() formula term")
+
+
+def _parse_strata_formula_term(term: str) -> _CovariateTerm | None:
+    inner = _complete_formula_call_inner(term, ("strata", "survival::strata"))
+    if inner is None:
+        return None
+
+    columns: list[str] = []
+    labels: list[str] = []
+    named_variables = False
+    na_group = False
+    shortlabel: bool | None = None
+    sep = ", "
+    seen_options: set[str] = set()
+    for part in _formula_response_parts(inner):
+        option = _formula_named_option(part)
+        if option is None:
+            raw_label = part.strip()
+            raw_column = part
+        else:
+            raw_name, raw_value = option
+            option_name = raw_name.strip().lower().replace("_", ".")
+            if option_name in {"na.group", "shortlabel", "sep"}:
+                if option_name in seen_options:
+                    raise ValueError(f"strata() contains multiple {option_name}= options")
+                seen_options.add(option_name)
+                if option_name == "na.group":
+                    na_group = _numeric_formula_bool_literal(raw_value, "strata na.group")
+                elif option_name == "shortlabel":
+                    shortlabel = _numeric_formula_bool_literal(raw_value, "strata shortlabel")
+                else:
+                    sep_value = _parse_formula_literal(raw_value)
+                    if not isinstance(sep_value, str):
+                        raise ValueError("strata sep must be a string")
+                    sep = sep_value
+                continue
+            named_variables = True
+            raw_label = raw_name.strip()
+            raw_column = raw_value
+
+        column, quoted = _formula_name(raw_column)
+        if _unsupported_formula_name(column, quoted):
+            raise ValueError(f"unsupported strata() formula column: {column}")
+        columns.append(column)
+        labels.append(raw_label)
+
+    if not columns:
+        raise ValueError("strata() requires at least one column")
+    return _CovariateTerm(
+        columns[0],
+        categorical=True,
+        formula_label=term,
+        strata_options=_StrataFormulaOptions(
+            columns=tuple(columns),
+            labels=tuple(labels),
+            na_group=na_group,
+            shortlabel=shortlabel,
+            sep=sep,
+            named_variables=named_variables,
+        ),
+    )
+
+
 def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if not term:
         raise ValueError("formula interaction terms must not be empty")
@@ -4675,6 +4795,10 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     ns_term = _parse_ns_formula_term(term)
     if ns_term is not None:
         return ns_term
+
+    strata_term = _parse_strata_formula_term(term)
+    if strata_term is not None:
+        return strata_term
 
     for wrapper in ("I", "identity"):
         prefix = f"{wrapper}("
@@ -5344,6 +5468,43 @@ def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
     )
 
 
+def _formula_covariate_model_term(term: _CovariateSpec) -> _FormulaModelTerm:
+    if isinstance(term, _CovariateTerm) and term.strata_options is not None:
+        return _ModelStrataTerm(term.strata_options.columns, term)
+    return _ModelCovariateTerm(term)
+
+
+def _formula_model_strata_columns(model_terms: Sequence[_FormulaModelTerm]) -> list[str]:
+    columns: list[str] = []
+    for model_term in model_terms:
+        if isinstance(model_term, _ModelStrataTerm):
+            _append_unique(columns, list(model_term.columns))
+        elif isinstance(model_term, _ModelCovariateTerm):
+            for factor in _covariate_factors(model_term.term):
+                if factor.strata_options is not None:
+                    _append_unique(columns, list(factor.strata_options.columns))
+    return columns
+
+
+def _formula_model_strata_factors(
+    model_terms: Sequence[_FormulaModelTerm],
+) -> list[_CovariateTerm]:
+    factors: list[_CovariateTerm] = []
+    for model_term in model_terms:
+        if isinstance(model_term, _ModelStrataTerm) and model_term.factor is not None:
+            _append_unique(factors, [model_term.factor])
+        elif isinstance(model_term, _ModelCovariateTerm):
+            _append_unique(
+                factors,
+                [
+                    factor
+                    for factor in _covariate_factors(model_term.term)
+                    if factor.strata_options is not None
+                ],
+            )
+    return factors
+
+
 @lru_cache(maxsize=512)
 def _split_terms_cached(
     rhs: str,
@@ -5448,23 +5609,6 @@ def _split_terms_cached(
                 _append_unique(frailty, [frailty_term])
                 _append_unique(model_terms, [model_item])
             continue
-        if term.startswith("strata(") and term.endswith(")"):
-            column_items = _formula_name_items(term[7:-1])
-            columns = [column for column, _quoted in column_items]
-            if not columns:
-                raise ValueError("strata() requires at least one column")
-            unsupported.extend(
-                column
-                for column, quoted in column_items
-                if _unsupported_formula_name(column, quoted)
-            )
-            if op == "-":
-                _remove_values(strata, columns)
-                _remove_values(model_terms, [_ModelStrataTerm(tuple(columns))])
-            else:
-                _append_unique(strata, columns)
-                _append_unique(model_terms, [_ModelStrataTerm(tuple(columns))])
-            continue
         if term.startswith("cluster(") and term.endswith(")"):
             column_items = _formula_name_items(term[8:-1])
             columns = [column for column, _quoted in column_items]
@@ -5493,17 +5637,23 @@ def _split_terms_cached(
                 _append_unique(model_terms, [model_item])
             continue
         covariate_terms = _parse_covariate_expression(term, dot_terms)
-        model_items = [_ModelCovariateTerm(item) for item in covariate_terms]
+        model_items = [_formula_covariate_model_term(item) for item in covariate_terms]
+        design_terms = [
+            item
+            for item in covariate_terms
+            if not (isinstance(item, _CovariateTerm) and item.strata_options is not None)
+        ]
         if op == "-":
-            _remove_values(covariates, covariate_terms)
+            _remove_values(covariates, design_terms)
             _remove_values(model_terms, model_items)
         else:
-            _append_unique(covariates, covariate_terms)
+            _append_unique(covariates, design_terms)
             _append_unique(model_terms, model_items)
 
     if unsupported:
         joined = ", ".join(unsupported)
         raise ValueError(f"unsupported formula term(s): {joined}")
+    strata = _formula_model_strata_columns(model_terms)
     return _CachedFormulaTerms(
         covariates=tuple(covariates),
         strata=tuple(strata),
@@ -5798,6 +5948,8 @@ def _term_raw_values(
     *,
     fit_scales: bool | None = None,
 ) -> list[Any]:
+    if term.strata_options is not None:
+        return list(_strata_formula_factor(data, term.strata_options, n).labels)
     if term.numeric_expression is not None:
         if scale_states is None:
             if isinstance(data, _FormulaSubsetData):
@@ -5863,6 +6015,10 @@ def _term_columns(
                 [math.prod(column[idx] for column in column_combo) for idx in range(n)]
             )
         return interaction_columns
+
+    if term.strata_options is not None:
+        factor = _strata_formula_factor(data, term.strata_options, n)
+        return _categorical_columns(factor.labels, tuple(factor.levels))
 
     values = _term_raw_values(data, term, n)
     declared_levels = _formula_declared_factor_levels(data, term)
@@ -6221,6 +6377,9 @@ def _fit_single_design_term(
     term: _CovariateTerm,
     n: int,
 ) -> _SingleDesignTerm:
+    if term.strata_options is not None:
+        factor = _strata_formula_factor(data, term.strata_options, n)
+        return _CategoricalDesignTerm(term, tuple(factor.levels))
     evaluation_scale_states = _term_scale_states(data, term, n)
     prediction_scale_states = _term_prediction_scale_states(term, evaluation_scale_states)
     values = _term_raw_values(data, term, n, evaluation_scale_states)
@@ -6331,9 +6490,26 @@ def _fit_design_term(
     return _fit_single_design_term(data, term, n)
 
 
-def _formula_factor_order(terms: Sequence[_CovariateSpec]) -> dict[_CovariateTerm, int]:
+def _formula_factor_order(terms: _FormulaTerms) -> dict[_CovariateTerm, int]:
     order: dict[_CovariateTerm, int] = {}
-    for term in terms:
+    for model_term in terms.model_terms:
+        if isinstance(model_term, _ModelCovariateTerm):
+            factors = _covariate_factors(model_term.term)
+        elif isinstance(model_term, _ModelStrataTerm) and model_term.factor is not None:
+            factors = (model_term.factor,)
+        elif isinstance(model_term, _ModelRidgeTerm):
+            factors = model_term.ridge.terms
+        elif isinstance(model_term, _ModelPSplineTerm):
+            factors = (model_term.pspline.term,)
+        elif isinstance(model_term, _ModelNSKTerm):
+            factors = (model_term.nsk.term,)
+        elif isinstance(model_term, _ModelFrailtyTerm):
+            factors = (model_term.frailty.term,)
+        else:
+            factors = ()
+        for factor in factors:
+            order.setdefault(factor, len(order))
+    for term in terms.covariates:
         for factor in _covariate_factors(term):
             order.setdefault(factor, len(order))
     return order
@@ -6486,8 +6662,11 @@ def _fit_formula_design(
         )
     if terms.frailty and not allow_frailty:
         raise NotImplementedError("frailty() formula terms are currently supported only by coxph")
-    strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
-    factor_order = _formula_factor_order(terms.covariates)
+    strata_factors = _formula_model_strata_factors(terms.model_terms)
+    strata_values, strata_levels = (
+        _formula_strata_values_and_levels(data, terms, n) if terms.strata else ([], ())
+    )
+    factor_order = _formula_factor_order(terms)
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
     ordered_model_terms = sorted(
         (
@@ -6562,7 +6741,8 @@ def _fit_formula_design(
             _formula_model_term_label(term, factor_order) for term in ordered_model_terms
         ),
         strata=tuple(terms.strata),
-        strata_levels=_label_levels(strata_values, "strata") if terms.strata else (),
+        strata_factors=tuple(strata_factors),
+        strata_levels=strata_levels,
         ridge=tuple(terms.ridge),
         intercept=include_intercept and terms.intercept,
     )
@@ -6585,6 +6765,15 @@ def _single_design_columns(
         if len(values) != n:
             raise ValueError("tt transform result must match the expanded risk-set rows")
         return [values]
+    if isinstance(spec, _CategoricalDesignTerm) and spec.term.strata_options is not None:
+        factor = _strata_formula_factor(data, spec.term.strata_options, n)
+        values = list(factor.labels)
+        unknown = next((value for value in values if value not in spec.levels), None)
+        if unknown is not None:
+            raise ValueError(
+                f"newdata {spec.term.formula_label} contains unknown level {unknown!r}"
+            )
+        return _categorical_columns(values, spec.levels, full=spec.full)
     if isinstance(spec, _NSDesignTerm):
         prediction_scale_states = () if prediction else spec.scale_states
     elif prediction and isinstance(spec, _NumericDesignTerm | _PolyDesignTerm):
@@ -7730,6 +7919,66 @@ def _combined_columns(data: Any, terms: list[str], n: int) -> list[Any]:
     return _combine_aligned_columns([_column(data, term) for term in terms], n)
 
 
+def _strata_factor_values(
+    data: Any,
+    factors: Sequence[_CovariateTerm],
+    fallback_columns: Sequence[str],
+    n: int,
+) -> list[Any]:
+    if not factors:
+        return _combined_columns(data, list(fallback_columns), n)
+    columns = [
+        list(
+            _strata_formula_factor(
+                data,
+                cast(_StrataFormulaOptions, factor.strata_options),
+                n,
+            ).labels
+        )
+        for factor in factors
+    ]
+    return _combine_aligned_columns(columns, n)
+
+
+def _formula_strata_values_and_levels(
+    data: Any,
+    terms: _FormulaTerms,
+    n: int,
+) -> tuple[list[Any], tuple[Any, ...]]:
+    factors = _formula_model_strata_factors(terms.model_terms)
+    if not factors:
+        values = _combined_columns(data, terms.strata, n)
+        return values, _label_levels(values, "strata")
+
+    fitted = [
+        _strata_formula_factor(
+            data,
+            cast(_StrataFormulaOptions, factor.strata_options),
+            n,
+        )
+        for factor in factors
+    ]
+    values = _combine_aligned_columns([list(factor.labels) for factor in fitted], n)
+    if len(fitted) == 1:
+        levels = tuple(fitted[0].levels)
+    else:
+        observed = set(values)
+        levels = tuple(
+            combination
+            for combination in product(*(factor.levels for factor in fitted))
+            if combination in observed
+        )
+    return values, levels
+
+
+def _formula_strata_values(data: Any, terms: _FormulaTerms, n: int) -> list[Any]:
+    return _formula_strata_values_and_levels(data, terms, n)[0]
+
+
+def _design_strata_values(data: Any, design: _FormulaDesign, n: int) -> list[Any]:
+    return _strata_factor_values(data, design.strata_factors, design.strata, n)
+
+
 def _combined_formula_groups(
     data: Any,
     strata_terms: list[str],
@@ -8183,6 +8432,83 @@ def _strata_default_shortlabel(columns: Sequence[Sequence[Any]], labels: Any) ->
         all(_is_missing_value(value) or isinstance(value, str) for value in column)
         for column in columns
     )
+
+
+def _strata_formula_column_levels(
+    source: Any,
+    values: Sequence[Any],
+    na_group: bool,
+) -> tuple[list[str], list[int | None]]:
+    declared = _mstate_categories(source)
+    if declared is None:
+        _levels, labels, codes = _strata_column_levels(values, na_group)
+        return labels, codes
+
+    levels = [
+        _FACTOR_NA_LEVEL if _is_missing_value(value) else value
+        for value in _materialize_1d(declared, "strata factor categories")
+    ]
+    labels = ["NA" if level is _FACTOR_NA_LEVEL else _strata_value_label(level) for level in levels]
+    level_map = {_factor_value_key(level): idx for idx, level in enumerate(levels)}
+    normalized = _factor_normalized_values(source, values)
+    saw_missing = any(_is_missing_value(value) for value in normalized)
+    missing_code: int | None = None
+    if na_group and saw_missing and (True, "") not in level_map:
+        missing_code = len(levels)
+        level_map[(True, "")] = missing_code
+        labels.append("NA")
+    elif na_group:
+        missing_code = level_map.get((True, ""))
+
+    codes: list[int | None] = []
+    for value in normalized:
+        key = _factor_value_key(value)
+        if key == (True, "") and not na_group:
+            codes.append(None)
+            continue
+        code = level_map.get(key)
+        if code is None:
+            raise ValueError("strata() contains a value outside its declared factor levels")
+        codes.append(missing_code if key == (True, "") else code)
+    return labels, codes
+
+
+def _strata_formula_factor(
+    data: Any,
+    options: _StrataFormulaOptions,
+    n: int,
+) -> StrataFactor:
+    sources = [_column_source(data, column) for column in options.columns]
+    columns = [_column(data, column) for column in options.columns]
+    if any(len(column) != n for column in columns):
+        raise ValueError("formula columns must have the same length as the Surv response")
+
+    component_labels: list[list[str]] = []
+    component_codes: list[list[int | None]] = []
+    for source, column in zip(sources, columns, strict=True):
+        labels, codes = _strata_formula_column_levels(source, column, options.na_group)
+        component_labels.append(labels)
+        component_codes.append(codes)
+
+    shortlabel = options.shortlabel
+    if shortlabel is None:
+        shortlabel = not options.named_variables and all(
+            _mstate_categories(source) is not None
+            or isinstance(source, _RCharacterVector)
+            or all(_is_missing_value(value) or isinstance(value, str) for value in column)
+            for source, column in zip(sources, columns, strict=True)
+        )
+    label_parts = _strata_combination_labels(options.labels, component_labels, shortlabel)
+    codes, observed_parts, counts = _core.strata_compact(
+        component_codes,
+        [len(labels) for labels in component_labels],
+    )
+    levels = [
+        options.sep.join(label_parts[term_idx][part_idx] for term_idx, part_idx in enumerate(parts))
+        for parts in observed_parts
+    ]
+    row_labels = [None if code is None else levels[code - 1] for code in codes]
+    return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
 
 
 def _strata_combination_labels(
@@ -20471,6 +20797,8 @@ def _formula_model_term_factors(term: _FormulaModelTerm) -> list[str]:
     if isinstance(term, _ModelFrailtyTerm):
         return [_covariate_term_name(term.frailty.term)]
     if isinstance(term, _ModelStrataTerm):
+        if term.factor is not None:
+            return [_covariate_term_name(term.factor)]
         return [f"strata({','.join(term.columns)})"]
     if isinstance(term, _ModelClusterTerm):
         return [f"cluster({term.column})"]
@@ -20850,6 +21178,9 @@ def _survreg_summary_coef_names(fit: Any, location_width: int, total_width: int)
 
     design = _formula_design_for_fit(fit)
     if design is not None and len(design.strata_levels) == scale_width:
+        if design.strata_factors:
+            names.extend(str(level) for level in design.strata_levels)
+            return names
         level_parts = [
             (level,) if len(design.strata) == 1 else tuple(level) for level in design.strata_levels
         ]
@@ -22624,7 +22955,7 @@ def _cox_prediction_strata(fit: Any, newdata: Any | None, n: int) -> list[int]:
         and design.strata
         and (isinstance(newdata, Mapping) or hasattr(newdata, "columns"))
     ):
-        labels = _combined_columns(newdata, list(design.strata), n)
+        labels = _design_strata_values(newdata, design, n)
         level_map = {value: idx for idx, value in enumerate(design.strata_levels)}
         strata: list[int] = []
         for value in labels:
@@ -24049,7 +24380,7 @@ def _survreg_prediction_strata(
         and design.strata
         and (isinstance(newdata, Mapping) or hasattr(newdata, "columns"))
     ):
-        labels = _combined_columns(newdata, list(design.strata), n)
+        labels = _design_strata_values(newdata, design, n)
         level_map = {value: idx for idx, value in enumerate(design.strata_levels)}
         strata: list[int] = []
         for value in labels:
@@ -28350,7 +28681,7 @@ def coxph(
         if terms.strata:
             if strata is not None:
                 raise ValueError("use only one of formula strata(...) or strata")
-            strata = _combined_columns(data, terms.strata, len(response))
+            strata = _formula_strata_values(data, terms, len(response))
         if terms.offsets:
             if offset is not None:
                 raise ValueError("use only one of formula offset(...) or offset")
@@ -28550,12 +28881,18 @@ def coxph(
         raise ValueError("istate must have the same length as the Surv response")
     original_strata_values = _materialize_labels(strata, "strata") if strata is not None else None
     strata_levels = (
-        _label_levels(original_strata_values, "strata")
-        if original_strata_values is not None
-        else ()
+        formula_design.strata_levels
+        if formula_design is not None and formula_design.strata_levels
+        else (
+            _label_levels(original_strata_values, "strata")
+            if original_strata_values is not None
+            else ()
+        )
     )
     fit_strata = (
-        _encode_groups(original_strata_values, n) if original_strata_values is not None else None
+        _encode_groups(original_strata_values, n, levels=strata_levels)
+        if original_strata_values is not None
+        else None
     )
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
@@ -29946,7 +30283,7 @@ def survreg(
             if terms.strata:
                 if strata is not None:
                     raise ValueError("use only one of formula strata(...) or strata")
-                strata = _combined_columns(data, terms.strata, len(response))
+                strata = _formula_strata_values(data, terms, len(response))
             if terms.offsets:
                 if offset is not None or offsets is not None:
                     raise ValueError("use only one of formula offset(...) or offset")
@@ -30038,7 +30375,19 @@ def survreg(
     offset_values = _optional_float_vector(offsets if offsets is not None else offset, "offsets", n)
     weight_values = _optional_float_vector(weights, "weights", n)
     case_weights = weight_values if explicit_weights else None
-    strata_values = _encode_groups(strata, n) if strata is not None else None
+    strata_values = (
+        _encode_groups(
+            strata,
+            n,
+            levels=(
+                formula_design.strata_levels
+                if formula_design is not None and formula_design.strata_levels
+                else None
+            ),
+        )
+        if strata is not None
+        else None
+    )
     if (
         (scale_value > 0.0 or exponential_fixed_scale or rayleigh_fixed_scale)
         and strata_values is not None

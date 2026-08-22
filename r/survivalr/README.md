@@ -26,6 +26,9 @@ model retention options.
 `coxph` formula fits support `tt(...)` terms for right-censored and
 counting-process responses, with either the default O'Brien transform or a
 custom four-argument transform function.
+Stratum-specific effects such as `age * strata(sex)` and
+`x:strata(site, cohort)` match R contrast expansion and retain their combined
+levels when rebuilding predictions for new data.
 `survobrien` formula expansion preserves factor keeper columns and their level
 ordering while transforming continuous terms within each event risk set.
 `finegray` formulas use the Python formula engine and Rust interval-expansion

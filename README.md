@@ -142,6 +142,10 @@ their fitted state for ordinary new-data model reconstruction. Formula
 `ns(...)` terms use a parallel O(n k) natural-spline basis matching R's
 `splines::ns`, including fitted knots and boundaries, linear extrapolation,
 interactions, nested numeric expressions, and pre-subset transform state.
+`strata(...)` can also participate in interactions such as
+`age * strata(sex)` and `x:strata(site, cohort)`. These terms use R-compatible
+full or reduced contrasts, retain fitted combined levels for prediction, and
+honor `na.group=`, `shortlabel=`, and `sep=`.
 Formula calls also accept `subset=` as a boolean mask or zero-based row indices
 and `na_action="omit"` for row-wise missing-data omission across formula
 columns and external row-aligned arrays such as `weights`, `offset`, and
