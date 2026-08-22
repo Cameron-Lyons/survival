@@ -8828,6 +8828,26 @@ def test_concordance_zero_weight_rank_tables_remain_available_in_python():
         )
 
 
+def test_concordance_zero_pair_diagnostics_remain_finite_in_python():
+    response = survival.Surv([4, 1, 6, 5, 2, 6, 5], [0, 0, 0, 1, 0, 1, 0])
+    result = survival.concordancefit(
+        response,
+        {
+            "x": [1, 0, 0.5, 0, 0, 1, 1],
+            "z": [0, -0.5, -0.5, 1, 0.5, 0, -1],
+        },
+        ymax=4,
+        timewt="S/G",
+        influence=3,
+    )
+
+    assert result is not None
+    assert result.concordance == pytest.approx([0.5, 0.5])
+    assert result.variance == [[0.0, 0.0], [0.0, 0.0]]
+    assert result.dfbeta is not None
+    assert all(value == 0.0 for column in result.dfbeta for value in column)
+
+
 def test_concordance_collapsed_single_score_strata_remain_available_in_python():
     result = survival.concordancefit(
         survival.Surv([1, 2, 1, 2], [1, 0, 1, 0]),
