@@ -4790,6 +4790,154 @@ test_that("empty concordance rank strata match reference diagnostics", {
   )
 })
 
+test_that("empty concordance rank tables match reference shapes", {
+  data <- data.frame(
+    time = c(4, 1, 6, 5, 2, 6, 5),
+    status = c(0, 0, 0, 1, 0, 1, 0),
+    x = c(1, 0, 0.5, 0, 0, 1, 1),
+    z = c(0, -0.5, -0.5, 1, 0.5, 0, -1)
+  )
+  single_score <- as.matrix(data["x"])
+  multi_score <- as.matrix(data[c("x", "z")])
+
+  for (reverse_value in c(FALSE, TRUE)) {
+    bridged_single <- concordancefit(
+      Surv(data$time, data$status),
+      single_score,
+      ymax = 4,
+      timewt = "S/G",
+      ranks = TRUE,
+      reverse = reverse_value
+    )
+    reference_single <- survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      single_score,
+      ymax = 4,
+      timewt = "S/G",
+      ranks = TRUE,
+      reverse = reverse_value
+    )
+    expect_equal(unclass(bridged_single), unclass(reference_single), tolerance = 1e-12)
+
+    bridged_formula <- concordance(
+      Surv(time, status) ~ x,
+      data = data,
+      ymax = 4,
+      timewt = "S/G",
+      ranks = TRUE,
+      reverse = reverse_value
+    )
+    reference_formula <- survival::concordance(
+      survival::Surv(time, status) ~ x,
+      data = data,
+      ymax = 4,
+      timewt = "S/G",
+      ranks = TRUE,
+      reverse = reverse_value
+    )
+    fields <- setdiff(names(reference_formula), "call")
+    expect_equal(
+      unclass(bridged_formula)[fields],
+      unclass(reference_formula)[fields],
+      tolerance = 1e-12
+    )
+  }
+
+  bridged_multi <- concordancefit(
+    Surv(data$time, data$status),
+    multi_score,
+    ymax = 4,
+    timewt = "S/G",
+    ranks = TRUE
+  )
+  reference_multi <- survival::concordancefit(
+    survival::Surv(data$time, data$status),
+    multi_score,
+    ymax = 4,
+    timewt = "S/G",
+    ranks = TRUE
+  )
+  expect_equal(unclass(bridged_multi), unclass(reference_multi), tolerance = 1e-12)
+  expect_error(
+    concordancefit(
+      Surv(data$time, data$status),
+      multi_score,
+      ymax = 4,
+      timewt = "S/G",
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected",
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(data$time, data$status),
+      multi_score,
+      ymax = 4,
+      timewt = "S/G",
+      ranks = TRUE,
+      reverse = TRUE
+    ),
+    "undefined columns selected",
+    fixed = TRUE
+  )
+
+  stratified <- data.frame(
+    time = c(1, 5, 2, 6),
+    status = c(0, 1, 0, 1),
+    x = c(0.1, 0.4, 0.2, 0.8),
+    z = c(0.8, 0.2, 0.6, 0.1),
+    group = c("a", "a", "b", "b")
+  )
+  replacement_error <- "replacement has length zero"
+  for (scores in list(stratified$x, as.matrix(stratified[c("x", "z")]))) {
+    expect_error(
+      concordancefit(
+        Surv(stratified$time, stratified$status),
+        scores,
+        strata = stratified$group,
+        ymax = 4,
+        ranks = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordancefit(
+        survival::Surv(stratified$time, stratified$status),
+        scores,
+        strata = stratified$group,
+        ymax = 4,
+        ranks = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+  }
+
+  for (formula in list(
+      Surv(time, status) ~ x + strata(group),
+      Surv(time, status) ~ x + z + strata(group))) {
+    reference_formula <- stats::update(formula, survival::Surv(time, status) ~ .)
+    expect_error(
+      concordance(formula, data = stratified, ymax = 4, ranks = TRUE),
+      replacement_error,
+      fixed = TRUE
+    )
+    expect_error(
+      survival::concordance(
+        reference_formula,
+        data = stratified,
+        ymax = 4,
+        ranks = TRUE
+      ),
+      replacement_error,
+      fixed = TRUE
+    )
+  }
+})
+
 test_that("collapsed single-score strata match reference behavior", {
   data <- data.frame(
     time = c(1, 2, 1, 2),
