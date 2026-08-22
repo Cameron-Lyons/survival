@@ -1270,6 +1270,10 @@ R-compatible names and methods.
 their level ordering, while transforming continuous terms within each event
 risk set.
 
+\code{coxph} and \code{survreg} formulas support raw and orthogonal univariate
+\code{poly(...)} terms, including interactions. Orthogonal bases retain their
+training coefficients when rebuilding model matrices for new data.
+
 Formula \code{finegray} calls use the Python formula engine and Rust interval
 expansion directly. The bridge supports weights, subsets, missing-data actions,
 strata, counting-process histories, and delayed entry; computes censoring risk

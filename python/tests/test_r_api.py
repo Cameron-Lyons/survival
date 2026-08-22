@@ -17234,6 +17234,141 @@ def test_formula_numeric_calls_rebuild_interactions_offsets_and_predictions():
     )
 
 
+def test_formula_poly_terms_build_multicolumn_designs_and_interactions():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 1, 0, 1, 0, 1, 0, 1],
+        "x": [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        "z": [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0],
+    }
+    formula = "Surv(time, status) ~ poly(x, 3) + poly(log(z), degree=2, raw=TRUE):x"
+    fit = survival.coxph(formula, data=data, max_iter=0)
+    matrix = survival.model_matrix(fit)
+    expected_orthogonal = [
+        [-0.5400617248673217, 0.5400617248673216, -0.4308202184276644],
+        [-0.3857583749052297, 0.0771516749810460, 0.3077287274483316],
+        [-0.2314550249431379, -0.2314550249431379, 0.4308202184276648],
+        [-0.0771516749810459, -0.3857583749052297, 0.1846372364689991],
+        [0.0771516749810459, -0.3857583749052297, -0.1846372364689989],
+        [0.2314550249431380, -0.2314550249431379, -0.4308202184276646],
+        [0.3857583749052298, 0.0771516749810459, -0.3077287274483319],
+        [0.5400617248673216, 0.5400617248673217, 0.4308202184276646],
+    ]
+    expected_rows = [
+        [
+            *expected_orthogonal[index],
+            math.log(data["z"][index]) * data["x"][index],
+            math.log(data["z"][index]) ** 2 * data["x"][index],
+        ]
+        for index in range(8)
+    ]
+
+    assert matrix["columns"] == [
+        "poly(x, 3)1",
+        "poly(x, 3)2",
+        "poly(x, 3)3",
+        "poly(log(z), degree=2, raw=TRUE)1:x",
+        "poly(log(z), degree=2, raw=TRUE)2:x",
+    ]
+    assert matrix["assign"] == [1, 1, 1, 2, 2]
+    assert survival.model_term_names(fit) == [
+        "poly(x, 3)",
+        "poly(log(z), degree=2, raw=TRUE):x",
+    ]
+    for actual, expected in zip(matrix["data"], expected_rows, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-13)
+
+
+def test_formula_poly_reuses_training_coefficients_for_prediction():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 1, 0, 1, 0, 1, 0, 1],
+        "x": [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    }
+    fit = survival.coxph("Surv(time, status) ~ poly(x, 3)", data=data, max_iter=0)
+    expected_rows = [
+        [1.31157847467778, 5.16916222373008, 21.9718311398109],
+        [1.46588182463987, 6.55789237338891, 31.5729674361988],
+        [2.08309522448824, 13.6558464716451, 95.8267257274105],
+    ]
+
+    expected = fit.predict(expected_rows)
+    assert survival.predict(
+        fit,
+        {"x": [10.0, 11.0, 15.0]},
+        reference="zero",
+    ) == pytest.approx(expected, abs=1e-12)
+
+    simple_fit = survival.coxph(
+        "Surv(time, status) ~ poly(x, 2, simple=TRUE)",
+        data=data,
+        max_iter=0,
+    )
+    simple_rows, _alpha, _norm2 = survival._survival.poly_basis(
+        [10.0, 11.0, 15.0],
+        2,
+    )
+    assert survival.predict(
+        simple_fit,
+        {"x": [10.0, 11.0, 15.0]},
+        reference="zero",
+    ) == pytest.approx(simple_fit.predict(simple_rows), abs=1e-12)
+
+
+def test_formula_poly_fits_orthogonal_state_before_subset_like_r():
+    x = [-10.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 8.0, 20.0]
+    keep = [False, True, True, True, True, True, True, True, False, False]
+    data = {
+        "time": [float(index) for index in range(1, 11)],
+        "status": [1, 0] * 5,
+        "x": x,
+    }
+    full_rows, _alpha, _norm2 = survival._survival.poly_basis(x, 2)
+
+    for simple in (False, True):
+        suffix = ", simple=TRUE" if simple else ""
+        fit = survival.coxph(
+            f"Surv(time, status) ~ poly(x, 2{suffix})",
+            data=data,
+            subset=keep,
+            max_iter=0,
+        )
+        expected = [row for row, retained in zip(full_rows, keep, strict=True) if retained]
+        for actual, expected_row in zip(fit.covariates, expected, strict=True):
+            assert actual == pytest.approx(expected_row, abs=1e-13)
+
+
+def test_formula_poly_matches_r_missing_value_and_argument_rules():
+    data = _numeric_data()
+    data["x1"][2] = None
+
+    with pytest.raises(ValueError, match="missing values are not allowed"):
+        survival.coxph(
+            "Surv(time, status) ~ poly(x1, 2)",
+            data=data,
+            na_action="omit",
+        )
+
+    raw_fit = survival.coxph(
+        "Surv(time, status) ~ poly(x1, 2, raw=TRUE)",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+    )
+    assert len(raw_fit.covariates) == 7
+    assert all(len(row) == 2 for row in raw_fit.covariates)
+
+    for term, message in (
+        ("poly(x1, 0)", "at least 1"),
+        ("poly(x1, raw=x2)", "must be TRUE or FALSE"),
+        ("poly(x1, 8)", "unique points"),
+        ("poly(x1, 2, coefs=1)", "explicit coefs"),
+        ("offset(poly(x1, 2))", "offset"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            survival.coxph(f"Surv(time, status) ~ {term}", data=_numeric_data())
+
+
 def test_formula_pmin_na_rm_controls_transformed_row_omission():
     data = _numeric_data()
     data["x1"] = [None, None, *data["x1"][2:]]
