@@ -183,7 +183,9 @@ and custom `tt(x, time, riskset, weights)` callables.
 Both `coxph` and `survreg` formula fits accept `ridge(...)` and `pspline(...)`
 penalties, including fixed smoothing, target degrees of freedom, and AIC-based
 P-spline selection. The native optimizers expose the fitted quadratic penalty,
-penalized likelihood, smoothing history, and effective degrees of freedom.
+penalized likelihood, smoothing history, and effective degrees of freedom;
+`survreg` model summaries and information criteria retain the fractional
+per-term degrees of freedom used by R.
 `clogit("case ~ exposure + strata(set)", data=...)` fits matched case-control
 models through the exact stratified Cox likelihood; `method="approximate"`
 maps to Breslow handling as it does in R.

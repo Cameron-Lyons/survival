@@ -619,6 +619,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
         "penalty_matrix",
         "penalty",
         "penalized_log_likelihood",
+        "degrees_of_freedom",
     }
     assert _pyi_class_property_names(stub_path, "SurvregPrediction") == {
         "predictions",

@@ -11363,9 +11363,11 @@ confint.survival_py_model <- function(object, parm, level = 0.95, ...) {
 
 logLik.survival_py_model <- function(object, ...) {
   value <- as.numeric(.call_r_api("loglik", object, ...))
+  degrees <- .call_r_api("degrees_freedom", object)
+  degrees <- if (is.integer(degrees)) degrees[[1L]] else as.numeric(degrees)[[1L]]
   result <- structure(
     value,
-    df = as.integer(.call_r_api("degrees_freedom", object)),
+    df = degrees,
     class = "logLik"
   )
   if (inherits(object, "survival_py_coxph")) {
@@ -11383,13 +11385,12 @@ nobs.survival_py_model <- function(object, ...) {
 }
 
 df.residual.survival_py_survreg <- function(object, ...) {
-  as.integer(.call_r_api("df_residual", object, ...))
+  value <- .call_r_api("df_residual", object, ...)
+  if (is.integer(value)) value[[1L]] else as.numeric(value)[[1L]]
 }
 
 extractAIC.survival_py_model <- function(fit, scale = 0, k = 2, ...) {
-  values <- .as_numeric_vector(.call_r_api("extract_aic", fit, scale = scale, k = k, ...))
-  names(values) <- c("df", "AIC")
-  values
+  .as_numeric_vector(.call_r_api("extract_aic", fit, scale = scale, k = k, ...))
 }
 
 formula.survival_py_model <- function(x, ...) {

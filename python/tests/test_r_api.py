@@ -18742,6 +18742,14 @@ def test_low_level_survreg_quadratic_penalty_validates_and_reports_objective():
     assert fit.penalty_matrix == [[0.0, 0.0], [0.0, 0.4]]
     assert fit.penalty >= 0.0
     assert fit.penalized_log_likelihood == pytest.approx(fit.log_likelihood - fit.penalty)
+    expected_df = len(fit.coefficients) - sum(
+        fit.penalty_matrix[row][column] * fit.variance_matrix[column][row]
+        for row in range(len(fit.penalty_matrix))
+        for column in range(len(fit.penalty_matrix))
+    )
+    assert fit.degrees_of_freedom is not None
+    assert fit.degrees_of_freedom == pytest.approx(expected_df)
+    assert survival.degrees_freedom(fit) == pytest.approx(fit.degrees_of_freedom)
     with pytest.raises(ValueError, match="shape"):
         survival.regression.survreg(
             time=[2.0, 3.0],
@@ -18810,6 +18818,21 @@ def test_survreg_formula_pspline_fixed_and_target_df_match_reference():
         6.711146188830356,
         abs=1e-9,
     )
+    assert fixed.df == pytest.approx(
+        [0.24759657551346781, 5.468849634240331, 0.9946999790765584],
+        abs=1e-9,
+    )
+    assert survival.degrees_freedom(fixed) == pytest.approx(
+        6.711146188830357,
+        abs=1e-9,
+    )
+    assert survival.df_residual(fixed) == pytest.approx(41.288853811169645, abs=1e-9)
+    assert survival.extract_aic(fixed) == pytest.approx(
+        [6.711146188830357, 172.97407110013205],
+        abs=1e-8,
+    )
+    assert survival.aic(fixed) == pytest.approx(172.97407110013205, abs=1e-8)
+    assert survival.model_summary(fixed)["df"] == pytest.approx(fixed.df, abs=1e-12)
 
     target_term = "pspline(x,df=4,nterm=6)"
     target = survival.survreg(

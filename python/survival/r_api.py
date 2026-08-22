@@ -479,6 +479,7 @@ class _FormulaFit:
     history: dict[str, dict[str, Any]] | None = None
     effective_degrees_of_freedom: float | None = None
     term_degrees_of_freedom: dict[str, float] | None = None
+    degrees_of_freedom_components: list[float] | None = None
     reported_log_likelihood: list[float] | None = None
     penalty_matrix: list[list[float]] | None = None
     conditional_logistic: bool = False
@@ -520,6 +521,10 @@ class _FormulaFit:
             return self.score_values
         if name == "n" and self.n_observations is not None:
             return self.n_observations
+        if name == "df" and _is_survreg_fit(self.fit):
+            if self.degrees_of_freedom_components is not None:
+                return list(self.degrees_of_freedom_components)
+            return len(list(self.fit.coefficients))
         if name == "means" and self.multi_state is not None:
             return list(self.multi_state.reported_means)
         if self.multi_state is not None and name in {
@@ -17679,17 +17684,26 @@ def degrees_freedom(fit: Any) -> float | int:
 
     _require_model_fit(fit, "degrees_freedom")
     if _is_survreg_fit(fit):
-        return len(list(fit.coefficients))
+        if isinstance(fit, _FormulaFit) and fit.effective_degrees_of_freedom is not None:
+            return fit.effective_degrees_of_freedom
+
+        model = _unwrap_formula_fit(fit)
+        effective = getattr(model, "degrees_of_freedom", None)
+        if effective is not None:
+            return float(effective)
+        return len(list(model.coefficients))
     return _cox_degrees_of_freedom(fit)
 
 
-def df_residual(fit: Any) -> int:
+def df_residual(fit: Any) -> float | int:
     """Return residual degrees of freedom for fitted ``survreg`` models."""
 
     _require_model_fit(fit, "df_residual")
     if not _is_survreg_fit(fit):
         raise TypeError("df_residual is only defined for fitted survreg models")
-    return nobs(fit) - degrees_freedom(fit)
+    fitted_df = degrees_freedom(fit)
+    residual_df = nobs(fit) - fitted_df
+    return residual_df if isinstance(fitted_df, float) else int(residual_df)
 
 
 def _finite_numeric_option(value: Any, name: str) -> float:
@@ -18622,7 +18636,13 @@ def model_summary(fit: Any) -> dict[str, Any]:
         ),
         "coefficient_names": names,
         "loglik": loglik(fit),
-        "df": degrees_freedom(fit),
+        "df": (
+            list(fit.degrees_of_freedom_components)
+            if is_survreg
+            and isinstance(fit, _FormulaFit)
+            and fit.degrees_of_freedom_components is not None
+            else degrees_freedom(fit)
+        ),
         "n": _model_row_count(fit),
         "robust": robust,
     }
@@ -27064,6 +27084,7 @@ def survreg(
     penalty_history: dict[str, dict[str, Any]] | None = None
     term_degrees_of_freedom: dict[str, float] | None = None
     effective_degrees_of_freedom: float | None = None
+    degrees_of_freedom_components: list[float] | None = None
     if formula_ridge_blocks or formula_pspline_blocks:
         width = len(rows[0]) if rows else 0
         ridge_thetas = [
@@ -27264,19 +27285,25 @@ def survreg(
             full_penalty,
             formula_design,
         )
-        effective_degrees_of_freedom = math.fsum(term_degrees_of_freedom.values())
+        degrees_of_freedom_components = []
         if formula_design.intercept:
-            effective_degrees_of_freedom += _quadratic_term_degrees_of_freedom(
-                fit,
-                full_penalty,
-                (0,),
+            degrees_of_freedom_components.append(
+                _quadratic_term_degrees_of_freedom(
+                    fit,
+                    full_penalty,
+                    (0,),
+                )
             )
+        degrees_of_freedom_components.extend(term_degrees_of_freedom.values())
         if full_width > width:
-            effective_degrees_of_freedom += _quadratic_term_degrees_of_freedom(
-                fit,
-                full_penalty,
-                tuple(range(width, full_width)),
+            degrees_of_freedom_components.append(
+                _quadratic_term_degrees_of_freedom(
+                    fit,
+                    full_penalty,
+                    tuple(range(width, full_width)),
+                )
             )
+        effective_degrees_of_freedom = math.fsum(degrees_of_freedom_components)
     else:
         fit = run_fit(None, initial_values)
     robust_cluster = cluster_values_for_validation
@@ -27308,6 +27335,7 @@ def survreg(
             history=penalty_history,
             effective_degrees_of_freedom=effective_degrees_of_freedom,
             term_degrees_of_freedom=term_degrees_of_freedom,
+            degrees_of_freedom_components=degrees_of_freedom_components,
             penalty_matrix=fit_penalty_matrix,
         )
         if (

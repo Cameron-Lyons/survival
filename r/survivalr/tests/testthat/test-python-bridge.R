@@ -2718,9 +2718,9 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nobs(aft_fit), nrow(data))
   expect_null(attr(logLik(aft_fit), "nobs"))
   fit_aic <- extractAIC(fit)
-  expect_named(fit_aic, c("df", "AIC"))
-  expect_equal(fit_aic[["df"]], 1)
-  expect_equal(fit_aic[["AIC"]], as.numeric(AIC(fit)))
+  expect_null(names(fit_aic))
+  expect_equal(fit_aic[[1L]], 1)
+  expect_equal(fit_aic[[2L]], as.numeric(AIC(fit)))
   expect_equal(deparse(formula(fit)), "Surv(time, status) ~ x")
   expect_s3_class(terms(fit), "terms")
   expect_null(weights(fit))
@@ -7098,6 +7098,45 @@ test_that("survreg bridge agrees with R survival distributions", {
       tolerance = if (identical(resid_type, "working")) 1e-02 else 5e-03
     )
   }
+})
+
+test_that("penalized survreg model metadata matches survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  n <- 48L
+  index <- 0:(n - 1L)
+  x <- ((index * 17L) %% 49L) / 10 - 2.4
+  z <- ((index * 7L) %% 47L) / 13 - 1.8
+  noise <- ((index * 13L) %% 11L - 5L) / 20
+  data <- data.frame(
+    time = exp(2.4 + 0.22 * x - 0.08 * x^2 + 0.15 * z + noise),
+    status = as.integer(index %% 5L != 0L),
+    x = x,
+    z = z
+  )
+  bridged <- survreg(
+    Surv(time, status) ~ pspline(x, theta = 0.5, nterm = 6) + z,
+    data = data,
+    control = survreg.control(maxiter = 100L, outer.max = 25L)
+  )
+  reference <- survival::survreg(
+    survival::Surv(time, status) ~ survival::pspline(x, theta = 0.5, nterm = 6) + z,
+    data = data,
+    control = survival::survreg.control(maxiter = 100L, outer.max = 25L)
+  )
+
+  expect_equal(coef(bridged), coef(reference), tolerance = 1e-08)
+  expect_equal(vcov(bridged), vcov(reference), tolerance = 1e-08)
+  expect_equal(bridged$df, reference$df, tolerance = 1e-08)
+  expect_equal(summary(bridged)$df, summary(reference)$df, tolerance = 1e-08)
+  expect_equal(logLik(bridged), logLik(reference), tolerance = 1e-08)
+  expect_type(attr(logLik(bridged), "df"), "double")
+  expect_equal(df.residual(bridged), df.residual(reference), tolerance = 1e-08)
+  expect_type(df.residual(bridged), "double")
+  expect_equal(extractAIC(bridged), extractAIC(reference), tolerance = 1e-08)
+  expect_equal(AIC(bridged), AIC(reference), tolerance = 1e-08)
 })
 
 test_that("multi-state survfit tables and summaries agree with R survival", {
