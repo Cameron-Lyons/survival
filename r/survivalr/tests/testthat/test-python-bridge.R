@@ -7993,3 +7993,44 @@ test_that("Student-t frailty formulas match survival", {
     tolerance = 1e-12
   )
 })
+
+test_that("gamma frailty target degrees of freedom match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = seq_len(18L),
+    status = c(1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1),
+    x = c(1.2, 0.7, 1.5, 0.2, 1.1, 0.4, 1.8, 0.9, 0.5, 1.4, 0.3, 1, 0.6, 1.7, 0.1, 1.3, 0.8, 1.6),
+    g = factor(rep(letters[1:6], 3))
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ x + frailty(g, distribution = "gamma", df = 2),
+    data = data,
+    ties = "breslow",
+    control = coxph.control(iter.max = 50L, eps = 1e-10, toler.chol = 1e-13, outer.max = 30L)
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x + survival::frailty(g, distribution = "gamma", df = 2),
+    data = data,
+    ties = "breslow",
+    control = survival::coxph.control(iter.max = 50L, eps = 1e-10, toler.chol = 1e-13, outer.max = 30L)
+  )
+
+  expect_equal(coef(bridged), coef(reference), tolerance = 1e-12)
+  expect_equal(bridged$frailty, reference$frail, tolerance = 1e-12)
+  expect_equal(bridged$frailty_variance, reference$fvar, tolerance = 1e-12)
+  expect_equal(bridged$log_likelihood, reference$loglik, tolerance = 1e-12)
+  expect_equal(
+    unname(unlist(bridged$term_degrees_of_freedom)),
+    unname(reference$df),
+    tolerance = 1e-12
+  )
+  expect_equal(bridged$history[[1L]]$theta, reference$history[[1L]]$theta, tolerance = 1e-12)
+  expect_equal(
+    bridged$history[[1L]]$c.loglik,
+    reference$history[[1L]]$c.loglik,
+    tolerance = 1e-12
+  )
+})

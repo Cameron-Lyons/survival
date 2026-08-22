@@ -10253,6 +10253,10 @@ def test_coxph_formula_fixed_sparse_gamma_frailty_matches_reference():
     )
     assert fit.information_matrix[0] == pytest.approx([0.478590809971639], abs=1e-12)
     assert fit.naive_information_matrix[0] == pytest.approx([0.351763771750402], abs=1e-12)
+    assert fit.history[frailty_term] == pytest.approx(
+        {"theta": 0.5, "done": True, "c.loglik": -24.3690750173844},
+        abs=1e-11,
+    )
 
 
 def test_coxph_formula_gamma_frailty_em_matches_reference():
@@ -10449,6 +10453,131 @@ def test_coxph_formula_gamma_frailty_em_matches_reference():
     assert history["c.loglik"] == pytest.approx(-70.5935332072113, abs=2e-11)
 
 
+def test_coxph_formula_gamma_frailty_calibrates_target_df_reference():
+    data = {
+        "time": [float(value) for value in range(1, 19)],
+        "status": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "x": [
+            1.2,
+            0.7,
+            1.5,
+            0.2,
+            1.1,
+            0.4,
+            1.8,
+            0.9,
+            0.5,
+            1.4,
+            0.3,
+            1.0,
+            0.6,
+            1.7,
+            0.1,
+            1.3,
+            0.8,
+            1.6,
+        ],
+        "g": list("abcdef") * 3,
+    }
+    frailty_term = 'frailty(g,distribution="gamma",df=2)'
+    fit = survival.coxph(
+        f"Surv(time,status) ~ x + {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10, "toler.chol": 1e-13},
+    )
+
+    assert fit.coefficients[0] == pytest.approx([-0.768418933256273], abs=1e-12)
+    assert fit.frailty == pytest.approx(
+        [
+            -0.0208733978148822,
+            0.305820524276599,
+            0.0298178781906759,
+            -0.140015016714592,
+            -0.230954162657359,
+            -0.030943304440632,
+        ],
+        abs=1e-12,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-23.3506715493412, -22.0626964958843],
+        abs=1e-12,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {"x": 0.74332073610608, frailty_term: 2.09154881877917},
+        abs=1e-12,
+    )
+    history = fit.history[frailty_term]
+    assert history["theta"] == pytest.approx(0.430546900360188, abs=1e-12)
+    assert history["done"] is True
+    assert history["half"] == 0
+    assert [row["theta"] for row in history["history"]] == pytest.approx(
+        [0.0, 1.0 / 3.0, 0.594577701730334, 0.463955517531834],
+        abs=1e-12,
+    )
+    assert [row["df"] for row in history["history"]] == pytest.approx(
+        [0.0, 1.68186596485171, 2.42348281123581, 2.09154881877917],
+        abs=1e-12,
+    )
+    assert history["c.loglik"] == pytest.approx(-24.2656193278319, abs=1e-12)
+
+
+def test_coxph_formula_gamma_frailty_selects_variance_by_aic_reference():
+    group = [level for level in "abcdefgh" for _ in range(8)]
+    within_group = list(range(1, 9)) * 8
+    scales = [scale for scale in (1.0, 1.2, 1.5, 1.9, 2.4, 3.0, 3.8, 4.8) for _ in range(8)]
+    data = {
+        "time": [value * scale for value, scale in zip(within_group, scales, strict=True)],
+        "status": [1] * 64,
+        "g": group,
+    }
+    frailty_term = 'frailty(g,distribution="gamma",method="aic")'
+    fit = survival.coxph(
+        f"Surv(time,status) ~ {frailty_term}",
+        data=data,
+        ties="breslow",
+        control={"iter.max": 50, "outer.max": 30, "eps": 1e-10, "toler.chol": 1e-13},
+    )
+
+    assert fit.coefficients[0] == []
+    assert fit.frailty == pytest.approx(
+        [
+            0.865250002647932,
+            0.605909342502875,
+            0.295070655591725,
+            -0.0560772831867553,
+            -0.460267163205522,
+            -0.834866798165431,
+            -1.27440888793327,
+            -1.84420455145919,
+        ],
+        abs=4e-4,
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-206.196936338164, -187.142249671341],
+        abs=1e-3,
+    )
+    assert fit.term_degrees_of_freedom == pytest.approx(
+        {frailty_term: 6.93224380874699},
+        abs=1e-3,
+    )
+    history = fit.history[frailty_term]
+    assert history["theta"] == pytest.approx(0.997907754769582, abs=4e-3)
+    assert history["done"] is True
+    assert len(history["history"]) == 8
+    assert history["history"][0] == pytest.approx(
+        {
+            "theta": 0.1,
+            "loglik": -195.231781928953,
+            "df": 3.16838255486095,
+            "aic": -198.400164483814,
+            "aicc": -198.766358659907,
+        },
+        abs=1e-11,
+    )
+    assert history["c.loglik"] == pytest.approx(-199.220570986039, abs=2e-3)
+
+
 def test_coxph_formula_frailty_rejects_unsupported_modes():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
@@ -10456,9 +10585,12 @@ def test_coxph_formula_frailty_rejects_unsupported_modes():
         "g": list("abcdef"),
     }
     for option, exception, message in (
-        ("distribution='gamma',method='aic'", NotImplementedError, "fixed theta or EM"),
         ("distribution='gamma',method='em',theta=.5", ValueError, "cannot include"),
         ("distribution='gamma',method='em',df=2", ValueError, "cannot include"),
+        ("distribution='gamma',method='aic',theta=.5", ValueError, "cannot include"),
+        ("distribution='gamma',method='aic',df=2", ValueError, "cannot include"),
+        ("distribution='gamma',method='df'", ValueError, "requires df"),
+        ("distribution='gamma',df=0", ValueError, "positive"),
         ("distribution='gamma',theta=.5,sparse=False", NotImplementedError, "sparse=True"),
         ("distribution='gamma',theta=0,sparse=True", ValueError, "positive"),
         ("distribution='gaussian',method='ml'", NotImplementedError, "support fixed"),
