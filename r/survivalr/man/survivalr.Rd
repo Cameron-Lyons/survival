@@ -15,8 +15,6 @@
 \alias{agexact.fit}
 \alias{agreg.fit}
 \alias{attrassign}
-\alias{attrassign.default}
-\alias{attrassign.lm}
 \alias{is.Surv}
 \alias{is.ratetable}
 \alias{[.ratetable}
@@ -437,11 +435,7 @@ aareg(formula, data, weights, subset, na.action, qrtol = 1e-07,
 
 \method{print}{summary.aareg}(x, ...)
 
-attrassign(object, ...)
-
-\method{attrassign}{default}(object, tt, ...)
-
-\method{attrassign}{lm}(object, ...)
+attrassign(object, tt)
 
 is.Surv(x)
 
@@ -1029,9 +1023,8 @@ input.}
 \item{episode, end, added}{Output column controls for
 \code{survSplit} and \code{survcondense}; \code{added} is accepted for R API
 compatibility.}
-\item{tt, special, order}{Term-object special-term inputs for
-\code{untangle.specials}; \code{tt} is also accepted by
-\code{attrassign.default}.}
+\item{tt, special, order}{Term-object inputs for \code{attrassign} and
+special-term inputs for \code{untangle.specials}.}
 \item{formula}{Formula, formula string, bridged \code{Surv} response, or
 bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{data, newdata}{Optional data frames or Python-compatible data objects.}

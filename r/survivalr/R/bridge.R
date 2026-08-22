@@ -387,11 +387,7 @@ untangle.specials <- function(tt, special, order = 1) {
   )
 }
 
-attrassign <- function(object, ...) {
-  UseMethod("attrassign")
-}
-
-attrassign.default <- function(object, tt, ...) {
+attrassign <- function(object, tt) {
   if (!inherits(tt, "terms")) {
     stop("need terms object", call. = FALSE)
   }
@@ -402,10 +398,6 @@ attrassign.default <- function(object, tt, ...) {
   labels <- attr(tt, "term.labels")
   term_names <- c("(Intercept)", labels)[aa + 1L]
   split(seq(along.with = term_names), factor(term_names, levels = unique(term_names)))
-}
-
-attrassign.lm <- function(object, ...) {
-  attrassign(stats::model.matrix(object), stats::terms(object))
 }
 
 .as_python_surv <- function(value) {
