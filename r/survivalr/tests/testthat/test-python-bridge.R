@@ -4507,6 +4507,28 @@ test_that("disabled standard errors with multiple scores match reference errors"
   )
 })
 
+test_that("multi-score influence covariance matches reference shape", {
+  time <- c(1, 2, 3, 4, 5, 6)
+  status <- c(1, 1, 0, 1, 0, 1)
+  x <- cbind(
+    s1 = c(0, 0.5, 1, -0.5, 0, 0.5),
+    s2 = c(1, 0, -0.5, 0.5, 0, -1)
+  )
+  bridged <- concordancefit(
+    Surv(time, status),
+    x,
+    influence = 2
+  )
+  reference <- survival::concordancefit(
+    survival::Surv(time, status),
+    x,
+    influence = 2
+  )
+
+  expect_true(is.matrix(bridged$var))
+  expect_equal(unclass(bridged), unclass(reference), tolerance = 1e-12)
+})
+
 test_that("collapsed single-score strata match reference behavior", {
   data <- data.frame(
     time = c(1, 2, 1, 2),
