@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survexp, m)?)?;
     m.add_function(wrap_pyfunction!(survexp_individual, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_cox_aggregate, m)?)?;
     m.add_function(wrap_pyfunction!(survexp_from_coords, m)?)?;
     m.add_function(wrap_pyfunction!(survexp_individual_from_coords, m)?)?;
     m.add_function(wrap_pyfunction!(create_simple_ratetable, m)?)?;

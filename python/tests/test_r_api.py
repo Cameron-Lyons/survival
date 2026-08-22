@@ -3798,6 +3798,74 @@ def test_survexp_ederer_keeps_the_full_reference_cohort():
     assert ederer.surv == pytest.approx(expected_ederer)
 
 
+def test_survexp_cox_fit_aggregates_profile_curves():
+    survexp_cox_fit = survival.r_api._survexp_cox_fit
+
+    training = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "x": [-1.0, -0.7, -0.3, 0.0, 0.3, 0.6, 0.9, 1.2],
+    }
+    fit = survival.coxph("Surv(time, status) ~ x", data=training)
+    profiles = {"x": [-0.5, 0.25, 1.0]}
+    curves = survival.survfit(fit, newdata=profiles, se_fit=False, censor=False)
+    ederer = survexp_cox_fit(
+        fit,
+        profiles,
+        [10.0, 10.0, 10.0],
+        [1, 1, 2],
+        "ederer",
+        [1.0, 3.0, 2.0],
+    )
+    individual = survexp_cox_fit(
+        fit,
+        profiles,
+        [2.5, 4.5, 7.5],
+        [1, 1, 2],
+        "individual",
+        [1.0, 1.0, 1.0],
+    )
+
+    assert ederer["time"] == curves.time
+    assert ederer["n"] == [2, 1]
+    assert ederer["surv"][0] == pytest.approx(
+        [
+            0.25 * left + 0.75 * right
+            for left, right in zip(curves.surv[0], curves.surv[1], strict=True)
+        ]
+    )
+    assert ederer["surv"][1] == pytest.approx(curves.surv[2])
+    assert individual["surv"] == pytest.approx(
+        [
+            survival._survival.step_values_at(curves.time, curve, [time], 1.0)[0]
+            for curve, time in zip(curves.surv, [2.5, 4.5, 7.5], strict=True)
+        ]
+    )
+    single = survexp_cox_fit(
+        fit,
+        {"x": [-0.5]},
+        [0.5],
+        [1],
+        "conditional",
+        [0.0],
+    )
+    assert single["time"] == curves.time
+    assert single["surv"][0] == pytest.approx(curves.surv[0])
+    assert single["n"] == len(training["time"])
+    for method in ("hakulinen", "conditional"):
+        result = survexp_cox_fit(
+            fit,
+            profiles,
+            [10.0, 10.0, 10.0],
+            [1, 1, 2],
+            method,
+            [1.0, 3.0, 2.0],
+        )
+        assert result["time"] == curves.time
+        assert result["n"] is None
+        assert all(math.isfinite(value) for curve in result["surv"] for value in curve)
+
+
 def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
     scalar = survival.cipoisson(5, time=10.0)
     vector = survival.cipoisson([0, 5, 20], time=[1.0, 10.0, 4.0])

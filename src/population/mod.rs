@@ -11,7 +11,8 @@ pub use ratetable::{
     is_ratetable, ratetable_date,
 };
 pub use survexp_module::{
-    SurvExpResult, survexp, survexp_from_coords, survexp_individual, survexp_individual_from_coords,
+    SurvExpResult, survexp, survexp_cox_aggregate, survexp_from_coords, survexp_individual,
+    survexp_individual_from_coords,
 };
 pub use survexp_us_module::{
     ExpectedSurvivalResult, compute_expected_survival, survexp_mn, survexp_us, survexp_usr,

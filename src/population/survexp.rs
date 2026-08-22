@@ -730,6 +730,168 @@ pub fn survexp_individual(
     Ok(expected)
 }
 
+#[derive(Clone, Copy)]
+enum CoxRateMethod {
+    Ederer,
+    Hakulinen,
+    Conditional,
+}
+
+impl CoxRateMethod {
+    fn parse(method: &str) -> PyResult<Self> {
+        match method {
+            "ederer" => Ok(Self::Ederer),
+            "hakulinen" => Ok(Self::Hakulinen),
+            "conditional" => Ok(Self::Conditional),
+            _ => Err(value_error(
+                "method must be 'ederer', 'hakulinen', or 'conditional'",
+            )),
+        }
+    }
+}
+
+type CoxAggregateOutput = (Vec<Vec<f64>>, Option<Vec<usize>>);
+
+fn validate_cox_curves(time: &[f64], surv: &[Vec<f64>], cumhaz: &[Vec<f64>]) -> PyResult<()> {
+    validate_eval_times(time)?;
+    if surv.len() != cumhaz.len() {
+        return Err(value_error(
+            "surv and cumhaz must contain the same number of curves",
+        ));
+    }
+    for (row, (survival_curve, hazard_curve)) in surv.iter().zip(cumhaz).enumerate() {
+        if survival_curve.len() != time.len() || hazard_curve.len() != time.len() {
+            return Err(value_error(format!(
+                "surv[{row}] and cumhaz[{row}] must have the same length as time"
+            )));
+        }
+        for (index, &value) in survival_curve.iter().enumerate() {
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(value_error(format!(
+                    "surv[{row}] must contain finite probabilities; got {value} at index {index}"
+                )));
+            }
+        }
+        for (index, &value) in hazard_curve.iter().enumerate() {
+            if !value.is_finite() || value < 0.0 {
+                return Err(value_error(format!(
+                    "cumhaz[{row}] must contain finite non-negative values; got {value} at index {index}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[pyfunction]
+pub fn survexp_cox_aggregate(
+    time: Vec<f64>,
+    surv: Vec<Vec<f64>>,
+    cumhaz: Vec<Vec<f64>>,
+    followup: Vec<f64>,
+    group: Vec<usize>,
+    weights: Vec<f64>,
+    method: &str,
+) -> PyResult<CoxAggregateOutput> {
+    let calculation = CoxRateMethod::parse(method)?;
+    validate_cox_curves(&time, &surv, &cumhaz)?;
+
+    let row_count = followup.len();
+    if surv.len() != row_count || group.len() != row_count || weights.len() != row_count {
+        return Err(value_error(
+            "surv, cumhaz, followup, group, and weights must have the same row count",
+        ));
+    }
+    for (index, &value) in followup.iter().enumerate() {
+        if value.is_nan() || value < 0.0 {
+            return Err(value_error(format!(
+                "followup values must be non-negative and not NaN; got {value} at index {index}"
+            )));
+        }
+    }
+    for (index, &value) in group.iter().enumerate() {
+        if value == 0 {
+            return Err(value_error(format!(
+                "group values must be positive integers; got 0 at index {index}"
+            )));
+        }
+    }
+    validate_finite(&weights, "weights")?;
+
+    let group_count = group.iter().copied().max().unwrap_or(0);
+    let mut group_rows = vec![Vec::new(); group_count];
+    let mut group_weight_totals = vec![0.0; group_count];
+    for (row, (&group_value, &weight)) in group.iter().zip(&weights).enumerate() {
+        let group_index = group_value - 1;
+        group_rows[group_index].push(row);
+        group_weight_totals[group_index] += weight;
+    }
+    let aggregate_group = |group_index: usize| {
+        let rows = &group_rows[group_index];
+        if rows.is_empty() {
+            return if matches!(calculation, CoxRateMethod::Ederer) {
+                vec![0.0; time.len()]
+            } else {
+                vec![f64::NAN; time.len()]
+            };
+        }
+        let total_weight = group_weight_totals[group_index];
+
+        if matches!(calculation, CoxRateMethod::Ederer) {
+            let mut curve = vec![0.0; time.len()];
+            for &row in rows {
+                let normalized_weight = weights[row] / total_weight;
+                for (aggregate, &subject_survival) in curve.iter_mut().zip(&surv[row]) {
+                    *aggregate += normalized_weight * subject_survival;
+                }
+            }
+            return curve;
+        }
+
+        let mut curve = Vec::with_capacity(time.len());
+        let mut cumulative_hazard = 0.0;
+        for (time_index, &eval_time) in time.iter().enumerate() {
+            let mut numerator = 0.0;
+            let mut denominator = 0.0;
+            for &row in rows {
+                if followup[row] < eval_time {
+                    continue;
+                }
+                let previous_survival =
+                    if matches!(calculation, CoxRateMethod::Conditional) || time_index == 0 {
+                        1.0
+                    } else {
+                        surv[row][time_index - 1]
+                    };
+                let contribution = previous_survival * weights[row] / total_weight;
+                let previous_hazard = if time_index == 0 {
+                    0.0
+                } else {
+                    cumhaz[row][time_index - 1]
+                };
+                numerator += (cumhaz[row][time_index] - previous_hazard) * contribution;
+                denominator += contribution;
+            }
+            let increment = numerator / denominator;
+            cumulative_hazard += increment;
+            curve.push((-cumulative_hazard).exp());
+        }
+        curve
+    };
+
+    let survival_by_group = if group_count > PARALLEL_THRESHOLD_XLARGE {
+        (0..group_count)
+            .into_par_iter()
+            .map(aggregate_group)
+            .collect()
+    } else {
+        (0..group_count).map(aggregate_group).collect()
+    };
+    let group_sizes = matches!(calculation, CoxRateMethod::Ederer)
+        .then(|| group_rows.iter().map(Vec::len).collect());
+    Ok((survival_by_group, group_sizes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,6 +933,96 @@ mod tests {
 
         assert_eq!(result.n, 0);
         assert!(result.time.is_empty());
+    }
+
+    #[test]
+    fn cox_aggregate_computes_weighted_ederer_curves_and_group_sizes() {
+        let result = survexp_cox_aggregate(
+            vec![1.0, 2.0],
+            vec![vec![0.9, 0.8], vec![0.8, 0.6], vec![0.7, 0.5]],
+            vec![vec![0.1, 0.2], vec![0.2, 0.4], vec![0.3, 0.6]],
+            vec![2.0, 2.0, 2.0],
+            vec![1, 1, 3],
+            vec![1.0, 3.0, 2.0],
+            "ederer",
+        )
+        .unwrap();
+
+        assert_eq!(result.1, Some(vec![2, 0, 1]));
+        assert!((result.0[0][0] - 0.825).abs() < 1e-12);
+        assert!((result.0[0][1] - 0.65).abs() < 1e-12);
+        assert_eq!(result.0[1], vec![0.0, 0.0]);
+        assert_eq!(result.0[2], vec![0.7, 0.5]);
+    }
+
+    #[test]
+    fn cox_aggregate_computes_hakulinen_and_conditional_hazards() {
+        let time = vec![1.0, 2.0];
+        let cumhaz: Vec<Vec<f64>> = vec![vec![0.1, 0.3], vec![0.2, 0.5]];
+        let surv = cumhaz
+            .iter()
+            .map(|curve| curve.iter().map(|&value| (-value).exp()).collect())
+            .collect::<Vec<Vec<f64>>>();
+        let call = |method| {
+            survexp_cox_aggregate(
+                time.clone(),
+                surv.clone(),
+                cumhaz.clone(),
+                vec![2.0, 2.0],
+                vec![1, 1],
+                vec![1.0, 1.0],
+                method,
+            )
+            .unwrap()
+            .0
+        };
+
+        let conditional = call("conditional");
+        assert!((conditional[0][0] - (-0.15_f64).exp()).abs() < 1e-12);
+        assert!((conditional[0][1] - (-0.4_f64).exp()).abs() < 1e-12);
+
+        let weighted_increment = (0.2 * (-0.1_f64).exp() + 0.3 * (-0.2_f64).exp())
+            / ((-0.1_f64).exp() + (-0.2_f64).exp());
+        let hakulinen = call("hakulinen");
+        assert!((hakulinen[0][0] - (-0.15_f64).exp()).abs() < 1e-12);
+        assert!((hakulinen[0][1] - (-0.15 - weighted_increment).exp()).abs() < 1e-12);
+
+        let signed = survexp_cox_aggregate(
+            time,
+            surv,
+            cumhaz,
+            vec![2.0, 1.0],
+            vec![1, 1],
+            vec![1.0, -2.0],
+            "conditional",
+        )
+        .unwrap()
+        .0;
+        assert!((signed[0][0] - (-0.3_f64).exp()).abs() < 1e-12);
+        assert!((signed[0][1] - (-0.5_f64).exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cox_aggregate_validates_groups_finite_weights_and_curve_shapes() {
+        Python::initialize();
+        let call = |group, weights, surv| {
+            survexp_cox_aggregate(
+                vec![1.0],
+                surv,
+                vec![vec![0.1]],
+                vec![1.0],
+                group,
+                weights,
+                "ederer",
+            )
+        };
+
+        assert!(call(vec![0], vec![1.0], vec![vec![0.9]]).is_err());
+        assert!(call(vec![1], vec![f64::NAN], vec![vec![0.9]]).is_err());
+        assert!(call(vec![1], vec![1.0], vec![vec![0.9, 0.8]]).is_err());
+
+        let zero_weight = call(vec![1], vec![0.0], vec![vec![0.9]]).unwrap();
+        assert!(zero_weight.0[0][0].is_nan());
     }
 
     #[test]

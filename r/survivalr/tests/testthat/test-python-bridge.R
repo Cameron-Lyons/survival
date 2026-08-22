@@ -4896,6 +4896,146 @@ test_that("data-prep helpers match R survival shapes", {
     tolerance = 1e-12
   )
 
+  survexp_cox_data <- stats::na.omit(
+    survival::lung[, c("time", "status", "age", "sex", "ph.ecog")]
+  )
+  survexp_cox_data$case_weight <- seq_len(nrow(survexp_cox_data)) %% 4L + 1L
+  bridged_survexp_cox_fit <- coxph(
+    Surv(time, status) ~ age + sex,
+    data = survexp_cox_data,
+    x = TRUE,
+    model = TRUE
+  )
+  reference_survexp_cox_fit <- survival::coxph(
+    survival::Surv(time, status) ~ age + sex,
+    data = survexp_cox_data,
+    x = TRUE,
+    model = TRUE
+  )
+  survexp_cox_formula <- Surv(time, status) ~ factor(ph.ecog)
+  for (cox_method in c(
+    "ederer", "hakulinen", "conditional", "individual.s", "individual.h"
+  )) {
+    bridged_survexp_cox <- survexp(
+      survexp_cox_formula,
+      data = survexp_cox_data,
+      weights = case_weight,
+      ratetable = bridged_survexp_cox_fit,
+      rmap = list(age = age, sex = sex),
+      method = cox_method,
+      times = c(100, 300, 500)
+    )
+    reference_survexp_cox <- survival::survexp(
+      survexp_cox_formula,
+      data = survexp_cox_data,
+      weights = case_weight,
+      ratetable = reference_survexp_cox_fit,
+      rmap = list(age = age, sex = sex),
+      method = cox_method,
+      times = c(100, 300, 500)
+    )
+    if (is.list(bridged_survexp_cox)) {
+      expect_equal(
+        bridged_survexp_cox$surv,
+        reference_survexp_cox$surv,
+        tolerance = 1e-12
+      )
+      expect_equal(bridged_survexp_cox$n.risk, reference_survexp_cox$n.risk)
+      expect_equal(bridged_survexp_cox$time, reference_survexp_cox$time)
+      expect_equal(bridged_survexp_cox$method, reference_survexp_cox$method)
+    } else {
+      expect_equal(
+        bridged_survexp_cox,
+        reference_survexp_cox,
+        tolerance = 1e-12
+      )
+    }
+  }
+  bridged_survexp_cox_no_response <- survexp(
+    ~factor(ph.ecog),
+    data = survexp_cox_data,
+    ratetable = bridged_survexp_cox_fit,
+    rmap = list(age = age, sex = sex),
+    method = "ederer",
+    times = c(100, 300, 500),
+    x = TRUE
+  )
+  reference_survexp_cox_no_response <- survival::survexp(
+    ~factor(ph.ecog),
+    data = survexp_cox_data,
+    ratetable = reference_survexp_cox_fit,
+    rmap = list(age = age, sex = sex),
+    method = "ederer",
+    times = c(100, 300, 500),
+    x = TRUE
+  )
+  expect_equal(
+    bridged_survexp_cox_no_response$surv,
+    reference_survexp_cox_no_response$surv,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_survexp_cox_no_response$n.risk,
+    reference_survexp_cox_no_response$n.risk
+  )
+  expect_equal(
+    bridged_survexp_cox_no_response$x,
+    reference_survexp_cox_no_response$x
+  )
+  single_survexp_cox_data <- survexp_cox_data[1L, , drop = FALSE]
+  bridged_survexp_cox_single <- survexp(
+    Surv(time, status) ~ 1,
+    data = single_survexp_cox_data,
+    weights = 0,
+    ratetable = bridged_survexp_cox_fit,
+    rmap = list(age = age, sex = sex),
+    method = "conditional",
+    times = c(100, 300, 500)
+  )
+  reference_survexp_cox_single <- survival::survexp(
+    Surv(time, status) ~ 1,
+    data = single_survexp_cox_data,
+    weights = 0,
+    ratetable = reference_survexp_cox_fit,
+    rmap = list(age = age, sex = sex),
+    method = "conditional",
+    times = c(100, 300, 500)
+  )
+  expect_equal(
+    bridged_survexp_cox_single$surv,
+    reference_survexp_cox_single$surv,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_survexp_cox_single$n.risk,
+    reference_survexp_cox_single$n.risk
+  )
+  signed_survexp_weights <- rep(1, nrow(survexp_cox_data))
+  signed_survexp_weights[[1L]] <- -0.5
+  bridged_survexp_cox_signed <- survexp(
+    survexp_cox_formula,
+    data = survexp_cox_data,
+    weights = signed_survexp_weights,
+    ratetable = bridged_survexp_cox_fit,
+    rmap = list(age = age, sex = sex),
+    method = "ederer",
+    times = c(100, 300, 500)
+  )
+  reference_survexp_cox_signed <- survival::survexp(
+    survexp_cox_formula,
+    data = survexp_cox_data,
+    weights = signed_survexp_weights,
+    ratetable = reference_survexp_cox_fit,
+    rmap = list(age = age, sex = sex),
+    method = "ederer",
+    times = c(100, 300, 500)
+  )
+  expect_equal(
+    bridged_survexp_cox_signed$surv,
+    reference_survexp_cox_signed$surv,
+    tolerance = 1e-12
+  )
+
   bridged_pyears <- pyears(
     c(10, 20, 30),
     event = c(1, 0, 1),
