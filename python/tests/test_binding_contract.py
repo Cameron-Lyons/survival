@@ -12808,6 +12808,17 @@ def test_r_api_stub_tracks_survsplit_public_signature():
     assert _pyi_function_arg_names(stub_path, "survSplit") == expected
 
 
+def test_r_api_stub_tracks_lvcf_public_signature():
+    setup_survival_import()
+    survival = importlib.import_module("survival")
+    stub_path = PACKAGE_ROOT / "r_api.pyi"
+
+    expected = ["id", "x", "time", "first"]
+    runtime_params = inspect.signature(survival.r_api.lvcf).parameters
+    assert list(runtime_params) == expected
+    assert _pyi_function_arg_names(stub_path, "lvcf") == expected
+
+
 def test_r_api_stub_tracks_survcondense_public_signature():
     setup_survival_import()
     survival = importlib.import_module("survival")

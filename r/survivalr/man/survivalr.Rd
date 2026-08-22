@@ -481,7 +481,7 @@ blog(edge = 0.05)
 
 aeqSurv(x, tolerance = sqrt(.Machine$double.eps))
 
-lvcf(id, x, time)
+lvcf(id, x, time, first = TRUE)
 
 nostutter(id, x, censor = 0, single = FALSE)
 
@@ -972,6 +972,9 @@ quantile inversion.}
 and timeline conversion for repeated events.}
 \item{lvcf}{Logical flag controlling last-value-carried-forward handling in
 \code{fromtimeline}.}
+\item{first}{For \code{lvcf}, initialize a missing first ordered logical or
+binary numeric value within each subject to false or zero before carrying it
+forward.}
 \item{yname}{Optional two- or three-element output response names for
 \code{fromtimeline}.}
 \item{id1}{Query IDs for \code{neardate}.}

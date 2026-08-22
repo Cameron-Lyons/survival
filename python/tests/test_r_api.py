@@ -1374,6 +1374,11 @@ def test_r_api_brier_returns_r_style_cox_model_fields():
 
 def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     carried = survival.lvcf([1, 1, 1, 2, 2], [10.0, None, 12.0, None, 20.0])
+    initialized_logical = survival.lvcf([1, 1, 2, 2], [None, True, None, False])
+    initialized_binary = survival.lvcf([1, 1, 2, 2], [None, 1, None, 0])
+    uninitialized_binary = survival.lvcf([1, 1, 2, 2], [None, 1, None, 0], first=False)
+    nonbinary_first = survival.lvcf([1, 1, 2, 2], [None, 2, None, 3])
+    initialized_by_time = survival.lvcf([1, 1, 2, 2], [True, None, False, None], time=[2, 1, 2, 1])
     carried_by_time = survival.lvcf([1, 1, 1], [None, 10.0, None], time=[2.0, 1.0, 3.0])
     carried_with_missing_time = survival.lvcf([1, 1, 1], [10.0, None, 20.0], time=[1.0, None, 2.0])
     carried_with_infinite_time = survival.lvcf(
@@ -1424,6 +1429,11 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
     stuttered_mixed_fallback = survival.nostutter([1, 1, 1], [1, "x", "x"])
 
     assert carried == [10.0, 10.0, 12.0, None, 20.0]
+    assert initialized_logical == [False, True, False, False]
+    assert initialized_binary == [0, 1, 0, 0]
+    assert uninitialized_binary == [None, 1, None, 0]
+    assert nonbinary_first == [None, 2, None, 3]
+    assert initialized_by_time == [True, False, False, False]
     assert carried_by_time == [10.0, 10.0, 10.0]
     assert carried_with_missing_time == [10.0, 20.0, 20.0]
     assert carried_with_infinite_time == [10.0, 20.0, 20.0]
@@ -1447,6 +1457,8 @@ def test_lvcf_and_nostutter_match_r_data_prep_helpers():
 
     with pytest.raises(ValueError, match="same length"):
         survival.lvcf([1], [1, None])
+    with pytest.raises(TypeError, match="first"):
+        survival.lvcf([1], [None], first=1)
     with pytest.raises(ValueError, match="missing"):
         survival.nostutter([1, None], [0, 1])
 
@@ -1494,7 +1506,7 @@ def test_lvcf_time_scan_matches_reference_randomized(character_id, character_tim
         else:
             times = [None if rng.random() < 0.1 else rng.randrange(-5, 11) for _ in range(n)]
 
-        assert survival.lvcf(ids, values, time=times) == _reference_lvcf_with_time(
+        assert survival.lvcf(ids, values, time=times, first=False) == _reference_lvcf_with_time(
             ids,
             values,
             times,

@@ -4173,6 +4173,33 @@ test_that("data-prep helpers match R survival shapes", {
   expect_error(neardate(1, 1, factor("2020-01-01"), 1), "sortable")
   expect_error(survival::neardate(1, 1, factor("2020-01-01"), 1), "sortable")
   reference_lvcf <- get0("lvcf", envir = asNamespace("survival"), inherits = FALSE)
+  if (!is.null(reference_lvcf)) {
+    expect_identical(names(formals(lvcf)), names(formals(reference_lvcf)))
+    first_ids <- c(1, 1, 2, 2)
+    for (first_value in c(TRUE, FALSE)) {
+      for (first_values in list(
+        c(NA, TRUE, NA, FALSE),
+        c(NA_integer_, 1L, NA_integer_, 0L),
+        c(NA_real_, 1, NA_real_, 0),
+        rep(NA_integer_, 4),
+        rep(NA_real_, 4),
+        c(NA_real_, 2, NA_real_, 3),
+        c(NA_character_, "x", NA_character_, "y"),
+        factor(c(NA, "x", NA, "y"), levels = c("x", "y"))
+      )) {
+        expect_equal(
+          lvcf(first_ids, first_values, first = first_value),
+          reference_lvcf(first_ids, first_values, first = first_value)
+        )
+      }
+      timed_values <- c(TRUE, NA, FALSE, NA)
+      timed_order <- c(2, 1, 2, 1)
+      expect_equal(
+        lvcf(first_ids, timed_values, timed_order, first = first_value),
+        reference_lvcf(first_ids, timed_values, timed_order, first = first_value)
+      )
+    }
+  }
   expect_equal(
     lvcf(c(1, 1, 1, 2, 2), c(10, NA, 12, NA, 20)),
     if (is.null(reference_lvcf)) {
