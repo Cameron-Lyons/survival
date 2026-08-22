@@ -14039,6 +14039,20 @@ def _coerce_turnbull_result_like(value: Any) -> TurnbullSurvfitResult:
 
 
 def _survfit0_any_result(value: Any, t0: float | None = None) -> Any:
+    if (
+        isinstance(value, Mapping)
+        and value
+        and all(
+            isinstance(curve, SurvfitMultiStateResult | SurvfitMultiStateCoxResult)
+            for curve in value.values()
+        )
+    ):
+        transformed = {label: _survfit0_any_result(curve, t0) for label, curve in value.items()}
+        return (
+            value
+            if all(transformed[label] is curve for label, curve in value.items())
+            else transformed
+        )
     if isinstance(value, SurvfitMultiStateCoxResult):
         return _survfit0_multistate_cox_result(value, t0)
     if isinstance(value, SurvfitMultiStateResult):
@@ -18290,6 +18304,45 @@ def _survfit_multistate_cox_frame(
     return frame
 
 
+def _survfit_multistate_grouped_frame(
+    result: Mapping[Any, SurvfitMultiStateCoxResult],
+) -> dict[str, list[Any]]:
+    batches = list(result.items())
+    curve_count = batches[0][1].curve_count
+    if any(batch.curve_count != curve_count for _label, batch in batches):
+        raise ValueError("stratified multi-state Cox results must share a data dimension")
+    first = batches[0][1].curves[0]
+    columns = list(_survfit_multistate_frame(first))
+    batch_frames = [
+        (label, tuple(_survfit_multistate_frame(curve) for curve in batch.curves))
+        for label, batch in batches
+    ]
+    if any(
+        list(curve_frame) != columns for _label, frames in batch_frames for curve_frame in frames
+    ):
+        raise ValueError("stratified multi-state curve frames must share columns")
+    frame: dict[str, list[Any]] = {
+        "curve": [],
+        **{name: [] for name in columns if name != "state"},
+        "strata": [],
+        "state": [],
+    }
+    for curve_index in range(curve_count):
+        for state in first.states:
+            for label, frames in batch_frames:
+                curve_frame = frames[curve_index]
+                indices = [
+                    index for index, value in enumerate(curve_frame["state"]) if value == state
+                ]
+                frame["curve"].extend([curve_index + 1] * len(indices))
+                frame["strata"].extend([label] * len(indices))
+                frame["state"].extend([state] * len(indices))
+                for name in columns:
+                    if name != "state":
+                        frame[name].extend(curve_frame[name][index] for index in indices)
+    return frame
+
+
 def _subset_survfit_multistate(
     result: SurvfitMultiStateResult | SurvfitMultiStateCoxResult,
     state_indices: Any,
@@ -18883,6 +18936,12 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _cox_survfit_frame(result)
     if isinstance(result, CoxBaseHazardResult):
         return _cox_basehaz_frame(result)
+    if (
+        isinstance(result, Mapping)
+        and result
+        and all(isinstance(curve, SurvfitMultiStateCoxResult) for curve in result.values())
+    ):
+        return _survfit_multistate_grouped_frame(result)
     if isinstance(result, SurvfitMultiStateCoxResult):
         return _survfit_multistate_cox_frame(result)
     if isinstance(result, SurvfitMultiStateResult):
