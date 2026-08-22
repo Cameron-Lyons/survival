@@ -1666,6 +1666,13 @@ class TurnbullSurvfitResult:
     survival_upper: list[float]
     n_iter: int
     converged: bool
+    n_risk: list[float] = field(default_factory=list)
+    n_event: list[float] = field(default_factory=list)
+    n_censor: list[float] = field(default_factory=list)
+    std_err: list[float] = field(default_factory=list)
+    logse: bool = False
+    conf_level: float = 0.95
+    conf_type: str = "log"
     model: dict[str, Any] | None = None
 
 
@@ -8202,7 +8209,7 @@ def _turnbull_intervals(response: Surv) -> tuple[list[float], list[float]]:
                 left.append(time)
                 right.append(time)
             else:
-                left.append(0.0)
+                left.append(float("-inf"))
                 right.append(time)
         return left, right
 
@@ -8222,7 +8229,7 @@ def _turnbull_intervals(response: Surv) -> tuple[list[float], list[float]]:
                 left.append(time)
                 right.append(time)
             elif status == 2:
-                left.append(0.0)
+                left.append(float("-inf"))
                 right.append(time)
             elif status == 3:
                 left.append(time)
@@ -8239,7 +8246,7 @@ def _turnbull_intervals(response: Surv) -> tuple[list[float], list[float]]:
             strict=True,
         ):
             if status == 2:
-                left.append(0.0)
+                left.append(float("-inf"))
                 right.append(time2)
             else:
                 left.append(time)
@@ -16823,6 +16830,16 @@ def _survfit0_turnbull_result(
         survival_upper=_prepend_curve_time0_optional(result.survival_upper, 1.0),
         n_iter=result.n_iter,
         converged=result.converged,
+        n_risk=_prepend_curve_time0(
+            result.n_risk,
+            result.n_risk[0] if result.n_risk else 0.0,
+        ),
+        n_event=_prepend_curve_time0(result.n_event, 0.0),
+        n_censor=_prepend_curve_time0(result.n_censor, 0.0),
+        std_err=_prepend_curve_time0_optional(result.std_err, 0.0),
+        logse=result.logse,
+        conf_level=result.conf_level,
+        conf_type=result.conf_type,
         model=result.model,
     )
 
@@ -16878,6 +16895,13 @@ def _coerce_turnbull_result_like(value: Any) -> TurnbullSurvfitResult:
         survival_upper=[float(item) for item in value.survival_upper],
         n_iter=int(getattr(value, "n_iter", 0)),
         converged=bool(getattr(value, "converged", True)),
+        n_risk=[float(item) for item in getattr(value, "n_risk", [])],
+        n_event=[float(item) for item in getattr(value, "n_event", [])],
+        n_censor=[float(item) for item in getattr(value, "n_censor", [])],
+        std_err=[float(item) for item in getattr(value, "std_err", [])],
+        logse=bool(getattr(value, "logse", False)),
+        conf_level=float(getattr(value, "conf_level", 0.95)),
+        conf_type=str(getattr(value, "conf_type", "log")),
         model=getattr(value, "model", None),
     )
 
@@ -17246,6 +17270,24 @@ def _survfit_without_standard_errors(result: Any) -> Any:
             n_enter_count=_optional_float_list(result, "n_enter_count"),
             model=getattr(result, "model", None),
         )
+    if isinstance(result, TurnbullSurvfitResult) or _is_turnbull_result_like(result):
+        turnbull = _coerce_turnbull_result_like(result)
+        return TurnbullSurvfitResult(
+            time_points=turnbull.time_points,
+            survival=turnbull.survival,
+            survival_lower=[],
+            survival_upper=[],
+            n_iter=turnbull.n_iter,
+            converged=turnbull.converged,
+            n_risk=turnbull.n_risk,
+            n_event=turnbull.n_event,
+            n_censor=turnbull.n_censor,
+            std_err=[],
+            logse=turnbull.logse,
+            conf_level=turnbull.conf_level,
+            conf_type=turnbull.conf_type,
+            model=turnbull.model,
+        )
     if isinstance(result, CoxSurvfitResult):
         return CoxSurvfitResult(
             time=result.time,
@@ -17304,6 +17346,13 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
             survival_upper=[float(value) for value in result.survival_upper],
             n_iter=int(result.n_iter),
             converged=bool(result.converged),
+            n_risk=[float(value) for value in getattr(result, "n_risk", [])],
+            n_event=[float(value) for value in getattr(result, "n_event", [])],
+            n_censor=[float(value) for value in getattr(result, "n_censor", [])],
+            std_err=[float(value) for value in getattr(result, "std_err", [])],
+            logse=bool(getattr(result, "logse", False)),
+            conf_level=float(getattr(result, "conf_level", 0.95)),
+            conf_type=str(getattr(result, "conf_type", "log")),
             model=model_frame,
         )
     if all(
@@ -18325,21 +18374,14 @@ def survfit(
             model_frame=model_frame if keep_model else None,
         )
     if response.type in {"left", "interval", "interval2"}:
-        if (
-            include_se
-            and _survfit_robust_cluster_values(response, cluster, id_values, None, robust_value)
-            is not None
-        ):
+        if cluster is not None:
             raise NotImplementedError(
-                "survfit robust variance is currently supported only for right-censored or "
-                "counting-process Kaplan-Meier curves"
+                "clustered interval-censored survfit variance is not available"
             )
         if not computation.is_kaplan_meier:
             raise ValueError(
                 "non-Kaplan-Meier survfit styles are only supported for right-censored data"
             )
-        if normalized_conf_type != "log":
-            raise ValueError("conf_type is only supported for right-censored data")
         if normalized_start_time is not None:
             raise ValueError("start_time is only supported for right-censored data")
         if include_time0:
@@ -18351,14 +18393,23 @@ def survfit(
             raise ValueError("weights must have the same length as the Surv response")
         if response.start is not None:
             raise ValueError("interval-censored survfit does not support entry times")
+        turnbull_robust = robust_value is not False
         if group is None:
             left, right = _turnbull_intervals(response)
-            result = _core.turnbull_estimator(left, right, weights=wt)
-            return (
+            result = _core.turnbull_estimator(
+                left,
+                right,
+                weights=wt,
+                robust=turnbull_robust,
+                conf_level=normalized_conf_level,
+                conf_type=normalized_conf_type,
+            )
+            result = (
                 _survfit_with_model_frame(result, model_frame)
                 if keep_model and model_frame is not None
                 else result
             )
+            return _survfit_without_standard_errors(result) if not include_se else result
 
         grouped_indices = _group_indices(group, len(response), levels=formula_group_levels)
         group_codes = [0] * len(response)
@@ -18371,17 +18422,24 @@ def survfit(
             right,
             group_codes,
             weights=wt,
+            robust=turnbull_robust,
+            conf_level=normalized_conf_level,
+            conf_type=normalized_conf_type,
         )
         raw_groups = [int(value) for value in raw_grouped.groups]
         if raw_groups != list(range(len(grouped_indices))):
             raise RuntimeError("grouped Turnbull fit returned inconsistent group codes")
         raw_time_points = raw_grouped.time_points
+        raw_n_risk = raw_grouped.n_risk
+        raw_n_event = raw_grouped.n_event
+        raw_n_censor = raw_grouped.n_censor
         raw_survival = raw_grouped.survival
+        raw_std_err = raw_grouped.std_err
         raw_survival_lower = raw_grouped.survival_lower
         raw_survival_upper = raw_grouped.survival_upper
         raw_n_iter = raw_grouped.n_iter
         raw_converged = raw_grouped.converged
-        return {
+        result = {
             label: TurnbullSurvfitResult(
                 time_points=raw_time_points[curve_idx],
                 survival=raw_survival[curve_idx],
@@ -18389,10 +18447,18 @@ def survfit(
                 survival_upper=raw_survival_upper[curve_idx],
                 n_iter=raw_n_iter[curve_idx],
                 converged=raw_converged[curve_idx],
+                n_risk=raw_n_risk[curve_idx],
+                n_event=raw_n_event[curve_idx],
+                n_censor=raw_n_censor[curve_idx],
+                std_err=raw_std_err[curve_idx],
+                logse=bool(raw_grouped.logse[curve_idx]),
+                conf_level=float(raw_grouped.conf_level),
+                conf_type=str(raw_grouped.conf_type),
                 model=model_frame if keep_model else None,
             )
             for curve_idx, label in enumerate(grouped_indices)
         }
+        return _survfit_without_standard_errors(result) if not include_se else result
 
     wt = _float_vector(weights, "weights") if weights is not None else None
     if wt is not None and len(wt) != len(response):
@@ -21773,12 +21839,21 @@ def _survfit_multistate_structure(
 
 
 def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any]]:
-    return {
+    frame: dict[str, list[Any]] = {
         "time": result.time_points,
         "surv": result.survival,
-        "lower": result.survival_lower,
-        "upper": result.survival_upper,
     }
+    for name, values in (
+        ("n.risk", result.n_risk),
+        ("n.event", result.n_event),
+        ("n.censor", result.n_censor),
+        ("std.err", result.std_err),
+        ("lower", result.survival_lower),
+        ("upper", result.survival_upper),
+    ):
+        if values:
+            frame[name] = values
+    return frame
 
 
 def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
@@ -21860,6 +21935,13 @@ def _raw_turnbull_survfit_frame(result: Any) -> dict[str, list[Any]]:
             survival_upper=[float(value) for value in result.survival_upper],
             n_iter=int(result.n_iter),
             converged=bool(result.converged),
+            n_risk=[float(value) for value in getattr(result, "n_risk", [])],
+            n_event=[float(value) for value in getattr(result, "n_event", [])],
+            n_censor=[float(value) for value in getattr(result, "n_censor", [])],
+            std_err=[float(value) for value in getattr(result, "std_err", [])],
+            logse=bool(getattr(result, "logse", False)),
+            conf_level=float(getattr(result, "conf_level", 0.95)),
+            conf_type=str(getattr(result, "conf_type", "log")),
         )
     )
 

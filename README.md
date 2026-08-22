@@ -161,6 +161,9 @@ They support right-censored `Surv(time, event)` data and counting-process
 `Surv(start, stop, event)` data with delayed-entry risk sets. Direct and
 formula `Surv(...)` calls also accept R-style named aliases including `time=`,
 `time1=`, `start=`, `time2=`, `stop=`, `event=`, and `status=`.
+Left- and interval-censored curves use a native Turnbull EM fit with the
+reference support-point rules, weighted redistribution, robust or Greenwood
+uncertainty, and all supported confidence transformations.
 Factor-valued event responses produce multi-state Aalen--Johansen curves.
 These curves support subject histories through `id=`, observed initial states
 through `istate=`, event-type conversion through `etype=`, user-supplied

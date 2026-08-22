@@ -6811,7 +6811,7 @@ def test_survfit_left_censored_response_uses_turnbull_estimator():
 
     high_level = survival.survfit(response)
     low_level = survival.turnbull_estimator(
-        [0.0, 2.0, 0.0, 4.0],
+        [float("-inf"), 2.0, float("-inf"), 4.0],
         [1.0, 2.0, 3.0, 4.0],
     )
 
@@ -6842,6 +6842,107 @@ def test_turnbull_weights_match_replicated_rows():
     assert weighted.survival == pytest.approx(replicated.survival)
 
 
+def test_turnbull_matches_reference_weighted_fit_and_uncertainty():
+    time = [1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0]
+    status = [1, 0, 2] * 4
+    weights = [12.0, 3.0, 2.0, 6.0, 2.0, 4.0, 2.0, 0.0, 2.0, 3.0, 3.0, 5.0]
+    response = survival.Surv(time, time, status, type="interval")
+
+    robust = survival.survfit(response, weights=weights)
+    greenwood = survival.survfit(response, weights=weights, robust=False)
+
+    expected_survival = [
+        0.537567714669201,
+        0.294594032546376,
+        0.209760214997243,
+        0.0948457531854178,
+    ]
+    assert robust.time_points == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    assert robust.n_risk == pytest.approx(
+        [44.0, 20.6529794454449, 9.3180987862618, 6.63477935339415]
+    )
+    assert robust.n_event == pytest.approx(
+        [20.3470205545551, 9.33488065918305, 2.68331943286765, 3.63477935339415]
+    )
+    assert robust.n_censor == pytest.approx([3.0, 2.0, 0.0, 3.0])
+    assert robust.survival == pytest.approx(expected_survival)
+    assert robust.std_err == pytest.approx(
+        [0.202635155653773, 0.146753572309286, 0.127982471861457, 0.0915918887134962]
+    )
+    assert robust.survival_lower == pytest.approx(
+        [0.25678776700521, 0.110966887195536, 0.0634415155186433, 0.014289546268505],
+        abs=2e-9,
+    )
+    assert robust.survival_upper == pytest.approx(
+        [1.0, 0.782085955596907, 0.693541877680389, 0.629531318089242],
+        abs=2e-9,
+    )
+    assert robust.logse is False
+    assert robust.converged is True
+
+    assert greenwood.survival == pytest.approx(expected_survival)
+    assert greenwood.std_err == pytest.approx(
+        [0.139823814703032, 0.243896693164094, 0.320762342282439, 0.534322843247077]
+    )
+    assert greenwood.survival_lower == pytest.approx(
+        [0.408709686826966, 0.182649590847976, 0.11186383877879, 0.0332813903521974],
+        abs=2e-9,
+    )
+    assert greenwood.logse is True
+
+
+def test_turnbull_survfit_options_and_frame_columns():
+    response = survival.Surv(
+        [float("-inf"), 2.0, 3.0, 4.0],
+        [1.0, 5.0, 3.0, float("inf")],
+        type="interval2",
+    )
+    fitted = survival.survfit(response, conf_type="plain", conf_level=0.9)
+    frame = survival.as_data_frame(fitted)
+
+    assert fitted.conf_type == "plain"
+    assert fitted.conf_level == pytest.approx(0.9)
+    assert list(frame) == [
+        "time",
+        "surv",
+        "n.risk",
+        "n.event",
+        "n.censor",
+        "std.err",
+        "lower",
+        "upper",
+    ]
+
+    without_error = survival.survfit(response, se_fit=False)
+    assert survival.as_data_frame(without_error) == {
+        "time": without_error.time_points,
+        "surv": without_error.survival,
+        "n.risk": without_error.n_risk,
+        "n.event": without_error.n_event,
+        "n.censor": without_error.n_censor,
+    }
+
+
+def test_turnbull_preserves_reference_boundary_support_mass():
+    fitted = survival.turnbull_estimator(
+        [float("-inf"), 1.0, 2.0, 3.0],
+        [1.0, float("inf"), 4.0, 3.0],
+        weights=[1.0, 2.0, 1.5, 1.0],
+    )
+
+    assert fitted.time_points == pytest.approx([1.0, 3.0, 3.5])
+    assert fitted.n_risk == pytest.approx([5.5, 2.5, 0.000197698729090146])
+    assert fitted.n_event == pytest.approx([0.0, 2.49980230127091, 0.000197698729090146])
+    assert fitted.survival == pytest.approx(
+        [0.818181818181818, 6.4701402247684e-05, 0.0],
+        abs=1e-15,
+    )
+    assert fitted.std_err == pytest.approx(
+        [0.173354965239553, 7.81689344490108e-05, 0.0],
+        abs=1e-15,
+    )
+
+
 def test_survfit_interval_weights_use_weighted_turnbull_estimator():
     response = survival.Surv(
         [1.0, 2.0, 3.0, 4.0],
@@ -6853,7 +6954,7 @@ def test_survfit_interval_weights_use_weighted_turnbull_estimator():
 
     high_level = survival.survfit(response, weights=weights)
     low_level = survival.turnbull_estimator(
-        [0.0, 2.0, 3.0, 4.0],
+        [float("-inf"), 2.0, 3.0, 4.0],
         [1.0, 5.0, 3.0, float("inf")],
         weights=weights,
     )
@@ -6926,7 +7027,7 @@ def test_survfit_formula_splits_interval_weights_by_group():
         weights=data["weights"],
     )
     expected_a = survival.turnbull_estimator(
-        [0.0, 2.0, 3.0],
+        [float("-inf"), 2.0, 3.0],
         [1.0, 5.0, 3.0],
         weights=[2.0, 1.0, 3.0],
     )
@@ -7009,7 +7110,7 @@ def test_survfit_interval_response_uses_turnbull_estimator():
 
     high_level = survival.survfit(response)
     low_level = survival.turnbull_estimator(
-        [0.0, 2.0, 3.0, 4.0],
+        [float("-inf"), 2.0, 3.0, 4.0],
         [1.0, 5.0, 3.0, float("inf")],
     )
 
@@ -7031,7 +7132,7 @@ def test_survfit_interval2_response_derives_censoring_codes():
 
     high_level = survival.survfit(response)
     low_level = survival.turnbull_estimator(
-        [0.0, 2.0, 3.0, 4.0],
+        [float("-inf"), 2.0, 3.0, 4.0],
         [1.0, 5.0, 3.0, float("inf")],
     )
 
@@ -24364,11 +24465,11 @@ def test_r_api_rejects_unsupported_formula_features():
             type="fh",
         )
 
-    with pytest.raises(ValueError, match="right-censored"):
-        survival.survfit(
-            survival.Surv([1.0, 2.0], [0, 1], type="left"),
-            conf_type="plain",
-        )
+    interval_plain = survival.survfit(
+        survival.Surv([1.0, 2.0], [0, 1], type="left"),
+        conf_type="plain",
+    )
+    assert interval_plain.conf_type == "plain"
 
     with pytest.raises(ValueError, match="right-censored"):
         survival.survfit(
