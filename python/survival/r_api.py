@@ -18216,6 +18216,23 @@ def model_matrix(fit: Any) -> dict[str, Any]:
     }
 
 
+def _model_matrix_newdata(fit: Any, newdata: Any) -> dict[str, Any]:
+    """Build a fitted model's design matrix for new formula data."""
+
+    _require_model_fit(fit, "_model_matrix_newdata")
+    rows, _offsets = _prediction_inputs(fit, newdata)
+    if rows is None:
+        raise TypeError("newdata is required")
+    width = len(rows[0]) if rows else len(_location_beta(fit))
+    if any(len(row) != width for row in rows):
+        raise ValueError("newdata model matrix must be rectangular")
+    return {
+        "data": rows,
+        "columns": _model_matrix_column_names(fit, width),
+        "assign": _model_matrix_assignments(fit, width),
+    }
+
+
 def _coxph_multistate_transition_names(
     metadata: _MultiStateCoxFitMetadata,
 ) -> list[str]:

@@ -9949,6 +9949,19 @@ def test_coxph_formula_pspline_matches_fixed_theta_reference():
         [-0.0043472678247675],
         abs=1e-12,
     )
+    profile_data = {"z": [0.3, -0.2], "x": [0.8, 1.6]}
+    profile_matrix = survival.r_api._model_matrix_newdata(fit, profile_data)
+    assert profile_matrix["columns"] == survival.coef_names(fit)
+    assert profile_matrix["assign"] == [1, 2, 2, 2, 2, 2, 2]
+    assert [
+        sum(
+            value * coefficient for value, coefficient in zip(row, fit.coefficients[0], strict=True)
+        )
+        for row in profile_matrix["data"]
+    ] == pytest.approx(
+        survival.predict(fit, profile_data, type="lp", reference="zero"),
+        abs=1e-12,
+    )
 
     intercept_fit = survival.coxph(
         "Surv(time,status) ~ pspline(x,theta=.5,nterm=4,intercept=True)",

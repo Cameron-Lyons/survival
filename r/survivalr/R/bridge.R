@@ -5778,8 +5778,7 @@ Surv2data <- function(formula, data, subset, id) {
   }, character(1L))
   part_names <- row.names(attr(Terms, "factors"))
   parts <- part_names[match(target_names, variable_keys)]
-  if (anyNA(parts) || !identical(target_names, unname(parts)) ||
-      any(!(target_names %in% names(model_frame)))) {
+  if (anyNA(parts) || any(!(target_names %in% names(model_frame)))) {
     return(NULL)
   }
   categorical <- vapply(target_names, function(name) {
@@ -5866,6 +5865,7 @@ Surv2data <- function(formula, data, subset, id) {
   }
   list(
     names = target_names,
+    parts = unname(parts),
     levels = level_frame,
     categorical = categorical
   )
@@ -6153,6 +6153,18 @@ Surv2data <- function(formula, data, subset, id) {
   if (!identical(names(beta), colnames(old_matrix))) {
     return(NULL)
   }
+  cmat_names <- names(beta)
+  if (!identical(target_names, term_spec$parts)) {
+    reference_matrix <- try(
+      stats::model.matrix(Terms, model_frame, xlev = xlevels),
+      silent = TRUE
+    )
+    if (!inherits(reference_matrix, "try-error") &&
+        ncol(reference_matrix) >= length(beta) &&
+        !is.null(colnames(reference_matrix))) {
+      cmat_names <- tail(colnames(reference_matrix), length(beta))
+    }
+  }
   fit_weights <- stats::model.weights(model_frame)
   if (is.null(fit_weights) && inherits(fit, "survival_py_model")) {
     fit_weights <- stats::weights(fit)
@@ -6162,7 +6174,7 @@ Surv2data <- function(formula, data, subset, id) {
     population_value,
     model_frame,
     Terms,
-    target_names,
+    term_spec$parts,
     xlevels,
     fit_weights
   )
@@ -6189,15 +6201,20 @@ Surv2data <- function(formula, data, subset, id) {
         rep(level, nrow(profile))
       }
     }
-    design <- tryCatch(
+    design <- tryCatch(if (inherits(fit, "survival_py_model")) {
+      .as_model_matrix(.call_r_api(
+        "_model_matrix_newdata",
+        fit,
+        .as_python_data(profile)
+      ))
+    } else {
       stats::model.matrix(
         Terms,
         profile,
         contrasts.arg = fit_contrasts,
         xlev = xlevels
-      ),
-      error = function(condition) NULL
-    )
+      )
+    }, error = function(condition) NULL)
     if (is.null(design)) {
       return(NULL)
     }
@@ -6224,7 +6241,7 @@ Surv2data <- function(formula, data, subset, id) {
   }
   design_rows <- lapply(design_matrices, mean_design)
   cmat <- do.call(rbind, design_rows)
-  colnames(cmat) <- names(beta)
+  colnames(cmat) <- cmat_names
 
   variance <- stats::vcov(fit)
   risk_scale <- cox_fit && identical(predict, "risk")
@@ -6324,7 +6341,7 @@ Surv2data <- function(formula, data, subset, id) {
       test_values,
       nrow = 1L,
       dimnames = list(
-        if (nonlinear_scale) target_names else "global",
+        if (nonlinear_scale) term_spec$parts else "global",
         names(test_values)
       )
     )

@@ -933,6 +933,61 @@ test_that("R formula wrappers delegate to the Python survival package", {
       tolerance = 1e-8
     )
   }
+  native_spline_yates_fit <- survival::coxph(
+    survival::Surv(time, status) ~
+      pspline(age, theta = 0.5, nterm = 6) + sex + ph.ecog,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  local_spline_yates_fit <- coxph(
+    Surv(time, status) ~
+      pspline(age, theta = 0.5, nterm = 6) + sex + ph.ecog,
+    data = yates_cox_model_data,
+    model = TRUE,
+    x = TRUE
+  )
+  spline_yates_levels <- c(50, 60, 70)
+  spline_yates_cases <- list(
+    variable = list(term = "age"),
+    formula = list(term = ~age),
+    transformed = list(term = "pspline(age)", test = "pairwise")
+  )
+  for (case_name in names(spline_yates_cases)) {
+    arguments <- c(
+      spline_yates_cases[[case_name]],
+      list(levels = spline_yates_levels)
+    )
+    expected <- do.call(
+      survival::yates,
+      c(list(fit = native_spline_yates_fit), arguments)
+    )
+    compare_yates(
+      do.call(yates, c(list(fit = local_spline_yates_fit), arguments)),
+      expected,
+      tolerance = 1e-7
+    )
+  }
+  set.seed(20260822)
+  spline_risk_expected <- survival::yates(
+    native_spline_yates_fit,
+    "age",
+    levels = spline_yates_levels,
+    predict = "risk",
+    nsim = 100
+  )
+  set.seed(20260822)
+  compare_yates(
+    yates(
+      local_spline_yates_fit,
+      "age",
+      levels = spline_yates_levels,
+      predict = "risk",
+      nsim = 100
+    ),
+    spline_risk_expected,
+    tolerance = 1e-7
+  )
   sas_yates_cox_expected <- survival::yates(
     native_yates_cox_fit,
     "group",
