@@ -7819,6 +7819,84 @@ test_that("formula factors retain numeric labels and unused levels", {
   )
 })
 
+test_that("formula factors retain ordered and custom contrasts", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- survival::lung[
+    stats::complete.cases(survival::lung[, c("time", "status", "age", "ph.ecog")]),
+    c("time", "status", "age", "ph.ecog")
+  ]
+  data$status <- as.integer(data$status == 2L)
+  data$ph.ecog <- ordered(data$ph.ecog, levels = 0:3)
+  bridged_cox <- coxph(
+    Surv(time, status) ~ ph.ecog * age,
+    data = data
+  )
+  reference_cox <- survival::coxph(
+    survival::Surv(time, status) ~ ph.ecog * age,
+    data = data
+  )
+
+  expect_equal(names(coef(bridged_cox)), names(coef(reference_cox)))
+  expect_equal(coef(bridged_cox), coef(reference_cox), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_cox)),
+    as.vector(model.matrix(reference_cox)),
+    tolerance = 1e-12
+  )
+
+  bridged_aft <- survreg(
+    Surv(time, status) ~ ph.ecog + age,
+    data = data,
+    dist = "weibull"
+  )
+  reference_aft <- survival::survreg(
+    survival::Surv(time, status) ~ ph.ecog + age,
+    data = data,
+    dist = "weibull"
+  )
+  expect_equal(names(coef(bridged_aft)), names(coef(reference_aft)))
+  expect_equal(coef(bridged_aft), coef(reference_aft), tolerance = 1e-08)
+  expect_equal(vcov(bridged_aft), vcov(reference_aft), tolerance = 1e-08)
+  expect_equal(logLik(bridged_aft), logLik(reference_aft), tolerance = 1e-08)
+
+  bridged_full_factor <- survreg(
+    Surv(time, status) ~ 0 + ph.ecog + age,
+    data = data,
+    dist = "weibull"
+  )
+  reference_full_factor <- survival::survreg(
+    survival::Surv(time, status) ~ 0 + ph.ecog + age,
+    data = data,
+    dist = "weibull"
+  )
+  expect_equal(names(coef(bridged_full_factor)), names(coef(reference_full_factor)))
+  expect_equal(coef(bridged_full_factor), coef(reference_full_factor), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_full_factor)),
+    as.vector(model.matrix(reference_full_factor)),
+    tolerance = 1e-12
+  )
+
+  data$ph.ecog <- factor(as.character(data$ph.ecog), levels = 0:3)
+  contrasts(data$ph.ecog) <- stats::contr.sum(4L)
+  bridged_custom <- coxph(Surv(time, status) ~ ph.ecog + age, data = data)
+  reference_custom <- survival::coxph(
+    survival::Surv(time, status) ~ ph.ecog + age,
+    data = data,
+    x = TRUE
+  )
+  expect_equal(names(coef(bridged_custom)), names(coef(reference_custom)))
+  expect_equal(coef(bridged_custom), coef(reference_custom), tolerance = 1e-08)
+  expect_equal(
+    as.vector(model.matrix(bridged_custom)),
+    as.vector(reference_custom$x),
+    tolerance = 1e-12
+  )
+})
+
 test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

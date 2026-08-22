@@ -15937,6 +15937,143 @@ def test_formula_factors_preserve_declared_numeric_levels_and_unused_aliases():
     assert survival.loglik(aft) == pytest.approx(survival.loglik(reduced_aft), abs=1e-10)
 
 
+def test_formula_factors_preserve_declared_contrast_matrices():
+    n = 48
+    index_values = list(range(n))
+    levels = ["low", "medium", "high", "very_high"]
+    groups = [levels[value % len(levels)] for value in index_values]
+    x = [((value * 11) % 43) / 10.0 - 2.1 for value in index_values]
+    noise = [((value * 13) % 11 - 5) / 20.0 for value in index_values]
+    root_twenty = math.sqrt(20.0)
+    contrasts = [
+        [-3.0 / root_twenty, 0.5, -1.0 / root_twenty],
+        [-1.0 / root_twenty, -0.5, 3.0 / root_twenty],
+        [1.0 / root_twenty, -0.5, -3.0 / root_twenty],
+        [3.0 / root_twenty, 0.5, 1.0 / root_twenty],
+    ]
+    encoded = [contrasts[levels.index(value)] for value in groups]
+    data = {
+        "time": [
+            math.exp(2.2 + 0.25 * x_value + 0.18 * row[0] - 0.12 * row[1] + error)
+            for x_value, row, error in zip(x, encoded, noise, strict=True)
+        ],
+        "status": [int(value % 5 != 0) for value in index_values],
+        "x": x,
+        "group": survival.r_api._r_factor(
+            groups,
+            levels,
+            contrasts,
+            [".L", ".Q", ".C"],
+        ),
+        "linear": [row[0] for row in encoded],
+        "quadratic": [row[1] for row in encoded],
+        "cubic": [row[2] for row in encoded],
+    }
+
+    cox = survival.coxph("Surv(time,status) ~ group + x", data=data, ties="breslow")
+    numeric_cox = survival.coxph(
+        "Surv(time,status) ~ linear + quadratic + cubic + x",
+        data=data,
+        ties="breslow",
+    )
+    assert survival.coef_names(cox) == ["group.L", "group.Q", "group.C", "x"]
+    for actual, expected in zip(
+        survival.model_matrix(cox)["data"],
+        [[*row, x_value] for row, x_value in zip(encoded, x, strict=True)],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-15)
+    assert survival.coef(cox) == pytest.approx(survival.coef(numeric_cox), abs=1e-12)
+    prediction_levels = ["very_high", "low", "high"]
+    prediction_x = [-0.7, 0.2, 1.1]
+    prediction_contrasts = [contrasts[levels.index(value)] for value in prediction_levels]
+    assert survival.predict(
+        cox,
+        {"group": prediction_levels, "x": prediction_x},
+        type="lp",
+        reference="zero",
+    ) == pytest.approx(
+        survival.predict(
+            numeric_cox,
+            {
+                "linear": [row[0] for row in prediction_contrasts],
+                "quadratic": [row[1] for row in prediction_contrasts],
+                "cubic": [row[2] for row in prediction_contrasts],
+                "x": prediction_x,
+            },
+            type="lp",
+            reference="zero",
+        ),
+        abs=1e-12,
+    )
+
+    aft = survival.survreg(
+        "Surv(time,status) ~ group + x",
+        data=data,
+        distribution="weibull",
+        max_iter=100,
+    )
+    numeric_aft = survival.survreg(
+        "Surv(time,status) ~ linear + quadratic + cubic + x",
+        data=data,
+        distribution="weibull",
+        max_iter=100,
+    )
+    assert survival.coef_names(aft)[:4] == ["(Intercept)", "group.L", "group.Q", "group.C"]
+    assert survival.coef(aft) == pytest.approx(survival.coef(numeric_aft), abs=1e-11)
+    assert survival.predict(
+        aft,
+        {"group": prediction_levels, "x": prediction_x},
+        type="lp",
+    ) == pytest.approx(
+        survival.predict(
+            numeric_aft,
+            {
+                "linear": [row[0] for row in prediction_contrasts],
+                "quadratic": [row[1] for row in prediction_contrasts],
+                "cubic": [row[2] for row in prediction_contrasts],
+                "x": prediction_x,
+            },
+            type="lp",
+        ),
+        abs=1e-11,
+    )
+
+    sum_contrasts = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [-1.0, -1.0, -1.0],
+    ]
+    custom_data = {
+        **data,
+        "group": survival.r_api._r_factor(groups, levels, sum_contrasts),
+    }
+    custom = survival.coxph("Surv(time,status) ~ group + x", data=custom_data)
+    assert survival.coef_names(custom) == ["group1", "group2", "group3", "x"]
+    for actual, expected in zip(
+        survival.model_matrix(custom)["data"],
+        [
+            [*sum_contrasts[levels.index(value)], x_value]
+            for value, x_value in zip(groups, x, strict=True)
+        ],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected, abs=1e-15)
+
+    malformed_data = {
+        **data,
+        "group": survival.r_api._r_factor(
+            groups,
+            levels,
+            contrasts[:-1],
+            [".L", ".Q", ".C"],
+        ),
+    }
+    with pytest.raises(ValueError, match="one row per declared level"):
+        survival.coxph("Surv(time,status) ~ group + x", data=malformed_data)
+
+
 def test_cox_zph_drops_aliased_columns_like_explicitly_reduced_fit():
     data = {
         "time": [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0],

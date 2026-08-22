@@ -342,6 +342,8 @@ class _NumericDesignTerm:
 class _CategoricalDesignTerm:
     term: _CovariateTerm
     levels: tuple[Any, ...]
+    contrasts: tuple[tuple[float, ...], ...] | None = None
+    contrast_names: tuple[str, ...] = ()
     full: bool = False
 
 
@@ -1578,9 +1580,19 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
 class _RFactorVector:
     """Iterable factor values with level metadata preserved across reticulate."""
 
-    def __init__(self, values: Any, levels: Any):
+    def __init__(
+        self,
+        values: Any,
+        levels: Any,
+        contrasts: Any | None = None,
+        contrast_names: Any | None = None,
+    ):
         self._values = tuple(values)
         self.categories = tuple(levels)
+        self.contrasts = None if contrasts is None else tuple(tuple(row) for row in contrasts)
+        self.contrast_names = (
+            None if contrast_names is None else tuple(str(name) for name in contrast_names)
+        )
 
     def __iter__(self):
         return iter(self._values)
@@ -1592,8 +1604,13 @@ class _RFactorVector:
         return self._values[item]
 
 
-def _r_factor(values: Any, levels: Any) -> _RFactorVector:
-    return _RFactorVector(values, levels)
+def _r_factor(
+    values: Any,
+    levels: Any,
+    contrasts: Any | None = None,
+    contrast_names: Any | None = None,
+) -> _RFactorVector:
+    return _RFactorVector(values, levels, contrasts, contrast_names)
 
 
 def _materialize_1d(values: Any, name: str) -> list[Any]:
@@ -1701,6 +1718,13 @@ def _mstate_categories(values: Any) -> Any | None:
     if categories is not None:
         return categories
     return getattr(getattr(values, "dtype", None), "categories", None)
+
+
+def _factor_contrasts(values: Any) -> tuple[Any | None, Any | None]:
+    return (
+        getattr(values, "contrasts", None),
+        getattr(values, "contrast_names", None),
+    )
 
 
 def _mstate_event_vector(values: Any, name: str) -> tuple[list[int | None], tuple[str, ...]]:
@@ -1908,7 +1932,8 @@ def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
     subsetted = [materialized[idx] for idx in indices]
     categories = _mstate_categories(values)
     if categories is not None:
-        return _RFactorVector(subsetted, categories)
+        contrasts, contrast_names = _factor_contrasts(values)
+        return _RFactorVector(subsetted, categories, contrasts, contrast_names)
     return subsetted
 
 
@@ -4480,7 +4505,8 @@ def _term_columns(
     declared_levels = _formula_declared_factor_levels(data, term)
     if declared_levels is not None:
         levels = _categorical_levels(values, term.column, declared_levels)
-        return [[1.0 if value == level else 0.0 for value in values] for level in levels[1:]]
+        contrasts, _contrast_names = _formula_declared_factor_contrasts(data, term, levels)
+        return _categorical_columns(values, levels, contrasts=contrasts)
     if not term.categorical:
         if term.transform is not None:
             return [_numeric_term_values(values, term)]
@@ -4492,7 +4518,7 @@ def _term_columns(
             return [numeric]
 
     levels = _categorical_levels(values, term.column)
-    return [[1.0 if value == level else 0.0 for value in values] for level in levels[1:]]
+    return _categorical_columns(values, levels)
 
 
 def _formula_declared_factor_levels(
@@ -4502,6 +4528,64 @@ def _formula_declared_factor_levels(
     if term.arithmetic is not None or (term.transform is not None and not term.categorical):
         return None
     return _mstate_categories(_column_source(data, term.column))
+
+
+def _formula_declared_factor_contrasts(
+    data: Any,
+    term: _CovariateTerm,
+    levels: tuple[Any, ...],
+) -> tuple[tuple[tuple[float, ...], ...] | None, tuple[str, ...]]:
+    raw_contrasts, raw_names = _factor_contrasts(_column_source(data, term.column))
+    if raw_contrasts is None:
+        return None, ()
+    try:
+        contrasts = tuple(
+            tuple(float(value) for value in row)
+            for row in _coerce_array_like(raw_contrasts, f"{term.column} contrasts")
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"factor contrasts for {term.column!r} must be numeric") from exc
+    if len(contrasts) != len(levels):
+        raise ValueError(
+            f"factor contrasts for {term.column!r} must have one row per declared level"
+        )
+    width = len(contrasts[0]) if contrasts else 0
+    if width < 1 or width >= len(levels) or any(len(row) != width for row in contrasts):
+        raise ValueError(
+            f"factor contrasts for {term.column!r} must be a rectangular matrix with fewer "
+            "columns than levels"
+        )
+    if any(not math.isfinite(value) for row in contrasts for value in row):
+        raise ValueError(f"factor contrasts for {term.column!r} must contain finite values")
+    names = (
+        tuple(str(index + 1) for index in range(width))
+        if raw_names is None
+        else tuple(
+            str(value) for value in _materialize_1d(raw_names, f"{term.column} contrast names")
+        )
+    )
+    if len(names) != width:
+        raise ValueError(
+            f"factor contrast names for {term.column!r} must match the contrast columns"
+        )
+    return contrasts, names
+
+
+def _categorical_columns(
+    values: Sequence[Any],
+    levels: tuple[Any, ...],
+    *,
+    contrasts: tuple[tuple[float, ...], ...] | None = None,
+    full: bool = False,
+) -> list[list[float]]:
+    if full:
+        return [[1.0 if value == level else 0.0 for value in values] for level in levels]
+    if contrasts is None:
+        return [[1.0 if value == level else 0.0 for value in values] for level in levels[1:]]
+    encoded_rows = dict(zip(levels, contrasts, strict=True))
+    return [
+        [encoded_rows[value][column] for value in values] for column in range(len(contrasts[0]))
+    ]
 
 
 def _categorical_levels(
@@ -4544,9 +4628,13 @@ def _fit_single_design_term(
     values = _term_raw_values(data, term, n)
     declared_levels = _formula_declared_factor_levels(data, term)
     if declared_levels is not None:
+        levels = _categorical_levels(values, term.column, declared_levels)
+        contrasts, contrast_names = _formula_declared_factor_contrasts(data, term, levels)
         return _CategoricalDesignTerm(
             term,
-            _categorical_levels(values, term.column, declared_levels),
+            levels,
+            contrasts=contrasts,
+            contrast_names=contrast_names,
         )
     if not term.categorical:
         if term.transform is not None:
@@ -4692,6 +4780,8 @@ def _set_full_categorical_factors(
         return _CategoricalDesignTerm(
             spec.term,
             spec.levels,
+            contrasts=spec.contrasts,
+            contrast_names=spec.contrast_names,
             full=spec.term in full_factors,
         )
     if isinstance(spec, _InteractionDesignTerm):
@@ -4700,6 +4790,8 @@ def _set_full_categorical_factors(
                 _CategoricalDesignTerm(
                     factor.term,
                     factor.levels,
+                    contrasts=factor.contrasts,
+                    contrast_names=factor.contrast_names,
                     full=factor.term in full_factors,
                 )
                 if isinstance(factor, _CategoricalDesignTerm)
@@ -4833,8 +4925,12 @@ def _single_design_columns(
             raise ValueError(
                 f"newdata column {spec.term.column!r} contains unknown level {value!r}"
             )
-    encoded_levels = levels if spec.full else levels[1:]
-    return [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
+    return _categorical_columns(
+        values,
+        levels,
+        contrasts=spec.contrasts,
+        full=spec.full,
+    )
 
 
 def _design_term_columns(
@@ -5659,8 +5755,11 @@ def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
     term = spec.term
     if isinstance(spec, _CategoricalDesignTerm):
         prefix = _covariate_term_name(term)
-        levels = spec.levels if spec.full else spec.levels[1:]
-        return [f"{prefix}{level}" for level in levels]
+        if spec.full:
+            return [f"{prefix}{level}" for level in spec.levels]
+        if spec.contrasts is not None:
+            return [f"{prefix}{name}" for name in spec.contrast_names]
+        return [f"{prefix}{level}" for level in spec.levels[1:]]
     return [_covariate_term_name(term)]
 
 
