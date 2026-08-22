@@ -1279,6 +1279,11 @@ accept logical or numeric centering and scaling options, fit before subsetting
 or missing-data omission, and retain their fitted state for ordinary new-data
 model reconstruction. Nested uses follow R's \code{makepredictcall} behavior.
 
+Natural-spline \code{ns(...)} formula terms use a parallel O(nk) Rust basis
+matching \code{splines::ns}, including fitted knots and boundaries, linear
+extrapolation, interactions, nested numeric expressions, and transform state
+computed before subsetting or missing-data omission.
+
 Formula \code{finegray} calls use the Python formula engine and Rust interval
 expansion directly. The bridge supports weights, subsets, missing-data actions,
 strata, counting-process histories, and delayed entry; computes censoring risk

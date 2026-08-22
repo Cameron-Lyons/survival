@@ -838,6 +838,7 @@ BINDINGS = (
     "nostutter_str_numeric",
     "nostutter_str_str",
     "npmle_interval",
+    "ns_basis",
     "nsk",
     "number_needed_to_treat",
     "one_calibration",

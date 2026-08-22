@@ -17523,6 +17523,190 @@ def test_formula_scale_supports_r_options_and_validation_rules():
             survival.coxph(f"Surv(time,status) ~ {term}", data=data)
 
 
+def test_formula_ns_matches_r_subset_interaction_and_prediction_state():
+    data = {
+        "time": [float(index) for index in range(1, 11)],
+        "status": [1, 0] * 5,
+        "x": [-10.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 8.0, 20.0],
+        "z": [0.1, 0.2, 0.3, None, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    }
+    keep = [False, *([True] * 7), False, False]
+    formula = (
+        "Surv(time,status) ~ ns(x,df=3) + ns(log(x+11),knots=c(2,2.5),Boundary.knots=c(1,4)):z"
+    )
+    fit = survival.coxph(
+        formula,
+        data=data,
+        subset=keep,
+        na_action="omit",
+        max_iter=0,
+    )
+    matrix = survival.model_matrix(fit)
+    expected = [
+        [
+            -0.183357984196436,
+            0.541720076870056,
+            -0.291695426006953,
+            -0.0136720611251965,
+            0.119671036290179,
+            -0.0683834493086738,
+        ],
+        [
+            -0.127040794324088,
+            0.617641885644578,
+            -0.332576399962465,
+            0.0383793121043007,
+            0.170483103349157,
+            -0.096761354798039,
+        ],
+        [
+            0.0267853762660533,
+            0.605986182111382,
+            -0.325893251499128,
+            0.155842438956225,
+            0.250078775172267,
+            -0.133902866173946,
+        ],
+        [
+            0.128829169593671,
+            0.573317222494136,
+            -0.305453270394685,
+            0.227953496260405,
+            0.281497463481944,
+            -0.141309705515239,
+        ],
+        [
+            0.227664092495275,
+            0.535299228164999,
+            -0.277249034945988,
+            0.301087452898934,
+            0.310487704768118,
+            -0.141431881825872,
+        ],
+        [
+            0.310332672003121,
+            0.500172802664608,
+            -0.243750624579545,
+            0.372121095262756,
+            0.338293150890159,
+            -0.134475607563453,
+        ],
+    ]
+    assert matrix["columns"] == [
+        "ns(x,df=3)1",
+        "ns(x,df=3)2",
+        "ns(x,df=3)3",
+        "ns(log(x+11),knots=c(2,2.5),Boundary.knots=c(1,4))1:z",
+        "ns(log(x+11),knots=c(2,2.5),Boundary.knots=c(1,4))2:z",
+        "ns(log(x+11),knots=c(2,2.5),Boundary.knots=c(1,4))3:z",
+    ]
+    assert matrix["assign"] == [1, 1, 1, 2, 2, 2]
+    for actual, expected_row in zip(matrix["data"], expected, strict=True):
+        assert actual == pytest.approx(expected_row, abs=2e-14)
+
+    rows, offsets = survival.r_api._prediction_inputs(
+        fit,
+        {"x": [-6.0, 4.0, 14.0], "z": [0.4, 0.5, 0.9]},
+    )
+    assert offsets is None
+    assert rows is not None
+    expected_new = [
+        [
+            -0.164180269680181,
+            0.398522271549858,
+            -0.214588915449923,
+            -0.0627149571978303,
+            0.193282421240293,
+            -0.110447097851596,
+        ],
+        [
+            0.375086462421965,
+            0.469382035710669,
+            -0.205667792665262,
+            0.244184729358635,
+            0.203043020872657,
+            -0.0670298447362882,
+        ],
+        [
+            0.26914941374946,
+            0.343827063860296,
+            0.367975903342625,
+            0.381259742666009,
+            0.309887834343169,
+            0.16119174268158,
+        ],
+    ]
+    for actual, expected_row in zip(rows, expected_new, strict=True):
+        assert actual == pytest.approx(expected_row, abs=2e-14)
+
+
+def test_formula_ns_fits_before_na_omission_and_recomputes_nested_scale_for_prediction():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 0] * 4,
+        "x": [1.0, 2.0, None, 4.0, 8.0, 9.0, 10.0, 12.0],
+        "z": [0.1, 0.2, 0.3, None, 0.5, 0.6, 0.7, 0.8],
+    }
+    fit = survival.coxph(
+        "Surv(time,status) ~ ns(scale(x),df=3) + z",
+        data=data,
+        na_action="omit",
+        max_iter=0,
+    )
+    expected = [
+        [0.0, 0.0, 0.0, 0.1],
+        [-0.0514858065951185, 0.202670179737657, -0.147396494354659, 0.2],
+        [0.525504836457573, 0.348148932988899, -0.107744678537381, 0.5],
+        [0.528771360259757, 0.311171679047559, 0.0577842334199574, 0.6],
+        [0.396077348438935, 0.325494166835015, 0.248125454423019, 0.7],
+        [-0.123711340206186, 0.45360824742268, 0.670103092783505, 0.8],
+    ]
+    for actual, expected_row in zip(fit.covariates, expected, strict=True):
+        assert actual == pytest.approx(expected_row, abs=2e-14)
+
+    rows, _offsets = survival.r_api._prediction_inputs(
+        fit,
+        {"x": [3.0, 7.0, 14.0], "z": [0.25, 0.55, 0.9]},
+    )
+    assert rows is not None
+    expected_new = [
+        [-0.0715217422198635, 0.338803346357782, -0.24640243371475, 0.25],
+        [0.225269330425255, 0.489285330712898, -0.342357442231141, 0.55],
+        [0.124295234146218, 0.389039194676059, 0.484234193882389, 0.9],
+    ]
+    for actual, expected_row in zip(rows, expected_new, strict=True):
+        assert actual == pytest.approx(expected_row, abs=2e-14)
+
+
+def test_formula_ns_supports_namespace_partial_options_and_validation():
+    data = _numeric_data()
+    fit = survival.coxph(
+        "Surv(time,status) ~ splines::ns(x1,d=4,int=TRUE,B=c(0,2))",
+        data=data,
+        max_iter=0,
+    )
+    matrix = survival.model_matrix(fit)
+    assert len(matrix["columns"]) == 4
+    assert all(
+        name.startswith("splines::ns(x1,d=4,int=TRUE,B=c(0,2))") for name in matrix["columns"]
+    )
+
+    with pytest.warns(RuntimeWarning, match="df.*too small"):
+        small = survival.coxph("Surv(time,status) ~ ns(x1,df=0)", data=data, max_iter=0)
+    assert len(survival.model_matrix(small)["columns"]) == 1
+
+    for term, message in (
+        ("ns()", "requires one numeric argument"),
+        ("ns(x1,df=2.5)", "df must be an integer"),
+        ("ns(x1,knots=c(0.5,Inf))", "must be finite"),
+        ("ns(x1,Boundary.knots=c(0,1,2))", "must contain two"),
+        ("ns(x1,extra=1)", "unsupported ns.*option"),
+        ("offset(ns(x1,df=3))", "offset.*numeric"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            survival.coxph(f"Surv(time,status) ~ {term}", data=data)
+
+
 def test_formula_pmin_na_rm_controls_transformed_row_omission():
     data = _numeric_data()
     data["x1"] = [None, None, *data["x1"][2:]]

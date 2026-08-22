@@ -5366,6 +5366,124 @@ test_that("survreg scale formula terms match R", {
   )
 })
 
+test_that("coxph natural spline formula terms match R", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not_installed("splines")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  set.seed(5221)
+  n <- 120L
+  age <- stats::runif(n, 35, 85)
+  marker <- stats::runif(n, 0.4, 4.8)
+  sex <- rep(c(0, 1), length.out = n)
+  event_time <- stats::rexp(n, exp(0.018 * age - 0.12 * log(marker) + 0.15 * sex))
+  censor <- stats::rexp(n, 1.1)
+  data <- data.frame(
+    time = pmax(pmin(event_time, censor), 0.001),
+    status = as.integer(event_time <= censor),
+    age = age,
+    marker = marker,
+    sex = sex
+  )
+  formula <- Surv(time, status) ~ splines::ns(age, df = 3) +
+    sex:splines::ns(log(marker), knots = c(0.5, 1), Boundary.knots = c(-1, 2))
+  bridged <- coxph(
+    formula,
+    data = data,
+    ties = "breslow",
+    max_iter = 150,
+    eps = 1e-10,
+    x = TRUE
+  )
+  reference <- survival::coxph(
+    formula,
+    data = data,
+    ties = "breslow",
+    x = TRUE,
+    control = survival::coxph.control(iter.max = 150, eps = 1e-10)
+  )
+
+  bridged_matrix <- model.matrix(bridged)
+  reference_matrix <- stats::model.matrix(reference)
+  expect_identical(colnames(bridged_matrix), colnames(reference_matrix))
+  expect_identical(attr(bridged_matrix, "assign"), attr(reference_matrix, "assign"))
+  expect_equal(unname(bridged_matrix), unname(reference_matrix), tolerance = 2e-12)
+  expect_identical(attr(terms(bridged), "term.labels"), attr(terms(reference), "term.labels"))
+  expect_equal(unname(coef(bridged)), unname(coef(reference)), tolerance = 3e-08)
+
+  newdata <- transform(
+    data[c(2, 19, 47, 83), ],
+    age = age + c(2, -3, 5, -4),
+    marker = marker + c(0.2, -0.1, 0.4, 0.3)
+  )
+  expect_equal(
+    as.numeric(predict(bridged, newdata = newdata, type = "lp", reference = "zero")),
+    as.numeric(stats::predict(reference, newdata = newdata, type = "lp", reference = "zero")),
+    tolerance = 3e-08
+  )
+})
+
+test_that("survreg natural splines preserve pre-omission state like R", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not_installed("splines")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  set.seed(5222)
+  n <- 90L
+  x <- stats::runif(n, 0.5, 8)
+  z <- stats::rnorm(n)
+  latent <- exp(1 + 0.08 * x - 0.12 * z + stats::rnorm(n, sd = 0.35))
+  censor <- stats::rexp(n, rate = 1 / 18)
+  data <- data.frame(
+    time = pmax(pmin(latent, censor), 0.01),
+    status = as.integer(latent <= censor),
+    x = x,
+    z = z
+  )
+  data$z[c(7, 61)] <- NA_real_
+  keep <- seq_len(n) %% 8L != 0L
+  formula <- Surv(time, status) ~ splines::ns(scale(x), df = 3) + z
+  bridged <- survreg(
+    formula,
+    data = data,
+    subset = keep,
+    na.action = na.omit,
+    dist = "weibull",
+    max_iter = 150,
+    eps = 1e-10,
+    x = TRUE
+  )
+  reference <- survival::survreg(
+    formula,
+    data = data,
+    subset = keep,
+    na.action = na.omit,
+    dist = "weibull",
+    x = TRUE,
+    control = survival::survreg.control(maxiter = 150, rel.tolerance = 1e-10)
+  )
+
+  bridged_matrix <- model.matrix(bridged)
+  reference_matrix <- stats::model.matrix(reference)
+  expect_identical(colnames(bridged_matrix), colnames(reference_matrix))
+  expect_identical(attr(bridged_matrix, "assign"), attr(reference_matrix, "assign"))
+  expect_equal(unname(bridged_matrix), unname(reference_matrix), tolerance = 2e-12)
+  expect_equal(unname(coef(bridged)), unname(coef(reference)), tolerance = 3e-08)
+
+  newdata <- transform(
+    data[c(3, 21, 44), ],
+    x = x + c(0.3, -0.2, 0.5),
+    z = c(-0.4, 0.2, 0.8)
+  )
+  expect_equal(
+    unname(predict(bridged, newdata = newdata, type = "lp")),
+    unname(stats::predict(reference, newdata = newdata, type = "lp")),
+    tolerance = 3e-08
+  )
+})
+
 test_that("pmin na.rm controls formula row omission like R", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
