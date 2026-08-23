@@ -9073,6 +9073,30 @@ test_that("data-prep helpers match R survival shapes", {
     survival::blogit(0.6)$linkfun(c(0, 0.25, 0.5, 0.75, 1)),
     tolerance = 1e-6
   )
+  capture_linkfun <- function(factory, edge, mu) {
+    capture_call(factory(edge)$linkfun, list(mu = mu))
+  }
+  link_boundary_edges <- list(
+    0, 0.5, 0.6, -1, Inf, -Inf, NA_real_, NaN, numeric(), c(0.05, 0.1)
+  )
+  link_boundary_inputs <- list(
+    c(NA, NaN, -Inf, 0, 0.5, 1, Inf),
+    numeric(),
+    structure(c(0, 0.5, 1), names = c("low", "middle", "high")),
+    matrix(c(0, 0.5, 1, NA), nrow = 2L, dimnames = list(c("a", "b"), c("x", "y")))
+  )
+  for (link_name in c("blogit", "bprobit", "bcloglog", "blog")) {
+    bridged_factory <- get(link_name, envir = asNamespace("survivalr"))
+    reference_factory <- get(link_name, envir = asNamespace("survival"))
+    for (edge in link_boundary_edges) {
+      for (mu in link_boundary_inputs) {
+        expect_identical(
+          capture_linkfun(bridged_factory, edge, mu),
+          capture_linkfun(reference_factory, edge, mu)
+        )
+      }
+    }
+  }
 
   bridged_survexp <- survexp(
     c(365.25, 730.5),

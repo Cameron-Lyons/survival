@@ -5,7 +5,11 @@ fn cloglog(p: f64) -> f64 {
 }
 
 fn bounded_unit_interval(input: f64, edge: f64) -> f64 {
-    input.min(1.0 - edge).max(edge)
+    if input.is_nan() || edge.is_nan() {
+        f64::NAN
+    } else {
+        input.min(1.0 - edge).max(edge)
+    }
 }
 
 #[pyclass]
@@ -42,7 +46,11 @@ impl LinkFunctionParams {
     }
     fn bprobit(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
-        probit(adjusted_input)
+        if !(0.0..=1.0).contains(&adjusted_input) {
+            f64::NAN
+        } else {
+            probit(adjusted_input)
+        }
     }
     fn bprobit_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::bprobit)
@@ -55,7 +63,13 @@ impl LinkFunctionParams {
         self.transform_many(input, Self::bcloglog)
     }
     fn blog(&self, input: f64) -> f64 {
-        let adjusted_input = if input < self.edge { self.edge } else { input };
+        let adjusted_input = if self.edge.is_nan() {
+            f64::NAN
+        } else if input < self.edge {
+            self.edge
+        } else {
+            input
+        };
         adjusted_input.ln()
     }
     fn blog_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
@@ -118,5 +132,37 @@ mod tests {
                 assert!((actual[idx] - transform(&link, input[idx].unwrap())).abs() < 1e-12);
             }
         }
+    }
+
+    #[test]
+    fn bounded_links_propagate_nan_inputs_and_edges() {
+        let link = LinkFunctionParams { edge: 0.05 };
+        let nan_edge = LinkFunctionParams { edge: f64::NAN };
+
+        for transform in [
+            LinkFunctionParams::blogit as fn(&LinkFunctionParams, f64) -> f64,
+            LinkFunctionParams::bprobit,
+            LinkFunctionParams::bcloglog,
+            LinkFunctionParams::blog,
+        ] {
+            assert!(transform(&link, f64::NAN).is_nan());
+            assert!(transform(&nan_edge, 0.5).is_nan());
+        }
+
+        for actual in [
+            link.blogit_many(vec![Some(f64::NAN)]),
+            link.bprobit_many(vec![Some(f64::NAN)]),
+            link.bcloglog_many(vec![Some(f64::NAN)]),
+            link.blog_many(vec![Some(f64::NAN)]),
+        ] {
+            assert!(actual[0].is_nan());
+        }
+
+        assert!(LinkFunctionParams { edge: 2.0 }.bprobit(0.5).is_nan());
+        assert!(
+            LinkFunctionParams { edge: -1.0 }
+                .bprobit(f64::NEG_INFINITY)
+                .is_nan()
+        );
     }
 }

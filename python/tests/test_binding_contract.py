@@ -5849,6 +5849,10 @@ def test_frailty_cox_and_link_function_bindings_are_typed_to_runtime_surface():
     assert large_edge.blogit(0.75) == pytest.approx(0.4054651)
     assert large_edge.bprobit(0.75) == pytest.approx(0.2533471)
     assert large_edge.bcloglog(0.75) == pytest.approx(-0.08742157)
+    nan_edge = core.LinkFunctionParams(math.nan)
+    for method_name in ("blogit", "bprobit", "bcloglog", "blog"):
+        assert math.isnan(getattr(link, method_name)(math.nan))
+        assert math.isnan(getattr(nan_edge, method_name)(0.5))
 
     time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     event = [1, 0, 1, 0, 1, 0]

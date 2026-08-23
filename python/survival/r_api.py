@@ -12591,6 +12591,8 @@ def _yates_survival_profiles(
 
 
 def _scalar_or_vector_with_flag(values: Any, name: str) -> tuple[list[Any], bool]:
+    if values is None:
+        return [None], True
     try:
         return _materialize_1d(values, name), False
     except TypeError:
@@ -12673,13 +12675,49 @@ def cipoisson(
 
 
 def _bounded_link_transform(x: Any, edge: Any, method_name: str) -> float | list[float]:
-    edge_value = _finite_float(edge, "edge")
     values, is_scalar = _scalar_or_vector_with_flag(x, "x")
-    link = _core.LinkFunctionParams(edge_value)
-    transform = getattr(link, f"{method_name}_many")
+    edges, edge_is_scalar = _scalar_or_vector_with_flag(edge, "edge")
+    if not values or not edges:
+        return []
+
+    value_count = len(values)
+    edge_count = len(edges)
+    size = max(value_count, edge_count)
+    if size % min(value_count, edge_count) != 0:
+        warning_count = 1 if method_name == "blog" or edge_count > value_count else 2
+        for _ in range(warning_count):
+            warnings.warn(
+                "an argument will be fractionally recycled",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+    values = _recycle_r_vector(values, size, "x")
+    edges = _recycle_r_vector(edges, size, "edge")
     prepared = [None if _is_missing_value(value) else float(value) for value in values]
-    result = [float(value) for value in transform(prepared)]
-    return result[0] if is_scalar else result
+    numeric_edges = [math.nan if _is_missing_value(value) else float(value) for value in edges]
+
+    if len(set(numeric_edges)) == 1:
+        link = _core.LinkFunctionParams(numeric_edges[0])
+        transform_many = getattr(link, f"{method_name}_many")
+        result = [float(value) for value in transform_many(prepared)]
+    else:
+        groups: dict[float, tuple[list[int], list[float | None]]] = {}
+        result = [math.nan] * size
+        for position, (value, edge_value) in enumerate(
+            zip(prepared, numeric_edges, strict=True)
+        ):
+            if value is None or math.isnan(edge_value):
+                continue
+            positions, group_values = groups.setdefault(edge_value, ([], []))
+            positions.append(position)
+            group_values.append(value)
+        for edge_value, (positions, group_values) in groups.items():
+            link = _core.LinkFunctionParams(edge_value)
+            transform_many = getattr(link, f"{method_name}_many")
+            transformed = transform_many(group_values)
+            for position, value in zip(positions, transformed, strict=True):
+                result[position] = float(value)
+    return result[0] if is_scalar and edge_is_scalar else result
 
 
 def blogit(x: Any, edge: Any = 0.05) -> float | list[float]:

@@ -3434,11 +3434,24 @@ nostutter <- function(id, x, censor = 0, single = FALSE) {
 
 .bounded_link <- function(name, family, display_name, edge) {
   out <- stats::make.link(family)
-  out$linkfun <- function(mu) {
-    result <- .as_numeric_vector(.call_r_api(name, .as_python_vector(mu), edge = edge))
-    result[is.nan(result)] <- NA_real_
-    result
-  }
+  out$linkfun <- switch(name,
+    blogit = function(mu) {
+      x <- pmax(edge, pmin(mu, 1 - edge))
+      log(x / (1 - x))
+    },
+    bprobit = function(mu) {
+      x <- pmax(edge, pmin(mu, 1 - edge))
+      stats::qnorm(x)
+    },
+    bcloglog = function(mu) {
+      x <- pmax(edge, pmin(mu, 1 - edge))
+      log(-log(1 - x))
+    },
+    blog = function(mu) {
+      x <- pmax(edge, mu)
+      log(x)
+    }
+  )
   out$name <- display_name
   out
 }

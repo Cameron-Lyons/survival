@@ -3931,6 +3931,7 @@ def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
         p=[0.0, 1.0, 0.95],
     )
     missing_confidence = survival.cipoisson([0, 1.2], p=[None, None])
+    missing_count = survival.cipoisson(None)
 
     assert scalar == pytest.approx((0.1623486, 1.1668332))
     assert [value for row in vector for value in row] == pytest.approx(
@@ -3949,6 +3950,7 @@ def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
     assert missing_confidence[0][0] == 0.0
     assert math.isnan(missing_confidence[0][1])
     assert all(math.isnan(value) for value in missing_confidence[1])
+    assert all(math.isnan(value) for value in missing_count)
     with pytest.raises(ValueError, match="k must be non-negative"):
         survival.cipoisson(-1)
     with pytest.raises(ValueError, match="method must"):
@@ -3985,6 +3987,29 @@ def test_r_style_bounded_link_helpers_match_survival_link_functions():
     assert missing[0] == pytest.approx(-2.94443898)
     assert math.isnan(missing[1])
     assert missing[2] == pytest.approx(2.94443898)
+
+    for transform in (survival.blogit, survival.bprobit, survival.bcloglog, survival.blog):
+        assert math.isnan(transform(None))
+        assert math.isnan(transform(math.nan))
+        assert all(math.isnan(value) for value in transform([0.0, 0.5, 1.0], edge=None))
+        assert all(math.isnan(value) for value in transform([0.0, 0.5, 1.0], edge=math.nan))
+        assert transform([0.0, 0.5], edge=[]) == []
+        expected_middle = transform(0.5)
+        assert transform(0.5, edge=[0.05, 0.1]) == pytest.approx(
+            [expected_middle, expected_middle]
+        )
+
+    assert all(math.isnan(value) for value in survival.blogit([0.0, 0.5, 1.0], edge=math.inf))
+    assert survival.blog([0.0, 0.5, 1.0], edge=math.inf) == [math.inf] * 3
+    with pytest.warns(RuntimeWarning, match="fractionally recycled") as recorded:
+        recycled_edges = survival.blogit(
+            [-math.inf, 0.0, 0.5, 1.0, math.inf],
+            edge=[0.05, 0.1],
+        )
+    assert len(recorded) == 2
+    assert recycled_edges == pytest.approx(
+        [-2.94443898, -2.19722458, 0.0, 2.19722458, 2.94443898]
+    )
 
 
 def test_r_style_pyears_tabulates_surv_inputs():
