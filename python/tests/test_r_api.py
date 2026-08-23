@@ -22024,6 +22024,50 @@ def test_survfit_coxph_stratified_default_returns_one_curve_per_stratum():
     assert result.cumhaz[1] == pytest.approx([0.0, 0.0, 0.5, 1.5])
 
 
+def test_survfit_coxph_stratified_frames_keep_curve_specific_time_grids():
+    data = {
+        "time": [1.0, 2.0, 4.0, 1.0, 3.0, 4.0],
+        "status": [1, 1, 0, 0, 1, 1],
+        "group": ["A", "A", "A", "B", "B", "B"],
+        "x1": [0.2, 0.4, 0.1, 1.0, 1.2, 0.8],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x1 + strata(group)",
+        data=data,
+        initial_beta=[0.0],
+        max_iter=0,
+        method="breslow",
+    )
+
+    default = survival.survfit(fit)
+    conditioned = survival.survfit(
+        fit,
+        newdata={"x1": [0.2, 0.5, 0.8, 1.1], "group": ["A", "A", "B", "B"]},
+        start_time=1.5,
+    )
+    event_only = survival.survfit(fit, censor=False)
+    padded = survival.survfit0(default)
+
+    assert default.curve_time_indices == [[0, 1, 3], [0, 2, 3]]
+    assert survival.as_data_frame(default)["time"] == pytest.approx(
+        [1.0, 2.0, 4.0, 1.0, 3.0, 4.0]
+    )
+    assert conditioned.curve_time_indices == [[0, 2], [0, 2], [1, 2], [1, 2]]
+    assert survival.as_data_frame(conditioned)["time"] == pytest.approx(
+        [2.0, 4.0, 2.0, 4.0, 3.0, 4.0, 3.0, 4.0]
+    )
+    assert event_only.curve_time_indices == [[0, 1], [2, 3]]
+    assert survival.as_data_frame(event_only)["time"] == pytest.approx([1.0, 2.0, 3.0, 4.0])
+    assert padded.curve_time_indices == [[0, 1, 2, 4], [0, 1, 3, 4]]
+
+    selected = survival.r_api._subset_survfit_cox(conditioned, [3, 0, 3])
+    assert selected.curve_time_indices == [[1, 2], [0, 2], [1, 2]]
+    assert selected.start_time is None
+    assert survival.as_data_frame(selected)["time"] == pytest.approx(
+        [3.0, 4.0, 2.0, 4.0, 3.0, 4.0]
+    )
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)

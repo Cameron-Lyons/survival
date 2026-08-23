@@ -1475,6 +1475,7 @@ class CoxSurvfitResult:
     conf_lower: list[list[float]] = field(default_factory=list)
     conf_upper: list[list[float]] = field(default_factory=list)
     model: dict[str, Any] | None = None
+    curve_time_indices: list[list[int]] | None = None
 
     def __iter__(self):
         yield self.time
@@ -17407,6 +17408,11 @@ def _survfit0_cox_result(
         std_chaz=_prepend_matrix_time0(result.std_chaz, 0.0),
         conf_lower=_prepend_matrix_time0(result.conf_lower, 1.0),
         conf_upper=_prepend_matrix_time0(result.conf_upper, 1.0),
+        curve_time_indices=(
+            None
+            if result.curve_time_indices is None
+            else [[0, *(index + 1 for index in indices)] for indices in result.curve_time_indices]
+        ),
         model=result.model,
     )
 
@@ -17891,11 +17897,13 @@ def _survfit_without_standard_errors(result: Any) -> Any:
             linear_predictors=result.linear_predictors,
             centered=result.centered,
             strata=result.strata,
+            strata_labels=result.strata_labels,
             start_time=result.start_time,
             std_err=[],
             std_chaz=[],
             conf_lower=[],
             conf_upper=[],
+            curve_time_indices=result.curve_time_indices,
             model=result.model,
         )
     if isinstance(result, Mapping):
@@ -17984,11 +17992,13 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
             linear_predictors=result.linear_predictors,
             centered=result.centered,
             strata=result.strata,
+            strata_labels=result.strata_labels,
             start_time=result.start_time,
             std_err=result.std_err,
             std_chaz=result.std_chaz,
             conf_lower=result.conf_lower,
             conf_upper=result.conf_upper,
+            curve_time_indices=result.curve_time_indices,
             model=model_frame,
         )
     if isinstance(result, Mapping):
@@ -22530,6 +22540,7 @@ def _subset_survfit_cox(
         std_chaz=select_rows(result.std_chaz, "cumulative-hazard standard-error"),
         conf_lower=select_rows(result.conf_lower, "lower-confidence"),
         conf_upper=select_rows(result.conf_upper, "upper-confidence"),
+        curve_time_indices=select_optional(result.curve_time_indices, "time-index"),
     )
 
 
@@ -22877,25 +22888,39 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     for name in active_optional:
         frame[name] = []
 
+    if result.curve_time_indices is not None and len(result.curve_time_indices) != len(result.surv):
+        raise ValueError("Cox survfit curve time-index fields have inconsistent lengths")
+
     for curve_idx, (surv_curve, cumhaz_curve, linear_predictor) in enumerate(
         zip(result.surv, result.cumhaz, result.linear_predictors, strict=True)
     ):
         if len(surv_curve) != len(result.time) or len(cumhaz_curve) != len(result.time):
             raise ValueError("Cox survfit curves must match time length")
-        n_times = len(result.time)
+        time_indices = (
+            list(range(len(result.time)))
+            if result.curve_time_indices is None
+            else result.curve_time_indices[curve_idx]
+        )
+        if any(index < 0 or index >= len(result.time) for index in time_indices):
+            raise ValueError("Cox survfit curve time indices are out of bounds")
+        n_times = len(time_indices)
         frame["curve"].extend([curve_idx + 1] * n_times)
-        frame["time"].extend(result.time)
-        frame["surv"].extend(surv_curve)
-        frame["cumhaz"].extend(cumhaz_curve)
+        frame["time"].extend(result.time[index] for index in time_indices)
+        frame["surv"].extend(surv_curve[index] for index in time_indices)
+        frame["cumhaz"].extend(cumhaz_curve[index] for index in time_indices)
         frame["linear.predictor"].extend([linear_predictor] * n_times)
         if strata is not None:
             frame["strata"].extend([strata[curve_idx]] * n_times)
         if result.start_time is not None:
             frame["start.time"].extend([result.start_time] * n_times)
         for name, values in active_optional.items():
-            optional_curve = _cox_survfit_optional_curve_column(values, curve_idx, n_times)
+            optional_curve = _cox_survfit_optional_curve_column(
+                values,
+                curve_idx,
+                len(result.time),
+            )
             if optional_curve is not None:
-                frame[name].extend(optional_curve)
+                frame[name].extend(optional_curve[index] for index in time_indices)
     return frame
 
 
@@ -26334,6 +26359,49 @@ def _cox_survfit_curve_rows(
     return [list(row) for _ in range(n_curves)]
 
 
+def _cox_survfit_curve_time_indices(
+    fit: Any,
+    result: CoxSurvfitResult,
+    include_censor: bool,
+    include_time0: bool,
+) -> list[list[int]] | None:
+    if result.strata is None:
+        return None
+    model = _unwrap_formula_fit(fit)
+    event_times = getattr(model, "event_times", None)
+    if event_times is None:
+        return None
+    training_times = [float(value) for value in event_times]
+    row_strata = _cox_training_strata(model, len(training_times))
+    if include_censor:
+        status = [1] * len(training_times)
+    else:
+        raw_status = getattr(model, "status", None)
+        if raw_status is None or len(raw_status) != len(training_times):
+            return None
+        status = [int(value) for value in raw_status]
+
+    indices_by_stratum: dict[int, list[int]] = {}
+    for stratum in set(result.strata):
+        stratum_times = {
+            time
+            for time, event, row_stratum in zip(
+                training_times,
+                status,
+                row_strata,
+                strict=True,
+            )
+            if row_stratum == stratum and event > 0
+        }
+        curve_indices = [
+            index for index, time in enumerate(result.time) if float(time) in stratum_times
+        ]
+        if include_time0 and result.time and 0 not in curve_indices:
+            curve_indices.insert(0, 0)
+        indices_by_stratum[stratum] = curve_indices
+    return [list(indices_by_stratum[stratum]) for stratum in result.strata]
+
+
 def _cox_survfit_with_confidence(
     fit: Any,
     result: CoxSurvfitResult,
@@ -26485,10 +26553,18 @@ def _cox_survfit_result(
     if include_censor:
         result = _cox_survfit_with_censor_times(fit, result)
     result = _cox_survfit_conditioned(fit, result, start_time, include_time0)
-    if not compute_confidence:
-        return result
-    curve_rows = _cox_survfit_curve_rows(fit, rows, len(result.surv))
-    return _cox_survfit_with_confidence(fit, result, curve_rows, conf_level, conf_type)
+    if compute_confidence:
+        curve_rows = _cox_survfit_curve_rows(fit, rows, len(result.surv))
+        result = _cox_survfit_with_confidence(fit, result, curve_rows, conf_level, conf_type)
+    return replace(
+        result,
+        curve_time_indices=_cox_survfit_curve_time_indices(
+            fit,
+            result,
+            include_censor,
+            include_time0,
+        ),
+    )
 
 
 def _select_multistate_curve_times(

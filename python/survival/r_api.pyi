@@ -643,6 +643,7 @@ class CoxSurvfitResult:
     conf_lower: list[list[float]]
     conf_upper: list[list[float]]
     model: dict[str, Any] | None
+    curve_time_indices: list[list[int]] | None
     def __iter__(self): ...
     @property
     def curves(self) -> list[list[float]]: ...

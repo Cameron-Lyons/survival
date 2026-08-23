@@ -13642,6 +13642,136 @@ test_that("Cox survfit data-margin subsetting matches survival", {
   )
 })
 
+test_that("stratified Cox survfit subsetting matches survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  set.seed(8082)
+  n <- 180L
+  group <- factor(rep(c("A", "B"), each = n / 2L))
+  x <- stats::rnorm(n)
+  z <- stats::rnorm(n)
+  rate <- exp(0.25 * x - 0.15 * z + ifelse(group == "B", 0.35, 0)) / 9
+  event_time <- stats::rexp(n, rate)
+  censor_time <- stats::rexp(n, 1 / 16)
+  data <- data.frame(
+    time = pmin(event_time, censor_time),
+    status = as.integer(event_time <= censor_time),
+    group = group,
+    x = x,
+    z = z
+  )
+  profiles <- data.frame(
+    x = c(-0.8, 0.1, 0.6, 1.1),
+    z = c(0.4, 0.1, -0.2, -0.5),
+    group = factor(c("A", "A", "B", "B"), levels = levels(group)),
+    row.names = c("a-low", "a-high", "b-low", "b-high")
+  )
+  bridged_model <- coxph(
+    Surv(time, status) ~ x + z + strata(group),
+    data = data
+  )
+  reference_model <- survival::coxph(
+    survival::Surv(time, status) ~ x + z + strata(group),
+    data = data
+  )
+  bridged <- survfit(
+    bridged_model,
+    newdata = profiles,
+    start.time = 2.5
+  )
+  reference <- survival::survfit(
+    reference_model,
+    newdata = profiles,
+    start.time = 2.5
+  )
+
+  compare_subset <- function(selector, drop = TRUE) {
+    bridged_subset <- bridged[selector, drop = drop]
+    reference_subset <- reference[selector, drop = drop]
+    expect_identical(dim(bridged_subset), dim(reference_subset))
+    for (field in c("time", "surv", "cumhaz")) {
+      expect_equal(
+        as.numeric(bridged_subset[[field]]),
+        as.numeric(reference_subset[[field]]),
+        tolerance = 2e-06,
+        info = paste("stratified Cox subset field", field)
+      )
+    }
+    for (include_confidence in c(FALSE, TRUE)) {
+      expect_equal(
+        quantile(
+          bridged_subset,
+          probs = c(0, 0.25, 0.5, 0.75),
+          conf.int = include_confidence
+        ),
+        quantile(
+          reference_subset,
+          probs = c(0, 0.25, 0.5, 0.75),
+          conf.int = include_confidence
+        ),
+        tolerance = 2e-06
+      )
+    }
+    expect_null(bridged_subset$start.time)
+    expect_null(reference_subset$start.time)
+  }
+
+  expect_identical(dim(bridged), dim(reference))
+  expect_equal(bridged$time, reference$time, tolerance = 2e-06)
+  expect_equal(bridged$surv, reference$surv, tolerance = 2e-06)
+  expect_equal(
+    quantile(bridged, probs = c(0, 0.5), conf.int = TRUE),
+    quantile(reference, probs = c(0, 0.5), conf.int = TRUE),
+    tolerance = 2e-06
+  )
+
+  bridged_default <- survfit(bridged_model)
+  reference_default <- survival::survfit(reference_model)
+  expect_identical(dim(bridged_default), dim(reference_default))
+  expect_equal(bridged_default$time, reference_default$time, tolerance = 2e-06)
+  expect_equal(bridged_default$surv, reference_default$surv, tolerance = 2e-06)
+  bridged_default_subset <- bridged_default[c("B", "A", "B")]
+  reference_default_subset <- reference_default[c("B", "A", "B")]
+  expect_identical(dim(bridged_default_subset), dim(reference_default_subset))
+  expect_equal(
+    bridged_default_subset$time,
+    reference_default_subset$time,
+    tolerance = 2e-06
+  )
+  expect_equal(
+    bridged_default_subset$surv,
+    reference_default_subset$surv,
+    tolerance = 2e-06
+  )
+  expect_equal(
+    quantile(bridged_default_subset, probs = c(0, 0.5), conf.int = TRUE),
+    quantile(reference_default_subset, probs = c(0, 0.5), conf.int = TRUE),
+    tolerance = 2e-06
+  )
+
+  compare_subset(1L)
+  compare_subset(c(4L, 1L, 4L))
+  compare_subset(c(TRUE, FALSE, TRUE, FALSE))
+  compare_subset("a-high")
+  compare_subset(2L, drop = FALSE)
+
+  bridged_empty <- bridged[integer()]
+  reference_empty <- reference[integer()]
+  expect_identical(dim(bridged_empty), dim(reference_empty))
+  expect_equal(bridged_empty$time, reference_empty$time)
+  expect_error(quantile(bridged_empty), "invalid 'times' argument", fixed = TRUE)
+  expect_error(quantile(reference_empty), "invalid 'times' argument", fixed = TRUE)
+  expect_error(bridged[5L], "strata 5 not matched")
+  expect_error(reference[5L], "strata 5 not matched")
+  expect_error(bridged["missing"], "strata missing not matched")
+  expect_error(reference["missing"], "strata missing not matched")
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
