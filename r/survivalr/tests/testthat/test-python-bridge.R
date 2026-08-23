@@ -9316,6 +9316,16 @@ test_that("data-prep helpers match R survival shapes", {
   expect_s3_class(bridged_pyears_frame, "pyears")
   expect_s3_class(bridged_pyears_frame$data, "data.frame")
   expect_equal(bridged_pyears_frame$data$pyears, c(30, 30))
+  bridged_pyears_single <- pyears(
+    3,
+    event = 1,
+    group = "only",
+    weights = 2,
+    scale = 1
+  )
+  expect_equal(unname(bridged_pyears_single$pyears), 6)
+  expect_equal(unname(bridged_pyears_single$n), 1)
+  expect_equal(unname(bridged_pyears_single$event), 2)
   pyears_formula_data <- data.frame(
     time = c(10, 20, 30),
     status = c(1, 0, 1),
@@ -9379,6 +9389,33 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(bridged_pyears_formula$n, reference_pyears_formula$n)
   expect_equal(bridged_pyears_formula$event, reference_pyears_formula$event)
   expect_s3_class(bridged_pyears_formula$terms, "terms")
+  expect_error(
+    pyears(time ~ 1, data = pyears_formula_data, data.frame = TRUE),
+    "arguments imply differing number of rows: 1, 0",
+    fixed = TRUE
+  )
+  pyears_single_data <- data.frame(time = 3, status = 1, group = "only", wt = 2)
+  bridged_pyears_single_formula <- pyears(
+    Surv(time, status) ~ group,
+    data = pyears_single_data,
+    weights = wt,
+    scale = 1
+  )
+  reference_pyears_single_formula <- survival::pyears(
+    survival::Surv(time, status) ~ group,
+    data = pyears_single_data,
+    weights = wt,
+    scale = 1
+  )
+  expect_equal(
+    bridged_pyears_single_formula$pyears,
+    reference_pyears_single_formula$pyears
+  )
+  expect_equal(bridged_pyears_single_formula$n, reference_pyears_single_formula$n)
+  expect_equal(
+    bridged_pyears_single_formula$event,
+    reference_pyears_single_formula$event
+  )
   pyears_environment_fixture <- local({
     time <- c(10, 20, 30, 40)
     status <- c(1, 0, 1, 1)
@@ -9491,6 +9528,34 @@ test_that("data-prep helpers match R survival shapes", {
       data = pyears_counting_data,
       scale = 1
     )$pyears
+  )
+  pyears_negative_counting_data <- data.frame(
+    start = -2,
+    stop = -1,
+    event = 1,
+    group = "a"
+  )
+  bridged_pyears_negative_counting <- pyears(
+    Surv(start, stop, event) ~ group,
+    data = pyears_negative_counting_data,
+    scale = 1
+  )
+  reference_pyears_negative_counting <- survival::pyears(
+    survival::Surv(start, stop, event) ~ group,
+    data = pyears_negative_counting_data,
+    scale = 1
+  )
+  expect_equal(
+    bridged_pyears_negative_counting$pyears,
+    reference_pyears_negative_counting$pyears
+  )
+  expect_equal(
+    bridged_pyears_negative_counting$n,
+    reference_pyears_negative_counting$n
+  )
+  expect_equal(
+    bridged_pyears_negative_counting$event,
+    reference_pyears_negative_counting$event
   )
   pyears_multi_data <- data.frame(
     time = c(10, 20, 30),

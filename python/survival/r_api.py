@@ -10961,13 +10961,11 @@ def _pyears_validate_time_columns(
     for idx, value in enumerate(stop):
         if not math.isfinite(value):
             raise ValueError(f"time contains non-finite value at index {idx}")
-        if value < 0.0:
+        if not start and value < 0.0:
             raise ValueError(f"time contains negative value at index {idx}")
     for idx, value in enumerate(start):
         if not math.isfinite(value):
             raise ValueError(f"start contains non-finite value at index {idx}")
-        if value < 0.0:
-            raise ValueError(f"start contains negative value at index {idx}")
         if stop[idx] < value:
             raise ValueError(f"stop must be greater than or equal to start at index {idx}")
 

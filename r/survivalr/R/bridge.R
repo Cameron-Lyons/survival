@@ -4195,6 +4195,9 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
   positions <- match(groups, group_info$keys)
   keep <- !is.na(positions)
   filled[positions[keep]] <- values[keep]
+  if (length(filled) == 1L) {
+    return(unname(filled))
+  }
   structure(
     filled,
     dim = unname(vapply(group_info$levels, length, integer(1))),
@@ -4351,6 +4354,11 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
     return(is.ratetable(ratetable))
   }
   missing(rmap)
+}
+
+.pyears_python_sequence <- function(value) {
+  converted <- .as_python_vector(value)
+  if (is.factor(value)) converted else as.list(converted)
 }
 
 .pyears_formula_response_args <- function(response) {
@@ -4661,6 +4669,9 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       has_tcut <- !is.null(term_values) &&
         any(vapply(term_values, inherits, logical(1), "tcut"))
       group_info <- .pyears_formula_group_info(term_labels, mf)
+      if (isTRUE(data.frame) && is.null(group_info)) {
+        base::stop("arguments imply differing number of rows: 1, 0", call. = FALSE)
+      }
       weight_values <- stats::model.weights(mf)
       if (is.null(weight_values)) {
         weight_values <- rep(1, nrow(mf))
@@ -4720,13 +4731,13 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       }
       result <- .call_r_api(
         "pyears",
-        if (is.null(response_args$direct)) NULL else .as_python_vector(response_args$direct),
-        time = if (is.null(response_args$time)) NULL else .as_python_vector(response_args$time),
-        start = if (is.null(response_args$start)) NULL else .as_python_vector(response_args$start),
-        stop = if (is.null(response_args$stop)) NULL else .as_python_vector(response_args$stop),
-        event = if (is.null(response_args$event)) NULL else .as_python_vector(response_args$event),
-        group = if (is.null(group_info)) NULL else .as_python_vector(group_info$row_keys),
-        weights = .as_python_vector(weight_values),
+        if (is.null(response_args$direct)) NULL else .pyears_python_sequence(response_args$direct),
+        time = if (is.null(response_args$time)) NULL else .pyears_python_sequence(response_args$time),
+        start = if (is.null(response_args$start)) NULL else .pyears_python_sequence(response_args$start),
+        stop = if (is.null(response_args$stop)) NULL else .pyears_python_sequence(response_args$stop),
+        event = if (is.null(response_args$event)) NULL else .pyears_python_sequence(response_args$event),
+        group = if (is.null(group_info)) NULL else .pyears_python_sequence(group_info$row_keys),
+        weights = .pyears_python_sequence(weight_values),
         scale = scale,
         `data_frame` = FALSE
       )
@@ -4761,13 +4772,13 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
   }
   result <- .call_r_api(
     "pyears",
-    if (is.null(direct_time)) NULL else .as_python_vector(direct_time),
-    time = if (missing(time) || !is.null(direct_time)) NULL else .as_python_vector(time),
-    start = if (missing(start)) NULL else .as_python_vector(start),
-    stop = if (missing(stop)) NULL else .as_python_vector(stop),
-    event = if (is.null(event)) NULL else .as_python_vector(event),
-    group = if (is.null(group)) NULL else .as_python_vector(group),
-    weights = if (missing(weights)) NULL else .as_python_vector(weights),
+    if (is.null(direct_time)) NULL else .pyears_python_sequence(direct_time),
+    time = if (missing(time) || !is.null(direct_time)) NULL else .pyears_python_sequence(time),
+    start = if (missing(start)) NULL else .pyears_python_sequence(start),
+    stop = if (missing(stop)) NULL else .pyears_python_sequence(stop),
+    event = if (is.null(event)) NULL else .pyears_python_sequence(event),
+    group = if (is.null(group)) NULL else .pyears_python_sequence(group),
+    weights = if (missing(weights)) NULL else .pyears_python_sequence(weights),
     subset = if (missing(subset)) NULL else subset,
     `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
     scale = scale,

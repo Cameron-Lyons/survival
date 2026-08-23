@@ -4117,6 +4117,29 @@ def test_pyears_normalizes_direct_inputs_once_without_subsetting(monkeypatch):
     assert calls == 1
 
 
+def test_pyears_accepts_singletons_and_negative_counting_intervals():
+    singleton = survival.pyears(
+        [3.0],
+        event=[1],
+        group=["only"],
+        weights=[2.0],
+        scale=1,
+    )
+    counting = survival.pyears(
+        start=[-2.0],
+        stop=[-1.0],
+        event=[1],
+        scale=1,
+    )
+
+    assert singleton.pyears == pytest.approx([6.0])
+    assert singleton.n == pytest.approx([1.0])
+    assert singleton.event == pytest.approx([2.0])
+    assert counting.pyears == pytest.approx([1.0])
+    assert counting.n == pytest.approx([1.0])
+    assert counting.event == pytest.approx([1.0])
+
+
 def test_r_style_finegray_matches_right_multistate_fixture():
     data = {
         "id": list(range(1, 9)),
