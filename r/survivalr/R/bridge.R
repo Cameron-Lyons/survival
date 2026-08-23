@@ -6685,14 +6685,9 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
   coefficient <- .as_numeric_matrix(.result_field(result, "coefficient"))
   coefficient[is.nan(coefficient)] <- NA_real_
   dimnames(coefficient) <- list(as.character(event_times), coefficient_names)
-  test_names <- if (identical(test, "variance") && nvar > 1L) {
-    colnames(design)
-  } else {
-    coefficient_names
-  }
   test_statistic <- .as_numeric_vector(.result_field(result, "test_statistic"))
   test_statistic[is.nan(test_statistic)] <- NA_real_
-  names(test_statistic) <- test_names
+  names(test_statistic) <- coefficient_names
   test_variance <- .as_numeric_matrix(.result_field(result, "test_variance"))
   test_variance[is.nan(test_variance)] <- NA_real_
   if (nvar > 1L && !identical(test, "variance")) {

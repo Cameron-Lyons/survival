@@ -4241,6 +4241,62 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("multi-covariate aareg variance tests preserve reference errors", {
+  skip_if_not_installed("reticulate")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 1:6,
+    status = rep(1, 6),
+    x = c(0, 1, 2, 1, 3, -1),
+    z = c(1, 0, 1, 2, -1, 0)
+  )
+  name_error <- "'names' attribute \\[3\\] must be the same length as the vector \\[2\\]"
+  expect_error(
+    aareg(Surv(time, status) ~ x + z, data = data, nmin = 1, test = "variance"),
+    name_error
+  )
+  expect_error(
+    survival::aareg(
+      survival::Surv(time, status) ~ x + z,
+      data = data,
+      nmin = 1,
+      test = "variance"
+    ),
+    name_error
+  )
+
+  expect_error(
+    aareg(Surv(time, status) ~ x + z, data = data, nmin = 99, test = "variance"),
+    "nmin threshold"
+  )
+  expect_error(
+    survival::aareg(
+      survival::Surv(time, status) ~ x + z,
+      data = data,
+      nmin = 99,
+      test = "variance"
+    ),
+    "threshold 'nmin'",
+    fixed = TRUE
+  )
+
+  bridged_single <- aareg(
+    Surv(time, status) ~ x,
+    data = data,
+    nmin = 1,
+    test = "variance"
+  )
+  reference_single <- survival::aareg(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    nmin = 1,
+    test = "variance"
+  )
+  bridged_single$call <- reference_single$call
+  expect_equal(bridged_single, reference_single, tolerance = 1e-10)
+})
+
 test_that("right-censored concordance includes censors at the death time", {
   data <- data.frame(
     time = c(1, 3, 2, 4, 4, 5),

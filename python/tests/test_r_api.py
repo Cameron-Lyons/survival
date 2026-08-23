@@ -26129,6 +26129,41 @@ def test_aareg_formula_validates_model_specific_options():
         survival.aareg("Surv(time, status) ~ x:cluster(group)", data=data, nmin=1)
 
 
+def test_aareg_multivariable_variance_test_preserves_reference_name_error():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 1, 1, 1, 1, 1],
+        "x": [0.0, 1.0, 2.0, 1.0, 3.0, -1.0],
+        "z": [1.0, 0.0, 1.0, 2.0, -1.0, 0.0],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"'names' attribute \[3\] must be the same length as the vector \[2\]",
+    ):
+        survival.aareg(
+            "Surv(time, status) ~ x + z",
+            data=data,
+            nmin=1,
+            test="variance",
+        )
+    with pytest.raises(ValueError, match="nmin threshold"):
+        survival.aareg(
+            "Surv(time, status) ~ x + z",
+            data=data,
+            nmin=99,
+            test="variance",
+        )
+
+    single = survival.aareg(
+        "Surv(time, status) ~ x",
+        data=data,
+        nmin=1,
+        test="variance",
+    )
+    assert single.test_statistic_names == ["Intercept", "x"]
+
+
 def test_aareg_explicit_cluster_overrides_formula_cluster_like_r():
     data = {
         "time": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],

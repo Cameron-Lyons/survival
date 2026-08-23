@@ -28639,11 +28639,12 @@ def aareg(
         taper=_aareg_taper_values(taper),
         test=test_name,
     )
-    test_names = (
-        coefficient_names[1:]
-        if test_name == "variance" and len(coefficient_names) > 2
-        else coefficient_names
-    )
+    if len(coefficient_names) != len(raw.test_statistic):
+        raise ValueError(
+            f"'names' attribute [{len(coefficient_names)}] must be the same length as the "
+            f"vector [{len(raw.test_statistic)}]"
+        )
+    test_names = coefficient_names
     model_frame = (
         _formula_model_frame(
             data,
