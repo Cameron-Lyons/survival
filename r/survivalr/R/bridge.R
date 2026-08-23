@@ -3686,23 +3686,29 @@ blog <- function(edge = 0.05) {
       }
       groups <- strata(model_frame[output_variables])
     }
-    fit <- .survexp_ratetable_fit(
-      as.numeric(groups), expected_data, response, new_time,
-      method == "conditional", ratetable
-    )
-    if (times_missing) {
-      n_risk <- fit$n
-      survival <- fit$surv
-    } else {
-      keep <- match(requested_times, new_time)
-      if (is.matrix(fit$surv)) {
-        survival <- rbind(1, fit$surv)[keep + 1L, , drop = FALSE]
-        n_risk <- fit$n[pmax(1L, keep), , drop = FALSE]
-      } else {
-        survival <- c(1, fit$surv)[keep + 1L]
-        n_risk <- fit$n[pmax(1L, keep)]
-      }
+    if (!times_missing && length(requested_times) == 0L) {
+      survival <- numeric()
+      n_risk <- integer()
       new_time <- requested_times
+    } else {
+      fit <- .survexp_ratetable_fit(
+        as.numeric(groups), expected_data, response, new_time,
+        method == "conditional", ratetable
+      )
+      if (times_missing) {
+        n_risk <- fit$n
+        survival <- fit$surv
+      } else {
+        keep <- match(requested_times, new_time)
+        if (is.matrix(fit$surv)) {
+          survival <- rbind(1, fit$surv)[keep + 1L, , drop = FALSE]
+          n_risk <- fit$n[pmax(1L, keep), , drop = FALSE]
+        } else {
+          survival <- c(1, fit$surv)[keep + 1L]
+          n_risk <- fit$n[pmax(1L, keep)]
+        }
+        new_time <- requested_times
+      }
     }
     new_time <- new_time / scale
     if (is.matrix(survival)) {

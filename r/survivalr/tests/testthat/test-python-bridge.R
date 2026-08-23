@@ -9085,6 +9085,59 @@ test_that("data-prep helpers match R survival shapes", {
   )
   expect_equal(no_response_bridge$surv, no_response_reference$surv, tolerance = 1e-12)
   expect_equal(no_response_bridge$n.risk, no_response_reference$n.risk)
+  strip_survexp_call <- function(value) {
+    value <- unclass(value)
+    value$call <- NULL
+    value
+  }
+  expect_warning(
+    empty_grouped_bridge <- survexp(
+      survival::Surv(time, status) ~ cohort,
+      data = grouped_data,
+      times = numeric(),
+      model = TRUE
+    ),
+    "no non-missing arguments"
+  )
+  expect_warning(
+    empty_grouped_reference <- survival::survexp(
+      survival::Surv(time, status) ~ cohort,
+      data = grouped_data,
+      times = numeric(),
+      model = TRUE
+    ),
+    "no non-missing arguments"
+  )
+  expect_equal(
+    strip_survexp_call(empty_grouped_bridge),
+    strip_survexp_call(empty_grouped_reference),
+    tolerance = 1e-12
+  )
+  expect_warning(
+    empty_no_response_bridge <- survexp(
+      ~ cohort,
+      data = grouped_data,
+      times = numeric(),
+      x = TRUE,
+      y = TRUE
+    ),
+    "no non-missing arguments"
+  )
+  expect_warning(
+    empty_no_response_reference <- survival::survexp(
+      ~ cohort,
+      data = grouped_data,
+      times = numeric(),
+      x = TRUE,
+      y = TRUE
+    ),
+    "no non-missing arguments"
+  )
+  expect_equal(
+    strip_survexp_call(empty_no_response_bridge),
+    strip_survexp_call(empty_no_response_reference),
+    tolerance = 1e-12
+  )
 
   remapped_data <- transform(grouped_data, attained_age = age)
   expect_equal(
