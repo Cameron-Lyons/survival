@@ -26034,6 +26034,64 @@ def test_cch_formula_matches_factor_phase_two_roundoff():
     assert fit.offsets[19:] == pytest.approx([54.285714285714285] * 16, abs=1e-12)
 
 
+def test_cch_formula_matches_delayed_entry_factor_roundoff():
+    data = {
+        "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],
+        "stop": [12, 3, 2, 8, 2, 17, 10, 6, 3, 3, 8, 5, 8, 11, 1, 8, 11, 5, 9, 1],
+        "status": [0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "group": [
+            "a",
+            "a",
+            "b",
+            "b",
+            "c",
+            "a",
+            "c",
+            "a",
+            "a",
+            "b",
+            "c",
+            "b",
+            "c",
+            "b",
+            "c",
+            "a",
+            "b",
+            "b",
+            "b",
+            "b",
+        ],
+        "id": list(range(1, 21)),
+        "subcohort": [1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1],
+    }
+    fit = survival.cch(
+        "Surv(start, stop, status) ~ 0 + group",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=60,
+        method="Prentice",
+    )
+
+    assert survival.coef(fit) == pytest.approx(
+        [1.0909193210480745, 1.932782521394574], abs=1e-11
+    )
+    expected_phase_two = [
+        [7.186983559093221e55, 1.9556591655713782e56],
+        [1.9556591655713782e56, 5.902264325547351e56],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    for actual, expected in zip(fit.var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    assert fit.means == pytest.approx([0.0, 0.0], abs=1e-15)
+    assert fit.log_likelihood == pytest.approx(
+        [-1620.065518335, -1618.89535847212], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(2.10915895645869, abs=1e-11)
+    assert fit.iterations == 4
+
+
 def test_cch_formula_matches_self_prentice_phase_two_roundoff():
     data = {
         "stop": [

@@ -93,12 +93,71 @@ fn add_risk_sums(
     }
 }
 
+fn remove_risk_sums(
+    covar: &Array2<f64>,
+    nvar: usize,
+    person: usize,
+    risk: f64,
+    denom: &mut f64,
+    a: &mut [f64],
+    cmat: &mut Array2<f64>,
+) {
+    *denom -= risk;
+    for i in 0..nvar {
+        let covar_i = covar[(person, i)];
+        let risk_covar_i = risk * covar_i;
+        a[i] -= risk_covar_i;
+        for j in 0..=i {
+            cmat[(i, j)] -= risk_covar_i * covar[(person, j)];
+        }
+    }
+}
+
 fn sort_entry_order(order: &mut [usize], entry_times: &Array1<f64>) {
     order.sort_by(|&lhs, &rhs| {
         entry_times[rhs]
             .total_cmp(&entry_times[lhs])
             .then_with(|| rhs.cmp(&lhs))
     });
+}
+
+fn sort_entry_order_by_input(
+    order: &mut [usize],
+    entry_times: &Array1<f64>,
+    input_order: &[usize],
+) {
+    order.sort_by(|&lhs, &rhs| {
+        entry_times[rhs]
+            .total_cmp(&entry_times[lhs])
+            .then_with(|| input_order[lhs].cmp(&input_order[rhs]))
+    });
+}
+
+fn counting_used_rows(
+    time: &Array1<f64>,
+    status: &Array1<i32>,
+    entry_times: &Array1<f64>,
+    strata: &Array1<i32>,
+) -> Vec<bool> {
+    // Intervals that span no event time are excluded from the native fit.
+    let mut used = vec![false; time.len()];
+    let mut stratum_start = 0;
+    for stratum_end in 0..time.len() {
+        if strata[stratum_end] != 1 {
+            continue;
+        }
+        let event_times = (stratum_start..=stratum_end)
+            .filter_map(|person| (status[person] != 0).then_some(time[person]))
+            .collect::<Vec<_>>();
+        for person in stratum_start..=stratum_end {
+            let first_event =
+                event_times.partition_point(|&event_time| event_time <= entry_times[person]);
+            used[person] =
+                first_event < event_times.len() && event_times[first_event] <= time[person];
+        }
+        stratum_start = stratum_end + 1;
+    }
+    used
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -163,6 +222,7 @@ pub(crate) struct CoxFit {
     status: Array1<i32>,
     entry_times: Option<Array1<f64>>,
     all_entered_before_first_event: bool,
+    counting_used: Option<Vec<bool>>,
     entry_order: Option<Vec<usize>>,
     covar: Array2<f64>,
     strata: Array1<i32>,
@@ -338,6 +398,9 @@ impl CoxFit {
                 .unwrap_or(f64::INFINITY);
             entries.iter().all(|&entry| entry < first_event_time)
         });
+        let counting_used = entry_times
+            .as_ref()
+            .map(|entries| counting_used_rows(&time, &status, entries, &strata));
         let entry_order = entry_times.as_ref().map(|entry_times| {
             let mut order: Vec<usize> = (0..entry_times.len()).collect();
             let mut stratum_start = 0;
@@ -358,6 +421,7 @@ impl CoxFit {
             status,
             entry_times,
             all_entered_before_first_event,
+            counting_used,
             entry_order,
             covar,
             strata,
@@ -398,6 +462,28 @@ impl CoxFit {
         self.penalty = CoxPenalty::Dense(Array2::from_shape_fn(penalty.dim(), |(row, column)| {
             penalty[(row, column)] * self.scale[row] * self.scale[column]
         }));
+    }
+
+    /// Restores stable original-row ordering for equal entry times after stop-time sorting.
+    pub(crate) fn preserve_entry_input_order(&mut self, input_order: &[usize]) {
+        let (Some(entry_times), Some(entry_order)) =
+            (self.entry_times.as_ref(), self.entry_order.as_mut())
+        else {
+            return;
+        };
+        debug_assert_eq!(input_order.len(), entry_times.len());
+        let mut stratum_start = 0;
+        for stratum_end in 0..self.strata.len() {
+            if self.strata[stratum_end] != 1 {
+                continue;
+            }
+            sort_entry_order_by_input(
+                &mut entry_order[stratum_start..=stratum_end],
+                entry_times,
+                input_order,
+            );
+            stratum_start = stratum_end + 1;
+        }
     }
 
     pub(crate) fn set_frailty_penalty(
@@ -1211,35 +1297,35 @@ impl CoxFit {
             .entry_order
             .as_deref()
             .expect("entry order must accompany counting-process entry times");
+        let used = self
+            .counting_used
+            .as_deref()
+            .expect("counting-process rows must have a usage mask");
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
         self.u.fill(0.0);
         self.imat.fill(0.0);
 
-        let (zbeta_vals, risk_vals): (Vec<f64>, Vec<f64>) = if nused > PARALLEL_THRESHOLD_MEDIUM {
+        let zbeta_vals: Vec<f64> = if nused > PARALLEL_THRESHOLD_MEDIUM {
             (0..nused)
                 .into_par_iter()
                 .map(|person| {
-                    let zbeta = self.offset[person]
-                        + beta
-                            .iter()
-                            .enumerate()
-                            .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)]);
-                    (zbeta, zbeta.exp() * self.weights[person])
+                    beta.iter()
+                        .enumerate()
+                        .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)])
+                        + self.offset[person]
                 })
-                .unzip()
+                .collect()
         } else {
             (0..nused)
                 .map(|person| {
-                    let zbeta = self.offset[person]
-                        + beta
-                            .iter()
-                            .enumerate()
-                            .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)]);
-                    (zbeta, zbeta.exp() * self.weights[person])
+                    beta.iter()
+                        .enumerate()
+                        .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)])
+                        + self.offset[person]
                 })
-                .unzip()
+                .collect()
         };
 
         let mut loglik = 0.0;
@@ -1250,57 +1336,56 @@ impl CoxFit {
             }
 
             let start_order = &entry_order[stratum_start..=stratum_end];
-
-            let mut stop_denom = 0.0;
-            let mut stop_a = vec![0.0; nvar];
-            let mut stop_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
-            let mut unentered_denom = 0.0;
-            let mut unentered_a = vec![0.0; nvar];
-            let mut unentered_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
+            // Maintain active sums in descending event-time order to avoid
+            // subtracting two large cumulative totals at every event.
+            let mut denom = 0.0;
+            let mut a = vec![0.0; nvar];
+            let mut cmat: Array2<f64> = Array2::zeros((nvar, nvar));
             let mut stop_ptr = stratum_end as isize;
             let mut start_ptr = 0usize;
-            let mut time_end = stratum_end;
+            let mut nrisk = 0usize;
+            let mut eta_sum = 0.0;
+            let mut recenter = 0.0;
             let mut death_a = vec![0.0; nvar];
             let mut death_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
-            let mut event_a = vec![0.0; nvar];
-            let mut event_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
 
             loop {
-                let event_time = self.time[time_end];
-                while stop_ptr >= stratum_start as isize
-                    && self.time[stop_ptr as usize] >= event_time
-                {
-                    let person = stop_ptr as usize;
-                    add_risk_sums(
-                        &self.covar,
-                        nvar,
-                        person,
-                        risk_vals[person],
-                        &mut stop_denom,
-                        &mut stop_a,
-                        &mut stop_cmat,
-                    );
-                    stop_ptr -= 1;
+                let mut event_ptr = stop_ptr;
+                while event_ptr >= stratum_start as isize && self.status[event_ptr as usize] == 0 {
+                    event_ptr -= 1;
                 }
+                if event_ptr < stratum_start as isize {
+                    break;
+                }
+                let event_time = self.time[event_ptr as usize];
+
                 while start_ptr < start_order.len()
                     && entry_times[start_order[start_ptr]] >= event_time
                 {
                     let person = start_order[start_ptr];
-                    add_risk_sums(
-                        &self.covar,
-                        nvar,
-                        person,
-                        risk_vals[person],
-                        &mut unentered_denom,
-                        &mut unentered_a,
-                        &mut unentered_cmat,
-                    );
+                    if used[person] {
+                        debug_assert!(nrisk > 0);
+                        nrisk -= 1;
+                        if nrisk == 0 {
+                            eta_sum = 0.0;
+                            denom = 0.0;
+                            a.fill(0.0);
+                            cmat.fill(0.0);
+                        } else {
+                            eta_sum -= zbeta_vals[person];
+                            let risk = (zbeta_vals[person] - recenter).exp() * self.weights[person];
+                            remove_risk_sums(
+                                &self.covar,
+                                nvar,
+                                person,
+                                risk,
+                                &mut denom,
+                                &mut a,
+                                &mut cmat,
+                            );
+                        }
+                    }
                     start_ptr += 1;
-                }
-
-                let mut time_start = time_end;
-                while time_start > stratum_start && self.time[time_start - 1] == event_time {
-                    time_start -= 1;
                 }
 
                 let mut ndead = 0usize;
@@ -1309,109 +1394,98 @@ impl CoxFit {
                 death_a.fill(0.0);
                 death_cmat.fill(0.0);
 
-                for person in time_start..=time_end {
-                    if self.status[person] == 0 {
+                while stop_ptr >= stratum_start as isize
+                    && self.time[stop_ptr as usize] >= event_time
+                {
+                    let person = stop_ptr as usize;
+                    stop_ptr -= 1;
+                    if !used[person] {
                         continue;
                     }
-                    ndead += 1;
-                    deadwt += self.weights[person];
-                    loglik += self.weights[person] * zbeta_vals[person];
-                    add_risk_sums(
-                        &self.covar,
-                        nvar,
-                        person,
-                        risk_vals[person],
-                        &mut denom2,
-                        &mut death_a,
-                        &mut death_cmat,
-                    );
-                    for i in 0..nvar {
-                        self.u[i] += self.weights[person] * self.covar[(person, i)];
-                    }
-                }
-
-                if ndead > 0 {
-                    let mut denom = stop_denom - unentered_denom;
-                    let denom_scale = stop_denom.abs() + unentered_denom.abs();
-                    let reliable_difference = denom.is_finite()
-                        && denom > 0.0
-                        && (denom_scale == 0.0 || denom > 64.0 * f64::EPSILON * denom_scale);
-                    event_a.fill(0.0);
-                    event_cmat.fill(0.0);
-                    for i in 0..nvar {
-                        event_a[i] = stop_a[i] - unentered_a[i];
-                        for j in 0..=i {
-                            event_cmat[(i, j)] = stop_cmat[(i, j)] - unentered_cmat[(i, j)];
-                        }
-                    }
-                    if !reliable_difference {
-                        denom = 0.0;
-                        event_a.fill(0.0);
-                        event_cmat.fill(0.0);
-                        for person in stratum_start..=stratum_end {
-                            if entry_times[person] < event_time && self.time[person] >= event_time {
-                                add_risk_sums(
-                                    &self.covar,
-                                    nvar,
-                                    person,
-                                    risk_vals[person],
-                                    &mut denom,
-                                    &mut event_a,
-                                    &mut event_cmat,
-                                );
+                    nrisk += 1;
+                    eta_sum += zbeta_vals[person];
+                    let eta_shift = eta_sum / nrisk as f64 - recenter;
+                    if eta_shift.abs() > 200.0 {
+                        recenter = eta_sum / nrisk as f64;
+                        if denom > 0.0 {
+                            let scale = (-eta_shift).exp();
+                            denom *= scale;
+                            for i in 0..nvar {
+                                a[i] *= scale;
+                                for j in 0..=i {
+                                    cmat[(i, j)] *= scale;
+                                }
                             }
                         }
                     }
-                    if matches!(method, Method::Breslow) || ndead == 1 {
-                        loglik -= deadwt * denom.ln();
+                    let risk = (zbeta_vals[person] - recenter).exp() * self.weights[person];
+                    if self.status[person] == 0 {
+                        add_risk_sums(
+                            &self.covar,
+                            nvar,
+                            person,
+                            risk,
+                            &mut denom,
+                            &mut a,
+                            &mut cmat,
+                        );
+                    } else {
+                        ndead += 1;
+                        deadwt += self.weights[person];
+                        loglik += self.weights[person] * (zbeta_vals[person] - recenter);
+                        add_risk_sums(
+                            &self.covar,
+                            nvar,
+                            person,
+                            risk,
+                            &mut denom2,
+                            &mut death_a,
+                            &mut death_cmat,
+                        );
                         for i in 0..nvar {
-                            let temp = event_a[i] / denom;
-                            self.u[i] -= deadwt * temp;
+                            self.u[i] += self.weights[person] * self.covar[(person, i)];
+                        }
+                    }
+                }
+
+                debug_assert!(ndead > 0);
+                if matches!(method, Method::Breslow) || ndead == 1 {
+                    denom += denom2;
+                    loglik -= deadwt * denom.ln();
+                    for i in 0..nvar {
+                        a[i] += death_a[i];
+                        let temp = a[i] / denom;
+                        self.u[i] -= deadwt * temp;
+                        for j in 0..=i {
+                            cmat[(i, j)] += death_cmat[(i, j)];
+                            let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
+                            self.imat[(j, i)] += val;
+                            if i != j {
+                                self.imat[(i, j)] += val;
+                            }
+                        }
+                    }
+                } else {
+                    let death_count = ndead as f64;
+                    let weight_average = deadwt / death_count;
+                    for _ in 0..ndead {
+                        denom += denom2 / death_count;
+                        loglik -= weight_average * denom.ln();
+                        for i in 0..nvar {
+                            a[i] += death_a[i] / death_count;
+                            let temp = a[i] / denom;
+                            self.u[i] -= weight_average * temp;
                             for j in 0..=i {
-                                let val = deadwt * (event_cmat[(i, j)] - temp * event_a[j]) / denom;
+                                cmat[(i, j)] += death_cmat[(i, j)] / death_count;
+                                let val = weight_average * (cmat[(i, j)] - temp * a[j]) / denom;
                                 self.imat[(j, i)] += val;
                                 if i != j {
                                     self.imat[(i, j)] += val;
                                 }
                             }
                         }
-                    } else {
-                        let death_count = ndead as f64;
-                        let risk_fraction = denom2 / death_count;
-                        let weight_average = deadwt / death_count;
-                        let mut efron_denom = denom - denom2;
-                        for i in 0..nvar {
-                            event_a[i] -= death_a[i];
-                            for j in 0..=i {
-                                event_cmat[(i, j)] -= death_cmat[(i, j)];
-                            }
-                        }
-                        for _ in 0..ndead {
-                            efron_denom += risk_fraction;
-                            loglik -= weight_average * efron_denom.ln();
-                            for i in 0..nvar {
-                                event_a[i] += death_a[i] / death_count;
-                                let temp = event_a[i] / efron_denom;
-                                self.u[i] -= weight_average * temp;
-                                for j in 0..=i {
-                                    event_cmat[(i, j)] += death_cmat[(i, j)] / death_count;
-                                    let val = weight_average
-                                        * (event_cmat[(i, j)] - temp * event_a[j])
-                                        / efron_denom;
-                                    self.imat[(j, i)] += val;
-                                    if i != j {
-                                        self.imat[(i, j)] += val;
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
-
-                if time_start == stratum_start {
-                    break;
-                }
-                time_end = time_start - 1;
             }
             stratum_start = stratum_end + 1;
         }

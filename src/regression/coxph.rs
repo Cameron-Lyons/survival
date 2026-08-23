@@ -955,6 +955,9 @@ pub fn coxph_fit(
     .map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit initialization failed: {}", e))
     })?;
+    if counting_process {
+        cox_fit.preserve_entry_input_order(&order);
+    }
     if let Some(values) = ridge_penalty.as_ref() {
         cox_fit.set_ridge_penalty(values);
     } else if let Some(values) = penalty_matrix.as_ref() {

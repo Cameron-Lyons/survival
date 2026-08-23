@@ -1736,6 +1736,60 @@ mod tests {
     }
 
     #[test]
+    fn native_prentice_matches_delayed_entry_factor_roundoff() {
+        let stop = vec![
+            12.0, 3.0, 2.0, 8.0, 2.0, 17.0, 10.0, 6.0, 3.0, 3.0, 8.0, 5.0, 8.0, 11.0, 1.0, 8.0,
+            11.0, 5.0, 9.0, 1.0,
+        ];
+        let status = vec![0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+        let groups = [1, 1, 2, 2, 3, 1, 3, 1, 1, 2, 3, 2, 3, 2, 3, 1, 2, 2, 2, 2];
+        let covariates = groups
+            .into_iter()
+            .map(|group| vec![f64::from(group == 2), f64::from(group == 3)])
+            .collect();
+        let subcohort = vec![1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1];
+        let start = vec![
+            6.0, 0.0, 0.0, 5.0, 0.0, 14.0, 5.0, 1.0, 2.0, 2.0, 7.0, 1.0, 3.0, 7.0, 0.0, 5.0, 9.0,
+            0.0, 4.0, 0.0,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=20).collect(),
+            60,
+            Some(start),
+            "Prentice",
+            false,
+        )
+        .expect("delayed-entry Prentice fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[1.090_919_321_048_074_5, 1.932_782_521_394_574],
+        );
+        let expected_phase_two = [
+            [7.186_983_559_093_221e55, 1.955_659_165_571_378_2e56],
+            [1.955_659_165_571_378_2e56, 5.902_264_325_547_351e56],
+        ];
+        for (actual_row, expected_row) in result.phase2_variance.iter().zip(expected_phase_two) {
+            for (&actual, expected) in actual_row.iter().zip(expected_row) {
+                assert!(
+                    (actual / expected - 1.0).abs() < 1e-11,
+                    "expected {expected:.17e}, got {actual:.17e}"
+                );
+            }
+        }
+        assert_close(
+            &result.log_likelihood,
+            &[-1_620.065_518_335, -1_618.895_358_472_12],
+        );
+        assert!((result.score_test - 2.109_158_956_458_69).abs() < 1e-11);
+        assert_eq!(result.iterations, 4);
+    }
+
+    #[test]
     fn native_stratified_borgan_results_match_r_survival() {
         let (start, stop, status, covariates, subcohort, id) = r_parity_fixture();
         let stratum = (0..stop.len()).map(|idx| idx % 2).collect::<Vec<_>>();

@@ -13176,6 +13176,44 @@ test_that("cch matches factor phase-two roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches delayed-entry factor roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0),
+    stop = c(12, 3, 2, 8, 2, 17, 10, 6, 3, 3, 8, 5, 8, 11, 1, 8, 11, 5, 9, 1),
+    status = c(0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+    group = factor(c(
+      "a", "a", "b", "b", "c", "a", "c", "a", "a", "b",
+      "c", "b", "c", "b", "c", "a", "b", "b", "b", "b"
+    )),
+    id = seq_len(20),
+    subcohort = c(1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ 0 + group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 60,
+    method = "Prentice"
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches SelfPrentice phase-two roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
