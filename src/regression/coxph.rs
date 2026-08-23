@@ -896,12 +896,21 @@ pub fn coxph_fit(
             })
             .collect()
     };
+    let counting_process = entry_times.is_some();
     let mut order: Vec<usize> = (0..n).collect();
+    // The counting optimizer walks stop times backward. Reverse equal-time rows
+    // here so that the backward walk retains their original input order.
     order.sort_by(|&lhs, &rhs| {
         strata_values[lhs]
             .cmp(&strata_values[rhs])
             .then_with(|| time[lhs].total_cmp(&time[rhs]))
-            .then_with(|| lhs.cmp(&rhs))
+            .then_with(|| {
+                if counting_process {
+                    rhs.cmp(&lhs)
+                } else {
+                    lhs.cmp(&rhs)
+                }
+            })
     });
     let entry_times_ref = entry_times.as_deref();
     let mut sorted_time = Vec::with_capacity(n);

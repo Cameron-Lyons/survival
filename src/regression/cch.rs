@@ -686,6 +686,24 @@ fn augmented_fit(
         .iter()
         .map(|&offset| offset - offset_mean)
         .collect::<Vec<_>>();
+    // The formula-level fit reports unweighted design means and leaves
+    // indicator columns uncentered, independently of optimizer scaling.
+    let reported_means = (0..augmented_covariates[0].len())
+        .map(|column| {
+            if augmented_covariates
+                .iter()
+                .all(|row| matches!(row[column], -1.0 | 0.0 | 1.0))
+            {
+                0.0
+            } else {
+                augmented_covariates
+                    .iter()
+                    .map(|row| row[column])
+                    .sum::<f64>()
+                    / augmented_n as f64
+            }
+        })
+        .collect::<Vec<_>>();
     let mut fit = fit_cox(
         augmented_stop,
         augmented_status,
@@ -695,14 +713,21 @@ fn augmented_fit(
         initial_coefficients.clone(),
         if prentice { 35 } else { 20 },
     )?;
+    let covariate_center = fit.coefficients[0]
+        .iter()
+        .zip(&reported_means)
+        .map(|(&coefficient, &mean)| coefficient * mean)
+        .sum::<f64>();
     for (linear_predictor, risk_score) in fit
         .linear_predictors
         .iter_mut()
         .zip(fit.risk_scores.iter_mut())
     {
+        *linear_predictor -= covariate_center;
         *linear_predictor += offset_mean;
         *risk_score = linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
     }
+    fit.means = reported_means;
     let dfbeta = fit.dfbeta()?;
     let phase2_rows = dfbeta[case_indices.len()..].to_vec();
     let phase2_scale = 1.0 - subcohort_indices.len() as f64 / cohort_size as f64;
@@ -1626,6 +1651,87 @@ mod tests {
             &[-1_710.608_339_894_93, -1_710.187_760_623_87],
         );
         assert!((result.score_test - 0.846_482_519_571_698).abs() < 1e-11);
+        assert_eq!(result.iterations, 3);
+    }
+
+    #[test]
+    fn native_self_prentice_matches_right_censored_phase_two_roundoff() {
+        let stop = vec![
+            9.0, 2.0, 11.0, 17.0, 13.0, 16.0, 9.0, 17.0, 2.0, 14.0, 4.0, 5.0, 9.0, 3.0, 5.0, 14.0,
+            13.0, 11.0, 12.0, 13.0, 19.0, 5.0, 17.0, 7.0, 11.0, 9.0, 17.0, 13.0, 19.0, 2.0, 7.0,
+            17.0, 11.0, 6.0, 17.0, 20.0,
+        ];
+        let status = vec![
+            1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1,
+            1, 1, 0, 1, 0, 0, 1,
+        ];
+        let x = vec![
+            -0.268_496_659_511_314_63,
+            0.335_513_465_200_485_75,
+            1.543_538_272_789_444,
+            0.736_611_278_363_456_6,
+            -1.293_128_439_900_177_5,
+            0.200_945_683_174_392_68,
+            1.008_253_155_630_741_5,
+            0.366_515_487_283_751_7,
+            -0.905_546_023_312_398_8,
+            -0.668_610_076_688_068_2,
+            -1.450_888_541_502_198_8,
+            1.112_470_096_940_035_8,
+            0.206_911_965_429_309_5,
+            0.767_274_338_629_228_6,
+            0.403_762_541_077_289_37,
+            -2.084_153_589_625_603_6,
+            -1.641_738_523_322_735_3,
+            0.752_711_012_030_994,
+            1.924_748_362_203_215_3,
+            0.515_767_051_110_402_4,
+            -0.286_366_660_299_187_4,
+            0.945_700_584_816_985_9,
+            -0.591_227_269_430_436_1,
+            1.169_159_231_896_013_8,
+            1.029_779_744_428_501_7,
+            0.220_287_103_277_879_04,
+            -0.223_255_527_834_578_4,
+            -0.106_245_341_765_360_09,
+            1.087_940_890_808_079_4,
+            -2.451_962_606_343_388,
+            -1.031_058_975_566_138,
+            0.388_790_816_358_851_04,
+            -0.605_095_620_571_917_8,
+            0.494_756_754_522_265_14,
+            0.198_096_233_886_051_08,
+            0.152_754_316_498_647_65,
+        ];
+        let subcohort = vec![
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1,
+            0, 1, 1, 1, 1, 1, 0,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            x.into_iter().map(|value| vec![value]).collect(),
+            subcohort,
+            (1..=36).collect(),
+            108,
+            None,
+            "SelfPrentice",
+            false,
+        )
+        .expect("SelfPrentice fit should succeed");
+
+        assert_close(&result.coefficients[0], &[-0.831_949_191_237_055_9]);
+        assert!(
+            (result.phase2_variance[0][0] / 4.218_812_001_681_335e53 - 1.0).abs() < 1e-11,
+            "expected reference phase-two variance, got {:.17e}",
+            result.phase2_variance[0][0]
+        );
+        assert!((result.means[0] - 0.113_479_457_821_405_05).abs() < 1e-15);
+        assert_close(
+            &result.log_likelihood,
+            &[-2_565.281_673_644_15, -2_560.966_586_506_64],
+        );
+        assert!((result.score_test - 8.884_185_983_358_03).abs() < 1e-11);
         assert_eq!(result.iterations, 3);
     }
 

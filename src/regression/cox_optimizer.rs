@@ -162,6 +162,7 @@ pub(crate) struct CoxFit {
     time: Array1<f64>,
     status: Array1<i32>,
     entry_times: Option<Array1<f64>>,
+    all_entered_before_first_event: bool,
     entry_order: Option<Vec<usize>>,
     covar: Array2<f64>,
     strata: Array1<i32>,
@@ -323,6 +324,20 @@ impl CoxFit {
         if let Some(last) = strata.last_mut() {
             *last = 1;
         }
+        // Counting rows are consumed backward, so centering follows the same
+        // descending-time order as the risk-set recurrence.
+        let reverse_centering_order = entry_times.is_some();
+        let all_entered_before_first_event = entry_times.as_ref().is_some_and(|entries| {
+            let first_event_time = time
+                .iter()
+                .zip(&status)
+                .filter_map(|(&event_time, &event_status)| {
+                    (event_status != 0).then_some(event_time)
+                })
+                .min_by(f64::total_cmp)
+                .unwrap_or(f64::INFINITY);
+            entries.iter().all(|&entry| entry < first_event_time)
+        });
         let entry_order = entry_times.as_ref().map(|entry_times| {
             let mut order: Vec<usize> = (0..entry_times.len()).collect();
             let mut stratum_start = 0;
@@ -342,6 +357,7 @@ impl CoxFit {
             time,
             status,
             entry_times,
+            all_entered_before_first_event,
             entry_order,
             covar,
             strata,
@@ -362,7 +378,7 @@ impl CoxFit {
             flag: 0,
             iter: 0,
         };
-        cox.scale_center(doscale)?;
+        cox.scale_center(doscale, reverse_centering_order)?;
         Ok(cox)
     }
 
@@ -626,10 +642,14 @@ impl CoxFit {
         )
     }
     #[allow(clippy::undocumented_unsafe_blocks)]
-    fn scale_center(&mut self, doscale: Vec<bool>) -> Result<(), CoxError> {
+    fn scale_center(&mut self, doscale: Vec<bool>, reverse_order: bool) -> Result<(), CoxError> {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
-        let total_weight: f64 = self.weights.sum();
+        let total_weight = if reverse_order {
+            self.weights.iter().rev().copied().sum()
+        } else {
+            self.weights.sum()
+        };
         let means: Vec<f64> = (0..nvar)
             .into_par_iter()
             .map(|i| {
@@ -637,8 +657,14 @@ impl CoxFit {
                     0.0
                 } else {
                     let mut mean = 0.0;
-                    for (person, &w) in self.weights.iter().enumerate() {
-                        mean += w * self.covar[(person, i)];
+                    if reverse_order {
+                        for person in (0..nused).rev() {
+                            mean += self.weights[person] * self.covar[(person, i)];
+                        }
+                    } else {
+                        for (person, &w) in self.weights.iter().enumerate() {
+                            mean += w * self.covar[(person, i)];
+                        }
                     }
                     mean / total_weight
                 }
@@ -651,9 +677,15 @@ impl CoxFit {
                     1.0
                 } else {
                     let mean = means[i];
-                    let abs_sum: f64 = (0..nused)
-                        .map(|person| self.weights[person] * (self.covar[(person, i)] - mean).abs())
-                        .sum();
+                    let abs_sum = if reverse_order {
+                        (0..nused).rev().fold(0.0, |sum, person| {
+                            sum + self.weights[person] * (self.covar[(person, i)] - mean).abs()
+                        })
+                    } else {
+                        (0..nused).fold(0.0, |sum, person| {
+                            sum + self.weights[person] * (self.covar[(person, i)] - mean).abs()
+                        })
+                    };
                     if abs_sum > 0.0 {
                         total_weight / abs_sum
                     } else {
@@ -1170,6 +1202,11 @@ impl CoxFit {
         let Some(entry_times) = self.entry_times.as_ref() else {
             return self.iterate_right_censored(beta);
         };
+        // Without delayed entry, the simpler recurrence has identical risk sets
+        // and preserves the reference separation of deaths from nondeaths.
+        if self.all_entered_before_first_event {
+            return self.iterate_right_censored(beta);
+        }
         let entry_order = self
             .entry_order
             .as_deref()

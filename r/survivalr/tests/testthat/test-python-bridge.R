@@ -13176,6 +13176,53 @@ test_that("cch matches factor phase-two roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches SelfPrentice phase-two roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    stop = c(9, 2, 11, 17, 13, 16, 9, 17, 2, 14, 4, 5, 9, 3, 5, 14, 13, 11, 12, 13, 19, 5, 17, 7, 11, 9, 17, 13, 19, 2, 7, 17, 11, 6, 17, 20),
+    status = c(1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1),
+    x = c(
+      -0.26849665951131463, 0.33551346520048575, 1.543538272789444,
+      0.73661127836345663, -1.2931284399001775, 0.20094568317439268,
+      1.0082531556307415, 0.36651548728375172, -0.90554602331239875,
+      -0.66861007668806816, -1.4508885415021988, 1.1124700969400358,
+      0.20691196542930951, 0.76727433862922856, 0.40376254107728937,
+      -2.0841535896256036, -1.6417385233227353, 0.752711012030994,
+      1.9247483622032153, 0.51576705111040244, -0.28636666029918739,
+      0.94570058481698593, -0.59122726943043613, 1.1691592318960138,
+      1.0297797444285017, 0.22028710327787904, -0.22325552783457839,
+      -0.10624534176536009, 1.0879408908080794, -2.4519626063433879,
+      -1.0310589755661379, 0.38879081635885104, -0.60509562057191779,
+      0.49475675452226514, 0.19809623388605108, 0.15275431649864765
+    ),
+    id = seq_len(36),
+    subcohort = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0)
+  )
+  args <- list(
+    formula = Surv(stop, status) ~ x,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 108,
+    method = "SelfPrentice"
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch stratified Borgan fits match survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
