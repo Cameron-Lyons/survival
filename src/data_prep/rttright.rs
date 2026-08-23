@@ -4,7 +4,6 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 use super::aeq_surv_module::aeq_surv;
-use crate::constants::{DIVISION_FLOOR, same_time};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
 };
@@ -59,15 +58,24 @@ fn rttright_impl(
     }
     validate_rttright_inputs(&time, &status, weights_ref)?;
 
-    if n == 0 {
-        return Ok(RttrightResult {
-            weights: vec![],
-            time: vec![],
-            status: vec![],
-            order: vec![],
-        });
-    }
+    let time = if timefix {
+        aeq_surv(time, None)?.time
+    } else {
+        time
+    };
+    let delta = rttright_delta(&time, &[]);
+    Ok(rttright_impl_prepared(time, status, weights, renorm, delta))
+}
 
+fn rttright_impl_prepared(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    weights: Option<Vec<f64>>,
+    renorm: bool,
+    delta: f64,
+) -> RttrightResult {
+    let n = time.len();
+    let weights_ref = weights.as_deref();
     let mut indices: Vec<usize> = (0..n).collect();
     indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
 
@@ -77,16 +85,16 @@ fn rttright_impl(
         .iter()
         .map(|&i| rttright_case_weight(weights_ref, i))
         .collect();
-    let sorted_weights = normalize_case_weights(&sorted_weights, renorm)?;
+    let sorted_weights = normalize_case_weights(&sorted_weights, renorm);
 
-    let km_weights = compute_km_weights(&sorted_time, &sorted_status, &sorted_weights, timefix);
+    let km_weights = compute_km_weights(&sorted_time, &sorted_status, &sorted_weights, delta);
 
-    Ok(RttrightResult {
+    RttrightResult {
         weights: km_weights,
         time: sorted_time,
         status: sorted_status,
         order: indices,
-    })
+    }
 }
 
 fn validate_rttright_inputs(time: &[f64], status: &[i32], weights: Option<&[f64]>) -> PyResult<()> {
@@ -108,76 +116,110 @@ fn rttright_case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
     weights.map_or(1.0, |wts| wts[index])
 }
 
-fn normalize_case_weights(weights: &[f64], renorm: bool) -> PyResult<Vec<f64>> {
+fn normalize_case_weights(weights: &[f64], renorm: bool) -> Vec<f64> {
     if !renorm {
-        return Ok(weights.to_vec());
+        return weights.to_vec();
     }
 
     let total = weights.iter().sum::<f64>();
-    if total <= DIVISION_FLOOR {
-        return Err(PyValueError::new_err(
-            "weights must have positive sum when renorm is true",
-        ));
-    }
-
-    Ok(weights.iter().map(|weight| weight / total).collect())
+    weights
+        .iter()
+        .map(|&weight| rttright_divide(weight, total))
+        .collect()
 }
 
-fn same_rttright_time(left: f64, right: f64, timefix: bool) -> bool {
-    if timefix {
-        same_time(left, right)
-    } else {
-        left == right
-    }
+fn rttright_delta(time: &[f64], query_times: &[f64]) -> f64 {
+    let mut values = Vec::with_capacity(time.len() + query_times.len());
+    values.extend_from_slice(time);
+    values.extend_from_slice(query_times);
+    values.sort_by(f64::total_cmp);
+    values.dedup_by(|left, right| *left == *right);
+    values
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .fold(f64::INFINITY, f64::min)
+        / 2.0
 }
 
-fn compute_km_weights(
+fn censor_survival(
     time: &[f64],
     status: &[i32],
-    init_weights: &[f64],
-    timefix: bool,
-) -> Vec<f64> {
+    weights: &[f64],
+    delta: f64,
+) -> (Vec<f64>, Vec<f64>) {
     let n = time.len();
     if n == 0 {
-        return vec![];
+        return (vec![], vec![]);
     }
 
-    let mut weights = vec![0.0; n];
-    let mut n_at_risk = init_weights.iter().sum::<f64>();
+    let transformed_time = time
+        .iter()
+        .zip(status)
+        .map(|(&value, &event)| if event == 0 { value + delta } else { value })
+        .collect::<Vec<_>>();
+    let mut order = (0..n).collect::<Vec<_>>();
+    order.sort_by(|&left, &right| {
+        transformed_time[left]
+            .total_cmp(&transformed_time[right])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut timeline = Vec::with_capacity(n);
+    let mut post_survival = Vec::with_capacity(n);
+    let mut risk_suffix = vec![0.0; n + 1];
+    for position in (0..n).rev() {
+        risk_suffix[position] = risk_suffix[position + 1] + weights[order[position]];
+    }
     let mut current_g = 1.0;
 
     let mut start = 0;
     while start < n {
-        let block_time = time[start];
+        let block_time = transformed_time[order[start]];
         let mut end = start + 1;
-        while end < n && same_rttright_time(time[end], block_time, timefix) {
+        while end < n && transformed_time[order[end]] == block_time {
             end += 1;
         }
 
         let mut event_weight = 0.0;
-        let mut censor_weight = 0.0;
-        for row in start..end {
-            if status[row] == 1 {
-                event_weight += init_weights[row];
-                weights[row] = if current_g > DIVISION_FLOOR {
-                    init_weights[row] / current_g
-                } else {
-                    init_weights[row]
-                };
-            } else {
-                censor_weight += init_weights[row];
+        for &row in &order[start..end] {
+            if status[row] == 0 {
+                event_weight += weights[row];
             }
         }
 
-        let risk_after_events = n_at_risk - event_weight;
-        if risk_after_events > DIVISION_FLOOR && censor_weight > 0.0 {
-            current_g *= 1.0 - censor_weight / risk_after_events;
+        if event_weight > 0.0 {
+            current_g *= 1.0 - event_weight / risk_suffix[start];
         }
-        n_at_risk = risk_after_events - censor_weight;
+        timeline.push(block_time);
+        post_survival.push(current_g);
         start = end;
     }
 
-    weights
+    (timeline, post_survival)
+}
+
+fn survival_before(timeline: &[f64], post_survival: &[f64], value: f64) -> f64 {
+    let index = timeline.partition_point(|&time| time < value);
+    if index == 0 {
+        1.0
+    } else {
+        post_survival[index - 1]
+    }
+}
+
+fn compute_km_weights(time: &[f64], status: &[i32], init_weights: &[f64], delta: f64) -> Vec<f64> {
+    let (timeline, post_survival) = censor_survival(time, status, init_weights, delta);
+    time.iter()
+        .zip(status)
+        .zip(init_weights)
+        .map(|((&value, &event), &weight)| {
+            if event == 0 {
+                0.0
+            } else {
+                rttright_divide(weight, survival_before(&timeline, &post_survival, value))
+            }
+        })
+        .collect()
 }
 
 const PARALLEL_TIME_MATRIX_WORK: usize = 8_192;
@@ -189,81 +231,32 @@ fn compute_time_matrix_group(
     case_weights: &[f64],
     indices: &[usize],
     renorm: bool,
-) -> PyResult<Vec<Vec<f64>>> {
+    delta: f64,
+) -> Vec<Vec<f64>> {
     let group_weights = indices
         .iter()
         .map(|&index| case_weights[index])
         .collect::<Vec<_>>();
     let group_weights = if renorm {
         let total = group_weights.iter().sum::<f64>();
-        if total <= 0.0 {
-            return Err(PyValueError::new_err(
-                "weights must have positive sum when renorm is true",
-            ));
-        }
         group_weights
             .into_iter()
-            .map(|weight| weight / total)
+            .map(|weight| rttright_divide(weight, total))
             .collect()
     } else {
         group_weights
     };
 
-    let mut order = (0..indices.len()).collect::<Vec<_>>();
-    order.sort_by(|&left, &right| {
-        time[indices[left]]
-            .total_cmp(&time[indices[right]])
-            .then_with(|| left.cmp(&right))
-    });
-
-    let mut event_g = vec![1.0; indices.len()];
-    let mut block_times = Vec::with_capacity(indices.len());
-    let mut post_block_g = Vec::with_capacity(indices.len());
-    let mut current_g = 1.0;
-    let mut n_at_risk = order
+    let group_time = indices.iter().map(|&index| time[index]).collect::<Vec<_>>();
+    let group_status = indices
         .iter()
-        .map(|&local_index| group_weights[local_index])
-        .sum::<f64>();
-
-    let mut start = 0;
-    while start < order.len() {
-        let block_time = time[indices[order[start]]];
-        let mut end = start + 1;
-        while end < order.len() && time[indices[order[end]]] == block_time {
-            end += 1;
-        }
-
-        let mut event_weight = 0.0;
-        let mut censor_weight = 0.0;
-        for &local_index in &order[start..end] {
-            event_g[local_index] = current_g;
-            if status[indices[local_index]] == 1 {
-                event_weight += group_weights[local_index];
-            } else {
-                censor_weight += group_weights[local_index];
-            }
-        }
-
-        let risk_after_events = n_at_risk - event_weight;
-        if risk_after_events > 0.0 && censor_weight > 0.0 {
-            current_g *= 1.0 - censor_weight / risk_after_events;
-        }
-        n_at_risk = risk_after_events - censor_weight;
-        block_times.push(block_time);
-        post_block_g.push(current_g);
-        start = end;
-    }
-
+        .map(|&index| status[index])
+        .collect::<Vec<_>>();
+    let (timeline, post_survival) =
+        censor_survival(&group_time, &group_status, &group_weights, delta);
     let query_g = query_times
         .iter()
-        .map(|query_time| {
-            let block_index = block_times.partition_point(|block_time| block_time < query_time);
-            if block_index == 0 {
-                1.0
-            } else {
-                post_block_g[block_index - 1]
-            }
-        })
+        .map(|&query_time| survival_before(&timeline, &post_survival, query_time))
         .collect::<Vec<_>>();
 
     let make_row = |local_index: usize| {
@@ -272,15 +265,16 @@ fn compute_time_matrix_group(
         let row_weight = group_weights[local_index];
         let mut row = vec![0.0; query_times.len()];
         if status[row_index] == 1 {
+            let event_g = survival_before(&timeline, &post_survival, row_time);
             for (column, &g_at_time) in query_g.iter().enumerate() {
-                row[column] = row_weight / event_g[local_index].max(g_at_time);
+                row[column] = rttright_divide(row_weight, event_g.max(g_at_time));
             }
         } else {
             for (column, (&query_time, &g_at_time)) in
                 query_times.iter().zip(query_g.iter()).enumerate()
             {
                 if row_time >= query_time {
-                    row[column] = row_weight / g_at_time;
+                    row[column] = rttright_divide(row_weight, g_at_time);
                 }
             }
         }
@@ -289,9 +283,9 @@ fn compute_time_matrix_group(
 
     let work = indices.len().saturating_mul(query_times.len());
     if work >= PARALLEL_TIME_MATRIX_WORK {
-        Ok((0..indices.len()).into_par_iter().map(make_row).collect())
+        (0..indices.len()).into_par_iter().map(make_row).collect()
     } else {
-        Ok((0..indices.len()).map(make_row).collect())
+        (0..indices.len()).map(make_row).collect()
     }
 }
 
@@ -335,6 +329,7 @@ pub fn rttright_time_matrix(
     };
     let case_weights = weights.unwrap_or_else(|| vec![1.0; n]);
     let strata = strata.unwrap_or_else(|| vec![0; n]);
+    let delta = rttright_delta(&time, &query_times);
     let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (index, stratum) in strata.into_iter().enumerate() {
         strata_indices.entry(stratum).or_default().push(index);
@@ -349,7 +344,8 @@ pub fn rttright_time_matrix(
             &case_weights,
             indices,
             renorm,
-        )?;
+            delta,
+        );
         for (&row_index, row) in indices.iter().zip(rows) {
             matrix[row_index] = row;
         }
@@ -638,6 +634,13 @@ pub fn rttright_stratified(
     }
     validate_rttright_inputs(&time, &status, weights_ref)?;
 
+    let time = if timefix {
+        aeq_surv(time, None)?.time
+    } else {
+        time
+    };
+    let delta = rttright_delta(&time, &[]);
+
     let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (i, &s) in strata.iter().enumerate() {
         strata_indices.entry(s).or_default().push(i);
@@ -653,7 +656,8 @@ pub fn rttright_stratified(
         let strata_weights =
             weights_ref.map(|wts| indices.iter().map(|&i| wts[i]).collect::<Vec<_>>());
 
-        let result = rttright_impl(strata_time, strata_status, strata_weights, timefix, renorm)?;
+        let result =
+            rttright_impl_prepared(strata_time, strata_status, strata_weights, renorm, delta);
 
         for (sorted_pos, &local_idx) in result.order.iter().enumerate() {
             let orig_idx = indices[local_idx];
@@ -702,130 +706,14 @@ pub fn rttright_matrix(
     timefix: bool,
     renorm: bool,
 ) -> PyResult<Vec<Vec<f64>>> {
-    let n = time.len();
-    if status.len() != n {
-        return Err(PyValueError::new_err(
-            "time and status must have same length",
-        ));
-    }
     if let Some(values) = strata.as_ref()
-        && values.len() != n
+        && values.len() != time.len()
     {
         return Err(PyValueError::new_err(
             "strata must have same length as time",
         ));
     }
-    if let Some(values) = weights.as_ref()
-        && values.len() != n
-    {
-        return Err(PyValueError::new_err(
-            "weights must have same length as time",
-        ));
-    }
-    validate_rttright_inputs(&time, &status, weights.as_deref())?;
-    validate_finite(&times, "times")?;
-
-    if n == 0 {
-        return Ok(vec![]);
-    }
-
-    let time = if timefix {
-        aeq_surv(time, None)?.time
-    } else {
-        time
-    };
-    let strata = strata.unwrap_or_else(|| vec![0; n]);
-    let case_weights = weights.unwrap_or_else(|| vec![1.0; n]);
-    let mut matrix = vec![vec![0.0; times.len()]; n];
-    let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (index, &stratum) in strata.iter().enumerate() {
-        strata_indices.entry(stratum).or_default().push(index);
-    }
-
-    for indices in strata_indices.values_mut() {
-        let total_weight = indices
-            .iter()
-            .map(|&index| case_weights[index])
-            .sum::<f64>();
-        if renorm && total_weight <= 0.0 {
-            return Err(PyValueError::new_err(
-                "weights must have positive sum when renorm is true",
-            ));
-        }
-        let scale = if renorm { total_weight } else { 1.0 };
-        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
-
-        let normalized_weights = indices
-            .iter()
-            .map(|&index| case_weights[index] / scale)
-            .collect::<Vec<_>>();
-        let mut event_g = vec![1.0; indices.len()];
-        let mut block_times = Vec::with_capacity(indices.len());
-        let mut post_block_g = Vec::with_capacity(indices.len());
-        let mut current_g = 1.0;
-        let mut n_at_risk = normalized_weights.iter().sum::<f64>();
-
-        let mut start = 0;
-        while start < indices.len() {
-            let block_time = time[indices[start]];
-            let mut end = start + 1;
-            while end < indices.len() && time[indices[end]] == block_time {
-                end += 1;
-            }
-
-            let mut event_weight = 0.0;
-            let mut censor_weight = 0.0;
-            for sorted_position in start..end {
-                event_g[sorted_position] = current_g;
-                if status[indices[sorted_position]] == 1 {
-                    event_weight += normalized_weights[sorted_position];
-                } else {
-                    censor_weight += normalized_weights[sorted_position];
-                }
-            }
-
-            let risk_after_events = n_at_risk - event_weight;
-            if risk_after_events > 0.0 && censor_weight > 0.0 {
-                current_g *= 1.0 - censor_weight / risk_after_events;
-            }
-            n_at_risk = risk_after_events - censor_weight;
-            block_times.push(block_time);
-            post_block_g.push(current_g);
-            start = end;
-        }
-
-        let query_g = times
-            .iter()
-            .map(|query_time| {
-                let block_index = block_times.partition_point(|block_time| block_time < query_time);
-                if block_index == 0 {
-                    1.0
-                } else {
-                    post_block_g[block_index - 1]
-                }
-            })
-            .collect::<Vec<_>>();
-
-        for (sorted_position, &row_index) in indices.iter().enumerate() {
-            let row_weight = normalized_weights[sorted_position];
-            if status[row_index] == 1 {
-                for (column_index, &g_at_time) in query_g.iter().enumerate() {
-                    matrix[row_index][column_index] =
-                        rttright_divide(row_weight, event_g[sorted_position].max(g_at_time));
-                }
-            } else {
-                for (column_index, (&query_time, &g_at_time)) in
-                    times.iter().zip(&query_g).enumerate()
-                {
-                    if time[row_index] >= query_time {
-                        matrix[row_index][column_index] = rttright_divide(row_weight, g_at_time);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(matrix)
+    rttright_time_matrix(time, status, times, weights, strata, timefix, renorm)
 }
 
 #[cfg(test)]
@@ -944,6 +832,42 @@ mod tests {
     }
 
     #[test]
+    fn test_rttright_preserves_zero_division_semantics() {
+        let result =
+            rttright(vec![1.0, 2.0], vec![0, 1], Some(vec![1.0, 0.0]), true, true).unwrap();
+
+        assert_eq!(result.weights[0], 0.0);
+        assert!(result.weights[1].is_nan());
+
+        let matrix = rttright_time_matrix(
+            vec![1.0, 2.0],
+            vec![0, 0],
+            vec![2.0],
+            Some(vec![1.0, 0.0]),
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_eq!(matrix[0][0], 0.0);
+        assert!(matrix[1][0].is_nan());
+    }
+
+    #[test]
+    fn test_rttright_normalizes_any_positive_weight_sum() {
+        let result = rttright(
+            vec![1.0, 2.0],
+            vec![1, 1],
+            Some(vec![1e-30, 2e-30]),
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_close_slice(&result.weights, &[1.0 / 3.0, 2.0 / 3.0]);
+    }
+
+    #[test]
     fn test_rttright_tied_blocks_are_atomic() {
         let result =
             rttright(vec![1.0, 2.0, 2.0, 3.0], vec![0, 1, 1, 1], None, true, true).unwrap();
@@ -987,6 +911,47 @@ mod tests {
 
         assert_close_slice(&fixed.weights, &[0.0, 1.0, 2.0]);
         assert_close_slice(&exact.weights, &[0.0, 1.5, 1.5]);
+    }
+
+    #[test]
+    fn test_rttright_uses_shifted_censoring_times_for_near_ties() {
+        let one_next = f64::from_bits(1.0f64.to_bits() + 1);
+        let ten_previous = f64::from_bits(10.0f64.to_bits() - 1);
+        let time = vec![1.0, one_next, ten_previous, ten_previous, 10.0, 10.0, 11.0];
+        let status = vec![1, 1, 0, 1, 0, 1, 1];
+
+        let result = rttright(time.clone(), status.clone(), None, false, true).unwrap();
+        let mut original = vec![0.0; result.weights.len()];
+        for (sorted_position, &original_index) in result.order.iter().enumerate() {
+            original[original_index] = result.weights[sorted_position];
+        }
+        assert_close_slice(
+            &original,
+            &[
+                1.0 / 7.0,
+                1.0 / 7.0,
+                0.0,
+                1.0 / 7.0,
+                0.0,
+                5.0 / 28.0,
+                15.0 / 56.0,
+            ],
+        );
+
+        let matrix =
+            rttright_time_matrix(time, status, vec![10.0], None, None, false, true).unwrap();
+        assert_close_slice(
+            &matrix.iter().map(|row| row[0]).collect::<Vec<_>>(),
+            &[
+                1.0 / 7.0,
+                1.0 / 7.0,
+                0.0,
+                1.0 / 7.0,
+                5.0 / 28.0,
+                5.0 / 28.0,
+                5.0 / 28.0,
+            ],
+        );
     }
 
     #[test]
@@ -1409,11 +1374,8 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("weights contains non-finite"));
 
-        let err = rttright(vec![1.0], vec![1], Some(vec![0.0]), true, true).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("weights must have positive sum when renorm is true")
-        );
+        let zero_sum = rttright(vec![1.0], vec![1], Some(vec![0.0]), true, true).unwrap();
+        assert!(zero_sum.weights[0].is_nan());
     }
 
     #[test]

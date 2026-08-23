@@ -13151,13 +13151,14 @@ def _rttright_counting_case_weights(
     group_values: Sequence[int],
     n: int,
     renorm: bool,
-) -> list[float]:
+) -> tuple[list[float], set[int]]:
     case_weights = _rttright_initial_weights(weights, n)
     _rttright_counting_validate_subject_weights(case_weights, id_values)
     if not renorm:
-        return case_weights
+        return case_weights, set()
 
     normalized = list(case_weights)
+    zero_sum_groups: set[int] = set()
     group_indices: dict[int, list[int]] = {}
     for row_idx, group_value in enumerate(group_values):
         group_indices.setdefault(group_value, []).append(row_idx)
@@ -13171,11 +13172,39 @@ def _rttright_counting_case_weights(
                 continue
             seen_ids.add(key)
             denominator += case_weights[row_idx]
-        if denominator <= 0.0:
-            raise ValueError("weights must have positive sum when renorm is true")
+        if denominator == 0.0:
+            zero_sum_groups.add(group_values[indices[0]])
+            continue
         for row_idx in indices:
             normalized[row_idx] = case_weights[row_idx] / denominator
-    return normalized
+    return normalized, zero_sum_groups
+
+
+def _rttright_counting_apply_zero_sum_groups(
+    matrix: list[list[float]],
+    start: Sequence[float],
+    stop: Sequence[float],
+    status: Sequence[int],
+    last: Sequence[bool],
+    group_values: Sequence[int],
+    zero_sum_groups: set[int],
+    query_times: Sequence[float] | None,
+) -> None:
+    if not zero_sum_groups:
+        return
+    for row_idx, group_value in enumerate(group_values):
+        if group_value not in zero_sum_groups:
+            continue
+        if query_times is None:
+            if last[row_idx] and status[row_idx] > 0:
+                matrix[row_idx][0] = math.nan
+            continue
+        if last[row_idx] and stop[row_idx] > 0.0:
+            matrix[row_idx] = [math.nan] * len(query_times)
+            continue
+        for column_idx, query_time in enumerate(query_times):
+            if start[row_idx] < query_time <= stop[row_idx]:
+                matrix[row_idx][column_idx] = math.nan
 
 
 def _rttright_counting_delta(
@@ -13275,15 +13304,15 @@ def _rttright_counting_result(
         raise NotImplementedError("function not defined for delayed entry or multistate data")
 
     last = _rttright_counting_last_rows(stop, id_labels)
-    if (
-        sum(1 for is_last, event in zip(last, status_values, strict=True) if is_last and event > 0)
-        <= 1
-    ):
-        raise NotImplementedError("function not defined for delayed entry or multistate data")
-
     query_times = None if times is None else _rttright_times_vector(times)
     group_values = _rttright_counting_group_values(group, n)
-    case_weights = _rttright_counting_case_weights(weights, id_labels, group_values, n, renorm)
+    case_weights, zero_sum_groups = _rttright_counting_case_weights(
+        weights,
+        id_labels,
+        group_values,
+        n,
+        renorm,
+    )
     delta = _rttright_counting_delta(start, stop, query_times)
 
     matrix = _core.rttright_counting_matrix(
@@ -13294,6 +13323,16 @@ def _rttright_counting_result(
         last,
         group_values,
         delta,
+        query_times,
+    )
+    _rttright_counting_apply_zero_sum_groups(
+        matrix,
+        start,
+        stop,
+        status_values,
+        last,
+        group_values,
+        zero_sum_groups,
         query_times,
     )
     if query_times is None:

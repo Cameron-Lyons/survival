@@ -2260,7 +2260,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   expect_equal(
     rttright(Surv(time, status) ~ 1, data = rtt_data, times = 2),
-    c(0.5, 0, 0.5)
+    c(`1` = 0.5, `2` = 0, `3` = 0.5)
   )
   expect_equal(
     rttright(Surv(time, status) ~ 1, data = rtt_data, times = c(1, 2, 3)),
@@ -2269,6 +2269,34 @@ test_that("R formula wrappers delegate to the Python survival package", {
       nrow = 3,
       byrow = TRUE,
       dimnames = list(NULL, c("1", "2", "3"))
+    )
+  )
+  zero_weight_rtt <- data.frame(
+    time = c(1, 2),
+    status = c(0, 1),
+    wt = c(1, 0),
+    row.names = c("censored", "zero-event")
+  )
+  expect_equal(
+    rttright(Surv(time, status) ~ 1, data = zero_weight_rtt, weights = wt),
+    c(0, NaN)
+  )
+  expect_equal(
+    rttright(Surv(time, status) ~ 1, data = zero_weight_rtt, weights = wt, times = 2),
+    c(censored = 0, `zero-event` = NaN)
+  )
+  expect_equal(
+    rttright(
+      Surv(time, status) ~ 1,
+      data = zero_weight_rtt,
+      weights = wt,
+      times = numeric()
+    ),
+    matrix(
+      numeric(),
+      nrow = 2L,
+      ncol = 0L,
+      dimnames = list(c("censored", "zero-event"), NULL)
     )
   )
   repeated_id_rtt <- data.frame(time = c(1, 2, 3), status = c(0, 0, 1), id = c("a", "a", "b"))
@@ -2280,6 +2308,10 @@ test_that("R formula wrappers delegate to the Python survival package", {
     group = c("A", "A", "B", "B")
   )
   expect_equal(rttright(Surv(time, status) ~ group, data = grouped_rtt), c(0, 1, 0, 1))
+  expect_equal(
+    rttright(Surv(time, status) ~ group, data = grouped_rtt, times = 3),
+    survival::rttright(survival::Surv(time, status) ~ group, data = grouped_rtt, times = 3)
+  )
   offset_grouped_rtt <- data.frame(
     time = c(1, 2, 3, 4),
     status = c(1, 0, 1, 1),
@@ -2339,6 +2371,43 @@ test_that("R formula wrappers delegate to the Python survival package", {
     )
   )
 
+  missing_rtt <- data.frame(
+    time = c(1, NA, 3),
+    status = c(0, 1, 1),
+    row.names = c("early", "missing", "event")
+  )
+  expect_equal(
+    rttright(Surv(time, status) ~ 1, data = missing_rtt, times = 2),
+    survival::rttright(survival::Surv(time, status) ~ 1, data = missing_rtt, times = 2)
+  )
+
+  singleton_rtt <- data.frame(
+    time = c(6, 3),
+    status = c(1, 0),
+    group = factor(c("south", "north"), levels = c("south", "west", "north")),
+    site = c("B", "A"),
+    keep = c(FALSE, TRUE)
+  )
+  expect_warning(
+    singleton_empty_rtt <- rttright(
+      Surv(time, status) ~ group + site,
+      data = singleton_rtt,
+      subset = keep,
+      times = numeric()
+    ),
+    "no non-missing arguments"
+  )
+  expect_warning(
+    reference_singleton_empty_rtt <- survival::rttright(
+      survival::Surv(time, status) ~ group + site,
+      data = singleton_rtt,
+      subset = keep,
+      times = numeric()
+    ),
+    "no non-missing arguments"
+  )
+  expect_equal(singleton_empty_rtt, reference_singleton_empty_rtt)
+
   counting_rtt <- data.frame(
     id = c("a", "a", "b", "b"),
     start = c(0, 1, 0, 2),
@@ -2361,6 +2430,52 @@ test_that("R formula wrappers delegate to the Python survival package", {
       data = counting_rtt,
       id = id,
       times = c(1, 2, 3, 4)
+    )
+  )
+
+  no_event_counting_rtt <- data.frame(
+    id = c("a", "a", "b"),
+    start = c(0, 1, 0),
+    stop = c(1, 2, 2),
+    status = c(0, 0, 0)
+  )
+  expect_equal(
+    rttright(
+      Surv(start, stop, status) ~ 1,
+      data = no_event_counting_rtt,
+      id = id,
+      times = 0
+    ),
+    survival::rttright(
+      survival::Surv(start, stop, status) ~ 1,
+      data = no_event_counting_rtt,
+      id = id,
+      times = 0
+    )
+  )
+
+  zero_sum_counting_rtt <- data.frame(
+    id = c("a", "b", "c"),
+    start = c(0, 0, 0),
+    stop = c(1, 2, 3),
+    status = c(1, 1, 1),
+    wt = c(0, 1, 1),
+    group = c("zero", "positive", "positive")
+  )
+  expect_equal(
+    rttright(
+      Surv(start, stop, status) ~ group,
+      data = zero_sum_counting_rtt,
+      id = id,
+      weights = wt,
+      times = c(0, 1)
+    ),
+    survival::rttright(
+      survival::Surv(start, stop, status) ~ group,
+      data = zero_sum_counting_rtt,
+      id = id,
+      weights = wt,
+      times = c(0, 1)
     )
   )
 

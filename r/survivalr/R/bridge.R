@@ -11254,9 +11254,10 @@ print.survcheck <- function(x, ...) {
 rttright <- function(formula, data, weights, subset, na.action,
                      times, id, timefix = TRUE, renorm = TRUE) {
   env <- parent.frame()
-  weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env, vector = TRUE)
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
-  id_values <- .eval_formula_arg(substitute(id), missing(id), data, env, vector = TRUE)
+  weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env)
+  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env)
+  id_values <- .eval_formula_arg(substitute(id), missing(id), data, env)
+  na_action_value <- if (missing(na.action)) getOption("na.action") else na.action
   if (if (missing(data)) .formula_has_offset(formula) else .formula_has_offset(formula, data)) {
     warning("Offset term ignored", call. = FALSE)
   }
@@ -11264,26 +11265,58 @@ rttright <- function(formula, data, weights, subset, na.action,
     "rttright",
     response = .as_formula_string(formula),
     data = .as_python_data(data),
-    weights = weight_values,
-    subset = subset_values,
-    `na.action` = if (missing(na.action)) NULL else .as_na_action(na.action),
+    weights = .as_python_optional_vector(weight_values),
+    subset = .as_python_optional_vector(subset_values),
+    `na.action` = .as_na_action(na_action_value),
     times = if (missing(times)) NULL else .as_python_vector(times),
-    id = id_values,
+    id = .as_python_optional_vector(id_values),
     timefix = timefix,
     renorm = renorm,
     `_warn_offset` = FALSE
   )
+  frame_args <- list(formula = formula)
+  if (!missing(data)) frame_args$data <- data
+  if (!missing(weights)) frame_args$weights <- weight_values
+  if (!missing(subset)) frame_args$subset <- subset_values
+  if (!missing(na.action)) frame_args$na.action <- na.action
+  if (!missing(id)) frame_args$id <- id_values
+  frame <- do.call(stats::model.frame, frame_args)
+  response <- stats::model.response(frame)
+  if (timefix) response <- survival::aeqSurv(response)
+  response_times <- as.numeric(response[, -ncol(response), drop = FALSE])
+  requested_times <- if (missing(times)) numeric() else as.numeric(times)
+  if (length(unique(c(response_times, requested_times))) < 2L) {
+    warning("no non-missing arguments to min; returning Inf", call. = FALSE)
+  }
+  row_names <- NULL
+  if (!missing(times) && length(times) <= 1L && nrow(frame) > 1L) {
+    Terms <- terms(formula, c("strata", "cluster"))
+    cluster_terms <- untangle.specials(Terms, "cluster")
+    if (length(cluster_terms$vars) > 0L) Terms <- Terms[-cluster_terms$terms]
+    term_labels <- attr(Terms, "term.labels")
+    single_stratum <- length(term_labels) == 0L ||
+      max(as.numeric(survival::strata(frame[term_labels]))) == 1L
+    if (single_stratum) row_names <- row.names(frame)
+  }
   if (missing(times)) {
     .as_numeric_vector(result)
   } else if (length(times) == 0L) {
-    matrix(numeric(), nrow = length(result), ncol = 0L)
+    if (length(result) == 1L) {
+      numeric()
+    } else if (is.null(row_names)) {
+      matrix(numeric(), nrow = length(result), ncol = 0L)
+    } else {
+      matrix(numeric(), nrow = length(result), ncol = 0L, dimnames = list(row_names, NULL))
+    }
   } else {
-    .as_numeric_result(
+    output <- .as_numeric_result(
       result,
       matrix_result = length(times) > 1L,
       drop_single_column = TRUE,
       col.names = as.character(times)
     )
+    if (length(times) == 1L) names(output) <- row_names
+    output
   }
 }
 

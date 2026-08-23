@@ -688,6 +688,44 @@ def test_rttright_formula_wrapper_preserves_legacy_direct_api():
         id="id",
         times=[1.0, 2.0, 3.0, 4.0],
     )
+    no_event_counting_data = {
+        "id": ["a", "a", "b"],
+        "start": [0.0, 1.0, 0.0],
+        "stop": [1.0, 2.0, 2.0],
+        "status": [0, 0, 0],
+    }
+    no_event_counting = survival.rttright(
+        "Surv(start, stop, status) ~ 1",
+        data=no_event_counting_data,
+        id="id",
+    )
+    no_event_counting_timed = survival.rttright(
+        "Surv(start, stop, status) ~ 1",
+        data=no_event_counting_data,
+        id="id",
+        times=[0.0],
+    )
+    zero_sum_counting_data = {
+        "id": ["a", "b", "c"],
+        "start": [0.0, 0.0, 0.0],
+        "stop": [1.0, 2.0, 3.0],
+        "status": [1, 1, 1],
+        "weights": [0.0, 1.0, 1.0],
+        "group": ["zero", "positive", "positive"],
+    }
+    zero_sum_counting = survival.rttright(
+        "Surv(start, stop, status) ~ group",
+        data=zero_sum_counting_data,
+        id="id",
+        weights="weights",
+    )
+    zero_sum_counting_timed = survival.rttright(
+        "Surv(start, stop, status) ~ group",
+        data=zero_sum_counting_data,
+        id="id",
+        weights="weights",
+        times=[0.0, 1.0],
+    )
     counting_grouped_data = {
         "id": ["a", "a", "b", "b", "c"],
         "start": [0.0, 1.0, 0.0, 2.0, 0.0],
@@ -756,6 +794,13 @@ def test_rttright_formula_wrapper_preserves_legacy_direct_api():
         assert actual_row == pytest.approx(expected_row)
     assert counting == pytest.approx([0.0, 0.5, 0.0, 0.5])
     assert counting_raw == pytest.approx([0.0, 1.0, 0.0, 1.0])
+    assert no_event_counting == pytest.approx([0.0, 0.0, 0.0])
+    assert no_event_counting_timed == pytest.approx([0.0, 0.5, 0.5])
+    assert math.isnan(zero_sum_counting[0])
+    assert zero_sum_counting[1:] == pytest.approx([0.5, 0.5])
+    assert all(math.isnan(value) for value in zero_sum_counting_timed[0])
+    assert zero_sum_counting_timed[1] == pytest.approx([0.5, 0.5])
+    assert zero_sum_counting_timed[2] == pytest.approx([0.5, 0.5])
     for actual_row, expected_row in zip(
         counting_timed,
         [

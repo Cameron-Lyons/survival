@@ -460,8 +460,8 @@ def test_rttright_public_apis_and_validation():
         survival.rttright([1.0], [1], [-1.0])
     with pytest.raises(ValueError, match="weights contains non-finite"):
         survival.rttright_stratified([1.0], [1], [0], [float("inf")])
-    with pytest.raises(ValueError, match="weights must have positive sum"):
-        survival.rttright([1.0], [1], [0.0])
+    zero_sum = survival.rttright([1.0], [1], [0.0])
+    assert math.isnan(zero_sum.weights[0])
 
 
 def test_agexact_public_api_and_validation():
