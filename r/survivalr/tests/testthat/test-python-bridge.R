@@ -5536,6 +5536,92 @@ test_that("non-recyclable rank strata fail before later empty strata", {
   }
 })
 
+test_that("bounded counting multi-score ranks report the first empty stratum", {
+  start <- c(0, 1, 4, 0, 0, 3, 2, 0)
+  stop <- c(1, 4, 6, 3, 2, 7, 4, 2)
+  status <- c(1, 1, 1, 0, 0, 1, 0, 0)
+  scores <- cbind(
+    s1 = c(0.5, 0, 0, 0, -0.5, 1, 0, 0),
+    s2 = c(0, 0.5, -0.5, 0.5, -0.5, -1, 0.5, 0.5)
+  )
+  groups <- c(3, 1, 1, 2, 2, 2, 3, 1)
+  weights <- c(2, 2, 1.5, 2, 2, 1.5, 1.5, 1.5)
+  empty_error <- "replacement has length zero"
+
+  expect_error(
+    concordancefit(
+      Surv(start, stop, status),
+      scores,
+      strata = groups,
+      weights = weights,
+      ymax = 6,
+      timewt = "S",
+      influence = 3,
+      ranks = TRUE,
+      keepstrata = FALSE
+    ),
+    empty_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(start, stop, status),
+      scores,
+      strata = groups,
+      weights = weights,
+      ymax = 6,
+      timewt = "S",
+      influence = 3,
+      ranks = TRUE,
+      keepstrata = FALSE
+    ),
+    empty_error,
+    fixed = TRUE
+  )
+})
+
+test_that("counting multi-score rank recycling follows positive S weights", {
+  start <- c(2, 4, 3, 4, 2, 1, 3, 2)
+  stop <- c(4, 8, 5, 7, 3, 3, 4, 6)
+  status <- c(1, 1, 1, 0, 1, 0, 1, 0)
+  scores <- cbind(
+    s1 = c(-0.5, 1, -0.5, 0.5, 1, -0.5, -0.5, 1),
+    s2 = c(1, -0.5, 1, 0, -0.5, -0.5, -0.5, 0)
+  )
+  groups <- c(1, 3, 1, 3, 2, 2, 2, 1)
+  weights <- c(1.5, 2, 2, 1.5, 1.5, 1.5, 0.5, 0.5)
+  replacement_error <- "number of items to replace is not a multiple of replacement length"
+
+  expect_error(
+    concordancefit(
+      Surv(start, stop, status),
+      scores,
+      strata = groups,
+      weights = weights,
+      ymax = 4,
+      timewt = "S",
+      ranks = TRUE,
+      keepstrata = FALSE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::concordancefit(
+      survival::Surv(start, stop, status),
+      scores,
+      strata = groups,
+      weights = weights,
+      ymax = 4,
+      timewt = "S",
+      ranks = TRUE,
+      keepstrata = FALSE
+    ),
+    replacement_error,
+    fixed = TRUE
+  )
+})
+
 test_that("multi-score rank errors finish stratum construction first", {
   time <- c(6, 7, 1, 2)
   status <- c(1, 1, 0, 0)

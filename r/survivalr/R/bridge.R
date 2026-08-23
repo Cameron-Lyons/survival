@@ -12216,14 +12216,29 @@ concordance <- function(object, ..., formula) {
 
 .concordance_empty_rank_strata_check <- function(
     response, n_scores, strata, ranks, timewt, ymax = NULL, keepstrata = 10,
-    check_recycling = FALSE) {
+    check_recycling = FALSE, weights = NULL, ymin = NULL, timefix = TRUE) {
   survival_response <- inherits(response, "Surv") || inherits(response, "survival_py_surv")
   if (!isTRUE(ranks) || !survival_response) {
     return(invisible(NULL))
   }
   native_response <- .as_native_surv(response)
+  right_censored <- ncol(native_response) == 2L
+  if (isTRUE(timefix)) {
+    time_columns <- if (right_censored) {
+      list(native_response[, 1L])
+    } else {
+      list(native_response[, 1L], native_response[, 2L])
+    }
+    adjusted <- .aeq_adjust_time_columns(
+      time_columns,
+      sqrt(.Machine$double.eps)
+    )
+    native_response[, 1L] <- adjusted[[1L]]
+    if (!right_censored) native_response[, 2L] <- adjusted[[2L]]
+  }
   status <- native_response[, ncol(native_response)]
   event_time <- native_response[, ncol(native_response) - 1L]
+  if (!is.null(ymin)) event_time <- pmax(event_time, ymin)
   strata_values <- if (is.null(strata) || length(strata) == 0L) {
     rep(1L, length(status))
   } else {
@@ -12250,6 +12265,36 @@ concordance <- function(object, ..., formula) {
   rank_status <- status
   if (!is.null(ymax)) rank_status[event_time > ymax] <- 0
   rank_counts <- vapply(split(rank_status, groups), sum, numeric(1))
+  if (!right_censored && identical(time_weight, "S")) {
+    start_time <- native_response[, 1L]
+    case_weights <- if (is.null(weights) || length(weights) == 0L) {
+      rep(1, length(status))
+    } else {
+      as.numeric(weights)
+    }
+    rank_counts <- vapply(levels(groups), function(level) {
+      indices <- which(groups == level)
+      event_times <- sort(unique(event_time[indices][status[indices] > 0]))
+      survival_weight <- 1
+      rank_count <- 0
+      for (event in event_times) {
+        if (survival_weight > 0 && (is.null(ymax) || event <= ymax)) {
+          rank_count <- rank_count + sum(
+            status[indices] * (event_time[indices] == event)
+          )
+        }
+        at_risk <- start_time[indices] < event & event_time[indices] >= event
+        deaths <- status[indices] > 0 & event_time[indices] == event
+        risk_weight <- sum(case_weights[indices][at_risk])
+        death_weight <- sum(case_weights[indices][deaths])
+        if (risk_weight > 0) {
+          survival_weight <- survival_weight *
+            (risk_weight - death_weight) / risk_weight
+        }
+      }
+      rank_count
+    }, numeric(1))
+  }
   if (n_scores > 1L && any(event_counts == 0)) {
     array(NULL, dim = c(0L, n_scores))
   }
@@ -12279,7 +12324,7 @@ concordance <- function(object, ..., formula) {
 
 .concordance_translate_empty_rank_error <- function(
     condition, response, n_scores, strata, ranks, timewt, ymax = NULL,
-    keepstrata = 10) {
+    keepstrata = 10, weights = NULL, ymin = NULL, timefix = TRUE) {
   replacement_message <- "number of items to replace is not a multiple of replacement length"
   if (grepl(replacement_message, conditionMessage(condition), fixed = TRUE)) {
     .concordance_empty_rank_strata_check(
@@ -12290,7 +12335,10 @@ concordance <- function(object, ..., formula) {
       timewt,
       ymax,
       keepstrata,
-      check_recycling = TRUE
+      check_recycling = TRUE,
+      weights = weights,
+      ymin = ymin,
+      timefix = timefix
     )
     stop(replacement_message, call. = FALSE)
   }
@@ -12325,7 +12373,10 @@ concordance <- function(object, ..., formula) {
           rank_context$ranks,
           rank_context$timewt,
           rank_context$ymax,
-          rank_context$keepstrata
+          rank_context$keepstrata,
+          rank_context$weights,
+          rank_context$ymin,
+          rank_context$timefix
         )
       }
       stop(condition)
@@ -12454,7 +12505,9 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     requested_timewt
   }
   requested_ranks <- "ranks" %in% names(dots) && isTRUE(dots[["ranks"]])
+  requested_ymin <- if ("ymin" %in% names(dots)) dots[["ymin"]] else NULL
   requested_ymax <- if ("ymax" %in% names(dots)) dots[["ymax"]] else NULL
+  requested_timefix <- !("timefix" %in% names(dots)) || isTRUE(dots[["timefix"]])
   requested_keepstrata <- if ("keepstrata" %in% names(dots)) {
     dots[["keepstrata"]]
   } else {
@@ -12473,7 +12526,10 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
       ranks = requested_ranks,
       timewt = formula_timewt,
       ymax = requested_ymax,
-      keepstrata = requested_keepstrata
+      keepstrata = requested_keepstrata,
+      weights = stats::model.weights(formula_frame),
+      ymin = requested_ymin,
+      timefix = requested_timefix
     )
   } else {
     NULL
@@ -12510,7 +12566,10 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
       requested_ranks,
       formula_timewt,
       requested_ymax,
-      requested_keepstrata
+      requested_keepstrata,
+      weights = stats::model.weights(formula_frame),
+      ymin = requested_ymin,
+      timefix = requested_timefix
     )
     .concordance_multi_score_strata_check(
       formula_n_scores,
@@ -13103,7 +13162,10 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       ranks = ranks,
       timewt = timewt,
       ymax = ymax,
-      keepstrata = keepstrata
+      keepstrata = keepstrata,
+      weights = if (missing(weights)) NULL else weights,
+      ymin = ymin,
+      timefix = timefix
     ),
     .as_python_surv(y),
     .as_python_optional_vector(x),
@@ -13136,7 +13198,10 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     ranks,
     timewt,
     ymax,
-    keepstrata
+    keepstrata,
+    weights = if (missing(weights)) NULL else weights,
+    ymin = ymin,
+    timefix = timefix
   )
   .concordance_disabled_standard_error_check(
     y,
