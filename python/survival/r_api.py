@@ -28485,6 +28485,12 @@ def cch(
             method=method_name,
             robust=robust_value,
         )
+    if int(fit.convergence_flag) == _COX_NONCONVERGENCE_FLAG:
+        warnings.warn(
+            "Ran out of iterations and did not converge",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return CchModelResult(
         fit=fit,
         design=design,

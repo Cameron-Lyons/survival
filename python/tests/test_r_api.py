@@ -26393,15 +26393,16 @@ def test_cch_formula_matches_prentice_nonconverged_factor_roundoff():
             1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1,
         ],
     }
-    fit = survival.cch(
-        'Surv(start, stop, status) ~ factor(group, levels=c("a","b","c"))',
-        data,
-        subcoh="subcohort",
-        id="id",
-        cohort_size=72,
-        method="Prentice",
-        robust=False,
-    )
+    with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
+        fit = survival.cch(
+            'Surv(start, stop, status) ~ factor(group, levels=c("a","b","c"))',
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=72,
+            method="Prentice",
+            robust=False,
+        )
 
     assert survival.coef(fit) == pytest.approx(
         [1.0939792224226965, 1.7261796126697362], abs=1e-12
@@ -26457,15 +26458,16 @@ def test_cch_formula_matches_self_prentice_scalar_rank_change_nonconvergence():
         "id": list(range(1, 21)),
         "subcohort": [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0],
     }
-    fit = survival.cch(
-        "Surv(start, stop, status) ~ 0 + x + z",
-        data,
-        subcoh="subcohort",
-        id="id",
-        cohort_size=60,
-        method="SelfPrentice",
-        robust=False,
-    )
+    with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
+        fit = survival.cch(
+            "Surv(start, stop, status) ~ 0 + x + z",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=60,
+            method="SelfPrentice",
+            robust=False,
+        )
 
     assert fit.coefficient_names == ()
     assert survival.coef(fit) == pytest.approx([-0.38031450692317803], abs=1e-14)
@@ -26483,6 +26485,179 @@ def test_cch_formula_matches_self_prentice_scalar_rank_change_nonconvergence():
         [-53.333333333333336] * 14 + [46.666666666666664] * 16,
         abs=1e-14,
     )
+
+
+def test_cch_formula_matches_self_prentice_nonfinite_last_trial():
+    x = [
+        float.fromhex(value)
+        for value in (
+            "0x1.6ddbe4e80f32cp+1",
+            "-0x1.21bd362f7848ep+0",
+            "0x1.0cfd9f38f0233p+0",
+            "-0x1.3efb77bb09e59p-1",
+            "-0x1.3f7842a77d9afp+0",
+            "0x1.e91bf55435d6cp-1",
+            "0x1.f8db9f93db011p-1",
+            "0x1.c71eda8a6aa8fp-1",
+            "0x1.13b1929f8d551p+1",
+            "-0x1.fea2c130fe8ap+0",
+            "-0x1.7534e6d009c66p-1",
+            "-0x1.c2f70106afa1bp-1",
+            "0x1.815fffb8e9f8bp-2",
+            "-0x1.14ed9b9588632p+0",
+            "-0x1.587326d9d9f4ep-3",
+            "-0x1.bd7259f1061b7p+0",
+            "-0x1.87b3854ba4eadp-4",
+            "0x1.f371f60d12813p-1",
+            "0x1.584db496043a7p-4",
+            "0x1.3d0de0a71db89p-1",
+            "0x1.275b93b2d2039p-2",
+            "-0x1.13c902c7ee50dp-1",
+            "0x1.839745fe36c7fp-1",
+            "0x1.62cf8806c1a28p-2",
+            "0x1.7a6f1cbbc3845p-1",
+            "-0x1.780ab09a7e8b3p+0",
+        )
+    ]
+    data = {
+        "start": [
+            3,
+            2,
+            7,
+            10,
+            7,
+            5,
+            0,
+            12,
+            0,
+            12,
+            2,
+            6,
+            1,
+            0,
+            6,
+            9,
+            0,
+            5,
+            15,
+            9,
+            1,
+            16,
+            14,
+            12,
+            13,
+            14,
+        ],
+        "stop": [
+            8,
+            8,
+            10,
+            13,
+            11,
+            6,
+            1,
+            18,
+            4,
+            18,
+            3,
+            7,
+            5,
+            5,
+            7,
+            13,
+            1,
+            7,
+            20,
+            11,
+            3,
+            20,
+            16,
+            15,
+            16,
+            18,
+        ],
+        "status": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+        ],
+        "x": x,
+        "id": list(range(1, 27)),
+        "subcohort": [
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+        ],
+    }
+    with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
+        fit = survival.cch(
+            "Surv(start, stop, status) ~ x",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=78,
+            method="SelfPrentice",
+            robust=False,
+        )
+
+    assert survival.coef(fit) == pytest.approx([0.35675870975521795], abs=1e-14)
+    assert fit.fit.model_information_matrix[0] == pytest.approx(
+        [0.07065572373940801], abs=1e-14
+    )
+    assert fit.phase2var[0] == pytest.approx([5.3496445399767664e107], rel=1e-11)
+    assert fit.var[0] == pytest.approx([5.3496445399767664e107], rel=1e-11)
+    assert fit.log_likelihood[0] == pytest.approx(-2041.861989279242, abs=1e-11)
+    assert math.isnan(fit.log_likelihood[1])
+    assert fit.score_test == pytest.approx(1.8152932355320033, abs=1e-13)
+    assert fit.means == pytest.approx([0.02685777821321628], abs=1e-15)
+    assert fit.iterations == 20
+    assert fit.fit.convergence_flag == 1000
 
 
 def test_cch_formula_matches_self_prentice_right_censored_scalar_phase_two_roundoff():

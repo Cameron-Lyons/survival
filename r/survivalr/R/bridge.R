@@ -7224,6 +7224,9 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
       )
     )
   }
+  if (as.integer(.result_field(result, "convergence_flag")) == 1000L) {
+    warning("Ran out of iterations and did not converge", call. = FALSE)
+  }
 
   coefficients <- .as_numeric_matrix(.result_field(result, "coefficients"))
   coefficients <- if (nrow(coefficients) == 0L) numeric() else coefficients[1L, ]

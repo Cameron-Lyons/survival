@@ -13425,6 +13425,59 @@ test_that("cch matches SelfPrentice scalar rank-change nonconvergence", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch retains a non-finite SelfPrentice final trial", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- c(
+    0x1.6ddbe4e80f32cp+1, -0x1.21bd362f7848ep+0, 0x1.0cfd9f38f0233p+0,
+    -0x1.3efb77bb09e59p-1, -0x1.3f7842a77d9afp+0, 0x1.e91bf55435d6cp-1,
+    0x1.f8db9f93db011p-1, 0x1.c71eda8a6aa8fp-1, 0x1.13b1929f8d551p+1,
+    -0x1.fea2c130fe8ap+0, -0x1.7534e6d009c66p-1, -0x1.c2f70106afa1bp-1,
+    0x1.815fffb8e9f8bp-2, -0x1.14ed9b9588632p+0, -0x1.587326d9d9f4ep-3,
+    -0x1.bd7259f1061b7p+0, -0x1.87b3854ba4eadp-4, 0x1.f371f60d12813p-1,
+    0x1.584db496043a7p-4, 0x1.3d0de0a71db89p-1, 0x1.275b93b2d2039p-2,
+    -0x1.13c902c7ee50dp-1, 0x1.839745fe36c7fp-1, 0x1.62cf8806c1a28p-2,
+    0x1.7a6f1cbbc3845p-1, -0x1.780ab09a7e8b3p+0
+  )
+  data <- data.frame(
+    start = c(3, 2, 7, 10, 7, 5, 0, 12, 0, 12, 2, 6, 1, 0, 6, 9, 0, 5, 15, 9, 1, 16, 14, 12, 13, 14),
+    stop = c(8, 8, 10, 13, 11, 6, 1, 18, 4, 18, 3, 7, 5, 5, 7, 13, 1, 7, 20, 11, 3, 20, 16, 15, 16, 18),
+    status = c(1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1),
+    x = x,
+    id = seq_len(26),
+    subcohort = c(0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 0)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ x,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 78,
+    method = "SelfPrentice",
+    robust = FALSE
+  )
+  actual <- expect_warning(
+    do.call(cch, args),
+    "Ran out of iterations and did not converge"
+  )
+  reference <- expect_warning(
+    do.call(survival::cch, args),
+    "Ran out of iterations and did not converge"
+  )
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches SelfPrentice right-censored scalar phase-two roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

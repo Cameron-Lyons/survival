@@ -1775,9 +1775,11 @@ impl CoxFit {
             }
             if self.counting_roundoff_compatibility && iter == self.max_iter {
                 // On exhaustion, retain the last trial unless it is worse
-                // than the last accepted likelihood by more than roundoff.
-                retain_last_trial = self.max_iter <= 1
-                    || (newlk - self.loglik[1]) / self.loglik[1].abs() >= -self.eps;
+                // than the last accepted likelihood by more than roundoff. A
+                // non-finite comparison does not trigger the reference fallback.
+                let worse_beyond_roundoff = self.max_iter > 1
+                    && (newlk - self.loglik[1]) / self.loglik[1].abs() < -self.eps;
+                retain_last_trial = !worse_beyond_roundoff;
                 break;
             }
             if _notfinite || rank_changed || newlk < self.loglik[1] {

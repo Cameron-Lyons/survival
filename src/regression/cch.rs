@@ -2345,6 +2345,84 @@ mod tests {
     }
 
     #[test]
+    fn native_self_prentice_retains_nonfinite_last_trial() {
+        let start = vec![
+            3.0, 2.0, 7.0, 10.0, 7.0, 5.0, 0.0, 12.0, 0.0, 12.0, 2.0, 6.0, 1.0, 0.0, 6.0, 9.0, 0.0,
+            5.0, 15.0, 9.0, 1.0, 16.0, 14.0, 12.0, 13.0, 14.0,
+        ];
+        let stop = vec![
+            8.0, 8.0, 10.0, 13.0, 11.0, 6.0, 1.0, 18.0, 4.0, 18.0, 3.0, 7.0, 5.0, 5.0, 7.0, 13.0,
+            1.0, 7.0, 20.0, 11.0, 3.0, 20.0, 16.0, 15.0, 16.0, 18.0,
+        ];
+        let status = vec![
+            1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1,
+        ];
+        let covariates = [
+            2.858_273_137_388_456_7,
+            -1.131_793_390_836_069,
+            1.050_744_964_028_251_6,
+            -0.623_012_296_277_873_6,
+            -1.247_928_777_591_01,
+            0.955_291_430_024_698_9,
+            0.986_050_593_184_247_3,
+            0.888_907_269_856_035_7,
+            2.153_856_590_181_626,
+            -1.994_670_938_931_939_5,
+            -0.728_919_232_268_606_2,
+            -0.880_790_741_029_901_1,
+            0.376_342_769_299_747_36,
+            -1.081_750_606_543_562,
+            -0.168_188_384_555_146_12,
+            -1.740_026_112_884_249_6,
+            -0.095_630_188_642_014_52,
+            0.975_478_829_475_152_7,
+            0.084_058_480_657_644_64,
+            0.619_246_502_303_995_4,
+            0.288_435_275_830_582_65,
+            -0.538_642_966_180_448_5,
+            0.757_013_499_528_866_8,
+            0.346_494_794_285_180_15,
+            0.739_128_969_116_571_6,
+            -1.468_913_114_279_115_4,
+        ]
+        .into_iter()
+        .map(|value| vec![value])
+        .collect();
+        let subcohort = vec![
+            0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 0,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=26).collect(),
+            78,
+            Some(start),
+            "SelfPrentice",
+            false,
+        )
+        .expect("non-finite final-trial SelfPrentice fit should succeed");
+
+        assert_close(&result.coefficients[0], &[0.356_758_709_755_217_95]);
+        assert_matrix_close(
+            &result.model_information_matrix,
+            &[vec![0.070_655_723_739_408_01]],
+        );
+        assert!(
+            (result.phase2_variance[0][0] / 5.349_644_539_976_766_4e107 - 1.0).abs() < 1e-11,
+            "expected final-trial phase-two variance, got {:.17e}",
+            result.phase2_variance[0][0]
+        );
+        assert!((result.log_likelihood[0] - -2_041.861_989_279_242).abs() < 1e-11);
+        assert!(result.log_likelihood[1].is_nan());
+        assert!((result.score_test - 1.815_293_235_532_003_3).abs() < 1e-13);
+        assert_close(&result.means, &[0.026_857_778_213_216_28]);
+        assert_eq!(result.iterations, 20);
+        assert_eq!(result.convergence_flag, crate::constants::CONVERGENCE_FLAG);
+    }
+
+    #[test]
     fn native_self_prentice_matches_right_censored_scalar_phase_two_roundoff() {
         let stop = vec![
             14.0, 9.0, 20.0, 4.0, 7.0, 10.0, 7.0, 10.0, 17.0, 8.0, 9.0, 17.0, 9.0, 3.0, 17.0, 3.0,
