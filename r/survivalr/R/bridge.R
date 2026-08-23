@@ -11466,8 +11466,6 @@ rttright <- function(formula, data, weights, subset, na.action,
 
 .draw_statefig <- function(coords, connect, statenames, margin, box, cex, col,
                            lwd, lty, bcol, acol, alwd, alty, offset) {
-  graphics::frame()
-  graphics::par(usr = c(0, 1, 0, 1))
   nstate <- nrow(connect)
   narrow <- sum(connect != 0)
   acol <- rep(acol, length.out = narrow)
@@ -11602,41 +11600,59 @@ rttright <- function(formula, data, weights, subset, na.action,
 statefig <- function(layout, connect, margin = 0.03, box = TRUE, cex = 1,
                      col = 1, lwd = 1, lty = 1, bcol = col, acol = col,
                      alwd = lwd, alty = lty, offset = 0) {
+  graphics::frame()
+  graphics::par(usr = c(0, 1, 0, 1))
   if (!is.numeric(layout)) {
-    stop("layout must be a numeric vector or matrix", call. = FALSE)
+    stop("layout must be a numeric vector or matrix")
   }
   if (!is.matrix(connect) || nrow(connect) != ncol(connect)) {
-    stop("connect must be a square matrix", call. = FALSE)
+    stop("connect must be a square matrix")
   }
-  connect_names <- dimnames(connect)
-  statenames <- if (!is.null(connect_names[[1L]])) {
-    connect_names[[1L]]
-  } else if (!is.null(connect_names[[2L]])) {
-    connect_names[[2L]]
+  nstate <- nrow(connect)
+  dd <- dimnames(connect)
+  if (!is.null(dd[[1L]])) {
+    statenames <- dd[[1L]]
+  } else if (is.null(dd[[2L]])) {
+    stop("connect must have the state names as dimnames")
   } else {
-    stop("connect must have the state names as dimnames", call. = FALSE)
+    statenames <- dd[[2L]]
   }
-  layout_value <- if (is.matrix(layout)) {
-    lapply(seq_len(nrow(layout)), function(idx) as.list(as.numeric(layout[idx, ])))
+  if (is.matrix(layout) && ncol(layout) == 2L && nrow(layout) > 1L) {
+    if (any(layout < 0) || any(layout > 1)) {
+      stop("layout coordinates must be between 0 and 1")
+    }
+    if (nrow(layout) != nstate) {
+      stop("layout matrix should have one row per state")
+    }
+    coords <- layout
   } else {
-    as.list(as.numeric(layout))
+    if (any(layout <= 0 | layout != floor(layout))) {
+      stop("non-integer number of states in layout argument")
+    }
+    space <- function(n) (1:n - 0.5) / n
+    if (sum(layout) != nstate) {
+      stop("number of boxes != number of states")
+    }
+    coords <- matrix(0, ncol = 2L, nrow = nstate)
+    n <- length(layout)
+    ix <- rep(seq(along = layout), layout)
+    if (is.vector(layout) || ncol(layout) > 1L) {
+      coords[, 1L] <- space(n)[ix]
+      for (i in 1:n) {
+        coords[ix == i, 2L] <- 1 - space(layout[i])
+      }
+    } else {
+      coords[, 2L] <- 1 - space(n)[ix]
+      for (i in 1:n) {
+        coords[ix == i, 1L] <- space(layout[i])
+      }
+    }
   }
-  connect_value <- lapply(
-    seq_len(nrow(connect)),
-    function(idx) as.list(as.numeric(connect[idx, ]))
-  )
-  result <- .call_r_api(
-    "statefig",
-    layout = layout_value,
-    connect = connect_value,
-    states = as.list(statenames)
-  )
-  coords <- .as_numeric_matrix(result[["positions"]])
-  dimnames(coords) <- list(as.character(result[["states"]]), c("x", "y"))
   .draw_statefig(
     coords, connect, statenames, margin, box, cex, col, lwd, lty,
     bcol, acol, alwd, alty, offset
   )
+  dimnames(coords) <- list(statenames, c("x", "y"))
   invisible(coords)
 }
 

@@ -2697,8 +2697,76 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   expect_equal(bridged_statefig_column, reference_statefig_column)
   expect_equal(bridged_statefig_singleton, reference_statefig_singleton)
+  grDevices::pdf(NULL)
   expect_error(statefig("bad", state_connect), "layout")
   expect_error(statefig(c(1, 1), matrix(0, nrow = 1, ncol = 2)), "square")
+  grDevices::dev.off()
+  reference_statefig_function <- get("statefig", envir = asNamespace("survival"))
+  capture_statefig <- function(fun, args) {
+    captured_warnings <- character()
+    grDevices::pdf(NULL)
+    on.exit(grDevices::dev.off())
+    result <- tryCatch(
+      withCallingHandlers(
+        list(
+          kind = "value",
+          value = do.call(fun, args),
+          usr = graphics::par("usr")
+        ),
+        warning = function(w) {
+          captured_warnings <<- c(captured_warnings, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }
+      ),
+      error = function(e) {
+        list(
+          kind = "error",
+          message = conditionMessage(e),
+          class = class(e),
+          usr = graphics::par("usr")
+        )
+      }
+    )
+    c(result, list(warnings = captured_warnings))
+  }
+  state_connect_three <- matrix(
+    c(0, 1, 0, 0, 0, 1, 1, 0, 0),
+    nrow = 3L,
+    dimnames = list(c("a", "b", "c"), c("a", "b", "c"))
+  )
+  state_connect_column_names <- state_connect
+  dimnames(state_connect_column_names) <- list(NULL, c("a", "b"))
+  state_connect_missing <- state_connect
+  state_connect_missing[1L, 2L] <- NA_real_
+  statefig_cases <- list(
+    list(layout = c(2, 1), connect = state_connect_three),
+    list(layout = matrix(c(1, 1), nrow = 1L), connect = state_connect),
+    list(layout = c(1, 1), connect = state_connect_column_names),
+    list(layout = c(0, 2), connect = state_connect),
+    list(layout = c(-1, 3), connect = state_connect),
+    list(layout = c(0.5, 1.5), connect = state_connect),
+    list(layout = c(NA, 2), connect = state_connect),
+    list(layout = c(Inf, 1), connect = state_connect),
+    list(
+      layout = matrix(c(-0.1, 0.2, 0.8, 0.9), nrow = 2L, byrow = TRUE),
+      connect = state_connect
+    ),
+    list(
+      layout = matrix(c(0.1, 0.2, 1.1, 0.9), nrow = 2L, byrow = TRUE),
+      connect = state_connect
+    ),
+    list(
+      layout = matrix(c(0.1, 0.2, 0.5, 0.5, 0.8, 0.9), nrow = 3L, byrow = TRUE),
+      connect = state_connect
+    ),
+    list(layout = c(1, 1), connect = state_connect_missing)
+  )
+  for (case in statefig_cases) {
+    expect_identical(
+      capture_statefig(statefig, case),
+      capture_statefig(reference_statefig_function, case)
+    )
+  }
 
   ridge_x <- c(1, 2, NA, 4)
   bridged_ridge <- ridge(ridge_x, theta = 2)
