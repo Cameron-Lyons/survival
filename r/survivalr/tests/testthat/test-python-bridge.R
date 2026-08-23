@@ -3669,76 +3669,65 @@ test_that("R formula wrappers delegate to the Python survival package", {
     )
   )
   expect_error(survfitKM(data$x, survfitkm_response), "x must be a factor")
-  reference_survfit_confint_impl <- get("survfit_confint", envir = asNamespace("survival"))
-  reference_survfit_confint <- function(...) {
-    args <- list(...)
-    if (is.null(args$conf.int)) {
-      args$conf.int <- 0.95
-    }
-    do.call(reference_survfit_confint_impl, args)
-  }
-  for (conf_type in c("plain", "log", "log-log", "logit", "arcsin")) {
-    actual_confint <- survfit_confint(c(0.2, 0.5, 0.9), 0.1, conf.type = conf_type)
-    expected_confint <- reference_survfit_confint(c(0.2, 0.5, 0.9), 0.1, conf.type = conf_type)
-    if (conf_type %in% c("log", "log-log", "logit") &&
-      length(actual_confint$lower) == 1L &&
-      length(expected_confint$lower) > 1L) {
-      expected_confint <- lapply(expected_confint, function(value) value[seq_along(actual_confint$lower)])
-    }
-    expect_equal(actual_confint, expected_confint, tolerance = 1e-12)
-  }
-  expect_equal(
-    survfit_confint(c(0.2, 0.5), c(0.1, 0.2, 0.3), conf.type = "plain"),
-    suppressWarnings(reference_survfit_confint(c(0.2, 0.5), c(0.1, 0.2, 0.3), conf.type = "plain")),
-    tolerance = 1e-12
-  )
-  expect_equal(
-    survfit_confint(0.5, 0.1, logse = FALSE, conf.type = "plain", selow = 0.05, ulimit = FALSE),
-    reference_survfit_confint(0.5, 0.1, logse = FALSE, conf.type = "plain", selow = 0.05, ulimit = FALSE),
-    tolerance = 1e-12
-  )
-  expect_equal(
-    survfit_confint(c(0.2, 0.5), 0.1, logse = FALSE, conf.type = "plain"),
-    reference_survfit_confint(c(0.2, 0.5), 0.1, logse = FALSE, conf.type = "plain"),
-    tolerance = 1e-12
-  )
-  for (conf_type in c("plain", "log", "log-log", "logit", "arcsin")) {
-    for (case in list(
-      list(p = numeric(), se = 0.1, selow = 0.05),
-      list(p = 0.5, se = numeric(), selow = 0.05),
-      list(p = c(0.2, 0.5), se = c(0, 0.1), selow = numeric())
-    )) {
-      expect_equal(
-        survfit_confint(case$p, case$se, conf.type = conf_type, selow = case$selow),
-        suppressWarnings(reference_survfit_confint(
-          case$p,
-          case$se,
-          conf.type = conf_type,
-          selow = case$selow
-        )),
-        tolerance = 1e-12
-      )
-    }
-    expect_equal(
-      survfit_confint(numeric(), 0.1, conf.type = conf_type),
-      suppressWarnings(reference_survfit_confint(
-        numeric(),
-        0.1,
-        conf.type = conf_type
-      )),
-      tolerance = 1e-12
+  reference_survfit_confint <- get("survfit_confint", envir = asNamespace("survival"))
+  capture_survfit_confint <- function(fun, args) {
+    captured_warnings <- character()
+    result <- tryCatch(
+      withCallingHandlers(
+        list(kind = "value", value = do.call(fun, args)),
+        warning = function(w) {
+          captured_warnings <<- c(captured_warnings, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }
+      ),
+      error = function(e) {
+        list(kind = "error", message = conditionMessage(e), class = class(e))
+      }
     )
-    expect_equal(
-      survfit_confint(0.5, numeric(), conf.type = conf_type),
-      suppressWarnings(reference_survfit_confint(
-        0.5,
-        numeric(),
-        conf.type = conf_type
-      )),
-      tolerance = 1e-12
+    c(result, list(warnings = captured_warnings))
+  }
+  survfit_confint_cases <- c(
+    lapply(
+      c("plain", "log", "log-log", "logit", "arcsin"),
+      function(conf_type) {
+        list(p = c(0.2, 0.5, 0.9), se = 0.1, conf.type = conf_type)
+      }
+    ),
+    list(
+      list(p = c(a = 0.2, b = 0.5), se = c(0.1, 0.2, 0.3), conf.type = "plain"),
+      list(p = matrix(c(0.2, 0.5), nrow = 1L), se = 0.1, conf.type = "plain"),
+      list(p = factor(c("0.2", "0.5")), se = 0.1, conf.type = "plain"),
+      list(p = c(NA, NaN, Inf, -Inf, -1, 0, 1, 2), se = c(0, 0.1), conf.type = "logit"),
+      list(p = numeric(), se = 0.1, conf.type = "log"),
+      list(p = 0.5, se = numeric(), conf.type = "log-log"),
+      list(p = c(0.2, 0.5), se = c(0, 0.1), conf.type = "arcsin", selow = numeric()),
+      list(p = 0.5, se = 0.1, logse = FALSE, conf.type = "plain", selow = 0.05, ulimit = FALSE),
+      list(p = c(0.2, 0.5), se = 0.1, logse = FALSE, conf.type = "plain"),
+      list(p = 0.5, se = 0.1, logse = NA, conf.type = "plain"),
+      list(p = 0.5, se = 0.1, logse = 1, conf.type = "plain"),
+      list(p = 0.5, se = 0.1, logse = c(TRUE, FALSE), conf.type = "plain"),
+      list(p = 0.5, se = 0.1, conf.type = "plain", ulimit = NA),
+      list(p = 0.5, se = 0.1, conf.type = "plain", ulimit = 0),
+      list(p = 0.5, se = 0.1, conf.type = "plain", ulimit = c(TRUE, FALSE)),
+      list(p = 0.5, se = 0.1, conf.type = "plain", selow = NULL),
+      list(p = 0.5, se = 0.1, conf.type = "plain", conf.int = 0),
+      list(p = 0.5, se = 0.1, conf.type = "plain", conf.int = 1),
+      list(p = 0.5, se = 0.1, conf.type = "plain", conf.int = NA_real_),
+      list(p = 0.5, se = 0.1, conf.type = "plain", conf.int = numeric()),
+      list(p = 0.5, se = 0.1, conf.type = "plain", conf.int = c(0.9, 0.95)),
+      list(p = 0.5, se = 0.1, conf.type = "p"),
+      list(p = 0.5, se = 0.1, conf.type = NA_character_),
+      list(p = 0.5, se = 0.1, conf.type = character()),
+      list(p = 0.5, se = 0.1, conf.type = c("plain", "log")),
+      list(p = 0.5, se = 0.1)
+    )
+  )
+  for (case in survfit_confint_cases) {
+    expect_identical(
+      capture_survfit_confint(survfit_confint, case),
+      capture_survfit_confint(reference_survfit_confint, case)
     )
   }
-  expect_error(survfit_confint(0.5, 0.1, conf.type = "p"), "invalid conf.int type")
   pseudo_data <- data.frame(time = c(1, 2, 3, 4), status = c(1, 0, 1, 1))
   pseudo_fit <- survfit(Surv(time, status) ~ 1, data = pseudo_data, model = TRUE)
   expect_equal(

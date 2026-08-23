@@ -10857,86 +10857,65 @@ survfit0 <- function(x, ...) {
 
 survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
                             selow, ulimit = TRUE) {
-  selow_missing <- missing(selow)
-  # Zero-length R recycling has type and shape semantics that the native
-  # result cannot represent, so preserve the reference vector operations.
-  if (
-    length(p) == 0L ||
-      length(se) == 0L ||
-      (!selow_missing && length(selow) == 0L)
-  ) {
-    if (conf.int <= 0 || conf.int >= 1) {
-      stop("confidence intervals must be between 0 and 1")
+  if (conf.int <= 0 || conf.int >= 1) {
+    stop("confidence intervals must be between 0 and 1")
+  }
+  zval <- stats::qnorm(1 - (1 - conf.int) / 2, 0, 1)
+  if (missing(selow)) {
+    scale <- 1
+  } else {
+    scale <- ifelse(selow == 0, 1, selow / se)
+  }
+  if (!logse) {
+    se <- ifelse(se == 0, 0, se / p)
+  }
+  if (conf.type == "plain") {
+    se2 <- se * p * zval
+    if (ulimit) {
+      list(lower = pmax(p - se2 * scale, 0), upper = pmin(p + se2, 1))
+    } else {
+      list(lower = pmax(p - se2 * scale, 0), upper = p + se2)
     }
-    zval <- stats::qnorm(1 - (1 - conf.int) / 2, 0, 1)
-    scale <- if (selow_missing) 1 else ifelse(selow == 0, 1, selow / se)
-    if (!logse) {
-      se <- ifelse(se == 0, 0, se / p)
+  } else if (conf.type == "log") {
+    xx <- ifelse(p == 0, NA, p)
+    se2 <- zval * se
+    temp1 <- ifelse(se == 0, p, exp(log(xx) - se2 * scale))
+    temp2 <- ifelse(se == 0, p, exp(log(xx) + se2))
+    if (ulimit) {
+      list(lower = temp1, upper = pmin(temp2, 1))
+    } else {
+      list(lower = temp1, upper = temp2)
     }
-    if (conf.type == "plain") {
-      se2 <- se * p * zval
-      lower <- pmax(p - se2 * scale, 0)
-      upper <- if (ulimit) pmin(p + se2, 1) else p + se2
-      return(list(lower = lower, upper = upper))
-    }
-    if (conf.type == "log") {
-      xx <- ifelse(p == 0, NA, p)
-      se2 <- zval * se
-      lower <- ifelse(se == 0, p, exp(log(xx) - se2 * scale))
-      upper <- ifelse(se == 0, p, exp(log(xx) + se2))
-      return(list(
-        lower = lower,
-        upper = if (ulimit) pmin(upper, 1) else upper
-      ))
-    }
-    if (conf.type == "log-log") {
-      xx <- ifelse(p == 0 | p == 1, NA, p)
-      se2 <- zval * se / log(xx)
-      lower <- ifelse(
-        se == 0,
-        p,
-        exp(-exp(log(-log(xx)) - se2 * scale))
-      )
-      upper <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) + se2)))
-      return(list(lower = lower, upper = upper))
-    }
-    if (conf.type == "logit") {
-      xx <- ifelse(p == 0, NA, p)
-      se2 <- zval * se * (1 + xx / (1 - xx))
-      lower <- ifelse(
-        se == 0,
-        p,
-        1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale))
-      )
-      upper <- ifelse(
-        se == 0,
-        p,
-        1 - 1 / (1 + exp(log(p / (1 - p)) + se2))
-      )
-      return(list(lower = lower, upper = upper))
-    }
-    if (conf.type == "arcsin") {
-      xx <- ifelse(p == 0, NA, p)
-      se2 <- 0.5 * zval * se * sqrt(xx / (1 - xx))
-      lower <- sin(pmax(0, asin(sqrt(xx)) - se2 * scale))^2
-      upper <- sin(pmin(pi / 2, asin(sqrt(xx)) + se2))^2
-      return(list(lower = lower, upper = upper))
-    }
+  } else if (conf.type == "log-log") {
+    xx <- ifelse(p == 0 | p == 1, NA, p)
+    se2 <- zval * se / log(xx)
+    temp1 <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) - se2 * scale)))
+    temp2 <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) + se2)))
+    list(lower = temp1, upper = temp2)
+  } else if (conf.type == "logit") {
+    xx <- ifelse(p == 0, NA, p)
+    se2 <- zval * se * (1 + xx / (1 - xx))
+    temp1 <- ifelse(
+      se == 0,
+      p,
+      1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale))
+    )
+    temp2 <- ifelse(
+      se == 0,
+      p,
+      1 - 1 / (1 + exp(log(p / (1 - p)) + se2))
+    )
+    list(lower = temp1, upper = temp2)
+  } else if (conf.type == "arcsin") {
+    xx <- ifelse(p == 0, NA, p)
+    se2 <- 0.5 * zval * se * sqrt(xx / (1 - xx))
+    list(
+      lower = (sin(pmax(0, asin(sqrt(xx)) - se2 * scale)))^2,
+      upper = (sin(pmin(pi / 2, asin(sqrt(xx)) + se2)))^2
+    )
+  } else {
     stop("invalid conf.int type")
   }
-  result <- .call_r_api(
-    "survfit_confint",
-    p = .as_python_vector(p),
-    se = .as_python_vector(se),
-    logse = logse,
-    conf_type = conf.type,
-    conf_int = conf.int,
-    selow = if (selow_missing) NULL else .as_python_vector(selow),
-    ulimit = ulimit
-  )
-  lower <- .as_numeric_vector(.result_field(result, "lower"))
-  upper <- .as_numeric_vector(.result_field(result, "upper"))
-  list(lower = lower, upper = upper)
 }
 
 pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
