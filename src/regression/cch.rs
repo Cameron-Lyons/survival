@@ -670,6 +670,39 @@ fn two_pass_mean(values: &[f64]) -> f64 {
     mean
 }
 
+fn reported_covariate_means(covariates: &[Vec<f64>]) -> Vec<f64> {
+    (0..covariates[0].len())
+        .map(|column| {
+            if covariates
+                .iter()
+                .all(|row| matches!(row[column], -1.0 | 0.0 | 1.0))
+            {
+                0.0
+            } else {
+                covariates.iter().map(|row| row[column]).sum::<f64>() / covariates.len() as f64
+            }
+        })
+        .collect()
+}
+
+fn recenter_fit_output(fit: &mut CoxPHFit, reported_means: Vec<f64>, offset_mean: f64) {
+    let covariate_center = fit.coefficients[0]
+        .iter()
+        .zip(&reported_means)
+        .map(|(&coefficient, &mean)| coefficient * mean)
+        .sum::<f64>();
+    for (linear_predictor, risk_score) in fit
+        .linear_predictors
+        .iter_mut()
+        .zip(fit.risk_scores.iter_mut())
+    {
+        *linear_predictor -= covariate_center;
+        *linear_predictor += offset_mean;
+        *risk_score = linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
+    }
+    fit.means = reported_means;
+}
+
 fn augmented_fit(
     stop: &[f64],
     status: &[i32],
@@ -749,22 +782,7 @@ fn augmented_fit(
         .collect::<Vec<_>>();
     // The formula-level fit reports unweighted design means and leaves
     // indicator columns uncentered, independently of optimizer scaling.
-    let reported_means = (0..augmented_covariates[0].len())
-        .map(|column| {
-            if augmented_covariates
-                .iter()
-                .all(|row| matches!(row[column], -1.0 | 0.0 | 1.0))
-            {
-                0.0
-            } else {
-                augmented_covariates
-                    .iter()
-                    .map(|row| row[column])
-                    .sum::<f64>()
-                    / augmented_n as f64
-            }
-        })
-        .collect::<Vec<_>>();
+    let reported_means = reported_covariate_means(&augmented_covariates);
     let mut fit = fit_cox(
         augmented_stop,
         augmented_status,
@@ -774,21 +792,7 @@ fn augmented_fit(
         initial_coefficients.clone(),
         if prentice { 35 } else { 20 },
     )?;
-    let covariate_center = fit.coefficients[0]
-        .iter()
-        .zip(&reported_means)
-        .map(|(&coefficient, &mean)| coefficient * mean)
-        .sum::<f64>();
-    for (linear_predictor, risk_score) in fit
-        .linear_predictors
-        .iter_mut()
-        .zip(fit.risk_scores.iter_mut())
-    {
-        *linear_predictor -= covariate_center;
-        *linear_predictor += offset_mean;
-        *risk_score = linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
-    }
-    fit.means = reported_means;
+    recenter_fit_output(&mut fit, reported_means, offset_mean);
     let dfbeta = fit.dfbeta()?;
     let phase2_rows = dfbeta[case_indices.len()..].to_vec();
     let phase2_scale = 1.0 - subcohort_indices.len() as f64 / cohort_size as f64;
@@ -858,14 +862,8 @@ fn lin_ying_fit(
         None,
         20,
     )?;
-    for (linear_predictor, risk_score) in fit
-        .linear_predictors
-        .iter_mut()
-        .zip(fit.risk_scores.iter_mut())
-    {
-        *linear_predictor += offset_mean;
-        *risk_score = linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
-    }
+    let reported_means = reported_covariate_means(covariates);
+    recenter_fit_output(&mut fit, reported_means, offset_mean);
     let dfbeta = fit.dfbeta()?;
     let noncase_dfbeta = dfbeta
         .iter()
@@ -3559,5 +3557,108 @@ mod tests {
             &[-2_117.995_420_191_261, -2_113.640_929_439_351_6],
         );
         assert_eq!(result.iterations, 15);
+    }
+
+    #[test]
+    fn native_lin_ying_nonconverged_variance_uses_reported_center() {
+        initialize_python();
+        let stop = vec![
+            20.0, 15.0, 3.0, 13.0, 12.0, 14.0, 11.0, 9.0, 1.0, 8.0, 11.0, 6.0, 13.0, 5.0, 10.0,
+            3.0, 15.0, 15.0, 5.0,
+        ];
+        let status = vec![1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let start = vec![
+            18.0, 12.0, 1.0, 11.0, 10.0, 9.0, 8.0, 4.0, 0.0, 5.0, 10.0, 5.0, 8.0, 1.0, 4.0, 0.0,
+            10.0, 12.0, 1.0,
+        ];
+        let x = vec![
+            0.572_285_447_933_572_1,
+            1.005_547_737_668_099_7,
+            0.274_544_095_838_992_6,
+            -1.479_614_497_848_948,
+            1.744_160_036_390_428_8,
+            0.148_338_443_910_920_85,
+            -0.315_570_288_206_833_6,
+            -0.185_621_706_296_713_76,
+            0.800_433_919_123_698_2,
+            0.965_417_662_006_613_8,
+            1.585_880_086_306_053_1,
+            -0.327_044_162_801_423_45,
+            -0.543_382_930_452_650_4,
+            -0.711_449_210_044_067_5,
+            -0.857_812_774_214_495_8,
+            -0.253_193_130_408_256_03,
+            0.465_286_001_193_234_54,
+            -0.318_177_236_549_812_67,
+            -1.151_411_196_390_294_4,
+        ];
+        let z = vec![
+            0.232_140_797_963_946_96,
+            -1.898_751_271_782_748,
+            0.363_948_018_065_745_17,
+            0.585_792_540_226_207,
+            -0.731_010_592_627_097_3,
+            -2.118_825_442_113_546_4,
+            -0.702_767_847_189_110_2,
+            0.512_343_968_708_403,
+            -0.243_670_889_554_871_32,
+            0.228_413_672_086_280_38,
+            1.122_545_511_523_189_3,
+            0.450_009_294_601_333_15,
+            -0.404_439_126_400_670_3,
+            -0.276_783_344_306_756_55,
+            -0.243_804_406_906_087_98,
+            0.497_978_284_947_842_7,
+            -0.985_468_495_674_806_4,
+            1.249_832_510_133_670_5,
+            -0.119_872_832_927_606_2,
+        ];
+        let covariates = x
+            .into_iter()
+            .zip(z)
+            .map(|(first, second)| vec![first, second])
+            .collect();
+        let subcohort = vec![1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=19).collect(),
+            57,
+            Some(start),
+            "LinYing",
+            true,
+        )
+        .expect("nonconverged LinYing fit should preserve centered variance");
+
+        assert_close(
+            &result.coefficients[0],
+            &[19.254_643_847_649_7, 4.524_255_526_168_59],
+        );
+        assert_close(
+            &result.means,
+            &[0.074_664_015_639_901_04, -0.130_652_086_906_667_74],
+        );
+        assert_matrix_close(
+            &result.phase2_variance,
+            &[
+                vec![0.077_069_339_272_481_6, -0.124_858_086_731_421],
+                vec![-0.124_858_086_731_421, 0.863_243_779_688_719],
+            ],
+        );
+        assert_matrix_close(
+            &result.information_matrix,
+            &[
+                vec![3.485_264_403_775_35, 22.354_799_727_472_8],
+                vec![22.354_799_727_472_8, 151.498_475_059_234],
+            ],
+        );
+        assert_close(
+            &result.log_likelihood,
+            &[-9.888_729_561_977_43, -0.009_168_087_404_564_32],
+        );
+        assert!((result.score_test - 17.364_613_463_800_4).abs() < 1e-11);
+        assert_eq!(result.iterations, 20);
     }
 }
