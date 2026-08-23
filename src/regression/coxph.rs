@@ -3,7 +3,7 @@ use crate::constants::{
     TIME_EPSILON,
 };
 use crate::internal::validation::validate_binary_i32;
-use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
+use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod, ProductAccumulator};
 use crate::regression::coxph_detail_module::{CoxphDetail, fitted_coxph_detail};
 pub use crate::regression::coxph_model::{CoxPHModel, Subject};
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
@@ -1059,13 +1059,17 @@ fn coxph_fit_internal(
         cox_fit.results();
     let mut linear_predictors = Vec::with_capacity(n);
     let mut risk_scores = Vec::with_capacity(n);
+    // Keep compatibility output on the same contracted dot-product path as
+    // its counting-process fit and the reference matrix multiplication.
+    let output_arithmetic = ProductAccumulator::new(counting_roundoff_compatibility);
     for (row, &offset) in covariates.iter().zip(offset_vec.iter()) {
-        let linear_predictor = row
-            .iter()
-            .zip(beta.iter())
-            .map(|(value, coefficient)| value * coefficient)
-            .sum::<f64>()
-            + offset;
+        let linear_predictor =
+            row.iter()
+                .zip(beta.iter())
+                .fold(0.0, |accumulator, (&value, &coefficient)| {
+                    output_arithmetic.add(accumulator, value, coefficient)
+                })
+                + offset;
         risk_scores.push(linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp());
         linear_predictors.push(linear_predictor);
     }

@@ -13470,6 +13470,66 @@ test_that("cch matches SelfPrentice right-censored scalar phase-two roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches Prentice two-covariate predictor roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- c(
+    0x1.37aa3180b8ec8p+0, -0x1.b5940fb15612bp-1, -0x1.36cc947ee6cd6p+0,
+    0x1.c729a5b474629p+0, -0x1.c87ce326f6dc3p+0, 0x1.1510e744c7addp+0,
+    -0x1.5c2b127324f7fp-6, -0x1.eac94a40acf16p-2, 0x1.02e1d6600c625p-2,
+    0x1.724c0c3e6908dp-2, -0x1.83ed31999bf0fp-2, 0x1.16725bb35aff9p-3,
+    0x1.253b0de2973afp+0, -0x1.28772ea8ed503p-2, 0x1.284fe82a35859p-1,
+    -0x1.15249b635980ap+1, 0x1.1dc85d9acdc5fp+0, -0x1.34d34b80c4667p-2,
+    -0x1.f7c1ff818fc48p+0, 0x1.7dfd1c7acd633p-1, -0x1.4025e3cfa0204p+0,
+    0x1.84b02c31ce6f8p+0, -0x1.41a49d0a0d7fap-3, -0x1.9d60e78b8bd95p-4,
+    0x1.4b3364109360dp-2, -0x1.7bb192612675fp+0, -0x1.569c4102d25f1p-1,
+    0x1.5f5d7ad270f56p-7
+  )
+  z <- c(
+    -0x1.6508ade602132p+0, -0x1.8666e99ceb88cp-2, 0x1.2c1b64e3a753cp-3,
+    -0x1.d9ee3f6c3d9bfp-1, 0x1.4c476a694760cp+0, 0x1.0fdb28c11a00fp-1,
+    -0x1.2191bdf72fe5ap-1, 0x1.9d35b2fb1a1d5p-1, -0x1.e92c887380936p+0,
+    -0x1.21ed4c5b98941p+1, -0x1.076edf2baa016p+0, -0x1.1393b8d4a9313p+0,
+    0x1.5c3e9bee218fap+0, 0x1.9a2900dd9ed8dp-2, -0x1.26b29ee964657p-2,
+    -0x1.4dcb669a5bd33p-2, 0x1.5afb2f25a5b34p-1, -0x1.110e63b3dde7p-2,
+    -0x1.a04991aa0e15dp+0, 0x1.edbcc383514f9p-3, 0x1.632d54ef597b8p-1,
+    -0x1.4cdf474450a7dp-1, -0x1.508596ff2b455p+0, 0x1.38ce309304b8cp-1,
+    0x1.5240249a2ddb6p-2, 0x1.51fcdb931123ep-2, -0x1.05f395993cd2bp+0,
+    0x1.201f87d5a5d5cp+0
+  )
+  data <- data.frame(
+    stop = c(7, 7, 20, 7, 17, 17, 14, 3, 14, 11, 5, 13, 18, 11, 2, 6, 15, 4, 10, 1, 19, 15, 4, 12, 2, 3, 6, 7),
+    status = c(1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1),
+    x = x,
+    z = z,
+    id = seq_len(28),
+    subcohort = c(1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 0)
+  )
+  args <- list(
+    formula = Surv(stop, status) ~ x + z,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 84,
+    method = "Prentice",
+    robust = FALSE
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

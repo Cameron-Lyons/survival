@@ -26549,6 +26549,201 @@ def test_cch_formula_matches_self_prentice_right_censored_scalar_phase_two_round
     )
 
 
+def test_cch_formula_matches_prentice_two_covariate_predictor_roundoff():
+    x = [
+        float.fromhex(value)
+        for value in (
+            "0x1.37aa3180b8ec8p+0",
+            "-0x1.b5940fb15612bp-1",
+            "-0x1.36cc947ee6cd6p+0",
+            "0x1.c729a5b474629p+0",
+            "-0x1.c87ce326f6dc3p+0",
+            "0x1.1510e744c7addp+0",
+            "-0x1.5c2b127324f7fp-6",
+            "-0x1.eac94a40acf16p-2",
+            "0x1.02e1d6600c625p-2",
+            "0x1.724c0c3e6908dp-2",
+            "-0x1.83ed31999bf0fp-2",
+            "0x1.16725bb35aff9p-3",
+            "0x1.253b0de2973afp+0",
+            "-0x1.28772ea8ed503p-2",
+            "0x1.284fe82a35859p-1",
+            "-0x1.15249b635980ap+1",
+            "0x1.1dc85d9acdc5fp+0",
+            "-0x1.34d34b80c4667p-2",
+            "-0x1.f7c1ff818fc48p+0",
+            "0x1.7dfd1c7acd633p-1",
+            "-0x1.4025e3cfa0204p+0",
+            "0x1.84b02c31ce6f8p+0",
+            "-0x1.41a49d0a0d7fap-3",
+            "-0x1.9d60e78b8bd95p-4",
+            "0x1.4b3364109360dp-2",
+            "-0x1.7bb192612675fp+0",
+            "-0x1.569c4102d25f1p-1",
+            "0x1.5f5d7ad270f56p-7",
+        )
+    ]
+    z = [
+        float.fromhex(value)
+        for value in (
+            "-0x1.6508ade602132p+0",
+            "-0x1.8666e99ceb88cp-2",
+            "0x1.2c1b64e3a753cp-3",
+            "-0x1.d9ee3f6c3d9bfp-1",
+            "0x1.4c476a694760cp+0",
+            "0x1.0fdb28c11a00fp-1",
+            "-0x1.2191bdf72fe5ap-1",
+            "0x1.9d35b2fb1a1d5p-1",
+            "-0x1.e92c887380936p+0",
+            "-0x1.21ed4c5b98941p+1",
+            "-0x1.076edf2baa016p+0",
+            "-0x1.1393b8d4a9313p+0",
+            "0x1.5c3e9bee218fap+0",
+            "0x1.9a2900dd9ed8dp-2",
+            "-0x1.26b29ee964657p-2",
+            "-0x1.4dcb669a5bd33p-2",
+            "0x1.5afb2f25a5b34p-1",
+            "-0x1.110e63b3dde7p-2",
+            "-0x1.a04991aa0e15dp+0",
+            "0x1.edbcc383514f9p-3",
+            "0x1.632d54ef597b8p-1",
+            "-0x1.4cdf474450a7dp-1",
+            "-0x1.508596ff2b455p+0",
+            "0x1.38ce309304b8cp-1",
+            "0x1.5240249a2ddb6p-2",
+            "0x1.51fcdb931123ep-2",
+            "-0x1.05f395993cd2bp+0",
+            "0x1.201f87d5a5d5cp+0",
+        )
+    ]
+    data = {
+        "stop": [
+            7,
+            7,
+            20,
+            7,
+            17,
+            17,
+            14,
+            3,
+            14,
+            11,
+            5,
+            13,
+            18,
+            11,
+            2,
+            6,
+            15,
+            4,
+            10,
+            1,
+            19,
+            15,
+            4,
+            12,
+            2,
+            3,
+            6,
+            7,
+        ],
+        "status": [
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+        ],
+        "x": x,
+        "z": z,
+        "id": list(range(1, 29)),
+        "subcohort": [
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+        ],
+    }
+    fit = survival.cch(
+        "Surv(stop, status) ~ x + z",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=84,
+        method="Prentice",
+        robust=False,
+    )
+
+    assert survival.coef(fit) == pytest.approx(
+        [-0.4996971296248197, -0.7397942205606742], abs=1e-14
+    )
+    assert fit.fit.model_information_matrix[0] == pytest.approx(
+        [0.09359545737421247, 0.04593044111190903], abs=1e-14
+    )
+    assert fit.fit.model_information_matrix[1] == pytest.approx(
+        [0.04593044111190903, 0.08298169176639801], abs=1e-14
+    )
+    expected_phase_two = [
+        [1.7274285464637325e53, 1.3359879872634454e53],
+        [1.3359879872634454e53, 3.0327962851566173e53],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-1737.3472482219913, -1737.2151457176699], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(0.25244916102924286, abs=1e-13)
+    assert fit.means == pytest.approx([-0.024954064440147937, -0.26342136899222335], abs=1e-15)
+    assert fit.iterations == 3
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],
