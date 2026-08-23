@@ -494,10 +494,6 @@ struct QrCoefficientMatrix {
     coefficients: Vec<f64>,
 }
 
-fn euclidean_norm(values: &[f64]) -> f64 {
-    values.iter().fold(0.0, |norm, value| norm.hypot(*value))
-}
-
 fn qr_coefficient_matrix(values: &[f64], n: usize, tolerance: f64) -> QrCoefficientMatrix {
     if n == 0 {
         return QrCoefficientMatrix {
@@ -506,53 +502,118 @@ fn qr_coefficient_matrix(values: &[f64], n: usize, tolerance: f64) -> QrCoeffici
         };
     }
 
-    let mut basis: Vec<Vec<f64>> = Vec::with_capacity(n);
-    let mut active_columns = Vec::with_capacity(n);
-    let mut triangular = vec![0.0; n * n];
+    // Match the LINPACK Householder reduction and coefficient recovery used
+    // by R's dqrdc2/dqrcf path, including tolerance-based column cycling.
+    let column_norm = |matrix: &[f64], column: usize, first_row: usize| {
+        (first_row..n).fold(0.0_f64, |norm, row| norm.hypot(matrix[row * n + column]))
+    };
+    let mut qr = values.to_vec();
+    let mut qraux = vec![0.0; n];
+    let mut original_norm = vec![0.0; n];
+    let mut pivot: Vec<usize> = (0..n).collect();
     for column in 0..n {
-        let original: Vec<f64> = (0..n).map(|row| values[row * n + column]).collect();
-        let original_norm = euclidean_norm(&original);
-        let mut residual = original.clone();
-        let mut projections = Vec::with_capacity(basis.len());
-        for direction in &basis {
-            let projection = dot(direction, &residual);
-            projections.push(projection);
+        qraux[column] = column_norm(&qr, column, 0);
+        original_norm[column] = if qraux[column] == 0.0 {
+            1.0
+        } else {
+            qraux[column]
+        };
+    }
+
+    let mut rank_boundary = n;
+    for column in 0..n {
+        while column < rank_boundary && qraux[column] < original_norm[column] * tolerance {
             for row in 0..n {
-                residual[row] -= projection * direction[row];
+                let value = qr[row * n + column];
+                for shifted in (column + 1)..n {
+                    qr[row * n + shifted - 1] = qr[row * n + shifted];
+                }
+                qr[row * n + n - 1] = value;
             }
+            let pivot_value = pivot[column];
+            let auxiliary_value = qraux[column];
+            let original_value = original_norm[column];
+            for shifted in (column + 1)..n {
+                pivot[shifted - 1] = pivot[shifted];
+                qraux[shifted - 1] = qraux[shifted];
+                original_norm[shifted - 1] = original_norm[shifted];
+            }
+            pivot[n - 1] = pivot_value;
+            qraux[n - 1] = auxiliary_value;
+            original_norm[n - 1] = original_value;
+            rank_boundary -= 1;
         }
-        let residual_norm = euclidean_norm(&residual);
-        if original_norm == 0.0
-            || !residual_norm.is_finite()
-            || residual_norm < tolerance * original_norm
-        {
+        if column + 1 == n {
             continue;
         }
 
-        let position = basis.len();
-        for (row, projection) in projections.into_iter().enumerate() {
-            triangular[row * n + position] = projection;
+        let mut norm = column_norm(&qr, column, column);
+        if norm == 0.0 {
+            continue;
         }
-        triangular[position * n + position] = residual_norm;
-        for value in &mut residual {
-            *value /= residual_norm;
+        let diagonal_offset = column * n + column;
+        if qr[diagonal_offset] != 0.0 {
+            norm = norm.copysign(qr[diagonal_offset]);
         }
-        basis.push(residual);
-        active_columns.push(column);
+        for row in column..n {
+            qr[row * n + column] /= norm;
+        }
+        qr[diagonal_offset] += 1.0;
+
+        for inner in (column + 1)..n {
+            let mut product = 0.0;
+            for row in column..n {
+                product = qr[row * n + column].mul_add(qr[row * n + inner], product);
+            }
+            let scale = -product / qr[diagonal_offset];
+            for row in column..n {
+                let offset = row * n + inner;
+                qr[offset] = scale.mul_add(qr[row * n + column], qr[offset]);
+            }
+            if qraux[inner] != 0.0 {
+                let ratio = qr[column * n + inner].abs() / qraux[inner];
+                let remaining = (1.0 - ratio * ratio).max(0.0);
+                if remaining >= 1e-6 {
+                    qraux[inner] *= remaining.sqrt();
+                } else {
+                    qraux[inner] = column_norm(&qr, inner, column + 1);
+                }
+            }
+        }
+        qraux[column] = qr[diagonal_offset];
+        qr[diagonal_offset] = -norm;
     }
 
-    let rank = basis.len();
+    let rank = rank_boundary.min(n);
     let mut coefficients = vec![f64::NAN; n * n];
     for rhs in 0..n {
-        let mut solution: Vec<f64> = basis.iter().map(|direction| direction[rhs]).collect();
-        for row in (0..rank).rev() {
-            for column in (row + 1)..rank {
-                solution[row] -= triangular[row * n + column] * solution[column];
+        let mut solution = vec![0.0; n];
+        solution[rhs] = 1.0;
+        let transformations = rank.min(n.saturating_sub(1));
+        for column in 0..transformations {
+            if qraux[column] == 0.0 {
+                continue;
             }
-            solution[row] /= triangular[row * n + row];
+            let mut product = qraux[column] * solution[column];
+            for row in (column + 1)..n {
+                product = qr[row * n + column].mul_add(solution[row], product);
+            }
+            let scale = -product / qraux[column];
+            solution[column] = scale.mul_add(qraux[column], solution[column]);
+            for row in (column + 1)..n {
+                solution[row] = scale.mul_add(qr[row * n + column], solution[row]);
+            }
         }
-        for (position, &column) in active_columns.iter().enumerate() {
-            coefficients[column * n + rhs] = solution[position];
+        solution.truncate(rank);
+        for row in (0..rank).rev() {
+            solution[row] /= qr[row * n + row];
+            let scale = -solution[row];
+            for inner in 0..row {
+                solution[inner] = scale.mul_add(qr[inner * n + row], solution[inner]);
+            }
+        }
+        for row in 0..rank {
+            coefficients[pivot[row] * n + rhs] = solution[row];
         }
     }
 
@@ -1535,6 +1596,85 @@ mod tests {
         assert_close(
             result.time_weights.last().unwrap()[1],
             5.173_385_769_715_47e-18,
+        );
+    }
+
+    #[test]
+    fn weighted_two_covariate_terminal_coefficient_matches_reference_qr() {
+        let x = [
+            0xbff0_e447_0a02_be58,
+            0x3fad_cbb4_7d2d_f9d3,
+            0xc000_3962_89e6_d553,
+            0xbfdc_1f5b_b739_a67a,
+            0x3f9e_d4f3_472d_121a,
+            0x3feb_eeb0_56b3_e6d1,
+            0xbfe2_1b0a_9bfc_9fc9,
+            0x3fec_8bab_a26f_cc35,
+            0x3fe7_45d3_db89_88c9,
+            0xbff0_1bb5_fb1c_963c,
+            0xbfe5_0afa_adf7_f29c,
+            0xbfc2_a5da_acea_2caa,
+            0xbff0_71f6_811c_a916,
+            0x3fc4_9925_b191_eff7,
+        ]
+        .map(f64::from_bits);
+        let z = [
+            0x3fd5_a8e6_842d_c111,
+            0x3fb6_f2cb_5459_12e1,
+            0xbfda_ec08_693d_b5d0,
+            0xc000_7262_0515_39c0,
+            0x3fda_5327_7d20_4f31,
+            0xbfe2_b29d_ac0f_c4c9,
+            0x3fc4_ad21_257d_760c,
+            0x3fe4_4bb6_e2af_625c,
+            0xbfd7_1537_c63c_8c91,
+            0xbfb5_b5b1_5fb6_26db,
+            0x3fdd_405d_a565_bba5,
+            0xbffa_8234_1f1f_43c9,
+            0xc003_5f9f_d7da_ef4c,
+            0x3fdc_9c72_9b9d_983c,
+        ]
+        .map(f64::from_bits);
+        let covariates: Vec<Vec<f64>> = x
+            .into_iter()
+            .zip(z)
+            .map(|(left, right)| vec![left, right])
+            .collect();
+        let stop = vec![
+            8.0, 3.0, 3.0, 3.0, 11.0, 6.0, 7.0, 6.0, 12.0, 11.0, 2.0, 5.0, 8.0, 5.0,
+        ];
+        let status = vec![1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0];
+        let weights = vec![
+            0.5, 2.0, 1.0, 0.5, 2.0, 1.0, 0.5, 1.0, 2.0, 1.0, 1.5, 1.0, 0.5, 2.0,
+        ];
+        let result = aareg_fit(
+            stop,
+            status,
+            covariates,
+            None,
+            Some(weights),
+            None,
+            1e-7,
+            Some(2),
+            false,
+            None,
+            "aalen".to_string(),
+            None,
+        )
+        .expect("weighted near-singular fit should succeed");
+
+        assert_eq!(result.n, vec![14, 7, 7]);
+        assert_close(
+            result.coefficient.last().unwrap()[0],
+            17_755.866_928_553_787,
+        );
+        assert_close(
+            result.coefficient.last().unwrap()[1],
+            3.592_368_801_523_464_5,
+        );
+        assert_close(
+            result.coefficient.last().unwrap()[2],
+            49_234.695_970_713_29,
         );
     }
 

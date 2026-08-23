@@ -28133,6 +28133,66 @@ def test_aareg_counting_retains_terminal_single_risk_roundoff_event():
     )
 
 
+def test_aareg_matches_near_singular_terminal_reference_coefficients():
+    data = {
+        "stop": [8, 3, 3, 3, 11, 6, 7, 6, 12, 11, 2, 5, 8, 5],
+        "status": [1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0],
+        "x": [
+            float.fromhex(value)
+            for value in (
+                "-0x1.0e4470a02be58p+0",
+                "0x1.dcbb47d2df9d3p-5",
+                "-0x1.0396289e6d553p+1",
+                "-0x1.c1f5bb739a67ap-2",
+                "0x1.ed4f3472d121ap-6",
+                "0x1.beeb056b3e6d1p-1",
+                "-0x1.21b0a9bfc9fc9p-1",
+                "0x1.c8baba26fcc35p-1",
+                "0x1.745d3db8988c9p-1",
+                "-0x1.01bb5fb1c963cp+0",
+                "-0x1.50afaadf7f29cp-1",
+                "-0x1.2a5daacea2caap-3",
+                "-0x1.071f6811ca916p+0",
+                "0x1.49925b191eff7p-3",
+            )
+        ],
+        "z": [
+            float.fromhex(value)
+            for value in (
+                "0x1.5a8e6842dc111p-2",
+                "0x1.6f2cb545912e1p-4",
+                "-0x1.aec08693db5dp-2",
+                "-0x1.07262051539cp+1",
+                "0x1.a53277d204f31p-2",
+                "-0x1.2b29dac0fc4c9p-1",
+                "0x1.4ad21257d760cp-3",
+                "0x1.44bb6e2af625cp-1",
+                "-0x1.71537c63c8c91p-2",
+                "-0x1.5b5b15fb626dbp-4",
+                "0x1.d405da565bba5p-2",
+                "-0x1.a82341f1f43c9p+0",
+                "-0x1.35f9fd7daef4cp+1",
+                "0x1.c9c729b9d983cp-2",
+            )
+        ],
+        "weight": [0.5, 2, 1, 0.5, 2, 1, 0.5, 1, 2, 1, 1.5, 1, 0.5, 2],
+    }
+
+    fit = survival.aareg(
+        "Surv(stop, status) ~ x + z",
+        data=data,
+        weights=data["weight"],
+        nmin=2,
+        test="aalen",
+    )
+
+    assert fit.n == [14, 7, 7]
+    assert fit.coefficient[-1] == pytest.approx(
+        [17_755.866_928_553_787, 3.592_368_801_523_464_5, 49_234.695_970_713_292],
+        abs=1e-10,
+    )
+
+
 def test_aareg_retains_early_multivariate_reduced_rank_moments():
     data = {
         "start": [7, 5, 0, 6, 7, 4, 1, 9, 0, 7, 4, 7, 7, 11, 0, 5],
