@@ -176,7 +176,7 @@ pub fn survcheck(
 
             if let Some(previous_end) = prev_end {
                 let mismatch = expected_state.is_some_and(|value| declared_state != value);
-                if t1 < previous_end - 1e-10 {
+                if t1 < previous_end {
                     flags[idx] = 1;
                     overlap_ids.insert(subj_id);
                     overlap_rows.insert(idx);
@@ -184,7 +184,7 @@ pub fn survcheck(
                         "Subject {}: overlapping intervals at observation {}",
                         subj_id, idx
                     ));
-                } else if t1 > previous_end + 1e-10 {
+                } else if t1 > previous_end {
                     if mismatch {
                         flags[idx] = 5;
                         jump_ids.insert(subj_id);
@@ -426,6 +426,21 @@ mod tests {
         let result = survcheck(id, time1, time2, status, None).unwrap();
         assert!(!result.is_valid);
         assert!(!result.gap_ids.is_empty());
+    }
+
+    #[test]
+    fn test_survcheck_preserves_unadjusted_near_gaps() {
+        let result = survcheck(
+            vec![1, 1],
+            vec![0.0, 1.0 + 1e-15],
+            vec![1.0, 2.0],
+            vec![0, 0],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.gap_rows, vec![1]);
+        assert!(result.overlap_rows.is_empty());
     }
 
     #[test]

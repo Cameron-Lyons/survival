@@ -2025,6 +2025,8 @@ test_that("R formula wrappers delegate to the Python survival package", {
     for (field in fields) {
       expect_equal(actual[[field]], expected[[field]], info = field)
     }
+    expect_identical(actual$Y, expected$Y)
+    expect_identical(actual$id, expected$id)
     expect_s3_class(actual, "survcheck")
   }
   checked <- survcheck(Surv(start, stop, status) ~ 1, data = check_data, id = id)
@@ -2035,6 +2037,61 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   compare_survcheck(checked, reference_checked)
   expect_equal(unname(checked$n), c(2L, 3L, 2L))
+  expect_identical(checked$flag, reference_checked$flag)
+  transition_origin_data <- data.frame(
+    id = c("b", "a", "b", "b"),
+    start = c(1, 1, 5, 5),
+    stop = c(5, 5, 9, 9),
+    status = c(0L, 0L, 1L, 0L)
+  )
+  transition_origin_checked <- survcheck(
+    Surv(start, stop, status) ~ 1,
+    data = transition_origin_data,
+    id = id
+  )
+  reference_transition_origin <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ 1,
+    data = transition_origin_data,
+    id = id
+  )
+  expect_identical(
+    transition_origin_checked$transitions,
+    reference_transition_origin$transitions
+  )
+  near_interval_data <- data.frame(
+    id = rep(c("gap", "overlap"), each = 2L),
+    start = c(0, 1 + 1e-15, 0, 1 - 1e-15),
+    stop = c(1, 2, 1, 2),
+    status = 0L
+  )
+  near_interval_checked <- survcheck(
+    Surv(start, stop, status) ~ 1,
+    data = near_interval_data,
+    id = id,
+    timefix = FALSE
+  )
+  reference_near_interval <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ 1,
+    data = near_interval_data,
+    id = id,
+    timefix = FALSE
+  )
+  compare_survcheck(near_interval_checked, reference_near_interval)
+  factor_id_data <- transform(
+    transition_origin_data,
+    id = factor(id, levels = c("a", "b", "unused"))
+  )
+  factor_id_checked <- survcheck(
+    Surv(start, stop, status) ~ 1,
+    data = factor_id_data,
+    id = id
+  )
+  reference_factor_id <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ 1,
+    data = factor_id_data,
+    id = id
+  )
+  expect_identical(factor_id_checked$events, reference_factor_id$events)
   checked_print <- checked
   reference_checked_print <- reference_checked
   attr(checked_print, "call") <- attr(reference_checked_print, "call") <- NULL
@@ -2143,6 +2200,45 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   compare_survcheck(missing_checked, reference_missing_checked)
   expect_equal(missing_checked$na.action, reference_missing_checked$na.action)
+  singleton_check_data <- data.frame(
+    id = factor(c("b", "a")),
+    start = c(1, 2),
+    stop = c(5, 3),
+    status = c(0L, 0L),
+    x = c(NA, -1)
+  )
+  singleton_checked <- survcheck(
+    Surv(start, stop, status) ~ x,
+    data = singleton_check_data,
+    id = id,
+    na.action = na.omit
+  )
+  reference_singleton_checked <- survival::survcheck(
+    survival::Surv(start, stop, status) ~ x,
+    data = singleton_check_data,
+    id = id,
+    na.action = na.omit
+  )
+  compare_survcheck(singleton_checked, reference_singleton_checked)
+  right_singleton_data <- data.frame(
+    id = 1:2,
+    time = 4:3,
+    state = factor(c("censor", "censor"), levels = c("censor", "B", "C")),
+    x = c(-1, NA)
+  )
+  right_singleton_checked <- survcheck(
+    Surv(time, state) ~ x,
+    data = right_singleton_data,
+    id = id,
+    na.action = na.omit
+  )
+  reference_right_singleton <- survival::survcheck(
+    survival::Surv(time, state) ~ x,
+    data = right_singleton_data,
+    id = id,
+    na.action = na.omit
+  )
+  compare_survcheck(right_singleton_checked, reference_right_singleton)
 
   rtt_data <- data.frame(
     time = c(3, 1, 2),

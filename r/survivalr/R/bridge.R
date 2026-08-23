@@ -9467,7 +9467,7 @@ is.na.Surv2 <- function(x) {
     return(adjusted)
   }
 
-  result <- .data_prep_attr("aeq_surv")(finite_values, tolerance)
+  result <- .data_prep_attr("aeq_surv")(as.list(finite_values), tolerance)
   adjusted_values <- as.numeric(result$time)
   for (index in seq_along(finite_positions)) {
     position <- finite_positions[[index]]
@@ -10950,7 +10950,7 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
 }
 
 .survcheck_events <- function(status, id, states) {
-  subjects <- factor(id, levels = unique(id))
+  subjects <- if (is.factor(id)) id else factor(id, levels = unique(id))
   targets <- factor(status, levels = 0:length(states))
   counts <- table(subjects, targets)[, -1L, drop = FALSE]
   if (all(counts == 0L)) {
@@ -11051,13 +11051,14 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
     lapply(issue_names, .survcheck_issue, raw = raw, id = id, row_map = row_map),
     issue_names
   )
-  flags <- c(
+  flags <- as.numeric(c(
     overlap = length(.result_field(raw, "overlap_rows")),
     gap = length(.result_field(raw, "gap_rows")),
     jump = length(.result_field(raw, "jump_rows")),
     teleport = length(.result_field(raw, "teleport_rows")),
     duplicate = 0L
-  )
+  ))
+  names(flags) <- c("overlap", "gap", "jump", "teleport", "duplicate")
   out <- list(
     states = state_names,
     transitions = .survcheck_transitions(
@@ -11126,6 +11127,36 @@ survcheck <- function(formula, data = NULL, subset = NULL, na.action = na.pass,
   multistate <- response_type %in% c("mright", "mcounting")
   response_states <- if (multistate) attr(response, "states") else "event"
   raw_status <- as.integer(response[, ncol(response)])
+  if (!multistate) {
+    response_rows <- if (nrow(response) > 1L) rownames(response) else NULL
+    ordinary_status <- factor(raw_status, levels = 0:1, labels = c("censor", "event"))
+    names(ordinary_status) <- response_rows
+    ordinary_event_attributes <- .compact_null(list(
+      names = response_rows,
+      levels = levels(ordinary_status),
+      class = class(ordinary_status)
+    ))
+    if (response_type == "right") {
+      response_time <- as.numeric(response[, 1L])
+      names(response_time) <- response_rows
+      response <- Surv(response_time, ordinary_status)
+      attr(response, "inputAttributes") <- .compact_null(list(
+        time = attributes(response_time),
+        event = ordinary_event_attributes
+      ))
+    } else {
+      response_start <- as.numeric(response[, 1L])
+      response_stop <- as.numeric(response[, 2L])
+      names(response_start) <- response_rows
+      names(response_stop) <- response_rows
+      response <- Surv(response_start, response_stop, ordinary_status)
+      attr(response, "inputAttributes") <- .compact_null(list(
+        time = attributes(response_start),
+        time2 = attributes(response_stop),
+        event = ordinary_event_attributes
+      ))
+    }
+  }
   if (is.null(initial_values)) {
     state_names <- c(istate0, response_states)
     initial_codes <- NULL
@@ -11158,11 +11189,11 @@ survcheck <- function(formula, data = NULL, subset = NULL, na.action = na.pass,
   id_codes <- match(id_values, unique(id_values))
   raw <- .call_r_api(
     "survcheck",
-    id = .as_python_vector(id_codes),
-    time1 = .as_python_vector(start),
-    time2 = .as_python_vector(stop),
-    status = .as_python_vector(target_status),
-    istate = if (is.null(initial_codes)) NULL else .as_python_vector(initial_codes)
+    id = as.list(id_codes),
+    time1 = as.list(start),
+    time2 = as.list(stop),
+    status = as.list(target_status),
+    istate = if (is.null(initial_codes)) NULL else as.list(initial_codes)
   )
   .as_survcheck_result(
     raw,
@@ -11173,7 +11204,7 @@ survcheck <- function(formula, data = NULL, subset = NULL, na.action = na.pass,
     raw_status,
     response_states,
     !is.null(initial_codes),
-    initial_labels,
+    if (is.null(initial_codes) && ncol(response) > 2L) NULL else initial_labels,
     call,
     attr(frame, "na.action")
   )
