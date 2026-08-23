@@ -24292,11 +24292,10 @@ def _normalize_survreg_distribution_helper(distribution: Any | None) -> str:
         return "weibull"
     if not isinstance(distribution, str):
         raise TypeError("distribution must be a string")
-    value = distribution.strip().lower().replace("_", "-")
-    if value in {"t", "student", "student-t"}:
-        return "t"
-    normalized = _normalize_survreg_distribution(distribution)
-    return normalized or "weibull"
+    value = distribution.casefold()
+    if value not in survreg_distributions:
+        raise ValueError("Distribution not found")
+    return value
 
 
 def _survreg_numeric_vector(values: Any, name: str) -> list[float]:
@@ -24312,6 +24311,20 @@ def _survreg_t_degrees_of_freedom(parms: Any | None) -> float:
     df = values[0]
     if not math.isfinite(df) or df <= 0.0:
         raise ValueError("parms for distribution='t' must be a positive finite value")
+    return df
+
+
+def _survreg_t_helper_degrees_of_freedom(parms: Any | None, kind: str) -> float:
+    if parms is None:
+        raise TypeError("parms is required for distribution='t'")
+    values = _survreg_numeric_vector(parms, "parms")
+    if len(values) != 1:
+        raise ValueError("parms for distribution='t' must be a single degrees-of-freedom value")
+    df = values[0]
+    if df <= 0.0:
+        warning_count = 1 if kind == "quantile" else 3
+        for _ in range(warning_count):
+            warnings.warn("NaNs produced", RuntimeWarning, stacklevel=3)
     return df
 
 
@@ -24698,6 +24711,8 @@ def _expand_survreg_distribution_inputs(
     mean: Any,
     scale: Any,
     *,
+    kind: str,
+    distribution_uses_log_transform: bool,
     target_length: int | None = None,
 ) -> tuple[list[float], list[float], list[float]]:
     vectors = {
@@ -24705,25 +24720,46 @@ def _expand_survreg_distribution_inputs(
         "mean": _survreg_numeric_vector(mean, "mean"),
         "scale": _survreg_numeric_vector(scale, "scale"),
     }
-    main_length = len(vectors[value_name])
-    n = (
-        target_length
-        if target_length is not None
-        else main_length
-        if main_length > 1
-        else max(len(vector) for vector in vectors.values())
-    )
+    if any(not vector for vector in vectors.values()):
+        return [], [], []
+
+    def recycled_length(left: int, right: int) -> int:
+        longer = max(left, right)
+        shorter = min(left, right)
+        if longer % shorter:
+            warnings.warn(
+                "longer object length is not a multiple of shorter object length",
+                RuntimeWarning,
+                stacklevel=4,
+            )
+        return longer
+
+    value_length = len(vectors[value_name])
+    mean_length = len(vectors["mean"])
+    scale_length = len(vectors["scale"])
+    if target_length is None:
+        if kind == "quantile":
+            intermediate_length = recycled_length(value_length, scale_length)
+            n = recycled_length(intermediate_length, mean_length)
+        else:
+            intermediate_length = recycled_length(value_length, mean_length)
+            n = recycled_length(intermediate_length, scale_length)
+            if kind == "density":
+                if distribution_uses_log_transform:
+                    n = recycled_length(n, value_length)
+                n = recycled_length(n, scale_length)
+    else:
+        n = target_length
+        recycled_length(value_length, n)
+        recycled_length(mean_length, n)
+        recycled_length(scale_length, n)
     if n < 0:
         raise ValueError("n must be non-negative")
 
-    expanded: dict[str, list[float]] = {}
-    for name, vector in vectors.items():
-        if len(vector) == n:
-            expanded[name] = vector
-        elif len(vector) == 1:
-            expanded[name] = vector * n
-        else:
-            raise ValueError(f"{name} must have length 1 or {n}")
+    expanded = {
+        name: [vector[index % len(vector)] for index in range(n)]
+        for name, vector in vectors.items()
+    }
     return expanded[value_name], expanded["mean"], expanded["scale"]
 
 
@@ -24737,13 +24773,31 @@ def _survreg_distribution_values(
     kind: str,
 ) -> list[float]:
     distribution_name = _normalize_survreg_distribution_helper(distribution)
+    descriptor = survreg_distributions[distribution_name]
     value_values, mean_values, scale_values = _expand_survreg_distribution_inputs(
         values,
         value_name,
         mean,
         scale,
+        kind=kind,
+        distribution_uses_log_transform=descriptor.dist is not None,
     )
-    distribution_parms = _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
+    if descriptor.dist is not None and kind != "quantile" and any(
+        value < 0.0 for value in value_values if not math.isnan(value)
+    ):
+        warnings.warn("NaNs produced", RuntimeWarning, stacklevel=3)
+    if kind == "quantile":
+        below = any(value < 0.0 for value in value_values if not math.isnan(value))
+        above = any(value > 1.0 for value in value_values if not math.isnan(value))
+        if below or above:
+            warnings.warn("NaNs produced", RuntimeWarning, stacklevel=3)
+        if below and above and _survreg_descriptor_base(descriptor).key == "extreme":
+            warnings.warn("NaNs produced", RuntimeWarning, stacklevel=3)
+    distribution_parms = (
+        _survreg_t_helper_degrees_of_freedom(parms, kind)
+        if distribution_name == "t"
+        else None
+    )
     return _core.survreg_distribution(
         value_values,
         mean_values,
@@ -24790,6 +24844,24 @@ def qsurvreg(
     return _survreg_distribution_values(p, "p", mean, scale, distribution, parms, "quantile")
 
 
+def _survreg_random_count(n: Any) -> int:
+    try:
+        values = [float(n)]
+    except (TypeError, ValueError):
+        values = _materialize_1d(n, "n")
+    if not values:
+        return 0
+    if len(values) > 1:
+        return len(values)
+    try:
+        numeric = float(values[0])
+    except (TypeError, ValueError) as exc:
+        raise TypeError("n must be numeric") from exc
+    if not math.isfinite(numeric) or numeric < 0.0:
+        raise ValueError("invalid arguments")
+    return int(numeric)
+
+
 def rsurvreg(
     n: Any,
     mean: Any,
@@ -24799,11 +24871,11 @@ def rsurvreg(
 ) -> list[float]:
     """Random draws from R ``survreg`` location-scale distributions."""
 
-    count = _integer_scalar(n, "n")
-    if count < 0:
-        raise ValueError("n must be non-negative")
+    count = _survreg_random_count(n)
     distribution_name = _normalize_survreg_distribution_helper(distribution)
     if count == 0:
+        if distribution_name == "t" and parms is None:
+            raise TypeError("parms is required for distribution='t'")
         return []
     probabilities = [random.random() for _ in range(count)]
     probability_values, mean_values, scale_values = _expand_survreg_distribution_inputs(
@@ -24811,9 +24883,17 @@ def rsurvreg(
         "p",
         mean,
         scale,
+        kind="quantile",
+        distribution_uses_log_transform=(
+            survreg_distributions[distribution_name].dist is not None
+        ),
         target_length=count,
     )
-    distribution_parms = _survreg_t_degrees_of_freedom(parms) if distribution_name == "t" else None
+    distribution_parms = (
+        _survreg_t_helper_degrees_of_freedom(parms, "quantile")
+        if distribution_name == "t"
+        else None
+    )
     return _core.survreg_distribution(
         probability_values,
         mean_values,

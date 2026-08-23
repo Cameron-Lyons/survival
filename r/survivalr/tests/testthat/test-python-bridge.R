@@ -3394,6 +3394,48 @@ test_that("R formula wrappers delegate to the Python survival package", {
     reference_t_draws,
     tolerance = 1e-12
   )
+  expect_equal(
+    dsurvreg(numeric(), mean = 0, distribution = "gaussian"),
+    survival::dsurvreg(numeric(), mean = 0, distribution = "gaussian")
+  )
+  expect_equal(
+    dsurvreg(1, mean = numeric(), distribution = "gaussian"),
+    survival::dsurvreg(1, mean = numeric(), distribution = "gaussian")
+  )
+  expect_equal(
+    dsurvreg(c(-1, 0, 1), mean = 0, scale = -1, distribution = "gaussian"),
+    survival::dsurvreg(c(-1, 0, 1), mean = 0, scale = -1, distribution = "gaussian")
+  )
+  expect_equal(
+    dsurvreg(c(-1, 0, 1), mean = 0, scale = 0, distribution = "gaussian"),
+    survival::dsurvreg(c(-1, 0, 1), mean = 0, scale = 0, distribution = "gaussian")
+  )
+  expect_warning(
+    nonpositive_cdf <- psurvreg(c(-1, 0, 1), mean = 0, distribution = "weibull"),
+    "NaNs produced"
+  )
+  expect_equal(
+    nonpositive_cdf,
+    suppressWarnings(survival::psurvreg(c(-1, 0, 1), mean = 0, distribution = "weibull"))
+  )
+  expect_warning(
+    boundary_quantiles <- qsurvreg(
+      c(-0.1, 0, 0.5, 1, 1.1, NA_real_),
+      mean = 0,
+      distribution = "gaussian"
+    ),
+    "NaNs produced"
+  )
+  expect_equal(
+    boundary_quantiles,
+    suppressWarnings(
+      survival::qsurvreg(
+        c(-0.1, 0, 0.5, 1, 1.1, NA_real_),
+        mean = 0,
+        distribution = "gaussian"
+      )
+    )
+  )
   expect_error(dsurvreg(1, 0, distribution = "missing"), "Distribution not found")
 
   km <- survfit(Surv(time, status) ~ group, data = data)

@@ -23037,9 +23037,17 @@ def test_survreg_distribution_helpers_match_r_reference_values(monkeypatch):
         survival.dsurvreg([1.0], mean=0.0, distribution="gaussian")
     )
 
-    nonpositive_density = survival.dsurvreg([0.0, -1.0], mean=0.0, distribution="weibull")
+    with pytest.warns(RuntimeWarning, match="NaNs produced"):
+        nonpositive_density = survival.dsurvreg(
+            [0.0, -1.0], mean=0.0, distribution="weibull"
+        )
     assert all(math.isnan(value) for value in nonpositive_density)
-    assert survival.psurvreg([0.0, -1.0], mean=0.0, distribution="weibull") == [0.0, 0.0]
+    with pytest.warns(RuntimeWarning, match="NaNs produced"):
+        nonpositive_cdf = survival.psurvreg(
+            [0.0, -1.0], mean=0.0, distribution="weibull"
+        )
+    assert nonpositive_cdf[0] == 0.0
+    assert math.isnan(nonpositive_cdf[1])
     boundary_quantiles = survival.qsurvreg([0.0, 1.0], mean=0.0, distribution="weibull")
     assert boundary_quantiles[0] == pytest.approx(0.0)
     assert math.isinf(boundary_quantiles[1])
@@ -23056,10 +23064,91 @@ def test_survreg_distribution_helpers_match_r_reference_values(monkeypatch):
         [-0.7266868, 0.0]
     )
 
-    with pytest.raises(ValueError, match="length 1 or 2"):
-        survival.dsurvreg([1.0, 2.0], mean=[0.0, 1.0, 2.0], distribution="weibull")
+    draws = iter([0.25, 0.5, 0.75])
+    monkeypatch.setattr(survival.r_api.random, "random", lambda: next(draws))
+    assert len(survival.rsurvreg(3.7, mean=0.0, distribution="gaussian")) == 3
+    draws = iter([0.25, 0.5])
+    monkeypatch.setattr(survival.r_api.random, "random", lambda: next(draws))
+    assert len(survival.rsurvreg([100, -1], mean=0.0, distribution="gaussian")) == 2
+    assert survival.rsurvreg([], mean=0.0, distribution="gaussian") == []
+
     with pytest.raises(TypeError, match="parms"):
         survival.dsurvreg([1.0], mean=0.0, distribution="t")
+
+
+def test_survreg_distribution_helpers_match_r_boundary_and_recycling_semantics():
+    with pytest.warns(RuntimeWarning, match="longer object length") as recorded:
+        recycled = survival.dsurvreg(
+            [1.0, 2.0, 3.0, 4.0],
+            mean=[0.0, 1.0],
+            scale=[1.0, 2.0, 3.0],
+            distribution="gaussian",
+        )
+    assert len(recorded) == 2
+    assert recycled == pytest.approx(
+        [
+            0.24197072451914337,
+            0.17603266338214976,
+            0.08065690817304778,
+            0.0044318484119380075,
+        ]
+    )
+    assert survival.qsurvreg(0.5, mean=[0.0, 1.0], distribution="gaussian") == [
+        0.0,
+        1.0,
+    ]
+    assert survival.dsurvreg([], mean=0.0, distribution="gaussian") == []
+    assert survival.dsurvreg(1.0, mean=[], distribution="gaussian") == []
+
+    assert survival.dsurvreg(
+        [-1.0, 0.0, 1.0], mean=0.0, scale=-1.0, distribution="gaussian"
+    ) == pytest.approx([-0.24197072451914337, -0.3989422804014327, -0.24197072451914337])
+    zero_scale = survival.dsurvreg(
+        [-1.0, 0.0, 1.0], mean=0.0, scale=0.0, distribution="gaussian"
+    )
+    assert all(math.isnan(value) for value in zero_scale)
+
+    with pytest.warns(RuntimeWarning, match="NaNs produced"):
+        quantiles = survival.qsurvreg(
+            [-0.1, 0.0, 0.5, 1.0, 1.1, math.nan],
+            mean=0.0,
+            distribution="gaussian",
+        )
+    assert math.isnan(quantiles[0])
+    assert quantiles[1:4] == [-math.inf, 0.0, math.inf]
+    assert math.isnan(quantiles[4])
+    assert math.isnan(quantiles[5])
+
+    with pytest.warns(RuntimeWarning, match="NaNs produced") as invalid_df_warnings:
+        invalid_df = survival.qsurvreg(
+            [0.2, 0.8], mean=0.0, distribution="t", parms=0.0
+        )
+    assert len(invalid_df_warnings) == 1
+    assert all(math.isnan(value) for value in invalid_df)
+    with pytest.warns(RuntimeWarning, match="NaNs produced") as invalid_t_density_warnings:
+        invalid_t_density = survival.dsurvreg(
+            [0.2, 0.8], mean=0.0, distribution="t", parms=-1.0
+        )
+    assert len(invalid_t_density_warnings) == 3
+    assert all(math.isnan(value) for value in invalid_t_density)
+    assert survival.qsurvreg(
+        [0.2, 0.8], mean=0.0, distribution="t", parms=math.inf
+    ) == pytest.approx([-0.8416212335729142, 0.8416212335729144], rel=1e-8)
+
+    with pytest.warns(RuntimeWarning, match="NaNs produced") as extreme_warnings:
+        extreme_quantiles = survival.qsurvreg(
+            [-0.1, 1.1], mean=0.0, distribution="extreme"
+        )
+    assert len(extreme_warnings) == 2
+    assert all(math.isnan(value) for value in extreme_quantiles)
+
+    assert survival.dsurvreg(1.0, mean=0.0, distribution="GAUSSIAN") == pytest.approx(
+        [0.24197072451914337]
+    )
+    with pytest.raises(ValueError, match="Distribution not found"):
+        survival.dsurvreg(1.0, mean=0.0, distribution="normal")
+    with pytest.raises(ValueError, match="Distribution not found"):
+        survival.dsurvreg(1.0, mean=0.0, distribution="student-t", parms=4.0)
 
 
 def test_survreg_distribution_registry_matches_reference_metadata_and_kernels():

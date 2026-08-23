@@ -1,5 +1,5 @@
 use crate::internal::statistical::{
-    normal_cdf, normal_inverse_cdf, student_t_cdf, student_t_inverse_cdf, student_t_pdf,
+    normal_inverse_cdf, student_t_cdf, student_t_inverse_cdf, student_t_pdf,
 };
 use crate::regression::survregc1::{SurvivalDist, standardized_density_row};
 use pyo3::prelude::*;
@@ -106,20 +106,13 @@ fn logistic_quantile(p: f64) -> f64 {
 }
 
 fn logistic_cdf(z: f64) -> f64 {
-    if z >= 0.0 {
-        1.0 / (1.0 + (-z).exp())
-    } else {
-        let ez = z.exp();
-        ez / (1.0 + ez)
-    }
+    let ez = z.exp();
+    ez / (1.0 + ez)
 }
 
 fn logistic_pdf(z: f64) -> f64 {
-    if !z.is_finite() {
-        return if z.is_nan() { f64::NAN } else { 0.0 };
-    }
-    let cdf = logistic_cdf(z);
-    cdf * (1.0 - cdf)
+    let ez = z.exp();
+    ez / (1.0 + ez).powi(2)
 }
 
 fn gaussian_pdf(z: f64) -> f64 {
@@ -127,6 +120,20 @@ fn gaussian_pdf(z: f64) -> f64 {
         return if z.is_nan() { f64::NAN } else { 0.0 };
     }
     (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
+}
+
+fn survreg_normal_cdf(z: f64) -> f64 {
+    0.5 * libm::erfc(-z / std::f64::consts::SQRT_2)
+}
+
+fn survreg_normal_inverse_cdf(probability: f64) -> f64 {
+    let mut value = normal_inverse_cdf(probability);
+    if value.is_finite() {
+        for _ in 0..2 {
+            value -= (survreg_normal_cdf(value) - probability) / gaussian_pdf(value);
+        }
+    }
+    value
 }
 
 fn distribution_key(distribution: &str) -> String {
@@ -212,7 +219,7 @@ fn quantile_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
         }
         "logistic" | "loglogistic" | "log_logistic" => logistic_quantile,
         "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            normal_inverse_cdf
+            survreg_normal_inverse_cdf
         }
         _ => unreachable!("distribution was validated"),
     }
@@ -225,7 +232,7 @@ fn cdf_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
         }
         "logistic" | "loglogistic" | "log_logistic" => logistic_cdf,
         "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            normal_cdf
+            survreg_normal_cdf
         }
         _ => unreachable!("distribution was validated"),
     }
@@ -262,12 +269,7 @@ impl SurvregDistributionKind {
     }
 }
 
-fn validate_equal_lengths(
-    values: &[f64],
-    mean: &[f64],
-    scale: &[f64],
-    require_finite_mean: bool,
-) -> PyResult<()> {
+fn validate_equal_lengths(values: &[f64], mean: &[f64], scale: &[f64]) -> PyResult<()> {
     let n = values.len();
     if mean.len() != n {
         return Err(value_error(format!(
@@ -283,22 +285,6 @@ fn validate_equal_lengths(
             n
         )));
     }
-    if require_finite_mean {
-        for (idx, &value) in mean.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(value_error(format!(
-                    "mean contains non-finite value at index {idx}"
-                )));
-            }
-        }
-    }
-    for (idx, &value) in scale.iter().enumerate() {
-        if !value.is_finite() || value <= 0.0 {
-            return Err(value_error(format!(
-                "scale contains non-positive or non-finite value at index {idx}"
-            )));
-        }
-    }
     Ok(())
 }
 
@@ -310,11 +296,8 @@ fn survreg_density_value(
     log_transform: bool,
 ) -> f64 {
     if log_transform {
-        if value <= 0.0 {
-            return f64::NAN;
-        }
         let z = (value.ln() - mean) / scale;
-        return pdf(z) / (scale * value);
+        return pdf(z) / value / scale;
     }
     let z = (value - mean) / scale;
     pdf(z) / scale
@@ -328,9 +311,6 @@ fn survreg_distribution_value(
     log_transform: bool,
 ) -> f64 {
     if log_transform {
-        if value <= 0.0 {
-            return 0.0;
-        }
         let z = (value.ln() - mean) / scale;
         return cdf(z);
     }
@@ -344,12 +324,12 @@ fn survreg_quantile_value(
     scale: f64,
     quantile: fn(f64) -> f64,
     log_transform: bool,
-) -> PyResult<f64> {
-    if !probability.is_finite() || !(0.0..=1.0).contains(&probability) {
-        return Err(value_error("p must be between 0 and 1"));
+) -> f64 {
+    if probability.is_nan() || !(0.0..=1.0).contains(&probability) {
+        return f64::NAN;
     }
     let value = mean + scale * quantile(probability);
-    Ok(if log_transform { value.exp() } else { value })
+    if log_transform { value.exp() } else { value }
 }
 
 #[pyfunction]
@@ -364,17 +344,15 @@ pub fn survreg_distribution(
 ) -> PyResult<Vec<f64>> {
     validate_distribution(&distribution)?;
     let key = validated_distribution_key(&distribution);
-    validate_equal_lengths(&values, &mean, &scale, !is_student_t_distribution(&key))?;
+    validate_equal_lengths(&values, &mean, &scale)?;
     let log_transform = response_uses_log_transform(&key);
     let kind = SurvregDistributionKind::from_str(&kind)
         .ok_or_else(|| value_error("kind must be one of density, distribution, or quantile"))?;
 
     if is_student_t_distribution(&key) {
         let df = parms.ok_or_else(|| value_error("parms is required for distribution='t'"))?;
-        if !df.is_finite() || df <= 0.0 {
-            return Err(value_error(
-                "parms for distribution='t' must be a positive finite value",
-            ));
+        if df.is_nan() || df <= 0.0 {
+            return Ok(vec![f64::NAN; values.len()]);
         }
         return values
             .iter()
@@ -382,16 +360,33 @@ pub fn survreg_distribution(
             .zip(scale.iter())
             .map(|((&value, &mean_value), &scale_value)| match kind {
                 SurvregDistributionKind::Density => {
-                    Ok(student_t_pdf((value - mean_value) / scale_value, df) / scale_value)
+                    let standardized = (value - mean_value) / scale_value;
+                    let density = if df.is_infinite() {
+                        gaussian_pdf(standardized)
+                    } else {
+                        student_t_pdf(standardized, df)
+                    };
+                    Ok(density / scale_value)
                 }
                 SurvregDistributionKind::Distribution => {
-                    Ok(student_t_cdf((value - mean_value) / scale_value, df))
+                    let standardized = (value - mean_value) / scale_value;
+                    Ok(if df.is_infinite() {
+                        survreg_normal_cdf(standardized)
+                    } else {
+                        student_t_cdf(standardized, df)
+                    })
                 }
                 SurvregDistributionKind::Quantile => {
-                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                        return Err(value_error("p must be between 0 and 1"));
-                    }
-                    Ok(mean_value + scale_value * student_t_inverse_cdf(value, df))
+                    let quantile = if df.is_infinite() {
+                        if value.is_nan() || !(0.0..=1.0).contains(&value) {
+                            f64::NAN
+                        } else {
+                            survreg_normal_inverse_cdf(value)
+                        }
+                    } else {
+                        student_t_inverse_cdf(value, df)
+                    };
+                    Ok(mean_value + scale_value * quantile)
                 }
             })
             .collect();
@@ -438,7 +433,7 @@ pub fn survreg_distribution(
                     scale_value,
                     quantile,
                     log_transform,
-                )?);
+                ));
             }
         }
     }
@@ -1068,20 +1063,79 @@ mod tests {
     }
 
     #[test]
-    fn test_survreg_student_t_distribution_requires_valid_df() {
-        for parms in [None, Some(0.0), Some(f64::INFINITY)] {
-            assert!(
-                survreg_distribution(
-                    vec![0.5],
-                    vec![0.0],
-                    vec![1.0],
-                    "t".to_string(),
-                    "quantile".to_string(),
-                    parms,
-                )
-                .is_err()
-            );
-        }
+    fn test_survreg_student_t_distribution_boundary_df_matches_r() {
+        assert!(
+            survreg_distribution(
+                vec![0.5],
+                vec![0.0],
+                vec![1.0],
+                "t".to_string(),
+                "quantile".to_string(),
+                None,
+            )
+            .is_err()
+        );
+
+        let invalid = survreg_distribution(
+            vec![0.2, 0.8],
+            vec![0.0; 2],
+            vec![1.0; 2],
+            "t".to_string(),
+            "quantile".to_string(),
+            Some(0.0),
+        )
+        .expect("invalid degrees of freedom should produce missing values");
+        assert!(invalid.iter().all(|value| value.is_nan()));
+
+        let gaussian_limit = survreg_distribution(
+            vec![0.2, 0.8],
+            vec![0.0; 2],
+            vec![1.0; 2],
+            "t".to_string(),
+            "quantile".to_string(),
+            Some(f64::INFINITY),
+        )
+        .expect("infinite degrees of freedom should use the Gaussian limit");
+        assert!((gaussian_limit[0] + 0.841_621_233_572_914_2).abs() < 1e-8);
+        assert!((gaussian_limit[1] - 0.841_621_233_572_914_4).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_survreg_distribution_numeric_boundaries_match_r() {
+        let negative_scale = survreg_distribution(
+            vec![-1.0, 0.0, 1.0],
+            vec![0.0; 3],
+            vec![-1.0; 3],
+            "gaussian".to_string(),
+            "density".to_string(),
+            None,
+        )
+        .expect("negative scales should follow vector arithmetic");
+        assert!((negative_scale[0] + 0.241_970_724_519_143_37).abs() < 1e-14);
+        assert!((negative_scale[1] + 0.398_942_280_401_432_7).abs() < 1e-14);
+        assert!((negative_scale[2] + 0.241_970_724_519_143_37).abs() < 1e-14);
+
+        let zero_scale = survreg_distribution(
+            vec![-1.0, 0.0, 1.0],
+            vec![0.0; 3],
+            vec![0.0; 3],
+            "gaussian".to_string(),
+            "density".to_string(),
+            None,
+        )
+        .expect("zero scales should produce missing density values");
+        assert!(zero_scale.iter().all(|value| value.is_nan()));
+
+        let invalid_probabilities = survreg_distribution(
+            vec![-0.1, 1.1, f64::NAN],
+            vec![0.0; 3],
+            vec![1.0; 3],
+            "gaussian".to_string(),
+            "quantile".to_string(),
+            None,
+        )
+        .expect("invalid probabilities should produce missing quantiles");
+        assert!(invalid_probabilities.iter().all(|value| value.is_nan()));
     }
 
     #[test]
