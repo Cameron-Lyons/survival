@@ -1455,6 +1455,7 @@ fn dense_coxph_frailty_fit(
     })?;
     let penalized_log_likelihood = cox_fit.penalized_log_likelihood();
     let penalty = cox_fit.penalty_hessian();
+    let initial_information_rank = cox_fit.initial_information_rank();
     let (beta, means, score, covariance, log_likelihood, score_test, flag, iterations) =
         cox_fit.results();
     let covariance_penalty = covariance.dot(&penalty);
@@ -1518,6 +1519,7 @@ fn dense_coxph_frailty_fit(
         log_likelihood: log_likelihood.to_vec(),
         score_test,
         convergence_flag: flag,
+        initial_information_rank,
         iterations,
         risk_scores: Vec::new(),
         event_times: time,
@@ -1904,6 +1906,7 @@ pub fn coxph_frailty_fit(
         log_likelihood: vec![result.initial_log_likelihood, result.final_log_likelihood],
         score_test: result.score_test,
         convergence_flag: result.flag,
+        initial_information_rank: result.flag,
         iterations: result.iterations,
         risk_scores: Vec::new(),
         event_times: time,

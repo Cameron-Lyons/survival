@@ -62,6 +62,7 @@ pub struct CoxPHFit {
     pub score_test: f64,
     #[pyo3(get)]
     pub convergence_flag: i32,
+    pub(crate) initial_information_rank: i32,
     #[pyo3(get)]
     pub iterations: usize,
     #[pyo3(get)]
@@ -1055,6 +1056,7 @@ fn coxph_fit_internal(
     cox_fit
         .fit()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
+    let initial_information_rank = cox_fit.initial_information_rank();
     let (beta, means, score_vector, information, log_likelihood, score_test, flag, iterations) =
         cox_fit.results();
     let mut linear_predictors = Vec::with_capacity(n);
@@ -1105,6 +1107,7 @@ fn coxph_fit_internal(
         log_likelihood: log_likelihood.to_vec(),
         score_test,
         convergence_flag: flag,
+        initial_information_rank,
         iterations,
         risk_scores,
         event_times: time,
@@ -1143,6 +1146,7 @@ mod tests {
             log_likelihood: vec![],
             score_test: 0.0,
             convergence_flag: 0,
+            initial_information_rank: 0,
             iterations: 0,
             risk_scores: vec![],
             event_times: vec![2.0, 4.0, 4.0, 3.0, 5.0, 6.0],
@@ -1195,6 +1199,7 @@ mod tests {
             log_likelihood: vec![],
             score_test: 0.0,
             convergence_flag: 0,
+            initial_information_rank: 0,
             iterations: 0,
             risk_scores: vec![],
             event_times: vec![2.0, 2.0, 3.0, 4.0, 4.0, 3.0, 5.0, 5.0],
@@ -1697,6 +1702,7 @@ mod tests {
             log_likelihood: vec![],
             score_test: 0.0,
             convergence_flag: 0,
+            initial_information_rank: 0,
             iterations: 0,
             risk_scores: vec![],
             event_times: vec![1.0, 2.0, 3.0],

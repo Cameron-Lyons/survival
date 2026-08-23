@@ -7224,16 +7224,38 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
       )
     )
   }
-  if (as.integer(.result_field(result, "convergence_flag")) == 1000L) {
-    warning("Ran out of iterations and did not converge", call. = FALSE)
-  }
-
   coefficients <- .as_numeric_matrix(.result_field(result, "coefficients"))
   coefficients <- if (nrow(coefficients) == 0L) numeric() else coefficients[1L, ]
-  names(coefficients) <- coefficient_names
+  fit_flag <- as.integer(.result_field(result, "convergence_flag"))
+  fit_iterations <- as.integer(.result_field(result, "iterations"))
+  model_variance <- .as_numeric_matrix(.result_field(result, "model_information_matrix"))
+  score_vector <- .as_numeric_vector(.result_field(result, "score_vector"))
+  if (fit_flag == 1000L) {
+    warning("Ran out of iterations and did not converge", call. = FALSE)
+  } else {
+    infs <- abs(drop(score_vector %*% model_variance))
+    infs <- !is.finite(score_vector) |
+      infs > sqrt(1e-9) * (1 + abs(coefficients))
+    if (any(infs)) {
+      warning(
+        paste(
+          "Loglik converged before variable ",
+          paste(seq_along(coefficients)[infs], collapse = ","),
+          "; beta may be infinite. "
+        ),
+        call. = FALSE
+      )
+    }
+  }
+
   variance <- .as_numeric_matrix(.result_field(result, "information_matrix"))
   naive_variance <- .as_numeric_matrix(.result_field(result, "naive_information_matrix"))
   phase2_variance <- .as_numeric_matrix(.result_field(result, "phase2_variance"))
+  which_singular <- as.logical(.as_numeric_vector(
+    .result_field(result, "coefficient_aliases")
+  ))
+  coefficients[which_singular] <- NA_real_
+  names(coefficients) <- coefficient_names
   dimnames(variance) <- dimnames(naive_variance) <- list(
     coefficient_names,
     coefficient_names
@@ -7252,7 +7274,7 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     var = variance,
     loglik = .as_numeric_vector(.result_field(result, "log_likelihood")),
     score = as.numeric(.result_field(result, "score_test")),
-    iter = as.integer(.result_field(result, "iterations")),
+    iter = fit_iterations,
     linear.predictors = .as_numeric_vector(.result_field(result, "linear_predictors")),
     residuals = .as_numeric_vector(.result_field(result, "residuals")),
     means = stats::setNames(.as_numeric_vector(.result_field(result, "means")), internal_fit_names),

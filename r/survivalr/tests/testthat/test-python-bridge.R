@@ -13139,6 +13139,70 @@ test_that("cch preserves small offset risk in counting-process data", {
   expect_equal(actual$iter, reference$iter)
 })
 
+test_that("cch masks aliases from the coefficient-producing fit", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  self_prentice_data <- data.frame(
+    start = c(16, 6, 5, 5, 16, 0, 12, 4, 14, 16, 1, 5, 14, 1, 12, 9, 1, 15),
+    stop = c(17, 8, 10, 6, 17, 2, 17, 6, 20, 17, 3, 7, 20, 4, 14, 15, 4, 17),
+    status = c(1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0),
+    group = factor(
+      c("d", "d", "d", "d", "d", "b", "b", "b", "a", "a", "d", "a", "b", "c", "c", "d", "a", "a"),
+      levels = c("a", "b", "c", "d")
+    ),
+    id = seq_len(18),
+    subcohort = c(1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1)
+  )
+  self_args <- list(
+    formula = Surv(start, stop, status) ~ group,
+    data = self_prentice_data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 54,
+    method = "SelfPrentice"
+  )
+  actual_self <- expect_warning(
+    do.call(cch, self_args),
+    "Loglik converged before variable  1"
+  )
+  reference_self <- expect_warning(
+    do.call(survival::cch, self_args),
+    "Loglik converged before variable  1"
+  )
+  expect_equal(actual_self$coefficients, reference_self$coefficients, tolerance = 1e-11)
+  expect_equal(actual_self$var, reference_self$var, tolerance = 1e-11)
+
+  prentice_data <- data.frame(
+    stop = c(7, 3, 6, 7, 9, 15, 13, 16, 13, 15, 6, 8, 17, 14, 8, 3, 12, 16, 1, 3),
+    status = c(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1),
+    group = factor(
+      c("c", "a", "d", "b", "b", "b", "b", "a", "c", "d", "d", "d", "b", "b", "b", "a", "a", "b", "d", "b"),
+      levels = c("a", "b", "c", "d")
+    ),
+    id = seq_len(20),
+    subcohort = c(0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1)
+  )
+  prentice_args <- list(
+    formula = Surv(stop, status) ~ group,
+    data = prentice_data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 60,
+    method = "Prentice"
+  )
+  actual_prentice <- expect_warning(
+    do.call(cch, prentice_args),
+    "Loglik converged before variable  3"
+  )
+  reference_prentice <- expect_warning(
+    do.call(survival::cch, prentice_args),
+    "Loglik converged before variable  3"
+  )
+  expect_equal(actual_prentice$coefficients, reference_prentice$coefficients, tolerance = 1e-11)
+})
+
 test_that("cch matches factor phase-two roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

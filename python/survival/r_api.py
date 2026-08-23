@@ -828,7 +828,7 @@ class CchModelResult:
             "phase2var": "phase2_variance",
         }
         if name == "coef":
-            return list(self.fit.coefficients[0])
+            return list(self.coefficients[0])
         if name == "x":
             return self.fit.covariates
         if name == "y":
@@ -843,7 +843,11 @@ class CchModelResult:
 
     @property
     def coefficients(self) -> list[list[float]]:
-        return self.fit.coefficients
+        beta = [float(value) for value in self.fit.coefficients[0]]
+        aliases = _cox_alias_mask(self.fit)
+        return [
+            [math.nan if aliased else value for value, aliased in zip(beta, aliases, strict=True)]
+        ]
 
     @property
     def information_matrix(self) -> list[list[float]]:
@@ -20420,6 +20424,10 @@ def _cox_alias_mask(fit: Any) -> list[bool]:
     model = _unwrap_formula_fit(fit)
     width = len(_cox_beta(model))
     aliases = [False] * width
+    reported_aliases = getattr(model, "coefficient_aliases", None)
+    if reported_aliases is not None:
+        reported = [bool(value) for value in reported_aliases]
+        return reported if len(reported) == width else aliases
     if width == 0 or int(getattr(model, "iterations", 0)) <= 0:
         return aliases
 
@@ -28491,6 +28499,33 @@ def cch(
             RuntimeWarning,
             stacklevel=2,
         )
+    else:
+        score_vector = [float(value) for value in fit.score_vector]
+        model_variance = [[float(value) for value in row] for row in fit.model_information_matrix]
+        raw_coefficients = [float(value) for value in fit.coefficients[0]]
+        influence = [
+            abs(
+                math.fsum(
+                    score_vector[row] * model_variance[row][column]
+                    for row in range(len(score_vector))
+                )
+            )
+            for column in range(len(raw_coefficients))
+        ]
+        infinite = [
+            index + 1
+            for index, value in enumerate(influence)
+            if not math.isfinite(score_vector[index])
+            or value > math.sqrt(1e-9) * (1.0 + abs(raw_coefficients[index]))
+        ]
+        if infinite:
+            warnings.warn(
+                "Loglik converged before variable  "
+                + ",".join(str(index) for index in infinite)
+                + " ; beta may be infinite. ",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     return CchModelResult(
         fit=fit,
         design=design,

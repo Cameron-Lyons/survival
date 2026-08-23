@@ -11964,6 +11964,7 @@ def test_case_cohort_bindings_are_typed_to_runtime_surface():
     assert _pyi_function_arg_names(stub_path, "cch_fit") == expected_fit_args
     assert {
         "coefficients",
+        "coefficient_aliases",
         "information_matrix",
         "naive_information_matrix",
         "phase2_variance",

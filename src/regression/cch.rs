@@ -1,4 +1,4 @@
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
+use crate::constants::{CONVERGENCE_FLAG, EXP_CLAMP_MAX, EXP_CLAMP_MIN};
 use crate::regression::coxph::{
     CoxPHFit, CoxPHModel, Subject, coxph_fit_with_counting_roundoff_compatibility,
 };
@@ -149,6 +149,8 @@ impl CohortData {
 pub struct CchFitResult {
     #[pyo3(get)]
     pub coefficients: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub coefficient_aliases: Vec<bool>,
     #[pyo3(get)]
     pub information_matrix: Vec<Vec<f64>>,
     #[pyo3(get)]
@@ -613,11 +615,49 @@ fn fit_weighted_cox(
 struct CchComputation {
     fit: CoxPHFit,
     coefficients: Vec<f64>,
+    coefficient_aliases: Vec<bool>,
     phase2_variance: Vec<Vec<f64>>,
     naive_variance: Vec<Vec<f64>>,
     variance: Vec<Vec<f64>>,
     offsets: Vec<f64>,
     robust: bool,
+}
+
+fn coefficient_aliases_from_information(
+    width: usize,
+    information_matrix: &[Vec<f64>],
+    convergence_flag: i32,
+    initial_information_rank: i32,
+) -> Vec<bool> {
+    if width == 0
+        || information_matrix.len() != width
+        || information_matrix.iter().any(|row| row.len() != width)
+    {
+        return vec![false; width];
+    }
+
+    let aliases = (0..width)
+        .map(|index| information_matrix[index][index] == 0.0)
+        .collect::<Vec<_>>();
+    if convergence_flag != CONVERGENCE_FLAG || initial_information_rank < 0 {
+        return aliases;
+    }
+
+    let rank = initial_information_rank as usize;
+    if rank < width && aliases.iter().filter(|&&aliased| aliased).count() == width - rank {
+        aliases
+    } else {
+        vec![false; width]
+    }
+}
+
+fn fitted_coefficient_aliases(fit: &CoxPHFit) -> Vec<bool> {
+    coefficient_aliases_from_information(
+        fit.coefficients.first().map_or(0, Vec::len),
+        &fit.information_matrix,
+        fit.convergence_flag,
+        fit.initial_information_rank,
+    )
 }
 
 fn two_pass_mean(values: &[f64]) -> f64 {
@@ -650,7 +690,7 @@ fn augmented_fit(
         .filter_map(|(idx, &sampled)| (sampled == 1).then_some(idx))
         .collect::<Vec<_>>();
 
-    let initial_coefficients = if prentice {
+    let (initial_coefficients, initial_aliases) = if prentice {
         let delta = event_time_delta(stop, status);
         let mut entry = start.to_vec();
         for idx in 0..stop.len() {
@@ -673,9 +713,12 @@ fn augmented_fit(
             None,
             20,
         )?;
-        Some(fit.coefficients[0].clone())
+        (
+            Some(fit.coefficients[0].clone()),
+            Some(fitted_coefficient_aliases(&fit)),
+        )
     } else {
-        None
+        (None, None)
     };
 
     let augmented_n = case_indices.len() + subcohort_indices.len();
@@ -752,11 +795,13 @@ fn augmented_fit(
     let phase2_variance = scaled_crossproduct(&phase2_rows, phase2_scale);
     let model_variance = fit.information_matrix.clone();
     let naive_variance = add_matrices(&model_variance, &phase2_variance);
+    let coefficient_aliases = initial_aliases.unwrap_or_else(|| fitted_coefficient_aliases(&fit));
     let coefficients = initial_coefficients.unwrap_or_else(|| fit.coefficients[0].clone());
 
     Ok(CchComputation {
         fit,
         coefficients,
+        coefficient_aliases,
         phase2_variance,
         variance: naive_variance.clone(),
         naive_variance,
@@ -844,9 +889,11 @@ fn lin_ying_fit(
         naive_variance.clone()
     };
     let coefficients = fit.coefficients[0].clone();
+    let coefficient_aliases = fitted_coefficient_aliases(&fit);
     Ok(CchComputation {
         fit,
         coefficients,
+        coefficient_aliases,
         phase2_variance,
         naive_variance,
         variance,
@@ -1102,10 +1149,12 @@ fn borgan_fit(
     let collapsed_score_rows =
         collapse_weighted_score_rows(&score_rows, &fit.weights, &source_indices, observed_n);
     let coefficients = fit.coefficients[0].clone();
+    let coefficient_aliases = fitted_coefficient_aliases(&fit);
     Ok(BorganComputation {
         computation: CchComputation {
             fit,
             coefficients,
+            coefficient_aliases,
             phase2_variance: phase_two.variance,
             variance: naive_variance.clone(),
             naive_variance,
@@ -1140,6 +1189,7 @@ fn finish_cch_result(
     let CchComputation {
         fit,
         coefficients,
+        coefficient_aliases,
         phase2_variance,
         naive_variance,
         variance,
@@ -1153,6 +1203,7 @@ fn finish_cch_result(
 
     Ok(CchFitResult {
         coefficients: vec![coefficients],
+        coefficient_aliases,
         information_matrix: variance,
         naive_information_matrix: naive_variance,
         model_information_matrix: fit.information_matrix,
@@ -1336,6 +1387,20 @@ mod tests {
         Vec<i32>,
         Vec<i64>,
     );
+
+    #[test]
+    fn nonconvergence_alias_mask_uses_initial_information_rank() {
+        let singular_information = vec![vec![0.0, 0.0], vec![0.0, 1.0]];
+
+        assert_eq!(
+            coefficient_aliases_from_information(2, &singular_information, CONVERGENCE_FLAG, 1,),
+            vec![true, false]
+        );
+        assert_eq!(
+            coefficient_aliases_from_information(1, &[vec![0.0]], CONVERGENCE_FLAG, 1),
+            vec![false]
+        );
+    }
 
     fn subject(id: usize) -> Subject {
         Subject::new(id, vec![id as f64], true, true, 0)
@@ -2342,6 +2407,7 @@ mod tests {
         assert_close(&result.means, &[-0.184_961_106_481_146_94]);
         assert_eq!(result.iterations, 20);
         assert_eq!(result.convergence_flag, crate::constants::CONVERGENCE_FLAG);
+        assert_eq!(result.coefficient_aliases, vec![false]);
     }
 
     #[test]
@@ -2766,6 +2832,255 @@ mod tests {
         );
         assert!((result.score_test - 2.109_158_956_458_69).abs() < 1e-11);
         assert_eq!(result.iterations, 4);
+    }
+
+    #[test]
+    fn self_prentice_reports_alias_from_the_coefficient_fit() {
+        let stop = vec![
+            17.0, 8.0, 10.0, 6.0, 17.0, 2.0, 17.0, 6.0, 20.0, 17.0, 3.0, 7.0, 20.0, 4.0, 14.0,
+            15.0, 4.0, 17.0,
+        ];
+        let status = vec![1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0];
+        let groups = [
+            'd', 'd', 'd', 'd', 'd', 'b', 'b', 'b', 'a', 'a', 'd', 'a', 'b', 'c', 'c', 'd', 'a',
+            'a',
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| {
+                vec![
+                    f64::from(group == 'b'),
+                    f64::from(group == 'c'),
+                    f64::from(group == 'd'),
+                ]
+            })
+            .collect();
+        let start = vec![
+            16.0, 6.0, 5.0, 5.0, 16.0, 0.0, 12.0, 4.0, 14.0, 16.0, 1.0, 5.0, 14.0, 1.0, 12.0, 9.0,
+            1.0, 15.0,
+        ];
+        let subcohort = vec![1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=18).collect(),
+            54,
+            Some(start),
+            "SelfPrentice",
+            false,
+        )
+        .expect("singular SelfPrentice fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[-16.780_418_656_828_065, 0.0, -0.969_815_805_339_758_6],
+        );
+        assert_eq!(result.coefficient_aliases, vec![false, true, false]);
+        assert_eq!(result.convergence_flag, 2);
+        assert_eq!(result.model_information_matrix[1], vec![0.0; 3]);
+    }
+
+    #[test]
+    fn prentice_aliases_follow_the_initial_coefficient_fit() {
+        let stop = vec![
+            7.0, 3.0, 6.0, 7.0, 9.0, 15.0, 13.0, 16.0, 13.0, 15.0, 6.0, 8.0, 17.0, 14.0, 8.0, 3.0,
+            12.0, 16.0, 1.0, 3.0,
+        ];
+        let status = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1];
+        let groups = [
+            'c', 'a', 'd', 'b', 'b', 'b', 'b', 'a', 'c', 'd', 'd', 'd', 'b', 'b', 'b', 'a', 'a',
+            'b', 'd', 'b',
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| {
+                vec![
+                    f64::from(group == 'b'),
+                    f64::from(group == 'c'),
+                    f64::from(group == 'd'),
+                ]
+            })
+            .collect();
+        let subcohort = vec![0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=20).collect(),
+            60,
+            None,
+            "Prentice",
+            false,
+        )
+        .expect("singular augmented Prentice fit should succeed");
+
+        assert!(result.coefficients[0][1].is_finite());
+        assert!(
+            (result.coefficients[0][1] - 2.340_378_489_586_3).abs() < 1e-11,
+            "expected group c coefficient 2.3403784895863, got {}",
+            result.coefficients[0][1]
+        );
+        assert_eq!(result.coefficient_aliases, vec![false; 3]);
+        assert_eq!(result.model_information_matrix[1], vec![0.0; 3]);
+    }
+
+    #[test]
+    fn self_prentice_negative_rank_uses_zero_diagonal_aliases() {
+        let stop = vec![
+            18.0, 12.0, 6.0, 15.0, 10.0, 2.0, 19.0, 3.0, 10.0, 9.0, 4.0, 8.0, 4.0, 9.0, 5.0, 8.0,
+            20.0, 1.0, 13.0, 11.0, 18.0, 2.0,
+        ];
+        let status = vec![
+            0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        ];
+        let groups = [
+            'b', 'a', 'b', 'c', 'b', 'a', 'b', 'c', 'b', 'b', 'a', 'c', 'b', 'a', 'a', 'b', 'a',
+            'c', 'c', 'c', 'b', 'b',
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| vec![f64::from(group == 'b'), f64::from(group == 'c')])
+            .collect();
+        let start = vec![
+            13.0, 10.0, 2.0, 11.0, 8.0, 1.0, 13.0, 2.0, 5.0, 8.0, 3.0, 6.0, 2.0, 8.0, 2.0, 3.0,
+            18.0, 0.0, 9.0, 6.0, 14.0, 0.0,
+        ];
+        let subcohort = vec![
+            1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=22).collect(),
+            66,
+            Some(start),
+            "SelfPrentice",
+            false,
+        )
+        .expect("negative-rank SelfPrentice fit should succeed");
+
+        assert_eq!(result.convergence_flag, -1);
+        assert_eq!(result.coefficient_aliases, vec![false, true]);
+        assert_eq!(result.model_information_matrix[1], vec![0.0; 2]);
+    }
+
+    #[test]
+    fn self_prentice_iteration_zero_still_reports_aliases() {
+        let stop = vec![
+            15.0, 5.0, 14.0, 18.0, 9.0, 4.0, 10.0, 3.0, 8.0, 19.0, 14.0, 17.0, 20.0, 3.0, 4.0,
+            16.0, 19.0, 18.0, 7.0, 8.0, 7.0, 14.0, 10.0, 17.0, 3.0, 3.0, 15.0, 4.0, 18.0, 17.0,
+            20.0,
+        ];
+        let status = vec![
+            1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0,
+            0, 0,
+        ];
+        let x = [
+            -0.000_600_774_570_038_758_4,
+            -0.312_082_379_784_322_57,
+            -0.764_566_938_200_546_4,
+            -0.241_624_021_646_016_48,
+            2.247_667_756_170_522,
+            2.559_957_401_037_520_3,
+            -0.339_799_886_630_334_67,
+            1.943_262_305_104_806_6,
+            -1.185_144_620_585_291_8,
+            -0.454_144_497_864_258_4,
+            0.418_379_474_658_818_5,
+            0.912_564_013_420_357_3,
+            1.485_608_170_916_249_2,
+            -0.843_255_548_265_396_1,
+            -0.236_296_981_985_741_78,
+            0.503_408_751_166_055_2,
+            0.349_215_368_310_620_67,
+            0.383_986_413_971_283_47,
+            0.266_320_095_499_534,
+            -0.000_688_421_051_798_383_8,
+            -0.412_170_458_183_485_36,
+            0.367_599_024_899_542_77,
+            -0.352_994_530_798_268,
+            -0.352_947_622_251_449_8,
+            0.812_867_685_598_858_7,
+            -0.653_380_403_465_129,
+            0.153_327_304_884_236_82,
+            -0.411_606_111_166_852_75,
+            0.187_476_023_572_892_4,
+            -1.455_126_000_653_147_7,
+            -0.464_524_786_753_851_5,
+        ];
+        let z = [
+            -0.975_256_683_577_279_6,
+            0.614_106_816_725_664_5,
+            -0.576_012_257_836_098,
+            -0.602_337_855_956_903_2,
+            -0.430_769_604_077_128_66,
+            -0.376_565_201_015_281_46,
+            0.491_700_503_097_756_7,
+            -1.167_550_635_095_018_4,
+            -1.282_720_188_618_548_9,
+            -0.263_186_794_749_471_8,
+            -0.795_651_620_126_064,
+            -2.331_187_972_587_066_3,
+            -0.898_826_528_058_933_7,
+            1.845_075_947_976_124_5,
+            -1.107_197_496_264_888_7,
+            -1.965_526_502_598_324_4,
+            0.326_809_956_007_639_73,
+            -1.050_498_426_045_156_2,
+            -0.038_723_454_587_182_31,
+            0.274_783_325_190_710_1,
+            -0.700_342_092_096_458_9,
+            -0.034_833_506_689_307_21,
+            1.143_641_861_378_53,
+            1.291_626_528_484_483,
+            -0.123_171_137_068_568_4,
+            0.005_611_346_438_593_344_5,
+            0.162_253_397_424_139_2,
+            -0.091_532_340_121_242_23,
+            0.009_175_393_215_244_803,
+            -0.111_959_798_951_459_76,
+            -0.749_126_948_184_165_9,
+        ];
+        let covariates = x
+            .into_iter()
+            .zip(z)
+            .map(|(left, right)| vec![left, right])
+            .collect();
+        let start = vec![
+            9.0, 2.0, 13.0, 12.0, 5.0, 0.0, 4.0, 0.0, 5.0, 18.0, 12.0, 16.0, 16.0, 0.0, 2.0, 12.0,
+            13.0, 14.0, 6.0, 6.0, 3.0, 13.0, 9.0, 15.0, 0.0, 1.0, 14.0, 1.0, 16.0, 13.0, 15.0,
+        ];
+        let subcohort = vec![
+            1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=31).collect(),
+            93,
+            Some(start),
+            "SelfPrentice",
+            false,
+        )
+        .expect("iteration-zero SelfPrentice fit should succeed");
+
+        assert_eq!(result.iterations, 0);
+        assert_eq!(
+            result.coefficient_aliases,
+            vec![true, false],
+            "unexpected convergence flag {} and model information {:?}",
+            result.convergence_flag,
+            result.model_information_matrix
+        );
+        assert_eq!(result.model_information_matrix[0], vec![0.0; 2]);
     }
 
     #[test]

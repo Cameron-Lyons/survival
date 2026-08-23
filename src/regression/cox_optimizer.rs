@@ -277,6 +277,7 @@ pub(crate) struct CoxFit {
     sctest: f64,
     flag: i32,
     iter: usize,
+    initial_information_rank: i32,
 }
 
 pub(crate) struct CoxFitBuilder {
@@ -479,6 +480,7 @@ impl CoxFit {
             sctest: 0.0,
             flag: 0,
             iter: 0,
+            initial_information_rank: 0,
         };
         cox.scale_center(doscale, reverse_centering_order)?;
         Ok(cox)
@@ -1706,6 +1708,7 @@ impl CoxFit {
         }
         a.copy_from_slice(&self.u);
         self.flag = Self::cholesky(&mut self.imat, self.toler, factor_arithmetic);
+        self.initial_information_rank = self.flag;
         // The counting-process reference rejects Newton trials whose factor
         // rank differs from the rank at the initial coefficient.
         let initial_rank = self.flag;
@@ -1974,6 +1977,10 @@ impl CoxFit {
             self.flag,
             self.iter,
         )
+    }
+
+    pub(crate) fn initial_information_rank(&self) -> i32 {
+        self.initial_information_rank
     }
 }
 

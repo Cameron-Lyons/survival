@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import date
 from itertools import combinations
 from statistics import NormalDist
+from types import SimpleNamespace
 
 import pytest
 
@@ -25834,6 +25835,89 @@ def test_cch_formula_matches_r_counting_process_results():
         assert actual == pytest.approx(expected_row, abs=1e-11)
     assert len(fit.phase2var) == 2
     assert len(fit.martingale_residuals()) == len(fit.status)
+
+
+def test_cch_masks_self_prentice_alias_but_preserves_prentice_coefficient():
+    self_prentice_data = {
+        "start": [16, 6, 5, 5, 16, 0, 12, 4, 14, 16, 1, 5, 14, 1, 12, 9, 1, 15],
+        "stop": [17, 8, 10, 6, 17, 2, 17, 6, 20, 17, 3, 7, 20, 4, 14, 15, 4, 17],
+        "status": [1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0],
+        "group": list("dddddbbbaadabccdaa"),
+        "id": list(range(1, 19)),
+        "subcohort": [1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1],
+    }
+    with pytest.warns(RuntimeWarning) as caught:
+        self_prentice = survival.cch(
+            'Surv(start, stop, status) ~ factor(group, levels=c("a","b","c","d"))',
+            self_prentice_data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=54,
+            method="SelfPrentice",
+            robust=True,
+        )
+    assert [str(item.message) for item in caught] == [
+        "robust ignored for method (SelfPrentice)",
+        "Loglik converged before variable  1 ; beta may be infinite. ",
+    ]
+    coefficients = survival.coef(self_prentice)
+    assert coefficients[0] == pytest.approx(-16.7804186568281, abs=1e-11)
+    assert math.isnan(coefficients[1])
+    assert coefficients[2] == pytest.approx(-0.969815805339759, abs=1e-11)
+    assert self_prentice.fit.coefficients[0][1] == 0.0
+    assert self_prentice.fit.coefficient_aliases == [False, True, False]
+
+    prentice_data = {
+        "stop": [7, 3, 6, 7, 9, 15, 13, 16, 13, 15, 6, 8, 17, 14, 8, 3, 12, 16, 1, 3],
+        "status": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1],
+        "group": list("cadbbbbacdddbbbaabdb"),
+        "id": list(range(1, 21)),
+        "subcohort": [0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1],
+    }
+    with pytest.warns(RuntimeWarning, match="Loglik converged before variable  3"):
+        prentice = survival.cch(
+            'Surv(stop, status) ~ factor(group, levels=c("a","b","c","d"))',
+            prentice_data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=60,
+            method="Prentice",
+        )
+    assert survival.coef(prentice)[1] == pytest.approx(2.3403784895863, abs=1e-11)
+    assert prentice.fit.coefficient_aliases == [False, False, False]
+
+
+def test_cch_iteration_zero_still_masks_and_warns(monkeypatch: pytest.MonkeyPatch):
+    native_fit = SimpleNamespace(
+        coefficients=[[0.0, 0.0]],
+        coefficient_aliases=[True, False],
+        convergence_flag=2,
+        iterations=0,
+        score_vector=[0.0, 1.0],
+        model_information_matrix=[[0.0, 0.0], [0.0, 1.0]],
+    )
+    monkeypatch.setattr(survival.r_api._core, "cch_fit", lambda *args, **kwargs: native_fit)
+
+    data = {
+        "stop": [1, 2, 3, 4],
+        "status": [1, 1, 0, 0],
+        "x": [0.0, 1.0, 0.0, 1.0],
+        "z": [1.0, 0.0, 1.0, 0.0],
+        "id": [1, 2, 3, 4],
+        "subcohort": [1, 1, 1, 1],
+    }
+    with pytest.warns(RuntimeWarning, match="Loglik converged before variable  2"):
+        fit = survival.cch(
+            "Surv(stop, status) ~ x + z",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=12,
+            method="SelfPrentice",
+        )
+
+    assert math.isnan(fit.coefficients[0][0])
+    assert fit.coefficients[0][1] == 0.0
 
 
 def test_cch_formula_preserves_small_counting_process_offset_risk():
