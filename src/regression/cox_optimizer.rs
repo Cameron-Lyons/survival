@@ -256,6 +256,7 @@ pub(crate) struct CoxFit {
     status: Array1<i32>,
     entry_times: Option<Array1<f64>>,
     all_entered_before_first_event: bool,
+    counting_roundoff_compatibility: bool,
     counting_used: Option<Vec<bool>>,
     entry_order: Option<Vec<usize>>,
     covar: Array2<f64>,
@@ -397,6 +398,7 @@ impl CoxFit {
             config,
             doscale,
             initial_beta,
+            false,
         )
     }
 
@@ -412,6 +414,7 @@ impl CoxFit {
         config: CoxFitConfig,
         doscale: Vec<bool>,
         initial_beta: Vec<f64>,
+        counting_roundoff_compatibility: bool,
     ) -> Result<Self, CoxError> {
         let nvar = covar.ncols();
         let mut strata = strata;
@@ -432,7 +435,8 @@ impl CoxFit {
         // The counting-process C routine effectively centers on the first row
         // in descending stop-time order before computing its global scale. Keep
         // scalar fits on their original centering path.
-        let reverse_centering_order = entry_times.is_some() && nvar > 1;
+        let reverse_centering_order =
+            counting_roundoff_compatibility && entry_times.is_some() && nvar > 1;
         let counting_used = entry_times
             .as_ref()
             .map(|entries| counting_used_rows(&time, &status, entries, &strata));
@@ -456,6 +460,7 @@ impl CoxFit {
             status,
             entry_times,
             all_entered_before_first_event,
+            counting_roundoff_compatibility,
             counting_used,
             entry_order,
             covar,
@@ -742,6 +747,7 @@ impl CoxFit {
         toler: f64,
         doscale: Vec<bool>,
         initial_beta: Vec<f64>,
+        counting_roundoff_compatibility: bool,
     ) -> Result<Self, CoxError> {
         let config = CoxFitConfig {
             method,
@@ -760,6 +766,7 @@ impl CoxFit {
             config,
             doscale,
             initial_beta,
+            counting_roundoff_compatibility,
         )
     }
     #[allow(clippy::undocumented_unsafe_blocks)]
@@ -1324,7 +1331,9 @@ impl CoxFit {
         };
         // For one covariate with no delayed entry, the simpler recurrence also
         // preserves the scalar reference path used by the CCH calculation.
-        if self.all_entered_before_first_event && self.covar.ncols() == 1 {
+        if self.all_entered_before_first_event
+            && !(self.counting_roundoff_compatibility && self.covar.ncols() > 1)
+        {
             return self.iterate_right_censored(beta);
         }
         let entry_order = self
@@ -1338,7 +1347,7 @@ impl CoxFit {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
-        let arithmetic = ProductAccumulator::new(nvar > 1);
+        let arithmetic = ProductAccumulator::new(self.counting_roundoff_compatibility && nvar > 1);
         self.u.fill(0.0);
         self.imat.fill(0.0);
 
@@ -1936,6 +1945,7 @@ mod tests {
             1e-9,
             vec![true; 2],
             vec![0.0; 2],
+            false,
         )
         .expect("counting-process fixture should initialize")
     }
@@ -2112,6 +2122,7 @@ mod tests {
                 1e-8,
                 vec![true],
                 vec![0.0],
+                false,
             )
             .expect("counting-process Cox fit should initialize");
 
@@ -2173,6 +2184,7 @@ mod tests {
             1e-9,
             vec![false],
             vec![0.0],
+            false,
         )
         .expect("cancellation fixture should initialize");
 
@@ -2207,6 +2219,7 @@ mod tests {
                 1e-9,
                 vec![false],
                 vec![0.0],
+                false,
             )
             .expect("large exact comparison fixture should initialize")
         };

@@ -1437,6 +1437,7 @@ fn dense_coxph_frailty_fit(
         toler,
         doscale,
         initial_beta,
+        false,
     )
     .map_err(|error| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
@@ -1528,6 +1529,7 @@ fn dense_coxph_frailty_fit(
         strata,
         method,
         nocenter,
+        counting_roundoff_compatibility: false,
     };
     Ok(CoxPHFrailtyFit {
         frailty,
@@ -1913,6 +1915,7 @@ pub fn coxph_frailty_fit(
         strata,
         method,
         nocenter,
+        counting_roundoff_compatibility: false,
     };
 
     Ok(CoxPHFrailtyFit {

@@ -1418,7 +1418,7 @@ impl CoxPHFit {
     ) -> Vec<Vec<f64>> {
         // The multivariate reference sweep is compiled with multiply-add
         // contraction. Keep scalar fits on their established arithmetic path.
-        let contracted = nvar > 1;
+        let contracted = self.counting_roundoff_compatibility && nvar > 1;
         let arithmetic = ProductAccumulator::new(contracted);
         let n = self.event_times.len();
         let mut residuals = vec![vec![0.0; nvar]; n];
@@ -2734,6 +2734,7 @@ mod tests {
             strata: vec![0; time.len()],
             method: "efron".to_string(),
             nocenter: Vec::new(),
+            counting_roundoff_compatibility: false,
         };
 
         let (grouped, test) = fit
@@ -2848,6 +2849,7 @@ mod tests {
             strata: vec![0, 0, 0, 0, 1, 1, 1, 1],
             method: "efron".to_string(),
             nocenter: Vec::new(),
+            counting_roundoff_compatibility: false,
         };
 
         let (surface, variance, test) = fit
@@ -2900,6 +2902,7 @@ mod tests {
             strata: vec![0, 0, 0],
             method: "breslow".to_string(),
             nocenter: Vec::new(),
+            counting_roundoff_compatibility: false,
         };
         let beta = fit.coefficients.first().expect("test coefficients exist");
         let martingale = fit
@@ -2952,6 +2955,7 @@ mod tests {
             strata: vec![0, 0, 0],
             method: "breslow".to_string(),
             nocenter: Vec::new(),
+            counting_roundoff_compatibility: false,
         };
         let raw = fit
             .schoenfeld_residuals_internal()
@@ -3052,6 +3056,7 @@ mod tests {
             strata: vec![0; 3],
             method: "exact".to_string(),
             nocenter: Vec::new(),
+            counting_roundoff_compatibility: false,
         };
         let mut shifted = fit.clone();
         for value in &mut shifted.linear_predictors {

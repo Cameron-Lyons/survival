@@ -84,6 +84,7 @@ pub struct CoxPHFit {
     pub method: String,
     #[pyo3(get)]
     pub nocenter: Vec<f64>,
+    pub(crate) counting_roundoff_compatibility: bool,
 }
 
 impl CoxPHFit {
@@ -754,6 +755,83 @@ pub fn coxph_fit(
     ridge_penalty: Option<Vec<f64>>,
     penalty_matrix: Option<Vec<Vec<f64>>>,
 ) -> PyResult<CoxPHFit> {
+    coxph_fit_internal(
+        time,
+        status,
+        covariates,
+        strata,
+        weights,
+        offset,
+        initial_beta,
+        max_iter,
+        eps,
+        toler,
+        method,
+        entry_times,
+        nocenter,
+        ridge_penalty,
+        penalty_matrix,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn coxph_fit_with_counting_roundoff_compatibility(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    weights: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+    initial_beta: Option<Vec<f64>>,
+    max_iter: Option<usize>,
+    eps: Option<f64>,
+    toler: Option<f64>,
+    method: Option<&str>,
+    entry_times: Option<Vec<f64>>,
+    nocenter: Option<Vec<f64>>,
+    ridge_penalty: Option<Vec<f64>>,
+    penalty_matrix: Option<Vec<Vec<f64>>>,
+) -> PyResult<CoxPHFit> {
+    coxph_fit_internal(
+        time,
+        status,
+        covariates,
+        strata,
+        weights,
+        offset,
+        initial_beta,
+        max_iter,
+        eps,
+        toler,
+        method,
+        entry_times,
+        nocenter,
+        ridge_penalty,
+        penalty_matrix,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn coxph_fit_internal(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    weights: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+    initial_beta: Option<Vec<f64>>,
+    max_iter: Option<usize>,
+    eps: Option<f64>,
+    toler: Option<f64>,
+    method: Option<&str>,
+    entry_times: Option<Vec<f64>>,
+    nocenter: Option<Vec<f64>>,
+    ridge_penalty: Option<Vec<f64>>,
+    penalty_matrix: Option<Vec<Vec<f64>>>,
+    counting_roundoff_compatibility: bool,
+) -> PyResult<CoxPHFit> {
     let n = time.len();
     if n == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -937,20 +1015,31 @@ pub fn coxph_fit(
     let covar = Array2::from_shape_vec((n, nvar), flat).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("invalid covariate shape: {}", e))
     })?;
+    let sorted_time = Array1::from_vec(sorted_time);
+    let sorted_status = Array1::from_vec(sorted_status);
+    let sorted_entry_times = sorted_entry_times.map(Array1::from_vec);
+    let strata_boundaries = Array1::from_vec(strata_boundaries);
+    let sorted_offset = Array1::from_vec(sorted_offset);
+    let sorted_weights = Array1::from_vec(sorted_weights);
+    let max_iter = max_iter.unwrap_or(COX_MAX_ITER);
+    let eps = eps.unwrap_or(COX_CONVERGENCE_TOLERANCE);
+    let toler = toler.unwrap_or(COX_RANK_TOLERANCE);
+    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; nvar]);
     let mut cox_fit = CoxFit::new_with_entry_times(
-        Array1::from_vec(sorted_time),
-        Array1::from_vec(sorted_status),
+        sorted_time,
+        sorted_status,
         covar,
-        sorted_entry_times.map(Array1::from_vec),
-        Array1::from_vec(strata_boundaries),
-        Array1::from_vec(sorted_offset),
-        Array1::from_vec(sorted_weights),
+        sorted_entry_times,
+        strata_boundaries,
+        sorted_offset,
+        sorted_weights,
         cox_method,
-        max_iter.unwrap_or(COX_MAX_ITER),
-        eps.unwrap_or(COX_CONVERGENCE_TOLERANCE),
-        toler.unwrap_or(COX_RANK_TOLERANCE),
+        max_iter,
+        eps,
+        toler,
         doscale,
-        initial_beta.unwrap_or_else(|| vec![0.0; nvar]),
+        initial_beta,
+        counting_roundoff_compatibility,
     )
     .map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit initialization failed: {}", e))
@@ -1023,6 +1112,7 @@ pub fn coxph_fit(
         strata: strata_values,
         method: method_name,
         nocenter: nocenter_values,
+        counting_roundoff_compatibility,
     })
 }
 
@@ -1067,6 +1157,7 @@ mod tests {
             strata: vec![1, 1, 1, 2, 2, 2],
             method: method.to_string(),
             nocenter: vec![-1.0, 0.0, 1.0],
+            counting_roundoff_compatibility: false,
         }
     }
 
@@ -1111,6 +1202,7 @@ mod tests {
             strata: vec![0, 0, 0, 0, 0, 1, 1, 1],
             method: method.to_string(),
             nocenter: vec![],
+            counting_roundoff_compatibility: false,
         }
     }
 
@@ -1612,6 +1704,7 @@ mod tests {
             strata: vec![0, 0, 0],
             method: "breslow".to_string(),
             nocenter: Vec::new(),
+            counting_roundoff_compatibility: false,
         };
 
         let (times, hazards, strata) = fit.basehaz_with_strata_internal(false).unwrap();

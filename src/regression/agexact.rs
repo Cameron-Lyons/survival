@@ -274,6 +274,7 @@ fn fit_agexact(data: AgexactData, state: AgexactState, params: AgexactParams) ->
         tol_chol,
         vec![false; p],
         beta,
+        false,
     ));
     take_infallible(fit.fit_agexact_compatibility());
     let (beta, _optimizer_means, u, imat, loglik, sctest, optimizer_flag, iterations) =

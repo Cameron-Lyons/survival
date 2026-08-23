@@ -1,5 +1,7 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
-use crate::regression::coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
+use crate::regression::coxph::{
+    CoxPHFit, CoxPHModel, Subject, coxph_fit_with_counting_roundoff_compatibility,
+};
 use pyo3::prelude::*;
 use std::collections::HashSet;
 
@@ -583,7 +585,7 @@ fn fit_weighted_cox(
     initial_beta: Option<Vec<f64>>,
     max_iter: usize,
 ) -> PyResult<CoxPHFit> {
-    coxph_fit(
+    coxph_fit_with_counting_roundoff_compatibility(
         stop,
         status,
         covariates,
