@@ -13176,6 +13176,89 @@ test_that("cch matches factor phase-two roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches factor counting offset mean roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(5, 0, 6, 17, 7, 0, 9, 6, 4, 10, 5, 0, 12, 4, 3, 14, 9, 15, 15, 13, 0, 14, 0, 2, 2),
+    stop = c(9, 1, 11, 20, 9, 1, 11, 9, 7, 14, 8, 2, 18, 9, 4, 16, 10, 17, 16, 14, 4, 15, 1, 5, 7),
+    status = c(0, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1),
+    group = factor(c(
+      "b", "b", "b", "b", "b", "a", "a", "a", "b", "b", "b", "c", "b",
+      "a", "b", "b", "b", "a", "a", "c", "b", "a", "b", "a", "a"
+    )),
+    id = seq_len(25),
+    subcohort = c(1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 75,
+    method = "Prentice"
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
+test_that("cch matches scalar counting offset mean roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(9, 10, 5, 1, 8, 16, 3, 10, 13, 0, 0, 3, 0, 9, 5, 13, 16, 11, 10, 10, 7, 10, 4, 5, 18, 11, 5),
+    stop = c(12, 13, 6, 3, 14, 17, 6, 13, 19, 4, 6, 5, 4, 13, 7, 18, 20, 12, 16, 11, 10, 12, 7, 10, 19, 14, 11),
+    status = c(1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1),
+    x = c(
+      0.008926919521119415, 0.9060546400253241, 1.8322206881267567,
+      -0.5487920544142219, -0.38538157279838425, -0.27423854220727134,
+      -0.12575800060661754, 0.0282533678905421, -0.14233207563149147,
+      -0.19480425083891662, -1.273056905241701, -0.3860241881622384,
+      -2.341092420046039, -0.2414972829893251, -0.48662182877357135,
+      0.5613828624512708, -0.5624384123439998, -1.0681337423459547,
+      0.31883033976783115, -0.8352213781406432, -0.009302242429820969,
+      -0.5042953637548548, -0.6629703130264287, -1.0188322597824033,
+      -0.41716297872025515, 0.028744936514534088, 0.8739803580994467
+    ),
+    id = seq_len(27),
+    subcohort = c(1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ x,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 81,
+    method = "SelfPrentice"
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

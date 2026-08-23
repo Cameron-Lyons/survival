@@ -26034,6 +26034,193 @@ def test_cch_formula_matches_factor_phase_two_roundoff():
     assert fit.offsets[19:] == pytest.approx([54.285714285714285] * 16, abs=1e-12)
 
 
+def test_cch_formula_matches_factor_counting_offset_mean_roundoff():
+    data = {
+        "start": [
+            5,
+            0,
+            6,
+            17,
+            7,
+            0,
+            9,
+            6,
+            4,
+            10,
+            5,
+            0,
+            12,
+            4,
+            3,
+            14,
+            9,
+            15,
+            15,
+            13,
+            0,
+            14,
+            0,
+            2,
+            2,
+        ],
+        "stop": [
+            9,
+            1,
+            11,
+            20,
+            9,
+            1,
+            11,
+            9,
+            7,
+            14,
+            8,
+            2,
+            18,
+            9,
+            4,
+            16,
+            10,
+            17,
+            16,
+            14,
+            4,
+            15,
+            1,
+            5,
+            7,
+        ],
+        "status": [0, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1],
+        "group": [
+            "b",
+            "b",
+            "b",
+            "b",
+            "b",
+            "a",
+            "a",
+            "a",
+            "b",
+            "b",
+            "b",
+            "c",
+            "b",
+            "a",
+            "b",
+            "b",
+            "b",
+            "a",
+            "a",
+            "c",
+            "b",
+            "a",
+            "b",
+            "a",
+            "a",
+        ],
+        "id": list(range(1, 26)),
+        "subcohort": [1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+    }
+    fit = survival.cch(
+        'Surv(start, stop, status) ~ factor(group, levels=c("a","b","c"))',
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=75,
+        method="Prentice",
+    )
+
+    assert survival.coef(fit) == pytest.approx(
+        [-0.1976697246209242, 0.17094077905200894], abs=1e-11
+    )
+    expected_phase_two = [
+        [1.1191531485494934e51, -6.436369031047727e52],
+        [-6.436369031047727e52, 3.701624425354347e54],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    for actual, expected in zip(fit.var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    assert fit.fit.model_information_matrix[0] == pytest.approx(
+        [0.3562306355451442, 0.32996392845590256], abs=1e-12
+    )
+    assert fit.fit.model_information_matrix[1] == pytest.approx(
+        [0.32996392845590256, 1.8405902468995765], abs=1e-12
+    )
+    assert fit.log_likelihood == pytest.approx([-1518.5669959877512, -1518.546609073264], abs=1e-11)
+    assert fit.score_test == pytest.approx(0.040572557274083286, abs=1e-11)
+    assert fit.iterations == 3
+    assert fit.offsets[:16] == pytest.approx([-56.756756756756744] * 16, abs=1e-13)
+    assert fit.offsets[16:] == pytest.approx([43.243243243243256] * 21, abs=1e-13)
+
+
+def test_cch_formula_matches_scalar_counting_offset_mean_roundoff():
+    data = {
+        "start": [
+            9, 10, 5, 1, 8, 16, 3, 10, 13, 0, 0, 3, 0, 9, 5, 13, 16, 11, 10, 10, 7, 10, 4, 5, 18,
+            11, 5,
+        ],
+        "stop": [
+            12, 13, 6, 3, 14, 17, 6, 13, 19, 4, 6, 5, 4, 13, 7, 18, 20, 12, 16, 11, 10, 12, 7,
+            10, 19, 14, 11,
+        ],
+        "status": [1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1],
+        "x": [
+            0.008926919521119415,
+            0.9060546400253241,
+            1.8322206881267567,
+            -0.5487920544142219,
+            -0.38538157279838425,
+            -0.27423854220727134,
+            -0.12575800060661754,
+            0.0282533678905421,
+            -0.14233207563149147,
+            -0.19480425083891662,
+            -1.273056905241701,
+            -0.3860241881622384,
+            -2.341092420046039,
+            -0.2414972829893251,
+            -0.48662182877357135,
+            0.5613828624512708,
+            -0.5624384123439998,
+            -1.0681337423459547,
+            0.31883033976783115,
+            -0.8352213781406432,
+            -0.009302242429820969,
+            -0.5042953637548548,
+            -0.6629703130264287,
+            -1.0188322597824033,
+            -0.41716297872025515,
+            0.028744936514534088,
+            0.8739803580994467,
+        ],
+        "id": list(range(1, 28)),
+        "subcohort": [
+            1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1,
+        ],
+    }
+    fit = survival.cch(
+        "Surv(start, stop, status) ~ x",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=81,
+        method="SelfPrentice",
+    )
+
+    assert survival.coef(fit) == pytest.approx([0.9772017738607798], abs=1e-11)
+    assert fit.phase2var[0][0] == pytest.approx(6.353402100415902e54, rel=1e-11)
+    assert fit.var[0][0] == pytest.approx(6.353402100415902e54, rel=1e-11)
+    assert fit.fit.model_information_matrix[0][0] == pytest.approx(
+        0.4162496937379837, abs=1e-12
+    )
+    assert fit.log_likelihood == pytest.approx(
+        [-1314.8167305006232, -1313.4980825636515], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(2.6344471156123235, abs=1e-11)
+    assert fit.iterations == 3
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],

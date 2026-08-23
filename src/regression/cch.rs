@@ -614,6 +614,16 @@ struct CchComputation {
     robust: bool,
 }
 
+fn two_pass_mean(values: &[f64]) -> f64 {
+    debug_assert!(!values.is_empty());
+    let count = values.len() as f64;
+    let mut mean = values.iter().sum::<f64>() / count;
+    if mean.is_finite() {
+        mean += values.iter().map(|&value| value - mean).sum::<f64>() / count;
+    }
+    mean
+}
+
 fn augmented_fit(
     stop: &[f64],
     status: &[i32],
@@ -683,7 +693,7 @@ fn augmented_fit(
         offsets.push(0.0);
     }
 
-    let offset_mean = offsets.iter().sum::<f64>() / offsets.len() as f64;
+    let offset_mean = two_pass_mean(&offsets);
     let centered_offsets = offsets
         .iter()
         .map(|&offset| offset - offset_mean)
@@ -1862,6 +1872,155 @@ mod tests {
         );
         assert!((result.score_test - 4.956_125_752_130_163).abs() < 1e-11);
         assert_eq!(result.iterations, 4);
+    }
+
+    #[test]
+    fn native_self_prentice_matches_scalar_counting_offset_mean_roundoff() {
+        let stop = vec![
+            12.0, 13.0, 6.0, 3.0, 14.0, 17.0, 6.0, 13.0, 19.0, 4.0, 6.0, 5.0, 4.0, 13.0, 7.0, 18.0,
+            20.0, 12.0, 16.0, 11.0, 10.0, 12.0, 7.0, 10.0, 19.0, 14.0, 11.0,
+        ];
+        let status = vec![
+            1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1,
+        ];
+        let start = vec![
+            9.0, 10.0, 5.0, 1.0, 8.0, 16.0, 3.0, 10.0, 13.0, 0.0, 0.0, 3.0, 0.0, 9.0, 5.0, 13.0,
+            16.0, 11.0, 10.0, 10.0, 7.0, 10.0, 4.0, 5.0, 18.0, 11.0, 5.0,
+        ];
+        let x = [
+            8.926_919_521_119_415e-3,
+            9.060_546_400_253_241e-1,
+            1.832_220_688_126_756_7,
+            -5.487_920_544_142_219e-1,
+            -3.853_815_727_983_842_5e-1,
+            -2.742_385_422_072_713_4e-1,
+            -1.257_580_006_066_175_4e-1,
+            2.825_336_789_054_21e-2,
+            -1.423_320_756_314_914_7e-1,
+            -1.948_042_508_389_166_2e-1,
+            -1.273_056_905_241_701,
+            -3.860_241_881_622_384e-1,
+            -2.341_092_420_046_039,
+            -2.414_972_829_893_251e-1,
+            -4.866_218_287_735_713_5e-1,
+            5.613_828_624_512_708e-1,
+            -5.624_384_123_439_998e-1,
+            -1.068_133_742_345_954_7,
+            3.188_303_397_678_311_5e-1,
+            -8.352_213_781_406_432e-1,
+            -9.302_242_429_820_97e-3,
+            -5.042_953_637_548_548e-1,
+            -6.629_703_130_264_287e-1,
+            -1.018_832_259_782_403_3,
+            -4.171_629_787_202_551_5e-1,
+            2.874_493_651_453_408_8e-2,
+            8.739_803_580_994_467e-1,
+        ];
+        let covariates: Vec<Vec<f64>> = x.into_iter().map(|value| vec![value]).collect();
+        let subcohort = vec![
+            1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=27).collect(),
+            81,
+            Some(start),
+            "SelfPrentice",
+            false,
+        )
+        .expect("scalar counting-process SelfPrentice fit should succeed");
+
+        assert_close(&result.coefficients[0], &[0.977_201_773_860_779_8]);
+        assert_close(
+            &result.model_information_matrix[0],
+            &[0.416_249_693_737_983_7],
+        );
+        assert!(
+            (result.phase2_variance[0][0] / 6.353_402_100_415_902e54 - 1.0).abs() < 1e-11,
+            "expected scalar reference phase-two variance, got {:.17e}",
+            result.phase2_variance[0][0]
+        );
+        assert_close(
+            &result.log_likelihood,
+            &[-1_314.816_730_500_623_2, -1_313.498_082_563_651_5],
+        );
+        assert!((result.score_test - 2.634_447_115_612_323_5).abs() < 1e-11);
+        assert_eq!(result.iterations, 3);
+    }
+
+    #[test]
+    fn native_prentice_matches_factor_counting_phase_two_roundoff() {
+        let stop = vec![
+            9.0, 1.0, 11.0, 20.0, 9.0, 1.0, 11.0, 9.0, 7.0, 14.0, 8.0, 2.0, 18.0, 9.0, 4.0, 16.0,
+            10.0, 17.0, 16.0, 14.0, 4.0, 15.0, 1.0, 5.0, 7.0,
+        ];
+        let status = vec![
+            0, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1,
+        ];
+        let start = vec![
+            5.0, 0.0, 6.0, 17.0, 7.0, 0.0, 9.0, 6.0, 4.0, 10.0, 5.0, 0.0, 12.0, 4.0, 3.0, 14.0,
+            9.0, 15.0, 15.0, 13.0, 0.0, 14.0, 0.0, 2.0, 2.0,
+        ];
+        let groups = [
+            'b', 'b', 'b', 'b', 'b', 'a', 'a', 'a', 'b', 'b', 'b', 'c', 'b', 'a', 'b', 'b', 'b',
+            'a', 'a', 'c', 'b', 'a', 'b', 'a', 'a',
+        ];
+        let subcohort = [
+            1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        ];
+        let covariates = groups
+            .iter()
+            .map(|&group| vec![f64::from(group == 'b'), f64::from(group == 'c')])
+            .collect::<Vec<_>>();
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort.to_vec(),
+            (1..=25).collect(),
+            75,
+            Some(start),
+            "Prentice",
+            false,
+        )
+        .expect("factor counting-process Prentice fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[-0.197_669_724_620_924_2, 0.170_940_779_052_008_94],
+        );
+        let expected_model_variance = [
+            [0.356_230_635_545_144_2, 0.329_963_928_455_902_56],
+            [0.329_963_928_455_902_56, 1.840_590_246_899_576_5],
+        ];
+        for (actual_row, expected_row) in result
+            .model_information_matrix
+            .iter()
+            .zip(expected_model_variance)
+        {
+            assert_close(actual_row, &expected_row);
+        }
+        let expected_phase_two = [
+            [1.119_153_148_549_493_4e51, -6.436_369_031_047_727e52],
+            [-6.436_369_031_047_727e52, 3.701_624_425_354_347e54],
+        ];
+        for (actual_row, expected_row) in result.phase2_variance.iter().zip(expected_phase_two) {
+            for (&actual, expected) in actual_row.iter().zip(expected_row) {
+                assert!(
+                    (actual / expected - 1.0).abs() < 1e-11,
+                    "expected {expected:.17e}, got {actual:.17e}"
+                );
+            }
+        }
+        assert_close(
+            &result.log_likelihood,
+            &[-1_518.566_995_987_751_2, -1_518.546_609_073_264],
+        );
+        assert!((result.score_test - 0.040_572_557_274_083_286).abs() < 1e-11);
+        assert_eq!(result.iterations, 3);
     }
 
     #[test]

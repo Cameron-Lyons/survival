@@ -432,11 +432,9 @@ impl CoxFit {
                 .unwrap_or(f64::INFINITY);
             entries.iter().all(|&entry| entry < first_event_time)
         });
-        // The counting-process C routine effectively centers on the first row
-        // in descending stop-time order before computing its global scale. Keep
-        // scalar fits on their original centering path.
-        let reverse_centering_order =
-            counting_roundoff_compatibility && entry_times.is_some() && nvar > 1;
+        // The counting-process C routine centers on the first used row in
+        // descending stop-time order before computing its global scale.
+        let reverse_centering_order = counting_roundoff_compatibility && entry_times.is_some();
         let counting_used = entry_times
             .as_ref()
             .map(|entries| counting_used_rows(&time, &status, entries, &strata));
@@ -773,8 +771,20 @@ impl CoxFit {
     fn scale_center(&mut self, doscale: Vec<bool>, reverse_order: bool) -> Result<(), CoxError> {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
-        let total_weight = if reverse_order {
-            self.weights.iter().rev().copied().sum()
+        let scale_rows = reverse_order.then(|| {
+            self.counting_used
+                .as_deref()
+                .map(|used| {
+                    used.iter()
+                        .enumerate()
+                        .filter_map(|(person, &included)| included.then_some(person))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|rows| !rows.is_empty())
+                .unwrap_or_else(|| (0..nused).collect())
+        });
+        let total_weight = if let Some(rows) = scale_rows.as_deref() {
+            rows.iter().rev().map(|&person| self.weights[person]).sum()
         } else {
             self.weights.sum()
         };
@@ -783,8 +793,8 @@ impl CoxFit {
             .map(|i| {
                 if !doscale[i] {
                     0.0
-                } else if reverse_order {
-                    self.covar[(nused - 1, i)]
+                } else if let Some(rows) = scale_rows.as_deref() {
+                    self.covar[(*rows.last().expect("scaling rows exist"), i)]
                 } else {
                     let mut mean = 0.0;
                     for (person, &w) in self.weights.iter().enumerate() {
@@ -801,8 +811,8 @@ impl CoxFit {
                     1.0
                 } else {
                     let mean = means[i];
-                    let abs_sum = if reverse_order {
-                        (0..nused).rev().fold(0.0, |sum, person| {
+                    let abs_sum = if let Some(rows) = scale_rows.as_deref() {
+                        rows.iter().rev().fold(0.0, |sum, &person| {
                             sum + self.weights[person] * (self.covar[(person, i)] - mean).abs()
                         })
                     } else {
@@ -830,11 +840,21 @@ impl CoxFit {
                     let mean = means[i];
                     let scale_val = scales[i];
                     let base_ptr = covar_ptr.load(Ordering::Relaxed);
-                    for person in 0..nused {
-                        unsafe {
-                            let offset = person as isize * row_stride + i as isize * col_stride;
-                            let ptr = base_ptr.offset(offset);
-                            *ptr = (*ptr - mean) * scale_val;
+                    if let Some(rows) = scale_rows.as_deref() {
+                        for &person in rows {
+                            unsafe {
+                                let offset = person as isize * row_stride + i as isize * col_stride;
+                                let ptr = base_ptr.offset(offset);
+                                *ptr = (*ptr - mean) * scale_val;
+                            }
+                        }
+                    } else {
+                        for person in 0..nused {
+                            unsafe {
+                                let offset = person as isize * row_stride + i as isize * col_stride;
+                                let ptr = base_ptr.offset(offset);
+                                *ptr = (*ptr - mean) * scale_val;
+                            }
                         }
                     }
                 }
@@ -844,8 +864,14 @@ impl CoxFit {
                 if doscale[i] {
                     let mean = means[i];
                     let scale_val = scales[i];
-                    for person in 0..nused {
-                        self.covar[(person, i)] = (self.covar[(person, i)] - mean) * scale_val;
+                    if let Some(rows) = scale_rows.as_deref() {
+                        for &person in rows {
+                            self.covar[(person, i)] = (self.covar[(person, i)] - mean) * scale_val;
+                        }
+                    } else {
+                        for person in 0..nused {
+                            self.covar[(person, i)] = (self.covar[(person, i)] - mean) * scale_val;
+                        }
                     }
                 }
             }
@@ -1347,12 +1373,11 @@ impl CoxFit {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
-        let arithmetic = ProductAccumulator::new(self.counting_roundoff_compatibility && nvar > 1);
+        let arithmetic = ProductAccumulator::new(self.counting_roundoff_compatibility);
         self.u.fill(0.0);
         self.imat.fill(0.0);
 
-        // Match the contracted multivariate dot product used by the
-        // counting-process C fit while preserving the scalar reference path.
+        // Match the contracted dot product used by the counting-process C fit.
         let zbeta_vals: Vec<f64> = if nused > PARALLEL_THRESHOLD_MEDIUM {
             (0..nused)
                 .into_par_iter()
