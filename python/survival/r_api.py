@@ -18984,6 +18984,13 @@ def survfit(
             raise ValueError("reverse survfit is only supported for Surv or formula inputs")
         if subset is not None:
             raise ValueError("subset is only supported for Surv or formula inputs")
+        individual_curve = id_arg is not None or individual_value
+        newdata, id_arg = _cox_survfit_omit_missing_newdata(
+            response,
+            newdata,
+            id_arg,
+            individual_curve,
+        )
         rows, offsets = _prediction_inputs(response, newdata)
         if hasattr(response, "means"):
             if individual_supplied:
@@ -18992,7 +18999,6 @@ def survfit(
                     RuntimeWarning,
                     stacklevel=2,
                 )
-            individual_curve = id_arg is not None or individual_value
             if individual_curve:
                 if newdata is None:
                     raise ValueError("the id option only makes sense with new data")
@@ -25895,6 +25901,49 @@ def _prediction_inputs(
     ):
         return [[1.0, *row] for row in rows], None
     return rows, None
+
+
+def _cox_survfit_omit_missing_newdata(
+    fit: Any,
+    newdata: Any | None,
+    id_arg: Any | None,
+    individual: bool,
+) -> tuple[Any | None, Any | None]:
+    design = _formula_design_for_fit(fit)
+    if (
+        newdata is None
+        or design is None
+        or not (isinstance(newdata, Mapping) or hasattr(newdata, "columns"))
+    ):
+        return newdata, id_arg
+    n = _formula_design_row_count(newdata, design)
+    columns = _formula_design_columns(design)
+    for factor in design.strata_factors:
+        _append_unique(columns, _covariate_term_columns(factor))
+    _append_unique(columns, list(design.strata))
+    if individual:
+        _append_unique(columns, list(design.response.columns))
+    if isinstance(id_arg, str):
+        _append_unique(columns, [id_arg])
+    missing_inputs = [(column, _column(newdata, column)) for column in columns]
+    valid_external_id = False
+    if id_arg is not None and not isinstance(id_arg, str):
+        id_values = _coerce_array_like(id_arg, "id")
+        valid_external_id = len(id_values) == n
+        if valid_external_id:
+            missing_inputs.append(("id", id_values))
+    missing = _missing_row_indices(missing_inputs, n)
+    keep = _keep_rows_after_na_action(missing, n, "omit", "fitted Cox newdata")
+    if keep is None:
+        return newdata, id_arg
+    if not keep:
+        raise ValueError("all rows of newdata have missing values")
+    filtered_id = (
+        id_arg
+        if id_arg is None or isinstance(id_arg, str) or not valid_external_id
+        else _subset_sequence(id_arg, keep, "id")
+    )
+    return _subset_data(newdata, keep), filtered_id
 
 
 def _linear_predictors_for_fit(

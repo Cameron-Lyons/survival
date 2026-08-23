@@ -10404,7 +10404,8 @@ survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, 
 }
 
 survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRUE) {
-  if (.is_multistate_cox_fit(formula)) {
+  multi_state_fit <- .is_multistate_cox_fit(formula)
+  if (multi_state_fit) {
     se.fit <- FALSE
   }
   dots <- list(...)
@@ -10421,8 +10422,57 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   if ("id" %in% names(dots) && is.null(dots$id)) {
     stop("id=NULL is an invalid argument", call. = FALSE)
   }
+  prediction_data <- newdata
+  curve_names <- NULL
+  preserve_id_vector <- FALSE
+  if (
+    !multi_state_fit &&
+      !is.null(newdata) &&
+      (is.data.frame(newdata) || is.list(newdata) || is.matrix(newdata))
+  ) {
+    frame_data <- as.data.frame(newdata)
+    individual_curve <- "id" %in% names(dots)
+    prediction_terms <- tryCatch(terms(formula), error = function(condition) NULL)
+    if (!is.null(prediction_terms)) {
+      if (!individual_curve) {
+        prediction_terms <- stats::delete.response(prediction_terms)
+      }
+      model_args <- list(
+        formula = prediction_terms,
+        data = frame_data,
+        na.action = stats::na.omit
+      )
+      id_is_column <- individual_curve &&
+        is.character(dots$id) &&
+        length(dots$id) == 1L &&
+        dots$id %in% names(frame_data)
+      if (individual_curve && !id_is_column) {
+        model_args$id <- dots$id
+        preserve_id_vector <- TRUE
+      }
+      prediction_frame <- do.call(stats::model.frame, model_args)
+      if (nrow(prediction_frame) == 0L) {
+        stop("all rows of newdata have missing values", call. = FALSE)
+      }
+      omitted <- as.integer(attr(prediction_frame, "na.action"))
+      keep <- if (length(omitted) == 0L) {
+        seq_len(nrow(frame_data))
+      } else {
+        setdiff(seq_len(nrow(frame_data)), omitted)
+      }
+      prediction_data <- frame_data[keep, , drop = FALSE]
+      curve_names <- row.names(prediction_frame)
+      if (individual_curve && !id_is_column) {
+        dots$id <- dots$id[keep]
+      }
+    }
+  }
   if ("id" %in% names(dots) && !is.null(dots$id)) {
-    dots$id <- .as_python_vector(dots$id)
+    dots$id <- if (preserve_id_vector) {
+      as.list(.as_python_vector(dots$id))
+    } else {
+      .as_python_vector(dots$id)
+    }
   }
   result <- do.call(
     .call_r_api,
@@ -10430,16 +10480,18 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
       list(
         "survfit",
         response = formula,
-        newdata = .as_python_data(newdata),
+        newdata = .as_python_data(prediction_data),
         `se.fit` = se.fit
       ),
       dots,
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
   )
-  if (!is.null(newdata) && (is.data.frame(newdata) || is.matrix(newdata))) {
+  if (!is.null(prediction_data) && (is.data.frame(prediction_data) || is.matrix(prediction_data))) {
     curve_count <- length(.result_field(result, "surv"))
-    curve_names <- row.names(newdata)
+    if (is.null(curve_names)) {
+      curve_names <- row.names(prediction_data)
+    }
     if (length(curve_names) == curve_count) {
       attr(result, ".survival_py_curve_names") <- curve_names
     }

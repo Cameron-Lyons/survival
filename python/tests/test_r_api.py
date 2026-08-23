@@ -22556,6 +22556,78 @@ def test_survfit_coxph_accepts_ignored_influence_argument():
         survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), influence=True)
 
 
+def test_survfit_coxph_omits_incomplete_newdata_for_every_na_action():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 1, 0, 1, 0, 1],
+        "x": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5],
+        "group": ["a", "b", "a", "b", "a", "b"],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x + group",
+        data=data,
+        initial_beta=[0.0, 0.0],
+        max_iter=0,
+    )
+    newdata = {
+        "x": [0.0, None, 1.0, 2.0],
+        "group": ["a", "a", None, "b"],
+        "unused": [None, 1.0, 2.0, None],
+    }
+    complete = {"x": [0.0, 2.0], "group": ["a", "b"]}
+    expected = survival.survfit(fit, newdata=complete)
+
+    for na_action in (None, "pass", "omit", "exclude", "fail", "unused"):
+        actual = survival.survfit(fit, newdata=newdata, na_action=na_action)
+        assert len(actual.surv) == 2
+        for actual_curve, expected_curve in zip(actual.surv, expected.surv, strict=True):
+            assert actual_curve == pytest.approx(expected_curve)
+
+    with pytest.raises(ValueError, match="all rows of newdata"):
+        survival.survfit(
+            fit,
+            newdata={"x": [None, None], "group": ["a", "b"]},
+        )
+
+
+def test_survfit_coxph_individual_omits_incomplete_response_id_and_covariates():
+    data = {
+        "start": [0.0, 0.0, 1.0, 1.0],
+        "stop": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 0, 1, 0],
+        "x": [0.0, 0.5, 1.0, 1.5],
+    }
+    fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=data,
+        initial_beta=[0.1],
+        max_iter=0,
+    )
+    newdata = {
+        "start": [0.0, 2.0, 0.0, 2.0],
+        "stop": [2.0, 4.0, 2.0, None],
+        "status": [0, 0, 0, 0],
+        "x": [0.2, None, 0.6, 0.8],
+        "subject": ["one", "one", None, "two"],
+    }
+    actual = survival.survfit(fit, newdata=newdata, id="subject")
+    expected = survival.survfit(
+        fit,
+        newdata={
+            "start": [0.0],
+            "stop": [2.0],
+            "status": [0],
+            "x": [0.2],
+            "subject": ["one"],
+        },
+        id="subject",
+    )
+
+    assert actual.time == pytest.approx(expected.time)
+    assert actual.surv[0] == pytest.approx(expected.surv[0])
+    assert actual.cumhaz[0] == pytest.approx(expected.cumhaz[0])
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)

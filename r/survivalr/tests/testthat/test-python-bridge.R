@@ -14264,6 +14264,105 @@ test_that("Cox survfit accepts the reference no-op influence argument", {
   }
 })
 
+test_that("Cox survfit newdata omission matches survival for every na.action", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = 1:6,
+    status = c(1, 1, 0, 1, 0, 1),
+    x = c(0, 0.5, 1, 1.5, 2, 2.5),
+    group = factor(rep(c("a", "b"), 3L))
+  )
+  newdata <- data.frame(
+    x = c(0, NA, 1, 2),
+    group = factor(c("a", "a", NA, "b"), levels = levels(data$group)),
+    unused = c(NA, 1, 2, NA),
+    row.names = c("ok", "missing-x", "missing-group", "ok2")
+  )
+  bridged_model <- coxph(
+    Surv(time, status) ~ x + group,
+    data = data,
+    init = c(0, 0),
+    max_iter = 0
+  )
+  reference_model <- survival::coxph(
+    survival::Surv(time, status) ~ x + group,
+    data = data,
+    init = c(0, 0),
+    iter.max = 0
+  )
+
+  for (na_action in list(na.pass, na.omit, na.exclude, na.fail, identity)) {
+    bridged <- survfit(bridged_model, newdata = newdata, na.action = na_action)
+    reference <- survival::survfit(
+      reference_model,
+      newdata = newdata,
+      na.action = na_action
+    )
+    expect_identical(dim(bridged), dim(reference))
+    for (field in c("time", "surv", "cumhaz", "std.err", "std.chaz", "lower", "upper")) {
+      expect_equal(bridged[[field]], reference[[field]], tolerance = 1e-12)
+    }
+  }
+  expect_error(
+    survfit(
+      bridged_model,
+      newdata = transform(newdata[1:2, ], x = NA_real_)
+    ),
+    "all rows of newdata have missing values",
+    fixed = TRUE
+  )
+
+  counting_data <- data.frame(
+    start = c(0, 0, 1, 1),
+    stop = 1:4,
+    status = c(1, 0, 1, 0),
+    x = c(0, 0.5, 1, 1.5)
+  )
+  counting_newdata <- data.frame(
+    start = c(0, 2, 0, 2),
+    stop = c(2, 4, 2, NA),
+    status = 0L,
+    x = c(0.2, NA, 0.6, 0.8),
+    subject = c("one", "one", NA, "two")
+  )
+  bridged_counting <- coxph(
+    Surv(start, stop, status) ~ x,
+    data = counting_data,
+    max_iter = 0
+  )
+  reference_counting <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x,
+    data = counting_data,
+    iter.max = 0
+  )
+  bridged_individual <- survfit(
+    bridged_counting,
+    newdata = counting_newdata,
+    id = counting_newdata$subject
+  )
+  reference_individual <- survival::survfit(
+    reference_counting,
+    newdata = counting_newdata,
+    id = counting_newdata$subject
+  )
+  for (field in c(
+    "n", "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz",
+    "std.err", "std.chaz", "lower", "upper"
+  )) {
+    expect_equal(
+      bridged_individual[[field]],
+      reference_individual[[field]],
+      tolerance = 1e-12
+    )
+  }
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
