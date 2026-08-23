@@ -1594,6 +1594,57 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(bridged_clogit, "coxph")
   expect_equal(attr(bridged_clogit, "userCall")[[1L]], quote(clogit))
 
+  capture_aeq_call <- function(fun, args) {
+    observed_warnings <- character()
+    result <- withCallingHandlers(
+      tryCatch(
+        list(value = do.call(fun, args)),
+        error = function(error) list(error = conditionMessage(error))
+      ),
+      warning = function(warning) {
+        observed_warnings <<- c(observed_warnings, conditionMessage(warning))
+        invokeRestart("muffleWarning")
+      }
+    )
+    list(result = result, warnings = observed_warnings)
+  }
+  aeq_nonfinite <- survival::Surv(
+    c(1, 1 + 1e-8, 2, Inf, NA),
+    c(1, 0, 1, 0, 1)
+  )
+  aeq_interval <- survival::Surv(
+    c(1, 1 + 1e-8, NA, 2),
+    c(1, 2, 3, Inf),
+    type = "interval2"
+  )
+  aeq_boundary_cases <- list(
+    list(x = c(1, 2)),
+    list(x = c(1, 2), tolerance = 0),
+    list(x = aeq_nonfinite),
+    list(x = aeq_nonfinite, tolerance = 1e-7),
+    list(x = aeq_nonfinite, tolerance = 0),
+    list(x = aeq_nonfinite, tolerance = -1),
+    list(x = aeq_nonfinite, tolerance = Inf),
+    list(x = aeq_nonfinite, tolerance = numeric()),
+    list(x = aeq_interval, tolerance = 1e-7),
+    list(
+      x = structure(
+        numeric(),
+        dim = c(0L, 2L),
+        dimnames = list(NULL, c("time", "status")),
+        type = "right",
+        class = "Surv"
+      )
+    ),
+    list(x = survival::Surv(c(-Inf, Inf), c(1, 0)), tolerance = 1e-7)
+  )
+  for (args in aeq_boundary_cases) {
+    expect_identical(
+      capture_aeq_call(aeqSurv, args),
+      capture_aeq_call(survival::aeqSurv, args)
+    )
+  }
+
   adjusted_response <- aeqSurv(survival::Surv(c(1, 1 + 1e-8, 2), c(1, 0, 1)), tolerance = 1e-7)
   adjusted_frame <- as.data.frame(adjusted_response)
   expect_equal(adjusted_frame[[1L]][, "time"], c(1, 1, 2), tolerance = 1e-10)

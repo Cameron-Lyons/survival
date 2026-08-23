@@ -9595,43 +9595,39 @@ is.na.Surv2 <- function(x) {
   }
 }
 
-.aeq_native_multistate_surv <- function(x, tolerance) {
-  surv_type <- attr(x, "type")
-  if (!is.character(surv_type) || length(surv_type) != 1L ||
-      !(surv_type %in% c("mright", "mcounting"))) {
-    return(NULL)
+aeqSurv <- function(x, tolerance = sqrt(.Machine$double.eps)) {
+  if (!missing(tolerance)) {
+    if (!is.numeric(tolerance) || length(tolerance) != 1L || !is.finite(tolerance)) {
+      stop("invalid value for tolerance", call. = FALSE)
+    }
+    if (tolerance <= 0) {
+      return(x)
+    }
   }
-  if (tolerance <= 0) {
+  if (!(inherits(x, "Surv") || inherits(x, "Surv2"))) {
+    stop("argument is not a Surv object", call. = FALSE)
+  }
+  times <- sort(unique(c(x[, -ncol(x)])))
+  times <- times[is.finite(times)]
+  differences <- diff(times)
+  tied <- differences <= tolerance | differences / mean(abs(times)) <= tolerance
+  if (!any(tied)) {
     return(x)
   }
-
-  out <- x
-  if (identical(surv_type, "mright")) {
-    adjusted <- .aeq_adjust_time_columns(list(out[, 1L]), tolerance)
-    out[, 1L] <- adjusted[[1L]]
+  cuts <- times[c(TRUE, !tied)]
+  if (ncol(x) == 2L) {
+    positions <- findInterval(x[, 1L], cuts)
+    output <- cbind(cuts[positions], as.integer(x[, 2L]))
   } else {
-    adjusted <- .aeq_adjust_time_columns(list(out[, 1L], out[, 2L]), tolerance)
-    .aeq_raise_if_zero_interval(out[, 1L], out[, 2L], adjusted[[1L]], adjusted[[2L]])
-    out[, 1L] <- adjusted[[1L]]
-    out[, 2L] <- adjusted[[2L]]
+    positions <- matrix(findInterval(x[, 1:2], cuts), ncol = 2L)
+    zero_length <- which(positions[, 1L] == positions[, 2L])
+    if (length(zero_length) > 0L && any(x[zero_length, 1L] != x[zero_length, 2L])) {
+      stop("aeqSurv exception, an interval has effective length 0", call. = FALSE)
+    }
+    output <- cbind(matrix(cuts[positions], ncol = 2L), as.integer(x[, 3L]))
   }
-  out
-}
-
-aeqSurv <- function(x, tolerance = sqrt(.Machine$double.eps)) {
-  if (!is.numeric(tolerance) || length(tolerance) != 1L || !is.finite(tolerance)) {
-    stop("invalid value for tolerance", call. = FALSE)
-  }
-  native_multistate <- .aeq_native_multistate_surv(x, tolerance)
-  if (!is.null(native_multistate)) {
-    return(native_multistate)
-  }
-  .call_r_api(
-    "aeqSurv",
-    .as_python_surv(x),
-    tolerance = tolerance,
-    .wrap = c("survival_py_surv", "survival_py_object")
-  )
+  attributes(output) <- attributes(x)
+  output
 }
 
 coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
