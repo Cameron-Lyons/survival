@@ -1,7 +1,7 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, TIME_EPSILON, same_time};
 use crate::internal::matrix::{lu_solve, matrix_inverse};
 use crate::internal::statistical::{chi2_sf, chi2_sf_continuous};
-use crate::regression::cox_optimizer::Method as CoxMethod;
+use crate::regression::cox_optimizer::{Method as CoxMethod, ProductAccumulator};
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_detail_module::{
     CoxphDetail, CoxphDetailOptions, compute_coxph_detail_with_options, coxph_detail,
@@ -1416,6 +1416,10 @@ impl CoxPHFit {
         order: &[usize],
         entry_times: &[f64],
     ) -> Vec<Vec<f64>> {
+        // The multivariate reference sweep is compiled with multiply-add
+        // contraction. Keep scalar fits on their established arithmetic path.
+        let contracted = nvar > 1;
+        let arithmetic = ProductAccumulator::new(contracted);
         let n = self.event_times.len();
         let mut residuals = vec![vec![0.0; nvar]; n];
         let scores: Vec<f64> = self
@@ -1486,7 +1490,8 @@ impl CoxPHFit {
                             cumulative_hazard.mul_add(covariate, -cumulative_xhazard[col_idx]);
                         residuals[original_idx][col_idx] = (-scores[original_idx])
                             .mul_add(hazard_difference, residuals[original_idx][col_idx]);
-                        risk_covariates[col_idx] -= row.risk * covariate;
+                        risk_covariates[col_idx] =
+                            arithmetic.subtract(risk_covariates[col_idx], row.risk, covariate);
                     }
                 }
 
@@ -1505,7 +1510,8 @@ impl CoxPHFit {
                         let covariate = self.covariates[original_idx][col_idx];
                         residuals[original_idx][col_idx] = scores[original_idx]
                             * covariate.mul_add(cumulative_hazard, -cumulative_xhazard[col_idx]);
-                        risk_covariates[col_idx] += row.risk * covariate;
+                        risk_covariates[col_idx] =
+                            arithmetic.add(risk_covariates[col_idx], row.risk, covariate);
                     }
                     denom += row.risk;
                     if row.status == 1 {
@@ -1513,7 +1519,11 @@ impl CoxPHFit {
                         death_risk += row.risk;
                         death_weight += row.weight;
                         for (col_idx, value) in death_covariates.iter_mut().enumerate() {
-                            *value += row.risk * self.covariates[original_idx][col_idx];
+                            *value = arithmetic.add(
+                                *value,
+                                row.risk,
+                                self.covariates[original_idx][col_idx],
+                            );
                         }
                     }
                 }
@@ -1524,7 +1534,8 @@ impl CoxPHFit {
                         cumulative_hazard += hazard;
                         for col_idx in 0..nvar {
                             mean[col_idx] = risk_covariates[col_idx] / denom;
-                            cumulative_xhazard[col_idx] += mean[col_idx] * hazard;
+                            cumulative_xhazard[col_idx] =
+                                arithmetic.add(cumulative_xhazard[col_idx], mean[col_idx], hazard);
                         }
                         for &row_idx in &deaths {
                             let original_idx = rows[row_idx].original_idx;
@@ -1541,16 +1552,27 @@ impl CoxPHFit {
                         let mean_death_weight = death_weight / death_count;
                         for step in 0..deaths.len() {
                             let fraction = step as f64 / death_count;
-                            let step_denom = denom - fraction * death_risk;
+                            let step_denom = arithmetic.subtract(denom, fraction, death_risk);
                             let hazard = mean_death_weight / step_denom;
                             cumulative_hazard += hazard;
                             for col_idx in 0..nvar {
-                                mean[col_idx] = (risk_covariates[col_idx]
-                                    - fraction * death_covariates[col_idx])
-                                    / step_denom;
-                                cumulative_xhazard[col_idx] += mean[col_idx] * hazard;
-                                hazard_fraction[col_idx] += hazard * fraction;
-                                mean_hazard_fraction[col_idx] += mean[col_idx] * hazard * fraction;
+                                mean[col_idx] = arithmetic.subtract(
+                                    risk_covariates[col_idx],
+                                    fraction,
+                                    death_covariates[col_idx],
+                                ) / step_denom;
+                                cumulative_xhazard[col_idx] = arithmetic.add(
+                                    cumulative_xhazard[col_idx],
+                                    mean[col_idx],
+                                    hazard,
+                                );
+                                hazard_fraction[col_idx] =
+                                    arithmetic.add(hazard_fraction[col_idx], hazard, fraction);
+                                mean_hazard_fraction[col_idx] = arithmetic.add(
+                                    mean_hazard_fraction[col_idx],
+                                    mean[col_idx] * hazard,
+                                    fraction,
+                                );
                                 mean_sum[col_idx] += mean[col_idx] / death_count;
                             }
                         }
@@ -1562,11 +1584,14 @@ impl CoxPHFit {
                                     hazard_fraction[col_idx],
                                     -mean_hazard_fraction[col_idx],
                                 );
-                                residuals[original_idx][col_idx] = scores[original_idx].mul_add(
-                                    correction,
-                                    residuals[original_idx][col_idx] + covariate
-                                        - mean_sum[col_idx],
-                                );
+                                let death_correction = if contracted {
+                                    residuals[original_idx][col_idx]
+                                        + (covariate - mean_sum[col_idx])
+                                } else {
+                                    residuals[original_idx][col_idx] + covariate - mean_sum[col_idx]
+                                };
+                                residuals[original_idx][col_idx] =
+                                    scores[original_idx].mul_add(correction, death_correction);
                             }
                         }
                     }

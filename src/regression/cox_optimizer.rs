@@ -62,6 +62,36 @@ enum FitMode {
     Standard,
     AgexactCompatibility,
 }
+
+#[derive(Clone, Copy)]
+pub(crate) struct ProductAccumulator {
+    contracted: bool,
+}
+
+impl ProductAccumulator {
+    pub(crate) const fn new(contracted: bool) -> Self {
+        Self { contracted }
+    }
+
+    #[inline]
+    pub(crate) fn add(self, accumulator: f64, left: f64, right: f64) -> f64 {
+        if self.contracted {
+            left.mul_add(right, accumulator)
+        } else {
+            accumulator + left * right
+        }
+    }
+
+    #[inline]
+    pub(crate) fn subtract(self, accumulator: f64, left: f64, right: f64) -> f64 {
+        if self.contracted {
+            (-left).mul_add(right, accumulator)
+        } else {
+            accumulator - left * right
+        }
+    }
+}
+
 pub(crate) type CoxFitResults = (
     Vec<f64>,
     Vec<f64>,
@@ -73,6 +103,7 @@ pub(crate) type CoxFitResults = (
     usize,
 );
 
+#[allow(clippy::too_many_arguments)]
 fn add_risk_sums(
     covar: &Array2<f64>,
     nvar: usize,
@@ -81,18 +112,20 @@ fn add_risk_sums(
     denom: &mut f64,
     a: &mut [f64],
     cmat: &mut Array2<f64>,
+    arithmetic: ProductAccumulator,
 ) {
     *denom += risk;
     for i in 0..nvar {
         let covar_i = covar[(person, i)];
         let risk_covar_i = risk * covar_i;
-        a[i] += risk_covar_i;
+        a[i] = arithmetic.add(a[i], risk, covar_i);
         for j in 0..=i {
-            cmat[(i, j)] += risk_covar_i * covar[(person, j)];
+            cmat[(i, j)] = arithmetic.add(cmat[(i, j)], risk_covar_i, covar[(person, j)]);
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn remove_risk_sums(
     covar: &Array2<f64>,
     nvar: usize,
@@ -101,14 +134,15 @@ fn remove_risk_sums(
     denom: &mut f64,
     a: &mut [f64],
     cmat: &mut Array2<f64>,
+    arithmetic: ProductAccumulator,
 ) {
     *denom -= risk;
     for i in 0..nvar {
         let covar_i = covar[(person, i)];
         let risk_covar_i = risk * covar_i;
-        a[i] -= risk_covar_i;
+        a[i] = arithmetic.subtract(a[i], risk, covar_i);
         for j in 0..=i {
-            cmat[(i, j)] -= risk_covar_i * covar[(person, j)];
+            cmat[(i, j)] = arithmetic.subtract(cmat[(i, j)], risk_covar_i, covar[(person, j)]);
         }
     }
 }
@@ -384,9 +418,6 @@ impl CoxFit {
         if let Some(last) = strata.last_mut() {
             *last = 1;
         }
-        // Counting rows are consumed backward, so centering follows the same
-        // descending-time order as the risk-set recurrence.
-        let reverse_centering_order = entry_times.is_some();
         let all_entered_before_first_event = entry_times.as_ref().is_some_and(|entries| {
             let first_event_time = time
                 .iter()
@@ -398,6 +429,10 @@ impl CoxFit {
                 .unwrap_or(f64::INFINITY);
             entries.iter().all(|&entry| entry < first_event_time)
         });
+        // The counting-process C routine effectively centers on the first row
+        // in descending stop-time order before computing its global scale. Keep
+        // scalar fits on their original centering path.
+        let reverse_centering_order = entry_times.is_some() && nvar > 1;
         let counting_used = entry_times
             .as_ref()
             .map(|entries| counting_used_rows(&time, &status, entries, &strata));
@@ -741,16 +776,12 @@ impl CoxFit {
             .map(|i| {
                 if !doscale[i] {
                     0.0
+                } else if reverse_order {
+                    self.covar[(nused - 1, i)]
                 } else {
                     let mut mean = 0.0;
-                    if reverse_order {
-                        for person in (0..nused).rev() {
-                            mean += self.weights[person] * self.covar[(person, i)];
-                        }
-                    } else {
-                        for (person, &w) in self.weights.iter().enumerate() {
-                            mean += w * self.covar[(person, i)];
-                        }
+                    for (person, &w) in self.weights.iter().enumerate() {
+                        mean += w * self.covar[(person, i)];
                     }
                     mean / total_weight
                 }
@@ -923,6 +954,7 @@ impl CoxFit {
             .as_ref()
             .expect("entry order must accompany counting-process entry times");
         let nvar = self.covar.ncols();
+        let arithmetic = ProductAccumulator::new(false);
         self.u.fill(0.0);
         self.imat.fill(0.0);
         let (linear_predictors, log_risk) = self.exact_predictors(beta);
@@ -966,6 +998,7 @@ impl CoxFit {
                         &mut stop_denom,
                         &mut stop_a,
                         &mut stop_cmat,
+                        arithmetic,
                     );
                     stop_count += 1;
                     stop_ptr -= 1;
@@ -982,6 +1015,7 @@ impl CoxFit {
                         &mut unentered_denom,
                         &mut unentered_a,
                         &mut unentered_cmat,
+                        arithmetic,
                     );
                     unentered_count += 1;
                     start_ptr += 1;
@@ -1288,9 +1322,9 @@ impl CoxFit {
         let Some(entry_times) = self.entry_times.as_ref() else {
             return self.iterate_right_censored(beta);
         };
-        // Without delayed entry, the simpler recurrence has identical risk sets
-        // and preserves the reference separation of deaths from nondeaths.
-        if self.all_entered_before_first_event {
+        // For one covariate with no delayed entry, the simpler recurrence also
+        // preserves the scalar reference path used by the CCH calculation.
+        if self.all_entered_before_first_event && self.covar.ncols() == 1 {
             return self.iterate_right_censored(beta);
         }
         let entry_order = self
@@ -1304,26 +1338,27 @@ impl CoxFit {
         let nvar = self.covar.ncols();
         let nused = self.covar.nrows();
         let method = self.method;
+        let arithmetic = ProductAccumulator::new(nvar > 1);
         self.u.fill(0.0);
         self.imat.fill(0.0);
 
+        // Match the contracted multivariate dot product used by the
+        // counting-process C fit while preserving the scalar reference path.
         let zbeta_vals: Vec<f64> = if nused > PARALLEL_THRESHOLD_MEDIUM {
             (0..nused)
                 .into_par_iter()
                 .map(|person| {
-                    beta.iter()
-                        .enumerate()
-                        .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)])
-                        + self.offset[person]
+                    beta.iter().enumerate().fold(0.0, |acc, (i, &b)| {
+                        arithmetic.add(acc, b, self.covar[(person, i)])
+                    }) + self.offset[person]
                 })
                 .collect()
         } else {
             (0..nused)
                 .map(|person| {
-                    beta.iter()
-                        .enumerate()
-                        .fold(0.0, |acc, (i, &b)| acc + b * self.covar[(person, i)])
-                        + self.offset[person]
+                    beta.iter().enumerate().fold(0.0, |acc, (i, &b)| {
+                        arithmetic.add(acc, b, self.covar[(person, i)])
+                    }) + self.offset[person]
                 })
                 .collect()
         };
@@ -1382,6 +1417,7 @@ impl CoxFit {
                                 &mut denom,
                                 &mut a,
                                 &mut cmat,
+                                arithmetic,
                             );
                         }
                     }
@@ -1428,11 +1464,16 @@ impl CoxFit {
                             &mut denom,
                             &mut a,
                             &mut cmat,
+                            arithmetic,
                         );
                     } else {
                         ndead += 1;
                         deadwt += self.weights[person];
-                        loglik += self.weights[person] * (zbeta_vals[person] - recenter);
+                        loglik = arithmetic.add(
+                            loglik,
+                            self.weights[person],
+                            zbeta_vals[person] - recenter,
+                        );
                         add_risk_sums(
                             &self.covar,
                             nvar,
@@ -1441,9 +1482,14 @@ impl CoxFit {
                             &mut denom2,
                             &mut death_a,
                             &mut death_cmat,
+                            arithmetic,
                         );
                         for i in 0..nvar {
-                            self.u[i] += self.weights[person] * self.covar[(person, i)];
+                            self.u[i] = arithmetic.add(
+                                self.u[i],
+                                self.weights[person],
+                                self.covar[(person, i)],
+                            );
                         }
                     }
                 }
@@ -1451,17 +1497,18 @@ impl CoxFit {
                 debug_assert!(ndead > 0);
                 if matches!(method, Method::Breslow) || ndead == 1 {
                     denom += denom2;
-                    loglik -= deadwt * denom.ln();
+                    loglik = arithmetic.subtract(loglik, deadwt, denom.ln());
                     for i in 0..nvar {
                         a[i] += death_a[i];
                         let temp = a[i] / denom;
-                        self.u[i] -= deadwt * temp;
+                        self.u[i] = arithmetic.subtract(self.u[i], deadwt, temp);
                         for j in 0..=i {
                             cmat[(i, j)] += death_cmat[(i, j)];
-                            let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
-                            self.imat[(j, i)] += val;
+                            let centered = arithmetic.subtract(cmat[(i, j)], temp, a[j]) / denom;
+                            let updated = arithmetic.add(self.imat[(j, i)], deadwt, centered);
+                            self.imat[(j, i)] = updated;
                             if i != j {
-                                self.imat[(i, j)] += val;
+                                self.imat[(i, j)] = updated;
                             }
                         }
                     }
@@ -1470,17 +1517,20 @@ impl CoxFit {
                     let weight_average = deadwt / death_count;
                     for _ in 0..ndead {
                         denom += denom2 / death_count;
-                        loglik -= weight_average * denom.ln();
+                        loglik = arithmetic.subtract(loglik, weight_average, denom.ln());
                         for i in 0..nvar {
                             a[i] += death_a[i] / death_count;
                             let temp = a[i] / denom;
-                            self.u[i] -= weight_average * temp;
+                            self.u[i] = arithmetic.subtract(self.u[i], weight_average, temp);
                             for j in 0..=i {
                                 cmat[(i, j)] += death_cmat[(i, j)] / death_count;
-                                let val = weight_average * (cmat[(i, j)] - temp * a[j]) / denom;
-                                self.imat[(j, i)] += val;
+                                let centered =
+                                    arithmetic.subtract(cmat[(i, j)], temp, a[j]) / denom;
+                                let updated =
+                                    arithmetic.add(self.imat[(j, i)], weight_average, centered);
+                                self.imat[(j, i)] = updated;
                                 if i != j {
-                                    self.imat[(i, j)] += val;
+                                    self.imat[(i, j)] = updated;
                                 }
                             }
                         }
