@@ -1584,14 +1584,17 @@ impl CoxPHFit {
                                     hazard_fraction[col_idx],
                                     -mean_hazard_fraction[col_idx],
                                 );
-                                let death_correction = if contracted {
-                                    residuals[original_idx][col_idx]
-                                        + (covariate - mean_sum[col_idx])
+                                if contracted {
+                                    let death_increment = scores[original_idx]
+                                        .mul_add(correction, covariate - mean_sum[col_idx]);
+                                    residuals[original_idx][col_idx] += death_increment;
                                 } else {
-                                    residuals[original_idx][col_idx] + covariate - mean_sum[col_idx]
-                                };
-                                residuals[original_idx][col_idx] =
-                                    scores[original_idx].mul_add(correction, death_correction);
+                                    let death_correction = residuals[original_idx][col_idx]
+                                        + covariate
+                                        - mean_sum[col_idx];
+                                    residuals[original_idx][col_idx] =
+                                        scores[original_idx].mul_add(correction, death_correction);
+                                }
                             }
                         }
                     }

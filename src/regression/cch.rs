@@ -2208,6 +2208,87 @@ mod tests {
     }
 
     #[test]
+    fn native_lin_ying_matches_factor_separation_robust_variance() {
+        let stop = vec![
+            20.0, 3.0, 16.0, 18.0, 13.0, 17.0, 17.0, 4.0, 3.0, 4.0, 8.0, 12.0, 9.0, 19.0, 8.0,
+            12.0, 18.0, 7.0, 18.0, 11.0, 17.0, 8.0, 20.0,
+        ];
+        let status = vec![
+            1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0,
+        ];
+        let start = vec![
+            18.0, 0.0, 14.0, 13.0, 9.0, 14.0, 13.0, 2.0, 0.0, 1.0, 5.0, 9.0, 8.0, 15.0, 4.0, 9.0,
+            17.0, 2.0, 16.0, 7.0, 16.0, 5.0, 14.0,
+        ];
+        let groups = [
+            'b', 'b', 'd', 'b', 'a', 'a', 'c', 'c', 'b', 'b', 'd', 'c', 'd', 'b', 'c', 'b', 'a',
+            'a', 'a', 'd', 'd', 'd', 'b',
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| {
+                vec![
+                    f64::from(group == 'b'),
+                    f64::from(group == 'c'),
+                    f64::from(group == 'd'),
+                ]
+            })
+            .collect();
+        let subcohort = vec![
+            1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=23).collect(),
+            69,
+            Some(start),
+            "LinYing",
+            true,
+        )
+        .expect("separated LinYing fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[
+                19.566_878_596_995_377,
+                19.553_869_713_958_708,
+                19.118_826_333_209_892,
+            ],
+        );
+        let expected_variance = [
+            [
+                11_624.855_674_487_8,
+                11_665.370_496_796_9,
+                11_612.136_479_164_5,
+            ],
+            [
+                11_665.370_496_796_9,
+                11_708.776_348_635_8,
+                11_654.419_975_037_7,
+            ],
+            [
+                11_612.136_479_164_5,
+                11_654.419_975_037_7,
+                11_611.295_358_827_8,
+            ],
+        ];
+        for (actual_row, expected_row) in result.information_matrix.iter().zip(expected_variance) {
+            for (&actual, expected) in actual_row.iter().zip(expected_row) {
+                assert!(
+                    (actual / expected - 1.0).abs() < 1e-11,
+                    "expected {expected:.17e}, got {actual:.17e}"
+                );
+            }
+        }
+        assert_eq!(result.score_residual_rows[1][0], 0.367_653_771_325_301_64);
+        assert_eq!(result.score_residual_rows[8][0], 0.367_653_771_325_301_64);
+        assert_eq!(result.score_residual_rows[14][1], 0.711_869_128_895_236_5);
+    }
+
+    #[test]
     fn native_prentice_matches_extreme_phase_two_roundoff() {
         let stop = vec![
             12.0, 2.0, 2.0, 14.0, 17.0, 2.0, 2.0, 14.0, 5.0, 20.0, 20.0, 9.0, 13.0, 13.0, 3.0, 3.0,

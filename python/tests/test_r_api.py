@@ -25920,6 +25920,39 @@ def test_cch_iteration_zero_still_masks_and_warns(monkeypatch: pytest.MonkeyPatc
     assert fit.coefficients[0][1] == 0.0
 
 
+def test_cch_linying_factor_separation_matches_robust_variance():
+    data = {
+        "start": [18, 0, 14, 13, 9, 14, 13, 2, 0, 1, 5, 9, 8, 15, 4, 9, 17, 2, 16, 7, 16, 5, 14],
+        "stop": [20, 3, 16, 18, 13, 17, 17, 4, 3, 4, 8, 12, 9, 19, 8, 12, 18, 7, 18, 11, 17, 8, 20],
+        "status": [1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0],
+        "group": list("bbdbaaccbbdcdbcbaaadddb"),
+        "id": list(range(1, 24)),
+        "subcohort": [1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1],
+    }
+    with pytest.warns(RuntimeWarning, match="Loglik converged before variable  1,2,3"):
+        fit = survival.cch(
+            'Surv(start, stop, status) ~ factor(group, levels=c("a","b","c","d"))',
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=69,
+            method="LinYing",
+            robust=True,
+        )
+
+    assert survival.coef(fit) == pytest.approx(
+        [19.5668785969954, 19.5538697139587, 19.1188263332099],
+        abs=1e-11,
+    )
+    expected_variance = [
+        [11624.8556744878, 11665.3704967969, 11612.1364791645],
+        [11665.3704967969, 11708.7763486358, 11654.4199750377],
+        [11612.1364791645, 11654.4199750377, 11611.2953588278],
+    ]
+    for actual, expected in zip(fit.var, expected_variance, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-7)
+
+
 def test_cch_formula_preserves_small_counting_process_offset_risk():
     data = {
         "start": [1, 8, 6, 13, 3, 14, 4, 0, 10, 12, 16, 11, 4, 1, 13, 14, 6, 8, 9, 13, 4],

@@ -13203,6 +13203,46 @@ test_that("cch masks aliases from the coefficient-producing fit", {
   expect_equal(actual_prentice$coefficients, reference_prentice$coefficients, tolerance = 1e-11)
 })
 
+test_that("cch matches LinYing factor separation robust variance", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(18, 0, 14, 13, 9, 14, 13, 2, 0, 1, 5, 9, 8, 15, 4, 9, 17, 2, 16, 7, 16, 5, 14),
+    stop = c(20, 3, 16, 18, 13, 17, 17, 4, 3, 4, 8, 12, 9, 19, 8, 12, 18, 7, 18, 11, 17, 8, 20),
+    status = c(1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0),
+    group = factor(
+      c("b", "b", "d", "b", "a", "a", "c", "c", "b", "b", "d", "c", "d", "b", "c", "b", "a", "a", "a", "d", "d", "d", "b"),
+      levels = c("a", "b", "c", "d")
+    ),
+    id = seq_len(23),
+    subcohort = c(1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 69,
+    method = "LinYing",
+    robust = TRUE
+  )
+  actual <- expect_warning(
+    do.call(cch, args),
+    "Loglik converged before variable  1,2,3"
+  )
+  reference <- expect_warning(
+    do.call(survival::cch, args),
+    "Loglik converged before variable  1,2,3"
+  )
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+})
+
 test_that("cch matches factor phase-two roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
