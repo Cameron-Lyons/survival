@@ -10,7 +10,7 @@
 })
 
 if (getRversion() >= "2.15.1") {
-  utils::globalVariables("nclass")
+  utils::globalVariables(c("nclass", "uses"))
 }
 
 .python_attr <- function(name) {
@@ -3394,60 +3394,98 @@ cipoisson <- function(k, time = 1, p = 0.95, method = c("exact", "anscombe")) {
 }
 
 lvcf <- function(id, x, time, first = TRUE) {
-  python_first <- if (length(first) == 1L && !is.na(first)) {
-    as.logical(first)
+  if (!missing(time)) {
+    index <- order(id, time)
   } else {
-    first
+    index <- order(id)
   }
-  python_x <- x
-  # Reticulate erases the storage type of an all-missing atomic vector.
-  if (isTRUE(python_first) && length(x) > 0L && all(is.na(x))) {
+  first_rows <- index[which(!duplicated(id[index]))]
+  if (first & any(is.na(x[first_rows]))) {
     if (is.logical(x)) {
-      python_x[] <- FALSE
-    } else if (is.numeric(x)) {
-      python_x[] <- if (is.integer(x)) 0L else 0
+      x[first_rows] <- ifelse(is.na(x[first_rows]), FALSE, x[first_rows])
+    } else if (is.numeric(x) && all(is.na(x) | x == 0 | x == 1)) {
+      x[first_rows] <- ifelse(is.na(x[first_rows]), 0L, x[first_rows])
     }
   }
-  result <- .call_r_api(
-    "lvcf",
-    id = .as_python_vector(id),
-    x = .as_python_vector(python_x),
-    time = if (missing(time)) NULL else .as_python_vector(time),
-    first = python_first
-  )
   if (is.factor(x)) {
-    return(factor(.as_nullable_character_vector(result), levels = levels(x)))
-  }
-  if (is.integer(x)) {
-    output <- as.integer(.as_nullable_numeric_vector(result))
-  } else if (is.numeric(x)) {
-    output <- .as_nullable_numeric_vector(result)
-  } else if (is.logical(x)) {
-    output <- .as_nullable_logical_vector(result)
+    x_levels <- levels(x)
+    x <- as.integer(x)
+    for (i in seq(along = x)) {
+      row <- index[i]
+      if (i == 1L || !is.na(x[row]) || id[row] != id[previous_row]) {
+        current <- x[row]
+      } else {
+        x[row] <- current
+      }
+      previous_row <- row
+    }
+    factor(x, seq(along.with = x_levels), x_levels)
   } else {
-    output <- .as_nullable_character_vector(result)
+    for (i in seq(along = x)) {
+      row <- index[i]
+      if (i == 1L || !is.na(x[row]) || id[row] != id[previous_row]) {
+        current <- x[row]
+      } else {
+        x[row] <- current
+      }
+      previous_row <- row
+    }
+    x
   }
-  attributes(output) <- attributes(x)
-  output
 }
 
 nostutter <- function(id, x, censor = 0, single = FALSE) {
-  if (!(is.character(x) || is.numeric(x) || is.factor(x))) {
+  if (is.character(x) || is.numeric(x)) {
+    x <- as.factor(x)
+  }
+  if (is.factor(x)) {
+    new_levels <- unique(c(censor, levels(x)))
+    is_censor <- x == censor
+    x <- as.integer(x)
+    x[is_censor] <- 0L
+  } else {
     stop("invalid variable type", call. = FALSE)
   }
-  x_levels <- if (is.factor(x)) levels(x) else levels(factor(x))
-  censor_value <- if (is.factor(x) || is.character(x)) as.character(censor)[[1L]] else censor
-  result <- .call_r_api(
-    "nostutter",
-    id = .as_python_vector(id),
-    x = if (is.factor(x)) as.character(x) else .as_python_vector(x),
-    censor = censor_value,
-    single = isTRUE(single)
-  )
-  factor(
-    .as_nullable_character_vector(result),
-    levels = unique(c(as.character(censor), x_levels))
-  )
+  n <- length(id)
+  if (length(x) != n) {
+    stop("wrong length for x or id", call. = FALSE)
+  }
+  if (single) {
+    used <- logical(1L + length(levels(x)))
+    for (i in 1:n) {
+      if (i == 1L || (id[i] != id[i - 1L] && !used[x[i]])) {
+        if (is.na(x[i])) {
+          current <- 0L
+        } else {
+          current <- x[i]
+          uses[x[i]] <- TRUE
+        }
+      } else if (!is.na(x[i])) {
+        if (x[i] == current) {
+          x[i] <- 0L
+        } else if (x[i] > 0L) {
+          current <- x[i]
+        }
+      }
+    }
+  } else {
+    for (i in 1:n) {
+      if (i == 1L || id[i] != id[i - 1L]) {
+        if (is.na(x[i])) {
+          current <- 0L
+        } else {
+          current <- x[i]
+        }
+      } else if (!is.na(x[i])) {
+        if (x[i] == current) {
+          x[i] <- 0L
+        } else if (x[i] > 0L) {
+          current <- x[i]
+        }
+      }
+    }
+  }
+  factor(x, sort(unique(x)), new_levels)
 }
 
 .bounded_link <- function(name, family, display_name, edge) {

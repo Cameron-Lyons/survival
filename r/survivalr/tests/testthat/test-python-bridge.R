@@ -8683,6 +8683,23 @@ test_that("data-prep helpers match R survival shapes", {
   reference_lvcf <- get0("lvcf", envir = asNamespace("survival"), inherits = FALSE)
   if (!is.null(reference_lvcf)) {
     expect_identical(names(formals(lvcf)), names(formals(reference_lvcf)))
+    lvcf_boundary_cases <- list(
+      list(id = numeric(), x = numeric()),
+      list(id = 1, x = NA_real_, first = NA),
+      list(id = c(1, NA), x = c(1, NA)),
+      list(id = c(1, 1), x = 1),
+      list(id = 1, x = c(1, NA)),
+      list(id = c(1, 1), x = c(NA, 1), time = NULL),
+      list(id = c(1, 1), x = c(NA, 1), time = numeric()),
+      list(id = c(1, 1, 1), x = as.Date(c("2020-01-01", NA, "2020-01-03"))),
+      list(id = c(1, 1, 1), x = I(list("a", NULL, "b")))
+    )
+    for (args in lvcf_boundary_cases) {
+      expect_identical(
+        capture_call(lvcf, args),
+        capture_call(reference_lvcf, args)
+      )
+    }
     first_ids <- c(1, 1, 2, 2)
     for (first_value in c(TRUE, FALSE)) {
       for (first_values in list(
@@ -8776,6 +8793,28 @@ test_that("data-prep helpers match R survival shapes", {
     }
   )
   reference_nostutter <- get0("nostutter", envir = asNamespace("survival"), inherits = FALSE)
+  if (!is.null(reference_nostutter)) {
+    expect_identical(names(formals(nostutter)), names(formals(reference_nostutter)))
+    nostutter_boundary_cases <- list(
+      list(id = numeric(), x = numeric()),
+      list(id = 1, x = 1),
+      list(id = c(1, 1), x = c(NA, 1)),
+      list(id = c(1, NA), x = c(1, 1)),
+      list(id = c(1, 1), x = c(TRUE, TRUE)),
+      list(id = c(1, 1), x = c(1, 1), censor = NA_real_),
+      list(id = c(1, 1), x = c("a", "a"), censor = character()),
+      list(id = c(1, 1, 1), x = c(1, 2, 1), single = TRUE),
+      list(id = c(1, 1, 1), x = c(NA, 1, 1), single = TRUE),
+      list(id = 1, x = c(1, 2)),
+      list(id = c(1, 1), x = 1)
+    )
+    for (args in nostutter_boundary_cases) {
+      expect_identical(
+        capture_call(nostutter, args),
+        capture_call(reference_nostutter, args)
+      )
+    }
+  }
   expect_equal(
     nostutter(c(1, 1, 1, 2, 2), c(0, 1, 1, 1, 1)),
     if (is.null(reference_nostutter)) {
@@ -8792,23 +8831,6 @@ test_that("data-prep helpers match R survival shapes", {
       reference_nostutter(c(1, 1, 1, 2, 2), c("censor", "a", "a", "b", "b"), censor = "censor")
     }
   )
-  single_numeric <- nostutter(
-    c(1, 1, 1, 1, 2, 2, 2),
-    c(1, 2, 1, 3, 1, 1, 2),
-    single = TRUE
-  )
-  expect_equal(as.character(single_numeric), c("1", "2", "0", "3", "1", "0", "2"))
-  expect_equal(levels(single_numeric), c("0", "1", "2", "3"))
-
-  single_character <- nostutter(
-    c(1, 1, 1, 1),
-    c("censor", "a", "b", "a"),
-    censor = "censor",
-    single = TRUE
-  )
-  expect_equal(as.character(single_character), c("censor", "a", "b", "censor"))
-  expect_equal(levels(single_character), c("censor", "a", "b"))
-
   expect_equal(nsk(1:5), survival::nsk(1:5), tolerance = 1e-10)
   expect_equal(nsk(1:5, df = 3), survival::nsk(1:5, df = 3), tolerance = 1e-10)
   expect_equal(
