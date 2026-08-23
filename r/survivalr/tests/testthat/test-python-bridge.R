@@ -1738,6 +1738,27 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = "subject"
   )
   expect_equal(multistate_split, reference_multistate_split)
+  reference_multistate_dot_formula <- Surv(time, state) ~ .
+  environment(reference_multistate_dot_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  expect_equal(
+    survSplit(
+      Surv(time, state) ~ .,
+      data = split_multistate,
+      cut = c(2, 3.5),
+      episode = "episode",
+      added = "added"
+    ),
+    survival::survSplit(
+      reference_multistate_dot_formula,
+      data = split_multistate,
+      cut = c(2, 3.5),
+      episode = "episode",
+      added = "added"
+    )
+  )
 
   split_multistate_counting <- data.frame(
     start = c(0, 1),
@@ -1765,6 +1786,27 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = "subject"
   )
   expect_equal(multistate_counting_split, reference_multistate_counting_split)
+  reference_multistate_counting_dot_formula <- Surv(start, stop, state) ~ .
+  environment(reference_multistate_counting_dot_formula) <- list2env(
+    list(Surv = survival::Surv),
+    parent = parent.frame()
+  )
+  expect_equal(
+    survSplit(
+      Surv(start, stop, state) ~ .,
+      data = split_multistate_counting,
+      cut = 2,
+      episode = "episode",
+      added = "added"
+    ),
+    survival::survSplit(
+      reference_multistate_counting_dot_formula,
+      data = split_multistate_counting,
+      cut = 2,
+      episode = "episode",
+      added = "added"
+    )
+  )
 
   expect_identical(names(formals(survSplit)), names(formals(survival::survSplit)))
   near_tie_split_data <- data.frame(time = 1, status = 1, x = 9)

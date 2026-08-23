@@ -11728,10 +11728,7 @@ survSplit <- function(formula, data, subset, na.action = na.pass, id, cut,
     timefix = timefix,
     subject_id = if (is.null(subject_id)) NULL else .as_python_vector(subject_id)
   )
-  output <- .restore_r_column_classes(
-    as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE),
-    covariates
-  )
+  output <- as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE)
   states <- attr(response, "states")
   if (!is.null(states)) {
     output[[split_event_name]] <- factor(
@@ -11740,6 +11737,7 @@ survSplit <- function(formula, data, subset, na.action = na.pass, id, cut,
       labels = c("censor", states)
     )
   }
+  output <- .restore_r_column_classes(output, covariates)
   if (named_response) {
     source_rows <- as.integer(output[[source_column]])
     response_row_names <- rownames(response)
