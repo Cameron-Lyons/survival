@@ -1118,7 +1118,7 @@ Royston-Sauerbrei small-sample adjustment.}
 \item{layout, connect}{State layout specification and square transition
 matrix for \code{statefig}.}
 \item{margin, box, cex, col, lwd, lty, bcol, acol, alwd, alty}{Plot
-style arguments accepted for \code{statefig} compatibility.}
+style arguments for state labels, boxes, and transition arrows in \code{statefig}.}
 \item{pch, log, xscale, yscale, xlim, ylim, xmax, xlab, ylab, xaxs,
 mark.time, cumhaz, fun}{Plotting controls for Python-backed
 \code{survfit} curves. The bridge supports common step-curve drawing and

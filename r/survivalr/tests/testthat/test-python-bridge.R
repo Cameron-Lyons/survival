@@ -2511,18 +2511,38 @@ test_that("R formula wrappers delegate to the Python survival package", {
     dimnames = list(c("a", "b"), c("a", "b"))
   )
   grDevices::pdf(NULL)
+  graphics::frame()
+  blank_statefig_plot <- grDevices::recordPlot()
   reference_statefig <- survival::statefig(c(1, 1), state_connect)
   reference_statefig_coords <- survival::statefig(
     matrix(c(0.2, 0.7, 0.8, 0.3), nrow = 2, byrow = TRUE),
     state_connect,
     box = FALSE
   )
+  reference_statefig_column <- survival::statefig(matrix(c(1, 1), ncol = 1), state_connect)
+  singleton_connect <- matrix(0, nrow = 1, dimnames = list("only", "only"))
+  reference_statefig_singleton <- survival::statefig(1, singleton_connect)
+  reference_statefig_usr <- graphics::par("usr")
+  bridged_statefig <- statefig(c(1, 1), state_connect)
+  bridged_statefig_coords <- statefig(
+    matrix(c(0.2, 0.7, 0.8, 0.3), nrow = 2, byrow = TRUE),
+    state_connect,
+    box = FALSE
+  )
+  bridged_statefig_column <- statefig(matrix(c(1, 1), ncol = 1), state_connect)
+  bridged_statefig_singleton <- statefig(1, singleton_connect)
+  bridged_statefig_usr <- graphics::par("usr")
+  bridged_statefig_plot <- grDevices::recordPlot()
   grDevices::dev.off()
-  expect_equal(statefig(c(1, 1), state_connect), reference_statefig)
+  expect_equal(bridged_statefig, reference_statefig)
+  expect_equal(bridged_statefig_usr, reference_statefig_usr)
+  expect_false(identical(blank_statefig_plot[[2L]], bridged_statefig_plot[[2L]]))
   expect_equal(
-    statefig(matrix(c(0.2, 0.7, 0.8, 0.3), nrow = 2, byrow = TRUE), state_connect, box = FALSE),
+    bridged_statefig_coords,
     reference_statefig_coords
   )
+  expect_equal(bridged_statefig_column, reference_statefig_column)
+  expect_equal(bridged_statefig_singleton, reference_statefig_singleton)
   expect_error(statefig("bad", state_connect), "layout")
   expect_error(statefig(c(1, 1), matrix(0, nrow = 1, ncol = 2)), "square")
 

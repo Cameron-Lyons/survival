@@ -11320,6 +11320,205 @@ rttright <- function(formula, data, weights, subset, na.action,
   }
 }
 
+.statefig_x_intersections <- function(x, center, radius, angle1, angle2) {
+  scaled <- (x - center[1L]) / radius
+  if (abs(scaled) > 1) return(NULL)
+  angles <- acos(scaled)
+  circle_pi <- 3.1415926545898
+  if (x > center[1L]) {
+    angles <- c(angles, circle_pi - angles)
+  } else {
+    angles <- -c(angles, circle_pi - angles)
+  }
+  angles <- c(angles, -angles, 2 * circle_pi - angles)
+  angles[angles < max(angle1, angle2) & angles > min(angle1, angle2)]
+}
+
+.statefig_y_intersections <- function(y, center, radius, angle1, angle2) {
+  circle_pi <- 3.1415926545898
+  scaled <- (y - center[2L]) / radius
+  if (abs(scaled) > 1) return(NULL)
+  angles <- asin(scaled)
+  angles <- c(angles, sign(angles) * circle_pi - angles)
+  angles <- c(angles, angles + 2 * circle_pi)
+  angles[angles < max(angle1, angle2) & angles > min(angle1, angle2)]
+}
+
+.statefig_arc <- function(x1, y1, x2, y2, curvature, delta1, delta2) {
+  theta <- atan2(y2 - y1, x2 - x1)
+  if (abs(curvature) < 0.001) curvature <- 0.001
+  half_distance <- sqrt((x2 - x1)^2 + (y2 - y1)^2) / 2
+  midpoint <- c((x1 + x2) / 2, (y1 + y2) / 2)
+  radius <- abs(half_distance * (1 + curvature^2) / (2 * curvature))
+  center <- if (curvature > 0) {
+    midpoint + (radius - curvature * half_distance) * c(-sin(theta), cos(theta))
+  } else {
+    midpoint + (radius + curvature * half_distance) * c(sin(theta), -cos(theta))
+  }
+  angle1 <- atan2(y1 - center[2L], x1 - center[1L])
+  angle2 <- atan2(y2 - center[2L], x2 - center[1L])
+  if (abs(angle2 - angle1) > pi) {
+    if (angle1 > 0) {
+      angle2 <- angle2 + 2 * pi
+    } else {
+      angle1 <- angle1 + 2 * pi
+    }
+  }
+  first_candidates <- c(
+    .statefig_x_intersections(x1 + delta1[1L], center, radius, angle1, angle2),
+    .statefig_x_intersections(x1 - delta1[1L], center, radius, angle1, angle2),
+    .statefig_y_intersections(y1 + delta1[2L], center, radius, angle1, angle2),
+    .statefig_y_intersections(y1 - delta1[2L], center, radius, angle1, angle2)
+  )
+  second_candidates <- c(
+    .statefig_x_intersections(x2 + delta2[1L], center, radius, angle1, angle2),
+    .statefig_x_intersections(x2 - delta2[1L], center, radius, angle1, angle2),
+    .statefig_y_intersections(y2 + delta2[2L], center, radius, angle1, angle2),
+    .statefig_y_intersections(y2 - delta2[2L], center, radius, angle1, angle2)
+  )
+  if (curvature > 0) {
+    arc_angles <- c(min(first_candidates, na.rm = TRUE), max(second_candidates, na.rm = TRUE))
+  } else {
+    arc_angles <- c(max(first_candidates, na.rm = TRUE), min(second_candidates, na.rm = TRUE))
+  }
+  list(center = center, angle = arc_angles, radius = radius)
+}
+
+.draw_statefig <- function(coords, connect, statenames, margin, box, cex, col,
+                           lwd, lty, bcol, acol, alwd, alty, offset) {
+  graphics::frame()
+  graphics::par(usr = c(0, 1, 0, 1))
+  nstate <- nrow(connect)
+  narrow <- sum(connect != 0)
+  acol <- rep(acol, length.out = narrow)
+  alwd <- rep(alwd, length.out = narrow)
+  alty <- rep(alty, length.out = narrow)
+  bcol <- rep(bcol, length.out = nstate)
+  lty <- rep(lty, length.out = nstate)
+  lwd <- rep(lwd, length.out = nstate)
+  col <- rep(col, length.out = nstate)
+
+  graphics::text(coords[, 1L], coords[, 2L], statenames, cex = cex, col = col)
+  text_width <- graphics::strwidth(statenames, cex = cex)
+  text_height <- graphics::strheight(statenames, cex = cex)
+  pin <- graphics::par("pin")
+  dx <- margin * pin[2L] / mean(pin)
+  dy <- margin * pin[1L] / mean(pin)
+  if (box) {
+    draw_box <- function(x, y, half_width, half_height, line_width, line_type, color) {
+      graphics::lines(
+        x + c(-half_width, half_width, half_width, -half_width, -half_width),
+        y + c(-half_height, -half_height, half_height, half_height, -half_height),
+        lwd = line_width,
+        lty = line_type,
+        col = color
+      )
+    }
+    for (idx in seq_len(nstate)) {
+      draw_box(
+        coords[idx, 1L],
+        coords[idx, 2L],
+        text_width[idx] / 2 + dx,
+        text_height[idx] / 2 + dy,
+        lwd[idx],
+        lty[idx],
+        bcol[idx]
+      )
+    }
+    dx <- 2 * dx
+    dy <- 2 * dy
+  }
+
+  draw_arrow <- function(...) graphics::arrows(..., angle = 20, length = 0.1)
+  draw_line <- function(point1, point2, curvature, delta1, delta2,
+                        line_width, line_type, color) {
+    if (curvature == 0 && point1[1L] == point2[1L]) {
+      if (point1[2L] > point2[2L]) {
+        draw_arrow(
+          point1[1L], point1[2L] - delta1[2L],
+          point2[1L], point2[2L] + delta2[2L],
+          lwd = line_width, lty = line_type, col = color
+        )
+      } else {
+        draw_arrow(
+          point1[1L], point1[2L] + delta1[2L],
+          point2[1L], point2[2L] - delta2[2L],
+          lwd = line_width, lty = line_type, col = color
+        )
+      }
+    } else if (curvature == 0 && point1[2L] == point2[2L]) {
+      if (point1[1L] > point2[1L]) {
+        draw_arrow(
+          point1[1L] - delta1[1L], point1[2L],
+          point2[1L] + delta2[1L], point2[2L],
+          lwd = line_width, lty = line_type, col = color
+        )
+      } else {
+        draw_arrow(
+          point1[1L] + delta1[1L], point1[2L],
+          point2[1L] - delta2[1L], point2[2L],
+          lwd = line_width, lty = line_type, col = color
+        )
+      }
+    } else {
+      arc <- .statefig_arc(
+        point1[1L], point1[2L], point2[1L], point2[2L],
+        curvature, delta1, delta2
+      )
+      if (curvature == 0) {
+        draw_arrow(
+          arc$center[1L] + arc$radius * cos(arc$angle[1L]),
+          arc$center[2L] + arc$radius * sin(arc$angle[1L]),
+          arc$center[1L] + arc$radius * cos(arc$angle[2L]),
+          arc$center[2L] + arc$radius * sin(arc$angle[2L]),
+          lwd = line_width, lty = line_type, col = color
+        )
+      } else {
+        angles <- seq(arc$angle[1L], arc$angle[2L], length.out = 21L)
+        graphics::lines(
+          arc$center[1L] + arc$radius * cos(angles),
+          arc$center[2L] + arc$radius * sin(angles),
+          lwd = line_width, lty = line_type, col = color
+        )
+        draw_arrow(
+          arc$center[1L] + arc$radius * cos(angles[20L]),
+          arc$center[2L] + arc$radius * sin(angles[20L]),
+          arc$center[1L] + arc$radius * cos(angles[21L]),
+          arc$center[2L] + arc$radius * sin(angles[21L]),
+          lwd = line_width, lty = line_type, col = color
+        )
+      }
+    }
+  }
+
+  arrow_index <- 1L
+  for (to_idx in seq_len(nstate)) {
+    for (from_idx in seq_len(nstate)) {
+      if (from_idx != to_idx && connect[from_idx, to_idx] != 0) {
+        point1 <- coords[from_idx, ]
+        point2 <- coords[to_idx, ]
+        if (connect[from_idx, to_idx] == 2 - connect[to_idx, from_idx] && offset != 0) {
+          arrow_offset <- c(point2[2L] - point1[2L], point1[1L] - point2[1L])
+          arrow_offset <- -offset * arrow_offset / sqrt(sum(arrow_offset^2))
+          point1 <- point1 + arrow_offset
+          point2 <- point2 + arrow_offset
+        }
+        draw_line(
+          point1,
+          point2,
+          connect[from_idx, to_idx] - 1,
+          c(text_width[from_idx] / 2 + dx, text_height[from_idx] / 2 + dy),
+          c(text_width[to_idx] / 2 + dx, text_height[to_idx] / 2 + dy),
+          alwd[arrow_index],
+          alty[arrow_index],
+          acol[arrow_index]
+        )
+        arrow_index <- arrow_index + 1L
+      }
+    }
+  }
+}
+
 statefig <- function(layout, connect, margin = 0.03, box = TRUE, cex = 1,
                      col = 1, lwd = 1, lty = 1, bcol = col, acol = col,
                      alwd = lwd, alty = lty, offset = 0) {
@@ -11338,30 +11537,26 @@ statefig <- function(layout, connect, margin = 0.03, box = TRUE, cex = 1,
     stop("connect must have the state names as dimnames", call. = FALSE)
   }
   layout_value <- if (is.matrix(layout)) {
-    lapply(seq_len(nrow(layout)), function(idx) as.numeric(layout[idx, ]))
+    lapply(seq_len(nrow(layout)), function(idx) as.list(as.numeric(layout[idx, ])))
   } else {
-    as.numeric(layout)
+    as.list(as.numeric(layout))
   }
-  connect_value <- lapply(seq_len(nrow(connect)), function(idx) as.numeric(connect[idx, ]))
+  connect_value <- lapply(
+    seq_len(nrow(connect)),
+    function(idx) as.list(as.numeric(connect[idx, ]))
+  )
   result <- .call_r_api(
     "statefig",
     layout = layout_value,
     connect = connect_value,
-    states = as.list(statenames),
-    margin = margin,
-    box = box,
-    cex = cex,
-    col = col,
-    lwd = lwd,
-    lty = lty,
-    bcol = bcol,
-    acol = acol,
-    alwd = alwd,
-    alty = alty,
-    offset = offset
+    states = as.list(statenames)
   )
   coords <- .as_numeric_matrix(result[["positions"]])
   dimnames(coords) <- list(as.character(result[["states"]]), c("x", "y"))
+  .draw_statefig(
+    coords, connect, statenames, margin, box, cex, col, lwd, lty,
+    bcol, acol, alwd, alty, offset
+  )
   invisible(coords)
 }
 
