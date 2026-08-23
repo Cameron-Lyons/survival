@@ -22135,6 +22135,59 @@ def test_survfit_coxph_counts_follow_weights_strata_and_conditioning():
     assert conditioned_frame["n.censor"] == pytest.approx([1.0, 0.0, 0.0, 0.0, 1.0])
 
 
+def test_survfit_coxph_weighted_uncertainty_uses_robust_variance():
+    data = {
+        "time": [1.0, 2.0, 4.0, 5.0, 1.0, 3.0, 4.0, 6.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "x": [0.2, 0.4, 0.1, 0.3, 1.0, 1.2, 0.8, 1.1],
+        "weight": [1.0, 2.0, 1.0, 1.0, 1.0, 1.5, 2.0, 1.0],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        weights="weight",
+        initial_beta=[0.0],
+        max_iter=0,
+    )
+
+    result = survival.survfit(fit, newdata={"x": [0.2, 0.8]})
+
+    assert fit.robust
+    assert fit.information_matrix[0][0] != pytest.approx(fit.fit.information_matrix[0][0])
+    assert result.std_chaz[0] == pytest.approx(
+        [
+            0.103526700286155,
+            0.239657064404349,
+            0.376045169536525,
+            0.572989178808403,
+            0.910071540255794,
+            0.910071540255794,
+        ]
+    )
+    assert result.std_chaz[1] == pytest.approx(
+        [
+            0.0960790392610098,
+            0.196058316593595,
+            0.273598392028314,
+            0.407686973683179,
+            0.655281799249129,
+            0.655281799249129,
+        ]
+    )
+    expected = survival.predict(
+        fit,
+        {
+            "time": [2.5, 5.0],
+            "status": [0, 1],
+            "x": [0.2, 0.8],
+        },
+        type="expected",
+        se_fit=True,
+    )
+    assert expected.fit == pytest.approx([0.330532212885154, 1.46130144365438])
+    assert expected.se_fit == pytest.approx([0.239657064404349, 0.655281799249129])
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)

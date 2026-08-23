@@ -13831,6 +13831,14 @@ test_that("Cox survfit counts and structural metadata match survival", {
     expect_identical(bridged$logse, reference$logse)
     expect_identical(bridged$conf.type, reference$conf.type)
     expect_equal(bridged$conf.int, reference$conf.int)
+    for (field in c("std.err", "std.chaz", "lower", "upper")) {
+      expect_equal(
+        bridged[[field]],
+        reference[[field]],
+        tolerance = 1e-12,
+        info = paste("Cox survfit uncertainty field", field)
+      )
+    }
   }
 
   profiles <- data.frame(x = c(0.2, 0.8), row.names = c("low", "high"))

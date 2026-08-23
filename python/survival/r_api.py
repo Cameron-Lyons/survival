@@ -26061,7 +26061,7 @@ def _cox_expected_events_with_se(
     if any(len(row) != nvar for row in rows):
         raise ValueError(f"newdata must have {nvar} columns")
     means = _cox_reference_means(model, "sample")
-    variance = _cox_variance_matrix(model, nvar)
+    variance = _cox_variance_matrix(fit, nvar)
     baselines = _cox_expected_baseline_by_stratum(model)
 
     predictions: list[float] = []
@@ -26584,7 +26584,7 @@ def _cox_survfit_with_confidence(
     model = _unwrap_formula_fit(fit)
     beta = _cox_beta(model)
     nvar = len(beta)
-    variance = _cox_variance_matrix(model, nvar)
+    variance = _cox_variance_matrix(fit, nvar)
     baselines = _cox_expected_baseline_by_stratum(model)
     means = _cox_reference_means(model, "sample")
     z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
