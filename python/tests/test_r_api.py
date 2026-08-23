@@ -23936,6 +23936,53 @@ def test_low_level_survreg_residuals_handle_interval_ldcase_and_working():
         )
 
 
+def test_survreg_stratified_residuals_use_row_specific_scales():
+    data = _toy_data()
+    fit = survival.survreg(
+        "Surv(time, status) ~ x1 + x2 + strata(group)",
+        data=data,
+        dist="weibull",
+        max_iter=10,
+        eps=1e-5,
+    )
+
+    matrix = survival.r_api.residuals(fit, type="matrix")
+    expected_matrix = []
+    for row_index, stratum in enumerate(fit.strata):
+        expected_matrix.append(
+            survival.survreg_residual_matrix(
+                [fit.time[row_index]],
+                [fit.status[row_index]],
+                [fit.linear_predictors[row_index]],
+                fit.scales[stratum],
+                fit.distribution,
+            )[0]
+        )
+    for actual, expected in zip(matrix, expected_matrix, strict=True):
+        assert actual == pytest.approx(expected)
+
+    expected_working = [
+        0.0 if abs(row[2]) <= 1e-12 else -row[1] / row[2] for row in expected_matrix
+    ]
+    assert fit.residuals("working").residuals == pytest.approx(expected_working)
+    assert survival.r_api.residuals(fit, type="working") == pytest.approx(expected_working)
+
+    location_variance = [
+        row[: fit.n_covariates] for row in fit.variance_matrix[: fit.n_covariates]
+    ]
+    expected_dfbeta = survival.survreg_dfbeta_residuals(
+        expected_matrix,
+        fit.covariates,
+        fit.scales,
+        fit.strata,
+        location_variance,
+        False,
+        False,
+    )
+    for actual, expected in zip(fit.dfbeta(), expected_dfbeta, strict=True):
+        assert actual == pytest.approx(expected)
+
+
 def test_survreg_fit_exposes_prediction_metadata_and_methods():
     data = _toy_data()
     fit = survival.survreg(
@@ -24258,6 +24305,7 @@ def test_survreg_gaussian_residuals_use_identity_response_scale():
     z = 0.5
     density = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
     survivor = 1.0 - normal.cdf(z)
+    hazard = density / survivor
 
     assert low_level_response.residuals == pytest.approx([0.5, 0.5])
     assert low_level_deviance.residuals == pytest.approx(
@@ -24266,7 +24314,7 @@ def test_survreg_gaussian_residuals_use_identity_response_scale():
             math.sqrt(-2.0 * math.log(survivor)),
         ]
     )
-    assert low_level_working.residuals == pytest.approx([z, density / survivor])
+    assert low_level_working.residuals == pytest.approx([z, 1.0 / (hazard - z)])
 
     data = _toy_data()
     fit = survival.survreg(

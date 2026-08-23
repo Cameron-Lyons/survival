@@ -9,11 +9,11 @@ use crate::regression::survreg_predict::{
 };
 use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survregc1};
 use crate::residuals::survreg_resid::{
-    SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg_with_parameter,
-    compute_dfbeta_survreg_with_parameter, compute_ldcase_with_parameter,
-    compute_response_residuals, compute_response_residuals_censored_with_parameter,
-    compute_survreg_dfbeta_residuals, compute_survreg_residual_matrix_with_parameter,
-    compute_working_residuals_from_derivative_matrix, compute_working_residuals_with_parameter,
+    SurvregResidType, SurvregResiduals,
+    compute_deviance_residuals_survreg_by_strata_with_parameter,
+    compute_response_residuals_censored_by_strata_with_parameter, compute_survreg_dfbeta_residuals,
+    compute_survreg_residual_matrix_by_strata_with_parameter,
+    compute_working_residuals_from_derivative_matrix,
 };
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
@@ -170,13 +170,6 @@ fn requested_distribution_name(requested: Option<&str>, distribution: Distributi
         "student" | "student_t" | "studentt" => "t".to_string(),
         _ => distribution.canonical_name().to_string(),
     }
-}
-
-fn is_student_t_distribution_name(distribution: &str) -> bool {
-    matches!(
-        distribution.to_lowercase().replace('-', "_").as_str(),
-        "t" | "student" | "student_t" | "studentt"
-    )
 }
 
 fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionType> {
@@ -404,88 +397,58 @@ impl SurvivalFit {
                 "survreg matrix residuals are matrix-valued; use survival.r_api.residuals or survival.survreg_residual_matrix",
             ));
         }
-        let has_interval_censoring = self.status.iter().any(|&value| value == 2 || value == 3);
-        if has_interval_censoring
-            && !matches!(
-                resid_type,
-                SurvregResidType::Response
-                    | SurvregResidType::Deviance
-                    | SurvregResidType::Working
-                    | SurvregResidType::Ldcase
-                    | SurvregResidType::Ldresp
-                    | SurvregResidType::Ldshape
-            )
-        {
-            return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
-                format!(
-                    "survreg residual type '{}' is not implemented for left or interval-censored data; use ldcase",
-                    residual_type
-                ),
-            ));
-        }
-
         let residuals = match resid_type {
             SurvregResidType::Response => {
-                if has_interval_censoring {
-                    compute_response_residuals_censored_with_parameter(
-                        &self.time,
-                        self.time2.as_deref(),
-                        &self.status,
-                        &self.linear_predictors,
-                        self.scale,
-                        &self.distribution,
-                        self.distribution_parameter(),
-                    )?
-                } else {
-                    compute_response_residuals(
-                        &self.time,
-                        &self.linear_predictors,
-                        &self.distribution,
-                    )
-                }
-            }
-            SurvregResidType::Deviance => compute_deviance_residuals_survreg_with_parameter(
-                &self.time,
-                self.time2.as_deref(),
-                &self.status,
-                &self.linear_predictors,
-                self.scale,
-                &self.distribution,
-                self.distribution_parameter(),
-            )?,
-            SurvregResidType::Working => {
-                if has_interval_censoring || is_student_t_distribution_name(&self.distribution) {
-                    let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
-                        &self.time,
-                        self.time2.as_deref(),
-                        &self.status,
-                        &self.linear_predictors,
-                        self.scale,
-                        &self.distribution,
-                        self.distribution_parameter(),
-                    )?;
-                    compute_working_residuals_from_derivative_matrix(&derivative_matrix)?
-                } else {
-                    compute_working_residuals_with_parameter(
-                        &self.time,
-                        &self.status,
-                        &self.linear_predictors,
-                        self.scale,
-                        &self.distribution,
-                        self.distribution_parameter(),
-                    )
-                }
-            }
-            SurvregResidType::Ldcase | SurvregResidType::Ldresp | SurvregResidType::Ldshape => {
-                compute_ldcase_with_parameter(
+                compute_response_residuals_censored_by_strata_with_parameter(
                     &self.time,
                     self.time2.as_deref(),
                     &self.status,
                     &self.linear_predictors,
-                    self.scale,
+                    &self.scales,
+                    &self.strata,
                     &self.distribution,
                     self.distribution_parameter(),
                 )?
+            }
+            SurvregResidType::Deviance => {
+                compute_deviance_residuals_survreg_by_strata_with_parameter(
+                    &self.time,
+                    self.time2.as_deref(),
+                    &self.status,
+                    &self.linear_predictors,
+                    &self.scales,
+                    &self.strata,
+                    &self.distribution,
+                    self.distribution_parameter(),
+                )?
+            }
+            SurvregResidType::Working => {
+                let derivative_matrix = compute_survreg_residual_matrix_by_strata_with_parameter(
+                    &self.time,
+                    self.time2.as_deref(),
+                    &self.status,
+                    &self.linear_predictors,
+                    &self.scales,
+                    &self.strata,
+                    &self.distribution,
+                    self.distribution_parameter(),
+                )?;
+                compute_working_residuals_from_derivative_matrix(&derivative_matrix)?
+            }
+            SurvregResidType::Ldcase | SurvregResidType::Ldresp | SurvregResidType::Ldshape => {
+                compute_survreg_residual_matrix_by_strata_with_parameter(
+                    &self.time,
+                    self.time2.as_deref(),
+                    &self.status,
+                    &self.linear_predictors,
+                    &self.scales,
+                    &self.strata,
+                    &self.distribution,
+                    self.distribution_parameter(),
+                )?
+                .into_iter()
+                .map(|row| row[0])
+                .collect()
             }
             SurvregResidType::Dfbeta | SurvregResidType::Dfbetas => unreachable!(),
             SurvregResidType::Matrix => unreachable!(),
@@ -499,36 +462,25 @@ impl SurvivalFit {
     }
 
     pub fn dfbeta(&self) -> PyResult<Vec<Vec<f64>>> {
-        if self.status.iter().any(|&value| value == 2 || value == 3) {
-            let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
-                &self.time,
-                self.time2.as_deref(),
-                &self.status,
-                &self.linear_predictors,
-                self.scale,
-                &self.distribution,
-                self.distribution_parameter(),
-            )?;
-            return compute_survreg_dfbeta_residuals(
-                &derivative_matrix,
-                &self.covariates,
-                &self.scales,
-                &self.strata,
-                &self.location_variance_matrix(),
-                false,
-                false,
-            );
-        }
-        Ok(compute_dfbeta_survreg_with_parameter(
+        let derivative_matrix = compute_survreg_residual_matrix_by_strata_with_parameter(
             &self.time,
+            self.time2.as_deref(),
             &self.status,
-            &self.covariates,
             &self.linear_predictors,
-            self.scale,
-            &self.location_variance_matrix(),
+            &self.scales,
+            &self.strata,
             &self.distribution,
             self.distribution_parameter(),
-        ))
+        )?;
+        compute_survreg_dfbeta_residuals(
+            &derivative_matrix,
+            &self.covariates,
+            &self.scales,
+            &self.strata,
+            &self.location_variance_matrix(),
+            false,
+            false,
+        )
     }
 }
 struct LikelihoodInput<'a> {

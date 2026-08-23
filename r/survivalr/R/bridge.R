@@ -1596,7 +1596,7 @@ attrassign <- function(object, tt) {
   NULL
 }
 
-.as_residual_result <- function(object, value, type, terms = NULL) {
+.as_residual_result <- function(object, value, type, terms = NULL, collapse = NULL) {
   key <- .residual_type_key(type)
   matrix_result <- FALSE
   drop_single_column <- FALSE
@@ -1609,12 +1609,38 @@ attrassign <- function(object, tt) {
       key %in% c("dfbeta", "dfbetas", "matrix")) {
     matrix_result <- TRUE
   }
-  .as_numeric_result(
+  result <- .as_numeric_result(
     value,
     matrix_result = matrix_result,
     drop_single_column = drop_single_column,
     col.names = .residual_column_names(object, key, terms = terms)
   )
+  if (inherits(object, "survival_py_survreg")) {
+    frame <- tryCatch(model.frame(object), error = function(condition) NULL)
+    observation_count <- tryCatch(nobs(object), error = function(condition) NA_integer_)
+    row_labels <- if (!is.null(collapse) && !identical(collapse, FALSE)) {
+      if (!is.na(observation_count) && length(collapse) == observation_count) {
+        row.names(rowsum(matrix(0, nrow = length(collapse), ncol = 1L), collapse))
+      } else {
+        NULL
+      }
+    } else if (!is.null(frame)) {
+      row.names(frame)
+    } else if (!is.na(observation_count)) {
+      as.character(seq_len(observation_count))
+    } else {
+      NULL
+    }
+    result_rows <- if (is.matrix(result)) nrow(result) else length(result)
+    if (length(row_labels) == result_rows) {
+      if (is.matrix(result)) {
+        rownames(result) <- row_labels
+      } else {
+        names(result) <- row_labels
+      }
+    }
+  }
+  result
 }
 
 .as_na_action <- function(value) {
@@ -14138,8 +14164,23 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
 
 residuals.survival_py_model <- function(object, ..., type = "martingale") {
   dots <- list(...)
+  residual_key <- .residual_type_key(type)
+  if (inherits(object, "survival_py_survreg") &&
+      identical(dots[["rsigma"]], FALSE) &&
+      residual_key %in% c("dfbeta", "dfbetas", "ldcase", "ldresp", "ldshape")) {
+    metadata <- .call_r_api("model_summary", object)
+    if (length(metadata$scales) > 1L) {
+      stop("non-conformable arguments", call. = FALSE)
+    }
+  }
   result <- .call_r_api("residuals", object, type = type, ...)
-  .as_residual_result(object, result, type, terms = dots[["terms"]])
+  .as_residual_result(
+    object,
+    result,
+    type,
+    terms = dots[["terms"]],
+    collapse = dots[["collapse"]]
+  )
 }
 
 .survreg_anova_heading <- function(object) {

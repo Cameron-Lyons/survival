@@ -23989,6 +23989,47 @@ def _survreg_strata(fit: Any, n: int, nstrata: int) -> list[int]:
     return strata
 
 
+def _survreg_residual_matrix_for_fit(fit: Any) -> list[list[float]]:
+    time = [float(value) for value in fit.time]
+    status = [int(value) for value in fit.status]
+    linear_predictors = [float(value) for value in fit.linear_predictors]
+    time2_value = getattr(fit, "time2", None)
+    time2 = None if time2_value is None else [float(value) for value in time2_value]
+    scales = _survreg_scales(fit)
+    strata = _survreg_strata(fit, len(time), len(scales))
+    distribution_parameter = (
+        _survreg_t_fit_degrees_of_freedom(getattr(fit, "distribution_parameters", None))
+        if _survreg_distribution_family(fit) == "t"
+        else None
+    )
+    if len(scales) == 1:
+        return _core.survreg_residual_matrix(
+            time,
+            status,
+            linear_predictors,
+            scales[0],
+            fit.distribution,
+            time2=time2,
+            distribution_parameter=distribution_parameter,
+        )
+
+    matrix: list[list[float]] = [[] for _ in time]
+    for stratum, scale in enumerate(scales):
+        indices = [index for index, value in enumerate(strata) if value == stratum]
+        block = _core.survreg_residual_matrix(
+            [time[index] for index in indices],
+            [status[index] for index in indices],
+            [linear_predictors[index] for index in indices],
+            scale,
+            fit.distribution,
+            time2=None if time2 is None else [time2[index] for index in indices],
+            distribution_parameter=distribution_parameter,
+        )
+        for row_index, row in zip(indices, block, strict=True):
+            matrix[row_index] = [float(value) for value in row]
+    return matrix
+
+
 def _survreg_derivative_context(
     fit: Any,
     *,
@@ -23998,19 +24039,7 @@ def _survreg_derivative_context(
     rows = _cox_training_rows(fit, nvar)
     if not rows and nvar:
         raise ValueError("stored training covariates are required for survreg residuals")
-    matrix = _core.survreg_residual_matrix(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        time2=getattr(fit, "time2", None),
-        distribution_parameter=(
-            _survreg_t_fit_degrees_of_freedom(getattr(fit, "distribution_parameters", None))
-            if _survreg_distribution_family(fit) == "t"
-            else None
-        ),
-    )
+    matrix = _survreg_residual_matrix_for_fit(fit)
     scales = _survreg_scales(fit)
     strata = _survreg_strata(fit, len(matrix), len(scales))
     rsigma_requested = True if rsigma is None else rsigma
@@ -28674,21 +28703,7 @@ def residuals(
                 )
             return _collapse_residual_result(dfbeta_values, collapse, len(dfbeta_values))
         if residual_type == "matrix":
-            matrix_values = _core.survreg_residual_matrix(
-                fit.time,
-                fit.status,
-                fit.linear_predictors,
-                fit.scale,
-                fit.distribution,
-                time2=getattr(fit, "time2", None),
-                distribution_parameter=(
-                    _survreg_t_fit_degrees_of_freedom(
-                        getattr(fit, "distribution_parameters", None),
-                    )
-                    if _survreg_distribution_family(fit) == "t"
-                    else None
-                ),
-            )
+            matrix_values = _survreg_residual_matrix_for_fit(fit)
             if weighted_value:
                 matrix_values = _weight_residual_result(
                     matrix_values,

@@ -4937,6 +4937,97 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("accelerated failure-time derivative residuals agree with survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  interval_data <- data.frame(
+    left = c(1, 1, 1, 1, 2, 2, 3, 4, 5, 6),
+    right = c(1, 1, 2, 1, 2, 4, Inf, 4, 7, Inf),
+    status = c(1, 2, 3, 0, 1, 3, 0, 1, 3, 0),
+    x = c(-1, -.7, -.4, -.1, .2, .5, .8, 1.1, 1.4, 1.7)
+  )
+  bridged_interval <- survreg(
+    Surv(left, right, status, type = "interval") ~ x,
+    data = interval_data,
+    dist = "weibull"
+  )
+  reference_interval <- survival::survreg(
+    survival::Surv(left, right, status, type = "interval") ~ x,
+    data = interval_data,
+    dist = "weibull"
+  )
+  residual_types <- c(
+    "response", "deviance", "working", "ldcase", "ldresp",
+    "ldshape", "dfbeta", "dfbetas", "matrix"
+  )
+  for (residual_type in residual_types) {
+    expect_equal(
+      residuals(bridged_interval, type = residual_type),
+      survival:::residuals.survreg(reference_interval, type = residual_type),
+      tolerance = 1e-05
+    )
+  }
+  collapse <- rep(1:5, each = 2L)
+  expect_equal(
+    residuals(
+      bridged_interval,
+      type = "matrix",
+      collapse = collapse,
+      weighted = TRUE
+    ),
+    survival:::residuals.survreg(
+      reference_interval,
+      type = "matrix",
+      collapse = collapse,
+      weighted = TRUE
+    ),
+    tolerance = 1e-05
+  )
+
+  stratified_data <- data.frame(
+    time = c(
+      .8, 1, 1.2, 1.5, 1.8, 2.1, 2.4, 2.8, 3.2, 3.7, 4.1, 4.8,
+      1, 1.4, 1.9, 2.5, 3.1, 3.8, 4.6, 5.5, 6.5, 7.6, 8.8, 10
+    ),
+    status = rep(c(1, 1, 0, 1), 6),
+    x = seq(-1.2, 1.1, length.out = 24),
+    group = factor(rep(c("a", "b"), each = 12))
+  )
+  bridged_stratified <- survreg(
+    Surv(time, status) ~ x + strata(group),
+    data = stratified_data,
+    dist = "weibull"
+  )
+  reference_stratified <- survival::survreg(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = stratified_data,
+    dist = "weibull"
+  )
+  for (residual_type in residual_types) {
+    expect_equal(
+      residuals(bridged_stratified, type = residual_type),
+      survival:::residuals.survreg(reference_stratified, type = residual_type),
+      tolerance = 1e-08
+    )
+  }
+  for (residual_type in c("dfbeta", "dfbetas", "ldcase", "ldresp", "ldshape")) {
+    expect_error(
+      residuals(bridged_stratified, type = residual_type, rsigma = FALSE),
+      "non-conformable arguments"
+    )
+    expect_error(
+      survival:::residuals.survreg(
+        reference_stratified,
+        type = residual_type,
+        rsigma = FALSE
+      ),
+      "non-conformable arguments"
+    )
+  }
+})
+
 test_that("aareg drops the reference model-matrix column", {
   skip_if_not_installed("reticulate")
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
