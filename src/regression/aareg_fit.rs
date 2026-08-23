@@ -634,11 +634,12 @@ fn coefficient_row(
         return vec![event_weight / moment.risk];
     }
     let rhs: Vec<f64> = (0..nvar)
-        .map(|column| {
-            event_weight * (covariates[event_idx][column] - moment.mean[column]) / moment.risk
-        })
+        .map(|column| event_weight * (covariates[event_idx][column] - moment.mean[column]))
         .collect();
-    let slopes = matrix_vector_product(&moment.inverse, &rhs, nvar);
+    let mut slopes = matrix_vector_product(&moment.inverse, &rhs, nvar);
+    for value in &mut slopes {
+        *value /= moment.risk;
+    }
     let mut row = Vec::with_capacity(nvar + 1);
     row.push(event_weight / moment.risk - dot(&moment.mean, &slopes));
     row.extend(slopes);
@@ -819,8 +820,10 @@ fn grouped_influence_at_time(
             - predicted_slope;
     }
 
-    let score: Vec<f64> = qcenter.iter().map(|value| value / moment.risk).collect();
-    let slopes = matrix_vector_product(&moment.inverse, &score, nvar);
+    let mut slopes = matrix_vector_product(&moment.inverse, &qcenter, nvar);
+    for value in &mut slopes {
+        *value /= moment.risk;
+    }
     let mut temp = Vec::with_capacity(nvar + 1);
     temp.push(qsum / moment.risk - dot(&slopes, &moment.mean));
     temp.extend_from_slice(&slopes);
@@ -845,6 +848,34 @@ fn add_group_test_influence(
         };
         influence[column] += test_value;
     }
+}
+
+fn singleton_influence_at_time(
+    moment: &RiskMoment,
+    event_idx: usize,
+    covariates: &[Vec<f64>],
+    weights: Option<&[f64]>,
+) -> (Vec<f64>, Vec<f64>) {
+    let nvar = moment.mean.len();
+    let event_weight = weights.map_or(1.0, |values| values[event_idx]);
+    let coefficient = coefficient_row(moment, event_idx, covariates, weights);
+    let centered: Vec<f64> = (0..nvar)
+        .map(|column| covariates[event_idx][column] - moment.mean[column])
+        .collect();
+    let predicted = event_weight / moment.risk + dot(&centered, &coefficient[1..]);
+    let residual = 1.0 - predicted;
+    let qcenter: Vec<f64> = centered
+        .iter()
+        .map(|value| residual * event_weight * value)
+        .collect();
+    let mut slopes = matrix_vector_product(&moment.inverse, &qcenter, nvar);
+    for value in &mut slopes {
+        *value /= moment.risk;
+    }
+    let mut temp = Vec::with_capacity(nvar + 1);
+    temp.push(residual * event_weight / moment.risk - dot(&slopes, &moment.mean));
+    temp.extend(slopes);
+    (temp, qcenter)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -973,9 +1004,27 @@ fn influence_values_grouped(
             continue;
         }
 
-        // A full-rank singleton risk set has no influence contribution
-        // upstream, even when covariance is only a rounding residual.
         if moment.risk_count == 1 {
+            // The one-covariate branch has exactly zero singleton influence
+            // upstream. Multivariable fits retain row-level roundoff here.
+            if nvar == 1 {
+                continue;
+            }
+            let event_idx = moment.events[0];
+            let (temp, qcenter) =
+                singleton_influence_at_time(moment, event_idx, covariates, weights);
+            let cluster_idx = cluster[event_idx] as usize;
+            for column in 0..width {
+                dfbeta[cluster_idx][column][time_idx] = temp[column];
+            }
+            let test_cluster_idx = test_cluster[event_idx] as usize;
+            add_group_test_influence(
+                &mut test_influence[test_cluster_idx],
+                &temp,
+                &qcenter,
+                moment,
+                test,
+            );
             continue;
         }
 
@@ -1096,8 +1145,25 @@ fn influence_values_scanned(
             }
             continue;
         }
-        // Keep this path consistent with the grouped influence calculation.
         if moment.risk_count == 1 {
+            if nvar > 1 {
+                let event_idx = moment.events[0];
+                let (temp, qcenter) =
+                    singleton_influence_at_time(moment, event_idx, covariates, weights);
+                let cluster_idx = cluster.map_or(event_idx, |values| values[event_idx] as usize);
+                let test_cluster_idx =
+                    test_cluster.map_or(event_idx, |values| values[event_idx] as usize);
+                for column in 0..width {
+                    dfbeta[cluster_idx][column][time_idx] = temp[column];
+                }
+                add_group_test_influence(
+                    &mut test_influence[test_cluster_idx],
+                    &temp,
+                    &qcenter,
+                    moment,
+                    test,
+                );
+            }
             for &event_idx in &moment.events {
                 event_rows[event_idx] = false;
             }
@@ -1139,9 +1205,12 @@ fn influence_values_scanned(
             } else {
                 let score: Vec<f64> = centered
                     .iter()
-                    .map(|value| residual * row_weight * value / moment.risk)
+                    .map(|value| residual * row_weight * value)
                     .collect();
-                let slopes = matrix_vector_product(&moment.inverse, &score, nvar);
+                let mut slopes = matrix_vector_product(&moment.inverse, &score, nvar);
+                for value in &mut slopes {
+                    *value /= moment.risk;
+                }
                 temp[0] = residual * row_weight / moment.risk - dot(&slopes, &moment.mean);
                 temp[1..].copy_from_slice(&slopes);
             }
@@ -1513,6 +1582,104 @@ mod tests {
         assert!((influence[0][0][0] - -4.08197157166326e-9).abs() < 1e-8);
         assert!((influence[0][1][0] - 4.8194566051338e-10).abs() < 1e-8);
         assert!((influence[0][2][0] - -4.76416887602925e-9).abs() < 1e-8);
+    }
+
+    #[test]
+    fn multivariate_singleton_influence_preserves_reference_roundoff() {
+        let x = [
+            0x3fd7_574d_8210_7103,
+            0x4002_37e8_d13d_5376,
+            0xbfaf_1ba0_9cb1_dbbe,
+            0x3fe2_71ab_0122_54a3,
+            0xbfa4_a30c_733b_1cdd,
+            0x3fe5_fccc_3dc3_cc19,
+            0xbfe1_9c20_a5bc_d130,
+            0xbfe5_fc55_42b2_3161,
+            0xbfa6_2345_37bd_f792,
+        ]
+        .map(f64::from_bits);
+        let z = [
+            0xc000_1ada_d701_1a1d,
+            0x3fce_108d_7399_60eb,
+            0xbfc9_0bb6_ad82_f500,
+            0xbfe9_1e0d_4f14_e16f,
+            0x3ff9_a385_0922_6376,
+            0x3fe3_fbdf_2e1b_edb2,
+            0xbfcb_3f12_cc82_a54b,
+            0x3fd1_89be_9b75_b29f,
+            0x3ff8_15bc_ab45_24bf,
+        ]
+        .map(f64::from_bits);
+        let covariates: Vec<Vec<f64>> = x
+            .into_iter()
+            .zip(z)
+            .map(|(left, right)| vec![left, right])
+            .collect();
+        let result = aareg_fit(
+            vec![4.0, 7.0, 3.0, 10.0, 12.0, 4.0, 1.0, 8.0, 11.0],
+            vec![1, 1, 1, 1, 1, 0, 1, 0, 0],
+            covariates.clone(),
+            None,
+            Some(vec![1.5, 1.5, 1.0, 1.0, 3.0, 0.5, 1.0, 3.0, 0.5]),
+            Some(vec![0, 1, 2, 1, 0, 2, 2, 1, 1]),
+            1e-7,
+            Some(0),
+            true,
+            None,
+            "nrisk".to_string(),
+            Some(vec![2, 0, 1, 2, 1, 1, 0, 2, 1]),
+        )
+        .expect("terminal singleton fit should succeed");
+
+        assert_eq!(result.n, vec![9, 6, 6]);
+        assert_eq!(result.times, vec![1.0, 3.0, 4.0, 7.0, 10.0, 12.0]);
+        let influence = result.dfbeta.expect("clustered influence");
+        let expected_terminal = [
+            1.2357462015422309e-8,
+            -4.6083184432151884e-8,
+            -8.870281696752633e-9,
+        ];
+        for (column, expected) in influence[0].iter().zip(expected_terminal) {
+            assert_close(column[5], expected);
+        }
+        for group in &influence[1..] {
+            for column in group {
+                assert_eq!(column[5], 0.0);
+            }
+        }
+        let robust = result
+            .robust_test_variance
+            .expect("robust variance should be present");
+        let expected_robust = [
+            [7.859538616305543, -3.0156466390232524, -3.261453899192717],
+            [-3.0156466390232524, 1.1589204868909564, 1.2569946031746024],
+            [-3.261453899192717, 1.2569946031746024, 1.3704417044925377],
+        ];
+        for (actual_row, expected_row) in robust.iter().zip(expected_robust) {
+            for (&actual, expected) in actual_row.iter().zip(expected_row) {
+                assert_close(actual, expected);
+            }
+        }
+
+        let grouped = aareg_fit(
+            vec![4.0, 7.0, 3.0, 10.0, 12.0, 4.0, 1.0, 8.0, 11.0],
+            vec![1, 1, 1, 1, 1, 0, 1, 0, 0],
+            covariates,
+            None,
+            Some(vec![1.5, 1.5, 1.0, 1.0, 3.0, 0.5, 1.0, 3.0, 0.5]),
+            Some(vec![0; 9]),
+            1e-7,
+            Some(0),
+            true,
+            None,
+            "nrisk".to_string(),
+            Some(vec![0; 9]),
+        )
+        .expect("grouped singleton fit should succeed");
+        let grouped_influence = grouped.dfbeta.expect("grouped influence");
+        for (column, expected) in grouped_influence[0].iter().zip(expected_terminal) {
+            assert_close(column[5], expected);
+        }
     }
 
     #[test]

@@ -26070,6 +26070,69 @@ def test_aareg_retains_early_multivariate_reduced_rank_moments():
     assert all(math.isnan(column[2]) for group in fit.dfbeta for column in group)
 
 
+def test_aareg_multivariate_singleton_influence_preserves_reference_roundoff():
+    data = {
+        "time": [4, 7, 3, 10, 12, 4, 1, 8, 11],
+        "status": [1, 1, 1, 1, 1, 0, 1, 0, 0],
+        "x": [
+            float.fromhex(value)
+            for value in (
+                "0x1.7574d82107103p-2",
+                "0x1.237e8d13d5376p+1",
+                "-0x1.f1ba09cb1dbbep-5",
+                "0x1.271ab012254a3p-1",
+                "-0x1.4a30c733b1cddp-5",
+                "0x1.5fccc3dc3cc19p-1",
+                "-0x1.19c20a5bcd13p-1",
+                "-0x1.5fc5542b23161p-1",
+                "-0x1.6234537bdf792p-5",
+            )
+        ],
+        "z": [
+            float.fromhex(value)
+            for value in (
+                "-0x1.01adad7011a1dp+1",
+                "0x1.e108d739960ebp-3",
+                "-0x1.90bb6ad82f5p-3",
+                "-0x1.91e0d4f14e16fp-1",
+                "0x1.9a38509226376p+0",
+                "0x1.3fbdf2e1bedb2p-1",
+                "-0x1.b3f12cc82a54bp-3",
+                "0x1.189be9b75b29fp-2",
+                "0x1.815bcab4524bfp+0",
+            )
+        ],
+        "weight": [1.5, 1.5, 1, 1, 3, 0.5, 1, 3, 0.5],
+        "cluster": ["a", "b", "c", "b", "a", "c", "c", "b", "b"],
+    }
+
+    fit = survival.aareg(
+        "Surv(time, status) ~ x + z",
+        data=data,
+        weights=data["weight"],
+        cluster=data["cluster"],
+        nmin=0,
+        test="nrisk",
+    )
+
+    assert fit.coefficient[-1] == pytest.approx(
+        [12616.8808270009, -47050.603544929734, -9056.494523728516]
+    )
+    assert fit.dfbeta is not None
+    assert [column[-1] for column in fit.dfbeta[0]] == pytest.approx(
+        [1.2357462015422309e-8, -4.6083184432151884e-8, -8.870281696752633e-9]
+    )
+    assert all(column[-1] == 0.0 for group in fit.dfbeta[1:] for column in group)
+    assert fit.robust_test_variance is not None
+    expected_robust = [
+        [7.859538616305543, -3.0156466390232524, -3.261453899192717],
+        [-3.0156466390232524, 1.1589204868909564, 1.2569946031746024],
+        [-3.261453899192717, 1.2569946031746024, 1.3704417044925377],
+    ]
+    for actual, expected in zip(fit.robust_test_variance, expected_robust, strict=True):
+        assert actual == pytest.approx(expected)
+
+
 def test_aareg_formula_supports_counting_data_and_clustered_influence():
     data = {
         "start": [0.0, 0.0, 1.0, 0.0, 2.0, 1.0],

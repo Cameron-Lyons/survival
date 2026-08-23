@@ -1386,6 +1386,40 @@ test_that("R formula wrappers delegate to the Python survival package", {
       nmin = 0
     )
   )
+  terminal_influence_aareg_data <- data.frame(
+    time = c(4, 7, 3, 10, 12, 4, 1, 8, 11),
+    status = c(1, 1, 1, 1, 1, 0, 1, 0, 0),
+    x = c(
+      0x1.7574d82107103p-2, 0x1.237e8d13d5376p+1, -0x1.f1ba09cb1dbbep-5,
+      0x1.271ab012254a3p-1, -0x1.4a30c733b1cddp-5, 0x1.5fccc3dc3cc19p-1,
+      -0x1.19c20a5bcd13p-1, -0x1.5fc5542b23161p-1, -0x1.6234537bdf792p-5
+    ),
+    z = c(
+      -0x1.01adad7011a1dp+1, 0x1.e108d739960ebp-3, -0x1.90bb6ad82f5p-3,
+      -0x1.91e0d4f14e16fp-1, 0x1.9a38509226376p+0, 0x1.3fbdf2e1bedb2p-1,
+      -0x1.b3f12cc82a54bp-3, 0x1.189be9b75b29fp-2, 0x1.815bcab4524bfp+0
+    ),
+    weight = c(1.5, 1.5, 1, 1, 3, 0.5, 1, 3, 0.5),
+    cluster = c("a", "b", "c", "b", "a", "c", "c", "b", "b")
+  )
+  compare_aareg(
+    aareg(
+      survival::Surv(time, status) ~ x + z,
+      data = terminal_influence_aareg_data,
+      weights = weight,
+      cluster = cluster,
+      nmin = 0,
+      test = "nrisk"
+    ),
+    survival::aareg(
+      survival::Surv(time, status) ~ x + z,
+      data = terminal_influence_aareg_data,
+      weights = weight,
+      cluster = cluster,
+      nmin = 0,
+      test = "nrisk"
+    )
+  )
   bridged_aareg_cluster_override <- NULL
   expect_warning(
     bridged_aareg_cluster_override <- aareg(

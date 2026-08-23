@@ -28612,6 +28612,15 @@ def aareg(
         None if cluster_values is None else list(_label_levels(cluster_values, "cluster"))
     )
     cluster_codes = None if cluster_values is None else _encode_labels(cluster_values, "cluster")
+    test_cluster_codes = None
+    if cluster_codes is not None:
+        order_index = sorted(
+            range(len(response)),
+            key=lambda index: (response.time[index], -int(response.event[index]), index),
+        )
+        test_cluster_codes = [0] * len(response)
+        for row_index, group_code in zip(order_index, cluster_codes, strict=True):
+            test_cluster_codes[row_index] = group_code
     keep_dfbeta = _normalize_bool_option(dfbeta, "dfbeta") or cluster_values is not None
     keep_model = _normalize_bool_option(model, "model")
     keep_x = _normalize_bool_option(x, "x")
@@ -28638,6 +28647,7 @@ def aareg(
         dfbeta=keep_dfbeta,
         taper=_aareg_taper_values(taper),
         test=test_name,
+        test_cluster=test_cluster_codes,
     )
     if len(coefficient_names) != len(raw.test_statistic):
         raise ValueError(
