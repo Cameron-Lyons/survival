@@ -3211,6 +3211,69 @@ test_that("R formula wrappers delegate to the Python survival package", {
     survival::coxph.wtest(asymmetric_wtest, c(1, 2))
   )
   expect_equal(coxph.wtest(diag(2), c(NA, 2)), survival::coxph.wtest(diag(2), c(NA, 2)))
+  reference_coxph_wtest <- get("coxph.wtest", envir = asNamespace("survival"))
+  capture_coxph_wtest <- function(fun, args) {
+    captured_warnings <- character()
+    result <- tryCatch(
+      withCallingHandlers(
+        list(kind = "value", value = do.call(fun, args)),
+        warning = function(w) {
+          captured_warnings <<- c(captured_warnings, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }
+      ),
+      error = function(e) {
+        list(kind = "error", message = conditionMessage(e), class = class(e))
+      }
+    )
+    c(result, list(warnings = captured_warnings))
+  }
+  coxph_wtest_cases <- list(
+    list(var = 2, b = 4),
+    list(var = c(v = 2), b = c(beta = 4)),
+    list(var = 0, b = 4),
+    list(var = 0, b = 0),
+    list(var = numeric(), b = numeric()),
+    list(var = numeric(), b = 1),
+    list(var = numeric(), b = matrix(numeric(), nrow = 0L, ncol = 2L)),
+    list(var = c(1, 0, 0, 1), b = c(1, 2)),
+    list(var = matrix(1:6, nrow = 2L), b = c(1, 2)),
+    list(var = diag(2), b = 1),
+    list(var = diag(2), b = matrix(numeric(), nrow = 2L, ncol = 0L)),
+    list(var = matrix(numeric(), nrow = 0L, ncol = 0L), b = matrix(numeric(), nrow = 0L, ncol = 2L)),
+    list(var = diag(2), b = c(1, NA)),
+    list(var = diag(2), b = c(NaN, 2)),
+    list(var = diag(2), b = c(Inf, 2)),
+    list(var = matrix(c(1, 0, 0, NA), nrow = 2L), b = c(1, 2)),
+    list(var = diag(2), b = matrix(c(1, NA, 3, 4), nrow = 2L)),
+    list(var = diag(2), b = c(1, 2), toler.chol = -1),
+    list(
+      var = matrix(c(6, 0, 2, 0, 0, 0, 2, 0, 3), nrow = 3L),
+      b = matrix(c(-1, -1, 0, -4, -2, 2, -2, -1, 1), nrow = 3L),
+      toler.chol = -1
+    ),
+    list(
+      var = matrix(c(9, -3, 3, 9, -3, 1, -1, -3, 3, -1, 1, 3, 9, -3, 3, 9), nrow = 4L),
+      b = matrix(c(3, 1, -2, 4, 3, -6, 3, 2), nrow = 4L),
+      toler.chol = -1e-9
+    ),
+    list(var = diag(2), b = c(1, 2), toler.chol = NA_real_),
+    list(var = diag(2), b = c(1, 2), toler.chol = c(1e-9, 1e-8)),
+    list(var = diag(2), b = c(1, 2), toler.chol = numeric()),
+    list(var = diag(2), b = c(1, 2), toler.chol = c(1e-9, Inf)),
+    list(var = "2", b = 4),
+    list(var = 2, b = factor("4")),
+    list(var = 2, b = 4 + 1i),
+    list(var = diag(2), b = c(1 + 1i, 2 - 1i)),
+    list(var = matrix(c(1 + 1i, 0, 0, 1), nrow = 2L), b = c(1, 2)),
+    list(var = 2, b = matrix(c(1, 2), nrow = 1L))
+  )
+  for (case in coxph_wtest_cases) {
+    expect_identical(
+      capture_coxph_wtest(coxph.wtest, case),
+      capture_coxph_wtest(reference_coxph_wtest, case)
+    )
+  }
 
   survreg_control <- survreg.control(maxiter = 1, rel.tolerance = 1e-05, toler.chol = 1e-08)
   expect_named(survreg_control, c("iter.max", "rel.tolerance", "toler.chol", "debug", "maxiter", "outer.max"))

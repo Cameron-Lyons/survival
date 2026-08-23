@@ -1582,6 +1582,15 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
     )
     missing_rhs = survival.coxph_wtest([[1.0, 0.0], [0.0, 1.0]], [None, 2.0])
     scalar = survival.coxph_wtest([2.0], [4.0])
+    zero_column_rhs = survival.coxph_wtest(
+        [[1.0, 0.0], [0.0, 1.0]],
+        [[], []],
+    )
+    negative_tolerance = survival.coxph_wtest(
+        [[6.0, 0.0, 2.0], [0.0, 0.0, 0.0], [2.0, 0.0, 3.0]],
+        [[-1.0, -4.0, -2.0], [-1.0, -2.0, -1.0], [0.0, 2.0, 1.0]],
+        toler_chol=-1.0,
+    )
 
     assert identity.test == pytest.approx([5.0])
     assert identity.df == 2
@@ -1613,6 +1622,17 @@ def test_coxph_wtest_matches_r_wald_helper_shapes():
     assert missing_rhs.solve == 0.0
     assert scalar.test == pytest.approx([8.0])
     assert scalar.solve == pytest.approx([2.0])
+    assert zero_column_rhs.test == []
+    assert zero_column_rhs.df == 2
+    assert zero_column_rhs.solve == [[], []]
+    assert negative_tolerance.test == pytest.approx([1.0 / 6.0, 8.0 / 3.0, 2.0 / 3.0])
+    assert negative_tolerance.df == 1
+    for actual_row, expected_row in zip(
+        negative_tolerance.solve,
+        [[-1.0 / 6.0, -2.0 / 3.0, -1.0 / 3.0], [0.0] * 3, [0.0] * 3],
+        strict=True,
+    ):
+        assert actual_row == pytest.approx(expected_row)
 
     with pytest.raises(ValueError, match="Argument lengths"):
         survival.coxph_wtest([[1.0]], [1.0, 2.0])

@@ -6471,7 +6471,7 @@ Surv2data <- function(formula, data, subset, id) {
   evaluate_contrast <- function(contrast) {
     contrast_estimate <- drop(contrast %*% estimate_values)
     contrast_variance <- contrast %*% mean_variance %*% t(contrast)
-    test_result <- coxph.wtest(contrast_variance, as.list(contrast_estimate))
+    test_result <- coxph.wtest(contrast_variance, as.numeric(contrast_estimate))
     chisq <- unname(test_result$test[[1L]])
     out <- c(chisq = chisq, df = test_result$df)
     if (is.null(sigma2)) out else c(out, ss = chisq * sigma2)
@@ -13775,20 +13775,70 @@ coxph_detail <- function(object, ...) {
 }
 
 coxph.wtest <- function(var, b, toler.chol = 1e-09) {
+  if (any(is.na(b))) {
+    toss <- which(is.na(b))
+    b <- b[!toss]
+    var <- var[!toss, !toss]
+  }
+  if (is.matrix(b)) {
+    nvar <- nrow(b)
+    ntest <- ncol(b)
+  } else {
+    nvar <- length(b)
+    ntest <- 1L
+  }
+  if (length(var) == 0L) {
+    if (nvar == 0L) {
+      return(list(test = numeric(0), df = 0, solve = 0))
+    }
+    stop("Argument lengths do not match")
+  }
+  if (length(var) == 1L) {
+    if (nvar == 1L) {
+      return(list(test = b * b / var, df = 1, solve = b / var))
+    }
+    stop("Argument lengths do not match")
+  }
+  if (!is.matrix(var) || nrow(var) != ncol(var)) {
+    stop("First argument must be a square matrix")
+  }
+  if (nrow(var) != nvar) {
+    stop("Argument lengths do not match")
+  }
+  if (any(!is.finite(b)) || any(!is.finite(var))) {
+    stop("infinite argument in coxph.wtest")
+  }
+  var_value <- matrix(as.double(var), nrow = nrow(var), ncol = ncol(var))
+  b_value <- if (is.matrix(b)) {
+    matrix(as.double(b), nrow = nvar, ncol = ntest)
+  } else {
+    as.double(b)
+  }
+  tolerance <- as.double(toler.chol)
+  if (any(!is.finite(tolerance))) {
+    stop("NA/NaN/Inf in foreign function call (arg 6)")
+  }
+  tolerance_value <- if (length(tolerance) == 0L) 0 else tolerance[[1L]]
   result <- .call_r_api(
     "coxph_wtest",
-    var = var,
-    b = b,
-    toler_chol = toler.chol
+    var = var_value,
+    b = b_value,
+    toler_chol = tolerance_value
   )
   solve_value <- .result_field(result, "solve")
-  if (is.matrix(b) && length(dim(b)) == 2L && ncol(b) > 1L && !is.null(solve_value)) {
+  if (is.matrix(b) && ntest == 0L) {
+    solve_value <- matrix(numeric(), nrow = nvar, ncol = 0L)
+  } else if (is.matrix(b) && ntest > 1L && !is.null(solve_value)) {
     solve_value <- .as_numeric_matrix(solve_value)
   } else if (!is.null(solve_value)) {
     solve_value <- .as_numeric_vector(solve_value)
   }
+  test_value <- .as_numeric_vector(.result_field(result, "test"))
+  if (is.matrix(b) && ntest == 0L) {
+    test_value <- NA_real_
+  }
   list(
-    test = .as_numeric_vector(.result_field(result, "test")),
+    test = test_value,
     df = as.integer(.result_field(result, "df")),
     solve = solve_value
   )
@@ -14018,7 +14068,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
         active_variance <- stats::vcov(object, complete = TRUE)[keep, keep, drop = FALSE]
         wald <- coxph.wtest(
           active_variance,
-          unname(as.list(unscaled_coefficients[keep]))
+          unname(unscaled_coefficients[keep])
         )
         wald_test <- wald$test
       } else {

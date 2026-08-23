@@ -66,7 +66,7 @@ pub use coxph_diagnostics::{
     cox_zph_group_variance, cox_zph_term_matrix, cox_zph_tests, cox_zph_tests_from_data,
     prediction_se_from_variance, scale_schoenfeld_residuals, term_prediction_se_from_variance,
 };
-pub use coxph_wtest_module::coxph_wtest;
+pub use coxph_wtest_module::{_coxph_wtest_stable, coxph_wtest};
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
     CureModelComparisonResult, LinkFunction, MixtureCureConfig, MixtureCureResult,

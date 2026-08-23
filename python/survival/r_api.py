@@ -7330,7 +7330,7 @@ def _quadratic_term_degrees_of_freedom(
     rhs_columns = [
         [term_naive[row][column] for row in range(len(columns))] for column in range(len(columns))
     ]
-    _tests, _rank, solve = _core.coxph_wtest(term_variance, rhs_columns, 1e-9)
+    _tests, _rank, solve = _core._coxph_wtest_stable(term_variance, rhs_columns, 1e-9)
     value = math.fsum(solve[index][index] for index in range(len(columns)))
     return min(max(value, 0.0), float(len(columns)))
 
@@ -7372,7 +7372,7 @@ def _variance_term_degrees_of_freedom(
     rhs = [
         [term_naive[row][column] for row in range(len(columns))] for column in range(len(columns))
     ]
-    _tests, _rank, solve = _core.coxph_wtest(term_variance, rhs, 1e-9)
+    _tests, _rank, solve = _core._coxph_wtest_stable(term_variance, rhs, 1e-9)
     return math.fsum(solve[index][index] for index in range(len(columns)))
 
 
@@ -19853,8 +19853,6 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     """Compute the Wald test helper exported as R's ``coxph.wtest``."""
 
     toler_value = _finite_float(toler_chol, "toler_chol")
-    if toler_value < 0.0:
-        raise ValueError("toler_chol must be non-negative")
     b_rows, b_is_matrix = _coxph_wtest_b_matrix(b)
     if any(value is None for row in b_rows for value in row):
         return CoxPHWTestResult(test=[], df=0, solve=0.0)
@@ -19898,7 +19896,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     ]
     tests, df, solve_rows = _core.coxph_wtest(matrix, b_columns, toler_value)
     solve: list[float] | list[list[float]] = (
-        solve_rows if b_is_matrix and ntest > 1 else [row[0] for row in solve_rows]
+        solve_rows if b_is_matrix and ntest != 1 else [row[0] for row in solve_rows]
     )
     return CoxPHWTestResult(test=tests, df=df, solve=solve)
 
@@ -24876,7 +24874,7 @@ def _survreg_fit_weighted_location(
         for column in range(nvar)
     ]
     try:
-        _tests, _rank, solve_rows = _core.coxph_wtest(information, [rhs], tol_chol)
+        _tests, _rank, solve_rows = _core._coxph_wtest_stable(information, [rhs], tol_chol)
     except ValueError:
         return [0.0] * nvar
     return [value if math.isfinite(value) else 0.0 for row in solve_rows for value in row[:1]]

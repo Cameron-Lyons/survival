@@ -13,6 +13,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cox_zph_tests, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_tests_from_data, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_wtest, m)?)?;
+    m.add_function(wrap_pyfunction!(_coxph_wtest_stable, m)?)?;
     m.add_function(wrap_pyfunction!(leverage_cox, m)?)?;
     m.add_function(wrap_pyfunction!(prediction_se_from_variance, m)?)?;
     m.add_function(wrap_pyfunction!(scale_schoenfeld_residuals, m)?)?;

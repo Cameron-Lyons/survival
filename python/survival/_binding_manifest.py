@@ -509,6 +509,7 @@ BINDINGS = (
     "Weights",
     "YatesPairwiseResult",
     "YatesResult",
+    "_coxph_wtest_stable",
     "aareg",
     "aareg_fit",
     "active_learning_selection",

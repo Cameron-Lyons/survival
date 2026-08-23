@@ -7478,6 +7478,11 @@ def coxph_wtest(
     rhs_columns: list[list[float]],
     toler_chol: float = 1e-9,
 ) -> tuple[list[float], int, list[list[float]]]: ...
+def _coxph_wtest_stable(
+    matrix: list[list[float]],
+    rhs_columns: list[list[float]],
+    toler_chol: float = 1e-9,
+) -> tuple[list[float], int, list[list[float]]]: ...
 def clustered_crossprod(
     rows: list[list[float]],
     weights: list[float],
