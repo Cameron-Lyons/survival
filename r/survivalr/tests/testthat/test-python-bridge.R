@@ -13139,6 +13139,43 @@ test_that("cch preserves small offset risk in counting-process data", {
   expect_equal(actual$iter, reference$iter)
 })
 
+test_that("cch matches factor phase-two roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(1, 11, 4, 0, 2, 0, 13, 0, 0, 12, 15, 0, 14, 0, 3, 0, 1, 0, 2, 12, 17, 9, 8, 15, 4, 11),
+    stop = c(7, 16, 7, 1, 3, 1, 19, 1, 4, 13, 16, 2, 15, 4, 6, 2, 2, 2, 8, 15, 19, 12, 11, 18, 6, 17),
+    status = c(1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1),
+    group = factor(c(
+      "a", "b", "b", "b", "a", "a", "a", "c", "a", "a", "a", "c", "a",
+      "c", "c", "a", "b", "c", "a", "b", "c", "a", "a", "c", "c", "a"
+    )),
+    id = seq_len(26),
+    subcohort = c(0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ 0 + group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 78,
+    method = "Prentice"
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch stratified Borgan fits match survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

@@ -70,15 +70,6 @@ impl CompensatedSum {
     pub(super) fn total(self) -> f64 {
         self.sum + self.correction
     }
-
-    pub(super) fn difference(self, earlier: Self) -> f64 {
-        let mut difference = Self::default();
-        difference.add(self.sum);
-        difference.add(-earlier.sum);
-        difference.add(self.correction);
-        difference.add(-earlier.correction);
-        difference.total()
-    }
 }
 
 pub(super) struct ActiveRiskSet<'a> {
@@ -196,18 +187,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compensated_sum_retains_small_remainders_and_differences() {
+    fn compensated_sum_retains_small_remainders() {
         let mut total = CompensatedSum::default();
         total.add(1e-40);
         total.add(1.0);
         total.add(-1.0);
         assert_eq!(total.total(), 1e-40);
-
-        let mut cumulative = CompensatedSum::default();
-        cumulative.add(1e40);
-        let earlier = cumulative;
-        cumulative.add(0.25);
-        assert_eq!(cumulative.difference(earlier), 0.25);
     }
 
     #[test]

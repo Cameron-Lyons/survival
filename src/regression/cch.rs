@@ -1,3 +1,4 @@
+use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
 use crate::regression::coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
 use pyo3::prelude::*;
 use std::collections::HashSet;
@@ -680,15 +681,28 @@ fn augmented_fit(
         offsets.push(0.0);
     }
 
-    let fit = fit_cox(
+    let offset_mean = offsets.iter().sum::<f64>() / offsets.len() as f64;
+    let centered_offsets = offsets
+        .iter()
+        .map(|&offset| offset - offset_mean)
+        .collect::<Vec<_>>();
+    let mut fit = fit_cox(
         augmented_stop,
         augmented_status,
         augmented_covariates,
         augmented_start,
-        offsets.clone(),
+        centered_offsets.clone(),
         initial_coefficients.clone(),
         if prentice { 35 } else { 20 },
     )?;
+    for (linear_predictor, risk_score) in fit
+        .linear_predictors
+        .iter_mut()
+        .zip(fit.risk_scores.iter_mut())
+    {
+        *linear_predictor += offset_mean;
+        *risk_score = linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
+    }
     let dfbeta = fit.dfbeta()?;
     let phase2_rows = dfbeta[case_indices.len()..].to_vec();
     let phase2_scale = 1.0 - subcohort_indices.len() as f64 / cohort_size as f64;
@@ -703,7 +717,7 @@ fn augmented_fit(
         phase2_variance,
         variance: naive_variance.clone(),
         naive_variance,
-        offsets,
+        offsets: centered_offsets,
         robust: false,
     })
 }
@@ -1546,6 +1560,73 @@ mod tests {
         );
         assert!((result.score_test - 0.011_850_593_966_545_8).abs() < 1e-11);
         assert_eq!(result.iterations, 2);
+    }
+
+    #[test]
+    fn native_counting_process_prentice_matches_factor_phase_two_roundoff() {
+        let stop = vec![
+            7.0, 16.0, 7.0, 1.0, 3.0, 1.0, 19.0, 1.0, 4.0, 13.0, 16.0, 2.0, 15.0, 4.0, 6.0, 2.0,
+            2.0, 2.0, 8.0, 15.0, 19.0, 12.0, 11.0, 18.0, 6.0, 17.0,
+        ];
+        let status = vec![
+            1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1,
+        ];
+        let groups = [
+            1, 2, 2, 2, 1, 1, 1, 3, 1, 1, 1, 3, 1, 3, 3, 1, 2, 3, 1, 2, 3, 1, 1, 3, 3, 1,
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| vec![f64::from(group == 2), f64::from(group == 3)])
+            .collect();
+        let subcohort = vec![
+            0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0,
+        ];
+        let start = vec![
+            1.0, 11.0, 4.0, 0.0, 2.0, 0.0, 13.0, 0.0, 0.0, 12.0, 15.0, 0.0, 14.0, 0.0, 3.0, 0.0,
+            1.0, 0.0, 2.0, 12.0, 17.0, 9.0, 8.0, 15.0, 4.0, 11.0,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=26).collect(),
+            78,
+            Some(start),
+            "Prentice",
+            false,
+        )
+        .expect("factor Prentice fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[0.079_030_942_884_838_3, -0.661_618_805_430_928],
+        );
+        assert_matrix_close(
+            &result.model_information_matrix,
+            &[
+                vec![0.536_078_739_349_966, 0.234_044_458_790_259],
+                vec![0.234_044_458_790_259, 0.817_122_606_277_822],
+            ],
+        );
+        let expected_phase_two = [
+            [4.554_908_571_063_97e54, 5.384_366_515_507_59e53],
+            [5.384_366_515_507_59e53, 1.694_513_462_088_3e53],
+        ];
+        for (actual_row, expected_row) in result.phase2_variance.iter().zip(expected_phase_two) {
+            for (&actual, expected) in actual_row.iter().zip(expected_row) {
+                assert!(
+                    (actual / expected - 1.0).abs() < 1e-11,
+                    "expected {expected:.17e}, got {actual:.17e}"
+                );
+            }
+        }
+        assert_close(
+            &result.log_likelihood,
+            &[-1_710.608_339_894_93, -1_710.187_760_623_87],
+        );
+        assert!((result.score_test - 0.846_482_519_571_698).abs() < 1e-11);
+        assert_eq!(result.iterations, 3);
     }
 
     #[test]

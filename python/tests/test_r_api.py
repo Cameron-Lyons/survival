@@ -25887,6 +25887,153 @@ def test_cch_formula_preserves_small_counting_process_offset_risk():
     assert fit.iterations == 2
 
 
+def test_cch_formula_matches_factor_phase_two_roundoff():
+    data = {
+        "start": [
+            1,
+            11,
+            4,
+            0,
+            2,
+            0,
+            13,
+            0,
+            0,
+            12,
+            15,
+            0,
+            14,
+            0,
+            3,
+            0,
+            1,
+            0,
+            2,
+            12,
+            17,
+            9,
+            8,
+            15,
+            4,
+            11,
+        ],
+        "stop": [
+            7,
+            16,
+            7,
+            1,
+            3,
+            1,
+            19,
+            1,
+            4,
+            13,
+            16,
+            2,
+            15,
+            4,
+            6,
+            2,
+            2,
+            2,
+            8,
+            15,
+            19,
+            12,
+            11,
+            18,
+            6,
+            17,
+        ],
+        "status": [1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1],
+        "group": [
+            "a",
+            "b",
+            "b",
+            "b",
+            "a",
+            "a",
+            "a",
+            "c",
+            "a",
+            "a",
+            "a",
+            "c",
+            "a",
+            "c",
+            "c",
+            "a",
+            "b",
+            "c",
+            "a",
+            "b",
+            "c",
+            "a",
+            "a",
+            "c",
+            "c",
+            "a",
+        ],
+        "id": list(range(1, 27)),
+        "subcohort": [
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+        ],
+    }
+    fit = survival.cch(
+        "Surv(start, stop, status) ~ 0 + group",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=78,
+        method="Prentice",
+    )
+
+    assert survival.coef(fit) == pytest.approx(
+        [0.0790309428848383, -0.661618805430928], abs=1e-11
+    )
+    expected_phase_two = [
+        [4.55490857106397e54, 5.38436651550759e53],
+        [5.38436651550759e53, 1.6945134620883e53],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    for actual, expected in zip(fit.var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    assert fit.fit.model_information_matrix[0] == pytest.approx(
+        [0.536078739349966, 0.234044458790259], abs=1e-11
+    )
+    assert fit.fit.model_information_matrix[1] == pytest.approx(
+        [0.234044458790259, 0.817122606277822], abs=1e-11
+    )
+    assert fit.offsets[:19] == pytest.approx([-45.714285714285715] * 19, abs=1e-12)
+    assert fit.offsets[19:] == pytest.approx([54.285714285714285] * 16, abs=1e-12)
+
+
 @pytest.mark.parametrize(
     ("method", "expected_coefficients", "expected_variance"),
     [
