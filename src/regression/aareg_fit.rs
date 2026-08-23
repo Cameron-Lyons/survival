@@ -42,6 +42,7 @@ impl AaregFitResult {
 struct RiskMoment {
     time: f64,
     events: Vec<usize>,
+    risk_count: usize,
     risk: f64,
     mean: Vec<f64>,
     covariance: Vec<f64>,
@@ -209,6 +210,35 @@ fn update_risk_sums(
     }
 }
 
+fn reference_single_covariate_moment(
+    time: f64,
+    order: &[usize],
+    stop: &[f64],
+    covariates: &[Vec<f64>],
+    start: Option<&[f64]>,
+    weights: Option<&[f64]>,
+    center: f64,
+) -> (f64, f64) {
+    let mut risk = 0.0;
+    let mut first = 0.0;
+    let mut second = 0.0;
+    for &idx in order {
+        if stop[idx] < time || start.is_some_and(|values| values[idx] >= time) {
+            continue;
+        }
+        let weight = weights.map_or(1.0, |values| values[idx]);
+        let centered = covariates[idx][0] - center;
+        risk += weight;
+        first = weight.mul_add(centered, first);
+        second = (weight * centered).mul_add(centered, second);
+    }
+
+    debug_assert!(risk > 0.0);
+    let centered_mean = first / risk;
+    let covariance = (-centered_mean).mul_add(first, second) / risk;
+    (center + centered_mean, covariance)
+}
+
 fn risk_moments(
     stop: &[f64],
     status: &[i32],
@@ -219,6 +249,19 @@ fn risk_moments(
 ) -> Vec<RiskMoment> {
     let groups = event_groups(stop, status);
     let n = stop.len();
+    // Preserve the upstream stop/status order for cancellation-dominated
+    // one-column moments without replacing the ordinary sorted sweep.
+    let single_covariate_reference = (nvar == 1).then(|| {
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&left, &right| {
+            stop[left]
+                .total_cmp(&stop[right])
+                .then_with(|| status[right].cmp(&status[left]))
+                .then(left.cmp(&right))
+        });
+        let center = order.iter().map(|&idx| covariates[idx][0]).sum::<f64>() / n as f64;
+        (center, order)
+    });
     let mut stop_order: Vec<usize> = (0..n).collect();
     stop_order.sort_by(|&left, &right| stop[left].total_cmp(&stop[right]).then(left.cmp(&right)));
     let mut start_order: Vec<usize> = (0..n).collect();
@@ -233,11 +276,13 @@ fn risk_moments(
     let mut s0 = 0.0;
     let mut s1 = vec![0.0; nvar];
     let mut s2 = vec![0.0; nvar * nvar];
+    let mut risk_count = 0;
     let mut start_pos = 0;
     if start.is_none() {
         for idx in 0..n {
             update_risk_sums(idx, 1.0, covariates, weights, &mut s0, &mut s1, &mut s2);
         }
+        risk_count = n;
         start_pos = n;
     }
     let mut stop_pos = 0;
@@ -255,6 +300,7 @@ fn risk_moments(
                     &mut s1,
                     &mut s2,
                 );
+                risk_count += 1;
                 start_pos += 1;
             }
         }
@@ -268,6 +314,7 @@ fn risk_moments(
                 &mut s1,
                 &mut s2,
             );
+            risk_count -= 1;
             stop_pos += 1;
         }
 
@@ -283,10 +330,22 @@ fn risk_moments(
                     covariance[row * nvar + column] = if value.abs() < 1e-15 { 0.0 } else { value };
                 }
             }
+            if let Some((center, order)) = &single_covariate_reference {
+                let scale = (s2[0] / s0).abs() + mean[0].abs().powi(2);
+                let cancellation_bound = 1e-10 * scale;
+                if covariance[0].abs() <= cancellation_bound {
+                    let (reference_mean, reference_covariance) = reference_single_covariate_moment(
+                        time, order, stop, covariates, start, weights, *center,
+                    );
+                    mean[0] = reference_mean;
+                    covariance[0] = reference_covariance;
+                }
+            }
         }
         moments.push(RiskMoment {
             time,
             events,
+            risk_count,
             risk: s0,
             mean,
             covariance,
@@ -782,6 +841,12 @@ fn influence_values_grouped(
             stop_cursor += 1;
         }
 
+        // A singleton risk set has no influence contribution upstream, even
+        // when its covariance survives as a positive rounding residual.
+        if moment.risk_count == 1 {
+            continue;
+        }
+
         let total_event_weight: f64 = moment
             .events
             .iter()
@@ -884,6 +949,13 @@ fn influence_values_scanned(
     for (time_idx, moment) in moments.iter().enumerate() {
         for &event_idx in &moment.events {
             event_rows[event_idx] = true;
+        }
+        // Keep this path consistent with the grouped influence calculation.
+        if moment.risk_count == 1 {
+            for &event_idx in &moment.events {
+                event_rows[event_idx] = false;
+            }
+            continue;
         }
         let total_event_weight: f64 = moment
             .events
@@ -1130,6 +1202,65 @@ mod tests {
             (actual - expected).abs() < 1e-11,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn single_covariate_retains_positive_reference_roundoff_variance() {
+        let result = aareg_fit(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![1, 1, 1, 1, 1],
+            vec![
+                vec![-0.626453810742332],
+                vec![0.183643324222082],
+                vec![-0.835628612410047],
+                vec![1.59528080213779],
+                vec![0.32950777181536],
+            ],
+            None,
+            None,
+            None,
+            1e-7,
+            Some(1),
+            false,
+            None,
+            "aalen".to_string(),
+            None,
+        )
+        .expect("fit should retain the final reference event");
+
+        assert_eq!(result.n, vec![5, 5, 5]);
+        assert_eq!(result.times, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(result.coefficient[4], vec![1.0, 0.0]);
+        assert_close(result.time_weights[4][0], 7.92486993001903e-18);
+        assert_close(result.time_weights[4][1], 8.60445698220756e-19);
+
+        let clustered = aareg_fit(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![1, 1, 1, 1, 1],
+            vec![
+                vec![-0.626453810742332],
+                vec![0.183643324222082],
+                vec![-0.835628612410047],
+                vec![1.59528080213779],
+                vec![0.32950777181536],
+            ],
+            None,
+            None,
+            Some(vec![0, 1, 2, 3, 4]),
+            1e-7,
+            Some(1),
+            true,
+            None,
+            "aalen".to_string(),
+            None,
+        )
+        .expect("clustered fit should retain the final reference event");
+        let influence = clustered.dfbeta.expect("clustered influence");
+        for cluster in influence {
+            for column in cluster {
+                assert_eq!(column[4], 0.0);
+            }
+        }
     }
 
     #[test]

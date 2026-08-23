@@ -25969,6 +25969,36 @@ def test_aareg_formula_matches_weighted_right_censored_reference_values():
     assert fit.y is not None
 
 
+def test_aareg_retains_single_risk_roundoff_event_and_zero_influence():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0],
+        "status": [1, 1, 1, 1, 1],
+        "x": [
+            -0.626453810742332,
+            0.183643324222082,
+            -0.835628612410047,
+            1.59528080213779,
+            0.32950777181536,
+        ],
+        "cluster": ["a", "b", "c", "d", "e"],
+    }
+
+    fit = survival.aareg(
+        "Surv(time, status) ~ x",
+        data=data,
+        cluster=data["cluster"],
+        nmin=1,
+    )
+
+    assert fit.n == [5, 5, 5]
+    assert fit.times == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert fit.coefficient[-1] == pytest.approx([1.0, 0.0])
+    assert fit.time_weights[-1][0] > 0.0
+    assert fit.time_weights[-1][1] > 0.0
+    assert fit.dfbeta is not None
+    assert all(column[-1] == 0.0 for group in fit.dfbeta for column in group)
+
+
 def test_aareg_formula_supports_counting_data_and_clustered_influence():
     data = {
         "start": [0.0, 0.0, 1.0, 0.0, 2.0, 1.0],

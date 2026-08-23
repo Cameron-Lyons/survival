@@ -1322,6 +1322,32 @@ test_that("R formula wrappers delegate to the Python survival package", {
       y = TRUE
     )
   )
+  single_risk_aareg_data <- data.frame(
+    time = 1:5,
+    status = rep(1, 5),
+    x = c(
+      -0.626453810742332,
+      0.183643324222082,
+      -0.835628612410047,
+      1.59528080213779,
+      0.32950777181536
+    ),
+    cluster = letters[1:5]
+  )
+  compare_aareg(
+    aareg(
+      survival::Surv(time, status) ~ x,
+      data = single_risk_aareg_data,
+      cluster = cluster,
+      nmin = 1
+    ),
+    survival::aareg(
+      survival::Surv(time, status) ~ x,
+      data = single_risk_aareg_data,
+      cluster = cluster,
+      nmin = 1
+    )
+  )
   bridged_aareg_cluster_override <- NULL
   expect_warning(
     bridged_aareg_cluster_override <- aareg(
