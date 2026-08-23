@@ -2745,75 +2745,69 @@ Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop
 
 Surv2 <- function(time, event, repeated = FALSE) {
   if (missing(time)) {
-    stop("must have a time argument", call. = FALSE)
+    stop("must have a time argument")
   }
   if (inherits(time, "difftime")) {
     time <- unclass(time)
   }
   if (!is.numeric(time)) {
-    stop("Time variable is not numeric", call. = FALSE)
+    stop("Time variable is not numeric")
+  }
+  nn <- length(time)
+  if (length(repeated) != 1L ||
+      !(is.logical(repeated) || is.character(repeated) && repeated == "first")) {
+    stop("invalid value for repeated option")
   }
   if (missing(event)) {
-    stop("must have an event argument", call. = FALSE)
+    stop("must have an event argument")
   }
-  if (length(event) != length(time)) {
-    stop("Time and event are different lengths", call. = FALSE)
-  }
-  if (length(repeated) != 1L ||
-      !(is.logical(repeated) || is.character(repeated) && repeated == "first") ||
-      is.na(repeated)) {
-    stop("invalid value for repeated option", call. = FALSE)
+  if (length(event) != nn) {
+    stop("Time and event are different lengths")
   }
   if (any(is.na(event) & !is.na(time))) {
-    fill <- if (is.numeric(event) && any(event == 0, na.rm = TRUE)) {
-      0
-    } else if (is.logical(event) && any(!event, na.rm = TRUE)) {
-      FALSE
+    if (is.numeric(event) && any(event == 0)) {
+      fill <- 0
+    } else if (is.logical(event) && any(!event)) {
+      fill <- FALSE
     } else if (is.factor(event)) {
-      levels(event)[1L]
+      fill <- levels(event)[1L]
     } else {
-      NA
+      fill <- NA
     }
     event[is.na(event) & !is.na(time)] <- fill
   }
   event <- as.factor(event)
-  input_attributes <- list()
+  states <- levels(event)[-1L]
+  status <- as.integer(event) - 1L
+  ss <- cbind(time = time, status = status)
+  inputAttributes <- list()
   if (!is.null(attributes(time))) {
-    input_attributes$time <- attributes(time)
+    inputAttributes$time <- attributes(time)
   }
-  if (!is.null(attributes(event))) {
-    input_attributes$event <- attributes(event)
+  if (!missing(event) && !is.null(attributes(event))) {
+    inputAttributes$event <- attributes(event)
   }
-  time_values <- .as_python_vector(as.numeric(time))
-  if (!is.list(time_values)) {
-    time_values <- as.list(time_values)
+  cname <- dimnames(ss)[[2L]]
+  if (length(cname) == 0L) {
+    cname <- c("time", "status")
   }
-  event_values <- .as_python_vector(event)
-  if (!is.factor(event) && !is.list(event_values)) {
-    event_values <- as.list(event_values)
+  dimnames(ss) <- list(NULL, cname)
+  if (any(is.na(states) | states == "")) {
+    stop("each state must have a non-blank name")
   }
-  result <- .call_r_api(
-    "Surv2",
-    time_values,
-    event_values,
-    repeated = repeated
-  )
-  status <- as.integer(.as_nullable_numeric_vector(.result_field(result, "status")))
-  out <- cbind(time = as.numeric(time), status = status)
-  if (length(input_attributes) > 0L) {
-    attr(out, "inputAttributes") <- input_attributes
+  if (length(inputAttributes) > 0L) {
+    attr(ss, "inputAttributes") <- inputAttributes
   }
-  attr(out, "states") <- as.character(.result_field(result, "states"))
-  attr(out, "repeated") <- .result_field(result, "repeated")
-  class(out) <- "Surv2"
-  out
+  if (!is.null(states)) {
+    attr(ss, "states") <- states
+  }
+  attr(ss, "repeated") <- repeated
+  class(ss) <- "Surv2"
+  ss
 }
 
 is.Surv <- function(x) {
-  if (inherits(x, "Surv")) {
-    return(TRUE)
-  }
-  .call_r_api("is_surv", x)
+  inherits(x, "Surv") || inherits(x, "survival_py_surv")
 }
 
 is.ratetable <- function(x, verbose = FALSE) {

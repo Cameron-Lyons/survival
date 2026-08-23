@@ -404,6 +404,67 @@ test_that("R formula wrappers delegate to the Python survival package", {
     attr(Surv2(c(1, 2), c("a", "a"), repeated = "first"), "repeated"),
     "first"
   )
+  reference_surv2_constructor <- get("Surv2", envir = asNamespace("survival"))
+  capture_surv2 <- function(fun, args) {
+    captured_warnings <- character()
+    result <- tryCatch(
+      withCallingHandlers(
+        list(kind = "value", value = do.call(fun, args)),
+        warning = function(w) {
+          captured_warnings <<- c(captured_warnings, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }
+      ),
+      error = function(e) {
+        list(kind = "error", message = conditionMessage(e), class = class(e))
+      }
+    )
+    c(result, list(warnings = captured_warnings))
+  }
+  custom_surv2_time <- structure(
+    c(1, 2),
+    names = c("x", "y"),
+    note = "kept"
+  )
+  blank_surv2_state <- factor(
+    c("baseline", ""),
+    levels = c("baseline", "")
+  )
+  surv2_cases <- list(
+    list(time = c(1, 2, 3), event = c("a", "b", "c")),
+    list(
+      time = c(1, 2, 3),
+      event = factor(c("a", "b", "a"), levels = c("z", "a", "b"))
+    ),
+    list(time = c(1, 2, 3), event = c(FALSE, TRUE, NA)),
+    list(time = c(1, 2), event = c(NA_real_, NA_real_)),
+    list(time = c(1, 2, 3), event = c(NA_real_, 0, 1)),
+    list(time = c(1, 2), event = c(NA, NA)),
+    list(time = c(1, 2, 3), event = c(NA, FALSE, TRUE)),
+    list(event = c("a", "b")),
+    list(time = c(1, 2), repeated = c(TRUE, FALSE)),
+    list(time = c(1, 2), event = c("a", "b"), repeated = NA),
+    list(time = c(1, 2), event = c("a", "b"), repeated = NA_character_),
+    list(time = c(1, 2), event = c("a", "b"), repeated = 1),
+    list(time = c(1, 2), event = c("a", "b"), repeated = c(TRUE, FALSE)),
+    list(time = c(1, 2), event = c("a", "b"), repeated = "first"),
+    list(time = numeric(), event = character()),
+    list(time = custom_surv2_time, event = c("a", "b")),
+    list(time = matrix(1:4, nrow = 2L), event = c("a", "b", "c", "d")),
+    list(time = as.difftime(c(1, 2), units = "days"), event = c("a", "b")),
+    list(time = c("1", "2"), event = c("a", "b")),
+    list(time = c(1, 2), event = "a"),
+    list(time = c(1, 2), event = blank_surv2_state),
+    list(time = c(NA, NaN, Inf, -Inf), event = c("a", "b", "c", "d"))
+  )
+  for (case in surv2_cases) {
+    expect_identical(
+      capture_surv2(Surv2, case),
+      capture_surv2(reference_surv2_constructor, case)
+    )
+  }
+  expect_false(is.Surv(1:3))
+  expect_false(is.Surv(surv2_response))
 
   timeline_data <- data.frame(
     id = c(1, 1, 1, 2, 2),
