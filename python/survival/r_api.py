@@ -28601,9 +28601,18 @@ def aareg(
     if terms.offsets:
         _offset_vector(data, terms.offsets, len(response))
 
-    design = _fit_formula_design(data, response_spec, terms, len(response))
-    rows = _design_rows_from_spec(data, design, len(response))
-    coefficient_names = ["Intercept", *_formula_design_output_names(design)]
+    design = _fit_formula_design(
+        data,
+        response_spec,
+        terms,
+        len(response),
+        include_intercept=True,
+    )
+    rows = [row[1:] for row in _design_rows_from_spec(data, design, len(response))]
+    design_names = _formula_design_output_names(design)[1:]
+    if not design_names:
+        raise ValueError("invalid 'length' argument")
+    coefficient_names = ["Intercept", *design_names]
     fit_weights = _optional_float_vector(weights, "weights", len(response))
     cluster_values = None if cluster is None else _materialize_labels(cluster, "cluster")
     if cluster_values is not None and len(cluster_values) != len(response):

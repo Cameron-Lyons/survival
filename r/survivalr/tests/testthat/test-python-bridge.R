@@ -4275,6 +4275,56 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("aareg drops the reference model-matrix column", {
+  skip_if_not_installed("reticulate")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    time = 1:6,
+    status = rep(1, 6),
+    x = c(0, 1, 2, 1, 3, -1),
+    z = c(1, 0, 1, 2, -1, 0),
+    group = factor(c("a", "b", "c", "a", "b", "c"))
+  )
+  length_error <- "invalid 'length' argument"
+  expect_error(aareg(Surv(time, status) ~ 1, data = data, nmin = 0), length_error, fixed = TRUE)
+  expect_error(
+    survival::aareg(survival::Surv(time, status) ~ 1, data = data, nmin = 0),
+    length_error,
+    fixed = TRUE
+  )
+  expect_error(
+    aareg(Surv(time, status) ~ 0 + x, data = data, nmin = 0),
+    length_error,
+    fixed = TRUE
+  )
+  expect_error(
+    survival::aareg(survival::Surv(time, status) ~ 0 + x, data = data, nmin = 0),
+    length_error,
+    fixed = TRUE
+  )
+
+  bridged_numeric <- aareg(Surv(time, status) ~ 0 + x + z, data = data, nmin = 0, x = TRUE)
+  reference_numeric <- survival::aareg(
+    survival::Surv(time, status) ~ 0 + x + z,
+    data = data,
+    nmin = 0,
+    x = TRUE
+  )
+  bridged_numeric$call <- reference_numeric$call
+  expect_equal(bridged_numeric, reference_numeric, tolerance = 1e-10)
+
+  bridged_factor <- aareg(Surv(time, status) ~ 0 + group, data = data, nmin = 0, x = TRUE)
+  reference_factor <- survival::aareg(
+    survival::Surv(time, status) ~ 0 + group,
+    data = data,
+    nmin = 0,
+    x = TRUE
+  )
+  bridged_factor$call <- reference_factor$call
+  expect_equal(bridged_factor, reference_factor, tolerance = 1e-10)
+})
+
 test_that("multi-covariate aareg variance tests preserve reference errors", {
   skip_if_not_installed("reticulate")
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")

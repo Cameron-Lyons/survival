@@ -26192,6 +26192,67 @@ def test_aareg_formula_validates_model_specific_options():
         survival.aareg("Surv(time, status) ~ x:cluster(group)", data=data, nmin=1)
 
 
+def test_aareg_formula_drops_the_reference_model_matrix_column():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": [1, 1, 1, 1, 1, 1],
+        "x": [0.0, 1.0, 2.0, 1.0, 3.0, -1.0],
+        "z": [1.0, 0.0, 1.0, 2.0, -1.0, 0.0],
+        "group": ["a", "b", "c", "a", "b", "c"],
+    }
+
+    for formula in ("Surv(time, status) ~ 1", "Surv(time, status) ~ 0 + x"):
+        with pytest.raises(ValueError, match="invalid 'length' argument"):
+            survival.aareg(formula, data=data, nmin=0)
+
+    def assert_matrix_close(actual: list[list[float]], expected: list[list[float]]) -> None:
+        for actual_row, expected_row in zip(actual, expected, strict=True):
+            for actual_value, expected_value in zip(actual_row, expected_row, strict=True):
+                if math.isnan(expected_value):
+                    assert math.isnan(actual_value)
+                else:
+                    assert actual_value == pytest.approx(expected_value)
+
+    dropped_numeric = survival.aareg(
+        "Surv(time, status) ~ 0 + x + z",
+        data=data,
+        nmin=0,
+        x=True,
+    )
+    reference_numeric = survival.aareg(
+        "Surv(time, status) ~ z",
+        data=data,
+        nmin=0,
+        x=True,
+    )
+    assert dropped_numeric.coefficient_names == ["Intercept", "z"]
+    assert dropped_numeric.n == reference_numeric.n
+    assert dropped_numeric.times == reference_numeric.times
+    assert dropped_numeric.nrisk == pytest.approx(reference_numeric.nrisk)
+    assert_matrix_close(dropped_numeric.coefficient, reference_numeric.coefficient)
+    assert dropped_numeric.test_statistic == pytest.approx(reference_numeric.test_statistic)
+    assert_matrix_close(dropped_numeric.test_variance, reference_numeric.test_variance)
+    assert dropped_numeric.x == reference_numeric.x
+
+    dropped_factor = survival.aareg(
+        "Surv(time, status) ~ 0 + group",
+        data=data,
+        nmin=0,
+        x=True,
+    )
+    reference_factor = survival.aareg(
+        "Surv(time, status) ~ group",
+        data=data,
+        nmin=0,
+        x=True,
+    )
+    assert dropped_factor.coefficient_names == reference_factor.coefficient_names
+    assert dropped_factor.n == reference_factor.n
+    assert dropped_factor.times == reference_factor.times
+    assert_matrix_close(dropped_factor.coefficient, reference_factor.coefficient)
+    assert dropped_factor.x == reference_factor.x
+
+
 def test_aareg_multivariable_variance_test_preserves_reference_name_error():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],

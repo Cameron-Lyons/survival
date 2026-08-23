@@ -6598,12 +6598,13 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
   cluster_values <- stats::model.extract(frame, "cluster")
 
   design <- stats::model.matrix(Terms, frame)
-  assign <- attr(design, "assign")
-  keep <- assign != 0L
-  design <- design[, keep, drop = FALSE]
+  design <- design[, -1L, drop = FALSE]
   storage.mode(design) <- "double"
   nused <- nrow(design)
   nvar <- ncol(design)
+  if (nvar == 0L) {
+    stop("invalid 'length' argument", call. = FALSE)
+  }
 
   fit_weights <- stats::model.extract(frame, "weights")
   if (length(fit_weights) == 0L) {
