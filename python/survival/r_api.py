@@ -1482,6 +1482,7 @@ class CoxSurvfitResult:
     n_censor: list[list[float]] = field(default_factory=list)
     conf_type: str | None = None
     conf_level: float | None = None
+    log_std_err: list[list[float]] = field(default_factory=list)
 
     def __iter__(self):
         yield self.time
@@ -17464,6 +17465,7 @@ def _survfit0_cox_result(
         start_time=result.start_time,
         std_err=_prepend_matrix_time0(result.std_err, 0.0),
         std_chaz=_prepend_matrix_time0(result.std_chaz, 0.0),
+        log_std_err=_prepend_matrix_time0(result.log_std_err, 0.0),
         conf_lower=_prepend_matrix_time0(result.conf_lower, 1.0),
         conf_upper=_prepend_matrix_time0(result.conf_upper, 1.0),
         curve_time_indices=(
@@ -17711,6 +17713,14 @@ def _cox_survfit_from_aggregates(
         if source.std_chaz and std_err
         else []
     )
+    log_std_err = (
+        [
+            _cox_survfit_result_std_chaz(surv_curve, se_curve)
+            for surv_curve, se_curve in zip(surv, std_err, strict=True)
+        ]
+        if source.log_std_err and std_err
+        else []
+    )
     conf_lower = (
         [[float(value) for value in aggregate.lower] for aggregate in aggregates]
         if source.conf_lower and source.conf_upper and std_err
@@ -17731,6 +17741,7 @@ def _cox_survfit_from_aggregates(
         start_time=source.start_time,
         std_err=std_err,
         std_chaz=std_chaz,
+        log_std_err=log_std_err,
         conf_lower=conf_lower,
         conf_upper=conf_upper,
         n=source.n,
@@ -17985,6 +17996,7 @@ def _survfit_without_standard_errors(result: Any) -> Any:
             start_time=result.start_time,
             std_err=[],
             std_chaz=[],
+            log_std_err=[],
             conf_lower=[],
             conf_upper=[],
             curve_time_indices=result.curve_time_indices,
@@ -18084,6 +18096,7 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
             start_time=result.start_time,
             std_err=result.std_err,
             std_chaz=result.std_chaz,
+            log_std_err=result.log_std_err,
             conf_lower=result.conf_lower,
             conf_upper=result.conf_upper,
             curve_time_indices=result.curve_time_indices,
@@ -18958,8 +18971,6 @@ def survfit(
                 conf_type="none",
                 keep_model=keep_model,
             )
-        if computation.stype != 2:
-            raise NotImplementedError("Cox product-limit survival curves are not yet supported")
         if reverse_curve:
             raise ValueError("reverse survfit is only supported for Surv or formula inputs")
         if subset is not None:
@@ -18979,6 +18990,7 @@ def survfit(
                 normalized_conf_type,
                 compute_confidence=include_se,
                 ctype=computation.ctype,
+                stype=computation.stype,
             )
             return (
                 _survfit_with_model_frame(result, _cox_survfit_model_frame(response, newdata))
@@ -22651,6 +22663,7 @@ def _subset_survfit_cox(
         start_time=None,
         std_err=select_rows(result.std_err, "standard-error"),
         std_chaz=select_rows(result.std_chaz, "cumulative-hazard standard-error"),
+        log_std_err=select_rows(result.log_std_err, "log-scale standard-error"),
         conf_lower=select_rows(result.conf_lower, "lower-confidence"),
         conf_upper=select_rows(result.conf_upper, "upper-confidence"),
         curve_time_indices=select_optional(result.curve_time_indices, "time-index"),
@@ -23007,7 +23020,7 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
         frame[name] = []
 
     optional_columns = {
-        "std.err": result.std_chaz or result.std_err,
+        "std.err": result.log_std_err or result.std_chaz or result.std_err,
         "std.chaz": result.std_chaz,
         "lower": result.conf_lower,
         "upper": result.conf_upper,
@@ -26018,6 +26031,152 @@ class _CoxExpectedBaseline:
     xbar: list[list[float]]
 
 
+@dataclass(frozen=True)
+class _CoxProductLimitBaseline:
+    times: list[float]
+    survival: list[float]
+    cumhaz: list[float]
+    n_event: list[float]
+    hazard: list[float]
+    varhaz: list[float]
+    xbar: list[list[float]]
+
+
+def _cox_product_limit_center(fit: Any) -> float:
+    if _sparse_frailty_for_fit(fit) is not None:
+        return _training_linear_predictor_center(fit)
+    model = _unwrap_formula_fit(fit)
+    beta = _cox_beta(model)
+    means = getattr(model, "means", None)
+    if means is None:
+        return _training_linear_predictor_center(fit)
+    mean_values = [float(value) for value in means]
+    if len(mean_values) != len(beta):
+        return _training_linear_predictor_center(fit)
+    coefficient_center = math.fsum(
+        mean * coefficient for mean, coefficient in zip(mean_values, beta, strict=True)
+    )
+    offsets = _cox_fit_offset(model, beta)
+    if offsets is None:
+        return coefficient_center
+    weights = [float(value) for value in _model_residual_weights(model, len(offsets))]
+    weight_sum = math.fsum(weights)
+    if weight_sum <= 0.0:
+        return coefficient_center
+    offset_center = math.fsum(
+        offset * weight for offset, weight in zip(offsets, weights, strict=True)
+    ) / weight_sum
+    return coefficient_center + offset_center
+
+
+def _cox_product_limit_baseline_by_stratum(
+    fit: Any,
+    start_time: float | None,
+) -> dict[int, _CoxProductLimitBaseline]:
+    model = _unwrap_formula_fit(fit)
+    beta = _cox_beta(model)
+    nvar = len(beta)
+    rows = _cox_training_rows(model, nvar)
+    stop_times = [float(value) for value in model.event_times]
+    status = [int(value) for value in model.status]
+    n = len(stop_times)
+    if len(rows) != n or len(status) != n:
+        raise ValueError("fitted Cox model event arrays have inconsistent lengths")
+
+    entry_values = getattr(model, "entry_times", None)
+    entry_times = (
+        [float(value) for value in entry_values] if entry_values is not None else None
+    )
+    if entry_times is not None and len(entry_times) != n:
+        raise ValueError("fitted Cox model entry times do not match event rows")
+    weights = [float(value) for value in _model_residual_weights(model, n)]
+    strata = _cox_training_strata(model, n)
+    linear_predictors = _linear_predictors_for_fit(fit, None)
+    if len(linear_predictors) != n:
+        raise ValueError("fitted Cox model predictors do not match event rows")
+    center = _cox_product_limit_center(fit)
+
+    retained = [
+        index
+        for index, stop in enumerate(stop_times)
+        if start_time is None or stop >= start_time - _SURVFIT_TIME_EPSILON
+    ]
+    if start_time is not None and not any(status[index] != 0 for index in retained):
+        raise ValueError("start_time argument has removed all endpoints")
+
+    result: dict[int, _CoxProductLimitBaseline] = {}
+    for stratum in sorted({strata[row_index] for row_index in retained}):
+        indices = [row_index for row_index in retained if strata[row_index] == stratum]
+        y = (
+            [
+                [entry_times[index], stop_times[index], float(status[index])]
+                for index in indices
+            ]
+            if entry_times is not None
+            else [[stop_times[index], float(status[index])] for index in indices]
+        )
+        raw = _core.cox_survfit_baseline(
+            y,
+            [[float(value) for value in rows[index]] for index in indices],
+            [weights[index] for index in indices],
+            [_safe_exp(linear_predictors[index] - center) for index in indices],
+            1,
+            1,
+        )
+        survival: list[float] = []
+        survival_value = 1.0
+        for step in raw["surv"]:
+            survival_value *= float(step)
+            survival.append(_clamp_probability(survival_value))
+        cumulative_variance: list[float] = []
+        variance_value = 0.0
+        for step in raw["varhaz"]:
+            variance_value += float(step)
+            cumulative_variance.append(variance_value)
+        cumulative_xbar: list[list[float]] = []
+        xbar_value = [0.0] * nvar
+        for step in raw["xbar"]:
+            xbar_value = [
+                xbar_value[column] + float(step[column]) for column in range(nvar)
+            ]
+            cumulative_xbar.append(list(xbar_value))
+        result[int(stratum)] = _CoxProductLimitBaseline(
+            times=[float(value) for value in raw["time"]],
+            survival=survival,
+            cumhaz=[float(value) for value in raw["cumhaz"]],
+            n_event=[float(value) for value in raw["n_event"]],
+            hazard=[float(value) for value in raw["hazard"]],
+            varhaz=cumulative_variance,
+            xbar=cumulative_xbar,
+        )
+    return result
+
+
+def _cox_product_limit_baseline_for_curve(
+    baselines: dict[int, _CoxProductLimitBaseline],
+    stratum: int | None,
+) -> _CoxProductLimitBaseline:
+    if stratum is not None:
+        baseline = baselines.get(int(stratum))
+        if baseline is not None:
+            return baseline
+    if len(baselines) == 1:
+        return next(iter(baselines.values()))
+    return _CoxProductLimitBaseline([], [], [], [], [], [], [])
+
+
+def _cox_product_limit_baseline_at(
+    baseline: _CoxProductLimitBaseline,
+    time: float,
+    nvar: int,
+) -> tuple[float, float, list[float]]:
+    pos = bisect_right(baseline.times, time)
+    if pos == 0:
+        return 0.0, 0.0, [0.0] * nvar
+    idx = pos - 1
+    return baseline.cumhaz[idx], baseline.varhaz[idx], list(baseline.xbar[idx])
+
+
 def _cox_survfit_baseline_method(fit: Any, ctype: int | None = None) -> str:
     if ctype is not None:
         return "efron" if ctype == 2 else "breslow"
@@ -26438,6 +26597,7 @@ def _cox_survfit_with_censor_times(
         start_time=result.start_time,
         std_err=result.std_err,
         std_chaz=result.std_chaz,
+        log_std_err=result.log_std_err,
         conf_lower=result.conf_lower,
         conf_upper=result.conf_upper,
     )
@@ -26474,6 +26634,7 @@ def _cox_survfit_conditioned(
         start_time=t0 if start_time is not None else None,
         std_err=result.std_err,
         std_chaz=result.std_chaz,
+        log_std_err=result.log_std_err,
         conf_lower=result.conf_lower,
         conf_upper=result.conf_upper,
     )
@@ -26775,17 +26936,149 @@ def _cox_survfit_with_confidence(
             conf_lower.append(curve_lower)
             conf_upper.append(curve_upper)
 
-    return CoxSurvfitResult(
-        time=result.time,
-        surv=result.surv,
-        cumhaz=result.cumhaz,
-        linear_predictors=result.linear_predictors,
-        centered=result.centered,
-        strata=result.strata,
-        strata_labels=result.strata_labels,
-        start_time=result.start_time,
+    return replace(
+        result,
         std_err=std_err,
         std_chaz=std_chaz,
+        conf_lower=conf_lower,
+        conf_upper=conf_upper,
+    )
+
+
+def _cox_survfit_with_product_limit_style(
+    fit: Any,
+    result: CoxSurvfitResult,
+    rows: list[list[float]] | None,
+    start_time: float | None,
+    include_time0: bool,
+    include_censor: bool,
+) -> tuple[CoxSurvfitResult, dict[int, _CoxProductLimitBaseline]]:
+    baselines = _cox_product_limit_baseline_by_stratum(fit, start_time)
+    selected_strata = (
+        set(baselines) if result.strata is None else {int(value) for value in result.strata}
+    )
+    times = sorted(
+        {
+            time
+            for stratum, baseline in baselines.items()
+            if stratum in selected_strata
+            for time, events in zip(baseline.times, baseline.n_event, strict=True)
+            if include_censor or events > 0.0
+        }
+    )
+    center = _cox_product_limit_center(fit) if result.centered else 0.0
+    curve_strata: list[int | None] = (
+        [None] * len(result.surv)
+        if result.strata is None
+        else [int(value) for value in result.strata]
+    )
+    prediction_risks = (
+        [1.0] * len(result.surv)
+        if rows is None
+        else [
+            _safe_exp(float(linear_predictor) - center)
+            for linear_predictor in result.linear_predictors
+        ]
+    )
+    survival_curves: list[list[float]] = []
+    cumulative_hazards: list[list[float]] = []
+    for stratum, risk in zip(curve_strata, prediction_risks, strict=True):
+        baseline = _cox_product_limit_baseline_for_curve(baselines, stratum)
+        baseline_survival = _core.step_values_at(
+            baseline.times,
+            baseline.survival,
+            times,
+            1.0,
+        )
+        baseline_hazard = _core.step_values_at(
+            baseline.times,
+            baseline.cumhaz,
+            times,
+            0.0,
+        )
+        survival_curves.append(
+            [_clamp_probability(float(value) ** risk) for value in baseline_survival]
+        )
+        cumulative_hazards.append([float(value) * risk for value in baseline_hazard])
+
+    styled = replace(
+        result,
+        time=times,
+        surv=survival_curves,
+        cumhaz=cumulative_hazards,
+        start_time=start_time,
+    )
+    if include_time0:
+        initial_time = (
+            float(start_time) if start_time is not None else _cox_survfit_default_time0(fit)
+        )
+        styled = _survfit0_cox_result(styled, initial_time)
+    return styled, baselines
+
+
+def _cox_survfit_product_limit_with_confidence(
+    fit: Any,
+    result: CoxSurvfitResult,
+    rows: list[list[float]],
+    default_curve: bool,
+    baselines: dict[int, _CoxProductLimitBaseline],
+    conf_level: float,
+    conf_type: str,
+) -> CoxSurvfitResult:
+    model = _unwrap_formula_fit(fit)
+    beta = _cox_beta(model)
+    nvar = len(beta)
+    variance = _cox_variance_matrix(fit, nvar)
+    center = _cox_product_limit_center(fit) if result.centered else 0.0
+    z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
+
+    std_err: list[list[float]] = []
+    log_std_err: list[list[float]] = []
+    conf_lower: list[list[float]] = []
+    conf_upper: list[list[float]] = []
+    for curve_idx, (survival_curve, row, linear_predictor) in enumerate(
+        zip(result.surv, rows, result.linear_predictors, strict=True)
+    ):
+        stratum = result.strata[curve_idx] if result.strata is not None else None
+        baseline = _cox_product_limit_baseline_for_curve(baselines, stratum)
+        risk = 1.0 if default_curve else _safe_exp(float(linear_predictor) - center)
+        curve_std_err: list[float] = []
+        curve_log_std_err: list[float] = []
+        curve_lower: list[float] = []
+        curve_upper: list[float] = []
+        for time, survival in zip(result.time, survival_curve, strict=True):
+            cumulative_hazard, cumulative_varhaz, cumulative_xbar = (
+                _cox_product_limit_baseline_at(baseline, float(time), nvar)
+            )
+            delta = [
+                cumulative_hazard * float(row[column]) - cumulative_xbar[column]
+                for column in range(nvar)
+            ]
+            variance_value = cumulative_varhaz + _quadratic_form(delta, variance)
+            log_se = math.sqrt(max(variance_value, 0.0)) * risk
+            survival_se = float(survival) * log_se
+            curve_log_std_err.append(log_se)
+            curve_std_err.append(survival_se)
+            if conf_type != "none":
+                lower, upper = _survfit_confidence_interval(
+                    float(survival),
+                    survival_se,
+                    z,
+                    conf_type,
+                )
+                curve_lower.append(lower)
+                curve_upper.append(upper)
+        log_std_err.append(curve_log_std_err)
+        std_err.append(curve_std_err)
+        if conf_type != "none":
+            conf_lower.append(curve_lower)
+            conf_upper.append(curve_upper)
+
+    return replace(
+        result,
+        std_err=std_err,
+        std_chaz=[],
+        log_std_err=log_std_err,
         conf_lower=conf_lower,
         conf_upper=conf_upper,
     )
@@ -26804,6 +27097,7 @@ def _cox_survfit_result(
     conf_type: str = "log",
     compute_confidence: bool = True,
     ctype: int | None = None,
+    stype: int = 2,
 ) -> CoxSurvfitResult:
     times, curves = _cox_survival_curve(fit, rows, offsets, centered, newdata)
     center = _training_linear_predictor_center(fit) if centered else 0.0
@@ -26853,6 +27147,37 @@ def _cox_survfit_result(
         selected_ctype = 2 if _cox_survfit_baseline_method(fit) == "efron" else 1
     else:
         selected_ctype = ctype
+    if stype == 1:
+        result, product_baselines = _cox_survfit_with_product_limit_style(
+            fit,
+            result,
+            rows,
+            start_time,
+            include_time0,
+            include_censor,
+        )
+        if compute_confidence:
+            curve_rows = _cox_survfit_curve_rows(fit, rows, len(result.surv))
+            result = _cox_survfit_product_limit_with_confidence(
+                fit,
+                result,
+                curve_rows,
+                rows is None,
+                product_baselines,
+                conf_level,
+                conf_type,
+            )
+        return replace(
+            _cox_survfit_with_counts(fit, result, start_time),
+            curve_time_indices=_cox_survfit_curve_time_indices(
+                fit,
+                result,
+                include_censor,
+                include_time0,
+            ),
+            conf_type=conf_type if compute_confidence else None,
+            conf_level=conf_level if compute_confidence else None,
+        )
     result = _cox_survfit_with_cumulative_hazard_style(fit, result, selected_ctype)
     if include_censor:
         result = _cox_survfit_with_censor_times(fit, result)

@@ -650,6 +650,7 @@ class CoxSurvfitResult:
     n_censor: list[list[float]]
     conf_type: str | None
     conf_level: float | None
+    log_std_err: list[list[float]]
     def __iter__(self): ...
     @property
     def curves(self) -> list[list[float]]: ...

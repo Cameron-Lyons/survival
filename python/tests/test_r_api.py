@@ -22248,8 +22248,73 @@ def test_survfit_coxph_supports_cumulative_hazard_styles_and_aliases():
     with pytest.warns(RuntimeWarning, match="type argument ignored"):
         ignored = survival.survfit(fit, type="kaplan-meier", stype=2)
     assert ignored.cumhaz[0] == pytest.approx(efron.cumhaz[0])
-    with pytest.raises(NotImplementedError, match="product-limit"):
-        survival.survfit(fit, stype=1)
+
+    product_limit = survival.survfit(fit, stype=1)
+    assert product_limit.surv[0] == pytest.approx([2.0 / 3.0, 0.5, 0.25, 0.25])
+    assert product_limit.cumhaz[0] == pytest.approx(
+        [1.0 / 3.0, 7.0 / 12.0, 13.0 / 12.0, 13.0 / 12.0]
+    )
+    assert product_limit.log_std_err[0] == pytest.approx(
+        [
+            0.288675134594813,
+            0.408248290463863,
+            0.816496580927726,
+            0.816496580927726,
+        ]
+    )
+    assert product_limit.std_chaz == []
+    for alias in ("kaplan-meier", "kalbfleisch-prentice"):
+        aliased = survival.survfit(fit, type=alias)
+        assert aliased.surv[0] == pytest.approx(product_limit.surv[0])
+        assert aliased.log_std_err[0] == pytest.approx(product_limit.log_std_err[0])
+
+
+def test_survfit_coxph_product_limit_supports_weights_offsets_and_newdata():
+    data = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 1, 1, 0],
+        "x": [0.0, 1.0, 2.0, 3.0],
+        "weight": [1.0, 2.0, 3.0, 4.0],
+        "offset": [0.1, 0.2, 0.5, 0.9],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x + offset(offset)",
+        data=data,
+        weights=data["weight"],
+        initial_beta=[0.7],
+        max_iter=0,
+    )
+
+    default = survival.survfit(fit, stype=1)
+    assert default.surv[0] == pytest.approx(
+        [0.935142266563013, 0.814547675317103, 0.642897641514615, 0.642897641514615]
+    )
+    profiles = survival.survfit(
+        fit,
+        newdata={"x": [1.0, 2.0], "offset": [0.3, 0.8]},
+        stype=1,
+        start_time=1.5,
+    )
+    assert profiles.time == pytest.approx([2.0, 3.0, 4.0])
+    expected_survival = [
+        [0.948508640469136, 0.866342458374783, 0.866342458374783],
+        [0.839024037487191, 0.621043733082420, 0.621043733082420],
+    ]
+    expected_standard_error = [
+        [0.0835492214488957, 0.206287249215511, 0.206287249215511],
+        [0.165584052395787, 0.356643396523756, 0.356643396523756],
+    ]
+    for actual, expected in zip(profiles.surv, expected_survival, strict=True):
+        assert actual == pytest.approx(expected)
+    for actual, expected in zip(
+        profiles.log_std_err,
+        expected_standard_error,
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert profiles.n_risk[0] == pytest.approx([9.0, 7.0, 4.0])
+    assert profiles.n_event[0] == pytest.approx([2.0, 3.0, 0.0])
+    assert profiles.n_censor[0] == pytest.approx([0.0, 0.0, 4.0])
 
 
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():

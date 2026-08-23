@@ -8921,7 +8921,12 @@ xtfrm.survival_py_surv <- function(x) {
   n_values <- as.integer(.as_numeric_vector(.result_field(x, "n")))
   has_counts <- length(n_values) > 0L ||
     isTRUE(attr(x, ".survival_py_empty_strata", exact = TRUE))
-  has_standard_errors <- length(.result_field(x, "std_chaz")) > 0L ||
+  has_log_standard_errors <- length(.result_field(x, "log_std_err")) > 0L ||
+    isTRUE(attr(x, ".survival_py_empty_log_std_err", exact = TRUE))
+  has_cumulative_hazard_errors <- length(.result_field(x, "std_chaz")) > 0L ||
+    isTRUE(attr(x, ".survival_py_empty_std_chaz", exact = TRUE))
+  standard_error_field <- if (has_log_standard_errors) "log_std_err" else "std_chaz"
+  has_standard_errors <- has_log_standard_errors || has_cumulative_hazard_errors ||
     isTRUE(attr(x, ".survival_py_empty_confint", exact = TRUE))
   has_confidence <- length(.result_field(x, "conf_lower")) > 0L ||
     isTRUE(attr(x, ".survival_py_empty_confint", exact = TRUE))
@@ -8945,9 +8950,21 @@ xtfrm.survival_py_surv <- function(x) {
     }
     fields$cumhaz <- .survfit_cox_data_matrix(x, "cumhaz", time_count, curve_count)
     if (has_standard_errors) {
-      fields$std.err <- .survfit_cox_data_matrix(x, "std_chaz", time_count, curve_count)
+      fields$std.err <- .survfit_cox_data_matrix(
+        x,
+        standard_error_field,
+        time_count,
+        curve_count
+      )
       fields$logse <- TRUE
-      fields$std.chaz <- fields$std.err
+      if (has_cumulative_hazard_errors) {
+        fields$std.chaz <- .survfit_cox_data_matrix(
+          x,
+          "std_chaz",
+          time_count,
+          curve_count
+        )
+      }
     }
     if (has_confidence) {
       fields$lower <- .survfit_cox_data_matrix(x, "conf_lower", time_count, curve_count)
@@ -8978,7 +8995,9 @@ xtfrm.survival_py_surv <- function(x) {
     if (has_standard_errors) {
       fields$std.err <- if (nrow(frame) == 0L) numeric() else frame$std.err
       fields$logse <- TRUE
-      fields$std.chaz <- if (nrow(frame) == 0L) numeric() else frame$std.chaz
+      if (has_cumulative_hazard_errors) {
+        fields$std.chaz <- if (nrow(frame) == 0L) numeric() else frame$std.chaz
+      }
     }
     if (has_confidence) {
       fields$lower <- if (nrow(frame) == 0L) numeric() else frame$lower
@@ -15381,6 +15400,10 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
       if (length(indices) == 0L) {
         attr(result, ".survival_py_empty_confint") <-
           length(.result_field(x, "conf_lower")) > 0L
+        attr(result, ".survival_py_empty_log_std_err") <-
+          length(.result_field(x, "log_std_err")) > 0L
+        attr(result, ".survival_py_empty_std_chaz") <-
+          length(.result_field(x, "std_chaz")) > 0L
       }
       if (length(indices) != 1L || !isTRUE(drop)) {
         attr(result, ".survival_py_data_count") <- length(indices)
@@ -15412,6 +15435,10 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
       if (length(indices) == 0L) {
         attr(result, ".survival_py_empty_confint") <-
           length(.result_field(x, "conf_lower")) > 0L
+        attr(result, ".survival_py_empty_log_std_err") <-
+          length(.result_field(x, "log_std_err")) > 0L
+        attr(result, ".survival_py_empty_std_chaz") <-
+          length(.result_field(x, "std_chaz")) > 0L
         attr(result, ".survival_py_empty_strata") <- TRUE
       }
       attr(result, ".survival_py_strata_count") <- if (

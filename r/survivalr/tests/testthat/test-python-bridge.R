@@ -13985,6 +13985,113 @@ test_that("Cox cumulative-hazard survfit styles match survival", {
   }
 })
 
+test_that("Cox product-limit survfit styles match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  compare_product_limit <- function(bridged_model, reference_model, arguments) {
+    bridged <- do.call(survfit, c(list(bridged_model), arguments))
+    reference <- do.call(survival::survfit, c(list(reference_model), arguments))
+    for (field in c(
+      "n", "time", "n.risk", "n.event", "n.censor", "strata",
+      "surv", "cumhaz", "std.err", "lower", "upper"
+    )) {
+      expect_equal(
+        bridged[[field]],
+        reference[[field]],
+        tolerance = 1e-12,
+        info = paste("Cox product-limit style field", field)
+      )
+    }
+    expect_identical(bridged$logse, reference$logse)
+    expect_null(bridged$std.chaz)
+    expect_null(reference$std.chaz)
+  }
+
+  right_data <- data.frame(
+    time = 1:4,
+    status = c(1, 1, 1, 0),
+    x = 0:3,
+    weight = 1:4,
+    curve_offset = c(0.1, 0.2, 0.5, 0.9)
+  )
+  bridged_right <- coxph(
+    Surv(time, status) ~ x + offset(curve_offset),
+    data = right_data,
+    weights = weight,
+    max_iter = 0
+  )
+  reference_right <- survival::coxph(
+    survival::Surv(time, status) ~ x + offset(curve_offset),
+    data = right_data,
+    weights = weight,
+    init = 0,
+    iter.max = 0
+  )
+  profiles <- data.frame(
+    x = c(1, 2),
+    curve_offset = c(0.3, 0.8),
+    row.names = c("low", "high")
+  )
+  for (arguments in list(
+    list(stype = 1L),
+    list(type = "kaplan-meier"),
+    list(type = "kalbfleisch-prentice"),
+    list(stype = 1L, censor = FALSE),
+    list(stype = 1L, newdata = profiles),
+    list(stype = 1L, newdata = profiles, start.time = 1.5)
+  )) {
+    compare_product_limit(bridged_right, reference_right, arguments)
+  }
+  bridged_profiles <- survfit(bridged_right, newdata = profiles, stype = 1L)
+  reference_profiles <- survival::survfit(
+    reference_right,
+    newdata = profiles,
+    stype = 1L
+  )
+  bridged_empty <- bridged_profiles[integer()]
+  reference_empty <- reference_profiles[integer()]
+  expect_identical(dim(bridged_empty), dim(reference_empty))
+  expect_equal(bridged_empty$std.err, reference_empty$std.err)
+  expect_null(bridged_empty$std.chaz)
+  expect_null(reference_empty$std.chaz)
+
+  counting_data <- data.frame(
+    start = c(0, 1, 0, 2, 0, 2, 3, 4),
+    stop = c(1, 4, 2, 5, 3, 5, 6, 7),
+    status = c(0, 1, 1, 0, 1, 0, 1, 0),
+    group = factor(rep(c("A", "B"), each = 4L)),
+    x = c(0.2, 0.4, 0.1, 0.3, 1, 1.2, 0.8, 1.1)
+  )
+  bridged_counting <- coxph(
+    Surv(start, stop, status) ~ x + strata(group),
+    data = counting_data,
+    max_iter = 0
+  )
+  reference_counting <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x + strata(group),
+    data = counting_data,
+    init = 0,
+    iter.max = 0
+  )
+  counting_profiles <- data.frame(
+    x = c(0.2, 0.8),
+    group = factor(c("A", "B"), levels = levels(counting_data$group))
+  )
+  for (arguments in list(
+    list(stype = 1L),
+    list(stype = 1L, censor = FALSE),
+    list(stype = 1L, start.time = 2.5),
+    list(stype = 1L, newdata = counting_profiles, start.time = 2.5)
+  )) {
+    compare_product_limit(bridged_counting, reference_counting, arguments)
+  }
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
