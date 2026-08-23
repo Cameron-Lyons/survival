@@ -13548,6 +13548,100 @@ test_that("Cox survfit quantiles preserve curve dimensions and conditioning", {
   )
 })
 
+test_that("Cox survfit data-margin subsetting matches survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  set.seed(8081)
+  n <- 150L
+  x <- stats::rnorm(n)
+  z <- stats::rnorm(n)
+  event_time <- stats::rexp(n, exp(0.3 * x - 0.2 * z) / 8)
+  censor_time <- stats::rexp(n, 1 / 14)
+  data <- data.frame(
+    time = pmin(event_time, censor_time),
+    status = as.integer(event_time <= censor_time),
+    x = x,
+    z = z
+  )
+  profiles <- data.frame(
+    x = c(-1, -0.2, 0.5, 1.2),
+    z = c(0.5, 0.1, -0.2, -0.6),
+    row.names = c("low", "middle-low", "middle-high", "high")
+  )
+  bridged_model <- coxph(Surv(time, status) ~ x + z, data = data)
+  reference_model <- survival::coxph(
+    survival::Surv(time, status) ~ x + z,
+    data = data
+  )
+  bridged <- survfit(
+    bridged_model,
+    newdata = profiles,
+    start.time = 2.5
+  )
+  reference <- survival::survfit(
+    reference_model,
+    newdata = profiles,
+    start.time = 2.5
+  )
+
+  compare_subset <- function(selector, drop = TRUE) {
+    bridged_subset <- bridged[selector, drop = drop]
+    reference_subset <- reference[selector, drop = drop]
+    expect_identical(dim(bridged_subset), dim(reference_subset))
+    expect_equal(
+      as.numeric(bridged_subset$surv),
+      as.numeric(reference_subset$surv),
+      tolerance = 2e-06
+    )
+    expect_equal(
+      as.numeric(bridged_subset$cumhaz),
+      as.numeric(reference_subset$cumhaz),
+      tolerance = 2e-06
+    )
+    for (include_confidence in c(FALSE, TRUE)) {
+      expect_equal(
+        quantile(
+          bridged_subset,
+          probs = c(0, 0.25, 0.5, 0.75),
+          conf.int = include_confidence
+        ),
+        quantile(
+          reference_subset,
+          probs = c(0, 0.25, 0.5, 0.75),
+          conf.int = include_confidence
+        ),
+        tolerance = 2e-06
+      )
+    }
+  }
+
+  compare_subset(1L)
+  compare_subset(c(4L, 1L, 4L))
+  compare_subset(c(TRUE, FALSE, TRUE, FALSE))
+  compare_subset(integer())
+  compare_subset(2L, drop = FALSE)
+
+  expect_identical(bridged[], bridged)
+  expect_error(bridged["low"], "no 'dimnames' attribute")
+  expect_error(bridged[5L], "subscript out of bounds")
+
+  bridged_no_se <- survfit(bridged_model, newdata = profiles, se.fit = FALSE)
+  reference_no_se <- survival::survfit(
+    reference_model,
+    newdata = profiles,
+    se.fit = FALSE
+  )
+  expect_equal(
+    quantile(bridged_no_se[FALSE], probs = c(0.25, 0.5), conf.int = TRUE),
+    quantile(reference_no_se[FALSE], probs = c(0.25, 0.5), conf.int = TRUE)
+  )
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

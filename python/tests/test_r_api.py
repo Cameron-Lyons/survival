@@ -16646,6 +16646,42 @@ def test_survfit_coxph_start_time_conditions_curve():
     assert at_event.surv[0][0] != pytest.approx(1.0)
 
 
+def test_subset_survfit_cox_selects_data_curves_and_metadata():
+    fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10)
+    curves = survival.survfit(
+        fit,
+        newdata={"x1": [0.2, 0.5, 0.8], "x2": [0.9, 0.6, 0.3]},
+        start_time=2.5,
+    )
+
+    selected = survival.r_api._subset_survfit_cox(curves, [2, 0, 2])
+    empty = survival.r_api._subset_survfit_cox(curves, [])
+
+    assert selected.time == pytest.approx(curves.time)
+    assert selected.start_time is None
+    assert selected.linear_predictors == pytest.approx(
+        [curves.linear_predictors[2], curves.linear_predictors[0], curves.linear_predictors[2]]
+    )
+    for field in ("surv", "cumhaz", "std_err", "std_chaz", "conf_lower", "conf_upper"):
+        actual = getattr(selected, field)
+        expected = getattr(curves, field)
+        for row, source_index in zip(actual, [2, 0, 2], strict=True):
+            assert row == pytest.approx(expected[source_index])
+    assert empty.time == pytest.approx(curves.time)
+    assert empty.start_time is None
+    assert empty.surv == []
+    assert empty.cumhaz == []
+    assert empty.linear_predictors == []
+    assert empty.conf_lower == []
+    with pytest.raises(IndexError, match="out of bounds"):
+        survival.r_api._subset_survfit_cox(curves, [3])
+    with pytest.raises(TypeError, match="fitted Cox survival curve"):
+        survival.r_api._subset_survfit_cox(
+            survival.survfit(survival.Surv([1.0, 2.0], [1, 0])),
+            [0],
+        )
+
+
 def test_survfit0_adds_initial_row_to_existing_cox_curves():
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=10)
     base = survival.survfit(fit, newdata=[[0.5, 0.8]])

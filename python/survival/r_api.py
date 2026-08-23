@@ -22490,6 +22490,49 @@ def _subset_survfit_multistate(
     )
 
 
+def _subset_survfit_cox(
+    result: CoxSurvfitResult,
+    curve_indices: Any,
+) -> CoxSurvfitResult:
+    if not isinstance(result, CoxSurvfitResult):
+        raise TypeError("Cox survfit subsetting requires a fitted Cox survival curve")
+    indices = [
+        _integer_scalar(value, "curve_indices")
+        for value in _materialize_1d(curve_indices, "curve_indices")
+    ]
+    curve_count = len(result.surv)
+    if any(index < 0 or index >= curve_count for index in indices):
+        raise IndexError("Cox survfit data index is out of bounds")
+    if len(result.cumhaz) != curve_count or len(result.linear_predictors) != curve_count:
+        raise ValueError("Cox survfit curve fields have inconsistent lengths")
+
+    def select_rows(values: list[list[float]], name: str) -> list[list[float]]:
+        if values and len(values) != curve_count:
+            raise ValueError(f"Cox survfit {name} fields have inconsistent lengths")
+        return [[float(value) for value in values[index]] for index in indices] if values else []
+
+    def select_optional(values: list[Any] | None, name: str) -> list[Any] | None:
+        if values is None:
+            return None
+        if len(values) != curve_count:
+            raise ValueError(f"Cox survfit {name} fields have inconsistent lengths")
+        return [values[index] for index in indices]
+
+    return replace(
+        result,
+        surv=select_rows(result.surv, "survival"),
+        cumhaz=select_rows(result.cumhaz, "cumulative-hazard"),
+        linear_predictors=[float(result.linear_predictors[index]) for index in indices],
+        strata=select_optional(result.strata, "strata"),
+        strata_labels=select_optional(result.strata_labels, "strata-label"),
+        start_time=None,
+        std_err=select_rows(result.std_err, "standard-error"),
+        std_chaz=select_rows(result.std_chaz, "cumulative-hazard standard-error"),
+        conf_lower=select_rows(result.conf_lower, "lower-confidence"),
+        conf_upper=select_rows(result.conf_upper, "upper-confidence"),
+    )
+
+
 def _survfit_multistate_structure(
     result: SurvfitMultiStateResult | SurvfitMultiStateCoxResult | Mapping[Any, Any],
 ) -> dict[str, Any]:

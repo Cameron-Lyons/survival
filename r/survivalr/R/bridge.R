@@ -8895,7 +8895,16 @@ xtfrm.survival_py_surv <- function(x) {
 
 .survfit_cox_quantile <- function(x, probs, conf.int, scale, tolerance, pname) {
   time <- .as_numeric_vector(.result_field(x, "time"))
-  survival <- .as_numeric_matrix(.result_field(x, "estimate"))
+  survival_values <- .result_field(x, "estimate")
+  curve_count <- length(survival_values)
+  if (curve_count == 0L) {
+    result <- stats::setNames(rep(NA_real_, length(probs)), pname)
+    if (isTRUE(conf.int) && isTRUE(attr(x, ".survival_py_empty_confint", exact = TRUE))) {
+      return(list(quantile = result, lower = result, upper = result))
+    }
+    return(result)
+  }
+  survival <- .as_numeric_matrix(survival_values)
   lower_values <- .result_field(x, "conf_lower")
   upper_values <- .result_field(x, "conf_upper")
   lower <- if (length(lower_values) == 0L) {
@@ -8907,10 +8916,6 @@ xtfrm.survival_py_surv <- function(x) {
     matrix(numeric(), nrow = 0L, ncol = 0L)
   } else {
     .as_numeric_matrix(upper_values)
-  }
-  curve_count <- nrow(survival)
-  if (curve_count == 0L) {
-    stop("quantile requires Kaplan-Meier survfit time and survival estimates", call. = FALSE)
   }
   if (ncol(survival) != length(time)) {
     stop("Cox survival curves must match their time grid", call. = FALSE)
@@ -14872,6 +14877,11 @@ dim.survival_py_survfit <- function(x) {
     return(stats::setNames(length(x), "strata"))
   }
 
+  retained_data_count <- attr(x, ".survival_py_data_count", exact = TRUE)
+  if (length(retained_data_count) == 1L) {
+    return(stats::setNames(as.integer(retained_data_count), "data"))
+  }
+
   frame <- as.data.frame.survival_py_survfit(x, optional = TRUE)
   if ("strata" %in% names(frame)) {
     strata_count <- length(unique(frame$strata))
@@ -15227,6 +15237,44 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
   }
   if (missing(i)) {
     return(x)
+  }
+  if (inherits(x, "survival.r_api.CoxSurvfitResult")) {
+    dimensions <- dim(x)
+    data_count <- if ("data" %in% names(dimensions)) dimensions[["data"]] else NULL
+    if (!is.null(data_count)) {
+      if (is.character(i)) {
+        stop("no 'dimnames' attribute for array", call. = FALSE)
+      }
+      indices <- tryCatch(
+        .survival_py_survfit_group_indices(
+          i,
+          seq_len(data_count),
+          dimension = "data"
+        ),
+        error = function(condition) {
+          stop("subscript out of bounds", call. = FALSE)
+        }
+      )
+      result <- .wrap_python(
+        .python_attr("_subset_survfit_cox")(
+          x,
+          as.list(as.integer(indices - 1L))
+        ),
+        c("survival_py_survfit", "survival_py_object")
+      )
+      curve_names <- attr(x, ".survival_py_curve_names", exact = TRUE)
+      if (length(curve_names) == data_count) {
+        attr(result, ".survival_py_curve_names") <- curve_names[indices]
+      }
+      if (length(indices) == 0L) {
+        attr(result, ".survival_py_empty_confint") <-
+          length(.result_field(x, "conf_lower")) > 0L
+      }
+      if (length(indices) != 1L || !isTRUE(drop)) {
+        attr(result, ".survival_py_data_count") <- length(indices)
+      }
+      return(result)
+    }
   }
   if (.is_grouped_survival_py_survfit(x)) {
     curves <- unclass(x)
