@@ -4231,6 +4231,7 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
   }
   event_values <- .result_field(result, "event")
   expected_values <- .result_field(result, "expected")
+  summary_values <- .result_field(result, "summary")
   if (!is.null(group_info) && !is.null(event_values)) {
     event_values <- .pyears_fill_grid(.as_numeric_vector(event_values), groups, group_info)
   }
@@ -4305,6 +4306,9 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
       }
       out$expected <- expected
     }
+    if (!is.null(summary_values)) {
+      out$summary <- summary_values
+    }
     if (!is.null(event_values)) {
       events <- if (is.null(group_info)) .as_numeric_vector(event_values) else event_values
       if (is.null(group_info) && grouped && !is.null(group_name)) {
@@ -4322,8 +4326,7 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
 
   observations <- out$observations
   out$observations <- NULL
-  summary_values <- .result_field(result, "summary")
-  if (!is.null(summary_values)) {
+  if (isTRUE(data.frame) && !is.null(summary_values)) {
     out$summary <- summary_values
   }
   out$observations <- observations

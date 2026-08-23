@@ -181,11 +181,7 @@ pub(crate) fn pyears3b(
                             expect[expected_index]
                         };
                         if method == 0 {
-                            let interval_survival_loss = if lambda == 0.0 {
-                                et2
-                            } else {
-                                -(-lambda * et2).exp_m1() / lambda
-                            };
+                            let interval_survival_loss = (1.0 - (-lambda * et2).exp()) / lambda;
                             temp += (-hazard).exp() * interval_survival_loss;
                         }
                         hazard += lambda * et2;
@@ -557,6 +553,49 @@ mod tests {
         assert_eq!(result.1, vec![1.0, 0.0, 1.0]);
         assert_eq!(result.2, vec![1.0, 0.0, 0.0]);
         assert_eq!(result.3, 20.0);
+    }
+
+    #[test]
+    fn expected_person_time_matches_reference_subtraction_rounding() {
+        let mut pyears = vec![0.0];
+        let mut pn = vec![0.0];
+        let mut pcount = vec![0.0];
+        let mut pexpect = vec![0.0];
+        let mut offtable = 0.0;
+        let mut output = PyearsOutput {
+            pyears: &mut pyears,
+            pn: &mut pn,
+            pcount: &mut pcount,
+            pexpect: &mut pexpect,
+            offtable: &mut offtable,
+        };
+
+        pyears3b(
+            1,
+            3,
+            1,
+            &[117.0, 126.0, 1.0],
+            &[1.0],
+            PyearsExpectedParams {
+                dim: 1,
+                fac: &[1],
+                dims: &[1],
+                cut: &[],
+                rates: &[0.001],
+                data: &[1.0],
+            },
+            PyearsObservedParams {
+                dim: 1,
+                fac: &[1],
+                dims: &[1],
+                cut: &[],
+                data: &[1.0],
+            },
+            0,
+            &mut output,
+        );
+
+        assert_eq!(pexpect[0].to_bits(), 8.959621227116354_f64.to_bits());
     }
 
     #[test]

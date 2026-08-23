@@ -9934,7 +9934,36 @@ test_that("data-prep helpers match R survival shapes", {
     expect_equal(bridged_ratetable$expected, reference_ratetable$expected, tolerance = 1e-12)
     expect_equal(bridged_ratetable$offtable, reference_ratetable$offtable)
     expect_equal(bridged_ratetable$summary, reference_ratetable$summary)
+    expect_identical(names(bridged_ratetable), names(reference_ratetable))
   }
+
+  pyears_ratetable_single_data <- data.frame(
+    start = 117,
+    stop = 126,
+    status = 1,
+    age = 41 * 365.25,
+    sex = factor("female"),
+    year = as.Date("1974-07-09")
+  )
+  bridged_ratetable_single <- pyears(
+    survival::Surv(start, stop, status) ~ 1,
+    data = pyears_ratetable_single_data,
+    ratetable = survival::survexp.us,
+    expect = "pyears",
+    scale = 365.25
+  )
+  reference_ratetable_single <- survival::pyears(
+    survival::Surv(start, stop, status) ~ 1,
+    data = pyears_ratetable_single_data,
+    ratetable = survival::survexp.us,
+    expect = "pyears",
+    scale = 365.25
+  )
+  expect_equal(
+    bridged_ratetable_single$expected,
+    reference_ratetable_single$expected,
+    tolerance = 1e-14
+  )
 
   pyears_ratetable_frame <- pyears(
     survival::Surv(time, status) ~ group,
