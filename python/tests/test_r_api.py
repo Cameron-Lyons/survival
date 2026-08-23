@@ -26919,6 +26919,102 @@ def test_cch_formula_matches_prentice_two_covariate_predictor_roundoff():
     assert fit.iterations == 3
 
 
+def test_cch_formula_matches_prentice_nonconverged_tied_duplicate_variance():
+    x = [
+        float.fromhex(value)
+        for value in (
+            "0x1.2641d22ff7141p+1",
+            "0x1.32a9e2f3e92ffp-4",
+            "-0x1.62690e707a5dcp-3",
+            "0x1.9b01e854d4df3p-5",
+            "-0x1.f12b42bde91e8p-2",
+            "-0x1.a9905d2a4ea91p-2",
+            "-0x1.4c68927f59f92p+0",
+            "0x1.9b0f3c3a34615p-1",
+            "-0x1.a020e5291b6ep-1",
+            "0x1.18d54c9da6facp-1",
+            "-0x1.7b346f44c4f3fp-3",
+            "0x1.4e72dd5ca9e8dp-1",
+            "0x1.724c1c3470da8p-3",
+            "0x1.9f6b452d1a2fdp-2",
+            "-0x1.2e3d196b7dda4p-1",
+            "-0x1.0ca35e51a19dcp+0",
+            "-0x1.ecafad4704c6ep-1",
+            "0x1.3d72d053e528p-1",
+            "-0x1.6da1f1e9831adp-4",
+            "0x1.6b80257cc989ep-1",
+        )
+    ]
+    z = [
+        float.fromhex(value)
+        for value in (
+            "-0x1.4ea65c96ddefep-1",
+            "-0x1.3790d11f31b98p+1",
+            "-0x1.692e0367461fep+1",
+            "-0x1.dc35361c3259ep-1",
+            "0x1.5e8e2b705a38dp-2",
+            "0x1.c14d4a896d9abp+0",
+            "0x1.2c9d056e93d9fp+0",
+            "-0x1.166286ca8d973p+0",
+            "-0x1.1f2aa6807cf44p-4",
+            "0x1.1f09e2306f2f7p+0",
+            "-0x1.017c7be522f6ap+1",
+            "0x1.ed5675d2ce60ap+0",
+            "0x1.64b7a449207ccp-1",
+            "-0x1.4049fb30963fep-6",
+            "0x1.187b70b31d4ffp-1",
+            "-0x1.b5ff4b1929383p-4",
+            "-0x1.915d3f9e511b5p-1",
+            "-0x1.416a90a02da9bp+0",
+            "-0x1.71730b6ff4c91p-1",
+            "-0x1.b6aaffc6b4385p-1",
+        )
+    ]
+    data = {
+        "stop": [20, 18, 8, 4, 16, 15, 10, 11, 11, 3, 16, 12, 17, 17, 20, 5, 5, 15, 18, 10],
+        "status": [1, 1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "x": x,
+        "z": z,
+        "id": list(range(1, 21)),
+        "subcohort": [0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1],
+    }
+    with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
+        fit = survival.cch(
+            "Surv(stop, status) ~ x + z",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=60,
+            method="Prentice",
+            robust=False,
+        )
+
+    assert survival.coef(fit) == pytest.approx(
+        [0.7461588069886617, 0.23555316062819207], abs=1e-14
+    )
+    expected_model_variance = [
+        [1.3599459375056464, 0.31978818551990684],
+        [0.31978818551990684, 0.2250156586593059],
+    ]
+    for actual, expected in zip(
+        fit.fit.model_information_matrix, expected_model_variance, strict=True
+    ):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    expected_phase_two = [
+        [0.6402165582659241, 0.26751817383809673],
+        [0.26751817383809673, 0.2772080185898387],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-1614.3759261023527, -1535.9596401887613], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(33.0292247229679, abs=1e-11)
+    assert fit.means == pytest.approx([-0.07498099468347273, -0.31027802243214964], abs=1e-15)
+    assert fit.iterations == 35
+    assert fit.fit.convergence_flag == 1000
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],

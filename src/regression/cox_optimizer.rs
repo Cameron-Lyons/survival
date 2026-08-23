@@ -1789,7 +1789,8 @@ impl CoxFit {
                     *newbeta_elem = if agexact_compatibility {
                         (*newbeta_elem + beta_elem) / 2.0
                     } else {
-                        (*newbeta_elem + (halving as f64) * beta_elem) / (halving as f64 + 1.0)
+                        factor_arithmetic.add(*newbeta_elem, halving as f64, *beta_elem)
+                            / (halving as f64 + 1.0)
                     };
                 }
             } else {

@@ -13583,6 +13583,66 @@ test_that("cch matches Prentice two-covariate predictor roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches nonconverged Prentice tied-duplicate variance", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  x <- c(
+    0x1.2641d22ff7141p+1, 0x1.32a9e2f3e92ffp-4, -0x1.62690e707a5dcp-3,
+    0x1.9b01e854d4df3p-5, -0x1.f12b42bde91e8p-2, -0x1.a9905d2a4ea91p-2,
+    -0x1.4c68927f59f92p+0, 0x1.9b0f3c3a34615p-1, -0x1.a020e5291b6ep-1,
+    0x1.18d54c9da6facp-1, -0x1.7b346f44c4f3fp-3, 0x1.4e72dd5ca9e8dp-1,
+    0x1.724c1c3470da8p-3, 0x1.9f6b452d1a2fdp-2, -0x1.2e3d196b7dda4p-1,
+    -0x1.0ca35e51a19dcp+0, -0x1.ecafad4704c6ep-1, 0x1.3d72d053e528p-1,
+    -0x1.6da1f1e9831adp-4, 0x1.6b80257cc989ep-1
+  )
+  z <- c(
+    -0x1.4ea65c96ddefep-1, -0x1.3790d11f31b98p+1, -0x1.692e0367461fep+1,
+    -0x1.dc35361c3259ep-1, 0x1.5e8e2b705a38dp-2, 0x1.c14d4a896d9abp+0,
+    0x1.2c9d056e93d9fp+0, -0x1.166286ca8d973p+0, -0x1.1f2aa6807cf44p-4,
+    0x1.1f09e2306f2f7p+0, -0x1.017c7be522f6ap+1, 0x1.ed5675d2ce60ap+0,
+    0x1.64b7a449207ccp-1, -0x1.4049fb30963fep-6, 0x1.187b70b31d4ffp-1,
+    -0x1.b5ff4b1929383p-4, -0x1.915d3f9e511b5p-1, -0x1.416a90a02da9bp+0,
+    -0x1.71730b6ff4c91p-1, -0x1.b6aaffc6b4385p-1
+  )
+  data <- data.frame(
+    stop = c(20, 18, 8, 4, 16, 15, 10, 11, 11, 3, 16, 12, 17, 17, 20, 5, 5, 15, 18, 10),
+    status = c(1, 1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+    x = x,
+    z = z,
+    id = seq_len(20),
+    subcohort = c(0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1)
+  )
+  args <- list(
+    formula = Surv(stop, status) ~ x + z,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 60,
+    method = "Prentice",
+    robust = FALSE
+  )
+  actual <- expect_warning(
+    do.call(cch, args),
+    "Ran out of iterations and did not converge"
+  )
+  reference <- expect_warning(
+    do.call(survival::cch, args),
+    "Ran out of iterations and did not converge"
+  )
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
