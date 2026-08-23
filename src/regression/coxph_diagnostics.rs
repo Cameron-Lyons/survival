@@ -1645,16 +1645,19 @@ impl CoxPHFit {
         } else {
             vec![1.0; nvar]
         };
+        let arithmetic = ProductAccumulator::new(self.counting_roundoff_compatibility && nvar > 1);
         Ok(score_residuals
             .iter()
             .map(|row| {
                 (0..nvar)
                     .map(|col_idx| {
-                        let value = (0..nvar)
-                            .map(|inner_idx| {
-                                self.information_matrix[col_idx][inner_idx] * row[inner_idx]
-                            })
-                            .sum::<f64>();
+                        let value = (0..nvar).fold(0.0, |sum, inner_idx| {
+                            arithmetic.add(
+                                sum,
+                                self.information_matrix[col_idx][inner_idx],
+                                row[inner_idx],
+                            )
+                        });
                         value / scale[col_idx]
                     })
                     .collect()

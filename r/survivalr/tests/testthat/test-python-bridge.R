@@ -13259,6 +13259,42 @@ test_that("cch matches scalar counting offset mean roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches Lin-Ying counting separation roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(0, 9, 3, 15, 2, 15, 0, 9, 10, 0, 8, 16, 0, 0, 3, 3, 2, 10, 7),
+    stop = c(2, 12, 5, 17, 6, 20, 2, 11, 16, 2, 9, 19, 2, 1, 8, 9, 8, 12, 12),
+    status = c(0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0),
+    group = factor(c("a", "d", "c", "b", "d", "d", "c", "a", "c", "b", "d", "c", "c", "d", "a", "c", "b", "c", "d")),
+    id = seq_len(19),
+    subcohort = c(1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 57,
+    method = "LinYing",
+    robust = FALSE
+  )
+  actual <- suppressWarnings(do.call(cch, args))
+  reference <- suppressWarnings(do.call(survival::cch, args))
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

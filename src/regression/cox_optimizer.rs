@@ -1687,6 +1687,7 @@ impl CoxFit {
 
     fn fit_with_mode(&mut self, mode: FitMode) -> Result<(), CoxError> {
         let agexact_compatibility = mode == FitMode::AgexactCompatibility;
+        let factor_arithmetic = ProductAccumulator::new(self.counting_roundoff_compatibility);
         let nvar = self.beta.len();
         let mut newbeta = vec![0.0; nvar];
         let mut a = vec![0.0; nvar];
@@ -1702,11 +1703,14 @@ impl CoxFit {
             return Ok(());
         }
         a.copy_from_slice(&self.u);
-        self.flag = Self::cholesky(&mut self.imat, self.toler);
-        Self::chsolve(&self.imat, &mut a);
-        self.sctest = a.iter().zip(&self.u).map(|(ai, ui)| ai * ui).sum();
+        self.flag = Self::cholesky(&mut self.imat, self.toler, factor_arithmetic);
+        Self::chsolve(&self.imat, &mut a, factor_arithmetic);
+        self.sctest = a
+            .iter()
+            .zip(&self.u)
+            .fold(0.0, |sum, (&ai, &ui)| factor_arithmetic.add(sum, ai, ui));
         if self.max_iter == 0 || !self.loglik[0].is_finite() {
-            Self::chinv(&mut self.imat);
+            Self::chinv(&mut self.imat, factor_arithmetic);
             self.rescale_params();
             if agexact_compatibility && self.max_iter == 0 {
                 self.flag = 0;
@@ -1729,7 +1733,7 @@ impl CoxFit {
                     f64::NAN
                 }
             };
-            self.flag = Self::cholesky(&mut self.imat, self.toler);
+            self.flag = Self::cholesky(&mut self.imat, self.toler, factor_arithmetic);
             _notfinite = !newlk.is_finite();
             if !_notfinite {
                 for i in 0..nvar {
@@ -1751,7 +1755,7 @@ impl CoxFit {
             {
                 self.loglik[1] = newlk;
                 self.beta.copy_from_slice(&newbeta);
-                Self::chinv(&mut self.imat);
+                Self::chinv(&mut self.imat, factor_arithmetic);
                 self.rescale_params();
                 if !agexact_compatibility && halving > 0 {
                     self.flag = -2;
@@ -1776,7 +1780,7 @@ impl CoxFit {
                 self.loglik[1] = newlk;
                 self.beta.copy_from_slice(&newbeta);
                 a.copy_from_slice(&self.u);
-                Self::chsolve(&self.imat, &mut a);
+                Self::chsolve(&self.imat, &mut a, factor_arithmetic);
                 for (newbeta_elem, (beta_elem, a_elem)) in newbeta
                     .iter_mut()
                     .zip(self.beta.iter().zip(a.iter()))
@@ -1789,7 +1793,7 @@ impl CoxFit {
         if agexact_compatibility {
             self.loglik[1] = newlk;
             self.beta.copy_from_slice(&newbeta);
-            Self::chinv(&mut self.imat);
+            Self::chinv(&mut self.imat, factor_arithmetic);
             self.rescale_params();
             self.flag = CONVERGENCE_FLAG;
             return Ok(());
@@ -1798,8 +1802,8 @@ impl CoxFit {
         self.recenter_penalty(&mut beta_final);
         self.beta.copy_from_slice(&beta_final);
         self.loglik[1] = self.iterate_with_mode(&beta_final, mode)?;
-        self.flag = Self::cholesky(&mut self.imat, self.toler);
-        Self::chinv(&mut self.imat);
+        self.flag = Self::cholesky(&mut self.imat, self.toler, factor_arithmetic);
+        Self::chinv(&mut self.imat, factor_arithmetic);
         self.rescale_params();
         self.flag = CONVERGENCE_FLAG;
         Ok(())
@@ -1835,7 +1839,7 @@ impl CoxFit {
             }
         }
     }
-    fn cholesky(mat: &mut Array2<f64>, toler: f64) -> i32 {
+    fn cholesky(mat: &mut Array2<f64>, toler: f64, arithmetic: ProductAccumulator) -> i32 {
         let n = mat.nrows();
         let mut eps = 0.0_f64;
         for i in 0..n {
@@ -1864,19 +1868,19 @@ impl CoxFit {
             for j in (i + 1)..n {
                 let temp = mat[(j, i)] / pivot;
                 mat[(j, i)] = temp;
-                mat[(j, j)] -= temp * temp * pivot;
+                mat[(j, j)] = arithmetic.subtract(mat[(j, j)], temp * temp, pivot);
                 for k in (j + 1)..n {
-                    mat[(k, j)] -= temp * mat[(k, i)];
+                    mat[(k, j)] = arithmetic.subtract(mat[(k, j)], temp, mat[(k, i)]);
                 }
             }
         }
         rank * nonnegative
     }
-    fn chsolve(chol: &Array2<f64>, a: &mut [f64]) {
+    fn chsolve(chol: &Array2<f64>, a: &mut [f64], arithmetic: ProductAccumulator) {
         for i in 0..a.len() {
             let mut temp = a[i];
             for j in 0..i {
-                temp -= a[j] * chol[(i, j)];
+                temp = arithmetic.subtract(temp, a[j], chol[(i, j)]);
             }
             a[i] = temp;
         }
@@ -1886,13 +1890,13 @@ impl CoxFit {
             } else {
                 let mut temp = a[i] / chol[(i, i)];
                 for j in (i + 1)..a.len() {
-                    temp -= a[j] * chol[(j, i)];
+                    temp = arithmetic.subtract(temp, a[j], chol[(j, i)]);
                 }
                 a[i] = temp;
             }
         }
     }
-    fn chinv(mat: &mut Array2<f64>) {
+    fn chinv(mat: &mut Array2<f64>, arithmetic: ProductAccumulator) {
         let n = mat.nrows();
         for i in 0..n {
             if mat[(i, i)] > 0.0 {
@@ -1900,7 +1904,7 @@ impl CoxFit {
                 for j in (i + 1)..n {
                     mat[(j, i)] = -mat[(j, i)];
                     for k in 0..i {
-                        mat[(j, k)] += mat[(j, i)] * mat[(i, k)];
+                        mat[(j, k)] = arithmetic.add(mat[(j, k)], mat[(j, i)], mat[(i, k)]);
                     }
                 }
             }
@@ -1919,7 +1923,7 @@ impl CoxFit {
                     let temp = mat[(j, i)] * mat[(j, j)];
                     mat[(i, j)] = temp;
                     for k in i..j {
-                        mat[(i, k)] += temp * mat[(j, k)];
+                        mat[(i, k)] = arithmetic.add(mat[(i, k)], temp, mat[(j, k)]);
                     }
                 }
             }
@@ -2267,8 +2271,9 @@ mod tests {
     fn information_factorization_inverts_spd_matrix() {
         let mut information = Array2::from_shape_vec((2, 2), vec![4.0, 2.0, 0.0, 3.0]).unwrap();
 
-        let rank = CoxFit::cholesky(&mut information, 1e-9);
-        CoxFit::chinv(&mut information);
+        let arithmetic = ProductAccumulator::new(false);
+        let rank = CoxFit::cholesky(&mut information, 1e-9, arithmetic);
+        CoxFit::chinv(&mut information, arithmetic);
 
         assert_eq!(rank, 2);
         let expected = [[0.375, -0.25], [-0.25, 0.5]];
@@ -2282,11 +2287,12 @@ mod tests {
     #[test]
     fn singular_information_solve_and_inverse_zero_the_alias() {
         let mut information = Array2::from_shape_vec((2, 2), vec![2.0, 2.0, 0.0, 2.0]).unwrap();
-        let rank = CoxFit::cholesky(&mut information, 1e-9);
+        let arithmetic = ProductAccumulator::new(false);
+        let rank = CoxFit::cholesky(&mut information, 1e-9, arithmetic);
         let mut score = vec![2.0, 2.0];
 
-        CoxFit::chsolve(&information, &mut score);
-        CoxFit::chinv(&mut information);
+        CoxFit::chsolve(&information, &mut score, arithmetic);
+        CoxFit::chinv(&mut information, arithmetic);
 
         assert_eq!(rank, 1);
         assert_eq!(score, vec![1.0, 0.0]);
@@ -2301,11 +2307,12 @@ mod tests {
         let mut information =
             Array2::from_shape_vec((3, 3), vec![2.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0])
                 .unwrap();
-        let rank = CoxFit::cholesky(&mut information, 1e-9);
+        let arithmetic = ProductAccumulator::new(false);
+        let rank = CoxFit::cholesky(&mut information, 1e-9, arithmetic);
         let mut score = vec![2.0, 2.0, 6.0];
 
-        CoxFit::chsolve(&information, &mut score);
-        CoxFit::chinv(&mut information);
+        CoxFit::chsolve(&information, &mut score, arithmetic);
+        CoxFit::chinv(&mut information, arithmetic);
 
         assert_eq!(rank, 2);
         assert_eq!(score, vec![1.0, 0.0, 2.0]);
@@ -2322,7 +2329,7 @@ mod tests {
     fn information_factorization_reports_indefinite_rank() {
         let mut information = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 0.0, 1.0]).unwrap();
 
-        let rank = CoxFit::cholesky(&mut information, 1e-9);
+        let rank = CoxFit::cholesky(&mut information, 1e-9, ProductAccumulator::new(false));
 
         assert_eq!(rank, -1);
         assert_eq!(information[(1, 1)], 0.0);
@@ -2337,8 +2344,15 @@ mod tests {
         let mut below_threshold =
             Array2::from_shape_vec((2, 2), vec![2.0, 0.0, 0.0, threshold / 2.0]).unwrap();
 
-        assert_eq!(CoxFit::cholesky(&mut at_threshold, tolerance), 2);
-        assert_eq!(CoxFit::cholesky(&mut below_threshold, tolerance), 1);
+        let arithmetic = ProductAccumulator::new(false);
+        assert_eq!(
+            CoxFit::cholesky(&mut at_threshold, tolerance, arithmetic),
+            2
+        );
+        assert_eq!(
+            CoxFit::cholesky(&mut below_threshold, tolerance, arithmetic),
+            1
+        );
     }
 
     #[test]

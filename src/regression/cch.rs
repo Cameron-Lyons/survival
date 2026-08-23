@@ -348,6 +348,12 @@ fn centered_rows(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
     for mean in &mut means {
         *mean /= rows.len() as f64;
     }
+    let count = rows.len() as f64;
+    for (column, mean) in means.iter_mut().enumerate() {
+        if mean.is_finite() {
+            *mean += rows.iter().map(|row| row[column] - *mean).sum::<f64>() / count;
+        }
+    }
     rows.iter()
         .map(|row| {
             row.iter()
@@ -793,15 +799,28 @@ fn lin_ying_fit(
             }
         })
         .collect::<Vec<_>>();
-    let fit = fit_cox(
+    let offset_mean = two_pass_mean(&offsets);
+    let centered_offsets = offsets
+        .iter()
+        .map(|&offset| offset - offset_mean)
+        .collect::<Vec<_>>();
+    let mut fit = fit_cox(
         stop.to_vec(),
         status.to_vec(),
         covariates.to_vec(),
         start.to_vec(),
-        offsets.clone(),
+        centered_offsets.clone(),
         None,
         20,
     )?;
+    for (linear_predictor, risk_score) in fit
+        .linear_predictors
+        .iter_mut()
+        .zip(fit.risk_scores.iter_mut())
+    {
+        *linear_predictor += offset_mean;
+        *risk_score = linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
+    }
     let dfbeta = fit.dfbeta()?;
     let noncase_dfbeta = dfbeta
         .iter()
@@ -831,7 +850,7 @@ fn lin_ying_fit(
         phase2_variance,
         naive_variance,
         variance,
-        offsets,
+        offsets: centered_offsets,
         robust,
     })
 }
@@ -2021,6 +2040,106 @@ mod tests {
         );
         assert!((result.score_test - 0.040_572_557_274_083_286).abs() < 1e-11);
         assert_eq!(result.iterations, 3);
+    }
+
+    #[test]
+    fn native_lin_ying_matches_counting_separation_offset_roundoff() {
+        let stop = vec![
+            2.0, 12.0, 5.0, 17.0, 6.0, 20.0, 2.0, 11.0, 16.0, 2.0, 9.0, 19.0, 2.0, 1.0, 8.0, 9.0,
+            8.0, 12.0, 12.0,
+        ];
+        let status = vec![0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0];
+        let start = vec![
+            0.0, 9.0, 3.0, 15.0, 2.0, 15.0, 0.0, 9.0, 10.0, 0.0, 8.0, 16.0, 0.0, 0.0, 3.0, 3.0,
+            2.0, 10.0, 7.0,
+        ];
+        let groups = [
+            'a', 'd', 'c', 'b', 'd', 'd', 'c', 'a', 'c', 'b', 'd', 'c', 'c', 'd', 'a', 'c', 'b',
+            'c', 'd',
+        ];
+        let covariates = groups
+            .iter()
+            .map(|&group| {
+                vec![
+                    f64::from(group == 'b'),
+                    f64::from(group == 'c'),
+                    f64::from(group == 'd'),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let subcohort = vec![1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1];
+        let result = cch_fit(
+            stop,
+            status.clone(),
+            covariates,
+            subcohort,
+            (1..=19).collect(),
+            57,
+            Some(start),
+            "LinYing",
+            false,
+        )
+        .expect("counting-process LinYing fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[
+                20.075_131_536_073_844,
+                21.294_838_186_021_916,
+                19.013_460_000_113_46,
+            ],
+        );
+        let expected_phase_two = [
+            [
+                0.687_605_643_207_16,
+                0.524_396_086_304_449_6,
+                0.572_993_353_564_584_7,
+            ],
+            [
+                0.524_396_086_304_449_6,
+                0.539_343_094_483_366_4,
+                0.593_332_779_841_546_2,
+            ],
+            [
+                0.572_993_353_564_584_7,
+                0.593_332_779_841_546_2,
+                0.891_348_994_392_904_8,
+            ],
+        ];
+        assert_matrix_close(&result.phase2_variance, &expected_phase_two.map(Vec::from));
+        let expected_variance = [
+            [
+                384_686_814.740_071,
+                384_686_813.275_339,
+                384_686_813.216_068,
+            ],
+            [384_686_813.275_339, 384_686_813.566_864, 384_686_813.324_93],
+            [384_686_813.216_068, 384_686_813.324_93, 384_686_814.793_596],
+        ];
+        for (actual_row, expected_row) in result.information_matrix.iter().zip(expected_variance) {
+            for (&actual, expected) in actual_row.iter().zip(expected_row) {
+                assert!(
+                    (actual / expected - 1.0).abs() < 1e-11,
+                    "expected {expected:.17e}, got {actual:.17e}"
+                );
+            }
+        }
+        assert_close(
+            &result.log_likelihood,
+            &[-13.753_938_417_949_772, -10.103_073_312_489_858],
+        );
+        assert!((result.score_test - 7.597_267_021_058_145).abs() < 1e-11);
+        assert_eq!(result.iterations, 19);
+        let expected_offsets = status.iter().map(|&event| {
+            if event == 1 {
+                -0.901_336_645_667_460_5
+            } else {
+                0.525_779_709_972_685_3
+            }
+        });
+        for (&actual, expected) in result.offsets.iter().zip(expected_offsets) {
+            assert!((actual - expected).abs() < 1e-15);
+        }
     }
 
     #[test]

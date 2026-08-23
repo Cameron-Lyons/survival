@@ -26221,6 +26221,73 @@ def test_cch_formula_matches_scalar_counting_offset_mean_roundoff():
     assert fit.iterations == 3
 
 
+def test_cch_formula_matches_lin_ying_counting_separation_roundoff():
+    data = {
+        "start": [0, 9, 3, 15, 2, 15, 0, 9, 10, 0, 8, 16, 0, 0, 3, 3, 2, 10, 7],
+        "stop": [2, 12, 5, 17, 6, 20, 2, 11, 16, 2, 9, 19, 2, 1, 8, 9, 8, 12, 12],
+        "status": [0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0],
+        "group": [
+            "a",
+            "d",
+            "c",
+            "b",
+            "d",
+            "d",
+            "c",
+            "a",
+            "c",
+            "b",
+            "d",
+            "c",
+            "c",
+            "d",
+            "a",
+            "c",
+            "b",
+            "c",
+            "d",
+        ],
+        "id": list(range(1, 20)),
+        "subcohort": [1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1],
+    }
+    fit = survival.cch(
+        'Surv(start, stop, status) ~ factor(group, levels=c("a","b","c","d"))',
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=57,
+        method="LinYing",
+        robust=False,
+    )
+
+    assert survival.coef(fit) == pytest.approx(
+        [20.075131536073844, 21.294838186021916, 19.01346000011346], abs=1e-11
+    )
+    expected_phase_two = [
+        [0.68760564320716, 0.5243960863044496, 0.5729933535645847],
+        [0.5243960863044496, 0.5393430944833664, 0.5933327798415462],
+        [0.5729933535645847, 0.5933327798415462, 0.8913489943929048],
+    ]
+    expected_variance = [
+        [384686814.74007094, 384686813.27533937, 384686813.2160679],
+        [384686813.27533937, 384686813.5668643, 384686813.32492995],
+        [384686813.2160679, 384686813.32492995, 384686814.79359627],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    for actual, expected in zip(fit.var, expected_variance, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-13.753938417949772, -10.103073312489858], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(7.597267021058145, abs=1e-11)
+    assert fit.iterations == 19
+    expected_offsets = [
+        -0.9013366456674605 if event else 0.5257797099726853 for event in data["status"]
+    ]
+    assert fit.offsets == pytest.approx(expected_offsets, abs=1e-15)
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],
