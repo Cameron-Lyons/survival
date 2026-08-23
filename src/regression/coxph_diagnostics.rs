@@ -204,6 +204,17 @@ fn diagnostic_order(strata: &[i32], event_times: &[f64]) -> Vec<usize> {
     order
 }
 
+#[inline]
+fn diagnostic_exp(value: f64, roundoff_compatibility: bool) -> f64 {
+    // The reference runtime evaluates the first-order expansion directly in
+    // this interval, avoiding platform-libm roundoff for near-zero predictors.
+    if roundoff_compatibility && value.abs() <= f64::EPSILON.sqrt() {
+        1.0 + value
+    } else {
+        value.exp()
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, status, strata=None))]
 pub fn cox_event_indices(
@@ -1226,7 +1237,12 @@ impl CoxPHFit {
         }
 
         let risk: Vec<f64> = (0..n)
-            .map(|idx| self.linear_predictors[idx].exp() * self.weights[idx])
+            .map(|idx| {
+                diagnostic_exp(
+                    self.linear_predictors[idx],
+                    self.counting_roundoff_compatibility,
+                ) * self.weights[idx]
+            })
             .collect();
         Ok(self.score_residuals_counting_process_sweep(nvar, method, &risk, &order, entry_times))
     }
@@ -1425,7 +1441,7 @@ impl CoxPHFit {
         let scores: Vec<f64> = self
             .linear_predictors
             .iter()
-            .map(|&value| value.exp())
+            .map(|&value| diagnostic_exp(value, contracted))
             .collect();
         let mut score_order = order.to_vec();
         score_order.sort_by(|&lhs, &rhs| {

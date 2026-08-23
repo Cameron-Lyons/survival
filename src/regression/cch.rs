@@ -3495,4 +3495,69 @@ mod tests {
         assert!(result.log_likelihood[1].is_nan());
         assert_eq!(result.iterations, 20);
     }
+
+    #[test]
+    fn native_prentice_factor_phase_two_variance_matches_reference_roundoff() {
+        initialize_python();
+        let stop = vec![
+            19.0, 4.0, 17.0, 7.0, 1.0, 13.0, 1.0, 17.0, 18.0, 2.0, 7.0, 14.0, 19.0, 11.0, 1.0, 3.0,
+            15.0, 8.0, 2.0, 14.0, 19.0, 5.0, 16.0, 14.0, 5.0, 15.0, 1.0, 12.0, 17.0, 11.0, 7.0,
+        ];
+        let status = vec![
+            1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1,
+            1, 1,
+        ];
+        let start = vec![
+            13.0, 3.0, 12.0, 6.0, 0.0, 7.0, 0.0, 15.0, 14.0, 0.0, 2.0, 8.0, 16.0, 8.0, 0.0, 1.0,
+            9.0, 6.0, 1.0, 8.0, 17.0, 1.0, 15.0, 8.0, 0.0, 10.0, 0.0, 8.0, 13.0, 10.0, 2.0,
+        ];
+        let groups = [
+            'a', 'a', 'b', 'c', 'c', 'a', 'c', 'a', 'c', 'a', 'b', 'b', 'c', 'b', 'c', 'a', 'c',
+            'a', 'c', 'b', 'c', 'c', 'c', 'b', 'b', 'c', 'b', 'c', 'a', 'b', 'c',
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| vec![f64::from(group == 'b'), f64::from(group == 'c')])
+            .collect();
+        let subcohort = vec![
+            0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0,
+            1, 1,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=31).collect(),
+            93,
+            Some(start),
+            "Prentice",
+            false,
+        )
+        .expect("factor Prentice fit should preserve phase-two variance roundoff");
+
+        assert_close(
+            &result.coefficients[0],
+            &[-0.398_741_339_231_074_63, -1.252_970_031_317_518],
+        );
+        assert_matrix_close(
+            &result.model_information_matrix,
+            &[
+                vec![1.999_999_375_190_315_3, 0.853_989_620_296_780_4],
+                vec![0.853_989_620_296_780_4, 1_154_617.859_660_592_2],
+            ],
+        );
+        assert_matrix_close(
+            &result.phase2_variance,
+            &[
+                vec![1.145_160_683_544_27, 0.363_631_758_239_673_2],
+                vec![0.363_631_758_239_673_2, 0.367_709_482_151_890_2],
+            ],
+        );
+        assert_close(
+            &result.log_likelihood,
+            &[-2_117.995_420_191_261, -2_113.640_929_439_351_6],
+        );
+        assert_eq!(result.iterations, 15);
+    }
 }

@@ -13851,6 +13851,48 @@ test_that("cch matches nonconverged SelfPrentice factor aliases", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches Prentice near-singular factor phase-two variance", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(13, 3, 12, 6, 0, 7, 0, 15, 14, 0, 2, 8, 16, 8, 0, 1, 9, 6, 1, 8, 17, 1, 15, 8, 0, 10, 0, 8, 13, 10, 2),
+    stop = c(19, 4, 17, 7, 1, 13, 1, 17, 18, 2, 7, 14, 19, 11, 1, 3, 15, 8, 2, 14, 19, 5, 16, 14, 5, 15, 1, 12, 17, 11, 7),
+    status = c(1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1),
+    group = factor(strsplit("aabccacacabbcbcacacbcccbbcbcabc", "")[[1L]]),
+    id = seq_len(31),
+    subcohort = c(0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 93,
+    method = "Prentice",
+    robust = FALSE
+  )
+  actual <- expect_warning(
+    do.call(cch, args),
+    "Loglik converged before variable  2"
+  )
+  reference <- expect_warning(
+    do.call(survival::cch, args),
+    "Loglik converged before variable  2"
+  )
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

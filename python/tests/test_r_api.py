@@ -27281,6 +27281,64 @@ def test_cch_formula_marks_nonconverged_self_prentice_factor_aliases():
     assert fit.fit.convergence_flag == 1000
 
 
+def test_cch_formula_matches_prentice_near_singular_factor_phase_two_variance():
+    data = {
+        "start": [
+            13, 3, 12, 6, 0, 7, 0, 15, 14, 0, 2,
+            8, 16, 8, 0, 1, 9, 6, 1, 8, 17, 1,
+            15, 8, 0, 10, 0, 8, 13, 10, 2,
+        ],
+        "stop": [
+            19, 4, 17, 7, 1, 13, 1, 17, 18, 2, 7,
+            14, 19, 11, 1, 3, 15, 8, 2, 14, 19, 5,
+            16, 14, 5, 15, 1, 12, 17, 11, 7,
+        ],
+        "status": [
+            1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0,
+            0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0,
+            1, 1, 1, 0, 1, 0, 1, 1, 1,
+        ],
+        "group": list("aabccacacabbcbcacacbcccbbcbcabc"),
+        "id": list(range(1, 32)),
+        "subcohort": [
+            0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1,
+            1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1,
+            1, 1, 0, 1, 0, 1, 0, 1, 1,
+        ],
+    }
+    with pytest.warns(RuntimeWarning, match="Loglik converged before variable  2"):
+        fit = survival.cch(
+            "Surv(start, stop, status) ~ group",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=93,
+            method="Prentice",
+            robust=False,
+        )
+
+    assert survival.coef(fit) == pytest.approx(
+        [-0.39874133923107463, -1.252970031317518], abs=1e-14
+    )
+    expected_phase_two = [
+        [1.14516068354427, 0.3636317582396732],
+        [0.3636317582396732, 0.3677094821518902],
+    ]
+    expected_variance = [
+        [3.1451600587345854, 1.2176213785364536],
+        [1.2176213785364536, 1154618.2273700743],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-11)
+    for actual, expected in zip(fit.var, expected_variance, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-9)
+    assert fit.log_likelihood == pytest.approx(
+        [-2117.995420191261, -2113.6409294393516], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(5.250115222330528, abs=1e-11)
+    assert fit.iterations == 15
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],
