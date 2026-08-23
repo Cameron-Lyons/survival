@@ -8893,6 +8893,108 @@ xtfrm.survival_py_surv <- function(x) {
   curve_names
 }
 
+.survfit_cox_shared_column <- function(x, name) {
+  values <- .as_numeric_matrix(.result_field(x, name))
+  if (nrow(values) == 0L) numeric() else values[1L, ]
+}
+
+.survfit_cox_data_matrix <- function(x, name, time_count, curve_count) {
+  if (curve_count == 0L) {
+    return(matrix(numeric(), nrow = time_count, ncol = 0L))
+  }
+  values <- .as_numeric_matrix(.result_field(x, name))
+  if (!identical(dim(values), c(curve_count, time_count))) {
+    stop("Cox survfit curve dimensions are inconsistent", call. = FALSE)
+  }
+  t(values)
+}
+
+.as_survival_py_cox_survfit_list <- function(x) {
+  curve_count <- length(.result_field(x, "estimate"))
+  dimensions <- dim(x)
+  data_dimension <- "data" %in% names(dimensions)
+  strata_dimension <- "strata" %in% names(dimensions)
+  raw_strata <- .as_numeric_vector(.result_field(x, "strata"))
+  stratified <- length(raw_strata) > 0L ||
+    isTRUE(attr(x, ".survival_py_empty_strata", exact = TRUE))
+  curve_names <- .survfit_cox_curve_names(x, curve_count)
+  n_values <- as.integer(.as_numeric_vector(.result_field(x, "n")))
+  has_counts <- length(n_values) > 0L ||
+    isTRUE(attr(x, ".survival_py_empty_strata", exact = TRUE))
+  has_standard_errors <- length(.result_field(x, "std_chaz")) > 0L ||
+    isTRUE(attr(x, ".survival_py_empty_confint", exact = TRUE))
+  has_confidence <- length(.result_field(x, "conf_lower")) > 0L ||
+    isTRUE(attr(x, ".survival_py_empty_confint", exact = TRUE))
+
+  if (data_dimension) {
+    time <- .as_numeric_vector(.result_field(x, "time"))
+    time_count <- length(time)
+    fields <- list()
+    if (has_counts) {
+      fields$n <- n_values[[1L]]
+    }
+    fields$time <- time
+    if (has_counts) {
+      fields$n.risk <- .survfit_cox_shared_column(x, "n_risk")
+      fields$n.event <- .survfit_cox_shared_column(x, "n_event")
+      fields$n.censor <- .survfit_cox_shared_column(x, "n_censor")
+    }
+    fields$surv <- .survfit_cox_data_matrix(x, "estimate", time_count, curve_count)
+    if (length(curve_names) == curve_count) {
+      colnames(fields$surv) <- curve_names
+    }
+    fields$cumhaz <- .survfit_cox_data_matrix(x, "cumhaz", time_count, curve_count)
+    if (has_standard_errors) {
+      fields$std.err <- .survfit_cox_data_matrix(x, "std_chaz", time_count, curve_count)
+      fields$logse <- TRUE
+      fields$std.chaz <- fields$std.err
+    }
+    if (has_confidence) {
+      fields$lower <- .survfit_cox_data_matrix(x, "conf_lower", time_count, curve_count)
+      fields$upper <- .survfit_cox_data_matrix(x, "conf_upper", time_count, curve_count)
+    }
+  } else {
+    frame <- as.data.frame.survival_py_survfit(x, optional = TRUE)
+    fields <- list()
+    if (has_counts) {
+      fields$n <- if (length(n_values) == 1L) n_values[[1L]] else n_values
+    }
+    fields$time <- if (nrow(frame) == 0L) numeric() else frame$time
+    if (has_counts) {
+      fields$n.risk <- if (nrow(frame) == 0L) numeric() else frame$n.risk
+      fields$n.event <- if (nrow(frame) == 0L) numeric() else frame$n.event
+      fields$n.censor <- if (nrow(frame) == 0L) numeric() else frame$n.censor
+    }
+    if (stratified && strata_dimension) {
+      lengths <- if (curve_count == 0L) {
+        integer()
+      } else {
+        tabulate(frame$curve, nbins = curve_count)
+      }
+      fields$strata <- stats::setNames(as.integer(lengths), curve_names)
+    }
+    fields$surv <- if (nrow(frame) == 0L) numeric() else frame$surv
+    fields$cumhaz <- if (nrow(frame) == 0L) numeric() else frame$cumhaz
+    if (has_standard_errors) {
+      fields$std.err <- if (nrow(frame) == 0L) numeric() else frame$std.err
+      fields$logse <- TRUE
+      fields$std.chaz <- if (nrow(frame) == 0L) numeric() else frame$std.chaz
+    }
+    if (has_confidence) {
+      fields$lower <- if (nrow(frame) == 0L) numeric() else frame$lower
+      fields$upper <- if (nrow(frame) == 0L) numeric() else frame$upper
+    }
+  }
+
+  conf_type <- .as_nullable_character_vector(.result_field(x, "conf_type"))
+  conf_level <- .as_numeric_vector(.result_field(x, "conf_level"))
+  if (has_standard_errors && length(conf_type) == 1L && !is.na(conf_type)) {
+    fields$conf.type <- conf_type[[1L]]
+    fields$conf.int <- conf_level[[1L]]
+  }
+  fields
+}
+
 .survfit_cox_quantile <- function(x, probs, conf.int, scale, tolerance, pname) {
   survival_values <- .result_field(x, "estimate")
   curve_count <- length(survival_values)
@@ -14765,30 +14867,10 @@ summary.survival_py_anova <- function(object, ...) {
   if (.is_grouped_survival_py_survfit(x)) {
     return(unclass(x))
   }
-  fields <- as.list(as.data.frame.survival_py_survfit(x, optional = TRUE))
-  if (
-    inherits(x, "survival.r_api.CoxSurvfitResult") &&
-      length(.result_field(x, "estimate")) == 0L
-  ) {
-    empty_fields <- list(
-      curve = integer(),
-      time = numeric(),
-      surv = numeric(),
-      cumhaz = numeric(),
-      linear.predictor = numeric()
-    )
-    fields <- c(empty_fields, fields[setdiff(names(fields), names(empty_fields))])
-    if (isTRUE(attr(x, ".survival_py_empty_strata", exact = TRUE))) {
-      fields$strata <- stats::setNames(integer(), character())
-    }
-    if (isTRUE(attr(x, ".survival_py_empty_confint", exact = TRUE))) {
-      fields$std.err <- numeric()
-      fields$std.chaz <- numeric()
-      fields$lower <- numeric()
-      fields$upper <- numeric()
-    }
+  if (inherits(x, "survival.r_api.CoxSurvfitResult")) {
+    return(.as_survival_py_cox_survfit_list(x))
   }
-  fields
+  as.list(as.data.frame.survival_py_survfit(x, optional = TRUE))
 }
 
 .as_survival_py_survfit_curve <- function(x) {

@@ -13772,6 +13772,124 @@ test_that("stratified Cox survfit subsetting matches survival", {
   expect_error(reference["missing"], "strata missing not matched")
 })
 
+test_that("Cox survfit counts and structural metadata match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = c(1, 2, 4, 5, 1, 3, 4, 6),
+    status = c(1, 1, 0, 1, 0, 1, 1, 0),
+    group = factor(rep(c("A", "B"), each = 4L)),
+    x = c(0.2, 0.4, 0.1, 0.3, 1, 1.2, 0.8, 1.1),
+    weight = c(1, 2, 1, 1, 1, 1.5, 2, 1)
+  )
+  bridged_unstratified <- coxph(
+    Surv(time, status) ~ x,
+    data = data,
+    weights = weight,
+    max_iter = 0
+  )
+  reference_unstratified <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    weights = weight,
+    init = 0,
+    iter.max = 0
+  )
+  bridged_stratified <- coxph(
+    Surv(time, status) ~ x + strata(group),
+    data = data,
+    weights = weight,
+    max_iter = 0
+  )
+  reference_stratified <- survival::coxph(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = data,
+    weights = weight,
+    init = 0,
+    iter.max = 0
+  )
+
+  compare_structure <- function(bridged, reference) {
+    expect_identical(dim(bridged), dim(reference))
+    expect_identical(dim(bridged$surv), dim(reference$surv))
+    expect_identical(dim(bridged$cumhaz), dim(reference$cumhaz))
+    for (field in c("n", "time", "n.risk", "n.event", "n.censor", "strata")) {
+      expect_equal(
+        bridged[[field]],
+        reference[[field]],
+        tolerance = 1e-12,
+        info = paste("Cox survfit structural field", field)
+      )
+    }
+    expect_equal(bridged$surv, reference$surv, tolerance = 1e-12)
+    expect_equal(bridged$cumhaz, reference$cumhaz, tolerance = 1e-12)
+    expect_identical(bridged$logse, reference$logse)
+    expect_identical(bridged$conf.type, reference$conf.type)
+    expect_equal(bridged$conf.int, reference$conf.int)
+  }
+
+  profiles <- data.frame(x = c(0.2, 0.8), row.names = c("low", "high"))
+  bridged_profiles <- survfit(bridged_unstratified, newdata = profiles)
+  reference_profiles <- survival::survfit(reference_unstratified, newdata = profiles)
+  compare_structure(survfit(bridged_unstratified), survival::survfit(reference_unstratified))
+  compare_structure(bridged_profiles, reference_profiles)
+  compare_structure(
+    survfit(bridged_unstratified, censor = FALSE),
+    survival::survfit(reference_unstratified, censor = FALSE)
+  )
+  compare_structure(
+    survfit(bridged_unstratified, start.time = 2.5),
+    survival::survfit(reference_unstratified, start.time = 2.5)
+  )
+
+  stratified_profiles <- data.frame(
+    x = c(0.2, 0.8),
+    group = factor(c("A", "B"), levels = levels(data$group)),
+    row.names = c("a", "b")
+  )
+  bridged_stratified_profiles <- survfit(
+    bridged_stratified,
+    newdata = stratified_profiles
+  )
+  reference_stratified_profiles <- survival::survfit(
+    reference_stratified,
+    newdata = stratified_profiles
+  )
+  compare_structure(survfit(bridged_stratified), survival::survfit(reference_stratified))
+  compare_structure(bridged_stratified_profiles, reference_stratified_profiles)
+  compare_structure(
+    survfit(bridged_stratified, censor = FALSE),
+    survival::survfit(reference_stratified, censor = FALSE)
+  )
+  compare_structure(
+    survfit(bridged_stratified, start.time = 2.5),
+    survival::survfit(reference_stratified, start.time = 2.5)
+  )
+  compare_structure(bridged_profiles[integer()], reference_profiles[integer()])
+  compare_structure(
+    bridged_stratified_profiles[integer()],
+    reference_stratified_profiles[integer()]
+  )
+  compare_structure(
+    bridged_stratified_profiles[1L, drop = FALSE],
+    reference_stratified_profiles[1L, drop = FALSE]
+  )
+
+  bridged_no_se <- survfit(bridged_unstratified, se.fit = FALSE)
+  reference_no_se <- survival::survfit(reference_unstratified, se.fit = FALSE)
+  expect_null(bridged_no_se$logse)
+  expect_null(reference_no_se$logse)
+  expect_null(bridged_no_se$conf.type)
+  expect_null(reference_no_se$conf.type)
+  expect_null(bridged_no_se$conf.int)
+  expect_null(reference_no_se$conf.int)
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

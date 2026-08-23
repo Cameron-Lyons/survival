@@ -16676,6 +16676,10 @@ def test_subset_survfit_cox_selects_data_curves_and_metadata():
     assert empty.cumhaz == []
     assert empty.linear_predictors == []
     assert empty.conf_lower == []
+    assert selected.n == curves.n
+    assert selected.n_risk == curves.n_risk
+    assert empty.n == curves.n
+    assert empty.n_risk == curves.n_risk
     with pytest.raises(IndexError, match="out of bounds"):
         survival.r_api._subset_survfit_cox(curves, [3])
     with pytest.raises(TypeError, match="fitted Cox survival curve"):
@@ -22065,10 +22069,70 @@ def test_survfit_coxph_stratified_frames_keep_curve_specific_time_grids():
 
     selected = survival.r_api._subset_survfit_cox(conditioned, [3, 0, 3])
     assert selected.curve_time_indices == [[1, 2], [0, 2], [1, 2]]
+    assert selected.n == [conditioned.n[3], conditioned.n[0], conditioned.n[3]]
+    assert selected.n_risk == [
+        conditioned.n_risk[3],
+        conditioned.n_risk[0],
+        conditioned.n_risk[3],
+    ]
     assert selected.start_time is None
     assert survival.as_data_frame(selected)["time"] == pytest.approx(
         [3.0, 4.0, 2.0, 4.0, 3.0, 4.0]
     )
+
+
+def test_survfit_coxph_counts_follow_weights_strata_and_conditioning():
+    data = {
+        "time": [1.0, 2.0, 4.0, 5.0, 1.0, 3.0, 4.0, 6.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "group": ["A", "A", "A", "A", "B", "B", "B", "B"],
+        "x1": [0.2, 0.4, 0.1, 0.3, 1.0, 1.2, 0.8, 1.1],
+        "weight": [1.0, 2.0, 1.0, 1.0, 1.0, 1.5, 2.0, 1.0],
+    }
+    unstratified = survival.coxph(
+        "Surv(time, status) ~ x1",
+        data=data,
+        weights="weight",
+        initial_beta=[0.0],
+        max_iter=0,
+    )
+    stratified = survival.coxph(
+        "Surv(time, status) ~ x1 + strata(group)",
+        data=data,
+        weights="weight",
+        initial_beta=[0.0],
+        max_iter=0,
+    )
+
+    shared = survival.survfit(unstratified, newdata={"x1": [0.2, 0.8]})
+    assert shared.n == [8]
+    assert len(shared.n_risk) == 1
+    assert shared.n_risk[0] == pytest.approx([10.5, 8.5, 6.5, 5.0, 2.0, 1.0])
+    assert shared.n_event[0] == pytest.approx([1.0, 2.0, 1.5, 2.0, 1.0, 0.0])
+    assert shared.n_censor[0] == pytest.approx([1.0, 0.0, 0.0, 1.0, 0.0, 1.0])
+    assert shared.conf_type == "log"
+    assert shared.conf_level == pytest.approx(0.95)
+
+    by_stratum = survival.survfit(stratified)
+    by_stratum_frame = survival.as_data_frame(by_stratum)
+    assert by_stratum.n == [4, 4]
+    assert by_stratum_frame["n.risk"] == pytest.approx(
+        [5.0, 4.0, 2.0, 1.0, 5.5, 4.5, 3.0, 1.0]
+    )
+    assert by_stratum_frame["n.event"] == pytest.approx(
+        [1.0, 2.0, 0.0, 1.0, 0.0, 1.5, 2.0, 0.0]
+    )
+    assert by_stratum_frame["n.censor"] == pytest.approx(
+        [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+    )
+
+    conditioned = survival.survfit(stratified, start_time=2.5)
+    conditioned_frame = survival.as_data_frame(conditioned)
+    assert conditioned.n == [2, 3]
+    assert conditioned_frame["time"] == pytest.approx([4.0, 5.0, 3.0, 4.0, 6.0])
+    assert conditioned_frame["n.risk"] == pytest.approx([2.0, 1.0, 4.5, 3.0, 1.0])
+    assert conditioned_frame["n.event"] == pytest.approx([0.0, 1.0, 1.5, 2.0, 0.0])
+    assert conditioned_frame["n.censor"] == pytest.approx([1.0, 0.0, 0.0, 0.0, 1.0])
 
 
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():

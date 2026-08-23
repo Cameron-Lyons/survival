@@ -1476,6 +1476,12 @@ class CoxSurvfitResult:
     conf_upper: list[list[float]] = field(default_factory=list)
     model: dict[str, Any] | None = None
     curve_time_indices: list[list[int]] | None = None
+    n: list[int] = field(default_factory=list)
+    n_risk: list[list[float]] = field(default_factory=list)
+    n_event: list[list[float]] = field(default_factory=list)
+    n_censor: list[list[float]] = field(default_factory=list)
+    conf_type: str | None = None
+    conf_level: float | None = None
 
     def __iter__(self):
         yield self.time
@@ -17413,6 +17419,20 @@ def _survfit0_cox_result(
             if result.curve_time_indices is None
             else [[0, *(index + 1 for index in indices)] for indices in result.curve_time_indices]
         ),
+        n=result.n,
+        n_risk=[
+            [
+                curve[0]
+                if curve
+                else float(result.n[min(index, len(result.n) - 1)] if result.n else 0.0),
+                *curve,
+            ]
+            for index, curve in enumerate(result.n_risk)
+        ],
+        n_event=_prepend_matrix_time0(result.n_event, 0.0),
+        n_censor=_prepend_matrix_time0(result.n_censor, 0.0),
+        conf_type=result.conf_type,
+        conf_level=result.conf_level,
         model=result.model,
     )
 
@@ -17526,6 +17546,8 @@ def _survfit0_any_result(value: Any, t0: float | None = None) -> Any:
         return _survfit0_multistate_cox_result(value, t0)
     if isinstance(value, SurvfitMultiStateResult):
         return _survfit0_multistate_result(value, t0)
+    if isinstance(value, CoxSurvfitResult):
+        return _survfit0_cox_result(value, t0)
     if isinstance(value, SurvfitResult) or _is_survfit_result_like(value):
         result = _coerce_survfit_result_like(value)
         initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
@@ -17537,8 +17559,6 @@ def _survfit0_any_result(value: Any, t0: float | None = None) -> Any:
                 initial_time,
             )
         )
-    if isinstance(value, CoxSurvfitResult):
-        return _survfit0_cox_result(value, t0)
     if isinstance(value, TurnbullSurvfitResult) or _is_turnbull_result_like(value):
         result = _coerce_turnbull_result_like(value)
         initial_time = _survfit0_default_time(result) if t0 is None else float(t0)
@@ -17661,6 +17681,12 @@ def _cox_survfit_from_aggregates(
         std_chaz=std_chaz,
         conf_lower=conf_lower,
         conf_upper=conf_upper,
+        n=source.n,
+        n_risk=source.n_risk,
+        n_event=source.n_event,
+        n_censor=source.n_censor,
+        conf_type=source.conf_type,
+        conf_level=source.conf_level,
         model=source.model,
     )
 
@@ -17776,6 +17802,12 @@ def aggregate_survfit_result(
             linear_predictors=[],
             centered=result.centered,
             start_time=result.start_time,
+            n=result.n,
+            n_risk=result.n_risk,
+            n_event=result.n_event,
+            n_censor=result.n_censor,
+            conf_type=result.conf_type,
+            conf_level=result.conf_level,
             model=result.model,
         )
 
@@ -17845,7 +17877,7 @@ def _survfit_without_standard_errors(result: Any) -> Any:
             n_enter_count=result.n_enter_count,
             model=result.model,
         )
-    if all(
+    if not isinstance(result, CoxSurvfitResult) and all(
         hasattr(result, name)
         for name in ("time", "n_risk", "n_event", "n_censor", "estimate", "cumhaz")
     ):
@@ -17904,6 +17936,10 @@ def _survfit_without_standard_errors(result: Any) -> Any:
             conf_lower=[],
             conf_upper=[],
             curve_time_indices=result.curve_time_indices,
+            n=result.n,
+            n_risk=result.n_risk,
+            n_event=result.n_event,
+            n_censor=result.n_censor,
             model=result.model,
         )
     if isinstance(result, Mapping):
@@ -17958,7 +17994,7 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
             conf_type=str(getattr(result, "conf_type", "log")),
             model=model_frame,
         )
-    if all(
+    if not isinstance(result, CoxSurvfitResult) and all(
         hasattr(result, name)
         for name in ("time", "n_risk", "n_event", "n_censor", "estimate", "cumhaz")
     ):
@@ -17999,6 +18035,12 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
             conf_lower=result.conf_lower,
             conf_upper=result.conf_upper,
             curve_time_indices=result.curve_time_indices,
+            n=result.n,
+            n_risk=result.n_risk,
+            n_event=result.n_event,
+            n_censor=result.n_censor,
+            conf_type=result.conf_type,
+            conf_level=result.conf_level,
             model=model_frame,
         )
     if isinstance(result, Mapping):
@@ -22528,6 +22570,16 @@ def _subset_survfit_cox(
             raise ValueError(f"Cox survfit {name} fields have inconsistent lengths")
         return [values[index] for index in indices]
 
+    def select_counts(values: list[Any], name: str) -> list[Any]:
+        if not values:
+            return []
+        if result.strata is None:
+            if len(values) != 1:
+                raise ValueError(f"Cox survfit {name} fields have inconsistent lengths")
+            return values
+        selected = select_optional(values, name)
+        return [] if selected is None else selected
+
     return replace(
         result,
         surv=select_rows(result.surv, "survival"),
@@ -22541,6 +22593,10 @@ def _subset_survfit_cox(
         conf_lower=select_rows(result.conf_lower, "lower-confidence"),
         conf_upper=select_rows(result.conf_upper, "upper-confidence"),
         curve_time_indices=select_optional(result.curve_time_indices, "time-index"),
+        n=select_counts(result.n, "sample-size"),
+        n_risk=select_counts(result.n_risk, "number-at-risk"),
+        n_event=select_counts(result.n_event, "number-of-events"),
+        n_censor=select_counts(result.n_censor, "number-censored"),
     )
 
 
@@ -22878,6 +22934,17 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     if result.start_time is not None:
         frame["start.time"] = []
 
+    count_columns = {
+        "n.risk": result.n_risk,
+        "n.event": result.n_event,
+        "n.censor": result.n_censor,
+    }
+    active_counts = {name: values for name, values in count_columns.items() if values}
+    for name, values in active_counts.items():
+        if len(values) not in {1, len(result.surv)}:
+            raise ValueError(f"Cox survfit {name} fields have inconsistent lengths")
+        frame[name] = []
+
     optional_columns = {
         "std.err": result.std_chaz or result.std_err,
         "std.chaz": result.std_chaz,
@@ -22913,6 +22980,11 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
             frame["strata"].extend([strata[curve_idx]] * n_times)
         if result.start_time is not None:
             frame["start.time"].extend([result.start_time] * n_times)
+        for name, values in active_counts.items():
+            count_curve = values[0 if len(values) == 1 else curve_idx]
+            if len(count_curve) != len(result.time):
+                raise ValueError(f"Cox survfit {name} columns must match time length")
+            frame[name].extend(float(count_curve[index]) for index in time_indices)
         for name, values in active_optional.items():
             optional_curve = _cox_survfit_optional_curve_column(
                 values,
@@ -26402,6 +26474,106 @@ def _cox_survfit_curve_time_indices(
     return [list(indices_by_stratum[stratum]) for stratum in result.strata]
 
 
+def _cox_survfit_with_counts(
+    fit: Any,
+    result: CoxSurvfitResult,
+    start_time: float | None,
+) -> CoxSurvfitResult:
+    model = _unwrap_formula_fit(fit)
+    event_times = getattr(model, "event_times", None)
+    raw_status = getattr(model, "status", None)
+    if event_times is None or raw_status is None:
+        return result
+    stop_times = [float(value) for value in event_times]
+    status = [int(value) for value in raw_status]
+    if len(status) != len(stop_times):
+        raise ValueError("fitted Cox response time and status lengths differ")
+    row_strata = _cox_training_strata(model, len(stop_times))
+    weights = [float(value) for value in _model_residual_weights(model, len(stop_times))]
+    raw_entry = getattr(model, "entry_times", None)
+    entry_times = None if raw_entry is None else [float(value) for value in raw_entry]
+    if entry_times is not None and len(entry_times) != len(stop_times):
+        raise ValueError("fitted Cox entry times do not match response length")
+
+    curve_strata: list[int | None] = (
+        [None] if result.strata is None else [int(value) for value in result.strata]
+    )
+    counts_by_stratum: dict[
+        int | None,
+        tuple[int, list[float], list[float], list[float]],
+    ] = {}
+    for curve_stratum in dict.fromkeys(curve_strata):
+        rows = [
+            row_index
+            for row_index, row_stratum in enumerate(row_strata)
+            if curve_stratum is None or row_stratum == curve_stratum
+        ]
+        if start_time is not None:
+            rows = [
+                row_index
+                for row_index in rows
+                if stop_times[row_index] >= start_time - _SURVFIT_TIME_EPSILON
+                and (
+                    entry_times is None
+                    or entry_times[row_index] < start_time - _SURVFIT_TIME_EPSILON
+                )
+            ]
+        ordered_stops = sorted((stop_times[row_index], weights[row_index]) for row_index in rows)
+        ordered_entries = (
+            sorted((entry_times[row_index], weights[row_index]) for row_index in rows)
+            if entry_times is not None
+            else None
+        )
+        total_weight = sum(weights[row_index] for row_index in rows)
+        event_weights: dict[float, float] = {}
+        censor_weights: dict[float, float] = {}
+        for row_index in rows:
+            target = event_weights if status[row_index] != 0 else censor_weights
+            target[stop_times[row_index]] = (
+                target.get(stop_times[row_index], 0.0) + weights[row_index]
+            )
+
+        curve_risk: list[float] = []
+        curve_event: list[float] = []
+        curve_censor: list[float] = []
+        stop_cursor = 0
+        stopped_weight = 0.0
+        entry_cursor = 0
+        entered_weight = 0.0
+        for time in result.time:
+            boundary = float(time) - _SURVFIT_TIME_EPSILON
+            while stop_cursor < len(ordered_stops) and ordered_stops[stop_cursor][0] < boundary:
+                stopped_weight += ordered_stops[stop_cursor][1]
+                stop_cursor += 1
+            if ordered_entries is None:
+                risk_weight = total_weight - stopped_weight
+            else:
+                while (
+                    entry_cursor < len(ordered_entries)
+                    and ordered_entries[entry_cursor][0] < boundary
+                ):
+                    entered_weight += ordered_entries[entry_cursor][1]
+                    entry_cursor += 1
+                risk_weight = entered_weight - stopped_weight
+            curve_risk.append(risk_weight)
+            curve_event.append(event_weights.get(float(time), 0.0))
+            curve_censor.append(censor_weights.get(float(time), 0.0))
+        counts_by_stratum[curve_stratum] = (
+            len(rows),
+            curve_risk,
+            curve_event,
+            curve_censor,
+        )
+
+    return replace(
+        result,
+        n=[counts_by_stratum[stratum][0] for stratum in curve_strata],
+        n_risk=[counts_by_stratum[stratum][1] for stratum in curve_strata],
+        n_event=[counts_by_stratum[stratum][2] for stratum in curve_strata],
+        n_censor=[counts_by_stratum[stratum][3] for stratum in curve_strata],
+    )
+
+
 def _cox_survfit_with_confidence(
     fit: Any,
     result: CoxSurvfitResult,
@@ -26557,13 +26729,15 @@ def _cox_survfit_result(
         curve_rows = _cox_survfit_curve_rows(fit, rows, len(result.surv))
         result = _cox_survfit_with_confidence(fit, result, curve_rows, conf_level, conf_type)
     return replace(
-        result,
+        _cox_survfit_with_counts(fit, result, start_time),
         curve_time_indices=_cox_survfit_curve_time_indices(
             fit,
             result,
             include_censor,
             include_time0,
         ),
+        conf_type=conf_type if compute_confidence else None,
+        conf_level=conf_level if compute_confidence else None,
     )
 
 
