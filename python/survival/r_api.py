@@ -12616,19 +12616,62 @@ def _recycle_r_vector(values: list[Any], n: int, name: str) -> list[Any]:
     return [values[idx % len(values)] for idx in range(n)]
 
 
-def _cipoisson_count(value: Any) -> float | None:
-    if _is_missing_value(value):
-        return None
-    count = float(value)
-    if count < 0:
-        raise ValueError("k must be non-negative")
-    return count
-
-
-def _cipoisson_float(value: Any, name: str) -> float | None:
+def _cipoisson_float(value: Any) -> float | None:
     if _is_missing_value(value):
         return None
     return float(value)
+
+
+def _match_cipoisson_method(method: Any) -> str:
+    if not isinstance(method, str):
+        raise TypeError("method must be a string")
+    matches = [choice for choice in ("exact", "anscombe") if choice.startswith(method)]
+    if len(matches) != 1 or not method:
+        raise ValueError("method must uniquely match 'exact' or 'anscombe'")
+    return matches[0]
+
+
+def _cipoisson_recycle(values: list[Any], n: int) -> list[Any]:
+    if not values:
+        return [None] * n
+    return _recycle_r_vector(values, n, "value")
+
+
+def _cipoisson_qgamma_warns(probability: float | None, shape: float | None) -> bool:
+    if probability is None or shape is None:
+        return False
+    if not 0.0 <= probability <= 1.0:
+        return True
+    return 0.0 < probability < 1.0 and shape < 0.0
+
+
+def _cipoisson_lower_shape(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return 1.0 if value == 0.0 else value
+
+
+def _cipoisson_qgamma_call_warns(
+    probabilities: list[float | None],
+    shapes: list[float | None],
+) -> bool:
+    if not probabilities or not shapes:
+        return False
+    size = max(len(probabilities), len(shapes))
+    recycled_probabilities = _cipoisson_recycle(probabilities, size)
+    recycled_shapes = _cipoisson_recycle(shapes, size)
+    return any(
+        _cipoisson_qgamma_warns(probability, shape)
+        for probability, shape in zip(
+            recycled_probabilities,
+            recycled_shapes,
+            strict=True,
+        )
+    )
+
+
+def _warn_cipoisson_nan() -> None:
+    warnings.warn("NaNs produced", RuntimeWarning, stacklevel=3)
 
 
 def cipoisson(
@@ -12636,12 +12679,10 @@ def cipoisson(
     time: Any = 1.0,
     p: Any = 0.95,
     method: Any = "exact",
-) -> tuple[float, float] | list[tuple[float, float]]:
+) -> tuple[float, float] | list[float] | list[tuple[float, float]]:
     """Return Poisson rate confidence intervals, like R's ``cipoisson``."""
 
-    if not isinstance(method, str):
-        raise TypeError("method must be a string")
-    method_value = method.strip().lower()
+    method_value = _match_cipoisson_method(method)
     k_values = _scalar_or_vector(k, "k")
     time_values = _scalar_or_vector(time, "time")
     p_values = _scalar_or_vector(p, "p")
@@ -12649,27 +12690,77 @@ def cipoisson(
     if n == 0:
         return []
 
-    k_values = _recycle_r_vector(k_values, n, "k")
-    time_values = _recycle_r_vector(time_values, n, "time")
-    p_values = _recycle_r_vector(p_values, n, "p")
-    if not k_values or not time_values or not p_values:
+    if n > 1:
+        k_values = _cipoisson_recycle(k_values, n)
+        time_values = _cipoisson_recycle(time_values, n)
+        p_values = _cipoisson_recycle(p_values, n)
+
+    counts = [_cipoisson_float(value) for value in k_values]
+    exposures = [_cipoisson_float(value) for value in time_values]
+    confidence = [_cipoisson_float(value) for value in p_values]
+    minimum_warning_free_count = 0.0 if method_value == "exact" else 1.0 / 8.0
+    warning_free_inputs = (
+        len(counts) == len(exposures) == len(confidence) == n
+        and all(
+            count is not None
+            and count >= minimum_warning_free_count
+            and exposure is not None
+            and exposure > 0.0
+            and probability is not None
+            and 0.0 <= probability <= 1.0
+            for count, exposure, probability in zip(counts, exposures, confidence, strict=True)
+        )
+    )
+    if warning_free_inputs:
+        intervals = [
+            (float(lower), float(upper))
+            for lower, upper in _core.cipoisson_many(counts, exposures, confidence, method_value)
+        ]
+        return intervals[0] if n == 1 else intervals
+
+    has_nonpositive_time = any(value is not None and value <= 0.0 for value in exposures)
+    has_missing_time = any(value is None for value in exposures)
+
+    alpha = [None if value is None else (1.0 - value) / 2.0 for value in confidence]
+    if method_value == "exact":
+        lower_shapes = [_cipoisson_lower_shape(value) for value in counts]
+        upper_shapes = [None if value is None else value + 1.0 for value in counts]
+        lower_quantile_is_evaluated = any(value is not None and value != 0.0 for value in counts)
+        if lower_quantile_is_evaluated and _cipoisson_qgamma_call_warns(alpha, lower_shapes):
+            _warn_cipoisson_nan()
+        upper_probability = [
+            None if probability is None else 1.0 - probability for probability in alpha
+        ]
+        if _cipoisson_qgamma_call_warns(upper_probability, upper_shapes):
+            _warn_cipoisson_nan()
+    else:
+        if any(value is not None and value < -7.0 / 8.0 for value in counts):
+            _warn_cipoisson_nan()
+        invalid_probability = any(value is not None and not 0.0 <= value <= 1.0 for value in alpha)
+        if invalid_probability:
+            _warn_cipoisson_nan()
+        if any(value is not None and value < 1.0 / 8.0 for value in counts):
+            _warn_cipoisson_nan()
+        if invalid_probability:
+            _warn_cipoisson_nan()
+
+    if not has_nonpositive_time and has_missing_time:
+        raise ValueError("missing value where TRUE/FALSE needed")
+    if not exposures:
+        return []
+    if n == 1 and has_nonpositive_time:
+        return (math.nan, math.nan)
+    if n == 1 and not counts:
+        return []
+    if n == 1 and not confidence:
+        if method_value == "exact":
+            return [0.0 if counts[0] == 0.0 else math.nan]
         return []
 
-    intervals: list[tuple[float, float]] = []
-    for raw_k, raw_time, raw_p in zip(k_values, time_values, p_values, strict=True):
-        count = _cipoisson_count(raw_k)
-        exposure = _cipoisson_float(raw_time, "time")
-        confidence = _cipoisson_float(raw_p, "p")
-        if count is None or exposure is None or exposure <= 0.0:
-            intervals.append((math.nan, math.nan))
-            continue
-        if confidence is None:
-            intervals.append(
-                (0.0, math.nan) if method_value == "exact" and count == 0 else (math.nan, math.nan)
-            )
-            continue
-        lower, upper = _core.cipoisson(count, exposure, confidence, method_value)
-        intervals.append((float(lower), float(upper)))
+    intervals = [
+        (float(lower), float(upper))
+        for lower, upper in _core.cipoisson_many(counts, exposures, confidence, method_value)
+    ]
 
     return intervals[0] if n == 1 else intervals
 

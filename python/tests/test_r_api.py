@@ -3919,7 +3919,7 @@ def test_survexp_cox_fit_aggregates_profile_curves():
         assert all(math.isfinite(value) for curve in result["surv"] for value in curve)
 
 
-def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
+def test_r_style_cipoisson_uses_rust_batch_kernel_with_r_recycling():
     scalar = survival.cipoisson(5, time=10.0)
     vector = survival.cipoisson([0, 5, 20], time=[1.0, 10.0, 4.0])
     recycled = survival.cipoisson([1, 2], time=[1.0, 2.0, 3.0])
@@ -3951,10 +3951,57 @@ def test_r_style_cipoisson_uses_rust_scalar_kernel_with_r_recycling():
     assert math.isnan(missing_confidence[0][1])
     assert all(math.isnan(value) for value in missing_confidence[1])
     assert all(math.isnan(value) for value in missing_count)
-    with pytest.raises(ValueError, match="k must be non-negative"):
-        survival.cipoisson(-1)
+    with pytest.warns(RuntimeWarning, match="NaNs produced") as recorded:
+        negative = survival.cipoisson(-1)
+    assert len(recorded) == 1
+    assert math.isnan(negative[0])
+    assert negative[1] == 0.0
     with pytest.raises(ValueError, match="method must"):
         survival.cipoisson(1, method="fancy")
+
+
+def test_r_style_cipoisson_matches_empty_and_warning_boundaries():
+    assert survival.cipoisson([], p=[]) == []
+    assert math.isnan(survival.cipoisson(1, p=[])[0])
+    assert survival.cipoisson(0, p=[]) == [0.0]
+    assert survival.cipoisson(1, p=[], method="anscombe") == []
+    assert all(math.isnan(value) for value in survival.cipoisson(1, time=0, p=[]))
+    for result in (
+        survival.cipoisson([], time=[1, 2]),
+        survival.cipoisson([1, 2], p=[]),
+    ):
+        assert len(result) == 2
+        assert all(math.isnan(value) for interval in result for value in interval)
+
+    with pytest.raises(ValueError, match="missing value where TRUE/FALSE needed"):
+        survival.cipoisson([1, 2], time=[])
+    with (
+        pytest.warns(RuntimeWarning, match="NaNs produced") as error_warnings,
+        pytest.raises(ValueError, match="missing value where TRUE/FALSE needed"),
+    ):
+        survival.cipoisson(-1, time=None)
+    assert len(error_warnings) == 1
+    with pytest.warns(RuntimeWarning, match="NaNs produced") as masked_time_warnings:
+        masked_time = survival.cipoisson([-1, 1], time=[None, 0])
+    assert len(masked_time_warnings) == 1
+    assert all(math.isnan(value) for interval in masked_time for value in interval)
+
+    with pytest.warns(RuntimeWarning, match="NaNs produced") as exact_warnings:
+        exact = survival.cipoisson([-2, 0], p=2)
+    assert len(exact_warnings) == 2
+    assert all(math.isnan(value) for value in exact[0])
+    assert exact[1][0] == 0.0
+    assert math.isnan(exact[1][1])
+
+    with pytest.warns(RuntimeWarning, match="NaNs produced") as anscombe_warnings:
+        anscombe = survival.cipoisson(-1, p=2, method="a")
+    assert len(anscombe_warnings) == 4
+    assert all(math.isnan(value) for value in anscombe)
+
+    with pytest.raises(ValueError, match="method must"):
+        survival.cipoisson([], method="Exact")
+    with pytest.raises(ValueError, match="method must"):
+        survival.cipoisson([], method=" exact")
 
 
 def test_r_style_bounded_link_helpers_match_survival_link_functions():

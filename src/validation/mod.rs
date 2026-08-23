@@ -46,7 +46,7 @@ pub use calibration_module::{
     TdAUCResult, TimeDependentCalibrationResult, advanced_calibration_metrics, calibration,
     predict_cox, risk_stratification, td_auc, time_dependent_calibration,
 };
-pub use cipoisson_module::{cipoisson, cipoisson_anscombe, cipoisson_exact};
+pub use cipoisson_module::{cipoisson, cipoisson_anscombe, cipoisson_exact, cipoisson_many};
 pub use conformal::{
     BootstrapConformalResult, CQRConformalResult, CVPlusCalibrationResult, CVPlusConformalResult,
     ConformalCalibrationPlot, ConformalCalibrationResult, ConformalDiagnostics,

@@ -18,12 +18,53 @@ fn validate_cipoisson_inputs(k: f64, time: f64, p: f64) -> PyResult<()> {
 }
 
 fn poisson_gamma_quantile(probability: f64, shape: f64) -> f64 {
-    if probability <= 0.0 {
+    if probability.is_nan() || shape.is_nan() || !(0.0..=1.0).contains(&probability) {
+        f64::NAN
+    } else if probability <= 0.0 {
         0.0
-    } else if probability >= 1.0 || shape.is_infinite() {
+    } else if probability >= 1.0 {
+        f64::INFINITY
+    } else if shape < 0.0 {
+        f64::NAN
+    } else if shape == 0.0 {
+        0.0
+    } else if shape.is_infinite() {
         f64::INFINITY
     } else {
         gamma_inverse_cdf(probability, shape)
+    }
+}
+
+fn cipoisson_exact_unchecked(k: f64, time: f64, p: f64) -> (f64, f64) {
+    let alpha = (1.0 - p) / 2.0;
+    let lower_bound = if k == 0.0 {
+        0.0
+    } else {
+        poisson_gamma_quantile(alpha, k)
+    };
+    let upper_bound = poisson_gamma_quantile(1.0 - alpha, k + 1.0);
+
+    if time <= 0.0 {
+        (f64::NAN, f64::NAN)
+    } else {
+        (lower_bound / time, upper_bound / time)
+    }
+}
+
+fn cipoisson_anscombe_unchecked(k: f64, time: f64, p: f64) -> (f64, f64) {
+    let alpha = (1.0 - p) / 2.0;
+    let z = if (0.0..=1.0).contains(&alpha) {
+        normal_inverse_cdf(alpha)
+    } else {
+        f64::NAN
+    };
+    let lower_bound = ((k - 1.0 / 8.0).sqrt() + z / 2.0).powi(2);
+    let upper_bound = ((k + 7.0 / 8.0).sqrt() - z / 2.0).powi(2);
+
+    if time <= 0.0 {
+        (f64::NAN, f64::NAN)
+    } else {
+        (lower_bound / time, upper_bound / time)
     }
 }
 
@@ -41,28 +82,14 @@ fn parse_cipoisson_method(method: &str) -> PyResult<&'static str> {
 #[pyo3(signature = (k, time=1.0, p=0.95))]
 pub fn cipoisson_exact(k: f64, time: f64, p: f64) -> PyResult<(f64, f64)> {
     validate_cipoisson_inputs(k, time, p)?;
-    let alpha = (1.0 - p) / 2.0;
-
-    let lower_bound = if k == 0.0 {
-        0.0
-    } else {
-        poisson_gamma_quantile(alpha, k)
-    };
-
-    let upper_bound = poisson_gamma_quantile(1.0 - alpha, k + 1.0);
-
-    Ok((lower_bound / time, upper_bound / time))
+    Ok(cipoisson_exact_unchecked(k, time, p))
 }
 
 #[pyfunction]
 #[pyo3(signature = (k, time=1.0, p=0.95))]
 pub fn cipoisson_anscombe(k: f64, time: f64, p: f64) -> PyResult<(f64, f64)> {
     validate_cipoisson_inputs(k, time, p)?;
-    let alpha = (1.0 - p) / 2.0;
-    let z = normal_inverse_cdf(alpha);
-    let lower_bound = ((k - 1.0 / 8.0).sqrt() + z / 2.0).powi(2);
-    let upper_bound = ((k + 7.0 / 8.0).sqrt() - z / 2.0).powi(2);
-    Ok((lower_bound / time, upper_bound / time))
+    Ok(cipoisson_anscombe_unchecked(k, time, p))
 }
 
 #[pyfunction]
@@ -76,6 +103,36 @@ pub fn cipoisson(k: f64, time: f64, p: f64, method: String) -> PyResult<(f64, f6
         "anscombe" => cipoisson_anscombe(k, time, p),
         _ => unreachable!(),
     }
+}
+
+#[pyfunction]
+pub fn cipoisson_many(
+    k: Vec<Option<f64>>,
+    time: Vec<Option<f64>>,
+    p: Vec<Option<f64>>,
+    method: String,
+) -> PyResult<Vec<(f64, f64)>> {
+    if k.len() != time.len() || k.len() != p.len() {
+        return Err(PyValueError::new_err(
+            "k, time, and p must have the same length",
+        ));
+    }
+    let method = parse_cipoisson_method(&method)?;
+    Ok(k.into_iter()
+        .zip(time)
+        .zip(p)
+        .map(|((count, exposure), confidence)| {
+            let (Some(count), Some(exposure)) = (count, exposure) else {
+                return (f64::NAN, f64::NAN);
+            };
+            let confidence = confidence.unwrap_or(f64::NAN);
+            match method {
+                "exact" => cipoisson_exact_unchecked(count, exposure, confidence),
+                "anscombe" => cipoisson_anscombe_unchecked(count, exposure, confidence),
+                _ => unreachable!(),
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -165,5 +222,36 @@ mod tests {
         let indeterminate = cipoisson_exact(f64::INFINITY, f64::INFINITY, 0.95).unwrap();
         assert!(indeterminate.0.is_nan());
         assert!(indeterminate.1.is_nan());
+    }
+
+    #[test]
+    fn cipoisson_many_preserves_r_numeric_boundaries() {
+        let exact = cipoisson_many(
+            vec![Some(-1.0), Some(0.0), None, Some(0.0)],
+            vec![Some(1.0), Some(0.0), Some(1.0), Some(1.0)],
+            vec![Some(0.95), Some(0.95), Some(0.95), None],
+            "exact".to_string(),
+        )
+        .unwrap();
+        assert!(exact[0].0.is_nan());
+        assert_eq!(exact[0].1, 0.0);
+        assert!(exact[1].0.is_nan());
+        assert!(exact[1].1.is_nan());
+        assert!(exact[2].0.is_nan());
+        assert!(exact[2].1.is_nan());
+        assert_eq!(exact[3].0, 0.0);
+        assert!(exact[3].1.is_nan());
+
+        let anscombe = cipoisson_many(
+            vec![Some(0.0), Some(1.0)],
+            vec![Some(1.0), Some(1.0)],
+            vec![Some(0.95), Some(2.0)],
+            "anscombe".to_string(),
+        )
+        .unwrap();
+        assert!(anscombe[0].0.is_nan());
+        assert!(anscombe[0].1.is_finite());
+        assert!(anscombe[1].0.is_nan());
+        assert!(anscombe[1].1.is_nan());
     }
 }

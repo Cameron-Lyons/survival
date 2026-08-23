@@ -94,6 +94,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cipoisson, m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_exact, m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_anscombe, m)?)?;
+    m.add_function(wrap_pyfunction!(cipoisson_many, m)?)?;
     m.add_function(wrap_pyfunction!(ns_basis, m)?)?;
     m.add_function(wrap_pyfunction!(poly_basis, m)?)?;
     m.add_function(wrap_pyfunction!(pspline_basis, m)?)?;

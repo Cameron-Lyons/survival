@@ -5908,6 +5908,7 @@ def test_classical_utility_bindings_are_typed():
         "cipoisson_exact",
         "cipoisson_anscombe",
         "cipoisson",
+        "cipoisson_many",
         "agexact",
     } <= stub_names
 
@@ -5915,6 +5916,7 @@ def test_classical_utility_bindings_are_typed():
         "cipoisson_exact": ["k", "time", "p"],
         "cipoisson_anscombe": ["k", "time", "p"],
         "cipoisson": ["k", "time", "p", "method"],
+        "cipoisson_many": ["k", "time", "p", "method"],
         "agexact": [
             "maxiter",
             "nused",
@@ -5944,11 +5946,14 @@ def test_classical_utility_bindings_are_typed():
     exact = core.cipoisson_exact(5, 10.0, 0.95)
     anscombe = core.cipoisson_anscombe(5, 10.0, 0.95)
     dispatched = core.cipoisson(5, 10.0, 0.95, "exact")
+    batched = core.cipoisson_many([5.0, None], [10.0, 1.0], [0.95, 0.95], "exact")
     assert isinstance(exact, tuple)
     assert isinstance(anscombe, tuple)
     assert exact[0] < exact[1]
     assert len(anscombe) == 2
     assert dispatched == pytest.approx(exact)
+    assert batched[0] == pytest.approx(exact)
+    assert all(math.isnan(value) for value in batched[1])
 
     agexact = core.agexact(
         0,

@@ -9048,6 +9048,37 @@ test_that("data-prep helpers match R survival shapes", {
       tolerance = 1e-6
     )
   }
+  cipoisson_boundary_cases <- list(
+    list(k = numeric()),
+    list(k = NA_real_),
+    list(k = NaN),
+    list(k = -1),
+    list(k = -2, method = "exact"),
+    list(k = -1, method = "anscombe"),
+    list(k = structure(c(1, 2), names = c("a", "b"))),
+    list(k = matrix(1:4, 2, dimnames = list(c("r1", "r2"), c("c1", "c2")))),
+    list(k = 1:5, time = c(1, 2), p = c(0.9, 0.95, 0.99)),
+    list(k = numeric(), time = 1:2),
+    list(k = 1:2, time = numeric()),
+    list(k = 1:2, p = numeric()),
+    list(k = array(numeric(), dim = c(0L, 2L)), time = numeric(), p = numeric()),
+    list(
+      k = array(numeric(), dim = c(0L, 2L), dimnames = list(character(), c("a", "b"))),
+      time = numeric(),
+      p = numeric()
+    ),
+    list(k = array(numeric(), dim = c(0L, 2L, 3L)), time = numeric(), p = numeric()),
+    list(k = -1, time = NA_real_),
+    list(k = c(-1, 1), time = c(NA_real_, 0)),
+    list(k = -1, p = 2, method = "anscombe"),
+    list(k = numeric(), method = "invalid")
+  )
+  for (args in cipoisson_boundary_cases) {
+    expect_identical(
+      capture_call(cipoisson, args),
+      capture_call(survival::cipoisson, args)
+    )
+  }
 
   link_x <- c(0, 0.01, 0.05, 0.5, 0.95, 0.99, 1, NA)
   for (link_name in c("blogit", "bprobit", "bcloglog", "blog")) {

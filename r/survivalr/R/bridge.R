@@ -3351,28 +3351,46 @@ match.ratetable <- function(R, ratetable) {
 }
 
 cipoisson <- function(k, time = 1, p = 0.95, method = c("exact", "anscombe")) {
-  method <- match.arg(method)
   nn <- max(length(k), length(time), length(p))
-  result <- .call_r_api(
-    "cipoisson",
-    k = .as_python_vector(k),
-    time = .as_python_vector(time),
-    p = .as_python_vector(p),
-    method = method
-  )
-  values <- .as_numeric_vector(result)
-  values[is.nan(values)] <- NA_real_
-  if (length(values) == 0L) {
-    return(numeric())
+  if (nn > 1L) {
+    k <- rep(k, length.out = nn)
+    time <- rep(time, length.out = nn)
+    p <- rep(p, length.out = nn)
+  }
+  p <- (1 - p) / 2
+  method <- match.arg(method)
+  if (method == "exact") {
+    dummy <- ifelse(k == 0, 1, k)
+    lower <- ifelse(k == 0, 0, stats::qgamma(p, dummy))
+    upper <- stats::qgamma(1 - p, k + 1)
+  } else {
+    upper <- (sqrt(k + 7 / 8) - stats::qnorm(p) / 2)^2
+    lower <- (sqrt(k - 1 / 8) + stats::qnorm(p) / 2)^2
+  }
+  if (any(time <= 0)) {
+    lower <- ifelse(time <= 0, NA_real_, lower)
+    upper <- ifelse(time <= 0, NA_real_, upper)
   }
   if (nn == 1L) {
-    out <- values[seq_len(2L)]
-    names(out) <- c("lower", "upper")
-    return(out)
+    c(lower = lower, upper = upper) / time
+  } else {
+    values <- cbind(lower = lower, upper = upper) / time
+    if (is.array(k)) {
+      dimensions <- dim(k)
+      labels <- dimnames(k)
+      if (is.null(labels)) {
+        array(
+          values,
+          dim = c(dimensions, 2L),
+          dimnames = list(NULL, NULL, c("lower", "upper"))
+        )
+      } else {
+        array(values, dim = c(dimensions, 2L), dimnames = list(labels, c("lower", "upper")))
+      }
+    } else {
+      values
+    }
   }
-  out <- matrix(values, ncol = 2L, byrow = TRUE)
-  colnames(out) <- c("lower", "upper")
-  out
 }
 
 lvcf <- function(id, x, time, first = TRUE) {

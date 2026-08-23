@@ -561,6 +561,7 @@ BINDINGS = (
     "cipoisson",
     "cipoisson_anscombe",
     "cipoisson_exact",
+    "cipoisson_many",
     "clinical_utility_at_threshold",
     "cluster",
     "cluster_ice_curves",
