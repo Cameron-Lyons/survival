@@ -1672,10 +1672,7 @@ mod tests {
             result.coefficient.last().unwrap()[1],
             3.592_368_801_523_464_5,
         );
-        assert_close(
-            result.coefficient.last().unwrap()[2],
-            49_234.695_970_713_29,
-        );
+        assert_close(result.coefficient.last().unwrap()[2], 49_234.695_970_713_29);
     }
 
     #[test]

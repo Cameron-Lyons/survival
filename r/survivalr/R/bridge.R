@@ -10866,12 +10866,58 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
   )
 }
 
+.survdiff_reference_singular_message <- function(condition) {
+  py_condition <- attr(condition, "py_object")
+  variance <- tryCatch(
+    {
+      rows <- reticulate::py_to_r(
+        reticulate::py_get_attr(py_condition, "survdiff_variance")
+      )
+      if (is.matrix(rows)) {
+        rows
+      } else {
+        matrix(
+          as.numeric(unlist(rows, use.names = FALSE)),
+          nrow = length(rows),
+          byrow = TRUE
+        )
+      }
+    },
+    error = function(...) NULL
+  )
+  if (is.null(variance)) {
+    return(NULL)
+  }
+  translated <- tryCatch(
+    {
+      solve(variance, rep(0, nrow(variance)))
+      NULL
+    },
+    error = identity
+  )
+  if (inherits(translated, "error")) {
+    conditionMessage(translated)
+  } else {
+    NULL
+  }
+}
+
 .survdiff_translate_singular_error <- function(condition) {
-  pattern <- "Lapack routine dgesv: system is exactly singular: U\\[[0-9]+,[0-9]+\\] = 0"
   message <- conditionMessage(condition)
-  location <- regexpr(pattern, message)
-  if (location[[1L]] > 0L) {
-    stop(regmatches(message, location), call. = FALSE)
+  exact_pattern <- "Lapack routine dgesv: system is exactly singular: U\\[[0-9]+,[0-9]+\\] = 0"
+  computational_pattern <- paste0(
+    "system is computationally singular: reciprocal condition number = ",
+    "[0-9.eE+-]+"
+  )
+  for (pattern in c(exact_pattern, computational_pattern)) {
+    location <- regexpr(pattern, message)
+    if (location[[1L]] > 0L) {
+      translated <- .survdiff_reference_singular_message(condition)
+      if (!is.null(translated)) {
+        stop(translated, call. = FALSE)
+      }
+      stop(regmatches(message, location), call. = FALSE)
+    }
   }
   stop(condition)
 }

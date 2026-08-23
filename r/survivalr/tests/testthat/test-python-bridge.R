@@ -12767,6 +12767,79 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
     fixed = TRUE
   )
 
+  singular_diff_data <- data.frame(
+    time = c(3.0000000000001, 7, 6, 7, 7, 3, 3),
+    status = c(1, 0, 1, 1, 1, 0, 0),
+    group = factor(
+      c("g2", "g1", "g3", "g1", "g4", "g3", "g2"),
+      levels = c("g4", "g3", "g2", "g1", "unused")
+    ),
+    site = c("s1", "s2", "s1", "s1", "s3", "s2", "s3")
+  )
+  bridged_singular_condition <- tryCatch(
+    survdiff(
+      Surv(time, status) ~ group + strata(site),
+      data = singular_diff_data,
+      rho = -0.5,
+      timefix = FALSE
+    ),
+    error = identity
+  )
+  reference_singular_condition <- tryCatch(
+    {
+      reference_singular_fit <- survival:::survdiff.fit(
+        survival::Surv(singular_diff_data$time, singular_diff_data$status),
+        singular_diff_data$group,
+        singular_diff_data$site,
+        -0.5
+      )
+      reference_expected <- apply(reference_singular_fit$expected, 1L, sum)
+      retained <- reference_expected > 0
+      reference_variance <- reference_singular_fit$var[retained, retained]
+      reference_variance <- reference_variance[-1L, -1L, drop = FALSE]
+      solve(reference_variance, rep(0, nrow(reference_variance)))
+    },
+    error = identity
+  )
+  expect_s3_class(bridged_singular_condition, "error")
+  expect_s3_class(reference_singular_condition, "error")
+  expect_identical(
+    conditionMessage(bridged_singular_condition),
+    conditionMessage(reference_singular_condition)
+  )
+
+  rounded_singular_data <- data.frame(
+    time = c(7, 3, 5, 7, 6, 8, 4, 1, 8, 6),
+    status = c(0, 0, 1, 1, 0, 1, 1, 1, 0, 1),
+    group = factor(
+      c("g3", "g4", "g1", "g2", "g1", "g2", "g1", "g4", "g3", "g2"),
+      levels = c("g4", "g3", "g2", "g1", "unused")
+    ),
+    site = c("s1", "s4", "s1", "s3", "s2", "s1", "s2", "s4", "s3", "s2")
+  )
+  bridged_rounded_condition <- tryCatch(
+    survdiff(
+      Surv(time, status) ~ group + strata(site),
+      data = rounded_singular_data,
+      rho = 2
+    ),
+    error = identity
+  )
+  reference_rounded_condition <- tryCatch(
+    survival::survdiff(
+      survival::Surv(time, status) ~ group + strata(site),
+      data = rounded_singular_data,
+      rho = 2
+    ),
+    error = identity
+  )
+  expect_s3_class(bridged_rounded_condition, "error")
+  expect_s3_class(reference_rounded_condition, "error")
+  expect_identical(
+    conditionMessage(bridged_rounded_condition),
+    conditionMessage(reference_rounded_condition)
+  )
+
   offset_diff_data <- data.frame(
     time = c(1, 2, 3, 4),
     status = c(1, 0, 1, 1),

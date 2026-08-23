@@ -10580,6 +10580,72 @@ def test_survdiff_matches_degenerate_reference_results():
         )
 
 
+def test_survdiff_reports_computationally_singular_reference_variance():
+    data = {
+        "time": [3.0000000000001, 7.0, 6.0, 7.0, 7.0, 3.0, 3.0],
+        "status": [1, 0, 1, 1, 1, 0, 0],
+        "group": survival.r_api._r_factor(
+            ["g2", "g1", "g3", "g1", "g4", "g3", "g2"],
+            ["g4", "g3", "g2", "g1", "unused"],
+        ),
+        "site": ["s1", "s2", "s1", "s1", "s3", "s2", "s3"],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"^system is computationally singular: reciprocal condition number = ",
+    ):
+        survival.survdiff(
+            "Surv(time, status) ~ group + strata(site)",
+            data=data,
+            rho=-0.5,
+            timefix=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("data", "rho", "message"),
+    [
+        (
+            {
+                "time": [2.0, 2.0, 4.0, 5.0, 3.0, 7.0, 1.0, 5.0, 1.0],
+                "status": [0, 1, 1, 0, 1, 0, 0, 1, 1],
+                "group": survival.r_api._r_factor(
+                    ["g1", "g2", "g4", "g1", "g3", "g3", "g2", "g4", "g1"],
+                    ["g4", "g3", "g2", "g1", "unused"],
+                ),
+                "site": ["s3", "s4", "s3", "s1", "s4", "s1", "s2", "s2", "s1"],
+            },
+            -0.5,
+            r"Lapack routine dgesv: system is exactly singular: U\[3,3\] = 0",
+        ),
+        (
+            {
+                "time": [8.0, 1.0, 5.0, 8.0, 6.0, 2.0, 8.0, 3.0, 3.0],
+                "status": [1, 1, 0, 1, 0, 1, 1, 0, 0],
+                "group": survival.r_api._r_factor(
+                    ["g2", "g2", "g3", "g4", "g1", "g3", "g4", "g1", "g1"],
+                    ["g4", "g3", "g2", "g1", "unused"],
+                ),
+                "site": survival.r_api._r_factor(
+                    ["s1", "s1", "s3", "s3", "s2", "s2", "s4", "s4", "s1"],
+                    ["s4", "s3", "s2", "s1", "unused"],
+                ),
+            },
+            0.5,
+            r"system is computationally singular: reciprocal condition number = ",
+        ),
+    ],
+)
+def test_survdiff_preserves_reference_strata_level_order(data, rho, message):
+    with pytest.raises(ValueError, match=message):
+        survival.survdiff(
+            "Surv(time, status) ~ group + strata(site)",
+            data=data,
+            rho=rho,
+        )
+
+
 def test_survdiff_formula_accepts_dotted_na_action_alias():
     data = {
         "time": [1.0, 2.0, 3.0, 4.0],

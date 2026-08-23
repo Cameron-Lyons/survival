@@ -18946,7 +18946,12 @@ def _survdiff_formula_groups(
     data: Any,
     terms: _FormulaTerms,
     n: int,
-) -> tuple[list[Any], tuple[Any, ...], list[Any] | None]:
+) -> tuple[
+    list[Any],
+    tuple[Any, ...],
+    list[Any] | None,
+    tuple[Any, ...] | None,
+]:
     if not terms.covariates:
         if terms.strata:
             raise ValueError("survdiff formula has no groups to test")
@@ -18955,8 +18960,11 @@ def _survdiff_formula_groups(
     group_levels = _survdiff_declared_group_levels(data, terms, group)
     if group_levels is None:
         group_levels = _survdiff_r_ordered_levels(group)
-    strata = _combined_columns(data, terms.strata, n) if terms.strata else None
-    return group, group_levels, strata
+    if terms.strata:
+        strata, strata_levels = _formula_strata_values_and_levels(data, terms, n)
+    else:
+        strata, strata_levels = None, None
+    return group, group_levels, strata, strata_levels
 
 
 def _survdiff_offset_formula_values(
@@ -19012,31 +19020,127 @@ def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
     return tuple(_core.timefix_vectors(list(vectors), _SURVFIT_TIME_EPSILON))
 
 
-def _survdiff_singular_pivot(components: Any) -> int | None:
+class _SurvdiffConditionError(ValueError):
+    def __init__(self, message: str, variance: list[list[float]]) -> None:
+        super().__init__(message)
+        self.survdiff_variance = variance
+
+
+def _survdiff_exact_reciprocal_condition(matrix: list[list[float]]) -> float | None:
+    from fractions import Fraction
+
+    size = len(matrix)
+    exact = [
+        [Fraction.from_float(value) for value in row_values]
+        + [Fraction(int(row_index == column)) for column in range(size)]
+        for row_index, row_values in enumerate(matrix)
+    ]
+    for column in range(size):
+        pivot_row = max(range(column, size), key=lambda row: abs(exact[row][column]))
+        if exact[pivot_row][column] == 0:
+            return None
+        if pivot_row != column:
+            exact[column], exact[pivot_row] = exact[pivot_row], exact[column]
+        pivot = exact[column][column]
+        exact[column] = [value / pivot for value in exact[column]]
+        for row in range(size):
+            if row == column:
+                continue
+            factor = exact[row][column]
+            exact[row] = [
+                value - factor * pivot_value
+                for value, pivot_value in zip(exact[row], exact[column], strict=True)
+            ]
+
+    matrix_norm = max(
+        sum(abs(Fraction.from_float(matrix[row][column])) for row in range(size))
+        for column in range(size)
+    )
+    inverse_norm = max(
+        sum(abs(exact[row][size + column]) for row in range(size))
+        for column in range(size)
+    )
+    return float(1 / (matrix_norm * inverse_norm))
+
+
+def _survdiff_variance_connected(components: Any, active: list[int]) -> bool:
+    if not active:
+        return True
+    pending = [active[0]]
+    reached = {active[0]}
+    while pending:
+        row = pending.pop()
+        for column in active:
+            if column in reached or column == row:
+                continue
+            if (
+                float(components.variance[row][column]) != 0.0
+                or float(components.variance[column][row]) != 0.0
+            ):
+                reached.add(column)
+                pending.append(column)
+    return len(reached) == len(active)
+
+
+def _survdiff_solve_condition(
+    components: Any,
+) -> tuple[int | None, float | None, list[list[float]]]:
     active = [idx for idx, value in enumerate(components.expected) if float(value) > 0.0]
     size = len(active) - 1
     if size <= 0:
-        return None
+        return None, None, []
     retained = active[1:]
-    matrix = [
+    condition_matrix = [
         [float(components.variance[row][column]) for column in retained]
         for row in retained
     ]
-    scale = max((abs(value) for row in matrix for value in row), default=0.0)
-    pivot_tolerance = math.ulp(scale) * max(size, 1) * 4.0
+    matrix = [row.copy() for row in condition_matrix]
+    matrix_norm = max(
+        (sum(abs(matrix[row][column]) for row in range(size)) for column in range(size)),
+        default=0.0,
+    )
+    pivots: list[int] = []
     for column in range(size):
         pivot_row = max(range(column, size), key=lambda row: abs(matrix[row][column]))
-        if abs(matrix[pivot_row][column]) <= pivot_tolerance:
-            return column + 1
+        if matrix[pivot_row][column] == 0.0:
+            if not _survdiff_variance_connected(components, active):
+                return column + 1, None, condition_matrix
+            exact_condition = _survdiff_exact_reciprocal_condition(condition_matrix)
+            return None, exact_condition or 0.0, condition_matrix
         if pivot_row != column:
             matrix[column], matrix[pivot_row] = matrix[pivot_row], matrix[column]
+        pivots.append(pivot_row)
         pivot = matrix[column][column]
         for row in range(column + 1, size):
             factor = matrix[row][column] / pivot
-            matrix[row][column] = 0.0
+            matrix[row][column] = factor
             for inner in range(column + 1, size):
                 matrix[row][inner] -= factor * matrix[column][inner]
-    return None
+
+    inverse = [[0.0] * size for _ in range(size)]
+    for rhs_column in range(size):
+        solution = [0.0] * size
+        solution[rhs_column] = 1.0
+        for column, pivot_row in enumerate(pivots):
+            if pivot_row != column:
+                solution[column], solution[pivot_row] = solution[pivot_row], solution[column]
+        for row in range(size):
+            for column in range(row):
+                solution[row] -= matrix[row][column] * solution[column]
+        for row in range(size - 1, -1, -1):
+            for column in range(row + 1, size):
+                solution[row] -= matrix[row][column] * solution[column]
+            solution[row] /= matrix[row][row]
+        for row, value in enumerate(solution):
+            inverse[row][rhs_column] = value
+
+    inverse_norm = max(
+        (sum(abs(inverse[row][column]) for row in range(size)) for column in range(size)),
+        default=0.0,
+    )
+    if matrix_norm == 0.0 or inverse_norm == 0.0:
+        return 1, None, condition_matrix
+    return None, (1.0 / inverse_norm) / matrix_norm, condition_matrix
 
 
 def _survdiff_result_from_components(
@@ -19048,10 +19152,17 @@ def _survdiff_result_from_components(
     statistic = float(components.chi_squared)
     if reference_degenerate:
         df = sum(float(value) > 0.0 for value in components.expected) - 1
-        pivot = _survdiff_singular_pivot(components)
+        pivot, reciprocal_condition, condition_matrix = _survdiff_solve_condition(components)
         if pivot is not None:
-            raise ValueError(
-                f"Lapack routine dgesv: system is exactly singular: U[{pivot},{pivot}] = 0"
+            raise _SurvdiffConditionError(
+                f"Lapack routine dgesv: system is exactly singular: U[{pivot},{pivot}] = 0",
+                condition_matrix,
+            )
+        if reciprocal_condition is not None and reciprocal_condition < math.ulp(1.0):
+            raise _SurvdiffConditionError(
+                "system is computationally singular: reciprocal condition number = "
+                f"{reciprocal_condition:.6g}",
+                condition_matrix,
             )
         if df < 0:
             if emit_warnings:
@@ -19146,11 +19257,12 @@ def _stratified_survdiff(
     rho: float,
     timefix: bool,
     group_levels: Sequence[Any] | None = None,
+    strata_levels: Sequence[Any] | None = None,
     emit_warnings: bool = True,
 ) -> Any:
     n = len(response)
     group_codes = _encode_groups(group, n, levels=group_levels)
-    strata_codes = _encode_groups(strata, n)
+    strata_codes = _encode_groups(strata, n, levels=strata_levels)
     times = list(response.time)
     if response.start is not None:
         components = _core.stratified_counting_logrank_components(
@@ -19207,6 +19319,7 @@ def survdiff(
 
     formula_strata: Any | None = None
     formula_group_levels: Sequence[Any] | None = None
+    formula_strata_levels: Sequence[Any] | None = None
     formula_offsets: list[float] | None = None
     if isinstance(response, str):
         if subset is not None:
@@ -19218,11 +19331,12 @@ def survdiff(
         _reject_formula_clusters("survdiff", terms)
         formula_offsets = _survdiff_offset_formula_values(data, terms, len(response))
         if formula_offsets is None:
-            group, formula_group_levels, formula_strata = _survdiff_formula_groups(
-                data,
-                terms,
-                len(response),
-            )
+            (
+                group,
+                formula_group_levels,
+                formula_strata,
+                formula_strata_levels,
+            ) = _survdiff_formula_groups(data, terms, len(response))
 
     if not isinstance(response, Surv):
         raise TypeError("survdiff response must be a Surv object or formula")
@@ -19261,6 +19375,7 @@ def survdiff(
             rho_value,
             core_timefix,
             formula_group_levels,
+            formula_strata_levels,
             emit_warnings,
         )
 

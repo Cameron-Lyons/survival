@@ -673,19 +673,15 @@ pub(crate) fn compute_survdiff(
                     }
                 }
                 if nrisk > 1.0 {
-                    let wt_sq = wt * wt;
-                    let factor =
-                        wt_sq * (deaths as f64) * (nrisk - deaths as f64) / (nrisk * (nrisk - 1.0));
+                    let squared_weight = wt * wt;
+                    let deaths = deaths as f64;
                     for (j_group, &rj) in output.risk.iter().take(ngroup).enumerate() {
                         let var_start = j_group * ngroup;
-                        let tmp = factor * rj;
+                        let tmp = squared_weight * deaths * rj * (nrisk - deaths)
+                            / (nrisk * (nrisk - 1.0));
+                        output.var[var_start + j_group] += tmp;
                         for (k_group, &rk) in output.risk.iter().take(ngroup).enumerate() {
-                            output.var[var_start + k_group] += tmp
-                                * (if j_group == k_group {
-                                    1.0 - rk / nrisk
-                                } else {
-                                    -rk / nrisk
-                                });
+                            output.var[k_group * ngroup + j_group] -= tmp * rk / nrisk;
                         }
                     }
                 }
@@ -1117,6 +1113,102 @@ mod tests {
         assert_eq!(raw.expected, marker.expected);
         assert_eq!(raw.variance, marker.variance);
         assert_eq!(raw.chi_squared, marker.chi_squared);
+    }
+
+    #[test]
+    fn stratified_logrank_preserves_reference_variance_update_order() {
+        let result = stratified_logrank_components(
+            vec![3.000_000_000_000_1, 7.0, 6.0, 7.0, 7.0, 3.0, 3.0],
+            vec![1, 0, 1, 1, 1, 0, 0],
+            vec![3, 4, 2, 4, 1, 2, 3],
+            vec![0, 1, 0, 0, 2, 1, 2],
+            Some(-0.5),
+            false,
+        )
+        .expect("near-singular stratified components should compute");
+
+        assert_eq!(
+            result.variance,
+            vec![
+                vec![0.0, 0.0, 0.0, 0.0],
+                vec![
+                    0.0,
+                    f64::from_bits(0x3fe3_1c71_c71c_71c8),
+                    f64::from_bits(0xbfbc_71c7_1c71_c71c),
+                    f64::from_bits(0xbfdf_1c71_c71c_71c8),
+                ],
+                vec![
+                    0.0,
+                    f64::from_bits(0xbfbc_71c7_1c71_c71c),
+                    f64::from_bits(0x3fcc_71c7_1c71_c71c),
+                    f64::from_bits(0xbfbc_71c7_1c71_c71c),
+                ],
+                vec![
+                    0.0,
+                    f64::from_bits(0xbfdf_1c71_c71c_71c8),
+                    f64::from_bits(0xbfbc_71c7_1c71_c71c),
+                    f64::from_bits(0x3fe3_1c71_c71c_71c8),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn stratified_logrank_preserves_reference_variance_orientation() {
+        let result = stratified_logrank_components(
+            vec![
+                7.000_000_000_000_1,
+                7.0,
+                5.0,
+                2.0,
+                6.0,
+                6.0,
+                5.0,
+                5.0,
+                4.0,
+                7.0,
+                5.0,
+                4.0,
+                2.0,
+                4.0,
+            ],
+            vec![0, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0],
+            vec![2, 2, 4, 2, 1, 2, 3, 1, 3, 4, 3, 4, 1, 1],
+            vec![3, 1, 2, 3, 2, 3, 3, 2, 3, 1, 1, 1, 2, 2],
+            Some(0.0),
+            true,
+        )
+        .expect("near-singular stratified components should compute");
+
+        assert_eq!(
+            result.variance,
+            vec![
+                vec![
+                    f64::from_bits(0x3fd8_7654_320f_edca),
+                    0.0,
+                    0.0,
+                    f64::from_bits(0xbfd8_7654_320f_edcc),
+                ],
+                vec![
+                    0.0,
+                    f64::from_bits(0x3fdf_5c28_f5c2_8f5c),
+                    f64::from_bits(0xbfdf_5c28_f5c2_8f5d),
+                    0.0,
+                ],
+                vec![
+                    0.0,
+                    f64::from_bits(0xbfdf_5c28_f5c2_8f5c),
+                    f64::from_bits(0x3fdf_5c28_f5c2_8f5c),
+                    0.0,
+                ],
+                vec![
+                    f64::from_bits(0xbfd8_7654_320f_edcc),
+                    0.0,
+                    0.0,
+                    f64::from_bits(0x3fd8_7654_320f_edcc),
+                ],
+            ]
+        );
     }
 
     #[test]
