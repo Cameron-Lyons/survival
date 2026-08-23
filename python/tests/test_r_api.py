@@ -4612,6 +4612,23 @@ def test_survobrien_expands_evaluated_formula_columns():
     )
     assert len(expanded["transformed"]["log(x)"]) == 7
 
+    callback_groups: list[list[float]] = []
+
+    def transform_nonempty(values: list[float]) -> list[float]:
+        assert values
+        callback_groups.append(values)
+        return [value * 2.0 for value in values]
+
+    stratified = _survobrien_expand_columns(
+        [1.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 1],
+        {"x": [0.1, 0.4, 0.2, 0.8]},
+        strata=["a", "a", "b", "b"],
+        transform=transform_nonempty,
+    )
+    assert callback_groups == [[0.1]]
+    assert stratified["transformed"]["x"] == pytest.approx([0.2])
+
 
 def test_survobrien_event_sets_match_python_reference():
     def reference(

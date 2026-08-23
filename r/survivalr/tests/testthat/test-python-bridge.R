@@ -10045,6 +10045,18 @@ test_that("data-prep helpers match R survival shapes", {
   )
   expect_equal(
     survobrien(
+      survival::Surv(time, status) ~ x + strata(group),
+      data = obrien_data,
+      transform = obrien_transform
+    ),
+    survival::survobrien(
+      survival::Surv(time, status) ~ x + strata(group),
+      data = obrien_data,
+      transform = obrien_transform
+    )
+  )
+  expect_equal(
+    survobrien(
       survival::Surv(time, status) ~ log(x),
       data = obrien_data
     ),

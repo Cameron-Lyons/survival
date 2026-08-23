@@ -12116,6 +12116,8 @@ def _survobrien_expand_columns(
             offset = 0
             for group_size in group_sizes:
                 group_rows = row_indices[offset : offset + group_size]
+                if not group_rows:
+                    continue
                 output.extend(
                     _survobrien_transform_values(
                         [values[row] for row in group_rows],
