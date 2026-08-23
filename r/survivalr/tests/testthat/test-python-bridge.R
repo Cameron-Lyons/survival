@@ -13295,6 +13295,54 @@ test_that("cch matches Lin-Ying counting separation roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches Prentice extreme phase-two roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  z <- c(
+    -0x1.25b9dca471164p-2, 0x1.fd2dbe115d3c3p-3, -0x1.fd955cb44cb4cp-2,
+    0x1.0617df82127a9p-2, 0x1.4135dc186d9d8p-5, 0x1.09c3a94e34199p-2,
+    0x1.556a4a939bae1p-3, -0x1.baca2a170cc3ap-2, 0x1.3f2fb73692a7p-5,
+    -0x1.c0f0aebdb304ep-3, 0x1.36dfa9a276d1ep-3, -0x1.61b13998c9f4p-3,
+    -0x1.304b02c403001p-1, 0x1.b567268e84f76p-1, -0x1.54646fe3fc80ep-3,
+    0x1.6d6fc94fc2cdbp+0, 0x1.16ef37594742bp+0, -0x1.c898e8df761cep-1,
+    -0x1.6e4aca9103164p-4, 0x1.3d99bfbc4fd8dp-2, -0x1.bdf209e71dadbp-1,
+    0x1.8cf8c702ac6e6p-5, -0x1.b68b9f5e4028fp-1, -0x1.e1b0f40cb0b7fp-1,
+    -0x1.192737a6cc726p+0, 0x1.01544edab80f7p-1, -0x1.b8e91470d006dp+0,
+    -0x1.0ff524ce8fa3fp-1, -0x1.01c3fb2bb56d7p+0
+  )
+  data <- data.frame(
+    stop = c(12, 2, 2, 14, 17, 2, 2, 14, 5, 20, 20, 9, 13, 13, 3, 3, 15, 3, 4, 5, 11, 19, 15, 13, 3, 19, 20, 2, 10),
+    status = c(1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1),
+    x = seq_len(29) - 1,
+    z = z,
+    id = seq_len(29),
+    subcohort = c(0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0)
+  )
+  args <- list(
+    formula = Surv(stop, status) ~ 0 + x + z,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 87,
+    method = "Prentice",
+    robust = FALSE
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

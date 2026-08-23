@@ -26288,6 +26288,87 @@ def test_cch_formula_matches_lin_ying_counting_separation_roundoff():
     assert fit.offsets == pytest.approx(expected_offsets, abs=1e-15)
 
 
+def test_cch_formula_matches_prentice_extreme_phase_two_roundoff():
+    z = [
+        float.fromhex(value)
+        for value in (
+            "-0x1.25b9dca471164p-2",
+            "0x1.fd2dbe115d3c3p-3",
+            "-0x1.fd955cb44cb4cp-2",
+            "0x1.0617df82127a9p-2",
+            "0x1.4135dc186d9d8p-5",
+            "0x1.09c3a94e34199p-2",
+            "0x1.556a4a939bae1p-3",
+            "-0x1.baca2a170cc3ap-2",
+            "0x1.3f2fb73692a7p-5",
+            "-0x1.c0f0aebdb304ep-3",
+            "0x1.36dfa9a276d1ep-3",
+            "-0x1.61b13998c9f4p-3",
+            "-0x1.304b02c403001p-1",
+            "0x1.b567268e84f76p-1",
+            "-0x1.54646fe3fc80ep-3",
+            "0x1.6d6fc94fc2cdbp+0",
+            "0x1.16ef37594742bp+0",
+            "-0x1.c898e8df761cep-1",
+            "-0x1.6e4aca9103164p-4",
+            "0x1.3d99bfbc4fd8dp-2",
+            "-0x1.bdf209e71dadbp-1",
+            "0x1.8cf8c702ac6e6p-5",
+            "-0x1.b68b9f5e4028fp-1",
+            "-0x1.e1b0f40cb0b7fp-1",
+            "-0x1.192737a6cc726p+0",
+            "0x1.01544edab80f7p-1",
+            "-0x1.b8e91470d006dp+0",
+            "-0x1.0ff524ce8fa3fp-1",
+            "-0x1.01c3fb2bb56d7p+0",
+        )
+    ]
+    data = {
+        "stop": [
+            12, 2, 2, 14, 17, 2, 2, 14, 5, 20, 20, 9, 13, 13, 3,
+            3, 15, 3, 4, 5, 11, 19, 15, 13, 3, 19, 20, 2, 10,
+        ],
+        "status": [
+            1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+            1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1,
+        ],
+        "x": list(range(29)),
+        "z": z,
+        "id": list(range(1, 30)),
+        "subcohort": [
+            0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1,
+            1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0,
+        ],
+    }
+    fit = survival.cch(
+        "Surv(stop, status) ~ 0 + x + z",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=87,
+        method="Prentice",
+        robust=False,
+    )
+
+    assert fit.coefficient_names == ()
+    assert survival.coef(fit) == pytest.approx([-0.5793734724555984], abs=1e-14)
+    assert fit.fit.model_information_matrix[0] == pytest.approx(
+        [0.15329241974587454], abs=1e-14
+    )
+    assert fit.phase2var[0] == pytest.approx([5.916689760171444e53], rel=1e-11)
+    assert fit.var[0] == pytest.approx([5.916689760171444e53], rel=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-2139.1913542354373, -2139.0435575686256], abs=1e-10
+    )
+    assert fit.score_test == pytest.approx(0.2903822837612465, abs=1e-13)
+    assert fit.iterations == 3
+    assert fit.means == pytest.approx([-0.11873659446818369], abs=1e-15)
+    assert fit.offsets == pytest.approx(
+        [-38.46153846153847] * 24 + [61.53846153846153] * 15,
+        abs=1e-14,
+    )
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],

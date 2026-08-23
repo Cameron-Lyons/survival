@@ -1416,9 +1416,9 @@ impl CoxPHFit {
         order: &[usize],
         entry_times: &[f64],
     ) -> Vec<Vec<f64>> {
-        // The multivariate reference sweep is compiled with multiply-add
-        // contraction. Keep scalar fits on their established arithmetic path.
-        let contracted = self.counting_roundoff_compatibility && nvar > 1;
+        // The reference counting sweep is compiled with multiply-add
+        // contraction for both scalar and multivariate fits.
+        let contracted = self.counting_roundoff_compatibility;
         let arithmetic = ProductAccumulator::new(contracted);
         let n = self.event_times.len();
         let mut residuals = vec![vec![0.0; nvar]; n];
