@@ -1669,13 +1669,6 @@ attrassign <- function(object, tt) {
   value
 }
 
-.is_integerish_vector <- function(value) {
-  numeric_value <- suppressWarnings(as.numeric(value))
-  length(numeric_value) == length(value) &&
-    all(is.finite(numeric_value)) &&
-    all(numeric_value == floor(numeric_value))
-}
-
 .wrap_python <- function(value, classes) {
   if (is.null(value)) {
     return(value)
@@ -2544,53 +2537,77 @@ levels.tcut <- function(x) {
 }
 
 neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_integer_) {
-  if (missing(best)) {
-    best <- "after"
+  if (missing(id1)) {
+    stop("id1 argument is required")
   }
-  best <- match.arg(best, c("after", "prior", "closest"))
+  if (missing(id2)) {
+    stop("id2 argument is required")
+  }
+  if (missing(y1)) {
+    stop("y1 argument is required")
+  }
+  if (missing(y2)) {
+    stop("y2 argument is required")
+  }
   if (length(id1) != length(y1)) {
-    stop("id1 and y1 must have the same length", call. = FALSE)
+    stop("id1 and y1 have different lengths")
   }
   if (length(id2) != length(y2)) {
-    stop("id2 and y2 must have the same length", call. = FALSE)
+    stop("id2 and y2 have different lengths")
   }
-  if (length(nomatch) != 1L) {
-    stop("nomatch must be a scalar", call. = FALSE)
-  }
+  best <- match.arg(best)
   if (is.factor(y1) || is.factor(y2)) {
-    stop("y1 and y2 must be sortable", call. = FALSE)
+    stop("y1 and y2 must be sortable")
   }
-  y1 <- as.numeric(y1)
-  y2 <- as.numeric(y2)
-  python_y1 <- lapply(y1, function(value) if (is.na(value)) NaN else value)
-  python_y2 <- lapply(y2, function(value) if (is.na(value)) NaN else value)
+  if (inherits(y1, "POSIXt")) {
+    if (!inherits(y2, "POSIXt")) {
+      y2 <- methods::as(y2, class(y1))
+    } else if (inherits(y2, "POSIXt")) {
+      y1 <- methods::as(y1, class(y2))
+    }
+  }
 
-  if (.is_integerish_vector(id1) && .is_integerish_vector(id2)) {
-    result <- .call_data_prep(
-      "neardate",
-      as.list(as.integer(id1)),
-      python_y1,
-      as.list(as.integer(id2)),
-      python_y2,
-      best = best
-    )
+  all_dates <- sort(unique(c(y1, y2)))
+  y1 <- match(y1, all_dates)
+  y2 <- match(y2, all_dates)
+  row_id <- seq_along(y2)
+  if (any(is.na(y2))) {
+    keep <- !is.na(y2)
+    y2 <- y2[keep]
+    id2 <- id2[keep]
+    row_id <- row_id[keep]
+  }
+  n2 <- length(y2)
+  if (n2 == 0L) {
+    stop("No valid entries in data set 2")
+  }
+
+  index1 <- match(id2, id1)
+  if (any(is.na(index1))) {
+    keep <- !is.na(index1)
+    id2 <- id2[keep]
+    y2 <- y2[keep]
+    index1 <- index1[keep]
+    row_id <- row_id[keep]
+  }
+  n2 <- length(y2)
+  if (n2 == 0L) {
+    stop("No valid entries in data set 2")
+  }
+
+  delta <- 1L + length(all_dates)
+  hash1 <- match(id1, id1) * delta + y1
+  hash2 <- index1 * delta + y2
+  order2 <- order(hash2)
+  if (best == "prior") {
+    index2 <- findInterval(hash1, hash2[order2])
+    index2 <- ifelse(index2 == 0L, NA, c(0L, order2)[1L + index2])
   } else {
-    result <- .call_data_prep(
-      "neardate_str",
-      as.list(as.character(id1)),
-      python_y1,
-      as.list(as.character(id2)),
-      python_y2,
-      best = best
-    )
+    index2 <- findInterval(hash1, hash2[order2], left.open = TRUE)
+    index2 <- ifelse(index2 == n2, NA, c(order2, 0L)[index2 + 1L])
   }
-
-  indices <- result$indices
-  matched <- !vapply(indices, is.null, logical(1))
-  values <- rep(nomatch, length(indices))
-  values[matched] <- as.integer(unlist(indices[matched], use.names = FALSE)) + 1L
-  values[is.na(id1)] <- NA_integer_
-  values
+  matched <- !is.na(index2) & id1 == id2[index2]
+  ifelse(matched, row_id[ifelse(is.na(index2), 1L, index2)], nomatch)
 }
 
 .surv_factor_response <- function(args, type = NULL, origin = 0) {

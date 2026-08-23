@@ -8549,7 +8549,7 @@ test_that("data-prep helpers match R survival shapes", {
     reference_tcut_levels(bridged_scaled)
   )
 
-  capture_tcut <- function(fun, args) {
+  capture_call <- function(fun, args) {
     observed_warnings <- character()
     result <- withCallingHandlers(
       tryCatch(
@@ -8582,8 +8582,8 @@ test_that("data-prep helpers match R survival shapes", {
   )
   for (args in tcut_boundary_cases) {
     expect_identical(
-      capture_tcut(tcut, args),
-      capture_tcut(survival::tcut, args)
+      capture_call(tcut, args),
+      capture_call(survival::tcut, args)
     )
   }
 
@@ -8635,6 +8635,51 @@ test_that("data-prep helpers match R survival shapes", {
   expect_error(survival::neardate(1, 2, 1, 1), "No valid entries")
   expect_error(neardate(1, 1, factor("2020-01-01"), 1), "sortable")
   expect_error(survival::neardate(1, 1, factor("2020-01-01"), 1), "sortable")
+  neardate_boundary_cases <- list(
+    list(id1 = 1, id2 = c(1, 1), y1 = "b", y2 = c("a", "c")),
+    list(id1 = 1, id2 = 1, y1 = 1, y2 = 2, best = "closest"),
+    list(
+      id1 = c(1, 1, 2), id2 = 1, y1 = c(0, 2, 1), y2 = 1,
+      nomatch = c(8L, 9L)
+    ),
+    list(id1 = numeric(), id2 = numeric(), y1 = numeric(), y2 = numeric()),
+    list(
+      id1 = c("1", "01"), id2 = c("01", "1"),
+      y1 = c(1, 2), y2 = c(1, 2)
+    ),
+    list(
+      id1 = 1, id2 = c(1, 1), y1 = as.Date("2020-06-01"),
+      y2 = as.Date(c("2020-01-01", "2021-01-01"))
+    ),
+    list(
+      id1 = 1, id2 = c(1, 1), y1 = as.POSIXct("2020-06-01", tz = "UTC"),
+      y2 = as.Date(c("2020-01-01", "2021-01-01"))
+    ),
+    list(id1 = 1, id2 = 1, y1 = factor("a"), y2 = "b"),
+    list(id1 = c(1, 2), id2 = 1, y1 = 1, y2 = 1),
+    list(id2 = 1, y1 = 1, y2 = 1),
+    list(id1 = 1, y1 = 1, y2 = 1),
+    list(id1 = 1, id2 = 1, y2 = 1),
+    list(id1 = 1, id2 = 1, y1 = 1),
+    list(
+      id1 = c(1, 1, 2), id2 = 1, y1 = c(0, 2, 1), y2 = 1,
+      nomatch = c("x", "y")
+    ),
+    list(
+      id1 = c(1, 1, 2), id2 = 1, y1 = c(0, 2, 1), y2 = 1,
+      nomatch = numeric()
+    ),
+    list(
+      id1 = c(1, 1, 2), id2 = 1, y1 = c(0, 2, 1), y2 = 1,
+      nomatch = NULL
+    )
+  )
+  for (args in neardate_boundary_cases) {
+    expect_identical(
+      capture_call(neardate, args),
+      capture_call(survival::neardate, args)
+    )
+  }
   reference_lvcf <- get0("lvcf", envir = asNamespace("survival"), inherits = FALSE)
   if (!is.null(reference_lvcf)) {
     expect_identical(names(formals(lvcf)), names(formals(reference_lvcf)))

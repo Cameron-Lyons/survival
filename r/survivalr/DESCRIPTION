@@ -12,6 +12,7 @@ Encoding: UTF-8
 SystemRequirements: Python (>= 3.11) with the survival Python package
 Imports:
     graphics,
+    methods,
     reticulate,
     splines,
     stats,

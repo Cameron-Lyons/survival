@@ -8829,22 +8829,192 @@ def _lvcf_vector(values: Any, name: str, *, labels: bool = False) -> list[Any]:
 
 
 def _integerish_vector_or_none(values: Any, name: str) -> list[int] | None:
+    materialized = _materialize_1d(values, name)
+    if any(not _is_missing_value(value) and not isinstance(value, Real) for value in materialized):
+        return None
     try:
-        return _integer_code_vector(values, name, "integer id values")
+        return _integer_code_vector(materialized, name, "integer id values")
     except (TypeError, ValueError):
         return None
 
 
-def _neardate_float_vector(values: Any, name: str) -> list[float]:
-    result: list[float] = []
-    for value in _materialize_1d(values, name):
+def _neardate_id_label(value: Any) -> str:
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, Real):
+        numeric = float(value)
+        return _r_format_numeric([numeric], digits=15)[0].strip()
+    return str(value)
+
+
+def _neardate_datetime_coordinate(value: _Date | _DateTime) -> float:
+    if not isinstance(value, _DateTime):
+        return float(value.toordinal())
+    seconds = value.hour * 3600 + value.minute * 60 + value.second + value.microsecond / 1_000_000.0
+    offset = value.utcoffset()
+    if offset is not None:
+        seconds -= offset.total_seconds()
+    return value.date().toordinal() + seconds / 86400.0
+
+
+def _neardate_order_vectors(
+    y1_values: list[Any],
+    y2_values: list[Any],
+) -> tuple[list[float], list[float]]:
+    observed = [value for value in [*y1_values, *y2_values] if not _is_missing_value(value)]
+
+    if all(isinstance(value, Real) for value in observed):
+        sort_value = float
+    elif all(isinstance(value, _Date) for value in observed):
+        sort_value = _neardate_datetime_coordinate
+    else:
+        coerce_strings = any(isinstance(value, str | bytes) for value in observed)
+
+        def sort_value(value: Any) -> Any:
+            return _neardate_id_label(value) if coerce_strings else value
+
+    try:
+        ordered = sorted({sort_value(value) for value in observed})
+    except (TypeError, ValueError) as exc:
+        raise TypeError("y1 and y2 must be sortable") from exc
+    ranks = {value: float(rank + 1) for rank, value in enumerate(ordered)}
+
+    def encode(values: list[Any]) -> list[float]:
+        encoded: list[float] = []
+        for value in values:
+            encoded.append(math.nan if _is_missing_value(value) else ranks[sort_value(value)])
+        return encoded
+
+    return encode(y1_values), encode(y2_values)
+
+
+def _neardate_nomatch_values(value: Any, size: int) -> list[Any]:
+    if value is None:
+        return [None] * size
+    if isinstance(value, str | bytes) or not hasattr(value, "__iter__"):
+        values = [value]
+    else:
+        values = _materialize_1d(value, "nomatch")
+    if not values:
+        return [None] * size
+    return [values[index % len(values)] for index in range(size)]
+
+
+def _neardate_matched_value(index_value: int, nomatch_values: Sequence[Any]) -> Any:
+    observed = [value for value in nomatch_values if value is not None]
+    if any(isinstance(value, str | bytes) for value in observed):
+        return str(index_value)
+    if any(isinstance(value, complex) and not isinstance(value, Real) for value in observed):
+        return complex(index_value)
+    if any(isinstance(value, float) for value in observed):
+        return float(index_value)
+    return index_value
+
+
+def _neardate_id_keys(
+    id1_values: list[Any], id2_values: list[Any]
+) -> tuple[list[Any], list[Any]]:
+    observed = [value for value in [*id1_values, *id2_values] if not _is_missing_value(value)]
+    coerce_strings = any(isinstance(value, str | bytes) for value in observed)
+    missing = object()
+
+    def key(value: Any) -> Any:
         if _is_missing_value(value):
-            result.append(math.nan)
+            return missing
+        if coerce_strings:
+            return _neardate_id_label(value)
+        if isinstance(value, Real):
+            return float(value)
+        if isinstance(value, _Date):
+            return _neardate_datetime_coordinate(value)
+        return value
+
+    return [key(value) for value in id1_values], [key(value) for value in id2_values]
+
+
+def _neardate_reference_result(
+    id1_values: list[Any],
+    id2_values: list[Any],
+    y1_values: list[float],
+    y2_values: list[float],
+    best: str,
+    nomatch: Any,
+) -> list[Any]:
+    nomatch_values = _neardate_nomatch_values(nomatch, len(id1_values))
+    id1_keys, id2_keys = _neardate_id_keys(id1_values, id2_values)
+    first_positions: dict[Any, int] = {}
+    for position, key in enumerate(id1_keys, start=1):
+        first_positions.setdefault(key, position)
+
+    date_count = len({value for value in [*y1_values, *y2_values] if not math.isnan(value)})
+    delta = 1 + date_count
+    reference_ids: list[Any] = []
+    reference_keys: list[Any] = []
+    reference_rows: list[int] = []
+    reference_hashes: list[float] = []
+    for row, (id_value, id_key, date_value) in enumerate(
+        zip(id2_values, id2_keys, y2_values, strict=True),
+        start=1,
+    ):
+        if math.isnan(date_value):
             continue
-        try:
-            result.append(float(value))
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"{name} must be sortable numeric values") from exc
+        id_position = first_positions.get(id_key)
+        if id_position is None:
+            continue
+        reference_ids.append(id_value)
+        reference_keys.append(id_key)
+        reference_rows.append(row)
+        reference_hashes.append(id_position * delta + date_value)
+
+    if not reference_hashes:
+        raise ValueError("No valid entries in data set 2")
+
+    reference_order = sorted(range(len(reference_hashes)), key=reference_hashes.__getitem__)
+    ordered_hashes = [reference_hashes[position] for position in reference_order]
+    candidates: list[int | None] = []
+    for id_key, date_value in zip(id1_keys, y1_values, strict=True):
+        candidate: int | None = None
+        if not math.isnan(date_value):
+            query_hash = first_positions[id_key] * delta + date_value
+            if best == "prior":
+                interval = bisect_right(ordered_hashes, query_hash)
+                if interval > 0:
+                    candidate = reference_order[interval - 1]
+            else:
+                interval = bisect_left(ordered_hashes, query_hash)
+                if interval < len(reference_order):
+                    candidate = reference_order[interval]
+        candidates.append(candidate)
+
+    if all(candidate is None for candidate in candidates):
+        # A wholly missing R interval vector stays logical and is recycled while
+        # indexing the filtered reference IDs, which can expand the result.
+        return _neardate_nomatch_values(
+            nomatch,
+            max(len(id1_values), len(reference_ids)),
+        )
+
+    matched: list[bool | None] = []
+    for id_value, id_key, candidate in zip(id1_values, id1_keys, candidates, strict=True):
+        if candidate is None:
+            matched.append(False)
+        elif _is_missing_value(id_value) or _is_missing_value(reference_ids[candidate]):
+            matched.append(None)
+        else:
+            matched.append(id_key == reference_keys[candidate])
+    # R's ifelse only promotes matched indices to the fallback type when its
+    # fallback branch is actually selected.
+    uses_nomatch = any(value is False for value in matched)
+
+    result: list[Any] = []
+    for position, (is_match, candidate) in enumerate(zip(matched, candidates, strict=True)):
+        if is_match is False:
+            result.append(nomatch_values[position])
+        elif is_match is None:
+            result.append(None)
+        else:
+            row = reference_rows[cast(int, candidate)]
+            result.append(_neardate_matched_value(row, nomatch_values) if uses_nomatch else row)
     return result
 
 
@@ -8855,7 +9025,7 @@ def neardate(
     y2: Any,
     best: Any = "after",
     nomatch: Any | None = None,
-) -> list[int | None]:
+) -> list[Any]:
     """Find nearest matching dates by id, returning R-style 1-based indices."""
 
     best_value = _match_string_arg(
@@ -8864,14 +9034,29 @@ def neardate(
         ("after", "prior", "closest"),
         "best must be 'after', 'prior', or 'closest'",
     )
-    y1_values = _neardate_float_vector(y1, "y1")
-    y2_values = _neardate_float_vector(y2, "y2")
     id1_values = _materialize_1d(id1, "id1")
     id2_values = _materialize_1d(id2, "id2")
+    y1_raw = _materialize_1d(y1, "y1")
+    y2_raw = _materialize_1d(y2, "y2")
+    if len(id1_values) != len(y1_raw):
+        raise ValueError("id1 and y1 have different lengths")
+    if len(id2_values) != len(y2_raw):
+        raise ValueError("id2 and y2 have different lengths")
+    y1_values, y2_values = _neardate_order_vectors(y1_raw, y2_raw)
     id1_missing = [_is_missing_value(value) for value in id1_values]
     id1_integer = _integerish_vector_or_none(id1_values, "id1")
     id2_integer = _integerish_vector_or_none(id2_values, "id2")
-    nomatch_value = None if nomatch is None else _integer_scalar(nomatch, "nomatch")
+    nomatch_values = _neardate_nomatch_values(nomatch, len(id1_values))
+
+    if best_value != "closest":
+        return _neardate_reference_result(
+            id1_values,
+            id2_values,
+            y1_values,
+            y2_values,
+            best_value,
+            nomatch,
+        )
 
     if id1_integer is not None and id2_integer is not None:
         result = _core.neardate(
@@ -8885,12 +9070,12 @@ def neardate(
     else:
         result = _core.neardate_str(
             [
-                "\0missing" if missing else f"\0value:{value}"
+                "\0missing" if missing else f"\0value:{_neardate_id_label(value)}"
                 for value, missing in zip(id1_values, id1_missing, strict=True)
             ],
             y1_values,
             [
-                "\0missing" if _is_missing_value(value) else f"\0value:{value}"
+                "\0missing" if _is_missing_value(value) else f"\0value:{_neardate_id_label(value)}"
                 for value in id2_values
             ],
             y2_values,
@@ -8898,10 +9083,15 @@ def neardate(
             None,
         )
 
-    return [
-        None if id1_missing[pos] else nomatch_value if idx is None else int(idx) + 1
-        for pos, idx in enumerate(result.indices)
-    ]
+    values: list[Any] = []
+    for pos, idx in enumerate(result.indices):
+        if idx is None:
+            values.append(nomatch_values[pos])
+        elif id1_missing[pos]:
+            values.append(None)
+        else:
+            values.append(_neardate_matched_value(int(idx) + 1, nomatch_values))
+    return values
 
 
 def _r_numeric_format_decimals(value: float, digits: int) -> int:
