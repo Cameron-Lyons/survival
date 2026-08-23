@@ -1355,11 +1355,9 @@ impl CoxFit {
         let Some(entry_times) = self.entry_times.as_ref() else {
             return self.iterate_right_censored(beta);
         };
-        // For one covariate with no delayed entry, the simpler recurrence also
-        // preserves the scalar reference path used by the CCH calculation.
-        if self.all_entered_before_first_event
-            && !(self.counting_roundoff_compatibility && self.covar.ncols() > 1)
-        {
+        // Ordinary fits can use the simpler recurrence when no row has delayed
+        // entry. Compatibility fits retain counting-process arithmetic.
+        if self.all_entered_before_first_event && !self.counting_roundoff_compatibility {
             return self.iterate_right_censored(beta);
         }
         let entry_order = self

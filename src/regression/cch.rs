@@ -2345,6 +2345,76 @@ mod tests {
     }
 
     #[test]
+    fn native_self_prentice_matches_right_censored_scalar_phase_two_roundoff() {
+        let stop = vec![
+            14.0, 9.0, 20.0, 4.0, 7.0, 10.0, 7.0, 10.0, 17.0, 8.0, 9.0, 17.0, 9.0, 3.0, 17.0, 3.0,
+            12.0, 16.0, 14.0, 17.0, 13.0,
+        ];
+        let status = vec![
+            0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1,
+        ];
+        let covariates = [
+            -0.307_782_517_846_172_7,
+            0.213_045_026_217_134_92,
+            -1.101_420_162_510_219_1,
+            0.230_088_703_356_417_82,
+            0.222_034_492_992_360_75,
+            -1.836_309_699_804_565_6,
+            -0.926_682_830_742_635_5,
+            0.716_481_417_602_347_4,
+            -0.225_806_302_888_351_52,
+            0.610_832_878_458_102_2,
+            1.316_493_023_556_545,
+            1.179_225_763_867_110_9,
+            -1.428_586_087_480_713_5,
+            0.889_376_894_941_417_5,
+            -0.323_905_861_899_676_74,
+            -1.242_982_089_827_116_2,
+            -0.570_666_517_413_567_2,
+            -0.803_402_126_410_111_9,
+            -0.777_027_309_617_994_4,
+            -0.254_815_842_165_916_6,
+            -0.043_458_959_446_175_484,
+        ]
+        .into_iter()
+        .map(|value| vec![value])
+        .collect();
+        let subcohort = vec![
+            1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=21).collect(),
+            63,
+            None,
+            "SelfPrentice",
+            false,
+        )
+        .expect("right-censored scalar SelfPrentice fit should succeed");
+
+        assert_close(&result.coefficients[0], &[-0.146_606_811_619_739_5]);
+        assert_matrix_close(
+            &result.model_information_matrix,
+            &[vec![0.117_847_442_163_704_02]],
+        );
+        assert!(
+            (result.phase2_variance[0][0] / 2.039_024_479_245_789_8e53 - 1.0).abs() < 1e-11,
+            "expected scalar reference phase-two variance, got {:.17e}",
+            result.phase2_variance[0][0]
+        );
+        assert_close(
+            &result.log_likelihood,
+            &[-1_530.274_844_052_458_8, -1_530.182_254_217_371_8],
+        );
+        assert!((result.score_test - 0.182_636_492_774_758_35).abs() < 1e-13);
+        assert_close(&result.means, &[-0.222_785_048_031_685_9]);
+        assert_eq!(result.iterations, 3);
+    }
+
+    #[test]
     fn native_prentice_matches_delayed_entry_factor_roundoff() {
         let stop = vec![
             12.0, 3.0, 2.0, 8.0, 2.0, 17.0, 10.0, 6.0, 3.0, 3.0, 8.0, 5.0, 8.0, 11.0, 1.0, 8.0,

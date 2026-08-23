@@ -26485,6 +26485,70 @@ def test_cch_formula_matches_self_prentice_scalar_rank_change_nonconvergence():
     )
 
 
+def test_cch_formula_matches_self_prentice_right_censored_scalar_phase_two_roundoff():
+    z = [
+        float.fromhex(value)
+        for value in (
+            "-0x1.3b2b5721b82a2p-2",
+            "0x1.b450f3616ca93p-3",
+            "-0x1.19f6abf922eaep+0",
+            "0x1.d738bf00c245fp-3",
+            "0x1.c6ba052fe3987p-3",
+            "-0x1.d6186479fcf9dp+0",
+            "-0x1.da762c079bd03p-1",
+            "0x1.6ed6a701966d1p-1",
+            "-0x1.ce7388f116d0ap-3",
+            "0x1.38bf164899229p-1",
+            "0x1.5105afd19667ap+0",
+            "0x1.2de1bd5a68ec9p+0",
+            "-0x1.6db7d15d4011p+0",
+            "0x1.c75c688b2ece1p-1",
+            "-0x1.4badfa6f5e01ep-2",
+            "-0x1.3e341301523a1p+0",
+            "-0x1.242e66da6d4ep-1",
+            "-0x1.9b578604efc38p-1",
+            "-0x1.8dd68605d0f95p-1",
+            "-0x1.04ee71b26bd64p-2",
+            "-0x1.64040b3143b2dp-5",
+        )
+    ]
+    data = {
+        "stop": [14, 9, 20, 4, 7, 10, 7, 10, 17, 8, 9, 17, 9, 3, 17, 3, 12, 16, 14, 17, 13],
+        "status": [0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1],
+        "x": list(range(21)),
+        "z": z,
+        "id": list(range(1, 22)),
+        "subcohort": [1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1],
+    }
+    fit = survival.cch(
+        "Surv(stop, status) ~ 0 + x + z",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=63,
+        method="SelfPrentice",
+        robust=False,
+    )
+
+    assert fit.coefficient_names == ()
+    assert survival.coef(fit) == pytest.approx([-0.1466068116197395], abs=1e-14)
+    assert fit.fit.model_information_matrix[0] == pytest.approx(
+        [0.11784744216370402], abs=1e-14
+    )
+    assert fit.phase2var[0] == pytest.approx([2.0390244792457898e53], rel=1e-11)
+    assert fit.var[0] == pytest.approx([2.0390244792457898e53], rel=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-1530.2748440524588, -1530.1822542173718], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(0.18263649277475835, abs=1e-13)
+    assert fit.means == pytest.approx([-0.2227850480316859], abs=1e-15)
+    assert fit.iterations == 3
+    assert fit.offsets == pytest.approx(
+        [-44.827586206896555] * 16 + [55.172413793103445] * 13,
+        abs=1e-14,
+    )
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],
