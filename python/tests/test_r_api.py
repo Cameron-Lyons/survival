@@ -27132,6 +27132,94 @@ def test_cch_formula_matches_prentice_nonconverged_tied_duplicate_variance():
     assert fit.fit.convergence_flag == 1000
 
 
+def test_cch_formula_preserves_prentice_finite_variance_after_nonconvergence():
+    data = {
+        "start": [16, 2, 0, 13, 11, 9, 5, 0, 0, 2, 6, 14, 17, 9, 5, 0, 11, 4, 14],
+        "stop": [19, 4, 1, 17, 16, 12, 10, 3, 1, 3, 9, 20, 19, 12, 8, 2, 13, 6, 19],
+        "status": [1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+        "x": [
+            1.31902037016325,
+            -1.55895861820514,
+            0.09023030919103,
+            1.38657406706107,
+            -1.15866615725249,
+            0.0750902109213203,
+            -1.09472225388637,
+            -0.0821319073337703,
+            0.524933329209907,
+            0.210932736086887,
+            0.450733636825875,
+            -0.249683060507394,
+            -1.29703341378867,
+            -0.399826580234449,
+            0.547798751664738,
+            2.07445629664622,
+            -0.65234722868968,
+            -0.0684031851667403,
+            0.466825159366182,
+        ],
+        "z": [
+            0.268665058925964,
+            -0.130595287012515,
+            2.72684347576924,
+            0.668735481964197,
+            -0.0643360648937243,
+            -0.555460924011281,
+            -0.649504574636737,
+            -0.178797409445533,
+            -0.321294398319967,
+            0.868148709391882,
+            0.54346099134323,
+            -0.623271515284646,
+            0.700304382098733,
+            -0.653834222693076,
+            0.00041222982414799,
+            2.21504230489358,
+            0.913000347229081,
+            0.186292785158738,
+            -0.327810686175575,
+        ],
+        "id": list(range(1, 20)),
+        "subcohort": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0],
+    }
+    with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
+        fit = survival.cch(
+            "Surv(start, stop, status) ~ x + z",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=57,
+            method="Prentice",
+            robust=False,
+        )
+
+    assert survival.coef(fit) == pytest.approx(
+        [0.46644780232953015, 2.3390122260183874], abs=1e-14
+    )
+    expected_model_variance = [
+        [822.9144187509715, 4743.555208546495],
+        [4743.555208546495, 27949.305396034895],
+    ]
+    for actual, expected in zip(
+        fit.fit.model_information_matrix, expected_model_variance, strict=True
+    ):
+        assert actual == pytest.approx(expected, rel=1e-13)
+    expected_phase_two = [
+        [1.2555534187894951e259, 6.360499711414119e259],
+        [6.360499711414119e259, 3.222161317375412e260],
+    ]
+    for actual, expected in zip(fit.phase2var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    for actual, expected in zip(fit.var, expected_phase_two, strict=True):
+        assert actual == pytest.approx(expected, rel=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-1200.5196058100112, -1001.0654313793955], abs=1e-11
+    )
+    assert fit.means == pytest.approx([0.11740112418865778, 0.4061777568175748], abs=1e-15)
+    assert fit.iterations == 35
+    assert fit.fit.convergence_flag == 1000
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],

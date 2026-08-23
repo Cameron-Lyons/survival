@@ -1735,13 +1735,9 @@ impl CoxFit {
         for iter in 1..=self.max_iter {
             self.iter = iter;
             self.recenter_penalty(&mut newbeta);
-            newlk = match self.iterate_with_mode(&newbeta, mode) {
-                Ok(lk) if lk.is_finite() => lk,
-                _ => {
-                    _notfinite = true;
-                    f64::NAN
-                }
-            };
+            // Preserve the sign of infinity because the exhaustion fallback
+            // distinguishes a worse negative-infinite trial from a NaN trial.
+            newlk = self.iterate_with_mode(&newbeta, mode)?;
             self.flag = Self::cholesky(&mut self.imat, self.toler, factor_arithmetic);
             let rank_changed = self.counting_roundoff_compatibility && self.flag != initial_rank;
             _notfinite = !newlk.is_finite();
