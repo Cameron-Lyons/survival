@@ -1348,6 +1348,32 @@ test_that("R formula wrappers delegate to the Python survival package", {
       nmin = 1
     )
   )
+  counting_single_risk_aareg_data <- data.frame(
+    start = c(1, 8, 7, 4, 8, 2, 6, 3, 10, 0, 5, 0, 7, 4),
+    stop = c(5, 11, 9, 5, 9, 6, 11, 7, 12, 1, 6, 1, 9, 7),
+    status = c(0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1),
+    x = c(
+      0x1.df8959eba015bp-4, 0x1.7e35d530f3d76p-1, -0x1.e45db3aa1c2c7p-1,
+      -0x1.c1f630ff7d53fp-3, -0x1.c20475dbec72cp+0, 0x1.31b80f83637f2p-1,
+      -0x1.60d77db8bfca2p+0, -0x1.c975026783892p-2, -0x1.f042e4171932fp-12,
+      -0x1.c1628ff5cd9ap-2, -0x1.40a81c9d0f22dp-2, -0x1.82193785cfe34p+1,
+      0x1.760bcc047ad82p-2, -0x1.4d055dda44427p-1
+    )
+  )
+  compare_aareg(
+    aareg(
+      survival::Surv(start, stop, status) ~ x,
+      data = counting_single_risk_aareg_data,
+      nmin = 1,
+      test = "variance"
+    ),
+    survival::aareg(
+      survival::Surv(start, stop, status) ~ x,
+      data = counting_single_risk_aareg_data,
+      nmin = 1,
+      test = "variance"
+    )
+  )
   reduced_rank_aareg_data <- data.frame(
     start = c(7, 5, 0, 6, 7, 4, 1, 9, 0, 7, 4, 7, 7, 11, 0, 5),
     stop = c(8, 10, 1, 7, 11, 5, 3, 12, 1, 11, 5, 8, 9, 12, 1, 9),

@@ -28089,6 +28089,50 @@ def test_aareg_retains_single_risk_roundoff_event_and_zero_influence():
     assert all(column[-1] == 0.0 for group in fit.dfbeta for column in group)
 
 
+def test_aareg_counting_retains_terminal_single_risk_roundoff_event():
+    data = {
+        "start": [1, 8, 7, 4, 8, 2, 6, 3, 10, 0, 5, 0, 7, 4],
+        "stop": [5, 11, 9, 5, 9, 6, 11, 7, 12, 1, 6, 1, 9, 7],
+        "status": [0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1],
+        "x": [
+            float.fromhex(value)
+            for value in (
+                "0x1.df8959eba015bp-4",
+                "0x1.7e35d530f3d76p-1",
+                "-0x1.e45db3aa1c2c7p-1",
+                "-0x1.c1f630ff7d53fp-3",
+                "-0x1.c20475dbec72cp+0",
+                "0x1.31b80f83637f2p-1",
+                "-0x1.60d77db8bfca2p+0",
+                "-0x1.c975026783892p-2",
+                "-0x1.f042e4171932fp-12",
+                "-0x1.c1628ff5cd9ap-2",
+                "-0x1.40a81c9d0f22dp-2",
+                "-0x1.82193785cfe34p+1",
+                "0x1.760bcc047ad82p-2",
+                "-0x1.4d055dda44427p-1",
+            )
+        ],
+    }
+
+    fit = survival.aareg(
+        "Surv(start, stop, status) ~ x",
+        data=data,
+        nmin=1,
+        test="variance",
+    )
+
+    assert fit.n == [14, 7, 7]
+    assert fit.times == [1.0, 1.0, 5.0, 6.0, 7.0, 9.0, 9.0, 11.0, 12.0]
+    assert fit.nrisk == pytest.approx([2, 2, 5, 4, 3, 5, 5, 3, 1])
+    assert fit.coefficient[-1] == pytest.approx(
+        [0.995958212173798, -8.54010129834455], abs=1e-12
+    )
+    assert fit.time_weights[-1] == pytest.approx(
+        [2.30969101765564e-11, 5.17338576971547e-18], abs=1e-22
+    )
+
+
 def test_aareg_retains_early_multivariate_reduced_rank_moments():
     data = {
         "start": [7, 5, 0, 6, 7, 4, 1, 9, 0, 7, 4, 7, 7, 11, 0, 5],

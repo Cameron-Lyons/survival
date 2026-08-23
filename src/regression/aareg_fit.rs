@@ -379,7 +379,9 @@ fn risk_moments(
                             .fold(0.0_f64, f64::max);
                         covariance_scale * inverse_scale >= 1e5
                     });
-                if cancellation_dominated || reduced_rank || ill_conditioned {
+                // Incremental removals can leave subtraction residue in a
+                // one-row risk set, so rebuild singleton moments directly.
+                if risk_count == 1 || cancellation_dominated || reduced_rank || ill_conditioned {
                     (mean, covariance) = reference_risk_moment(
                         time, order, stop, covariates, start, weights, center,
                     );
@@ -1477,6 +1479,63 @@ mod tests {
                 assert_eq!(column[4], 0.0);
             }
         }
+    }
+
+    #[test]
+    fn counting_single_covariate_retains_terminal_reference_roundoff() {
+        let x = [
+            0x3fbd_f895_9eba_015b,
+            0x3fe7_e35d_530f_3d76,
+            0xbfee_45db_3aa1_c2c7,
+            0xbfcc_1f63_0ff7_d53f,
+            0xbffc_2047_5dbe_c72c,
+            0x3fe3_1b80_f836_37f2,
+            0xbff6_0d77_db8b_fca2,
+            0xbfdc_9750_2678_3892,
+            0xbf3f_042e_4171_932f,
+            0xbfdc_1628_ff5c_d9a0,
+            0xbfd4_0a81_c9d0_f22d,
+            0xc008_2193_785c_fe34,
+            0x3fd7_60bc_c047_ad82,
+            0xbfe4_d055_dda4_4427,
+        ]
+        .map(f64::from_bits);
+        let covariates: Vec<Vec<f64>> = x.into_iter().map(|value| vec![value]).collect();
+        let stop: Vec<f64> = vec![
+            5.0, 11.0, 9.0, 5.0, 9.0, 6.0, 11.0, 7.0, 12.0, 1.0, 6.0, 1.0, 9.0, 7.0,
+        ];
+        let status: Vec<i32> = vec![0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1];
+        let start = vec![
+            1.0, 8.0, 7.0, 4.0, 8.0, 2.0, 6.0, 3.0, 10.0, 0.0, 5.0, 0.0, 7.0, 4.0,
+        ];
+        let result = aareg_fit(
+            stop,
+            status,
+            covariates,
+            Some(start),
+            None,
+            None,
+            1e-7,
+            Some(1),
+            false,
+            None,
+            "variance".to_string(),
+            None,
+        )
+        .expect("counting fit should retain the terminal reference event");
+
+        assert_eq!(result.n, vec![14, 7, 7]);
+        assert_eq!(result.times.last(), Some(&12.0));
+        assert_close(result.coefficient.last().unwrap()[0], 0.995_958_212_173_798);
+        assert_close(result.coefficient.last().unwrap()[1], -8.540_101_298_344_55);
+        assert_close(
+            result.time_weights.last().unwrap()[0],
+            2.309_691_017_655_64e-11,
+        );
+        assert_close(
+            result.time_weights.last().unwrap()[1],
+            5.173_385_769_715_47e-18,
+        );
     }
 
     #[test]
