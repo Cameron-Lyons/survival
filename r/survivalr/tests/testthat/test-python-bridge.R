@@ -9849,6 +9849,31 @@ test_that("data-prep helpers match R survival shapes", {
       etype = "a"
     )
   )
+  finegray_weighted_strata_data <- data.frame(
+    time = rep(1:3, 2),
+    status = factor(
+      rep(c("target", "censored", "compete"), 2),
+      levels = c("censored", "target", "compete")
+    ),
+    x = c(10, 11, 12, 20, 21, 22),
+    group = factor(rep(c("z", "a"), each = 3)),
+    wt = c(101, 102, 103, 201, 202, 203)
+  )
+  bridged_finegray_weighted_strata <- finegray(
+    Surv(time, status) ~ x + strata(group),
+    data = finegray_weighted_strata_data,
+    weights = wt,
+    etype = "target"
+  )
+  reference_finegray_weighted_strata <- survival::finegray(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = finegray_weighted_strata_data,
+    weights = wt,
+    etype = "target"
+  )
+  expect_equal(bridged_finegray_weighted_strata, reference_finegray_weighted_strata)
+  expect_equal(head(bridged_finegray_weighted_strata[["(weights)"]], 3), 201:203)
+  expect_equal(head(bridged_finegray_weighted_strata$fgwt, 3), 101:103)
   finegray_class_data <- data.frame(
     time = seq_len(8L),
     status = factor(
@@ -9935,6 +9960,28 @@ test_that("data-prep helpers match R survival shapes", {
       count = "extra"
     )
   )
+  finegray_zero_probability_data <- data.frame(
+    id = 1:4,
+    start = c(0, 0, 0, 3),
+    stop = c(1, 1.5, 2, 5),
+    status = factor(
+      c("target", "compete", "censored", "target"),
+      levels = c("censored", "target", "compete")
+    ),
+    x = 1:4
+  )
+  bridged_finegray_zero_probability <- finegray(
+    Surv(start, stop, status) ~ x,
+    data = finegray_zero_probability_data,
+    id = id
+  )
+  reference_finegray_zero_probability <- survival::finegray(
+    survival::Surv(start, stop, status) ~ x,
+    data = finegray_zero_probability_data,
+    id = id
+  )
+  expect_equal(bridged_finegray_zero_probability, reference_finegray_zero_probability)
+  expect_true(any(is.nan(bridged_finegray_zero_probability$fgwt)))
   expect_error(
     finegray(
       Surv(start, stop, status) ~ x,

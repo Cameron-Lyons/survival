@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from .helpers import setup_survival_import
@@ -348,15 +350,15 @@ def test_finegray_validates_public_inputs():
     assert harmless_zero.row == [1, 1, 1, 2]
     assert harmless_zero.wt == pytest.approx([1.0, 0.5, 0.0, 1.0])
 
-    with pytest.raises(ValueError, match="probability is zero"):
-        survival.regression.finegray(
-            [0.0],
-            [2.0],
-            [1.0, 2.0, 3.0],
-            [1.0, 0.0, 0.0],
-            [True],
-            [True, False, True],
-        )
+    zero_ratio = survival.regression.finegray(
+        [0.0],
+        [2.0],
+        [1.0, 2.0, 3.0],
+        [1.0, 0.0, 0.0],
+        [True],
+        [True, False, True],
+    )
+    assert math.isnan(zero_ratio.wt[1])
 
 
 def test_finegray_regression_and_cif_public_api():

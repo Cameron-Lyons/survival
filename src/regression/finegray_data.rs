@@ -120,29 +120,6 @@ fn validate_finegray_inputs(
         }
     }
 
-    if cprob.contains(&0.0) {
-        let kept_indices: Vec<usize> = keep
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &is_kept)| is_kept.then_some(idx))
-            .collect();
-        for (&stop, &should_extend) in tstop.iter().zip(extend) {
-            if !should_extend {
-                continue;
-            }
-            let initial_cut = ctime.partition_point(|&cut_time| cut_time < stop);
-            let first_later_kept = kept_indices.partition_point(|&idx| idx <= initial_cut);
-            if initial_cut < ncut
-                && first_later_kept < kept_indices.len()
-                && cprob[initial_cut] == 0.0
-            {
-                return Err(value_error(
-                    "censoring probability is zero before a selected event",
-                ));
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -487,8 +464,8 @@ mod tests {
     }
 
     #[test]
-    fn test_finegray_rejects_zero_probability_before_later_kept_cut() {
-        let error = finegray(
+    fn test_finegray_preserves_zero_probability_ratios() {
+        let result = finegray(
             vec![0.0],
             vec![2.0],
             vec![1.0, 2.0, 3.0],
@@ -496,8 +473,12 @@ mod tests {
             vec![true],
             vec![true, false, true],
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.to_string().contains("probability is zero"));
+        assert_eq!(result.row, vec![1, 1]);
+        assert_eq!(result.start, vec![0.0, 2.0]);
+        assert_eq!(result.end, vec![2.0, 3.0]);
+        assert_eq!(result.wt[0], 1.0);
+        assert!(result.wt[1].is_nan());
     }
 }

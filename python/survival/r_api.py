@@ -11938,7 +11938,9 @@ def finegray(
             expanded_start.append(float(left))
             expanded_stop.append(float(right))
             expanded_status.append(float(response.status[source_idx] == endpoint_code))
-            expanded_weight.append(float(weight) * inputs.numeric_weights[source_idx])
+            # R's stratified expansion indexes user weights by the split's
+            # stratum-local row, independently of the retained model-frame row.
+            expanded_weight.append(float(weight) * inputs.numeric_weights[local_idx])
             expanded_add.append(int(add))
 
     if not source_rows:

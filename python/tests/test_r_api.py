@@ -4147,7 +4147,7 @@ def test_r_style_finegray_keeps_model_frame_terms_weights_and_stratum_order():
     assert result["I(x^2)"][:3] == pytest.approx([400.0, 441.0, 484.0])
     assert result["offset(z)"][:3] == pytest.approx([4.0, 5.0, 6.0])
     assert result["(weights)"][:3] == pytest.approx([201.0, 202.0, 203.0])
-    assert result["crwt"][:3] == pytest.approx([201.0, 202.0, 203.0])
+    assert result["crwt"][:3] == pytest.approx([101.0, 102.0, 103.0])
     assert result["added.rows"] == [0] * 6
 
 
@@ -4395,12 +4395,12 @@ def test_r_style_finegray_validates_multistate_formula_contract():
         "event": ["target", "compete", "censor", "target"],
         "x": [1, 2, 3, 4],
     }
-    with pytest.raises(ValueError, match="probability is zero"):
-        survival.finegray(
-            "Surv(start, stop, event) ~ x",
-            data=zero_before_target,
-            id="id",
-        )
+    zero_probability_result = survival.finegray(
+        "Surv(start, stop, event) ~ x",
+        data=zero_before_target,
+        id="id",
+    )
+    assert any(math.isnan(weight) for weight in zero_probability_result["fgwt"])
 
     harmless_zero = {
         "id": [1, 2, 3, 4],
