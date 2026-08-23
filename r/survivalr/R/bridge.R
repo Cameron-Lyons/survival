@@ -7177,17 +7177,26 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
   }
 
   design <- stats::model.matrix(Terms, frame)
-  if (attr(Terms, "intercept") == 1L) {
-    design <- design[, -1L, drop = FALSE]
+  if (ncol(design) < 2L) {
+    stop("subscript out of bounds", call. = FALSE)
   }
-  if (ncol(design) == 0L) {
-    stop("cch formula must contain at least one covariate", call. = FALSE)
+  design <- design[, 2:ncol(design)]
+  coefficient_names <- dimnames(design)[[2L]]
+  fit_design <- if (is.null(dim(design))) {
+    matrix(as.numeric(design), ncol = 1L)
+  } else {
+    design
   }
-  coefficient_names <- colnames(design)
+  assignment_label <- if (method %in% c("Prentice", "SelfPrentice")) "aX" else "X"
+  internal_fit_names <- if (length(coefficient_names) == 0L) {
+    assignment_label
+  } else {
+    paste0(assignment_label, coefficient_names)
+  }
   common_args <- list(
     stop = as.list(stop_time),
     status = as.list(status),
-    covariates = .coxph_fit_covariates(design, nrow(design)),
+    covariates = .coxph_fit_covariates(fit_design, nrow(fit_design)),
     subcohort = as.list(as.integer(subcoh)),
     id = as.list(as.integer(factor(id, levels = unique(id))) - 1L),
     start = if (is.null(start_time)) NULL else as.list(start_time),
@@ -7227,7 +7236,9 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     coefficient_names
   )
   fit_x <- .as_numeric_matrix(.result_field(result, "covariates"))
-  colnames(fit_x) <- coefficient_names
+  rownames(fit_x) <- as.character(seq_len(nrow(fit_x)))
+  colnames(fit_x) <- internal_fit_names
+  attr(fit_x, "assign") <- rep.int(1L, ncol(fit_x))
   fit_start <- .as_numeric_vector(.result_field(result, "entry_times"))
   fit_stop <- .as_numeric_vector(.result_field(result, "event_times"))
   fit_status <- as.integer(.as_numeric_vector(.result_field(result, "status")))
@@ -7241,12 +7252,12 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     iter = as.integer(.result_field(result, "iterations")),
     linear.predictors = .as_numeric_vector(.result_field(result, "linear_predictors")),
     residuals = .as_numeric_vector(.result_field(result, "residuals")),
-    means = stats::setNames(.as_numeric_vector(.result_field(result, "means")), coefficient_names),
+    means = stats::setNames(.as_numeric_vector(.result_field(result, "means")), internal_fit_names),
     method = method,
     n = as.integer(.result_field(result, "n")),
     nevent = as.integer(.result_field(result, "nevent")),
     terms = Terms,
-    assign = attr(design, "assign"),
+    assign = stats::setNames(list(seq_len(ncol(fit_design))), assignment_label),
     naive.var = naive_variance,
     x = fit_x,
     y = fit_y,
@@ -7264,7 +7275,7 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     out$opt <- .as_numeric_matrix(.result_field(result, "optimization_fraction"))
     out$delta <- .as_numeric_matrix(.result_field(result, "phase2_score_matrix"))
     out$sc <- .as_numeric_matrix(.result_field(result, "collapsed_score_rows"))
-    internal_score_names <- paste0("X", coefficient_names)
+    internal_score_names <- internal_fit_names
     dimnames(out$opt) <- list(c("opt", rep("", max(0L, nrow(out$opt) - 1L))), NULL)
     if (identical(method, "II.Borgan")) {
       dimnames(out$delta) <- list(internal_score_names, internal_score_names)

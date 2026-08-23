@@ -20554,6 +20554,8 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
     include_complete = (
         _is_coxph_fit(fit) if complete is None else _normalize_bool_option(complete, "complete")
     )
+    if isinstance(fit, CchModelResult):
+        return list(fit.coefficient_names)
     if _is_survreg_fit(fit):
         location_width = len(_location_beta(fit))
         names = _fit_location_coef_names(fit, location_width)
@@ -24920,9 +24922,10 @@ def _prediction_inputs(
                     f"newdata column {sparse_frailty.formula.term.column!r} contains unknown level "
                     f"{unknown!r}"
                 )
-        return _design_rows_from_spec(newdata, design, n, prediction=True), (
-            offsets if any(offsets) else None
-        )
+        rows = _design_rows_from_spec(newdata, design, n, prediction=True)
+        if isinstance(fit, CchModelResult):
+            return [row[1:] for row in rows], None
+        return rows, (offsets if any(offsets) else None)
     coefficient_names = getattr(fit, "coefficient_names", None)
     if coefficient_names is not None and (
         isinstance(newdata, Mapping) or hasattr(newdata, "columns")
@@ -28409,11 +28412,19 @@ def cch(
     if terms.clusters:
         raise ValueError("cluster() terms are not supported by cch")
 
-    design = _fit_formula_design(data, response_spec, terms, len(response))
-    rows = _design_rows_from_spec(data, design, len(response))
-    if not rows or not rows[0]:
-        raise ValueError("cch formula must contain at least one covariate")
-    coefficient_names = tuple(_formula_design_output_names(design))
+    design = _fit_formula_design(
+        data,
+        response_spec,
+        terms,
+        len(response),
+        include_intercept=True,
+    )
+    design_names = _formula_design_output_names(design)
+    if len(design_names) < 2:
+        raise ValueError("subscript out of bounds")
+    rows = [row[1:] for row in _design_rows_from_spec(data, design, len(response))]
+    selected_names = design_names[1:]
+    coefficient_names = () if len(selected_names) == 1 else tuple(selected_names)
 
     raw_subcohort = _materialize_1d(subcohort_values, "subcoh")
     if len(raw_subcohort) != len(response):

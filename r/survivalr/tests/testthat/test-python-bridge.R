@@ -13189,6 +13189,47 @@ test_that("cch rejects invalid unstratified sampling inputs", {
   )
 })
 
+test_that("cch drops the reference model-matrix column", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    stop = c(5, 12, 3, 18, 9, 1, 15, 7, 20, 4, 11, 16, 2, 14, 6, 10, 13, 8, 17, 19),
+    status = c(1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1),
+    x = c(-1.2, .4, .9, -.3, 1.4, -.8, .2, 1.1, -.5, .7, -1, .1, 1.7, -.6, .5, -1.5, 1, -.1, .8, -.9),
+    z = c(0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1),
+    group = factor(rep(c("a", "b"), 10)),
+    id = seq_len(20),
+    subcohort = c(rep(1, 14), rep(0, 6))
+  )
+  common <- list(data = data, subcoh = ~subcohort, id = ~id, cohort.size = 80)
+  expect_error(
+    do.call(cch, c(list(formula = Surv(stop, status) ~ 1), common)),
+    "subscript out of bounds",
+    fixed = TRUE
+  )
+  expect_error(
+    do.call(cch, c(list(formula = Surv(stop, status) ~ 0 + x), common)),
+    "subscript out of bounds",
+    fixed = TRUE
+  )
+
+  compare_shape <- function(formula) {
+    actual <- do.call(cch, c(list(formula = formula), common))
+    reference <- do.call(survival::cch, c(list(formula = formula), common))
+    expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+    expect_equal(actual$var, reference$var, tolerance = 1e-11)
+    expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+    expect_equal(actual$means, reference$means, tolerance = 1e-11)
+    expect_equal(actual$x, reference$x, tolerance = 1e-11)
+    expect_equal(actual$assign, reference$assign)
+  }
+  compare_shape(Surv(stop, status) ~ x)
+  compare_shape(Surv(stop, status) ~ 0 + x + z)
+  compare_shape(Surv(stop, status) ~ 0 + group)
+})
+
 test_that("low-level Cox survival curves match right and counting-process fits", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

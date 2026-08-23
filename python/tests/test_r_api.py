@@ -25929,6 +25929,49 @@ def test_cch_formula_expands_factors_and_validates_sampling_inputs():
         )
 
 
+def test_cch_formula_drops_the_reference_model_matrix_column():
+    data = _cch_parity_data()
+    common = {
+        "subcoh": "subcohort",
+        "id": "id",
+        "cohort_size": 80,
+        "method": "Prentice",
+    }
+
+    for formula in ("Surv(stop, status) ~ 1", "Surv(stop, status) ~ 0 + x"):
+        with pytest.raises(ValueError, match="subscript out of bounds"):
+            survival.cch(formula, data, **common)
+
+    one_covariate = survival.cch("Surv(stop, status) ~ x", data, **common)
+    assert survival.coef_names(one_covariate) == []
+
+    dropped_numeric = survival.cch("Surv(stop, status) ~ 0 + x + z", data, **common)
+    reference_numeric = survival.cch("Surv(stop, status) ~ z", data, **common)
+    assert survival.coef_names(dropped_numeric) == []
+    assert survival.coef(dropped_numeric) == pytest.approx(survival.coef(reference_numeric))
+    for actual, expected in zip(
+        survival.vcov(dropped_numeric),
+        survival.vcov(reference_numeric),
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert dropped_numeric.means == pytest.approx(reference_numeric.means)
+    assert dropped_numeric.x == reference_numeric.x
+    assert survival.predict(
+        dropped_numeric,
+        {"x": [100.0], "z": [0.25]},
+        reference="zero",
+    ) == pytest.approx(
+        survival.predict(reference_numeric, {"z": [0.25]}, reference="zero")
+    )
+
+    dropped_factor = survival.cch("Surv(stop, status) ~ 0 + group", data, **common)
+    reference_factor = survival.cch("Surv(stop, status) ~ group", data, **common)
+    assert survival.coef_names(dropped_factor) == []
+    assert survival.coef(dropped_factor) == pytest.approx(survival.coef(reference_factor))
+    assert dropped_factor.x == reference_factor.x
+
+
 def test_aareg_formula_matches_weighted_right_censored_reference_values():
     data = {
         "stop": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
