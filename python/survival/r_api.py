@@ -22879,7 +22879,7 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
         frame["start.time"] = []
 
     optional_columns = {
-        "std.err": result.std_err,
+        "std.err": result.std_chaz or result.std_err,
         "std.chaz": result.std_chaz,
         "lower": result.conf_lower,
         "upper": result.conf_upper,

@@ -13694,7 +13694,7 @@ test_that("stratified Cox survfit subsetting matches survival", {
     bridged_subset <- bridged[selector, drop = drop]
     reference_subset <- reference[selector, drop = drop]
     expect_identical(dim(bridged_subset), dim(reference_subset))
-    for (field in c("time", "surv", "cumhaz")) {
+    for (field in c("time", "surv", "cumhaz", "std.err", "std.chaz", "lower", "upper")) {
       expect_equal(
         as.numeric(bridged_subset[[field]]),
         as.numeric(reference_subset[[field]]),

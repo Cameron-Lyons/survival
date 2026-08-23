@@ -16598,6 +16598,9 @@ def test_survfit_accepts_simple_coxph_model():
     assert result.std_err[0] == pytest.approx(
         [surv * se for surv, se in zip(result.surv[0], expected_prediction.se_fit, strict=True)]
     )
+    result_frame = survival.as_data_frame(result)
+    assert result_frame["std.err"] == pytest.approx(result_frame["std.chaz"])
+    assert result_frame["std.err"] == pytest.approx(result.std_chaz[0])
     assert len(result.conf_lower) == 1
     assert len(result.conf_upper) == 1
     assert len(result.conf_lower[0]) == len(result.time)
