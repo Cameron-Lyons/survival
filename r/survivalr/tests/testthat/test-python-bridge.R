@@ -10302,6 +10302,7 @@ test_that("data-prep helpers match R survival shapes", {
     id = id
   )
   expect_equal(bridged_condense, reference_condense)
+  expect_identical(typeof(bridged_condense$event), typeof(reference_condense$event))
   bridged_condense_weighted <- survcondense(
     Surv(tstart, tstop, event) ~ x,
     data = condense_data,
@@ -10381,6 +10382,22 @@ test_that("data-prep helpers match R survival shapes", {
     survcondense(condense_strata_formula, data = condense_special_data, id = id),
     survival::survcondense(condense_strata_formula, data = condense_special_data, id = id)
   )
+  condense_strata_levels_data <- transform(
+    condense_data,
+    site = factor(c("west", "north", "north", "west"), levels = c("north", "south", "west"))
+  )
+  expect_identical(
+    survcondense(
+      condense_strata_formula,
+      data = condense_strata_levels_data,
+      id = id
+    ),
+    survival::survcondense(
+      condense_strata_formula,
+      data = condense_strata_levels_data,
+      id = id
+    )
+  )
   condense_multi_strata_formula <- Surv(tstart, tstop, event) ~ strata(site, phase)
   environment(condense_multi_strata_formula) <- environment(reference_formula)
   expect_equal(
@@ -10392,6 +10409,58 @@ test_that("data-prep helpers match R survival shapes", {
   expect_equal(
     survcondense(condense_offset_formula, data = condense_special_data, id = id),
     survival::survcondense(condense_offset_formula, data = condense_special_data, id = id)
+  )
+  condense_missing_data <- data.frame(
+    id = c(4L, 2L, 3L, 1L, 1L, 1L, 1L, 2L),
+    tstart = c(0L, 3L, 2L, 6L, 5L, 1L, 3L, 5L),
+    tstop = c(4L, 5L, 6L, 7L, 6L, 3L, 5L, 7L),
+    event = c(1L, 1L, 0L, 0L, 0L, 0L, 1L, 1L),
+    x = factor(
+      c("a", "b", NA, "b", "c", "b", "b", "b"),
+      levels = c("a", "c", "b")
+    ),
+    off = c(0.5, 2, 1, 0.5, 0.5, 0.5, 0.5, 1)
+  )
+  condense_missing_formula <- Surv(tstart, tstop, event) ~ offset(off) + x
+  environment(condense_missing_formula) <- environment(reference_formula)
+  expect_identical(
+    survcondense(condense_missing_formula, data = condense_missing_data, id = id),
+    survival::survcondense(
+      condense_missing_formula,
+      data = condense_missing_data,
+      id = id
+    )
+  )
+  condense_empty_data <- data.frame(
+    id = c("b", "a", "c"),
+    tstart = c(3L, 3L, 2L),
+    tstop = c(7L, 4L, 3L),
+    event = c(1L, 0L, 1L),
+    x = factor(c(NA, "b", "b"), levels = c("c", "b", "a")),
+    off = c(0.5, 1, 0.5),
+    wt = c(1, 3, 3)
+  )
+  condense_empty_formula <- Surv(tstart, tstop, event) ~ offset(off) + x
+  environment(condense_empty_formula) <- environment(reference_formula)
+  expect_identical(
+    survcondense(
+      condense_empty_formula,
+      data = condense_empty_data,
+      weights = wt,
+      id = id,
+      start = "begin",
+      end = "finish",
+      event = "outcome"
+    ),
+    survival::survcondense(
+      condense_empty_formula,
+      data = condense_empty_data,
+      weights = wt,
+      id = id,
+      start = "begin",
+      end = "finish",
+      event = "outcome"
+    )
   )
   condense_multistate_data <- data.frame(
     id = rep(1:3, each = 2),

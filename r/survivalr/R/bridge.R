@@ -11552,6 +11552,26 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
   id_values <- .eval_formula_arg(substitute(id), missing(id), data, env, vector = TRUE)
   weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env, vector = TRUE)
   subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
+  survcondense_call <- match.call()
+  output_model_frame <- function() {
+    model_call <- survcondense_call
+    model_indices <- match(
+      c("formula", "data", "weights", "subset", "id"),
+      names(model_call),
+      nomatch = 0L
+    )
+    model_call <- model_call[c(1L, model_indices[model_indices > 0L])]
+    model_call$na.action <- na.action
+    model_call[[1L]] <- quote(stats::model.frame)
+    model_frame <- eval(model_call, env)
+    frame_names <- names(model_frame)
+    frame_names[frame_names == "(id)"] <- id_name
+    if (!is.null(weight_name)) {
+      frame_names[frame_names == "(weights)"] <- weight_name
+    }
+    names(model_frame) <- frame_names
+    model_frame
+  }
   result <- .call_r_api(
     "survcondense",
     formula = .as_formula_string(formula),
@@ -11566,10 +11586,41 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
     `_id_name` = id_name,
     `_weights_name` = weight_name
   )
-  frame <- as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE)
+  if (length(result) > 0L && all(lengths(result) == 0L)) {
+    model_frame <- output_model_frame()
+    frame_names <- names(model_frame)
+    frame <- model_frame[
+      FALSE,
+      -c(1L, which(duplicated(frame_names))),
+      drop = FALSE
+    ]
+    attr(frame, "terms") <- NULL
+    frame[[start]] <- numeric()
+    frame[[end]] <- numeric()
+    frame[[event]] <- if (is.factor(event_source)) {
+      factor(character(), levels = c("censor", levels(event_source)[-1L]))
+    } else {
+      numeric()
+    }
+    return(frame)
+  }
+  frame <- as.data.frame(
+    lapply(result, .as_model_frame_column),
+    stringsAsFactors = FALSE,
+    optional = TRUE
+  )
   strata_columns <- grep("^strata\\(", names(frame), value = TRUE)
-  for (column in strata_columns) {
-    frame[[column]] <- factor(frame[[column]])
+  if (length(strata_columns) > 0L) {
+    model_frame <- output_model_frame()
+    for (column in strata_columns) {
+      source <- model_frame[[column]]
+      source_levels <- if (is.factor(source)) levels(source) else levels(factor(source))
+      frame[[column]] <- factor(
+        as.character(frame[[column]]),
+        levels = source_levels,
+        ordered = is.ordered(source)
+      )
+    }
   }
   event_values <- frame[[event]]
   frame <- .restore_r_column_classes(frame, data)
@@ -11578,6 +11629,8 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
       as.character(event_values),
       levels = c("censor", levels(event_source)[-1L])
     )
+  } else {
+    frame[[event]] <- as.numeric(event_values)
   }
   frame
 }
