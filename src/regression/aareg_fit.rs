@@ -210,33 +210,49 @@ fn update_risk_sums(
     }
 }
 
-fn reference_single_covariate_moment(
+fn reference_risk_moment(
     time: f64,
     order: &[usize],
     stop: &[f64],
     covariates: &[Vec<f64>],
     start: Option<&[f64]>,
     weights: Option<&[f64]>,
-    center: f64,
-) -> (f64, f64) {
+    center: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
+    let nvar = center.len();
     let mut risk = 0.0;
-    let mut first = 0.0;
-    let mut second = 0.0;
+    let mut first = vec![0.0; nvar];
+    let mut second = vec![0.0; nvar * nvar];
     for &idx in order {
         if stop[idx] < time || start.is_some_and(|values| values[idx] >= time) {
             continue;
         }
         let weight = weights.map_or(1.0, |values| values[idx]);
-        let centered = covariates[idx][0] - center;
         risk += weight;
-        first = weight.mul_add(centered, first);
-        second = (weight * centered).mul_add(centered, second);
+        for row in 0..nvar {
+            let centered_row = covariates[idx][row] - center[row];
+            first[row] = weight.mul_add(centered_row, first[row]);
+            for column in 0..=row {
+                let centered_column = covariates[idx][column] - center[column];
+                let offset = row * nvar + column;
+                second[offset] = (weight * centered_row).mul_add(centered_column, second[offset]);
+            }
+        }
     }
 
     debug_assert!(risk > 0.0);
-    let centered_mean = first / risk;
-    let covariance = (-centered_mean).mul_add(first, second) / risk;
-    (center + centered_mean, covariance)
+    let mut mean = vec![0.0; nvar];
+    let mut covariance = vec![0.0; nvar * nvar];
+    for row in 0..nvar {
+        let centered_mean = first[row] / risk;
+        mean[row] = center[row] + centered_mean;
+        for column in 0..=row {
+            let value = (-centered_mean).mul_add(first[column], second[row * nvar + column]) / risk;
+            covariance[row * nvar + column] = value;
+            covariance[column * nvar + row] = value;
+        }
+    }
+    (mean, covariance)
 }
 
 fn risk_moments(
@@ -246,12 +262,13 @@ fn risk_moments(
     start: Option<&[f64]>,
     weights: Option<&[f64]>,
     nvar: usize,
+    qrtol: f64,
 ) -> Vec<RiskMoment> {
     let groups = event_groups(stop, status);
     let n = stop.len();
     // Preserve the upstream stop/status order for cancellation-dominated
-    // one-column moments without replacing the ordinary sorted sweep.
-    let single_covariate_reference = (nvar == 1).then(|| {
+    // or reduced-rank moments without replacing the ordinary sorted sweep.
+    let risk_moment_reference = (nvar > 0).then(|| {
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&left, &right| {
             stop[left]
@@ -259,7 +276,15 @@ fn risk_moments(
                 .then_with(|| status[right].cmp(&status[left]))
                 .then(left.cmp(&right))
         });
-        let center = order.iter().map(|&idx| covariates[idx][0]).sum::<f64>() / n as f64;
+        let mut center = vec![0.0; nvar];
+        for &idx in &order {
+            for column in 0..nvar {
+                center[column] += covariates[idx][column];
+            }
+        }
+        for value in &mut center {
+            *value /= n as f64;
+        }
         (center, order)
     });
     let mut stop_order: Vec<usize> = (0..n).collect();
@@ -320,6 +345,7 @@ fn risk_moments(
 
         let mut mean = vec![0.0; nvar];
         let mut covariance = vec![0.0; nvar * nvar];
+        let mut precomputed_inverse = Vec::new();
         if s0 > 0.0 {
             for column in 0..nvar {
                 mean[column] = s1[column] / s0;
@@ -330,15 +356,35 @@ fn risk_moments(
                     covariance[row * nvar + column] = if value.abs() < 1e-15 { 0.0 } else { value };
                 }
             }
-            if let Some((center, order)) = &single_covariate_reference {
-                let scale = (s2[0] / s0).abs() + mean[0].abs().powi(2);
-                let cancellation_bound = 1e-10 * scale;
-                if covariance[0].abs() <= cancellation_bound {
-                    let (reference_mean, reference_covariance) = reference_single_covariate_moment(
-                        time, order, stop, covariates, start, weights, *center,
+            if let Some((center, order)) = &risk_moment_reference {
+                let cancellation_dominated = (0..nvar).any(|column| {
+                    let scale =
+                        (s2[column * nvar + column] / s0).abs() + mean[column].abs().powi(2);
+                    covariance[column * nvar + column].abs() <= 1e-10 * scale
+                });
+                let sweep_inverse = (nvar > 1)
+                    .then(|| invert_matrix(&covariance, nvar, qrtol))
+                    .flatten();
+                let reduced_rank = nvar > 1 && sweep_inverse.is_none();
+                let ill_conditioned = nvar > 1
+                    && !reduced_rank
+                    && sweep_inverse.as_ref().is_some_and(|inverse| {
+                        let covariance_scale = covariance
+                            .iter()
+                            .map(|value| value.abs())
+                            .fold(0.0_f64, f64::max);
+                        let inverse_scale = inverse
+                            .iter()
+                            .map(|value| value.abs())
+                            .fold(0.0_f64, f64::max);
+                        covariance_scale * inverse_scale >= 1e5
+                    });
+                if cancellation_dominated || reduced_rank || ill_conditioned {
+                    (mean, covariance) = reference_risk_moment(
+                        time, order, stop, covariates, start, weights, center,
                     );
-                    mean[0] = reference_mean;
-                    covariance[0] = reference_covariance;
+                } else if let Some(inverse) = sweep_inverse {
+                    precomputed_inverse = inverse;
                 }
             }
         }
@@ -349,7 +395,7 @@ fn risk_moments(
             risk: s0,
             mean,
             covariance,
-            inverse: Vec::new(),
+            inverse: precomputed_inverse,
             time_weight: Vec::new(),
         });
     }
@@ -380,6 +426,7 @@ fn taper_covariances(moments: &mut [RiskMoment], taper: &[f64], nvar: usize) {
                 *value += original_value * weight;
             }
         }
+        moment.inverse.clear();
     }
 }
 
@@ -440,6 +487,76 @@ fn invert_matrix(values: &[f64], n: usize, tolerance: f64) -> Option<Vec<f64>> {
     Some(inverse)
 }
 
+struct QrCoefficientMatrix {
+    rank: usize,
+    coefficients: Vec<f64>,
+}
+
+fn euclidean_norm(values: &[f64]) -> f64 {
+    values.iter().fold(0.0, |norm, value| norm.hypot(*value))
+}
+
+fn qr_coefficient_matrix(values: &[f64], n: usize, tolerance: f64) -> QrCoefficientMatrix {
+    if n == 0 {
+        return QrCoefficientMatrix {
+            rank: 0,
+            coefficients: Vec::new(),
+        };
+    }
+
+    let mut basis: Vec<Vec<f64>> = Vec::with_capacity(n);
+    let mut active_columns = Vec::with_capacity(n);
+    let mut triangular = vec![0.0; n * n];
+    for column in 0..n {
+        let original: Vec<f64> = (0..n).map(|row| values[row * n + column]).collect();
+        let original_norm = euclidean_norm(&original);
+        let mut residual = original.clone();
+        let mut projections = Vec::with_capacity(basis.len());
+        for direction in &basis {
+            let projection = dot(direction, &residual);
+            projections.push(projection);
+            for row in 0..n {
+                residual[row] -= projection * direction[row];
+            }
+        }
+        let residual_norm = euclidean_norm(&residual);
+        if original_norm == 0.0
+            || !residual_norm.is_finite()
+            || residual_norm < tolerance * original_norm
+        {
+            continue;
+        }
+
+        let position = basis.len();
+        for (row, projection) in projections.into_iter().enumerate() {
+            triangular[row * n + position] = projection;
+        }
+        triangular[position * n + position] = residual_norm;
+        for value in &mut residual {
+            *value /= residual_norm;
+        }
+        basis.push(residual);
+        active_columns.push(column);
+    }
+
+    let rank = basis.len();
+    let mut coefficients = vec![f64::NAN; n * n];
+    for rhs in 0..n {
+        let mut solution: Vec<f64> = basis.iter().map(|direction| direction[rhs]).collect();
+        for row in (0..rank).rev() {
+            for column in (row + 1)..rank {
+                solution[row] -= triangular[row * n + column] * solution[column];
+            }
+            solution[row] /= triangular[row * n + row];
+        }
+        for (position, &column) in active_columns.iter().enumerate() {
+            coefficients[column * n + rhs] = solution[position];
+        }
+    }
+
+    QrCoefficientMatrix { rank, coefficients }
+}
+
 fn matrix_vector_product(matrix: &[f64], vector: &[f64], n: usize) -> Vec<f64> {
     (0..n)
         .map(|row| {
@@ -470,7 +587,8 @@ fn prepare_retained_moments(
         .count();
     if nvar > 1 {
         while retained > 0
-            && invert_matrix(&moments[retained - 1].covariance, nvar, qrtol).is_none()
+            && moments[retained - 1].inverse.len() != nvar * nvar
+            && qr_coefficient_matrix(&moments[retained - 1].covariance, nvar, qrtol).rank < nvar
         {
             retained -= 1;
         }
@@ -480,13 +598,15 @@ fn prepare_retained_moments(
             "the nmin threshold is too high; no Aalen model can be fit",
         ));
     }
-    for (time_idx, moment) in moments.iter_mut().take(retained).enumerate() {
-        moment.inverse = invert_matrix(&moment.covariance, nvar, qrtol).ok_or_else(|| {
-            value_error(format!(
-                "risk covariance is rank deficient at event time {} (index {time_idx})",
-                moment.time
-            ))
-        })?;
+    for moment in moments.iter_mut().take(retained) {
+        if moment.inverse.len() != nvar * nvar {
+            let qr = qr_coefficient_matrix(&moment.covariance, nvar, qrtol);
+            moment.inverse = if qr.rank == nvar {
+                invert_matrix(&moment.covariance, nvar, qrtol).unwrap_or(qr.coefficients)
+            } else {
+                qr.coefficients
+            };
+        }
         moment.time_weight = if nvar == 0 {
             vec![moment.risk]
         } else {
@@ -841,8 +961,20 @@ fn influence_values_grouped(
             stop_cursor += 1;
         }
 
-        // A singleton risk set has no influence contribution upstream, even
-        // when its covariance survives as a positive rounding residual.
+        if moment.inverse.iter().any(|value| value.is_nan()) {
+            for group in &mut dfbeta {
+                for column in group {
+                    column[time_idx] = f64::NAN;
+                }
+            }
+            for group in &mut test_influence {
+                group.fill(f64::NAN);
+            }
+            continue;
+        }
+
+        // A full-rank singleton risk set has no influence contribution
+        // upstream, even when covariance is only a rounding residual.
         if moment.risk_count == 1 {
             continue;
         }
@@ -949,6 +1081,20 @@ fn influence_values_scanned(
     for (time_idx, moment) in moments.iter().enumerate() {
         for &event_idx in &moment.events {
             event_rows[event_idx] = true;
+        }
+        if moment.inverse.iter().any(|value| value.is_nan()) {
+            for group in &mut dfbeta {
+                for column in group {
+                    column[time_idx] = f64::NAN;
+                }
+            }
+            for group in &mut test_influence {
+                group.fill(f64::NAN);
+            }
+            for &event_idx in &moment.events {
+                event_rows[event_idx] = false;
+            }
+            continue;
         }
         // Keep this path consistent with the grouped influence calculation.
         if moment.risk_count == 1 {
@@ -1125,6 +1271,7 @@ pub fn aareg_fit(
         start.as_deref(),
         weights.as_deref(),
         nvar,
+        qrtol,
     );
     let total_times = moments.len();
     taper_covariances(&mut moments, &taper, nvar);
@@ -1261,6 +1408,111 @@ mod tests {
                 assert_eq!(column[4], 0.0);
             }
         }
+    }
+
+    #[test]
+    fn multivariate_fit_retains_early_reduced_rank_moments() {
+        let result = aareg_fit(
+            vec![
+                8.0, 10.0, 1.0, 7.0, 11.0, 5.0, 3.0, 12.0, 1.0, 11.0, 5.0, 8.0, 9.0, 12.0, 1.0, 9.0,
+            ],
+            vec![0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1],
+            vec![
+                vec![0.573908926345705, -0.998654664215969],
+                vec![0.557383157775316, 0.0747227936381808],
+                vec![-0.048318399946546, 0.351874693602948],
+                vec![1.77926496475137, -0.8879259478384],
+                vec![-0.994176155979485, 0.537219149435208],
+                vec![0.640347136457419, -0.837719990909545],
+                vec![0.14103345783844, -1.66434120525646],
+                vec![-0.54381139957941, 0.227724188582013],
+                vec![0.481044344724356, 0.795642091749136],
+                vec![0.515125707267044, 0.318483478317856],
+                vec![0.273248501950473, -0.189220036134785],
+                vec![-0.783292341519974, -0.881718032267188],
+                vec![-0.236489544926223, 0.358906236331899],
+                vec![0.112112836045669, 0.963535718907729],
+                vec![-1.27275904597986, 0.672340443408467],
+                vec![0.990232610649446, -0.091722475837281],
+            ],
+            Some(vec![
+                7.0, 5.0, 0.0, 6.0, 7.0, 4.0, 1.0, 9.0, 0.0, 7.0, 4.0, 7.0, 7.0, 11.0, 0.0, 5.0,
+            ]),
+            Some(vec![
+                2.0, 3.0, 3.0, 1.5, 1.0, 2.0, 2.0, 1.0, 1.5, 2.0, 3.0, 0.5, 3.0, 3.0, 3.0, 1.0,
+            ]),
+            Some((0..16).collect()),
+            1e-7,
+            Some(0),
+            true,
+            None,
+            "aalen".to_string(),
+            None,
+        )
+        .expect("fit should retain estimable rows before later full-rank moments");
+
+        assert_eq!(result.n, vec![16, 8, 8]);
+        assert_eq!(
+            result.times,
+            vec![1.0, 1.0, 3.0, 5.0, 7.0, 8.0, 9.0, 10.0, 11.0, 11.0]
+        );
+        assert_eq!(result.coefficient[2], vec![1.0, 0.0, 0.0]);
+        assert!(result.coefficient[3][0].is_nan());
+        assert_close(result.coefficient[3][1], -2.72406352408014);
+        assert!(result.coefficient[3][2].is_nan());
+        assert_close(result.time_weights[2][0], 2.20713894501395e-19);
+        assert_close(result.time_weights[2][1], 4.82036442220766e-21);
+        assert_close(result.time_weights[2][2], -1.30549597135516e-16);
+        assert!(result.time_weights[3][0].is_nan());
+        assert_close(result.time_weights[3][1], 0.666376318559675);
+        assert!(result.time_weights[3][2].is_nan());
+        assert!(result.test_statistic[0].is_nan());
+        assert_close(result.test_statistic[1], 0.384207314024795);
+        assert!(result.test_statistic[2].is_nan());
+        let influence = result.dfbeta.expect("clustered influence");
+        assert!(
+            influence
+                .iter()
+                .all(|group| group.iter().all(|column| column[2].is_nan()))
+        );
+    }
+
+    #[test]
+    fn ill_conditioned_counting_moment_uses_reference_order() {
+        let result = aareg_fit(
+            vec![10.0, 12.0, 6.0, 2.0, 3.0, 6.0, 4.0, 4.0],
+            vec![1, 0, 1, 1, 1, 1, 0, 1],
+            vec![
+                vec![0.302864245707098, -0.619339229584789],
+                vec![0.643637278746447, -0.998442891497977],
+                vec![-0.485867527842945, -0.426723367421423],
+                vec![0.134741789184607, -0.842220842557035],
+                vec![0.427573412166526, -0.813835914125232],
+                vec![-1.70747127299651, -1.02980266064102],
+                vec![0.563768815226198, -0.254829711379971],
+                vec![-0.619311246208519, -0.887182144937102],
+            ],
+            Some(vec![5.0, 7.0, 2.0, 0.0, 0.0, 1.0, 3.0, 2.0]),
+            Some(vec![0.5, 2.0, 1.0, 1.0, 3.0, 0.5, 0.5, 1.5]),
+            Some(vec![1, 0, 0, 0, 0, 0, 1, 0]),
+            1e-7,
+            Some(3),
+            true,
+            None,
+            "aalen".to_string(),
+            None,
+        )
+        .expect("ill-conditioned fit should succeed");
+
+        assert_eq!(result.n, vec![8, 3, 5]);
+        assert_eq!(result.times, vec![2.0, 3.0, 4.0]);
+        assert!((result.coefficient[0][0] - 693.465242967597).abs() < 1e-8);
+        assert!((result.coefficient[0][1] - -81.8427155699274).abs() < 1e-8);
+        assert!((result.coefficient[0][2] - 809.096111859553).abs() < 1e-8);
+        let influence = result.dfbeta.expect("clustered influence");
+        assert!((influence[0][0][0] - -4.08197157166326e-9).abs() < 1e-8);
+        assert!((influence[0][1][0] - 4.8194566051338e-10).abs() < 1e-8);
+        assert!((influence[0][2][0] - -4.76416887602925e-9).abs() < 1e-8);
     }
 
     #[test]
@@ -1439,8 +1691,15 @@ mod tests {
         let cluster: Vec<i32> = (0..stop.len()).map(|idx| (idx % 3) as i32).collect();
         let test_cluster: Vec<i32> = (0..stop.len()).map(|idx| (idx % 4) as i32).collect();
 
-        let mut moments =
-            risk_moments(&stop, &status, &covariates, Some(&start), Some(&weights), 2);
+        let mut moments = risk_moments(
+            &stop,
+            &status,
+            &covariates,
+            Some(&start),
+            Some(&weights),
+            2,
+            1e-7,
+        );
         let retained = prepare_retained_moments(&mut moments, 2, Some(1), 1e-7)
             .expect("comparison inputs should retain multiple event times");
         moments.truncate(retained);

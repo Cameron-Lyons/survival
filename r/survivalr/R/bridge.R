@@ -6683,6 +6683,7 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
   event_times <- .as_numeric_vector(.result_field(result, "times"))
   coefficient_names <- c("Intercept", colnames(design))
   coefficient <- .as_numeric_matrix(.result_field(result, "coefficient"))
+  coefficient[is.nan(coefficient)] <- NA_real_
   dimnames(coefficient) <- list(as.character(event_times), coefficient_names)
   test_names <- if (identical(test, "variance") && nvar > 1L) {
     colnames(design)
@@ -6690,8 +6691,10 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
     coefficient_names
   }
   test_statistic <- .as_numeric_vector(.result_field(result, "test_statistic"))
+  test_statistic[is.nan(test_statistic)] <- NA_real_
   names(test_statistic) <- test_names
   test_variance <- .as_numeric_matrix(.result_field(result, "test_variance"))
+  test_variance[is.nan(test_variance)] <- NA_real_
   if (nvar > 1L && !identical(test, "variance")) {
     variance_names <- c("b0", rep("", nvar))
     dimnames(test_variance) <- list(variance_names, variance_names)
@@ -6699,6 +6702,7 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
     dimnames(test_variance) <- NULL
   }
   time_weights <- .as_numeric_matrix(.result_field(result, "time_weights"))
+  time_weights[is.nan(time_weights)] <- NA_real_
   dimnames(time_weights) <- NULL
 
   out <- list(
@@ -6730,8 +6734,11 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
         )
       }
     }
+    influence[is.nan(influence)] <- NA_real_
     out$dfbeta <- influence
-    out$test.var2 <- .as_numeric_matrix(.result_field(result, "robust_test_variance"))
+    robust_variance <- .as_numeric_matrix(.result_field(result, "robust_test_variance"))
+    robust_variance[is.nan(robust_variance)] <- NA_real_
+    out$test.var2 <- robust_variance
   }
   if (any(fit_weights != 1)) {
     out$weights <- fit_weights[order_index]

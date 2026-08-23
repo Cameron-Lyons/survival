@@ -25999,6 +25999,77 @@ def test_aareg_retains_single_risk_roundoff_event_and_zero_influence():
     assert all(column[-1] == 0.0 for group in fit.dfbeta for column in group)
 
 
+def test_aareg_retains_early_multivariate_reduced_rank_moments():
+    data = {
+        "start": [7, 5, 0, 6, 7, 4, 1, 9, 0, 7, 4, 7, 7, 11, 0, 5],
+        "stop": [8, 10, 1, 7, 11, 5, 3, 12, 1, 11, 5, 8, 9, 12, 1, 9],
+        "status": [0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1],
+        "x": [
+            0.573908926345705,
+            0.557383157775316,
+            -0.048318399946546,
+            1.77926496475137,
+            -0.994176155979485,
+            0.640347136457419,
+            0.14103345783844,
+            -0.54381139957941,
+            0.481044344724356,
+            0.515125707267044,
+            0.273248501950473,
+            -0.783292341519974,
+            -0.236489544926223,
+            0.112112836045669,
+            -1.27275904597986,
+            0.990232610649446,
+        ],
+        "z": [
+            -0.998654664215969,
+            0.0747227936381808,
+            0.351874693602948,
+            -0.8879259478384,
+            0.537219149435208,
+            -0.837719990909545,
+            -1.66434120525646,
+            0.227724188582013,
+            0.795642091749136,
+            0.318483478317856,
+            -0.189220036134785,
+            -0.881718032267188,
+            0.358906236331899,
+            0.963535718907729,
+            0.672340443408467,
+            -0.091722475837281,
+        ],
+        "weight": [2, 3, 3, 1.5, 1, 2, 2, 1, 1.5, 2, 3, 0.5, 3, 3, 3, 1],
+    }
+
+    fit = survival.aareg(
+        "Surv(start, stop, status) ~ x + z",
+        data=data,
+        weights=data["weight"],
+        cluster=list(range(16)),
+        nmin=0,
+    )
+
+    assert fit.n == [16, 8, 8]
+    assert fit.times == [1.0, 1.0, 3.0, 5.0, 7.0, 8.0, 9.0, 10.0, 11.0, 11.0]
+    assert fit.coefficient[2] == pytest.approx([1.0, 0.0, 0.0])
+    assert math.isnan(fit.coefficient[3][0])
+    assert fit.coefficient[3][1] == pytest.approx(-2.72406352408014)
+    assert math.isnan(fit.coefficient[3][2])
+    assert fit.time_weights[2] == pytest.approx(
+        [2.20713894501395e-19, 4.82036442220766e-21, -1.30549597135516e-16]
+    )
+    assert math.isnan(fit.time_weights[3][0])
+    assert fit.time_weights[3][1] == pytest.approx(0.666376318559675)
+    assert math.isnan(fit.time_weights[3][2])
+    assert math.isnan(fit.test_statistic[0])
+    assert fit.test_statistic[1] == pytest.approx(0.384207314024795)
+    assert math.isnan(fit.test_statistic[2])
+    assert fit.dfbeta is not None
+    assert all(math.isnan(column[2]) for group in fit.dfbeta for column in group)
+
+
 def test_aareg_formula_supports_counting_data_and_clustered_influence():
     data = {
         "start": [0.0, 0.0, 1.0, 0.0, 2.0, 1.0],

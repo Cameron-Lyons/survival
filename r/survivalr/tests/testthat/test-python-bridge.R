@@ -1348,6 +1348,44 @@ test_that("R formula wrappers delegate to the Python survival package", {
       nmin = 1
     )
   )
+  reduced_rank_aareg_data <- data.frame(
+    start = c(7, 5, 0, 6, 7, 4, 1, 9, 0, 7, 4, 7, 7, 11, 0, 5),
+    stop = c(8, 10, 1, 7, 11, 5, 3, 12, 1, 11, 5, 8, 9, 12, 1, 9),
+    status = c(0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1),
+    x = c(
+      0.573908926345705, 0.557383157775316, -0.048318399946546,
+      1.77926496475137, -0.994176155979485, 0.640347136457419,
+      0.14103345783844, -0.54381139957941, 0.481044344724356,
+      0.515125707267044, 0.273248501950473, -0.783292341519974,
+      -0.236489544926223, 0.112112836045669, -1.27275904597986,
+      0.990232610649446
+    ),
+    z = c(
+      -0.998654664215969, 0.0747227936381808, 0.351874693602948,
+      -0.8879259478384, 0.537219149435208, -0.837719990909545,
+      -1.66434120525646, 0.227724188582013, 0.795642091749136,
+      0.318483478317856, -0.189220036134785, -0.881718032267188,
+      0.358906236331899, 0.963535718907729, 0.672340443408467,
+      -0.091722475837281
+    ),
+    weight = c(2, 3, 3, 1.5, 1, 2, 2, 1, 1.5, 2, 3, 0.5, 3, 3, 3, 1)
+  )
+  compare_aareg(
+    aareg(
+      survival::Surv(start, stop, status) ~ x + z,
+      data = reduced_rank_aareg_data,
+      weights = weight,
+      cluster = seq_len(nrow(reduced_rank_aareg_data)),
+      nmin = 0
+    ),
+    survival::aareg(
+      survival::Surv(start, stop, status) ~ x + z,
+      data = reduced_rank_aareg_data,
+      weights = weight,
+      cluster = seq_len(nrow(reduced_rank_aareg_data)),
+      nmin = 0
+    )
+  )
   bridged_aareg_cluster_override <- NULL
   expect_warning(
     bridged_aareg_cluster_override <- aareg(
