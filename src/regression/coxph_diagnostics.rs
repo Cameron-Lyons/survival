@@ -181,13 +181,24 @@ fn quadratic_form(row: &[f64], variance: &[Vec<f64>]) -> f64 {
         .sum()
 }
 
-fn grouped_quadratic_form(row: &[f64], variance: &[Vec<f64>], columns: &[usize]) -> f64 {
+fn grouped_quadratic_form(
+    row: &[f64],
+    variance: &[Vec<f64>],
+    columns: &[usize],
+    column_multipliers: Option<&[f64]>,
+) -> f64 {
     columns
         .iter()
         .map(|&left_idx| {
+            let left =
+                row[left_idx] * column_multipliers.map_or(1.0, |multipliers| multipliers[left_idx]);
             columns
                 .iter()
-                .map(|&right_idx| row[left_idx] * variance[left_idx][right_idx] * row[right_idx])
+                .map(|&right_idx| {
+                    let right = row[right_idx]
+                        * column_multipliers.map_or(1.0, |multipliers| multipliers[right_idx]);
+                    left * variance[left_idx][right_idx] * right
+                })
                 .sum::<f64>()
         })
         .sum()
@@ -814,22 +825,32 @@ pub fn prediction_se_from_variance(
 }
 
 #[pyfunction]
+#[pyo3(signature = (rows, variance, groups, column_multipliers=None))]
 pub fn term_prediction_se_from_variance(
     rows: Vec<Vec<f64>>,
     variance: Vec<Vec<f64>>,
     groups: Vec<Vec<usize>>,
+    column_multipliers: Option<Vec<f64>>,
 ) -> PyResult<Vec<Vec<f64>>> {
     let width = variance.len();
     validate_square_matrix(&variance, width, "variance")?;
     validate_matrix_width(&rows, width, "rows")?;
     validate_column_groups(&groups, width)?;
+    if let Some(multipliers) = column_multipliers.as_deref() {
+        if multipliers.len() != width {
+            return Err(value_error(format!(
+                "column_multipliers length must be {width}"
+            )));
+        }
+        validate_finite_slice(multipliers, "column_multipliers")?;
+    }
     Ok(rows
         .iter()
         .map(|row| {
             groups
                 .iter()
                 .map(|columns| {
-                    grouped_quadratic_form(row, &variance, columns)
+                    grouped_quadratic_form(row, &variance, columns, column_multipliers.as_deref())
                         .max(0.0)
                         .sqrt()
                 })
@@ -2619,6 +2640,7 @@ mod tests {
             vec![vec![1.0, 2.0], vec![3.0, 4.0]],
             vec![vec![2.0, 0.5], vec![0.5, 1.0]],
             vec![vec![0], vec![1], vec![0, 1]],
+            None,
         )
         .expect("term prediction SEs should compute");
         assert!((term_prediction_se[0][0] - 2.0_f64.sqrt()).abs() < 1e-12);
@@ -2627,6 +2649,29 @@ mod tests {
         assert!((term_prediction_se[1][0] - 18.0_f64.sqrt()).abs() < 1e-12);
         assert!((term_prediction_se[1][1] - 4.0).abs() < 1e-12);
         assert!((term_prediction_se[1][2] - 46.0_f64.sqrt()).abs() < 1e-12);
+
+        let weighted_term_prediction_se = term_prediction_se_from_variance(
+            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
+            vec![vec![0], vec![1], vec![0, 1]],
+            Some(vec![0.5, -2.0]),
+        )
+        .expect("coefficient-weighted term prediction SEs should compute");
+        assert!((weighted_term_prediction_se[0][0] - 0.5_f64.sqrt()).abs() < 1e-12);
+        assert!((weighted_term_prediction_se[0][1] - 4.0).abs() < 1e-12);
+        assert!((weighted_term_prediction_se[0][2] - 14.5_f64.sqrt()).abs() < 1e-12);
+        assert!((weighted_term_prediction_se[1][0] - 4.5_f64.sqrt()).abs() < 1e-12);
+        assert!((weighted_term_prediction_se[1][1] - 8.0).abs() < 1e-12);
+        assert!((weighted_term_prediction_se[1][2] - 56.5_f64.sqrt()).abs() < 1e-12);
+        assert!(
+            term_prediction_se_from_variance(
+                vec![vec![1.0, 2.0]],
+                vec![vec![2.0, 0.5], vec![0.5, 1.0]],
+                vec![vec![0, 1]],
+                Some(vec![1.0]),
+            )
+            .is_err()
+        );
 
         let interval_se = cox_interval_cumulative_hazard_se(
             vec![vec![1.0, 2.0], vec![0.0, 0.0]],

@@ -8097,7 +8097,8 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
     )
   )
 
-  expect_design_parity <- function(bridged, reference, case, compare_fit = TRUE) {
+  expect_design_parity <- function(bridged, reference, case, compare_fit = TRUE,
+                                   compare_term_se = FALSE) {
     expect_identical(names(coef(bridged)), case$columns)
     expect_identical(names(coef(reference)), case$columns)
     if (compare_fit) {
@@ -8137,6 +8138,24 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
       expect_equal(
         as.numeric(bridged_terms),
         as.numeric(reference_terms),
+        tolerance = 2e-04
+      )
+    }
+    if (compare_term_se) {
+      bridged_with_se <- predict(bridged, type = "terms", se.fit = TRUE)
+      reference_with_se <- stats::predict(reference, type = "terms", se.fit = TRUE)
+      expect_identical(dim(bridged_with_se$fit), dim(reference_with_se$fit))
+      expect_identical(dim(bridged_with_se$se.fit), dim(reference_with_se$se.fit))
+      expect_identical(colnames(bridged_with_se$fit), case$terms)
+      expect_identical(colnames(bridged_with_se$se.fit), case$terms)
+      expect_equal(
+        as.numeric(bridged_with_se$fit),
+        as.numeric(reference_with_se$fit),
+        tolerance = 2e-04
+      )
+      expect_equal(
+        as.numeric(bridged_with_se$se.fit),
+        as.numeric(reference_with_se$se.fit),
         tolerance = 2e-04
       )
     }
@@ -8234,7 +8253,8 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
       bridged,
       reference,
       case,
-      compare_fit = !isTRUE(case$singular)
+      compare_fit = !isTRUE(case$singular),
+      compare_term_se = !isTRUE(case$singular)
     )
   }
 })

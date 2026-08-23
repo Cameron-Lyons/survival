@@ -3295,7 +3295,12 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
         ],
         "cox_zph_group_variance": ["information_matrix", "groups", "beta"],
         "prediction_se_from_variance": ["rows", "variance"],
-        "term_prediction_se_from_variance": ["rows", "variance", "groups"],
+        "term_prediction_se_from_variance": [
+            "rows",
+            "variance",
+            "groups",
+            "column_multipliers",
+        ],
         "leverage_cox": [
             "time",
             "event",
@@ -3441,6 +3446,32 @@ def test_cox_diagnostic_low_level_bindings_are_typed():
     )
     assert term_prediction_se[0] == pytest.approx([math.sqrt(2.0), 2.0, math.sqrt(8.0)])
     assert term_prediction_se[1] == pytest.approx([math.sqrt(18.0), 4.0, math.sqrt(46.0)])
+    weighted_term_prediction_se = core.term_prediction_se_from_variance(
+        [[1.0, 2.0], [3.0, 4.0]],
+        [[2.0, 0.5], [0.5, 1.0]],
+        [[0], [1], [0, 1]],
+        [0.5, -2.0],
+    )
+    assert weighted_term_prediction_se[0] == pytest.approx(
+        [math.sqrt(0.5), 4.0, math.sqrt(14.5)]
+    )
+    assert weighted_term_prediction_se[1] == pytest.approx(
+        [math.sqrt(4.5), 8.0, math.sqrt(56.5)]
+    )
+    with pytest.raises(ValueError, match="column_multipliers length"):
+        core.term_prediction_se_from_variance(
+            [[1.0, 2.0]],
+            [[2.0, 0.5], [0.5, 1.0]],
+            [[0, 1]],
+            [1.0],
+        )
+    with pytest.raises(ValueError, match="column_multipliers contains non-finite"):
+        core.term_prediction_se_from_variance(
+            [[1.0, 2.0]],
+            [[2.0, 0.5], [0.5, 1.0]],
+            [[0, 1]],
+            [1.0, math.nan],
+        )
     interval_se = core.cox_interval_cumulative_hazard_se(
         [[1.0, 2.0], [0.0, 0.0]],
         [0.25, 0.0],

@@ -24259,6 +24259,7 @@ def _survreg_term_prediction_se(
         prediction_rows,
         variance,
         [groups[group_idx][1] for group_idx in selected],
+        beta,
     )
 
 

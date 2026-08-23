@@ -24123,6 +24123,7 @@ def test_predict_survreg_r_style_generic_types():
     expected_terms_se = [
         [
             abs(row[col_idx] - means[col_idx])
+            * abs(fit.location_coefficients[col_idx])
             * math.sqrt(max(location_vcov[col_idx][col_idx], 0.0))
             for col_idx in range(1, fit.n_covariates)
         ]
@@ -24152,6 +24153,7 @@ def test_predict_survreg_r_style_generic_types():
     expected_training_terms_se = [
         [
             abs(row[col_idx] - means[col_idx])
+            * abs(fit.location_coefficients[col_idx])
             * math.sqrt(max(location_vcov[col_idx][col_idx], 0.0))
             for col_idx in range(1, fit.n_covariates)
         ]
@@ -25447,6 +25449,7 @@ def test_survreg_formula_treatment_codes_categorical_covariates():
     newdata = {"group": ["B", "A"], "x1": [0.5, 0.8]}
     term_se = survival.predict(fit, newdata, type="terms", terms="group", se_fit=True)
     group_var = fit.variance_matrix[1][1]
+    group_loading = abs(fit.location_coefficients[1])
     group_mean = sum(1.0 if value == "B" else 0.0 for value in data["group"]) / len(data["group"])
     for actual, expected in zip(
         term_se.fit,
@@ -25460,8 +25463,16 @@ def test_survreg_formula_treatment_codes_categorical_covariates():
     for actual, expected in zip(
         term_se.se_fit,
         [
-            [abs(1.0 - group_mean) * math.sqrt(max(group_var, 0.0))],
-            [abs(0.0 - group_mean) * math.sqrt(max(group_var, 0.0))],
+            [
+                abs(1.0 - group_mean)
+                * group_loading
+                * math.sqrt(max(group_var, 0.0))
+            ],
+            [
+                abs(0.0 - group_mean)
+                * group_loading
+                * math.sqrt(max(group_var, 0.0))
+            ],
         ],
         strict=True,
     ):

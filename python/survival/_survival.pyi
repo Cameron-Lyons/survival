@@ -7503,6 +7503,7 @@ def term_prediction_se_from_variance(
     rows: list[list[float]],
     variance: list[list[float]],
     groups: list[list[int]],
+    column_multipliers: list[float] | None = None,
 ) -> list[list[float]]: ...
 def cox_interval_cumulative_hazard_se(
     centered_rows: list[list[float]],
