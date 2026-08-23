@@ -50,6 +50,37 @@ pub(super) struct CoxSweepRow {
     pub(super) status: i32,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct CompensatedSum {
+    sum: f64,
+    correction: f64,
+}
+
+impl CompensatedSum {
+    pub(super) fn add(&mut self, value: f64) {
+        let next = self.sum + value;
+        self.correction += if self.sum.abs() >= value.abs() {
+            (self.sum - next) + value
+        } else {
+            (value - next) + self.sum
+        };
+        self.sum = next;
+    }
+
+    pub(super) fn total(self) -> f64 {
+        self.sum + self.correction
+    }
+
+    pub(super) fn difference(self, earlier: Self) -> f64 {
+        let mut difference = Self::default();
+        difference.add(self.sum);
+        difference.add(-earlier.sum);
+        difference.add(self.correction);
+        difference.add(-earlier.correction);
+        difference.total()
+    }
+}
+
 pub(super) struct ActiveRiskSet<'a> {
     rows: &'a [CoxSweepRow],
     use_entry_times: bool,
@@ -58,6 +89,7 @@ pub(super) struct ActiveRiskSet<'a> {
     active_rows: Vec<bool>,
     entry_pos: usize,
     stop_pos: usize,
+    risk_accumulator: CompensatedSum,
     pub(super) risk_sum: f64,
 }
 
@@ -87,11 +119,13 @@ impl<'a> ActiveRiskSet<'a> {
         } else {
             Vec::new()
         };
-        let risk_sum = if use_entry_times {
-            0.0
-        } else {
-            rows.iter().map(|row| row.risk).sum()
-        };
+        let mut risk_accumulator = CompensatedSum::default();
+        if !use_entry_times {
+            for row in rows {
+                risk_accumulator.add(row.risk);
+            }
+        }
+        let risk_sum = risk_accumulator.total();
 
         Self {
             rows,
@@ -101,6 +135,7 @@ impl<'a> ActiveRiskSet<'a> {
             active_rows,
             entry_pos: 0,
             stop_pos: 0,
+            risk_accumulator,
             risk_sum,
         }
     }
@@ -116,7 +151,8 @@ impl<'a> ActiveRiskSet<'a> {
                 let row_idx = self.entry_order[self.entry_pos];
                 if !self.active_rows[row_idx] {
                     self.active_rows[row_idx] = true;
-                    self.risk_sum += self.rows[row_idx].risk;
+                    self.risk_accumulator.add(self.rows[row_idx].risk);
+                    self.risk_sum = self.risk_accumulator.total();
                     on_change(row_idx, true);
                 }
                 self.entry_pos += 1;
@@ -127,7 +163,8 @@ impl<'a> ActiveRiskSet<'a> {
                 let row_idx = self.stop_order[self.stop_pos];
                 if self.active_rows[row_idx] {
                     self.active_rows[row_idx] = false;
-                    self.risk_sum -= self.rows[row_idx].risk;
+                    self.risk_accumulator.add(-self.rows[row_idx].risk);
+                    self.risk_sum = self.risk_accumulator.total();
                     on_change(row_idx, false);
                 }
                 self.stop_pos += 1;
@@ -137,7 +174,8 @@ impl<'a> ActiveRiskSet<'a> {
                 && self.rows[self.stop_order[self.stop_pos]].stop < event_time
             {
                 let row_idx = self.stop_order[self.stop_pos];
-                self.risk_sum -= self.rows[row_idx].risk;
+                self.risk_accumulator.add(-self.rows[row_idx].risk);
+                self.risk_sum = self.risk_accumulator.total();
                 on_change(row_idx, false);
                 self.stop_pos += 1;
             }
@@ -156,6 +194,21 @@ pub(super) fn cumulative_step_at(times: &[f64], values: &[f64], time: f64) -> f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compensated_sum_retains_small_remainders_and_differences() {
+        let mut total = CompensatedSum::default();
+        total.add(1e-40);
+        total.add(1.0);
+        total.add(-1.0);
+        assert_eq!(total.total(), 1e-40);
+
+        let mut cumulative = CompensatedSum::default();
+        cumulative.add(1e40);
+        let earlier = cumulative;
+        cumulative.add(0.25);
+        assert_eq!(cumulative.difference(earlier), 0.25);
+    }
 
     #[test]
     fn cumulative_step_at_uses_last_prior_value() {

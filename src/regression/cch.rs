@@ -1481,6 +1481,74 @@ mod tests {
     }
 
     #[test]
+    fn native_counting_process_prentice_preserves_small_offset_risk() {
+        let stop = vec![
+            3.0, 13.0, 11.0, 15.0, 5.0, 16.0, 9.0, 1.0, 12.0, 14.0, 19.0, 16.0, 9.0, 3.0, 15.0,
+            18.0, 7.0, 9.0, 10.0, 15.0, 10.0,
+        ];
+        let status = vec![
+            0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1,
+        ];
+        let x = [
+            -2.366_019_802_897_81,
+            -0.939_726_558_703_197,
+            0.672_805_414_806_265,
+            -0.476_183_125_795_317,
+            -0.636_546_918_038_443,
+            -0.687_008_929_997_081,
+            0.535_019_844_914_994,
+            -0.210_862_903_347_529,
+            0.705_276_653_609_758,
+            -0.678_855_799_561_129,
+            -0.832_078_189_498_332,
+            -0.956_832_544_488_333,
+            -0.230_958_721_600_656,
+            -0.542_591_235_128_462,
+            -1.206_226_329_830_76,
+            1.486_831_793_410_71,
+            1.289_638_472_695_21,
+            0.271_588_841_450_844,
+            -1.635_910_435_825_59,
+            -0.831_208_786_158_255,
+            -0.890_202_805_534_755,
+        ];
+        let covariates = x.into_iter().map(|value| vec![value]).collect();
+        let subcohort = vec![
+            1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0,
+        ];
+        let start = vec![
+            1.0, 8.0, 6.0, 13.0, 3.0, 14.0, 4.0, 0.0, 10.0, 12.0, 16.0, 11.0, 4.0, 1.0, 13.0, 14.0,
+            6.0, 8.0, 9.0, 13.0, 4.0,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=21).collect(),
+            63,
+            Some(start),
+            "Prentice",
+            false,
+        )
+        .expect("counting-process Prentice fit should succeed");
+
+        assert_close(&result.coefficients[0], &[0.291_262_177_689_472]);
+        assert_matrix_close(
+            &result.model_information_matrix,
+            &[vec![0.193_853_550_610_786]],
+        );
+        assert_matrix_close(&result.phase2_variance, &[vec![0.150_259_455_416_288]]);
+        assert_matrix_close(&result.information_matrix, &[vec![0.344_113_006_027_074]]);
+        assert_close(
+            &result.log_likelihood,
+            &[-1_207.817_811_028_63, -1_207.811_906_389_63],
+        );
+        assert!((result.score_test - 0.011_850_593_966_545_8).abs() < 1e-11);
+        assert_eq!(result.iterations, 2);
+    }
+
+    #[test]
     fn native_stratified_borgan_results_match_r_survival() {
         let (start, stop, status, covariates, subcohort, id) = r_parity_fixture();
         let stratum = (0..stop.len()).map(|idx| idx % 2).collect::<Vec<_>>();

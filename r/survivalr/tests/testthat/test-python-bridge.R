@@ -13098,6 +13098,47 @@ test_that("cch unstratified fits match survival for right and counting data", {
   }
 })
 
+test_that("cch preserves small offset risk in counting-process data", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(1, 8, 6, 13, 3, 14, 4, 0, 10, 12, 16, 11, 4, 1, 13, 14, 6, 8, 9, 13, 4),
+    stop = c(3, 13, 11, 15, 5, 16, 9, 1, 12, 14, 19, 16, 9, 3, 15, 18, 7, 9, 10, 15, 10),
+    status = c(0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1),
+    x = c(
+      -2.36601980289781, -0.939726558703197, 0.672805414806265,
+      -0.476183125795317, -0.636546918038443, -0.687008929997081,
+      0.535019844914994, -0.210862903347529, 0.705276653609758,
+      -0.678855799561129, -0.832078189498332, -0.956832544488333,
+      -0.230958721600656, -0.542591235128462, -1.20622632983076,
+      1.48683179341071, 1.28963847269521, 0.271588841450844,
+      -1.63591043582559, -0.831208786158255, -0.890202805534755
+    ),
+    id = seq_len(21),
+    subcohort = c(1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ x,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 63,
+    method = "Prentice"
+  )
+  actual <- do.call(cch, args)
+  reference <- do.call(survival::cch, args)
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+})
+
 test_that("cch stratified Borgan fits match survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

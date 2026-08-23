@@ -6,7 +6,9 @@ use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_detail_module::{
     CoxphDetail, CoxphDetailOptions, compute_coxph_detail_with_options, coxph_detail,
 };
-use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
+use crate::regression::coxph_support::{
+    ActiveRiskSet, CompensatedSum, CoxSweepRow, StratifiedBaselineLookup,
+};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
 use crate::residuals::agmart_module::{AgmartData, compute_agmart};
 use crate::residuals::coxmart_module::{CoxMartSurvivalData, CoxMartWeights, compute_coxmart};
@@ -1453,9 +1455,9 @@ impl CoxPHFit {
             let mut cumulative_scalars = Vec::with_capacity(event_count);
             let mut cumulative_xhazards = Vec::with_capacity(event_count);
             let mut deaths: Vec<usize> = Vec::with_capacity(event_count);
-            let mut cumulative_scalar = 0.0;
-            let mut cumulative_xhazard = vec![0.0; nvar];
-            let mut active_risk_covariates = vec![0.0; nvar];
+            let mut cumulative_scalar = CompensatedSum::default();
+            let mut cumulative_xhazard = vec![CompensatedSum::default(); nvar];
+            let mut active_risk_covariates = vec![CompensatedSum::default(); nvar];
             let mut time_start = 0usize;
             while time_start < rows.len() {
                 let event_time = rows[time_start].stop;
@@ -1468,8 +1470,9 @@ impl CoxPHFit {
                     let direction = if added { 1.0 } else { -1.0 };
                     let original_idx = rows[row_idx].original_idx;
                     for (col_idx, value) in active_risk_covariates.iter_mut().enumerate() {
-                        *value +=
-                            direction * rows[row_idx].risk * self.covariates[original_idx][col_idx];
+                        value.add(
+                            direction * rows[row_idx].risk * self.covariates[original_idx][col_idx],
+                        );
                     }
                 });
 
@@ -1498,16 +1501,16 @@ impl CoxPHFit {
                                 continue;
                             }
                             let hazard = weight_average / step_denom;
-                            for ((value, &active_total), &death_total) in mean
+                            for ((value, active_total), &death_total) in mean
                                 .iter_mut()
-                                .zip(&active_risk_covariates)
+                                .zip(active_risk_covariates.iter().map(|value| value.total()))
                                 .zip(&death_covariates)
                             {
                                 *value = (active_total - fraction * death_total) / step_denom;
                             }
-                            cumulative_scalar += hazard;
+                            cumulative_scalar.add(hazard);
                             for (col_idx, value) in cumulative_xhazard.iter_mut().enumerate() {
-                                *value += mean[col_idx] * hazard;
+                                value.add(mean[col_idx] * hazard);
                             }
                             for &row_idx in &deaths {
                                 let original_idx = rows[row_idx].original_idx;
@@ -1526,11 +1529,11 @@ impl CoxPHFit {
                         let hazard = deadwt / active.risk_sum;
                         let mean: Vec<f64> = active_risk_covariates
                             .iter()
-                            .map(|&value| value / active.risk_sum)
+                            .map(|value| value.total() / active.risk_sum)
                             .collect();
-                        cumulative_scalar += hazard;
+                        cumulative_scalar.add(hazard);
                         for (col_idx, value) in cumulative_xhazard.iter_mut().enumerate() {
-                            *value += mean[col_idx] * hazard;
+                            value.add(mean[col_idx] * hazard);
                         }
                         for &row_idx in &deaths {
                             let original_idx = rows[row_idx].original_idx;
@@ -1559,18 +1562,21 @@ impl CoxPHFit {
                 };
                 let start_index = step_index(row.entry);
                 let stop_index = step_index(row.stop);
-                let start_scalar = start_index.map_or(0.0, |idx| cumulative_scalars[idx]);
-                let stop_scalar = stop_index.map_or(0.0, |idx| cumulative_scalars[idx]);
-                let active_scalar = stop_scalar - start_scalar;
+                let start_scalar =
+                    start_index.map_or_else(CompensatedSum::default, |idx| cumulative_scalars[idx]);
+                let stop_scalar =
+                    stop_index.map_or_else(CompensatedSum::default, |idx| cumulative_scalars[idx]);
+                let active_scalar = stop_scalar.difference(start_scalar);
                 let score = scores[row.original_idx];
                 for (col_idx, residual) in residuals[row.original_idx].iter_mut().enumerate() {
-                    let start_xhazard =
-                        start_index.map_or(0.0, |idx| cumulative_xhazards[idx][col_idx]);
-                    let stop_xhazard =
-                        stop_index.map_or(0.0, |idx| cumulative_xhazards[idx][col_idx]);
+                    let start_xhazard = start_index.map_or_else(CompensatedSum::default, |idx| {
+                        cumulative_xhazards[idx][col_idx]
+                    });
+                    let stop_xhazard = stop_index.map_or_else(CompensatedSum::default, |idx| {
+                        cumulative_xhazards[idx][col_idx]
+                    });
                     *residual += score
-                        * (stop_xhazard
-                            - start_xhazard
+                        * (stop_xhazard.difference(start_xhazard)
                             - active_scalar * self.covariates[row.original_idx][col_idx]);
                 }
             }

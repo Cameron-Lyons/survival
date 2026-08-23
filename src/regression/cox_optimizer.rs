@@ -1294,13 +1294,35 @@ impl CoxFit {
                 }
 
                 if ndead > 0 {
-                    let denom = stop_denom - unentered_denom;
+                    let mut denom = stop_denom - unentered_denom;
+                    let denom_scale = stop_denom.abs() + unentered_denom.abs();
+                    let reliable_difference = denom.is_finite()
+                        && denom > 0.0
+                        && (denom_scale == 0.0 || denom > 64.0 * f64::EPSILON * denom_scale);
                     event_a.fill(0.0);
                     event_cmat.fill(0.0);
                     for i in 0..nvar {
                         event_a[i] = stop_a[i] - unentered_a[i];
                         for j in 0..=i {
                             event_cmat[(i, j)] = stop_cmat[(i, j)] - unentered_cmat[(i, j)];
+                        }
+                    }
+                    if !reliable_difference {
+                        denom = 0.0;
+                        event_a.fill(0.0);
+                        event_cmat.fill(0.0);
+                        for person in stratum_start..=stratum_end {
+                            if entry_times[person] < event_time && self.time[person] >= event_time {
+                                add_risk_sums(
+                                    &self.covar,
+                                    nvar,
+                                    person,
+                                    risk_vals[person],
+                                    &mut denom,
+                                    &mut event_a,
+                                    &mut event_cmat,
+                                );
+                            }
                         }
                     }
                     if matches!(method, Method::Breslow) || ndead == 1 {

@@ -25836,6 +25836,57 @@ def test_cch_formula_matches_r_counting_process_results():
     assert len(fit.martingale_residuals()) == len(fit.status)
 
 
+def test_cch_formula_preserves_small_counting_process_offset_risk():
+    data = {
+        "start": [1, 8, 6, 13, 3, 14, 4, 0, 10, 12, 16, 11, 4, 1, 13, 14, 6, 8, 9, 13, 4],
+        "stop": [3, 13, 11, 15, 5, 16, 9, 1, 12, 14, 19, 16, 9, 3, 15, 18, 7, 9, 10, 15, 10],
+        "status": [0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1],
+        "x": [
+            -2.36601980289781,
+            -0.939726558703197,
+            0.672805414806265,
+            -0.476183125795317,
+            -0.636546918038443,
+            -0.687008929997081,
+            0.535019844914994,
+            -0.210862903347529,
+            0.705276653609758,
+            -0.678855799561129,
+            -0.832078189498332,
+            -0.956832544488333,
+            -0.230958721600656,
+            -0.542591235128462,
+            -1.20622632983076,
+            1.48683179341071,
+            1.28963847269521,
+            0.271588841450844,
+            -1.63591043582559,
+            -0.831208786158255,
+            -0.890202805534755,
+        ],
+        "id": list(range(1, 22)),
+        "subcohort": [1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0],
+    }
+    fit = survival.cch(
+        "Surv(start, stop, status) ~ x",
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=63,
+        method="Prentice",
+    )
+
+    assert survival.coef(fit) == pytest.approx([0.291262177689472], abs=1e-11)
+    assert fit.var[0] == pytest.approx([0.344113006027074], abs=1e-11)
+    assert fit.naive_var[0] == pytest.approx([0.344113006027074], abs=1e-11)
+    assert fit.phase2var[0] == pytest.approx([0.150259455416288], abs=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-1207.81781102863, -1207.81190638963], abs=1e-11
+    )
+    assert fit.score_test == pytest.approx(0.0118505939665458, abs=1e-11)
+    assert fit.iterations == 2
+
+
 @pytest.mark.parametrize(
     ("method", "expected_coefficients", "expected_variance"),
     [
