@@ -27220,6 +27220,67 @@ def test_cch_formula_preserves_prentice_finite_variance_after_nonconvergence():
     assert fit.fit.convergence_flag == 1000
 
 
+def test_cch_formula_marks_nonconverged_self_prentice_factor_aliases():
+    pandas = pytest.importorskip("pandas")
+    data = {
+        "start": [10, 13, 9, 6, 0, 5, 6, 15, 0, 8, 7, 12, 14, 13, 9, 9, 8, 16, 0, 10, 13, 13],
+        "stop": [11, 15, 12, 10, 6, 10, 8, 19, 1, 9, 9, 16, 17, 18, 15, 14, 12, 18, 2, 14, 15, 14],
+        "status": [0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0],
+        "group": pandas.Categorical(
+            [
+                "d",
+                "b",
+                "d",
+                "d",
+                "d",
+                "a",
+                "c",
+                "d",
+                "a",
+                "a",
+                "a",
+                "d",
+                "a",
+                "a",
+                "d",
+                "b",
+                "b",
+                "a",
+                "b",
+                "d",
+                "d",
+                "a",
+            ],
+            categories=["a", "b", "c", "d"],
+        ),
+        "id": list(range(1, 23)),
+        "subcohort": [1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1],
+    }
+    with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
+        fit = survival.cch(
+            "Surv(start, stop, status) ~ group",
+            data,
+            subcoh="subcohort",
+            id="id",
+            cohort_size=66,
+            method="SelfPrentice",
+            robust=False,
+        )
+
+    coefficients = survival.coef(fit)
+    assert coefficients[0] == pytest.approx(0.874863321521505, abs=1e-14)
+    assert math.isnan(coefficients[1])
+    assert math.isnan(coefficients[2])
+    assert fit.fit.coefficient_aliases == [False, True, True]
+    assert fit.phase2var[0] == pytest.approx([1.15272506906587e54, 0.0, 0.0], rel=1e-11)
+    assert fit.phase2var[1] == [0.0, 0.0, 0.0]
+    assert fit.phase2var[2] == [0.0, 0.0, 0.0]
+    assert fit.log_likelihood[0] == pytest.approx(-1241.12500229992, abs=1e-11)
+    assert math.isnan(fit.log_likelihood[1])
+    assert fit.iterations == 20
+    assert fit.fit.convergence_flag == 1000
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],

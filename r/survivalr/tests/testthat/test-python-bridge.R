@@ -13806,6 +13806,51 @@ test_that("cch preserves finite Prentice variance after nonconvergence", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches nonconverged SelfPrentice factor aliases", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(10, 13, 9, 6, 0, 5, 6, 15, 0, 8, 7, 12, 14, 13, 9, 9, 8, 16, 0, 10, 13, 13),
+    stop = c(11, 15, 12, 10, 6, 10, 8, 19, 1, 9, 9, 16, 17, 18, 15, 14, 12, 18, 2, 14, 15, 14),
+    status = c(0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0),
+    group = factor(c(
+      "d", "b", "d", "d", "d", "a", "c", "d", "a", "a", "a",
+      "d", "a", "a", "d", "b", "b", "a", "b", "d", "d", "a"
+    )),
+    id = seq_len(22),
+    subcohort = c(1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 66,
+    method = "SelfPrentice",
+    robust = FALSE
+  )
+  actual <- expect_warning(
+    do.call(cch, args),
+    "Ran out of iterations and did not converge"
+  )
+  reference <- expect_warning(
+    do.call(survival::cch, args),
+    "Ran out of iterations and did not converge"
+  )
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

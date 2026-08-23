@@ -644,7 +644,7 @@ fn coefficient_aliases_from_information(
     }
 
     let rank = initial_information_rank as usize;
-    if rank < width && aliases.iter().filter(|&&aliased| aliased).count() == width - rank {
+    if rank < width {
         aliases
     } else {
         vec![false; width]
@@ -1399,6 +1399,19 @@ mod tests {
         assert_eq!(
             coefficient_aliases_from_information(1, &[vec![0.0]], CONVERGENCE_FLAG, 1),
             vec![false]
+        );
+        assert_eq!(
+            coefficient_aliases_from_information(
+                3,
+                &[
+                    vec![1.0, 0.0, 0.0],
+                    vec![0.0, 0.0, 0.0],
+                    vec![0.0, 0.0, 0.0],
+                ],
+                CONVERGENCE_FLAG,
+                2,
+            ),
+            vec![false, true, true]
         );
     }
 
@@ -3424,5 +3437,62 @@ mod tests {
             &[-1_200.519_605_810_011_2, -1_001.065_431_379_395_5],
         );
         assert_eq!(result.iterations, 35);
+    }
+
+    #[test]
+    fn native_self_prentice_marks_zero_information_factor_coefficients_aliased() {
+        initialize_python();
+        let stop = vec![
+            11.0, 15.0, 12.0, 10.0, 6.0, 10.0, 8.0, 19.0, 1.0, 9.0, 9.0, 16.0, 17.0, 18.0, 15.0,
+            14.0, 12.0, 18.0, 2.0, 14.0, 15.0, 14.0,
+        ];
+        let status = vec![
+            0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0,
+        ];
+        let start = vec![
+            10.0, 13.0, 9.0, 6.0, 0.0, 5.0, 6.0, 15.0, 0.0, 8.0, 7.0, 12.0, 14.0, 13.0, 9.0, 9.0,
+            8.0, 16.0, 0.0, 10.0, 13.0, 13.0,
+        ];
+        let groups = [
+            'd', 'b', 'd', 'd', 'd', 'a', 'c', 'd', 'a', 'a', 'a', 'd', 'a', 'a', 'd', 'b', 'b',
+            'a', 'b', 'd', 'd', 'a',
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| {
+                vec![
+                    f64::from(group == 'b'),
+                    f64::from(group == 'c'),
+                    f64::from(group == 'd'),
+                ]
+            })
+            .collect();
+        let subcohort = vec![
+            1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=22).collect(),
+            66,
+            Some(start),
+            "SelfPrentice",
+            false,
+        )
+        .expect("nonconverged factor SelfPrentice fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[0.874_863_321_521_505, 0.0, 2.243_625_146_156_09],
+        );
+        assert_eq!(result.coefficient_aliases, vec![false, true, true]);
+        assert!((result.phase2_variance[0][0] / 1.152_725_069_065_87e54 - 1.0).abs() < 1e-11);
+        assert_eq!(result.phase2_variance[1], vec![0.0; 3]);
+        assert_eq!(result.phase2_variance[2], vec![0.0; 3]);
+        assert!((result.log_likelihood[0] + 1_241.125_002_299_92).abs() < 1e-11);
+        assert!(result.log_likelihood[1].is_nan());
+        assert_eq!(result.iterations, 20);
     }
 }
