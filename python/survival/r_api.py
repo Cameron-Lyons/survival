@@ -26513,10 +26513,6 @@ def _cox_survfit_with_counts(
                 row_index
                 for row_index in rows
                 if stop_times[row_index] >= start_time - _SURVFIT_TIME_EPSILON
-                and (
-                    entry_times is None
-                    or entry_times[row_index] < start_time - _SURVFIT_TIME_EPSILON
-                )
             ]
         ordered_stops = sorted((stop_times[row_index], weights[row_index]) for row_index in rows)
         ordered_entries = (

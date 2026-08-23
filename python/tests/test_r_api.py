@@ -22188,6 +22188,31 @@ def test_survfit_coxph_weighted_uncertainty_uses_robust_variance():
     assert expected.se_fit == pytest.approx([0.239657064404349, 0.655281799249129])
 
 
+def test_survfit_coxph_counting_counts_keep_entries_after_conditioning_time():
+    data = {
+        "start": [0.0, 1.0, 0.0, 2.0, 0.0, 2.0, 3.0, 4.0],
+        "stop": [1.0, 4.0, 2.0, 5.0, 3.0, 5.0, 6.0, 7.0],
+        "status": [0, 1, 1, 0, 1, 0, 1, 0],
+        "group": ["A", "A", "A", "A", "B", "B", "B", "B"],
+        "x": [0.2, 0.4, 0.1, 0.3, 1.0, 1.2, 0.8, 1.1],
+    }
+    fit = survival.coxph(
+        "Surv(start, stop, status) ~ x + strata(group)",
+        data=data,
+        initial_beta=[0.0],
+        max_iter=0,
+    )
+
+    result = survival.survfit(fit, start_time=2.5)
+    frame = survival.as_data_frame(result)
+
+    assert result.n == [2, 4]
+    assert frame["time"] == pytest.approx([4.0, 5.0, 3.0, 5.0, 6.0, 7.0])
+    assert frame["n.risk"] == pytest.approx([2.0, 1.0, 2.0, 3.0, 2.0, 1.0])
+    assert frame["n.event"] == pytest.approx([1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
+    assert frame["n.censor"] == pytest.approx([0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)

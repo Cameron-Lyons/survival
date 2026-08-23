@@ -13878,6 +13878,34 @@ test_that("Cox survfit counts and structural metadata match survival", {
     survfit(bridged_stratified, start.time = 2.5),
     survival::survfit(reference_stratified, start.time = 2.5)
   )
+
+  counting_data <- data.frame(
+    start = c(0, 1, 0, 2, 0, 2, 3, 4),
+    stop = c(1, 4, 2, 5, 3, 5, 6, 7),
+    status = c(0, 1, 1, 0, 1, 0, 1, 0),
+    group = factor(rep(c("A", "B"), each = 4L)),
+    x = c(0.2, 0.4, 0.1, 0.3, 1, 1.2, 0.8, 1.1)
+  )
+  bridged_counting <- coxph(
+    Surv(start, stop, status) ~ x + strata(group),
+    data = counting_data,
+    max_iter = 0
+  )
+  reference_counting <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x + strata(group),
+    data = counting_data,
+    init = 0,
+    iter.max = 0
+  )
+  compare_structure(
+    survfit(bridged_counting),
+    survival::survfit(reference_counting)
+  )
+  compare_structure(
+    survfit(bridged_counting, start.time = 2.5),
+    survival::survfit(reference_counting, start.time = 2.5)
+  )
+
   compare_structure(bridged_profiles[integer()], reference_profiles[integer()])
   compare_structure(
     bridged_stratified_profiles[integer()],
