@@ -9627,18 +9627,36 @@ aeqSurv <- function(x, tolerance = sqrt(.Machine$double.eps)) {
 coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
                           iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
                           timefix = TRUE, survcheckallow = "gap") {
-  eps <- .as_finite_scalar(eps, "eps", positive = TRUE)
-  toler.chol <- .as_finite_scalar(toler.chol, "toler.chol", positive = TRUE)
-  iter.max <- .as_integer_scalar(iter.max, "iter.max", nonnegative = TRUE)
-  toler.inf <- .as_finite_scalar(toler.inf, "toler.inf", positive = TRUE)
-  outer.max <- .as_integer_scalar(outer.max, "outer.max", positive = TRUE)
-  timefix <- .as_logical_scalar(timefix, "timefix")
+  if (!is.numeric(iter.max) || iter.max < 0) {
+    stop("Invalid value for iterations")
+  }
+  if (!is.numeric(eps) || eps <= 0) {
+    stop("Invalid convergence criteria")
+  }
+  if (!is.numeric(toler.chol) || toler.chol <= 0) {
+    stop("invalid value for toler.chol")
+  }
+  if (!is.numeric(eps) || eps <= 0) {
+    stop("eps must be > 0")
+  }
+  if (eps <= toler.chol) {
+    warning("For numerical accuracy, tolerance should be < eps")
+  }
+  if (!is.numeric(toler.inf) || toler.inf <= 0) {
+    stop("The toler.inf setting must be >0")
+  }
+  if (!is.logical(timefix)) {
+    stop("timefix must be TRUE or FALSE")
+  }
+  if (!is.numeric(outer.max) || outer.max <= 0) {
+    stop("invalid value for outer.max")
+  }
   list(
     eps = eps,
     toler.chol = toler.chol,
-    iter.max = iter.max,
+    iter.max = as.integer(iter.max),
     toler.inf = toler.inf,
-    outer.max = outer.max,
+    outer.max = as.integer(outer.max),
     timefix = timefix,
     survcheckallow = survcheckallow
   )
@@ -10011,12 +10029,6 @@ survreg.control <- function(maxiter = 30, rel.tolerance = 1e-09,
   } else {
     maxiter <- iter.max
   }
-  iter.max <- .as_integer_scalar(iter.max, "iter.max", nonnegative = TRUE)
-  maxiter <- .as_integer_scalar(maxiter, "maxiter", nonnegative = TRUE)
-  rel.tolerance <- .as_finite_scalar(rel.tolerance, "rel.tolerance", positive = TRUE)
-  toler.chol <- .as_finite_scalar(toler.chol, "toler.chol", positive = TRUE)
-  debug <- .as_finite_scalar(debug, "debug")
-  outer.max <- .as_integer_scalar(outer.max, "outer.max", positive = TRUE)
   list(
     iter.max = iter.max,
     rel.tolerance = rel.tolerance,

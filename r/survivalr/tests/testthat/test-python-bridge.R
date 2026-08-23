@@ -3028,7 +3028,43 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(cox_control[["iter.max"]], 0L)
   expect_false(cox_control[["timefix"]])
   expect_equal(cox_control[["survcheckallow"]], "gap")
-  expect_error(coxph.control(iter.max = -1), "iter.max")
+  expect_error(coxph.control(iter.max = -1), "Invalid value for iterations")
+  capture_control <- function(fun, args) {
+    warning_messages <- character()
+    value <- tryCatch(
+      withCallingHandlers(
+        do.call(fun, args),
+        warning = function(condition) {
+          warning_messages <<- c(warning_messages, conditionMessage(condition))
+          invokeRestart("muffleWarning")
+        }
+      ),
+      error = function(condition) structure(conditionMessage(condition), class = "captured_error")
+    )
+    list(value = value, warnings = warning_messages)
+  }
+  cox_control_cases <- list(
+    list(),
+    list(iter.max = 3.9, outer.max = 4.9),
+    list(eps = Inf),
+    list(toler.chol = Inf),
+    list(toler.inf = Inf),
+    list(outer.max = Inf),
+    list(timefix = c(TRUE, FALSE)),
+    list(timefix = NA),
+    list(eps = c(1e-09, 1e-08)),
+    list(iter.max = c(2, 3)),
+    list(iter.max = TRUE),
+    list(eps = TRUE),
+    list(eps = 1e-09, toler.chol = 1e-08),
+    list(survcheckallow = c("gap", "overlap"))
+  )
+  for (case in cox_control_cases) {
+    expect_identical(
+      capture_control(coxph.control, case),
+      capture_control(survival::coxph.control, case)
+    )
+  }
   cox_fit_data <- data.frame(
     time = c(1, 2, 3, 4, 5, 6),
     status = c(1, 1, 0, 1, 0, 1),
@@ -3279,7 +3315,25 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_named(survreg_control, c("iter.max", "rel.tolerance", "toler.chol", "debug", "maxiter", "outer.max"))
   expect_equal(survreg_control[["iter.max"]], 1L)
   expect_equal(survreg_control[["maxiter"]], 1L)
-  expect_error(survreg.control(rel.tolerance = 0), "rel.tolerance")
+  survreg_control_cases <- list(
+    list(),
+    list(maxiter = 3.9),
+    list(maxiter = -1),
+    list(rel.tolerance = 0),
+    list(toler.chol = Inf),
+    list(debug = c(1, 2)),
+    list(outer.max = NA),
+    list(maxiter = 5, iter.max = NULL),
+    list(maxiter = 5, iter.max = c(2, 3)),
+    list(maxiter = 5, iter.max = Inf),
+    list(iter.max = TRUE)
+  )
+  for (case in survreg_control_cases) {
+    expect_identical(
+      capture_control(survreg.control, case),
+      capture_control(survival::survreg.control, case)
+    )
+  }
 
   expect_equal(
     dsurvreg(c(1, 2), mean = 0, scale = 1, distribution = "t", parms = 5),

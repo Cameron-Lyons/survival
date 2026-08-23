@@ -1013,7 +1013,7 @@ def coxph_control(
     eps: Any = 1e-9,
     toler_chol: Any = ...,
     iter_max: Any = 20,
-    toler_inf: Any | None = None,
+    toler_inf: Any = ...,
     outer_max: Any = 10,
     timefix: Any = True,
     survcheckallow: Any = "gap",
@@ -1022,7 +1022,7 @@ def survreg_control(
     maxiter: Any = 30,
     rel_tolerance: Any = 1e-9,
     toler_chol: Any = 1e-10,
-    iter_max: Any | None = None,
+    iter_max: Any = ...,
     debug: Any = 0,
     outer_max: Any = 10,
 ) -> dict[str, Any]: ...

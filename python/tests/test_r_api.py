@@ -20446,12 +20446,16 @@ def test_r_style_control_constructors_match_reference_defaults_and_feed_fits():
 @pytest.mark.parametrize(
     ("kwargs", "error"),
     [
-        ({"eps": 0.0}, "eps must be positive"),
-        ({"toler_chol": 0.0}, "toler_chol must be positive"),
-        ({"iter_max": -1}, "iter_max must be non-negative"),
-        ({"toler_inf": 0.0}, "toler_inf must be positive"),
-        ({"outer_max": 0}, "outer_max must be positive"),
-        ({"timefix": 1}, "timefix must be True or False"),
+        ({"eps": 0.0}, "Invalid convergence criteria"),
+        ({"eps": True}, "Invalid convergence criteria"),
+        ({"toler_chol": 0.0}, "invalid value for toler.chol"),
+        ({"iter_max": -1}, "Invalid value for iterations"),
+        ({"iter_max": True}, "Invalid value for iterations"),
+        ({"toler_inf": 0.0}, "The toler.inf setting must be >0"),
+        ({"toler_inf": None}, "The toler.inf setting must be >0"),
+        ({"outer_max": 0}, "invalid value for outer.max"),
+        ({"timefix": 1}, "timefix must be TRUE or FALSE"),
+        ({"timefix": None}, "timefix must be TRUE or FALSE"),
     ],
 )
 def test_coxph_control_rejects_invalid_options(kwargs, error):
@@ -20460,8 +20464,47 @@ def test_coxph_control_rejects_invalid_options(kwargs, error):
 
 
 def test_coxph_control_warns_when_factorization_tolerance_is_not_smaller():
-    with pytest.warns(RuntimeWarning, match="toler_chol should be less than eps"):
+    with pytest.warns(RuntimeWarning, match="tolerance should be < eps"):
         survival.coxph_control(eps=1e-9, toler_chol=1e-8)
+
+
+def test_control_constructors_match_r_boundary_storage_semantics():
+    infinite_eps = survival.coxph_control(eps=math.inf)
+    assert infinite_eps["eps"] == math.inf
+    assert infinite_eps["toler.inf"] == math.inf
+
+    with pytest.warns(RuntimeWarning, match="tolerance should be < eps"):
+        infinite_tolerance = survival.coxph_control(toler_chol=math.inf)
+    assert infinite_tolerance["toler.chol"] == math.inf
+    assert survival.coxph_control(toler_inf=math.inf)["toler.inf"] == math.inf
+
+    with pytest.warns(RuntimeWarning, match="NAs introduced by coercion"):
+        infinite_outer = survival.coxph_control(outer_max=math.inf)
+    assert infinite_outer["outer.max"] is None
+    assert survival.coxph_control(timefix=[True, False])["timefix"] == [True, False]
+    assert survival.coxph_control(timefix=[])["timefix"] == []
+    assert survival.coxph_control(timefix=[None])["timefix"] == [None]
+    assert survival.coxph_control(survcheckallow=["gap", "overlap"])[
+        "survcheckallow"
+    ] == ["gap", "overlap"]
+
+    with pytest.raises(ValueError, match="length = 2"):
+        survival.coxph_control(eps=[1e-9, 1e-8])
+    with pytest.raises(ValueError, match="argument is of length zero"):
+        survival.coxph_control(iter_max=[])
+
+    assert survival.survreg_control(maxiter=3.9)["iter.max"] == 3.9
+    assert survival.survreg_control(maxiter=-1)["iter.max"] == -1
+    assert survival.survreg_control(rel_tolerance=0)["rel.tolerance"] == 0
+    assert survival.survreg_control(toler_chol=math.inf)["toler.chol"] == math.inf
+    assert survival.survreg_control(debug=[1, 2])["debug"] == [1, 2]
+    assert survival.survreg_control(outer_max=None)["outer.max"] is None
+    explicit_null = survival.survreg_control(maxiter=5, iter_max=None)
+    assert explicit_null["iter.max"] is None
+    assert explicit_null["maxiter"] is None
+    vector_iterations = survival.survreg_control(maxiter=5, iter_max=[2, 3])
+    assert vector_iterations["iter.max"] == [2, 3]
+    assert vector_iterations["maxiter"] == [2, 3]
 
 
 def test_coxph_control_timefix_applies_to_counting_process_endpoints():

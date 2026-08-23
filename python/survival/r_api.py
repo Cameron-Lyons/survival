@@ -15541,52 +15541,95 @@ def _normalize_optional_bool_option(value: Any | None, name: str) -> bool | None
     return _normalize_bool_option(value, name)
 
 
-def _r_control_integer(value: Any, name: str, *, positive: bool) -> int:
-    if isinstance(value, bool):
-        raise TypeError(f"{name} must be numeric")
-    numeric = _finite_float(value, name)
+def _r_control_numeric_scalar(value: Any, error_message: str) -> float:
+    if isinstance(value, bool | str | bytes | complex) or value is None:
+        raise ValueError(error_message)
+    if isinstance(value, Sequence):
+        values = list(value)
+        if not values:
+            raise ValueError("argument is of length zero")
+        if len(values) != 1:
+            raise ValueError(f"'length = {len(values)}' in coercion to 'logical(1)'")
+        value = values[0]
+        if isinstance(value, bool | str | bytes | complex) or value is None:
+            raise ValueError(error_message)
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(error_message) from exc
+    if math.isnan(numeric):
+        raise ValueError("missing value where TRUE/FALSE needed")
+    return numeric
+
+
+def _r_control_integer(value: Any, error_message: str, *, positive: bool) -> int | None:
+    numeric = _r_control_numeric_scalar(value, error_message)
     if (positive and numeric <= 0.0) or (not positive and numeric < 0.0):
-        qualifier = "positive" if positive else "non-negative"
-        raise ValueError(f"{name} must be {qualifier}")
+        raise ValueError(error_message)
+    if not math.isfinite(numeric) or numeric > 2_147_483_647:
+        warnings.warn(
+            "NAs introduced by coercion to integer range",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return None
     return int(numeric)
+
+
+def _r_control_logical(value: Any) -> bool | None | list[bool | None]:
+    if _is_bool_like(value):
+        return bool(value)
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        values = list(value)
+        if all(item is None or _is_bool_like(item) for item in values):
+            return [None if item is None else bool(item) for item in values]
+    raise ValueError("timefix must be TRUE or FALSE")
 
 
 def coxph_control(
     eps: Any = 1e-9,
     toler_chol: Any = _COXPH_CONTROL_TOLER_CHOL,
     iter_max: Any = 20,
-    toler_inf: Any | None = None,
+    toler_inf: Any = _MISSING,
     outer_max: Any = 10,
     timefix: Any = True,
     survcheckallow: Any = "gap",
 ) -> dict[str, Any]:
     """Construct validated Cox fit controls using R-compatible names and defaults."""
 
-    eps_value = _finite_float(eps, "eps")
+    eps_value = _r_control_numeric_scalar(eps, "Invalid convergence criteria")
     if eps_value <= 0.0:
-        raise ValueError("eps must be positive")
-    toler_chol_value = _finite_float(toler_chol, "toler_chol")
+        raise ValueError("Invalid convergence criteria")
+    toler_chol_value = _r_control_numeric_scalar(toler_chol, "invalid value for toler.chol")
     if toler_chol_value <= 0.0:
-        raise ValueError("toler_chol must be positive")
+        raise ValueError("invalid value for toler.chol")
     if eps_value <= toler_chol_value:
         warnings.warn(
-            "for numerical accuracy, toler_chol should be less than eps",
+            "For numerical accuracy, tolerance should be < eps",
             RuntimeWarning,
             stacklevel=2,
         )
-    iter_max_value = _r_control_integer(iter_max, "iter_max", positive=False)
+    iter_max_value = _r_control_integer(
+        iter_max,
+        "Invalid value for iterations",
+        positive=False,
+    )
     toler_inf_value = (
         math.sqrt(eps_value)
-        if toler_inf is None
-        else _finite_float(
+        if toler_inf is _MISSING
+        else _r_control_numeric_scalar(
             toler_inf,
-            "toler_inf",
+            "The toler.inf setting must be >0",
         )
     )
     if toler_inf_value <= 0.0:
-        raise ValueError("toler_inf must be positive")
-    outer_max_value = _r_control_integer(outer_max, "outer_max", positive=True)
-    timefix_value = _normalize_bool_option(timefix, "timefix")
+        raise ValueError("The toler.inf setting must be >0")
+    outer_max_value = _r_control_integer(
+        outer_max,
+        "invalid value for outer.max",
+        positive=True,
+    )
+    timefix_value = _r_control_logical(timefix)
     return {
         "eps": eps_value,
         "toler.chol": toler_chol_value,
@@ -15602,14 +15645,14 @@ def survreg_control(
     maxiter: Any = 30,
     rel_tolerance: Any = 1e-9,
     toler_chol: Any = 1e-10,
-    iter_max: Any | None = None,
+    iter_max: Any = _MISSING,
     debug: Any = 0,
     outer_max: Any = 10,
 ) -> dict[str, Any]:
     """Construct accelerated-failure-time fit controls with R-compatible keys."""
 
-    iteration_limit = maxiter if iter_max is None else iter_max
-    effective_maxiter = iteration_limit if iter_max is not None else maxiter
+    iteration_limit = maxiter if iter_max is _MISSING else iter_max
+    effective_maxiter = maxiter if iter_max is _MISSING else iter_max
     return {
         "iter.max": iteration_limit,
         "rel.tolerance": rel_tolerance,
