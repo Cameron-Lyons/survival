@@ -857,6 +857,7 @@ def survfit(
     stype: int | None = None,
     ctype: int | None = None,
     id: Any | None = None,
+    individual: Any = False,
     cluster: Any | None = None,
     robust: Any | None = None,
     istate: Any | None = None,

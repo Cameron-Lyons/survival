@@ -18786,6 +18786,7 @@ def survfit(
     stype: int | None = None,
     ctype: int | None = None,
     id: Any | None = None,
+    individual: Any = _MISSING,
     cluster: Any | None = None,
     robust: Any | None = None,
     istate: Any | None = None,
@@ -18832,6 +18833,10 @@ def survfit(
     include_se = _normalize_bool_option_with_default(se_fit, "se_fit", True)
     robust_value = _normalize_optional_bool_option(robust, "robust")
     id_arg = id
+    individual_supplied = individual is not _MISSING
+    individual_value = (
+        False if individual is _MISSING else _normalize_bool_option(individual, "individual")
+    )
     if istate is not None and etype is not None:
         raise ValueError("survfit cannot use both istate and etype")
 
@@ -18933,6 +18938,8 @@ def survfit(
         if etype is not None or istate is not None:
             raise ValueError("etype and istate are only supported for Surv or formula inputs")
         if is_multistate_cox_fit:
+            if individual_supplied:
+                raise ValueError("individual is not supported for fitted multi-state Cox models")
             if reverse_curve:
                 raise ValueError("reverse survfit is not supported for multi-state Cox models")
             if subset is not None:
@@ -18977,21 +18984,55 @@ def survfit(
             raise ValueError("subset is only supported for Surv or formula inputs")
         rows, offsets = _prediction_inputs(response, newdata)
         if hasattr(response, "means"):
-            result = _cox_survfit_result(
-                response,
-                rows,
-                offsets,
-                True,
-                newdata,
-                normalized_start_time,
-                include_time0,
-                include_censor,
-                normalized_conf_level,
-                normalized_conf_type,
-                compute_confidence=include_se,
-                ctype=computation.ctype,
-                stype=computation.stype,
-            )
+            if individual_supplied:
+                warnings.warn(
+                    "the `id' option supersedes `individual'",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            individual_curve = id_arg is not None or individual_value
+            if individual_curve:
+                if newdata is None:
+                    raise ValueError("the id option only makes sense with new data")
+                if rows is None:
+                    raise AssertionError("newdata prediction rows are missing")
+                if isinstance(id_arg, str):
+                    id_arg = _column(newdata, id_arg)
+                ids = (
+                    [0] * len(rows)
+                    if id_arg is None
+                    else _materialize_labels(id_arg, "id")
+                )
+                result = _cox_survfit_individual_result(
+                    response,
+                    rows,
+                    offsets,
+                    newdata,
+                    ids,
+                    normalized_start_time,
+                    include_censor,
+                    normalized_conf_level,
+                    normalized_conf_type,
+                    compute_confidence=include_se,
+                    stype=computation.stype,
+                    ctype=computation.ctype,
+                )
+            else:
+                result = _cox_survfit_result(
+                    response,
+                    rows,
+                    offsets,
+                    True,
+                    newdata,
+                    normalized_start_time,
+                    include_time0,
+                    include_censor,
+                    normalized_conf_level,
+                    normalized_conf_type,
+                    compute_confidence=include_se,
+                    ctype=computation.ctype,
+                    stype=computation.stype,
+                )
             return (
                 _survfit_with_model_frame(result, _cox_survfit_model_frame(response, newdata))
                 if keep_model
@@ -19015,6 +19056,8 @@ def survfit(
 
     if not isinstance(response, Surv):
         raise TypeError("survfit response must be a Surv object, formula, or fitted Cox model")
+    if individual_supplied:
+        raise ValueError("individual is only supported for fitted Cox models")
     if subset is not None:
         indices = _subset_indices(subset, len(response))
         response = _subset_surv(response, indices)
@@ -26042,7 +26085,33 @@ class _CoxProductLimitBaseline:
     xbar: list[list[float]]
 
 
-def _cox_product_limit_center(fit: Any) -> float:
+@dataclass(frozen=True)
+class _CoxIndividualBaseline:
+    n: int
+    times: list[float]
+    survival_steps: list[float]
+    hazard: list[float]
+    varhaz: list[float]
+    xbar: list[list[float]]
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+
+
+def _cox_product_limit_probability(
+    value: float,
+    n_risk: float | None = None,
+    n_event: float | None = None,
+) -> float:
+    bounded = _clamp_probability(float(value))
+    if n_risk is not None and n_event is not None:
+        tolerance = 16.0 * math.ulp(1.0) * max(abs(n_risk), abs(n_event), 1.0)
+        if n_event >= n_risk - tolerance:
+            return 0.0
+    return 0.0 if bounded <= 8.0 * math.ulp(1.0) else bounded
+
+
+def _cox_survfit_native_center(fit: Any) -> float:
     if _sparse_frailty_for_fit(fit) is not None:
         return _training_linear_predictor_center(fit)
     model = _unwrap_formula_fit(fit)
@@ -26051,6 +26120,13 @@ def _cox_product_limit_center(fit: Any) -> float:
     if means is None:
         return _training_linear_predictor_center(fit)
     mean_values = [float(value) for value in means]
+    if getattr(model, "entry_times", None) is not None:
+        training_rows = _cox_training_rows(model, len(beta))
+        if training_rows:
+            mean_values = [
+                math.fsum(float(row[column]) for row in training_rows) / len(training_rows)
+                for column in range(len(beta))
+            ]
     if len(mean_values) != len(beta):
         return _training_linear_predictor_center(fit)
     coefficient_center = math.fsum(
@@ -26094,7 +26170,7 @@ def _cox_product_limit_baseline_by_stratum(
     linear_predictors = _linear_predictors_for_fit(fit, None)
     if len(linear_predictors) != n:
         raise ValueError("fitted Cox model predictors do not match event rows")
-    center = _cox_product_limit_center(fit)
+    center = _cox_survfit_native_center(fit)
 
     retained = [
         index
@@ -26125,9 +26201,18 @@ def _cox_product_limit_baseline_by_stratum(
         )
         survival: list[float] = []
         survival_value = 1.0
-        for step in raw["surv"]:
-            survival_value *= float(step)
-            survival.append(_clamp_probability(survival_value))
+        for step, n_risk, n_event in zip(
+            raw["surv"],
+            raw["n_risk"],
+            raw["n_event"],
+            strict=True,
+        ):
+            survival_value *= _cox_product_limit_probability(
+                float(step),
+                float(n_risk),
+                float(n_event),
+            )
+            survival.append(_cox_product_limit_probability(survival_value))
         cumulative_variance: list[float] = []
         variance_value = 0.0
         for step in raw["varhaz"]:
@@ -26175,6 +26260,398 @@ def _cox_product_limit_baseline_at(
         return 0.0, 0.0, [0.0] * nvar
     idx = pos - 1
     return baseline.cumhaz[idx], baseline.varhaz[idx], list(baseline.xbar[idx])
+
+
+def _cox_individual_baseline_by_stratum(
+    fit: Any,
+    start_time: float | None,
+    stype: int,
+    ctype: int,
+) -> dict[int, _CoxIndividualBaseline]:
+    model = _unwrap_formula_fit(fit)
+    beta = _cox_beta(model)
+    nvar = len(beta)
+    rows = _cox_training_rows(model, nvar)
+    stop_times = [float(value) for value in model.event_times]
+    status = [int(value) for value in model.status]
+    n = len(stop_times)
+    if len(rows) != n or len(status) != n:
+        raise ValueError("fitted Cox model event arrays have inconsistent lengths")
+    entry_values = getattr(model, "entry_times", None)
+    entry_times = (
+        [float(value) for value in entry_values] if entry_values is not None else None
+    )
+    if entry_times is not None and len(entry_times) != n:
+        raise ValueError("fitted Cox model entry times do not match event rows")
+    weights = [float(value) for value in _model_residual_weights(model, n)]
+    strata = _cox_training_strata(model, n)
+    linear_predictors = _linear_predictors_for_fit(fit, None)
+    if len(linear_predictors) != n:
+        raise ValueError("fitted Cox model predictors do not match event rows")
+    center = _cox_survfit_native_center(fit)
+    retained = [
+        index
+        for index, stop in enumerate(stop_times)
+        if start_time is None or stop >= start_time - _SURVFIT_TIME_EPSILON
+    ]
+    if start_time is not None and not any(status[index] != 0 for index in retained):
+        raise ValueError("start_time argument has removed all endpoints")
+
+    survtype = 1 if stype == 1 else ctype + 1
+    result: dict[int, _CoxIndividualBaseline] = {}
+    for stratum in sorted({strata[row_index] for row_index in retained}):
+        indices = [row_index for row_index in retained if strata[row_index] == stratum]
+        y = (
+            [
+                [entry_times[index], stop_times[index], float(status[index])]
+                for index in indices
+            ]
+            if entry_times is not None
+            else [[stop_times[index], float(status[index])] for index in indices]
+        )
+        raw = _core.cox_survfit_baseline(
+            y,
+            [[float(value) for value in rows[index]] for index in indices],
+            [weights[index] for index in indices],
+            [_safe_exp(linear_predictors[index] - center) for index in indices],
+            survtype,
+            survtype,
+        )
+        result[int(stratum)] = _CoxIndividualBaseline(
+            n=int(raw["n"]),
+            times=[float(value) for value in raw["time"]],
+            survival_steps=(
+                [
+                    _cox_product_limit_probability(value, n_risk, n_event)
+                    for value, n_risk, n_event in zip(
+                        raw["surv"],
+                        raw["n_risk"],
+                        raw["n_event"],
+                        strict=True,
+                    )
+                ]
+                if stype == 1
+                else []
+            ),
+            hazard=[float(value) for value in raw["hazard"]],
+            varhaz=[float(value) for value in raw["varhaz"]],
+            xbar=[[float(value) for value in row] for row in raw["xbar"]],
+            n_risk=[float(value) for value in raw["n_risk"]],
+            n_event=[float(value) for value in raw["n_event"]],
+            n_censor=[float(value) for value in raw["n_censor"]],
+        )
+    return result
+
+
+@dataclass(frozen=True)
+class _CoxIndividualCurve:
+    label: Any
+    n: int
+    times: list[float]
+    survival: list[float]
+    cumhaz: list[float]
+    std_err: list[float]
+    log_std_err: list[float]
+    conf_lower: list[float]
+    conf_upper: list[float]
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+    linear_predictor: float
+
+
+def _cox_product_limit_confidence_interval(
+    survival: float,
+    std_err: float,
+    z: float,
+    conf_type: str,
+) -> tuple[float, float]:
+    if survival <= 0.0 and conf_type != "plain":
+        return math.nan, math.nan
+    return _survfit_confidence_interval(survival, std_err, z, conf_type)
+
+
+def _cox_survfit_individual_curve(
+    label: Any,
+    indices: list[int],
+    starts: list[float],
+    stops: list[float],
+    rows: list[list[float]],
+    linear_predictors: list[float],
+    curve_strata: list[int],
+    baselines: dict[int, _CoxIndividualBaseline],
+    variance: list[list[float]],
+    center: float,
+    stype: int,
+    include_censor: bool,
+    compute_confidence: bool,
+    conf_level: float,
+    conf_type: str,
+) -> _CoxIndividualCurve:
+    nvar = len(rows[0]) if rows else 0
+    output_time: list[float] = []
+    output_risk: list[float] = []
+    output_event: list[float] = []
+    output_censor: list[float] = []
+    hazard_steps: list[float] = []
+    survival_steps: list[float] = []
+    variance_steps: list[float] = []
+    delta_steps: list[list[float]] = []
+    time_offset = 0.0
+    previous_stop: float | None = None
+    first_baseline: _CoxIndividualBaseline | None = None
+
+    for row_index in indices:
+        if previous_stop is not None:
+            time_offset += previous_stop - starts[row_index]
+        previous_stop = stops[row_index]
+        baseline = baselines.get(curve_strata[row_index])
+        if baseline is None:
+            raise ValueError("newdata trajectory selects a stratum without baseline data")
+        if first_baseline is None:
+            first_baseline = baseline
+        risk = _safe_exp(linear_predictors[row_index] - center)
+        first_time = bisect_right(baseline.times, starts[row_index])
+        last_time = bisect_right(baseline.times, stops[row_index])
+        for time_index in range(first_time, last_time):
+            time = baseline.times[time_index]
+            output_time.append(time_offset + time)
+            output_risk.append(baseline.n_risk[time_index])
+            output_event.append(baseline.n_event[time_index])
+            output_censor.append(baseline.n_censor[time_index])
+            hazard_steps.append(baseline.hazard[time_index] * risk)
+            if stype == 1:
+                survival_steps.append(baseline.survival_steps[time_index] ** risk)
+            if compute_confidence:
+                variance_steps.append(baseline.varhaz[time_index] * risk * risk)
+                delta_steps.append(
+                    [
+                        (
+                            baseline.hazard[time_index] * rows[row_index][column]
+                            - baseline.xbar[time_index][column]
+                        )
+                        * risk
+                        for column in range(nvar)
+                    ]
+                )
+
+    cumulative_hazard: list[float] = []
+    hazard_value = 0.0
+    for step in hazard_steps:
+        hazard_value += step
+        cumulative_hazard.append(hazard_value)
+    survival_curve: list[float] = []
+    if stype == 1:
+        survival_value = 1.0
+        for step in survival_steps:
+            survival_value *= step
+            survival_curve.append(_cox_product_limit_probability(survival_value))
+    else:
+        survival_curve = [
+            _clamp_probability(_safe_exp(-value)) for value in cumulative_hazard
+        ]
+
+    log_standard_error: list[float] = []
+    standard_error: list[float] = []
+    lower: list[float] = []
+    upper: list[float] = []
+    if compute_confidence:
+        z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
+        cumulative_variance = 0.0
+        cumulative_delta = [0.0] * nvar
+        for time_index, survival in enumerate(survival_curve):
+            cumulative_variance += variance_steps[time_index]
+            for column in range(nvar):
+                cumulative_delta[column] += delta_steps[time_index][column]
+            log_se = math.sqrt(
+                max(cumulative_variance + _quadratic_form(cumulative_delta, variance), 0.0)
+            )
+            survival_se = survival * log_se
+            log_standard_error.append(log_se)
+            standard_error.append(survival_se)
+            if conf_type != "none":
+                curve_lower, curve_upper = _cox_product_limit_confidence_interval(
+                    survival,
+                    survival_se,
+                    z,
+                    conf_type,
+                )
+                lower.append(curve_lower)
+                upper.append(curve_upper)
+
+    if not include_censor:
+        kept = [index for index, events in enumerate(output_event) if events > 0.0]
+
+        def select(values: list[float]) -> list[float]:
+            return [values[index] for index in kept] if values else []
+
+        output_time = select(output_time)
+        output_risk = select(output_risk)
+        output_event = select(output_event)
+        output_censor = select(output_censor)
+        survival_curve = select(survival_curve)
+        cumulative_hazard = select(cumulative_hazard)
+        standard_error = select(standard_error)
+        log_standard_error = select(log_standard_error)
+        lower = select(lower)
+        upper = select(upper)
+
+    if first_baseline is None:
+        raise ValueError("newdata trajectory has no rows")
+    return _CoxIndividualCurve(
+        label=label,
+        n=first_baseline.n,
+        times=output_time,
+        survival=survival_curve,
+        cumhaz=cumulative_hazard,
+        std_err=standard_error,
+        log_std_err=log_standard_error,
+        conf_lower=lower,
+        conf_upper=upper,
+        n_risk=output_risk,
+        n_event=output_event,
+        n_censor=output_censor,
+        linear_predictor=linear_predictors[indices[0]],
+    )
+
+
+def _cox_survfit_individual_result(
+    fit: Any,
+    rows: list[list[float]],
+    offsets: list[float] | None,
+    newdata: Any,
+    ids: list[Any],
+    start_time: float | None,
+    include_censor: bool,
+    conf_level: float,
+    conf_type: str,
+    compute_confidence: bool,
+    stype: int,
+    ctype: int,
+) -> CoxSurvfitResult:
+    design = _formula_design_for_fit(fit)
+    if design is None:
+        raise ValueError("individual Cox curves require a formula-based fitted model")
+    response = _surv_from_formula_design(newdata, design)
+    if response.type != "counting" or response.start is None:
+        raise ValueError("individual Cox curves require counting-process newdata")
+    if getattr(_unwrap_formula_fit(fit), "entry_times", None) is None:
+        raise ValueError("Survival type of newdata does not match the fitted model")
+    n = len(rows)
+    if n == 0:
+        raise ValueError("newdata must contain at least one row")
+    if not rows[0]:
+        raise ValueError("Individual survival but no variables")
+    if len(response) != n or len(ids) != n:
+        raise ValueError("id and counting-process response must match newdata rows")
+    if any(_is_missing_value(value) for value in ids):
+        raise ValueError("id contains missing values")
+    groups: dict[Any, list[int]] = {}
+    for row_index, value in enumerate(ids):
+        try:
+            groups.setdefault(value, []).append(row_index)
+        except TypeError as exc:
+            raise TypeError("id contains unhashable labels") from exc
+
+    curve_strata = _cox_prediction_strata(fit, newdata, n)
+    linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
+    center = _cox_survfit_native_center(fit)
+    baselines = _cox_individual_baseline_by_stratum(
+        fit,
+        start_time,
+        stype,
+        ctype,
+    )
+    variance = _cox_variance_matrix(fit, len(rows[0]) if rows else 0)
+    starts = [float(value) for value in response.start]
+    stops = [float(value) for value in response.time]
+    curves = [
+        _cox_survfit_individual_curve(
+            label,
+            indices,
+            starts,
+            stops,
+            rows,
+            linear_predictors,
+            curve_strata,
+            baselines,
+            variance,
+            center,
+            stype,
+            include_censor,
+            compute_confidence,
+            conf_level,
+            conf_type,
+        )
+        for label, indices in groups.items()
+    ]
+    times = sorted({time for curve in curves for time in curve.times})
+    time_index = {time: index for index, time in enumerate(times)}
+    curve_time_indices = [
+        [time_index[time] for time in curve.times] for curve in curves
+    ]
+
+    def expand(values: list[float], curve_times: list[float], initial: float) -> list[float]:
+        if len(values) != len(curve_times):
+            raise ValueError("individual Cox curve fields have inconsistent lengths")
+        if any(
+            left > right
+            for left, right in zip(curve_times, curve_times[1:], strict=False)
+        ):
+            raise ValueError("individual Cox trajectory times must be ordered")
+        expanded: list[float] = []
+        for time in times:
+            position = bisect_right(curve_times, time) - 1
+            expanded.append(initial if position < 0 else float(values[position]))
+        return expanded
+
+    def expand_counts(values: list[float], curve_times: list[float]) -> list[float]:
+        by_time = dict(zip(curve_times, values, strict=True))
+        return [float(by_time.get(time, 0.0)) for time in times]
+
+    multiple_curves = len(curves) > 1
+    return CoxSurvfitResult(
+        time=times,
+        surv=[expand(curve.survival, curve.times, 1.0) for curve in curves],
+        cumhaz=[expand(curve.cumhaz, curve.times, 0.0) for curve in curves],
+        linear_predictors=[curve.linear_predictor for curve in curves],
+        centered=True,
+        strata=list(range(len(curves))) if multiple_curves else None,
+        strata_labels=[curve.label for curve in curves] if multiple_curves else None,
+        start_time=start_time,
+        std_err=(
+            [expand(curve.std_err, curve.times, 0.0) for curve in curves]
+            if compute_confidence
+            else []
+        ),
+        std_chaz=(
+            [expand(curve.log_std_err, curve.times, 0.0) for curve in curves]
+            if compute_confidence and stype == 2
+            else []
+        ),
+        conf_lower=(
+            [expand(curve.conf_lower, curve.times, 1.0) for curve in curves]
+            if compute_confidence and conf_type != "none"
+            else []
+        ),
+        conf_upper=(
+            [expand(curve.conf_upper, curve.times, 1.0) for curve in curves]
+            if compute_confidence and conf_type != "none"
+            else []
+        ),
+        curve_time_indices=curve_time_indices if multiple_curves else None,
+        n=[curve.n for curve in curves],
+        n_risk=[expand_counts(curve.n_risk, curve.times) for curve in curves],
+        n_event=[expand_counts(curve.n_event, curve.times) for curve in curves],
+        n_censor=[expand_counts(curve.n_censor, curve.times) for curve in curves],
+        conf_type=conf_type if compute_confidence else None,
+        conf_level=conf_level if compute_confidence else None,
+        log_std_err=(
+            [expand(curve.log_std_err, curve.times, 0.0) for curve in curves]
+            if compute_confidence and stype == 1
+            else []
+        ),
+    )
 
 
 def _cox_survfit_baseline_method(fit: Any, ctype: int | None = None) -> str:
@@ -26966,7 +27443,7 @@ def _cox_survfit_with_product_limit_style(
             if include_censor or events > 0.0
         }
     )
-    center = _cox_product_limit_center(fit) if result.centered else 0.0
+    center = _cox_survfit_native_center(fit) if result.centered else 0.0
     curve_strata: list[int | None] = (
         [None] * len(result.surv)
         if result.strata is None
@@ -27029,7 +27506,7 @@ def _cox_survfit_product_limit_with_confidence(
     beta = _cox_beta(model)
     nvar = len(beta)
     variance = _cox_variance_matrix(fit, nvar)
-    center = _cox_product_limit_center(fit) if result.centered else 0.0
+    center = _cox_survfit_native_center(fit) if result.centered else 0.0
     z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
 
     std_err: list[list[float]] = []
@@ -27060,7 +27537,7 @@ def _cox_survfit_product_limit_with_confidence(
             curve_log_std_err.append(log_se)
             curve_std_err.append(survival_se)
             if conf_type != "none":
-                lower, upper = _survfit_confidence_interval(
+                lower, upper = _cox_product_limit_confidence_interval(
                     float(survival),
                     survival_se,
                     z,

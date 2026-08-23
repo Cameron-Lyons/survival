@@ -8909,6 +8909,11 @@ xtfrm.survival_py_surv <- function(x) {
   t(values)
 }
 
+.survfit_cox_na_nan <- function(values) {
+  values[is.nan(values)] <- NA_real_
+  values
+}
+
 .as_survival_py_cox_survfit_list <- function(x) {
   curve_count <- length(.result_field(x, "estimate"))
   dimensions <- dim(x)
@@ -8967,8 +8972,12 @@ xtfrm.survival_py_surv <- function(x) {
       }
     }
     if (has_confidence) {
-      fields$lower <- .survfit_cox_data_matrix(x, "conf_lower", time_count, curve_count)
-      fields$upper <- .survfit_cox_data_matrix(x, "conf_upper", time_count, curve_count)
+      fields$lower <- .survfit_cox_na_nan(
+        .survfit_cox_data_matrix(x, "conf_lower", time_count, curve_count)
+      )
+      fields$upper <- .survfit_cox_na_nan(
+        .survfit_cox_data_matrix(x, "conf_upper", time_count, curve_count)
+      )
     }
   } else {
     frame <- as.data.frame.survival_py_survfit(x, optional = TRUE)
@@ -9000,8 +9009,16 @@ xtfrm.survival_py_surv <- function(x) {
       }
     }
     if (has_confidence) {
-      fields$lower <- if (nrow(frame) == 0L) numeric() else frame$lower
-      fields$upper <- if (nrow(frame) == 0L) numeric() else frame$upper
+      fields$lower <- if (nrow(frame) == 0L) {
+        numeric()
+      } else {
+        .survfit_cox_na_nan(frame$lower)
+      }
+      fields$upper <- if (nrow(frame) == 0L) {
+        numeric()
+      } else {
+        .survfit_cox_na_nan(frame$upper)
+      }
     }
   }
 
@@ -9010,6 +9027,10 @@ xtfrm.survival_py_surv <- function(x) {
   if (has_standard_errors && length(conf_type) == 1L && !is.na(conf_type)) {
     fields$conf.type <- conf_type[[1L]]
     fields$conf.int <- conf_level[[1L]]
+  }
+  start_time <- .as_numeric_vector(.result_field(x, "start_time"))
+  if (length(start_time) == 1L) {
+    fields$start.time <- start_time[[1L]]
   }
   fields
 }
@@ -10386,13 +10407,35 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   if (.is_multistate_cox_fit(formula)) {
     se.fit <- FALSE
   }
-  result <- .call_r_api(
-    "survfit",
-    response = formula,
-    newdata = .as_python_data(newdata),
-    `se.fit` = se.fit,
-    ...,
-    .wrap = c("survival_py_survfit", "survival_py_object")
+  dots <- list(...)
+  if ("individual" %in% names(dots)) {
+    warning("the `id' option supersedes `individual'", call. = FALSE)
+    individual <- dots$individual
+    if (is.logical(individual) && length(individual) == 1L && !is.na(individual)) {
+      dots$individual <- NULL
+      if (isTRUE(individual) && !("id" %in% names(dots))) {
+        dots$id <- rep.int(0L, NROW(newdata))
+      }
+    }
+  }
+  if ("id" %in% names(dots) && is.null(dots$id)) {
+    stop("id=NULL is an invalid argument", call. = FALSE)
+  }
+  if ("id" %in% names(dots) && !is.null(dots$id)) {
+    dots$id <- .as_python_vector(dots$id)
+  }
+  result <- do.call(
+    .call_r_api,
+    c(
+      list(
+        "survfit",
+        response = formula,
+        newdata = .as_python_data(newdata),
+        `se.fit` = se.fit
+      ),
+      dots,
+      list(.wrap = c("survival_py_survfit", "survival_py_object"))
+    )
   )
   if (!is.null(newdata) && (is.data.frame(newdata) || is.matrix(newdata))) {
     curve_count <- length(.result_field(result, "surv"))

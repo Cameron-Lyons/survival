@@ -14092,6 +14092,149 @@ test_that("Cox product-limit survfit styles match survival", {
   }
 })
 
+test_that("Cox individual trajectories match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    start = c(0, 0.5, 0, 1.5, 2, 1, 0.25, 3.5),
+    stop = c(1, 2, 2, 3, 4, 4, 2.5, 5),
+    status = c(1, 1, 0, 1, 0, 1, 1, 0),
+    x1 = c(0.2, 0.8, -0.3, 1.1, 0.4, -0.7, 0.6, -0.1),
+    x2 = c(1, 0, 1, 2, -1, 0.5, 1.5, -0.5),
+    group = factor(rep(c("a", "b"), each = 4L))
+  )
+  trajectory <- data.frame(
+    start = c(0, 2.5, 0, 3),
+    stop = c(2.5, 5, 3, 5),
+    status = 0L,
+    x1 = c(0.1, 0.3, -0.2, 0.4),
+    x2 = c(0.2, -0.1, 0.6, 0.5),
+    group = factor(c("a", "b", "a", "b"), levels = levels(data$group)),
+    subject = c("one", "one", "two", "two")
+  )
+  bridged_model <- coxph(
+    Surv(start, stop, status) ~ x1 + x2 + strata(group),
+    data = data,
+    init = c(0.15, -0.1),
+    max_iter = 0
+  )
+  reference_model <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x1 + x2 + strata(group),
+    data = data,
+    init = c(0.15, -0.1),
+    iter.max = 0
+  )
+
+  compare_trajectory <- function(
+    newdata,
+    id,
+    arguments = list(),
+    bridged_fit = bridged_model,
+    reference_fit = reference_model
+  ) {
+    bridged <- do.call(
+      survfit,
+      c(list(bridged_fit, newdata = newdata, id = id), arguments)
+    )
+    reference <- do.call(
+      survival::survfit,
+      c(list(reference_fit, newdata = newdata, id = id), arguments)
+    )
+    expect_identical(dim(bridged), dim(reference))
+    for (field in c(
+      "n", "time", "n.risk", "n.event", "n.censor", "strata",
+      "surv", "cumhaz", "std.err", "std.chaz", "lower", "upper",
+      "start.time"
+    )) {
+      expect_equal(
+        bridged[[field]],
+        reference[[field]],
+        tolerance = 2e-12,
+        info = paste("Cox individual trajectory field", field)
+      )
+    }
+    expect_identical(bridged$logse, reference$logse)
+    expect_identical(bridged$conf.type, reference$conf.type)
+    expect_equal(bridged$conf.int, reference$conf.int)
+  }
+
+  for (arguments in list(
+    list(stype = 2L, ctype = 2L),
+    list(stype = 2L, ctype = 1L),
+    list(stype = 1L, ctype = 2L),
+    list(type = "kalbfleisch-prentice"),
+    list(stype = 2L, ctype = 2L, censor = FALSE),
+    list(stype = 1L, ctype = 2L, censor = FALSE),
+    list(stype = 2L, ctype = 2L, start.time = 1.5),
+    list(stype = 1L, ctype = 2L, start.time = 1.5),
+    list(stype = 2L, ctype = 2L, time0 = TRUE),
+    list(stype = 1L, ctype = 2L, time0 = TRUE),
+    list(stype = 2L, ctype = 2L, se.fit = FALSE)
+  )) {
+    compare_trajectory(trajectory, trajectory$subject, arguments)
+  }
+  compare_trajectory(
+    trajectory[1:2, , drop = FALSE],
+    trajectory$subject[1:2],
+    list(stype = 2L, ctype = 2L)
+  )
+
+  weighted_data <- transform(
+    data,
+    weight = c(1, 2, 1, 3, 2, 1, 2, 1),
+    curve_offset = c(0.1, 0.2, -0.1, 0.4, 0.3, -0.2, 0.5, 0)
+  )
+  weighted_trajectory <- transform(
+    trajectory,
+    curve_offset = c(0.3, -0.1, 0.2, 0.4)
+  )
+  bridged_weighted <- coxph(
+    Surv(start, stop, status) ~ x1 + x2 + strata(group) + offset(curve_offset),
+    data = weighted_data,
+    weights = weight,
+    init = c(0.15, -0.1),
+    max_iter = 0
+  )
+  reference_weighted <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x1 + x2 + strata(group) +
+      offset(curve_offset),
+    data = weighted_data,
+    weights = weight,
+    init = c(0.15, -0.1),
+    iter.max = 0
+  )
+  for (stype in c(1L, 2L)) {
+    compare_trajectory(
+      weighted_trajectory,
+      weighted_trajectory$subject,
+      list(stype = stype, ctype = 2L),
+      bridged_weighted,
+      reference_weighted
+    )
+  }
+
+  bridged_legacy <- expect_warning(
+    survfit(bridged_model, newdata = trajectory, individual = TRUE),
+    "supersedes"
+  )
+  reference_legacy <- expect_warning(
+    survival::survfit(reference_model, newdata = trajectory, individual = TRUE),
+    "supersedes"
+  )
+  expect_equal(bridged_legacy$time, reference_legacy$time, tolerance = 2e-12)
+  expect_equal(bridged_legacy$surv, reference_legacy$surv, tolerance = 2e-12)
+  expect_error(
+    survfit(bridged_model, newdata = trajectory, id = NULL),
+    "id=NULL is an invalid argument",
+    fixed = TRUE
+  )
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

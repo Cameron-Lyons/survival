@@ -22317,6 +22317,231 @@ def test_survfit_coxph_product_limit_supports_weights_offsets_and_newdata():
     assert profiles.n_censor[0] == pytest.approx([0.0, 0.0, 4.0])
 
 
+def test_survfit_coxph_product_limit_zero_confidence_matches_r_boundaries():
+    fit = survival.coxph(
+        "Surv(time, status) ~ 1",
+        data={"time": [1.0, 2.0], "status": [1, 1]},
+        max_iter=0,
+    )
+
+    transformed = survival.survfit(fit, stype=1, conf_type="log")
+    assert transformed.surv[0] == pytest.approx([0.5, 0.0])
+    assert math.isnan(transformed.conf_lower[0][-1])
+    assert math.isnan(transformed.conf_upper[0][-1])
+
+    plain = survival.survfit(fit, stype=1, conf_type="plain")
+    assert plain.conf_lower[0][-1] == pytest.approx(0.0)
+    assert plain.conf_upper[0][-1] == pytest.approx(0.0)
+
+
+def test_survfit_coxph_individual_curves_stitch_counting_process_profiles():
+    data = {
+        "start": [0.0, 0.5, 0.0, 1.5, 2.0, 1.0, 0.25, 3.5],
+        "stop": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 2.5, 5.0],
+        "status": [1, 1, 0, 1, 0, 1, 1, 0],
+        "x1": [0.2, 0.8, -0.3, 1.1, 0.4, -0.7, 0.6, -0.1],
+        "x2": [1.0, 0.0, 1.0, 2.0, -1.0, 0.5, 1.5, -0.5],
+        "group": ["a", "a", "a", "a", "b", "b", "b", "b"],
+    }
+    fit = survival.coxph(
+        "Surv(start, stop, status) ~ x1 + x2 + strata(group)",
+        data=data,
+        initial_beta=[0.15, -0.1],
+        max_iter=0,
+    )
+    newdata = {
+        "start": [0.0, 2.5, 0.0, 3.0],
+        "stop": [2.5, 5.0, 3.0, 5.0],
+        "status": [0, 0, 0, 0],
+        "x1": [0.1, 0.3, -0.2, 0.4],
+        "x2": [0.2, -0.1, 0.6, 0.5],
+        "group": ["a", "b", "a", "b"],
+    }
+    ids = ["one", "one", "two", "two"]
+    expected_time = [1.0, 2.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    expected_counts = {
+        "n.risk": [3.0, 3.0, 3.0, 1.0, 3.0, 3.0, 1.0, 3.0, 1.0],
+        "n.event": [1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0],
+        "n.censor": [0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
+    }
+    expected_cumhaz = [
+        0.340185329012036,
+        0.676551313165832,
+        1.02120140105578,
+        1.02120140105578,
+        0.312464403670707,
+        0.621420692170754,
+        1.56790584012424,
+        1.89739045626058,
+        1.89739045626058,
+    ]
+    expected_standard_error = [
+        0.36230879265044,
+        0.612506533580476,
+        0.632721567668558,
+        0.632721567668558,
+        0.348380890353651,
+        0.60829240119334,
+        2.33537565600025,
+        2.12374297321677,
+        2.12374297321677,
+    ]
+
+    cumulative = survival.survfit(
+        fit,
+        newdata=newdata,
+        id=ids,
+        stype=2,
+        ctype=2,
+    )
+    cumulative_frame = survival.as_data_frame(cumulative)
+    assert cumulative.n == [4, 4]
+    assert cumulative.strata_labels == ids[::2]
+    assert cumulative_frame["time"] == pytest.approx(expected_time)
+    assert cumulative_frame["surv"] == pytest.approx(
+        [
+            0.711638423294672,
+            0.508367171893036,
+            0.360161981162029,
+            0.360161981162029,
+            0.731641672241006,
+            0.537180726771331,
+            0.208481318740526,
+            0.149959434779908,
+            0.149959434779908,
+        ]
+    )
+    assert cumulative_frame["cumhaz"] == pytest.approx(expected_cumhaz)
+    assert cumulative_frame["std.err"] == pytest.approx(expected_standard_error)
+    assert cumulative_frame["std.chaz"] == pytest.approx(expected_standard_error)
+    for name, expected in expected_counts.items():
+        assert cumulative_frame[name] == pytest.approx(expected)
+
+    product_limit = survival.survfit(
+        fit,
+        newdata=newdata,
+        id=ids,
+        stype=1,
+        ctype=2,
+    )
+    product_frame = survival.as_data_frame(product_limit)
+    assert product_frame["time"] == pytest.approx(expected_time)
+    assert product_frame["surv"] == pytest.approx(
+        [
+            0.663885899488341,
+            0.43467693350465,
+            0.290155605799086,
+            0.290155605799086,
+            0.6864211292536,
+            0.465212710780377,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    )
+    assert product_frame["cumhaz"] == pytest.approx(expected_cumhaz)
+    assert product_frame["std.err"] == pytest.approx(
+        [
+            0.435553812751138,
+            0.699841673134845,
+            0.755570394210267,
+            0.755570394210267,
+            0.413125360193381,
+            0.683165822204926,
+            2.35598712855524,
+            2.15826358387233,
+            2.15826358387233,
+        ]
+    )
+    assert "std.chaz" not in product_frame
+    assert all(math.isnan(value) for value in product_frame["lower"][-3:])
+    assert all(math.isnan(value) for value in product_frame["upper"][-3:])
+
+
+def test_survfit_coxph_individual_curve_options_and_validation():
+    data = {
+        "start": [0.0, 0.0, 1.0, 1.0],
+        "stop": [1.0, 2.0, 3.0, 4.0],
+        "status": [1, 1, 1, 0],
+        "x": [0.0, 0.5, 1.0, 1.5],
+    }
+    fit = survival.coxph(
+        "Surv(start, stop, status) ~ x",
+        data=data,
+        initial_beta=[0.2],
+        max_iter=0,
+    )
+    newdata = {
+        "start": [0.0, 2.0],
+        "stop": [2.0, 4.0],
+        "status": [0, 0],
+        "x": [0.25, 1.25],
+        "subject": ["one", "one"],
+    }
+
+    named = survival.survfit(
+        fit,
+        newdata=newdata,
+        id="subject",
+        censor=False,
+        se_fit=False,
+    )
+    with pytest.warns(RuntimeWarning, match="supersedes"):
+        legacy = survival.survfit(
+            fit,
+            newdata=newdata,
+            individual=True,
+            censor=False,
+            se_fit=False,
+        )
+    assert named.time == pytest.approx(legacy.time)
+    assert named.surv[0] == pytest.approx(legacy.surv[0])
+    assert named.n_censor[0] == pytest.approx([0.0] * len(named.time))
+    assert named.std_err == []
+    with_time0 = survival.survfit(
+        fit,
+        newdata=newdata,
+        id="subject",
+        censor=False,
+        se_fit=False,
+        time0=True,
+    )
+    assert with_time0.time == pytest.approx(named.time)
+    assert with_time0.surv[0] == pytest.approx(named.surv[0])
+
+    conditioned = survival.survfit(
+        fit,
+        newdata=newdata,
+        id="subject",
+        start_time=1.5,
+    )
+    assert conditioned.start_time == pytest.approx(1.5)
+
+    with pytest.raises(ValueError, match="only makes sense with new data"):
+        survival.survfit(fit, id=["one"])
+    right_fit = survival.coxph(
+        "Surv(stop, status) ~ x",
+        data=data,
+        initial_beta=[0.2],
+        max_iter=0,
+    )
+    with pytest.raises(ValueError, match="counting-process newdata"):
+        survival.survfit(
+            right_fit,
+            newdata={"stop": [1.0], "status": [0], "x": [0.0]},
+            id=["one"],
+        )
+    with pytest.raises(ValueError, match="id and counting-process response"):
+        survival.survfit(fit, newdata=newdata, id=["one"])
+    no_variable_fit = survival.coxph(
+        "Surv(start, stop, status) ~ 1",
+        data=data,
+        max_iter=0,
+    )
+    with pytest.raises(ValueError, match="no variables"):
+        survival.survfit(no_variable_fit, newdata=newdata, id="subject")
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)
