@@ -13926,6 +13926,65 @@ test_that("Cox survfit counts and structural metadata match survival", {
   expect_null(reference_no_se$conf.int)
 })
 
+test_that("Cox cumulative-hazard survfit styles match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = c(1, 1, 2, 2, 3, 4),
+    status = c(1, 1, 1, 0, 1, 0),
+    x = c(0, 1, 0.2, 0.8, 0.4, 0.6)
+  )
+  bridged_model <- coxph(
+    Surv(time, status) ~ x,
+    data = data,
+    ties = "efron",
+    max_iter = 0
+  )
+  reference_model <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    ties = "efron",
+    init = 0,
+    iter.max = 0
+  )
+  compare_style <- function(arguments) {
+    bridged <- do.call(survfit, c(list(bridged_model), arguments))
+    reference <- do.call(survival::survfit, c(list(reference_model), arguments))
+    for (field in c(
+      "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz",
+      "std.err", "std.chaz", "lower", "upper"
+    )) {
+      expect_equal(
+        bridged[[field]],
+        reference[[field]],
+        tolerance = 1e-12,
+        info = paste("Cox cumulative-hazard style field", field)
+      )
+    }
+  }
+
+  for (arguments in list(
+    list(),
+    list(stype = 2L),
+    list(ctype = 1L),
+    list(ctype = 2L),
+    list(type = "aalen"),
+    list(type = "efron"),
+    list(type = "breslow"),
+    list(type = "fleming-harrington"),
+    list(type = "greenwood"),
+    list(type = "tsiatis"),
+    list(type = "exact")
+  )) {
+    compare_style(arguments)
+  }
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

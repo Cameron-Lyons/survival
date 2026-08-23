@@ -15888,6 +15888,58 @@ def _normalize_survfit_type(
     return _SurvfitComputation(2, 2)
 
 
+def _normalize_cox_survfit_type(
+    fit: Any,
+    survfit_type: str | None,
+    stype: int | None,
+    ctype: int | None,
+) -> _SurvfitComputation:
+    method = str(getattr(fit, "method", "breslow")).lower().replace("_", "-")
+    default_ctype = 2 if method == "efron" else 1
+    if survfit_type is not None and (stype is not None or ctype is not None):
+        warnings.warn("type argument ignored", RuntimeWarning, stacklevel=3)
+        survfit_type = None
+
+    if survfit_type is not None:
+        if not isinstance(survfit_type, str):
+            raise TypeError("survfit type must be a string")
+        value = survfit_type.strip().lower().replace("_", "-")
+        choices = (
+            "kalbfleisch-prentice",
+            "aalen",
+            "efron",
+            "kaplan-meier",
+            "breslow",
+            "fleming-harrington",
+            "greenwood",
+            "tsiatis",
+            "exact",
+        )
+        normalized = _match_string_arg(
+            value,
+            "survfit type",
+            choices,
+            "invalid value for Cox survfit type",
+        )
+        style_by_type = {
+            "kalbfleisch-prentice": _SurvfitComputation(1, 1),
+            "aalen": _SurvfitComputation(2, 1),
+            "efron": _SurvfitComputation(2, 2),
+            "kaplan-meier": _SurvfitComputation(1, 1),
+            "breslow": _SurvfitComputation(2, 1),
+            "fleming-harrington": _SurvfitComputation(2, 2),
+            "greenwood": _SurvfitComputation(2, 1),
+            "tsiatis": _SurvfitComputation(2, 1),
+            "exact": _SurvfitComputation(2, 1),
+        }
+        return style_by_type[normalized]
+
+    return _SurvfitComputation(
+        2 if stype is None else _normalize_survfit_style(stype, "stype"),
+        default_ctype if ctype is None else _normalize_survfit_style(ctype, "ctype"),
+    )
+
+
 def _clamp_probability(value: float) -> float:
     return min(max(value, 0.0), 1.0)
 
@@ -18738,6 +18790,12 @@ def survfit(
         raise ValueError("predicted survival curves are not defined for a clogit model")
 
     is_multistate_cox_fit = isinstance(response, _FormulaFit) and response.multi_state is not None
+    is_fitted_cox = (
+        not isinstance(response, Surv | str)
+        and hasattr(response, "survival_curve")
+        and hasattr(response, "means")
+        and not is_multistate_cox_fit
+    )
 
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, None)
     conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
@@ -18764,7 +18822,11 @@ def survfit(
     if istate is not None and etype is not None:
         raise ValueError("survfit cannot use both istate and etype")
 
-    computation = _normalize_survfit_type(type, stype, ctype)
+    computation = (
+        _normalize_cox_survfit_type(response, type, stype, ctype)
+        if is_fitted_cox
+        else _normalize_survfit_type(type, stype, ctype)
+    )
     normalized_conf_level = _normalize_survfit_conf_level(conf_level, conf_int)
     normalized_conf_type = _normalize_survfit_conf_type(conf_type)
     normalized_start_time = _normalize_start_time(start_time)
@@ -18896,10 +18958,8 @@ def survfit(
                 conf_type="none",
                 keep_model=keep_model,
             )
-        if not computation.is_kaplan_meier:
-            raise ValueError(
-                "non-Kaplan-Meier survfit styles are only supported for Surv or formula inputs"
-            )
+        if computation.stype != 2:
+            raise NotImplementedError("Cox product-limit survival curves are not yet supported")
         if reverse_curve:
             raise ValueError("reverse survfit is only supported for Surv or formula inputs")
         if subset is not None:
@@ -18918,6 +18978,7 @@ def survfit(
                 normalized_conf_level,
                 normalized_conf_type,
                 compute_confidence=include_se,
+                ctype=computation.ctype,
             )
             return (
                 _survfit_with_model_frame(result, _cox_survfit_model_frame(response, newdata))
@@ -25957,7 +26018,19 @@ class _CoxExpectedBaseline:
     xbar: list[list[float]]
 
 
-def _cox_expected_baseline_by_stratum(fit: Any) -> dict[int, _CoxExpectedBaseline]:
+def _cox_survfit_baseline_method(fit: Any, ctype: int | None = None) -> str:
+    if ctype is not None:
+        return "efron" if ctype == 2 else "breslow"
+    method = str(getattr(fit, "method", "breslow")).lower().replace("_", "-")
+    if method in {"breslow", "efron", "exact"}:
+        return method
+    raise ValueError(f"Cox baseline output is not available for the {method} method")
+
+
+def _cox_expected_baseline_by_stratum(
+    fit: Any,
+    method: str | None = None,
+) -> dict[int, _CoxExpectedBaseline]:
     model = _unwrap_formula_fit(fit)
     beta = _cox_beta(model)
     nvar = len(beta)
@@ -25976,7 +26049,7 @@ def _cox_expected_baseline_by_stratum(fit: Any) -> dict[int, _CoxExpectedBaselin
     strata = _cox_training_strata(model, n)
     offsets = _cox_prediction_offset_vector(model, n)
     means = _cox_reference_means(model, "sample")
-    method = _cox_detail_method(model)
+    method = _cox_survfit_baseline_method(model) if method is None else method
     strata_values, baseline_times, cumhaz, varhaz, xbar = _core.cox_expected_baseline_by_stratum(
         times,
         status,
@@ -26570,18 +26643,75 @@ def _cox_survfit_with_counts(
     )
 
 
+def _cox_survfit_with_cumulative_hazard_style(
+    fit: Any,
+    result: CoxSurvfitResult,
+    ctype: int,
+) -> CoxSurvfitResult:
+    model = _unwrap_formula_fit(fit)
+    fit_method = _cox_survfit_baseline_method(model)
+    native_ctype = 2 if fit_method == "efron" else 1
+    if ctype == native_ctype and fit_method != "exact":
+        return result
+
+    baselines = _cox_expected_baseline_by_stratum(
+        model,
+        _cox_survfit_baseline_method(model, ctype),
+    )
+    curve_strata = result.strata if result.strata is not None else [0] * len(result.surv)
+    selected = set(curve_strata)
+    times = sorted(
+        {
+            float(time)
+            for stratum, baseline in baselines.items()
+            if stratum in selected
+            for time in baseline.times
+        }
+    )
+    cumulative_hazards: list[list[float]] = []
+    survival_curves: list[list[float]] = []
+    for stratum, linear_predictor in zip(
+        curve_strata,
+        result.linear_predictors,
+        strict=True,
+    ):
+        baseline = baselines.get(stratum, _CoxExpectedBaseline([], [], [], []))
+        baseline_hazard = _core.step_values_at(
+            baseline.times,
+            baseline.cumhaz,
+            times,
+            0.0,
+        )
+        risk = _safe_exp(float(linear_predictor))
+        curve_hazard = [float(value) * risk for value in baseline_hazard]
+        cumulative_hazards.append(curve_hazard)
+        survival_curves.append(
+            [_clamp_probability(_safe_exp(-value)) for value in curve_hazard]
+        )
+    return replace(
+        result,
+        time=times,
+        surv=survival_curves,
+        cumhaz=cumulative_hazards,
+    )
+
+
 def _cox_survfit_with_confidence(
     fit: Any,
     result: CoxSurvfitResult,
     rows: list[list[float]],
     conf_level: float,
     conf_type: str,
+    ctype: int,
 ) -> CoxSurvfitResult:
     model = _unwrap_formula_fit(fit)
     beta = _cox_beta(model)
     nvar = len(beta)
     variance = _cox_variance_matrix(fit, nvar)
-    baselines = _cox_expected_baseline_by_stratum(model)
+    baselines = _cox_expected_baseline_by_stratum(
+        model,
+        _cox_survfit_baseline_method(model, ctype),
+    )
     means = _cox_reference_means(model, "sample")
     z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
 
@@ -26673,6 +26803,7 @@ def _cox_survfit_result(
     conf_level: float = 0.95,
     conf_type: str = "log",
     compute_confidence: bool = True,
+    ctype: int | None = None,
 ) -> CoxSurvfitResult:
     times, curves = _cox_survival_curve(fit, rows, offsets, centered, newdata)
     center = _training_linear_predictor_center(fit) if centered else 0.0
@@ -26718,12 +26849,24 @@ def _cox_survfit_result(
         strata=curve_strata,
         strata_labels=curve_strata_labels,
     )
+    if ctype is None:
+        selected_ctype = 2 if _cox_survfit_baseline_method(fit) == "efron" else 1
+    else:
+        selected_ctype = ctype
+    result = _cox_survfit_with_cumulative_hazard_style(fit, result, selected_ctype)
     if include_censor:
         result = _cox_survfit_with_censor_times(fit, result)
     result = _cox_survfit_conditioned(fit, result, start_time, include_time0)
     if compute_confidence:
         curve_rows = _cox_survfit_curve_rows(fit, rows, len(result.surv))
-        result = _cox_survfit_with_confidence(fit, result, curve_rows, conf_level, conf_type)
+        result = _cox_survfit_with_confidence(
+            fit,
+            result,
+            curve_rows,
+            conf_level,
+            conf_type,
+            selected_ctype,
+        )
     return replace(
         _cox_survfit_with_counts(fit, result, start_time),
         curve_time_indices=_cox_survfit_curve_time_indices(

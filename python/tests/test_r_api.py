@@ -22213,6 +22213,45 @@ def test_survfit_coxph_counting_counts_keep_entries_after_conditioning_time():
     assert frame["n.censor"] == pytest.approx([0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
 
 
+def test_survfit_coxph_supports_cumulative_hazard_styles_and_aliases():
+    data = {
+        "time": [1.0, 1.0, 2.0, 2.0, 3.0, 4.0],
+        "status": [1, 1, 1, 0, 1, 0],
+        "x": [0.0, 1.0, 0.2, 0.8, 0.4, 0.6],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x",
+        data=data,
+        initial_beta=[0.0],
+        max_iter=0,
+        method="efron",
+    )
+
+    efron = survival.survfit(fit, ctype=2)
+    breslow = survival.survfit(fit, ctype=1)
+
+    assert survival.survfit(fit, stype=2).cumhaz[0] == pytest.approx(efron.cumhaz[0])
+    assert efron.cumhaz[0] == pytest.approx(
+        [11.0 / 30.0, 37.0 / 60.0, 67.0 / 60.0, 67.0 / 60.0]
+    )
+    assert breslow.cumhaz[0] == pytest.approx(
+        [1.0 / 3.0, 7.0 / 12.0, 13.0 / 12.0, 13.0 / 12.0]
+    )
+    for alias in ("efron", "fleming-harrington"):
+        assert survival.survfit(fit, type=alias).std_chaz[0] == pytest.approx(
+            efron.std_chaz[0]
+        )
+    for alias in ("aalen", "breslow", "greenwood", "tsiatis", "exact"):
+        assert survival.survfit(fit, type=alias).std_chaz[0] == pytest.approx(
+            breslow.std_chaz[0]
+        )
+    with pytest.warns(RuntimeWarning, match="type argument ignored"):
+        ignored = survival.survfit(fit, type="kaplan-meier", stype=2)
+    assert ignored.cumhaz[0] == pytest.approx(efron.cumhaz[0])
+    with pytest.raises(NotImplementedError, match="product-limit"):
+        survival.survfit(fit, stype=1)
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)
@@ -26389,7 +26428,7 @@ def test_r_api_rejects_unsupported_formula_features():
             start_time=99.0,
         )
 
-    with pytest.raises(ValueError, match="Surv or formula"):
+    with pytest.raises(ValueError, match="Cox survfit type"):
         survival.survfit(
             survival.coxph("Surv(time, status) ~ x1", data=_toy_data(), max_iter=1),
             type="fh",
