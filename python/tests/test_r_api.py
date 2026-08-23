@@ -4030,7 +4030,7 @@ def test_r_style_pyears_tabulates_surv_inputs():
     assert counting_result.event == pytest.approx([1.0])
     assert no_event_result.event is None
     assert no_event_result.pyears == pytest.approx([30.0, 30.0])
-    assert tcut_result.group == ["0+ thru 10", "10+ thru 20", "20+ thru 30"]
+    assert tcut_result.group == [" 0+ thru 10", "10+ thru 20", "20+ thru 30"]
     assert tcut_result.pyears == pytest.approx([15.0, 13.0, 5.0])
     assert tcut_result.n == pytest.approx([2.0, 2.0, 1.0])
     assert tcut_result.event == pytest.approx([0.0, 0.0, 1.0])
@@ -5106,9 +5106,19 @@ def test_r_style_neardate_and_tcut_use_native_data_prep_helpers():
     cut = survival.tcut([5.0, 15.0, 30.0], [0.0, 10.0, 20.0, 30.0])
     assert isinstance(cut, survival.TcutResult)
     assert cut.codes == [0, 1, 2]
-    assert cut.levels == ["0+ thru 10", "10+ thru 20", "20+ thru 30"]
+    assert cut.levels == [" 0+ thru 10", "10+ thru 20", "20+ thru 30"]
     assert cut.breaks == pytest.approx([0.0, 10.0, 20.0, 30.0])
     assert cut.counts == [1, 1, 1]
+
+    wide_labels = survival.tcut(
+        [0.0],
+        [-73132369.7138578, -66683647.222817, 19527939.8933053, 45323074.2830783],
+    )
+    assert wide_labels.levels == [
+        "-73132370+ thru -66683647",
+        "-66683647+ thru  19527940",
+        " 19527940+ thru  45323074",
+    ]
 
     special = survival.tcut(
         [5.0, None, float("inf"), float("-inf")],
@@ -5139,12 +5149,37 @@ def test_r_style_neardate_and_tcut_use_native_data_prep_helpers():
     assert scaled.codes == [0, 1, 2]
     assert scaled.levels == ["a", "b", "c"]
     assert scaled.breaks == pytest.approx([0.0, 3652.5, 7305.0, 10957.5])
+
+    zero_scaled = survival.tcut([1.0, 2.0], 2, scale=0.0)
+    assert zero_scaled.values == [0.0, 0.0]
+    assert zero_scaled.breaks == [0.0, 0.0, 0.0]
+    assert zero_scaled.codes == [0, 1]
+
+    negative_scaled = survival.tcut([1.0, 2.0], 2, scale=-1.0)
+    assert negative_scaled.values == [-1.0, -2.0]
+    assert negative_scaled.breaks == pytest.approx([-0.99, -1.5, -2.01])
+    assert negative_scaled.codes == [0, 1]
+
+    infinite_scaled = survival.tcut([1.0, 2.0], 2, scale=float("inf"))
+    assert infinite_scaled.values == [float("inf"), float("inf")]
+    assert infinite_scaled.breaks == [float("inf"), float("inf"), float("inf")]
+
+    missing_scaled = survival.tcut([1.0, 2.0], 2, scale=float("nan"))
+    assert all(math.isnan(value) for value in missing_scaled.values)
+    assert all(math.isnan(value) for value in missing_scaled.breaks)
+
+    empty_breaks = survival.tcut([1.0, 2.0], [])
+    assert empty_breaks.values == [1.0, 2.0]
+    assert empty_breaks.codes == [-1, -1]
+    assert empty_breaks.levels == []
+    assert empty_breaks.breaks == []
+    assert empty_breaks.counts == []
     assert survival.tcut is survival.r_api.tcut
 
-    with pytest.raises(ValueError, match="breaks must have at least 1"):
-        survival.tcut([1.0], [])
     with pytest.raises(ValueError, match="contain no NA"):
         survival.tcut([1.0], [0.0, None, 2.0])
+    with pytest.raises(ValueError, match="labels length"):
+        survival.tcut([1.0, 2.0], 1.5, labels=["a", "b"])
 
 
 def test_surv_rejects_invalid_named_response_arguments():

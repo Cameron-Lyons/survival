@@ -69,6 +69,9 @@ fn tcut_breaks_and_default_labels(
     value: &[f64],
     breaks: Vec<f64>,
 ) -> PyResult<(Vec<f64>, Vec<String>)> {
+    if breaks.is_empty() {
+        return Ok((breaks, Vec::new()));
+    }
     if breaks.len() == 1 {
         let n_intervals = interval_count_from_scalar_break(breaks[0])?;
         if value.is_empty() {
@@ -159,28 +162,42 @@ pub struct TcutResult {
 }
 
 #[pyfunction]
-#[pyo3(signature = (value, breaks, labels=None))]
+#[pyo3(signature = (value, breaks, labels=None, scale=1.0))]
 pub fn tcut(
     value: &Bound<'_, PyAny>,
     breaks: &Bound<'_, PyAny>,
     labels: Option<Vec<String>>,
+    scale: f64,
 ) -> PyResult<TcutResult> {
     let value = extract_vec_f64(value)?;
     let breaks = match breaks.extract::<f64>() {
         Ok(scalar) => vec![scalar],
         Err(_) => extract_vec_f64(breaks)?,
     };
-    tcut_from_vecs(value, breaks, labels)
+    tcut_from_vecs(value, breaks, labels, scale)
 }
 
 fn tcut_from_vecs(
     value: Vec<f64>,
     breaks: Vec<f64>,
     labels: Option<Vec<String>>,
+    scale: f64,
 ) -> PyResult<TcutResult> {
+    if let Some(labels) = labels.as_ref() {
+        let valid_length = if breaks.len() == 1 {
+            labels.len() as f64 == breaks[0]
+        } else {
+            !breaks.is_empty() && labels.len() == breaks.len() - 1
+        };
+        if !valid_length {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "labels length does not match the number of intervals",
+            ));
+        }
+    }
     let (cut_breaks, default_labels) = tcut_breaks_and_default_labels(&value, breaks)?;
 
-    let n_intervals = cut_breaks.len() - 1;
+    let n_intervals = cut_breaks.len().saturating_sub(1);
 
     let interval_labels = match labels {
         Some(l) => {
@@ -208,10 +225,10 @@ fn tcut_from_vecs(
     }
 
     Ok(TcutResult {
-        values: value,
+        values: value.into_iter().map(|item| item * scale).collect(),
         codes,
         levels: interval_labels,
-        breaks: cut_breaks,
+        breaks: cut_breaks.into_iter().map(|item| item * scale).collect(),
         counts,
     })
 }
@@ -298,7 +315,7 @@ mod tests {
         let values = vec![5.0, 15.0, 25.0, 35.0];
         let breaks = vec![0.0, 10.0, 20.0, 30.0, 40.0];
 
-        let result = tcut_from_vecs(values, breaks, None).unwrap();
+        let result = tcut_from_vecs(values, breaks, None, 1.0).unwrap();
         assert_eq!(result.codes, vec![0, 1, 2, 3]);
         assert_eq!(result.levels.len(), 4);
     }
@@ -309,13 +326,13 @@ mod tests {
         let breaks = vec![0.0, 10.0, 20.0];
         let labels = vec!["young".to_string(), "old".to_string()];
 
-        let result = tcut_from_vecs(values, breaks, Some(labels)).unwrap();
+        let result = tcut_from_vecs(values, breaks, Some(labels), 1.0).unwrap();
         assert_eq!(result.levels, vec!["young", "old"]);
     }
 
     #[test]
     fn test_tcut_scalar_break_count_generates_range_intervals() {
-        let result = tcut_from_vecs(vec![5.0, 15.0, 25.0], vec![3.0], None).unwrap();
+        let result = tcut_from_vecs(vec![5.0, 15.0, 25.0], vec![3.0], None, 1.0).unwrap();
 
         assert_eq!(result.codes, vec![0, 1, 2]);
         assert_eq!(result.levels, vec!["Range 1", "Range 2", "Range 3"]);
@@ -325,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_tcut_scalar_break_count_pads_constant_values() {
-        let result = tcut_from_vecs(vec![5.0, 5.0, 5.0], vec![2.0], None).unwrap();
+        let result = tcut_from_vecs(vec![5.0, 5.0, 5.0], vec![2.0], None, 1.0).unwrap();
 
         assert_eq!(result.codes, vec![0, 0, 0]);
         assert_eq!(result.levels, vec!["Range 1", "Range 2"]);
@@ -335,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_tcut_scalar_break_count_preserves_missing_values() {
-        let result = tcut_from_vecs(vec![1.0, f64::NAN, 3.0], vec![2.0], None).unwrap();
+        let result = tcut_from_vecs(vec![1.0, f64::NAN, 3.0], vec![2.0], None, 1.0).unwrap();
 
         assert_eq!(result.codes, vec![0, -1, 1]);
         assert_eq!(result.levels, vec!["Range 1", "Range 2"]);
@@ -348,7 +365,7 @@ mod tests {
         let values = vec![-5.0, 50.0, 15.0];
         let breaks = vec![0.0, 10.0, 20.0, 30.0];
 
-        let result = tcut_from_vecs(values, breaks, None).unwrap();
+        let result = tcut_from_vecs(values, breaks, None, 1.0).unwrap();
         assert_eq!(result.codes[0], -1);
         assert_eq!(result.codes[1], -1);
         assert_eq!(result.codes[2], 1);
@@ -359,15 +376,20 @@ mod tests {
         let values = vec![0.0, 10.0, 20.0, 30.0];
         let breaks = vec![0.0, 10.0, 20.0, 30.0];
 
-        let result = tcut_from_vecs(values, breaks, None).unwrap();
+        let result = tcut_from_vecs(values, breaks, None, 1.0).unwrap();
         assert_eq!(result.codes, vec![0, 1, 2, 2]);
         assert_eq!(result.counts, vec![1, 1, 2]);
     }
 
     #[test]
     fn test_tcut_duplicate_ordered_breaks_are_allowed() {
-        let result =
-            tcut_from_vecs(vec![5.0, 15.0, 25.0], vec![0.0, 10.0, 10.0, 30.0], None).unwrap();
+        let result = tcut_from_vecs(
+            vec![5.0, 15.0, 25.0],
+            vec![0.0, 10.0, 10.0, 30.0],
+            None,
+            1.0,
+        )
+        .unwrap();
 
         assert_eq!(result.codes, vec![0, 2, 2]);
         assert_eq!(result.counts, vec![1, 0, 2]);
@@ -380,11 +402,51 @@ mod tests {
             vec![5.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY],
             vec![f64::NEG_INFINITY, 10.0, 20.0, f64::INFINITY],
             None,
+            1.0,
         )
         .unwrap();
 
         assert_eq!(result.codes, vec![0, -1, 2, 0]);
         assert_eq!(result.counts, vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn test_tcut_scales_values_and_cutpoints_after_classification() {
+        let negative = tcut_from_vecs(vec![1.0, 2.0], vec![2.0], None, -1.0).unwrap();
+        assert_eq!(negative.values, vec![-1.0, -2.0]);
+        assert_eq!(negative.breaks, vec![-0.99, -1.5, -2.01]);
+        assert_eq!(negative.codes, vec![0, 1]);
+        assert_eq!(negative.counts, vec![1, 1]);
+
+        let zero = tcut_from_vecs(vec![1.0, 2.0], vec![2.0], None, 0.0).unwrap();
+        assert_eq!(zero.values, vec![0.0, 0.0]);
+        assert_eq!(zero.breaks, vec![0.0, 0.0, 0.0]);
+        assert_eq!(zero.codes, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_tcut_accepts_empty_explicit_breaks_without_labels() {
+        let result = tcut_from_vecs(vec![1.0, 2.0], Vec::new(), None, 1.0).unwrap();
+        assert_eq!(result.values, vec![1.0, 2.0]);
+        assert_eq!(result.codes, vec![-1, -1]);
+        assert!(result.levels.is_empty());
+        assert!(result.breaks.is_empty());
+        assert!(result.counts.is_empty());
+
+        assert!(tcut_from_vecs(vec![1.0], Vec::new(), Some(Vec::new()), 1.0).is_err());
+    }
+
+    #[test]
+    fn test_tcut_fractional_interval_count_rejects_explicit_labels() {
+        assert!(
+            tcut_from_vecs(
+                vec![1.0, 2.0],
+                vec![1.5],
+                Some(vec!["a".to_string(), "b".to_string()]),
+                1.0,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -414,11 +476,11 @@ mod tests {
 
     #[test]
     fn test_tcut_rejects_malformed_breaks_and_values() {
-        assert!(tcut_from_vecs(vec![0.5], vec![0.0, f64::NAN], None).is_err());
-        assert!(tcut_from_vecs(vec![0.5], vec![2.0, 1.0], None).is_err());
-        assert!(tcut_from_vecs(vec![f64::NAN], vec![2.0], None).is_err());
-        assert!(tcut_from_vecs(vec![0.5], vec![0.0], None).is_err());
-        assert!(tcut_from_vecs(Vec::new(), vec![2.0], None).is_err());
+        assert!(tcut_from_vecs(vec![0.5], vec![0.0, f64::NAN], None, 1.0).is_err());
+        assert!(tcut_from_vecs(vec![0.5], vec![2.0, 1.0], None, 1.0).is_err());
+        assert!(tcut_from_vecs(vec![f64::NAN], vec![2.0], None, 1.0).is_err());
+        assert!(tcut_from_vecs(vec![0.5], vec![0.0], None, 1.0).is_err());
+        assert!(tcut_from_vecs(Vec::new(), vec![2.0], None, 1.0).is_err());
     }
 
     #[test]

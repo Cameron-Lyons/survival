@@ -1669,12 +1669,6 @@ attrassign <- function(object, tt) {
   value
 }
 
-.tcut_default_labels <- function(breaks) {
-  left <- format(breaks[-length(breaks)])
-  right <- format(breaks[-1L])
-  paste0(left, "+ thru ", right)
-}
-
 .is_integerish_vector <- function(value) {
   numeric_value <- suppressWarnings(as.numeric(value))
   length(numeric_value) == length(value) &&
@@ -2492,38 +2486,49 @@ predict.pspline <- function(object, newx, ...) {
 tcut <- function(x, breaks, labels, scale = 1) {
   x <- as.numeric(x)
   breaks <- as.numeric(breaks)
-  scale <- .as_finite_scalar(scale, "scale", positive = TRUE)
-  if (length(breaks) < 1L) {
-    stop("breaks must have at least 1 element", call. = FALSE)
-  }
   if (length(breaks) == 1L) {
-    labels_value <- if (missing(labels)) NULL else as.character(labels)
-    result <- .call_data_prep("tcut", x, breaks, labels_value)
-    return(structure(
-      x * scale,
-      cutpoints = as.numeric(result$breaks) * scale,
-      labels = as.character(result$levels),
-      class = "tcut"
-    ))
-  }
-  if (anyNA(breaks) || is.unsorted(breaks, strictly = FALSE)) {
-    stop("breaks must be given in ascending order and contain no NA's", call. = FALSE)
-  }
-  labels <- if (missing(labels)) {
-    .tcut_default_labels(breaks)
+    if (breaks < 1) {
+      stop("Must specify at least one interval")
+    }
+    if (missing(labels)) {
+      labels <- paste("Range", seq(length = breaks))
+    } else if (length(labels) != breaks) {
+      stop("Number of labels must equal number of intervals")
+    }
+    value_range <- range(x[!is.na(x)])
+    value_range[is.na(value_range)] <- 1
+    if ((width <- diff(value_range)) == 0) {
+      value_range[2L] <- value_range[1L] + 1
+      width <- 1
+    }
+    breaks <- seq(
+      value_range[1L] - 0.01 * width,
+      value_range[2L] + 0.01 * width,
+      length = breaks + 1
+    )
   } else {
-    as.character(labels)
+    if (is.na(ascending <- all(diff(breaks) >= 0)) || !ascending) {
+      stop("breaks must be given in ascending order and contain no NA's")
+    }
+    if (missing(labels)) {
+      labels <- paste(
+        format(breaks[-length(breaks)]),
+        "+ thru ",
+        format(breaks[-1L]),
+        sep = ""
+      )
+    } else if (length(labels) != length(breaks) - 1L) {
+      stop("Number of labels must be 1 less than number of break points")
+    }
   }
-  if (length(labels) != length(breaks) - 1L) {
-    stop("labels length must equal length(breaks) - 1", call. = FALSE)
-  }
-  .call_data_prep("tcut", x, breaks, labels)
-  structure(
+
+  out <- structure(
     x * scale,
     cutpoints = breaks * scale,
-    labels = labels,
-    class = "tcut"
+    labels = labels
   )
+  class(out) <- "tcut"
+  out
 }
 
 `[.tcut` <- function(x, ..., drop = FALSE) {

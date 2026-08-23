@@ -8904,8 +8904,71 @@ def neardate(
     ]
 
 
+def _r_numeric_format_decimals(value: float, digits: int) -> int:
+    if value == 0.0:
+        return 0
+    rendered = format(abs(value), f".{digits}g")
+    mantissa, separator, exponent = rendered.partition("e")
+    fractional = mantissa.partition(".")[2].rstrip("0")
+    if not separator:
+        return len(fractional)
+    return max(0, len(fractional) - int(exponent))
+
+
+def _r_numeric_scientific_decimals(value: float, digits: int) -> int:
+    if value == 0.0:
+        return 0
+    mantissa = format(abs(value), f".{digits - 1}e").partition("e")[0]
+    return len(mantissa.partition(".")[2].rstrip("0"))
+
+
+def _r_format_numeric(values: Sequence[float], digits: int = 7) -> list[str]:
+    finite = [value for value in values if math.isfinite(value)]
+    fixed_decimals = max(
+        (_r_numeric_format_decimals(value, digits) for value in finite),
+        default=0,
+    )
+    scientific_decimals = max(
+        (_r_numeric_scientific_decimals(value, digits) for value in finite),
+        default=0,
+    )
+
+    def special(value: float) -> str | None:
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "Inf" if value > 0.0 else "-Inf"
+        return None
+
+    fixed = [
+        special(value) or format(0.0 if value == 0.0 else value, f".{fixed_decimals}f")
+        for value in values
+    ]
+    scientific = [
+        special(value) or format(0.0 if value == 0.0 else value, f".{scientific_decimals}e")
+        for value in values
+    ]
+    fixed_width = max(map(len, fixed), default=0)
+    exponents = [0 if value == 0.0 else math.floor(math.log10(abs(value))) for value in finite]
+    exponent_width = max((len(str(abs(exponent))) for exponent in exponents), default=2)
+    exponent_width = max(2, exponent_width)
+    scientific_numeric_width = (
+        int(any(value < 0.0 for value in finite))
+        + 1
+        + (scientific_decimals + 1 if scientific_decimals else 0)
+        + 2
+        + exponent_width
+    )
+    scientific_width = max(scientific_numeric_width, max(map(len, scientific), default=0))
+    selected = scientific if scientific_width < fixed_width else fixed
+    width = scientific_width if selected is scientific else fixed_width
+    return [value.rjust(width) for value in selected]
+
+
 def _tcut_default_labels(breaks: list[float]) -> list[str]:
-    return [f"{breaks[idx]:g}+ thru {breaks[idx + 1]:g}" for idx in range(len(breaks) - 1)]
+    lower = _r_format_numeric(breaks[:-1])
+    upper = _r_format_numeric(breaks[1:])
+    return [f"{left}+ thru {right}" for left, right in zip(lower, upper, strict=True)]
 
 
 def tcut(
@@ -8924,23 +8987,21 @@ def tcut(
         for value in _scalar_or_vector(breaks, "breaks")
     ]
     if not break_values:
-        raise ValueError("breaks must have at least 1 element")
+        label_values = (
+            None if labels is None else [str(value) for value in _materialize_1d(labels, "labels")]
+        )
+        return _core.tcut(x_values, break_values, label_values, float(scale))
     if any(math.isnan(value) for value in break_values):
         raise ValueError("breaks must be given in ascending order and contain no NA's")
     if len(break_values) == 1:
         label_values = (
             None if labels is None else [str(value) for value in _materialize_1d(labels, "labels")]
         )
-        return _core.tcut(
-            [value * _normalize_positive_scale(scale) for value in x_values],
-            break_values[0],
-            label_values,
-        )
+        return _core.tcut(x_values, break_values[0], label_values, float(scale))
     if any(
         later < earlier for earlier, later in zip(break_values[:-1], break_values[1:], strict=True)
     ):
         raise ValueError("breaks must be given in ascending order and contain no NA's")
-    scale_value = _normalize_positive_scale(scale)
     label_values = (
         _tcut_default_labels(break_values)
         if labels is None
@@ -8948,11 +9009,7 @@ def tcut(
     )
     if len(label_values) != len(break_values) - 1:
         raise ValueError("labels length must equal length(breaks) - 1")
-    return _core.tcut(
-        [value * scale_value for value in x_values],
-        [value * scale_value for value in break_values],
-        label_values,
-    )
+    return _core.tcut(x_values, break_values, label_values, float(scale))
 
 
 def _quantile_type7(sorted_values: list[float], probability: float) -> float:

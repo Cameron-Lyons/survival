@@ -5990,6 +5990,7 @@ def tcut(
     value: list[float],
     breaks: float | list[float],
     labels: list[str] | None = None,
+    scale: float = 1.0,
 ) -> TcutResult: ...
 def tcut_expand(
     start: list[float],

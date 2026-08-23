@@ -3567,7 +3567,7 @@ def test_data_prep_low_level_bindings_are_typed():
         "from_timeline_rows": ["id", "time", "status"],
         "survcondense": ["id", "time1", "time2", "status"],
         "survcondense_plan": ["id_order", "start", "stop", "row_code"],
-        "tcut": ["value", "breaks", "labels"],
+        "tcut": ["value", "breaks", "labels", "scale"],
         "tcut_expand": ["start", "stop", "cuts"],
         "to_timeline": ["id", "time1", "time2", "status", "time_points"],
         "from_timeline": ["id", "states", "time_points"],

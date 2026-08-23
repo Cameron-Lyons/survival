@@ -8549,6 +8549,44 @@ test_that("data-prep helpers match R survival shapes", {
     reference_tcut_levels(bridged_scaled)
   )
 
+  capture_tcut <- function(fun, args) {
+    observed_warnings <- character()
+    result <- withCallingHandlers(
+      tryCatch(
+        list(value = do.call(fun, args)),
+        error = function(error) list(error = conditionMessage(error))
+      ),
+      warning = function(warning) {
+        observed_warnings <<- c(observed_warnings, conditionMessage(warning))
+        invokeRestart("muffleWarning")
+      }
+    )
+    list(result = result, warnings = observed_warnings)
+  }
+  tcut_boundary_cases <- list(
+    list(x = 1, breaks = 2),
+    list(x = c(1, 2), breaks = numeric()),
+    list(x = c(1, 2), breaks = 2, scale = 0),
+    list(x = c(1, 2), breaks = 2, scale = -1),
+    list(x = c(1, 2), breaks = 2, scale = Inf),
+    list(x = c(1, 2), breaks = 2, scale = NA_real_),
+    list(x = c(1, 2), breaks = c(0, 1, 2), scale = c(1, -1)),
+    list(x = numeric(), breaks = 2),
+    list(x = NA_real_, breaks = 2),
+    list(x = c(1, Inf), breaks = 2),
+    list(x = c(1, 2), breaks = Inf),
+    list(x = c(1, 2), breaks = NaN),
+    list(x = c(1, 2), breaks = 0),
+    list(x = c(1, 2), breaks = 1.5, labels = c("a", "b")),
+    list(x = c(1, 2), breaks = c(0, 1, 2), labels = factor(c("a", "b")))
+  )
+  for (args in tcut_boundary_cases) {
+    expect_identical(
+      capture_tcut(tcut, args),
+      capture_tcut(survival::tcut, args)
+    )
+  }
+
   expect_equal(
     neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9)),
     survival::neardate(c(1, 1, 2), c(1, 1, 2), c(4, 12, 7), c(5, 10, 9))
