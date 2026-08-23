@@ -13343,6 +13343,42 @@ test_that("cch matches Prentice extreme phase-two roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches Prentice nonconverged factor roundoff", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  data <- data.frame(
+    start = c(3, 14, 11, 4, 0, 10, 8, 12, 0, 8, 17, 11, 8, 8, 15, 15, 18, 0, 0, 0, 6, 5, 2, 7),
+    stop = c(7, 16, 12, 7, 6, 13, 13, 15, 3, 12, 20, 14, 9, 11, 18, 16, 20, 1, 2, 2, 11, 10, 8, 10),
+    status = c(0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0),
+    group = factor(c("b", "b", "c", "b", "b", "a", "c", "b", "a", "c", "a", "a", "c", "c", "a", "c", "b", "c", "c", "b", "c", "a", "a", "a")),
+    id = seq_len(24),
+    subcohort = c(1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ group,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 72,
+    method = "Prentice",
+    robust = TRUE
+  )
+  actual <- suppressWarnings(do.call(cch, args))
+  reference <- suppressWarnings(do.call(survival::cch, args))
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

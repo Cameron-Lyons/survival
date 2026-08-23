@@ -1688,6 +1688,10 @@ impl CoxFit {
     fn fit_with_mode(&mut self, mode: FitMode) -> Result<(), CoxError> {
         let agexact_compatibility = mode == FitMode::AgexactCompatibility;
         let factor_arithmetic = ProductAccumulator::new(self.counting_roundoff_compatibility);
+        // Compatibility fits do not converge while step halving. A shrinking
+        // worse trial must not end the iteration loop.
+        let defer_halved_convergence =
+            agexact_compatibility || self.counting_roundoff_compatibility;
         let nvar = self.beta.len();
         let mut newbeta = vec![0.0; nvar];
         let mut a = vec![0.0; nvar];
@@ -1751,7 +1755,7 @@ impl CoxFit {
             }
             if !_notfinite
                 && (1.0 - self.loglik[1] / newlk).abs() <= self.eps
-                && (!agexact_compatibility || halving == 0)
+                && (!defer_halved_convergence || halving == 0)
             {
                 self.loglik[1] = newlk;
                 self.beta.copy_from_slice(&newbeta);

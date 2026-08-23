@@ -26369,6 +26369,59 @@ def test_cch_formula_matches_prentice_extreme_phase_two_roundoff():
     )
 
 
+def test_cch_formula_matches_prentice_nonconverged_factor_roundoff():
+    data = {
+        "start": [
+            3, 14, 11, 4, 0, 10, 8, 12, 0, 8, 17, 11,
+            8, 8, 15, 15, 18, 0, 0, 0, 6, 5, 2, 7,
+        ],
+        "stop": [
+            7, 16, 12, 7, 6, 13, 13, 15, 3, 12, 20, 14,
+            9, 11, 18, 16, 20, 1, 2, 2, 11, 10, 8, 10,
+        ],
+        "status": [
+            0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1,
+            0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        ],
+        "group": [
+            "b", "b", "c", "b", "b", "a", "c", "b", "a", "c", "a", "a",
+            "c", "c", "a", "c", "b", "c", "c", "b", "c", "a", "a", "a",
+        ],
+        "id": list(range(1, 25)),
+        "subcohort": [
+            1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1,
+            1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1,
+        ],
+    }
+    fit = survival.cch(
+        'Surv(start, stop, status) ~ factor(group, levels=c("a","b","c"))',
+        data,
+        subcoh="subcohort",
+        id="id",
+        cohort_size=72,
+        method="Prentice",
+        robust=False,
+    )
+
+    assert survival.coef(fit) == pytest.approx(
+        [1.0939792224226965, 1.7261796126697362], abs=1e-12
+    )
+    assert fit.fit.model_information_matrix[0] == [0.0, 0.0]
+    assert fit.fit.model_information_matrix[1] == pytest.approx(
+        [0.0, 1.5846091640267563], abs=1e-12
+    )
+    assert fit.phase2var[0] == [0.0, 0.0]
+    assert fit.phase2var[1] == pytest.approx([0.0, 5.479910966576661e55], rel=1e-11)
+    assert fit.var[0] == [0.0, 0.0]
+    assert fit.var[1] == pytest.approx([0.0, 5.479910966576661e55], rel=1e-11)
+    assert fit.log_likelihood == pytest.approx(
+        [-1608.4670105538544, -1607.8074092453187], abs=1e-10
+    )
+    assert fit.score_test == pytest.approx(1.918757475019571, abs=1e-12)
+    assert fit.iterations == 35
+    assert fit.means == [0.0, 0.0]
+
+
 def test_cch_formula_matches_delayed_entry_factor_roundoff():
     data = {
         "start": [6, 0, 0, 5, 0, 14, 5, 1, 2, 2, 7, 1, 3, 7, 0, 5, 9, 0, 4, 0],

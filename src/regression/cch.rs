@@ -2220,6 +2220,67 @@ mod tests {
     }
 
     #[test]
+    fn native_prentice_matches_nonconverged_factor_roundoff() {
+        let stop = vec![
+            7.0, 16.0, 12.0, 7.0, 6.0, 13.0, 13.0, 15.0, 3.0, 12.0, 20.0, 14.0, 9.0, 11.0, 18.0,
+            16.0, 20.0, 1.0, 2.0, 2.0, 11.0, 10.0, 8.0, 10.0,
+        ];
+        let status = vec![
+            0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        ];
+        let start = vec![
+            3.0, 14.0, 11.0, 4.0, 0.0, 10.0, 8.0, 12.0, 0.0, 8.0, 17.0, 11.0, 8.0, 8.0, 15.0, 15.0,
+            18.0, 0.0, 0.0, 0.0, 6.0, 5.0, 2.0, 7.0,
+        ];
+        let groups = [
+            'b', 'b', 'c', 'b', 'b', 'a', 'c', 'b', 'a', 'c', 'a', 'a', 'c', 'c', 'a', 'c', 'b',
+            'c', 'c', 'b', 'c', 'a', 'a', 'a',
+        ];
+        let covariates = groups
+            .into_iter()
+            .map(|group| vec![f64::from(group == 'b'), f64::from(group == 'c')])
+            .collect();
+        let subcohort = vec![
+            1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1,
+        ];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=24).collect(),
+            72,
+            Some(start),
+            "Prentice",
+            false,
+        )
+        .expect("nonconverged factor Prentice fit should succeed");
+
+        assert_close(
+            &result.coefficients[0],
+            &[1.093_979_222_422_696_5, 1.726_179_612_669_736_2],
+        );
+        assert_matrix_close(
+            &result.model_information_matrix,
+            &[vec![0.0, 0.0], vec![0.0, 1.584_609_164_026_756_3]],
+        );
+        assert_eq!(result.phase2_variance[0][0], 0.0);
+        assert_eq!(result.phase2_variance[0][1], 0.0);
+        assert_eq!(result.phase2_variance[1][0], 0.0);
+        assert!(
+            (result.phase2_variance[1][1] / 5.479_910_966_576_661e55 - 1.0).abs() < 1e-11,
+            "expected 5.479910966576661e55, got {:.17e}",
+            result.phase2_variance[1][1]
+        );
+        assert_close(
+            &result.log_likelihood,
+            &[-1_608.467_010_553_854_4, -1_607.807_409_245_318_7],
+        );
+        assert!((result.score_test - 1.918_757_475_019_571).abs() < 1e-12);
+        assert_eq!(result.iterations, 35);
+    }
+
+    #[test]
     fn native_prentice_matches_delayed_entry_factor_roundoff() {
         let stop = vec![
             12.0, 3.0, 2.0, 8.0, 2.0, 17.0, 10.0, 6.0, 3.0, 3.0, 8.0, 5.0, 8.0, 11.0, 1.0, 8.0,
