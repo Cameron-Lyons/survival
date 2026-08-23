@@ -1708,6 +1708,9 @@ impl CoxFit {
         }
         a.copy_from_slice(&self.u);
         self.flag = Self::cholesky(&mut self.imat, self.toler, factor_arithmetic);
+        // The counting-process reference rejects Newton trials whose factor
+        // rank differs from the rank at the initial coefficient.
+        let initial_rank = self.flag;
         Self::chsolve(&self.imat, &mut a, factor_arithmetic);
         self.sctest = a
             .iter()
@@ -1727,6 +1730,7 @@ impl CoxFit {
         }
         self.loglik[1] = self.loglik[0];
         let mut newlk = self.loglik[1];
+        let mut retain_last_trial = false;
         for iter in 1..=self.max_iter {
             self.iter = iter;
             self.recenter_penalty(&mut newbeta);
@@ -1738,6 +1742,7 @@ impl CoxFit {
                 }
             };
             self.flag = Self::cholesky(&mut self.imat, self.toler, factor_arithmetic);
+            let rank_changed = self.counting_roundoff_compatibility && self.flag != initial_rank;
             _notfinite = !newlk.is_finite();
             if !_notfinite {
                 for i in 0..nvar {
@@ -1754,6 +1759,7 @@ impl CoxFit {
                 }
             }
             if !_notfinite
+                && !rank_changed
                 && (1.0 - self.loglik[1] / newlk).abs() <= self.eps
                 && (!defer_halved_convergence || halving == 0)
             {
@@ -1769,7 +1775,14 @@ impl CoxFit {
             if agexact_compatibility && iter == self.max_iter {
                 break;
             }
-            if _notfinite || newlk < self.loglik[1] {
+            if self.counting_roundoff_compatibility && iter == self.max_iter {
+                // On exhaustion, retain the last trial unless it is worse
+                // than the last accepted likelihood by more than roundoff.
+                retain_last_trial = self.max_iter <= 1
+                    || (newlk - self.loglik[1]) / self.loglik[1].abs() >= -self.eps;
+                break;
+            }
+            if _notfinite || rank_changed || newlk < self.loglik[1] {
                 halving += 1;
                 for (newbeta_elem, beta_elem) in newbeta.iter_mut().zip(self.beta.iter()).take(nvar)
                 {
@@ -1795,6 +1808,14 @@ impl CoxFit {
             }
         }
         if agexact_compatibility {
+            self.loglik[1] = newlk;
+            self.beta.copy_from_slice(&newbeta);
+            Self::chinv(&mut self.imat, factor_arithmetic);
+            self.rescale_params();
+            self.flag = CONVERGENCE_FLAG;
+            return Ok(());
+        }
+        if retain_last_trial {
             self.loglik[1] = newlk;
             self.beta.copy_from_slice(&newbeta);
             Self::chinv(&mut self.imat, factor_arithmetic);

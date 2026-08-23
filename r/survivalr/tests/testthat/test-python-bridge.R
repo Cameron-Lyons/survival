@@ -13379,6 +13379,52 @@ test_that("cch matches Prentice nonconverged factor roundoff", {
   expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
 })
 
+test_that("cch matches SelfPrentice scalar rank-change nonconvergence", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  z <- c(
+    -0x1.07f5a4b214a4bp+1, -0x1.f38591f4ca8ecp-2, -0x1.c4f10762d8968p-3,
+    0x1.ead98e4367054p-1, 0x1.68ca02e83ae8dp-1, 0x1.86d48b04043d2p+0,
+    -0x1.5d3edf9d07ec3p+0, 0x1.2e7c7289d4334p-1, -0x1.323db64df3146p-2,
+    0x1.491e143954abcp-2, -0x1.1d02ca196b41fp-2, -0x1.869a32eae2edfp-1,
+    0x1.d12ebee1e59fcp+0, -0x1.db0f80cbd6f65p-3, -0x1.4f7c463e94cc1p+0,
+    0x1.b0ae59554e4edp-1, -0x1.f898caeebe89fp-1, -0x1.31756b6da5469p-1,
+    -0x1.b8ed5db64786dp-3, -0x1.9429e7fd46204p+0
+  )
+  data <- data.frame(
+    start = c(4, 5, 8, 16, 4, 7, 12, 10, 4, 0, 4, 18, 7, 14, 4, 5, 0, 15, 0, 15),
+    stop = c(7, 11, 10, 20, 10, 12, 13, 13, 6, 1, 10, 19, 13, 15, 9, 6, 3, 16, 4, 18),
+    status = c(1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1),
+    x = seq_len(20) - 1,
+    z = z,
+    id = seq_len(20),
+    subcohort = c(1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0)
+  )
+  args <- list(
+    formula = Surv(start, stop, status) ~ 0 + x + z,
+    data = data,
+    subcoh = ~subcohort,
+    id = ~id,
+    cohort.size = 60,
+    method = "SelfPrentice",
+    robust = FALSE
+  )
+  actual <- suppressWarnings(do.call(cch, args))
+  reference <- suppressWarnings(do.call(survival::cch, args))
+
+  expect_equal(actual$coefficients, reference$coefficients, tolerance = 1e-11)
+  expect_equal(actual$var, reference$var, tolerance = 1e-11)
+  expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
+  expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+  expect_equal(actual$means, reference$means, tolerance = 1e-11)
+  expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+  expect_equal(actual$score, reference$score, tolerance = 1e-11)
+  expect_equal(actual$iter, reference$iter)
+  expect_equal(actual$offset, reference$offset, tolerance = 1e-11)
+})
+
 test_that("cch matches delayed-entry factor roundoff", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

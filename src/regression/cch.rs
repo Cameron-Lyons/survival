@@ -2281,6 +2281,70 @@ mod tests {
     }
 
     #[test]
+    fn native_self_prentice_matches_scalar_rank_change_nonconvergence() {
+        let stop = vec![
+            7.0, 11.0, 10.0, 20.0, 10.0, 12.0, 13.0, 13.0, 6.0, 1.0, 10.0, 19.0, 13.0, 15.0, 9.0,
+            6.0, 3.0, 16.0, 4.0, 18.0,
+        ];
+        let status = vec![1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1];
+        let start = vec![
+            4.0, 5.0, 8.0, 16.0, 4.0, 7.0, 12.0, 10.0, 4.0, 0.0, 4.0, 18.0, 7.0, 14.0, 4.0, 5.0,
+            0.0, 15.0, 0.0, 15.0,
+        ];
+        let covariates = [
+            -2.062_183_939_889_370_4,
+            -0.487_814_217_153_426_77,
+            -0.221_162_851_051_370_57,
+            0.958_691_068_389_735_2,
+            0.704_666_224_335_100_8,
+            1.526_680_649_262_051_5,
+            -1.364_240_623_319_276_5,
+            0.590_793_208_432_023_8,
+            -0.299_063_538_081_800_2,
+            0.321_403_804_778_281_23,
+            -0.278_330_953_408_671_5,
+            -0.762_895_194_218_312_8,
+            1.817_119_531_775_119,
+            -0.231_963_163_586_324_54,
+            -1.310_490_026_739_714_4,
+            0.845_080_176_986_042_7,
+            -0.985_540_715_831_365_9,
+            -0.596_598_965_773_080_5,
+            -0.215_296_489_835_000_85,
+            -1.578_764_437_994_437_7,
+        ]
+        .into_iter()
+        .map(|value| vec![value])
+        .collect();
+        let subcohort = vec![1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0];
+        let result = cch_fit(
+            stop,
+            status,
+            covariates,
+            subcohort,
+            (1..=20).collect(),
+            60,
+            Some(start),
+            "SelfPrentice",
+            false,
+        )
+        .expect("scalar rank-changing SelfPrentice fit should succeed");
+
+        assert_close(&result.coefficients[0], &[-0.380_314_506_923_178_03]);
+        assert_eq!(result.model_information_matrix, vec![vec![0.0]]);
+        assert_eq!(result.phase2_variance, vec![vec![0.0]]);
+        assert_eq!(result.information_matrix, vec![vec![0.0]]);
+        assert_close(
+            &result.log_likelihood,
+            &[-1_311.707_669_541_762_7, -1_309.954_168_326_491_3],
+        );
+        assert!((result.score_test - 10.988_242_633_258_912).abs() < 1e-12);
+        assert_close(&result.means, &[-0.184_961_106_481_146_94]);
+        assert_eq!(result.iterations, 20);
+        assert_eq!(result.convergence_flag, crate::constants::CONVERGENCE_FLAG);
+    }
+
+    #[test]
     fn native_prentice_matches_delayed_entry_factor_roundoff() {
         let stop = vec![
             12.0, 3.0, 2.0, 8.0, 2.0, 17.0, 10.0, 6.0, 3.0, 3.0, 8.0, 5.0, 8.0, 11.0, 1.0, 8.0,
