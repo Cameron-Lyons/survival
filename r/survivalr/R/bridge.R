@@ -8840,14 +8840,12 @@ xtfrm.survival_py_surv <- function(x) {
   ) * (1 / scale)
 }
 
-.survfit_curve_quantile <- function(curve, probs, conf.int, scale, tolerance) {
-  time <- .as_numeric_vector(.result_field(curve, "time"))
-  surv <- .as_numeric_vector(.result_field(curve, "estimate"))
+.survfit_curve_quantile_values <- function(time, surv, lower, upper, probs,
+                                           conf.int, scale, tolerance,
+                                           firstx = 0) {
   if (length(time) == 0L || length(surv) == 0L) {
     stop("quantile requires Kaplan-Meier survfit time and survival estimates", call. = FALSE)
   }
-  lower <- .as_numeric_vector(.result_field(curve, "conf_lower"))
-  upper <- .as_numeric_vector(.result_field(curve, "conf_upper"))
   if (length(lower) == 0L || length(upper) == 0L) {
     conf.int <- FALSE
   } else {
@@ -8858,15 +8856,118 @@ xtfrm.survival_py_surv <- function(x) {
   if (isTRUE(conf.int)) {
     return(.survfit_quantile_doquant(
       probs, time, surv, upper, lower,
-      firstx = 0, scale = scale, tol = tolerance
+      firstx = firstx, scale = scale, tol = tolerance
     ))
   }
-  .survfit_quantile_doquant(probs, time, surv, firstx = 0, scale = scale, tol = tolerance)
+  .survfit_quantile_doquant(
+    probs, time, surv, firstx = firstx, scale = scale, tol = tolerance
+  )
+}
+
+.survfit_curve_quantile <- function(curve, probs, conf.int, scale, tolerance) {
+  .survfit_curve_quantile_values(
+    time = .as_numeric_vector(.result_field(curve, "time")),
+    surv = .as_numeric_vector(.result_field(curve, "estimate")),
+    lower = .as_numeric_vector(.result_field(curve, "conf_lower")),
+    upper = .as_numeric_vector(.result_field(curve, "conf_upper")),
+    probs = probs,
+    conf.int = conf.int,
+    scale = scale,
+    tolerance = tolerance
+  )
 }
 
 .survfit_curve_has_confint <- function(curve) {
   length(.as_numeric_vector(.result_field(curve, "conf_lower"))) > 0L &&
     length(.as_numeric_vector(.result_field(curve, "conf_upper"))) > 0L
+}
+
+.survfit_cox_curve_names <- function(x, curve_count) {
+  curve_names <- attr(x, ".survival_py_curve_names", exact = TRUE)
+  if (length(curve_names) != curve_count) {
+    curve_names <- .as_nullable_character_vector(.result_field(x, "strata_labels"))
+  }
+  if (length(curve_names) != curve_count) {
+    curve_names <- as.character(seq_len(curve_count))
+  }
+  curve_names
+}
+
+.survfit_cox_quantile <- function(x, probs, conf.int, scale, tolerance, pname) {
+  time <- .as_numeric_vector(.result_field(x, "time"))
+  survival <- .as_numeric_matrix(.result_field(x, "estimate"))
+  lower_values <- .result_field(x, "conf_lower")
+  upper_values <- .result_field(x, "conf_upper")
+  lower <- if (length(lower_values) == 0L) {
+    matrix(numeric(), nrow = 0L, ncol = 0L)
+  } else {
+    .as_numeric_matrix(lower_values)
+  }
+  upper <- if (length(upper_values) == 0L) {
+    matrix(numeric(), nrow = 0L, ncol = 0L)
+  } else {
+    .as_numeric_matrix(upper_values)
+  }
+  curve_count <- nrow(survival)
+  if (curve_count == 0L) {
+    stop("quantile requires Kaplan-Meier survfit time and survival estimates", call. = FALSE)
+  }
+  if (ncol(survival) != length(time)) {
+    stop("Cox survival curves must match their time grid", call. = FALSE)
+  }
+  has_confint <- nrow(lower) == curve_count && ncol(lower) == length(time) &&
+    nrow(upper) == curve_count && ncol(upper) == length(time)
+  if (!has_confint) {
+    conf.int <- FALSE
+  }
+  start_time <- .as_numeric_vector(.result_field(x, "start_time"))
+  firstx <- if (length(start_time) == 0L) 0 else start_time[[1L]]
+
+  curve_quantile <- function(curve_index, include_confint) {
+    .survfit_curve_quantile_values(
+      time = time,
+      surv = survival[curve_index, ],
+      lower = if (include_confint) lower[curve_index, ] else NULL,
+      upper = if (include_confint) upper[curve_index, ] else NULL,
+      probs = probs,
+      conf.int = include_confint,
+      scale = scale,
+      tolerance = tolerance,
+      firstx = firstx
+    )
+  }
+
+  if (curve_count == 1L) {
+    result <- curve_quantile(1L, isTRUE(conf.int))
+    if (isTRUE(conf.int)) {
+      dimnames(result) <- list(NULL, pname)
+      return(list(quantile = result[1L, ], lower = result[2L, ], upper = result[3L, ]))
+    }
+    names(result) <- pname
+    return(result)
+  }
+
+  curve_names <- .survfit_cox_curve_names(x, curve_count)
+  qmat <- matrix(
+    0,
+    nrow = curve_count,
+    ncol = length(probs),
+    dimnames = list(curve_names, pname)
+  )
+  if (isTRUE(conf.int)) {
+    qlower <- qupper <- qmat
+    for (curve_index in seq_len(curve_count)) {
+      result <- curve_quantile(curve_index, TRUE)
+      qmat[curve_index, ] <- result[1L, ]
+      qlower[curve_index, ] <- result[2L, ]
+      qupper[curve_index, ] <- result[3L, ]
+    }
+    return(list(quantile = qmat, lower = qlower, upper = qupper))
+  }
+  for (curve_index in seq_len(curve_count)) {
+    qmat[curve_index, ] <- curve_quantile(curve_index, FALSE)
+  }
+  qmat
 }
 
 quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
@@ -8889,6 +8990,10 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
     )
   }
   pname <- format(probs * 100)
+
+  if (inherits(x, "survival.r_api.CoxSurvfitResult")) {
+    return(.survfit_cox_quantile(x, probs, conf.int, scale, tolerance, pname))
+  }
 
   if (is.list(x) && !inherits(x, "python.builtin.object")) {
     curves <- unclass(x)
@@ -10155,7 +10260,7 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   if (.is_multistate_cox_fit(formula)) {
     se.fit <- FALSE
   }
-  .call_r_api(
+  result <- .call_r_api(
     "survfit",
     response = formula,
     newdata = .as_python_data(newdata),
@@ -10163,6 +10268,14 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
     ...,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
+  if (!is.null(newdata) && (is.data.frame(newdata) || is.matrix(newdata))) {
+    curve_count <- length(.result_field(result, "surv"))
+    curve_names <- row.names(newdata)
+    if (length(curve_names) == curve_count) {
+      attr(result, ".survival_py_curve_names") <- curve_names
+    }
+  }
+  result
 }
 
 .survfitKM_type <- function(y) {

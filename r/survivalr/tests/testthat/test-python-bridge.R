@@ -13434,6 +13434,120 @@ test_that("survreg analysis of deviance matches survival", {
   expect_error(anova(bridged_full, test = "F"), "arg.*Chisq.*none")
 })
 
+test_that("Cox survfit quantiles preserve curve dimensions and conditioning", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  set.seed(7073)
+  n <- 180L
+  x <- stats::rnorm(n)
+  z <- stats::rnorm(n)
+  group <- factor(rep(c("a", "b", "c"), each = n / 3L))
+  rate <- exp(0.3 * x - 0.2 * z + c(a = -0.2, b = 0, c = 0.25)[group]) / 8
+  event_time <- stats::rexp(n, rate)
+  censor_time <- stats::rexp(n, 1 / 14)
+  data <- data.frame(
+    time = pmin(event_time, censor_time),
+    status = as.integer(event_time <= censor_time),
+    x = x,
+    z = z,
+    group = group
+  )
+  profiles <- data.frame(
+    x = c(-0.8, 0.1, 1.0),
+    z = c(0.5, 0, -0.5),
+    group = factor(c("a", "b", "c"), levels = levels(group)),
+    row.names = c("low", "middle", "high")
+  )
+  probabilities <- c(0, 0.25, 0.5, 0.75)
+
+  bridged <- coxph(Surv(time, status) ~ x + z, data = data)
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x + z,
+    data = data
+  )
+  bridged_stratified <- coxph(
+    Surv(time, status) ~ x + z + strata(group),
+    data = data
+  )
+  reference_stratified <- survival::coxph(
+    survival::Surv(time, status) ~ x + z + strata(group),
+    data = data
+  )
+
+  compare_quantiles <- function(bridged_curve, reference_curve) {
+    for (include_confidence in c(FALSE, TRUE)) {
+      expect_equal(
+        quantile(
+          bridged_curve,
+          probs = probabilities,
+          conf.int = include_confidence,
+          scale = 2
+        ),
+        quantile(
+          reference_curve,
+          probs = probabilities,
+          conf.int = include_confidence,
+          scale = 2
+        ),
+        tolerance = 2e-06
+      )
+    }
+    expect_equal(
+      median(bridged_curve),
+      median(reference_curve),
+      tolerance = 2e-06
+    )
+  }
+
+  compare_quantiles(
+    survfit(bridged, newdata = profiles),
+    survival::survfit(reference, newdata = profiles)
+  )
+  compare_quantiles(
+    survfit(bridged, newdata = profiles, start.time = 2.5),
+    survival::survfit(reference, newdata = profiles, start.time = 2.5)
+  )
+  compare_quantiles(
+    survfit(bridged, newdata = profiles[1L, , drop = FALSE], start.time = 2.5),
+    survival::survfit(
+      reference,
+      newdata = profiles[1L, , drop = FALSE],
+      start.time = 2.5
+    )
+  )
+  compare_quantiles(
+    survfit(bridged_stratified),
+    survival::survfit(reference_stratified)
+  )
+  compare_quantiles(
+    survfit(bridged_stratified, newdata = profiles, start.time = 2.5),
+    survival::survfit(
+      reference_stratified,
+      newdata = profiles,
+      start.time = 2.5
+    )
+  )
+
+  expect_equal(
+    quantile(
+      survfit(bridged, newdata = profiles, se.fit = FALSE),
+      probs = probabilities,
+      conf.int = TRUE
+    ),
+    quantile(
+      survival::survfit(reference, newdata = profiles, se.fit = FALSE),
+      probs = probabilities,
+      conf.int = TRUE
+    ),
+    tolerance = 2e-06
+  )
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
