@@ -18787,6 +18787,7 @@ def survfit(
     ctype: int | None = None,
     id: Any | None = None,
     individual: Any = _MISSING,
+    influence: Any = _MISSING,
     cluster: Any | None = None,
     robust: Any | None = None,
     istate: Any | None = None,
@@ -18837,6 +18838,7 @@ def survfit(
     individual_value = (
         False if individual is _MISSING else _normalize_bool_option(individual, "individual")
     )
+    influence_supplied = influence is not _MISSING
     if istate is not None and etype is not None:
         raise ValueError("survfit cannot use both istate and etype")
 
@@ -19058,6 +19060,8 @@ def survfit(
         raise TypeError("survfit response must be a Surv object, formula, or fitted Cox model")
     if individual_supplied:
         raise ValueError("individual is only supported for fitted Cox models")
+    if influence_supplied:
+        raise ValueError("influence is only supported for fitted Cox models")
     if subset is not None:
         indices = _subset_indices(subset, len(response))
         response = _subset_surv(response, indices)

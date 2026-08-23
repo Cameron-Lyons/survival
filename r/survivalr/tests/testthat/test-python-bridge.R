@@ -14235,6 +14235,35 @@ test_that("Cox individual trajectories match survival", {
   )
 })
 
+test_that("Cox survfit accepts the reference no-op influence argument", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = 1:6,
+    status = c(1, 1, 0, 1, 0, 1),
+    x = c(0, 0.5, 1, 1.5, 2, 2.5)
+  )
+  bridged_model <- coxph(Surv(time, status) ~ x, data = data, max_iter = 0)
+  reference_model <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    init = 0,
+    iter.max = 0
+  )
+  for (value in list(FALSE, TRUE, "unused", c(1, 2))) {
+    bridged <- survfit(bridged_model, influence = value)
+    reference <- survival::survfit(reference_model, influence = value)
+    for (field in c("time", "surv", "cumhaz", "std.err", "std.chaz")) {
+      expect_equal(bridged[[field]], reference[[field]], tolerance = 1e-12)
+    }
+  }
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

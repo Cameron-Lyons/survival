@@ -22542,6 +22542,20 @@ def test_survfit_coxph_individual_curve_options_and_validation():
         survival.survfit(no_variable_fit, newdata=newdata, id="subject")
 
 
+def test_survfit_coxph_accepts_ignored_influence_argument():
+    fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=_toy_data(), max_iter=0)
+    expected = survival.survfit(fit)
+
+    for value in (False, True, "unused", [1, 2]):
+        actual = survival.survfit(fit, influence=value)
+        assert actual.time == pytest.approx(expected.time)
+        assert actual.surv[0] == pytest.approx(expected.surv[0])
+        assert actual.cumhaz[0] == pytest.approx(expected.cumhaz[0])
+
+    with pytest.raises(ValueError, match="only supported for fitted Cox models"):
+        survival.survfit(survival.Surv([1.0, 2.0], [1, 0]), influence=True)
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)
