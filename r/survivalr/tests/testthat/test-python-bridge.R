@@ -11607,16 +11607,10 @@ test_that("public helper signatures accept R-style named and positional calls", 
     head(names(formals(survdiff)), 6L),
     names(formals(survival::survdiff))
   )
+  expect_identical(names(formals(basehaz)), names(formals(survival::basehaz)))
+  expect_identical(names(formals(cox.zph)), names(formals(survival::cox.zph)))
   expect_identical(
-    head(names(formals(basehaz)), 3L),
-    names(formals(survival::basehaz))
-  )
-  expect_identical(
-    head(names(formals(cox.zph)), 5L),
-    names(formals(survival::cox.zph))
-  )
-  expect_identical(
-    head(names(formals(coxph.detail)), 3L),
+    names(formals(coxph.detail)),
     names(formals(survival::coxph.detail))
   )
 
@@ -11688,6 +11682,37 @@ test_that("public helper signatures accept R-style named and positional calls", 
     survivalr:::.result_field(bridged_detail, "riskmat")
   )
   expect_equal(unname(bridged_riskmat), unname(reference_detail$riskmat))
+
+  error_message <- function(expression) {
+    tryCatch(
+      {
+        force(expression)
+        NULL
+      },
+      error = conditionMessage
+    )
+  }
+  expect_identical(
+    error_message(basehaz(bridged, unused = TRUE)),
+    error_message(survival::basehaz(reference, unused = TRUE))
+  )
+  expect_identical(
+    error_message(cox.zph(bridged, unused = TRUE)),
+    error_message(survival::cox.zph(reference, unused = TRUE))
+  )
+  expect_identical(
+    error_message(coxph.detail(bridged, unused = TRUE)),
+    error_message(survival::coxph.detail(reference, unused = TRUE))
+  )
+
+  expect_equal(
+    as.data.frame(cox_zph(bridged, transform = "rank", global = FALSE)),
+    as.data.frame(cox.zph(bridged, transform = "rank", global = FALSE))
+  )
+  expect_equal(
+    .result_field(coxph_detail(bridged, riskmat = TRUE), "riskmat"),
+    .result_field(coxph.detail(bridged, riskmat = TRUE), "riskmat")
+  )
 })
 
 test_that("Fitted-model concordance supports joint Cox and survreg comparisons", {

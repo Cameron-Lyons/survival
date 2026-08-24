@@ -761,7 +761,7 @@ survpenal.fit(x, y, weights, offset, init, controlvals, dist,
 
 survregDtest(dlist, verbose = FALSE)
 
-basehaz(fit, newdata, centered = TRUE, ...)
+basehaz(fit, newdata, centered = TRUE)
 
 brier(fit, times, newdata, ties = TRUE, detail = FALSE,
   timefix = TRUE, efron = FALSE)
@@ -785,11 +785,11 @@ survConcordance(formula, data, weights, subset, na.action)
 survConcordance.fit(y, x, strata, weight)
 
 cox.zph(fit, transform = "km", terms = TRUE, singledf = FALSE,
-  global = TRUE, ...)
+  global = TRUE)
 
 cox_zph(fit, ...)
 
-coxph.detail(object, riskmat = FALSE, rorder = c("data", "time"), ...)
+coxph.detail(object, riskmat = FALSE, rorder = c("data", "time"))
 
 coxph.wtest(var, b, toler.chol = 1e-09)
 

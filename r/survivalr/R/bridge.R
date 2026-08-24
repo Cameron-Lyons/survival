@@ -13157,13 +13157,12 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail"
   )
 }
 
-basehaz <- function(fit, newdata, centered = TRUE, ...) {
+basehaz <- function(fit, newdata, centered = TRUE) {
   .call_r_api(
     "basehaz",
     fit,
     newdata = if (missing(newdata)) NULL else .as_python_data(newdata),
     centered = centered,
-    ...,
     .wrap = c("survival_py_basehaz", "survival_py_object")
   )
 }
@@ -14552,7 +14551,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
 }
 
 cox.zph <- function(fit, transform = "km", terms = TRUE, singledf = FALSE,
-                    global = TRUE, ...) {
+                    global = TRUE) {
   .call_r_api(
     "cox_zph",
     fit,
@@ -14560,28 +14559,36 @@ cox.zph <- function(fit, transform = "km", terms = TRUE, singledf = FALSE,
     terms = terms,
     singledf = singledf,
     global = global,
-    ...,
     .wrap = c("survival_py_cox_zph", "survival_py_object")
   )
 }
 
 cox_zph <- function(fit, ...) {
-  cox.zph(fit, ...)
+  .call_r_api(
+    "cox_zph",
+    fit,
+    ...,
+    .wrap = c("survival_py_cox_zph", "survival_py_object")
+  )
 }
 
-coxph.detail <- function(object, riskmat = FALSE, rorder = c("data", "time"), ...) {
+coxph.detail <- function(object, riskmat = FALSE, rorder = c("data", "time")) {
   .call_r_api(
     "coxph_detail",
     object,
     riskmat = riskmat,
     rorder = match.arg(rorder),
-    ...,
     .wrap = c("survival_py_coxph_detail", "survival_py_object")
   )
 }
 
 coxph_detail <- function(object, ...) {
-  coxph.detail(object, ...)
+  .call_r_api(
+    "coxph_detail",
+    object,
+    ...,
+    .wrap = c("survival_py_coxph_detail", "survival_py_object")
+  )
 }
 
 coxph.wtest <- function(var, b, toler.chol = 1e-09) {
