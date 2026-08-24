@@ -14622,6 +14622,42 @@ test_that("stratified Cox profiles without strata expand across every baseline",
     median(survival::survfit(reference, newdata = profiles)),
     tolerance = 1e-12
   )
+
+  bridged_profiles <- survfit(bridged, newdata = profiles)
+  reference_profiles <- survival::survfit(reference, newdata = profiles)
+  subsetters <- list(
+    function(value) value[c(4L, 1L, 4L)],
+    function(value) value[1L, ],
+    function(value) value[, 1L],
+    function(value) value[1L, 1L],
+    function(value) value[c(2L, 1L), c(2L, 1L), drop = FALSE],
+    function(value) value[1L, , drop = FALSE],
+    function(value) value[, 1L, drop = FALSE],
+    function(value) value["b", c(2L, 1L), drop = FALSE],
+    function(value) value[, integer(), drop = FALSE],
+    function(value) value[integer(), , drop = FALSE]
+  )
+  for (subsetter in subsetters) {
+    bridged_subset <- subsetter(bridged_profiles)
+    reference_subset <- subsetter(reference_profiles)
+    expect_identical(dim(bridged_subset), dim(reference_subset))
+    for (field in c(
+      "n", "time", "n.risk", "n.event", "n.censor", "strata",
+      "surv", "cumhaz", "std.err", "std.chaz", "lower", "upper"
+    )) {
+      expect_equal(
+        bridged_subset[[field]],
+        reference_subset[[field]],
+        tolerance = 1e-12,
+        info = paste("strata-by-data subset field", field)
+      )
+    }
+  }
+  expect_error(
+    bridged_profiles["b", c("second", "first"), drop = FALSE],
+    "no 'dimnames' attribute for array",
+    fixed = TRUE
+  )
 })
 
 test_that("multi-state survfit tables and summaries agree with R survival", {
