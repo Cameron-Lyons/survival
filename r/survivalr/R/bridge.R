@@ -9181,6 +9181,40 @@ xtfrm.survival_py_surv <- function(x) {
   }
 
   curve_names <- .survfit_cox_curve_names(x, curve_count)
+  reshape_strata_data <- function(values) {
+    dimensions <- dim(x)
+    if (!all(c("strata", "data") %in% names(dimensions))) {
+      return(values)
+    }
+    strata_count <- as.integer(dimensions[["strata"]])
+    data_count <- as.integer(dimensions[["data"]])
+    if (nrow(values) != strata_count * data_count) {
+      stop("Cox survfit quantile dimensions are inconsistent", call. = FALSE)
+    }
+    profile_names <- attr(x, ".survival_py_curve_names", exact = TRUE)
+    if (length(profile_names) != data_count) {
+      profile_names <- as.character(seq_len(data_count))
+    }
+    raw_labels <- .as_nullable_character_vector(.result_field(x, "strata_labels"))
+    base_curves <- seq.int(1L, nrow(values), by = data_count)
+    strata_names <- if (length(raw_labels) == nrow(values)) {
+      raw_labels[base_curves]
+    } else {
+      as.character(seq_len(strata_count))
+    }
+    result <- array(
+      NA_real_,
+      dim = c(strata_count, data_count, ncol(values)),
+      dimnames = list(strata_names, profile_names, colnames(values))
+    )
+    for (stratum in seq_len(strata_count)) {
+      for (profile in seq_len(data_count)) {
+        curve <- (stratum - 1L) * data_count + profile
+        result[stratum, profile, ] <- values[curve, ]
+      }
+    }
+    result
+  }
   qmat <- matrix(
     0,
     nrow = curve_count,
@@ -9195,12 +9229,16 @@ xtfrm.survival_py_surv <- function(x) {
       qlower[curve_index, ] <- result[2L, ]
       qupper[curve_index, ] <- result[3L, ]
     }
-    return(list(quantile = qmat, lower = qlower, upper = qupper))
+    return(list(
+      quantile = reshape_strata_data(qmat),
+      lower = reshape_strata_data(qlower),
+      upper = reshape_strata_data(qupper)
+    ))
   }
   for (curve_index in seq_len(curve_count)) {
     qmat[curve_index, ] <- curve_quantile(curve_index, FALSE)
   }
-  qmat
+  reshape_strata_data(qmat)
 }
 
 quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),

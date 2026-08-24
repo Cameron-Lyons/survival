@@ -14601,6 +14601,27 @@ test_that("stratified Cox profiles without strata expand across every baseline",
   for (field in c("time", "surv", "cumhaz", "std.err", "lower", "upper")) {
     expect_equal(bridged_single[[field]], reference_single[[field]], tolerance = 1e-12)
   }
+
+  for (include_confidence in c(FALSE, TRUE)) {
+    expect_equal(
+      quantile(
+        survfit(bridged, newdata = profiles),
+        probs = c(0, 0.5),
+        conf.int = include_confidence
+      ),
+      quantile(
+        survival::survfit(reference, newdata = profiles),
+        probs = c(0, 0.5),
+        conf.int = include_confidence
+      ),
+      tolerance = 1e-12
+    )
+  }
+  expect_equal(
+    median(survfit(bridged, newdata = profiles)),
+    median(survival::survfit(reference, newdata = profiles)),
+    tolerance = 1e-12
+  )
 })
 
 test_that("multi-state survfit tables and summaries agree with R survival", {
