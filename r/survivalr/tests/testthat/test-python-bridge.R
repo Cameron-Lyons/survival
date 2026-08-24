@@ -14659,7 +14659,12 @@ test_that("stratified Cox profiles without strata expand across every baseline",
     fixed = TRUE
   )
 
-  for (aggregate_groups in list(NULL, c("lo", "hi"), c("same", "same"))) {
+  for (aggregate_groups in list(
+    NULL,
+    c("lo", "hi"),
+    c("same", "same"),
+    list(kind = c("lo", "hi"), bucket = c("x", "y"))
+  )) {
     bridged_aggregate <- if (is.null(aggregate_groups)) {
       aggregate(bridged_profiles)
     } else {
@@ -14691,6 +14696,36 @@ test_that("stratified Cox profiles without strata expand across every baseline",
       quantile(reference_aggregate, probs = c(0, 0.5), conf.int = TRUE),
       tolerance = 1e-12
     )
+    for (options in list(
+      list(censored = TRUE),
+      list(),
+      list(times = c(0, 2.5, 8), extend = TRUE)
+    )) {
+      bridged_aggregate_summary <- do.call(
+        summary,
+        c(list(bridged_aggregate), options)
+      )
+      reference_aggregate_summary <- do.call(
+        summary,
+        c(list(reference_aggregate, data.frame = TRUE), options)
+      )
+      expect_identical(
+        names(bridged_aggregate_summary),
+        names(reference_aggregate_summary)
+      )
+      expect_identical(
+        dim(bridged_aggregate_summary),
+        dim(reference_aggregate_summary)
+      )
+      for (field in names(reference_aggregate_summary)) {
+        expect_equal(
+          bridged_aggregate_summary[[field]],
+          reference_aggregate_summary[[field]],
+          tolerance = 1e-12,
+          info = paste("aggregated strata-by-data summary field", field)
+        )
+      }
+    }
   }
 
   summary_options <- list(

@@ -1058,6 +1058,65 @@ attrassign <- function(object, tt) {
   frame[keep, , drop = FALSE]
 }
 
+.survival_py_cox_retained_summary_frame <- function(object, has_times) {
+  if (!isTRUE(attr(object, ".survival_py_aggregate_snapshot", exact = TRUE))) {
+    return(NULL)
+  }
+  fields <- attr(object, ".survival_py_subset_fields", exact = TRUE)
+  if (is.null(fields) || is.null(fields$time) || is.null(fields$surv)) {
+    return(NULL)
+  }
+  time <- as.numeric(fields$time)
+  time_count <- length(time)
+  survival <- fields$surv
+  profile_count <- if (is.matrix(survival)) ncol(survival) else 1L
+  frame <- data.frame(time = rep(time, times = profile_count))
+  for (name in intersect(c("n.risk", "n.event", "n.censor"), names(fields))) {
+    frame[[name]] <- rep(as.numeric(fields[[name]]), times = profile_count)
+  }
+  frame$surv <- as.numeric(survival)
+
+  standard_chaz <- fields$std.chaz
+  if (!is.null(standard_chaz)) {
+    if (is.matrix(standard_chaz) && profile_count > 1L) {
+      frame$std.chaz <- as.numeric(standard_chaz)
+    } else if (is.matrix(standard_chaz) && isTRUE(has_times)) {
+      frame$std.chaz <- as.numeric(standard_chaz[, 1L])
+    } else if (is.matrix(standard_chaz)) {
+      for (column in seq_len(ncol(standard_chaz))) {
+        frame[[paste0("std.chaz.", column)]] <- as.numeric(standard_chaz[, column])
+      }
+    } else {
+      frame$std.chaz <- as.numeric(standard_chaz)
+    }
+  }
+
+  if (!is.null(fields$strata)) {
+    strata <- rep(names(fields$strata), as.integer(fields$strata))
+    frame$strata <- factor(rep(strata, times = profile_count), levels = unique(strata))
+  }
+  if (profile_count > 1L) {
+    frame$curve <- rep(seq_len(profile_count), each = time_count)
+  }
+  aggregate_data <- attr(object, ".survival_py_aggregate_data", exact = TRUE)
+  if (!is.null(aggregate_data) && nrow(aggregate_data) == profile_count) {
+    if (ncol(aggregate_data) == 1L && identical(names(aggregate_data), "aggregate")) {
+      frame[["fit$newdata[nindx, ]"]] <- rep(
+        aggregate_data[[1L]],
+        each = time_count
+      )
+    } else {
+      for (name in names(aggregate_data)) {
+        frame[[name]] <- rep(aggregate_data[[name]], each = time_count)
+      }
+    }
+  }
+  if (!is.null(fields$start.time)) {
+    frame$start.time <- rep(as.numeric(fields$start.time), nrow(frame))
+  }
+  frame
+}
+
 .survival_py_survfit_summary_frame <- function(object, times, censored, scale,
                                                extend, data.frame, dosum, ...) {
   censored <- .survival_py_summary_logical(censored, "censored")
@@ -1065,10 +1124,19 @@ attrassign <- function(object, tt) {
   data.frame <- .survival_py_summary_logical(data.frame, "data.frame")
   scale <- .survival_py_summary_scale(scale)
   has_times <- !missing(times)
-  if (has_times) {
+  retained_frame <- if (inherits(object, "survival.r_api.CoxSurvfitResult")) {
+    .survival_py_cox_retained_summary_frame(object, has_times)
+  } else {
+    NULL
+  }
+  if (has_times && is.null(retained_frame)) {
     object <- survfit0(object)
   }
-  frame <- as.data.frame.survival_py_survfit(object, optional = TRUE)
+  frame <- if (is.null(retained_frame)) {
+    as.data.frame.survival_py_survfit(object, optional = TRUE)
+  } else {
+    retained_frame
+  }
   if (
     inherits(object, "survival.r_api.CoxSurvfitResult") &&
       all(c("std.err", "surv") %in% names(frame)) &&
@@ -1118,7 +1186,7 @@ attrassign <- function(object, tt) {
       times = times,
       extend = extend,
       dosum = dosum,
-      augment = FALSE
+      augment = !is.null(retained_frame)
     )
     frame <- do.call(rbind, pieces)
     row.names(frame) <- NULL
@@ -1126,6 +1194,9 @@ attrassign <- function(object, tt) {
 
   if ("time" %in% names(frame) && scale != 1) {
     frame$time <- frame$time / scale
+  }
+  if (!is.null(retained_frame)) {
+    frame$curve <- NULL
   }
   class(frame) <- c("summary.survival_py_survfit", class(frame))
   frame
@@ -15365,6 +15436,17 @@ aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
     attr(result, ".survival_py_strata_count") <- as.integer(dims[["strata"]])
     attr(result, ".survival_py_curve_names") <- as.character(seq_len(aggregate_count))
     attr(result, ".survival_py_subset_fields") <- fields
+    attr(result, ".survival_py_aggregate_snapshot") <- TRUE
+    if (!is.null(groups)) {
+      by_list <- if (is.list(by)) by else list(by)
+      aggregate_data <- if (length(by_list) == 1L && is.null(names(by))) {
+        data.frame(aggregate = levels(as.factor(by_list[[1L]])))
+      } else {
+        grouped <- stats::aggregate(integer(data_count), by_list, sum)
+        grouped[-ncol(grouped)]
+      }
+      attr(result, ".survival_py_aggregate_data") <- aggregate_data
+    }
   }
   result
 }
