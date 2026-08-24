@@ -15093,6 +15093,14 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
 
   reference_survfit <- getFromNamespace("survfit.formula", "survival")
+  print_body <- function(value, options = list()) {
+    lines <- capture.output(do.call(print, c(list(x = value), options)))
+    first_blank <- match("", lines)
+    if (is.na(first_blank)) lines else lines[-seq_len(first_blank)]
+  }
+  expect_print_equal <- function(bridged, reference, options = list()) {
+    expect_identical(print_body(bridged, options), print_body(reference, options))
+  }
 
   data <- data.frame(
     time = c(1, 2, 3, 4, 5, 6),
@@ -15143,6 +15151,33 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     survival::Surv(time, event) ~ group,
     data = data,
     p0 = p0
+  )
+  for (options in list(
+    list(),
+    list(rmean = "none"),
+    list(rmean = "common"),
+    list(rmean = "individual"),
+    list(rmean = 5),
+    list(scale = 2, digits = 4)
+  )) {
+    expect_print_equal(bridged, reference, options)
+    expect_print_equal(grouped_bridged, grouped_reference, options)
+  }
+  bridged_delayed <- survfit(
+    Surv(time, event) ~ group,
+    data = data,
+    start.time = 2
+  )
+  reference_delayed <- reference_survfit(
+    survival::Surv(time, event) ~ group,
+    data = data,
+    start.time = 2
+  )
+  expect_print_equal(bridged_delayed, reference_delayed)
+  expect_print_equal(
+    bridged_delayed,
+    reference_delayed,
+    list(rmean = "individual")
   )
   grouped_expected <- summary(grouped_reference, data.frame = TRUE, censored = TRUE)
   grouped_expected$strata <- sub("^group=", "", as.character(grouped_expected$strata))
@@ -15212,6 +15247,7 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
   expect_identical(grouped_ill$states, grouped_reference_ill$states)
   expect_identical(grouped_ill$oldstate, grouped_reference_ill$oldstate)
   expect_equal(grouped_ill$pstate, grouped_reference_ill$pstate, tolerance = 1e-06)
+  expect_print_equal(grouped_ill, grouped_reference_ill)
 
   group_a_ill <- grouped_bridged["a", "ill"]
   group_a_reference_ill <- grouped_reference["group=a", "ill"]
@@ -15377,6 +15413,12 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     survival::Surv(start, stop, event) ~ 1,
     data = counting_data,
     id = id
+  )
+  expect_print_equal(counting_diagnostic_bridged, counting_diagnostic_reference)
+  expect_print_equal(
+    counting_diagnostic_bridged,
+    counting_diagnostic_reference,
+    list(rmean = "none")
   )
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(
@@ -17562,6 +17604,15 @@ test_that("single-formula multi-state Cox models match survival", {
   skip_if_not_installed("survival")
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
 
+  print_body <- function(value, options = list()) {
+    lines <- capture.output(do.call(print, c(list(x = value), options)))
+    first_blank <- match("", lines)
+    if (is.na(first_blank)) lines else lines[-seq_len(first_blank)]
+  }
+  expect_print_equal <- function(bridged, reference, options = list()) {
+    expect_identical(print_body(bridged, options), print_body(reference, options))
+  }
+
   competing <- data.frame(
     id = seq_len(12L),
     time = seq_len(12L),
@@ -17623,6 +17674,7 @@ test_that("single-formula multi-state Cox models match survival", {
     se.fit = FALSE,
     time0 = TRUE
   )
+  expect_print_equal(default_curve, reference_default_curve)
   default_curve_list <- as.list(default_curve)
   expect_equal(default_curve_list$time, reference_default_curve$time, tolerance = 1e-12)
   expect_equal(
@@ -17739,6 +17791,17 @@ test_that("single-formula multi-state Cox models match survival", {
     se.fit = FALSE,
     time0 = TRUE
   )
+  expect_print_equal(bridged_profiles, reference_profiles)
+  expect_print_equal(
+    bridged_profiles,
+    reference_profiles,
+    list(rmean = "none")
+  )
+  expect_print_equal(
+    bridged_profiles,
+    reference_profiles,
+    list(rmean = "individual")
+  )
   bridged_profile_list <- as.list(bridged_profiles)
   for (field in c(
     "time", "pstate", "cumhaz", "n.risk", "n.event", "n.censor",
@@ -17775,6 +17838,10 @@ test_that("single-formula multi-state Cox models match survival", {
     dim(bridged_profiles[2L, c("(s0)", "b"), drop = FALSE]),
     c(data = 1L, states = 2L)
   )
+  expect_print_equal(
+    bridged_profiles[2L, c("(s0)", "b"), drop = FALSE],
+    reference_profiles[2L, c("(s0)", "b"), drop = FALSE]
+  )
 
   aggregate_profile_data <- data.frame(x = c(0.5, 1.5, 2.0))
   aggregate_profiles <- survfit(
@@ -17790,6 +17857,7 @@ test_that("single-formula multi-state Cox models match survival", {
   )
   bridged_average <- as.list(aggregate(aggregate_profiles))
   reference_average <- aggregate(reference_aggregate_profiles)
+  expect_print_equal(aggregate(aggregate_profiles), reference_average)
   for (field in c(
     "time", "pstate", "n.risk", "n.event", "n.censor",
     "n.transition", "p0", "states", "transitions"
@@ -17813,6 +17881,7 @@ test_that("single-formula multi-state Cox models match survival", {
     reference_aggregate_profiles,
     by = list(aggregate_groups)
   )
+  expect_print_equal(bridged_grouped_average, reference_grouped_average)
   expect_equal(
     as.list(bridged_grouped_average)$pstate,
     reference_grouped_average$pstate,
@@ -17879,6 +17948,12 @@ test_that("single-formula multi-state Cox models match survival", {
     se.fit = FALSE,
     time0 = TRUE
   )
+  expect_print_equal(bridged_stratified_curves, reference_stratified_curves)
+  expect_print_equal(
+    bridged_stratified_curves,
+    reference_stratified_curves,
+    list(rmean = "individual")
+  )
   bridged_stratified_list <- as.list(bridged_stratified_curves)
   for (field in c(
     "n", "time", "strata", "pstate", "cumhaz", "n.risk", "n.event",
@@ -17917,9 +17992,11 @@ test_that("single-formula multi-state Cox models match survival", {
     dim(bridged_stratified_subset),
     c(strata = 1L, data = 1L, states = 2L)
   )
+  expect_print_equal(bridged_stratified_subset, reference_stratified_subset)
 
   bridged_stratified_average <- aggregate(bridged_stratified_curves)
   reference_stratified_average <- aggregate(reference_stratified_curves)
+  expect_print_equal(bridged_stratified_average, reference_stratified_average)
   expect_equal(
     as.list(bridged_stratified_average)$pstate,
     reference_stratified_average$pstate,

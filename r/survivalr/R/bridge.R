@@ -15897,9 +15897,20 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
           c("survival_py_survfit", "survival_py_object")
         )
       })
-      return(structure(
+      result <- structure(
         selected,
         class = c("survival_py_survfit", "survival_py_object", "list")
+      )
+      print_labels <- attr(x, ".survival_py_print_labels", exact = TRUE)
+      if (length(print_labels) == length(curves)) {
+        print_labels <- print_labels[strata_indices]
+      } else {
+        print_labels <- NULL
+      }
+      return(.survival_py_inherit_survfit_print_metadata(
+        result,
+        x,
+        print_labels
       ))
     }
     if (!is.null(data_count)) {
@@ -15927,14 +15938,15 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
         states,
         dimension = "states"
       )
-      return(.wrap_python(
+      result <- .wrap_python(
         .python_attr("_subset_survfit_multistate")(
           x,
           as.list(as.integer(state_indices - 1L)),
           as.list(as.integer(data_indices - 1L))
         ),
         c("survival_py_survfit", "survival_py_object")
-      ))
+      )
+      return(.survival_py_inherit_survfit_print_metadata(result, x))
     }
     state_selector <- if (has_second_dimension) {
       if (missing(j)) seq_along(states) else j
@@ -15975,15 +15987,27 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
         names(curves)
       )
       selected <- lapply(curves[group_indices], subset_curve)
-      return(structure(
+      result <- structure(
         selected,
         class = c("survival_py_survfit", "survival_py_object", "list")
+      )
+      print_labels <- attr(x, ".survival_py_print_labels", exact = TRUE)
+      if (length(print_labels) == length(curves)) {
+        print_labels <- print_labels[group_indices]
+      } else {
+        print_labels <- NULL
+      }
+      return(.survival_py_inherit_survfit_print_metadata(
+        result,
+        x,
+        print_labels
       ))
     }
     if (has_second_dimension && !missing(i) && !all(seq_len(1L)[i] == 1L)) {
       stop("subscript out of bounds", call. = FALSE)
     }
-    return(subset_curve(x))
+    result <- subset_curve(x)
+    return(.survival_py_inherit_survfit_print_metadata(result, x))
   }
   if (inherits(x, "survival.r_api.CoxSurvfitResult")) {
     dimensions <- dim(x)
@@ -16642,6 +16666,218 @@ as.data.frame.survival_py_anova <- function(x, row.names = NULL, optional = FALS
   list(matrix = output[, , drop = TRUE], end.time = end_time)
 }
 
+.survival_py_survfit_multistate_print_summary <- function(x, scale, rmean) {
+  expanded <- survfit0(x)
+  fields <- .as_survival_py_multistate_list(expanded)
+  state_count <- length(fields$states)
+  group_count <- max(1L, length(fields$strata))
+  if (group_count > 1L) {
+    group_index <- rep(seq_len(group_count), fields$strata)
+    group_names <- names(fields$strata)
+    print_labels <- attr(x, ".survival_py_print_labels", exact = TRUE)
+    if (length(print_labels) == group_count) {
+      group_names <- print_labels
+    }
+  } else {
+    group_index <- rep(1L, length(fields$time))
+    group_names <- NULL
+  }
+
+  if (is.matrix(fields$n.event)) {
+    event_column_count <- ncol(fields$n.event)
+    event_count <- tapply(
+      fields$n.event,
+      list(rep(group_index, event_column_count), col(fields$n.event)),
+      sum
+    )
+    dimnames(event_count) <- list(
+      group_names,
+      fields$states[seq_len(event_column_count)]
+    )
+  } else {
+    event_count <- tapply(fields$n.event, group_index, sum)
+    names(event_count) <- group_names
+  }
+
+  dimensions <- dim(x)
+  data_count <- if (!is.null(dimensions) && "data" %in% names(dimensions)) {
+    as.integer(dimensions[["data"]])
+  } else if (length(dim(fields$pstate)) == 3L) {
+    dim(fields$pstate)[[2L]]
+  } else {
+    0L
+  }
+  if (data_count < 2L) {
+    output <- matrix(0, nrow = state_count * group_count, ncol = 2L)
+    output[, 1L] <- rep(fields$n, state_count)
+    output[seq_along(event_count), 2L] <- c(event_count)
+    row_names <- if (group_count > 1L) {
+      c(outer(group_names, fields$states, paste, sep = ", "))
+    } else {
+      fields$states
+    }
+  } else {
+    output <- matrix(
+      0,
+      nrow = state_count * data_count * group_count,
+      ncol = 2L
+    )
+    output[, 1L] <- rep(fields$n, state_count * data_count)
+    output[, 2L] <- rep(c(event_count), each = data_count)
+    data_state_names <- outer(
+      seq_len(data_count),
+      fields$states,
+      paste,
+      sep = ", "
+    )
+    row_names <- if (group_count > 1L) {
+      c(outer(group_names, data_state_names, paste, sep = ", "))
+    } else {
+      data_state_names
+    }
+    state_count <- state_count * data_count
+  }
+
+  if (!identical(rmean, "none")) {
+    maximum_time <- if (is.numeric(rmean)) {
+      rep(rmean, group_count)
+    } else if (identical(rmean, "common")) {
+      rep(max(fields$time), group_count)
+    } else {
+      as.numeric(tapply(fields$time, group_index, max))
+    }
+    mean_time <- matrix(0, group_count, state_count)
+    include_standard_error <- !is.null(fields$influence) || !is.null(fields$std.auc)
+    if (include_standard_error) {
+      standard_error <- mean_time
+    }
+    for (group in seq_len(group_count)) {
+      probability <- if (is.matrix(fields$pstate)) {
+        fields$pstate[group_index == group, , drop = FALSE]
+      } else if (is.array(fields$pstate)) {
+        matrix(
+          fields$pstate[group_index == group, , , drop = FALSE],
+          ncol = state_count
+        )
+      } else {
+        matrix(fields$pstate[group_index == group], ncol = 1L)
+      }
+      curve_time <- fields$time[group_index == group]
+      interval <- diff(c(curve_time[curve_time < maximum_time[[group]]], maximum_time[[group]]))
+      if (length(interval) > nrow(probability)) {
+        interval <- interval[seq_len(nrow(probability))]
+      }
+      if (length(interval) < nrow(probability)) {
+        interval <- c(interval, rep(0, nrow(probability) - length(interval)))
+      }
+      mean_time[group, ] <- zapsmall(colSums(interval * probability), digits = 15L)
+      if (!is.null(fields$influence)) {
+        influence <- if (is.list(fields$influence)) {
+          apply(
+            fields$influence[[group]],
+            1L,
+            function(value) colSums(value * interval)
+          )
+        } else {
+          apply(
+            fields$influence,
+            1L,
+            function(value) colSums(value * interval)
+          )
+        }
+        standard_error[group, ] <- sqrt(rowSums(influence^2))
+      } else if (!is.null(fields$std.auc)) {
+        if (is.matrix(fields$std.auc)) {
+          for (state in seq_len(state_count)) {
+            standard_error[group, state] <- stats::approx(
+              curve_time,
+              fields$std.auc[group_index == group, state],
+              maximum_time[[group]],
+              rule = 2
+            )$y
+          }
+        } else {
+          standard_error[[group]] <- stats::approx(
+            curve_time,
+            fields$std.auc[group_index == group],
+            maximum_time[[group]],
+            rule = 2
+          )$y
+        }
+      }
+    }
+    output <- cbind(output, c(mean_time) / scale)
+    column_names <- c("n", "nevent", "rmean")
+    if (include_standard_error) {
+      output <- cbind(output, c(standard_error) / scale)
+      column_names <- c(column_names, "se(rmean)")
+    }
+    if (all(maximum_time == maximum_time[[1L]])) {
+      maximum_time <- maximum_time[[1L]]
+    }
+  } else {
+    column_names <- c("n", "nevent")
+  }
+  dimnames(output) <- list(row_names, column_names)
+  if (identical(rmean, "none")) {
+    list(matrix = output, curve = expanded)
+  } else {
+    list(matrix = output, end.time = maximum_time / scale, curve = expanded)
+  }
+}
+
+.survival_py_print_multistate_survfit <- function(
+    x, scale = 1, rmean = getOption("survfit.rmean"), ...) {
+  Call <- attr(x, ".survival_py_call", exact = TRUE)
+  if (!is.null(Call)) {
+    cat("Call: ")
+    dput(Call)
+    cat("\n")
+  }
+  if (is.null(rmean)) {
+    rmean <- "common"
+  }
+  fields <- .as_survival_py_multistate_list(x)
+  start_time <- attr(x, ".survival_py_start_time", exact = TRUE)
+  if (is.numeric(rmean)) {
+    if (is.null(start_time)) {
+      if (rmean < min(fields$time, fields$t0)) {
+        stop("Truncation point for the mean is < smallest survival", call. = FALSE)
+      }
+    } else if (rmean < start_time) {
+      stop("Truncation point for the mean is < smallest survival", call. = FALSE)
+    }
+  } else {
+    rmean <- match.arg(rmean, c("none", "common", "individual"))
+    if (length(rmean) == 0L) {
+      stop("Invalid value for rmean option", call. = FALSE)
+    }
+  }
+  summary <- .survival_py_survfit_multistate_print_summary(x, scale, rmean)
+  if (is.null(summary$end.time)) {
+    print(summary$matrix, ...)
+  } else {
+    end_time <- summary$end.time
+    column_names <- colnames(summary$matrix)
+    column_names[[length(column_names)]] <- paste0(
+      column_names[[length(column_names)]],
+      "*"
+    )
+    colnames(summary$matrix) <- column_names
+    print(summary$matrix, ...)
+    if (length(end_time) == 1L) {
+      cat(
+        "   *restricted mean time in state (max time =",
+        format(end_time, ...),
+        ")\n"
+      )
+    } else {
+      cat("   *restricted mean time in state (per curve cutoff)\n")
+    }
+  }
+  invisible(summary$curve)
+}
+
 print.survival_py_survfit <- function(
     x,
     scale = 1,
@@ -16650,7 +16886,17 @@ print.survival_py_survfit <- function(
     rmean = getOption("survfit.rmean"),
     ...) {
   if (.is_survival_py_multistate_survfit(x)) {
-    return(.print_tabular_result(x, ...))
+    extra <- list(...)
+    if (!missing(digits)) {
+      extra$digits <- digits
+    }
+    if (!missing(print.rmean)) {
+      extra$print.rmean <- print.rmean
+    }
+    return(do.call(
+      .survival_py_print_multistate_survfit,
+      c(list(x = x, scale = scale, rmean = rmean), extra)
+    ))
   }
   Call <- attr(x, ".survival_py_call", exact = TRUE)
   if (!is.null(Call)) {

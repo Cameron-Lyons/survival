@@ -1065,8 +1065,9 @@ it must reduce each curve row to one numeric value.}
 \item{rmean, dosum}{Accepted \code{summary.survival_py_survfit}
 compatibility arguments. For \code{print.survival_py_survfit}, \code{rmean}
 selects no restricted mean, a common or individual upper limit, or a numeric
-cutoff. The tabular bridge summary uses \code{dosum} for interval event/censor
-counts when explicit \code{times} are supplied.}
+cutoff; multi-state curves report restricted mean time in each state. The
+tabular bridge summary uses \code{dosum} for interval event/censor counts when
+explicit \code{times} are supplied.}
 \item{print.rmean}{Legacy logical control for printing the restricted mean.}
 \item{rmap}{Optional rate-table variable mapping for formula
 \code{survexp} and \code{pyears} calls delegated to \pkg{survival}.}
