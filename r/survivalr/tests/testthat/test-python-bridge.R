@@ -14696,6 +14696,28 @@ test_that("stratified Cox profiles without strata expand across every baseline",
       quantile(reference_aggregate, probs = c(0, 0.5), conf.int = TRUE),
       tolerance = 1e-12
     )
+    bridged_aggregate_frame <- as.data.frame(bridged_aggregate)
+    reference_aggregate_frame <- summary(
+      reference_aggregate,
+      data.frame = TRUE,
+      censored = TRUE
+    )
+    expect_identical(
+      names(bridged_aggregate_frame),
+      names(reference_aggregate_frame)
+    )
+    expect_identical(
+      dim(bridged_aggregate_frame),
+      dim(reference_aggregate_frame)
+    )
+    for (field in names(reference_aggregate_frame)) {
+      expect_equal(
+        bridged_aggregate_frame[[field]],
+        reference_aggregate_frame[[field]],
+        tolerance = 1e-12,
+        info = paste("aggregated strata-by-data frame field", field)
+      )
+    }
     for (options in list(
       list(censored = TRUE),
       list(),

@@ -9233,7 +9233,7 @@ xtfrm.survival_py_surv <- function(x) {
     }
     return(result)
   }
-  frame <- as.data.frame.survival_py_survfit(x, optional = TRUE)
+  frame <- .as_r_data_frame(x, optional = TRUE)
   has_confint <- all(c("lower", "upper") %in% names(frame))
   if (!has_confint) {
     conf.int <- FALSE
@@ -16129,6 +16129,18 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
 }
 
 as.data.frame.survival_py_survfit <- function(x, row.names = NULL, optional = FALSE, ...) {
+  if (inherits(x, "survival.r_api.CoxSurvfitResult")) {
+    retained <- .survival_py_cox_retained_summary_frame(x, FALSE)
+    if (!is.null(retained)) {
+      retained$curve <- NULL
+      return(as.data.frame(
+        retained,
+        row.names = row.names,
+        optional = optional,
+        ...
+      ))
+    }
+  }
   .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
 }
 
