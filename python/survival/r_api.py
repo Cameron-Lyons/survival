@@ -23219,9 +23219,25 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     if result.curve_time_indices is not None and len(result.curve_time_indices) != len(result.surv):
         raise ValueError("Cox survfit curve time-index fields have inconsistent lengths")
 
-    for curve_idx, (surv_curve, cumhaz_curve, linear_predictor) in enumerate(
-        zip(result.surv, result.cumhaz, result.linear_predictors, strict=True)
+    curve_count = len(result.surv)
+    if len(result.cumhaz) != curve_count or len(result.linear_predictors) != curve_count:
+        raise ValueError("Cox survfit curve fields have inconsistent lengths")
+    curve_order = list(range(curve_count))
+    if (
+        result.data_count is not None
+        and result.strata_count is not None
+        and result.data_count * result.strata_count == curve_count
     ):
+        curve_order = [
+            stratum * result.data_count + profile
+            for profile in range(result.data_count)
+            for stratum in range(result.strata_count)
+        ]
+
+    for curve_idx in curve_order:
+        surv_curve = result.surv[curve_idx]
+        cumhaz_curve = result.cumhaz[curve_idx]
+        linear_predictor = result.linear_predictors[curve_idx]
         if len(surv_curve) != len(result.time) or len(cumhaz_curve) != len(result.time):
             raise ValueError("Cox survfit curves must match time length")
         time_indices = (

@@ -6668,6 +6668,37 @@ def test_aggregate_survfit_result_averages_profiles_within_each_stratum():
         )
 
 
+def test_cox_survfit_frame_orders_strata_within_each_expanded_profile():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 1, 0, 1, 0, 1, 0, 1],
+        "x": [float(index) for index in range(1, 9)],
+        "group": ["a", "b"] * 4,
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x + strata(group)",
+        data=data,
+        initial_beta=[0.1],
+        max_iter=0,
+    )
+    curves = survival.survfit(fit, newdata={"x": [2.0, 3.0]})
+
+    frame = survival.as_data_frame(curves)
+    assert curves.curve_time_indices is not None
+    assert frame["curve"] == [1] * 4 + [3] * 4 + [2] * 4 + [4] * 4
+    assert frame["strata"] == ["a"] * 4 + ["b"] * 4 + ["a"] * 4 + ["b"] * 4
+    assert frame["time"] == [1.0, 3.0, 5.0, 7.0, 2.0, 4.0, 6.0, 8.0] * 2
+    assert frame["surv"][:4] == pytest.approx(
+        [curves.surv[0][index] for index in curves.curve_time_indices[0]],
+    )
+    assert frame["surv"][4:8] == pytest.approx(
+        [curves.surv[2][index] for index in curves.curve_time_indices[2]],
+    )
+    assert frame["surv"][8:12] == pytest.approx(
+        [curves.surv[1][index] for index in curves.curve_time_indices[1]],
+    )
+
+
 def test_survfit_counting_id_reports_entry_counts_without_artificial_censors():
     response = survival.Surv(
         [0.0, 10.0, 25.0, 0.0, 5.0],

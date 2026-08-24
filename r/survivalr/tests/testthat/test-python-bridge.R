@@ -14692,6 +14692,30 @@ test_that("stratified Cox profiles without strata expand across every baseline",
       tolerance = 1e-12
     )
   }
+
+  summary_options <- list(
+    list(censored = TRUE),
+    list(),
+    list(times = c(0, 2.5, 8), extend = TRUE)
+  )
+  for (options in summary_options) {
+    bridged_summary <- do.call(summary, c(list(bridged_profiles), options))
+    reference_summary <- do.call(
+      summary,
+      c(list(reference_profiles, data.frame = TRUE), options)
+    )
+    for (field in c(
+      "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz",
+      "std.err", "std.chaz", "lower", "upper", "strata"
+    )) {
+      expect_equal(
+        bridged_summary[[field]],
+        reference_summary[[field]],
+        tolerance = 1e-12,
+        info = paste("strata-by-data summary field", field)
+      )
+    }
+  }
 })
 
 test_that("multi-state survfit tables and summaries agree with R survival", {

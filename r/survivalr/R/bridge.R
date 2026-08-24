@@ -1069,6 +1069,22 @@ attrassign <- function(object, tt) {
     object <- survfit0(object)
   }
   frame <- as.data.frame.survival_py_survfit(object, optional = TRUE)
+  if (
+    inherits(object, "survival.r_api.CoxSurvfitResult") &&
+      all(c("std.err", "surv") %in% names(frame)) &&
+      (
+        length(.result_field(object, "log_std_err")) > 0L ||
+          length(.result_field(object, "std_chaz")) > 0L
+      )
+  ) {
+    frame$std.err <- frame$std.err * frame$surv
+  }
+  if (
+    inherits(object, "survival.r_api.CoxSurvfitResult") &&
+      "strata" %in% names(frame)
+  ) {
+    frame$strata <- factor(frame$strata, levels = unique(frame$strata))
+  }
 
   if (!has_times) {
     if (!censored && "n.event" %in% names(frame)) {
