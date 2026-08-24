@@ -10466,6 +10466,20 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   if ("id" %in% names(dots) && is.null(dots$id)) {
     stop("id=NULL is an invalid argument", call. = FALSE)
   }
+  if (!is.null(newdata) && !is.null(formula_terms)) {
+    individual_curve <- "id" %in% names(dots)
+    if (is.vector(newdata, "numeric")) {
+      if (individual_curve) {
+        stop("newdata must be a data frame", call. = FALSE)
+      }
+      if (is.null(names(newdata))) {
+        stop("Newdata argument must be a data frame", call. = FALSE)
+      }
+      newdata <- data.frame(as.list(newdata), stringsAsFactors = FALSE)
+    } else if (is.array(newdata)) {
+      stop("'data' must be a data.frame, not a matrix or an array", call. = FALSE)
+    }
+  }
   prediction_data <- newdata
   curve_names <- NULL
   preserve_id_vector <- FALSE

@@ -14456,6 +14456,88 @@ test_that("Cox survfit formula guards match survival", {
   expect_error(survival::survfit(reference_transformed), expected_tt_error)
 })
 
+test_that("Cox survfit newdata shape rules match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = 1:8,
+    z = rep(c(0, 1), 4L)
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ x + z,
+    data = data,
+    init = c(0, 0),
+    max_iter = 0
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x + z,
+    data = data,
+    init = c(0, 0),
+    iter.max = 0
+  )
+
+  profile <- c(x = 2, z = 1)
+  bridged_profile <- survfit(bridged, newdata = profile)
+  reference_profile <- survival::survfit(reference, newdata = profile)
+  for (field in c("time", "surv", "cumhaz", "std.err", "std.chaz", "lower", "upper")) {
+    expect_equal(
+      bridged_profile[[field]],
+      reference_profile[[field]],
+      tolerance = 1e-12
+    )
+  }
+
+  expect_error(
+    survfit(bridged, newdata = unname(profile)),
+    "Newdata argument must be a data frame",
+    fixed = TRUE
+  )
+  expect_error(
+    survival::survfit(reference, newdata = unname(profile)),
+    "Newdata argument must be a data frame",
+    fixed = TRUE
+  )
+  profile_matrix <- matrix(profile, nrow = 1L, dimnames = list(NULL, names(profile)))
+  expected_matrix_error <- "'data' must be a data.frame, not a matrix or an array"
+  expect_error(survfit(bridged, newdata = profile_matrix), expected_matrix_error, fixed = TRUE)
+  expect_error(
+    survival::survfit(reference, newdata = profile_matrix),
+    expected_matrix_error,
+    fixed = TRUE
+  )
+
+  counting_data <- transform(data, start = pmax(time - 1, 0), stop = time)
+  bridged_counting <- coxph(
+    Surv(start, stop, status) ~ x + z,
+    data = counting_data,
+    init = c(0, 0),
+    max_iter = 0
+  )
+  reference_counting <- survival::coxph(
+    survival::Surv(start, stop, status) ~ x + z,
+    data = counting_data,
+    init = c(0, 0),
+    iter.max = 0
+  )
+  expect_error(
+    survfit(bridged_counting, newdata = profile, id = "one"),
+    "newdata must be a data frame",
+    fixed = TRUE
+  )
+  expect_error(
+    survival::survfit(reference_counting, newdata = profile, id = "one"),
+    "newdata must be a data frame",
+    fixed = TRUE
+  )
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
