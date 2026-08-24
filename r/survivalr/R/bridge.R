@@ -348,6 +348,23 @@ if (getRversion() >= "2.15.1") {
   }
 }
 
+.formula_subset_indices <- function(expr, missing_arg, data, env, na.action) {
+  value <- .eval_formula_arg(expr, missing_arg, data, env)
+  if (is.null(value) || is.null(data)) {
+    return(value)
+  }
+  action <- .as_na_action(na.action)
+  if (is.character(action) && length(action) == 1L &&
+      sub("^na\\.", "", tolower(action)) %in% c("omit", "exclude")) {
+    if (is.logical(value)) {
+      value[is.na(value)] <- FALSE
+    } else {
+      value <- value[!is.na(value)]
+    }
+  }
+  .as_python_formula_subset(value, data)
+}
+
 .as_python_formula_subset <- function(value, data) {
   if (is.null(value)) {
     return(NULL)
@@ -10654,7 +10671,14 @@ survfit.formula <- function(formula, data, weights, subset, na.action,
                             error, entry = FALSE, time0 = FALSE, ...) {
   Call <- match.call(expand.dots = FALSE)
   data_value <- if (missing(data)) NULL else data
-  na_action_value <- if (missing(na.action)) "fail" else na.action
+  na_action_value <- if (missing(na.action)) getOption("na.action") else na.action
+  subset_value <- .formula_subset_indices(
+    substitute(subset),
+    missing(subset),
+    data_value,
+    parent.frame(),
+    na_action_value
+  )
   omitted <- .survival_py_survfit_formula_na_action(
     Call,
     formula,
@@ -10681,7 +10705,7 @@ survfit.formula <- function(formula, data, weights, subset, na.action,
         "survfit",
         response = .as_formula_string(formula),
         data = .as_python_data(data_value),
-        subset = if (missing(subset)) NULL else subset,
+        subset = subset_value,
         `na.action` = .as_na_action(na_action_value)
       ),
       evaluated_dots,
@@ -12826,7 +12850,14 @@ coxph <- function(formula, data, weights, subset, na.action, init, control,
                   nocenter = c(-1, 0, 1), ...) {
   Call <- match.call(expand.dots = FALSE)
   data_value <- if (missing(data)) NULL else data
-  na_action_value <- if (missing(na.action)) "fail" else na.action
+  na_action_value <- if (missing(na.action)) getOption("na.action") else na.action
+  subset_value <- .formula_subset_indices(
+    substitute(subset),
+    missing(subset),
+    data_value,
+    parent.frame(),
+    na_action_value
+  )
   dots <- .formula_supplied_dots(
     Call,
     c(
@@ -12854,7 +12885,7 @@ coxph <- function(formula, data, weights, subset, na.action, init, control,
         "coxph",
         response = .as_formula_string(formula),
         data = .as_python_data(data_value),
-        subset = if (missing(subset)) NULL else subset,
+        subset = subset_value,
         `na.action` = .as_na_action(na_action_value),
         `_row_names` = if (is.data.frame(data_value)) row.names(data_value) else NULL
       ),
@@ -13173,7 +13204,14 @@ survreg <- function(formula, data, weights, subset, na.action,
                     robust = FALSE, cluster, score = FALSE, ...) {
   Call <- match.call(expand.dots = FALSE)
   data_value <- if (missing(data)) NULL else data
-  na_action_value <- if (missing(na.action)) "fail" else na.action
+  na_action_value <- if (missing(na.action)) getOption("na.action") else na.action
+  subset_value <- .formula_subset_indices(
+    substitute(subset),
+    missing(subset),
+    data_value,
+    parent.frame(),
+    na_action_value
+  )
   dots <- .formula_supplied_dots(
     Call,
     c(
@@ -13195,7 +13233,7 @@ survreg <- function(formula, data, weights, subset, na.action,
         "survreg",
         response = .as_formula_string(formula),
         data = .as_python_data(data_value),
-        subset = if (missing(subset)) NULL else subset,
+        subset = subset_value,
         `na.action` = .as_na_action(na_action_value)
       ),
       evaluated_dots,

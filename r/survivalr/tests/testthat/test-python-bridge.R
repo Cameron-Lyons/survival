@@ -11813,6 +11813,147 @@ test_that("public helper signatures accept R-style named and positional calls", 
   )
 })
 
+test_that("formula row selection follows R model-frame semantics", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = 1:10,
+    status = c(1, 1, 0, 1, 1, 0, 1, 0, 1, 1),
+    group = factor(rep(c("control", "treated"), 5L)),
+    x = c(0.1, 0.4, 0.2, 0.8, 1.1, 0.7, 1.5, 1.2, 0.5, 1.7)
+  )
+  reference_survfit_formula <- get(
+    "survfit.formula",
+    envir = asNamespace("survival")
+  )
+  stable_survfit_frame <- function(value, bridged) {
+    fields <- c(
+      "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz"
+    )
+    if (bridged) {
+      return(as.data.frame(value)[c("strata", fields)])
+    }
+    frame <- data.frame(
+      strata = rep(
+        sub("^group=", "", names(value$strata)),
+        value$strata
+      )
+    )
+    for (field in fields) {
+      frame[[field]] <- value[[field]]
+    }
+    frame[c("strata", fields)]
+  }
+
+  bridged_subset_cox <- coxph(
+    Surv(time, status) ~ x,
+    data = data,
+    subset = x >= 0.4 & group != "control"
+  )
+  reference_subset_cox <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    subset = x >= 0.4 & group != "control"
+  )
+  expect_equal(
+    coef(bridged_subset_cox),
+    coef(reference_subset_cox),
+    tolerance = 1e-8
+  )
+
+  bridged_subset_survreg <- survreg(
+    Surv(time, status) ~ x,
+    data = data,
+    subset = x >= 0.4 & group != "control"
+  )
+  reference_subset_survreg <- survival::survreg(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    subset = x >= 0.4 & group != "control"
+  )
+  expect_equal(
+    coef(bridged_subset_survreg),
+    coef(reference_subset_survreg),
+    tolerance = 1e-8
+  )
+
+  bridged_subset_survfit <- survfit.formula(
+    Surv(time, status) ~ group,
+    data = data,
+    subset = x >= 0.4
+  )
+  reference_subset_survfit <- reference_survfit_formula(
+    survival::Surv(time, status) ~ group,
+    data = data,
+    subset = x >= 0.4
+  )
+  expect_equal(
+    stable_survfit_frame(bridged_subset_survfit, TRUE),
+    stable_survfit_frame(reference_subset_survfit, FALSE),
+    tolerance = 1e-8
+  )
+
+  old_options <- options(na.action = "na.omit")
+  on.exit(options(old_options), add = TRUE)
+  missing_data <- data
+  missing_data$x[c(2L, 7L)] <- NA_real_
+  missing_data$group[[4L]] <- NA
+  missing_data$status[[5L]] <- NA_integer_
+
+  bridged_missing_cox <- coxph(
+    Surv(time, status) ~ x,
+    data = missing_data,
+    subset = x >= 0.4
+  )
+  reference_missing_cox <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = missing_data,
+    subset = x >= 0.4
+  )
+  expect_equal(
+    coef(bridged_missing_cox),
+    coef(reference_missing_cox),
+    tolerance = 1e-8
+  )
+
+  bridged_missing_survreg <- survreg(
+    Surv(time, status) ~ x,
+    data = missing_data,
+    subset = x >= 0.4
+  )
+  reference_missing_survreg <- survival::survreg(
+    survival::Surv(time, status) ~ x,
+    data = missing_data,
+    subset = x >= 0.4
+  )
+  expect_equal(
+    coef(bridged_missing_survreg),
+    coef(reference_missing_survreg),
+    tolerance = 1e-8
+  )
+
+  bridged_missing_survfit <- survfit.formula(
+    Surv(time, status) ~ group,
+    data = missing_data,
+    subset = x >= 0.4
+  )
+  reference_missing_survfit <- reference_survfit_formula(
+    survival::Surv(time, status) ~ group,
+    data = missing_data,
+    subset = x >= 0.4
+  )
+  expect_equal(
+    stable_survfit_frame(bridged_missing_survfit, TRUE),
+    stable_survfit_frame(reference_missing_survfit, FALSE),
+    tolerance = 1e-8
+  )
+})
+
 test_that("Fitted-model concordance supports joint Cox and survreg comparisons", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
