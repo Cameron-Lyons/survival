@@ -3697,7 +3697,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     summary_frame(summary(reference_direct_km, times = direct_summary_times, extend = TRUE, scale = 2)),
     tolerance = 1e-8
   )
-  expect_true(any(grepl("time", capture.output(print(km)), fixed = TRUE)))
+  expect_true(any(grepl("events", capture.output(print(km)), fixed = TRUE)))
   survfitkm_response <- Surv(data$time, data$status)
   reference_survfitkm_response <- survival::Surv(data$time, data$status)
   expect_survfitkm_equal <- function(bridged, reference, tolerance = 1e-8) {
@@ -14921,6 +14921,170 @@ test_that("Cox survfit custom reducers match survival", {
   expect_identical(bridged_calls, reference_calls)
   expect_error(aggregate(bridged_profiles, FUN = range), "single value summary")
   expect_error(aggregate(reference_profiles, FUN = range), "single value summary")
+})
+
+test_that("survfit compact printing matches survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  print_body <- function(value, options = list()) {
+    lines <- capture.output(do.call(print, c(list(x = value), options)))
+    first_blank <- match("", lines)
+    if (is.na(first_blank)) lines else lines[-seq_len(first_blank)]
+  }
+  expect_print_equal <- function(bridged, reference, options = list()) {
+    expect_identical(print_body(bridged, options), print_body(reference, options))
+  }
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = 1:8,
+    group = factor(rep(c("a", "b"), 4L)),
+    weights = c(1, 2, 1, 3, 1, 2, 1, 2)
+  )
+  bridged_ordinary <- survfit(Surv(time, status) ~ 1, data = data)
+  reference_ordinary <- survival::survfit(
+    survival::Surv(time, status) ~ 1,
+    data = data
+  )
+  bridged_grouped <- survfit(Surv(time, status) ~ group, data = data)
+  reference_grouped <- survival::survfit(
+    survival::Surv(time, status) ~ group,
+    data = data
+  )
+  bridged_weighted <- survfit(
+    Surv(time, status) ~ 1,
+    data = data,
+    weights = weights
+  )
+  reference_weighted <- survival::survfit(
+    survival::Surv(time, status) ~ 1,
+    data = data,
+    weights = weights
+  )
+
+  expect_print_equal(bridged_ordinary, reference_ordinary)
+  expect_print_equal(bridged_grouped, reference_grouped)
+  expect_print_equal(bridged_weighted, reference_weighted)
+  for (options in list(
+    list(rmean = "common"),
+    list(rmean = "individual"),
+    list(rmean = 7),
+    list(scale = 2, digits = 4, rmean = "common"),
+    list(print.rmean = TRUE),
+    list(print.rmean = FALSE)
+  )) {
+    expect_print_equal(bridged_grouped, reference_grouped, options)
+  }
+  expect_match(
+    capture.output(print(bridged_ordinary))[[1L]],
+    "^Call: survfit\\(formula = Surv",
+    perl = TRUE
+  )
+  expect_error(
+    capture.output(print(bridged_ordinary, rmean = 0.5)),
+    "Truncation point for the mean is < smallest survival",
+    fixed = TRUE
+  )
+
+  counting_data <- data.frame(
+    start = c(0, 0, 1, 2, 0),
+    stop = c(1, 3, 3, 4, 4),
+    status = c(1, 1, 0, 1, 0)
+  )
+  expect_print_equal(
+    survfit(Surv(start, stop, status) ~ 1, data = counting_data),
+    survival::survfit(
+      survival::Surv(start, stop, status) ~ 1,
+      data = counting_data
+    )
+  )
+
+  bridged_delayed <- survfit(
+    Surv(time, status) ~ group,
+    data = data,
+    conf.int = 0.9,
+    start.time = 2
+  )
+  reference_delayed <- survival::survfit(
+    survival::Surv(time, status) ~ group,
+    data = data,
+    conf.int = 0.9,
+    start.time = 2
+  )
+  expect_print_equal(bridged_delayed, reference_delayed)
+  expect_print_equal(
+    bridged_delayed,
+    reference_delayed,
+    list(rmean = "common")
+  )
+  expect_print_equal(
+    bridged_delayed[1L, drop = FALSE],
+    reference_delayed[1L, drop = FALSE],
+    list(rmean = "common")
+  )
+
+  bridged_model <- coxph(
+    Surv(time, status) ~ x,
+    data = data,
+    init = list(0.1),
+    max_iter = 0
+  )
+  reference_model <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    init = 0.1,
+    iter.max = 0
+  )
+  profiles <- data.frame(
+    x = c(2, 3, 5),
+    row.names = c("low", "middle", "high")
+  )
+  bridged_profiles <- survfit(bridged_model, newdata = profiles)
+  reference_profiles <- survival::survfit(reference_model, newdata = profiles)
+  expect_print_equal(bridged_profiles, reference_profiles)
+  expect_print_equal(
+    bridged_profiles,
+    reference_profiles,
+    list(rmean = "common")
+  )
+  expect_print_equal(
+    aggregate(bridged_profiles, by = c("lo", "hi", "lo")),
+    aggregate(reference_profiles, by = c("lo", "hi", "lo"))
+  )
+
+  bridged_stratified <- coxph(
+    Surv(time, status) ~ x + strata(group),
+    data = data,
+    init = list(0.1),
+    max_iter = 0
+  )
+  reference_stratified <- survival::coxph(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = data,
+    init = 0.1,
+    iter.max = 0
+  )
+  bridged_strata_profiles <- survfit(bridged_stratified, newdata = profiles)
+  reference_strata_profiles <- survival::survfit(
+    reference_stratified,
+    newdata = profiles
+  )
+  expect_print_equal(bridged_strata_profiles, reference_strata_profiles)
+  expect_print_equal(
+    bridged_strata_profiles,
+    reference_strata_profiles,
+    list(rmean = "individual")
+  )
+  expect_print_equal(
+    bridged_strata_profiles[1L, , drop = FALSE],
+    reference_strata_profiles[1L, , drop = FALSE]
+  )
 })
 
 test_that("multi-state survfit tables and summaries agree with R survival", {

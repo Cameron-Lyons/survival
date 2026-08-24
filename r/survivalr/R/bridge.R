@@ -10550,7 +10550,63 @@ survfit <- function(formula, ...) {
   UseMethod("survfit")
 }
 
+.survival_py_tag_survfit <- function(result, Call, dots = list(), print_labels = NULL) {
+  if (is.call(Call)) {
+    Call[[1L]] <- quote(survfit)
+  }
+  attr(result, ".survival_py_call") <- Call
+  if (!is.null(print_labels)) {
+    attr(result, ".survival_py_print_labels") <- print_labels
+  }
+  conf_level <- if ("conf.int" %in% names(dots)) dots[["conf.int"]] else 0.95
+  if (is.numeric(conf_level) && length(conf_level) == 1L && is.finite(conf_level)) {
+    attr(result, ".survival_py_conf_level") <- as.numeric(conf_level)
+  }
+  if ("start.time" %in% names(dots) && !is.null(dots[["start.time"]])) {
+    attr(result, ".survival_py_start_time") <- as.numeric(dots[["start.time"]])[[1L]]
+  }
+  result
+}
+
+.survival_py_inherit_survfit_print_metadata <- function(
+    result, source, print_labels = NULL) {
+  for (name in c(".survival_py_call", ".survival_py_conf_level")) {
+    value <- attr(source, name, exact = TRUE)
+    if (!is.null(value)) {
+      attr(result, name) <- value
+    }
+  }
+  if (!is.null(print_labels)) {
+    attr(result, ".survival_py_print_labels") <- print_labels
+  }
+  result
+}
+
+.survival_py_formula_print_labels <- function(formula, result) {
+  if (!.is_grouped_survival_py_survfit(result)) {
+    return(NULL)
+  }
+  curve_labels <- names(unclass(result))
+  if (is.null(curve_labels)) {
+    return(NULL)
+  }
+  formula_value <- tryCatch(
+    if (inherits(formula, "formula")) formula else stats::as.formula(formula),
+    error = function(condition) NULL
+  )
+  if (is.null(formula_value)) {
+    return(curve_labels)
+  }
+  term_labels <- attr(stats::terms(formula_value), "term.labels")
+  if (length(term_labels) == 1L && !any(grepl("=", curve_labels, fixed = TRUE))) {
+    paste0(term_labels[[1L]], "=", curve_labels)
+  } else {
+    curve_labels
+  }
+}
+
 survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
+  Call <- match.call()
   dots <- match.call(expand.dots = FALSE)$...
   evaluated_dots <- .eval_formula_dots(
     dots,
@@ -10558,7 +10614,7 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
     parent.frame(),
     vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
-  do.call(
+  result <- do.call(
     .call_r_api,
     c(
       list(
@@ -10571,10 +10627,17 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
       evaluated_dots,
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
+  )
+  .survival_py_tag_survfit(
+    result,
+    Call,
+    evaluated_dots,
+    .survival_py_formula_print_labels(formula, result)
   )
 }
 
 survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
+  Call <- match.call()
   dots <- match.call(expand.dots = FALSE)$...
   evaluated_dots <- .eval_formula_dots(
     dots,
@@ -10582,7 +10645,7 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
     parent.frame(),
     vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
-  do.call(
+  result <- do.call(
     .call_r_api,
     c(
       list(
@@ -10595,6 +10658,12 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
       evaluated_dots,
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
+  )
+  .survival_py_tag_survfit(
+    result,
+    Call,
+    evaluated_dots,
+    .survival_py_formula_print_labels(formula, result)
   )
 }
 
@@ -10609,14 +10678,16 @@ survfit.Surv <- function(formula, ..., group = NULL, subset = NULL, na.action = 
 }
 
 survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, na.action = "fail") {
+  Call <- match.call()
   dots <- list(...)
+  original_dots <- dots
   vector_args <- intersect(c("weights", "id", "cluster", "istate", "etype"), names(dots))
   for (name in vector_args) {
     if (!is.null(dots[[name]])) {
       dots[[name]] <- .as_python_vector(dots[[name]])
     }
   }
-  do.call(
+  result <- do.call(
     .call_r_api,
     c(
       list(
@@ -10630,9 +10701,18 @@ survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, 
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
   )
+  print_labels <- if (
+    .is_grouped_survival_py_survfit(result) && !is.null(group)
+  ) {
+    names(unclass(result))
+  } else {
+    NULL
+  }
+  .survival_py_tag_survfit(result, Call, original_dots, print_labels)
 }
 
 survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRUE) {
+  Call <- match.call()
   multi_state_fit <- .is_multistate_cox_fit(formula)
   if (multi_state_fit) {
     se.fit <- FALSE
@@ -10808,7 +10888,7 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
       attr(result, ".survival_py_curve_names") <- curve_names
     }
   }
-  result
+  .survival_py_tag_survfit(result, Call, dots)
 }
 
 .survfitKM_type <- function(y) {
@@ -15480,6 +15560,11 @@ aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
       attr(result, ".survival_py_aggregate_data") <- aggregate_data
     }
   }
+  for (name in c(
+    ".survival_py_call", ".survival_py_conf_level", ".survival_py_start_time"
+  )) {
+    attr(result, name) <- attr(x, name, exact = TRUE)
+  }
   result
 }
 
@@ -15996,7 +16081,7 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
           length(.result_field(x, "std_chaz")) > 0L
         attr(result, ".survival_py_empty_strata") <- length(strata_indices) == 0L
       }
-      return(result)
+      return(.survival_py_inherit_survfit_print_metadata(result, x))
     }
   }
   if (has_second_dimension) {
@@ -16044,7 +16129,7 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
           length(.result_field(x, "std_chaz")) > 0L
         attr(result, ".survival_py_empty_strata") <- TRUE
       }
-      return(result)
+      return(.survival_py_inherit_survfit_print_metadata(result, x))
     }
     data_count <- if ("data" %in% names(dimensions)) dimensions[["data"]] else NULL
     if (!is.null(data_count)) {
@@ -16083,7 +16168,7 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
       if (length(indices) != 1L || !isTRUE(drop)) {
         attr(result, ".survival_py_data_count") <- length(indices)
       }
-      return(result)
+      return(.survival_py_inherit_survfit_print_metadata(result, x))
     }
     strata_count <- if ("strata" %in% names(dimensions)) dimensions[["strata"]] else NULL
     if (!is.null(strata_count)) {
@@ -16123,19 +16208,31 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
       } else {
         length(indices)
       }
-      return(result)
+      return(.survival_py_inherit_survfit_print_metadata(result, x))
     }
   }
   if (.is_grouped_survival_py_survfit(x)) {
     curves <- unclass(x)
     idx <- .survival_py_survfit_group_indices(i, names(curves))
     selected <- curves[idx]
-    if (isTRUE(drop) && length(selected) == 1L) {
-      return(.as_survival_py_survfit_curve(selected[[1L]]))
+    print_labels <- attr(x, ".survival_py_print_labels", exact = TRUE)
+    if (length(print_labels) == length(curves)) {
+      print_labels <- print_labels[idx]
+    } else {
+      print_labels <- NULL
     }
-    return(structure(
+    if (isTRUE(drop) && length(selected) == 1L) {
+      result <- .as_survival_py_survfit_curve(selected[[1L]])
+      return(.survival_py_inherit_survfit_print_metadata(result, x))
+    }
+    result <- structure(
       selected,
       class = c("survival_py_survfit", "survival_py_object", "list")
+    )
+    return(.survival_py_inherit_survfit_print_metadata(
+      result,
+      x,
+      print_labels
     ))
   }
   if (isTRUE(all(i == 1))) {
@@ -16237,8 +16334,396 @@ as.data.frame.survival_py_anova <- function(x, row.names = NULL, optional = FALS
   .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
 }
 
-print.survival_py_survfit <- function(x, ...) {
-  .print_tabular_result(x, ...)
+.survival_py_survfit_record_count <- function(curve, frame) {
+  event_count <- .as_numeric_vector(.result_field(curve, "n_event_count"))
+  censor_count <- .as_numeric_vector(.result_field(curve, "n_censor_count"))
+  if (length(event_count) == nrow(frame) && length(censor_count) == nrow(frame)) {
+    return(sum(event_count + censor_count))
+  }
+  model <- .result_field(curve, "model")
+  if (is.list(model) && length(model) > 0L) {
+    return(NROW(model[[1L]]))
+  }
+  if ("n.risk" %in% names(frame) && length(frame$n.risk) > 0L) {
+    return(max(frame$n.risk))
+  }
+  0
+}
+
+.survival_py_survfit_curve_print_fields <- function(curve, owner = curve) {
+  frame <- .as_r_data_frame(curve, optional = TRUE)
+  fields <- list(
+    n = .survival_py_survfit_record_count(curve, frame),
+    time = as.numeric(frame$time),
+    n.risk = as.numeric(frame$n.risk),
+    n.event = as.numeric(frame$n.event),
+    n.censor = as.numeric(frame$n.censor),
+    surv = as.numeric(frame$surv)
+  )
+  if ("lower" %in% names(frame) && "upper" %in% names(frame)) {
+    fields$lower <- as.numeric(frame$lower)
+    fields$upper <- as.numeric(frame$upper)
+    fields$conf.int <- attr(owner, ".survival_py_conf_level", exact = TRUE)
+    if (is.null(fields$conf.int)) {
+      fields$conf.int <- 0.95
+    }
+  }
+  start_time <- attr(owner, ".survival_py_start_time", exact = TRUE)
+  if (!is.null(start_time)) {
+    fields$start.time <- start_time
+  }
+  fields
+}
+
+.survival_py_survfit_print_fields <- function(x) {
+  if (inherits(x, "survival.r_api.CoxSurvfitResult")) {
+    fields <- .as_survival_py_cox_survfit_list(x)
+    if (!is.null(fields$lower) && is.null(fields$conf.int)) {
+      fields$conf.int <- attr(x, ".survival_py_conf_level", exact = TRUE)
+      if (is.null(fields$conf.int)) {
+        fields$conf.int <- 0.95
+      }
+    }
+    start_time <- attr(x, ".survival_py_start_time", exact = TRUE)
+    if (!is.null(start_time) && is.null(fields$start.time)) {
+      fields$start.time <- start_time
+    }
+    return(fields)
+  }
+  if (!.is_grouped_survival_py_survfit(x)) {
+    return(.survival_py_survfit_curve_print_fields(x))
+  }
+
+  curves <- unclass(x)
+  pieces <- lapply(curves, .survival_py_survfit_curve_print_fields, owner = x)
+  fields <- list(
+    n = vapply(pieces, function(piece) piece$n, numeric(1L)),
+    time = unlist(lapply(pieces, `[[`, "time"), use.names = FALSE),
+    n.risk = unlist(lapply(pieces, `[[`, "n.risk"), use.names = FALSE),
+    n.event = unlist(lapply(pieces, `[[`, "n.event"), use.names = FALSE),
+    n.censor = unlist(lapply(pieces, `[[`, "n.censor"), use.names = FALSE),
+    surv = unlist(lapply(pieces, `[[`, "surv"), use.names = FALSE)
+  )
+  labels <- attr(x, ".survival_py_print_labels", exact = TRUE)
+  if (length(labels) != length(pieces)) {
+    labels <- names(curves)
+  }
+  if (is.null(labels)) {
+    labels <- as.character(seq_along(pieces))
+  }
+  fields$strata <- stats::setNames(
+    vapply(pieces, function(piece) length(piece$time), integer(1L)),
+    labels
+  )
+  if (all(vapply(pieces, function(piece) !is.null(piece$lower), logical(1L)))) {
+    fields$lower <- unlist(lapply(pieces, `[[`, "lower"), use.names = FALSE)
+    fields$upper <- unlist(lapply(pieces, `[[`, "upper"), use.names = FALSE)
+    fields$conf.int <- pieces[[1L]]$conf.int
+  }
+  if (!is.null(pieces[[1L]]$start.time)) {
+    fields$start.time <- pieces[[1L]]$start.time
+  }
+  fields
+}
+
+.survival_py_survfit_print_quantile <- function(survival, time) {
+  tolerance <- sqrt(.Machine$double.eps)
+  keep <- !is.na(survival) & survival < 0.5 + tolerance
+  if (!any(keep)) {
+    return(NA_real_)
+  }
+  selected_time <- time[keep]
+  selected_survival <- survival[keep]
+  if (
+    abs(selected_survival[[1L]] - 0.5) < tolerance &&
+      any(selected_survival < selected_survival[[1L]])
+  ) {
+    next_index <- min(which(selected_survival < selected_survival[[1L]]))
+    return((selected_time[[1L]] + selected_time[[next_index]]) / 2)
+  }
+  selected_time[[1L]]
+}
+
+.survival_py_survfit_print_curve_summary <- function(
+    records, time, survival, n.risk, n.event, lower, upper,
+    start.time, end.time, n.id) {
+  if (!is.na(end.time)) {
+    hazard_variance <- ifelse(
+      n.risk - n.event == 0,
+      0,
+      n.event / (n.risk * (n.risk - n.event))
+    )
+    keep <- which(time <= end.time)
+    if (length(keep) == 0L) {
+      mean_time <- end.time
+      mean_survival <- 1
+      hazard_variance <- 0
+    } else {
+      mean_time <- c(time[keep], end.time)
+      mean_survival <- c(survival[keep], survival[max(keep)])
+      hazard_variance <- c(hazard_variance[keep], 0)
+    }
+    count <- length(mean_time)
+    intervals <- diff(c(start.time, mean_time))
+    rectangles <- intervals * c(1, mean_survival[-count])
+    variance_mean <- sum(
+      cumsum(rev(rectangles[-1L]))^2 * rev(hazard_variance)[-1L]
+    )
+    restricted_mean <- zapsmall(sum(rectangles), digits = 15L)
+  } else {
+    restricted_mean <- 0
+    variance_mean <- 0
+  }
+  maximum_n <- if (is.null(n.id)) max(n.risk) else n.id
+  median <- .survival_py_survfit_print_quantile(survival, time)
+  if (!is.null(upper)) {
+    lower_median <- .survival_py_survfit_print_quantile(lower, time)
+    upper_median <- .survival_py_survfit_print_quantile(upper, time)
+    c(
+      records, maximum_n, n.risk[[1L]], sum(n.event), restricted_mean,
+      sqrt(variance_mean), median, lower_median, upper_median
+    )
+  } else {
+    c(
+      records, maximum_n, n.risk[[1L]], sum(n.event), restricted_mean,
+      sqrt(variance_mean), median, 0, 0
+    )
+  }
+}
+
+.survival_py_survfit_print_summary <- function(x, scale, rmean) {
+  fields <- .survival_py_survfit_print_fields(x)
+  start_time <- if (!is.null(fields$t0)) {
+    fields$t0
+  } else if (!is.null(fields$start.time)) {
+    fields$start.time
+  } else {
+    min(0, fields$time)
+  }
+  scaled_time <- fields$time / scale
+  if (is.numeric(rmean)) {
+    rmean <- rmean / scale
+  }
+  survival <- fields$surv
+  confidence_labels <- paste(fields$conf.int, c("LCL", "UCL"), sep = "")
+  column_labels <- c(
+    "records", "n.max", "n.start", "events", "rmean", "se(rmean)",
+    "median", confidence_labels
+  )
+  if (!is.null(fields$n.id)) {
+    column_labels[[2L]] <- "n.id"
+  }
+  if (is.matrix(survival) && !is.matrix(fields$n.event)) {
+    fields$n.event <- matrix(
+      rep(fields$n.event, ncol(survival)),
+      ncol = ncol(survival)
+    )
+  }
+
+  if (is.null(fields$strata)) {
+    end_time <- if (identical(rmean, "none")) {
+      NA_real_
+    } else if (is.numeric(rmean)) {
+      rmean
+    } else {
+      max(scaled_time)
+    }
+    if (is.matrix(survival)) {
+      output <- matrix(0, ncol(survival), 9L)
+      for (column in seq_len(ncol(survival))) {
+        output[column, ] <- .survival_py_survfit_print_curve_summary(
+          fields$n,
+          scaled_time,
+          survival[, column],
+          fields$n.risk,
+          fields$n.event[, column],
+          if (is.null(fields$lower)) NULL else fields$lower[, column],
+          if (is.null(fields$upper)) NULL else fields$upper[, column],
+          start_time,
+          end_time,
+          fields$n.id
+        )
+      }
+      dimnames(output) <- list(colnames(survival), column_labels)
+    } else {
+      output <- matrix(
+        .survival_py_survfit_print_curve_summary(
+          fields$n,
+          scaled_time,
+          survival,
+          fields$n.risk,
+          fields$n.event,
+          fields$lower,
+          fields$upper,
+          start_time,
+          end_time,
+          fields$n.id
+        ),
+        nrow = 1L,
+        dimnames = list(NULL, column_labels)
+      )
+    }
+  } else {
+    strata_count <- length(fields$strata)
+    strata_index <- rep(seq_len(strata_count), fields$strata)
+    last_time <- rev(scaled_time)[match(seq_len(strata_count), rev(strata_index))]
+    end_time <- if (identical(rmean, "none")) {
+      rep(NA_real_, strata_count)
+    } else if (is.numeric(rmean)) {
+      rep(rmean, strata_count)
+    } else if (identical(rmean, "common")) {
+      rep(max(last_time), strata_count)
+    } else {
+      last_time
+    }
+    if (is.matrix(survival)) {
+      profile_count <- ncol(survival)
+      output <- matrix(0, strata_count * profile_count, 9L)
+      if (is.null(colnames(survival))) {
+        rownames(output) <- rep(names(fields$strata), profile_count)
+      } else {
+        rownames(output) <- c(outer(
+          names(fields$strata),
+          colnames(survival),
+          paste,
+          sep = ", "
+        ))
+      }
+      colnames(output) <- column_labels
+      cursor <- 0L
+      for (profile in seq_len(profile_count)) {
+        for (stratum in seq_len(strata_count)) {
+          rows <- strata_index == stratum
+          cursor <- cursor + 1L
+          output[cursor, ] <- .survival_py_survfit_print_curve_summary(
+            fields$n[[stratum]],
+            scaled_time[rows],
+            survival[rows, profile],
+            fields$n.risk[rows],
+            fields$n.event[rows, profile],
+            if (is.null(fields$lower)) NULL else fields$lower[rows, profile],
+            if (is.null(fields$upper)) NULL else fields$upper[rows, profile],
+            start_time,
+            end_time[[stratum]],
+            if (is.null(fields$n.id)) NULL else fields$n.id[[profile]]
+          )
+        }
+      }
+    } else {
+      output <- matrix(
+        0,
+        strata_count,
+        9L,
+        dimnames = list(names(fields$strata), column_labels)
+      )
+      for (stratum in seq_len(strata_count)) {
+        rows <- strata_index == stratum
+        output[stratum, ] <- .survival_py_survfit_print_curve_summary(
+          fields$n[[stratum]],
+          scaled_time[rows],
+          survival[rows],
+          fields$n.risk[rows],
+          fields$n.event[rows],
+          if (is.null(fields$lower)) NULL else fields$lower[rows],
+          if (is.null(fields$upper)) NULL else fields$upper[rows],
+          start_time,
+          end_time[[stratum]],
+          if (is.null(fields$n.id)) NULL else fields$n.id[[stratum]]
+        )
+      }
+    }
+  }
+  if (is.null(fields$lower)) {
+    output <- output[, seq_len(7L), drop = FALSE]
+  }
+  if (identical(rmean, "none")) {
+    output <- output[, -(5:6), drop = FALSE]
+  }
+  list(matrix = output[, , drop = TRUE], end.time = end_time)
+}
+
+print.survival_py_survfit <- function(
+    x,
+    scale = 1,
+    digits = max(options()$digits - 4, 3),
+    print.rmean = getOption("survfit.print.rmean"),
+    rmean = getOption("survfit.rmean"),
+    ...) {
+  if (.is_survival_py_multistate_survfit(x)) {
+    return(.print_tabular_result(x, ...))
+  }
+  Call <- attr(x, ".survival_py_call", exact = TRUE)
+  if (!is.null(Call)) {
+    cat("Call: ")
+    dput(Call)
+    cat("\n")
+  }
+  saved_digits <- options(digits = digits)
+  on.exit(options(saved_digits))
+  if (!missing(print.rmean) && is.logical(print.rmean) && missing(rmean)) {
+    rmean <- if (print.rmean) "common" else "none"
+  } else {
+    if (is.null(rmean)) {
+      rmean <- if (is.logical(print.rmean) && isTRUE(print.rmean)) "common" else "none"
+    }
+    fields <- .survival_py_survfit_print_fields(x)
+    if (is.numeric(rmean)) {
+      if (is.null(fields$start.time)) {
+        if (rmean < min(fields$time)) {
+          stop("Truncation point for the mean is < smallest survival", call. = FALSE)
+        }
+      } else if (rmean < fields$start.time) {
+        stop("Truncation point for the mean is < smallest survival", call. = FALSE)
+      }
+    } else {
+      rmean <- match.arg(rmean, c("none", "common", "individual"))
+      if (length(rmean) == 0L) {
+        stop("Invalid value for rmean option", call. = FALSE)
+      }
+    }
+  }
+  summary <- .survival_py_survfit_print_summary(x, scale, rmean)
+  output <- if (is.matrix(summary$matrix)) {
+    summary$matrix
+  } else {
+    matrix(
+      summary$matrix,
+      nrow = 1L,
+      dimnames = list(NULL, names(summary$matrix))
+    )
+  }
+  if (colnames(output)[[2L]] == "n.id") {
+    output <- output[, -3L, drop = FALSE]
+    colnames(output)[[2L]] <- "n"
+  } else {
+    if (all(output[, 2L] == output[, 3L])) {
+      column_names <- colnames(output)[-3L]
+      column_names[[2L]] <- "n"
+      output <- output[, -3L, drop = FALSE]
+      colnames(output) <- column_names
+    }
+    if (all(output[, 1L] == output[, 2L])) {
+      output <- output[, -1L, drop = FALSE]
+    }
+  }
+  if (!identical(rmean, "none")) {
+    column_names <- colnames(output)
+    column_names[column_names == "rmean"] <- "rmean*"
+    colnames(output) <- column_names
+    print(output)
+    if (identical(rmean, "individual")) {
+      cat("   * restricted mean with variable upper limit\n")
+    } else {
+      cat(
+        "    * restricted mean with upper limit = ",
+        format(summary$end.time[[1L]]),
+        "\n"
+      )
+    }
+  } else {
+    print(output)
+  }
+  invisible(x)
 }
 
 print.survival_py_surv <- function(x, ...) {

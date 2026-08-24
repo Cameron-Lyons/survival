@@ -937,7 +937,10 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{print}{survival_py_surv}(x, ...)
 
-\method{print}{survival_py_survfit}(x, ...)
+\method{print}{survival_py_survfit}(x, scale = 1,
+  digits = max(options()$digits - 4, 3),
+  print.rmean = getOption("survfit.print.rmean"),
+  rmean = getOption("survfit.rmean"), ...)
 
 \method{print}{survival_py_basehaz}(x, ...)
 
@@ -1058,10 +1061,13 @@ for a time-changing group.}
 \item{by}{Optional grouping vector or list for aggregating Python-backed Cox
 \code{survfit} prediction curves across their \code{data} margin.}
 \item{FUN}{Summary function for \code{aggregate.survival_py_survfit};
-currently \code{mean} is supported.}
+it must reduce each curve row to one numeric value.}
 \item{rmean, dosum}{Accepted \code{summary.survival_py_survfit}
-compatibility arguments. The tabular bridge summary uses \code{dosum} for
-interval event/censor counts when explicit \code{times} are supplied.}
+compatibility arguments. For \code{print.survival_py_survfit}, \code{rmean}
+selects no restricted mean, a common or individual upper limit, or a numeric
+cutoff. The tabular bridge summary uses \code{dosum} for interval event/censor
+counts when explicit \code{times} are supplied.}
+\item{print.rmean}{Legacy logical control for printing the restricted mean.}
 \item{rmap}{Optional rate-table variable mapping for formula
 \code{survexp} and \code{pyears} calls delegated to \pkg{survival}.}
 \item{expect}{Expected-count scale selector accepted by \code{pyears}.}
@@ -1193,8 +1199,8 @@ multi-state Cox fits and defaults to \code{"gap"}.}
 \item{dlist}{Distribution-list object for \code{survregDtest}.}
 \item{row.names, optional, make.names}{Standard \code{as.data.frame}
 arguments.}
-\item{digits}{Number of significant digits used by concordance and model
-summary printers.}
+\item{digits}{Number of significant digits used by concordance, model summary,
+and survival-curve printers.}
 \item{signif.stars}{Logical flag controlling significance stars in printed
 Cox coefficient tables.}
 \item{expand}{Logical multi-state Cox print expansion flag, accepted for
@@ -1242,7 +1248,8 @@ supported.}
 summary coefficients, the standard \code{extractAIC} scale argument, divisor
 for survival quantile and \code{summary.survival_py_survfit} times, or a
 logical flag controlling whether \code{ridge} scales the penalty by column
-variance. It also scales \code{aareg} summary coefficients.}
+variance. It also scales \code{aareg} summary coefficients and printed
+survival-curve times.}
 \item{maxtime}{Optional upper time limit for \code{aareg} summaries and
 cumulative-coefficient plots.}
 \item{k}{Penalty multiplier for \code{extractAIC}, observed Poisson event
