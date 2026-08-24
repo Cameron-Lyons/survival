@@ -6588,6 +6588,21 @@ def test_aggregate_survfit_result_averages_cox_prediction_curves():
     assert grouped.surv[0] == pytest.approx(curves.surv[1])
     assert grouped.surv[1] == pytest.approx(expected_group)
 
+    maximized = survival.r_api.aggregate_survfit_result(curves, reducer=max)
+    assert maximized.surv[0] == pytest.approx(
+        [max(values) for values in zip(*curves.surv, strict=True)]
+    )
+    assert maximized.std_err == []
+    minimized = survival.r_api.aggregate_survfit_result(
+        curves,
+        groups=[2, 1, 2],
+        reducer=min,
+    )
+    assert minimized.surv[0] == pytest.approx(curves.surv[1])
+    assert minimized.surv[1] == pytest.approx(
+        [min(first, third) for first, third in zip(curves.surv[0], curves.surv[2], strict=True)]
+    )
+
     uncertain = survival.r_api.CoxSurvfitResult(
         time=[1.0, 2.0],
         surv=[[0.9, 0.8], [0.8, 0.6], [0.7, 0.4]],
@@ -6618,6 +6633,12 @@ def test_aggregate_survfit_result_averages_cox_prediction_curves():
         survival.r_api.aggregate_survfit_result(curves, groups=[1])
     with pytest.raises(ValueError, match="positive integer"):
         survival.r_api.aggregate_survfit_result(curves, groups=[0, 1, 1])
+    with pytest.raises(TypeError, match="callable"):
+        survival.r_api.aggregate_survfit_result(curves, reducer=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="single numeric"):
+        survival.r_api.aggregate_survfit_result(curves, reducer=lambda values: values)
+    with pytest.raises(ValueError, match="weights cannot"):
+        survival.r_api.aggregate_survfit_result(curves, weights=[1, 1, 1], reducer=max)
 
 
 def test_aggregate_survfit_result_averages_profiles_within_each_stratum():
@@ -6651,6 +6672,17 @@ def test_aggregate_survfit_result_averages_profiles_within_each_stratum():
             )
         ]
         assert actual == pytest.approx(expected, nan_ok=True)
+
+    maximized = survival.r_api.aggregate_survfit_result(curves, reducer=max)
+    for stratum in range(2):
+        indices = (curves.curve_time_indices or [])[stratum * 2]
+        expected = [math.nan] * len(curves.time)
+        for time_index in indices:
+            expected[time_index] = max(
+                curves.surv[stratum * 2][time_index],
+                curves.surv[stratum * 2 + 1][time_index],
+            )
+        assert maximized.surv[stratum] == pytest.approx(expected, nan_ok=True)
 
     regrouped = survival.r_api.aggregate_survfit_result(curves, groups=[2, 1])
     assert regrouped.data_count == 2
@@ -15923,6 +15955,17 @@ def test_coxph_multistate_competing_risks_matches_r_reference():
     )
     assert averaged_curve.cumhaz == [[] for _ in averaged_curve.time]
     assert averaged_curve.n_risk == aggregate_source.n_risk
+    maximized_curve = survival.r_api.aggregate_survfit_result(
+        aggregate_source,
+        reducer=max,
+    )
+    assert isinstance(maximized_curve, survival.SurvfitMultiStateResult)
+    assert maximized_curve.pstate[-1] == pytest.approx(
+        [
+            max(curve.pstate[-1][state] for curve in aggregate_source.curves)
+            for state in range(len(maximized_curve.states))
+        ]
+    )
     grouped_curve = survival.r_api.aggregate_survfit_result(
         aggregate_source,
         groups=[1, 2, 1],

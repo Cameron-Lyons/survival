@@ -1100,7 +1100,7 @@ attrassign <- function(object, tt) {
   }
   aggregate_data <- attr(object, ".survival_py_aggregate_data", exact = TRUE)
   if (!is.null(aggregate_data) && nrow(aggregate_data) == profile_count) {
-    if (ncol(aggregate_data) == 1L && identical(names(aggregate_data), "aggregate")) {
+    if (ncol(aggregate_data) == 1L) {
       frame[["fit$newdata[nindx, ]"]] <- rep(
         aggregate_data[[1L]],
         each = time_count
@@ -15391,39 +15391,74 @@ summary.survival_py_anova <- function(object, ...) {
 }
 
 aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
+  default_fun <- missing(FUN)
   dims <- dim(x)
   data_count <- dims["data"]
   if (is.null(data_count) || is.na(data_count)) {
     stop("survfit object does not have a 'data' margin", call. = FALSE)
   }
-  if (!identical(FUN, mean)) {
-    stop("FUN must be mean for Python-backed survfit objects", call. = FALSE)
-  }
-  if (length(list(...)) > 0L) {
-    stop("additional FUN arguments are not supported", call. = FALSE)
-  }
   groups <- .survival_py_survfit_aggregate_groups(by, data_count)
+  index <- if (is.null(groups)) rep.int(1L, data_count) else groups
+  test <- tapply(seq.int(data_count), index, FUN)
+  if (is.list(test) || length(test) != max(index) || !is.numeric(test)) {
+    stop("FUN must return a single value summary", call. = FALSE)
+  }
+  reducer <- if (default_fun) {
+    NULL
+  } else {
+    FUN <- match.fun(FUN)
+    function(values) {
+      reduced <- FUN(as.numeric(values))
+      if (is.list(reduced) || length(reduced) != 1L || !is.numeric(reduced)) {
+        stop("FUN must return a single value summary", call. = FALSE)
+      }
+      as.numeric(reduced)
+    }
+  }
   result <- .call_r_api(
     "aggregate_survfit_result",
     x,
     groups = groups,
+    reducer = reducer,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
   if (
     inherits(x, "survival.r_api.CoxSurvfitResult") &&
-      all(c("strata", "data") %in% names(dims))
+      "data" %in% names(dims)
   ) {
-    fields <- .as_survival_py_cox_survfit_list(x)
-    survival_matrix <- fields$surv
-    if (is.null(groups)) {
-      fields$surv <- rowMeans(survival_matrix)
-      aggregate_count <- 1L
+    aggregate_count <- if (is.null(groups)) 1L else max(groups)
+    strata_count <- if ("strata" %in% names(dims)) {
+      as.integer(dims[["strata"]])
     } else {
-      aggregate_count <- max(groups)
-      fields$surv <- vapply(seq_len(aggregate_count), function(group) {
-        rowMeans(survival_matrix[, groups == group, drop = FALSE])
-      }, numeric(nrow(survival_matrix)))
-      colnames(fields$surv) <- as.character(seq_len(aggregate_count))
+      NULL
+    }
+    retained_dimensions <- if (is.null(strata_count)) {
+      if (aggregate_count == 1L) integer() else c(data = aggregate_count)
+    } else if (aggregate_count == 1L) {
+      c(strata = strata_count)
+    } else {
+      c(strata = strata_count, data = aggregate_count)
+    }
+    attr(result, ".survival_py_retained_dimensions") <- retained_dimensions
+    attr(result, ".survival_py_data_count") <- aggregate_count
+    if (!is.null(strata_count)) {
+      attr(result, ".survival_py_strata_count") <- strata_count
+    }
+    attr(result, ".survival_py_curve_names") <- as.character(seq_len(aggregate_count))
+
+    fields <- .as_survival_py_cox_survfit_list(x)
+    if (default_fun) {
+      survival_matrix <- fields$surv
+      if (is.null(groups)) {
+        fields$surv <- rowMeans(survival_matrix)
+      } else {
+        fields$surv <- vapply(seq_len(aggregate_count), function(group) {
+          rowMeans(survival_matrix[, groups == group, drop = FALSE])
+        }, numeric(nrow(survival_matrix)))
+        colnames(fields$surv) <- as.character(seq_len(aggregate_count))
+      }
+    } else {
+      fields$surv <- .as_survival_py_cox_survfit_list(result)$surv
     }
     fields <- fields[intersect(
       c(
@@ -15432,9 +15467,6 @@ aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
       ),
       names(fields)
     )]
-    attr(result, ".survival_py_data_count") <- aggregate_count
-    attr(result, ".survival_py_strata_count") <- as.integer(dims[["strata"]])
-    attr(result, ".survival_py_curve_names") <- as.character(seq_len(aggregate_count))
     attr(result, ".survival_py_subset_fields") <- fields
     attr(result, ".survival_py_aggregate_snapshot") <- TRUE
     if (!is.null(groups)) {

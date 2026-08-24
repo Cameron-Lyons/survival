@@ -4,7 +4,7 @@ import math
 import random
 import warnings
 from bisect import bisect_left, bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date as _Date
 from datetime import datetime as _DateTime
@@ -17698,6 +17698,95 @@ def _weighted_average(values: Sequence[float], weights: Sequence[float] | None) 
     )
 
 
+@dataclass(frozen=True)
+class _ReducedSurvfitAggregate:
+    time: list[float]
+    surv: list[float]
+    std_err: list[float] = field(default_factory=list)
+    lower: list[float] = field(default_factory=list)
+    upper: list[float] = field(default_factory=list)
+
+
+def _survfit_reducer_value(
+    reducer: Callable[[list[float]], Any],
+    values: list[float],
+) -> float:
+    reduced = reducer(values)
+    if isinstance(reduced, bool | str | bytes | bytearray | Mapping | Sequence):
+        raise ValueError("reducer must return a single numeric value")
+    try:
+        return float(reduced)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("reducer must return a single numeric value") from exc
+
+
+def _reduce_shared_survfit(
+    time: Sequence[float],
+    curves: Sequence[Sequence[float]],
+    groups: Sequence[int] | None,
+    reducer: Callable[[list[float]], Any],
+    time_indices: Sequence[int] | None = None,
+) -> list[_ReducedSurvfitAggregate]:
+    time_values = [float(value) for value in time]
+    curve_values = [[float(value) for value in curve] for curve in curves]
+    if any(len(curve) != len(time_values) for curve in curve_values):
+        raise ValueError("survfit curves must have the same length as time")
+    selected_times = (
+        list(range(len(time_values)))
+        if time_indices is None
+        else [int(value) for value in time_indices]
+    )
+    if any(value < 0 or value >= len(time_values) for value in selected_times):
+        raise ValueError("survfit curve time indices are out of bounds")
+    group_codes = [1] * len(curve_values) if groups is None else list(groups)
+    if len(group_codes) != len(curve_values):
+        raise ValueError("groups must have same length as number of curves")
+
+    aggregates: list[_ReducedSurvfitAggregate] = []
+    for code in sorted(set(group_codes)):
+        members = [index for index, value in enumerate(group_codes) if value == code]
+        survival = [math.nan] * len(time_values)
+        for time_index in selected_times:
+            survival[time_index] = _survfit_reducer_value(
+                reducer,
+                [curve_values[index][time_index] for index in members],
+            )
+        aggregates.append(_ReducedSurvfitAggregate(time_values, survival))
+    return aggregates
+
+
+def _aggregate_shared_survfit(
+    time: list[float],
+    curves: list[list[float]],
+    std_err: list[list[float]] | None,
+    weights: list[float] | None,
+    groups: list[int] | None,
+    reducer: Callable[[list[float]], Any] | None,
+    time_indices: Sequence[int] | None = None,
+) -> Any:
+    if reducer is None:
+        return _core.aggregate_shared_survfit(time, curves, std_err, weights, groups)
+    return _reduce_shared_survfit(time, curves, groups, reducer, time_indices)
+
+
+def _cox_survfit_reducer_source(
+    result: CoxSurvfitResult,
+    reducer: Callable[[list[float]], Any] | None,
+) -> CoxSurvfitResult:
+    if reducer is None:
+        return result
+    return replace(
+        result,
+        std_err=[],
+        std_chaz=[],
+        log_std_err=[],
+        conf_lower=[],
+        conf_upper=[],
+        conf_type=None,
+        conf_level=None,
+    )
+
+
 def _cox_survfit_from_aggregates(
     source: CoxSurvfitResult,
     aggregates: Sequence[Any],
@@ -17762,6 +17851,7 @@ def _aggregate_strata_data_cox_survfit(
     result: CoxSurvfitResult,
     groups: Any | None,
     weights: Any | None,
+    reducer: Callable[[list[float]], Any] | None,
 ) -> CoxSurvfitResult:
     if result.data_count is None or result.strata_count is None:
         raise AssertionError("strata-by-data Cox dimensions are missing")
@@ -17789,12 +17879,20 @@ def _aggregate_strata_data_cox_survfit(
     for stratum_index in range(strata_count):
         start = stratum_index * data_count
         stop = start + data_count
-        stratum_aggregates = _core.aggregate_shared_survfit(
+        time_indices: Sequence[int] | None = None
+        if reducer is not None and result.curve_time_indices:
+            member_indices = result.curve_time_indices[start:stop]
+            if any(values != member_indices[0] for values in member_indices[1:]):
+                raise ValueError("Cox survfit profiles within a stratum use different times")
+            time_indices = member_indices[0]
+        stratum_aggregates = _aggregate_shared_survfit(
             result.time,
             result.surv[start:stop],
             result.std_err[start:stop] if result.std_err else None,
             curve_weights,
             group_codes,
+            reducer,
+            time_indices,
         )
         if len(stratum_aggregates) != aggregate_count:
             raise AssertionError("Cox survfit aggregate counts are inconsistent")
@@ -17837,7 +17935,7 @@ def _aggregate_strata_data_cox_survfit(
         "time-index",
     )
     source = replace(
-        result,
+        _cox_survfit_reducer_source(result, reducer),
         n=repeated_strata_values(result.n, "sample-size"),
         n_risk=repeated_strata_values(result.n_risk, "number-at-risk"),
         n_event=repeated_strata_values(result.n_event, "number-of-events"),
@@ -17864,13 +17962,19 @@ def aggregate_survfit_result(
     result: CoxSurvfitResult | SurvfitMultiStateCoxResult | Mapping[Any, Any],
     groups: Any | None = None,
     weights: Any | None = None,
+    reducer: Callable[[list[float]], Any] | None = None,
 ) -> (
     CoxSurvfitResult
     | SurvfitMultiStateResult
     | SurvfitMultiStateCoxResult
     | dict[Any, SurvfitMultiStateResult | SurvfitMultiStateCoxResult]
 ):
-    """Average Cox survfit prediction curves, optionally by group code."""
+    """Aggregate Cox survfit prediction curves, optionally by group code."""
+
+    if reducer is not None and not callable(reducer):
+        raise TypeError("reducer must be callable")
+    if reducer is not None and weights is not None:
+        raise ValueError("weights cannot be combined with a custom reducer")
 
     if isinstance(result, Mapping):
         if not result or not all(
@@ -17886,7 +17990,7 @@ def aggregate_survfit_result(
                 if isinstance(curve, SurvfitMultiStateCoxResult)
                 else SurvfitMultiStateCoxResult((curve,), curve.model)
             )
-            value = aggregate_survfit_result(batch, groups, weights)
+            value = aggregate_survfit_result(batch, groups, weights, reducer)
             if not isinstance(value, SurvfitMultiStateResult | SurvfitMultiStateCoxResult):
                 raise AssertionError("stratified multi-state aggregation returned invalid output")
             aggregated[label] = value
@@ -17905,12 +18009,13 @@ def aggregate_survfit_result(
 
         first = result.curves[0]
         state_aggregates = [
-            _core.aggregate_shared_survfit(
+            _aggregate_shared_survfit(
                 first.time,
                 [[float(row[state_index]) for row in curve.pstate] for curve in result.curves],
                 None,
                 curve_weights,
                 group_codes,
+                reducer,
             )
             for state_index in range(len(first.states))
         ]
@@ -17964,7 +18069,7 @@ def aggregate_survfit_result(
     if len(result.cumhaz) != n_curves or len(result.linear_predictors) != n_curves:
         raise ValueError("Cox survfit result has inconsistent curve counts")
     if result.data_count is not None and result.strata_count is not None:
-        return _aggregate_strata_data_cox_survfit(result, groups, weights)
+        return _aggregate_strata_data_cox_survfit(result, groups, weights, reducer)
     if n_curves == 0:
         return CoxSurvfitResult(
             time=[float(value) for value in result.time],
@@ -17990,15 +18095,20 @@ def aggregate_survfit_result(
     curve_weights = _float_vector(weights, "weights") if weights is not None else None
 
     if groups is None:
-        aggregates = _core.aggregate_shared_survfit(
+        aggregates = _aggregate_shared_survfit(
             curve_time,
             curve_survs,
             curve_std_errs,
             curve_weights,
             None,
+            reducer,
         )
         linear_predictor = _weighted_average(result.linear_predictors, curve_weights)
-        return _cox_survfit_from_aggregates(result, aggregates, [linear_predictor])
+        return _cox_survfit_from_aggregates(
+            _cox_survfit_reducer_source(result, reducer),
+            aggregates,
+            [linear_predictor],
+        )
 
     group_codes = _integer_code_vector(groups, "groups", "integer group codes")
     if len(group_codes) != n_curves:
@@ -18006,12 +18116,13 @@ def aggregate_survfit_result(
     if any(code < 1 for code in group_codes):
         raise ValueError("groups must use positive integer group codes")
 
-    aggregates = _core.aggregate_shared_survfit(
+    aggregates = _aggregate_shared_survfit(
         curve_time,
         curve_survs,
         curve_std_errs,
         curve_weights,
         group_codes,
+        reducer,
     )
     predictor_sums: dict[int, float] = {}
     predictor_weights: dict[int, float] = {}
@@ -18025,7 +18136,11 @@ def aggregate_survfit_result(
         predictor_sums[code] / predictor_weights[code] for code in sorted(predictor_sums)
     ]
 
-    return _cox_survfit_from_aggregates(result, aggregates, linear_predictors)
+    return _cox_survfit_from_aggregates(
+        _cox_survfit_reducer_source(result, reducer),
+        aggregates,
+        linear_predictors,
+    )
 
 
 def _survfit_without_standard_errors(result: Any) -> Any:

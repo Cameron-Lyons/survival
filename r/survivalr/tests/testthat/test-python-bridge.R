@@ -4360,21 +4360,29 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(cox_default_aggregate, "survival_py_survfit")
   expect_null(dim(cox_default_aggregate))
   expect_equal(cox_default_frame$surv, expected_default_surv, tolerance = 1e-8)
-  expect_equal(cox_default_frame$cumhaz, -log(expected_default_surv), tolerance = 1e-8)
+  expect_false("cumhaz" %in% names(cox_default_frame))
   cox_group_aggregate <- aggregate(cox_aggregate_curves, by = c("lo", "hi", "lo"))
   cox_group_frame <- as.data.frame(cox_group_aggregate)
   expect_s3_class(cox_group_aggregate, "survival_py_survfit")
   expect_equal(dim(cox_group_aggregate), c(data = 2L))
-  expect_equal(unique(cox_group_frame$curve), c(1L, 2L))
-  expect_equal(cox_group_frame$surv[cox_group_frame$curve == 1L], cox_surv_by_curve[["2"]], tolerance = 1e-8)
+  expect_false("curve" %in% names(cox_group_frame))
+  expect_identical(
+    unique(as.character(cox_group_frame[["fit$newdata[nindx, ]"]])),
+    c("hi", "lo")
+  )
   expect_equal(
-    cox_group_frame$surv[cox_group_frame$curve == 2L],
+    cox_group_frame$surv[cox_group_frame[["fit$newdata[nindx, ]"]] == "hi"],
+    cox_surv_by_curve[["2"]],
+    tolerance = 1e-8
+  )
+  expect_equal(
+    cox_group_frame$surv[cox_group_frame[["fit$newdata[nindx, ]"]] == "lo"],
     rowMeans(cbind(cox_surv_by_curve[["1"]], cox_surv_by_curve[["3"]])),
     tolerance = 1e-8
   )
   expect_error(aggregate(survfit(response, se.fit = FALSE)), "data.*margin")
   expect_error(aggregate(cox_aggregate_curves, by = "lo"), "same length")
-  expect_error(aggregate(cox_aggregate_curves, FUN = max), "FUN must be mean")
+  expect_error(aggregate(cox_aggregate_curves, FUN = range), "single value summary")
   stratified_curves <- survfit(
     coxph(Surv(time, status) ~ x + strata(group), data = data, max_iter = 0),
     newdata = data.frame(x = c(0.5, 0.7), group = c("control", "treated")),
@@ -14782,6 +14790,139 @@ test_that("stratified Cox profiles without strata expand across every baseline",
   expect_equal(bridged_endpoints, reference_endpoints, tolerance = 1e-12)
 })
 
+test_that("Cox survfit custom reducers match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = 1:8,
+    group = factor(rep(c("a", "b"), 4L))
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ x,
+    data = data,
+    init = list(0.1),
+    max_iter = 0
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data = data,
+    init = 0.1,
+    iter.max = 0
+  )
+  profiles <- data.frame(x = c(2, 3, 5))
+  bridged_profiles <- survfit(bridged, newdata = profiles, se.fit = FALSE)
+  reference_profiles <- survival::survfit(
+    reference,
+    newdata = profiles,
+    se.fit = FALSE
+  )
+
+  compare_aggregate <- function(bridged_curve, reference_curve, options) {
+    bridged_aggregate <- do.call(aggregate, c(list(bridged_curve), options))
+    reference_aggregate <- do.call(aggregate, c(list(reference_curve), options))
+    expect_identical(dim(bridged_aggregate), dim(reference_aggregate))
+    expect_identical(
+      names(bridged_aggregate),
+      setdiff(names(reference_aggregate), c("newdata", "call"))
+    )
+    for (field in names(bridged_aggregate)) {
+      expect_equal(
+        bridged_aggregate[[field]],
+        reference_aggregate[[field]],
+        tolerance = 1e-12,
+        info = paste("custom aggregate field", field)
+      )
+    }
+
+    bridged_frame <- as.data.frame(bridged_aggregate)
+    reference_frame <- summary(
+      reference_aggregate,
+      data.frame = TRUE,
+      censored = TRUE
+    )
+    expect_identical(names(bridged_frame), names(reference_frame))
+    expect_identical(dim(bridged_frame), dim(reference_frame))
+    for (field in names(reference_frame)) {
+      expect_equal(
+        bridged_frame[[field]],
+        reference_frame[[field]],
+        tolerance = 1e-12,
+        info = paste("custom aggregate frame field", field)
+      )
+    }
+    expect_equal(
+      quantile(bridged_aggregate, probs = c(0, 0.5), conf.int = TRUE),
+      quantile(reference_aggregate, probs = c(0, 0.5), conf.int = TRUE),
+      tolerance = 1e-12
+    )
+  }
+
+  for (options in list(
+    list(FUN = max),
+    list(by = c("lo", "hi", "lo"), FUN = min),
+    list(by = list(kind = c("lo", "hi", "lo")), FUN = mean),
+    list(ignored = "value")
+  )) {
+    compare_aggregate(bridged_profiles, reference_profiles, options)
+  }
+
+  bridged_stratified <- coxph(
+    Surv(time, status) ~ x + strata(group),
+    data = data,
+    init = list(0.1),
+    max_iter = 0
+  )
+  reference_stratified <- survival::coxph(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = data,
+    init = 0.1,
+    iter.max = 0
+  )
+  bridged_stratified_profiles <- survfit(
+    bridged_stratified,
+    newdata = profiles,
+    se.fit = FALSE
+  )
+  reference_stratified_profiles <- survival::survfit(
+    reference_stratified,
+    newdata = profiles,
+    se.fit = FALSE
+  )
+  compare_aggregate(
+    bridged_stratified_profiles,
+    reference_stratified_profiles,
+    list(FUN = max)
+  )
+  compare_aggregate(
+    bridged_stratified_profiles,
+    reference_stratified_profiles,
+    list(by = c("lo", "hi", "lo"), FUN = min)
+  )
+
+  bridged_calls <- 0L
+  bridged_reducer <- function(values) {
+    bridged_calls <<- bridged_calls + 1L
+    max(values)
+  }
+  reference_calls <- 0L
+  reference_reducer <- function(values) {
+    reference_calls <<- reference_calls + 1L
+    max(values)
+  }
+  aggregate(bridged_profiles, FUN = bridged_reducer)
+  aggregate(reference_profiles, FUN = reference_reducer)
+  expect_identical(bridged_calls, reference_calls)
+  expect_error(aggregate(bridged_profiles, FUN = range), "single value summary")
+  expect_error(aggregate(reference_profiles, FUN = range), "single value summary")
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
@@ -17516,6 +17657,27 @@ test_that("single-formula multi-state Cox models match survival", {
   expect_false("cumhaz" %in% names(as.list(bridged_grouped_average)))
   expect_equal(dim(bridged_grouped_average), c(data = 2L, states = 3L))
 
+  for (options in list(
+    list(FUN = max),
+    list(by = aggregate_groups, FUN = min)
+  )) {
+    bridged_custom_average <- do.call(
+      aggregate,
+      c(list(aggregate_profiles), options)
+    )
+    reference_custom_average <- do.call(
+      aggregate,
+      c(list(reference_aggregate_profiles), options)
+    )
+    expect_equal(
+      as.list(bridged_custom_average)$pstate,
+      reference_custom_average$pstate,
+      tolerance = 1e-12
+    )
+    expect_identical(dim(bridged_custom_average), dim(reference_custom_average))
+    expect_false("cumhaz" %in% names(as.list(bridged_custom_average)))
+  }
+
   stratified_competing <- transform(
     competing,
     g = factor(rep(c("g1", "g2"), each = 6L))
@@ -17600,6 +17762,17 @@ test_that("single-formula multi-state Cox models match survival", {
     tolerance = 1e-12
   )
   expect_equal(dim(bridged_stratified_average), c(strata = 2L, states = 3L))
+  bridged_stratified_maximum <- aggregate(bridged_stratified_curves, FUN = max)
+  reference_stratified_maximum <- aggregate(reference_stratified_curves, FUN = max)
+  expect_equal(
+    as.list(bridged_stratified_maximum)$pstate,
+    reference_stratified_maximum$pstate,
+    tolerance = 1e-12
+  )
+  expect_identical(
+    dim(bridged_stratified_maximum),
+    dim(reference_stratified_maximum)
+  )
 
   bridged_stratified_unpadded <- survfit(
     bridged_stratified,

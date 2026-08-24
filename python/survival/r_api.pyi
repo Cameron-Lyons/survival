@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
 from ._survival import SplineBasisResult as _SplineBasisResult
@@ -906,6 +906,7 @@ def aggregate_survfit_result(
     result: CoxSurvfitResult | SurvfitMultiStateCoxResult | Mapping[Any, Any],
     groups: Any | None = None,
     weights: Any | None = None,
+    reducer: Callable[[list[float]], Any] | None = None,
 ) -> (
     CoxSurvfitResult
     | SurvfitMultiStateResult
