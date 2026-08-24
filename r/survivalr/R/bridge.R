@@ -10550,7 +10550,37 @@ survfit <- function(formula, ...) {
   UseMethod("survfit")
 }
 
-.survival_py_tag_survfit <- function(result, Call, dots = list(), print_labels = NULL) {
+.survival_py_survfit_formula_na_action <- function(Call, formula, na.action, env) {
+  action <- tryCatch(.as_na_action(na.action), error = function(condition) NULL)
+  if (is.null(action) || !(action %in% c("omit", "exclude"))) {
+    return(NULL)
+  }
+  indices <- match(
+    c(
+      "formula", "data", "weights", "subset", "id", "cluster", "group",
+      "istate", "etype"
+    ),
+    names(Call),
+    nomatch = 0L
+  )
+  frame_call <- Call[c(1L, indices)]
+  frame_call[[1L]] <- quote(stats::model.frame)
+  frame_call$formula <- if (inherits(formula, "formula")) {
+    formula
+  } else {
+    stats::as.formula(formula, env = env)
+  }
+  frame_call$na.action <- if (identical(action, "exclude")) {
+    quote(stats::na.exclude)
+  } else {
+    quote(stats::na.omit)
+  }
+  frame <- tryCatch(eval(frame_call, env), error = function(condition) NULL)
+  if (is.null(frame)) NULL else attr(frame, "na.action")
+}
+
+.survival_py_tag_survfit <- function(
+    result, Call, dots = list(), print_labels = NULL, na.action = NULL) {
   if (is.call(Call)) {
     Call[[1L]] <- quote(survfit)
   }
@@ -10564,6 +10594,9 @@ survfit <- function(formula, ...) {
   }
   if ("start.time" %in% names(dots) && !is.null(dots[["start.time"]])) {
     attr(result, ".survival_py_start_time") <- as.numeric(dots[["start.time"]])[[1L]]
+  }
+  if (length(na.action) > 0L) {
+    attr(result, ".survival_py_na_action") <- na.action
   }
   result
 }
@@ -10607,6 +10640,12 @@ survfit <- function(formula, ...) {
 
 survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
   Call <- match.call()
+  omitted <- .survival_py_survfit_formula_na_action(
+    Call,
+    formula,
+    na.action,
+    parent.frame()
+  )
   dots <- match.call(expand.dots = FALSE)$...
   evaluated_dots <- .eval_formula_dots(
     dots,
@@ -10632,12 +10671,19 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
     result,
     Call,
     evaluated_dots,
-    .survival_py_formula_print_labels(formula, result)
+    .survival_py_formula_print_labels(formula, result),
+    omitted
   )
 }
 
 survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
   Call <- match.call()
+  omitted <- .survival_py_survfit_formula_na_action(
+    Call,
+    formula,
+    na.action,
+    parent.frame()
+  )
   dots <- match.call(expand.dots = FALSE)$...
   evaluated_dots <- .eval_formula_dots(
     dots,
@@ -10663,7 +10709,8 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
     result,
     Call,
     evaluated_dots,
-    .survival_py_formula_print_labels(formula, result)
+    .survival_py_formula_print_labels(formula, result),
+    omitted
   )
 }
 
@@ -16826,14 +16873,22 @@ as.data.frame.survival_py_anova <- function(x, row.names = NULL, optional = FALS
   }
 }
 
-.survival_py_print_multistate_survfit <- function(
-    x, scale = 1, rmean = getOption("survfit.rmean"), ...) {
+.survival_py_print_survfit_header <- function(x) {
   Call <- attr(x, ".survival_py_call", exact = TRUE)
   if (!is.null(Call)) {
     cat("Call: ")
     dput(Call)
     cat("\n")
   }
+  omitted <- attr(x, ".survival_py_na_action", exact = TRUE)
+  if (length(omitted) > 0L) {
+    cat("  ", stats::naprint(omitted), "\n")
+  }
+}
+
+.survival_py_print_multistate_survfit <- function(
+    x, scale = 1, rmean = getOption("survfit.rmean"), ...) {
+  .survival_py_print_survfit_header(x)
   if (is.null(rmean)) {
     rmean <- "common"
   }
@@ -16898,12 +16953,7 @@ print.survival_py_survfit <- function(
       c(list(x = x, scale = scale, rmean = rmean), extra)
     ))
   }
-  Call <- attr(x, ".survival_py_call", exact = TRUE)
-  if (!is.null(Call)) {
-    cat("Call: ")
-    dput(Call)
-    cat("\n")
-  }
+  .survival_py_print_survfit_header(x)
   saved_digits <- options(digits = digits)
   on.exit(options(saved_digits))
   if (!missing(print.rmean) && is.logical(print.rmean) && missing(rmean)) {

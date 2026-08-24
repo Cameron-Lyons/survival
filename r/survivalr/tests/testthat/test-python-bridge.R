@@ -14971,6 +14971,25 @@ test_that("survfit compact printing matches survival", {
   expect_print_equal(bridged_ordinary, reference_ordinary)
   expect_print_equal(bridged_grouped, reference_grouped)
   expect_print_equal(bridged_weighted, reference_weighted)
+  missing_data <- data
+  missing_data$time[[5L]] <- NA_real_
+  missing_data$weights[[2L]] <- NA_real_
+  for (na_action in list(stats::na.omit, stats::na.exclude)) {
+    expect_print_equal(
+      survfit(
+        Surv(time, status) ~ group,
+        data = missing_data,
+        weights = weights,
+        na.action = na_action
+      ),
+      survival::survfit(
+        survival::Surv(time, status) ~ group,
+        data = missing_data,
+        weights = weights,
+        na.action = na_action
+      )
+    )
+  }
   for (options in list(
     list(rmean = "common"),
     list(rmean = "individual"),
@@ -15163,6 +15182,20 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     expect_print_equal(bridged, reference, options)
     expect_print_equal(grouped_bridged, grouped_reference, options)
   }
+  missing_data <- data
+  missing_data$event[[2L]] <- NA
+  expect_print_equal(
+    survfit(
+      Surv(time, event) ~ group,
+      data = missing_data,
+      na.action = stats::na.omit
+    ),
+    reference_survfit(
+      survival::Surv(time, event) ~ group,
+      data = missing_data,
+      na.action = stats::na.omit
+    )
+  )
   bridged_delayed <- survfit(
     Surv(time, event) ~ group,
     data = data,
