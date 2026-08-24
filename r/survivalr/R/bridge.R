@@ -180,6 +180,18 @@ if (getRversion() >= "2.15.1") {
   frame
 }
 
+.survival_py_model_frame_source <- function(data) {
+  if (is.data.frame(data)) data[FALSE, , drop = FALSE] else NULL
+}
+
+.survival_py_tag_model_frame_source <- function(result, data) {
+  source <- .survival_py_model_frame_source(data)
+  if (!is.null(source)) {
+    attr(result, ".survival_py_model_frame_source") <- source
+  }
+  result
+}
+
 .as_python_factor <- function(value) {
   factor_values <- as.character(value)
   if (anyNA(factor_values)) {
@@ -281,11 +293,20 @@ if (getRversion() >= "2.15.1") {
 }
 
 .formula_environment_data <- function(formula, enclos) {
-  formula_environment <- environment(formula)
+  formulas <- if (inherits(formula, "formula")) {
+    list(formula)
+  } else if (is.list(formula) &&
+             length(formula) > 0L &&
+             all(vapply(formula, inherits, logical(1L), "formula"))) {
+    formula
+  } else {
+    return(NULL)
+  }
+  formula_environment <- environment(formulas[[1L]])
   if (is.null(formula_environment)) {
     formula_environment <- enclos
   }
-  variables <- unique(all.vars(formula))
+  variables <- unique(unlist(lapply(formulas, all.vars), use.names = FALSE))
   values <- lapply(variables, function(name) {
     eval(as.name(name), formula_environment)
   })
@@ -10670,7 +10691,11 @@ survfit.formula <- function(formula, data, weights, subset, na.action,
                             istate, timefix = TRUE, etype, model = FALSE,
                             error, entry = FALSE, time0 = FALSE, ...) {
   Call <- match.call(expand.dots = FALSE)
-  data_value <- if (missing(data)) NULL else data
+  data_value <- if (missing(data)) {
+    .formula_environment_data(formula, parent.frame())
+  } else {
+    data
+  }
   na_action_value <- if (missing(na.action)) getOption("na.action") else na.action
   subset_value <- .formula_subset_indices(
     substitute(subset),
@@ -10712,13 +10737,14 @@ survfit.formula <- function(formula, data, weights, subset, na.action,
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
   )
-  .survival_py_tag_survfit(
+  result <- .survival_py_tag_survfit(
     result,
     Call,
     evaluated_dots,
     .survival_py_formula_print_labels(formula, result),
     omitted
   )
+  .survival_py_tag_model_frame_source(result, data_value)
 }
 
 survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
@@ -12849,7 +12875,11 @@ coxph <- function(formula, data, weights, subset, na.action, init, control,
                   method = ties, id, cluster, istate, statedata,
                   nocenter = c(-1, 0, 1), ...) {
   Call <- match.call(expand.dots = FALSE)
-  data_value <- if (missing(data)) NULL else data
+  data_value <- if (missing(data)) {
+    .formula_environment_data(formula, parent.frame())
+  } else {
+    data
+  }
   na_action_value <- if (missing(na.action)) getOption("na.action") else na.action
   subset_value <- .formula_subset_indices(
     substitute(subset),
@@ -12878,7 +12908,7 @@ coxph <- function(formula, data, weights, subset, na.action, init, control,
   if (!is.null(dots$id) && is.name(dots$id)) {
     evaluated_dots[["_id_column"]] <- as.character(dots$id)
   }
-  do.call(
+  result <- do.call(
     .call_r_api,
     c(
       list(
@@ -12893,6 +12923,7 @@ coxph <- function(formula, data, weights, subset, na.action, init, control,
       list(.wrap = c("survival_py_coxph", "survival_py_model", "survival_py_object"))
     )
   )
+  .survival_py_tag_model_frame_source(result, data_value)
 }
 
 survreg.distributions <- list(
@@ -13203,7 +13234,11 @@ survreg <- function(formula, data, weights, subset, na.action,
                     parms = NULL, model = FALSE, x = FALSE, y = TRUE,
                     robust = FALSE, cluster, score = FALSE, ...) {
   Call <- match.call(expand.dots = FALSE)
-  data_value <- if (missing(data)) NULL else data
+  data_value <- if (missing(data)) {
+    .formula_environment_data(formula, parent.frame())
+  } else {
+    data
+  }
   na_action_value <- if (missing(na.action)) getOption("na.action") else na.action
   subset_value <- .formula_subset_indices(
     substitute(subset),
@@ -13226,7 +13261,7 @@ survreg <- function(formula, data, weights, subset, na.action,
     vector_args = c("weights", "offset", "cluster")
   )
   evaluated_dots <- .normalize_survreg_distribution_dots(evaluated_dots)
-  do.call(
+  result <- do.call(
     .call_r_api,
     c(
       list(
@@ -13240,6 +13275,7 @@ survreg <- function(formula, data, weights, subset, na.action,
       list(.wrap = c("survival_py_survreg", "survival_py_model", "survival_py_object"))
     )
   )
+  .survival_py_tag_model_frame_source(result, data_value)
 }
 
 basehaz <- function(fit, newdata, centered = TRUE) {
@@ -14862,10 +14898,15 @@ model.matrix.survival_py_model <- function(object, ...) {
 model.frame.survival_py_model <- function(formula, ...) {
   columns <- .call_r_api("model_frame", formula, ...)
   columns <- lapply(columns, .as_model_frame_column)
-  as.data.frame(columns, ...)
+  frame <- as.data.frame(columns, ...)
+  .restore_r_column_classes(
+    frame,
+    attr(formula, ".survival_py_model_frame_source", exact = TRUE)
+  )
 }
 
 model.frame.survival_py_survfit <- function(formula, ...) {
+  source <- attr(formula, ".survival_py_model_frame_source", exact = TRUE)
   object <- formula
   if (.is_grouped_survival_py_survfit(object)) {
     if (length(object) == 0L) {
@@ -14875,7 +14916,8 @@ model.frame.survival_py_survfit <- function(formula, ...) {
   }
   columns <- .call_r_api("model_frame", object, ...)
   columns <- lapply(columns, .as_model_frame_column)
-  as.data.frame(columns, ...)
+  frame <- as.data.frame(columns, ...)
+  .restore_r_column_classes(frame, source)
 }
 
 fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {

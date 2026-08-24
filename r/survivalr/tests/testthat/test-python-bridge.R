@@ -11954,6 +11954,127 @@ test_that("formula row selection follows R model-frame semantics", {
   )
 })
 
+test_that("formula functions resolve omitted data from their environments", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  formula_env <- list2env(
+    list(
+      env_time = 1:10,
+      env_status = c(1, 1, 0, 1, 1, 0, 1, 0, 1, 1),
+      env_group = factor(rep(c("control", "treated"), 5L)),
+      env_x = c(0.1, 0.4, 0.2, 0.8, 1.1, 0.7, 1.5, 1.2, 0.5, 1.7),
+      env_weights = c(1, 2, 1, 1.5, 0.5, 2, 1, 1, 1.5, 0.75),
+      env_keep = c(FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE)
+    ),
+    parent = environment()
+  )
+  cox_formula <- stats::as.formula(
+    "Surv(env_time, env_status) ~ env_x",
+    env = formula_env
+  )
+  curve_formula <- stats::as.formula(
+    "Surv(env_time, env_status) ~ env_group",
+    env = formula_env
+  )
+  reference_cox_formula <- stats::as.formula(
+    "survival::Surv(env_time, env_status) ~ env_x",
+    env = formula_env
+  )
+  reference_curve_formula <- stats::as.formula(
+    "survival::Surv(env_time, env_status) ~ env_group",
+    env = formula_env
+  )
+
+  bridged_cox <- coxph(
+    cox_formula,
+    weights = formula_env$env_weights,
+    subset = formula_env$env_keep,
+    model = TRUE
+  )
+  reference_cox <- survival::coxph(
+    reference_cox_formula,
+    weights = formula_env$env_weights,
+    subset = formula_env$env_keep,
+    model = TRUE
+  )
+  expect_equal(coef(bridged_cox), coef(reference_cox), tolerance = 1e-8)
+  expect_equal(
+    model.frame(bridged_cox)$env_x,
+    model.frame(reference_cox)$env_x
+  )
+
+  bridged_survreg <- survreg(
+    cox_formula,
+    weights = formula_env$env_weights,
+    subset = formula_env$env_keep,
+    model = TRUE
+  )
+  reference_survreg <- survival::survreg(
+    reference_cox_formula,
+    weights = formula_env$env_weights,
+    subset = formula_env$env_keep,
+    model = TRUE
+  )
+  expect_equal(
+    coef(bridged_survreg),
+    coef(reference_survreg),
+    tolerance = 1e-8
+  )
+  expect_equal(
+    model.frame(bridged_survreg)$env_x,
+    model.frame(reference_survreg)$env_x
+  )
+
+  bridged_survfit <- survfit.formula(
+    curve_formula,
+    weights = formula_env$env_weights,
+    subset = formula_env$env_keep,
+    model = TRUE
+  )
+  reference_survfit_formula <- get(
+    "survfit.formula",
+    envir = asNamespace("survival")
+  )
+  reference_survfit <- reference_survfit_formula(
+    reference_curve_formula,
+    weights = formula_env$env_weights,
+    subset = formula_env$env_keep,
+    model = TRUE
+  )
+  reference_survfit$model <- stats::model.frame.default(
+    reference_curve_formula,
+    weights = formula_env$env_weights,
+    subset = formula_env$env_keep
+  )
+  fields <- c(
+    "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz"
+  )
+  bridged_frame <- as.data.frame(bridged_survfit)[c("strata", fields)]
+  reference_frame <- data.frame(
+    strata = rep(
+      sub("^env_group=", "", names(reference_survfit$strata)),
+      reference_survfit$strata
+    )
+  )
+  for (field in fields) {
+    reference_frame[[field]] <- reference_survfit[[field]]
+  }
+  expect_equal(
+    bridged_frame,
+    reference_frame[c("strata", fields)],
+    tolerance = 1e-8
+  )
+  expect_equal(
+    model.frame(bridged_survfit)$env_group,
+    model.frame(reference_survfit)$env_group
+  )
+})
+
 test_that("Fitted-model concordance supports joint Cox and survreg comparisons", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
