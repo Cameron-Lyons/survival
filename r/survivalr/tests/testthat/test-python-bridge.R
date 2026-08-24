@@ -18632,3 +18632,48 @@ test_that("multi-state Cox tied curve types match survival", {
     expect_equal(bridged_curve$pstate, reference_curve$pstate, tolerance = 1e-12)
   }
 })
+
+test_that("survfit0 ignores extra arguments like survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  time <- c(1, 2, 3, 4, 5)
+  status <- c(1, 0, 1, 1, 0)
+  bridged <- survfit(Surv(time, status))
+  reference_survfit <- getS3method(
+    "survfit",
+    "formula",
+    envir = asNamespace("survival")
+  )
+  reference <- reference_survfit(survival::Surv(time, status) ~ 1)
+
+  bridged_default <- as.list(survfit0(bridged))
+  bridged_extra <- as.list(survfit0(
+    bridged,
+    "unused positional argument",
+    unused_named = 42,
+    unused_lazy = stop("extra arguments must not be evaluated")
+  ))
+  reference_extra <- survival::survfit0(
+    reference,
+    "unused positional argument",
+    unused_named = 42,
+    unused_lazy = stop("extra arguments must not be evaluated")
+  )
+
+  expect_identical(bridged_extra, bridged_default)
+  expect_identical(reference_extra, survival::survfit0(reference))
+  for (field in c(
+    "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz"
+  )) {
+    expect_equal(
+      bridged_extra[[field]],
+      reference_extra[[field]],
+      tolerance = 1e-12,
+      info = paste("survfit0 extra-argument field", field)
+    )
+  }
+})

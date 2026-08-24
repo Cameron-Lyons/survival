@@ -11655,7 +11655,6 @@ survfit0 <- function(x, ...) {
   .call_r_api(
     "survfit0",
     x,
-    ...,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
 }
