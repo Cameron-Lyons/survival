@@ -15309,12 +15309,42 @@ aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
   if (length(list(...)) > 0L) {
     stop("additional FUN arguments are not supported", call. = FALSE)
   }
-  .call_r_api(
+  groups <- .survival_py_survfit_aggregate_groups(by, data_count)
+  result <- .call_r_api(
     "aggregate_survfit_result",
     x,
-    groups = .survival_py_survfit_aggregate_groups(by, data_count),
+    groups = groups,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
+  if (
+    inherits(x, "survival.r_api.CoxSurvfitResult") &&
+      all(c("strata", "data") %in% names(dims))
+  ) {
+    fields <- .as_survival_py_cox_survfit_list(x)
+    survival_matrix <- fields$surv
+    if (is.null(groups)) {
+      fields$surv <- rowMeans(survival_matrix)
+      aggregate_count <- 1L
+    } else {
+      aggregate_count <- max(groups)
+      fields$surv <- vapply(seq_len(aggregate_count), function(group) {
+        rowMeans(survival_matrix[, groups == group, drop = FALSE])
+      }, numeric(nrow(survival_matrix)))
+      colnames(fields$surv) <- as.character(seq_len(aggregate_count))
+    }
+    fields <- fields[intersect(
+      c(
+        "n", "time", "n.risk", "n.event", "n.censor", "strata",
+        "surv", "std.chaz", "start.time"
+      ),
+      names(fields)
+    )]
+    attr(result, ".survival_py_data_count") <- aggregate_count
+    attr(result, ".survival_py_strata_count") <- as.integer(dims[["strata"]])
+    attr(result, ".survival_py_curve_names") <- as.character(seq_len(aggregate_count))
+    attr(result, ".survival_py_subset_fields") <- fields
+  }
+  result
 }
 
 as.list.survival_py_survfit <- function(x, ...) {
@@ -15795,7 +15825,9 @@ plot.survival_py_cox_zph <- function(x, resid = TRUE, se = TRUE, df = 4,
       result <- .wrap_python(
         .python_attr("_subset_survfit_cox")(
           x,
-          as.list(as.integer(curve_indices - 1L))
+          as.list(as.integer(curve_indices - 1L)),
+          data_count = as.integer(length(data_indices)),
+          strata_count = as.integer(length(strata_indices))
         ),
         c("survival_py_survfit", "survival_py_object")
       )

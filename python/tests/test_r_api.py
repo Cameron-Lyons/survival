@@ -6620,6 +6620,54 @@ def test_aggregate_survfit_result_averages_cox_prediction_curves():
         survival.r_api.aggregate_survfit_result(curves, groups=[0, 1, 1])
 
 
+def test_aggregate_survfit_result_averages_profiles_within_each_stratum():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 1, 0, 1, 0, 1, 0, 1],
+        "x": [float(index) for index in range(1, 9)],
+        "group": ["a", "b"] * 4,
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x + strata(group)",
+        data=data,
+        initial_beta=[0.1],
+        max_iter=0,
+    )
+    curves = survival.survfit(fit, newdata={"x": [2.0, 3.0]})
+
+    averaged = survival.r_api.aggregate_survfit_result(curves)
+    assert averaged.data_count == 1
+    assert averaged.strata_count == 2
+    assert averaged.strata == [0, 1]
+    assert averaged.strata_labels == ["a", "b"]
+    assert len(averaged.n_risk) == len(averaged.curve_time_indices or []) == 2
+    for stratum, actual in enumerate(averaged.surv):
+        expected = [
+            sum(values) / 2.0
+            for values in zip(
+                curves.surv[stratum * 2],
+                curves.surv[stratum * 2 + 1],
+                strict=True,
+            )
+        ]
+        assert actual == pytest.approx(expected, nan_ok=True)
+
+    regrouped = survival.r_api.aggregate_survfit_result(curves, groups=[2, 1])
+    assert regrouped.data_count == 2
+    assert regrouped.strata_count == 2
+    assert regrouped.strata == [0, 0, 1, 1]
+    assert regrouped.strata_labels == ["a", "a", "b", "b"]
+    for stratum in range(2):
+        assert regrouped.surv[stratum * 2] == pytest.approx(
+            curves.surv[stratum * 2 + 1],
+            nan_ok=True,
+        )
+        assert regrouped.surv[stratum * 2 + 1] == pytest.approx(
+            curves.surv[stratum * 2],
+            nan_ok=True,
+        )
+
+
 def test_survfit_counting_id_reports_entry_counts_without_artificial_censors():
     response = survival.Surv(
         [0.0, 10.0, 25.0, 0.0, 5.0],

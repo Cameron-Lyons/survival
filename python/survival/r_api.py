@@ -17758,6 +17758,108 @@ def _cox_survfit_from_aggregates(
     )
 
 
+def _aggregate_strata_data_cox_survfit(
+    result: CoxSurvfitResult,
+    groups: Any | None,
+    weights: Any | None,
+) -> CoxSurvfitResult:
+    if result.data_count is None or result.strata_count is None:
+        raise AssertionError("strata-by-data Cox dimensions are missing")
+    data_count = int(result.data_count)
+    strata_count = int(result.strata_count)
+    curve_count = len(result.surv)
+    if data_count <= 0 or strata_count <= 0 or curve_count != data_count * strata_count:
+        raise ValueError("Cox survfit strata-by-data dimensions are inconsistent")
+
+    curve_weights = _float_vector(weights, "weights") if weights is not None else None
+    if curve_weights is not None and len(curve_weights) != data_count:
+        raise ValueError("weights must have same length as number of data curves")
+    group_codes = None
+    if groups is not None:
+        group_codes = _integer_code_vector(groups, "groups", "integer group codes")
+        if len(group_codes) != data_count:
+            raise ValueError("groups must have same length as number of data curves")
+        if any(code < 1 for code in group_codes):
+            raise ValueError("groups must use positive integer group codes")
+    aggregate_codes = [1] if group_codes is None else sorted(set(group_codes))
+    aggregate_count = len(aggregate_codes)
+
+    aggregates: list[Any] = []
+    linear_predictors: list[float] = []
+    for stratum_index in range(strata_count):
+        start = stratum_index * data_count
+        stop = start + data_count
+        stratum_aggregates = _core.aggregate_shared_survfit(
+            result.time,
+            result.surv[start:stop],
+            result.std_err[start:stop] if result.std_err else None,
+            curve_weights,
+            group_codes,
+        )
+        if len(stratum_aggregates) != aggregate_count:
+            raise AssertionError("Cox survfit aggregate counts are inconsistent")
+        aggregates.extend(stratum_aggregates)
+        for code in aggregate_codes:
+            members = (
+                list(range(data_count))
+                if group_codes is None
+                else [index for index, value in enumerate(group_codes) if value == code]
+            )
+            member_weights = (
+                None if curve_weights is None else [curve_weights[index] for index in members]
+            )
+            linear_predictors.append(
+                _weighted_average(
+                    [result.linear_predictors[start + index] for index in members],
+                    member_weights,
+                )
+            )
+
+    def repeated_strata_values(values: list[Any], name: str) -> list[Any]:
+        if not values:
+            return []
+        if len(values) != curve_count:
+            raise ValueError(f"Cox survfit {name} fields have inconsistent lengths")
+        return [
+            (
+                list(values[stratum_index * data_count])
+                if isinstance(values[stratum_index * data_count], list)
+                else values[stratum_index * data_count]
+            )
+            for stratum_index in range(strata_count)
+            for _aggregate_index in range(aggregate_count)
+        ]
+
+    strata = repeated_strata_values(result.strata or [], "strata")
+    strata_labels = repeated_strata_values(result.strata_labels or [], "strata-label")
+    curve_time_indices = repeated_strata_values(
+        result.curve_time_indices or [],
+        "time-index",
+    )
+    source = replace(
+        result,
+        n=repeated_strata_values(result.n, "sample-size"),
+        n_risk=repeated_strata_values(result.n_risk, "number-at-risk"),
+        n_event=repeated_strata_values(result.n_event, "number-of-events"),
+        n_censor=repeated_strata_values(result.n_censor, "number-censored"),
+    )
+    aggregated = _cox_survfit_from_aggregates(source, aggregates, linear_predictors)
+    return replace(
+        aggregated,
+        std_err=[],
+        log_std_err=[],
+        conf_lower=[],
+        conf_upper=[],
+        conf_type=None,
+        conf_level=None,
+        strata=strata or None,
+        strata_labels=strata_labels or None,
+        curve_time_indices=curve_time_indices or None,
+        data_count=aggregate_count,
+        strata_count=strata_count,
+    )
+
+
 def aggregate_survfit_result(
     result: CoxSurvfitResult | SurvfitMultiStateCoxResult | Mapping[Any, Any],
     groups: Any | None = None,
@@ -17861,6 +17963,8 @@ def aggregate_survfit_result(
     n_curves = len(result.surv)
     if len(result.cumhaz) != n_curves or len(result.linear_predictors) != n_curves:
         raise ValueError("Cox survfit result has inconsistent curve counts")
+    if result.data_count is not None and result.strata_count is not None:
+        return _aggregate_strata_data_cox_survfit(result, groups, weights)
     if n_curves == 0:
         return CoxSurvfitResult(
             time=[float(value) for value in result.time],
@@ -22697,6 +22801,8 @@ def _subset_survfit_multistate(
 def _subset_survfit_cox(
     result: CoxSurvfitResult,
     curve_indices: Any,
+    data_count: int | None = None,
+    strata_count: int | None = None,
 ) -> CoxSurvfitResult:
     if not isinstance(result, CoxSurvfitResult):
         raise TypeError("Cox survfit subsetting requires a fitted Cox survival curve")
@@ -22750,6 +22856,8 @@ def _subset_survfit_cox(
         n_risk=select_counts(result.n_risk, "number-at-risk"),
         n_event=select_counts(result.n_event, "number-of-events"),
         n_censor=select_counts(result.n_censor, "number-censored"),
+        data_count=data_count,
+        strata_count=strata_count,
     )
 
 

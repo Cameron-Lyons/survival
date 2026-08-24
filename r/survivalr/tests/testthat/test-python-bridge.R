@@ -14658,6 +14658,40 @@ test_that("stratified Cox profiles without strata expand across every baseline",
     "no 'dimnames' attribute for array",
     fixed = TRUE
   )
+
+  for (aggregate_groups in list(NULL, c("lo", "hi"), c("same", "same"))) {
+    bridged_aggregate <- if (is.null(aggregate_groups)) {
+      aggregate(bridged_profiles)
+    } else {
+      aggregate(bridged_profiles, by = aggregate_groups)
+    }
+    reference_aggregate <- if (is.null(aggregate_groups)) {
+      aggregate(reference_profiles)
+    } else {
+      aggregate(reference_profiles, by = aggregate_groups)
+    }
+    expect_identical(dim(bridged_aggregate), dim(reference_aggregate))
+    expect_identical(
+      names(bridged_aggregate),
+      setdiff(names(reference_aggregate), c("newdata", "call"))
+    )
+    for (field in c(
+      "n", "time", "n.risk", "n.event", "n.censor", "strata",
+      "surv", "cumhaz", "std.err", "std.chaz", "lower", "upper"
+    )) {
+      expect_equal(
+        bridged_aggregate[[field]],
+        reference_aggregate[[field]],
+        tolerance = 1e-12,
+        info = paste("strata-by-data aggregate field", field)
+      )
+    }
+    expect_equal(
+      quantile(bridged_aggregate, probs = c(0, 0.5), conf.int = TRUE),
+      quantile(reference_aggregate, probs = c(0, 0.5), conf.int = TRUE),
+      tolerance = 1e-12
+    )
+  }
 })
 
 test_that("multi-state survfit tables and summaries agree with R survival", {
