@@ -10409,6 +10409,50 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
     se.fit <- FALSE
   }
   dots <- list(...)
+  formula_terms <- tryCatch(terms(formula), error = function(condition) NULL)
+  if (!multi_state_fit && !is.null(formula_terms)) {
+    specials <- attr(formula_terms, "specials")
+    if (length(specials$tt) > 0L) {
+      stop(
+        "The survfit function can not process coxph models with a tt term",
+        call. = FALSE
+      )
+    }
+    factor_matrix <- attr(formula_terms, "factors")
+    if (length(specials$strata) > 0L) {
+      for (row in specials$strata) {
+        factor_matrix <- factor_matrix[
+          ,
+          factor_matrix[row, , drop = TRUE] == 0L,
+          drop = FALSE
+        ]
+      }
+    }
+    if (any(factor_matrix > 1L)) {
+      stop(
+        paste0(
+          "not able to create a curve for models that contain an interaction ",
+          "without the lower order effect"
+        ),
+        call. = FALSE
+      )
+    }
+  }
+  if (
+    !multi_state_fit &&
+      is.null(newdata) &&
+      !is.null(formula_terms) &&
+      any(attr(formula_terms, "order") > 1L)
+  ) {
+    warning(
+      paste0(
+        "the model contains interactions; the default curve based on columm means of ",
+        "the X matrix is almost certainly not useful. Consider adding a newdata argument."
+      ),
+      call. = FALSE
+    )
+  }
+  dots$`_formula_guarded` <- TRUE
   if ("individual" %in% names(dots)) {
     warning("the `id' option supersedes `individual'", call. = FALSE)
     individual <- dots$individual
@@ -10432,7 +10476,7 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   ) {
     frame_data <- as.data.frame(newdata)
     individual_curve <- "id" %in% names(dots)
-    prediction_terms <- tryCatch(terms(formula), error = function(condition) NULL)
+    prediction_terms <- formula_terms
     if (!is.null(prediction_terms)) {
       if (!individual_curve) {
         prediction_terms <- stats::delete.response(prediction_terms)

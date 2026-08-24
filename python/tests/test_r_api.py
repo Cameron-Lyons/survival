@@ -1,6 +1,7 @@
 import math
 import random
 import statistics
+import warnings
 from bisect import bisect_right
 from dataclasses import replace
 from datetime import date
@@ -22626,6 +22627,71 @@ def test_survfit_coxph_individual_omits_incomplete_response_id_and_covariates():
     assert actual.time == pytest.approx(expected.time)
     assert actual.surv[0] == pytest.approx(expected.surv[0])
     assert actual.cumhaz[0] == pytest.approx(expected.cumhaz[0])
+
+
+def test_survfit_coxph_enforces_reference_formula_interaction_guards():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 1, 0, 1, 0, 1, 0, 1],
+        "x": [float(index) for index in range(1, 9)],
+        "z": [0.0, 1.0] * 4,
+        "w": [0.0, 0.0, 1.0, 1.0] * 2,
+        "group": ["a", "b"] * 4,
+    }
+
+    for rhs in ("x:z", "x + x:z", "x + z + w + x:z + x:w + x:z:w"):
+        fit = survival.coxph(f"Surv(time, status) ~ {rhs}", data=data, max_iter=0)
+        with pytest.raises(ValueError, match="interaction without the lower order effect"):
+            survival.survfit(fit, newdata={"x": [1.0], "z": [0.0], "w": [1.0]})
+
+    hierarchical = survival.coxph(
+        "Surv(time, status) ~ x * z",
+        data=data,
+        max_iter=0,
+    )
+    with pytest.warns(RuntimeWarning, match="default curve based on columm means"):
+        default_curve = survival.survfit(hierarchical)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        selected_curve = survival.survfit(
+            hierarchical,
+            newdata={"x": [1.0], "z": [0.0]},
+        )
+    assert len(default_curve.surv) == len(selected_curve.surv) == 1
+
+    stratified = survival.coxph(
+        "Surv(time, status) ~ x * strata(group)",
+        data=data,
+        max_iter=0,
+    )
+    with (
+        pytest.warns(RuntimeWarning, match="default curve based on columm means"),
+        pytest.raises(ValueError, match="strata by covariate interaction"),
+    ):
+        survival.survfit(stratified)
+    assert len(
+        survival.survfit(
+            stratified,
+            newdata={"x": [1.0, 2.0], "group": ["a", "b"]},
+        ).surv
+    ) == 2
+
+
+def test_survfit_coxph_rejects_time_transform_models_like_reference():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 1, 0, 1, 0, 1, 0, 1],
+        "x": [float(index) for index in range(1, 9)],
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ tt(x)",
+        data=data,
+        tt=lambda values, *_args: values,
+        max_iter=0,
+    )
+
+    with pytest.raises(ValueError, match="can not process coxph models with a tt term"):
+        survival.survfit(fit)
 
 
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():

@@ -14363,6 +14363,99 @@ test_that("Cox survfit newdata omission matches survival for every na.action", {
   }
 })
 
+test_that("Cox survfit formula guards match survival", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = 1:8,
+    z = rep(c(0, 1), 4L),
+    group = factor(rep(c("a", "b"), 4L))
+  )
+  incomplete <- coxph(
+    Surv(time, status) ~ x:z,
+    data = data,
+    max_iter = 0
+  )
+  reference_incomplete <- survival::coxph(
+    survival::Surv(time, status) ~ x:z,
+    data = data,
+    iter.max = 0
+  )
+  expected_error <- "interaction without the lower order effect"
+  expect_error(survfit(incomplete), expected_error)
+  expect_error(survival::survfit(reference_incomplete), expected_error)
+
+  hierarchical <- coxph(
+    Surv(time, status) ~ x * z,
+    data = data,
+    max_iter = 0
+  )
+  reference_hierarchical <- survival::coxph(
+    survival::Surv(time, status) ~ x * z,
+    data = data,
+    iter.max = 0
+  )
+  expect_warning(
+    bridged_default <- survfit(hierarchical),
+    "model contains interactions"
+  )
+  expect_warning(
+    reference_default <- survival::survfit(reference_hierarchical),
+    "model contains interactions"
+  )
+  expect_equal(bridged_default$surv, reference_default$surv, tolerance = 1e-12)
+
+  newdata <- data.frame(x = c(1, 2), z = c(0, 1))
+  bridged_selected <- survfit(hierarchical, newdata = newdata)
+  reference_selected <- survival::survfit(reference_hierarchical, newdata = newdata)
+  expect_equal(bridged_selected$surv, reference_selected$surv, tolerance = 1e-12)
+
+  stratified <- coxph(
+    Surv(time, status) ~ x * strata(group),
+    data = data,
+    max_iter = 0
+  )
+  reference_stratified <- survival::coxph(
+    survival::Surv(time, status) ~ x * strata(group),
+    data = data,
+    iter.max = 0
+  )
+  expect_warning(
+    expect_error(survfit(stratified), "strata by covariate interaction"),
+    "model contains interactions"
+  )
+  expect_warning(
+    expect_error(
+      survival::survfit(reference_stratified),
+      "strata by covariate interaction"
+    ),
+    "model contains interactions"
+  )
+
+  transformed <- coxph(
+    Surv(time, status) ~ tt(x),
+    data = data,
+    tt = function(values, ...) values,
+    max_iter = 0
+  )
+  reference_transformed <- survival::coxph(
+    survival::Surv(time, status) ~ tt(x),
+    data = data,
+    tt = function(values, ...) values,
+    iter.max = 0
+  )
+  expected_tt_error <- "can not process coxph models with a tt term"
+  expect_error(survfit(transformed), expected_tt_error)
+  expect_error(survival::survfit(reference_transformed), expected_tt_error)
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

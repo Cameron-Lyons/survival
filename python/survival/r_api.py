@@ -18804,6 +18804,7 @@ def survfit(
     if _is_clogit_fit(response):
         raise ValueError("predicted survival curves are not defined for a clogit model")
 
+    formula_guarded = bool(kwargs.pop("_formula_guarded", False))
     is_multistate_cox_fit = isinstance(response, _FormulaFit) and response.multi_state is not None
     is_fitted_cox = (
         not isinstance(response, Surv | str)
@@ -18811,6 +18812,12 @@ def survfit(
         and hasattr(response, "means")
         and not is_multistate_cox_fit
     )
+    if is_fitted_cox:
+        _validate_cox_survfit_formula(
+            response,
+            newdata,
+            warn_interactions=not formula_guarded,
+        )
 
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, None)
     conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
@@ -25944,6 +25951,59 @@ def _cox_survfit_omit_missing_newdata(
         else _subset_sequence(id_arg, keep, "id")
     )
     return _subset_data(newdata, keep), filtered_id
+
+
+def _cox_survfit_design_factors(term: _DesignTerm) -> tuple[_CovariateTerm, ...]:
+    if isinstance(term, _InteractionDesignTerm):
+        return tuple(factor.term for factor in term.factors)
+    if isinstance(term, _PSplineDesignTerm | _NSKDesignTerm | _FrailtyDesignTerm):
+        return (term.formula.term,)
+    return (term.term,)
+
+
+def _validate_cox_survfit_formula(
+    fit: Any,
+    newdata: Any | None,
+    *,
+    warn_interactions: bool = True,
+) -> None:
+    if bool(getattr(fit, "time_transform_expanded", False)):
+        raise ValueError("The survfit function can not process coxph models with a tt term")
+    design = _formula_design_for_fit(fit)
+    if design is None:
+        return
+    factor_sets = [frozenset(_cox_survfit_design_factors(term)) for term in design.covariates]
+    ordinary_sets = {
+        factors
+        for factors in factor_sets
+        if not any(factor.strata_options is not None for factor in factors)
+    }
+    for factors in ordinary_sets:
+        if len(factors) < 2:
+            continue
+        for size in range(1, len(factors)):
+            if any(
+                frozenset(subset) not in ordinary_sets
+                for subset in combinations(factors, size)
+            ):
+                raise ValueError(
+                    "not able to create a curve for models that contain an interaction "
+                    "without the lower order effect"
+                )
+    interactions = [factors for factors in factor_sets if len(factors) > 1]
+    if newdata is None and interactions:
+        if warn_interactions:
+            warnings.warn(
+                "the model contains interactions; the default curve based on columm means of "
+                "the X matrix is almost certainly not useful. Consider adding a newdata argument.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        if any(
+            any(factor.strata_options is not None for factor in factors)
+            for factors in interactions
+        ):
+            raise ValueError("Models with strata by covariate interaction terms require newdata")
 
 
 def _linear_predictors_for_fit(
