@@ -14716,6 +14716,13 @@ test_that("stratified Cox profiles without strata expand across every baseline",
       )
     }
   }
+
+  plot_file <- tempfile(fileext = ".png")
+  grDevices::png(plot_file)
+  bridged_endpoints <- expect_warning(plot(bridged_profiles, conf.int = FALSE), NA)
+  reference_endpoints <- expect_warning(plot(reference_profiles, conf.int = FALSE), NA)
+  grDevices::dev.off()
+  expect_equal(bridged_endpoints, reference_endpoints, tolerance = 1e-12)
 })
 
 test_that("multi-state survfit tables and summaries agree with R survival", {

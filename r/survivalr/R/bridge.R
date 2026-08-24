@@ -9377,7 +9377,13 @@ confint.survival_py_survfit <- function(object, ...) {
   if (!all(c("time", "surv") %in% names(frame))) {
     stop("survfit plot requires time and survival estimates", call. = FALSE)
   }
-  group <- if ("strata" %in% names(frame)) {
+  group <- if (
+    inherits(x, "survival.r_api.CoxSurvfitResult") &&
+      "curve" %in% names(frame) &&
+      length(unique(frame$curve)) > 1L
+  ) {
+    frame$curve
+  } else if ("strata" %in% names(frame)) {
     frame$strata
   } else if ("curve" %in% names(frame) && length(unique(frame$curve)) > 1L) {
     frame$curve
