@@ -11609,10 +11609,16 @@ test_that("public helper signatures accept R-style named and positional calls", 
   )
   expect_identical(names(formals(basehaz)), names(formals(survival::basehaz)))
   expect_identical(names(formals(cox.zph)), names(formals(survival::cox.zph)))
+  expect_identical(names(formals(coxph)), names(formals(survival::coxph)))
   expect_identical(
     names(formals(coxph.detail)),
     names(formals(survival::coxph.detail))
   )
+  expect_identical(
+    names(formals(survfit.formula)),
+    names(formals(get("survfit.formula", envir = asNamespace("survival"))))
+  )
+  expect_identical(names(formals(survreg)), names(formals(survival::survreg)))
 
   data <- data.frame(
     time = 1:8,
@@ -11659,6 +11665,98 @@ test_that("public helper signatures accept R-style named and positional calls", 
     x = TRUE,
     y = TRUE
   )
+  case_weights <- c(1, 2, 1, 1.5, 0.5, 2, 1, 1)
+  bridged_positional_cox <- coxph(
+    Surv(time, status) ~ x,
+    data,
+    case_weights,
+    keep,
+    stats::na.omit
+  )
+  reference_positional_cox <- survival::coxph(
+    survival::Surv(time, status) ~ x,
+    data,
+    case_weights,
+    keep,
+    stats::na.omit
+  )
+  expect_equal(
+    coef(bridged_positional_cox),
+    coef(reference_positional_cox),
+    tolerance = 1e-8
+  )
+
+  bridged_positional_survfit <- survfit.formula(
+    Surv(time, status) ~ group,
+    data,
+    case_weights,
+    keep,
+    stats::na.omit
+  )
+  reference_survfit_formula <- get(
+    "survfit.formula",
+    envir = asNamespace("survival")
+  )
+  reference_positional_survfit <- reference_survfit_formula(
+    survival::Surv(time, status) ~ group,
+    data,
+    case_weights,
+    keep,
+    stats::na.omit
+  )
+  positional_survfit_fields <- c(
+    "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz"
+  )
+  bridged_positional_survfit_frame <- as.data.frame(
+    bridged_positional_survfit
+  )
+  reference_positional_survfit_frame <- data.frame(
+    strata = rep(
+      sub("^group=", "", names(reference_positional_survfit$strata)),
+      reference_positional_survfit$strata
+    )
+  )
+  for (field in positional_survfit_fields) {
+    reference_positional_survfit_frame[[field]] <-
+      reference_positional_survfit[[field]]
+  }
+  expect_equal(
+    bridged_positional_survfit_frame[
+      c("strata", positional_survfit_fields)
+    ],
+    reference_positional_survfit_frame[
+      c("strata", positional_survfit_fields)
+    ],
+    tolerance = 1e-8
+  )
+
+  bridged_positional_survreg <- survreg(
+    Surv(time, status) ~ x,
+    data,
+    case_weights,
+    keep,
+    stats::na.omit,
+    "weibull"
+  )
+  reference_positional_survreg <- survival::survreg(
+    survival::Surv(time, status) ~ x,
+    data,
+    case_weights,
+    keep,
+    stats::na.omit,
+    "weibull"
+  )
+  expect_equal(
+    coef(bridged_positional_survreg),
+    coef(reference_positional_survreg),
+    tolerance = 1e-8
+  )
+  expect_equal(
+    bridged_positional_survreg$scale,
+    reference_positional_survreg$scale,
+    tolerance = 1e-8
+  )
+
   newdata <- data.frame(x = 0.35, z = 1)
   expect_equal(
     unname(predict(bridged, newdata, type = "lp")),

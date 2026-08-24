@@ -519,8 +519,9 @@ untangle.specials(tt, special, order = 1)
 
 survfit(formula, ...)
 
-\method{survfit}{formula}(formula, data = NULL, ..., subset = NULL,
-  na.action = "fail")
+\method{survfit}{formula}(formula, data, weights, subset, na.action,
+  stype = 1, ctype = 1, id, cluster, robust, istate, timefix = TRUE,
+  etype, model = FALSE, error, entry = FALSE, time0 = FALSE, ...)
 
 \method{survfit}{character}(formula, data = NULL, ..., subset = NULL,
   na.action = "fail")
@@ -722,7 +723,10 @@ statefig(layout, connect, margin = 0.03, box = TRUE, cex = 1,
 
 strata(..., na.group = FALSE, shortlabel, sep = ", ")
 
-coxph(formula, data = NULL, ..., subset = NULL, na.action = "fail")
+coxph(formula, data, weights, subset, na.action, init, control,
+  ties = c("efron", "breslow", "exact"), singular.ok = TRUE,
+  robust, model = FALSE, x = FALSE, y = TRUE, tt, method = ties,
+  id, cluster, istate, statedata, nocenter = c(-1, 0, 1), ...)
 
 coxph.control(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
@@ -737,7 +741,9 @@ agexact.fit(x, y, strata, offset, init, control, weights, method,
 agreg.fit(x, y, strata, offset, init, control, weights, method,
   rownames, resid = TRUE, nocenter = NULL)
 
-survreg(formula, data = NULL, ..., subset = NULL, na.action = "fail")
+survreg(formula, data, weights, subset, na.action, dist = "weibull",
+  init = NULL, scale = 0, control, parms = NULL, model = FALSE,
+  x = FALSE, y = TRUE, robust = FALSE, cluster, score = FALSE, ...)
 
 dsurvreg(x, mean, scale = 1, distribution = "weibull", parms)
 
@@ -1097,6 +1103,13 @@ options handled by the native bridge.}
 \code{survival::survobrien}, or the time-axis transform for \code{cox.zph}.}
 \item{terms, singledf, global}{Logical controls for term grouping,
 single-degree-of-freedom tests, and the global test in \code{cox.zph}.}
+\item{singular.ok}{Logical Cox formula control for accepting singular model
+matrices.}
+\item{statedata}{Optional multi-state Cox state metadata passed through by
+formula fits.}
+\item{error}{Optional \code{survfit.formula} compatibility control passed to
+the fitted curve implementation.}
+\item{score}{Logical \code{survreg} control for retaining score information.}
 \item{nsmo, hr, plot}{Number of smoothing-grid points, hazard-ratio display
 flag, and drawing flag for \code{plot.survival_py_cox_zph}. Set
 \code{plot = FALSE} to return the smoothed curve data.}

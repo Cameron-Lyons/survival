@@ -322,6 +322,16 @@ if (getRversion() >= "2.15.1") {
   values
 }
 
+.formula_supplied_dots <- function(Call, argument_names) {
+  dots <- as.list(Call$...)
+  for (name in argument_names) {
+    if (name %in% names(Call)) {
+      dots[[name]] <- Call[[name]]
+    }
+  }
+  dots
+}
+
 .eval_formula_arg <- function(expr, missing_arg, data, env, vector = FALSE) {
   if (isTRUE(missing_arg)) {
     return(NULL)
@@ -10638,18 +10648,29 @@ survfit <- function(formula, ...) {
   }
 }
 
-survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
-  Call <- match.call()
+survfit.formula <- function(formula, data, weights, subset, na.action,
+                            stype = 1, ctype = 1, id, cluster, robust,
+                            istate, timefix = TRUE, etype, model = FALSE,
+                            error, entry = FALSE, time0 = FALSE, ...) {
+  Call <- match.call(expand.dots = FALSE)
+  data_value <- if (missing(data)) NULL else data
+  na_action_value <- if (missing(na.action)) "fail" else na.action
   omitted <- .survival_py_survfit_formula_na_action(
     Call,
     formula,
-    na.action,
+    na_action_value,
     parent.frame()
   )
-  dots <- match.call(expand.dots = FALSE)$...
+  dots <- .formula_supplied_dots(
+    Call,
+    c(
+      "weights", "stype", "ctype", "id", "cluster", "robust", "istate",
+      "timefix", "etype", "model", "error", "entry", "time0"
+    )
+  )
   evaluated_dots <- .eval_formula_dots(
     dots,
-    data,
+    data_value,
     parent.frame(),
     vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
@@ -10659,9 +10680,9 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
       list(
         "survfit",
         response = .as_formula_string(formula),
-        data = .as_python_data(data),
-        subset = subset,
-        `na.action` = .as_na_action(na.action)
+        data = .as_python_data(data_value),
+        subset = if (missing(subset)) NULL else subset,
+        `na.action` = .as_na_action(na_action_value)
       ),
       evaluated_dots,
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
@@ -12798,11 +12819,25 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
   frame
 }
 
-coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
-  dots <- match.call(expand.dots = FALSE)$...
+coxph <- function(formula, data, weights, subset, na.action, init, control,
+                  ties = c("efron", "breslow", "exact"), singular.ok = TRUE,
+                  robust, model = FALSE, x = FALSE, y = TRUE, tt,
+                  method = ties, id, cluster, istate, statedata,
+                  nocenter = c(-1, 0, 1), ...) {
+  Call <- match.call(expand.dots = FALSE)
+  data_value <- if (missing(data)) NULL else data
+  na_action_value <- if (missing(na.action)) "fail" else na.action
+  dots <- .formula_supplied_dots(
+    Call,
+    c(
+      "weights", "init", "control", "ties", "singular.ok", "robust",
+      "model", "x", "y", "tt", "method", "id", "cluster", "istate",
+      "statedata", "nocenter"
+    )
+  )
   evaluated_dots <- .eval_formula_dots(
     dots,
-    data,
+    data_value,
     parent.frame(),
     vector_args = c("weights", "offset", "strata", "cluster", "id", "istate")
   )
@@ -12818,10 +12853,10 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") 
       list(
         "coxph",
         response = .as_formula_string(formula),
-        data = .as_python_data(data),
-        subset = subset,
-        `na.action` = .as_na_action(na.action),
-        `_row_names` = if (is.data.frame(data)) row.names(data) else NULL
+        data = .as_python_data(data_value),
+        subset = if (missing(subset)) NULL else subset,
+        `na.action` = .as_na_action(na_action_value),
+        `_row_names` = if (is.data.frame(data_value)) row.names(data_value) else NULL
       ),
       evaluated_dots,
       list(.wrap = c("survival_py_coxph", "survival_py_model", "survival_py_object"))
@@ -13132,11 +13167,23 @@ rsurvreg <- function(n, mean, scale = 1, distribution = "weibull", parms) {
   dots
 }
 
-survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail") {
-  dots <- match.call(expand.dots = FALSE)$...
+survreg <- function(formula, data, weights, subset, na.action,
+                    dist = "weibull", init = NULL, scale = 0, control,
+                    parms = NULL, model = FALSE, x = FALSE, y = TRUE,
+                    robust = FALSE, cluster, score = FALSE, ...) {
+  Call <- match.call(expand.dots = FALSE)
+  data_value <- if (missing(data)) NULL else data
+  na_action_value <- if (missing(na.action)) "fail" else na.action
+  dots <- .formula_supplied_dots(
+    Call,
+    c(
+      "weights", "dist", "init", "scale", "control", "parms", "model",
+      "x", "y", "robust", "cluster", "score"
+    )
+  )
   evaluated_dots <- .eval_formula_dots(
     dots,
-    data,
+    data_value,
     parent.frame(),
     vector_args = c("weights", "offset", "cluster")
   )
@@ -13147,9 +13194,9 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = "fail"
       list(
         "survreg",
         response = .as_formula_string(formula),
-        data = .as_python_data(data),
-        subset = subset,
-        `na.action` = .as_na_action(na.action)
+        data = .as_python_data(data_value),
+        subset = if (missing(subset)) NULL else subset,
+        `na.action` = .as_na_action(na_action_value)
       ),
       evaluated_dots,
       list(.wrap = c("survival_py_survreg", "survival_py_model", "survival_py_object"))
