@@ -1483,6 +1483,8 @@ class CoxSurvfitResult:
     conf_type: str | None = None
     conf_level: float | None = None
     log_std_err: list[list[float]] = field(default_factory=list)
+    data_count: int | None = None
+    strata_count: int | None = None
 
     def __iter__(self):
         yield self.time
@@ -17488,6 +17490,8 @@ def _survfit0_cox_result(
         conf_type=result.conf_type,
         conf_level=result.conf_level,
         model=result.model,
+        data_count=result.data_count,
+        strata_count=result.strata_count,
     )
 
 
@@ -18005,6 +18009,8 @@ def _survfit_without_standard_errors(result: Any) -> Any:
             n_event=result.n_event,
             n_censor=result.n_censor,
             model=result.model,
+            data_count=result.data_count,
+            strata_count=result.strata_count,
         )
     if isinstance(result, Mapping):
         return {label: _survfit_without_standard_errors(curve) for label, curve in result.items()}
@@ -18107,6 +18113,8 @@ def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
             conf_type=result.conf_type,
             conf_level=result.conf_level,
             model=model_frame,
+            data_count=result.data_count,
+            strata_count=result.strata_count,
         )
     if isinstance(result, Mapping):
         return {
@@ -19033,6 +19041,14 @@ def survfit(
                     ctype=computation.ctype,
                 )
             else:
+                rows, offsets, curve_strata, data_count, strata_count = (
+                    _cox_survfit_expand_missing_strata(
+                        response,
+                        newdata,
+                        rows,
+                        offsets,
+                    )
+                )
                 result = _cox_survfit_result(
                     response,
                     rows,
@@ -19047,6 +19063,9 @@ def survfit(
                     compute_confidence=include_se,
                     ctype=computation.ctype,
                     stype=computation.stype,
+                    curve_strata=curve_strata,
+                    data_count=data_count,
+                    strata_count=strata_count,
                 )
             return (
                 _survfit_with_model_frame(result, _cox_survfit_model_frame(response, newdata))
@@ -25925,9 +25944,10 @@ def _cox_survfit_omit_missing_newdata(
         return newdata, id_arg
     n = _formula_design_row_count(newdata, design)
     columns = _formula_design_columns(design)
-    for factor in design.strata_factors:
-        _append_unique(columns, _covariate_term_columns(factor))
-    _append_unique(columns, list(design.strata))
+    strata_columns = _cox_survfit_strata_columns(design)
+    available = set(_data_column_names(newdata) or ())
+    if all(column in available for column in strata_columns):
+        _append_unique(columns, strata_columns)
     if individual:
         _append_unique(columns, list(design.response.columns))
     if isinstance(id_arg, str):
@@ -25951,6 +25971,58 @@ def _cox_survfit_omit_missing_newdata(
         else _subset_sequence(id_arg, keep, "id")
     )
     return _subset_data(newdata, keep), filtered_id
+
+
+def _cox_survfit_strata_columns(design: _FormulaDesign) -> list[str]:
+    columns: list[str] = []
+    for factor in design.strata_factors:
+        _append_unique(columns, _covariate_term_columns(factor))
+    _append_unique(columns, list(design.strata))
+    return columns
+
+
+def _cox_survfit_expand_missing_strata(
+    fit: Any,
+    newdata: Any | None,
+    rows: list[list[float]] | None,
+    offsets: list[float] | None,
+) -> tuple[
+    list[list[float]] | None,
+    list[float] | None,
+    list[int] | None,
+    int | None,
+    int | None,
+]:
+    design = _formula_design_for_fit(fit)
+    if (
+        design is None
+        or not design.strata
+        or newdata is None
+        or rows is None
+        or not (isinstance(newdata, Mapping) or hasattr(newdata, "columns"))
+    ):
+        return rows, offsets, None, None, None
+    strata_columns = _cox_survfit_strata_columns(design)
+    available = set(_data_column_names(newdata) or ())
+    if strata_columns and all(column in available for column in strata_columns):
+        return rows, offsets, None, None, None
+    model = _unwrap_formula_fit(fit)
+    event_times = getattr(model, "event_times", None)
+    if event_times is None:
+        return rows, offsets, None, None, None
+    training_strata = _cox_training_strata(model, len(event_times))
+    unique_strata = sorted(set(training_strata))
+    if len(unique_strata) <= 1:
+        return rows, offsets, None, None, None
+    data_count = len(rows)
+    expanded_rows = [list(row) for _stratum in unique_strata for row in rows]
+    expanded_offsets = (
+        None
+        if offsets is None
+        else [float(offset) for _stratum in unique_strata for offset in offsets]
+    )
+    curve_strata = [stratum for stratum in unique_strata for _row in rows]
+    return expanded_rows, expanded_offsets, curve_strata, data_count, len(unique_strata)
 
 
 def _cox_survfit_design_factors(term: _DesignTerm) -> tuple[_CovariateTerm, ...]:
@@ -27049,10 +27121,15 @@ def _cox_survival_curve(
     offsets: list[float] | None,
     centered: bool,
     newdata: Any | None,
+    curve_strata: list[int] | None = None,
 ) -> tuple[list[float], list[list[float]]]:
     with_strata = getattr(fit, "survival_curve_with_strata", None)
     if rows is not None and with_strata is not None:
-        prediction_strata = _cox_prediction_strata(fit, newdata, len(rows))
+        prediction_strata = (
+            curve_strata
+            if curve_strata is not None
+            else _cox_prediction_strata(fit, newdata, len(rows))
+        )
         if offsets is None:
             times, curves = with_strata(rows, prediction_strata, centered)
             return [float(value) for value in times], curves
@@ -27115,6 +27192,7 @@ def _cox_survfit_curve_strata(
     rows: list[list[float]] | None,
     newdata: Any | None,
     n_curves: int,
+    curve_strata: list[int] | None = None,
 ) -> list[int] | None:
     if getattr(fit, "basehaz_with_strata", None) is None:
         return None
@@ -27128,7 +27206,11 @@ def _cox_survfit_curve_strata(
         if n_curves == len(unique_strata):
             return unique_strata
         return None
-    prediction_strata = _cox_prediction_strata(fit, newdata, len(rows))
+    prediction_strata = (
+        curve_strata
+        if curve_strata is not None
+        else _cox_prediction_strata(fit, newdata, len(rows))
+    )
     return prediction_strata if len(prediction_strata) == n_curves else None
 
 
@@ -27190,6 +27272,8 @@ def _cox_survfit_with_censor_times(
         log_std_err=result.log_std_err,
         conf_lower=result.conf_lower,
         conf_upper=result.conf_upper,
+        data_count=result.data_count,
+        strata_count=result.strata_count,
     )
 
 
@@ -27227,6 +27311,8 @@ def _cox_survfit_conditioned(
         log_std_err=result.log_std_err,
         conf_lower=result.conf_lower,
         conf_upper=result.conf_upper,
+        data_count=result.data_count,
+        strata_count=result.strata_count,
     )
 
 
@@ -27688,19 +27774,35 @@ def _cox_survfit_result(
     compute_confidence: bool = True,
     ctype: int | None = None,
     stype: int = 2,
+    curve_strata: list[int] | None = None,
+    data_count: int | None = None,
+    strata_count: int | None = None,
 ) -> CoxSurvfitResult:
-    times, curves = _cox_survival_curve(fit, rows, offsets, centered, newdata)
+    times, curves = _cox_survival_curve(
+        fit,
+        rows,
+        offsets,
+        centered,
+        newdata,
+        curve_strata,
+    )
     center = _training_linear_predictor_center(fit) if centered else 0.0
     if rows is None:
         linear_predictors = [_cox_default_survfit_linear_predictor(fit)] * len(curves)
     else:
         linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
-    curve_strata = _cox_survfit_curve_strata(fit, rows, newdata, len(curves))
+    curve_strata = _cox_survfit_curve_strata(
+        fit,
+        rows,
+        newdata,
+        len(curves),
+        curve_strata,
+    )
     curve_strata_labels = None
     if curve_strata is not None:
         curve_strata_labels = (
             _cox_strata_labels_for_fit(fit, curve_strata)
-            if rows is None
+            if rows is None or data_count is not None
             else list(range(1, len(curve_strata) + 1))
         )
     basehaz_with_strata = getattr(fit, "basehaz_with_strata", None)
@@ -27732,6 +27834,8 @@ def _cox_survfit_result(
         centered=centered,
         strata=curve_strata,
         strata_labels=curve_strata_labels,
+        data_count=data_count,
+        strata_count=strata_count,
     )
     if ctype is None:
         selected_ctype = 2 if _cox_survfit_baseline_method(fit) == "efron" else 1

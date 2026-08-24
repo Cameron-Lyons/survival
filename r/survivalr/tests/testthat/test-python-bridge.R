@@ -14538,6 +14538,71 @@ test_that("Cox survfit newdata shape rules match survival", {
   )
 })
 
+test_that("stratified Cox profiles without strata expand across every baseline", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  data <- data.frame(
+    time = 1:8,
+    status = c(1, 1, 0, 1, 0, 1, 0, 1),
+    x = 1:8,
+    group = factor(rep(c("a", "b"), 4L))
+  )
+  bridged <- coxph(
+    Surv(time, status) ~ x + strata(group),
+    data = data,
+    init = list(0.1),
+    max_iter = 0
+  )
+  reference <- survival::coxph(
+    survival::Surv(time, status) ~ x + strata(group),
+    data = data,
+    init = 0.1,
+    iter.max = 0
+  )
+  profiles <- data.frame(x = c(2, 3), row.names = c("first", "second"))
+  option_sets <- list(
+    list(),
+    list(stype = 1L, ctype = 2L),
+    list(censor = FALSE),
+    list(start.time = 2.5),
+    list(se.fit = FALSE)
+  )
+
+  for (options in option_sets) {
+    bridged_profiles <- do.call(survfit, c(list(bridged, newdata = profiles), options))
+    reference_profiles <- do.call(
+      survival::survfit,
+      c(list(reference, newdata = profiles), options)
+    )
+    expect_identical(dim(bridged_profiles), dim(reference_profiles))
+    expect_equal(bridged_profiles$strata, reference_profiles$strata)
+    for (field in c(
+      "n", "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz",
+      "std.err", "std.chaz", "lower", "upper"
+    )) {
+      expect_equal(
+        bridged_profiles[[field]],
+        reference_profiles[[field]],
+        tolerance = 1e-12
+      )
+    }
+  }
+
+  single_profile <- profiles[1L, , drop = FALSE]
+  bridged_single <- survfit(bridged, newdata = single_profile)
+  reference_single <- survival::survfit(reference, newdata = single_profile)
+  expect_identical(dim(bridged_single), dim(reference_single))
+  expect_equal(bridged_single$strata, reference_single$strata)
+  for (field in c("time", "surv", "cumhaz", "std.err", "lower", "upper")) {
+    expect_equal(bridged_single[[field]], reference_single[[field]], tolerance = 1e-12)
+  }
+})
+
 test_that("multi-state survfit tables and summaries agree with R survival", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")

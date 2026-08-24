@@ -8936,7 +8936,93 @@ xtfrm.survival_py_surv <- function(x) {
   has_confidence <- length(.result_field(x, "conf_lower")) > 0L ||
     isTRUE(attr(x, ".survival_py_empty_confint", exact = TRUE))
 
-  if (data_dimension) {
+  if (data_dimension && strata_dimension) {
+    data_count <- as.integer(dimensions[["data"]])
+    strata_count <- as.integer(dimensions[["strata"]])
+    if (curve_count != data_count * strata_count) {
+      stop("Cox survfit data-by-strata curve dimensions are inconsistent", call. = FALSE)
+    }
+    time <- .as_numeric_vector(.result_field(x, "time"))
+    curve_indices <- lapply(.result_field(x, "curve_time_indices"), function(values) {
+      as.integer(unlist(values, recursive = TRUE, use.names = FALSE)) + 1L
+    })
+    if (length(curve_indices) != curve_count) {
+      stop("Cox survfit data-by-strata time indices are inconsistent", call. = FALSE)
+    }
+    base_curves <- seq.int(1L, curve_count, by = data_count)
+    strata_lengths <- vapply(curve_indices[base_curves], length, integer(1L))
+    for (stratum in seq_len(strata_count)) {
+      members <- ((stratum - 1L) * data_count + 1L):(stratum * data_count)
+      if (!all(vapply(curve_indices[members], length, integer(1L)) == strata_lengths[[stratum]])) {
+        stop("Cox survfit profiles within a stratum have inconsistent times", call. = FALSE)
+      }
+    }
+    combined_time <- unlist(
+      lapply(base_curves, function(curve) time[curve_indices[[curve]]]),
+      use.names = FALSE
+    )
+    profile_names <- attr(x, ".survival_py_curve_names", exact = TRUE)
+    if (length(profile_names) != data_count) {
+      profile_names <- as.character(seq_len(data_count))
+    }
+    raw_labels <- .as_nullable_character_vector(.result_field(x, "strata_labels"))
+    strata_names <- if (length(raw_labels) == curve_count) {
+      raw_labels[base_curves]
+    } else {
+      as.character(seq_len(strata_count))
+    }
+
+    combine_profiles <- function(name) {
+      values <- .as_numeric_matrix(.result_field(x, name))
+      if (!identical(dim(values), c(curve_count, length(time)))) {
+        stop("Cox survfit data-by-strata field dimensions are inconsistent", call. = FALSE)
+      }
+      result <- matrix(0, nrow = length(combined_time), ncol = data_count)
+      cursor <- 0L
+      for (stratum in seq_len(strata_count)) {
+        for (profile in seq_len(data_count)) {
+          curve <- (stratum - 1L) * data_count + profile
+          indices <- curve_indices[[curve]]
+          rows <- cursor + seq_along(indices)
+          result[rows, profile] <- values[curve, indices]
+        }
+        cursor <- cursor + strata_lengths[[stratum]]
+      }
+      result
+    }
+    shared_by_stratum <- function(name) {
+      values <- .as_numeric_matrix(.result_field(x, name))
+      unlist(lapply(base_curves, function(curve) {
+        values[curve, curve_indices[[curve]]]
+      }), use.names = FALSE)
+    }
+
+    fields <- list()
+    if (has_counts) {
+      fields$n <- n_values[base_curves]
+    }
+    fields$time <- combined_time
+    if (has_counts) {
+      fields$n.risk <- shared_by_stratum("n_risk")
+      fields$n.event <- shared_by_stratum("n_event")
+      fields$n.censor <- shared_by_stratum("n_censor")
+    }
+    fields$surv <- combine_profiles("estimate")
+    colnames(fields$surv) <- profile_names
+    fields$cumhaz <- combine_profiles("cumhaz")
+    if (has_standard_errors) {
+      fields$std.err <- combine_profiles(standard_error_field)
+      fields$logse <- TRUE
+      if (has_cumulative_hazard_errors) {
+        fields$std.chaz <- combine_profiles("std_chaz")
+      }
+    }
+    if (has_confidence) {
+      fields$lower <- .survfit_cox_na_nan(combine_profiles("conf_lower"))
+      fields$upper <- .survfit_cox_na_nan(combine_profiles("conf_upper"))
+    }
+    fields$strata <- stats::setNames(as.integer(strata_lengths), strata_names)
+  } else if (data_dimension) {
     time <- .as_numeric_vector(.result_field(x, "time"))
     time_count <- length(time)
     fields <- list()
@@ -10409,7 +10495,10 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
     se.fit <- FALSE
   }
   dots <- list(...)
-  formula_terms <- tryCatch(terms(formula), error = function(condition) NULL)
+  formula_terms <- tryCatch(
+    terms(stats::formula(formula), specials = c("strata", "tt")),
+    error = function(condition) NULL
+  )
   if (!multi_state_fit && !is.null(formula_terms)) {
     specials <- attr(formula_terms, "specials")
     if (length(specials$tt) > 0L) {
@@ -10492,6 +10581,17 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
     individual_curve <- "id" %in% names(dots)
     prediction_terms <- formula_terms
     if (!is.null(prediction_terms)) {
+      strata_terms <- survival::untangle.specials(formula_terms, "strata")
+      if (length(strata_terms$terms) > 0L) {
+        strata_variables <- unique(unlist(lapply(strata_terms$vars, function(value) {
+          all.vars(str2lang(value))
+        })))
+        if (!all(strata_variables %in% names(frame_data))) {
+          prediction_terms <- prediction_terms[-strata_terms$terms]
+        }
+      }
+    }
+    if (!is.null(prediction_terms)) {
       if (!individual_curve) {
         prediction_terms <- stats::delete.response(prediction_terms)
       }
@@ -10545,12 +10645,23 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
   )
+  result_data_count <- .as_numeric_vector(.result_field(result, "data_count"))
+  result_strata_count <- .as_numeric_vector(.result_field(result, "strata_count"))
+  if (length(result_data_count) == 1L && length(result_strata_count) == 1L) {
+    attr(result, ".survival_py_data_count") <- as.integer(result_data_count)
+    attr(result, ".survival_py_strata_count") <- as.integer(result_strata_count)
+  }
   if (!is.null(prediction_data) && (is.data.frame(prediction_data) || is.matrix(prediction_data))) {
     curve_count <- length(.result_field(result, "surv"))
     if (is.null(curve_names)) {
       curve_names <- row.names(prediction_data)
     }
-    if (length(curve_names) == curve_count) {
+    expected_name_count <- if (length(result_data_count) == 1L) {
+      as.integer(result_data_count)
+    } else {
+      curve_count
+    }
+    if (length(curve_names) == expected_name_count) {
       attr(result, ".survival_py_curve_names") <- curve_names
     }
   }
@@ -15155,10 +15266,19 @@ dim.survival_py_survfit <- function(x) {
   }
 
   retained_data_count <- attr(x, ".survival_py_data_count", exact = TRUE)
+  retained_strata_count <- attr(x, ".survival_py_strata_count", exact = TRUE)
+  if (length(retained_data_count) == 1L && length(retained_strata_count) == 1L) {
+    if (as.integer(retained_data_count) == 1L) {
+      return(stats::setNames(as.integer(retained_strata_count), "strata"))
+    }
+    return(c(
+      strata = as.integer(retained_strata_count),
+      data = as.integer(retained_data_count)
+    ))
+  }
   if (length(retained_data_count) == 1L) {
     return(stats::setNames(as.integer(retained_data_count), "data"))
   }
-  retained_strata_count <- attr(x, ".survival_py_strata_count", exact = TRUE)
   if (length(retained_strata_count) == 1L) {
     if (is.na(retained_strata_count)) {
       return(NULL)

@@ -651,6 +651,8 @@ class CoxSurvfitResult:
     conf_type: str | None
     conf_level: float | None
     log_std_err: list[list[float]]
+    data_count: int | None
+    strata_count: int | None
     def __iter__(self): ...
     @property
     def curves(self) -> list[list[float]]: ...

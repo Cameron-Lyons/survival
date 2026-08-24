@@ -22694,6 +22694,52 @@ def test_survfit_coxph_rejects_time_transform_models_like_reference():
         survival.survfit(fit)
 
 
+def test_survfit_coxph_expands_profiles_without_strata_across_all_baselines():
+    data = {
+        "time": [float(index) for index in range(1, 9)],
+        "status": [1, 1, 0, 1, 0, 1, 0, 1],
+        "x": [float(index) for index in range(1, 9)],
+        "group": ["a", "b"] * 4,
+    }
+    fit = survival.coxph(
+        "Surv(time, status) ~ x + strata(group)",
+        data=data,
+        initial_beta=[0.1],
+        max_iter=0,
+    )
+    profiles = {"x": [2.0, 3.0]}
+    expanded_profiles = {
+        "x": [2.0, 3.0, 2.0, 3.0],
+        "group": ["a", "a", "b", "b"],
+    }
+
+    for options in ({}, {"stype": 1, "ctype": 2}, {"censor": False}):
+        actual = survival.survfit(fit, newdata=profiles, **options)
+        expected = survival.survfit(fit, newdata=expanded_profiles, **options)
+        assert actual.data_count == 2
+        assert actual.strata_count == 2
+        assert actual.strata == [0, 0, 1, 1]
+        assert actual.time == pytest.approx(expected.time)
+        for field in (
+            "surv",
+            "cumhaz",
+            "std_err",
+            "std_chaz",
+            "log_std_err",
+            "conf_lower",
+            "conf_upper",
+            "n_risk",
+            "n_event",
+            "n_censor",
+        ):
+            for actual_curve, expected_curve in zip(
+                getattr(actual, field),
+                getattr(expected, field),
+                strict=True,
+            ):
+                assert actual_curve == pytest.approx(expected_curve, nan_ok=True)
+
+
 def test_survfit_optimizer_coxph_defaults_to_fitted_means():
     data = _toy_data()
     fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, eps=1e-5)
