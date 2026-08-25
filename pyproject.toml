@@ -45,7 +45,7 @@ Issues = "https://github.com/Cameron-Lyons/survival/issues"
 [project.optional-dependencies]
 dev = [
   "pre-commit==4.6.2",
-  "ruff==0.16.3",
+  "ruff==0.16.4",
   "mypy==2.3.1",
 ]
 test = [
