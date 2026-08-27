@@ -1567,6 +1567,35 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(bridged_agreg_fit$first, reference_agreg_fit$first, tolerance = 1e-12)
   expect_equal(bridged_agreg_fit$info, reference_agreg_fit$info)
 
+  weighted_agreg_args <- list(
+    x = agreg_fit_x,
+    y = agreg_fit_y,
+    strata = NULL,
+    offset = c(0.1, -0.2, 0.05, 0, 0.15, -0.1),
+    init = c(0.35),
+    weights = c(0.5, 4, 1.25, 2.5, 0.75, 3),
+    method = "breslow",
+    rownames = as.character(seq_len(nrow(agreg_fit_x)))
+  )
+  bridged_weighted_agreg_fit <- do.call(
+    agreg.fit,
+    c(weighted_agreg_args, list(control = coxph.control(iter.max = 0)))
+  )
+  reference_weighted_agreg_fit <- do.call(
+    survival::agreg.fit,
+    c(weighted_agreg_args, list(control = survival::coxph.control(iter.max = 0)))
+  )
+  expect_equal(
+    bridged_weighted_agreg_fit$means,
+    reference_weighted_agreg_fit$means,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_weighted_agreg_fit$linear.predictors,
+    reference_weighted_agreg_fit$linear.predictors,
+    tolerance = 1e-12
+  )
+
   bridged_agexact_fit <- agexact.fit(
     agreg_fit_x,
     agreg_fit_y,
