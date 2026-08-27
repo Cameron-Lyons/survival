@@ -142,7 +142,7 @@ mod pseudo_bench {
         run(bencher, n, "cumhaz");
     }
 
-    #[divan::bench(args = [100, 500])]
+    #[divan::bench(args = [100, 500, 1000])]
     fn restricted_mean_time_grid(bencher: divan::Bencher, n: usize) {
         run(bencher, n, "rmst");
     }
