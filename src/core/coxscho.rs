@@ -86,81 +86,124 @@ pub(crate) fn coxscho(
     let start = &input.y[0..params.nused];
     let stop = &input.y[params.nused..2 * params.nused];
     let event = &input.y[2 * params.nused..3 * params.nused];
-    let mut covar_cols = Vec::with_capacity(params.nvar);
-    let mut remaining = covar;
-    for _ in 0..params.nvar {
-        let (col, rest) = remaining.split_at_mut(params.nused);
-        covar_cols.push(col);
-        remaining = rest;
-    }
     let (a, rest) = work.split_at_mut(params.nvar);
     let (a2, mean) = rest.split_at_mut(params.nvar);
-    let mut person = 0;
-    while person < params.nused {
-        if event[person] != 1.0 {
-            person += 1;
-            continue;
+    let mut entry_order = Vec::new();
+    let mut active = vec![false; params.nused];
+    let mut event_ranges = Vec::new();
+    let mut event_means = Vec::new();
+    let mut stratum_start = 0;
+
+    while stratum_start < params.nused {
+        let mut stratum_end = stratum_start;
+        while stratum_end + 1 < params.nused && input.strata[stratum_end] != 1 {
+            stratum_end += 1;
         }
-        let time = stop[person];
-        let mut deaths = 0.0;
+
+        entry_order.clear();
+        entry_order.extend(stratum_start..=stratum_end);
+        entry_order.sort_by(|&left, &right| {
+            start[left]
+                .total_cmp(&start[right])
+                .then_with(|| left.cmp(&right))
+        });
+        active[stratum_start..=stratum_end].fill(false);
+        event_ranges.clear();
+        event_means.clear();
+
         let mut denom = 0.0;
-        let mut efron_wt = 0.0;
-        for i in 0..params.nvar {
-            a[i] = 0.0;
-            a2[i] = 0.0;
-        }
-        let mut k = person;
-        while k < params.nused {
-            if start[k] < time {
-                let weight = input.score[k];
-                denom += weight;
-                for i in 0..params.nvar {
-                    a[i] += weight * covar_cols[i][k];
-                }
-                if stop[k] == time && event[k] == 1.0 {
-                    deaths += 1.0;
-                    efron_wt += weight;
-                    for i in 0..params.nvar {
-                        a2[i] += weight * covar_cols[i][k];
+        a.fill(0.0);
+        let mut entry_pos = 0;
+        let mut stop_pos = stratum_start;
+        let mut time_start = stratum_start;
+
+        while time_start <= stratum_end {
+            let time = stop[time_start];
+            let mut time_end = time_start;
+            while time_end < stratum_end && stop[time_end + 1] == time {
+                time_end += 1;
+            }
+
+            let death_count = (time_start..=time_end)
+                .filter(|&row| event[row] == 1.0)
+                .count();
+            if death_count > 0 {
+                while entry_pos < entry_order.len() && start[entry_order[entry_pos]] < time {
+                    let row = entry_order[entry_pos];
+                    entry_pos += 1;
+                    if active[row] {
+                        continue;
+                    }
+                    active[row] = true;
+                    let risk = input.score[row];
+                    denom += risk;
+                    for var in 0..params.nvar {
+                        a[var] += risk * covar[var * params.nused + row];
                     }
                 }
-            }
-            if input.strata[k] == 1 {
-                break;
-            }
-            k += 1;
-        }
-        for mean_i in mean.iter_mut().take(params.nvar) {
-            *mean_i = 0.0;
-        }
-        if deaths > 0.0 {
-            for k_death in 0..(deaths as usize) {
-                let temp = if params.method == 1 {
-                    (k_death as f64) / deaths
-                } else {
-                    0.0
-                };
-                for i in 0..params.nvar {
-                    let denominator = deaths * (denom - temp * efron_wt);
-                    if denominator != 0.0 {
-                        mean[i] += (a[i] - temp * a2[i]) / denominator;
+
+                while stop_pos <= stratum_end && stop[stop_pos] < time {
+                    let row = stop_pos;
+                    stop_pos += 1;
+                    if !active[row] {
+                        continue;
+                    }
+                    active[row] = false;
+                    let risk = input.score[row];
+                    denom -= risk;
+                    for var in 0..params.nvar {
+                        a[var] -= risk * covar[var * params.nused + row];
                     }
                 }
-            }
-        }
-        let mut k = person;
-        while k < params.nused && stop[k] == time {
-            if event[k] == 1.0 {
-                for i in 0..params.nvar {
-                    covar_cols[i][k] -= mean[i];
+
+                let deaths = death_count as f64;
+                let mut efron_wt = 0.0;
+                a2.fill(0.0);
+                for row in (time_start..=time_end).filter(|&row| event[row] == 1.0) {
+                    let risk = input.score[row];
+                    efron_wt += risk;
+                    for var in 0..params.nvar {
+                        a2[var] += risk * covar[var * params.nused + row];
+                    }
                 }
+
+                mean.fill(0.0);
+                for step in 0..death_count {
+                    let fraction = if params.method == 1 {
+                        step as f64 / deaths
+                    } else {
+                        0.0
+                    };
+                    let step_denom = deaths * (denom - fraction * efron_wt);
+                    if step_denom == 0.0 {
+                        continue;
+                    }
+                    for var in 0..params.nvar {
+                        mean[var] += (a[var] - fraction * a2[var]) / step_denom;
+                    }
+                }
+
+                let mean_offset = event_means.len();
+                event_means.extend_from_slice(mean);
+                event_ranges.push((time_start, time_end, mean_offset));
             }
-            person += 1;
-            if input.strata[k] == 1 {
+
+            if time_end == stratum_end {
                 break;
             }
-            k += 1;
+            time_start = time_end + 1;
         }
+
+        for &(time_start, time_end, mean_offset) in &event_ranges {
+            let event_mean = &event_means[mean_offset..mean_offset + params.nvar];
+            for row in (time_start..=time_end).filter(|&row| event[row] == 1.0) {
+                for (var, &mean_value) in event_mean.iter().enumerate() {
+                    covar[var * params.nused + row] -= mean_value;
+                }
+            }
+        }
+
+        stratum_start = stratum_end + 1;
     }
 }
 #[pyfunction]
@@ -197,6 +240,16 @@ pub fn schoenfeld_residuals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_close(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "value {idx} differed: {actual} != {expected}"
+            );
+        }
+    }
 
     fn valid_inputs() -> (Vec<f64>, Vec<f64>, Vec<i32>, Vec<f64>) {
         (
@@ -251,5 +304,81 @@ mod tests {
             .expect_err("non-binary event should fail");
 
         assert!(err.to_string().contains("event values must be 0 or 1"));
+    }
+
+    #[test]
+    fn weighted_risk_scores_match_stratified_tied_event_reference() {
+        let y = vec![
+            0.0, 0.0, 0.0, 1.0, 1.5, 0.0, 0.0, 1.0, 0.0, // start
+            1.0, 2.0, 2.0, 2.0, 3.0, 1.0, 2.0, 2.0, 3.0, // stop
+            1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, // event
+        ];
+        let covar = vec![
+            -1.0, 0.2, 1.1, 0.5, -0.4, 0.8, -0.7, 0.3, 1.4, // x1
+            0.5, -1.0, 0.7, 1.2, -0.2, -0.6, 0.9, -1.3, 0.1, // x2
+        ];
+        let strata = vec![0, 0, 0, 0, 1, 0, 0, 0, 1];
+        let score = vec![1.0, 1.2, 0.8, 1.5, 0.7, 1.1, 0.9, 1.4, 0.6];
+        let cases = [
+            (
+                0,
+                vec![
+                    -1.04,
+                    -0.178571428571429,
+                    0.721428571428572,
+                    0.5,
+                    -0.4,
+                    0.8,
+                    -0.917241379310345,
+                    0.0827586206896552,
+                    1.4,
+                    0.546666666666667,
+                    -1.24285714285714,
+                    0.457142857142857,
+                    1.2,
+                    -0.2,
+                    -0.6,
+                    1.22758620689655,
+                    -0.972413793103448,
+                    0.1,
+                ],
+            ),
+            (
+                1,
+                vec![
+                    -1.04,
+                    -0.150223214285714,
+                    0.749776785714286,
+                    0.5,
+                    -0.4,
+                    0.8,
+                    -1.01862068965517,
+                    -0.0186206896551724,
+                    1.4,
+                    0.546666666666667,
+                    -1.33080357142857,
+                    0.369196428571429,
+                    1.2,
+                    -0.2,
+                    -0.6,
+                    1.19093596059113,
+                    -1.00906403940887,
+                    0.1,
+                ],
+            ),
+        ];
+
+        for (method, expected) in cases {
+            let actual = schoenfeld_residuals(
+                y.clone(),
+                score.clone(),
+                strata.clone(),
+                covar.clone(),
+                2,
+                method,
+            )
+            .unwrap();
+            assert_close(&actual, &expected);
+        }
     }
 }
