@@ -3123,6 +3123,102 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nrow(aft_dfbeta), nrow(data))
 })
 
+test_that("zero-covariate low-level Cox fits match null-model results", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  right_y <- survival::Surv(
+    c(1, 2, 2, 3, 4, 5),
+    c(1, 0, 1, 1, 0, 1)
+  )
+  right_args <- list(
+    x = matrix(numeric(), nrow = 6L, ncol = 0L),
+    y = right_y,
+    strata = c(1, 1, 1, 2, 2, 2),
+    offset = c(0.1, -0.2, 0, 0.3, -0.1, 0.2),
+    init = NULL,
+    weights = c(1, 2, 0.5, 1.5, 3, 1),
+    method = "efron",
+    rownames = letters[1:6]
+  )
+  for (keep_residuals in c(TRUE, FALSE)) {
+    bridged <- do.call(
+      coxph.fit,
+      c(
+        right_args,
+        list(control = coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    reference <- do.call(
+      survival::coxph.fit,
+      c(
+        right_args,
+        list(control = survival::coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    expect_equal(bridged, reference, tolerance = 1e-12)
+  }
+
+  vector_args <- right_args
+  vector_args$x <- numeric()
+  expect_equal(
+    do.call(
+      coxph.fit,
+      c(vector_args, list(control = coxph.control(iter.max = 20)))
+    ),
+    do.call(
+      survival::coxph.fit,
+      c(vector_args, list(control = survival::coxph.control(iter.max = 20)))
+    ),
+    tolerance = 1e-12
+  )
+
+  counting_args <- list(
+    x = matrix(numeric(), nrow = 6L, ncol = 0L),
+    y = survival::Surv(
+      c(0, 0, 1, 2, 3, 4),
+      c(2, 3, 4, 5, 6, 7),
+      c(1, 0, 1, 1, 0, 1)
+    ),
+    strata = c(1, 1, 1, 2, 2, 2),
+    offset = c(0.1, -0.2, 0, 0.3, -0.1, 0.2),
+    init = NULL,
+    weights = c(1, 2, 0.5, 1.5, 3, 1),
+    method = "efron",
+    rownames = letters[1:6]
+  )
+  for (keep_residuals in c(TRUE, FALSE)) {
+    bridged <- do.call(
+      agreg.fit,
+      c(
+        counting_args,
+        list(control = coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    reference <- do.call(
+      survival::agreg.fit,
+      c(
+        counting_args,
+        list(control = survival::coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    expect_equal(bridged, reference, tolerance = 1e-12)
+  }
+  invalid_counting_args <- counting_args
+  invalid_counting_args$init <- 1
+  expect_error(
+    do.call(
+      agreg.fit,
+      c(invalid_counting_args, list(control = coxph.control()))
+    ),
+    "Wrong length for inital values"
+  )
+})
+
 test_that("tmerge matches native interval, metadata, and class semantics", {
   skip_if_not_installed("reticulate")
   skip_if_not_installed("survival")
