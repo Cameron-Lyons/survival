@@ -890,7 +890,7 @@ mod survreg_bench {
         status.iter().map(|&value| f64::from(value)).collect()
     }
 
-    #[divan::bench(args = [100, 1000, 5000])]
+    #[divan::bench(args = [100, 1000, 5000, 10000])]
     fn survreg_weibull(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates) = generate_tied_regression_data(n, 3);
         let status = status_as_survreg(&status);
@@ -917,7 +917,7 @@ mod survreg_bench {
         });
     }
 
-    #[divan::bench(args = [100, 1000, 5000])]
+    #[divan::bench(args = [100, 1000, 5000, 10000])]
     fn weighted_stratified_survreg_lognormal(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates) = generate_tied_regression_data(n, 3);
         let status = status_as_survreg(&status);
