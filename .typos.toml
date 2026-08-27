@@ -18,6 +18,7 @@ wil = "wil"
 consts = "consts"
 parms = "parms"
 parm = "parm"
+inital = "inital"
 
 [files]
 extend-exclude = [

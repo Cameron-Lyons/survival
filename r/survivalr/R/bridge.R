@@ -8321,10 +8321,19 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     stop("y must have 2 or 3 columns", call. = FALSE)
   }
   n <- length(time)
-  covariate_matrix <- as.matrix(x)
+  covariate_matrix <- if (!is.matrix(x) && length(x) == 0L) {
+    matrix(numeric(), nrow = n, ncol = 0L)
+  } else {
+    as.matrix(x)
+  }
+  null_model <- ncol(covariate_matrix) == 0L
   x_names <- colnames(covariate_matrix)
   if (is.null(x_names)) {
-    x_names <- paste0("X", seq_len(ncol(covariate_matrix)))
+    x_names <- if (null_model) {
+      character()
+    } else {
+      paste0("X", seq_len(ncol(covariate_matrix)))
+    }
   }
   covariates <- .coxph_fit_covariates(covariate_matrix, n)
 
@@ -8347,6 +8356,12 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   }
   if (!is.null(init)) {
     init <- as.numeric(init)
+  }
+  if (null_model) {
+    if (isTRUE(include_agreg_info) && length(init) != 0L) {
+      stop("Wrong length for inital values", call. = FALSE)
+    }
+    init <- NULL
   }
   if (missing(control) || is.null(control)) {
     control <- coxph.control()
@@ -8375,7 +8390,7 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
       weights = weights,
       offset = offset,
       initial_beta = if (is.null(init)) NULL else as.list(init),
-      max_iter = as.integer(control[["iter.max"]]),
+      max_iter = if (null_model) 0L else as.integer(control[["iter.max"]]),
       eps = as.numeric(control[["eps"]]),
       toler = as.numeric(control[["toler.chol"]]),
       method = method,
@@ -8383,6 +8398,37 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
       nocenter = if (is.null(nocenter)) NULL else as.list(as.numeric(nocenter))
     ))
   )
+
+  if (null_model) {
+    loglik <- .as_numeric_vector(.result_field(fit, "log_likelihood"))
+    null_loglik <- if (isTRUE(include_agreg_info)) {
+      loglik[[length(loglik)]]
+    } else {
+      loglik[[1L]]
+    }
+    martingale <- NULL
+    if (isTRUE(resid)) {
+      martingale <- .as_numeric_vector(
+        do.call(reticulate::py_get_attr(fit, "martingale_residuals"), list())
+      )
+      names(martingale) <- as.character(rownames)
+    }
+    out <- list(
+      loglik = null_loglik,
+      linear.predictors = offset
+    )
+    if (!isTRUE(include_agreg_info) && isTRUE(resid)) {
+      out$residuals <- martingale
+    }
+    out$method <- method
+    if (isTRUE(include_class)) {
+      out$class <- c("coxph.null", "coxph")
+    }
+    if (isTRUE(include_agreg_info) && isTRUE(resid)) {
+      out$residuals <- martingale
+    }
+    return(out)
+  }
 
   coefficient_matrix <- .as_numeric_matrix(.result_field(fit, "coefficients"))
   coefficients <- if (nrow(coefficient_matrix) == 0L) {
