@@ -211,6 +211,32 @@ mod aareg_bench {
             },
         );
     }
+
+    #[divan::bench(args = [100, 500, 1000])]
+    fn unclustered_influence(bencher: divan::Bencher, n: usize) {
+        let inputs = inputs(n, 3);
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(stop, status, covariates, weights)| {
+                black_box(
+                    aareg_fit(
+                        stop,
+                        status,
+                        covariates,
+                        None,
+                        Some(weights),
+                        None,
+                        1e-7,
+                        Some(9),
+                        true,
+                        None,
+                        "aalen".to_string(),
+                        None,
+                    )
+                    .expect("benchmark Aalen influence inputs should be full rank"),
+                )
+            },
+        );
+    }
 }
 
 mod logrank {
