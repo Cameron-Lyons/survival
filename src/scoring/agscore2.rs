@@ -1,5 +1,5 @@
-use super::common::{apply_deltas_add, build_score_result, validate_scoring_inputs};
-use ndarray::{Array2, ArrayView2};
+use super::agscore3::agscore3;
+use super::common::{build_score_result, validate_scoring_inputs};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
@@ -13,127 +13,27 @@ pub(crate) fn agscore2(
     method: i32,
 ) -> Result<Vec<f64>, String> {
     let n = y.len() / 3;
-    let nvar = covar.len() / n;
     let tstart = &y[0..n];
-    let tstop = &y[n..2 * n];
-    let event = &y[2 * n..3 * n];
-
-    let covar_matrix: ArrayView2<f64> = ArrayView2::from_shape((nvar, n), covar).map_err(|e| {
-        format!(
-            "Failed to create covariate matrix view with shape ({}, {}): {}",
-            nvar, n, e
-        )
-    })?;
-
-    let mut resid_matrix = Array2::zeros((nvar, n));
-    let mut a = vec![0.0; nvar];
-    let mut a2 = vec![0.0; nvar];
-    let mut mean = vec![0.0; nvar];
-    let mut mh1 = vec![0.0; nvar];
-    let mut mh2 = vec![0.0; nvar];
-    let mut mh3 = vec![0.0; nvar];
-
-    let mut person = 0;
-    while person < n {
-        if event[person] == 0.0 {
-            person += 1;
-            continue;
-        }
-
-        let time = tstop[person];
-        let mut denom = 0.0;
-        let mut e_denom = 0.0;
-        let mut deaths = 0.0;
-        let mut meanwt = 0.0;
-        a.fill(0.0);
-        a2.fill(0.0);
-
-        let mut at_risk_indices: Vec<usize> = Vec::new();
-        let mut k = person;
-        while k < n && strata[k] == strata[person] {
-            if tstart[k] < time {
-                at_risk_indices.push(k);
-                let risk = score[k] * weights[k];
-                denom += risk;
-                for i in 0..nvar {
-                    a[i] += risk * covar_matrix[[i, k]];
-                }
-                if tstop[k] == time && event[k] == 1.0 {
-                    deaths += 1.0;
-                    e_denom += risk;
-                    meanwt += weights[k];
-                    for i in 0..nvar {
-                        a2[i] += risk * covar_matrix[[i, k]];
-                    }
-                }
-            }
-            k += 1;
-        }
-
-        if deaths < 2.0 || method == 0 {
-            let hazard = meanwt / denom;
-            for i in 0..nvar {
-                mean[i] = a[i] / denom;
-            }
-
-            apply_deltas_add(&at_risk_indices, nvar, &mut resid_matrix, |k| {
-                let risk = score[k];
-                let is_event = tstop[k] == time && event[k] == 1.0;
-                (0..nvar)
-                    .map(|i| {
-                        let diff = covar_matrix[[i, k]] - mean[i];
-                        let mut delta = -diff * risk * hazard;
-                        if is_event {
-                            delta += diff;
-                        }
-                        delta
-                    })
-                    .collect()
-            });
-        } else {
-            let meanwt_norm = meanwt / deaths;
-            let mut temp1 = 0.0;
-            let mut temp2 = 0.0;
-            mh1.fill(0.0);
-            mh2.fill(0.0);
-            mh3.fill(0.0);
-
-            for dd in 0..deaths as usize {
-                let downwt = dd as f64 / deaths;
-                let d2 = denom - downwt * e_denom;
-                let hazard = meanwt_norm / d2;
-                temp1 += hazard;
-                temp2 += (1.0 - downwt) * hazard;
-                for i in 0..nvar {
-                    mean[i] = (a[i] - downwt * a2[i]) / d2;
-                    mh1[i] += mean[i] * hazard;
-                    mh2[i] += mean[i] * (1.0 - downwt) * hazard;
-                    mh3[i] += mean[i] / deaths;
-                }
-            }
-
-            apply_deltas_add(&at_risk_indices, nvar, &mut resid_matrix, |k| {
-                let risk = score[k];
-                let is_event = tstop[k] == time && event[k] == 1.0;
-                (0..nvar)
-                    .map(|i| {
-                        if is_event {
-                            (covar_matrix[[i, k]] - mh3[i]) - risk * covar_matrix[[i, k]] * temp2
-                                + risk * mh2[i]
-                        } else {
-                            -risk * (covar_matrix[[i, k]] * temp1 - mh1[i])
-                        }
-                    })
-                    .collect()
-            });
-        }
-
-        while person < n && tstop[person] == time {
-            person += 1;
-        }
+    let mut stratum_blocks = vec![0usize; n];
+    for idx in 1..n {
+        stratum_blocks[idx] = stratum_blocks[idx - 1] + usize::from(strata[idx] != strata[idx - 1]);
     }
+    let mut start_order: Vec<usize> = (0..n).collect();
+    start_order.sort_by(|&left, &right| {
+        stratum_blocks[left]
+            .cmp(&stratum_blocks[right])
+            .then_with(|| tstart[left].total_cmp(&tstart[right]))
+            .then_with(|| left.cmp(&right))
+    });
+    let sort1: Vec<i32> = start_order
+        .into_iter()
+        .map(|idx| {
+            i32::try_from(idx + 1)
+                .map_err(|_| "Observation count exceeds supported sort index range".to_string())
+        })
+        .collect::<Result<_, _>>()?;
 
-    Ok(resid_matrix.into_raw_vec_and_offset().0)
+    agscore3(y, covar, strata, score, weights, method, &sort1)
 }
 
 #[pyfunction]
@@ -167,6 +67,7 @@ mod tests {
         let weights = vec![1.0, 1.0, 1.0];
         let result = agscore2(&y, &covar, &strata, &score, &weights, 0).unwrap();
         assert_eq!(result.len(), n * nvar);
+        assert_eq!(result, vec![0.0, -0.125, -0.125]);
     }
 
     #[test]
@@ -180,6 +81,21 @@ mod tests {
         for &r in &result {
             assert_eq!(r, 0.0);
         }
+    }
+
+    #[test]
+    fn accepts_stratum_labels_outside_numeric_order() {
+        let y = vec![
+            0.0, 0.0, 0.0, 0.0, // start
+            1.0, 2.0, 1.0, 2.0, // stop
+            1.0, 0.0, 1.0, 0.0, // event
+        ];
+        let covar = vec![0.0, 1.0, 2.0, 3.0];
+        let strata = vec![4, 4, 2, 2];
+        let score = vec![1.0; 4];
+        let weights = vec![1.0; 4];
+        let result = agscore2(&y, &covar, &strata, &score, &weights, 0).unwrap();
+        assert_eq!(result, vec![-0.25; 4]);
     }
 
     #[test]

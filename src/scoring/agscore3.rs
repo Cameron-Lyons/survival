@@ -1,8 +1,5 @@
-use super::common::{
-    apply_deltas_add, apply_deltas_set, build_score_result, validate_scoring_inputs,
-};
+use super::common::{build_score_result, validate_scoring_inputs};
 use crate::internal::validation::{PermutationIndexError, validate_one_based_i32_permutation};
-use ndarray::{Array2, ArrayView2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
@@ -25,6 +22,22 @@ fn validate_one_based_sort1(sort1: &[i32], n: usize) -> Result<Vec<usize>, Strin
 }
 
 #[inline]
+fn finish_residual(
+    row: usize,
+    n: usize,
+    covar: &[f64],
+    score: &[f64],
+    cumhaz: f64,
+    xhaz: &[f64],
+    residuals: &mut [f64],
+) {
+    for (var, &xhaz_value) in xhaz.iter().enumerate() {
+        let idx = var * n + row;
+        residuals[idx] -= score[row] * (cumhaz * covar[idx] - xhaz_value);
+    }
+}
+
+#[inline]
 pub(crate) fn agscore3(
     y: &[f64],
     covar: &[f64],
@@ -40,14 +53,7 @@ pub(crate) fn agscore3(
     let tstop = &y[n..2 * n];
     let event = &y[2 * n..3 * n];
 
-    let covar_matrix = ArrayView2::from_shape((nvar, n), covar).map_err(|e| {
-        format!(
-            "Failed to create covariate view with shape ({}, {}): {}",
-            nvar, n, e
-        )
-    })?;
-
-    let mut resid_matrix = Array2::zeros((nvar, n));
+    let mut residuals = vec![0.0; nvar * n];
     let mut a = vec![0.0; nvar];
     let mut a2 = vec![0.0; nvar];
     let mut mean = vec![0.0; nvar];
@@ -59,146 +65,143 @@ pub(crate) fn agscore3(
     let mut cumhaz = 0.0;
     let mut denom = 0.0;
     let mut current_stratum = *strata.last().unwrap_or(&0);
-    let mut i1 = n - 1;
+    let mut entry_pos = n;
     let sort1 = validate_one_based_sort1(sort1, n)?;
+    let mut death_rows = Vec::new();
 
-    let mut person = n - 1;
+    let mut person = n;
     while person > 0 {
-        let dtime = tstop[person];
+        let current_row = person - 1;
+        let dtime = tstop[current_row];
 
-        if strata[person] != current_stratum {
-            let mut exit_indices = Vec::new();
-            while i1 > 0 && sort1[i1] > person {
-                exit_indices.push(sort1[i1]);
-                i1 -= 1;
+        if strata[current_row] != current_stratum {
+            while entry_pos > 0 && sort1[entry_pos - 1] > current_row {
+                entry_pos -= 1;
+                finish_residual(
+                    sort1[entry_pos],
+                    n,
+                    covar,
+                    score,
+                    cumhaz,
+                    &xhaz,
+                    &mut residuals,
+                );
             }
-
-            apply_deltas_add(&exit_indices, nvar, &mut resid_matrix, |k| {
-                (0..nvar)
-                    .map(|j| -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]))
-                    .collect()
-            });
 
             cumhaz = 0.0;
             denom = 0.0;
             a.fill(0.0);
             xhaz.fill(0.0);
-            current_stratum = strata[person];
+            current_stratum = strata[current_row];
         } else {
-            let mut exit_indices = Vec::new();
-            while i1 > 0 && tstart[sort1[i1]] >= dtime {
-                let k = sort1[i1];
+            while entry_pos > 0 && tstart[sort1[entry_pos - 1]] >= dtime {
+                let k = sort1[entry_pos - 1];
                 if strata[k] != current_stratum {
                     break;
                 }
-                exit_indices.push(k);
+                entry_pos -= 1;
+                finish_residual(k, n, covar, score, cumhaz, &xhaz, &mut residuals);
                 let risk = score[k] * weights[k];
                 denom -= risk;
-                for j in 0..nvar {
-                    a[j] -= risk * covar_matrix[[j, k]];
+                for var in 0..nvar {
+                    a[var] -= risk * covar[var * n + k];
                 }
-                i1 -= 1;
             }
-
-            apply_deltas_add(&exit_indices, nvar, &mut resid_matrix, |k| {
-                (0..nvar)
-                    .map(|j| -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]))
-                    .collect()
-            });
         }
 
         let mut e_denom = 0.0;
-        let mut deaths = 0.0;
         let mut meanwt = 0.0;
         a2.fill(0.0);
 
-        let mut processed_indices = Vec::new();
-        while person > 0 && tstop[person] == dtime {
-            if strata[person] != current_stratum {
+        death_rows.clear();
+        while person > 0 && tstop[person - 1] == dtime {
+            let row = person - 1;
+            if strata[row] != current_stratum {
                 break;
             }
-            processed_indices.push(person);
+            person -= 1;
 
-            let risk = score[person] * weights[person];
+            for (var, &xhaz_value) in xhaz.iter().enumerate() {
+                let idx = var * n + row;
+                residuals[idx] = (covar[idx] * cumhaz - xhaz_value) * score[row];
+            }
+            let risk = score[row] * weights[row];
             denom += risk;
-            for j in 0..nvar {
-                a[j] += risk * covar_matrix[[j, person]];
+            for var in 0..nvar {
+                a[var] += risk * covar[var * n + row];
             }
 
-            if event[person] > 0.5 {
-                deaths += 1.0;
+            if event[row] == 1.0 {
+                death_rows.push(row);
                 e_denom += risk;
-                meanwt += weights[person];
-                for j in 0..nvar {
-                    a2[j] += risk * covar_matrix[[j, person]];
+                meanwt += weights[row];
+                for var in 0..nvar {
+                    a2[var] += risk * covar[var * n + row];
                 }
             }
-            person -= 1;
         }
 
-        apply_deltas_set(&processed_indices, nvar, &mut resid_matrix, |p| {
-            (0..nvar)
-                .map(|j| (covar_matrix[[j, p]] * cumhaz - xhaz[j]) * score[p])
-                .collect()
-        });
-
-        if deaths > 0.0 {
-            if deaths < 2.0 || method == 0 {
+        if !death_rows.is_empty() {
+            let deaths = death_rows.len() as f64;
+            if death_rows.len() == 1 || method == 0 {
                 let hazard = meanwt / denom;
                 cumhaz += hazard;
-                for j in 0..nvar {
-                    mean[j] = a[j] / denom;
-                    xhaz[j] += mean[j] * hazard;
+                for var in 0..nvar {
+                    mean[var] = a[var] / denom;
+                    xhaz[var] += mean[var] * hazard;
                 }
 
-                apply_deltas_add(&processed_indices, nvar, &mut resid_matrix, |p| {
-                    (0..nvar).map(|j| covar_matrix[[j, p]] - mean[j]).collect()
-                });
+                for &row in &death_rows {
+                    for (var, &mean_value) in mean.iter().enumerate() {
+                        let idx = var * n + row;
+                        residuals[idx] += covar[idx] - mean_value;
+                    }
+                }
             } else {
                 mh1.fill(0.0);
                 mh2.fill(0.0);
                 mh3.fill(0.0);
                 let meanwt_norm = meanwt / deaths;
 
-                for dd in 0..deaths as i32 {
+                for dd in 0..death_rows.len() {
                     let downwt = dd as f64 / deaths;
                     let d2 = denom - downwt * e_denom;
                     let hazard = meanwt_norm / d2;
                     cumhaz += hazard;
-                    for j in 0..nvar {
-                        mean[j] = (a[j] - downwt * a2[j]) / d2;
-                        xhaz[j] += mean[j] * hazard;
-                        mh1[j] += hazard * downwt;
-                        mh2[j] += mean[j] * hazard * downwt;
-                        mh3[j] += mean[j] / deaths;
+                    for var in 0..nvar {
+                        mean[var] = (a[var] - downwt * a2[var]) / d2;
+                        xhaz[var] += mean[var] * hazard;
+                        mh1[var] += hazard * downwt;
+                        mh2[var] += mean[var] * hazard * downwt;
+                        mh3[var] += mean[var] / deaths;
                     }
                 }
 
-                apply_deltas_add(&processed_indices, nvar, &mut resid_matrix, |p| {
-                    (0..nvar)
-                        .map(|j| {
-                            (covar_matrix[[j, p]] - mh3[j])
-                                + score[p] * (covar_matrix[[j, p]] * mh1[j] - mh2[j])
-                        })
-                        .collect()
-                });
+                for &row in &death_rows {
+                    for var in 0..nvar {
+                        let idx = var * n + row;
+                        residuals[idx] += (covar[idx] - mh3[var])
+                            + score[row] * (covar[idx] * mh1[var] - mh2[var]);
+                    }
+                }
             }
         }
     }
 
-    let mut final_indices = Vec::new();
-    while i1 > 0 {
-        final_indices.push(sort1[i1]);
-        i1 -= 1;
+    while entry_pos > 0 {
+        entry_pos -= 1;
+        finish_residual(
+            sort1[entry_pos],
+            n,
+            covar,
+            score,
+            cumhaz,
+            &xhaz,
+            &mut residuals,
+        );
     }
 
-    apply_deltas_add(&final_indices, nvar, &mut resid_matrix, |k| {
-        (0..nvar)
-            .map(|j| -score[k] * (cumhaz * covar_matrix[[j, k]] - xhaz[j]))
-            .collect()
-    });
-
-    Ok(resid_matrix.into_raw_vec_and_offset().0)
+    Ok(residuals)
 }
 
 #[pyfunction]
@@ -230,18 +233,28 @@ pub fn perform_agscore3_calculation(
 mod tests {
     use super::*;
 
+    fn assert_close(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "value {idx} differed: {actual} != {expected}"
+            );
+        }
+    }
+
     #[test]
-    fn basic_output_length() {
+    fn includes_an_event_in_the_first_row() {
         let n = 3;
-        let nvar = 1;
-        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0];
+        let y = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 1.0, 0.0, 0.0];
         let covar = vec![0.5, 1.0, 1.5];
         let strata = vec![0, 0, 0];
         let score = vec![1.0, 1.0, 1.0];
         let weights = vec![1.0, 1.0, 1.0];
         let sort1 = vec![1, 2, 3];
         let result = agscore3(&y, &covar, &strata, &score, &weights, 0, &sort1).unwrap();
-        assert_eq!(result.len(), n * nvar);
+        assert_eq!(result.len(), n);
+        assert_close(&result, &[-1.0 / 3.0, 0.0, -1.0 / 6.0]);
     }
 
     #[test]
@@ -256,6 +269,76 @@ mod tests {
         let sort1 = vec![1, 2, 3];
         let result = agscore3(&y, &covar, &strata, &score, &weights, 0, &sort1).unwrap();
         assert_eq!(result.len(), n * nvar);
+    }
+
+    #[test]
+    fn matches_weighted_stratified_tied_event_reference() {
+        let y = vec![
+            0.0, 0.0, 0.0, 1.0, 1.5, 0.0, 0.0, 1.0, 0.0, // start
+            1.0, 2.0, 2.0, 2.0, 3.0, 1.0, 2.0, 2.0, 3.0, // stop
+            1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, // event
+        ];
+        let covar = vec![
+            -1.0, 0.2, 1.1, 0.5, -0.4, 0.8, -0.7, 0.3, 1.4, // x1
+            0.5, -1.0, 0.7, 1.2, -0.2, -0.6, 0.9, -1.3, 0.1, // x2
+        ];
+        let strata = vec![0, 0, 0, 0, 0, 1, 1, 1, 1];
+        let score = vec![1.0, 1.2, 0.8, 1.5, 0.7, 1.1, 0.9, 1.4, 0.6];
+        let weights = vec![0.5, 2.0, 1.25, 0.75, 1.5, 1.0, 0.4, 2.2, 0.8];
+        let sort1 = vec![1, 2, 3, 4, 5, 6, 7, 9, 8];
+        let cases = [
+            (
+                0,
+                vec![
+                    -1.11321499013807,
+                    -0.0209051282804873,
+                    0.337701743846123,
+                    -0.167045385992077,
+                    0.289310060528062,
+                    1.1927614710623e-17,
+                    -0.42033527696793,
+                    -0.00306122448979592,
+                    -0.42069970845481,
+                    0.760026298487837,
+                    -0.173621914405268,
+                    0.317217447427648,
+                    -1.13716342576766,
+                    0.0406241830722516,
+                    1.12952823548651e-17,
+                    0.736203665139525,
+                    -0.02667638483965,
+                    -0.408517284464806,
+                ],
+            ),
+            (
+                1,
+                vec![
+                    -1.11321499013807,
+                    -0.0146311379877521,
+                    0.412169374387006,
+                    -0.246665252829545,
+                    0.332715384062158,
+                    2.41063196411902e-17,
+                    -0.481287473194709,
+                    -0.0151917692696914,
+                    -0.544267209599306,
+                    0.760026298487837,
+                    -0.305463552399534,
+                    0.311359764467586,
+                    -1.27634446002223,
+                    0.100990551473691,
+                    4.10204557001015e-18,
+                    0.769461336701994,
+                    -0.0552638122545356,
+                    -0.528506576116701,
+                ],
+            ),
+        ];
+
+        for (method, expected) in cases {
+            let actual = agscore3(&y, &covar, &strata, &score, &weights, method, &sort1).unwrap();
+            assert_close(&actual, &expected);
+        }
     }
 
     #[test]

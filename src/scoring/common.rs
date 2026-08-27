@@ -2,69 +2,10 @@ use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
 use crate::internal::validation::{
     ValidationError, validate_binary_f64, validate_finite, validate_length, validate_non_negative,
 };
-use ndarray::Array2;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rayon::prelude::*;
-
-#[inline]
-pub(crate) fn apply_deltas_add<F>(
-    indices: &[usize],
-    nvar: usize,
-    matrix: &mut Array2<f64>,
-    compute_deltas: F,
-) where
-    F: Fn(usize) -> Vec<f64> + Sync + Send,
-{
-    if indices.len() > PARALLEL_THRESHOLD_MEDIUM {
-        let updates: Vec<(usize, Vec<f64>)> = indices
-            .par_iter()
-            .map(|&idx| (idx, compute_deltas(idx)))
-            .collect();
-        for (idx, deltas) in updates {
-            for j in 0..nvar {
-                matrix[[j, idx]] += deltas[j];
-            }
-        }
-    } else {
-        for &idx in indices {
-            let deltas = compute_deltas(idx);
-            for j in 0..nvar {
-                matrix[[j, idx]] += deltas[j];
-            }
-        }
-    }
-}
-
-#[inline]
-pub(crate) fn apply_deltas_set<F>(
-    indices: &[usize],
-    nvar: usize,
-    matrix: &mut Array2<f64>,
-    compute_deltas: F,
-) where
-    F: Fn(usize) -> Vec<f64> + Sync + Send,
-{
-    if indices.len() > PARALLEL_THRESHOLD_MEDIUM {
-        let updates: Vec<(usize, Vec<f64>)> = indices
-            .par_iter()
-            .map(|&idx| (idx, compute_deltas(idx)))
-            .collect();
-        for (idx, deltas) in updates {
-            for j in 0..nvar {
-                matrix[[j, idx]] = deltas[j];
-            }
-        }
-    } else {
-        for &idx in indices {
-            let deltas = compute_deltas(idx);
-            for j in 0..nvar {
-                matrix[[j, idx]] = deltas[j];
-            }
-        }
-    }
-}
 
 fn validation_err_to_pyresult<T>(result: Result<T, ValidationError>) -> PyResult<T> {
     result.map_err(|e| PyValueError::new_err(e.to_string()))
@@ -180,25 +121,6 @@ pub(crate) fn build_score_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::Array2;
-
-    #[test]
-    fn apply_deltas_add_accumulates() {
-        let mut matrix = Array2::from_elem((1, 3), 1.0);
-        apply_deltas_add(&[0, 1, 2], 1, &mut matrix, |idx| vec![idx as f64]);
-        assert_eq!(matrix[[0, 0]], 1.0);
-        assert_eq!(matrix[[0, 1]], 2.0);
-        assert_eq!(matrix[[0, 2]], 3.0);
-    }
-
-    #[test]
-    fn apply_deltas_set_overwrites() {
-        let mut matrix = Array2::from_elem((1, 3), 10.0);
-        apply_deltas_set(&[0, 1, 2], 1, &mut matrix, |idx| vec![idx as f64]);
-        assert_eq!(matrix[[0, 0]], 0.0);
-        assert_eq!(matrix[[0, 1]], 1.0);
-        assert_eq!(matrix[[0, 2]], 2.0);
-    }
 
     #[test]
     fn compute_summary_stats_known_values() {
