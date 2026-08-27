@@ -182,7 +182,7 @@ def test_score_calculation_validates_public_inputs():
 
 def test_agscore3_public_api_and_validation():
     result = survival.perform_agscore3_calculation(
-        time_data=[0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 1.0, 0.0],
+        time_data=[0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 1.0, 0.0, 0.0],
         covariates=[0.5, 1.0, 1.5],
         strata=[0, 0, 0],
         score=[1.0, 1.0, 1.0],
@@ -193,6 +193,7 @@ def test_agscore3_public_api_and_validation():
 
     assert result["method"] == "breslow"
     assert len(result["residuals"]) == 3
+    assert result["residuals"] == pytest.approx([-1.0 / 3.0, 0.0, -1.0 / 6.0])
 
     with pytest.raises(RuntimeError, match="Sort1 length does not match observations"):
         survival.perform_agscore3_calculation(
