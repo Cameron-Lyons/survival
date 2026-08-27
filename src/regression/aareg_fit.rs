@@ -564,6 +564,9 @@ fn influence_values_rowwise(
     let mut dfbeta = vec![vec![vec![0.0; moments.len()]; width]; cluster_count];
     let mut test_influence = vec![vec![0.0; width]; test_cluster_count];
     let mut event_rows = vec![false; n];
+    let mut event_rhs = vec![0.0; nvar];
+    let mut summed_slopes = vec![0.0; nvar];
+    let mut row_slopes = vec![0.0; nvar];
 
     for (time_idx, moment) in moments.iter().enumerate() {
         for &event_idx in &moment.events {
@@ -574,15 +577,23 @@ fn influence_values_rowwise(
             .iter()
             .map(|&idx| weights.map_or(1.0, |values| values[idx]))
             .sum();
-        let mut summed_slopes = vec![0.0; nvar];
+        summed_slopes.fill(0.0);
         for &event_idx in &moment.events {
-            let coefficient = coefficient_row(moment, event_idx, covariates, weights);
+            let event_weight = weights.map_or(1.0, |values| values[event_idx]);
+            let event_covariates = &covariates[event_idx];
             for column in 0..nvar {
-                summed_slopes[column] += coefficient[column + 1];
+                event_rhs[column] =
+                    event_weight * (event_covariates[column] - moment.mean[column]) / moment.risk;
+            }
+            for (row, slope) in summed_slopes.iter_mut().enumerate() {
+                *slope += (0..nvar)
+                    .map(|column| moment.inverse[row * nvar + column] * event_rhs[column])
+                    .sum::<f64>();
             }
         }
 
         for row_idx in 0..n {
+            let row_covariates = &covariates[row_idx];
             let at_risk = row_at_risk(start, stop, row_idx, moment.time);
             let event_indicator = usize::from(event_rows[row_idx]) as f64;
             let row_weight = if at_risk {
@@ -590,37 +601,47 @@ fn influence_values_rowwise(
             } else {
                 0.0
             };
-            let centered: Vec<f64> = (0..nvar)
-                .map(|column| covariates[row_idx][column] - moment.mean[column])
-                .collect();
             let predicted = if at_risk {
-                total_event_weight / moment.risk + dot(&centered, &summed_slopes)
+                total_event_weight / moment.risk
+                    + (0..nvar)
+                        .map(|column| {
+                            (row_covariates[column] - moment.mean[column]) * summed_slopes[column]
+                        })
+                        .sum::<f64>()
             } else {
                 0.0
             };
             let residual = event_indicator - predicted;
-            let mut temp = vec![0.0; width];
-            if nvar == 0 {
-                temp[0] = residual * row_weight / moment.risk;
+            let normalized_score = residual * row_weight / moment.risk;
+            let intercept = if nvar == 0 {
+                normalized_score
             } else {
-                let score: Vec<f64> = centered
-                    .iter()
-                    .map(|value| residual * row_weight * value / moment.risk)
-                    .collect();
-                let slopes = matrix_vector_product(&moment.inverse, &score, nvar);
-                temp[0] = residual * row_weight / moment.risk - dot(&slopes, &moment.mean);
-                temp[1..].copy_from_slice(&slopes);
-            }
+                for (row, slope) in row_slopes.iter_mut().enumerate() {
+                    *slope = (0..nvar)
+                        .map(|column| {
+                            moment.inverse[row * nvar + column]
+                                * normalized_score
+                                * (row_covariates[column] - moment.mean[column])
+                        })
+                        .sum();
+                }
+                normalized_score - dot(&row_slopes, &moment.mean)
+            };
             let cluster_idx = cluster.map_or(row_idx, |values| values[row_idx] as usize);
             let test_cluster_idx = test_cluster.map_or(row_idx, |values| values[row_idx] as usize);
             for column in 0..width {
-                dfbeta[cluster_idx][column][time_idx] += temp[column];
-                let test_value = if test == "nrisk" {
-                    temp[column] * moment.risk
-                } else if test == "variance" && nvar > 1 && column > 0 {
-                    residual * row_weight * centered[column - 1]
+                let influence = if column == 0 {
+                    intercept
                 } else {
-                    temp[column] * moment.time_weight[column]
+                    row_slopes[column - 1]
+                };
+                dfbeta[cluster_idx][column][time_idx] += influence;
+                let test_value = if test == "nrisk" {
+                    influence * moment.risk
+                } else if test == "variance" && nvar > 1 && column > 0 {
+                    residual * row_weight * (row_covariates[column - 1] - moment.mean[column - 1])
+                } else {
+                    influence * moment.time_weight[column]
                 };
                 test_influence[test_cluster_idx][column] += test_value;
             }
