@@ -333,7 +333,7 @@ fn weighted_crossproduct(rows: &[Vec<f64>], divisors: &[f64]) -> Vec<Vec<f64>> {
     result
 }
 
-fn column_means(rows: &[Vec<f64>]) -> Vec<f64> {
+fn centered_rows(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
     if rows.is_empty() {
         return Vec::new();
     }
@@ -347,24 +347,6 @@ fn column_means(rows: &[Vec<f64>]) -> Vec<f64> {
     for mean in &mut means {
         *mean /= rows.len() as f64;
     }
-    means
-}
-
-fn counting_process_means(rows: &[Vec<f64>]) -> Vec<f64> {
-    let mut means = column_means(rows);
-    for column_idx in 0..means.len() {
-        if rows
-            .iter()
-            .all(|row| matches!(row[column_idx], -1.0 | 0.0 | 1.0))
-        {
-            means[column_idx] = 0.0;
-        }
-    }
-    means
-}
-
-fn centered_rows(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    let means = column_means(rows);
     rows.iter()
         .map(|row| {
             row.iter()
@@ -602,7 +584,7 @@ fn fit_weighted_cox(
     initial_beta: Option<Vec<f64>>,
     max_iter: usize,
 ) -> PyResult<CoxPHFit> {
-    let mut fit = coxph_fit(
+    coxph_fit(
         stop,
         status,
         covariates,
@@ -616,11 +598,7 @@ fn fit_weighted_cox(
         Some("efron"),
         Some(start),
         Some(vec![-1.0, 0.0, 1.0]),
-    )?;
-    // The counting-process fitter reports ordinary design means even when
-    // sampling weights are present.
-    fit.means = counting_process_means(&fit.covariates);
-    Ok(fit)
+    )
 }
 
 struct CchComputation {

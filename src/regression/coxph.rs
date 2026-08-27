@@ -567,6 +567,24 @@ fn validate_method_weights(method: CoxMethod, weights: Option<&[f64]>) -> PyResu
     Ok(())
 }
 
+fn counting_process_means(covariates: &[Vec<f64>], doscale: &[bool]) -> Vec<f64> {
+    let mut means = vec![0.0; doscale.len()];
+    for row in covariates {
+        for ((mean, &value), &center) in means.iter_mut().zip(row).zip(doscale) {
+            if center {
+                *mean += value;
+            }
+        }
+    }
+    let denominator = covariates.len() as f64;
+    for (mean, &center) in means.iter_mut().zip(doscale) {
+        if center {
+            *mean /= denominator;
+        }
+    }
+    means
+}
+
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None))]
 #[allow(clippy::too_many_arguments)]
@@ -703,6 +721,9 @@ pub fn coxph_fit(
             })
             .collect()
     };
+    let reported_counting_process_means = entry_times
+        .as_ref()
+        .map(|_| counting_process_means(&covariates, &doscale));
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&lhs, &rhs| {
         strata_values[lhs]
@@ -756,8 +777,17 @@ pub fn coxph_fit(
     cox_fit
         .fit()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
-    let (beta, means, score_vector, information, log_likelihood, score_test, flag, iterations) =
-        cox_fit.results();
+    let (
+        beta,
+        optimizer_means,
+        score_vector,
+        information,
+        log_likelihood,
+        score_test,
+        flag,
+        iterations,
+    ) = cox_fit.results();
+    let means = reported_counting_process_means.unwrap_or(optimizer_means);
     let mut linear_predictors = Vec::with_capacity(n);
     let mut risk_scores = Vec::with_capacity(n);
     for (row, &offset) in covariates.iter().zip(offset_vec.iter()) {
@@ -1053,6 +1083,37 @@ mod tests {
         );
         assert_eq!(fit.convergence_flag, 2);
         assert_eq!(fit.iterations, 4);
+    }
+
+    #[test]
+    fn counting_process_fit_reports_unweighted_means() {
+        let time = vec![2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 0, 1, 1];
+        let covariates = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+            vec![2.0, 0.0],
+            vec![8.0, 1.0],
+        ];
+        let weights = vec![1.0, 1.0, 1.0, 50.0];
+        let fit = coxph_fit(
+            time,
+            status,
+            covariates,
+            None,
+            Some(weights),
+            None,
+            None,
+            Some(0),
+            None,
+            None,
+            Some("breslow"),
+            Some(vec![0.0, 1.0, 0.5, 2.0]),
+            Some(vec![-1.0, 0.0, 1.0]),
+        )
+        .expect("weighted counting-process fit should succeed");
+
+        assert_close_vec(&fit.means, &[2.75, 0.0]);
     }
 
     #[test]
