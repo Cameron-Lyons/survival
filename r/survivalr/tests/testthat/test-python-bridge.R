@@ -1499,6 +1499,32 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(bridged_cox_fit$means, reference_cox_fit$means, tolerance = 1e-12)
   expect_equal(bridged_cox_fit$method, reference_cox_fit$method)
 
+  weighted_efron_args <- list(
+    x = matrix(c(-0.5, 0.3, 1.1, -0.2, 0.7, 0.9), ncol = 1L),
+    y = survival::Surv(c(1, 2, 2, 3, 4, 5), c(0, 1, 1, 0, 1, 0)),
+    strata = NULL,
+    offset = c(0.1, -0.2, 0.05, 0, 0.15, -0.1),
+    init = 0.35,
+    weights = c(0.5, 4, 1.25, 2.5, 0.75, 3),
+    method = "efron",
+    rownames = as.character(seq_len(6L)),
+    resid = TRUE,
+    nocenter = c(-1, 0, 1)
+  )
+  bridged_weighted_efron <- do.call(
+    coxph.fit,
+    c(weighted_efron_args, list(control = coxph.control(iter.max = 0)))
+  )
+  reference_weighted_efron <- do.call(
+    survival::coxph.fit,
+    c(weighted_efron_args, list(control = survival::coxph.control(iter.max = 0)))
+  )
+  expect_equal(
+    bridged_weighted_efron$residuals,
+    reference_weighted_efron$residuals,
+    tolerance = 1e-12
+  )
+
   bridged_stratified_cox_fit <- coxph.fit(
     cox_fit_x,
     cox_fit_y,

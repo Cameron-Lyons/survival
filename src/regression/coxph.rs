@@ -1117,6 +1117,48 @@ mod tests {
     }
 
     #[test]
+    fn weighted_efron_martingale_residuals_match_tied_death_adjustment() {
+        let fit = coxph_fit(
+            vec![1.0, 2.0, 2.0, 3.0, 4.0, 5.0],
+            vec![0, 1, 1, 0, 1, 0],
+            vec![
+                vec![-0.5],
+                vec![0.3],
+                vec![1.1],
+                vec![-0.2],
+                vec![0.7],
+                vec![0.9],
+            ],
+            None,
+            Some(vec![0.5, 4.0, 1.25, 2.5, 0.75, 3.0]),
+            Some(vec![0.1, -0.2, 0.05, 0.0, 0.15, -0.1]),
+            Some(vec![0.35]),
+            Some(0),
+            None,
+            None,
+            Some("efron"),
+            None,
+            Some(vec![-1.0, 0.0, 1.0]),
+        )
+        .expect("weighted Efron fit should succeed");
+
+        let residuals = fit
+            .martingale_residuals()
+            .expect("martingale residuals should compute");
+        assert_close_vec(
+            &residuals,
+            &[
+                0.0,
+                0.6925430252928146,
+                0.4776514121598462,
+                -0.4382541097187386,
+                0.07193586128657424,
+                -0.7751843293463833,
+            ],
+        );
+    }
+
+    #[test]
     fn default_rank_tolerance_preserves_near_collinear_columns() {
         let n = 20;
         let time = (1..=n).map(|value| value as f64).collect::<Vec<_>>();

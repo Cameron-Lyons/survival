@@ -4,6 +4,7 @@ use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
+use crate::residuals::coxmart_module::{CoxMartSurvivalData, CoxMartWeights, compute_coxmart};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
 use crate::validation::ProportionalityTest;
 use crate::validation::hypothesis_tests::proportional_hazards_chi2;
@@ -523,7 +524,81 @@ pub fn cox_interval_cumulative_hazard_se(
 }
 
 impl CoxPHFit {
+    fn right_censored_expected_events(&self) -> Vec<f64> {
+        let n = self.event_times.len();
+        let row_strata = self.row_strata_cow();
+        let order = diagnostic_order(row_strata.as_ref(), &self.event_times);
+        let centered_linear_predictors: Vec<f64> = {
+            let center = self
+                .coefficients
+                .first()
+                .map(|coefficients| {
+                    coefficients
+                        .iter()
+                        .zip(&self.means)
+                        .map(|(&coefficient, &mean)| coefficient * mean)
+                        .sum()
+                })
+                .unwrap_or(0.0);
+            order
+                .iter()
+                .map(|&idx| self.linear_predictors[idx] - center)
+                .collect()
+        };
+        let max_linear_predictor = centered_linear_predictors
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let overflow_threshold = f64::MAX.ln();
+        let shift = if max_linear_predictor > overflow_threshold {
+            overflow_threshold - (1.0 + max_linear_predictor)
+        } else {
+            0.0
+        };
+        let score: Vec<f64> = centered_linear_predictors
+            .iter()
+            .map(|&value| (value + shift).exp())
+            .collect();
+        let time: Vec<f64> = order.iter().map(|&idx| self.event_times[idx]).collect();
+        let status: Vec<i32> = order.iter().map(|&idx| self.status[idx]).collect();
+        let weights: Vec<f64> = order.iter().map(|&idx| self.weights[idx]).collect();
+        let mut stratum_ends = vec![0; n];
+        for sorted_idx in 0..n {
+            if sorted_idx + 1 == n
+                || row_strata[order[sorted_idx]] != row_strata[order[sorted_idx + 1]]
+            {
+                stratum_ends[sorted_idx] = 1;
+            }
+        }
+
+        let mut sorted_residuals = vec![0.0; n];
+        compute_coxmart(
+            n,
+            i32::from(self.method == "efron"),
+            CoxMartSurvivalData {
+                time: &time,
+                status: &status,
+                strata: &stratum_ends,
+            },
+            CoxMartWeights {
+                score: &score,
+                wt: &weights,
+            },
+            &mut sorted_residuals,
+        );
+
+        let mut expected = vec![0.0; n];
+        for (sorted_idx, &original_idx) in order.iter().enumerate() {
+            expected[original_idx] =
+                self.status[original_idx] as f64 - sorted_residuals[sorted_idx];
+        }
+        expected
+    }
+
     pub(crate) fn expected_events_internal(&self) -> PyResult<Vec<f64>> {
+        if self.entry_times.is_none() && matches!(self.method.as_str(), "breslow" | "efron") {
+            return Ok(self.right_censored_expected_events());
+        }
         let (times, hazards, hazard_strata) = self.basehaz_with_strata_internal(false)?;
         let baseline = StratifiedBaselineLookup::from_components(&times, &hazards, &hazard_strata);
         let entry_times = self.entry_times.as_deref();
