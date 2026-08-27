@@ -43,8 +43,16 @@ fn validate_sort_indices(values: &[i32], n: usize, name: &str) -> PyResult<()> {
     }
 }
 
-fn validate_strata_boundaries(values: &[i32], n: usize) -> PyResult<()> {
+fn normalize_strata_boundaries(values: &mut Vec<i32>, n: usize) -> PyResult<()> {
     if values.len() == n && values.iter().all(|&value| value == 0 || value == 1) {
+        let mut boundary_count = 0;
+        for position in 0..n {
+            if values[position] == 1 {
+                values[boundary_count] = position as i32;
+                boundary_count += 1;
+            }
+        }
+        values.truncate(boundary_count);
         return Ok(());
     }
 
@@ -73,7 +81,7 @@ fn validate_norisk_inputs(
     status: &[i32],
     sort1: &[i32],
     sort2: &[i32],
-    strata: &[i32],
+    strata: &mut Vec<i32>,
 ) -> PyResult<()> {
     let n = time1.len();
     validate_same_length(n, time2.len(), "time2")?;
@@ -85,7 +93,7 @@ fn validate_norisk_inputs(
     validate_binary_i32(status, "status")?;
     validate_sort_indices(sort1, n, "sort1")?;
     validate_sort_indices(sort2, n, "sort2")?;
-    validate_strata_boundaries(strata, n)
+    normalize_strata_boundaries(strata, n)
 }
 
 #[pyfunction]
@@ -95,46 +103,40 @@ pub fn norisk(
     status: Vec<i32>,
     sort1: Vec<i32>,
     sort2: Vec<i32>,
-    strata: Vec<i32>,
+    mut strata: Vec<i32>,
 ) -> PyResult<Vec<i32>> {
-    validate_norisk_inputs(&time1, &time2, &status, &sort1, &sort2, &strata)?;
-    let time1_slice = &time1;
-    let time2_slice = &time2;
-    let status_slice = &status;
-    let sort1_slice = &sort1;
-    let sort2_slice = &sort2;
-    let strata_slice = &strata;
-    let n = time1_slice.len();
+    validate_norisk_inputs(&time1, &time2, &status, &sort1, &sort2, &mut strata)?;
+    let n = time1.len();
     let mut notused = vec![0; n];
     let mut ndeath = 0;
     let mut istrat = 0;
     let mut j = 0;
-    for (i, &sort2_i) in sort2_slice.iter().enumerate() {
+    for (i, &sort2_i) in sort2.iter().enumerate() {
         let p2 = sort2_i as usize;
-        let dtime = time2_slice[p2];
-        if i == strata_slice.get(istrat).copied().unwrap_or(n as i32) as usize {
+        let dtime = time2[p2];
+        if i == strata.get(istrat).copied().unwrap_or(n as i32) as usize {
             while j < i {
-                let p1 = sort1_slice[j] as usize;
+                let p1 = sort1[j] as usize;
                 notused[p1] = if ndeath > notused[p1] { 1 } else { 0 };
                 j += 1;
             }
             ndeath = 0;
             istrat += 1;
         } else {
-            while j < i && time1_slice[sort1_slice[j] as usize] >= dtime {
-                let p1 = sort1_slice[j] as usize;
+            while j < i && time1[sort1[j] as usize] >= dtime {
+                let p1 = sort1[j] as usize;
                 notused[p1] = if ndeath > notused[p1] { 1 } else { 0 };
                 j += 1;
             }
         }
-        ndeath += status_slice[p2];
+        ndeath += status[p2];
         if j < n {
-            let p1 = sort1_slice[j] as usize;
+            let p1 = sort1[j] as usize;
             notused[p1] = ndeath;
         }
     }
     while j < n {
-        let p1 = sort1_slice[j] as usize;
+        let p1 = sort1[j] as usize;
         notused[p1] = if ndeath > notused[p1] { 1 } else { 0 };
         j += 1;
     }
@@ -231,19 +233,49 @@ mod tests {
     }
 
     #[test]
-    fn norisk_accepts_marker_style_strata_vector() {
+    fn norisk_normalizes_marker_style_strata_vector() {
         initialize_python();
 
-        let result = norisk(
-            vec![0.0, 1.0, 2.0],
-            vec![1.0, 2.0, 3.0],
-            vec![1, 0, 1],
-            vec![0, 1, 2],
-            vec![0, 1, 2],
-            vec![1, 0, 0],
-        )
-        .expect("marker-style strata should remain accepted");
+        let args = || {
+            (
+                vec![0.0, 1.0, 2.0],
+                vec![1.0, 2.0, 3.0],
+                vec![1, 0, 1],
+                vec![0, 1, 2],
+                vec![0, 1, 2],
+            )
+        };
+        let (time1, time2, status, sort1, sort2) = args();
+        let markers = norisk(time1, time2, status, sort1, sort2, vec![1, 0, 0])
+            .expect("marker-style strata should remain accepted");
+        let (time1, time2, status, sort1, sort2) = args();
+        let boundaries = norisk(time1, time2, status, sort1, sort2, vec![0])
+            .expect("boundary-style strata should remain accepted");
 
-        assert_eq!(result.len(), 3);
+        assert_eq!(markers, boundaries);
+        assert_eq!(markers, vec![0, 1, 1]);
+    }
+
+    #[test]
+    fn norisk_normalizes_multiple_stratum_markers() {
+        initialize_python();
+
+        let args = || {
+            (
+                vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+                vec![3.0, 2.0, 1.0, 3.0, 2.0, 1.0],
+                vec![1, 0, 0, 0, 1, 0],
+                vec![2, 1, 0, 5, 4, 3],
+                vec![0, 1, 2, 3, 4, 5],
+            )
+        };
+        let (time1, time2, status, sort1, sort2) = args();
+        let markers = norisk(time1, time2, status, sort1, sort2, vec![1, 0, 0, 1, 0, 0])
+            .expect("marker-style strata should remain accepted");
+        let (time1, time2, status, sort1, sort2) = args();
+        let boundaries = norisk(time1, time2, status, sort1, sort2, vec![0, 3])
+            .expect("boundary-style strata should remain accepted");
+
+        assert_eq!(markers, boundaries);
     }
 }
