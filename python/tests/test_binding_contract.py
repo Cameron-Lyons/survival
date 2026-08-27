@@ -11431,6 +11431,7 @@ def test_case_cohort_bindings_are_typed_to_runtime_surface():
         "information_matrix",
         "naive_information_matrix",
         "phase2_variance",
+        "linear_predictor_center",
         "method",
         "cohort_size",
         "subcohort_size",
