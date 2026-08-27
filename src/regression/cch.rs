@@ -173,6 +173,8 @@ pub struct CchFitResult {
     #[pyo3(get)]
     pub linear_predictors: Vec<f64>,
     #[pyo3(get)]
+    pub linear_predictor_center: f64,
+    #[pyo3(get)]
     pub entry_times: Option<Vec<f64>>,
     #[pyo3(get)]
     pub weights: Vec<f64>,
@@ -331,7 +333,7 @@ fn weighted_crossproduct(rows: &[Vec<f64>], divisors: &[f64]) -> Vec<Vec<f64>> {
     result
 }
 
-fn centered_rows(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
+fn column_means(rows: &[Vec<f64>]) -> Vec<f64> {
     if rows.is_empty() {
         return Vec::new();
     }
@@ -345,6 +347,24 @@ fn centered_rows(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
     for mean in &mut means {
         *mean /= rows.len() as f64;
     }
+    means
+}
+
+fn counting_process_means(rows: &[Vec<f64>]) -> Vec<f64> {
+    let mut means = column_means(rows);
+    for column_idx in 0..means.len() {
+        if rows
+            .iter()
+            .all(|row| matches!(row[column_idx], -1.0 | 0.0 | 1.0))
+        {
+            means[column_idx] = 0.0;
+        }
+    }
+    means
+}
+
+fn centered_rows(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let means = column_means(rows);
     rows.iter()
         .map(|row| {
             row.iter()
@@ -582,7 +602,7 @@ fn fit_weighted_cox(
     initial_beta: Option<Vec<f64>>,
     max_iter: usize,
 ) -> PyResult<CoxPHFit> {
-    coxph_fit(
+    let mut fit = coxph_fit(
         stop,
         status,
         covariates,
@@ -596,7 +616,11 @@ fn fit_weighted_cox(
         Some("efron"),
         Some(start),
         Some(vec![-1.0, 0.0, 1.0]),
-    )
+    )?;
+    // The counting-process fitter reports ordinary design means even when
+    // sampling weights are present.
+    fit.means = counting_process_means(&fit.covariates);
+    Ok(fit)
 }
 
 struct CchComputation {
@@ -1078,6 +1102,11 @@ fn finish_cch_result(
     let cohort_size = metadata.cohort_sizes.iter().sum();
     let subcohort_size = metadata.subcohort_sizes.iter().sum();
     let stratified = metadata.stratum.is_some();
+    let linear_predictor_center = fit.coefficients[0]
+        .iter()
+        .zip(&fit.means)
+        .map(|(&coefficient, &mean)| coefficient * mean)
+        .sum();
 
     Ok(CchFitResult {
         coefficients: vec![coefficients],
@@ -1094,6 +1123,7 @@ fn finish_cch_result(
         event_times: fit.event_times,
         status: fit.status,
         linear_predictors: fit.linear_predictors,
+        linear_predictor_center,
         entry_times: fit.entry_times,
         weights: fit.weights,
         covariates: fit.covariates,
@@ -1494,6 +1524,7 @@ mod tests {
                     vec![0.697_261_201_213_853, 0.649_936_772_854_918],
                     vec![0.302_738_798_786_147, 0.350_063_227_145_082],
                 ],
+                vec![-0.096_153_846_153_846_1, 0.0],
             ),
             (
                 "II.Borgan",
@@ -1506,9 +1537,12 @@ mod tests {
                     vec![0.524_014_328_275_41, 0.356_352_324_777_529],
                     vec![0.475_985_671_724_59, 0.643_647_675_222_471],
                 ],
+                vec![0.095, 0.0],
             ),
         ];
-        for (method, expected_coefficients, expected_variance, expected_opt) in expected {
+        for (method, expected_coefficients, expected_variance, expected_opt, expected_means) in
+            expected
+        {
             let result = cch_borgan_fit(
                 stop.clone(),
                 status.clone(),
@@ -1523,6 +1557,7 @@ mod tests {
             .expect("right-censored Borgan fit should succeed");
             assert_close(&result.coefficients[0], &expected_coefficients);
             assert_matrix_close(&result.information_matrix, &expected_variance);
+            assert_close(&result.means, &expected_means);
             assert_matrix_close(
                 result
                     .optimization_fraction
@@ -1543,6 +1578,7 @@ mod tests {
                     vec![0.446_615_040_566_727, -0.379_274_338_369_315],
                     vec![-0.379_274_338_369_315, 1.792_883_479_688_41],
                 ],
+                vec![-0.096_153_846_153_846_1, 0.0],
             ),
             (
                 "II.Borgan",
@@ -1551,9 +1587,10 @@ mod tests {
                     vec![0.220_569_751_476_77, -0.100_625_898_088_698],
                     vec![-0.100_625_898_088_698, 0.619_445_707_012_408],
                 ],
+                vec![0.095, 0.0],
             ),
         ];
-        for (method, expected_coefficients, expected_variance) in expected {
+        for (method, expected_coefficients, expected_variance, expected_means) in expected {
             let result = cch_borgan_fit(
                 stop.clone(),
                 status.clone(),
@@ -1568,6 +1605,7 @@ mod tests {
             .expect("counting-process Borgan fit should succeed");
             assert_close(&result.coefficients[0], &expected_coefficients);
             assert_matrix_close(&result.information_matrix, &expected_variance);
+            assert_close(&result.means, &expected_means);
         }
     }
 

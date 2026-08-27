@@ -6005,6 +6005,10 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
   fit_stop <- .as_numeric_vector(.result_field(result, "event_times"))
   fit_status <- as.integer(.as_numeric_vector(.result_field(result, "status")))
   fit_y <- Surv(fit_start, fit_stop, fit_status)
+  linear_predictors <- .as_numeric_vector(.result_field(result, "linear_predictors"))
+  linear_predictors <- linear_predictors - as.numeric(
+    .result_field(result, "linear_predictor_center")
+  )
 
   out <- list(
     coefficients = coefficients,
@@ -6012,7 +6016,7 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     loglik = .as_numeric_vector(.result_field(result, "log_likelihood")),
     score = as.numeric(.result_field(result, "score_test")),
     iter = as.integer(.result_field(result, "iterations")),
-    linear.predictors = .as_numeric_vector(.result_field(result, "linear_predictors")),
+    linear.predictors = linear_predictors,
     residuals = .as_numeric_vector(.result_field(result, "residuals")),
     means = stats::setNames(.as_numeric_vector(.result_field(result, "means")), coefficient_names),
     method = method,
