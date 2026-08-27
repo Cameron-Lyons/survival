@@ -4,6 +4,7 @@ use crate::regression::cox_optimizer::Method as CoxMethod;
 use crate::regression::coxph::CoxPHFit;
 use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
 use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
+use crate::residuals::agmart_module::{AgmartData, compute_agmart_by_stratum};
 use crate::residuals::coxmart_module::{CoxMartSurvivalData, CoxMartWeights, compute_coxmart};
 use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
 use crate::validation::ProportionalityTest;
@@ -13,6 +14,21 @@ use pyo3::prelude::*;
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
+}
+
+fn stabilized_exp(values: impl IntoIterator<Item = f64>) -> Vec<f64> {
+    let values: Vec<f64> = values.into_iter().collect();
+    let max_value = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let overflow_threshold = f64::MAX.ln();
+    let shift = if max_value > overflow_threshold {
+        overflow_threshold - (1.0 + max_value)
+    } else {
+        0.0
+    };
+    values
+        .into_iter()
+        .map(|value| (value + shift).exp())
+        .collect()
 }
 
 fn validate_finite_slice(values: &[f64], name: &str) -> PyResult<()> {
@@ -524,41 +540,29 @@ pub fn cox_interval_cumulative_hazard_se(
 }
 
 impl CoxPHFit {
+    fn diagnostic_linear_predictor_center(&self) -> f64 {
+        self.coefficients
+            .first()
+            .map(|coefficients| {
+                coefficients
+                    .iter()
+                    .zip(&self.means)
+                    .map(|(&coefficient, &mean)| coefficient * mean)
+                    .sum()
+            })
+            .unwrap_or(0.0)
+    }
+
     fn right_censored_expected_events(&self) -> Vec<f64> {
         let n = self.event_times.len();
         let row_strata = self.row_strata_cow();
         let order = diagnostic_order(row_strata.as_ref(), &self.event_times);
-        let centered_linear_predictors: Vec<f64> = {
-            let center = self
-                .coefficients
-                .first()
-                .map(|coefficients| {
-                    coefficients
-                        .iter()
-                        .zip(&self.means)
-                        .map(|(&coefficient, &mean)| coefficient * mean)
-                        .sum()
-                })
-                .unwrap_or(0.0);
+        let center = self.diagnostic_linear_predictor_center();
+        let score = stabilized_exp(
             order
                 .iter()
-                .map(|&idx| self.linear_predictors[idx] - center)
-                .collect()
-        };
-        let max_linear_predictor = centered_linear_predictors
-            .iter()
-            .copied()
-            .fold(f64::NEG_INFINITY, f64::max);
-        let overflow_threshold = f64::MAX.ln();
-        let shift = if max_linear_predictor > overflow_threshold {
-            overflow_threshold - (1.0 + max_linear_predictor)
-        } else {
-            0.0
-        };
-        let score: Vec<f64> = centered_linear_predictors
-            .iter()
-            .map(|&value| (value + shift).exp())
-            .collect();
+                .map(|&idx| self.linear_predictors[idx] - center),
+        );
         let time: Vec<f64> = order.iter().map(|&idx| self.event_times[idx]).collect();
         let status: Vec<i32> = order.iter().map(|&idx| self.status[idx]).collect();
         let weights: Vec<f64> = order.iter().map(|&idx| self.weights[idx]).collect();
@@ -595,9 +599,35 @@ impl CoxPHFit {
         expected
     }
 
+    fn counting_process_expected_events(&self, entry_times: &[f64]) -> Vec<f64> {
+        let center = self.diagnostic_linear_predictor_center();
+        let score = stabilized_exp(self.linear_predictors.iter().map(|&value| value - center));
+        let row_strata = self.row_strata_cow();
+        let residuals = compute_agmart_by_stratum(
+            i32::from(self.method == "efron"),
+            AgmartData {
+                start: entry_times,
+                stop: &self.event_times,
+                event: &self.status,
+                score: &score,
+                wt: &self.weights,
+                strata: row_strata.as_ref(),
+            },
+        );
+
+        self.status
+            .iter()
+            .zip(residuals)
+            .map(|(&status, residual)| status as f64 - residual)
+            .collect()
+    }
+
     pub(crate) fn expected_events_internal(&self) -> PyResult<Vec<f64>> {
-        if self.entry_times.is_none() && matches!(self.method.as_str(), "breslow" | "efron") {
-            return Ok(self.right_censored_expected_events());
+        if matches!(self.method.as_str(), "breslow" | "efron") {
+            return Ok(match self.entry_times.as_deref() {
+                Some(entry_times) => self.counting_process_expected_events(entry_times),
+                None => self.right_censored_expected_events(),
+            });
         }
         let (times, hazards, hazard_strata) = self.basehaz_with_strata_internal(false)?;
         let baseline = StratifiedBaselineLookup::from_components(&times, &hazards, &hazard_strata);

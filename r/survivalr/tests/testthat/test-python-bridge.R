@@ -3180,9 +3180,9 @@ test_that("zero-covariate low-level Cox fits match null-model results", {
   counting_args <- list(
     x = matrix(numeric(), nrow = 6L, ncol = 0L),
     y = survival::Surv(
-      c(0, 0, 1, 2, 3, 4),
-      c(2, 3, 4, 5, 6, 7),
-      c(1, 0, 1, 1, 0, 1)
+      c(0, 0, 1, 0, 2, 3),
+      c(2, 2, 3, 4, 4, 5),
+      c(1, 1, 0, 0, 1, 0)
     ),
     strata = c(1, 1, 1, 2, 2, 2),
     offset = c(0.1, -0.2, 0, 0.3, -0.1, 0.2),
