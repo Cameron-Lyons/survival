@@ -11680,6 +11680,15 @@ def test_package_root_marks_curated_and_legacy_exports():
     setup_survival_import()
     survival = importlib.import_module("survival")
 
+    stub_tree = ast.parse((PACKAGE_ROOT / "__init__.pyi").read_text())
+    stub_r_exports = {
+        alias.asname or alias.name
+        for node in stub_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "r_api"
+        for alias in node.names
+    }
+    assert set(survival._R_EXPORTS) <= stub_r_exports
+
     assert "regression" in survival.__all__
     assert "StrataFactor" in survival.__all__
     assert "Surv" in survival.__all__
@@ -11957,6 +11966,7 @@ def test_r_api_stub_tracks_model_generic_public_signatures():
         "vcov": ["fit", "complete"],
         "loglik": ["fit"],
         "model_formula": ["fit"],
+        "model_term_names": ["fit", "terms"],
         "model_summary": ["fit"],
         "model_weights": ["fit"],
         "nobs": ["fit"],
