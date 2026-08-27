@@ -24,6 +24,7 @@ from . import spatial as spatial
 from . import surv_analysis as surv_analysis
 from . import validation as validation
 from .r_api import (
+    AaregModelResult,
     CchModelResult,
     FineGrayFrame,
     FineGrayOutput,
@@ -42,6 +43,7 @@ from .r_api import (
     TMergeOperation,
     YatesPairwiseResult,
     YatesResult,
+    aareg,
     aeqSurv,
     aic,
     anova,
@@ -83,6 +85,7 @@ from .r_api import (
     model_frame,
     model_matrix,
     model_summary,
+    model_term_names,
     model_weights,
     neardate,
     nobs,
@@ -113,6 +116,7 @@ from .r_api import (
     survfit_confint,
     survfit_residuals,
     survfitkm_counting_influence,
+    survfitkm_influence,
     survobrien,
     survreg,
     survSplit,
