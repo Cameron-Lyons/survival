@@ -215,6 +215,16 @@ pub fn surv2data_timeline(
     status: Vec<Option<i32>>,
     repeated: bool,
 ) -> PyResult<Surv2TimelineResult> {
+    surv2data_timeline_with_policy(id, time, status, repeated, false)
+}
+
+pub(crate) fn surv2data_timeline_with_policy(
+    id: Vec<i64>,
+    time: Vec<f64>,
+    mut status: Vec<Option<i32>>,
+    repeated: bool,
+    first_only: bool,
+) -> PyResult<Surv2TimelineResult> {
     let n = id.len();
     if time.len() != n || status.len() != n {
         return Err(PyValueError::new_err(
@@ -234,8 +244,12 @@ pub fn surv2data_timeline(
     let mut next_row = vec![NO_NEXT_ROW; n];
     let mut n_intervals = 0;
     let mut has_initial_state = None;
+    let mut seen_events = HashSet::new();
     for (position, &current) in order.iter().enumerate() {
         if position == 0 || id[order[position - 1]] != id[current] {
+            if first_only {
+                seen_events.clear();
+            }
             let current_has_state = status[current].is_some_and(|value| value != 0);
             if has_initial_state.is_some_and(|expected| expected != current_has_state) {
                 return Err(PyValueError::new_err(
@@ -243,6 +257,12 @@ pub fn surv2data_timeline(
                 ));
             }
             has_initial_state = Some(current_has_state);
+        }
+        if first_only {
+            let event = status[current].unwrap_or(0);
+            if event != 0 && !seen_events.insert(event) {
+                status[current] = Some(0);
+            }
         }
 
         let Some(&next) = order.get(position + 1) else {
@@ -293,7 +313,7 @@ pub fn surv2data_timeline(
         }
         let istate = has_initial_state.then(|| state_by_row[row_index]);
         let mut event = status[next].unwrap_or(0);
-        if !repeated && istate == Some(event) {
+        if !first_only && !repeated && istate == Some(event) {
             event = 0;
         }
         result.row_index.push(row_index);
@@ -711,6 +731,34 @@ mod tests {
             mixed
                 .to_string()
                 .contains("everyone or no one should have an initial state")
+        );
+    }
+
+    #[test]
+    fn surv2data_timeline_can_retain_only_each_subjects_first_event() {
+        let result = surv2data_timeline_with_policy(
+            vec![1, 2, 1, 1, 2, 1, 2, 2],
+            vec![2.0, 3.0, 0.0, 3.0, 0.0, 1.0, 2.0, 1.0],
+            vec![
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(2),
+            ],
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(result.row_index, vec![0, 2, 4, 5, 6, 7]);
+        assert_eq!(result.status, vec![0, 2, 2, 0, 0, 0]);
+        assert_eq!(
+            result.istate,
+            vec![Some(2), Some(1), Some(1), Some(2), Some(2), Some(2)]
         );
     }
 

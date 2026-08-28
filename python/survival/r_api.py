@@ -5382,28 +5382,23 @@ def Surv2data(
 
     id_codes = _encode_labels(id_values, "id")
     repeated_is_first = isinstance(repeated, str) and repeated.lower() == "first"
-    if repeated_is_first:
-        seen_by_id: dict[int, set[int]] = {}
-        for row_idx in sorted(
-            range(len(time_values)),
-            key=lambda idx: (id_codes[idx], time_values[idx]),
-        ):
-            status_value = status_values[row_idx]
-            if status_value in (None, 0):
-                continue
-            seen = seen_by_id.setdefault(id_codes[row_idx], set())
-            if status_value in seen:
-                status_values[row_idx] = 0
-            else:
-                seen.add(status_value)
-        repeated_value = True
-    else:
-        repeated_value = _normalize_bool_option(repeated, "repeated")
+    repeated_value = True if repeated_is_first else _normalize_bool_option(repeated, "repeated")
     if not state_values:
         order = sorted(
             range(len(time_values)),
             key=lambda idx: (id_codes[idx], time_values[idx]),
         )
+        if repeated_is_first:
+            seen_by_id: dict[int, set[int]] = {}
+            for row_idx in order:
+                status_value = status_values[row_idx]
+                if status_value in (None, 0):
+                    continue
+                seen = seen_by_id.setdefault(id_codes[row_idx], set())
+                if status_value in seen:
+                    status_values[row_idx] = 0
+                else:
+                    seen.add(status_value)
         intervals: list[tuple[int, float, float, int, Any]] = []
         for _, grouped_rows_iter in groupby(order, key=lambda idx: id_codes[idx]):
             grouped_rows = list(grouped_rows_iter)
@@ -5442,6 +5437,7 @@ def Surv2data(
         time_values,
         status_values,
         repeated_value,
+        repeated_is_first,
     )
     rows = [int(value) for value in result.row_index]
     starts = [float(value) for value in result.start]

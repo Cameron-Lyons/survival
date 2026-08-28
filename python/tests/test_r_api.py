@@ -2837,6 +2837,17 @@ def test_surv2data_converts_timeline_rows_to_counting_transitions():
     )
     assert repeated_first_result["status"] == [2, 0, 0]
 
+    shuffled_first_result = survival.Surv2data(
+        [2.0, 0.0, 1.0, 0.0, 2.0, 1.0],
+        [2, 1, 2, 1, 2, 2],
+        states=["entry", "death"],
+        id=["a", "a", "a", "b", "b", "b"],
+        repeated="first",
+    )
+    assert shuffled_first_result["row"] == [1, 2, 3, 5]
+    assert shuffled_first_result["status"] == [2, 0, 2, 0]
+    assert shuffled_first_result["istate"] == [1, 2, 1, 2]
+
     ordinary_result = survival.Surv2data(
         [0.0, 0.0, 2.0, 3.0, 5.0, 6.0],
         [0, 0, 1, 1, 1, 0],
