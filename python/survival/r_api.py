@@ -5636,10 +5636,18 @@ def fromtimeline(
         repeated_value or not state_values,
     )
     removed_ids = [id_values[int(row)] for row in plan.removed_row]
+    has_initial_state = bool(plan.istate)
+    if not plan.start and id_codes:
+        first_subject = id_codes[0]
+        first_row = min(
+            (row for row, subject in enumerate(id_codes) if subject == first_subject),
+            key=time_values.__getitem__,
+        )
+        has_initial_state = status_values[first_row] != 0
 
     if state_values:
         state_levels = ["censor", *state_values]
-        istate_levels = state_values
+        istate_levels = state_values if has_initial_state else []
     else:
         state_levels = []
         istate_levels = []
@@ -5648,7 +5656,7 @@ def fromtimeline(
         "start": plan.start,
         "stop": plan.stop,
         "status": plan.status,
-        "istate": plan.istate,
+        "istate": plan.istate if has_initial_state else None,
         "static": static_columns,
         "static_row": plan.static_row,
         "dynamic_row": plan.dynamic_row,

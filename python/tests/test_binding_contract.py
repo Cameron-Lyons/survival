@@ -3377,6 +3377,25 @@ def test_data_prep_low_level_bindings_are_typed():
     assert suppressed_timeline_rows.status == [0, 0, 2]
     assert suppressed_timeline_rows.istate == [1, 1, 1]
 
+    absent_initial_state_rows = core.from_timeline_rows(
+        [0, 0, 0, 1, 1, 1, 2],
+        [0.0, 1.0, 2.0, 0.0, 2.0, 4.0, 0.0],
+        [0, 0, 1, 0, 2, 0, 0],
+        False,
+    )
+    assert absent_initial_state_rows.status == [0, 1, 2, 0]
+    assert absent_initial_state_rows.istate == []
+    assert absent_initial_state_rows.static_row == [0, 0, 3, 3]
+    assert absent_initial_state_rows.dynamic_row == [0, 1, 3, 4]
+    assert absent_initial_state_rows.removed_row == [6]
+
+    with pytest.raises(ValueError, match="everyone or no one should have an initial state"):
+        core.from_timeline_rows(
+            [0, 0, 1],
+            [0.0, 1.0, 0.0],
+            [0, 1, 1],
+        )
+
     collapsed = core.collapse(
         [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0],
         [1, 1, 1, 1],
