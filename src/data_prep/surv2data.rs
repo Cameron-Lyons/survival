@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use crate::constants::TIME_EPSILON;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 
+const NO_NEXT_ROW: usize = usize::MAX;
+
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct Surv2DataResult {
@@ -91,15 +93,8 @@ pub fn from_timeline_rows(
     }
 
     let capacity = n.saturating_sub(groups.len());
-    let mut result = FromTimelineRowsResult {
-        start: Vec::with_capacity(capacity),
-        stop: Vec::with_capacity(capacity),
-        status: Vec::with_capacity(capacity),
-        istate: Vec::with_capacity(capacity),
-        static_row: Vec::with_capacity(capacity),
-        dynamic_row: Vec::with_capacity(capacity),
-        removed_row: Vec::new(),
-    };
+    let mut next_row = vec![NO_NEXT_ROW; n];
+    group_index.clear();
     for mut rows in groups {
         rows.sort_unstable_by(|&left, &right| {
             time[left]
@@ -111,7 +106,6 @@ pub fn from_timeline_rows(
         }
         let first_row = rows[0];
         if rows.len() < 2 {
-            result.removed_row.push(first_row);
             continue;
         }
         if status[first_row] == 0 {
@@ -119,9 +113,29 @@ pub fn from_timeline_rows(
                 "no observation should start in a censored state",
             ));
         }
+        group_index.insert(id[first_row], first_row);
         for pair in rows.windows(2) {
             let row = pair[0];
             let next = pair[1];
+            next_row[row] = next;
+        }
+    }
+
+    let mut result = FromTimelineRowsResult {
+        start: Vec::with_capacity(capacity),
+        stop: Vec::with_capacity(capacity),
+        status: Vec::with_capacity(capacity),
+        istate: Vec::with_capacity(capacity),
+        static_row: Vec::with_capacity(capacity),
+        dynamic_row: Vec::with_capacity(capacity),
+        removed_row: Vec::new(),
+    };
+    for (row, next) in next_row.into_iter().enumerate() {
+        let Some(&first_row) = group_index.get(&id[row]) else {
+            result.removed_row.push(row);
+            continue;
+        };
+        if next != NO_NEXT_ROW {
             result.start.push(time[row]);
             result.stop.push(time[next]);
             result.status.push(status[next]);
@@ -141,8 +155,6 @@ pub fn surv2data_timeline(
     status: Vec<Option<i32>>,
     repeated: bool,
 ) -> PyResult<Surv2TimelineResult> {
-    const NO_NEXT_ROW: usize = usize::MAX;
-
     let n = id.len();
     if time.len() != n || status.len() != n {
         return Err(PyValueError::new_err(
@@ -643,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn from_timeline_rows_sorts_within_subject_and_tracks_removed_rows() {
+    fn from_timeline_rows_restores_input_order_and_tracks_removed_rows() {
         let result = from_timeline_rows(
             vec![0, 1, 0, 1, 0, 2],
             vec![0.0, 3.0, 4.0, 0.0, 2.0, 1.0],
@@ -651,12 +663,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.start, vec![0.0, 2.0, 0.0]);
-        assert_eq!(result.stop, vec![2.0, 4.0, 3.0]);
-        assert_eq!(result.status, vec![2, 3, 2]);
-        assert_eq!(result.istate, vec![1, 2, 1]);
-        assert_eq!(result.static_row, vec![0, 0, 3]);
-        assert_eq!(result.dynamic_row, vec![0, 4, 3]);
+        assert_eq!(result.start, vec![0.0, 0.0, 2.0]);
+        assert_eq!(result.stop, vec![2.0, 3.0, 4.0]);
+        assert_eq!(result.status, vec![2, 2, 3]);
+        assert_eq!(result.istate, vec![1, 1, 2]);
+        assert_eq!(result.static_row, vec![0, 3, 0]);
+        assert_eq!(result.dynamic_row, vec![0, 3, 4]);
         assert_eq!(result.removed_row, vec![5]);
     }
 
