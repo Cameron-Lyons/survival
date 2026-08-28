@@ -141,6 +141,8 @@ pub fn surv2data_timeline(
     status: Vec<Option<i32>>,
     repeated: bool,
 ) -> PyResult<Surv2TimelineResult> {
+    const NO_NEXT_ROW: usize = usize::MAX;
+
     let n = id.len();
     if time.len() != n || status.len() != n {
         return Err(PyValueError::new_err(
@@ -157,7 +159,7 @@ pub fn surv2data_timeline(
             .then_with(|| left.cmp(&right))
     });
 
-    let mut intervals = vec![None; n];
+    let mut next_row = vec![NO_NEXT_ROW; n];
     let mut n_intervals = 0;
     for pair in order.windows(2) {
         let current = pair[0];
@@ -170,13 +172,7 @@ pub fn surv2data_timeline(
                 "duplicated time values for a single id",
             ));
         }
-
-        let current_state = status[current];
-        let mut event = status[next].unwrap_or(0);
-        if !repeated && current_state == Some(event) {
-            event = 0;
-        }
-        intervals[current] = Some((time[current], time[next], event, current_state));
+        next_row[current] = next;
         n_intervals += 1;
     }
 
@@ -187,13 +183,18 @@ pub fn surv2data_timeline(
         status: Vec::with_capacity(n_intervals),
         istate: Vec::with_capacity(n_intervals),
     };
-    for (row_index, interval) in intervals.into_iter().enumerate() {
-        let Some((start, stop, event, istate)) = interval else {
+    for (row_index, next) in next_row.into_iter().enumerate() {
+        if next == NO_NEXT_ROW {
             continue;
-        };
+        }
+        let istate = status[row_index];
+        let mut event = status[next].unwrap_or(0);
+        if !repeated && istate == Some(event) {
+            event = 0;
+        }
         result.row_index.push(row_index);
-        result.start.push(start);
-        result.stop.push(stop);
+        result.start.push(time[row_index]);
+        result.stop.push(time[next]);
         result.status.push(event);
         result.istate.push(istate);
     }
@@ -540,6 +541,23 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn surv2data_timeline_skips_singletons_and_preserves_input_order() {
+        let result = surv2data_timeline(
+            vec![9, 1, 2, 1, 8, 2],
+            vec![5.0, 2.0, 3.0, 0.0, 1.0, 0.0],
+            vec![Some(1), Some(2), Some(3), Some(1), Some(1), Some(1)],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.row_index, vec![3, 5]);
+        assert_eq!(result.start, vec![0.0, 0.0]);
+        assert_eq!(result.stop, vec![2.0, 3.0]);
+        assert_eq!(result.status, vec![2, 3]);
+        assert_eq!(result.istate, vec![Some(1), Some(1)]);
     }
 
     #[test]
