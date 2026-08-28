@@ -106,9 +106,11 @@ pub fn from_timeline_rows(
                 .total_cmp(&time[right])
                 .then_with(|| left.cmp(&right))
         });
+        if rows.windows(2).any(|pair| time[pair[0]] == time[pair[1]]) {
+            return Err(PyValueError::new_err("duplicated time for an id"));
+        }
         let first_row = rows[0];
-        let last_row = rows[rows.len() - 1];
-        if rows.len() < 2 || time[first_row] == time[last_row] {
+        if rows.len() < 2 {
             result.removed_row.push(first_row);
             continue;
         }
@@ -563,5 +565,19 @@ mod tests {
         assert!(from_timeline_rows(vec![0], vec![], vec![1]).is_err());
         assert!(from_timeline_rows(vec![0], vec![f64::NAN], vec![1]).is_err());
         assert!(from_timeline_rows(vec![0, 0], vec![0.0, 1.0], vec![0, 1]).is_err());
+    }
+
+    #[test]
+    fn timeline_rows_reject_duplicate_times_within_a_subject() {
+        let partial_tie =
+            from_timeline_rows(vec![0, 0, 0], vec![0.0, 1.0, 1.0], vec![1, 2, 3]).unwrap_err();
+        assert!(
+            partial_tie
+                .to_string()
+                .contains("duplicated time for an id")
+        );
+
+        let all_tied = from_timeline_rows(vec![0, 0], vec![1.0, 1.0], vec![1, 2]).unwrap_err();
+        assert!(all_tied.to_string().contains("duplicated time for an id"));
     }
 }

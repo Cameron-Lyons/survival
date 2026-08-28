@@ -2913,6 +2913,9 @@ def test_fromtimeline_builds_intervals_and_covariate_row_maps():
     with pytest.raises(ValueError, match="censored state"):
         survival.fromtimeline([0.0, 1.0], [0, 1], id=[1, 1])
 
+    with pytest.raises(ValueError, match="duplicated time for an id"):
+        survival.fromtimeline([0.0, 1.0, 1.0], [1, 2, 3], id=[1, 1, 1])
+
 
 def test_surv_accepts_named_response_arguments():
     positional = survival.Surv([1, 2, 3], [1, 2, 1])
