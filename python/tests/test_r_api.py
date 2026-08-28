@@ -2979,8 +2979,48 @@ def test_fromtimeline_builds_intervals_and_covariate_row_maps():
     with pytest.raises(TypeError, match="repeated must be True or False"):
         survival.fromtimeline([0.0, 1.0], [1, 1], id=[1, 1], repeated="yes")
 
-    with pytest.raises(ValueError, match="censored state"):
-        survival.fromtimeline([0.0, 1.0], [0, 1], id=[1, 1])
+    absent_initial_state = survival.fromtimeline(
+        [0.0, 1.0, 2.0, 0.0, 2.0, 4.0],
+        [0, 0, 1, 0, 1, 0],
+        id=[1, 1, 1, 2, 2, 2],
+    )
+    assert absent_initial_state["start"] == pytest.approx([0.0, 1.0, 0.0, 2.0])
+    assert absent_initial_state["stop"] == pytest.approx([1.0, 2.0, 2.0, 4.0])
+    assert absent_initial_state["status"] == [0, 1, 1, 0]
+    assert absent_initial_state["istate"] is None
+    assert absent_initial_state["istate_levels"] == []
+
+    absent_multistate = survival.fromtimeline(
+        [0.0, 1.0, 2.0, 0.0, 2.0, 4.0],
+        [0, 0, 1, 0, 2, 0],
+        id=[1, 1, 1, 2, 2, 2],
+        states=["ill", "death"],
+    )
+    assert absent_multistate["status"] == [0, 1, 2, 0]
+    assert absent_multistate["istate"] is None
+    assert absent_multistate["state_levels"] == ["censor", "ill", "death"]
+    assert absent_multistate["istate_levels"] == []
+
+    singleton_initial_states = survival.fromtimeline(
+        [0.0, 0.0],
+        [1, 2],
+        id=[1, 2],
+        states=["ill", "death"],
+    )
+    assert singleton_initial_states["start"] == []
+    assert singleton_initial_states["istate"] == []
+    assert singleton_initial_states["istate_levels"] == ["ill", "death"]
+    assert singleton_initial_states["removed_id"] == [1, 2]
+
+    with pytest.raises(ValueError, match="everyone or no one should have an initial state"):
+        survival.fromtimeline(
+            [0.0, 1.0, 0.0, 1.0],
+            [0, 1, 1, 2],
+            id=[1, 1, 2, 2],
+        )
+
+    with pytest.raises(ValueError, match="everyone or no one should have an initial state"):
+        survival.fromtimeline([0.0, 1.0, 0.0], [0, 1, 1], id=[1, 1, 2])
 
     with pytest.raises(ValueError, match="duplicated time for an id"):
         survival.fromtimeline([0.0, 1.0, 1.0], [1, 2, 3], id=[1, 1, 1])

@@ -103,7 +103,8 @@ pub(crate) fn from_timeline_rows_with_repeated(
 
     let capacity = n.saturating_sub(groups.len());
     let mut next_row = vec![NO_NEXT_ROW; n];
-    let mut state_by_row = vec![0; n];
+    let mut has_initial_state = None;
+    let mut state_by_row = Vec::new();
     group_index.clear();
     for mut rows in groups {
         rows.sort_unstable_by(|&left, &right| {
@@ -115,32 +116,46 @@ pub(crate) fn from_timeline_rows_with_repeated(
             return Err(PyValueError::new_err("duplicated time for an id"));
         }
         let first_row = rows[0];
+        let current_has_state = status[first_row] != 0;
+        if has_initial_state.is_some_and(|expected| expected != current_has_state) {
+            return Err(PyValueError::new_err(
+                "everyone or no one should have an initial state",
+            ));
+        }
+        if has_initial_state.is_none() {
+            has_initial_state = Some(current_has_state);
+            if current_has_state {
+                state_by_row.resize(n, 0);
+            }
+        }
         if rows.len() < 2 {
             continue;
         }
-        if status[first_row] == 0 {
-            return Err(PyValueError::new_err(
-                "no observation should start in a censored state",
-            ));
-        }
         group_index.insert(id[first_row], first_row);
-        let mut current_state = status[first_row];
-        for pair in rows.windows(2) {
-            let row = pair[0];
-            let next = pair[1];
-            if status[row] != 0 {
-                current_state = status[row];
+        if current_has_state {
+            let mut current_state = status[first_row];
+            for pair in rows.windows(2) {
+                let row = pair[0];
+                let next = pair[1];
+                if status[row] != 0 {
+                    current_state = status[row];
+                }
+                next_row[row] = next;
+                state_by_row[row] = current_state;
             }
-            next_row[row] = next;
-            state_by_row[row] = current_state;
+        } else {
+            for pair in rows.windows(2) {
+                next_row[pair[0]] = pair[1];
+            }
         }
     }
 
+    let has_initial_state = has_initial_state.unwrap_or(false);
     let mut result = FromTimelineRowsResult {
         start: Vec::with_capacity(capacity),
         stop: Vec::with_capacity(capacity),
         status: Vec::with_capacity(capacity),
-        istate: Vec::with_capacity(capacity),
+        istate: Vec::with_capacity(if has_initial_state { capacity } else { 0 }),
         static_row: Vec::with_capacity(capacity),
         dynamic_row: Vec::with_capacity(capacity),
         removed_row: Vec::new(),
@@ -154,14 +169,17 @@ pub(crate) fn from_timeline_rows_with_repeated(
             result.start.push(time[row]);
             result.stop.push(time[next]);
             let event = status[next];
+            let current_state = has_initial_state.then(|| state_by_row[row]);
             result
                 .status
-                .push(if !repeated && event == state_by_row[row] {
+                .push(if !repeated && current_state == Some(event) {
                     0
                 } else {
                     event
                 });
-            result.istate.push(state_by_row[row]);
+            if let Some(state) = current_state {
+                result.istate.push(state);
+            }
             result.static_row.push(first_row);
             result.dynamic_row.push(row);
         }
@@ -739,10 +757,45 @@ mod tests {
     }
 
     #[test]
-    fn timeline_rows_validate_inputs_and_initial_states() {
+    fn timeline_rows_validate_inputs() {
         assert!(from_timeline_rows(vec![0], vec![], vec![1]).is_err());
         assert!(from_timeline_rows(vec![0], vec![f64::NAN], vec![1]).is_err());
-        assert!(from_timeline_rows(vec![0, 0], vec![0.0, 1.0], vec![0, 1]).is_err());
+    }
+
+    #[test]
+    fn from_timeline_rows_handles_absent_and_mixed_initial_states() {
+        let absent = from_timeline_rows_with_repeated(
+            vec![0, 0, 0, 1, 1, 1, 2],
+            vec![0.0, 1.0, 2.0, 0.0, 2.0, 4.0, 0.0],
+            vec![0, 0, 1, 0, 2, 0, 0],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(absent.start, vec![0.0, 1.0, 0.0, 2.0]);
+        assert_eq!(absent.stop, vec![1.0, 2.0, 2.0, 4.0]);
+        assert_eq!(absent.status, vec![0, 1, 2, 0]);
+        assert!(absent.istate.is_empty());
+        assert_eq!(absent.static_row, vec![0, 0, 3, 3]);
+        assert_eq!(absent.dynamic_row, vec![0, 1, 3, 4]);
+        assert_eq!(absent.removed_row, vec![6]);
+
+        let mixed =
+            from_timeline_rows(vec![0, 0, 1, 1], vec![0.0, 1.0, 0.0, 1.0], vec![0, 1, 1, 2])
+                .unwrap_err();
+        assert!(
+            mixed
+                .to_string()
+                .contains("everyone or no one should have an initial state")
+        );
+
+        let singleton_mixed =
+            from_timeline_rows(vec![0, 0, 1], vec![0.0, 1.0, 0.0], vec![0, 1, 1]).unwrap_err();
+        assert!(
+            singleton_mixed
+                .to_string()
+                .contains("everyone or no one should have an initial state")
+        );
     }
 
     #[test]
