@@ -31,16 +31,17 @@ fn from_timeline_rows_py(
 }
 
 #[pyfunction(name = "surv2data_timeline")]
-#[pyo3(signature = (id, time, status, repeated=false, first_only=false))]
+#[pyo3(signature = (id, time, status, repeated=false, first_only=false, multistate=true))]
 fn surv2data_timeline_py(
     id: Vec<i64>,
     time: Vec<f64>,
     status: Vec<Option<i32>>,
     repeated: bool,
     first_only: bool,
+    multistate: bool,
 ) -> PyResult<Surv2TimelineResult> {
-    crate::data_prep::surv2data_module::surv2data_timeline_with_policy(
-        id, time, status, repeated, first_only,
+    crate::data_prep::surv2data_module::surv2data_timeline_with_options(
+        id, time, status, repeated, first_only, multistate,
     )
 }
 

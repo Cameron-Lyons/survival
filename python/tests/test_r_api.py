@@ -2855,6 +2855,23 @@ def test_surv2data_converts_timeline_rows_to_counting_transitions():
     )
     assert ordinary_result["row"] == [0, 1, 2, 3]
     assert ordinary_result["status"] == [1, 1, 1, 0]
+
+    ordinary_mixed_first_status = survival.Surv2data(
+        [0.0, 1.0, 0.0, 1.0],
+        [1, None, 0, 1],
+        id=[1, 1, 2, 2],
+    )
+    assert ordinary_mixed_first_status["row"] == [0, 2]
+    assert ordinary_mixed_first_status["status"] == [0, 1]
+    assert ordinary_mixed_first_status["istate"] == [0, 0]
+
+    ordinary_first_only = survival.Surv2data(
+        [0.0, 1.0, 2.0, 3.0, 4.0],
+        [0, 1, 0, 1, 1],
+        id=[1, 1, 1, 1, 1],
+        repeated="first",
+    )
+    assert ordinary_first_only["status"] == [1, 0, 0, 0]
     assert ordinary_result["type"] == "counting"
 
     ordinary_right = survival.Surv2data(

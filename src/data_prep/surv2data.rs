@@ -221,9 +221,20 @@ pub fn surv2data_timeline(
 pub(crate) fn surv2data_timeline_with_policy(
     id: Vec<i64>,
     time: Vec<f64>,
+    status: Vec<Option<i32>>,
+    repeated: bool,
+    first_only: bool,
+) -> PyResult<Surv2TimelineResult> {
+    surv2data_timeline_with_options(id, time, status, repeated, first_only, true)
+}
+
+pub(crate) fn surv2data_timeline_with_options(
+    id: Vec<i64>,
+    time: Vec<f64>,
     mut status: Vec<Option<i32>>,
     repeated: bool,
     first_only: bool,
+    multistate: bool,
 ) -> PyResult<Surv2TimelineResult> {
     let n = id.len();
     if time.len() != n || status.len() != n {
@@ -250,13 +261,15 @@ pub(crate) fn surv2data_timeline_with_policy(
             if first_only {
                 seen_events.clear();
             }
-            let current_has_state = status[current].is_some_and(|value| value != 0);
-            if has_initial_state.is_some_and(|expected| expected != current_has_state) {
-                return Err(PyValueError::new_err(
-                    "everyone or no one should have an initial state",
-                ));
+            if multistate {
+                let current_has_state = status[current].is_some_and(|value| value != 0);
+                if has_initial_state.is_some_and(|expected| expected != current_has_state) {
+                    return Err(PyValueError::new_err(
+                        "everyone or no one should have an initial state",
+                    ));
+                }
+                has_initial_state = Some(current_has_state);
             }
-            has_initial_state = Some(current_has_state);
         }
         if first_only {
             let event = status[current].unwrap_or(0);
@@ -280,7 +293,7 @@ pub(crate) fn surv2data_timeline_with_policy(
         n_intervals += 1;
     }
 
-    let has_initial_state = has_initial_state.unwrap_or(false);
+    let has_initial_state = multistate && has_initial_state.unwrap_or(false);
     let mut state_by_row = if has_initial_state {
         vec![0; n]
     } else {
@@ -313,7 +326,7 @@ pub(crate) fn surv2data_timeline_with_policy(
         }
         let istate = has_initial_state.then(|| state_by_row[row_index]);
         let mut event = status[next].unwrap_or(0);
-        if !first_only && !repeated && istate == Some(event) {
+        if multistate && !first_only && !repeated && istate == Some(event) {
             event = 0;
         }
         result.row_index.push(row_index);
@@ -760,6 +773,36 @@ mod tests {
             result.istate,
             vec![Some(2), Some(1), Some(1), Some(2), Some(2), Some(2)]
         );
+    }
+
+    #[test]
+    fn surv2data_timeline_supports_ordinary_event_histories() {
+        let mixed_first_status = surv2data_timeline_with_options(
+            vec![1, 1, 2, 2],
+            vec![0.0, 1.0, 0.0, 1.0],
+            vec![Some(1), None, Some(0), Some(1)],
+            true,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(mixed_first_status.row_index, vec![0, 2]);
+        assert_eq!(mixed_first_status.status, vec![0, 1]);
+        assert_eq!(mixed_first_status.istate, vec![None, None]);
+
+        let first_only = surv2data_timeline_with_options(
+            vec![1, 1, 1, 1, 1, 1],
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![Some(1), Some(0), Some(1), None, Some(2), Some(2)],
+            true,
+            true,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(first_only.status, vec![0, 0, 0, 2, 0]);
+        assert_eq!(first_only.istate, vec![None; 5]);
     }
 
     #[test]

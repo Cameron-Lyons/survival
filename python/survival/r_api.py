@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date as _Date
 from datetime import datetime as _DateTime
 from functools import lru_cache
-from itertools import combinations, groupby, product
+from itertools import combinations, product
 from numbers import Real
 from operator import index
 from statistics import NormalDist
@@ -5383,72 +5383,33 @@ def Surv2data(
     id_codes = _encode_labels(id_values, "id")
     repeated_is_first = isinstance(repeated, str) and repeated.lower() == "first"
     repeated_value = True if repeated_is_first else _normalize_bool_option(repeated, "repeated")
-    if not state_values:
-        order = sorted(
-            range(len(time_values)),
-            key=lambda idx: (id_codes[idx], time_values[idx]),
+    try:
+        result = _core.surv2data_timeline(
+            id_codes,
+            time_values,
+            status_values,
+            repeated_value if state_values else True,
+            repeated_is_first,
+            bool(state_values),
         )
-        if repeated_is_first:
-            seen_by_id: dict[int, set[int]] = {}
-            for row_idx in order:
-                status_value = status_values[row_idx]
-                if status_value in (None, 0):
-                    continue
-                seen = seen_by_id.setdefault(id_codes[row_idx], set())
-                if status_value in seen:
-                    status_values[row_idx] = 0
-                else:
-                    seen.add(status_value)
-        intervals: list[tuple[int, float, float, int, Any]] = []
-        for _, grouped_rows_iter in groupby(order, key=lambda idx: id_codes[idx]):
-            grouped_rows = list(grouped_rows_iter)
-            for current_row, next_row in zip(grouped_rows[:-1], grouped_rows[1:], strict=True):
-                if time_values[current_row] == time_values[next_row]:
-                    raise ValueError("duplicated time for an id")
-                next_status = status_values[next_row]
-                intervals.append(
-                    (
-                        current_row,
-                        time_values[current_row],
-                        time_values[next_row],
-                        0 if next_status is None else next_status,
-                        id_values[current_row],
-                    )
-                )
-        intervals.sort(key=lambda interval: interval[0])
-        rows = [interval[0] for interval in intervals]
-        starts = [interval[1] for interval in intervals]
-        stops = [interval[2] for interval in intervals]
-        output_status = [interval[3] for interval in intervals]
-        output_ids = [interval[4] for interval in intervals]
-        response_type = _timeline_response_type(rows, id_codes, multistate=False)
-        return {
-            "row": rows,
-            "start": starts,
-            "stop": stops,
-            "status": output_status,
-            "id": output_ids,
-            "istate": [0] * len(rows),
-            "states": [],
-            "type": response_type,
-        }
-    result = _core.surv2data_timeline(
-        id_codes,
-        time_values,
-        status_values,
-        repeated_value,
-        repeated_is_first,
-    )
+    except ValueError as exc:
+        if not state_values and str(exc) == "duplicated time values for a single id":
+            raise ValueError("duplicated time for an id") from None
+        raise
     rows = [int(value) for value in result.row_index]
     starts = [float(value) for value in result.start]
-    response_type = _timeline_response_type(rows, id_codes, multistate=True)
+    response_type = _timeline_response_type(rows, id_codes, multistate=bool(state_values))
     return {
         "row": rows,
         "start": starts,
         "stop": [float(value) for value in result.stop],
         "status": [int(value) for value in result.status],
         "id": [id_values[row] for row in rows],
-        "istate": [None if value is None else int(value) for value in result.istate],
+        "istate": (
+            [None if value is None else int(value) for value in result.istate]
+            if state_values
+            else [0] * len(rows)
+        ),
         "states": state_values,
         "type": response_type,
     }
