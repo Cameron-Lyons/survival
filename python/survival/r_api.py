@@ -5340,6 +5340,23 @@ def _surv2data_status_values(status: Any) -> list[int | None]:
     return values
 
 
+def _timeline_response_type(
+    rows: Sequence[int],
+    id_codes: Sequence[int],
+    *,
+    multistate: bool,
+) -> str:
+    right_type = "mright" if multistate else "right"
+    counting_type = "mcounting" if multistate else "counting"
+    seen = bytearray(max(id_codes, default=-1) + 1)
+    for row in rows:
+        subject = id_codes[row]
+        if seen[subject]:
+            return counting_type
+        seen[subject] = 1
+    return right_type
+
+
 def Surv2data(
     time: Any,
     status: Any,
@@ -5407,7 +5424,7 @@ def Surv2data(
         stops = [interval[2] for interval in intervals]
         output_status = [interval[3] for interval in intervals]
         output_ids = [interval[4] for interval in intervals]
-        response_type = "right" if starts and all(value == 0.0 for value in starts) else "counting"
+        response_type = _timeline_response_type(rows, id_codes, multistate=False)
         return {
             "row": rows,
             "start": starts,
@@ -5426,15 +5443,7 @@ def Surv2data(
     )
     rows = [int(value) for value in result.row_index]
     starts = [float(value) for value in result.start]
-    response_type = (
-        "mright"
-        if state_values and starts and all(value == 0.0 for value in starts)
-        else "mcounting"
-        if state_values
-        else "right"
-        if starts and all(value == 0.0 for value in starts)
-        else "counting"
-    )
+    response_type = _timeline_response_type(rows, id_codes, multistate=True)
     return {
         "row": rows,
         "start": starts,
@@ -5636,6 +5645,11 @@ def fromtimeline(
         repeated_value or not state_values,
     )
     removed_ids = [id_values[int(row)] for row in plan.removed_row]
+    response_type = _timeline_response_type(
+        plan.dynamic_row,
+        id_codes,
+        multistate=bool(state_values),
+    )
     has_initial_state = bool(plan.istate)
     if not plan.start and id_codes:
         first_subject = id_codes[0]
@@ -5663,6 +5677,7 @@ def fromtimeline(
         "state_levels": state_levels,
         "istate_levels": istate_levels,
         "removed_id": removed_ids,
+        "type": response_type,
     }
 
 
