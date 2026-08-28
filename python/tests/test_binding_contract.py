@@ -3360,6 +3360,14 @@ def test_data_prep_low_level_bindings_are_typed():
     assert timeline_rows.dynamic_row == [0, 3, 4]
     assert timeline_rows.removed_row == [5]
 
+    censored_timeline_rows = core.from_timeline_rows(
+        [0, 1, 0, 1, 0, 1],
+        [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+        [1, 2, 0, 0, 2, 3],
+    )
+    assert censored_timeline_rows.status == [0, 0, 2, 3]
+    assert censored_timeline_rows.istate == [1, 2, 1, 2]
+
     collapsed = core.collapse(
         [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 1.0, 0.0, 1.0, 0.0],
         [1, 1, 1, 1],

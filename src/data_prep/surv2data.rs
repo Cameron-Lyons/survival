@@ -94,6 +94,7 @@ pub fn from_timeline_rows(
 
     let capacity = n.saturating_sub(groups.len());
     let mut next_row = vec![NO_NEXT_ROW; n];
+    let mut state_by_row = vec![0; n];
     group_index.clear();
     for mut rows in groups {
         rows.sort_unstable_by(|&left, &right| {
@@ -114,10 +115,15 @@ pub fn from_timeline_rows(
             ));
         }
         group_index.insert(id[first_row], first_row);
+        let mut current_state = status[first_row];
         for pair in rows.windows(2) {
             let row = pair[0];
             let next = pair[1];
+            if status[row] != 0 {
+                current_state = status[row];
+            }
             next_row[row] = next;
+            state_by_row[row] = current_state;
         }
     }
 
@@ -139,7 +145,7 @@ pub fn from_timeline_rows(
             result.start.push(time[row]);
             result.stop.push(time[next]);
             result.status.push(status[next]);
-            result.istate.push(status[row]);
+            result.istate.push(state_by_row[row]);
             result.static_row.push(first_row);
             result.dynamic_row.push(row);
         }
@@ -670,6 +676,23 @@ mod tests {
         assert_eq!(result.static_row, vec![0, 3, 0]);
         assert_eq!(result.dynamic_row, vec![0, 3, 4]);
         assert_eq!(result.removed_row, vec![5]);
+    }
+
+    #[test]
+    fn from_timeline_rows_carries_states_through_censored_rows() {
+        let result = from_timeline_rows(
+            vec![0, 1, 0, 1, 0, 1],
+            vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+            vec![1, 2, 0, 0, 2, 3],
+        )
+        .unwrap();
+
+        assert_eq!(result.start, vec![0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(result.stop, vec![1.0, 1.0, 2.0, 2.0]);
+        assert_eq!(result.status, vec![0, 0, 2, 3]);
+        assert_eq!(result.istate, vec![1, 2, 1, 2]);
+        assert_eq!(result.static_row, vec![0, 1, 0, 1]);
+        assert_eq!(result.dynamic_row, vec![0, 1, 2, 3]);
     }
 
     #[test]
