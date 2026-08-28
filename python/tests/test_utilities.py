@@ -187,6 +187,12 @@ def test_surv2data_and_survcondense_public_apis():
         [1, 2, 1, 2],
         first_only=True,
     )
+    ordinary_timeline = survival.surv2data_timeline(
+        [1, 1, 2, 2],
+        [0.0, 1.0, 0.0, 1.0],
+        [1, None, 0, 1],
+        multistate=False,
+    )
     condensed = survival.survcondense(
         [2, 1, 1, 2],
         [0.0, 0.0, 5.0, 3.0],
@@ -206,6 +212,9 @@ def test_surv2data_and_survcondense_public_apis():
     assert timeline.istate == [1, 1, 2]
     assert first_only_timeline.status == [2, 0, 0]
     assert first_only_timeline.istate == [1, 2, 2]
+    assert ordinary_timeline.row_index == [0, 2]
+    assert ordinary_timeline.status == [0, 1]
+    assert ordinary_timeline.istate == [None, None]
 
     assert condensed.id == [1, 2, 2]
     assert condensed.time1 == pytest.approx([0.0, 0.0, 3.0])

@@ -5749,6 +5749,7 @@ def surv2data_timeline(
     status: list[int | None],
     repeated: bool = False,
     first_only: bool = False,
+    multistate: bool = True,
 ) -> Surv2TimelineResult: ...
 def from_timeline_rows(
     id: list[int],
