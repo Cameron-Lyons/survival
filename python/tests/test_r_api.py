@@ -3017,6 +3017,25 @@ def test_fromtimeline_builds_intervals_and_covariate_row_maps():
     assert retained_repeated_result["status"] == [0, 1]
     assert retained_repeated_result["istate"] == [1, 1]
 
+    first_only_result = survival.fromtimeline(
+        [0.0, 1.0, 2.0, 3.0],
+        [1, 2, 1, 2],
+        id=[1, 1, 1, 1],
+        states=["entry", "death"],
+        repeated="first",
+    )
+    assert first_only_result["status"] == [2, 0, 0]
+    assert first_only_result["istate"] == [1, 2, 2]
+
+    ordinary_first_only = survival.fromtimeline(
+        [0.0, 1.0, 2.0, 3.0, 4.0],
+        [0, 1, 0, 1, 1],
+        id=[1, 1, 1, 1, 1],
+        repeated="FIRST",
+    )
+    assert ordinary_first_only["status"] == [1, 0, 0, 0]
+    assert ordinary_first_only["istate"] is None
+
     with pytest.raises(TypeError, match="repeated must be True or False"):
         survival.fromtimeline([0.0, 1.0], [1, 1], id=[1, 1], repeated="yes")
 

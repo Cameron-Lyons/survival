@@ -5621,7 +5621,7 @@ def fromtimeline(
     data: Any | None = None,
     id_name: Any = "id",
 ) -> dict[str, Any]:
-    """Convert right-censored timeline rows into R ``fromtimeline`` intervals."""
+    """Convert timeline rows, including first-event-only histories, into intervals."""
 
     time_values = _float_vector(time, "time")
     status_values = [int(value) for value in _int_vector(status, "status")]
@@ -5632,7 +5632,8 @@ def fromtimeline(
     if any(not math.isfinite(value) for value in time_values):
         raise ValueError("time values must be finite")
     state_values = _totimeline_state_values(states)
-    repeated_value = _normalize_bool_option(repeated, "repeated")
+    repeated_is_first = isinstance(repeated, str) and repeated.casefold() == "first"
+    repeated_value = True if repeated_is_first else _normalize_bool_option(repeated, "repeated")
     id_name_value = str(id_name)
     column_names, columns = _fromtimeline_data_columns(data, n)
     static_columns = _fromtimeline_static_columns(columns, id_values, column_names, id_name_value)
@@ -5645,6 +5646,7 @@ def fromtimeline(
         time_values,
         status_values,
         repeated_value or not state_values,
+        repeated_is_first,
     )
     removed_ids = [id_values[int(row)] for row in plan.removed_row]
     response_type = _timeline_response_type(

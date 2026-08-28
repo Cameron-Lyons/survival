@@ -3264,7 +3264,7 @@ def test_data_prep_low_level_bindings_are_typed():
         ],
         "surv2data": ["id", "time", "event_time", "event_status"],
         "surv2data_timeline": ["id", "time", "status", "repeated"],
-        "from_timeline_rows": ["id", "time", "status", "repeated"],
+        "from_timeline_rows": ["id", "time", "status", "repeated", "first_only"],
         "survcondense": ["id", "time1", "time2", "status"],
         "survcondense_plan": ["id_order", "start", "stop", "row_code"],
         "tcut": ["value", "breaks", "labels"],
@@ -3376,6 +3376,16 @@ def test_data_prep_low_level_bindings_are_typed():
     )
     assert suppressed_timeline_rows.status == [0, 0, 2]
     assert suppressed_timeline_rows.istate == [1, 1, 1]
+
+    first_only_timeline_rows = core.from_timeline_rows(
+        [0, 0, 0, 0],
+        [0.0, 1.0, 2.0, 3.0],
+        [1, 2, 1, 2],
+        True,
+        True,
+    )
+    assert first_only_timeline_rows.status == [2, 0, 0]
+    assert first_only_timeline_rows.istate == [1, 2, 2]
 
     absent_initial_state_rows = core.from_timeline_rows(
         [0, 0, 0, 1, 1, 1, 2],

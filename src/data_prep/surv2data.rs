@@ -1,6 +1,6 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::constants::TIME_EPSILON;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
@@ -80,6 +80,16 @@ pub(crate) fn from_timeline_rows_with_repeated(
     status: Vec<i32>,
     repeated: bool,
 ) -> PyResult<FromTimelineRowsResult> {
+    from_timeline_rows_with_policy(id, time, status, repeated, false)
+}
+
+pub(crate) fn from_timeline_rows_with_policy(
+    id: Vec<usize>,
+    time: Vec<f64>,
+    mut status: Vec<i32>,
+    repeated: bool,
+    first_only: bool,
+) -> PyResult<FromTimelineRowsResult> {
     let n = id.len();
     validate_parallel_len("time", time.len(), n)?;
     validate_parallel_len("status", status.len(), n)?;
@@ -105,6 +115,7 @@ pub(crate) fn from_timeline_rows_with_repeated(
     let mut next_row = vec![NO_NEXT_ROW; n];
     let mut has_initial_state = None;
     let mut state_by_row = Vec::new();
+    let mut seen_events = HashSet::new();
     group_index.clear();
     for mut rows in groups {
         rows.sort_unstable_by(|&left, &right| {
@@ -114,6 +125,15 @@ pub(crate) fn from_timeline_rows_with_repeated(
         });
         if rows.windows(2).any(|pair| time[pair[0]] == time[pair[1]]) {
             return Err(PyValueError::new_err("duplicated time for an id"));
+        }
+        if first_only {
+            seen_events.clear();
+            for &row in &rows {
+                let event = status[row];
+                if event != 0 && !seen_events.insert(event) {
+                    status[row] = 0;
+                }
+            }
         }
         let first_row = rows[0];
         let current_has_state = status[first_row] != 0;
@@ -170,13 +190,13 @@ pub(crate) fn from_timeline_rows_with_repeated(
             result.stop.push(time[next]);
             let event = status[next];
             let current_state = has_initial_state.then(|| state_by_row[row]);
-            result
-                .status
-                .push(if !repeated && current_state == Some(event) {
+            result.status.push(
+                if !first_only && !repeated && current_state == Some(event) {
                     0
                 } else {
                     event
-                });
+                },
+            );
             if let Some(state) = current_state {
                 result.istate.push(state);
             }
@@ -754,6 +774,21 @@ mod tests {
         .unwrap();
         assert_eq!(transition_back.status, vec![2, 0, 1]);
         assert_eq!(transition_back.istate, vec![1, 2, 2]);
+    }
+
+    #[test]
+    fn from_timeline_rows_can_retain_only_each_subjects_first_event() {
+        let result = from_timeline_rows_with_policy(
+            vec![0, 1, 0, 1, 0, 1, 0, 1],
+            vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+            vec![1, 1, 2, 2, 1, 1, 2, 2],
+            true,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(result.status, vec![2, 2, 0, 0, 0, 0]);
+        assert_eq!(result.istate, vec![1, 1, 2, 2, 2, 2]);
     }
 
     #[test]

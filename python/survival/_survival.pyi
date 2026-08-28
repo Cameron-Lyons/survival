@@ -5754,6 +5754,7 @@ def from_timeline_rows(
     time: list[float],
     status: list[int],
     repeated: bool = True,
+    first_only: bool = False,
 ) -> FromTimelineRowsResult: ...
 def survcondense(
     id: list[int],
