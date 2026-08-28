@@ -316,7 +316,6 @@ fn accumulate_expected_baseline_stratum(
             .then_with(|| left.cmp(&right))
     });
 
-    let mut active = vec![entry_times.is_none(); time.len()];
     let mut risk_sum = 0.0;
     let mut risk_xsum = vec![0.0; nvar];
     if entry_times.is_none() {
@@ -335,23 +334,19 @@ fn accumulate_expected_baseline_stratum(
         if let (Some(entry), Some(order)) = (entry_times, entry_order.as_ref()) {
             while entry_pos < order.len() && entry[order[entry_pos]] < event_time {
                 let idx = order[entry_pos];
-                if !active[idx] {
-                    active[idx] = true;
-                    risk_sum += risk_weights[idx];
-                    add_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
-                }
+                risk_sum += risk_weights[idx];
+                add_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
                 entry_pos += 1;
             }
         }
         while stop_pos < stop_order.len()
             && is_before_event_time(time[stop_order[stop_pos]], event_time)
         {
+            // Validated entry times precede stop times, so a delayed-entry row
+            // reaching this cursor has already been added to the risk set.
             let idx = stop_order[stop_pos];
-            if active[idx] {
-                active[idx] = false;
-                risk_sum -= risk_weights[idx];
-                remove_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
-            }
+            risk_sum -= risk_weights[idx];
+            remove_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
             stop_pos += 1;
         }
 
@@ -435,7 +430,7 @@ fn accumulate_expected_baseline_stratum(
 pub fn cox_expected_baseline_by_stratum(
     time: Vec<f64>,
     status: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
+    mut covariates: Vec<Vec<f64>>,
     beta: Vec<f64>,
     weights: Vec<f64>,
     strata: Vec<i32>,
@@ -460,15 +455,6 @@ pub fn cox_expected_baseline_by_stratum(
         return Err(value_error("method must be 'breslow', 'efron', or 'exact'"));
     }
 
-    let centered_rows: Vec<Vec<f64>> = covariates
-        .iter()
-        .map(|row| {
-            row.iter()
-                .zip(means.iter())
-                .map(|(&value, &mean)| value - mean)
-                .collect()
-        })
-        .collect();
     let risk_weights: Vec<f64> = covariates
         .iter()
         .enumerate()
@@ -482,6 +468,11 @@ pub fn cox_expected_baseline_by_stratum(
             weights[idx] * safe_exp(linear_predictor)
         })
         .collect();
+    for row in &mut covariates {
+        for (value, &mean) in row.iter_mut().zip(&means) {
+            *value -= mean;
+        }
+    }
 
     let mut indices_by_stratum: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
     for (idx, &stratum) in strata.iter().enumerate() {
@@ -501,7 +492,7 @@ pub fn cox_expected_baseline_by_stratum(
             &event_times,
             &time,
             &status,
-            &centered_rows,
+            &covariates,
             &risk_weights,
             &weights,
             entry_times.as_deref(),
@@ -737,5 +728,27 @@ mod tests {
             err.to_string()
                 .contains("entry_times[1] must be less than time[1]")
         );
+    }
+
+    #[test]
+    fn expected_baseline_delayed_entry_cursors_remove_expired_rows() {
+        let result = cox_expected_baseline_by_stratum(
+            vec![2.0, 4.0, 5.0],
+            vec![0, 1, 0],
+            vec![vec![], vec![], vec![]],
+            vec![],
+            vec![1.0; 3],
+            vec![0; 3],
+            vec![0.0; 3],
+            vec![],
+            Some(vec![0.0, 1.0, 3.0]),
+            Some("breslow".to_string()),
+        )
+        .expect("valid delayed-entry baseline should compute");
+
+        assert_eq!(result.1, vec![vec![4.0]]);
+        assert_eq!(result.2, vec![vec![0.5]]);
+        assert_eq!(result.3, vec![vec![0.25]]);
+        assert_eq!(result.4, vec![vec![Vec::<f64>::new()]]);
     }
 }
