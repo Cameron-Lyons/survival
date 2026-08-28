@@ -2948,6 +2948,15 @@ def test_fromtimeline_builds_intervals_and_covariate_row_maps():
     assert interleaved_result["static_row"] == [0, 3, 0]
     assert interleaved_result["dynamic_row"] == [0, 3, 4]
 
+    censored_result = survival.fromtimeline(
+        [0.0, 1.0, 2.0],
+        [1, 0, 2],
+        id=[1, 1, 1],
+        states=["entry", "ill"],
+    )
+    assert censored_result["status"] == [0, 2]
+    assert censored_result["istate"] == [1, 1]
+
     with pytest.raises(ValueError, match="censored state"):
         survival.fromtimeline([0.0, 1.0], [0, 1], id=[1, 1])
 
