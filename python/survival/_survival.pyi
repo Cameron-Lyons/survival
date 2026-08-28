@@ -495,6 +495,12 @@ class RttrightResult:
     @property
     def order(self) -> list[int]: ...
 
+class RttrightCountingResult:
+    @property
+    def weights(self) -> list[float]: ...
+    @property
+    def matrix(self) -> list[list[float]]: ...
+
 class Surv2DataResult:
     @property
     def id(self) -> list[int]: ...
@@ -5711,6 +5717,17 @@ def rttright(
     timefix: bool = True,
     renorm: bool = True,
 ) -> RttrightResult: ...
+def rttright_counting(
+    start: list[float],
+    stop: list[float],
+    status: list[int],
+    id: list[int],
+    times: list[float] | None = None,
+    weights: list[float] | None = None,
+    strata: list[int] | None = None,
+    timefix: bool = True,
+    renorm: bool = True,
+) -> RttrightCountingResult: ...
 def rttright_matrix(
     time: list[float],
     status: list[int],

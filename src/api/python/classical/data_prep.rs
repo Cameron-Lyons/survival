@@ -16,6 +16,38 @@ fn rttright_time_matrix_py(
     py.detach(move || rttright_time_matrix(time, status, times, weights, strata, timefix, renorm))
 }
 
+#[pyfunction(name = "rttright_counting")]
+#[pyo3(signature = (
+    start,
+    stop,
+    status,
+    id,
+    times=None,
+    weights=None,
+    strata=None,
+    timefix=true,
+    renorm=true
+))]
+#[allow(clippy::too_many_arguments)]
+fn rttright_counting_py(
+    py: Python<'_>,
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    id: Vec<i64>,
+    times: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    timefix: bool,
+    renorm: bool,
+) -> PyResult<RttrightCountingResult> {
+    py.detach(move || {
+        rttright_counting(
+            start, stop, status, id, times, weights, strata, timefix, renorm,
+        )
+    })
+}
+
 #[pyfunction(name = "from_timeline_rows")]
 #[pyo3(signature = (id, time, status, repeated=true, first_only=false))]
 fn from_timeline_rows_py(
@@ -76,6 +108,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tcut, m)?)?;
     m.add_function(wrap_pyfunction!(tcut_expand, m)?)?;
     m.add_function(wrap_pyfunction!(rttright, m)?)?;
+    m.add_function(wrap_pyfunction!(rttright_counting_py, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_stratified, m)?)?;
     m.add_function(wrap_pyfunction!(rttright_time_matrix_py, m)?)?;
@@ -96,6 +129,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         StrataResult,
         NearDateResult,
         TcutResult,
+        RttrightCountingResult,
         RttrightResult,
     );
 

@@ -34,7 +34,8 @@ pub use nostutter::{
     nostutter_str_numeric, nostutter_str_str,
 };
 pub use rttright_module::{
-    RttrightResult, rttright, rttright_matrix, rttright_stratified, rttright_time_matrix,
+    RttrightCountingResult, RttrightResult, rttright, rttright_counting, rttright_matrix,
+    rttright_stratified, rttright_time_matrix,
 };
 pub use strata_module::{StrataResult, strata, strata_compact, strata_str};
 pub use surv2data_module::{
