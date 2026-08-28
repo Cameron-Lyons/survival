@@ -269,8 +269,9 @@ def test_norisk():
     strata = [1, 0, 0, 0, 0]
 
     result = survival.norisk(time1, time2, status, sort1, sort2, strata)
-    assert isinstance(result, list)
-    assert len(result) == len(time1)
+    boundary_result = survival.norisk(time1, time2, status, sort1, sort2, [0])
+    assert result == boundary_result
+    assert result == [0, 1, 1, 1, 1]
 
 
 def test_norisk_validates_public_inputs():
