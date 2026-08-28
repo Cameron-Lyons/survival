@@ -3263,7 +3263,7 @@ def test_data_prep_low_level_bindings_are_typed():
             "renorm",
         ],
         "surv2data": ["id", "time", "event_time", "event_status"],
-        "surv2data_timeline": ["id", "time", "status", "repeated"],
+        "surv2data_timeline": ["id", "time", "status", "repeated", "first_only"],
         "from_timeline_rows": ["id", "time", "status", "repeated", "first_only"],
         "survcondense": ["id", "time1", "time2", "status"],
         "survcondense_plan": ["id_order", "start", "stop", "row_code"],

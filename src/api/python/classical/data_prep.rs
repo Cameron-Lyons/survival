@@ -30,6 +30,20 @@ fn from_timeline_rows_py(
     )
 }
 
+#[pyfunction(name = "surv2data_timeline")]
+#[pyo3(signature = (id, time, status, repeated=false, first_only=false))]
+fn surv2data_timeline_py(
+    id: Vec<i64>,
+    time: Vec<f64>,
+    status: Vec<Option<i32>>,
+    repeated: bool,
+    first_only: bool,
+) -> PyResult<Surv2TimelineResult> {
+    crate::data_prep::surv2data_module::surv2data_timeline_with_policy(
+        id, time, status, repeated, first_only,
+    )
+}
+
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge, m)?)?;
     m.add_function(wrap_pyfunction!(tmerge_plan, m)?)?;
@@ -39,7 +53,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survcondense, m)?)?;
     m.add_function(wrap_pyfunction!(survcondense_plan, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data, m)?)?;
-    m.add_function(wrap_pyfunction!(surv2data_timeline, m)?)?;
+    m.add_function(wrap_pyfunction!(surv2data_timeline_py, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline_rows_py, m)?)?;
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;

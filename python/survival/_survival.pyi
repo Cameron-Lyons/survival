@@ -5748,6 +5748,7 @@ def surv2data_timeline(
     time: list[float],
     status: list[int | None],
     repeated: bool = False,
+    first_only: bool = False,
 ) -> Surv2TimelineResult: ...
 def from_timeline_rows(
     id: list[int],
