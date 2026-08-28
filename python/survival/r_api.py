@@ -5408,6 +5408,8 @@ def Surv2data(
         for _, grouped_rows_iter in groupby(order, key=lambda idx: id_codes[idx]):
             grouped_rows = list(grouped_rows_iter)
             for current_row, next_row in zip(grouped_rows[:-1], grouped_rows[1:], strict=True):
+                if time_values[current_row] == time_values[next_row]:
+                    raise ValueError("duplicated time for an id")
                 next_status = status_values[next_row]
                 intervals.append(
                     (

@@ -2883,6 +2883,10 @@ def test_surv2data_converts_timeline_rows_to_counting_transitions():
 
     with pytest.raises(ValueError, match="duplicated time"):
         survival.Surv2data([0.0, 0.0], [1, 2], states=["a", "b"], id=[1, 1])
+    with pytest.raises(ValueError, match="duplicated time for an id"):
+        survival.Surv2data([0.0, 0.0], [0, 1], id=[1, 1])
+    with pytest.raises(ValueError, match="duplicated time for an id"):
+        survival.Surv2data([0.0, 1.0, 1.0], [0, 0, 1], id=[1, 1, 1])
     with pytest.raises(ValueError, match="everyone or no one should have an initial state"):
         survival.Surv2data(
             [0.0, 1.0, 0.0, 1.0],
