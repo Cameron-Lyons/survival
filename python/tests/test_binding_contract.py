@@ -3352,12 +3352,12 @@ def test_data_prep_low_level_bindings_are_typed():
         [0.0, 3.0, 4.0, 0.0, 2.0, 1.0],
         [1, 2, 3, 1, 2, 1],
     )
-    assert timeline_rows.start == [0.0, 2.0, 0.0]
-    assert timeline_rows.stop == [2.0, 4.0, 3.0]
-    assert timeline_rows.status == [2, 3, 2]
-    assert timeline_rows.istate == [1, 2, 1]
-    assert timeline_rows.static_row == [0, 0, 3]
-    assert timeline_rows.dynamic_row == [0, 4, 3]
+    assert timeline_rows.start == [0.0, 0.0, 2.0]
+    assert timeline_rows.stop == [2.0, 3.0, 4.0]
+    assert timeline_rows.status == [2, 2, 3]
+    assert timeline_rows.istate == [1, 1, 2]
+    assert timeline_rows.static_row == [0, 3, 0]
+    assert timeline_rows.dynamic_row == [0, 3, 4]
     assert timeline_rows.removed_row == [5]
 
     collapsed = core.collapse(
