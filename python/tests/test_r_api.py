@@ -694,6 +694,21 @@ def test_rttright_formula_wrapper_preserves_legacy_direct_api():
     ):
         assert actual_row == pytest.approx(expected_row)
 
+    near_tied_counting = survival.Surv(
+        [0.0, 1.0 + 5e-10, 0.0],
+        [1.0, 2.0, 2.0],
+        [0, 1, 1],
+    )
+    assert survival.rttright(near_tied_counting, id=["a", "a", "b"]) == pytest.approx(
+        [0.0, 0.5, 0.5]
+    )
+    with pytest.raises(ValueError, match="survcheck"):
+        survival.rttright(
+            near_tied_counting,
+            id=["a", "a", "b"],
+            timefix=False,
+        )
+
     with pytest.raises(ValueError, match="id is required"):
         survival.rttright(survival.Surv([0.0], [1.0], [1]))
     with pytest.raises(ValueError, match="survcheck"):

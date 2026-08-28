@@ -8145,14 +8145,6 @@ def _rttright_binary_status(response: Surv) -> list[int]:
     return [1 if int(value) > 0 else 0 for value in response.event]
 
 
-def _rttright_divide(numerator: float, denominator: float) -> float:
-    if denominator != 0.0:
-        return numerator / denominator
-    if numerator == 0.0:
-        return math.nan
-    return math.inf
-
-
 def _rttright_counting_common_start(
     start: Sequence[float],
     id_values: Sequence[Any],
@@ -8165,132 +8157,6 @@ def _rttright_counting_common_start(
         return False
     first_start = next(iter(first_by_id.values()))
     return all(value == first_start for value in first_by_id.values())
-
-
-def _rttright_counting_last_rows(
-    stop: Sequence[float],
-    id_values: Sequence[Any],
-) -> list[bool]:
-    last_by_id: dict[Any, tuple[float, int]] = {}
-    for row_idx, id_value in enumerate(id_values):
-        key = _hashable_group_value(id_value)
-        candidate = (float(stop[row_idx]), row_idx)
-        if key not in last_by_id or candidate > last_by_id[key]:
-            last_by_id[key] = candidate
-    return [
-        row_idx == last_by_id[_hashable_group_value(id_value)][1]
-        for row_idx, id_value in enumerate(id_values)
-    ]
-
-
-def _rttright_counting_validate_subject_weights(
-    weights: Sequence[float],
-    id_values: Sequence[Any],
-) -> None:
-    ranges: dict[Any, list[float]] = {}
-    for weight, id_value in zip(weights, id_values, strict=True):
-        key = _hashable_group_value(id_value)
-        if key not in ranges:
-            ranges[key] = [float(weight), float(weight)]
-        else:
-            ranges[key][0] = min(ranges[key][0], float(weight))
-            ranges[key][1] = max(ranges[key][1], float(weight))
-    if any(high > low for low, high in ranges.values()):
-        raise ValueError("there are subjects with multiple weights")
-
-
-def _rttright_counting_group_values(group: Sequence[int] | None, n: int) -> list[int]:
-    if group is None:
-        return [0] * n
-    group_values = [int(value) for value in group]
-    if len(group_values) != n:
-        raise ValueError("rttright strata must have the same length as the Surv response")
-    return group_values
-
-
-def _rttright_counting_case_weights(
-    weights: Any | None,
-    id_values: Sequence[Any],
-    group_values: Sequence[int],
-    n: int,
-    renorm: bool,
-) -> list[float]:
-    case_weights = _rttright_initial_weights(weights, n)
-    _rttright_counting_validate_subject_weights(case_weights, id_values)
-    if not renorm:
-        return case_weights
-
-    normalized = list(case_weights)
-    group_indices: dict[int, list[int]] = {}
-    for row_idx, group_value in enumerate(group_values):
-        group_indices.setdefault(group_value, []).append(row_idx)
-
-    for indices in group_indices.values():
-        seen_ids: set[Any] = set()
-        denominator = 0.0
-        for row_idx in indices:
-            key = _hashable_group_value(id_values[row_idx])
-            if key in seen_ids:
-                continue
-            seen_ids.add(key)
-            denominator += case_weights[row_idx]
-        if denominator <= 0.0:
-            raise ValueError("weights must have positive sum when renorm is true")
-        for row_idx in indices:
-            normalized[row_idx] = case_weights[row_idx] / denominator
-    return normalized
-
-
-def _rttright_counting_delta(
-    start: Sequence[float],
-    stop: Sequence[float],
-    query_times: Sequence[float] | None,
-) -> float:
-    values = [*map(float, start), *map(float, stop)]
-    if query_times is not None:
-        values.extend(float(value) for value in query_times)
-    unique = sorted(set(values))
-    diffs = [right - left for left, right in zip(unique, unique[1:], strict=False) if right > left]
-    if not diffs:
-        raise NotImplementedError("function not defined for delayed entry or multistate data")
-    return min(diffs) / 2.0
-
-
-def _rttright_counting_km(
-    start: Sequence[float],
-    stop: Sequence[float],
-    censor: Sequence[int],
-    weights: Sequence[float],
-) -> tuple[list[float], list[float]]:
-    event_times = sorted({float(stop[idx]) for idx, value in enumerate(censor) if value == 1})
-    survival_times: list[float] = []
-    survival_values: list[float] = []
-    current = 1.0
-    for event_time in event_times:
-        risk = sum(
-            float(weight)
-            for left, right, weight in zip(start, stop, weights, strict=True)
-            if float(left) < event_time <= float(right)
-        )
-        events = sum(
-            float(weights[idx])
-            for idx, value in enumerate(censor)
-            if value == 1 and float(stop[idx]) == event_time
-        )
-        if risk > 0.0:
-            current *= 1.0 - events / risk
-        survival_times.append(event_time)
-        survival_values.append(current)
-    return survival_times, survival_values
-
-
-def _rttright_km_survival_at(
-    survival_times: Sequence[float],
-    survival_values: Sequence[float],
-    time: float,
-) -> float:
-    index = bisect_left(survival_times, float(time))
-    return 1.0 if index == 0 else float(survival_values[index - 1])
 
 
 def _rttright_time_matrix(
@@ -8336,60 +8202,6 @@ def _rttright_time_matrix(
     return matrix
 
 
-def _rttright_counting_group_result(
-    start: Sequence[float],
-    stop: Sequence[float],
-    status: Sequence[int],
-    weights: Sequence[float],
-    last: Sequence[bool],
-    query_times: Sequence[float] | None,
-    delta: float,
-) -> list[float] | list[list[float]]:
-    km_stop = [float(value) for value in stop]
-    censor = [
-        1 if is_last and int(event) == 0 else 0 for is_last, event in zip(last, status, strict=True)
-    ]
-    for row_idx, value in enumerate(censor):
-        if value == 1:
-            km_stop[row_idx] += delta
-    survival_times, survival_values = _rttright_counting_km(start, km_stop, censor, weights)
-
-    if query_times is None:
-        result: list[float] = []
-        for row_stop, row_status, row_weight, is_last in zip(
-            stop,
-            status,
-            weights,
-            last,
-            strict=True,
-        ):
-            if is_last and int(row_status) > 0:
-                gwt = _rttright_km_survival_at(survival_times, survival_values, float(row_stop))
-                result.append(_rttright_divide(float(row_weight), gwt))
-            else:
-                result.append(0.0)
-        return result
-
-    matrix = [[0.0] * len(query_times) for _ in range(len(start))]
-    gwt = [_rttright_km_survival_at(survival_times, survival_values, time) for time in query_times]
-    gwt2 = [
-        _rttright_km_survival_at(survival_times, survival_values, row_stop) for row_stop in stop
-    ]
-    for row_idx, (row_start, row_stop, _row_status, row_weight, is_last) in enumerate(
-        zip(start, stop, status, weights, last, strict=True)
-    ):
-        for col_idx, query_time in enumerate(query_times):
-            if float(row_start) < float(query_time) <= float(row_stop):
-                matrix[row_idx][col_idx] = _rttright_divide(float(row_weight), gwt[col_idx])
-        if is_last and float(row_stop) > 0.0:
-            for col_idx, query_gwt in enumerate(gwt):
-                matrix[row_idx][col_idx] = _rttright_divide(
-                    float(row_weight),
-                    max(gwt2[row_idx], query_gwt),
-                )
-    return matrix
-
-
 def _rttright_counting_result(
     response: Surv,
     weights: Any | None,
@@ -8413,65 +8225,23 @@ def _rttright_counting_result(
     status_values = [int(value) for value in response.event]
     if any(value not in (0, 1) for value in status_values):
         raise ValueError("rttright counting response must contain only 0/1 status values")
-    if timefix:
-        start, stop = _timefix_vectors(start, stop)
-
-    check = _core.survcheck(
-        _survcheck_integer_labels(id_labels, "id"),
+    query_times = None if times is None else _rttright_times_vector(times)
+    group_values = None if group is None else [int(value) for value in group]
+    weight_values = None if weights is None else _float_vector(weights, "weights")
+    result = _core.rttright_counting(
         start,
         stop,
         status_values,
-        None,
+        _survcheck_integer_labels(id_labels, "id"),
+        query_times,
+        weight_values,
+        group_values,
+        timefix,
+        renorm,
     )
-    if any(flag > 0 for flag in check.flags):
-        raise ValueError("one or more flags are >0 in survcheck")
-    if not _rttright_counting_common_start(start, id_labels):
-        raise NotImplementedError("function not defined for delayed entry or multistate data")
-
-    last = _rttright_counting_last_rows(stop, id_labels)
-    if (
-        sum(1 for is_last, event in zip(last, status_values, strict=True) if is_last and event > 0)
-        <= 1
-    ):
-        raise NotImplementedError("function not defined for delayed entry or multistate data")
-
-    query_times = None if times is None else _rttright_times_vector(times)
-    group_values = _rttright_counting_group_values(group, n)
-    case_weights = _rttright_counting_case_weights(weights, id_labels, group_values, n, renorm)
-    delta = _rttright_counting_delta(start, stop, query_times)
-
-    matrix: list[list[float]] | None = None
-    vector = [0.0] * n
-    if query_times is not None:
-        matrix = [[0.0] * len(query_times) for _ in range(n)]
-
-    group_indices: dict[int, list[int]] = {}
-    for row_idx, group_value in enumerate(group_values):
-        group_indices.setdefault(group_value, []).append(row_idx)
-
-    for indices in group_indices.values():
-        group_result = _rttright_counting_group_result(
-            [start[idx] for idx in indices],
-            [stop[idx] for idx in indices],
-            [status_values[idx] for idx in indices],
-            [case_weights[idx] for idx in indices],
-            [last[idx] for idx in indices],
-            query_times,
-            delta,
-        )
-        if query_times is None:
-            for local_idx, row_idx in enumerate(indices):
-                vector[row_idx] = float(group_result[local_idx])
-        else:
-            if matrix is None:
-                raise RuntimeError("rttright counting matrix was not initialized")
-            for local_idx, row_idx in enumerate(indices):
-                matrix[row_idx] = [float(value) for value in group_result[local_idx]]
-
     if query_times is None:
-        return vector
-    if matrix is None:
-        raise RuntimeError("rttright counting matrix was not initialized")
+        return [float(value) for value in result.weights]
+    matrix = [[float(value) for value in row] for row in result.matrix]
     if len(query_times) == 1:
         return [row[0] for row in matrix]
     return matrix

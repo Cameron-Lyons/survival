@@ -1,7 +1,7 @@
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::aeq_surv_module::aeq_surv;
 use crate::constants::{DIVISION_FLOOR, same_time};
@@ -20,6 +20,15 @@ pub struct RttrightResult {
     pub status: Vec<i32>,
     #[pyo3(get)]
     pub order: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct RttrightCountingResult {
+    #[pyo3(get)]
+    pub weights: Vec<f64>,
+    #[pyo3(get)]
+    pub matrix: Vec<Vec<f64>>,
 }
 
 #[pyfunction]
@@ -355,6 +364,420 @@ pub fn rttright_time_matrix(
         }
     }
     Ok(matrix)
+}
+
+const COUNTING_TIME_EPSILON: f64 = 1e-9;
+
+fn timefix_counting_vectors(mut start: Vec<f64>, mut stop: Vec<f64>) -> (Vec<f64>, Vec<f64>) {
+    let mut points = Vec::with_capacity(start.len() + stop.len());
+    points.extend(
+        start
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(row, value)| (value, 0usize, row)),
+    );
+    points.extend(
+        stop.iter()
+            .copied()
+            .enumerate()
+            .map(|(row, value)| (value, 1usize, row)),
+    );
+    points.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+
+    let mut cursor = 0;
+    while cursor < points.len() {
+        let base = points[cursor].0;
+        let mut scan = cursor + 1;
+        while scan < points.len() && points[scan].0 - base < COUNTING_TIME_EPSILON {
+            let (_, vector, row) = points[scan];
+            if vector == 0 {
+                start[row] = base;
+            } else {
+                stop[row] = base;
+            }
+            scan += 1;
+        }
+        cursor = scan;
+    }
+    (start, stop)
+}
+
+fn validate_counting_histories(id: &[i64], start: &[f64], stop: &[f64]) -> PyResult<Vec<bool>> {
+    let mut subject_rows: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (row, &subject) in id.iter().enumerate() {
+        subject_rows.entry(subject).or_default().push(row);
+    }
+    if subject_rows.is_empty() {
+        return Err(PyNotImplementedError::new_err(
+            "function not defined for delayed entry or multistate data",
+        ));
+    }
+
+    let mut common_start = None;
+    let mut last = vec![false; id.len()];
+    for rows in subject_rows.values_mut() {
+        let subject_start = rows
+            .iter()
+            .map(|&row| start[row])
+            .min_by(f64::total_cmp)
+            .expect("subject rows are non-empty");
+        if common_start.is_none() {
+            common_start = Some(subject_start);
+        } else if common_start != Some(subject_start) {
+            return Err(PyNotImplementedError::new_err(
+                "function not defined for delayed entry or multistate data",
+            ));
+        }
+
+        let last_row = rows
+            .iter()
+            .copied()
+            .max_by(|&left, &right| {
+                stop[left]
+                    .total_cmp(&stop[right])
+                    .then_with(|| left.cmp(&right))
+            })
+            .expect("subject rows are non-empty");
+        last[last_row] = true;
+
+        rows.sort_by(|&left, &right| {
+            stop[left]
+                .total_cmp(&stop[right])
+                .then_with(|| start[left].total_cmp(&start[right]))
+        });
+        let mut previous_stop = None;
+        for &row in rows.iter() {
+            if stop[row] < start[row]
+                || previous_stop.is_some_and(|previous| {
+                    start[row] < previous - 1e-10 || start[row] > previous + 1e-10
+                })
+            {
+                return Err(PyValueError::new_err(
+                    "one or more flags are >0 in survcheck",
+                ));
+            }
+            previous_stop = Some(stop[row]);
+        }
+    }
+    Ok(last)
+}
+
+fn normalize_counting_weights(
+    id: &[i64],
+    strata_indices: &BTreeMap<i32, Vec<usize>>,
+    weights: &[f64],
+    renorm: bool,
+) -> PyResult<Vec<f64>> {
+    let mut subject_weights = HashMap::new();
+    for (&subject, &weight) in id.iter().zip(weights) {
+        if subject_weights
+            .insert(subject, weight)
+            .is_some_and(|previous| previous != weight)
+        {
+            return Err(PyValueError::new_err(
+                "there are subjects with multiple weights",
+            ));
+        }
+    }
+    if !renorm {
+        return Ok(weights.to_vec());
+    }
+
+    let mut normalized = weights.to_vec();
+    for indices in strata_indices.values() {
+        let mut seen = HashSet::new();
+        let denominator = indices
+            .iter()
+            .filter_map(|&row| seen.insert(id[row]).then_some(weights[row]))
+            .sum::<f64>();
+        if denominator <= 0.0 {
+            return Err(PyValueError::new_err(
+                "weights must have positive sum when renorm is true",
+            ));
+        }
+        for &row in indices {
+            normalized[row] /= denominator;
+        }
+    }
+    Ok(normalized)
+}
+
+fn counting_delta(start: &[f64], stop: &[f64], query_times: Option<&[f64]>) -> PyResult<f64> {
+    let mut values =
+        Vec::with_capacity(start.len() + stop.len() + query_times.map_or(0, <[f64]>::len));
+    values.extend_from_slice(start);
+    values.extend_from_slice(stop);
+    if let Some(times) = query_times {
+        values.extend_from_slice(times);
+    }
+    values.sort_by(f64::total_cmp);
+    values.dedup_by(|left, right| *left == *right);
+    values
+        .windows(2)
+        .filter_map(|pair| (pair[1] > pair[0]).then_some(pair[1] - pair[0]))
+        .min_by(f64::total_cmp)
+        .map(|difference| difference / 2.0)
+        .ok_or_else(|| {
+            PyNotImplementedError::new_err(
+                "function not defined for delayed entry or multistate data",
+            )
+        })
+}
+
+fn counting_km(
+    start: &[f64],
+    stop: &[f64],
+    weights: &[f64],
+    censor: &[bool],
+) -> (Vec<f64>, Vec<f64>) {
+    let mut start_order = (0..start.len()).collect::<Vec<_>>();
+    start_order.sort_by(|&left, &right| {
+        start[left]
+            .total_cmp(&start[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let mut stop_order = (0..stop.len()).collect::<Vec<_>>();
+    stop_order.sort_by(|&left, &right| {
+        stop[left]
+            .total_cmp(&stop[right])
+            .then_with(|| left.cmp(&right))
+    });
+    let mut censor_order = (0..stop.len())
+        .filter(|&row| censor[row])
+        .collect::<Vec<_>>();
+    censor_order.sort_by(|&left, &right| {
+        stop[left]
+            .total_cmp(&stop[right])
+            .then_with(|| left.cmp(&right))
+    });
+
+    let mut survival_times = Vec::with_capacity(censor_order.len());
+    let mut survival_values = Vec::with_capacity(censor_order.len());
+    let mut current = 1.0;
+    let mut risk = 0.0;
+    let mut start_cursor = 0;
+    let mut stop_cursor = 0;
+    let mut censor_cursor = 0;
+    while censor_cursor < censor_order.len() {
+        let event_time = stop[censor_order[censor_cursor]];
+        while start_cursor < start_order.len() && start[start_order[start_cursor]] < event_time {
+            risk += weights[start_order[start_cursor]];
+            start_cursor += 1;
+        }
+        while stop_cursor < stop_order.len() && stop[stop_order[stop_cursor]] < event_time {
+            risk -= weights[stop_order[stop_cursor]];
+            stop_cursor += 1;
+        }
+
+        let mut event_weight = 0.0;
+        while censor_cursor < censor_order.len() && stop[censor_order[censor_cursor]] == event_time
+        {
+            event_weight += weights[censor_order[censor_cursor]];
+            censor_cursor += 1;
+        }
+        if risk > 0.0 {
+            current *= 1.0 - event_weight / risk;
+        }
+        survival_times.push(event_time);
+        survival_values.push(current);
+    }
+    (survival_times, survival_values)
+}
+
+#[inline]
+fn counting_survival_at(times: &[f64], values: &[f64], time: f64) -> f64 {
+    let index = times.partition_point(|event_time| *event_time < time);
+    if index == 0 { 1.0 } else { values[index - 1] }
+}
+
+enum CountingGroupResult {
+    Weights(Vec<f64>),
+    Matrix(Vec<Vec<f64>>),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_counting_group(
+    start: &[f64],
+    stop: &[f64],
+    status: &[i32],
+    weights: &[f64],
+    last: &[bool],
+    indices: &[usize],
+    query_times: Option<&[f64]>,
+    delta: f64,
+) -> CountingGroupResult {
+    let group_start = indices.iter().map(|&row| start[row]).collect::<Vec<_>>();
+    let mut group_stop = indices.iter().map(|&row| stop[row]).collect::<Vec<_>>();
+    let group_weights = indices.iter().map(|&row| weights[row]).collect::<Vec<_>>();
+    let censor = indices
+        .iter()
+        .map(|&row| last[row] && status[row] == 0)
+        .collect::<Vec<_>>();
+    for (row, &is_censor) in censor.iter().enumerate() {
+        if is_censor {
+            group_stop[row] += delta;
+        }
+    }
+    let (survival_times, survival_values) =
+        counting_km(&group_start, &group_stop, &group_weights, &censor);
+
+    let Some(query_times) = query_times else {
+        let result = indices
+            .iter()
+            .enumerate()
+            .map(|(local_row, &row)| {
+                if last[row] && status[row] > 0 {
+                    let survival =
+                        counting_survival_at(&survival_times, &survival_values, stop[row]);
+                    rttright_divide(group_weights[local_row], survival)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        return CountingGroupResult::Weights(result);
+    };
+
+    let query_survival = query_times
+        .iter()
+        .map(|&time| counting_survival_at(&survival_times, &survival_values, time))
+        .collect::<Vec<_>>();
+    let make_row = |local_row: usize| {
+        let row = indices[local_row];
+        let row_weight = group_weights[local_row];
+        let mut values = vec![0.0; query_times.len()];
+        for (column, (&query_time, &survival)) in
+            query_times.iter().zip(&query_survival).enumerate()
+        {
+            if start[row] < query_time && query_time <= stop[row] {
+                values[column] = rttright_divide(row_weight, survival);
+            }
+        }
+        if last[row] && stop[row] > 0.0 {
+            let stop_survival = counting_survival_at(&survival_times, &survival_values, stop[row]);
+            for (column, &survival) in query_survival.iter().enumerate() {
+                values[column] = rttright_divide(row_weight, stop_survival.max(survival));
+            }
+        }
+        values
+    };
+    let work = indices.len().saturating_mul(query_times.len());
+    let matrix = if work >= PARALLEL_TIME_MATRIX_WORK {
+        (0..indices.len()).into_par_iter().map(make_row).collect()
+    } else {
+        (0..indices.len()).map(make_row).collect()
+    };
+    CountingGroupResult::Matrix(matrix)
+}
+
+/// Redistribute counting-process censoring mass for complete subject histories.
+#[allow(clippy::too_many_arguments)]
+pub fn rttright_counting(
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    id: Vec<i64>,
+    query_times: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    timefix: bool,
+    renorm: bool,
+) -> PyResult<RttrightCountingResult> {
+    let n = start.len();
+    if stop.len() != n || status.len() != n || id.len() != n {
+        return Err(PyValueError::new_err(
+            "start, stop, status, and id must have the same length",
+        ));
+    }
+    if weights.as_ref().is_some_and(|values| values.len() != n) {
+        return Err(PyValueError::new_err(
+            "weights must have same length as time",
+        ));
+    }
+    if strata.as_ref().is_some_and(|values| values.len() != n) {
+        return Err(PyValueError::new_err(
+            "rttright strata must have the same length as the Surv response",
+        ));
+    }
+    validate_finite(&start, "start")?;
+    validate_finite(&stop, "stop")?;
+    validate_binary_i32(&status, "status")?;
+    if let Some(values) = weights.as_deref() {
+        validate_finite(values, "weights")?;
+        validate_non_negative(values, "weights")?;
+    }
+    if let Some(times) = query_times.as_deref() {
+        validate_finite(times, "times")?;
+    }
+
+    let (start, stop) = if timefix {
+        timefix_counting_vectors(start, stop)
+    } else {
+        (start, stop)
+    };
+    let last = validate_counting_histories(&id, &start, &stop)?;
+    if last
+        .iter()
+        .zip(&status)
+        .filter(|(is_last, event)| **is_last && **event > 0)
+        .count()
+        <= 1
+    {
+        return Err(PyNotImplementedError::new_err(
+            "function not defined for delayed entry or multistate data",
+        ));
+    }
+
+    let strata = strata.unwrap_or_else(|| vec![0; n]);
+    let mut strata_indices: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (row, stratum) in strata.into_iter().enumerate() {
+        strata_indices.entry(stratum).or_default().push(row);
+    }
+    let case_weights = weights.unwrap_or_else(|| vec![1.0; n]);
+    let case_weights = normalize_counting_weights(&id, &strata_indices, &case_weights, renorm)?;
+    let delta = counting_delta(&start, &stop, query_times.as_deref())?;
+
+    let mut result_weights = if query_times.is_none() {
+        vec![0.0; n]
+    } else {
+        vec![]
+    };
+    let mut result_matrix = query_times
+        .as_ref()
+        .map_or_else(Vec::new, |times| vec![vec![0.0; times.len()]; n]);
+    for indices in strata_indices.values() {
+        match compute_counting_group(
+            &start,
+            &stop,
+            &status,
+            &case_weights,
+            &last,
+            indices,
+            query_times.as_deref(),
+            delta,
+        ) {
+            CountingGroupResult::Weights(weights) => {
+                for (&row, weight) in indices.iter().zip(weights) {
+                    result_weights[row] = weight;
+                }
+            }
+            CountingGroupResult::Matrix(matrix) => {
+                for (&row, values) in indices.iter().zip(matrix) {
+                    result_matrix[row] = values;
+                }
+            }
+        }
+    }
+    Ok(RttrightCountingResult {
+        weights: result_weights,
+        matrix: result_matrix,
+    })
 }
 
 #[pyfunction]
@@ -959,6 +1382,152 @@ mod tests {
         )
         .unwrap_err();
         assert!(bad_times.to_string().contains("times contains non-finite"));
+    }
+
+    #[test]
+    fn test_rttright_counting_matches_vector_and_matrix_references() {
+        let start = vec![0.0, 1.0, 0.0, 2.0];
+        let stop = vec![1.0, 3.0, 2.0, 4.0];
+        let status = vec![0, 1, 0, 1];
+        let id = vec![1, 1, 2, 2];
+        let vector = rttright_counting(
+            start.clone(),
+            stop.clone(),
+            status.clone(),
+            id.clone(),
+            None,
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_close_slice(&vector.weights, &[0.0, 0.5, 0.0, 0.5]);
+        assert!(vector.matrix.is_empty());
+
+        let interleaved = rttright_counting(
+            vec![2.0, 0.0, 0.0, 1.0],
+            vec![4.0, 1.0, 2.0, 3.0],
+            vec![1, 0, 0, 1],
+            vec![2, 1, 2, 1],
+            None,
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_close_slice(&interleaved.weights, &[0.5, 0.0, 0.0, 0.5]);
+
+        let matrix = rttright_counting(
+            start,
+            stop,
+            status,
+            id,
+            Some(vec![1.0, 2.0, 3.0, 4.0]),
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert!(matrix.weights.is_empty());
+        assert_nested_close(
+            &matrix.matrix,
+            &[
+                vec![0.5, 0.0, 0.0, 0.0],
+                vec![0.5, 0.5, 0.5, 0.5],
+                vec![0.5, 0.5, 0.0, 0.0],
+                vec![0.5, 0.5, 0.5, 0.5],
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rttright_counting_preserves_weighted_strata() {
+        let result = rttright_counting(
+            vec![0.0, 1.0, 0.0, 2.0, 0.0, 1.5],
+            vec![1.0, 3.0, 2.0, 4.0, 1.5, 2.5],
+            vec![0, 1, 0, 1, 0, 0],
+            vec![1, 1, 2, 2, 3, 3],
+            Some(vec![1.0, 2.0, 3.0, 4.0]),
+            Some(vec![2.0, 2.0, 1.0, 1.0, 3.0, 3.0]),
+            Some(vec![0, 0, 1, 1, 0, 0]),
+            true,
+            true,
+        )
+        .unwrap();
+        assert_nested_close(
+            &result.matrix,
+            &[
+                vec![0.4, 0.0, 0.0, 0.0],
+                vec![0.4, 0.4, 1.0, 1.0],
+                vec![1.0, 1.0, 0.0, 0.0],
+                vec![1.0, 1.0, 1.0, 1.0],
+                vec![0.6, 0.0, 0.0, 0.0],
+                vec![0.6, 0.6, 0.6, 0.6],
+            ],
+        );
+    }
+
+    #[test]
+    fn test_rttright_counting_validates_histories_and_subject_weights() {
+        initialize_python();
+
+        let delayed = rttright_counting(
+            vec![0.0, 1.0],
+            vec![2.0, 3.0],
+            vec![1, 1],
+            vec![1, 2],
+            None,
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap_err();
+        assert!(delayed.to_string().contains("delayed entry"));
+
+        let multiple_weights = rttright_counting(
+            vec![0.0, 1.0, 0.0],
+            vec![1.0, 2.0, 2.0],
+            vec![0, 1, 1],
+            vec![1, 1, 2],
+            None,
+            Some(vec![1.0, 2.0, 1.0]),
+            None,
+            true,
+            true,
+        )
+        .unwrap_err();
+        assert!(multiple_weights.to_string().contains("multiple weights"));
+
+        let fixed = rttright_counting(
+            vec![0.0, 1.0 + 5e-10, 0.0],
+            vec![1.0, 2.0, 2.0],
+            vec![0, 1, 1],
+            vec![1, 1, 2],
+            None,
+            None,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_close_slice(&fixed.weights, &[0.0, 0.5, 0.5]);
+        let exact = rttright_counting(
+            vec![0.0, 1.0 + 5e-10, 0.0],
+            vec![1.0, 2.0, 2.0],
+            vec![0, 1, 1],
+            vec![1, 1, 2],
+            None,
+            None,
+            None,
+            false,
+            true,
+        )
+        .unwrap_err();
+        assert!(exact.to_string().contains("survcheck"));
     }
 
     #[test]

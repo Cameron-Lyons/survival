@@ -1141,6 +1141,51 @@ mod surv2data_bench {
     }
 }
 
+mod rttright_counting_bench {
+    use super::*;
+    use survival::data_prep::rttright_counting;
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn counting_time_matrix(bencher: divan::Bencher, n: usize) {
+        let subjects = n / 2;
+        let id: Vec<i64> = (0..subjects)
+            .flat_map(|subject| [subject as i64; 2])
+            .collect();
+        let start: Vec<f64> = (0..subjects)
+            .flat_map(|subject| [0.0, 1.0 + (subject % 7) as f64 * 0.01])
+            .collect();
+        let stop: Vec<f64> = (0..subjects)
+            .flat_map(|subject| {
+                [
+                    1.0 + (subject % 7) as f64 * 0.01,
+                    3.0 + subject as f64 * 0.001,
+                ]
+            })
+            .collect();
+        let status: Vec<i32> = (0..subjects)
+            .flat_map(|subject| [0, i32::from(subject % 3 != 0)])
+            .collect();
+        let times: Vec<f64> = (0..16).map(|index| 0.5 + index as f64 * 0.25).collect();
+
+        bencher.bench_local(|| {
+            black_box(
+                rttright_counting(
+                    start.clone(),
+                    stop.clone(),
+                    status.clone(),
+                    id.clone(),
+                    Some(times.clone()),
+                    None,
+                    None,
+                    true,
+                    true,
+                )
+                .expect("benchmark counting-process histories should be valid"),
+            )
+        });
+    }
+}
+
 fn main() {
     divan::main();
 }
