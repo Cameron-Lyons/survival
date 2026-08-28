@@ -2845,8 +2845,33 @@ def test_surv2data_converts_timeline_rows_to_counting_transitions():
     assert ordinary_result["row"] == [0, 1, 2, 3]
     assert ordinary_result["status"] == [1, 1, 1, 0]
 
+    carried_state = survival.Surv2data(
+        [0.0, 1.0, 2.0, 3.0],
+        [1, None, 1, 2],
+        states=["ill", "death"],
+        id=[1, 1, 1, 1],
+    )
+    assert carried_state["status"] == [0, 0, 2]
+    assert carried_state["istate"] == [1, 1, 1]
+
+    absent_initial_state = survival.Surv2data(
+        [0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+        [0, 1, 1, None, 2, 2],
+        states=["ill", "death"],
+        id=[1, 1, 1, 2, 2, 2],
+    )
+    assert absent_initial_state["status"] == [1, 1, 2, 2]
+    assert absent_initial_state["istate"] == [None, None, None, None]
+
     with pytest.raises(ValueError, match="duplicated time"):
         survival.Surv2data([0.0, 0.0], [1, 2], states=["a", "b"], id=[1, 1])
+    with pytest.raises(ValueError, match="everyone or no one should have an initial state"):
+        survival.Surv2data(
+            [0.0, 1.0, 0.0, 1.0],
+            [1, 2, 0, 2],
+            states=["ill", "death"],
+            id=[1, 1, 2, 2],
+        )
 
 
 def test_totimeline_expands_counting_rows_to_state_timeline():

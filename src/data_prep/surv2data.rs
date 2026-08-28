@@ -161,9 +161,21 @@ pub fn surv2data_timeline(
 
     let mut next_row = vec![NO_NEXT_ROW; n];
     let mut n_intervals = 0;
-    for pair in order.windows(2) {
-        let current = pair[0];
-        let next = pair[1];
+    let mut has_initial_state = None;
+    for (position, &current) in order.iter().enumerate() {
+        if position == 0 || id[order[position - 1]] != id[current] {
+            let current_has_state = status[current].is_some_and(|value| value != 0);
+            if has_initial_state.is_some_and(|expected| expected != current_has_state) {
+                return Err(PyValueError::new_err(
+                    "everyone or no one should have an initial state",
+                ));
+            }
+            has_initial_state = Some(current_has_state);
+        }
+
+        let Some(&next) = order.get(position + 1) else {
+            continue;
+        };
         if id[current] != id[next] {
             continue;
         }
@@ -174,6 +186,26 @@ pub fn surv2data_timeline(
         }
         next_row[current] = next;
         n_intervals += 1;
+    }
+
+    let has_initial_state = has_initial_state.unwrap_or(false);
+    let mut state_by_row = if has_initial_state {
+        vec![0; n]
+    } else {
+        Vec::new()
+    };
+    if has_initial_state {
+        let mut current_id = None;
+        let mut current_state = 0;
+        for &row in &order {
+            if current_id != Some(id[row]) {
+                current_id = Some(id[row]);
+                current_state = status[row].unwrap_or(0);
+            } else if let Some(state) = status[row].filter(|&value| value != 0) {
+                current_state = state;
+            }
+            state_by_row[row] = current_state;
+        }
     }
 
     let mut result = Surv2TimelineResult {
@@ -187,7 +219,7 @@ pub fn surv2data_timeline(
         if next == NO_NEXT_ROW {
             continue;
         }
-        let istate = status[row_index];
+        let istate = has_initial_state.then(|| state_by_row[row_index]);
         let mut event = status[next].unwrap_or(0);
         if !repeated && istate == Some(event) {
             event = 0;
@@ -558,6 +590,56 @@ mod tests {
         assert_eq!(result.stop, vec![2.0, 3.0]);
         assert_eq!(result.status, vec![2, 3]);
         assert_eq!(result.istate, vec![Some(1), Some(1)]);
+    }
+
+    #[test]
+    fn surv2data_timeline_carries_states_across_censored_rows() {
+        let stutter = surv2data_timeline(
+            vec![1, 1, 1, 1],
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![Some(1), None, Some(1), Some(2)],
+            false,
+        )
+        .unwrap();
+        let repeated = surv2data_timeline(
+            vec![1, 1, 1, 1],
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![Some(1), None, Some(1), Some(2)],
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(stutter.status, vec![0, 0, 2]);
+        assert_eq!(stutter.istate, vec![Some(1), Some(1), Some(1)]);
+        assert_eq!(repeated.status, vec![0, 1, 2]);
+        assert_eq!(repeated.istate, vec![Some(1), Some(1), Some(1)]);
+    }
+
+    #[test]
+    fn surv2data_timeline_handles_absent_and_mixed_initial_states() {
+        let absent = surv2data_timeline(
+            vec![1, 1, 1, 2, 2, 2],
+            vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+            vec![Some(0), Some(1), Some(1), None, Some(2), Some(2)],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(absent.status, vec![1, 1, 2, 2]);
+        assert_eq!(absent.istate, vec![None, None, None, None]);
+
+        let mixed = surv2data_timeline(
+            vec![1, 1, 2, 2],
+            vec![0.0, 1.0, 0.0, 1.0],
+            vec![Some(1), Some(2), Some(0), Some(2)],
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            mixed
+                .to_string()
+                .contains("everyone or no one should have an initial state")
+        );
     }
 
     #[test]
