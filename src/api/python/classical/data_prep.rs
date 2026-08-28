@@ -17,14 +17,17 @@ fn rttright_time_matrix_py(
 }
 
 #[pyfunction(name = "from_timeline_rows")]
-#[pyo3(signature = (id, time, status, repeated=true))]
+#[pyo3(signature = (id, time, status, repeated=true, first_only=false))]
 fn from_timeline_rows_py(
     id: Vec<usize>,
     time: Vec<f64>,
     status: Vec<i32>,
     repeated: bool,
+    first_only: bool,
 ) -> PyResult<FromTimelineRowsResult> {
-    crate::data_prep::surv2data_module::from_timeline_rows_with_repeated(id, time, status, repeated)
+    crate::data_prep::surv2data_module::from_timeline_rows_with_policy(
+        id, time, status, repeated, first_only,
+    )
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
