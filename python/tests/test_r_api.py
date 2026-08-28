@@ -2844,6 +2844,24 @@ def test_surv2data_converts_timeline_rows_to_counting_transitions():
     )
     assert ordinary_result["row"] == [0, 1, 2, 3]
     assert ordinary_result["status"] == [1, 1, 1, 0]
+    assert ordinary_result["type"] == "counting"
+
+    ordinary_right = survival.Surv2data(
+        [5.0, 9.0, 2.0, 8.0],
+        [0, 1, 0, 1],
+        id=[1, 1, 2, 2],
+    )
+    assert ordinary_right["start"] == pytest.approx([5.0, 2.0])
+    assert ordinary_right["type"] == "right"
+
+    multistate_right = survival.Surv2data(
+        [5.0, 9.0, 2.0, 8.0],
+        [1, 2, 1, 2],
+        states=["entry", "death"],
+        id=[1, 1, 2, 2],
+    )
+    assert multistate_right["start"] == pytest.approx([5.0, 2.0])
+    assert multistate_right["type"] == "mright"
 
     carried_state = survival.Surv2data(
         [0.0, 1.0, 2.0, 3.0],
@@ -2923,6 +2941,7 @@ def test_fromtimeline_builds_intervals_and_covariate_row_maps():
     assert result["static"] == [True, False, True]
     assert result["static_row"] == [0, 0, 3, 3]
     assert result["dynamic_row"] == [0, 1, 3, 4]
+    assert result["type"] == "counting"
 
     multistate_result = survival.fromtimeline(
         [0.0, 2.0, 5.0, 0.0, 3.0, 6.0],
@@ -2934,6 +2953,24 @@ def test_fromtimeline_builds_intervals_and_covariate_row_maps():
     assert multistate_result["istate"] == [1, 2, 1, 2]
     assert multistate_result["state_levels"] == ["censor", "entry", "ill", "death"]
     assert multistate_result["istate_levels"] == ["entry", "ill", "death"]
+    assert multistate_result["type"] == "mcounting"
+
+    ordinary_right = survival.fromtimeline(
+        [5.0, 9.0, 2.0, 8.0],
+        [0, 1, 0, 1],
+        id=[1, 1, 2, 2],
+    )
+    assert ordinary_right["start"] == pytest.approx([5.0, 2.0])
+    assert ordinary_right["type"] == "right"
+
+    multistate_right = survival.fromtimeline(
+        [5.0, 9.0, 2.0, 8.0],
+        [1, 2, 1, 2],
+        id=[1, 1, 2, 2],
+        states=["entry", "death"],
+    )
+    assert multistate_right["start"] == pytest.approx([5.0, 2.0])
+    assert multistate_right["type"] == "mright"
 
     interleaved_result = survival.fromtimeline(
         [0.0, 3.0, 4.0, 0.0, 2.0],
@@ -3011,6 +3048,7 @@ def test_fromtimeline_builds_intervals_and_covariate_row_maps():
     assert singleton_initial_states["istate"] == []
     assert singleton_initial_states["istate_levels"] == ["ill", "death"]
     assert singleton_initial_states["removed_id"] == [1, 2]
+    assert singleton_initial_states["type"] == "mright"
 
     with pytest.raises(ValueError, match="everyone or no one should have an initial state"):
         survival.fromtimeline(
