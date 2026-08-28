@@ -5606,6 +5606,7 @@ def fromtimeline(
     *,
     id: Any,
     states: Any | None = None,
+    repeated: Any = False,
     data: Any | None = None,
     id_name: Any = "id",
 ) -> dict[str, Any]:
@@ -5619,6 +5620,8 @@ def fromtimeline(
         raise ValueError("time, status, and id must have the same length")
     if any(not math.isfinite(value) for value in time_values):
         raise ValueError("time values must be finite")
+    state_values = _totimeline_state_values(states)
+    repeated_value = _normalize_bool_option(repeated, "repeated")
     id_name_value = str(id_name)
     column_names, columns = _fromtimeline_data_columns(data, n)
     static_columns = _fromtimeline_static_columns(columns, id_values, column_names, id_name_value)
@@ -5626,10 +5629,14 @@ def fromtimeline(
         [_hashable_group_value(value) for value in id_values],
         "id",
     )
-    plan = _core.from_timeline_rows(id_codes, time_values, status_values)
+    plan = _core.from_timeline_rows(
+        id_codes,
+        time_values,
+        status_values,
+        repeated_value or not state_values,
+    )
     removed_ids = [id_values[int(row)] for row in plan.removed_row]
 
-    state_values = _totimeline_state_values(states) if states is not None else []
     if state_values:
         state_levels = ["censor", *state_values]
         istate_levels = state_values

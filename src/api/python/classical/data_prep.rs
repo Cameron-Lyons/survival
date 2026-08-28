@@ -16,6 +16,17 @@ fn rttright_time_matrix_py(
     py.detach(move || rttright_time_matrix(time, status, times, weights, strata, timefix, renorm))
 }
 
+#[pyfunction(name = "from_timeline_rows")]
+#[pyo3(signature = (id, time, status, repeated=true))]
+fn from_timeline_rows_py(
+    id: Vec<usize>,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    repeated: bool,
+) -> PyResult<FromTimelineRowsResult> {
+    crate::data_prep::surv2data_module::from_timeline_rows_with_repeated(id, time, status, repeated)
+}
+
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tmerge, m)?)?;
     m.add_function(wrap_pyfunction!(tmerge_plan, m)?)?;
@@ -26,7 +37,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survcondense_plan, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data, m)?)?;
     m.add_function(wrap_pyfunction!(surv2data_timeline, m)?)?;
-    m.add_function(wrap_pyfunction!(from_timeline_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(from_timeline_rows_py, m)?)?;
     m.add_function(wrap_pyfunction!(to_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(from_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(lvcf_indices, m)?)?;

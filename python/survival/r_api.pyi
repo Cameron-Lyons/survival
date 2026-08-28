@@ -193,6 +193,7 @@ def fromtimeline(
     *,
     id: Any,
     states: Any | None = None,
+    repeated: Any = False,
     data: Any | None = None,
     id_name: Any = "id",
 ) -> dict[str, Any]: ...

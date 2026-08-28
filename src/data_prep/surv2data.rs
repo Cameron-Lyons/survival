@@ -71,6 +71,15 @@ pub fn from_timeline_rows(
     time: Vec<f64>,
     status: Vec<i32>,
 ) -> PyResult<FromTimelineRowsResult> {
+    from_timeline_rows_with_repeated(id, time, status, true)
+}
+
+pub(crate) fn from_timeline_rows_with_repeated(
+    id: Vec<usize>,
+    time: Vec<f64>,
+    status: Vec<i32>,
+    repeated: bool,
+) -> PyResult<FromTimelineRowsResult> {
     let n = id.len();
     validate_parallel_len("time", time.len(), n)?;
     validate_parallel_len("status", status.len(), n)?;
@@ -144,7 +153,14 @@ pub fn from_timeline_rows(
         if next != NO_NEXT_ROW {
             result.start.push(time[row]);
             result.stop.push(time[next]);
-            result.status.push(status[next]);
+            let event = status[next];
+            result
+                .status
+                .push(if !repeated && event == state_by_row[row] {
+                    0
+                } else {
+                    event
+                });
             result.istate.push(state_by_row[row]);
             result.static_row.push(first_row);
             result.dynamic_row.push(row);
@@ -693,6 +709,33 @@ mod tests {
         assert_eq!(result.istate, vec![1, 2, 1, 2]);
         assert_eq!(result.static_row, vec![0, 1, 0, 1]);
         assert_eq!(result.dynamic_row, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn from_timeline_rows_suppresses_repeated_current_states() {
+        let id = vec![0, 0, 0, 0];
+        let time = vec![0.0, 1.0, 2.0, 3.0];
+        let status = vec![1, 0, 1, 2];
+
+        let suppressed =
+            from_timeline_rows_with_repeated(id.clone(), time.clone(), status.clone(), false)
+                .unwrap();
+        let retained = from_timeline_rows(id, time, status).unwrap();
+
+        assert_eq!(suppressed.status, vec![0, 0, 2]);
+        assert_eq!(suppressed.istate, vec![1, 1, 1]);
+        assert_eq!(retained.status, vec![0, 1, 2]);
+        assert_eq!(retained.istate, vec![1, 1, 1]);
+
+        let transition_back = from_timeline_rows_with_repeated(
+            vec![0, 0, 0, 0],
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![1, 2, 0, 1],
+            false,
+        )
+        .unwrap();
+        assert_eq!(transition_back.status, vec![2, 0, 1]);
+        assert_eq!(transition_back.istate, vec![1, 2, 2]);
     }
 
     #[test]
