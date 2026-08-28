@@ -282,6 +282,10 @@ fn accumulate_expected_baseline_stratum(
     method: &str,
     nvar: usize,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
+    if event_times.is_empty() {
+        return Default::default();
+    }
+
     let mut out_times = Vec::with_capacity(event_times.len());
     let mut out_hazard = Vec::with_capacity(event_times.len());
     let mut out_varhaz = Vec::with_capacity(event_times.len());
@@ -455,6 +459,25 @@ pub fn cox_expected_baseline_by_stratum(
         return Err(value_error("method must be 'breslow', 'efron', or 'exact'"));
     }
 
+    if status.iter().all(|&value| value == 0) {
+        let mut out_strata = strata;
+        out_strata.sort_unstable();
+        out_strata.dedup();
+        let nstrata = out_strata.len();
+        return Ok((
+            out_strata,
+            vec![Vec::new(); nstrata],
+            vec![Vec::new(); nstrata],
+            vec![Vec::new(); nstrata],
+            vec![Vec::new(); nstrata],
+        ));
+    }
+
+    let mut indices_by_stratum: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (idx, &stratum) in strata.iter().enumerate() {
+        indices_by_stratum.entry(stratum).or_default().push(idx);
+    }
+
     let risk_weights: Vec<f64> = covariates
         .iter()
         .enumerate()
@@ -472,11 +495,6 @@ pub fn cox_expected_baseline_by_stratum(
         for (value, &mean) in row.iter_mut().zip(&means) {
             *value -= mean;
         }
-    }
-
-    let mut indices_by_stratum: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (idx, &stratum) in strata.iter().enumerate() {
-        indices_by_stratum.entry(stratum).or_default().push(idx);
     }
 
     let mut out_strata = Vec::with_capacity(indices_by_stratum.len());
@@ -750,5 +768,51 @@ mod tests {
         assert_eq!(result.2, vec![vec![0.5]]);
         assert_eq!(result.3, vec![vec![0.25]]);
         assert_eq!(result.4, vec![vec![Vec::<f64>::new()]]);
+    }
+
+    #[test]
+    fn expected_baseline_skips_event_free_strata() {
+        let result = cox_expected_baseline_by_stratum(
+            vec![2.0, 3.0, 4.0],
+            vec![0, 0, 0],
+            vec![vec![1.0], vec![2.0], vec![3.0]],
+            vec![0.5],
+            vec![1.0; 3],
+            vec![2, 1, 2],
+            vec![0.0; 3],
+            vec![2.0],
+            Some(vec![0.0, 1.0, 2.0]),
+            Some("efron".to_string()),
+        )
+        .expect("event-free strata should return empty baselines");
+
+        assert_eq!(result.0, vec![1, 2]);
+        assert_eq!(result.1, vec![Vec::<f64>::new(); 2]);
+        assert_eq!(result.2, vec![Vec::<f64>::new(); 2]);
+        assert_eq!(result.3, vec![Vec::<f64>::new(); 2]);
+        assert_eq!(result.4, vec![Vec::<Vec<f64>>::new(); 2]);
+    }
+
+    #[test]
+    fn expected_baseline_skips_event_free_stratum_in_mixed_input() {
+        let result = cox_expected_baseline_by_stratum(
+            vec![1.0, 2.0, 1.0, 2.0],
+            vec![1, 0, 0, 0],
+            vec![vec![], vec![], vec![], vec![]],
+            vec![],
+            vec![1.0; 4],
+            vec![1, 1, 2, 2],
+            vec![0.0; 4],
+            vec![],
+            None,
+            Some("breslow".to_string()),
+        )
+        .expect("mixed event and event-free strata should compute");
+
+        assert_eq!(result.0, vec![1, 2]);
+        assert_eq!(result.1, vec![vec![1.0], vec![]]);
+        assert_eq!(result.2, vec![vec![0.5], vec![]]);
+        assert_eq!(result.3, vec![vec![0.25], vec![]]);
+        assert_eq!(result.4, vec![vec![Vec::<f64>::new()], vec![]]);
     }
 }
