@@ -52,7 +52,7 @@ test = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
   "pandas==3.0.5",
-  "polars==1.43.2",
+  "polars==1.44.1",
 ]
 
 [tool.maturin]
