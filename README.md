@@ -239,6 +239,10 @@ Common result objects can be converted to column-oriented tables with
 The `survival.residuals` name remains the residual diagnostics module; the
 R-style residual generic is available as `survival.r_api.residuals(...)` for
 fitted Cox and `survreg` models.
+For AFT models, `type="matrix"` returns six analytic diagnostic columns in R's
+order (`g`, `dg`, `ddg`, `ds`, `dds`, `dsg`), including its interval-censoring
+conventions. Working residuals use the location score divided by negative
+curvature; tail probabilities are evaluated directly to avoid cancellation.
 
 Other historical root-level algorithm names remain available for compatibility,
 but module imports are the preferred style because they match the current repo

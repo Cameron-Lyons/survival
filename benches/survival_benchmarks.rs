@@ -267,6 +267,42 @@ mod logrank {
     }
 }
 
+mod survreg_residuals {
+    use super::*;
+    use survival::residuals::survreg_residual_matrix;
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn gaussian_mixed_censoring(bencher: divan::Bencher, n: usize) {
+        let time: Vec<f64> = (0..n).map(|i| 1.0 + (i % 41) as f64 * 0.1).collect();
+        let time2: Vec<f64> = time.iter().map(|time| time + 0.25).collect();
+        let status: Vec<i32> = (0..n).map(|i| (i % 4) as i32).collect();
+        let linear_pred = vec![2.5; n];
+        bencher
+            .with_inputs(|| {
+                (
+                    time.clone(),
+                    time2.clone(),
+                    status.clone(),
+                    linear_pred.clone(),
+                )
+            })
+            .bench_local_values(|(time, time2, status, linear_pred)| {
+                black_box(
+                    survreg_residual_matrix(
+                        time,
+                        status,
+                        linear_pred,
+                        1.3,
+                        "gaussian".to_string(),
+                        Some(time2),
+                        None,
+                    )
+                    .expect("benchmark residual inputs should be valid"),
+                )
+            });
+    }
+}
+
 mod brier_score {
     use super::*;
 
