@@ -10838,7 +10838,19 @@ survConcordance.fit <- function(y, x, strata, weight) {
   values
 }
 
-.concordancefit_count <- function(result, score_names = NULL) {
+.concordancefit_count <- function(result, score_names = NULL, strata = NULL) {
+  stratum_counts <- .result_field(result, "stratum_counts")
+  if (!is.null(stratum_counts)) {
+    count <- .as_numeric_matrix(stratum_counts)
+    labels <- as.character(unlist(.result_field(result, "stratum_labels"), use.names = FALSE))
+    # Python retains encounter order. R uses factor level order, including an
+    # explicitly ordered factor's levels, with unused levels omitted.
+    levels <- if (is.null(strata)) sort(labels) else levels(droplevels(as.factor(strata)))
+    order <- match(levels, labels)
+    count <- count[order, , drop = FALSE]
+    dimnames(count) <- list(levels, c("concordant", "discordant", "tied.x", "tied.y", "tied.xy"))
+    return(count)
+  }
   concordant <- .as_numeric_vector(.result_field(result, "concordant"))
   comparable <- .as_numeric_vector(.result_field(result, "comparable"))
   tied_x <- .as_numeric_vector(.result_field(result, "tied_x"))
@@ -10910,7 +10922,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     "concordance",
     .as_python_surv(y),
     scores = .as_python_optional_vector(x),
-    strata = if (missing(strata)) NULL else .as_python_vector(strata),
+    strata = if (missing(strata) || length(strata) == 0L) NULL else .as_python_vector(strata),
     weights = if (missing(weights)) NULL else .as_python_vector(weights),
     ymin = ymin,
     ymax = ymax,
@@ -10935,7 +10947,11 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   }
   out <- list(
     concordance = if (length(concordance) == 1L) concordance[[1L]] else concordance,
-    count = .concordancefit_count(result, if (multi_score) score_names else NULL),
+    count = .concordancefit_count(
+      result,
+      if (multi_score) score_names else NULL,
+      if (missing(strata)) NULL else strata
+    ),
     n = as.integer(.result_field(result, "n"))
   )
   variance <- .result_field(result, "variance")

@@ -1,4 +1,4 @@
-"""Time native concordance summaries and influences with mixed event/censor ties.
+"""Time native concordance calls with mixed event/censor ties.
 
 Run against the installed extension, for example:
     .venv/bin/python scripts/bench_concordance.py --n 1000 10000 100000 --repeats 5
@@ -35,9 +35,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeats", type=positive_int, default=5)
     parser.add_argument("--timewt", choices=["n", "S", "I"], default="n")
     parser.add_argument(
+        "--timefix",
+        choices=["default", "true", "false"],
+        default="default",
+        help="Use the extension default or explicitly control near-tie adjudication",
+    )
+    parser.add_argument(
         "--operations",
         "--operation",
-        choices=["summary", "influence"],
+        choices=["index", "summary", "influence"],
         nargs="+",
         default=["summary", "influence"],
     )
@@ -106,6 +112,7 @@ def main() -> None:
         "repeats": args.repeats,
         "warmups": 1,
         "timewt": args.timewt,
+        "timefix": args.timefix,
         "timing": "native wrapper call, including input conversion and result construction",
         "results": [],
     }
@@ -119,9 +126,12 @@ def main() -> None:
                 function = getattr(native, name)
                 call_args = (stop, status, risk, weights, args.timewt)
                 if response == "counting":
-                    call_args = (start, *call_args, False)
-                samples, result = measure(partial(function, *call_args), args.repeats)
-                if operation == "summary":
+                    call_args = (start, *call_args)
+                options = {} if args.timefix == "default" else {"timefix": args.timefix == "true"}
+                samples, result = measure(partial(function, *call_args, **options), args.repeats)
+                if operation == "index":
+                    result_summary = {"concordance": result}
+                elif operation == "summary":
                     result_summary = {
                         key: result[key] for key in ["concordance", "concordant", "comparable"]
                     }
