@@ -78,6 +78,7 @@ __all__ = bind_names(
         "survfitkm",
         "survfitkm_counting_influence",
         "survfitkm_influence",
+        "survfit_residuals_at_times",
         "survfitkm_with_options",
     ],
 )

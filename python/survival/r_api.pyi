@@ -541,6 +541,13 @@ class SurvfitResult:
     n_censor_count: list[float] | None
     n_enter_count: list[float] | None
     model: dict[str, Any] | None
+    stype: int | None
+    ctype: int | None
+    timefix: bool
+    start_time: float | None
+    n: int | None
+    n_id: int | None
+    model_groups: list[Any] | None
     @property
     def surv(self) -> list[float]: ...
     @property
@@ -982,7 +989,7 @@ def survfit_residuals(
     *,
     type: str = "pstate",
     collapse: Any = False,
-    weighted: Any = False,
+    weighted: Any = None,
     data_frame: Any = False,
     extra: Any = False,
     **kwargs: Any,

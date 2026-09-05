@@ -836,6 +836,13 @@ class SurvfitResult:
     n_censor_count: list[float] | None = None
     n_enter_count: list[float] | None = None
     model: dict[str, Any] | None = None
+    stype: int | None = None
+    ctype: int | None = None
+    timefix: bool = True
+    start_time: float | None = None
+    n: int | None = None
+    n_id: int | None = None
+    model_groups: list[Any] | None = None
 
     @property
     def surv(self) -> list[float]:
@@ -947,6 +954,7 @@ class TurnbullSurvfitResult:
 class _PseudoMatrixResult:
     pseudo: list[list[float]]
     time: list[float]
+    id: list[Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -8393,35 +8401,6 @@ def _pseudo_subset_model_frame(
     return subset
 
 
-def _pseudo_rmst_values(
-    curve_time: Sequence[float],
-    curve_survival: Sequence[float],
-    eval_times: Sequence[float],
-) -> list[float]:
-    result: list[float] = []
-    times = [float(value) for value in curve_time]
-    survival = [float(value) for value in curve_survival]
-    for eval_time in eval_times:
-        target = float(eval_time)
-        area = 0.0
-        previous_time = 0.0
-        previous_survival = 1.0
-        for time, estimate in zip(times, survival, strict=True):
-            if target <= previous_time:
-                break
-            upper = min(target, time)
-            if upper > previous_time:
-                area += previous_survival * (upper - previous_time)
-                previous_time = upper
-            if time > target:
-                break
-            previous_survival = estimate
-        if target > previous_time:
-            area += previous_survival * (target - previous_time)
-        result.append(area)
-    return result
-
-
 def _pseudo_curve_values(
     curve: SurvfitResult,
     eval_times: Sequence[float],
@@ -8437,7 +8416,13 @@ def _pseudo_curve_values(
             [float(value) for value in eval_times],
             0.0,
         )
-    return _pseudo_rmst_values(times, [float(value) for value in curve.estimate], eval_times)
+    return _integrated_step_values(
+        times,
+        curve.estimate,
+        eval_times,
+        start_time=curve.start_time if curve.start_time is not None else min(0.0, *times),
+        initial_value=1.0,
+    )
 
 
 def _integrated_step_values(
@@ -8545,6 +8530,8 @@ def _pseudo_values_close(
 
 
 def _pseudo_counting_computation(fit: SurvfitResult) -> _SurvfitComputation:
+    if fit.stype is not None and fit.ctype is not None:
+        return _SurvfitComputation(fit.stype, fit.ctype)
     ctype1_hazard = _pseudo_counting_candidate_cumhaz(fit, 1)
     ctype2_hazard = _pseudo_counting_candidate_cumhaz(fit, 2)
     ctype = 2 if _pseudo_values_close(fit.cumhaz, ctype2_hazard) else 1
@@ -8554,25 +8541,53 @@ def _pseudo_counting_computation(fit: SurvfitResult) -> _SurvfitComputation:
     return _SurvfitComputation(stype, ctype)
 
 
-def _pseudo_counting_residual_rows(
-    influence: Any,
+def _survfit_residual_block(
     fit: SurvfitResult,
+    response: Surv,
     eval_times: Sequence[float],
     pseudo_type: str,
 ) -> list[list[float]]:
-    times = [float(value) for value in fit.time]
-    requested_times = [float(value) for value in eval_times]
-    if pseudo_type == "survival":
-        return _core.step_matrix_values_at(times, influence.influence_surv, requested_times, 0.0)
-    if pseudo_type == "cumhaz":
-        return _core.step_matrix_values_at(times, influence.influence_chaz, requested_times, 0.0)
-    return [
-        _pseudo_integrated_step_values(times, [float(value) for value in row], requested_times)
-        for row in influence.influence_surv
-    ]
+    computation = _pseudo_counting_computation(fit)
+    if computation.ctype == 2 and (
+        pseudo_type == "cumhaz" or (pseudo_type == "survival" and computation.stype == 2)
+    ):
+        warnings.warn(
+            "ctype=2 residuals use R's approximate tied-event calculation",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    if fit.timefix:
+        eval_times = _core.aeq_surv(list(eval_times), None).time
+    return _core.survfit_residuals_at_times(
+        list(response.time),
+        list(response.event),
+        list(fit.time),
+        list(fit.n_risk),
+        list(fit.n_event),
+        list(fit.estimate),
+        list(fit.cumhaz),
+        list(eval_times),
+        pseudo_type,
+        None if response.start is None else list(response.start),
+        computation.stype,
+    )
 
 
-def _pseudo_counting_survfit(
+def _survfit_collapse_ids(model: Mapping[Any, Any], response: Surv) -> bool:
+    ids = _pseudo_model_id_values(model, response)
+    if ids is None or len(_label_levels(ids, "id")) == len(response):
+        return False
+    cluster = model.get("(cluster)")
+    if cluster is not None:
+        values = _materialize_labels(cluster, "cluster")
+        if len(values) != len(response):
+            raise ValueError("cluster must have the same length as the Surv response")
+        if len(_label_levels(values, "cluster")) == len(response):
+            return False
+    return True
+
+
+def _pseudo_survfit(
     fit: SurvfitResult,
     response: Surv,
     model: Mapping[Any, Any],
@@ -8582,46 +8597,30 @@ def _pseudo_counting_survfit(
     data_frame: bool,
 ) -> Any:
     if eval_times is None:
-        raise TypeError("times are required for counting-process pseudo-values")
+        raise TypeError("times are required for fitted pseudo-values")
     id_values = _pseudo_model_id_values(model, response)
     weights = _pseudo_model_weights(model, response)
     n_rows = len(response)
-    if id_values is None:
-        id_values = list(range(n_rows))
-        subject_count = n_rows
-    else:
-        subject_count = len(_label_levels(id_values, "id"))
-    if subject_count == 0:
-        result = _PseudoMatrixResult([], [float(value) for value in eval_times])
-        return _pseudo_matrix_or_frame(result, data_frame)
-
+    subject_count = fit.n_id if fit.n_id is not None else fit.n
+    if subject_count is None:
+        subject_count = n_rows if id_values is None else len(_label_levels(id_values, "id"))
     full_values = _pseudo_curve_values(fit, eval_times, pseudo_type)
-    computation = _pseudo_counting_computation(fit)
-    start_values = [] if response.start is None else list(response.start)
-    influence = survfitkm_counting_influence(
-        start_values,
-        list(response.time),
-        [int(value) for value in response.event],
-        [float(value) for value in fit.time],
-        [float(value) for value in fit.estimate],
-        cluster=id_values if collapse else list(range(n_rows)),
-        weights=weights,
-        stype=computation.stype,
-        ctype=computation.ctype,
-    )
-    residual_rows = _pseudo_counting_residual_rows(influence, fit, eval_times, pseudo_type)
-    scale = float(subject_count)
-    pseudo_matrix: list[list[float]] = []
-    for residuals in residual_rows:
-        pseudo_matrix.append(
-            [
-                full_value + scale * residual
-                for full_value, residual in zip(full_values, residuals, strict=True)
-            ]
+    residual_rows = _survfit_residual_block(fit, response, eval_times, pseudo_type)
+    row_weights = weights if collapse else None
+    if collapse and _survfit_collapse_ids(model, response):
+        case_weights = [1.0] * n_rows if weights is None else weights
+        residual_rows, id_values, _ = _collapse_survfit_residual_matrix(
+            residual_rows, id_values, case_weights, None
         )
-
-    result = _PseudoMatrixResult(pseudo_matrix, [float(value) for value in eval_times])
-    return _pseudo_matrix_or_frame(result, data_frame)
+        row_weights = None
+    scale = float(subject_count)
+    matrix = []
+    for row_idx, row in enumerate(residual_rows):
+        row_scale = scale if row_weights is None else scale * row_weights[row_idx]
+        matrix.append(
+            [value + row_scale * residual for value, residual in zip(full_values, row, strict=True)]
+        )
+    return _pseudo_matrix_or_frame(_PseudoMatrixResult(matrix, eval_times, id_values), data_frame)
 
 
 def _pseudo_for_grouped_survfit(
@@ -8632,36 +8631,33 @@ def _pseudo_for_grouped_survfit(
     data_frame: bool,
 ) -> Any:
     grouped_result: dict[Any, Any] = {}
+    seen_ids: set[Any] = set()
     for label, curve in fit.items():
         response = _pseudo_model_response(curve)
         if response.type not in {"right", "counting"}:
             raise NotImplementedError(
                 "pseudo currently supports right-censored or counting survfit results"
             )
-        group_values = _pseudo_group_values_from_model(curve.model, response)
+        group_values = (
+            curve.model_groups
+            if curve.model_groups is not None
+            else _pseudo_group_values_from_model(curve.model, response)
+        )
         indices = [idx for idx, value in enumerate(group_values) if value == label]
         if not indices:
             raise TypeError("stored grouped survfit model frame does not match curve labels")
         group_response = _subset_surv(response, indices)
-        if response.type == "counting":
-            group_model = _pseudo_subset_model_frame(curve.model, group_response, indices)
-            grouped_result[label] = _pseudo_counting_survfit(
-                curve,
-                group_response,
-                group_model,
-                eval_times,
-                pseudo_type,
-                collapse,
-                data_frame,
-            )
-            continue
-        result = _core.pseudo(
-            list(group_response.time),
-            list(group_response.event),
-            eval_times,
-            pseudo_type,
+        group_model = _pseudo_subset_model_frame(curve.model, group_response, indices)
+        if collapse and _survfit_collapse_ids(curve.model, response):
+            ids = _pseudo_model_id_values(group_model, group_response)
+            if ids is not None:
+                levels = set(_label_levels(ids, "id"))
+                if seen_ids.intersection(levels):
+                    raise ValueError("same id appears in multiple curves, cannot collapse")
+                seen_ids.update(levels)
+        grouped_result[label] = _pseudo_survfit(
+            curve, group_response, group_model, eval_times, pseudo_type, collapse, data_frame
         )
-        grouped_result[label] = _pseudo_matrix_or_frame(result, data_frame)
 
     if not data_frame:
         return grouped_result
@@ -8677,13 +8673,18 @@ def _pseudo_for_grouped_survfit(
 
 
 def _pseudo_matrix_or_frame(result: Any, data_frame: bool) -> Any:
-    matrix = [[float(value) for value in row] for row in result.pseudo]
+    matrix = (
+        result.pseudo
+        if isinstance(result, _PseudoMatrixResult)
+        else [[float(value) for value in row] for row in result.pseudo]
+    )
     if not data_frame:
         return matrix
-    frame: dict[str, list[float | int]] = {"id": [], "time": [], "pseudo": []}
+    frame: dict[str, list[Any]] = {"id": [], "time": [], "pseudo": []}
+    ids = getattr(result, "id", None)
     for row_idx, row in enumerate(matrix, start=1):
         for time, value in zip(result.time, row, strict=True):
-            frame["id"].append(row_idx)
+            frame["id"].append(row_idx if ids is None else ids[row_idx - 1])
             frame["time"].append(float(time))
             frame["pseudo"].append(float(value))
     return frame
@@ -8860,29 +8861,13 @@ def pseudo(
 
     response = _pseudo_model_response(fit)
     model = getattr(fit, "model", None)
-    if response.type == "counting":
-        if not isinstance(fit, SurvfitResult) or not isinstance(model, Mapping):
-            raise TypeError(
-                "counting-process pseudo-values require a survfit result with a stored model frame"
-            )
-        return _pseudo_counting_survfit(
-            fit,
-            response,
-            model,
-            eval_time_values,
-            pseudo_type,
-            collapse_value,
-            data_frame,
-        )
-    if response.type != "right":
-        raise NotImplementedError("pseudo currently supports right-censored survfit results")
-    result = _core.pseudo(
-        list(response.time),
-        list(response.event),
-        eval_time_values,
-        pseudo_type,
+    if response.type not in {"right", "counting"}:
+        raise NotImplementedError("pseudo supports right-censored or counting survfit results")
+    if not isinstance(fit, SurvfitResult) or not isinstance(model, Mapping):
+        raise TypeError("pseudo requires a survfit result with a stored model frame")
+    return _pseudo_survfit(
+        fit, response, model, eval_time_values, pseudo_type, collapse_value, data_frame
     )
-    return _pseudo_matrix_or_frame(result, data_frame)
 
 
 def rttright(
@@ -10515,9 +10500,13 @@ def _survfit_residual_curve_specs(
     n: int,
 ) -> list[tuple[Any, Any, list[int], int]]:
     if isinstance(fit, Mapping):
+        first_curve = next(iter(fit.values()))
+        groups = getattr(first_curve, "model_groups", None)
+        if groups is None:
+            groups = _survfit_residual_group_values(frame, n)
         return _survfit_residual_grouped_indices(
             fit,
-            _survfit_residual_group_values(frame, n),
+            groups,
             n,
         )
     return [(None, fit, list(range(n)), 1)]
@@ -10746,68 +10735,20 @@ def _survfit_multistate_residual_result(
     }
 
 
-def _survfit_residual_rows_at_times(
-    influence: Any,
-    times: Sequence[float],
-    residual_type: str,
-) -> list[list[float]]:
-    curve_times = [float(value) for value in influence.time]
-    eval_times = [float(value) for value in times]
-    if residual_type == "cumhaz":
-        return _core.step_matrix_values_at(curve_times, influence.influence_chaz, eval_times, 0.0)
-    if residual_type == "auc":
-        return [
-            _pseudo_integrated_step_values(curve_times, [float(value) for value in row], eval_times)
-            for row in influence.influence_surv
-        ]
-    return _core.step_matrix_values_at(curve_times, influence.influence_surv, eval_times, 0.0)
-
-
 def _survfit_residual_matrix(
     response: Surv,
-    weights: list[float],
     curve_specs: list[tuple[Any, Any, list[int], int]],
     times: Sequence[float],
     residual_type: str,
 ) -> tuple[list[list[float]], list[int] | None]:
     matrix = [[0.0 for _ in times] for _ in range(len(response))]
     curve_numbers = [0 for _ in range(len(response))] if len(curve_specs) > 1 else None
+    pseudo_type = {"pstate": "survival", "cumhaz": "cumhaz", "auc": "rmst"}[residual_type]
     for _label, curve, indices, curve_idx in curve_specs:
         if not isinstance(curve, SurvfitResult):
-            raise TypeError("residuals.survfit currently supports Kaplan-Meier survfit results")
+            raise TypeError("residuals.survfit requires a Kaplan-Meier survfit result")
         group_response = _subset_surv(response, indices)
-        if group_response.type == "counting":
-            if group_response.start is None:
-                raise ValueError("counting-process Surv response is missing start times")
-            group_weights = [weights[idx] for idx in indices]
-            computation = _pseudo_counting_computation(curve)
-            influence = survfitkm_counting_influence(
-                list(group_response.start),
-                list(group_response.time),
-                [int(value) for value in group_response.event],
-                [float(value) for value in curve.time],
-                [float(value) for value in curve.estimate],
-                list(range(len(indices))),
-                weights=group_weights,
-                stype=computation.stype,
-                ctype=computation.ctype,
-            )
-        elif group_response.type == "right" and group_response.start is None:
-            group_weights = [weights[idx] for idx in indices]
-            computation = _pseudo_counting_computation(curve)
-            influence = survfitkm_influence(
-                list(group_response.time),
-                [int(value) for value in group_response.event],
-                list(range(len(indices))),
-                weights=group_weights,
-                stype=computation.stype,
-                ctype=computation.ctype,
-            )
-        else:
-            raise NotImplementedError(
-                "residuals.survfit currently supports right-censored or counting Kaplan-Meier fits"
-            )
-        rows = _survfit_residual_rows_at_times(influence, times, residual_type)
+        rows = _survfit_residual_block(curve, group_response, times, pseudo_type)
         for local_idx, source_idx in enumerate(indices):
             matrix[source_idx] = rows[local_idx]
             if curve_numbers is not None:
@@ -10827,6 +10768,11 @@ def _collapse_survfit_residual_matrix(
     collapsed_curve = [0 for _ in levels] if curve_numbers is not None else None
     for row_idx, id_value in enumerate(ids):
         target = index_by_id[id_value]
+        if collapsed_curve is not None and collapsed_curve[target] not in {
+            0,
+            curve_numbers[row_idx],
+        }:
+            raise ValueError("same id appears in multiple curves, cannot collapse")
         collapsed[target] = [
             current + float(weights[row_idx]) * float(value)
             for current, value in zip(collapsed[target], matrix[row_idx], strict=True)
@@ -10852,7 +10798,7 @@ def survfit_residuals(
     *,
     type: str = "pstate",
     collapse: Any = False,
-    weighted: Any = False,
+    weighted: Any = None,
     data_frame: Any = False,
     extra: Any = False,
     **kwargs: Any,
@@ -10871,11 +10817,11 @@ def survfit_residuals(
     eval_times = _survfit_residual_times(times)
     residual_type = _survfit_residual_type(type)
     collapse_value = _normalize_bool_option(collapse, "collapse")
-    weighted_value = _normalize_bool_option(weighted, "weighted")
+    weighted_value = (
+        collapse_value if weighted is None else _normalize_bool_option(weighted, "weighted")
+    )
     data_frame_value = _normalize_bool_option(data_frame, "data_frame")
     extra_value = _normalize_bool_option(extra, "extra")
-    if collapse_value and not weighted_value:
-        raise ValueError("invalid combination of options: collapse=True and weighted=False")
 
     frame = _survfit_residual_model_frame(fit)
     response = _survfit_residual_response(frame)
@@ -10883,13 +10829,17 @@ def survfit_residuals(
     if n == 0:
         raise ValueError("data set has no non-missing observations")
     weights_values, has_case_weights = _survfit_residual_weights(frame, n)
-    id_values, id_name, has_id = _survfit_residual_ids(frame, n)
+    id_values, id_name, _has_id = _survfit_residual_ids(frame, n)
+    if not _survfit_collapse_ids(frame, response):
+        collapse_value = False
+    if collapse_value and not weighted_value:
+        raise ValueError("invalid combination of options: collapse=True and weighted=False")
     if not has_case_weights:
         weighted_value = False
-    if not has_id or len(_label_levels(id_values, "id")) == n:
-        collapse_value = False
 
     curve_specs = _survfit_residual_curve_specs(fit, frame, n)
+    if getattr(curve_specs[0][1], "timefix", True):
+        eval_times = list(_core.aeq_surv(eval_times, None).time)
     if response.type in {"mright", "mcounting"}:
         return _survfit_multistate_residual_result(
             frame,
@@ -10908,7 +10858,6 @@ def survfit_residuals(
 
     matrix, curve_numbers = _survfit_residual_matrix(
         response,
-        weights_values,
         curve_specs,
         eval_times,
         residual_type,
@@ -11503,7 +11452,7 @@ def _prepend_matrix_time0(values: list[list[float]], initial: float) -> list[lis
 
 
 def _survfit0_default_time(result: Any) -> float:
-    if isinstance(result, CoxSurvfitResult) and result.start_time is not None:
+    if isinstance(result, (CoxSurvfitResult, SurvfitResult)) and result.start_time is not None:
         return float(result.start_time)
     times = getattr(result, "time", None)
     if times is None:
@@ -11519,7 +11468,8 @@ def _survfit0_result(result: SurvfitResult, t0: float | None = None) -> SurvfitR
     if not _needs_time0_insert(result.time, initial_time):
         return result
     n_risk0 = float(result.n_risk[0]) if result.n_risk else 0.0
-    return SurvfitResult(
+    return replace(
+        result,
         time=_prepend_curve_time0(result.time, initial_time),
         n_risk=_prepend_curve_time0(result.n_risk, n_risk0),
         n_event=_prepend_curve_time0(result.n_event, 0.0),
@@ -12021,24 +11971,7 @@ def _survfit_without_standard_errors(result: Any) -> Any:
 
 def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
     if isinstance(result, SurvfitResult):
-        return SurvfitResult(
-            time=result.time,
-            n_risk=result.n_risk,
-            n_event=result.n_event,
-            n_censor=result.n_censor,
-            estimate=result.estimate,
-            std_err=result.std_err,
-            conf_lower=result.conf_lower,
-            conf_upper=result.conf_upper,
-            cumhaz=result.cumhaz,
-            std_chaz=result.std_chaz,
-            n_enter=result.n_enter,
-            n_risk_count=result.n_risk_count,
-            n_event_count=result.n_event_count,
-            n_censor_count=result.n_censor_count,
-            n_enter_count=result.n_enter_count,
-            model=model_frame,
-        )
+        return replace(result, model=model_frame)
     if all(
         hasattr(result, name)
         for name in (
@@ -13131,6 +13064,7 @@ def survfit(
         if normalized_start_time is not None
         else _survfit_default_time0(response)
     )
+    model_groups = None if group is None else _materialize_labels(group, "group")
     if normalized_start_time is not None:
         indices = _survfit_start_time_indices(response, normalized_start_time, fix_time)
         response = _subset_surv(response, indices)
@@ -13149,6 +13083,34 @@ def survfit(
             "survfit robust variance is currently supported only for right-censored or "
             "counting-process curves"
         )
+
+    def finish(result: Any) -> Any:
+        if model_frame is None:
+            return result
+        result = _survfit_with_model_frame(result, model_frame)
+
+        def with_metadata(curve: SurvfitResult, indices: Sequence[int]) -> SurvfitResult:
+            subject_count = (
+                None
+                if id_values is None
+                else len(_label_levels([id_values[idx] for idx in indices], "id"))
+            )
+            return replace(
+                curve,
+                stype=computation.stype,
+                ctype=computation.ctype,
+                timefix=fix_time,
+                start_time=normalized_start_time,
+                n=len(indices),
+                n_id=subject_count,
+                model_groups=model_groups,
+            )
+
+        if isinstance(result, Mapping):
+            groups = _group_indices(group, len(response), levels=formula_group_levels)
+            return {label: with_metadata(curve, groups[label]) for label, curve in result.items()}
+        return with_metadata(result, range(len(response)))
+
     if group is None:
         km = (
             _survfit_counting_with_id(
@@ -13198,11 +13160,7 @@ def survfit(
                 else km
             )
             result = _survfit_without_standard_errors(result) if not include_se else result
-            return (
-                _survfit_with_model_frame(result, model_frame)
-                if model_frame is not None
-                else result
-            )
+            return finish(result)
         result = _survfit_from_km_counts(
             km,
             normalized_conf_level,
@@ -13246,7 +13204,7 @@ def survfit(
             else result
         )
         result = _survfit_without_standard_errors(result) if not include_se else result
-        return _survfit_with_model_frame(result, model_frame) if model_frame is not None else result
+        return finish(result)
 
     grouped_indices = _group_indices(group, len(response), levels=formula_group_levels)
     batched_km: dict[int, Any] | None = None
@@ -13415,11 +13373,7 @@ def survfit(
                 else result
             )
     result = _survfit_without_standard_errors(results) if not include_se else results
-    return (
-        _survfit_with_model_frame(result, model_frame)
-        if model_frame is not None and batched_km is None
-        else result
-    )
+    return finish(result)
 
 
 def _survdiff_weight_type(rho: float) -> str:
