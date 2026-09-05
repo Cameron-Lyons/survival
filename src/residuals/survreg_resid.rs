@@ -463,6 +463,7 @@ fn validate_time2_for_interval_residuals(
     time: &[f64],
     status: &[i32],
     time2: Option<&[f64]>,
+    distribution: &str,
 ) -> PyResult<()> {
     let has_interval_rows = status.contains(&3);
     if !has_interval_rows && time2.is_none() {
@@ -478,6 +479,7 @@ fn validate_time2_for_interval_residuals(
             "time2 must have the same length as time",
         ));
     }
+    let uses_log_time = response_uses_log_transform_key(&validated_distribution_key(distribution));
     for (idx, ((&start, &end), &event)) in time
         .iter()
         .zip(values.iter())
@@ -492,7 +494,7 @@ fn validate_time2_for_interval_residuals(
                 "time2 contains non-finite interval endpoint at index {idx}"
             )));
         }
-        if end <= 0.0 {
+        if uses_log_time && end <= 0.0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "time2[{idx}] must be positive"
             )));
@@ -511,8 +513,20 @@ fn validate_survreg_residual_inputs(
     status: &[i32],
     linear_pred: &[f64],
     scale: f64,
+    distribution: &str,
 ) -> PyResult<()> {
-    validate_positive_finite("time", time)?;
+    validate_distribution(distribution)?;
+    let key = validated_distribution_key(distribution);
+    if response_uses_log_transform_key(&key) {
+        validate_positive_finite("time", time)?;
+    } else {
+        if time.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "time must not be empty",
+            ));
+        }
+        validate_finite_values("time", time)?;
+    }
     validate_status_values(status)?;
     validate_finite_values("linear_pred", linear_pred)?;
     validate_scale(scale)
@@ -643,7 +657,7 @@ pub(crate) fn compute_response_residuals_censored_with_parameter(
     distribution: &str,
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
-    validate_time2_for_interval_residuals(time, status, time2)?;
+    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
     let mut residuals = Vec::with_capacity(time.len());
     for (idx, &linear_predictor) in linear_pred.iter().enumerate().take(time.len()) {
         let (center, _) = survreg_saturated_center_loglik(
@@ -742,7 +756,7 @@ pub(crate) fn compute_deviance_residuals_from_derivative_matrix_with_parameter(
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
     validate_derivative_matrix(derivative_matrix)?;
-    validate_time2_for_interval_residuals(time, status, time2)?;
+    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
     let working = compute_working_residuals_from_derivative_matrix(derivative_matrix)?;
     let mut residuals = Vec::with_capacity(time.len());
 
@@ -873,7 +887,7 @@ pub(crate) fn compute_ldcase_with_parameter(
     distribution: &str,
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
-    validate_time2_for_interval_residuals(time, status, time2)?;
+    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
     let n = time.len();
 
     let mut ld = Vec::with_capacity(n);
@@ -997,7 +1011,7 @@ pub(crate) fn compute_survreg_residual_matrix_with_parameter(
     distribution: &str,
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<Vec<f64>>> {
-    validate_time2_for_interval_residuals(time, status, time2)?;
+    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
     let key = validated_distribution_key(distribution);
     let distribution_parameter =
         validated_distribution_parameter_for_key(&key, distribution_parameter)?;
@@ -1229,8 +1243,7 @@ pub fn survreg_residual_matrix(
             "time, status, and linear_pred must have the same length",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
@@ -1342,8 +1355,7 @@ pub fn residuals_survreg(
             "survreg matrix residuals are matrix-valued; use survreg_residual_matrix",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
@@ -1437,8 +1449,7 @@ pub fn dfbeta_survreg(
             "All inputs must have the same length",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
     let width = validate_covariates(&covariates)?;
