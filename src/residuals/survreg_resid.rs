@@ -1,4 +1,5 @@
-use crate::internal::statistical::{ln_gamma, student_t_cdf, student_t_pdf};
+use crate::internal::aft::{AftDistribution, transformed_interval_width as aft_interval_width};
+use crate::internal::statistical::{student_t_cdf, student_t_pdf};
 use pyo3::prelude::*;
 
 const LOG_PROBABILITY_FLOOR: f64 = -690.0;
@@ -216,17 +217,7 @@ fn log_one_minus_exp_neg(value: f64) -> f64 {
 }
 
 fn standardized_interval_width(lower: f64, upper: f64, scale: f64, log_transform: bool) -> f64 {
-    let width = if log_transform {
-        let relative_width = (upper - lower) / lower;
-        if relative_width.is_finite() {
-            relative_width.ln_1p()
-        } else {
-            upper.ln() - lower.ln()
-        }
-    } else {
-        upper - lower
-    };
-    width / scale
+    aft_interval_width(lower, upper, log_transform) / scale
 }
 
 fn transformed_interval_width(
@@ -714,7 +705,7 @@ pub(crate) fn compute_working_residuals_with_parameter(
     let key = validated_distribution_key(distribution);
     let parameter = validated_distribution_parameter_for_key(&key, distribution_parameter)
         .expect("distribution parameter was validated");
-    let family = ResidualDistribution::from_key(&key, parameter);
+    let family = AftDistribution::from_key(&key, parameter);
     time.iter()
         .zip(status)
         .zip(linear_pred)
@@ -747,7 +738,7 @@ pub(crate) fn compute_dfbeta_survreg_with_parameter(
     let key = validated_distribution_key(distribution);
     let parameter = validated_distribution_parameter_for_key(&key, distribution_parameter)
         .expect("distribution parameter was validated");
-    let family = ResidualDistribution::from_key(&key, parameter);
+    let family = AftDistribution::from_key(&key, parameter);
 
     let mut dfbeta = Vec::with_capacity(n);
 
@@ -782,7 +773,7 @@ pub(crate) fn compute_ldcase_with_parameter(
     validate_time2_for_interval_residuals(time, status, time2)?;
     let key = validated_distribution_key(distribution);
     let parameter = validated_distribution_parameter_for_key(&key, distribution_parameter)?;
-    let family = ResidualDistribution::from_key(&key, parameter);
+    let family = AftDistribution::from_key(&key, parameter);
     let log_transform = response_uses_log_transform_key(&key);
     let transform = |value: f64| if log_transform { value.ln() } else { value };
     Ok(time
@@ -794,56 +785,13 @@ pub(crate) fn compute_ldcase_with_parameter(
             let z = (transform(time) - eta) / scale;
             if event == 3 {
                 let upper = time2.expect("validated time2 length")[idx];
-                let width = standardized_interval_width(time, upper, scale, log_transform);
-                family.interval(z, width, scale)[0]
+                let width = aft_interval_width(time, upper, log_transform);
+                family.interval_from_response_width(z, width, scale)[0]
             } else {
                 family.single(z, scale, event)[0]
             }
         })
         .collect())
-}
-
-/// Distribution calculations shared by all residual types. The two tails are
-/// evaluated directly, so a small survival probability is never `1 - cdf`.
-#[derive(Clone, Copy)]
-enum ResidualDistribution {
-    Extreme,
-    Logistic,
-    Gaussian,
-    StudentT { df: f64, log_normalizer: f64 },
-}
-
-#[derive(Clone, Copy)]
-struct ResidualDensity {
-    log_density: f64,
-    score: f64,
-    curvature: f64,
-}
-
-fn softplus(value: f64) -> f64 {
-    value.max(0.0) + (-value.abs()).exp().ln_1p()
-}
-
-/// The normal hazard and its small difference from z. Retaining the continued
-/// fraction's correction avoids both subtracting large log probabilities and
-/// subtracting almost equal hazard and z values in the tail curvature.
-fn normal_tail_hazard(z: f64) -> (f64, f64) {
-    let mut denominator = z;
-    for numerator in (2..=32).rev() {
-        denominator = z + f64::from(numerator) / denominator;
-    }
-    let correction = denominator.recip();
-    (z + correction, correction)
-}
-
-/// Log of the upper normal tail for a nonnegative argument. The continued
-/// fraction also covers tails smaller than f64 probabilities.
-fn normal_log_upper_tail(z: f64) -> f64 {
-    if z < 20.0 {
-        return (0.5 * libm::erfc(z / std::f64::consts::SQRT_2)).ln();
-    }
-    let (hazard, _) = normal_tail_hazard(z);
-    -0.5 * z * z - 0.5 * std::f64::consts::TAU.ln() - hazard.ln()
 }
 
 /// R's interval diagnostic columns use a different scale convention from a
@@ -854,257 +802,6 @@ fn interval_scale_convention(mut row: [f64; 6], scale: f64) -> [f64; 6] {
     row[4] += 2.0 * ds;
     row[5] = scale * row[5] + row[1] * (scale * (1.0 + ds) - 1.0 + ds);
     row
-}
-
-impl ResidualDistribution {
-    fn from_key(key: &str, parameter: Option<f64>) -> Self {
-        match key {
-            "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value"
-            | "extremevalue" => Self::Extreme,
-            "logistic" | "loglogistic" | "log_logistic" => Self::Logistic,
-            "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
-                Self::Gaussian
-            }
-            "t" | "student" | "student_t" | "studentt" => {
-                let df = parameter.expect("Student-t df was validated");
-                Self::StudentT {
-                    df,
-                    log_normalizer: ln_gamma((df + 1.0) / 2.0)
-                        - ln_gamma(df / 2.0)
-                        - 0.5 * (df * std::f64::consts::PI).ln(),
-                }
-            }
-            _ => unreachable!("distribution was validated"),
-        }
-    }
-
-    fn density(self, z: f64) -> ResidualDensity {
-        let (log_density, score, curvature) = match self {
-            Self::Extreme => {
-                let exponential = z.exp();
-                (z - exponential, 1.0 - exponential, -exponential)
-            }
-            Self::Logistic => {
-                let log_density = -z.abs() - 2.0 * (-z.abs()).exp().ln_1p();
-                (log_density, -(z / 2.0).tanh(), -2.0 * log_density.exp())
-            }
-            Self::Gaussian => (-0.5 * z * z - 0.5 * std::f64::consts::TAU.ln(), -z, -1.0),
-            Self::StudentT { df, log_normalizer } => {
-                let denominator = df + z * z;
-                (
-                    log_normalizer - 0.5 * (df + 1.0) * (z * z / df).ln_1p(),
-                    -(df + 1.0) * z / denominator,
-                    (df + 1.0) * (z * z - df) / denominator / denominator,
-                )
-            }
-        };
-        ResidualDensity {
-            log_density,
-            score,
-            curvature,
-        }
-    }
-
-    fn log_tails(self, z: f64) -> (f64, f64) {
-        match self {
-            Self::Extreme => {
-                let exponential = z.exp();
-                // exp(z) may underflow even while log(F(z)) is representable.
-                let log_cdf = if exponential == 0.0 {
-                    z
-                } else {
-                    (-(-exponential).exp_m1()).ln()
-                };
-                (log_cdf, -exponential)
-            }
-            Self::Logistic => (-softplus(-z), -softplus(z)),
-            Self::Gaussian => {
-                let log_small = normal_log_upper_tail(z.abs());
-                let log_large = (-log_small.exp()).ln_1p();
-                if z < 0.0 {
-                    (log_small, log_large)
-                } else {
-                    (log_large, log_small)
-                }
-            }
-            Self::StudentT { df, .. } => {
-                let log_small = student_t_cdf(-z.abs(), df).ln();
-                let log_large = (-log_small.exp()).ln_1p();
-                if z < 0.0 {
-                    (log_small, log_large)
-                } else {
-                    (log_large, log_small)
-                }
-            }
-        }
-    }
-
-    fn single(self, z: f64, scale: f64, status: i32) -> [f64; 6] {
-        let density = self.density(z);
-        let (g, score, curvature) = if status == 1 {
-            (
-                density.log_density - scale.ln(),
-                density.score,
-                density.curvature,
-            )
-        } else {
-            let (log_cdf, log_survival) = self.log_tails(z);
-            match self {
-                Self::Extreme if status == 0 => (-z.exp(), -z.exp(), -z.exp()),
-                Self::Extreme => {
-                    let exponential = z.exp();
-                    let ratio = if exponential < 1e-4 {
-                        1.0 - exponential / 2.0 + exponential * exponential / 12.0
-                    } else {
-                        (density.log_density - log_cdf).exp()
-                    };
-                    let curvature = if exponential < 1e-4 {
-                        -exponential / 2.0 + exponential * exponential / 6.0
-                    } else {
-                        ratio * (1.0 - exponential - ratio)
-                    };
-                    (log_cdf, ratio, curvature)
-                }
-                Self::Logistic => {
-                    let score = if status == 0 {
-                        -log_cdf.exp()
-                    } else {
-                        log_survival.exp()
-                    };
-                    (
-                        if status == 0 { log_survival } else { log_cdf },
-                        score,
-                        -density.log_density.exp(),
-                    )
-                }
-                Self::Gaussian if (status == 0 && z >= 20.0) || (status == 2 && z <= -20.0) => {
-                    let (hazard, correction) = normal_tail_hazard(z.abs());
-                    let g = if status == 0 { log_survival } else { log_cdf };
-                    let score = if status == 0 { -hazard } else { hazard };
-                    (g, score, -hazard * correction)
-                }
-                _ => {
-                    let g = if status == 0 { log_survival } else { log_cdf };
-                    let ratio = (density.log_density - g).exp();
-                    let score = if status == 0 { -ratio } else { ratio };
-                    (g, score, score * (density.score - score))
-                }
-            }
-        };
-        [
-            g,
-            -score / scale,
-            curvature / scale / scale,
-            -z * score - f64::from(status == 1),
-            z * (score + z * curvature),
-            (score + z * curvature) / scale,
-        ]
-    }
-
-    fn interval(self, lower: f64, width: f64, scale: f64) -> [f64; 6] {
-        let upper = lower + width;
-        let lower_density = self.density(lower);
-        let upper_density = self.density(upper);
-        // Integrating the conditional scores avoids subtracting almost equal
-        // endpoint densities. Check log-density variation as well as width:
-        // the extreme-value density changes at exp(z), much faster than z.
-        let density_variation = width
-            * (lower_density.score.abs().max(upper_density.score.abs())
-                + lower_density
-                    .curvature
-                    .abs()
-                    .max(upper_density.curvature.abs())
-                    .sqrt());
-        if density_variation < 1e-3 {
-            return self.narrow_interval(lower, width, scale);
-        }
-        // P = A - B, using upper tails on the right and lower tails on
-        // the left. Combine their log-likelihood derivatives directly: forming
-        // density/probability ratios loses curvature in distant Gaussian tails.
-        let (larger, smaller) = if lower > 0.0 {
-            (self.single(lower, scale, 0), self.single(upper, scale, 0))
-        } else {
-            (self.single(upper, scale, 2), self.single(lower, scale, 2))
-        };
-        let log_ratio = if matches!(self, Self::Gaussian) && (lower >= 20.0 || upper <= -20.0) {
-            let (near, far) = if lower > 0.0 {
-                (lower, upper)
-            } else {
-                (-upper, -lower)
-            };
-            let (near_hazard, near_correction) = normal_tail_hazard(near);
-            let (_, far_correction) = normal_tail_hazard(far);
-            let hazard_difference = width + far_correction - near_correction;
-            -0.5 * width * (near + far) - (hazard_difference / near_hazard).ln_1p()
-        } else {
-            smaller[0] - larger[0]
-        };
-        let ratio = (-log_ratio).exp_m1().recip();
-        if ratio == 0.0 {
-            return interval_scale_convention(larger, scale);
-        }
-        let location_difference = larger[1] - smaller[1];
-        let scale_difference = larger[3] - smaller[3];
-        let covariance_weight = ratio * (1.0 + ratio);
-        let g = larger[0] + (-log_ratio.exp_m1()).ln();
-        let dg = larger[1] + ratio * location_difference;
-        let ddg = larger[2] + ratio * (larger[2] - smaller[2])
-            - covariance_weight * location_difference * location_difference;
-        let ds = larger[3] + ratio * scale_difference;
-        let dds = larger[4] + ratio * (larger[4] - smaller[4])
-            - covariance_weight * scale_difference * scale_difference;
-        let dsg = larger[5] + ratio * (larger[5] - smaller[5])
-            - covariance_weight * location_difference * scale_difference;
-        interval_scale_convention([g, dg, ddg, ds, dds, dsg], scale)
-    }
-
-    fn narrow_interval(self, lower: f64, width: f64, scale: f64) -> [f64; 6] {
-        const NODES: [f64; 4] = [
-            -0.8611363115940526,
-            -0.3399810435848563,
-            0.3399810435848563,
-            0.8611363115940526,
-        ];
-        const WEIGHTS: [f64; 4] = [
-            0.34785484513745385,
-            0.6521451548625461,
-            0.6521451548625461,
-            0.34785484513745385,
-        ];
-        let half_width = width / 2.0;
-        let center = lower + half_width;
-        let rows = NODES.map(|node| self.single(center + node * half_width, scale, 1));
-        let maximum = rows
-            .iter()
-            .map(|row| row[0])
-            .fold(f64::NEG_INFINITY, f64::max);
-        let weights: [f64; 4] = std::array::from_fn(|i| WEIGHTS[i] * (rows[i][0] - maximum).exp());
-        let total = weights.iter().sum::<f64>();
-        let dg = (0..4).map(|i| weights[i] * rows[i][1]).sum::<f64>() / total;
-        let ds_true = (0..4).map(|i| weights[i] * rows[i][3]).sum::<f64>() / total;
-        let mut ddg = 0.0;
-        let mut dds_true = 0.0;
-        let mut dsg_true = 0.0;
-        for i in 0..4 {
-            let location_delta = rows[i][1] - dg;
-            let scale_delta = rows[i][3] - ds_true;
-            ddg += weights[i] * (rows[i][2] + location_delta * location_delta);
-            dds_true += weights[i] * (rows[i][4] + scale_delta * scale_delta);
-            dsg_true += weights[i] * (rows[i][5] + location_delta * scale_delta);
-        }
-        let g = half_width.ln() + scale.ln() + maximum + total.ln();
-        interval_scale_convention(
-            [
-                g,
-                dg,
-                ddg / total,
-                ds_true,
-                dds_true / total,
-                dsg_true / total,
-            ],
-            scale,
-        )
-    }
 }
 
 #[cfg(test)]
@@ -1140,7 +837,7 @@ pub(crate) fn compute_survreg_residual_matrix_with_parameter(
     let key = validated_distribution_key(distribution);
     let distribution_parameter =
         validated_distribution_parameter_for_key(&key, distribution_parameter)?;
-    let family = ResidualDistribution::from_key(&key, distribution_parameter);
+    let family = AftDistribution::from_key(&key, distribution_parameter);
     let log_transform = response_uses_log_transform_key(&key);
     let transform = |value: f64| if log_transform { value.ln() } else { value };
     let mut matrix = Vec::with_capacity(time.len());
@@ -1149,8 +846,8 @@ pub(crate) fn compute_survreg_residual_matrix_with_parameter(
         let z = (transform(time[i]) - linear_pred[i]) / scale;
         let row = if status[i] == 3 {
             let upper = time2.expect("validated time2 length")[i];
-            let width = standardized_interval_width(time[i], upper, scale, log_transform);
-            family.interval(z, width, scale)
+            let width = aft_interval_width(time[i], upper, log_transform);
+            interval_scale_convention(family.interval_from_response_width(z, width, scale), scale)
         } else {
             family.single(z, scale, status[i])
         };

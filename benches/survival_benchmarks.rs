@@ -948,6 +948,52 @@ mod case_cohort_bench {
 mod survreg_bench {
     use super::*;
 
+    fn mixed_censored_probe(bencher: divan::Bencher, n: usize, distribution: &str) {
+        let time: Vec<f64> = (0..n)
+            .map(|i| 3.0 + ((i % 19) as f64 - 9.0) * 0.2)
+            .collect();
+        let upper: Vec<f64> = time
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| value + if i % 3 == 0 { 1e-7 } else { 0.2 })
+            .collect();
+        let status: Vec<f64> = (0..n).map(|i| (i % 4) as f64).collect();
+        let rows: Vec<Vec<f64>> = (0..n)
+            .map(|i| vec![1.0, (i % 17) as f64 * 0.05, (i % 7) as f64 * -0.1])
+            .collect();
+        bencher.bench_local(|| {
+            black_box(
+                survreg(
+                    time.clone(),
+                    status.clone(),
+                    rows.clone(),
+                    None,
+                    None,
+                    Some(vec![3.0, 0.0, 0.0, 0.0]),
+                    None,
+                    Some(distribution),
+                    Some(0),
+                    None,
+                    None,
+                    Some(upper.clone()),
+                    None,
+                    None,
+                )
+                .expect("mixed-censoring likelihood probe should be finite"),
+            );
+        });
+    }
+
+    #[divan::bench(args = [1000, 9999, 10000, 100000])]
+    fn mixed_censored_gaussian(bencher: divan::Bencher, n: usize) {
+        mixed_censored_probe(bencher, n, "gaussian");
+    }
+
+    #[divan::bench(args = [1000, 9999, 10000, 100000])]
+    fn mixed_censored_student_t(bencher: divan::Bencher, n: usize) {
+        mixed_censored_probe(bencher, n, "t");
+    }
+
     fn status_as_survreg(status: &[i32]) -> Vec<f64> {
         status.iter().map(|&value| f64::from(value)).collect()
     }

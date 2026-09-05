@@ -228,6 +228,12 @@ The AFT optimizer uses positive-definite observed-information Newton steps when
 available and falls back to the stable outer-product system otherwise. The R
 bridge also routes built-in `survreg.fit` matrix calls through this kernel,
 including fixed or stratified scales and interval-censored responses.
+AFT likelihoods and analytic derivatives share the distribution calculations used
+by residual diagnostics, with the optimizer using the true likelihood Hessian.
+Log-tail evaluation preserves very small probabilities, and interval widths are
+computed before log-time transformation to retain adjacent response endpoints.
+Zero-weight observations are omitted from likelihood evaluation; the line search
+rejects non-finite likelihoods or derivatives.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
