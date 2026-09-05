@@ -73,6 +73,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(coxph_penalized_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_borgan_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount1, m)?)?;
@@ -107,6 +108,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         PSpline,
         CoxCountOutput,
         CoxPHFit,
+        CoxPenaltyDiagnostics,
         LinkFunctionParams,
         CoxPHModel,
         Subject,

@@ -851,7 +851,8 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{fitted}{survival_py_model}(object, ..., type = NULL, se.fit = FALSE)
 
-\method{summary}{survival_py_model}(object, conf.int = 0.95, scale = 1, ...)
+\method{summary}{survival_py_model}(object, conf.int = 0.95, scale = 1,
+  terms = FALSE, ...)
 
 \method{summary}{survival_py_survfit}(object, times, censored = FALSE,
   scale = 1, extend = FALSE, rmean = getOption("survfit.rmean"),
@@ -1065,7 +1066,10 @@ options handled by the native bridge.}
 \item{transform}{Formula \code{survobrien} option delegated to
 \code{survival::survobrien}, or the time-axis transform for \code{cox.zph}.}
 \item{terms, singledf, global}{Logical controls for term grouping,
-single-degree-of-freedom tests, and the global test in \code{cox.zph}.}
+single-degree-of-freedom tests, and the global test in \code{cox.zph}.
+For penalized Cox model summaries, \code{terms = TRUE} combines each
+multi-column term into one Wald statistic and reports its effective degrees
+of freedom; confidence intervals remain available for each coefficient.}
 \item{covariate}{Direct numeric covariate vector for Python-backed
 \code{survobrien}.}
 \item{scores, risk.scores}{Optional direct concordance score vectors or

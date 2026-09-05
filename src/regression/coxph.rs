@@ -1,3 +1,4 @@
+use super::coxph_penalty::{CoxPenaltyDiagnostics, validate_penalty};
 use crate::constants::{
     COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, EXP_CLAMP_MAX, EXP_CLAMP_MIN,
     TIME_EPSILON,
@@ -603,6 +604,100 @@ pub fn coxph_fit(
     entry_times: Option<Vec<f64>>,
     nocenter: Option<Vec<f64>>,
 ) -> PyResult<CoxPHFit> {
+    coxph_fit_internal(
+        time,
+        status,
+        covariates,
+        strata,
+        weights,
+        offset,
+        initial_beta,
+        max_iter,
+        eps,
+        toler,
+        method,
+        entry_times,
+        nocenter,
+        None,
+    )
+}
+
+/// Jointly maximize partial likelihood minus a fixed diagonal quadratic penalty.
+///
+/// `penalty` is finite non-negative curvature in the original coefficient units;
+/// `term_groups` partitions all coefficient columns for effective degrees of freedom.
+/// The returned fit contains unpenalized partial log likelihood at both initial
+/// and final coefficients, and the unpenalized final score. Its covariance is
+/// inverse penalized information. Additional sampling covariance and effective
+/// degrees of freedom are returned separately in the diagnostics.
+/// Penalized fits report unweighted means; the exact method uses Breslow evaluation.
+#[pyfunction]
+#[pyo3(signature = (time, status, covariates, penalty, term_groups, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn coxph_penalized_fit(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    penalty: Vec<f64>,
+    term_groups: Vec<Vec<usize>>,
+    strata: Option<Vec<i32>>,
+    weights: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+    initial_beta: Option<Vec<f64>>,
+    max_iter: Option<usize>,
+    eps: Option<f64>,
+    toler: Option<f64>,
+    method: Option<&str>,
+    entry_times: Option<Vec<f64>>,
+    nocenter: Option<Vec<f64>>,
+) -> PyResult<(CoxPHFit, CoxPenaltyDiagnostics)> {
+    validate_penalty(
+        &penalty,
+        &term_groups,
+        covariates.first().map_or(0, Vec::len),
+    )?;
+    let fit = coxph_fit_internal(
+        time,
+        status,
+        covariates,
+        strata,
+        weights,
+        offset,
+        initial_beta,
+        max_iter,
+        eps,
+        toler,
+        method,
+        entry_times,
+        nocenter,
+        Some(&penalty),
+    )?;
+    let diagnostics = CoxPenaltyDiagnostics::from_fit(
+        &fit,
+        penalty,
+        &term_groups,
+        toler.unwrap_or(COX_RANK_TOLERANCE),
+    )?;
+    Ok((fit, diagnostics))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn coxph_fit_internal(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    weights: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+    initial_beta: Option<Vec<f64>>,
+    max_iter: Option<usize>,
+    eps: Option<f64>,
+    toler: Option<f64>,
+    method: Option<&str>,
+    entry_times: Option<Vec<f64>>,
+    nocenter: Option<Vec<f64>>,
+    penalty: Option<&[f64]>,
+) -> PyResult<CoxPHFit> {
     let n = time.len();
     if n == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -698,7 +793,11 @@ pub fn coxph_fit(
         ));
     }
 
-    let cox_method = parse_cox_method(method)?;
+    let mut cox_method = parse_cox_method(method)?;
+    // R's penalized fitter uses Breslow for every method other than Efron.
+    if penalty.is_some() && matches!(cox_method, CoxMethod::Exact) {
+        cox_method = CoxMethod::Breslow;
+    }
     validate_method_weights(cox_method, weights.as_deref())?;
     let method_name = match cox_method {
         CoxMethod::Breslow => "breslow",
@@ -721,9 +820,8 @@ pub fn coxph_fit(
             })
             .collect()
     };
-    let reported_counting_process_means = entry_times
-        .as_ref()
-        .map(|_| counting_process_means(&covariates, &doscale));
+    let reported_means = (entry_times.is_some() || penalty.is_some())
+        .then(|| counting_process_means(&covariates, &doscale));
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&lhs, &rhs| {
         strata_values[lhs]
@@ -774,6 +872,9 @@ pub fn coxph_fit(
     .map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit initialization failed: {}", e))
     })?;
+    if let Some(diagonal) = penalty {
+        cox_fit.set_diagonal_penalty(diagonal);
+    }
     cox_fit
         .fit()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
@@ -787,7 +888,7 @@ pub fn coxph_fit(
         flag,
         iterations,
     ) = cox_fit.results();
-    let means = reported_counting_process_means.unwrap_or(optimizer_means);
+    let means = reported_means.unwrap_or(optimizer_means);
     let mut linear_predictors = Vec::with_capacity(n);
     let mut risk_scores = Vec::with_capacity(n);
     for (row, &offset) in covariates.iter().zip(offset_vec.iter()) {

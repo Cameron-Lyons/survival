@@ -799,6 +799,133 @@ mod cox_regression {
     }
 }
 
+mod ridge_cox {
+    use super::*;
+    use survival::regression::{CoxPHFit, coxph_penalized_fit};
+
+    #[derive(Clone)]
+    struct Inputs {
+        time: Vec<f64>,
+        status: Vec<i32>,
+        covariates: Vec<Vec<f64>>,
+        weights: Vec<f64>,
+        strata: Vec<i32>,
+        penalty: Vec<f64>,
+        groups: Vec<Vec<usize>>,
+    }
+
+    fn inputs(n: usize, penalized_columns: usize) -> Inputs {
+        const P: usize = 8;
+        let covariates: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                let index = (i + 1) as f64;
+                (0..P)
+                    .map(|j| (index * (j + 1) as f64 * 0.31).sin() + 0.55 * (index * 0.21).sin())
+                    .collect()
+            })
+            .collect();
+        // The same weighted, stratified data are used for each comparison.
+        // theta=20 uses R's unweighted sample-variance scaling before fitting.
+        let mut penalty = vec![0.0; P];
+        for column in (P - penalized_columns)..P {
+            let mean = covariates.iter().map(|row| row[column]).sum::<f64>() / n as f64;
+            penalty[column] = 20.0
+                * covariates
+                    .iter()
+                    .map(|row| (row[column] - mean).powi(2))
+                    .sum::<f64>()
+                / (n - 1) as f64;
+        }
+        let mut groups: Vec<Vec<usize>> = (0..(P - penalized_columns)).map(|i| vec![i]).collect();
+        if penalized_columns != 0 {
+            groups.push(((P - penalized_columns)..P).collect());
+        }
+        Inputs {
+            time: (0..n)
+                .map(|i| 1.0 + ((i * 37) % 201) as f64 / 10.0)
+                .collect(),
+            status: (0..n).map(|i| i32::from(i % 4 != 0)).collect(),
+            covariates,
+            weights: generate_case_weights(n),
+            strata: generate_strata(n, 3),
+            penalty,
+            groups,
+        }
+    }
+
+    fn fit(inputs: Inputs, penalized: bool) -> CoxPHFit {
+        if penalized {
+            let (fit, diagnostics) = coxph_penalized_fit(
+                inputs.time,
+                inputs.status,
+                inputs.covariates,
+                inputs.penalty,
+                inputs.groups,
+                Some(inputs.strata),
+                Some(inputs.weights),
+                None,
+                None,
+                Some(30),
+                Some(1e-9),
+                Some(1e-11),
+                Some("efron"),
+                None,
+                None,
+            )
+            .expect("benchmark ridge Cox inputs should be valid");
+            black_box(diagnostics);
+            fit
+        } else {
+            coxph_fit(
+                inputs.time,
+                inputs.status,
+                inputs.covariates,
+                Some(inputs.strata),
+                Some(inputs.weights),
+                None,
+                None,
+                Some(30),
+                Some(1e-9),
+                Some(1e-11),
+                Some("efron"),
+                None,
+                None,
+            )
+            .expect("benchmark ordinary Cox inputs should be valid")
+        }
+    }
+
+    fn run(bencher: divan::Bencher, n: usize, penalized_columns: usize) {
+        let inputs = inputs(n, penalized_columns);
+        let penalized = penalized_columns != 0;
+        let check = fit(inputs.clone(), penalized);
+        assert_eq!(
+            check.convergence_flag, 8,
+            "benchmark Cox fit must converge at full rank"
+        );
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|inputs| {
+                black_box(fit(inputs, penalized));
+            });
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn ordinary(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 0);
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn mixed_ridge(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 4);
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn grouped_ridge(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 8);
+    }
+}
+
 mod case_cohort_bench {
     use super::*;
 
