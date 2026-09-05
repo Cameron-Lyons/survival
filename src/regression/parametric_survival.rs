@@ -3,7 +3,7 @@ use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
     compute_quantile_prediction, compute_response_prediction, compute_se_linear_predictor,
 };
-use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survregc1};
+use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survreg_loglik, survregc1};
 use crate::residuals::survreg_resid::{
     SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg_with_parameter,
     compute_dfbeta_survreg_with_parameter, compute_ldcase_with_parameter,
@@ -539,40 +539,60 @@ struct LikelihoodInput<'a> {
     frailty: &'a ArrayView1<'a, i32>,
 }
 
-fn calculate_likelihood(
-    input: &LikelihoodInput<'_>,
-) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
-    let dist = match input.distribution {
-        DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
-        DistributionType::Logistic => SurvivalDist::Logistic,
-        DistributionType::Gaussian => SurvivalDist::Gaussian,
-        DistributionType::Weibull => SurvivalDist::Weibull,
-        DistributionType::LogNormal => SurvivalDist::LogNormal,
-        DistributionType::LogLogistic => SurvivalDist::LogLogistic,
-        DistributionType::StudentT => SurvivalDist::StudentT(
-            input
-                .distribution_parameter
-                .ok_or_else(|| "Student-t degrees of freedom are missing".to_string())?,
-        ),
-    };
-    let beta = ArrayView1::from(input.beta);
-    survregc1(
-        input.n,
-        input.nvar,
-        input.nstrat,
-        false,
-        &beta,
-        dist,
-        input.strata,
-        &input.offsets.view(),
-        input.time1,
-        input.time2,
-        input.status,
-        &input.weights.view(),
-        &input.covariates.view(),
-        0,
-        input.frailty,
-    )
+impl LikelihoodInput<'_> {
+    fn distribution(&self) -> Result<SurvivalDist, Box<dyn std::error::Error>> {
+        Ok(match self.distribution {
+            DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
+            DistributionType::Logistic => SurvivalDist::Logistic,
+            DistributionType::Gaussian => SurvivalDist::Gaussian,
+            DistributionType::Weibull => SurvivalDist::Weibull,
+            DistributionType::LogNormal => SurvivalDist::LogNormal,
+            DistributionType::LogLogistic => SurvivalDist::LogLogistic,
+            DistributionType::StudentT => SurvivalDist::StudentT(
+                self.distribution_parameter
+                    .ok_or("Student-t degrees of freedom are missing")?,
+            ),
+        })
+    }
+
+    fn evaluate(&self) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
+        survregc1(
+            self.n,
+            self.nvar,
+            self.nstrat,
+            false,
+            &ArrayView1::from(self.beta),
+            self.distribution()?,
+            self.strata,
+            &self.offsets.view(),
+            self.time1,
+            self.time2,
+            self.status,
+            &self.weights.view(),
+            &self.covariates.view(),
+            0,
+            self.frailty,
+        )
+    }
+
+    fn loglik(&self) -> Result<f64, Box<dyn std::error::Error>> {
+        survreg_loglik(
+            self.n,
+            self.nvar,
+            self.nstrat,
+            &ArrayView1::from(self.beta),
+            self.distribution()?,
+            self.strata,
+            &self.offsets.view(),
+            self.time1,
+            self.time2,
+            self.status,
+            &self.weights.view(),
+            &self.covariates.view(),
+            0,
+            self.frailty,
+        )
+    }
 }
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
@@ -1176,7 +1196,7 @@ fn compute_survreg(
         covariates,
         frailty: &frailty,
     };
-    let initial_likelihood = calculate_likelihood(&input)?;
+    let initial_likelihood = input.evaluate()?;
     let mut loglik = initial_likelihood.loglik;
     let mut information = SurvregInformation::factor(&initial_likelihood.imat, tol_chol);
     let mut jj = initial_likelihood.jj;
@@ -1199,6 +1219,7 @@ fn compute_survreg(
             };
             let Some(delta) = delta else { continue };
             let mut step_factor = 1.0;
+            let mut retry = false;
             for _ in 0..=MAX_HALVING_ITERATIONS {
                 let mut candidate_beta = beta.clone();
                 candidate_beta
@@ -1223,7 +1244,17 @@ fn compute_survreg(
                     covariates,
                     frailty: &frailty,
                 };
-                let candidate = calculate_likelihood(&candidate_input)?;
+                // The first trial usually succeeds. Once it fails, screen
+                // shorter steps without allocating or accumulating derivative
+                // matrices, then fully evaluate any improving candidate.
+                if retry {
+                    let trial_loglik = candidate_input.loglik()?;
+                    if !trial_loglik.is_finite() || trial_loglik < old_loglik {
+                        step_factor *= STEP_HALVE_FACTOR;
+                        continue;
+                    }
+                }
+                let candidate = candidate_input.evaluate()?;
                 if candidate.loglik.is_finite()
                     && candidate.loglik >= old_loglik
                     && candidate.u.iter().all(|value| value.is_finite())
@@ -1240,6 +1271,7 @@ fn compute_survreg(
                     ));
                     break;
                 }
+                retry = true;
                 step_factor *= STEP_HALVE_FACTOR;
             }
             if accepted.is_some() {
