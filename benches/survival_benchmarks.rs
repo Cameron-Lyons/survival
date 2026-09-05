@@ -945,7 +945,23 @@ mod survreg_bench {
 
     #[divan::bench(args = [100, 1000, 5000, 10000])]
     fn weighted_stratified_survreg_lognormal(bencher: divan::Bencher, n: usize) {
-        let (time, status, covariates) = generate_tied_regression_data(n, 3);
+        bench_weighted_stratified_lognormal(bencher, n, false);
+    }
+
+    #[divan::bench(args = [100, 1000, 5000, 10000])]
+    fn weighted_stratified_survreg_lognormal_duplicate(bencher: divan::Bencher, n: usize) {
+        bench_weighted_stratified_lognormal(bencher, n, true);
+    }
+
+    fn bench_weighted_stratified_lognormal(bencher: divan::Bencher, n: usize, duplicate: bool) {
+        let (time, status, mut covariates) = generate_tied_regression_data(n, 3);
+        if duplicate {
+            // Keep the same matrix size while making the final location
+            // column an exact alias of the preceding column.
+            for row in &mut covariates {
+                row[2] = row[1];
+            }
+        }
         let status = status_as_survreg(&status);
         let weights = generate_case_weights(n);
         let strata: Vec<usize> = generate_strata(n, 3)

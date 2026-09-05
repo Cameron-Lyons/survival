@@ -635,7 +635,7 @@ attrassign <- function(object, tt) {
   if (n_row > 0L && any(vapply(rows, length, integer(1)) != n_col)) {
     stop("vcov result must be rectangular")
   }
-  matrix(unlist(rows, use.names = FALSE), nrow = n_row, ncol = n_col, byrow = TRUE)
+  matrix(as.numeric(unlist(rows, use.names = FALSE)), nrow = n_row, ncol = n_col, byrow = TRUE)
 }
 
 .as_coefficient_table <- function(rows, model_type = "coxph", robust = FALSE,
@@ -686,7 +686,11 @@ attrassign <- function(object, tt) {
       if (robust) {
         values <- c(values, row_numeric(row, "naive_se", fallback_name = "se"))
       }
-      return(c(values, statistic, row_numeric(row, "p")))
+      result <- c(values, statistic, row_numeric(row, "p"))
+      if (is.na(coefficient)) {
+        result[is.na(result)] <- NA_real_
+      }
+      return(result)
     }
 
     coefficient <- coefficient * cox_scale
@@ -1270,6 +1274,15 @@ attrassign <- function(object, tt) {
     return(list(fit = fit, se.fit = se.fit))
   }
   .as_prediction_value(value, matrix_result = matrix_result, col.names = col.names)
+}
+
+.survreg_alias_prediction_missing <- function(value) {
+  if (is.numeric(value)) {
+    value[is.nan(value)] <- NA_real_
+  } else if (is.list(value)) {
+    value <- lapply(value, .survreg_alias_prediction_missing)
+  }
+  value
 }
 
 .model_term_names <- function(object, terms = NULL) {
@@ -11079,7 +11092,12 @@ coxph.wtest <- function(var, b, toler.chol = 1e-09) {
 }
 
 coef.survival_py_model <- function(object, ...) {
-  values <- .as_numeric_vector(.call_r_api("coef", object, ...))
+  values <- .call_r_api("coef", object, ...)
+  values <- if (inherits(object, "survival_py_survreg")) {
+    .as_nullable_numeric_vector(values)
+  } else {
+    .as_numeric_vector(values)
+  }
   names(values) <- as.character(.call_r_api("coef_names", object))
   values
 }
@@ -11094,7 +11112,11 @@ vcov.survival_py_model <- function(object, ..., complete = TRUE) {
 confint.survival_py_model <- function(object, parm, level = 0.95, ...) {
   selected <- if (missing(parm)) NULL else parm
   result <- .call_r_api("confint", object, parm = selected, level = level, ...)
-  .as_confint_matrix(result, level)
+  values <- .as_confint_matrix(result, level)
+  if (inherits(object, "survival_py_survreg")) {
+    values[is.nan(values)] <- NA_real_
+  }
+  values
 }
 
 logLik.survival_py_model <- function(object, ...) {
@@ -11183,6 +11205,9 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     matrix_result = .predict_matrix_result(type),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
+    value <- .survreg_alias_prediction_missing(value)
+  }
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
@@ -11197,13 +11222,17 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
     scale = scale
   )
   if (identical(model_type, "survreg")) {
+    if (all(is.na(coefficient_table[, 1L]))) {
+      warning("This model has zero rank --- no summary is provided", call. = FALSE)
+      return(invisible(object))
+    }
     location_coefficients <- result$location_coefficients
     location_names <- result$location_coefficient_names
     if (is.null(location_coefficients) || is.null(location_names)) {
       location_coefficients <- coef(object)
       location_names <- names(location_coefficients)
     }
-    location_coefficients <- .as_numeric_vector(location_coefficients)
+    location_coefficients <- .as_nullable_numeric_vector(location_coefficients)
     location_names <- as.character(location_names)
     if (length(location_coefficients) != length(location_names)) {
       stop("survreg summary coefficient names must match its location coefficients", call. = FALSE)
@@ -11289,6 +11318,9 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
     matrix_result = .predict_matrix_result(type),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
+    value <- .survreg_alias_prediction_missing(value)
+  }
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 

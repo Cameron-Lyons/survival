@@ -1,7 +1,4 @@
-use crate::constants::{
-    CHOLESKY_TOL, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX, STEP_HALVE_FACTOR,
-};
-use crate::internal::matrix::regularized_lu_solve;
+use crate::constants::{CHOLESKY_TOL, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, STEP_HALVE_FACTOR};
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
     compute_quantile_prediction, compute_response_prediction, compute_se_linear_predictor,
@@ -581,36 +578,136 @@ fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
 
-fn is_positive_definite(matrix: &Array2<f64>, tolerance: f64) -> bool {
-    if matrix.nrows() != matrix.ncols() {
-        return false;
-    }
-    let size = matrix.nrows();
-    let scale = matrix
-        .diag()
-        .iter()
-        .map(|value| value.abs())
-        .fold(1.0_f64, f64::max);
-    let threshold = tolerance * scale;
-    let mut lower = Array2::<f64>::zeros((size, size));
-    for row in 0..size {
-        for column in 0..=row {
-            let product_sum = (0..column)
-                .map(|index| lower[[row, index]] * lower[[column, index]])
-                .sum::<f64>();
-            if row == column {
-                let pivot = matrix[[row, row]] - product_sum;
-                if !pivot.is_finite() || pivot <= threshold {
-                    return false;
+/// Ordered LDL factorization used by the AFT information and score-product
+/// systems. Discarded pivots represent aliased parameters, not a request to
+/// add a ridge penalty. The tolerance and signed rank follow survreg's
+/// cholesky3 convention, which differs from the Cox factorization.
+struct SurvregInformation {
+    factors: Vec<f64>,
+    size: usize,
+    signed_rank: i32,
+}
+
+impl SurvregInformation {
+    fn factor(matrix: &Array2<f64>, tolerance: f64) -> Self {
+        let size = matrix.nrows();
+        debug_assert_eq!(size, matrix.ncols());
+        let mut factors: Vec<f64> = matrix.iter().copied().collect();
+        // R's dense cholesky3 uses an absolute threshold when the original
+        // diagonal is nonnegative, and scales by its minimum otherwise.
+        let minimum = matrix.diag().iter().copied().fold(0.0_f64, f64::min);
+        let threshold = if minimum == 0.0 {
+            tolerance
+        } else {
+            minimum * tolerance
+        };
+        let mut rank = 0;
+        let mut sign = 1;
+        for column in 0..size {
+            let pivot = factors[column * size + column];
+            if !pivot.is_finite() || pivot < threshold {
+                for row in column..size {
+                    factors[row * size + column] = 0.0;
                 }
-                lower[[row, column]] = pivot.sqrt();
-            } else {
-                lower[[row, column]] =
-                    (matrix[[row, column]] - product_sum) / lower[[column, column]];
+                if pivot < -8.0 * threshold {
+                    sign = -1;
+                }
+                continue;
+            }
+            rank += 1;
+            for row in column + 1..size {
+                let multiplier = factors[row * size + column] / pivot;
+                factors[row * size + column] = multiplier;
+                factors[row * size + row] -= multiplier * multiplier * pivot;
+                for following in row + 1..size {
+                    factors[following * size + row] -=
+                        multiplier * factors[following * size + column];
+                }
             }
         }
+        Self {
+            factors,
+            size,
+            signed_rank: rank * sign,
+        }
     }
-    true
+
+    fn solve(&self, score: &Array1<f64>) -> Option<Array1<f64>> {
+        debug_assert_eq!(score.len(), self.size);
+        let mut step = score.to_vec();
+        for row in 0..self.size {
+            let mut value = step[row];
+            for (column, previous) in step.iter().enumerate().take(row) {
+                value -= previous * self.factors[row * self.size + column];
+            }
+            step[row] = value;
+        }
+        for row in (0..self.size).rev() {
+            let diagonal = self.factors[row * self.size + row];
+            if diagonal == 0.0 {
+                step[row] = 0.0;
+                continue;
+            }
+            let mut value = step[row] / diagonal;
+            for (column, following) in step.iter().enumerate().skip(row + 1) {
+                value -= following * self.factors[column * self.size + row];
+            }
+            step[row] = value;
+        }
+        step.iter()
+            .all(|value| value.is_finite())
+            .then(|| Array1::from_vec(step))
+    }
+
+    fn covariance(mut self) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
+        let n = self.size;
+        // Invert the unit-lower factor and its positive diagonal weights.
+        // As in R's chinv2, an accepted nonpositive pivot is not reciprocated.
+        // This also preserves R's prescribed-parameter indefinite cases.
+        for column in 0..n {
+            if self.factors[column * n + column] > 0.0 {
+                self.factors[column * n + column] = 1.0 / self.factors[column * n + column];
+                for row in column + 1..n {
+                    self.factors[row * n + column] = -self.factors[row * n + column];
+                    for previous in 0..column {
+                        self.factors[row * n + previous] +=
+                            self.factors[row * n + column] * self.factors[column * n + previous];
+                    }
+                }
+            }
+        }
+        // Accumulate the symmetric covariance in the upper triangle. Zero
+        // rows and columns explicitly retain the discarded-pivot mask.
+        for row in 0..n {
+            if self.factors[row * n + row] == 0.0 {
+                for column in 0..row {
+                    self.factors[column * n + row] = 0.0;
+                }
+                for column in row..n {
+                    self.factors[row * n + column] = 0.0;
+                }
+            } else {
+                for following in row + 1..n {
+                    let weighted =
+                        self.factors[following * n + row] * self.factors[following * n + following];
+                    self.factors[row * n + following] = weighted;
+                    for column in row..following {
+                        self.factors[row * n + column] +=
+                            weighted * self.factors[following * n + column];
+                    }
+                }
+            }
+        }
+        for row in 1..n {
+            for column in 0..row {
+                self.factors[row * n + column] = self.factors[column * n + row];
+            }
+        }
+        if self.factors.iter().any(|value| !value.is_finite()) {
+            return Err("AFT covariance contains non-finite values".into());
+        }
+        Ok(Array2::from_shape_vec((n, n), self.factors)?)
+    }
 }
 
 fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) {
@@ -622,24 +719,6 @@ fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) 
                 *nb = b - 1.1;
             }
         });
-}
-fn calculate_variance_matrix(
-    imat: Array2<f64>,
-    _nvar2: usize,
-    _tol_chol: f64,
-) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
-    use crate::internal::matrix::matrix_inverse;
-    if imat.nrows() == 0 || imat.ncols() == 0 {
-        return Ok(imat);
-    }
-    let max_val = imat.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
-    if max_val < NEAR_ZERO_MATRIX {
-        return Ok(imat);
-    }
-    match matrix_inverse(&imat) {
-        Some(inv) => Ok(inv),
-        None => Ok(imat),
-    }
 }
 
 fn validate_time_values(time: &[f64]) -> PyResult<()> {
@@ -1099,7 +1178,7 @@ fn compute_survreg(
     };
     let initial_likelihood = calculate_likelihood(&input)?;
     let mut loglik = initial_likelihood.loglik;
-    let mut imat = initial_likelihood.imat;
+    let mut information = SurvregInformation::factor(&initial_likelihood.imat, tol_chol);
     let mut jj = initial_likelihood.jj;
     let mut u = initial_likelihood.u;
     usave.assign(&u);
@@ -1108,17 +1187,17 @@ fn compute_survreg(
     while iter < max_iter {
         let old_loglik = loglik;
         let mut accepted = None;
-        let observed_delta = is_positive_definite(&imat, tol_chol)
-            .then(|| regularized_lu_solve(&imat, &u).ok())
-            .flatten();
-        let delta_candidates = [
-            (true, observed_delta),
-            (false, regularized_lu_solve(&jj, &u).ok()),
-        ];
-        for (uses_observed_information, delta) in delta_candidates
-            .iter()
-            .filter_map(|(observed, delta)| delta.as_ref().map(|delta| (*observed, delta)))
-        {
+        for uses_observed_information in [true, false] {
+            let delta = if uses_observed_information {
+                (information.signed_rank >= 0)
+                    .then(|| information.solve(&u))
+                    .flatten()
+            } else {
+                // Compute the score-product fallback only if an observed
+                // information step could not be accepted.
+                SurvregInformation::factor(&jj, tol_chol).solve(&u)
+            };
+            let Some(delta) = delta else { continue };
             let mut step_factor = 1.0;
             for _ in 0..=MAX_HALVING_ITERATIONS {
                 let mut candidate_beta = beta.clone();
@@ -1147,13 +1226,15 @@ fn compute_survreg(
                 let candidate = calculate_likelihood(&candidate_input)?;
                 if candidate.loglik.is_finite()
                     && candidate.loglik >= old_loglik
-                    && (!uses_observed_information
-                        || is_positive_definite(&candidate.imat, tol_chol))
+                    && candidate.u.iter().all(|value| value.is_finite())
+                    && candidate.imat.diag().iter().all(|value| value.is_finite())
                 {
+                    let candidate_information =
+                        SurvregInformation::factor(&candidate.imat, tol_chol);
                     accepted = Some((
                         candidate_beta,
                         candidate.loglik,
-                        candidate.imat,
+                        candidate_information,
                         candidate.jj,
                         candidate.u,
                     ));
@@ -1166,12 +1247,17 @@ fn compute_survreg(
             }
         }
 
-        if let Some((candidate_beta, candidate_loglik, candidate_imat, candidate_jj, candidate_u)) =
-            accepted
+        if let Some((
+            candidate_beta,
+            candidate_loglik,
+            candidate_information,
+            candidate_jj,
+            candidate_u,
+        )) = accepted
         {
             beta = candidate_beta;
             loglik = candidate_loglik;
-            imat = candidate_imat;
+            information = candidate_information;
             jj = candidate_jj;
             u = candidate_u;
             usave.assign(&u);
@@ -1182,11 +1268,21 @@ fn compute_survreg(
                 break;
             }
         } else {
+            // At an optimum, summation roundoff can make every trial appear
+            // worse. Only declare convergence when the observed-information
+            // Newton decrement is below both the requested absolute tolerance
+            // and floating-point resolution of the accepted likelihood.
+            if information.signed_rank >= 0 && loglik.is_finite() {
+                converged = information.solve(&u).is_some_and(|delta| {
+                    let decrement = u.dot(&delta);
+                    decrement >= 0.0 && decrement <= eps.min(f64::EPSILON * loglik.abs().max(1.0))
+                });
+            }
             break;
         }
     }
     let convergence_flag = if converged { 0 } else { -1 };
-    let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
+    let variance = information.covariance()?;
     Ok(SurvivalFitComputed {
         coefficients: beta,
         iterations: iter,
@@ -1380,12 +1476,17 @@ mod tests {
     }
 
     #[test]
-    fn positive_definite_check_rejects_saddle_information() {
+    fn information_rank_distinguishes_singular_and_indefinite_systems() {
         let positive = Array2::from_shape_vec((2, 2), vec![2.0, 0.5, 0.5, 1.0]).unwrap();
         let indefinite = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 2.0, 1.0]).unwrap();
+        let singular = Array2::from_shape_vec((2, 2), vec![1.0; 4]).unwrap();
 
-        assert!(is_positive_definite(&positive, 1e-10));
-        assert!(!is_positive_definite(&indefinite, 1e-10));
+        assert_eq!(SurvregInformation::factor(&positive, 1e-10).signed_rank, 2);
+        assert_eq!(
+            SurvregInformation::factor(&indefinite, 1e-10).signed_rank,
+            -1
+        );
+        assert_eq!(SurvregInformation::factor(&singular, 1e-10).signed_rank, 1);
     }
 
     #[test]
@@ -1717,7 +1818,7 @@ mod tests {
     #[test]
     fn test_calculate_variance_matrix_empty() {
         let imat = Array2::zeros((0, 0));
-        let result = calculate_variance_matrix(imat, 0, crate::constants::DIVISION_FLOOR);
+        let result = SurvregInformation::factor(&imat, 1e-10).covariance();
         assert!(result.is_ok());
         let var = result.unwrap();
         assert_eq!(var.nrows(), 0);
@@ -1731,10 +1832,118 @@ mod tests {
         imat[[1, 1]] = 2.0;
         imat[[0, 1]] = 0.5;
         imat[[1, 0]] = 0.5;
-        let result = calculate_variance_matrix(imat, 2, crate::constants::DIVISION_FLOOR);
+        let result = SurvregInformation::factor(&imat, 1e-10).covariance();
         assert!(result.is_ok());
         let var = result.unwrap();
         assert_eq!(var.nrows(), 2);
         assert_eq!(var.ncols(), 2);
+        let identity = imat.dot(&var);
+        for row in 0..2 {
+            for column in 0..2 {
+                let expected = if row == column { 1.0 } else { 0.0 };
+                assert!((identity[[row, column]] - expected).abs() < 1e-14);
+            }
+        }
+    }
+
+    #[test]
+    fn singular_information_returns_a_generalized_covariance_and_step() {
+        let imat = Array2::from_shape_vec(
+            (3, 3),
+            vec![6.0, 3.0, 3.0, 3.0, 19.0, 19.0, 3.0, 19.0, 19.0],
+        )
+        .unwrap();
+        let information = SurvregInformation::factor(&imat, 1e-10);
+        let step = information
+            .solve(&Array1::from_vec(vec![21.0, 28.0, 28.0]))
+            .unwrap();
+        assert!((step[0] - 3.0).abs() < 1e-14);
+        assert!((step[1] - 1.0).abs() < 1e-14);
+        assert_eq!(step[2], 0.0);
+        let variance = information.covariance().unwrap();
+        for index in 0..3 {
+            assert_eq!(variance[[2, index]], 0.0);
+            assert_eq!(variance[[index, 2]], 0.0);
+        }
+        // A V A = A characterizes the generalized inverse on the estimable
+        // column space; the selected coefficients preserve original order.
+        let reconstructed = imat.dot(&variance).dot(&imat);
+        for (actual, expected) in reconstructed.iter().zip(imat.iter()) {
+            assert!((actual - expected).abs() < 1e-13);
+        }
+        assert!((variance[[0, 0]] - 19.0 / 105.0).abs() < 1e-15);
+        assert!((variance[[1, 1]] - 6.0 / 105.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn information_uses_absolute_tolerance_for_positive_diagonals() {
+        // R Gaussian intercept fit, fixed scale 1e6 and three observations.
+        let information = Array2::from_shape_vec((1, 1), vec![3e-12]).unwrap();
+        let discarded = SurvregInformation::factor(&information, 1e-10)
+            .covariance()
+            .unwrap();
+        assert_eq!(discarded[[0, 0]], 0.0);
+        let retained = SurvregInformation::factor(&information, 1e-14)
+            .covariance()
+            .unwrap();
+        assert!((retained[[0, 0]] * 3e-12 - 1.0).abs() < 1e-15);
+        // cholesky3 discards pivots strictly below the threshold.
+        assert_eq!(
+            SurvregInformation::factor(&information, 3e-12).signed_rank,
+            1
+        );
+    }
+
+    #[test]
+    fn indefinite_prescribed_information_matches_r_generalized_covariance() {
+        // R survreg6 at Gaussian location/log(scale)=0 for y=1:4.
+        let information = Array2::from_shape_vec((2, 2), vec![4.0, 20.0, 20.0, 60.0]).unwrap();
+        let factor = SurvregInformation::factor(&information, 1e-10);
+        assert_eq!(factor.signed_rank, -1);
+        assert_eq!(
+            factor.covariance().unwrap().into_raw_vec_and_offset().0,
+            vec![0.25, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn information_retains_r_negative_cutoff_and_roundoff_rank_rules() {
+        // R cholesky3/chinv2 can retain a tiny negative diagonal when a
+        // larger original negative diagonal sets a negative cutoff.
+        let diagonal = Array2::from_diag(&Array1::from_vec(vec![-1.0, -1e-12, 2.0]));
+        let factor = SurvregInformation::factor(&diagonal, 1e-10);
+        assert_eq!(factor.signed_rank, -2);
+        assert_eq!(
+            factor.covariance().unwrap().diag().to_vec(),
+            vec![0.0, -1e-12, 0.5]
+        );
+        for (difference, rank) in [(1e-12, 1), (1e-8, -1)] {
+            let information =
+                Array2::from_shape_vec((2, 2), vec![1.0, 1.0, 1.0, 1.0 - difference]).unwrap();
+            assert_eq!(
+                SurvregInformation::factor(&information, 1e-10).signed_rank,
+                rank
+            );
+        }
+    }
+
+    #[test]
+    fn covariance_keeps_independent_columns_after_an_alias() {
+        let information =
+            Array2::from_shape_vec((3, 3), vec![2.0, 2.0, 1.0, 2.0, 2.0, 1.0, 1.0, 1.0, 3.0])
+                .unwrap();
+        let factor = SurvregInformation::factor(&information, 1e-10);
+        assert_eq!(factor.signed_rank, 2);
+        let variance = factor.covariance().unwrap();
+        assert_eq!(variance.row(1).to_vec(), vec![0.0; 3]);
+        assert_eq!(variance.column(1).to_vec(), vec![0.0; 3]);
+        for (actual, expected) in information
+            .dot(&variance)
+            .dot(&information)
+            .iter()
+            .zip(information.iter())
+        {
+            assert!((actual - expected).abs() < 1e-14);
+        }
     }
 }

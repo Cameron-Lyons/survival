@@ -237,9 +237,20 @@ predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
 term contributions, and quantile predictions via `type="quantile"`.
-The AFT optimizer uses positive-definite observed-information Newton steps when
-available and falls back to the stable outer-product system otherwise. The R
-bridge also routes built-in `survreg.fit` matrix calls through this kernel,
+AFT coefficient accessors report aliased location coefficients as `NaN`, while
+stored training predictions and residuals retain the fitted numeric values.
+As in R, an aliased coefficient makes ordinary `newdata` predictions missing;
+term predictions retain contributions from other terms. AFT `newdata` predictions
+omit formula offsets, while training predictions retain them; the native
+`fit.predict(...)` method still accepts explicit offsets. `vcov(complete=False)`
+retains estimated scale parameters when the model has no aliases.
+The AFT optimizer uses an ordered LDL factorization for its observed-information
+Newton steps, with a score-product fallback when needed. It honors R's
+[`survreg` pivot tolerance](https://github.com/cran/survival/blob/3.8-11/src/cholesky3.c),
+preserves supplied coefficients in aliased directions, and returns zero
+covariance rows and columns for discarded pivots. Each accepted factorization
+is reused for the next step and the final covariance. The R bridge also routes
+built-in `survreg.fit` matrix calls through this kernel,
 including fixed or stratified scales and interval-censored responses.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
@@ -789,6 +800,22 @@ uv run --no-sync pytest python/tests -v
 Smoke-test benchmarks:
 ```sh
 cargo bench -- --test
+```
+
+The AFT benchmarks include matched weighted, stratified lognormal fits with
+full-rank and duplicated covariate columns. Five paired release runs on Apple
+Silicon with Rust 1.94 and one Rayon thread found no measurable change for the
+10,000-row full-rank fit (4.644 to 4.642 ms) after the rank/covariance correction.
+For duplicated columns, 100 and 10,000 rows improved by about 38% and 10%, while
+1,000 and 5,000 rows cost about 17% and 70% more. The 5,000-row fit requires six
+rejected early Newton trials; the corrected covariance matches R. These timings
+compare against revision `918c6456`, whose singular covariance was incorrect.
+Each run used at least 50 samples and 0.25 seconds per case:
+
+```sh
+RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- \
+  survreg_bench::weighted_stratified_survreg_lognormal --sample-count 50 \
+  --sample-size 1 --min-time 0.25 --timer os
 ```
 
 Format and lint:
