@@ -2,10 +2,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::constants::{
-    DEFAULT_CONFIDENCE_LEVEL, DIVISION_FLOOR, Z_SCORE_95, normal_ci, normal_ci_bounds,
-    z_score_for_confidence,
+    DEFAULT_CONFIDENCE_LEVEL, Z_SCORE_95, normal_ci, normal_ci_bounds, z_score_for_confidence,
 };
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::{normal_cdf, student_t_cdf};
 use crate::internal::validation::{validate_confidence_level, validate_positive_finite_slice};
 
 const REML_MAX_ITERATIONS: usize = 100;
@@ -530,6 +529,14 @@ impl PublicationBiasResult {
 
 #[pyfunction]
 #[pyo3(signature = (effects, std_errors))]
+/// Test publication bias using Egger regression and Begg rank correlation.
+///
+/// Egger regresses standardized effects on precision with an intercept and uses
+/// a two-sided Student-t test with `n - 2` degrees of freedom. Its fields are NaN
+/// when the precision slope is numerically unidentifiable or standardized
+/// effects are not representable. With zero residual variance, a nonzero
+/// intercept has an infinite statistic and zero probability; a zero intercept
+/// has an undefined statistic and probability.
 pub fn publication_bias_tests(
     effects: Vec<f64>,
     std_errors: Vec<f64>,
@@ -537,20 +544,23 @@ pub fn publication_bias_tests(
     let k = effects.len();
     validate_meta_inputs(&effects, &std_errors, 3)?;
 
-    let precisions: Vec<f64> = std_errors.iter().map(|se| 1.0 / se).collect();
+    // Scaling the precision column leaves the intercept and its test unchanged.
+    // This avoids overflowing reciprocals and makes rank independent of units.
+    let min_se = std_errors.iter().copied().fold(f64::INFINITY, f64::min);
+    let precisions: Vec<f64> = std_errors.iter().map(|se| min_se / se).collect();
     let standardized: Vec<f64> = effects
         .iter()
         .zip(std_errors.iter())
         .map(|(e, se)| e / se)
         .collect();
 
-    let (_slope, intercept, se_intercept) = weighted_regression(&precisions, &standardized);
-    let egger_t = if se_intercept > 0.0 {
-        intercept / se_intercept
+    let (intercept, se_intercept, egger_t) =
+        egger_regression(&precisions, &standardized).unwrap_or((f64::NAN, f64::NAN, f64::NAN));
+    let egger_p = if egger_t.is_nan() {
+        f64::NAN
     } else {
-        0.0
+        2.0 * student_t_cdf(-egger_t.abs(), (k - 2) as f64)
     };
-    let egger_p = 2.0 * (1.0 - t_distribution_cdf(egger_t.abs(), k - 2));
 
     let (begg_z, begg_p) = kendall_tau_test(&effects, &std_errors);
 
@@ -568,32 +578,44 @@ pub fn publication_bias_tests(
     })
 }
 
-fn weighted_regression(x: &[f64], y: &[f64]) -> (f64, f64, f64) {
+fn egger_regression(x: &[f64], y: &[f64]) -> Option<(f64, f64, f64)> {
     let n = x.len() as f64;
-    let sum_x: f64 = x.iter().sum();
-    let sum_y: f64 = y.iter().sum();
-    let sum_xy: f64 = x.iter().zip(y.iter()).map(|(xi, yi)| xi * yi).sum();
-    let sum_xx: f64 = x.iter().map(|xi| xi * xi).sum();
-
-    let denom = n * sum_xx - sum_x * sum_x;
-    if denom.abs() < DIVISION_FLOOR {
-        return (0.0, 0.0, f64::INFINITY);
+    if y.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let y_scale = y.iter().map(|value| value.abs()).fold(0.0, f64::max);
+    let y_scale = if y_scale == 0.0 { 1.0 } else { y_scale };
+    let mean_x = x.iter().sum::<f64>() / n;
+    let mean_y = y.iter().map(|value| value / y_scale).sum::<f64>() / n;
+    let sxx = x.iter().map(|value| (value - mean_x).powi(2)).sum::<f64>();
+    let sum_xx = x.iter().map(|value| value * value).sum::<f64>();
+    // R's lm.fit uses a default relative column-norm rank tolerance of 1e-7.
+    // A dropped precision slope does not identify the two-parameter Egger test.
+    if sxx <= 1e-14 * sum_xx {
+        return None;
     }
 
-    let slope = (n * sum_xy - sum_x * sum_y) / denom;
-    let intercept = (sum_y - slope * sum_x) / n;
-
-    let residuals: Vec<f64> = x
+    let sxy = x
         .iter()
-        .zip(y.iter())
-        .map(|(xi, yi)| yi - (slope * xi + intercept))
-        .collect();
-    let sse: f64 = residuals.iter().map(|r| r * r).sum();
-    let mse = sse / (n - 2.0);
+        .zip(y)
+        .map(|(xi, yi)| (xi - mean_x) * (yi / y_scale - mean_y))
+        .sum::<f64>();
+    let slope = sxy / sxx;
+    let intercept = mean_y - slope * mean_x;
+    let sse = x
+        .iter()
+        .zip(y)
+        .map(|(xi, yi)| ((yi / y_scale - mean_y) - slope * (xi - mean_x)).powi(2))
+        .sum::<f64>();
+    // Var(intercept) = MSE * (1/n + mean(x)^2 / Sxx).
+    // Scale the response to avoid overflow when squaring residuals.
+    let se_intercept = (sse / (n - 2.0)).sqrt() * (1.0 / n + mean_x * mean_x / sxx).sqrt();
 
-    let se_intercept = (mse * sum_xx / (n * denom)).sqrt();
-
-    (slope, intercept, se_intercept)
+    Some((
+        intercept * y_scale,
+        se_intercept * y_scale,
+        intercept / se_intercept,
+    ))
 }
 
 fn kendall_tau_test(effects: &[f64], std_errors: &[f64]) -> (f64, f64) {
@@ -665,30 +687,6 @@ fn trim_and_fill(effects: &[f64], std_errors: &[f64]) -> (usize, f64) {
     (n_missing, adjusted_effect)
 }
 
-fn t_distribution_cdf(t: f64, df: usize) -> f64 {
-    let t_crits = [
-        (1, 6.314),
-        (2, 2.920),
-        (3, 2.353),
-        (5, 2.015),
-        (10, 1.812),
-        (20, 1.725),
-        (30, 1.697),
-    ];
-
-    for &(d, crit) in &t_crits {
-        if df <= d {
-            if t.abs() >= crit {
-                return 0.95 + 0.05 * (t.abs() - crit) / crit;
-            } else {
-                return 0.5 + 0.45 * t.abs() / crit;
-            }
-        }
-    }
-
-    normal_cdf(t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -744,6 +742,142 @@ mod tests {
 
         assert!(result.egger_p >= 0.0 && result.egger_p <= 1.0);
         assert!(result.begg_p >= 0.0 && result.begg_p <= 1.0);
+    }
+
+    #[test]
+    fn egger_matches_r_inference_across_units_and_degrees_of_freedom() {
+        #[derive(serde::Deserialize)]
+        struct Reference {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            id: String,
+            effects: Vec<f64>,
+            std_errors: Vec<f64>,
+            egger_intercept: f64,
+            egger_se: f64,
+            egger_t: f64,
+            egger_p: f64,
+        }
+        let reference: Reference = serde_json::from_str(include_str!(
+            "../../python/tests/fixtures/egger_r_reference.json"
+        ))
+        .unwrap();
+        for case in reference.cases {
+            for units in [1e-8, 1.0, 1e8] {
+                for effect_scale in [-1.0, 1.0, 1e160] {
+                    let result = publication_bias_tests(
+                        case.effects
+                            .iter()
+                            .map(|e| e * units * effect_scale)
+                            .collect(),
+                        case.std_errors.iter().map(|se| se * units).collect(),
+                    )
+                    .unwrap();
+                    let actual = [
+                        result.egger_intercept / effect_scale,
+                        result.egger_se / effect_scale.abs(),
+                        result.egger_t * effect_scale.signum(),
+                        result.egger_p,
+                    ];
+                    let expected = [
+                        case.egger_intercept,
+                        case.egger_se,
+                        case.egger_t,
+                        case.egger_p,
+                    ];
+                    for (index, (actual, expected)) in actual.into_iter().zip(expected).enumerate()
+                    {
+                        // Do not hide a lost small probability with absolute tolerance.
+                        let absolute = if index == 3 { 0.0 } else { 2e-12 };
+                        assert!(
+                            (actual - expected).abs() <= absolute + 2e-10 * expected.abs(),
+                            "{}: units={units}, effect_scale={effect_scale}, field={index}, {actual} != {expected}",
+                            case.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn egger_marks_unidentifiable_regressions_unavailable() {
+        for std_errors in [vec![1.0; 3], vec![1.0, 1.0 + 1e-10, 1.0 + 2e-10]] {
+            for units in [1e-8, 1.0, 1e8] {
+                let result = publication_bias_tests(
+                    vec![units, 2.0 * units, 4.0 * units],
+                    std_errors.iter().map(|se| se * units).collect(),
+                )
+                .unwrap();
+                assert!(result.egger_intercept.is_nan());
+                assert!(result.egger_se.is_nan());
+                assert!(result.egger_t.is_nan());
+                assert!(result.egger_p.is_nan());
+                assert!(result.begg_p.is_finite());
+                assert!(result.trim_fill_effect.is_finite());
+            }
+        }
+        let unrepresentable =
+            publication_bias_tests(vec![f64::MAX; 3], vec![0.1, 0.2, 0.3]).unwrap();
+        assert!(unrepresentable.egger_intercept.is_nan());
+        assert!(unrepresentable.egger_se.is_nan());
+        assert!(unrepresentable.egger_t.is_nan());
+        assert!(unrepresentable.egger_p.is_nan());
+    }
+
+    #[test]
+    fn egger_rank_cutoff_retains_estimable_precision_columns() {
+        // R lm(y ~ x), x = 1 + (0:2) * delta, y = c(1, 2, 4):
+        // rank 1 at delta=1e-7, rank 2 at delta=2e-7.
+        for (delta, estimable) in [(1e-7, false), (2e-7, true)] {
+            for units in [1e-8, 1.0, 1e8] {
+                let std_errors: Vec<f64> = (0..3)
+                    .map(|i| units / (1.0 + f64::from(i) * delta))
+                    .collect();
+                let effects = std_errors
+                    .iter()
+                    .zip([1.0, 2.0, 4.0])
+                    .map(|(se, y)| se * y)
+                    .collect();
+                let result = publication_bias_tests(effects, std_errors).unwrap();
+                for value in [
+                    result.egger_intercept,
+                    result.egger_se,
+                    result.egger_t,
+                    result.egger_p,
+                ] {
+                    assert_eq!(value.is_finite(), estimable);
+                }
+                if estimable {
+                    // This nearly aliased fit loses a few digits in both QR and
+                    // centered arithmetic; the inferential result still agrees.
+                    assert!((result.egger_p - 0.12103775436571447).abs() < 1e-8);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn egger_zero_residual_variance_preserves_undefined_and_infinite_statistics() {
+        let std_errors = vec![1.0, 0.5, 0.25];
+        let zero = publication_bias_tests(vec![0.0; 3], std_errors.clone()).unwrap();
+        assert_eq!(zero.egger_intercept, 0.0);
+        assert_eq!(zero.egger_se, 0.0);
+        assert!(zero.egger_t.is_nan());
+        assert!(zero.egger_p.is_nan());
+        for intercept in [-2.0, 2.0] {
+            let result = publication_bias_tests(
+                std_errors.iter().map(|se| intercept * se).collect(),
+                std_errors.clone(),
+            )
+            .unwrap();
+            assert_eq!(result.egger_intercept, intercept);
+            assert_eq!(result.egger_se, 0.0);
+            assert_eq!(result.egger_t, f64::INFINITY.copysign(intercept));
+            assert_eq!(result.egger_p, 0.0);
+        }
     }
 
     #[test]
