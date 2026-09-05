@@ -157,7 +157,7 @@ pub fn rd_survival(
         0.0
     };
 
-    let p_value = 2.0 * (1.0 - normal_cdf(z_score.abs()));
+    let p_value = 2.0 * normal_sf(z_score.abs());
 
     let (ci_lower, ci_upper) = normal_ci_95(treatment_effect, se);
 

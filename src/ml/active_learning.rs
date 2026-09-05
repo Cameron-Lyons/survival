@@ -1,7 +1,9 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::{
+    normal_cdf, normal_inverse_cdf, normal_quantile_lower, two_sided_normal_quantile,
+};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
@@ -342,55 +344,12 @@ impl LogrankSampleSizeResult {
     }
 }
 
-#[allow(clippy::excessive_precision)]
 fn standard_normal_quantile(p: f64) -> f64 {
     if p <= 0.0 || p >= 1.0 {
-        return f64::NAN;
-    }
-    let a1 = -3.969683028665376e1;
-    let a2 = 2.209460984245205e2;
-    let a3 = -2.759285104469687e2;
-    let a4 = 1.383577518672690e2;
-    let a5 = -3.066479806614716e1;
-    let a6 = 2.506628277459239e0;
-
-    let b1 = -5.447609879822406e1;
-    let b2 = 1.615858368580409e2;
-    let b3 = -1.556989798598866e2;
-    let b4 = 6.680131188771972e1;
-    let b5 = -1.328068155288572e1;
-
-    let c1 = -7.784894002430293e-3;
-    let c2 = -3.223964580411365e-1;
-    let c3 = -2.400758277161838e0;
-    let c4 = -2.549732539343734e0;
-    let c5 = 4.374664141464968e0;
-    let c6 = 2.938163982698783e0;
-
-    let d1 = 7.784695709041462e-3;
-    let d2 = 3.224671290700398e-1;
-    let d3 = 2.445134137142996e0;
-    let d4 = 3.754408661907416e0;
-
-    let p_low = 0.02425;
-    let p_high = 1.0 - p_low;
-
-    let result;
-    if p < p_low {
-        let q = (-2.0 * p.ln()).sqrt();
-        result = (((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6)
-            / ((((d1 * q + d2) * q + d3) * q + d4) * q + 1.0);
-    } else if p <= p_high {
-        let q = p - 0.5;
-        let r = q * q;
-        result = (((((a1 * r + a2) * r + a3) * r + a4) * r + a5) * r + a6) * q
-            / (((((b1 * r + b2) * r + b3) * r + b4) * r + b5) * r + 1.0);
+        f64::NAN
     } else {
-        let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        result = -(((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6)
-            / ((((d1 * q + d2) * q + d3) * q + d4) * q + 1.0);
+        normal_inverse_cdf(p)
     }
-    result
 }
 
 #[pyfunction]
@@ -437,7 +396,7 @@ pub fn sample_size_logrank(
         validate_nonnegative_finite("follow_up_time", follow_up)?;
     }
 
-    let z_alpha = standard_normal_quantile(1.0 - alpha / 2.0);
+    let z_alpha = two_sided_normal_quantile(alpha).unwrap_or(f64::NAN);
     let z_beta = standard_normal_quantile(power);
 
     let ln_hr = hazard_ratio.ln();
@@ -524,7 +483,7 @@ pub fn power_logrank(
 
     let n_events = (sample_size as f64 * event_rate).ceil() as usize;
 
-    let z_alpha = standard_normal_quantile(1.0 - alpha / 2.0);
+    let z_alpha = two_sided_normal_quantile(alpha).unwrap_or(f64::NAN);
 
     let r = allocation_ratio;
     let ln_hr = hazard_ratio.ln();
@@ -580,13 +539,15 @@ impl AdaptiveDesignResult {
 }
 
 fn obf_boundary(alpha: f64, info_fraction: f64) -> f64 {
-    let z_alpha = standard_normal_quantile(1.0 - alpha / 2.0);
+    let z_alpha = two_sided_normal_quantile(alpha).unwrap_or(f64::NAN);
     z_alpha / info_fraction.sqrt()
 }
 
 fn pocock_boundary(alpha: f64, _info_fraction: f64, n_looks: usize) -> f64 {
-    let adjusted_alpha = alpha / (n_looks as f64).sqrt();
-    standard_normal_quantile(1.0 - adjusted_alpha / 2.0)
+    let n_looks = n_looks as f64;
+    let probability = alpha / (2.0 * n_looks.sqrt());
+    let log_probability = alpha.ln() - std::f64::consts::LN_2 - 0.5 * n_looks.ln();
+    -normal_quantile_lower(probability, log_probability)
 }
 
 #[pyfunction]
@@ -650,7 +611,7 @@ pub fn group_sequential_analysis(
     let conditional_power = if remaining_info > 0.0 && current_z_stat > 0.0 {
         let drift = current_z_stat / info_fraction.sqrt();
         let projected_z = drift * remaining_info.sqrt() + current_z_stat;
-        let z_alpha = standard_normal_quantile(1.0 - alpha / 2.0);
+        let z_alpha = two_sided_normal_quantile(alpha).unwrap_or(f64::NAN);
         normal_cdf(projected_z - z_alpha)
     } else {
         0.0
@@ -715,6 +676,28 @@ mod tests {
         let result = sample_size_logrank(0.7, 0.8, 0.05, 1.0, Some(0.5), 0.0, None, None).unwrap();
         assert!(result.required_events > 0);
         assert!(result.required_sample_size >= result.required_events);
+    }
+
+    #[test]
+    fn logrank_design_supports_subnormal_alpha() {
+        let alpha = f64::from_bits(1);
+        let result = sample_size_logrank(0.7, 0.8, alpha, 1.0, Some(1.0), 0.0, None, None).unwrap();
+        assert_eq!(result.required_events, 48_630);
+        let power = power_logrank(result.required_events, 0.7, alpha, 1.0, 1.0).unwrap();
+        assert!((power.power - 0.800_091_153_668_757_4).abs() < 2e-13);
+        let sequential = group_sequential_analysis(50, 200, 1.5, 1, 4, alpha, 0.0, "obf").unwrap();
+        assert!((sequential.efficacy_boundary - 76.970_816_671_134_67).abs() < 2e-12);
+        // R qnorm(log(alpha) - log(2) - 0.5 * log(n_looks),
+        // lower.tail = FALSE, log.p = TRUE), before alpha adjustment underflows.
+        for (n_looks, expected) in [
+            (1, 38.485_408_335_567_335),
+            (4, 38.503_402_647_931_395),
+            (10, 38.515_291_632_945_45),
+        ] {
+            let pocock =
+                group_sequential_analysis(50, 200, 1.5, 1, n_looks, alpha, 0.0, "pocock").unwrap();
+            assert!((pocock.efficacy_boundary - expected).abs() < 2e-12);
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::constants::{TIME_EPSILON, exp_ci_95, same_time};
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::normal_sf;
 use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -387,7 +387,7 @@ pub fn fit_illness_death(
      -> TransitionHazard {
         let hr = coef.exp();
         let z = if se > 1e-10 { coef / se } else { 0.0 };
-        let p_value = 2.0 * (1.0 - normal_cdf(z.abs()));
+        let p_value = 2.0 * normal_sf(z.abs());
         let (ci_lower, ci_upper) = exp_ci_95(coef, se);
         TransitionHazard {
             from_state: from.to_string(),

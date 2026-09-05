@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 use crate::constants::{DIVISION_FLOOR, TIME_EPSILON, normal_ci_95, same_time};
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::normal_sf;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
 };
@@ -1029,7 +1029,7 @@ pub fn pseudo_gee_regression(
         .iter()
         .map(|z| {
             if z.is_finite() {
-                2.0 * (1.0 - normal_cdf(z.abs()))
+                2.0 * normal_sf(z.abs())
             } else {
                 f64::NAN
             }

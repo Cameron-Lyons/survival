@@ -10250,7 +10250,7 @@ def survfit_confint(
     p_values = _r_numeric_vector(p, "p")
     se_values = _r_numeric_vector(se, "se")
     confidence = _normalize_conf_level(conf_int, "conf_int")
-    zval = NormalDist().inv_cdf(1.0 - (1.0 - confidence) / 2.0)
+    zval = -NormalDist().inv_cdf((1.0 - confidence) / 2.0)
     selow_values = None if selow is None else _r_numeric_vector(selow, "selow")
     lower, upper = _core.survfit_confint_native(
         p_values,
@@ -15173,7 +15173,7 @@ def _normal_two_sided_p_value(statistic: float) -> float:
         return math.nan
     if math.isinf(statistic):
         return 0.0
-    return 2.0 * NormalDist().cdf(-abs(statistic))
+    return math.erfc(abs(statistic) / math.sqrt(2.0))
 
 
 def _coefficient_exp(value: float) -> float:
@@ -15336,7 +15336,7 @@ def confint(
     _require_model_fit(fit, "confint")
     confidence_level = _normalize_conf_level(level, "level")
     alpha = 1.0 - confidence_level
-    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    z = -NormalDist().inv_cdf(alpha / 2.0)
     names = coef_names(fit)
     coefficients = coef(fit)
     variance = vcov(fit, complete=not _is_survreg_fit(fit))
@@ -17825,7 +17825,7 @@ def _cox_survfit_with_confidence(
     variance = _cox_variance_matrix(model, nvar)
     baselines = _cox_expected_baseline_by_stratum(model)
     means = _cox_reference_means(model, "sample")
-    z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
+    z = -NormalDist().inv_cdf((1.0 - conf_level) / 2.0)
 
     std_err: list[list[float]] = []
     std_chaz: list[list[float]] = []

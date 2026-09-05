@@ -1,6 +1,6 @@
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, normal_ci_95};
 use crate::internal::matrix::{lu_solve, matrix_inverse};
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::normal_sf;
 use ndarray::{Array1, Array2};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -344,7 +344,7 @@ pub(crate) fn agfit5(
         .map(|i| {
             if standard_errors[i] > 0.0 {
                 let z = beta[i] / standard_errors[i];
-                2.0 * (1.0 - normal_cdf(z.abs()))
+                2.0 * normal_sf(z.abs())
             } else {
                 1.0
             }

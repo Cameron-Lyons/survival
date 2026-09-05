@@ -1,6 +1,6 @@
 use crate::constants::normal_ci_95;
 use crate::internal::matrix::lu_solve;
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::normal_sf;
 use ndarray::{Array1, Array2, Axis};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -587,7 +587,7 @@ fn perform_aalen_regression(
     {
         if se > 0.0 {
             let z_stat = coef / se;
-            *p_val = 2.0 * (1.0 - normal_cdf(z_stat.abs()));
+            *p_val = 2.0 * normal_sf(z_stat.abs());
         }
     }
     let confidence_intervals: Vec<AaregConfidenceInterval> = coefficients

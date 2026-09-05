@@ -1,4 +1,4 @@
-use crate::internal::statistical::{normal_cdf, sample_normal};
+use crate::internal::statistical::{normal_sf, sample_normal};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -149,7 +149,7 @@ fn lognormal_log_lik(time: f64, status: i32, mu: f64, sigma: f64) -> f64 {
     if status == 1 {
         -0.5 * z * z - log_t - sigma.ln() - 0.5 * (2.0 * std::f64::consts::PI).ln()
     } else {
-        (1.0 - normal_cdf(z)).max(1e-300).ln()
+        normal_sf(z).max(1e-300).ln()
     }
 }
 
@@ -472,7 +472,7 @@ pub fn bayesian_parametric_predict(
             BayesianDistribution::Weibull => (-(t / scale).powf(shape)).exp(),
             BayesianDistribution::LogNormal => {
                 let z = (t.ln() - scale.ln()) / shape;
-                1.0 - normal_cdf(z)
+                normal_sf(z)
             }
             BayesianDistribution::LogLogistic => 1.0 / (1.0 + (t / scale).powf(shape)),
             BayesianDistribution::Exponential => (-t / scale).exp(),
