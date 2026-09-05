@@ -14,6 +14,9 @@ use crate::residuals::survreg_resid::{
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
 
+mod initial;
+use initial::{SurvregRescaling, initialize_survreg};
+
 type PredictionRows = (Vec<f64>, Option<Vec<Vec<f64>>>);
 
 // Matches survival::survreg.control() without changing other model families.
@@ -127,6 +130,23 @@ pub struct SurvivalFit {
 }
 
 impl DistributionType {
+    fn likelihood_distribution(
+        self,
+        distribution_parameter: Option<f64>,
+    ) -> Result<SurvivalDist, Box<dyn std::error::Error>> {
+        Ok(match self {
+            DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
+            DistributionType::Logistic => SurvivalDist::Logistic,
+            DistributionType::Gaussian => SurvivalDist::Gaussian,
+            DistributionType::Weibull => SurvivalDist::Weibull,
+            DistributionType::LogNormal => SurvivalDist::LogNormal,
+            DistributionType::LogLogistic => SurvivalDist::LogLogistic,
+            DistributionType::StudentT => SurvivalDist::StudentT(
+                distribution_parameter.ok_or("Student-t degrees of freedom are missing")?,
+            ),
+        })
+    }
+
     fn canonical_name(self) -> &'static str {
         match self {
             DistributionType::ExtremeValue => "extreme_value",
@@ -540,21 +560,6 @@ struct LikelihoodInput<'a> {
 }
 
 impl LikelihoodInput<'_> {
-    fn distribution(&self) -> Result<SurvivalDist, Box<dyn std::error::Error>> {
-        Ok(match self.distribution {
-            DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
-            DistributionType::Logistic => SurvivalDist::Logistic,
-            DistributionType::Gaussian => SurvivalDist::Gaussian,
-            DistributionType::Weibull => SurvivalDist::Weibull,
-            DistributionType::LogNormal => SurvivalDist::LogNormal,
-            DistributionType::LogLogistic => SurvivalDist::LogLogistic,
-            DistributionType::StudentT => SurvivalDist::StudentT(
-                self.distribution_parameter
-                    .ok_or("Student-t degrees of freedom are missing")?,
-            ),
-        })
-    }
-
     fn evaluate(&self) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
         survregc1(
             self.n,
@@ -562,7 +567,8 @@ impl LikelihoodInput<'_> {
             self.nstrat,
             false,
             &ArrayView1::from(self.beta),
-            self.distribution()?,
+            self.distribution
+                .likelihood_distribution(self.distribution_parameter)?,
             self.strata,
             &self.offsets.view(),
             self.time1,
@@ -581,7 +587,8 @@ impl LikelihoodInput<'_> {
             self.nvar,
             self.nstrat,
             &ArrayView1::from(self.beta),
-            self.distribution()?,
+            self.distribution
+                .likelihood_distribution(self.distribution_parameter)?,
             self.strata,
             &self.offsets.view(),
             self.time1,
@@ -1025,7 +1032,8 @@ pub fn survreg(
     if let Some(values) = initial_beta.as_ref() {
         validate_finite_values("initial_beta", values)?;
     }
-    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; expected_initial_len]);
+    let initialize = initial_beta.is_none();
+    let initial_beta = initial_beta.unwrap_or_default();
     let y = {
         if let Some(time2) = time2_values.as_ref() {
             let mut y_data = Vec::with_capacity(n * 3);
@@ -1046,7 +1054,7 @@ pub fn survreg(
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
         }
     };
-    let cov_array = if nvar > 0 {
+    let mut cov_array = if nvar > 0 {
         let mut flat = Vec::with_capacity(n * nvar);
         for col_idx in 0..nvar {
             flat.extend(covariate_rows.iter().map(|row| row[col_idx]));
@@ -1060,7 +1068,13 @@ pub fn survreg(
     let offsets_arr = Array1::from_vec(offsets_vec.clone());
     let distribution_type = config.distribution;
     let distribution_name = requested_distribution_name(distribution, distribution_type);
-    let result = compute_survreg(ComputeSurvregInput {
+    let rescaling = if initialize {
+        SurvregRescaling::apply(&mut cov_array, &weights_arr)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+    } else {
+        None
+    };
+    let mut input = ComputeSurvregInput {
         max_iter: config.max_iter,
         nvar,
         y: &y,
@@ -1075,8 +1089,26 @@ pub fn survreg(
         distribution: distribution_type,
         distribution_parameter,
         fixed_scale,
-    })
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
+    };
+    if initialize {
+        input.beta = initialize_survreg(&input)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    }
+    let mut result = compute_survreg(input)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let rescaled_predictors = rescaling.as_ref().map(|_| {
+        (0..n)
+            .map(|person| {
+                (0..nvar)
+                    .map(|column| cov_array[[column, person]] * result.coefficients[column])
+                    .sum::<f64>()
+                    + offsets_vec[person]
+            })
+            .collect()
+    });
+    if let Some(rescaling) = rescaling {
+        rescaling.restore(&mut result);
+    }
     let variance_matrix = result
         .variance_matrix
         .outer_iter()
@@ -1091,8 +1123,9 @@ pub fn survreg(
             .map(|value| value.exp())
             .collect()
     };
-    let linear_predictors =
-        compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec));
+    let linear_predictors = rescaled_predictors.unwrap_or_else(|| {
+        compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec))
+    });
     let status_values: Vec<i32> = status.iter().map(|&value| value as i32).collect();
     let fitted_covariates = if nvar == 0 {
         vec![vec![]; n]
@@ -1384,7 +1417,8 @@ mod tests {
                 ],
                 None,
                 None,
-                None,
+                // Isolate the tolerance comparison from automatic initialization.
+                Some(vec![0.0; 3]),
                 None,
                 Some("weibull"),
                 None,
@@ -1413,6 +1447,136 @@ mod tests {
         let loose = fit_with_tolerance(Some(1e-6));
         assert!(loose.iterations < default.iterations);
         assert!(loose.score_vector.iter().any(|score| score.abs() > 1e-8));
+    }
+
+    #[test]
+    fn automatic_initialization_ignores_zero_weight_unresolved_intervals() {
+        let fit = |time: Vec<f64>, status, weights, time2| {
+            let n = time.len();
+            survreg(
+                time,
+                status,
+                vec![vec![1.0]; n],
+                Some(weights),
+                None,
+                None,
+                None,
+                Some("logistic"),
+                Some(0),
+                None,
+                None,
+                time2,
+                Some(1.0),
+                None,
+            )
+            .unwrap()
+        };
+        let reference = fit(vec![1.0, 3.0], vec![1.0; 2], vec![1.0; 2], None);
+        let with_ignored = fit(
+            vec![1.0, 3.0, 1e-100],
+            vec![1.0, 1.0, 3.0],
+            vec![1.0, 1.0, 0.0],
+            Some(vec![1.0, 3.0, 2e-100]),
+        );
+        assert_eq!(with_ignored.coefficients, reference.coefficients);
+        assert_eq!(with_ignored.variance_matrix, reference.variance_matrix);
+        assert_eq!(with_ignored.score_vector, reference.score_vector);
+        assert_eq!(with_ignored.log_likelihood, reference.log_likelihood);
+    }
+
+    #[test]
+    fn automatic_rescaling_ignores_zero_weight_extreme_covariates() {
+        for fixed_scale in [None, Some(1.0)] {
+            let fit = |ignored| {
+                let mut time = vec![1.0, 2.0, 3.0, 4.0];
+                let mut covariates: Vec<Vec<f64>> = time.iter().map(|&x| vec![1.0, x]).collect();
+                let mut weights = vec![1.0; 4];
+                if ignored {
+                    time.push(2.0);
+                    covariates.push(vec![1.0, 1e20]);
+                    weights.push(0.0);
+                }
+                let status = vec![1.0; time.len()];
+                survreg(
+                    time,
+                    status,
+                    covariates,
+                    Some(weights),
+                    None,
+                    None,
+                    None,
+                    Some("gaussian"),
+                    Some(0),
+                    None,
+                    None,
+                    None,
+                    fixed_scale,
+                    None,
+                )
+                .unwrap()
+            };
+            let reference = fit(false);
+            let with_ignored = fit(true);
+            assert_eq!(with_ignored.coefficients, reference.coefficients);
+            assert_eq!(with_ignored.variance_matrix, reference.variance_matrix);
+            assert_eq!(with_ignored.score_vector, reference.score_vector);
+            assert_eq!(with_ignored.log_likelihood, reference.log_likelihood);
+            assert_eq!(
+                &with_ignored.linear_predictors[..4],
+                reference.linear_predictors
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_gaussian_starts_match_r_without_optimizer_iterations() {
+        let time = vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0];
+        let all_event = survreg(
+            time.clone(),
+            vec![1.0; 6],
+            (0..6).map(|i| vec![1.0, f64::from(i)]).collect(),
+            None,
+            None,
+            None,
+            None,
+            Some("gaussian"),
+            Some(0),
+            None,
+            None,
+            None,
+            Some(1.0),
+            None,
+        )
+        .unwrap();
+        for (actual, expected) in all_event
+            .location_coefficients
+            .iter()
+            .zip([0.23809523809523903, 1.771_428_571_428_571_4])
+        {
+            assert!((actual - expected).abs() < 2e-14, "{actual} != {expected}");
+        }
+        assert_eq!(all_event.iterations, 0);
+        assert_eq!(all_event.scale, 1.0);
+        let censored = survreg(
+            time,
+            vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            vec![vec![1.0]; 6],
+            None,
+            None,
+            None,
+            None,
+            Some("gaussian"),
+            Some(0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!((censored.location_coefficients[0] - 6.491_626_281_538_652).abs() < 2e-8);
+        assert!((censored.scale - 6.182412330330469).abs() < 2e-14);
+        assert_eq!(censored.iterations, 0);
     }
 
     #[test]

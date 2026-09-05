@@ -520,7 +520,7 @@ result = regression.survreg(
     covariates=covariates,
     weights=None,          # Optional: observation weights
     offsets=None,          # Optional: offset values
-    initial_beta=None,     # Optional: initial coefficient values
+    initial_beta=None,     # Derive starting values from the observations
     strata=None,           # Optional: stratification variable
     distribution="weibull",  # "extreme_value", "logistic", "gaussian", "weibull", or "lognormal"
     max_iter=20,          # Optional: maximum iterations
@@ -534,6 +534,24 @@ print(f"Iterations: {result.iterations}")
 print(f"Variance matrix: {result.variance_matrix}")
 print(f"Convergence flag: {result.convergence_flag}")
 ```
+
+Omitted AFT starts use R's distribution-specific weighted variance estimates,
+censoring-aware working regression, and a preliminary intercept fit when scales
+must be estimated for a model with covariates. This applies to every built-in
+distribution, fixed scales, and stratified scales. `max_iter=0` returns the
+initialized model without taking a main-model optimization step.
+
+With omitted starts and a leading intercept, continuous covariates are centered
+and scaled during fitting; binary columns keep their coding. Coefficients and
+covariance are returned in the original units, while stored predictions are
+computed before converting back to preserve accuracy. As in R, `score_vector`
+uses the working design coordinates. Explicit complete starting vectors bypass
+initialization and rescaling.
+Zero-weight observations do not determine starting values or working coordinates.
+
+Automatic initialization reports an error for an unusable response scale,
+constant nonbinary covariate that cannot be rescaled, or interval probability
+that rounds to zero. Explicit starts remain available for these cases.
 
 ### Cox Proportional Hazards Model
 
@@ -806,13 +824,15 @@ cargo bench -- --test
 
 The AFT benchmarks include matched weighted, stratified lognormal fits with
 full-rank and duplicated covariate columns. Five paired release runs on Apple
-Silicon with Rust 1.94 and one Rayon thread compared likelihood-only retries
-against revision `7ee22927`. The 5,000-row fit with six rejected trials improved
-from 2.956 to 2.486 ms (about 16%); the 5,000-row fit with one rejected trial
-cost about 3% more (1.928 to 1.996 ms) because its accepted retry needs an extra
-likelihood scan. Cases with two rejected trials improved by about 1.5–2.4%,
-and controls without retries were roughly unchanged. All eight benchmark fits
-retained identical outputs. Each run used at least 50 samples and 0.25 seconds
+Silicon with Rust 1.94 and one Rayon thread compared automatic initialization
+against the zero starts in revision `6e687b37`. Main-model iterations fell from
+8–9 to R's 4–5, but the preliminary scale fit and working regressions increased
+total fitting time by about 11–34% in six of eight cases; the other two timing
+comparisons were inconclusive. For example, the 1,000-row full-rank fit took
+444 µs versus 367 µs, and the 10,000-row duplicated-column fit took 4.842 ms
+versus 3.595 ms. These measurements include all initialization work and input
+cloning. All eight fits converged and were checked against R's coefficients,
+covariance, and likelihood. Each run used at least 50 samples and 0.25 seconds
 per case:
 
 ```sh
