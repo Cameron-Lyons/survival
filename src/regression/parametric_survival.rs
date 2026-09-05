@@ -3,6 +3,7 @@ use crate::constants::{
     STEP_HALVE_FACTOR,
 };
 use crate::internal::matrix::regularized_lu_solve;
+use crate::internal::student_t::StudentT;
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
     compute_quantile_prediction_with_options, compute_response_prediction,
@@ -610,11 +611,11 @@ fn calculate_likelihood(
         DistributionType::Weibull => SurvivalDist::Weibull,
         DistributionType::LogNormal => SurvivalDist::LogNormal,
         DistributionType::LogLogistic => SurvivalDist::LogLogistic,
-        DistributionType::StudentT => SurvivalDist::StudentT(
+        DistributionType::StudentT => SurvivalDist::StudentT(StudentT::new(
             input
                 .distribution_parameter
                 .ok_or_else(|| "Student-t degrees of freedom are missing".to_string())?,
-        ),
+        )),
     };
     let beta = ArrayView1::from(input.beta);
     survregc1(

@@ -235,6 +235,10 @@ R's default prediction; `predict_median()` and `predict_quantile()` return
 actual distribution quantiles. Gaussian, logistic, extreme-value, and Student-t
 responses use the identity transform. Native prediction standard errors are
 available for training and new rows and follow the requested response scale.
+Student-t distribution helpers accept `distribution="t", parms=df` and retain
+precision near the median and in rare tails. For example,
+`qsurvreg(1e-20, distribution="t", parms=4)` returns approximately
+`-131607.4013`. Native, Python, and R bridge calls share these calculations.
 The AFT optimizer uses positive-definite observed-information Newton steps when
 available and falls back to the stable outer-product system otherwise. The R
 bridge also routes built-in `survreg.fit` matrix calls through this kernel,

@@ -1,6 +1,5 @@
-use crate::internal::statistical::{
-    normal_cdf, normal_inverse_cdf, student_t_cdf, student_t_inverse_cdf, student_t_pdf,
-};
+use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::student_t::StudentT;
 use pyo3::prelude::*;
 
 fn value_error(message: impl Into<String>) -> PyErr {
@@ -348,6 +347,17 @@ fn survreg_quantile_value(
     Ok(if log_transform { value.exp() } else { value })
 }
 
+fn student_t_standardize(value: f64, mean: f64, scale: f64) -> f64 {
+    let centered = value - mean;
+    if centered.is_infinite() && value.is_finite() && mean.is_finite() {
+        // Opposite-sign finite inputs can overflow before a large scale brings
+        // their difference back into range.
+        value / scale - mean / scale
+    } else {
+        centered / scale
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (values, mean, scale, distribution, kind, parms=None))]
 pub fn survreg_distribution(
@@ -372,22 +382,24 @@ pub fn survreg_distribution(
                 "parms for distribution='t' must be a positive finite value",
             ));
         }
+        let student = StudentT::new(df);
         return values
             .iter()
             .zip(mean.iter())
             .zip(scale.iter())
             .map(|((&value, &mean_value), &scale_value)| match kind {
                 SurvregDistributionKind::Density => {
-                    Ok(student_t_pdf((value - mean_value) / scale_value, df) / scale_value)
+                    let z = student_t_standardize(value, mean_value, scale_value);
+                    Ok((student.log_pdf(z) - scale_value.ln()).exp())
                 }
                 SurvregDistributionKind::Distribution => {
-                    Ok(student_t_cdf((value - mean_value) / scale_value, df))
+                    Ok(student.cdf(student_t_standardize(value, mean_value, scale_value)))
                 }
                 SurvregDistributionKind::Quantile => {
                     if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                         return Err(value_error("p must be between 0 and 1"));
                     }
-                    Ok(mean_value + scale_value * student_t_inverse_cdf(value, df))
+                    Ok(scale_value.mul_add(student.inverse_cdf(value), mean_value))
                 }
             })
             .collect();
@@ -519,10 +531,8 @@ pub(crate) fn compute_quantile_prediction_with_options(
                 "Student-t degrees of freedom must be positive and finite",
             ));
         }
-        quantiles
-            .iter()
-            .map(|&q| student_t_inverse_cdf(q, df))
-            .collect()
+        let student = StudentT::new(df);
+        quantiles.iter().map(|&q| student.inverse_cdf(q)).collect()
     } else {
         let quantile = quantile_fn_for_distribution(&key);
         quantiles.iter().map(|&q| quantile(q)).collect()
