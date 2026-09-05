@@ -17,6 +17,7 @@ pub(crate) mod coxph_detail_module;
 pub(crate) mod coxph_diagnostics;
 pub(crate) mod coxph_model;
 pub(crate) mod coxph_penalty;
+pub(crate) mod coxph_ridge;
 pub(crate) mod coxph_support;
 #[path = "coxph_wtest.rs"]
 pub(crate) mod coxph_wtest_module;
@@ -61,6 +62,7 @@ pub use coxph_diagnostics::{
     term_prediction_se_from_variance,
 };
 pub use coxph_penalty::CoxPenaltyDiagnostics;
+pub use coxph_ridge::{CoxRidgeSelection, coxph_ridge_fit};
 pub use coxph_wtest_module::coxph_wtest;
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,

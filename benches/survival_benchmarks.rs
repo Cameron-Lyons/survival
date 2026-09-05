@@ -801,7 +801,7 @@ mod cox_regression {
 
 mod ridge_cox {
     use super::*;
-    use survival::regression::{CoxPHFit, coxph_penalized_fit};
+    use survival::regression::{CoxPHFit, coxph_penalized_fit, coxph_ridge_fit};
 
     #[derive(Clone)]
     struct Inputs {
@@ -923,6 +923,49 @@ mod ridge_cox {
     #[divan::bench(args = [1000, 10000])]
     fn grouped_ridge(bencher: divan::Bencher, n: usize) {
         run(bencher, n, 8);
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn automatic_df_grouped(bencher: divan::Bencher, n: usize) {
+        let inputs = inputs(n, 8);
+        let fit_selected = |inputs: Inputs| {
+            let (fit, diagnostics, selection) = coxph_ridge_fit(
+                inputs.time,
+                inputs.status,
+                inputs.covariates,
+                inputs
+                    .penalty
+                    .into_iter()
+                    .map(|penalty| penalty / 20.0)
+                    .collect(),
+                inputs.groups,
+                vec![None],
+                vec![Some(4.0)],
+                vec![0.1],
+                Some(inputs.strata),
+                Some(inputs.weights),
+                None,
+                None,
+                Some(30),
+                Some(1e-9),
+                Some(1e-11),
+                Some("efron"),
+                None,
+                None,
+                None,
+            )
+            .expect("benchmark automatic ridge Cox inputs should be valid");
+            (fit, diagnostics, selection)
+        };
+        let (check, diagnostics, selection) = fit_selected(inputs.clone());
+        assert_eq!(check.convergence_flag, 8);
+        assert!(selection.done[0]);
+        assert!((diagnostics.term_df[0] - 4.0).abs() < 0.1);
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|inputs| {
+                black_box(fit_selected(inputs));
+            });
     }
 }
 

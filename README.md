@@ -171,12 +171,15 @@ shapes for ordinary predictions and individual time-dependent trajectories.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
-Fixed ridge penalties are jointly optimized with the Cox partial likelihood:
+Ridge penalties are jointly optimized with the Cox partial likelihood:
 
 ```python
 fit = coxph("Surv(time, status) ~ age + ridge(x, z, theta=2)", data=data)
 fit.df           # effective degrees of freedom for age and the joint ridge term
 fit.variance2    # sampling covariance, distinct from vcov(fit)
+
+selected = coxph("Surv(time, status) ~ age + ridge(x, z, df=1)", data=data)
+selected.history # evaluated theta/df pairs and each controller's next proposal
 ```
 
 `ridge(..., theta=..., scale=FALSE)` uses the supplied penalty in the original
@@ -187,12 +190,35 @@ prediction, residuals, and fractional-df information criteria are supported.
 Robust covariance requests produce R's warning and use penalized covariance.
 An exact tie request follows R's penalized Breslow calculation; `fit.method`
 reports the effective method and `fit.requested_method` retains the request.
-Automatic df selection, ridge interactions, penalized `survreg`, penalized
-ANOVA, and `cox_zph` are not yet implemented and report explicit errors.
+Omitting `theta` selects the penalty by effective degrees of freedom, defaulting
+to half the number of columns in each ridge term. `ridge(..., df=..., eps=.1)`
+sets the target and its absolute tolerance. Multiple targets share each joint
+fit; `control={"outer.max": 10}` limits the outer search. The history's final
+row records the evaluated penalty, while its `theta` is R's next proposal,
+which can be NaN at full df. Its `done` flag reports whether the target was met;
+the returned df always describes the attained fit. Targets must be finite and
+between zero and the term's column count. When a full-df controller proposes
+NaN while other terms still need iterations, fitting retains its last finite
+penalty and records the proposal in history.
+If rounding makes interpolation undefined before reaching the target, the
+search bisects an available theta bracket. Extreme scales can therefore follow
+a different search path from R while retaining finite penalties and actual df.
+Ridge interactions, penalized `survreg`, penalized ANOVA, and `cox_zph` are not
+yet implemented and report explicit errors.
 The native `coxph_penalized_fit` also accepts a diagonal penalty and coefficient
 groups directly, returning the fit and `CoxPenaltyDiagnostics`. Its initial and
 final log likelihoods are unpenalized; the formula facade reports R's penalized
 initial likelihood when nonzero initial coefficients are supplied.
+The native `coxph_ridge_fit` additionally returns `CoxRidgeSelection`, including
+the evaluated penalties, proposals, histories, and outer/inner iteration counts.
+The standalone `ridge_fit` uses the same joint Efron optimizer and returns
+coefficients and standard errors in original covariate units. For
+`RidgePenalty.from_df(...)`, the constructor's theta is the search seed;
+`RidgeResult.theta` is the fitted value. Its GCV convention is
+`(-2 * log_likelihood / n_obs) / (1 - df / n_obs)^2`, using the unpenalized
+partial likelihood. `ridge_cv` uses deterministic folds and minimizes
+`-2 / n_obs * sum(loglik_full(beta_train) - loglik_train(beta_train))`, retaining
+full risk sets in the validation comparison and propagating fitting errors.
 Formula fits support `tt(...)` time-varying coefficient terms for right-censored
 and counting-process responses, including R's default O'Brien rank transform
 and custom `tt(x, time, riskset, weights)` callables.
@@ -798,8 +824,9 @@ uv run --no-sync pytest python/tests -v
 The `ridge_cox` benchmarks include joint fitting, sampling covariance, and
 effective-df diagnostics. On a local Apple Silicon run with 10,000 rows, eight
 correlated covariates, weights, strata, and one Rayon thread, median times were
-2.926 ms for ordinary Cox, 2.947 ms for mixed ridge, and 2.957 ms for grouped
-ridge.
+2.884 ms for ordinary Cox, 2.927 ms for mixed fixed-theta ridge, and 2.903 ms for
+grouped fixed-theta ridge. Automatic selection of four df took 12.06 ms over
+four outer fits and eight total Newton iterations (50 samples per case).
 
 Smoke-test benchmarks:
 ```sh
@@ -844,7 +871,7 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 - Python 3.11+ and Rust 1.94+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 
-Fixed-theta ridge Cox tests preserve the R survival 3.8.11 reference outputs,
+Fixed-theta and df-selected ridge Cox tests preserve R survival 3.8.11 outputs,
 including three documented upstream discrepancies. This implementation resets
 martingale risk calculations between strata, includes prediction offsets inside
 the exponential, and calculates counting-process interval uncertainty from the
