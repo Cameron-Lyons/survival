@@ -73,7 +73,7 @@ impl SurvregQuantilePrediction {
 }
 
 fn extreme_value_quantile(p: f64) -> f64 {
-    (-(1.0 - p).ln()).ln()
+    (-(-p).ln_1p()).ln()
 }
 
 fn extreme_value_cdf(z: f64) -> f64 {
@@ -83,7 +83,7 @@ fn extreme_value_cdf(z: f64) -> f64 {
     if z == f64::NEG_INFINITY {
         return 0.0;
     }
-    1.0 - (-z.exp()).exp()
+    -(-z.exp()).exp_m1()
 }
 
 fn extreme_value_pdf(z: f64) -> f64 {
@@ -98,7 +98,7 @@ fn extreme_value_pdf(z: f64) -> f64 {
 }
 
 fn logistic_quantile(p: f64) -> f64 {
-    (p / (1.0 - p)).ln()
+    p.ln() - (-p).ln_1p()
 }
 
 fn logistic_cdf(z: f64) -> f64 {
@@ -480,28 +480,76 @@ pub(crate) fn compute_quantile_prediction(
     quantiles: &[f64],
     distribution: &str,
 ) -> Vec<Vec<f64>> {
-    let n = linear_pred.len();
-    let nq = quantiles.len();
+    compute_quantile_prediction_with_options(
+        linear_pred,
+        &[scale],
+        quantiles,
+        distribution,
+        None,
+        true,
+    )
+    .expect("distribution was validated and prediction inputs are valid")
+}
 
-    let key = validated_distribution_key(distribution);
-    let quantile_fn = quantile_fn_for_distribution(&key);
-    let uses_log_transform = response_uses_log_transform(&key);
-
-    let mut predictions = Vec::with_capacity(n);
-    for lp in linear_pred.iter().take(n) {
-        let mut row = Vec::with_capacity(nq);
-        for &q in quantiles {
-            let z = quantile_fn(q);
-            let linear_quantile = lp + scale * z;
-            row.push(if uses_log_transform {
-                linear_quantile.exp()
-            } else {
-                linear_quantile
-            });
-        }
-        predictions.push(row);
+pub(crate) fn compute_quantile_prediction_with_options(
+    linear_pred: &[f64],
+    scales: &[f64],
+    quantiles: &[f64],
+    distribution: &str,
+    distribution_parameter: Option<f64>,
+    transform: bool,
+) -> PyResult<Vec<Vec<f64>>> {
+    validate_distribution(distribution)?;
+    validate_quantiles(quantiles)?;
+    if scales.len() != 1 && scales.len() != linear_pred.len() {
+        return Err(value_error(
+            "scales must have one value or match prediction rows",
+        ));
     }
-    predictions
+    for &scale in scales {
+        validate_scale(scale)?;
+    }
+    let key = validated_distribution_key(distribution);
+    // Inverting the distribution can be expensive (especially Student-t).
+    // Each probability is inverted once and then reused for every row.
+    let standardized_quantiles: Vec<f64> = if is_student_t_distribution(&key) {
+        let df = distribution_parameter.unwrap_or(4.0);
+        if !df.is_finite() || df <= 0.0 {
+            return Err(value_error(
+                "Student-t degrees of freedom must be positive and finite",
+            ));
+        }
+        quantiles
+            .iter()
+            .map(|&q| student_t_inverse_cdf(q, df))
+            .collect()
+    } else {
+        let quantile = quantile_fn_for_distribution(&key);
+        quantiles.iter().map(|&q| quantile(q)).collect()
+    };
+    let uses_log_transform = transform && response_uses_log_transform(&key);
+    Ok(linear_pred
+        .iter()
+        .enumerate()
+        .map(|(idx, &lp)| {
+            let scale = if scales.len() == 1 {
+                scales[0]
+            } else {
+                scales[idx]
+            };
+            standardized_quantiles
+                .iter()
+                .map(|&score| {
+                    let value = lp + scale * score;
+                    if uses_log_transform {
+                        value.exp()
+                    } else {
+                        value
+                    }
+                })
+                .collect()
+        })
+        .collect())
 }
 
 pub(crate) fn compute_se_linear_predictor(
@@ -525,6 +573,21 @@ pub(crate) fn compute_se_linear_predictor(
     se
 }
 
+pub(crate) fn transform_prediction_se(
+    se: &mut [f64],
+    predictions: &[f64],
+    distribution: &str,
+    prediction_type: SurvregPredictType,
+) {
+    if prediction_type == SurvregPredictType::Response
+        && response_uses_log_transform(&validated_prediction_distribution_key(distribution))
+    {
+        for (value, prediction) in se.iter_mut().zip(predictions) {
+            *value *= prediction.abs();
+        }
+    }
+}
+
 fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
     for (idx, &value) in values.iter().enumerate() {
         if !value.is_finite() {
@@ -533,6 +596,13 @@ fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
                 name, idx
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_non_nan_values(name: &str, values: &[f64]) -> PyResult<()> {
+    if let Some(idx) = values.iter().position(|value| value.is_nan()) {
+        return Err(value_error(format!("{name} contains NaN at index {idx}")));
     }
     Ok(())
 }
@@ -595,8 +665,10 @@ pub fn survreg_quantile_prediction_se_matrix(
     if scales.is_empty() {
         return Err(value_error("scales must not be empty"));
     }
-    validate_finite_values("scales", &scales)?;
-    validate_finite_values("quantile_scores", &quantile_scores)?;
+    for &scale in &scales {
+        validate_scale(scale)?;
+    }
+    validate_non_nan_values("quantile_scores", &quantile_scores)?;
     for (row_idx, row) in predictions.iter().enumerate() {
         if row.len() != quantile_scores.len() {
             return Err(value_error(format!(
@@ -605,10 +677,14 @@ pub fn survreg_quantile_prediction_se_matrix(
                 quantile_scores.len()
             )));
         }
-        validate_finite_values("predictions", row)?;
+        validate_non_nan_values("predictions", row)?;
     }
 
     let width = validate_square_matrix("variance", &variance)?;
+    // An empty batch has no row from which to infer the design width.
+    if n == 0 {
+        return Ok(Vec::new());
+    }
     let full_width = nvar + scales.len();
     if width != nvar && width != full_width {
         return Err(value_error(
@@ -627,14 +703,15 @@ pub fn survreg_quantile_prediction_se_matrix(
     let has_scale_variance = width == full_width;
     let mut result = Vec::with_capacity(n);
     for (row_idx, row) in rows.iter().enumerate() {
+        let mut location_variance = 0.0;
+        for left in 0..nvar {
+            for right in 0..nvar {
+                location_variance += row[left] * variance[left][right] * row[right];
+            }
+        }
         let mut result_row = Vec::with_capacity(quantile_scores.len());
         for (score_idx, &score) in quantile_scores.iter().enumerate() {
-            let mut variance_value = 0.0;
-            for left in 0..nvar {
-                for right in 0..nvar {
-                    variance_value += row[left] * variance[left][right] * row[right];
-                }
-            }
+            let mut variance_value = location_variance;
             if has_scale_variance {
                 let stratum = strata[row_idx];
                 let scale_col = nvar + stratum;
@@ -645,7 +722,11 @@ pub fn survreg_quantile_prediction_se_matrix(
                 }
                 variance_value += scale_value * variance[scale_col][scale_col] * scale_value;
             }
-            let mut se = variance_value.max(0.0).sqrt();
+            let mut se = if variance_value.is_finite() {
+                variance_value.max(0.0).sqrt()
+            } else {
+                variance_value.sqrt()
+            };
             if transform_se {
                 se *= predictions[row_idx][score_idx].abs();
             }
@@ -722,9 +803,9 @@ fn validate_var_matrix(var_matrix: &[Vec<f64>], nvar: usize) -> PyResult<()> {
 
 fn validate_quantiles(quantiles: &[f64]) -> PyResult<()> {
     for &q in quantiles {
-        if !q.is_finite() || q <= 0.0 || q >= 1.0 {
+        if !q.is_finite() || !(0.0..=1.0).contains(&q) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Quantiles must be between 0 and 1 (exclusive)",
+                "Quantiles must be between 0 and 1 (inclusive)",
             ));
         }
     }
@@ -770,9 +851,11 @@ pub fn predict_survreg(
     };
 
     let se = if se_fit {
-        var_matrix
-            .as_ref()
-            .map(|vm| compute_se_linear_predictor(&covariates, vm))
+        var_matrix.as_ref().map(|vm| {
+            let mut se = compute_se_linear_predictor(&covariates, vm);
+            transform_prediction_se(&mut se, &predictions, &distribution, pred_type);
+            se
+        })
     } else {
         None
     };
@@ -818,6 +901,177 @@ pub fn predict_survreg_quantile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_standalone_student_t_quantiles_use_default_df_and_accept_endpoints() {
+        let result = predict_survreg_quantile(
+            vec![vec![1.0], vec![2.0]],
+            vec![1.0],
+            2.0,
+            "student-t".into(),
+            vec![0.0, 0.5, 0.75, 1.0],
+            None,
+        )
+        .unwrap();
+        for (idx, row) in result.predictions.iter().enumerate() {
+            let location = (idx + 1) as f64;
+            assert_eq!(row[0], f64::NEG_INFINITY);
+            assert_eq!(row[1], location);
+            // R 3.8.11 qt(.75, df=4).
+            assert!((row[2] - (location + 2.0 * 0.740_697_084_112_682_6)).abs() < 1e-10);
+            assert_eq!(row[3], f64::INFINITY);
+        }
+    }
+
+    #[test]
+    fn test_prediction_quantiles_reject_invalid_probabilities() {
+        for probability in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.01, 1.01] {
+            assert!(
+                predict_survreg_quantile(
+                    vec![vec![1.0]],
+                    vec![0.0],
+                    1.0,
+                    "weibull".into(),
+                    vec![probability],
+                    None,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_extreme_and_logistic_predictions_preserve_small_probabilities() {
+        for probability in [1e-300, 1e-100, 1e-20, 0.25] {
+            let extreme = extreme_value_quantile(probability);
+            assert!(extreme.is_finite());
+            assert!((extreme_value_cdf(extreme) / probability - 1.0).abs() < 1e-12);
+            let logistic = logistic_quantile(probability);
+            assert!(logistic.is_finite());
+            assert!((logistic_cdf(logistic) / probability - 1.0).abs() < 1e-12);
+        }
+        assert_eq!(extreme_value_quantile(0.0), f64::NEG_INFINITY);
+        assert_eq!(extreme_value_quantile(1.0), f64::INFINITY);
+        assert_eq!(logistic_quantile(0.0), f64::NEG_INFINITY);
+        assert_eq!(logistic_quantile(1.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn test_response_prediction_standard_errors_use_delta_transform() {
+        for (distribution, factor) in [("lognormal", 2.0_f64.exp()), ("gaussian", 1.0)] {
+            for prediction_type in ["response", "lp"] {
+                let result = predict_survreg(
+                    vec![vec![1.0, 2.0]],
+                    vec![0.5, 0.5],
+                    1.0,
+                    distribution.into(),
+                    prediction_type.into(),
+                    Some(vec![0.5]),
+                    Some(vec![vec![0.25, 0.0], vec![0.0, 1.0]]),
+                    true,
+                )
+                .unwrap();
+                let expected = 4.25_f64.sqrt()
+                    * if prediction_type == "response" {
+                        factor
+                    } else {
+                        1.0
+                    };
+                assert!((result.se.unwrap()[0] - expected).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn test_quantile_standard_errors_accept_infinite_endpoints() {
+        let scores = vec![f64::NEG_INFINITY, f64::INFINITY];
+        let fixed = survreg_quantile_prediction_se_matrix(
+            vec![vec![1.0]],
+            vec![1.0],
+            vec![0],
+            vec![vec![4.0]],
+            scores.clone(),
+            vec![vec![f64::NEG_INFINITY, f64::INFINITY]],
+            false,
+        )
+        .unwrap();
+        assert_eq!(fixed, vec![vec![2.0, 2.0]]);
+        let transformed = survreg_quantile_prediction_se_matrix(
+            vec![vec![1.0]],
+            vec![1.0],
+            vec![0],
+            vec![vec![4.0]],
+            scores.clone(),
+            vec![vec![0.0, f64::INFINITY]],
+            true,
+        )
+        .unwrap();
+        assert_eq!(transformed, vec![vec![0.0, f64::INFINITY]]);
+        let estimated = survreg_quantile_prediction_se_matrix(
+            vec![vec![1.0]],
+            vec![1.0],
+            vec![0],
+            vec![vec![4.0, 0.0], vec![0.0, 1.0]],
+            scores,
+            vec![vec![f64::NEG_INFINITY, f64::INFINITY]],
+            false,
+        )
+        .unwrap();
+        assert!(estimated[0].iter().all(|value| !value.is_finite()));
+        for (score, prediction) in [(f64::NAN, 1.0), (0.0, f64::NAN)] {
+            assert!(
+                survreg_quantile_prediction_se_matrix(
+                    vec![vec![1.0]],
+                    vec![1.0],
+                    vec![0],
+                    vec![vec![4.0]],
+                    vec![score],
+                    vec![vec![prediction]],
+                    false,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_quantile_standard_errors_accept_empty_prediction_batches() {
+        let result = survreg_quantile_prediction_se_matrix(
+            vec![],
+            vec![1.0],
+            vec![],
+            vec![vec![4.0, 0.0], vec![0.0, 1.0]],
+            vec![f64::NEG_INFINITY, f64::INFINITY],
+            vec![],
+            true,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+        assert!(
+            survreg_quantile_prediction_se_matrix(
+                vec![],
+                vec![1.0],
+                vec![0],
+                vec![vec![4.0]],
+                vec![0.0],
+                vec![],
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            survreg_quantile_prediction_se_matrix(
+                vec![],
+                vec![1.0],
+                vec![],
+                vec![vec![f64::NAN]],
+                vec![0.0],
+                vec![],
+                false,
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn test_linear_predictor() {
@@ -1058,6 +1312,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "distribution was validated")]
     fn test_prediction_helpers_do_not_default_unknown_distribution() {
+        crate::tests::common::initialize_python();
         let _ = compute_quantile_prediction(&[0.0], 1.0, &[0.5], "mystery");
     }
 
