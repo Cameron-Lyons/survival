@@ -216,18 +216,6 @@ def test_ridge_predictions_reuse_training_variance_and_term_groups():
     _assert_numeric(selected.se_fit, [[row[1]] for row in all_rows.se_fit])
 
 
-@pytest.mark.parametrize(
-    "formula",
-    [
-        "Surv(time, event) ~ ridge(x)",
-        "Surv(time, event) ~ ridge(x, df=0.5)",
-    ],
-)
-def test_ridge_df_selection_is_explicitly_unsupported(formula):
-    with pytest.raises((ValueError, NotImplementedError), match="theta|fixed|df"):
-        survival.coxph(formula, data=_CASES["mixed_scaled_efron"]["data"])
-
-
 def test_reference_preserves_and_documents_known_r_discrepancies():
     stratified = _CASES["weighted_offset_strata"]
     counting = _CASES["counting_weighted_strata"]

@@ -1063,6 +1063,28 @@ class CoxPenaltyDiagnostics:
     @property
     def term_df(self) -> list[float]: ...
 
+class CoxRidgeSelection:
+    @property
+    def fitted_theta(self) -> list[float]: ...
+    @property
+    def proposed_theta(self) -> list[float]: ...
+    @property
+    def done(self) -> list[bool]: ...
+    @property
+    def histories(self) -> list[list[list[float]]]: ...
+    @property
+    def halves(self) -> list[int]: ...
+    @property
+    def inner_failures(self) -> list[int]: ...
+    @property
+    def outer_iterations(self) -> int: ...
+    @property
+    def inner_iterations(self) -> int: ...
+    @property
+    def penalty(self) -> list[float]: ...
+    @property
+    def initial_loglik(self) -> float: ...
+
 class CoxPHFit:
     @property
     def coefficients(self) -> list[list[float]]: ...
@@ -7129,6 +7151,27 @@ def coxph_penalized_fit(
     entry_times: list[float] | None = None,
     nocenter: list[float] | None = None,
 ) -> tuple[CoxPHFit, CoxPenaltyDiagnostics]: ...
+def coxph_ridge_fit(
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
+    penalty_scales: list[float],
+    term_groups: list[list[int]],
+    theta: list[float | None],
+    df: list[float | None],
+    df_tolerances: list[float],
+    strata: list[int] | None = None,
+    weights: list[float] | None = None,
+    offset: list[float] | None = None,
+    initial_beta: list[float] | None = None,
+    max_iter: int | None = None,
+    eps: float | None = None,
+    toler: float | None = None,
+    method: str | None = None,
+    entry_times: list[float] | None = None,
+    nocenter: list[float] | None = None,
+    outer_max_iter: int | None = None,
+) -> tuple[CoxPHFit, CoxPenaltyDiagnostics, CoxRidgeSelection]: ...
 def coxph_detail(
     time: list[float],
     status: list[int],

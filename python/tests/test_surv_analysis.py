@@ -1346,7 +1346,7 @@ def test_ridge_public_apis_and_validation():
         n_vars=1,
         time=[1.0, 1.0, 2.0],
         status=[1, 0, 0],
-        penalty=survival.RidgePenalty(0.0, False),
+        penalty=survival.RidgePenalty(1.0, False),
         weights=None,
     )
 
@@ -1360,7 +1360,13 @@ def test_ridge_public_apis_and_validation():
     assert fit.scale_factors is None
     assert best_theta in [0.01, 0.1, 1.0]
     assert len(cv_scores) == 3
-    assert tied_fit.coefficients == pytest.approx([-1.5])
+    # R survival 3.8.11: Surv(time, status) ~ ridge(x, theta=1, scale=FALSE).
+    # Without the positive penalty this example has a separated likelihood.
+    assert tied_fit.coefficients == pytest.approx([-0.679158490823703])
+    assert tied_fit.std_err == pytest.approx([0.726038052937759])
+    assert tied_fit.df == pytest.approx(0.472868745686348)
+    risk = exp(2 * tied_fit.coefficients[0])
+    assert -4 * risk / (1 + 2 * risk) == pytest.approx(tied_fit.coefficients[0])
 
     with pytest.raises(ValueError, match="x length must equal n_obs \\* n_vars"):
         survival.ridge_fit([1.0], 2, 1, [1.0, 2.0], [1, 1], penalty, None)
