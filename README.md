@@ -609,6 +609,21 @@ print(f"Degrees of freedom: {result.degrees_of_freedom}")
 print(f"Variance matrix: {result.variance}")
 ```
 
+### Publication Bias Tests
+
+`survival.validation.publication_bias_tests(effects, std_errors)` returns Egger
+intercept, standard error, statistic, and two-sided Student-t probability, along
+with Begg and trim-and-fill results. The Egger calculation regresses standardized
+effects on precision with an intercept and uses `n - 2` degrees of freedom.
+Changing units for both effects and standard errors preserves its inference.
+
+If precision has insufficient variation to identify the two-parameter
+regression, or standardized effects cannot be represented as finite values,
+the four Egger fields are `NaN`; other results remain available. With exactly
+zero residual variance, a nonzero intercept has an infinite statistic and zero
+probability. A zero intercept and zero standard error produce `NaN` for the
+statistic and probability.
+
 ### Built-in Datasets
 
 The library includes 33 classic survival analysis datasets:
