@@ -15,7 +15,7 @@ use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
 
 mod initial;
-use initial::{SurvregRescaling, initialize_survreg};
+use initial::{SurvregRescaling, initialize_survreg, is_mean_only};
 
 type PredictionRows = (Vec<f64>, Option<Vec<Vec<f64>>>);
 
@@ -1020,13 +1020,22 @@ pub fn survreg(
     }
     let estimated_scale_count = if fixed_scale.is_some() { 0 } else { nstrat };
     let expected_initial_len = nvar + estimated_scale_count;
+    let initialize_scales = estimated_scale_count > 0
+        && initial_beta
+            .as_ref()
+            .is_some_and(|values| values.len() == nvar);
     if let Some(values) = initial_beta.as_ref()
         && values.len() != expected_initial_len
+        && !initialize_scales
     {
+        let expected = if estimated_scale_count > 0 {
+            format!("{nvar} location coefficients or {expected_initial_len} full parameters")
+        } else {
+            expected_initial_len.to_string()
+        };
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "initial_beta has {} values but model expects {}",
-            values.len(),
-            expected_initial_len
+            "initial_beta has {} values but model expects {expected}",
+            values.len()
         )));
     }
     if let Some(values) = initial_beta.as_ref() {
@@ -1066,6 +1075,11 @@ pub fn survreg(
     };
     let weights_arr = Array1::from_vec(weights_vec);
     let offsets_arr = Array1::from_vec(offsets_vec.clone());
+    if initialize_scales && is_mean_only(&cov_array, &weights_arr) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "an intercept-only model requires a full initial vector including log-scale parameters",
+        ));
+    }
     let distribution_type = config.distribution;
     let distribution_name = requested_distribution_name(distribution, distribution_type);
     let rescaling = if initialize {
@@ -1090,8 +1104,9 @@ pub fn survreg(
         distribution_parameter,
         fixed_scale,
     };
-    if initialize {
-        input.beta = initialize_survreg(&input)
+    if initialize || initialize_scales {
+        let initial_location = (!initialize).then_some(input.beta.as_slice());
+        input.beta = initialize_survreg(&input, initial_location)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     }
     let mut result = compute_survreg(input)
@@ -1386,6 +1401,97 @@ struct ComputeSurvregInput<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_initial_values_use_fitted_null_scales_without_solving_locations() {
+        // For these exact Gaussian observations, the intercept-only MLE has
+        // mean 13/4 and variance 59/16. A zero location column would make the
+        // unused scalar GLIM update undefined (0/0).
+        let fit = |initial| {
+            survreg(
+                vec![1.0, 2.0, 4.0, 6.0],
+                vec![1.0; 4],
+                vec![vec![0.0]; 4],
+                None,
+                None,
+                Some(initial),
+                None,
+                Some("gaussian"),
+                Some(0),
+                Some(1e-12),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let partial = fit(vec![0.0]);
+        assert_eq!(partial.coefficients[0], 0.0);
+        assert!((partial.coefficients[1] - 0.5 * (59.0_f64 / 16.0).ln()).abs() < 1e-10);
+        let completed = fit(partial.coefficients.clone());
+        assert_eq!(partial.coefficients, completed.coefficients);
+        assert_eq!(partial.variance_matrix, completed.variance_matrix);
+        assert_eq!(partial.log_likelihood, completed.log_likelihood);
+        assert_eq!(partial.score_vector, completed.score_vector);
+    }
+
+    #[test]
+    fn partial_initial_values_require_full_vector_for_mean_only_estimated_scales() {
+        let fit = |initial, scale| {
+            survreg(
+                vec![1.0, 2.0, 4.0, 6.0],
+                vec![1.0; 4],
+                vec![vec![1.0]; 4],
+                None,
+                None,
+                Some(initial),
+                None,
+                Some("gaussian"),
+                Some(0),
+                None,
+                None,
+                None,
+                scale,
+                None,
+            )
+        };
+        let error = fit(vec![1.2], None).unwrap_err();
+        assert!(error.to_string().contains("full initial vector"));
+        assert_eq!(
+            fit(vec![1.2, 0.0], None).unwrap().coefficients,
+            vec![1.2, 0.0]
+        );
+        assert_eq!(fit(vec![1.2], Some(1.0)).unwrap().coefficients, vec![1.2]);
+    }
+
+    #[test]
+    fn empty_initial_locations_are_valid_only_for_a_zero_column_design() {
+        let fit = |row: Vec<f64>| {
+            survreg(
+                vec![1.0, 2.0, 4.0, 6.0],
+                vec![1.0; 4],
+                vec![row; 4],
+                None,
+                None,
+                Some(vec![]),
+                None,
+                Some("gaussian"),
+                Some(0),
+                Some(1e-12),
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let empty = fit(vec![]).unwrap();
+        assert_eq!(empty.n_covariates, 0);
+        assert_eq!(empty.coefficients.len(), 1);
+        assert!((empty.scales[0] - (59.0_f64 / 16.0).sqrt()).abs() < 1e-10);
+        assert_eq!(empty.linear_predictors, vec![0.0; 4]);
+        assert!(fit(vec![0.0]).is_err());
+    }
 
     #[test]
     fn test_survreg_config_default() {
