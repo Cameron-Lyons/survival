@@ -171,6 +171,14 @@ class _CovariateTerm:
     categorical_wrapper: str | None = None
     transform: str | None = None
     arithmetic: str | None = None
+    ridge: _RidgeTerm | None = None
+
+
+@dataclass(frozen=True)
+class _RidgeTerm:
+    arguments: tuple[_CovariateTerm, ...]
+    theta: float
+    scale: bool
 
 
 @dataclass(frozen=True)
@@ -277,8 +285,33 @@ class _FormulaFit:
     score_values: list[float] | None = None
     conditional_logistic: bool = False
     n_observations: int | None = None
+    penalty_diagnostics: Any | None = None
+    requested_method: str | None = None
+    initial_penalty: float = 0.0
+    empty_penalized: bool = False
 
     def __getattr__(self, name: str) -> Any:
+        if self.empty_penalized:
+            if name in {"iterations", "iter", "convergence_flag"}:
+                return 0
+            if name == "method":
+                return self.requested_method
+            if name == "means":
+                rows = self.fit.covariates
+                return [math.fsum(column) / len(rows) for column in zip(*rows, strict=True)]
+        if self.penalty_diagnostics is not None:
+            if name == "log_likelihood":
+                values = list(self.fit.log_likelihood)
+                values[0] -= self.initial_penalty
+                return values
+            if name == "df":
+                return self.penalty_diagnostics.term_df
+            if name in {"variance2", "var2"}:
+                return self.penalty_diagnostics.variance2
+            if name == "penalty":
+                return [self.penalty_diagnostics.penalty] * 2
+            if name == "iter":
+                return [1, self.fit.iterations]
         if self.conditional_logistic and name in {
             "basehaz",
             "basehaz_with_strata",
@@ -286,7 +319,10 @@ class _FormulaFit:
             "survival_curve_with_strata",
         }:
             raise ValueError("predicted survival curves are not defined for a clogit model")
-        if self.conditional_logistic and getattr(self.fit, "method", None) == "exact":
+        if (self.conditional_logistic and getattr(self.fit, "method", None) == "exact") or (
+            (self.penalty_diagnostics is not None or self.empty_penalized)
+            and self.requested_method == "exact"
+        ):
             unavailable = {
                 "score_residuals": "score",
                 "schoenfeld_residuals": "schoenfeld",
@@ -2503,6 +2539,11 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
 
 
 def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
+    if term.ridge is not None:
+        columns: list[str] = []
+        for argument in term.ridge.arguments:
+            _append_unique(columns, _covariate_term_columns(argument))
+        return columns
     if term.arithmetic is not None:
         return _arithmetic_expression_columns(term.arithmetic)
     return [term.column]
@@ -2795,6 +2836,8 @@ def _interaction_from_factors(factors: list[_CovariateTerm]) -> _CovariateSpec:
 
 def _interaction_from_terms(terms: tuple[_CovariateSpec, ...]) -> _CovariateSpec:
     factors = [factor for term in terms for factor in _covariate_factors(term)]
+    if len(factors) > 1 and any(factor.ridge is not None for factor in factors):
+        raise NotImplementedError("interactions involving ridge() are not yet supported")
     return _interaction_from_factors(factors)
 
 
@@ -2804,9 +2847,196 @@ def _dot_covariate_terms(dot_terms: Sequence[str] | None) -> list[_CovariateSpec
     return [_CovariateTerm(column) for column in dot_terms]
 
 
+def _ridge_number_label(value: float) -> str:
+    mantissa, exponent = format(value, ".14e").split("e")
+    scientific = f"{mantissa.rstrip('0').rstrip('.')}e{exponent}"
+    fixed = format(value, f".{max(0, 14 - int(exponent))}f")
+    if "." in fixed:
+        fixed = fixed.rstrip("0").rstrip(".")
+    return scientific if len(scientific) < len(fixed) else fixed
+
+
+def _ridge_column_label(column: str) -> str:
+    syntactic = (
+        bool(column)
+        and (column[0].isalpha() or (column[0] == "." and not column[1:2].isdigit()))
+        and all(char.isalnum() or char in {".", "_"} for char in column)
+        and column not in _R_RESERVED_NAMES
+    )
+    return column if syntactic else f"`{column}`"
+
+
+def _ridge_arithmetic_label(expression: str, *, display: bool = True) -> str:
+    expression = expression.strip()
+    if _strip_outer_formula_parentheses(expression) != expression:
+        return f"({_ridge_arithmetic_label(expression[1:-1], display=display)})"
+    split = _find_top_level_arithmetic_operator(expression, {"+", "-"})
+    if split is None:
+        split = _find_top_level_arithmetic_operator(expression, {"*", "/"})
+    if split is not None:
+        left, operator, right = split
+        separator = "/" if operator == "/" else f" {operator} "
+        return (
+            f"{_ridge_arithmetic_label(left, display=display)}{separator}"
+            f"{_ridge_arithmetic_label(right, display=display)}"
+        )
+    if expression.startswith(("+", "-")):
+        return expression[0] + _ridge_arithmetic_label(expression[1:], display=display)
+    split = _find_top_level_power_operator(expression)
+    if split is not None:
+        left, _operator, right = split
+        return (
+            f"{_ridge_arithmetic_label(left, display=display)}^"
+            f"{_ridge_arithmetic_label(right, display=display)}"
+        )
+    literal = _arithmetic_literal(expression)
+    if literal is not None:
+        return _ridge_number_label(literal) if display else repr(literal)
+    return _ridge_column_label(_formula_name(expression)[0])
+
+
+def _ridge_argument_name(term: _CovariateTerm) -> str:
+    value = (
+        _ridge_arithmetic_label(term.arithmetic)
+        if term.arithmetic is not None
+        else _ridge_column_label(term.column)
+    )
+    return f"{term.transform}({value})" if term.transform is not None else value
+
+
+def _parse_ridge_term(term: str) -> _CovariateTerm:
+    arguments: list[_CovariateTerm] = []
+    options: dict[str, float | bool] = {}
+    labels: list[str] = []
+    for item in _split_top_level(term[6:-1], ","):
+        parts = _split_top_level(item, "=")
+        if len(parts) == 1:
+            argument = _parse_covariate_atom(item)
+            if argument.categorical or argument.ridge is not None or argument.transform == "tt":
+                raise ValueError("ridge() requires numeric columns or numeric transforms")
+            if argument.arithmetic is not None:
+                expression = _ridge_arithmetic_label(argument.arithmetic, display=False)
+                argument = replace(argument, column=expression, arithmetic=expression)
+            arguments.append(argument)
+            labels.append(_ridge_argument_name(argument))
+            continue
+        if len(parts) != 2 or parts[0] not in {"theta", "scale", "df", "eps"}:
+            raise ValueError(f"unsupported ridge() argument: {item}")
+        name, value = parts
+        if name in options:
+            raise ValueError(f"ridge() received duplicate {name}")
+        if name == "scale":
+            if value not in {"TRUE", "FALSE", "True", "False", "T", "F"}:
+                raise ValueError("ridge() scale must be TRUE or FALSE")
+            options[name] = value in {"TRUE", "True", "T"}
+            label = "TRUE" if options[name] else "FALSE"
+        else:
+            try:
+                number = float(value)
+            except ValueError as exc:
+                raise ValueError(f"ridge() {name} must be a finite numeric literal") from exc
+            if not math.isfinite(number) or number < 0.0 or (name == "eps" and number == 0.0):
+                raise ValueError(f"ridge() {name} must be finite and nonnegative (eps positive)")
+            options[name] = number
+            label = _ridge_number_label(number)
+        labels.append(f"{name} = {label}")
+    if not arguments:
+        raise ValueError("ridge() requires at least one numeric covariate")
+    if "theta" in options and "df" in options:
+        raise ValueError("only one of df or theta can be specified for ridge()")
+    if "theta" not in options:
+        raise NotImplementedError(
+            "ridge() currently requires explicit theta; automatic df selection is not yet supported"
+        )
+    return _CovariateTerm(
+        f"ridge({', '.join(labels)})",
+        ridge=_RidgeTerm(
+            tuple(arguments), float(options["theta"]), bool(options.get("scale", True))
+        ),
+    )
+
+
+def _ridge_numeric_columns(data: Any, term: _CovariateTerm, n: int) -> list[list[float]]:
+    if term.ridge is None:
+        raise AssertionError("ridge metadata is required")
+    columns: list[list[float]] = []
+    for argument in term.ridge.arguments:
+        try:
+            values = _numeric_term_values(_term_raw_values(data, argument, n), argument)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ridge() requires numeric covariates") from exc
+        columns.append(values)
+    return columns
+
+
+def _freeze_ridge_penalties(formula: str, data: Any) -> dict[_CovariateTerm, tuple[float, ...]]:
+    """Evaluate R's ridge scaling before model-frame subset and NA removal."""
+    response_spec = _formula_response_spec(formula)
+    terms = _split_terms(formula.partition("~")[2], _dot_terms(data, list(response_spec.columns)))
+    penalties: dict[_CovariateTerm, tuple[float, ...]] = {}
+    for term in terms.covariates:
+        if isinstance(term, _InteractionTerm) or term.ridge is None:
+            continue
+        ridge = term.ridge
+        diagonal: list[float] = []
+        for argument in ridge.arguments:
+            if not ridge.scale:
+                diagonal.append(ridge.theta)
+                continue
+            columns = [_column(data, name) for name in _covariate_term_columns(argument)]
+            n = (
+                len(columns[0])
+                if columns
+                else len(_formula_response_values(data, response_spec)[0])
+            )
+            if any(len(column) != n for column in columns):
+                raise ValueError("ridge() columns must have matching lengths")
+            keep = [
+                i for i in range(n) if not any(_is_missing_value(column[i]) for column in columns)
+            ]
+            clean = _subset_data(data, keep) if len(keep) != n else data
+            values = _numeric_term_values(_term_raw_values(clean, argument, len(keep)), argument)
+            values = [value for value in values if not _is_missing_value(value)]
+            if len(values) < 2 or any(not math.isfinite(value) for value in values):
+                raise ValueError("scaled ridge() requires at least two finite values per covariate")
+            mean = math.fsum(values) / len(values)
+            variance = math.fsum((value - mean) ** 2 for value in values) / (len(values) - 1)
+            diagonal.append(ridge.theta * variance)
+        penalties[term] = tuple(diagonal)
+    return penalties
+
+
+def _ridge_design_penalty(
+    design: _FormulaDesign, frozen: Mapping[_CovariateTerm, tuple[float, ...]]
+) -> tuple[list[float], list[list[int]], tuple[str, ...]]:
+    penalty: list[float] = []
+    groups: list[list[int]] = []
+    names: list[str] = []
+    for spec in design.covariates:
+        matrix_names = _design_term_output_names(spec)
+        groups.append(list(range(len(penalty), len(penalty) + len(matrix_names))))
+        if isinstance(spec, _NumericDesignTerm) and spec.term.ridge is not None:
+            penalty.extend(frozen[spec.term])
+            names.extend(f"ridge({_ridge_argument_name(arg)})" for arg in spec.term.ridge.arguments)
+        else:
+            penalty.extend([0.0] * len(matrix_names))
+            names.extend(matrix_names)
+    return penalty, groups, tuple(names)
+
+
+def _reject_formula_penalties(terms: _FormulaTerms, function: str) -> None:
+    if any(
+        factor.ridge is not None for term in terms.covariates for factor in _covariate_factors(term)
+    ):
+        raise NotImplementedError(f"ridge() penalties are not yet supported by {function}")
+
+
 def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if not term:
         raise ValueError("formula interaction terms must not be empty")
+
+    if term.startswith("ridge(") and term.endswith(")"):
+        return _parse_ridge_term(term)
 
     factor_items = _factor_column_items(term)
     if factor_items is not None:
@@ -2869,7 +3099,7 @@ def _parse_offset_term(expression: str) -> _CovariateTerm:
         _arithmetic_expression_columns(expression)
         return _CovariateTerm(expression, arithmetic=expression)
     offset_term = _parse_covariate_atom(expression)
-    if offset_term.categorical:
+    if offset_term.categorical or offset_term.ridge is not None:
         raise ValueError("offset() requires a numeric column or transform")
     return offset_term
 
@@ -3365,6 +3595,8 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
             return [tuple(values[idx] for values in factor_values) for idx in range(n)]
         return [math.prod(values[idx] for values in numeric_values) for idx in range(n)]
 
+    if term.ridge is not None:
+        return list(zip(*_ridge_numeric_columns(data, term, n), strict=True))
     values = _term_raw_values(data, term, n)
     if term.transform is None:
         return values
@@ -3385,6 +3617,8 @@ def _term_columns(
             )
         return interaction_columns
 
+    if term.ridge is not None:
+        return _ridge_numeric_columns(data, term, n)
     values = _term_raw_values(data, term, n)
     if not term.categorical:
         if term.transform is not None:
@@ -3419,6 +3653,9 @@ def _fit_single_design_term(
     term: _CovariateTerm,
     n: int,
 ) -> _SingleDesignTerm:
+    if term.ridge is not None:
+        _ridge_numeric_columns(data, term, n)
+        return _NumericDesignTerm(term)
     values = _term_raw_values(data, term, n)
     if not term.categorical:
         if term.transform is not None:
@@ -3506,7 +3743,10 @@ def _fit_formula_design(
     n: int,
     *,
     include_intercept: bool = False,
+    allow_ridge: bool = False,
 ) -> _FormulaDesign:
+    if not allow_ridge:
+        _reject_formula_penalties(terms, "this model")
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
     factor_order = _formula_factor_order(terms.covariates)
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
@@ -3564,6 +3804,8 @@ def _single_design_columns(
     n: int,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
 ) -> list[list[float]]:
+    if spec.term.ridge is not None:
+        return _ridge_numeric_columns(data, spec.term, n)
     if (
         isinstance(spec, _NumericDesignTerm)
         and spec.term.transform == "tt"
@@ -3645,6 +3887,16 @@ def _design_term_name(spec: _DesignTerm) -> str:
 
 def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
     term = spec.term
+    if term.ridge is not None:
+        if len(term.ridge.arguments) == 1:
+            return [term.column]
+        arguments = term.ridge.arguments
+        if all(argument.transform is not None for argument in arguments):
+            return [f"{term.column}{idx + 1}" for idx in range(len(arguments))]
+        return [
+            f"{term.column}{argument.column if argument.transform is None else ''}"
+            for argument in arguments
+        ]
     if isinstance(spec, _CategoricalDesignTerm):
         prefix = _covariate_term_name(term)
         levels = spec.levels if spec.full else spec.levels[1:]
@@ -3699,6 +3951,11 @@ def _formula_model_frame(
     _append_unique(columns, list(extra_columns))
     for column in columns:
         frame[column] = _column(data, column)
+    for spec in design.covariates:
+        if isinstance(spec, _NumericDesignTerm) and spec.term.ridge is not None:
+            frame[spec.term.column] = [
+                list(row) for row in _term_values(data, spec.term, len(response))
+            ]
     for name, values in (
         ("(weights)", weights),
         ("(offset)", offsets if offsets is not None else offset),
@@ -3857,6 +4114,7 @@ def _combined_formula_groups(
     covariate_terms: list[_CovariateSpec],
     n: int,
 ) -> list[Any]:
+    _reject_formula_penalties(_FormulaTerms(covariate_terms, [], [], []), "formula grouping")
     columns = [
         *[_column(data, term) for term in strata_terms],
         *[_term_values(data, term, n) for term in covariate_terms],
@@ -6157,6 +6415,7 @@ def _pyears_formula_inputs(
     data, aligned = _apply_formula_na_action(formula, data, na_action, weights=aligned_weights)
     aligned_weights = aligned["weights"]
     response, terms = _parse_formula(formula, data)
+    _reject_formula_penalties(terms, "pyears")
     if any(isinstance(term, _InteractionTerm) for term in terms.covariates):
         raise ValueError("pyears formula does not support interaction terms")
     group, group_levels = _pyears_formula_group_and_levels(data, terms, len(response))
@@ -6565,6 +6824,7 @@ def _finegray_model_columns(
     terms: _FormulaTerms,
     n: int,
 ) -> list[tuple[str, list[Any]]]:
+    _reject_formula_penalties(terms, "finegray")
     columns: list[tuple[str, list[Any]]] = []
     seen: set[str] = set()
 
@@ -7106,6 +7366,7 @@ def _survobrien_formula_terms(
     terms: _FormulaTerms,
     n: int,
 ) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
+    _reject_formula_penalties(terms, "survobrien")
     keepers: list[tuple[str, list[Any]]] = []
     continuous: list[tuple[str, list[float]]] = []
     for term in terms.covariates:
@@ -7651,6 +7912,7 @@ def _survcondense_model_columns(
     terms: _FormulaTerms,
     n: int,
 ) -> list[tuple[str, list[Any]]]:
+    _reject_formula_penalties(terms, "survcondense")
     columns: list[tuple[str, list[Any]]] = []
     model_terms: Sequence[_FormulaModelTerm]
     model_terms = terms.model_terms or [_ModelCovariateTerm(term) for term in terms.covariates]
@@ -12111,16 +12373,39 @@ def _cox_flat_basehaz_with_training_times(
     fit: Any,
     centered: bool,
 ) -> CoxBaseHazardResult:
+    penalty = getattr(fit, "penalty_diagnostics", None)
+    native_centered = centered if penalty is None else False
+    penalty_scale = 1.0
+    if penalty is not None:
+        beta = _cox_beta(fit)
+        offsets = _cox_prediction_offset_vector(fit, len(fit.event_times))
+        weights = _model_residual_weights(fit, len(offsets))
+        total_weight = sum(weights)
+        offset_center = (
+            sum(value * weight for value, weight in zip(offsets, weights, strict=True))
+            / total_weight
+            if total_weight > 0.0
+            else 0.0
+        )
+        covariate_center = (
+            sum(
+                mean * coefficient
+                for mean, coefficient in zip(_cox_reference_means(fit, "sample"), beta, strict=True)
+            )
+            if centered
+            else 0.0
+        )
+        penalty_scale = _safe_exp(covariate_center + offset_center)
     with_strata = getattr(fit, "basehaz_with_strata", None)
     if with_strata is None:
-        base_times, base_hazards = fit.basehaz(centered)
+        base_times, base_hazards = fit.basehaz(native_centered)
         event_times = getattr(fit, "event_times", None)
         training_times = (
             sorted({float(value) for value in event_times})
             if event_times is not None
             else [float(value) for value in base_times]
         )
-        hazards = [float(value) for value in base_hazards]
+        hazards = [float(value) * penalty_scale for value in base_hazards]
         times = [float(value) for value in base_times]
         return CoxBaseHazardResult(
             time=training_times,
@@ -12128,7 +12413,9 @@ def _cox_flat_basehaz_with_training_times(
             centered=centered,
         )
 
-    base_times, base_hazards, base_strata = with_strata(centered)
+    base_times, base_hazards, base_strata = with_strata(native_centered)
+    if penalty is not None:
+        base_hazards = [float(value) * penalty_scale for value in base_hazards]
     event_times = getattr(fit, "event_times", None)
     if event_times is None:
         strata_values = [int(value) for value in base_strata]
@@ -13918,6 +14205,8 @@ def cox_zph(
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected cox_zph argument(s): {unexpected}")
+    if _cox_penalty_diagnostics(fit) is not None:
+        raise NotImplementedError("cox_zph is not yet supported for penalized Cox models")
     if _is_clogit_fit(fit) and getattr(_unwrap_formula_fit(fit), "method", None) == "exact":
         raise ValueError("schoenfeld residuals are not available for the exact method")
     if _is_survreg_fit(fit) or not hasattr(fit, "schoenfeld_residuals"):
@@ -14614,6 +14903,8 @@ def _cox_alias_mask(fit: Any) -> list[bool]:
 
     model = _unwrap_formula_fit(fit)
     width = len(_cox_beta(model))
+    if isinstance(fit, _FormulaFit) and fit.empty_penalized:
+        return [True] * width
     aliases = [False] * width
     if width == 0 or int(getattr(model, "iterations", 0)) <= 0:
         return aliases
@@ -14669,7 +14960,17 @@ def _cox_full_loglik(fit: Any) -> float:
     return _cox_loglik_values(fit)[-1]
 
 
-def _cox_degrees_of_freedom(fit: Any) -> int:
+def _cox_penalty_diagnostics(fit: Any) -> Any | None:
+    diagnostics = getattr(fit, "penalty_diagnostics", None)
+    if diagnostics is None:
+        diagnostics = getattr(_unwrap_formula_fit(fit), "penalty_diagnostics", None)
+    return diagnostics
+
+
+def _cox_degrees_of_freedom(fit: Any) -> int | float:
+    diagnostics = _cox_penalty_diagnostics(fit)
+    if diagnostics is not None:
+        return math.fsum(float(value) for value in diagnostics.term_df)
     if _cox_event_count(fit) == 0:
         return 0
     return sum(not aliased for aliased in _cox_alias_mask(fit))
@@ -14687,14 +14988,14 @@ def _fallback_coef_names(width: int) -> list[str]:
 
 
 def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
+    coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
+    if coefficient_names is not None and len(coefficient_names) == width:
+        return list(coefficient_names)
     design = _formula_design_for_fit(fit)
     if design is not None:
         names = _formula_design_output_names(design)
         if len(names) == width:
             return names
-    coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
-    if coefficient_names is not None and len(coefficient_names) == width:
-        return list(coefficient_names)
     return _fallback_coef_names(width)
 
 
@@ -14798,13 +15099,13 @@ def nobs(fit: Any) -> int:
     return _model_row_count(fit)
 
 
-def degrees_freedom(fit: Any) -> int:
-    """Return the number of fitted parameters counted by model log likelihoods."""
+def degrees_freedom(fit: Any) -> int | float:
+    """Return parameter count or penalized effective degrees of freedom."""
 
     _require_model_fit(fit, "degrees_freedom")
     if _is_survreg_fit(fit):
         return len(list(fit.coefficients))
-    return _cox_degrees_of_freedom(_unwrap_formula_fit(fit))
+    return _cox_degrees_of_freedom(fit)
 
 
 def df_residual(fit: Any) -> int:
@@ -14813,7 +15114,7 @@ def df_residual(fit: Any) -> int:
     _require_model_fit(fit, "df_residual")
     if not _is_survreg_fit(fit):
         raise TypeError("df_residual is only defined for fitted survreg models")
-    return nobs(fit) - degrees_freedom(fit)
+    return nobs(fit) - len(list(fit.coefficients))
 
 
 def _finite_numeric_option(value: Any, name: str) -> float:
@@ -15125,7 +15426,7 @@ def model_frame(fit: Any) -> dict[str, list[Any]]:
         if text_name in {"group", "(id)", "(cluster)", "(strata)"}:
             columns[text_name] = _materialize_labels(values, text_name)
             continue
-        materialized = _materialize_1d(values, text_name)
+        materialized = _coerce_array_like(values, text_name)
         if materialized and isinstance(materialized[0], list | tuple):
             continue
         columns[text_name] = list(materialized)
@@ -15361,6 +15662,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
 
     _require_model_fit(fit, "model_summary")
     is_survreg = _is_survreg_fit(fit)
+    penalty_diagnostics = None if is_survreg else _cox_penalty_diagnostics(fit)
     robust = bool(getattr(fit, "robust", False))
     if is_survreg:
         location_width = len(_location_beta(fit))
@@ -15404,11 +15706,28 @@ def model_summary(fit: Any) -> dict[str, Any]:
                 result["distribution_parameters"] = parameter_values
     else:
         model = _unwrap_formula_fit(fit)
-        logliks = _cox_loglik_values(model)
+        logliks = _cox_loglik_values(fit)
         result["null_loglik"] = logliks[0]
-        result["score_test"] = float(model.score_test)
         result["n_event"] = sum(1 for event in model.status if int(event) == 1)
         result["method"] = str(getattr(model, "method", "breslow"))
+        if penalty_diagnostics is None:
+            result["score_test"] = float(model.score_test)
+        else:
+            result["method"] = str(getattr(fit, "requested_method", None) or result["method"])
+            variance2 = [[float(value) for value in row] for row in penalty_diagnostics.variance2]
+            if len(variance2) != len(coefficients) or any(
+                len(row) != len(coefficients) for row in variance2
+            ):
+                raise ValueError("penalized variance matrix does not match coefficient width")
+            for idx, row in enumerate(result["coefficients"]):
+                row["se2"] = math.sqrt(max(variance2[idx][idx], 0.0))
+                row["chisq"] = float(row["statistic"]) ** 2
+                row["df"] = 1.0
+            result["penalized"] = True
+            result["term_df"] = [float(value) for value in penalty_diagnostics.term_df]
+            result["variance2"] = variance2
+            result["penalty"] = [float(penalty_diagnostics.penalty)] * 2
+            result["iter"] = [1, int(model.iterations)]
     return result
 
 
@@ -16152,6 +16471,8 @@ def _cox_refit_loglik_and_df(
 
 
 def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
+    if _cox_penalty_diagnostics(fit) is not None:
+        raise NotImplementedError("anova for penalized Cox models is not yet supported")
     model = _require_coxph_fit(fit)
     beta = _cox_beta(model)
     n_columns = len(beta)
@@ -16178,6 +16499,8 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
 
 
 def _anova_multiple_coxph(fits: tuple[Any, ...], test_name: str, with_tests: bool) -> Any:
+    if any(_cox_penalty_diagnostics(fit) is not None for fit in fits):
+        raise NotImplementedError("anova for penalized Cox models is not yet supported")
     models = [_require_coxph_fit(fit) for fit in fits]
     logliks = [_cox_full_loglik(model) for model in models]
     dfs = [_cox_degrees_of_freedom(model) for model in models]
@@ -16411,6 +16734,13 @@ def _cox_reference_means_for_rows(
     newdata: Any | None,
 ) -> list[list[float]]:
     beta = _cox_beta(fit)
+    design = _formula_design_for_fit(fit)
+    if (
+        reference == "strata"
+        and getattr(fit, "penalty_diagnostics", None) is not None
+        and (design is None or not design.strata)
+    ):
+        reference = "sample"
     if reference != "strata":
         means = _cox_reference_means(fit, reference)
         return [means for _row in rows]
@@ -17153,6 +17483,13 @@ def _cox_reference_centers(
         return [0.0] * n
     beta = _cox_beta(fit)
     offset_center = _cox_training_offset_center(fit, beta)
+    design = _formula_design_for_fit(fit)
+    if (
+        reference == "strata"
+        and getattr(fit, "penalty_diagnostics", None) is not None
+        and (design is None or not design.strata)
+    ):
+        reference = "sample"
     if reference != "strata":
         return [_cox_reference_center(fit, reference)] * n
 
@@ -17417,6 +17754,7 @@ def _cox_expected_events_with_se(
     offsets: list[float] | None,
     newdata: Any | None,
 ) -> PredictResult:
+    is_training = rows is None
     model = _unwrap_formula_fit(fit)
     beta = _cox_beta(model)
     nvar = len(beta)
@@ -17496,6 +17834,8 @@ def _cox_expected_events_with_se(
         risks,
         variance,
     )
+    if is_training and getattr(fit, "penalty_diagnostics", None) is not None:
+        predictions = [float(value) for value in fit.expected_events()]
     return PredictResult(predictions, se)
 
 
@@ -18025,6 +18365,7 @@ def _concordance_score_columns(
     terms: _FormulaTerms,
     n: int,
 ) -> tuple[list[list[float]], list[str]]:
+    _reject_formula_penalties(terms, "concordance formula input")
     if terms.offsets:
         raise ValueError("Offset terms not allowed")
     if not terms.covariates:
@@ -19122,7 +19463,13 @@ def predict(
         if include_se:
             if linear_se is None:
                 raise AssertionError("se_fit risk predictions require linear SEs")
-            risk_se = [float(se) * risk for se, risk in zip(linear_se, risks, strict=True)]
+            if getattr(fit, "penalty_diagnostics", None) is not None:
+                # Preserve predict.coxph's reported risk-scale SE convention.
+                risk_se = [
+                    float(se) * math.sqrt(risk) for se, risk in zip(linear_se, risks, strict=True)
+                ]
+            else:
+                risk_se = [float(se) * risk for se, risk in zip(linear_se, risks, strict=True)]
             return PredictResult(
                 _collapse_prediction_result(risks, collapse),
                 _collapse_prediction_se(risk_se, collapse),
@@ -19331,6 +19678,11 @@ def coxph_detail(
         raise TypeError("coxph_detail requires a fitted Cox model")
     if not _is_coxph_fit(fit):
         raise TypeError("coxph_detail requires a fitted Cox model")
+    if (
+        _cox_penalty_diagnostics(fit) is not None
+        and getattr(fit, "requested_method", None) == "exact"
+    ):
+        raise ValueError("detailed output is not available for the exact method")
     rorder_name = _cox_detail_rorder(rorder)
     model = _unwrap_formula_fit(fit)
     method = _cox_detail_method(model)
@@ -19895,9 +20247,13 @@ def coxph(
     time_transform_observed_n: int | None = None
     formula_x = False
     istate_column: str | None = None
+    frozen_penalties: dict[_CovariateTerm, tuple[float, ...]] = {}
+    penalty_diagonal: list[float] = []
+    penalty_groups: list[list[int]] = []
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
+        frozen_penalties = _freeze_ridge_penalties(response, data)
         weights = _column_or_values(data, weights, "weights") if weights is not None else None
         id_arg = _column_or_values(data, id_arg, "id") if id_arg is not None else None
         istate_column = istate if isinstance(istate, str) else None
@@ -19962,7 +20318,13 @@ def coxph(
                 raise ValueError("use only one of formula cluster(...) or cluster")
             cluster = _combined_columns(data, terms.clusters, len(response))
             formula_cluster_columns = tuple(terms.clusters)
-        formula_design = _fit_formula_design(data, response_spec, terms, len(response))
+        formula_design = _fit_formula_design(
+            data, response_spec, terms, len(response), allow_ridge=True
+        )
+        if frozen_penalties:
+            penalty_diagonal, penalty_groups, direct_coefficient_names = _ridge_design_penalty(
+                formula_design, frozen_penalties
+            )
         x = _design_rows_from_spec(data, formula_design, len(response))
         formula_x_matrix = [list(row) for row in x] if formula_x else None
         formula_model_data = data
@@ -20094,25 +20456,40 @@ def coxph(
             fit_times = _survdiff_timefix_values(fit_times, True)
         else:
             entry_times, fit_times = _timefix_vectors(entry_times, fit_times)
-    fit = _core.coxph_fit(
-        fit_times,
-        list(response.event),
-        rows,
-        strata=fit_strata,
-        weights=fit_weights,
-        offset=fit_offset,
-        initial_beta=(
-            _float_vector(initial_beta if initial_beta is not None else init, "init")
-            if init is not None or initial_beta is not None
-            else None
-        ),
-        max_iter=max_iter,
-        eps=eps,
-        toler=toler,
-        method=method_name,
-        entry_times=entry_times,
-        nocenter=nocenter_values,
+    penalized = bool(frozen_penalties) and any(response.event)
+    empty_penalized = bool(frozen_penalties) and not penalized
+    if empty_penalized:
+        direct_coefficient_names = None
+    initial_values = (
+        _float_vector(initial_beta if initial_beta is not None else init, "init")
+        if init is not None or initial_beta is not None
+        else None
     )
+    fit_options: dict[str, Any] = {
+        "strata": fit_strata,
+        "weights": fit_weights,
+        "offset": fit_offset,
+        "initial_beta": None if empty_penalized else initial_values,
+        "max_iter": 0 if empty_penalized else max_iter,
+        "eps": eps,
+        "toler": toler,
+        "method": "breslow" if empty_penalized else method_name,
+        "entry_times": entry_times,
+        "nocenter": nocenter_values,
+    }
+    if penalized:
+        fit, penalty_diagnostics = _core.coxph_penalized_fit(
+            fit_times, list(response.event), rows, penalty_diagonal, penalty_groups, **fit_options
+        )
+    else:
+        fit = _core.coxph_fit(fit_times, list(response.event), rows, **fit_options)
+        penalty_diagnostics = None
+    initial_penalty = 0.0
+    if penalized and initial_values is not None:
+        initial_penalty = 0.5 * math.fsum(
+            weight * value * value
+            for weight, value in zip(penalty_diagonal, initial_values, strict=True)
+        )
     if not singular_ok_value and any(_cox_alias_mask(fit)):
         raise ValueError(
             "coxph design matrix is singular; use singular_ok=True to allow dependent covariates"
@@ -20126,6 +20503,17 @@ def coxph(
     )
     automatically_robust = cluster is not None or has_fractional_weights or has_repeated_event_id
     use_robust_variance = automatically_robust if robust_value is None else robust_value
+    if empty_penalized:
+        use_robust_variance = False
+        cluster = None
+    if penalized and use_robust_variance:
+        warnings.warn(
+            "the robust variance is not defined for a penalized model, option ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        use_robust_variance = False
+        cluster = None
     if cluster is not None and not use_robust_variance:
         warnings.warn(
             "cluster specified with robust=FALSE, cluster ignored",
@@ -20174,6 +20562,10 @@ def coxph(
             y_response=response if formula_design is not None and keep_y else None,
             model_frame=model_frame,
             n_observations=time_transform_observed_n,
+            penalty_diagnostics=penalty_diagnostics,
+            requested_method=method_name if frozen_penalties else None,
+            initial_penalty=initial_penalty,
+            empty_penalized=empty_penalized,
         )
     return fit
 

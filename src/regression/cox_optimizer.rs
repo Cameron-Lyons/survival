@@ -158,6 +158,10 @@ pub(crate) struct CoxFit {
     beta: Vec<f64>,
     u: Vec<f64>,
     imat: Array2<f64>,
+    // Diagonal curvature in the internally scaled coefficient units.
+    penalty_diagonal: Option<Vec<f64>>,
+    objective: [f64; 2],
+    last_loglik: f64,
     loglik: [f64; 2],
     sctest: f64,
     flag: i32,
@@ -337,6 +341,9 @@ impl CoxFit {
             beta: initial_beta,
             u: vec![0.0; nvar],
             imat: Array2::zeros((nvar, nvar)),
+            penalty_diagonal: None,
+            objective: [0.0; 2],
+            last_loglik: 0.0,
             loglik: [0.0; 2],
             sctest: 0.0,
             flag: 0,
@@ -344,6 +351,24 @@ impl CoxFit {
         };
         cox.scale_center(doscale)?;
         Ok(cox)
+    }
+
+    /// Configure a validated penalty diagonal in original coefficient units.
+    /// Call before fitting; centering/scaling has already been applied by construction.
+    pub(crate) fn set_diagonal_penalty(&mut self, diagonal: &[f64]) {
+        debug_assert_eq!(diagonal.len(), self.beta.len());
+        debug_assert!(
+            diagonal
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+        );
+        self.penalty_diagonal = Some(
+            diagonal
+                .iter()
+                .zip(&self.scale)
+                .map(|(&penalty, &scale)| penalty * scale * scale)
+                .collect(),
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1159,15 +1184,25 @@ impl CoxFit {
     }
 
     fn iterate_with_mode(&mut self, beta: &[f64], mode: FitMode) -> Result<f64, CoxError> {
-        if mode == FitMode::AgexactCompatibility
+        let loglik = if mode == FitMode::AgexactCompatibility
             && self.entry_times.is_some()
             && matches!(self.method, Method::Exact)
             && self.covar.nrows() <= EXACT_COMPATIBILITY_DIRECT_THRESHOLD
         {
-            self.iterate_counting_process_exact_compatibility(beta)
+            self.iterate_counting_process_exact_compatibility(beta)?
         } else {
-            self.iterate(beta)
+            self.iterate(beta)?
+        };
+        self.last_loglik = loglik;
+        let mut penalty = 0.0;
+        if let Some(diagonal) = self.penalty_diagonal.as_ref() {
+            for (i, (&curvature, &coefficient)) in diagonal.iter().zip(beta).enumerate() {
+                self.u[i] -= curvature * coefficient;
+                self.imat[(i, i)] += curvature;
+                penalty += 0.5 * curvature * coefficient * coefficient;
+            }
         }
+        Ok(loglik - penalty)
     }
 
     pub(crate) fn fit(&mut self) -> Result<(), CoxError> {
@@ -1186,8 +1221,9 @@ impl CoxFit {
         let mut halving = 0;
         let mut _notfinite;
         let beta_copy = self.beta.clone();
-        self.loglik[0] = self.iterate_with_mode(&beta_copy, mode)?;
-        self.loglik[1] = self.loglik[0];
+        self.objective[0] = self.iterate_with_mode(&beta_copy, mode)?;
+        self.objective[1] = self.objective[0];
+        self.loglik = [self.last_loglik; 2];
         if nvar == 0 {
             self.flag = 0;
             return Ok(());
@@ -1196,7 +1232,7 @@ impl CoxFit {
         self.flag = Self::cholesky(&mut self.imat, self.toler);
         Self::chsolve(&self.imat, &mut a);
         self.sctest = a.iter().zip(&self.u).map(|(ai, ui)| ai * ui).sum();
-        if self.max_iter == 0 || !self.loglik[0].is_finite() {
+        if self.max_iter == 0 || !self.objective[0].is_finite() {
             Self::chinv(&mut self.imat);
             self.rescale_params();
             if agexact_compatibility && self.max_iter == 0 {
@@ -1208,8 +1244,7 @@ impl CoxFit {
         for i in 0..nvar {
             newbeta[i] += a[i];
         }
-        self.loglik[1] = self.loglik[0];
-        let mut newlk = self.loglik[1];
+        let mut newlk = self.objective[1];
         for iter in 1..=self.max_iter {
             self.iter = iter;
             newlk = match self.iterate_with_mode(&newbeta, mode) {
@@ -1236,10 +1271,12 @@ impl CoxFit {
                 }
             }
             if !_notfinite
-                && (1.0 - self.loglik[1] / newlk).abs() <= self.eps
+                && ((self.penalty_diagonal.is_some() && newlk == self.objective[1])
+                    || (1.0 - self.objective[1] / newlk).abs() <= self.eps)
                 && (!agexact_compatibility || halving == 0)
             {
-                self.loglik[1] = newlk;
+                self.objective[1] = newlk;
+                self.loglik[1] = self.last_loglik;
                 self.beta.copy_from_slice(&newbeta);
                 Self::chinv(&mut self.imat);
                 self.rescale_params();
@@ -1251,7 +1288,7 @@ impl CoxFit {
             if agexact_compatibility && iter == self.max_iter {
                 break;
             }
-            if _notfinite || newlk < self.loglik[1] {
+            if _notfinite || newlk < self.objective[1] {
                 halving += 1;
                 for (newbeta_elem, beta_elem) in newbeta.iter_mut().zip(self.beta.iter()).take(nvar)
                 {
@@ -1263,7 +1300,8 @@ impl CoxFit {
                 }
             } else {
                 halving = 0;
-                self.loglik[1] = newlk;
+                self.objective[1] = newlk;
+                self.loglik[1] = self.last_loglik;
                 self.beta.copy_from_slice(&newbeta);
                 a.copy_from_slice(&self.u);
                 Self::chsolve(&self.imat, &mut a);
@@ -1277,7 +1315,8 @@ impl CoxFit {
             }
         }
         if agexact_compatibility {
-            self.loglik[1] = newlk;
+            self.objective[1] = newlk;
+            self.loglik[1] = self.last_loglik;
             self.beta.copy_from_slice(&newbeta);
             Self::chinv(&mut self.imat);
             self.rescale_params();
@@ -1285,7 +1324,8 @@ impl CoxFit {
             return Ok(());
         }
         let beta_final = self.beta.clone();
-        self.loglik[1] = self.iterate_with_mode(&beta_final, mode)?;
+        self.objective[1] = self.iterate_with_mode(&beta_final, mode)?;
+        self.loglik[1] = self.last_loglik;
         self.flag = Self::cholesky(&mut self.imat, self.toler);
         Self::chinv(&mut self.imat);
         self.rescale_params();
@@ -1301,6 +1341,10 @@ impl CoxFit {
         {
             *beta *= scale_i;
             *u /= scale_i;
+            if let Some(diagonal) = self.penalty_diagonal.as_ref() {
+                // The public score remains the derivative of the unpenalized likelihood.
+                *u += diagonal[i] / scale_i / scale_i * *beta;
+            }
             for (j, &scale_j) in self.scale.iter().enumerate() {
                 self.imat[(i, j)] *= scale_i * scale_j;
             }
@@ -1419,6 +1463,90 @@ impl CoxFit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_objective_shortcut_preserves_unpenalized_no_event_behavior() {
+        for penalized in [false, true] {
+            let mut fit = CoxFitBuilder::new(
+                Array1::from_vec(vec![1.0, 2.0, 3.0]),
+                Array1::zeros(3),
+                Array2::from_shape_vec((3, 1), vec![0.0, 0.5, 1.0]).unwrap(),
+            )
+            .max_iter(4)
+            .build()
+            .unwrap();
+            if penalized {
+                fit.set_diagonal_penalty(&[1.0]);
+            }
+            fit.fit().unwrap();
+            let (beta, _, _, variance, loglik, _, flag, iterations) = fit.results();
+            assert_eq!(beta, vec![0.0]);
+            assert_eq!(loglik, [0.0, 0.0]);
+            if penalized {
+                assert_eq!(flag, 1);
+                assert_eq!(iterations, 1);
+                assert_eq!(variance[(0, 0)], 1.0);
+            } else {
+                assert_eq!(flag, CONVERGENCE_FLAG);
+                assert_eq!(iterations, 4);
+                assert_eq!(variance[(0, 0)], 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn diagonal_penalty_matches_objective_and_information_finite_differences() {
+        for method in [Method::Breslow, Method::Efron] {
+            for counting in [false, true] {
+                let mut fit = counting_process_order_fixture();
+                fit.method = method;
+                if !counting {
+                    fit.entry_times = None;
+                }
+                fit.set_diagonal_penalty(&[0.4, 1.7]);
+                let beta = vec![0.31, -0.24];
+                let raw = fit.iterate(&beta).unwrap();
+                let raw_score = fit.u.clone();
+                let raw_information = fit.imat.clone();
+                let objective = fit.iterate_with_mode(&beta, FitMode::Standard).unwrap();
+                let score = fit.u.clone();
+                let information = fit.imat.clone();
+                let diagonal = fit.penalty_diagonal.as_ref().unwrap();
+                let expected_penalty: f64 = beta
+                    .iter()
+                    .zip(diagonal)
+                    .map(|(&b, &p)| 0.5 * p * b * b)
+                    .sum();
+                assert!((objective - raw + expected_penalty).abs() < 1e-12);
+                for i in 0..2 {
+                    assert!((score[i] - raw_score[i] + diagonal[i] * beta[i]).abs() < 1e-12);
+                    assert!(
+                        (information[(i, i)] - raw_information[(i, i)] - diagonal[i]).abs() < 1e-12
+                    );
+                }
+                let step = 1e-5;
+                for i in 0..2 {
+                    let mut above = beta.clone();
+                    let mut below = beta.clone();
+                    above[i] += step;
+                    below[i] -= step;
+                    let above_value = fit.iterate_with_mode(&above, FitMode::Standard).unwrap();
+                    let above_score = fit.u.clone();
+                    let below_value = fit.iterate_with_mode(&below, FitMode::Standard).unwrap();
+                    let below_score = fit.u.clone();
+                    assert!(((above_value - below_value) / (2.0 * step) - score[i]).abs() < 1e-8);
+                    for j in 0..2 {
+                        assert!(
+                            ((below_score[j] - above_score[j]) / (2.0 * step)
+                                - information[(i, j)])
+                                .abs()
+                                < 1e-8
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn counting_process_order_fixture() -> CoxFit {
         CoxFit::new_with_entry_times(

@@ -1053,6 +1053,16 @@ class ConditionalLogisticRegression:
     def predict(self, covariates: list[float]) -> float: ...
     def odds_ratios(self) -> list[float]: ...
 
+class CoxPenaltyDiagnostics:
+    @property
+    def penalty_diagonal(self) -> list[float]: ...
+    @property
+    def penalty(self) -> float: ...
+    @property
+    def variance2(self) -> list[list[float]]: ...
+    @property
+    def term_df(self) -> list[float]: ...
+
 class CoxPHFit:
     @property
     def coefficients(self) -> list[list[float]]: ...
@@ -7102,6 +7112,23 @@ def coxph_fit(
     entry_times: list[float] | None = None,
     nocenter: list[float] | None = None,
 ) -> CoxPHFit: ...
+def coxph_penalized_fit(
+    time: list[float],
+    status: list[int],
+    covariates: list[list[float]],
+    penalty: list[float],
+    term_groups: list[list[int]],
+    strata: list[int] | None = None,
+    weights: list[float] | None = None,
+    offset: list[float] | None = None,
+    initial_beta: list[float] | None = None,
+    max_iter: int | None = None,
+    eps: float | None = None,
+    toler: float | None = None,
+    method: str | None = None,
+    entry_times: list[float] | None = None,
+    nocenter: list[float] | None = None,
+) -> tuple[CoxPHFit, CoxPenaltyDiagnostics]: ...
 def coxph_detail(
     time: list[float],
     status: list[int],
