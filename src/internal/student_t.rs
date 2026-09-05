@@ -164,6 +164,9 @@ impl StudentT {
         if self.df >= 100_000.0 {
             return self.normal_limit_tail(x).ln() + LN_2;
         }
+        if self.df >= 1_000.0 {
+            return self.normal_integral_tail(x).ln() + LN_2;
+        }
 
         let a = 0.5 * self.df;
         let logarithm = self.log_one_plus_square(x);
@@ -291,6 +294,47 @@ impl StudentT {
             power *= inverse_df;
         }
         0.5 * libm::erfc(x / SQRT_2) + (-0.5 * square - LOG_SQRT_2_PI).exp() * correction
+    }
+
+    fn normal_integral_tail(self, x: f64) -> f64 {
+        // Under w²=df*log(1+x²/df), the Student density becomes
+        // sqrt(2π)*c_df*phi(w)*g(w²/df), g(v)=sqrt(v/(1-exp(-v))).
+        // Here df>=1e3 and x<9, so v<.081 at the lower integration limit.
+        // Integrating g through v^8 has relative truncation error below
+        // 5e-16; see docs/student-t-normal-limit.md. Rounding dominates.
+        let ratio = (x / self.sqrt_df).powi(2);
+        let w = if ratio < 1e-8 {
+            // The ratio can underflow even though x is representable.
+            x * (1.0 + ratio * (-0.25 + ratio * (13.0 / 96.0)))
+        } else {
+            (self.df * ratio.ln_1p()).sqrt()
+        };
+        let square = w * w;
+        let tail = 0.5 * libm::erfc(w / SQRT_2);
+        let density = (-0.5 * square - LOG_SQRT_2_PI).exp();
+        let coefficients = [
+            0.25,
+            1.0 / 96.0,
+            -1.0 / 384.0,
+            -1.0 / 10_240.0,
+            19.0 / 368_640.0,
+            79.0 / 61_931_520.0,
+            -55.0 / 49_545_216.0,
+            -2_339.0 / 118_908_518_400.0,
+        ];
+        let mut moment = tail;
+        let mut power = w;
+        let inverse_df = self.df.recip();
+        let mut inverse_power = 1.0;
+        let mut correction = 0.0;
+        for (index, coefficient) in coefficients.into_iter().enumerate() {
+            // M_2k = w^(2k-1)*phi(w) + (2k-1)*M_(2k-2).
+            moment = power * density + (2 * index + 1) as f64 * moment;
+            inverse_power *= inverse_df;
+            correction += coefficient * inverse_power * moment;
+            power *= square;
+        }
+        (self.log_normalizer + LOG_SQRT_2_PI).exp() * (tail + correction)
     }
 
     pub(crate) fn cdf(self, x: f64) -> f64 {
@@ -480,6 +524,47 @@ mod tests {
             Some("-Inf") => f64::NEG_INFINITY,
             Some(number) => number.parse().expect("numeric reference"),
             None => value.as_f64().expect("numeric reference"),
+        }
+    }
+
+    #[test]
+    fn student_t_normal_limit_matches_r_at_method_boundaries() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../python/tests/fixtures/student_t_normal_reference.json"
+        ))
+        .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let df = reference_number(&case["df"]);
+            let distribution = StudentT::new(df);
+            let mut previous = 0.0;
+            for (index, x) in case["x"].as_array().unwrap().iter().enumerate() {
+                let x = reference_number(x);
+                let expected = reference_number(&case["cdf"][index]);
+                let actual = distribution.cdf(x);
+                assert!(actual > 0.0 && actual >= previous, "df={df}, x={x}");
+                assert!(
+                    (actual - expected).abs() <= 1e-13 * expected,
+                    "df={df}, x={x}: actual={actual:e}, expected={expected:e}"
+                );
+                let expected_log = reference_number(&case["log_cdf"][index]);
+                assert!(
+                    (distribution.log_sf(-x) - expected_log).abs() <= 1e-13,
+                    "log tail df={df}, x={x}"
+                );
+                previous = actual;
+            }
+            let mut previous = f64::NEG_INFINITY;
+            for (index, probability) in case["p"].as_array().unwrap().iter().enumerate() {
+                let probability = reference_number(probability);
+                let expected = reference_number(&case["quantile"][index]);
+                let actual = distribution.inverse_cdf(probability);
+                assert!(actual >= previous, "df={df}, p={probability}");
+                assert!(
+                    (actual - expected).abs() <= 1e-13 * expected.abs(),
+                    "df={df}, p={probability}: actual={actual:e}, expected={expected:e}"
+                );
+                previous = actual;
+            }
         }
     }
 
