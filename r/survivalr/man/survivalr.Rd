@@ -715,7 +715,7 @@ coxph(formula, data = NULL, ..., subset = NULL, na.action = "fail")
 
 coxph.control(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
-  timefix = TRUE)
+  timefix = TRUE, survcheckallow = "gap")
 
 coxph.fit(x, y, strata, offset, init, control, weights, method,
   rownames, resid = TRUE, nocenter = NULL)
@@ -1161,6 +1161,10 @@ convergence tolerance used when \code{ridge}, \code{frailty.*}, or
 \code{pspline} searches for a penalty matching \code{df}.}
 \item{maxiter, rel.tolerance, debug}{Control options passed through
 \code{survreg.control}.}
+\item{survcheckallow}{Survival-data checks allowed by the Cox control object.
+Retained for compatibility with R's \code{survival} package. It has no effect
+on ordinary right-censored and counting-process Cox fits; multistate Cox
+fitting is not yet supported.}
 \item{dlist}{Distribution-list object for \code{survregDtest}.}
 \item{row.names, optional, make.names}{Standard \code{as.data.frame}
 arguments.}

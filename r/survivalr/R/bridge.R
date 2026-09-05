@@ -255,7 +255,7 @@ if (getRversion() >= "2.15.1") {
     if (nzchar(dot_names[[idx]]) && dot_names[[idx]] %in% vector_args && !is.null(value)) {
       value <- .as_python_vector(value)
     }
-    values[[idx]] <- value
+    values[idx] <- list(value)
   }
   names(values) <- dot_names
   values
@@ -1455,7 +1455,16 @@ attrassign <- function(object, tt) {
 }
 
 .call_r_api <- function(name, ..., .wrap = character()) {
-  result <- do.call(.python_attr(name), .compact_null(list(...)))
+  arguments <- .compact_null(list(...))
+  if (name %in% c("coxph", "survreg", "clogit")) {
+    captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments)
+    result <- captured$result
+    for (message in captured$warnings) {
+      warning(message, call. = FALSE)
+    }
+  } else {
+    result <- do.call(.python_attr(name), arguments)
+  }
   if (length(.wrap) > 0L) {
     return(.wrap_python(result, .wrap))
   }
@@ -8266,7 +8275,7 @@ aeqSurv <- function(x, tolerance = sqrt(.Machine$double.eps)) {
 
 coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
                           iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
-                          timefix = TRUE) {
+                          timefix = TRUE, survcheckallow = "gap") {
   eps <- .as_finite_scalar(eps, "eps", positive = TRUE)
   toler.chol <- .as_finite_scalar(toler.chol, "toler.chol", positive = TRUE)
   iter.max <- .as_integer_scalar(iter.max, "iter.max", nonnegative = TRUE)
@@ -8279,7 +8288,8 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     iter.max = iter.max,
     toler.inf = toler.inf,
     outer.max = outer.max,
-    timefix = timefix
+    timefix = timefix,
+    survcheckallow = survcheckallow
   )
 }
 
@@ -8319,6 +8329,9 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     status <- as.integer(y[, 3L])
   } else {
     stop("y must have 2 or 3 columns", call. = FALSE)
+  }
+  if (isTRUE(include_agreg_info) && all(status == 0L)) {
+    stop("Can't fit a Cox model with 0 failures", call. = FALSE)
   }
   n <- length(time)
   covariate_matrix <- if (!is.matrix(x) && length(x) == 0L) {
@@ -8398,6 +8411,17 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
       nocenter = if (is.null(nocenter)) NULL else as.list(as.numeric(nocenter))
     ))
   )
+
+  messages <- .python_attr("_cox_fit_diagnostic_messages")(
+    fit,
+    counting = !is.null(entry_times),
+    max_iter = if (null_model) 0L else as.integer(control[["iter.max"]]),
+    eps = as.numeric(control[["eps"]]),
+    toler_inf = as.numeric(control[["toler.inf"]])
+  )
+  for (message in messages) {
+    warning(message, call. = FALSE)
+  }
 
   if (null_model) {
     loglik <- .as_numeric_vector(.result_field(fit, "log_likelihood"))

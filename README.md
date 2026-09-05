@@ -188,6 +188,19 @@ covariance sweeps stay in Rust; Python performs only formula preparation and
 result labeling.
 R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
 in the bridge and pass named control lists through to the Python API.
+Native R Cox control objects, including `survcheckallow`, are accepted for
+ordinary right-censored and counting-process fits. That setting only affects
+multistate fitting in R. Starting coefficients supplied through `init=` can
+be a single number for a one-parameter model or a vector matching all fitted
+parameters, including estimated log scales for AFT models. Explicit R `NULL`
+values retain the default initialization regardless of argument order.
+Cox and AFT fits warn when iterations are exhausted. Cox coefficient warnings
+use `control={"toler.inf": ...}` and the fitted score and covariance, with R's
+distinct criteria for right-censored, counting-process, and exact fits.
+Zero- and one-iteration requests suppress these diagnostics. Python exposes
+them as `RuntimeWarning`; the bridge raises R warning conditions.
+AFT's default relative convergence tolerance is `1e-9` in both Rust and
+Python, matching `survival::survreg.control()`; callers can set `eps` explicitly.
 Time-dependent start/stop data can be built with the R-compatible `tmerge`
 workflow. Its update builders preserve R's `(tstart, tstop]` boundary rules,
 event placement, cumulative updates, missing-value handling, and classification

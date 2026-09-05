@@ -10031,10 +10031,10 @@ def _apply_coxph_control(
     max_iter: int,
     eps: float | None,
     toler: float | None,
-) -> tuple[int, float | None, float | None, bool]:
+) -> tuple[int, float | None, float | None, bool, float | None]:
     values = _control_mapping(control, "coxph control")
     if not values:
-        return max_iter, eps, toler, True
+        return max_iter, eps, toler, True, None
 
     max_iter_value, name = _pop_control_alias(
         values,
@@ -10069,10 +10069,13 @@ def _apply_coxph_control(
     )
     fix_time = _normalize_bool_option(timefix_value, f"control.{name}") if name else True
 
-    _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
+    toler_inf = _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
     _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
+    # R only consults this option for multistate fits, which coxph rejects
+    # below. Ordinary right/counting fits accept it without inspecting it.
+    values.pop("survcheckallow", None)
     _reject_unknown_control_options(values, "coxph")
-    return max_iter, eps, toler, fix_time
+    return max_iter, eps, toler, fix_time, toler_inf
 
 
 def _apply_survreg_control(
@@ -10119,6 +10122,80 @@ def _apply_survreg_control(
     _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
     _reject_unknown_control_options(values, "survreg")
     return max_iter, eps, tol_chol
+
+
+def _cox_fit_diagnostic_messages(
+    fit: Any,
+    *,
+    max_iter: int,
+    counting: bool,
+    eps: float | None = None,
+    toler_inf: float | None = None,
+    offset_center: float = 0.0,
+) -> list[str]:
+    """Report R's convergence diagnostics using the unmodified native fit."""
+    if max_iter <= 1:
+        return []
+    beta = _cox_beta(fit)
+    if not beta:
+        return []
+    variance = fit.information_matrix
+    score = fit.score_vector
+    exact = fit.method == "exact"
+    if (
+        counting
+        and not exact
+        and (
+            any(not math.isfinite(value) for value in beta)
+            or any(not math.isfinite(value) for row in variance for value in row)
+        )
+    ):
+        raise RuntimeError("Cox fitting failed due to numeric overflow")
+    displacement = [
+        abs(sum(value * variance[row][column] for row, value in enumerate(score)))
+        for column in range(len(beta))
+    ]
+    if fit.convergence_flag == _COX_NONCONVERGENCE_FLAG:
+        messages = ["Ran out of iterations and did not converge"]
+        if not counting and not exact:
+            center = offset_center + sum(
+                value * mean for value, mean in zip(beta, fit.means, strict=True)
+            )
+            if any(value - center > 500.0 for value in fit.linear_predictors) or any(
+                not math.isfinite(value) for value in displacement
+            ):
+                messages.append("one or more coefficients may be infinite")
+        return messages
+
+    convergence_tolerance = 1e-9 if eps is None else eps
+    infinity_tolerance = math.sqrt(convergence_tolerance) if toler_inf is None else toler_inf
+    flagged = []
+    for column, (coefficient, step) in enumerate(zip(beta, displacement, strict=True)):
+        if counting and not exact:
+            infinite = not math.isfinite(score[column]) or step > infinity_tolerance * (
+                1.0 + abs(coefficient)
+            )
+        else:
+            infinite = step > convergence_tolerance and step > infinity_tolerance * abs(coefficient)
+            if not exact:
+                infinite = infinite or not math.isfinite(score[column])
+        if infinite:
+            flagged.append(str(column + 1))
+    if not flagged:
+        return []
+    noun = "beta" if counting or exact else "coefficient"
+    return [f"Loglik converged before variable {','.join(flagged)}; {noun} may be infinite."]
+
+
+def _survreg_fit_diagnostic_messages(fit: Any, *, max_iter: int | None = None) -> list[str]:
+    if (30 if max_iter is None else max_iter) > 1 and fit.convergence_flag != 0:
+        return ["Ran out of iterations and did not converge"]
+    return []
+
+
+def _warn_fit_diagnostics(messages: Sequence[str]) -> None:
+    for message in messages:
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
 
 
 def _normalize_survfit_type(
@@ -19881,7 +19958,7 @@ def coxph(
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
     max_iter = _integer_scalar(max_iter, "max_iter")
-    max_iter, eps, toler, fix_time = _apply_coxph_control(control, max_iter, eps, toler)
+    max_iter, eps, toler, fix_time, toler_inf = _apply_coxph_control(control, max_iter, eps, toler)
 
     formula_design: _FormulaDesign | None = None
     formula_string: str | None = None
@@ -20005,7 +20082,13 @@ def coxph(
             "coxph currently supports right-censored and counting Surv responses"
         )
 
+    diagnostic_offset_center = 0.0
     if time_transform_terms:
+        diagnostic_offset = _optional_float_vector(offset, "offset", len(response))
+        if diagnostic_offset:
+            diagnostic_offset_center = sum(
+                value / len(diagnostic_offset) for value in diagnostic_offset
+            )
         if formula_design is None or formula_model_data is None:
             raise AssertionError("tt terms require formula design metadata")
         time_transform_observed_n = len(response)
@@ -20053,6 +20136,8 @@ def coxph(
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
     fit_offset = _optional_float_vector(offset, "offset", n)
+    if fit_offset and not time_transform_expanded:
+        diagnostic_offset_center = sum(value / len(fit_offset) for value in fit_offset)
     model_frame = None
     if keep_model:
         model_frame = (
@@ -20101,10 +20186,8 @@ def coxph(
         strata=fit_strata,
         weights=fit_weights,
         offset=fit_offset,
-        initial_beta=(
-            _float_vector(initial_beta if initial_beta is not None else init, "init")
-            if init is not None or initial_beta is not None
-            else None
+        initial_beta=_normalize_numeric_sequence_or_none(
+            initial_beta if initial_beta is not None else init, "init"
         ),
         max_iter=max_iter,
         eps=eps,
@@ -20113,6 +20196,17 @@ def coxph(
         entry_times=entry_times,
         nocenter=nocenter_values,
     )
+    if any(response.event):
+        _warn_fit_diagnostics(
+            _cox_fit_diagnostic_messages(
+                fit,
+                max_iter=max_iter,
+                counting=entry_times is not None,
+                eps=eps,
+                toler_inf=toler_inf,
+                offset_center=diagnostic_offset_center,
+            )
+        )
     if not singular_ok_value and any(_cox_alias_mask(fit)):
         raise ValueError(
             "coxph design matrix is singular; use singular_ok=True to allow dependent covariates"
@@ -20591,9 +20685,7 @@ def survreg(
         ((name, value) for name, value in initial_options.items() if value is not None),
         ("initial", None),
     )
-    initial_values = (
-        _float_vector(initial_source, initial_name) if initial_source is not None else None
-    )
+    initial_values = _normalize_numeric_sequence_or_none(initial_source, initial_name)
 
     fixed_scale = (
         0.5
@@ -20618,6 +20710,7 @@ def survreg(
         fixed_scale=fixed_scale,
         distribution_parameter=distribution_parameter,
     )
+    _warn_fit_diagnostics(_survreg_fit_diagnostic_messages(fit, max_iter=max_iter))
     robust_cluster = cluster_values_for_validation
     if robust_value and robust_cluster is None:
         robust_cluster = list(range(n))

@@ -1,6 +1,5 @@
 use crate::constants::{
-    CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
-    STEP_HALVE_FACTOR,
+    CHOLESKY_TOL, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX, STEP_HALVE_FACTOR,
 };
 use crate::internal::matrix::regularized_lu_solve;
 use crate::regression::survreg_predict::{
@@ -19,6 +18,9 @@ use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
 
 type PredictionRows = (Vec<f64>, Option<Vec<Vec<f64>>>);
+
+// Matches survival::survreg.control() without changing other model families.
+const SURVREG_CONVERGENCE_TOLERANCE: f64 = 1e-9;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -49,7 +51,7 @@ impl SurvregConfig {
         Self {
             distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
             max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
-            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            eps: eps.unwrap_or(SURVREG_CONVERGENCE_TOLERANCE),
             tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
         }
     }
@@ -59,7 +61,7 @@ impl Default for SurvregConfig {
     fn default() -> Self {
         Self {
             max_iter: DEFAULT_MAX_ITER,
-            eps: CONVERGENCE_EPSILON,
+            eps: SURVREG_CONVERGENCE_TOLERANCE,
             tol_chol: CHOLESKY_TOL,
             distribution: DEFAULT_SURVREG_DISTRIBUTION,
         }
@@ -76,7 +78,7 @@ impl SurvregConfig {
         Self {
             distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
             max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
-            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            eps: eps.unwrap_or(SURVREG_CONVERGENCE_TOLERANCE),
             tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
         }
     }
@@ -1226,11 +1228,63 @@ mod tests {
 
     #[test]
     fn test_survreg_config_default() {
-        let config = SurvregConfig::default();
-        assert_eq!(config.max_iter, 30);
-        assert!((config.eps - 1e-6).abs() < 1e-10);
-        assert!((config.tol_chol - 1e-10).abs() < 1e-15);
-        assert_eq!(config.distribution, DistributionType::Weibull);
+        for config in [
+            SurvregConfig::default(),
+            SurvregConfig::new(None, None, None, None),
+            SurvregConfig::create(None, None, None, None),
+        ] {
+            assert_eq!(config.max_iter, 30);
+            assert_eq!(config.eps, 1e-9);
+            assert_eq!(config.tol_chol, 1e-10);
+            assert_eq!(config.distribution, DistributionType::Weibull);
+        }
+    }
+
+    #[test]
+    fn default_survreg_tolerance_matches_r_control_on_censored_data() {
+        let fit_with_tolerance = |eps| {
+            survreg(
+                vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0],
+                vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                vec![
+                    vec![1.0, 0.0],
+                    vec![1.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![1.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![1.0, 1.0],
+                ],
+                None,
+                None,
+                None,
+                None,
+                Some("weibull"),
+                None,
+                eps,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let default = fit_with_tolerance(None);
+        let explicit = fit_with_tolerance(Some(1e-9));
+        assert_eq!(default.coefficients, explicit.coefficients);
+        assert_eq!(default.iterations, explicit.iterations);
+        assert!(default.score_vector.iter().all(|score| score.abs() < 1e-10));
+        // R survival 3.8.11 default Weibull fit: intercept, x and log(scale).
+        let reference = [
+            2.201_004_230_665_683,
+            -0.412_866_281_489_401_24,
+            -0.280_610_838_292_473_6,
+        ];
+        for (actual, expected) in default.coefficients.iter().zip(reference) {
+            assert!((actual - expected).abs() < 2e-9);
+        }
+        let loose = fit_with_tolerance(Some(1e-6));
+        assert!(loose.iterations < default.iterations);
+        assert!(loose.score_vector.iter().any(|score| score.abs() > 1e-8));
     }
 
     #[test]
