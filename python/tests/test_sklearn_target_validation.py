@@ -238,8 +238,8 @@ def test_target_validation_preserves_readonly_noncontiguous_inputs(dtype):
     common = importlib.import_module("survival._sklearn_common")
     x, y = _data(dtype)
     x, y = x[::-1], y[::-1]
-    x.flags.writeable = False
-    y.flags.writeable = False
+    x.setflags(write=False)
+    y.setflags(write=False)
     original_x, original_y = x.copy(), y.copy()
 
     checked_x, time, status = common._validate_survival_data(x, y)
