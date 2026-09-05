@@ -1,5 +1,4 @@
-use crate::constants::{GAUSSIAN_ELIMINATION_TOL, NEAR_ZERO_MATRIX, RIDGE_REGULARIZATION};
-use crate::internal::validation::MatrixError;
+use crate::constants::GAUSSIAN_ELIMINATION_TOL;
 use ndarray::{Array1, Array2};
 use std::borrow::Cow;
 
@@ -189,39 +188,6 @@ impl PartialPivotLu {
     }
 }
 
-pub(crate) fn regularized_lu_solve(
-    matrix: &Array2<f64>,
-    vector: &Array1<f64>,
-) -> Result<Array1<f64>, MatrixError> {
-    if matrix.nrows() == 0 || matrix.ncols() == 0 {
-        if vector.is_empty() {
-            return Ok(Array1::zeros(0));
-        }
-        return Err(MatrixError::EmptyMatrix);
-    }
-
-    let max_val = matrix.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
-    if max_val < NEAR_ZERO_MATRIX {
-        return Err(MatrixError::SingularMatrix);
-    }
-
-    match lu_solve_internal(matrix, vector) {
-        Some(result) => Ok(result),
-        None => {
-            let n = matrix.nrows();
-            let ridge = max_val * RIDGE_REGULARIZATION;
-            let mut reg_matrix = matrix.clone();
-            for i in 0..n {
-                reg_matrix[[i, i]] += ridge;
-            }
-            match lu_solve_internal(&reg_matrix, vector) {
-                Some(result) => Ok(result),
-                None => Err(MatrixError::SingularMatrix),
-            }
-        }
-    }
-}
-
 fn lu_solve_internal(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
     if matrix.nrows() == 0 || matrix.ncols() == 0 {
         return vector.is_empty().then(|| Array1::zeros(0));
@@ -388,15 +354,6 @@ mod tests {
     use ndarray::arr2;
 
     #[test]
-    fn test_regularized_lu_solve_identity() {
-        let matrix = arr2(&[[1.0, 0.0], [0.0, 1.0]]);
-        let vector = Array1::from_vec(vec![1.0, 2.0]);
-        let result = regularized_lu_solve(&matrix, &vector).unwrap();
-        assert!((result[0] - 1.0).abs() < 1e-10);
-        assert!((result[1] - 2.0).abs() < 1e-10);
-    }
-
-    #[test]
     fn standardize_row_major_matrix_centers_and_scales_columns() {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let (standardized, means, scales) = standardize_row_major_matrix(&x, 3, 2);
@@ -431,22 +388,6 @@ mod tests {
         assert!(matches!(matrix, Cow::Owned(_)));
         assert_eq!(means, vec![2.0, 3.0]);
         assert_eq!(scales, vec![1.0, 1.0]);
-    }
-
-    #[test]
-    fn test_regularized_lu_solve_empty() {
-        let matrix: Array2<f64> = Array2::zeros((0, 0));
-        let vector: Array1<f64> = Array1::zeros(0);
-        let result = regularized_lu_solve(&matrix, &vector).unwrap();
-        assert_eq!(result.len(), 0);
-    }
-
-    #[test]
-    fn test_regularized_lu_solve_near_zero_matrix() {
-        let matrix = arr2(&[[1e-15, 0.0], [0.0, 1e-15]]);
-        let vector = Array1::from_vec(vec![1.0, 2.0]);
-        let result = regularized_lu_solve(&matrix, &vector);
-        assert!(matches!(result, Err(MatrixError::SingularMatrix)));
     }
 
     #[test]

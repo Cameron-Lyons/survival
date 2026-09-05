@@ -277,8 +277,11 @@ class _FormulaFit:
     score_values: list[float] | None = None
     conditional_logistic: bool = False
     n_observations: int | None = None
+    survreg_aliases: tuple[bool, ...] | None = None
 
     def __getattr__(self, name: str) -> Any:
+        if name == "coefficients" and self.survreg_aliases is not None:
+            return _survreg_reported_coefficients(self)
         if self.conditional_logistic and name in {
             "basehaz",
             "basehaz_with_strata",
@@ -14796,12 +14799,42 @@ def _require_model_fit(fit: Any, generic: str) -> Any:
     return fit
 
 
+def _survreg_alias_mask(fit: Any, variance: list[list[float]] | None = None) -> list[bool]:
+    if variance is None and isinstance(fit, _FormulaFit) and fit.survreg_aliases is not None:
+        return list(fit.survreg_aliases)
+    model = _unwrap_formula_fit(fit)
+    if variance is None:
+        variance = fit.variance_matrix
+    # R marks location coefficients using the reported (possibly robust)
+    # variance. A discarded log(scale) pivot remains numeric, including
+    # at zero iterations.
+    return [variance[idx][idx] == 0.0 for idx in range(model.n_covariates)]
+
+
+def _survreg_reported_coefficients(fit: Any) -> list[float]:
+    values = list(_unwrap_formula_fit(fit).coefficients)
+    for idx, aliased in enumerate(_survreg_alias_mask(fit)):
+        if aliased:
+            values[idx] = math.nan
+    return values
+
+
+def _survreg_vcov_indices(fit: Any, complete: bool) -> list[int]:
+    width = len(_unwrap_formula_fit(fit).coefficients)
+    aliases = _survreg_alias_mask(fit)
+    if complete or not any(aliases):
+        return list(range(width))
+    # vcov.survreg recycles its location-coefficient logical index across
+    # the entire covariance matrix, including any estimated scale columns.
+    return [idx for idx in range(width) if not aliases[idx % len(aliases)]]
+
+
 def coef(fit: Any) -> list[float]:
     """Return fitted model coefficients, like R's coef generic."""
 
     _require_model_fit(fit, "coef")
     if _is_survreg_fit(fit):
-        return _location_beta(fit)
+        return _survreg_reported_coefficients(fit)[: len(_location_beta(fit))]
     beta = _cox_beta(fit)
     return [
         math.nan if aliased else value
@@ -14819,10 +14852,11 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
     if _is_survreg_fit(fit):
         location_width = len(_location_beta(fit))
         names = _fit_location_coef_names(fit, location_width)
-        if include_complete:
-            total_width = len(list(fit.coefficients))
-            names.extend(_survreg_scale_coef_names(fit, total_width - location_width))
-        return names
+        if complete is None:
+            return names
+        total_width = len(_unwrap_formula_fit(fit).coefficients)
+        names.extend(_survreg_scale_coef_names(fit, total_width - location_width))
+        return [names[idx] for idx in _survreg_vcov_indices(fit, include_complete)]
 
     beta = _cox_beta(fit)
     names = _fit_location_coef_names(fit, len(beta))
@@ -14837,8 +14871,10 @@ def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
     _require_model_fit(fit, "vcov")
     include_complete = _normalize_bool_option_with_default(complete, "complete", True)
     if _is_survreg_fit(fit):
-        width = len(list(fit.coefficients)) if include_complete else len(_location_beta(fit))
-        return _survreg_variance_matrix(fit, width)
+        width = len(_unwrap_formula_fit(fit).coefficients)
+        variance = _survreg_variance_matrix(fit, width)
+        keep = _survreg_vcov_indices(fit, include_complete)
+        return [[variance[row][column] for column in keep] for row in keep]
     variance = _cox_variance_matrix(fit, len(_cox_beta(fit)))
     if include_complete:
         return variance
@@ -15416,7 +15452,9 @@ def confint(
     z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
     names = coef_names(fit)
     coefficients = coef(fit)
-    variance = vcov(fit, complete=not _is_survreg_fit(fit))
+    variance = (
+        _survreg_variance_matrix(fit, len(coefficients)) if _is_survreg_fit(fit) else vcov(fit)
+    )
     indices = _coefficient_selection_indices(parm, names)
 
     intervals = []
@@ -15441,7 +15479,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
     robust = bool(getattr(fit, "robust", False))
     if is_survreg:
         location_width = len(_location_beta(fit))
-        coefficients = [float(value) for value in fit.coefficients]
+        coefficients = _survreg_reported_coefficients(fit)
         names = _survreg_summary_coef_names(fit, location_width, len(coefficients))
         variance = vcov(fit, complete=True)
     else:
@@ -16626,7 +16664,7 @@ def _survreg_dfbeta_residuals(
         fit,
         rsigma=rsigma,
     )
-    return _core.survreg_dfbeta_residuals(
+    result = _core.survreg_dfbeta_residuals(
         matrix,
         rows,
         scales,
@@ -16635,6 +16673,13 @@ def _survreg_dfbeta_residuals(
         include_scale,
         residual_type == "dfbetas",
     )
+
+    if residual_type == "dfbetas":
+        undefined = [idx for idx, row in enumerate(variance) if not row[idx] > 0.0]
+        for row in result:
+            for idx in undefined:
+                row[idx] = math.nan
+    return result
 
 
 def _survreg_influence_residuals(
@@ -16796,7 +16841,7 @@ def _survreg_predict_terms(
     rows: list[list[float]] | None,
     terms: Any | None,
 ) -> list[list[float]]:
-    beta = _location_beta(fit)
+    beta = coef(fit)
     prediction_rows = _survreg_term_design_rows(fit, rows)
     groups = _cox_predict_term_groups(fit, len(beta))
     selected = _predict_terms_selection(terms, [name for name, _columns in groups])
@@ -16819,11 +16864,20 @@ def _survreg_term_prediction_se(
     variance = _location_variance_matrix(fit, len(beta))
     groups = _cox_predict_term_groups(fit, len(beta))
     selected = _predict_terms_selection(terms, [name for name, _columns in groups])
-    return _core.term_prediction_se_from_variance(
-        prediction_rows,
+    coefficient_rows = [
+        [value * beta[idx] for idx, value in enumerate(row)] for row in prediction_rows
+    ]
+    standard_errors = _core.term_prediction_se_from_variance(
+        coefficient_rows,
         variance,
         [groups[group_idx][1] for group_idx in selected],
     )
+    aliases = _survreg_alias_mask(fit)
+    for row in standard_errors:
+        for output_idx, group_idx in enumerate(selected):
+            if any(aliases[idx] for idx in groups[group_idx][1]):
+                row[output_idx] = math.nan
+    return standard_errors
 
 
 def _survreg_linear_prediction_se(
@@ -19063,6 +19117,10 @@ def predict(
                     _survreg_term_prediction_se(fit, rows, terms),
                 )
             return term_predictions
+        # R uses stored fitted values for training rows, but omits formula
+        # offsets when evaluating the model matrix for newdata.
+        offsets = None
+        missing_newdata_predictions = rows is not None and any(_survreg_alias_mask(fit))
         if predict_type in {"quantile", "uquantile"}:
             if p is not None and quantiles is not None:
                 raise ValueError("use only one of p or quantiles")
@@ -19086,18 +19144,29 @@ def predict(
                     predict_type,
                     newdata,
                 )
+                if missing_newdata_predictions:
+                    predictions = [[math.nan] * len(q) for _ in predictions]
+                    if predict_type == "quantile" and _survreg_response_uses_log_transform(fit):
+                        se = [[math.nan] * len(q) for _ in se]
                 return PredictResult(
                     _drop_single_quantile(predictions, q),
                     _drop_single_quantile(se, q),
                 )
+            if missing_newdata_predictions:
+                predictions = [[math.nan] * len(q) for _ in predictions]
             return _drop_single_quantile(predictions, q)
         result = fit.predict(rows, predict_type, offsets, False)
+        predictions = (
+            [math.nan] * len(result.predictions)
+            if missing_newdata_predictions
+            else result.predictions
+        )
         if include_se:
             return PredictResult(
-                result.predictions,
-                _survreg_prediction_se(fit, rows, predict_type, result.predictions),
+                predictions,
+                _survreg_prediction_se(fit, rows, predict_type, predictions),
             )
-        return result.predictions
+        return predictions
 
     reference_name = _normalize_predict_reference(reference, centered_value, predict_type)
 
@@ -20723,6 +20792,7 @@ def survreg(
             robust_cluster,
         )
     score_values = list(fit.score_vector) if keep_score else None
+    survreg_aliases = tuple(_survreg_alias_mask(fit, robust_variance))
     return (
         _FormulaFit(
             fit,
@@ -20737,6 +20807,7 @@ def survreg(
             y_response=response if keep_y else None,
             model_frame=model_frame,
             score_values=score_values,
+            survreg_aliases=survreg_aliases,
         )
         if (
             formula_design is not None
@@ -20745,6 +20816,7 @@ def survreg(
             or robust_variance is not None
             or model_frame is not None
             or score_values is not None
+            or any(survreg_aliases)
         )
         else fit
     )

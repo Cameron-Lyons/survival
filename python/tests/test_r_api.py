@@ -9171,7 +9171,7 @@ def test_model_generic_helpers_report_core_fit_metadata():
         assert actual == pytest.approx(expected)
     for actual, expected in zip(
         survival.vcov(aft, complete=False),
-        [row[: aft.n_covariates] for row in aft.variance_matrix[: aft.n_covariates]],
+        aft.variance_matrix,
         strict=True,
     ):
         assert actual == pytest.approx(expected)
@@ -15741,7 +15741,7 @@ def test_predict_survreg_r_style_generic_types():
         assert actual == pytest.approx(expected)
     expected_terms_se = [
         [
-            abs(row[col_idx] - means[col_idx])
+            abs((row[col_idx] - means[col_idx]) * fit.location_coefficients[col_idx])
             * math.sqrt(max(location_vcov[col_idx][col_idx], 0.0))
             for col_idx in range(1, fit.n_covariates)
         ]
@@ -15770,7 +15770,7 @@ def test_predict_survreg_r_style_generic_types():
     ]
     expected_training_terms_se = [
         [
-            abs(row[col_idx] - means[col_idx])
+            abs((row[col_idx] - means[col_idx]) * fit.location_coefficients[col_idx])
             * math.sqrt(max(location_vcov[col_idx][col_idx], 0.0))
             for col_idx in range(1, fit.n_covariates)
         ]
@@ -16057,7 +16057,7 @@ def test_predict_survreg_uses_training_rows_and_offsets():
     )
 
 
-def test_predict_survreg_formula_newdata_mapping_uses_offsets():
+def test_predict_survreg_formula_newdata_mapping_omits_offsets_like_r():
     data = _toy_data()
     fit = survival.survreg(
         "Surv(time, status) ~ x1 + offset(offset)",
@@ -16072,14 +16072,14 @@ def test_predict_survreg_formula_newdata_mapping_uses_offsets():
     design_rows = _with_intercept(rows)
 
     assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp", offsets).predictions
+        fit.predict(design_rows, "lp").predictions
     )
     assert survival.predict(fit, newdata) == pytest.approx(
-        fit.predict(design_rows, "response", offsets).predictions
+        fit.predict(design_rows, "response").predictions
     )
 
 
-def test_predict_survreg_formula_rebuilds_transformed_offsets_from_newdata():
+def test_predict_survreg_formula_newdata_omits_transformed_offsets_like_r():
     data = _toy_data()
     data["exposure"] = [math.exp(value) for value in data["offset"]]
     fit = survival.survreg(
@@ -16095,14 +16095,14 @@ def test_predict_survreg_formula_rebuilds_transformed_offsets_from_newdata():
     design_rows = _with_intercept(rows)
 
     assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp", offsets).predictions
+        fit.predict(design_rows, "lp").predictions
     )
     assert survival.predict(fit, newdata) == pytest.approx(
-        fit.predict(design_rows, "response", offsets).predictions
+        fit.predict(design_rows, "response").predictions
     )
 
 
-def test_predict_survreg_formula_rebuilds_identity_arithmetic_offsets_from_newdata():
+def test_predict_survreg_formula_newdata_omits_arithmetic_offsets_like_r():
     data = _toy_data()
     fit = survival.survreg(
         "Surv(time, status) ~ x1 + offset(I(offset + x2))",
@@ -16128,17 +16128,16 @@ def test_predict_survreg_formula_rebuilds_identity_arithmetic_offsets_from_newda
         eps=1e-5,
     )
     rows = [[0.5], [1.0]]
-    offsets = [0.5, 0.3]
     newdata = {"x1": [0.5, 1.0], "offset": [0.2, -0.1], "x2": [0.3, 0.4]}
     design_rows = _with_intercept(rows)
 
     assert fit.coefficients == pytest.approx(low_level.coefficients)
     assert bare_fit.coefficients == pytest.approx(low_level.coefficients)
     assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp", offsets).predictions
+        fit.predict(design_rows, "lp").predictions
     )
     assert survival.predict(bare_fit, newdata, type="lp") == pytest.approx(
-        bare_fit.predict(design_rows, "lp", offsets).predictions
+        bare_fit.predict(design_rows, "lp").predictions
     )
 
 
@@ -17078,8 +17077,14 @@ def test_survreg_formula_treatment_codes_categorical_covariates():
     for actual, expected in zip(
         term_se.se_fit,
         [
-            [abs(1.0 - group_mean) * math.sqrt(max(group_var, 0.0))],
-            [abs(0.0 - group_mean) * math.sqrt(max(group_var, 0.0))],
+            [
+                abs((1.0 - group_mean) * fit.location_coefficients[1])
+                * math.sqrt(max(group_var, 0.0))
+            ],
+            [
+                abs((0.0 - group_mean) * fit.location_coefficients[1])
+                * math.sqrt(max(group_var, 0.0))
+            ],
         ],
         strict=True,
     ):
