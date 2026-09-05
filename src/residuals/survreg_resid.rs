@@ -463,7 +463,6 @@ fn validate_time2_for_interval_residuals(
     time: &[f64],
     status: &[i32],
     time2: Option<&[f64]>,
-    distribution: &str,
 ) -> PyResult<()> {
     let has_interval_rows = status.contains(&3);
     if !has_interval_rows && time2.is_none() {
@@ -479,7 +478,6 @@ fn validate_time2_for_interval_residuals(
             "time2 must have the same length as time",
         ));
     }
-    let uses_log_time = response_uses_log_transform_key(&validated_distribution_key(distribution));
     for (idx, ((&start, &end), &event)) in time
         .iter()
         .zip(values.iter())
@@ -494,11 +492,8 @@ fn validate_time2_for_interval_residuals(
                 "time2 contains non-finite interval endpoint at index {idx}"
             )));
         }
-        if uses_log_time && end <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "time2[{idx}] must be positive"
-            )));
-        }
+        // The response validator enforces positive lower endpoints for log-time
+        // families, so ordering also enforces their upper endpoint domain.
         if end <= start {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "time2[{idx}] must be greater than time[{idx}] for interval-censored rows"
@@ -657,7 +652,7 @@ pub(crate) fn compute_response_residuals_censored_with_parameter(
     distribution: &str,
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
-    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
+    validate_time2_for_interval_residuals(time, status, time2)?;
     let mut residuals = Vec::with_capacity(time.len());
     for (idx, &linear_predictor) in linear_pred.iter().enumerate().take(time.len()) {
         let (center, _) = survreg_saturated_center_loglik(
@@ -756,7 +751,7 @@ pub(crate) fn compute_deviance_residuals_from_derivative_matrix_with_parameter(
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
     validate_derivative_matrix(derivative_matrix)?;
-    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
+    validate_time2_for_interval_residuals(time, status, time2)?;
     let working = compute_working_residuals_from_derivative_matrix(derivative_matrix)?;
     let mut residuals = Vec::with_capacity(time.len());
 
@@ -887,7 +882,7 @@ pub(crate) fn compute_ldcase_with_parameter(
     distribution: &str,
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
-    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
+    validate_time2_for_interval_residuals(time, status, time2)?;
     let n = time.len();
 
     let mut ld = Vec::with_capacity(n);
@@ -1011,7 +1006,7 @@ pub(crate) fn compute_survreg_residual_matrix_with_parameter(
     distribution: &str,
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<Vec<f64>>> {
-    validate_time2_for_interval_residuals(time, status, time2, distribution)?;
+    validate_time2_for_interval_residuals(time, status, time2)?;
     let key = validated_distribution_key(distribution);
     let distribution_parameter =
         validated_distribution_parameter_for_key(&key, distribution_parameter)?;
