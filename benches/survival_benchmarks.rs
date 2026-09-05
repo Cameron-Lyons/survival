@@ -1186,6 +1186,49 @@ mod rttright_counting_bench {
     }
 }
 
+mod student_t_normal_limit_bench {
+    use super::black_box;
+    use survival::regression::survreg_distribution;
+
+    fn distribution(bencher: divan::Bencher, df: f64, kind: &str) {
+        let values: Vec<f64> = (0..1024)
+            .map(|i| {
+                let fraction = i as f64 / 1023.0;
+                if kind == "quantile" {
+                    0.001 + 0.998 * fraction
+                } else {
+                    -8.5 + 17.0 * fraction
+                }
+            })
+            .collect();
+        let mean = vec![0.0; values.len()];
+        let scale = vec![1.0; values.len()];
+        bencher.bench_local(|| {
+            black_box(
+                survreg_distribution(
+                    values.clone(),
+                    mean.clone(),
+                    scale.clone(),
+                    "t".to_string(),
+                    kind.to_string(),
+                    Some(df),
+                )
+                .expect("ordinary Student distribution values should be valid"),
+            )
+        });
+    }
+
+    #[divan::bench(args = [4.5, 999.0, 1000.0, 3000.0, 9999.0, 10000.0, 30000.0, 100000.0, 1000000.0])]
+    fn cdf_1024(bencher: divan::Bencher, df: f64) {
+        distribution(bencher, df, "distribution");
+    }
+
+    #[divan::bench(args = [4.5, 999.0, 1000.0, 3000.0, 9999.0, 10000.0, 30000.0, 100000.0, 1000000.0])]
+    fn quantile_1024(bencher: divan::Bencher, df: f64) {
+        distribution(bencher, df, "quantile");
+    }
+}
+
 fn main() {
     divan::main();
 }
