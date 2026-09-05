@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::input_validation::{validate_prediction_shape, validate_training_shape};
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
 pub enum GBSurvLoss {
@@ -471,16 +473,7 @@ impl GradientBoostSurvival {
         status: Vec<i32>,
         config: &GradientBoostSurvivalConfig,
     ) -> PyResult<Self> {
-        if x.len() != n_obs * n_vars {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "x length must equal n_obs * n_vars",
-            ));
-        }
-        if time.len() != n_obs || status.len() != n_obs {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "time and status must have length n_obs",
-            ));
-        }
+        validate_training_shape(x.len(), n_obs, n_vars, time.len(), status.len())?;
 
         let config = config.clone();
         Ok(py.detach(move || fit_gradient_boost_inner(&x, n_obs, n_vars, &time, &status, &config)))
@@ -488,11 +481,7 @@ impl GradientBoostSurvival {
 
     #[pyo3(signature = (x_new, n_new))]
     pub fn predict_risk(&self, x_new: Vec<f64>, n_new: usize) -> PyResult<Vec<f64>> {
-        if x_new.len() != n_new * self.n_vars {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "x_new dimensions don't match",
-            ));
-        }
+        validate_prediction_shape(x_new.len(), n_new, self.n_vars)?;
 
         let predictions: Vec<f64> = (0..n_new)
             .into_par_iter()

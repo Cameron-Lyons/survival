@@ -22,6 +22,7 @@ pub(crate) mod galee_module;
 pub(crate) mod gpu_acceleration;
 pub(crate) mod gradient_boost;
 pub(crate) mod graph_surv;
+pub(crate) mod input_validation;
 pub(crate) mod knowledge_distillation;
 pub(crate) mod multimodal_surv;
 pub(crate) mod neural_mtlr;
@@ -39,6 +40,9 @@ pub(crate) mod temporal_fusion;
 pub(crate) mod tracer_module;
 pub(crate) mod transfer_learning;
 pub(crate) mod utils;
+
+#[cfg(test)]
+mod dimension_tests;
 
 #[cfg(feature = "ml")]
 pub use active_learning::{

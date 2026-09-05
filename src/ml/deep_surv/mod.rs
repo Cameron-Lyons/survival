@@ -12,6 +12,7 @@ use rayon::prelude::*;
 use super::config_validation::{
     ensure_open_unit_interval, ensure_positive_f64, ensure_positive_usize,
 };
+use super::input_validation::{validate_prediction_shape, validate_training_shape};
 use super::utils::{
     EarlyStopping, shuffled_epoch_indices, tensor_to_vec_f32, train_validation_split_indices,
 };
