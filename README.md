@@ -224,6 +224,12 @@ predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
 term contributions, and quantile predictions via `type="quantile"`.
+Gaussian, logistic, extreme-value, and Student-t AFT models accept finite real-valued
+responses, including negative values and zero, for all censoring types. Log-time
+families retain their positive-response requirement. Native and sklearn predictions
+use each family's response transformation; `predict_median` and `predict_quantile`
+return distribution quantiles. Right-censored concordance also accepts real-valued
+responses, so these models can be scored directly.
 The AFT optimizer uses positive-definite observed-information Newton steps when
 available and falls back to the stable outer-product system otherwise. The R
 bridge also routes built-in `survreg.fit` matrix calls through this kernel,

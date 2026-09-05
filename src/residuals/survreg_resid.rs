@@ -492,11 +492,8 @@ fn validate_time2_for_interval_residuals(
                 "time2 contains non-finite interval endpoint at index {idx}"
             )));
         }
-        if end <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "time2[{idx}] must be positive"
-            )));
-        }
+        // The response validator enforces positive lower endpoints for log-time
+        // families, so ordering also enforces their upper endpoint domain.
         if end <= start {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "time2[{idx}] must be greater than time[{idx}] for interval-censored rows"
@@ -511,8 +508,20 @@ fn validate_survreg_residual_inputs(
     status: &[i32],
     linear_pred: &[f64],
     scale: f64,
+    distribution: &str,
 ) -> PyResult<()> {
-    validate_positive_finite("time", time)?;
+    validate_distribution(distribution)?;
+    let key = validated_distribution_key(distribution);
+    if response_uses_log_transform_key(&key) {
+        validate_positive_finite("time", time)?;
+    } else {
+        if time.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "time must not be empty",
+            ));
+        }
+        validate_finite_values("time", time)?;
+    }
     validate_status_values(status)?;
     validate_finite_values("linear_pred", linear_pred)?;
     validate_scale(scale)
@@ -1229,8 +1238,7 @@ pub fn survreg_residual_matrix(
             "time, status, and linear_pred must have the same length",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
@@ -1342,8 +1350,7 @@ pub fn residuals_survreg(
             "survreg matrix residuals are matrix-valued; use survreg_residual_matrix",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
@@ -1437,8 +1444,7 @@ pub fn dfbeta_survreg(
             "All inputs must have the same length",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
     let width = validate_covariates(&covariates)?;

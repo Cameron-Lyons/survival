@@ -5,7 +5,8 @@ use crate::constants::{
 use crate::internal::matrix::regularized_lu_solve;
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
-    compute_quantile_prediction, compute_response_prediction, compute_se_linear_predictor,
+    compute_quantile_prediction_with_parameter, compute_response_prediction,
+    compute_se_linear_predictor,
 };
 use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survregc1};
 use crate::residuals::survreg_resid::{
@@ -361,11 +362,12 @@ impl SurvivalFit {
         }
 
         let (linear_predictors, _rows) = self.prediction_rows(covariates, offset)?;
-        let predictions = compute_quantile_prediction(
+        let predictions = compute_quantile_prediction_with_parameter(
             &linear_predictors,
             self.scale,
             &quantiles,
             &self.distribution,
+            self.distribution_parameter(),
         );
 
         Ok(SurvregQuantilePrediction {
@@ -640,7 +642,7 @@ fn calculate_variance_matrix(
     }
 }
 
-fn validate_time_values(time: &[f64]) -> PyResult<()> {
+fn validate_time_values(time: &[f64], uses_log_time: bool) -> PyResult<()> {
     if time.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "time must not be empty",
@@ -653,7 +655,7 @@ fn validate_time_values(time: &[f64]) -> PyResult<()> {
                 idx
             )));
         }
-        if value <= 0.0 {
+        if uses_log_time && value <= 0.0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "time[{}] must be positive",
                 idx
@@ -684,6 +686,7 @@ fn validate_time2_values(
     time: &[f64],
     status: &[f64],
     time2: Option<Vec<f64>>,
+    uses_log_time: bool,
 ) -> PyResult<Option<Vec<f64>>> {
     let has_interval_rows = status.contains(&3.0);
     if !has_interval_rows && time2.is_none() {
@@ -716,7 +719,7 @@ fn validate_time2_values(
                     idx
                 )));
             }
-            if end <= 0.0 {
+            if uses_log_time && end <= 0.0 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "time2[{}] must be positive",
                     idx
@@ -852,9 +855,10 @@ pub fn survreg(
             status.len()
         )));
     }
-    validate_time_values(&time)?;
+    let uses_log_time = config.distribution.uses_log_time();
+    validate_time_values(&time, uses_log_time)?;
     validate_status_values(&status)?;
-    let time2_values = validate_time2_values(&time, &status, time2)?;
+    let time2_values = validate_time2_values(&time, &status, time2, uses_log_time)?;
     if !config.eps.is_finite() || config.eps <= 0.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "eps must be a finite positive value",
