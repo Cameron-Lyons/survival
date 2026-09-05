@@ -16,6 +16,7 @@ pub(crate) mod coxph;
 pub(crate) mod coxph_detail_module;
 pub(crate) mod coxph_diagnostics;
 pub(crate) mod coxph_model;
+pub(crate) mod coxph_penalty;
 pub(crate) mod coxph_support;
 #[path = "coxph_wtest.rs"]
 pub(crate) mod coxph_wtest_module;
@@ -51,7 +52,7 @@ pub use cause_specific_cox_module::{
 };
 pub use cch::{CchFitResult, CchMethod, CohortData, cch_borgan_fit, cch_fit};
 pub use clogit::{ClogitDataSet, ConditionalLogisticRegression};
-pub use coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit};
+pub use coxph::{CoxPHFit, CoxPHModel, Subject, coxph_fit, coxph_penalized_fit};
 pub use coxph_detail_module::{CoxphDetail, CoxphDetailRow, coxph_detail};
 pub use coxph_diagnostics::{
     clustered_crossprod, clustered_sandwich_variance, cox_dfbeta_from_score_residuals,
@@ -59,6 +60,7 @@ pub use coxph_diagnostics::{
     cox_zph_term_matrix, cox_zph_tests, prediction_se_from_variance, scale_schoenfeld_residuals,
     term_prediction_se_from_variance,
 };
+pub use coxph_penalty::CoxPenaltyDiagnostics;
 pub use coxph_wtest_module::coxph_wtest;
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
