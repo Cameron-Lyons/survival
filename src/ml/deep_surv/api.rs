@@ -31,6 +31,8 @@ impl DeepSurv {
     ) -> PyResult<Self> {
         validate_training_shape(x.len(), n_obs, n_vars, time.len(), status.len())?;
         ensure_positive_usize("n_vars", n_vars)?;
+        config.validate()?;
+        config.validate_network_shape(n_obs, n_vars)?;
 
         let config = config.clone();
         Ok(py.detach(move || fit_deep_surv_inner(&x, n_obs, n_vars, &time, &status, &config)))

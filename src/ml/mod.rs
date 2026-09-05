@@ -42,6 +42,8 @@ pub(crate) mod transfer_learning;
 pub(crate) mod utils;
 
 #[cfg(test)]
+mod config_tests;
+#[cfg(test)]
 mod dimension_tests;
 
 #[cfg(feature = "ml")]
