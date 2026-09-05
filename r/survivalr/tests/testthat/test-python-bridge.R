@@ -1455,7 +1455,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
 
   cox_control <- coxph.control(iter.max = 0, eps = 1e-05, toler.chol = 1e-08, timefix = FALSE)
-  expect_named(cox_control, c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix"))
+  expect_named(cox_control, c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix", "survcheckallow"))
   expect_equal(cox_control[["iter.max"]], 0L)
   expect_false(cox_control[["timefix"]])
   expect_error(coxph.control(iter.max = -1), "iter.max")
