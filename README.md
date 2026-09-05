@@ -249,7 +249,9 @@ Newton steps, with a score-product fallback when needed. It honors R's
 [`survreg` pivot tolerance](https://github.com/cran/survival/blob/3.8-11/src/cholesky3.c),
 preserves supplied coefficients in aliased directions, and returns zero
 covariance rows and columns for discarded pivots. Each accepted factorization
-is reused for the next step and the final covariance. The R bridge also routes
+is reused for the next step and the final covariance. After the first rejected
+step, the optimizer screens shorter steps using only their likelihood and
+computes full derivatives for improving candidates. The R bridge also routes
 built-in `survreg.fit` matrix calls through this kernel,
 including fixed or stratified scales and interval-censored responses.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
@@ -804,13 +806,14 @@ cargo bench -- --test
 
 The AFT benchmarks include matched weighted, stratified lognormal fits with
 full-rank and duplicated covariate columns. Five paired release runs on Apple
-Silicon with Rust 1.94 and one Rayon thread found no measurable change for the
-10,000-row full-rank fit (4.644 to 4.642 ms) after the rank/covariance correction.
-For duplicated columns, 100 and 10,000 rows improved by about 38% and 10%, while
-1,000 and 5,000 rows cost about 17% and 70% more. The 5,000-row fit requires six
-rejected early Newton trials; the corrected covariance matches R. These timings
-compare against revision `918c6456`, whose singular covariance was incorrect.
-Each run used at least 50 samples and 0.25 seconds per case:
+Silicon with Rust 1.94 and one Rayon thread compared likelihood-only retries
+against revision `7ee22927`. The 5,000-row fit with six rejected trials improved
+from 2.956 to 2.486 ms (about 16%); the 5,000-row fit with one rejected trial
+cost about 3% more (1.928 to 1.996 ms) because its accepted retry needs an extra
+likelihood scan. Cases with two rejected trials improved by about 1.5–2.4%,
+and controls without retries were roughly unchanged. All eight benchmark fits
+retained identical outputs. Each run used at least 50 samples and 0.25 seconds
+per case:
 
 ```sh
 RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- \
