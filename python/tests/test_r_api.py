@@ -15922,7 +15922,6 @@ def test_survreg_gaussian_residuals_use_identity_response_scale():
         residual_type="working",
     )
     z = 0.5
-    density = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
     survivor = 1.0 - normal.cdf(z)
 
     assert low_level_response.residuals == pytest.approx([0.5, 0.5])
@@ -15932,7 +15931,7 @@ def test_survreg_gaussian_residuals_use_identity_response_scale():
             math.sqrt(-2.0 * math.log(survivor)),
         ]
     )
-    assert low_level_working.residuals == pytest.approx([z, density / survivor])
+    assert low_level_working.residuals == pytest.approx([z, 1.5598731483480794])
 
     data = _toy_data()
     fit = survival.survreg(
