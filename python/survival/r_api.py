@@ -14134,6 +14134,7 @@ def _normalize_survreg_distribution(distribution: Any | None) -> str | None:
         "extremevalue": "extreme_value",
         "student": "t",
         "student-t": "t",
+        "studentt": "t",
     }
     if value in aliases:
         return aliases[value]
@@ -16819,31 +16820,26 @@ def _survreg_distribution_family(fit: Any) -> str:
 
 def _survreg_quantile_probabilities(values: Any | None) -> list[float]:
     probabilities = _quantile_vector(values, "p") if values is not None else [0.1, 0.9]
-    if any(not math.isfinite(value) or value <= 0.0 or value >= 1.0 for value in probabilities):
+    if any(not math.isfinite(value) or value < 0.0 or value > 1.0 for value in probabilities):
         raise ValueError("p must be between 0 and 1")
     return probabilities
 
 
 def _survreg_quantile_scores(fit: Any, probabilities: list[float]) -> list[float]:
     family = _survreg_distribution_family(fit)
-    if family == "logistic":
-        return [math.log(value / (1.0 - value)) for value in probabilities]
-    if family == "gaussian":
-        normal = NormalDist()
-        return [normal.inv_cdf(value) for value in probabilities]
-    if family == "t":
-        df = _survreg_t_fit_degrees_of_freedom(
-            getattr(fit, "distribution_parameters", None),
-        )
-        return _core.survreg_distribution(
-            probabilities,
-            [0.0] * len(probabilities),
-            [1.0] * len(probabilities),
-            "t",
-            "quantile",
-            df,
-        )
-    return [math.log(-math.log1p(-value)) for value in probabilities]
+    parameter = (
+        _survreg_t_fit_degrees_of_freedom(getattr(fit, "distribution_parameters", None))
+        if family == "t"
+        else None
+    )
+    return _core.survreg_distribution(
+        probabilities,
+        [0.0] * len(probabilities),
+        [1.0] * len(probabilities),
+        family,
+        "quantile",
+        parameter,
+    )
 
 
 def _normalize_survreg_distribution_helper(distribution: Any | None) -> str:
@@ -17075,41 +17071,22 @@ def _survreg_quantile_variance_matrix(
     raise ValueError("fitted survreg variance matrix does not match quantile width")
 
 
-def _survreg_quantile_linear_values(
-    fit: Any,
-    rows: list[list[float]] | None,
-    offsets: list[float] | None,
-    quantile_scores: list[float],
-    newdata: Any | None,
-) -> list[list[float]]:
-    result = fit.predict(rows, "lp", offsets, False)
-    linear_predictors = [float(value) for value in result.predictions]
-    strata = _survreg_prediction_strata(fit, newdata, len(linear_predictors))
-    scales = _survreg_scales(fit)
-    return [
-        [linear_predictor + score * scales[strata[row_idx]] for score in quantile_scores]
-        for row_idx, linear_predictor in enumerate(linear_predictors)
-    ]
-
-
 def _survreg_quantile_prediction_matrix(
     fit: Any,
     rows: list[list[float]] | None,
     offsets: list[float] | None,
-    quantile_scores: list[float],
+    probabilities: list[float],
     predict_type: str,
     newdata: Any | None,
 ) -> list[list[float]]:
-    linear_values = _survreg_quantile_linear_values(
-        fit,
+    strata = None if rows is None else _survreg_prediction_strata(fit, newdata, len(rows))
+    return fit.predict_quantile(
         rows,
+        probabilities,
         offsets,
-        quantile_scores,
-        newdata,
-    )
-    if predict_type != "quantile" or not _survreg_response_uses_log_transform(fit):
-        return linear_values
-    return [[_safe_exp(value) for value in row] for row in linear_values]
+        strata=strata,
+        transform=predict_type == "quantile",
+    ).predictions
 
 
 def _survreg_quantile_prediction_se_matrix(
@@ -18991,16 +18968,16 @@ def predict(
                 raise ValueError("use only one of p or quantiles")
             q_values = quantiles if quantiles is not None else p
             q = _survreg_quantile_probabilities(q_values)
-            scores = _survreg_quantile_scores(fit, q)
             predictions = _survreg_quantile_prediction_matrix(
                 fit,
                 rows,
                 offsets,
-                scores,
+                q,
                 predict_type,
                 newdata,
             )
             if include_se:
+                scores = _survreg_quantile_scores(fit, q)
                 se = _survreg_quantile_prediction_se_matrix(
                     fit,
                     rows,

@@ -1133,7 +1133,9 @@ long data frame instead of a matrix.}
 \item{q, p, n}{Quantiles, probabilities, or draw count for the
 \code{survreg} distribution helpers; \code{p} is the confidence level for
 \code{cipoisson} and the survival probabilities for
-\code{survfit_confint}.}
+\code{survfit_confint}. AFT prediction quantiles also accept probabilities
+0 and 1, returning the distribution's limits. Prediction standard errors at
+these limits may be infinite or undefined when the scale is estimated.}
 \item{probs}{Survival quantile probabilities.}
 \item{se}{Standard-error vector for \code{survfit_confint}, or logical flag
 controlling confidence curves for \code{aareg} plots.}

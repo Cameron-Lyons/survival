@@ -223,7 +223,18 @@ The R-style `predict(...)` and `fitted(...)` generics support Cox linear
 predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
-term contributions, and quantile predictions via `type="quantile"`.
+term contributions, and quantile predictions via `type="quantile"` or
+`type="uquantile"` for the model's linear scale. Probabilities include 0 and 1,
+which return the distribution's limits. Quantiles use each row's fitted scale
+and retain Student-t degrees of freedom.
+The native `fit.predict_quantile()` method uses training strata by default;
+new covariates for a model with multiple scales require zero-based
+`strata=...` indices. Pass `transform=False` for linear-scale quantiles.
+`AFTEstimator.predict()` returns the fitted response-scale location, matching
+R's default prediction; `predict_median()` and `predict_quantile()` return
+actual distribution quantiles. Gaussian, logistic, extreme-value, and Student-t
+responses use the identity transform. Native prediction standard errors are
+available for training and new rows and follow the requested response scale.
 The AFT optimizer uses positive-definite observed-information Newton steps when
 available and falls back to the stable outer-product system otherwise. The R
 bridge also routes built-in `survreg.fit` matrix calls through this kernel,

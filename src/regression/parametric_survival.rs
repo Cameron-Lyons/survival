@@ -5,7 +5,8 @@ use crate::constants::{
 use crate::internal::matrix::regularized_lu_solve;
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
-    compute_quantile_prediction, compute_response_prediction, compute_se_linear_predictor,
+    compute_quantile_prediction_with_options, compute_response_prediction,
+    compute_se_linear_predictor, transform_prediction_se,
 };
 use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survregc1};
 use crate::residuals::survreg_resid::{
@@ -297,6 +298,82 @@ impl SurvivalFit {
             Ok((self.linear_predictors.clone(), None))
         }
     }
+
+    /// Predict response quantiles using stored training strata by default.
+    /// Retains the original Rust API; explicit new-data strata are available
+    /// through `predict_quantile_with_options`.
+    pub fn predict_quantile(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        quantiles: Option<Vec<f64>>,
+        offset: Option<Vec<f64>>,
+    ) -> PyResult<SurvregQuantilePrediction> {
+        self.predict_quantile_with_options(covariates, quantiles, offset, None, true)
+    }
+
+    /// Predict quantiles with optional zero-based stratum indices per row.
+    /// Training predictions use the stored strata when none are supplied;
+    /// new rows require indices when the fit has multiple scales. Set
+    /// `transform` to false to retain the model's linear response scale.
+    /// Probabilities include 0 and 1, returning the distribution's limits.
+    pub fn predict_quantile_with_options(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        quantiles: Option<Vec<f64>>,
+        offset: Option<Vec<f64>>,
+        strata: Option<Vec<usize>>,
+        transform: bool,
+    ) -> PyResult<SurvregQuantilePrediction> {
+        let new_data = covariates.is_some();
+        let (linear_predictors, _rows) = self.prediction_rows(covariates, offset)?;
+        let n = linear_predictors.len();
+        if self.scales.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "fitted scales must not be empty",
+            ));
+        }
+        let prediction_strata = match strata {
+            Some(values) => values,
+            None if !new_data => self.strata.clone(),
+            None if self.scales.len() == 1 => vec![0; n],
+            None => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "strata is required for new covariates when the fit has multiple scales",
+                ));
+            }
+        };
+        if prediction_strata.len() != n {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "strata length must match prediction rows",
+            ));
+        }
+        let row_scales = prediction_strata
+            .iter()
+            .enumerate()
+            .map(|(idx, &stratum)| {
+                self.scales.get(stratum).copied().ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "strata contains value {stratum} at row {idx}, expected < {}",
+                        self.scales.len()
+                    ))
+                })
+            })
+            .collect::<PyResult<Vec<f64>>>()?;
+        let quantiles = quantiles.unwrap_or_else(|| vec![0.5]);
+        let predictions = compute_quantile_prediction_with_options(
+            &linear_predictors,
+            &row_scales,
+            &quantiles,
+            &self.distribution,
+            self.distribution_parameter(),
+            transform,
+        )?;
+        Ok(SurvregQuantilePrediction {
+            n,
+            quantiles,
+            predictions,
+        })
+    }
 }
 
 #[pymethods]
@@ -330,8 +407,10 @@ impl SurvivalFit {
         };
 
         let se = if se_fit {
-            rows.as_ref()
-                .map(|values| compute_se_linear_predictor(values, &self.location_variance_matrix()))
+            let values = rows.as_deref().unwrap_or(&self.covariates);
+            let mut se = compute_se_linear_predictor(values, &self.location_variance_matrix());
+            transform_prediction_se(&mut se, &predictions, &self.distribution, prediction_type);
+            Some(se)
         } else {
             None
         };
@@ -344,35 +423,16 @@ impl SurvivalFit {
         })
     }
 
-    #[pyo3(signature = (covariates=None, quantiles=None, offset=None))]
-    pub fn predict_quantile(
+    #[pyo3(name = "predict_quantile", signature = (covariates=None, quantiles=None, offset=None, strata=None, transform=true))]
+    fn predict_quantile_py(
         &self,
         covariates: Option<Vec<Vec<f64>>>,
         quantiles: Option<Vec<f64>>,
         offset: Option<Vec<f64>>,
+        strata: Option<Vec<usize>>,
+        transform: bool,
     ) -> PyResult<SurvregQuantilePrediction> {
-        let quantiles = quantiles.unwrap_or_else(|| vec![0.5]);
-        for &q in &quantiles {
-            if !q.is_finite() || q <= 0.0 || q >= 1.0 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Quantiles must be between 0 and 1 (exclusive)",
-                ));
-            }
-        }
-
-        let (linear_predictors, _rows) = self.prediction_rows(covariates, offset)?;
-        let predictions = compute_quantile_prediction(
-            &linear_predictors,
-            self.scale,
-            &quantiles,
-            &self.distribution,
-        );
-
-        Ok(SurvregQuantilePrediction {
-            n: predictions.len(),
-            quantiles,
-            predictions,
-        })
+        self.predict_quantile_with_options(covariates, quantiles, offset, strata, transform)
     }
 
     #[pyo3(signature = (residual_type="deviance".to_string()))]
@@ -1223,6 +1283,119 @@ struct ComputeSurvregInput<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prediction_test_fit(distribution: &str) -> SurvivalFit {
+        SurvivalFit {
+            coefficients: vec![1.0, 0.5, 0.5_f64.ln(), 2.0_f64.ln()],
+            location_coefficients: vec![1.0, 0.5],
+            scale: 0.5,
+            scales: vec![0.5, 2.0],
+            distribution: distribution.into(),
+            distribution_parameters: vec![],
+            n_covariates: 2,
+            n_strata: 2,
+            // The second training row includes an offset of 0.25.
+            linear_predictors: vec![1.0, 2.25],
+            time: vec![1.0, 2.0],
+            time2: None,
+            status: vec![1, 1],
+            covariates: vec![vec![1.0, 0.0], vec![1.0, 2.0]],
+            strata: vec![1, 0],
+            weights: vec![1.0; 2],
+            iterations: 0,
+            variance_matrix: vec![
+                vec![0.04, 0.0, 0.0, 0.0],
+                vec![0.0, 0.09, 0.0, 0.0],
+                vec![0.0, 0.0, 0.16, 0.0],
+                vec![0.0, 0.0, 0.0, 0.25],
+            ],
+            log_likelihood: 0.0,
+            convergence_flag: 0,
+            score_vector: vec![0.0; 4],
+        }
+    }
+
+    #[test]
+    fn test_prediction_quantiles_use_training_strata_and_transform_option() {
+        let fit = prediction_test_fit("loglogistic");
+        let response = fit
+            .predict_quantile(None, Some(vec![0.0, 0.75, 1.0]), None)
+            .unwrap();
+        let linear = fit
+            .predict_quantile_with_options(None, Some(vec![0.0, 0.75, 1.0]), None, None, false)
+            .unwrap();
+        for (idx, expected) in [1.0 + 2.0 * 3.0_f64.ln(), 2.25 + 0.5 * 3.0_f64.ln()]
+            .into_iter()
+            .enumerate()
+        {
+            assert!((linear.predictions[idx][1] - expected).abs() < 1e-12);
+            assert!((response.predictions[idx][1] - expected.exp()).abs() < 1e-12);
+            assert_eq!(linear.predictions[idx][0], f64::NEG_INFINITY);
+            assert_eq!(response.predictions[idx][0], 0.0);
+            assert_eq!(response.predictions[idx][2], f64::INFINITY);
+        }
+    }
+
+    #[test]
+    fn test_prediction_quantiles_require_valid_new_data_strata() {
+        let fit = prediction_test_fit("logistic");
+        let covariates = vec![vec![1.0, 0.0], vec![1.0, 2.0]];
+        for strata in [None, Some(vec![0]), Some(vec![0, 2])] {
+            assert!(
+                fit.predict_quantile_with_options(
+                    Some(covariates.clone()),
+                    Some(vec![0.75]),
+                    None,
+                    strata,
+                    true
+                )
+                .is_err()
+            );
+        }
+        let result = fit
+            .predict_quantile_with_options(
+                Some(covariates),
+                Some(vec![0.75]),
+                Some(vec![0.25, -0.25]),
+                Some(vec![0, 1]),
+                true,
+            )
+            .unwrap();
+        assert!((result.predictions[0][0] - (1.25 + 0.5 * 3.0_f64.ln())).abs() < 1e-12);
+        assert!((result.predictions[1][0] - (1.75 + 2.0 * 3.0_f64.ln())).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_prediction_student_t_quantiles_use_fitted_degrees_of_freedom() {
+        let mut fit = prediction_test_fit("t");
+        fit.distribution_parameters = vec![7.0];
+        let result = fit.predict_quantile(None, Some(vec![0.75]), None).unwrap();
+        // R 3.8.11 qt(.75, df=7).
+        let score = 0.711_141_778_081_786_6;
+        assert!((result.predictions[0][0] - (1.0 + 2.0 * score)).abs() < 1e-10);
+        assert!((result.predictions[1][0] - (2.25 + 0.5 * score)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_prediction_training_standard_errors_use_stored_covariates() {
+        for distribution in ["lognormal", "gaussian"] {
+            let fit = prediction_test_fit(distribution);
+            let lp = fit.predict(None, "lp".into(), None, true).unwrap();
+            let response = fit.predict(None, "response".into(), None, true).unwrap();
+            assert_eq!(lp.predictions, vec![1.0, 2.25]);
+            for (idx, expected_lp_se) in [0.2, 0.4_f64.sqrt()].into_iter().enumerate() {
+                assert!((lp.se.as_ref().unwrap()[idx] - expected_lp_se).abs() < 1e-12);
+                let factor = if distribution == "lognormal" {
+                    lp.predictions[idx].exp()
+                } else {
+                    1.0
+                };
+                assert!(
+                    (response.se.as_ref().unwrap()[idx] - expected_lp_se * factor).abs() < 1e-12
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_survreg_config_default() {
