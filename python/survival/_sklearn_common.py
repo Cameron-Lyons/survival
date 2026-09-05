@@ -19,12 +19,11 @@ if TYPE_CHECKING:
     class _Predictor(Protocol):
         def predict(self, X: ArrayLike) -> NDArray[np.float64]: ...
 
-    def check_array(X: ArrayLike, **kwargs: Any) -> NDArray[np.float64]: ...
     def check_is_fitted(estimator: Any, attributes: Any = None) -> None: ...
 else:
     try:
         from sklearn.base import BaseEstimator, RegressorMixin
-        from sklearn.utils.validation import check_array, check_is_fitted
+        from sklearn.utils.validation import check_is_fitted
 
         _HAS_SKLEARN = True
     except ImportError:
@@ -47,16 +46,52 @@ else:
         class RegressorMixin:
             pass
 
-        def check_array(X, **kwargs):
-            array = np.asarray(X, dtype=kwargs.get("dtype"))
-            if kwargs.get("ensure_2d", True) and array.ndim != 2:
-                shape = "scalar" if array.ndim == 0 else f"{array.ndim}D"
-                raise ValueError(f"Expected 2D array, got {shape} array instead")
-            return array
-
         def check_is_fitted(estimator, attributes=None):
             if not hasattr(estimator, "is_fitted_") or not estimator.is_fitted_:
                 raise ValueError(f"{type(estimator).__name__} is not fitted yet.")
+
+
+def check_array(
+    X: ArrayLike, *, dtype: Any = np.float64, ensure_2d: bool = True
+) -> NDArray[np.float64]:
+    """Validate dense features consistently with or without scikit-learn."""
+    if np.ma.is_masked(X):
+        raise ValueError("X must not contain masked feature values")
+    array = np.asarray(X)
+    if ensure_2d and array.ndim != 2:
+        shape = "scalar" if array.ndim == 0 else f"{array.ndim}D"
+        raise ValueError(f"Expected 2D array, got {shape} array instead")
+    if array.ndim > 0 and array.shape[0] == 0:
+        raise ValueError("X must contain at least one sample")
+
+    # NumPy complex scalars in object arrays can also lose their imaginary part
+    # when cast to float64. Check before conversion to avoid that data loss.
+    if np.iscomplexobj(array):
+        raise ValueError("X must contain only real feature values")
+    if array.dtype.kind == "O":
+        simple_types = (float, int, bool, str, bytes)
+        complex_types = (complex, np.complexfloating)
+        temporal_types = (np.datetime64, np.timedelta64)
+        for value in array.flat:
+            if type(value) in simple_types:
+                continue
+            if isinstance(value, complex_types):
+                raise ValueError("X must contain only real feature values")
+            if isinstance(value, temporal_types) and np.isnat(value):
+                raise ValueError("X must contain only finite feature values")
+            if np.ma.is_masked(value):
+                raise ValueError("X must not contain masked feature values")
+    if array.dtype.kind in "mM" and np.isnat(array).any():
+        raise ValueError("X must contain only finite feature values")
+
+    try:
+        with np.errstate(over="ignore", invalid="ignore"):
+            array = array.astype(dtype, copy=False)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("X must contain only finite real feature values") from error
+    if not np.isfinite(array).all():
+        raise ValueError("X must contain only finite feature values")
+    return array
 
 
 def _validate_survival_data(
