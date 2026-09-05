@@ -142,8 +142,17 @@ fn initial_location_coefficients(
     Ok(coefficients)
 }
 
+pub(super) fn is_mean_only(covariates: &Array2<f64>, weights: &Array1<f64>) -> bool {
+    covariates.nrows() == 1
+        && covariates
+            .iter()
+            .zip(weights)
+            .all(|(&value, &weight)| weight == 0.0 || value == 1.0)
+}
+
 pub(super) fn initialize_survreg(
     input: &ComputeSurvregInput<'_>,
+    initial_location: Option<&[f64]>,
 ) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
     let transform = |time: f64| {
         if input.distribution.uses_log_time() {
@@ -201,12 +210,7 @@ pub(super) fn initialize_survreg(
         return Err("initial iteration failed: response scale is not finite and positive (use starting estimates?)".into());
     }
     let mut log_scales = vec![log_scale; input.nstrat];
-    let mean_only = input.nvar == 1
-        && input
-            .covariates
-            .iter()
-            .zip(input.weights)
-            .all(|(&value, &weight)| weight == 0.0 || value == 1.0);
+    let mean_only = is_mean_only(input.covariates, input.weights);
     if !mean_only && input.fixed_scale.is_none() {
         let intercept = Array2::ones((1, input.y.nrows()));
         let mut beta = initial_location_coefficients(input, &intercept, &midpoint, &log_scales)?;
@@ -235,7 +239,12 @@ pub(super) fn initialize_survreg(
         }
         log_scales.copy_from_slice(&fit.coefficients[1..]);
     }
-    let mut beta = initial_location_coefficients(input, input.covariates, &midpoint, &log_scales)?;
+    // A location-only start is already in the user's design coordinates.
+    // Only its missing scales come from the preliminary intercept fit.
+    let mut beta = match initial_location {
+        Some(values) => values.to_vec(),
+        None => initial_location_coefficients(input, input.covariates, &midpoint, &log_scales)?,
+    };
     if input.fixed_scale.is_none() {
         beta.extend(log_scales);
     }

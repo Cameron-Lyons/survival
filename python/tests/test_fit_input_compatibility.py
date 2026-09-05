@@ -84,7 +84,7 @@ def test_scalar_initial_value_does_not_broadcast_to_multiple_coefficients(functi
             survival.coxph("Surv(time, status) ~ x + I(x*x)", _data(), init=0.0)
     else:
         with pytest.raises(ValueError, match="initial_beta has 1 values"):
-            survival.survreg("Surv(time, status) ~ 1", _data(), dist="logistic", init=2.0)
+            survival.survreg("Surv(time, status) ~ x", _data(), dist="logistic", init=2.0)
 
 
 @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
