@@ -1,5 +1,5 @@
 use crate::constants::{PARALLEL_THRESHOLD_XLARGE, clamped_normal_ci_bounds_95};
-use crate::internal::statistical::erf;
+use crate::internal::statistical::{normal_cdf, normal_sf};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -83,12 +83,19 @@ fn weibull_pdf(t: f64, scale: f64, shape: f64) -> f64 {
     (shape / scale) * (t / scale).powf(shape - 1.0) * (-(t / scale).powf(shape)).exp()
 }
 
+fn lognormal_survival(t: f64, mu: f64, sigma: f64) -> f64 {
+    if t <= 0.0 || sigma <= 0.0 {
+        return 1.0;
+    }
+    normal_sf((t.ln() - mu) / sigma)
+}
+
 fn lognormal_cdf(t: f64, mu: f64, sigma: f64) -> f64 {
     if t <= 0.0 || sigma <= 0.0 {
         return 0.0;
     }
     let z = (t.ln() - mu) / sigma;
-    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
+    normal_cdf(z)
 }
 
 fn lognormal_pdf(t: f64, mu: f64, sigma: f64) -> f64 {
@@ -140,7 +147,10 @@ fn compute_interval_likelihood(
             f.max(1e-300).ln()
         }
         CensorType::RightCensored => {
-            let s = 1.0 - cdf_fn(left, scale, shape);
+            let s = match distribution {
+                IntervalDistribution::LogNormal => lognormal_survival(left, scale, shape),
+                _ => 1.0 - cdf_fn(left, scale, shape),
+            };
             s.max(1e-300).ln()
         }
         CensorType::LeftCensored => {
@@ -148,10 +158,15 @@ fn compute_interval_likelihood(
             f.max(1e-300).ln()
         }
         CensorType::IntervalCensored => {
-            let f_right = cdf_fn(right, scale, shape);
-            let f_left = cdf_fn(left, scale, shape);
-            let diff = (f_right - f_left).max(1e-300);
-            diff.ln()
+            let probability = if *distribution == IntervalDistribution::LogNormal
+                && left > 0.0
+                && left.ln() >= scale
+            {
+                lognormal_survival(left, scale, shape) - lognormal_survival(right, scale, shape)
+            } else {
+                cdf_fn(right, scale, shape) - cdf_fn(left, scale, shape)
+            };
+            probability.max(1e-300).ln()
         }
     }
 }
@@ -322,7 +337,7 @@ pub fn interval_censored_regression(
             let t = (left[i] + right[i].min(left[i] * 10.0)) / 2.0;
             match distribution {
                 IntervalDistribution::Weibull => 1.0 - weibull_cdf(t, scale_i, shape),
-                IntervalDistribution::LogNormal => 1.0 - lognormal_cdf(t, scale_i, shape),
+                IntervalDistribution::LogNormal => lognormal_survival(t, scale_i, shape),
                 IntervalDistribution::LogLogistic => 1.0 - loglogistic_cdf(t, scale_i, shape),
                 _ => 1.0 - weibull_cdf(t, scale_i, shape),
             }
@@ -683,6 +698,30 @@ pub fn npmle_interval(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lognormal_censoring_retains_tail_likelihood() {
+        // R pnorm(9, lower.tail = FALSE, log.p = TRUE), and the log
+        // probability of an interval with standardized endpoints 9 and 10.
+        let right = compute_interval_likelihood(
+            9.0_f64.exp(),
+            f64::INFINITY,
+            CensorType::RightCensored,
+            0.0,
+            1.0,
+            &IntervalDistribution::LogNormal,
+        );
+        assert!((right - (-43.628_149_113_332_12)).abs() < 1e-12);
+        let interval = compute_interval_likelihood(
+            9.0_f64.exp(),
+            10.0_f64.exp(),
+            CensorType::IntervalCensored,
+            0.0,
+            1.0,
+            &IntervalDistribution::LogNormal,
+        );
+        assert!((interval - (-43.628_216_632_280_825)).abs() < 1e-12);
+    }
 
     #[test]
     fn test_weibull_cdf() {

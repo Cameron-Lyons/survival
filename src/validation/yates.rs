@@ -1,5 +1,5 @@
 use crate::constants::{normal_ci, normal_ci_bounds_95};
-use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::statistical::{normal_inverse_cdf, normal_sf};
 use crate::internal::validation::{
     validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
 };
@@ -278,7 +278,7 @@ pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResul
             let z = if se_diff > 0.0 { diff / se_diff } else { 0.0 };
             z_scores.push(z);
 
-            let p = 2.0 * (1.0 - normal_cdf(z.abs()));
+            let p = 2.0 * normal_sf(z.abs());
             p_values.push(p);
         }
     }

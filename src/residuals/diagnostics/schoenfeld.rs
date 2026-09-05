@@ -148,7 +148,7 @@ pub fn smooth_schoenfeld(
         if se_slope > 1e-10 {
             let z = slope / se_slope;
             slope_test_stats[j] = z;
-            slope_p_values[j] = 2.0 * (1.0 - normal_cdf(z.abs()));
+            slope_p_values[j] = 2.0 * normal_sf(z.abs());
         }
     }
 

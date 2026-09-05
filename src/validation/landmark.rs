@@ -1,7 +1,7 @@
 use crate::constants::{
     PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, same_time, z_score_for_confidence,
 };
-use crate::internal::statistical::normal_cdf as norm_cdf;
+use crate::internal::statistical::normal_sf;
 use crate::internal::validation::{
     validate_binary_i32, validate_confidence_level, validate_finite, validate_no_nan,
 };
@@ -400,7 +400,7 @@ pub(crate) fn compute_hazard_ratio(
     } else {
         0.0
     };
-    let p_value = 2.0 * (1.0 - norm_cdf(z_statistic.abs()));
+    let p_value = 2.0 * normal_sf(z_statistic.abs());
     HazardRatioResult {
         hazard_ratio,
         ci_lower,

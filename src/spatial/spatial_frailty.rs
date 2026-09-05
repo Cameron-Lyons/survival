@@ -1,7 +1,7 @@
 use crate::constants::{PARALLEL_THRESHOLD_MEDIUM, exp_ci_bounds_95};
 use crate::internal::matrix::invert_flat_square_matrix_with_fallback;
 use crate::internal::sorting::descending_time_indices;
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::normal_sf;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -745,7 +745,7 @@ pub fn moran_i_test(
     let var_i = (n_regions as f64).powi(2) / (w_sum.powi(2) * (n_regions as f64 - 1.0));
     let z_score = (moran_i - expected_i) / var_i.sqrt();
 
-    let p_value = 2.0 * (1.0 - normal_cdf(z_score.abs()));
+    let p_value = 2.0 * normal_sf(z_score.abs());
 
     Ok((moran_i, z_score, p_value))
 }

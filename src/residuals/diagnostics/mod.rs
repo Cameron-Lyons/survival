@@ -3,7 +3,7 @@ use rayon::prelude::*;
 
 use crate::constants::PARALLEL_THRESHOLD_MEDIUM;
 use crate::internal::matrix::invert_flat_square_matrix_with_fallback;
-use crate::internal::statistical::{lower_incomplete_gamma, normal_cdf};
+use crate::internal::statistical::{lower_incomplete_gamma, normal_sf};
 
 fn diagnostic_value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())

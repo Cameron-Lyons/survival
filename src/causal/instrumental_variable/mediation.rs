@@ -186,9 +186,9 @@ pub fn mediation_survival(
         0.0
     };
 
-    let total_pvalue = 2.0 * (1.0 - normal_cdf(total_z.abs()));
-    let direct_pvalue = 2.0 * (1.0 - normal_cdf(direct_z.abs()));
-    let indirect_pvalue = 2.0 * (1.0 - normal_cdf(indirect_z.abs()));
+    let total_pvalue = 2.0 * normal_sf(total_z.abs());
+    let direct_pvalue = 2.0 * normal_sf(direct_z.abs());
+    let indirect_pvalue = 2.0 * normal_sf(indirect_z.abs());
 
     Ok(MediationSurvivalResult {
         total_effect,

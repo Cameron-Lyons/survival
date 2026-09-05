@@ -1,7 +1,6 @@
 use crate::internal::rng::Rng;
 use burn::prelude::Backend;
 use burn::tensor::Tensor;
-use std::f64::consts::SQRT_2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrainValidationSplit {
@@ -85,7 +84,7 @@ pub(crate) fn shuffled_epoch_indices(train_indices: &[usize], rng: &mut Rng) -> 
 
 #[inline]
 pub(crate) fn gelu_cpu(x: f64) -> f64 {
-    x * 0.5 * (1.0 + crate::internal::statistical::erf(x / SQRT_2))
+    x * crate::internal::statistical::normal_cdf(x)
 }
 
 #[inline]

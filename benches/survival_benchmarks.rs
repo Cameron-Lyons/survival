@@ -976,6 +976,69 @@ mod survreg_bench {
     }
 }
 
+mod gaussian_distribution_bench {
+    use super::*;
+    use survival::regression::survreg_distribution;
+
+    fn run(bencher: divan::Bencher, values: Vec<f64>, kind: &str) {
+        let n = values.len();
+        let inputs = (
+            values,
+            vec![0.0; n],
+            vec![1.0; n],
+            "gaussian".to_string(),
+            kind.to_string(),
+        );
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(values, mean, scale, distribution, kind)| {
+                black_box(
+                    survreg_distribution(values, mean, scale, distribution, kind, None)
+                        .expect("benchmark Gaussian distribution inputs should be valid"),
+                )
+            },
+        );
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn central_probabilities(bencher: divan::Bencher, n: usize) {
+        let values = (0..n)
+            .map(|idx| -4.0 + 8.0 * idx as f64 / (n - 1) as f64)
+            .collect();
+        run(bencher, values, "distribution");
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn tail_probabilities(bencher: divan::Bencher, n: usize) {
+        let tails = [-5.0, -8.0, -9.0, -12.0, -20.0, -30.0, -37.5, -38.0];
+        let values = (0..n).map(|idx| tails[idx % tails.len()]).collect();
+        run(bencher, values, "distribution");
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn central_quantiles(bencher: divan::Bencher, n: usize) {
+        let values = (0..n)
+            .map(|idx| 0.001 + 0.998 * idx as f64 / (n - 1) as f64)
+            .collect();
+        run(bencher, values, "quantile");
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn tail_quantiles(bencher: divan::Bencher, n: usize) {
+        let tails = [
+            f64::from_bits(1),
+            1e-320,
+            1e-300,
+            1e-200,
+            1e-100,
+            1e-20,
+            1e-10,
+            1.0_f64.next_down(),
+        ];
+        let values = (0..n).map(|idx| tails[idx % tails.len()]).collect();
+        run(bencher, values, "quantile");
+    }
+}
+
 mod simd_bench {
     use survival::simd_ops::{dot_product_simd, sum_simd, variance_simd};
 

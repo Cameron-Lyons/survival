@@ -55,28 +55,22 @@ pub(crate) fn probit(p: f64) -> f64 {
 
 #[inline]
 pub(crate) fn erf(x: f64) -> f64 {
-    let a1 = 0.254829592;
-    let a2 = -0.284496736;
-    let a3 = 1.421413741;
-    let a4 = -1.453152027;
-    let a5 = 1.061405429;
-    let p = 0.3275911;
-
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x = x.abs();
-    let t = 1.0 / (1.0 + p * x);
-    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-    sign * y
+    libm::erf(x)
 }
 
 #[inline]
 pub(crate) fn erfc(x: f64) -> f64 {
-    1.0 - erf(x)
+    libm::erfc(x)
 }
 
 #[inline]
 pub(crate) fn normal_cdf(x: f64) -> f64 {
-    0.5 * (1.0 + erf(x / SQRT_2))
+    0.5 * erfc(-x / SQRT_2)
+}
+
+#[inline]
+pub(crate) fn normal_sf(x: f64) -> f64 {
+    0.5 * erfc(x / SQRT_2)
 }
 
 #[inline]
@@ -857,7 +851,6 @@ pub(crate) fn km_step_prob_at(t: f64, unique_times: &[f64], km_values: &[f64]) -
 }
 
 #[inline]
-#[allow(clippy::excessive_precision)]
 pub(crate) fn normal_inverse_cdf(p: f64) -> f64 {
     if p <= 0.0 {
         return f64::NEG_INFINITY;
@@ -869,6 +862,18 @@ pub(crate) fn normal_inverse_cdf(p: f64) -> f64 {
         return 0.0;
     }
 
+    // Reflect into the lower tail so refinement never subtracts a tiny
+    // upper-tail probability from a CDF that has rounded to one.
+    let lower = if p > 0.5 { 1.0 - p } else { p };
+    let x = normal_quantile_lower(lower, lower.ln());
+    if p > 0.5 { -x } else { x }
+}
+
+#[allow(clippy::excessive_precision)]
+// Internal lower-tail entry point: 0 <= p <= 0.5 and finite log_p <= log(0.5).
+// Callers retain log_p before scaling p so even an underflowed p remains useful.
+pub(crate) fn normal_quantile_lower(p: f64, log_p: f64) -> f64 {
+    // Acklam's rational approximation provides the initial estimate.
     let a = [
         -3.969683028665376e+01,
         2.209460984245205e+02,
@@ -900,22 +905,43 @@ pub(crate) fn normal_inverse_cdf(p: f64) -> f64 {
     ];
 
     let p_low = 0.02425;
-    let p_high = 1.0 - p_low;
-
-    if p < p_low {
-        let q = (-2.0 * p.ln()).sqrt();
+    let mut x = if p < p_low {
+        let q = (-2.0 * log_p).sqrt();
         (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
             / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
-    } else if p <= p_high {
+    } else {
         let q = p - 0.5;
         let r = q * q;
         (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
             / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+    };
+
+    if x < -8.0 {
+        // Laplace's continued fraction for the normal Mills ratio (DLMF
+        // 7.9.1, after rescaling). At |x| >= 8, the 15/16 convergents
+        // bracket the ratio within 1e-17 relative error, below double
+        // precision. Log probabilities remain useful
+        // even when a probability or density would underflow or quantize.
+        let t = -x;
+        let mut fraction = 0.0;
+        for numerator in (1..=16).rev() {
+            fraction = numerator as f64 / (t + fraction);
+        }
+        let mills = 1.0 / (t + fraction);
+        let log_cdf = -0.5 * x * x - 0.918_938_533_204_672_7 + mills.ln();
+        x -= (log_cdf - log_p) * mills;
     } else {
-        let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+        let error = if x > -0.5 {
+            // Retain quantiles arbitrarily close to the median.
+            0.5 * erf(x / SQRT_2) - (p - 0.5)
+        } else {
+            normal_cdf(x) - p
+        };
+        let density = (-0.5 * x * x).exp() / 2.506_628_274_631_000_5;
+        let correction = error / density;
+        x -= correction / (1.0 + 0.5 * x * correction);
     }
+    x
 }
 
 #[inline]
@@ -924,7 +950,8 @@ pub(crate) fn two_sided_normal_quantile(alpha: f64) -> Option<f64> {
         return None;
     }
 
-    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    // Taking logs before halving also supports subnormal alpha values.
+    let z = -normal_quantile_lower(alpha / 2.0, alpha.ln() - std::f64::consts::LN_2);
     z.is_finite().then_some(z)
 }
 
@@ -1212,6 +1239,155 @@ pub(crate) fn gamma_continued_fraction(a: f64, x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normal_probabilities_match_r_reference_in_both_tails() {
+        // R 4.6.1: pnorm(z, lower.tail = FALSE), printed with 17 digits.
+        let cases = [
+            (0.0, 0.5),
+            (1e-12, 0.499_999_999_999_601_04),
+            (0.1, 0.460_172_162_722_971),
+            (1.0, 0.158_655_253_931_457_05),
+            (5.0, 2.866_515_718_791_939e-7),
+            (8.0, 6.220_960_574_271_785e-16),
+            (9.0, 1.128_588_405_953_840_8e-19),
+            (12.0, 1.776_482_112_077_679e-33),
+            (20.0, 2.753_624_118_606_233_7e-89),
+            (30.0, 4.906_713_927_148_187e-198),
+            (37.5, 4.605_353_009_581_955e-308),
+            (38.0, 2.885_428_35e-316),
+        ];
+        for (z, expected) in cases {
+            let tolerance = expected * 3e-13 + f64::from_bits(1);
+            for actual in [normal_sf(z), normal_cdf(-z)] {
+                assert!(actual > 0.0, "normal tail at {z} must remain positive");
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "normal tail at {z}: {actual:e} != {expected:e}"
+                );
+            }
+            assert_eq!(normal_sf(-z), normal_cdf(z));
+            assert!((normal_cdf(z) + normal_sf(z) - 1.0).abs() <= f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_normal_error_functions_and_probabilities_preserve_special_values() {
+        assert_eq!(erf(0.0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(erf(-0.0).to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(erfc(0.0), 1.0);
+        assert_eq!(erf(f64::INFINITY), 1.0);
+        assert_eq!(erf(f64::NEG_INFINITY), -1.0);
+        assert_eq!(erfc(f64::INFINITY), 0.0);
+        assert_eq!(erfc(f64::NEG_INFINITY), 2.0);
+        assert_eq!(normal_cdf(0.0), 0.5);
+        assert_eq!(normal_sf(0.0), 0.5);
+        assert_eq!(normal_cdf(f64::NEG_INFINITY), 0.0);
+        assert_eq!(normal_cdf(f64::INFINITY), 1.0);
+        assert_eq!(normal_sf(f64::NEG_INFINITY), 1.0);
+        assert_eq!(normal_sf(f64::INFINITY), 0.0);
+        assert!(erf(f64::NAN).is_nan());
+        assert!(erfc(f64::NAN).is_nan());
+        assert!(normal_cdf(f64::NAN).is_nan());
+        assert!(normal_sf(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_normal_quantiles_match_r_reference_across_probability_range() {
+        // R 4.6.1: qnorm(p). Include subnormal probabilities whose CDF
+        // values are too coarsely rounded to support probability refinement.
+        let cases = [
+            (f64::from_bits(1), -38.467_405_617_144_344),
+            (1e-320, -38.269_125_343_032_65),
+            (1e-310, -37.663_060_331_949_52),
+            (1e-300, -37.047_096_299_361_2),
+            (1e-200, -30.205_594_179_579_64),
+            (1e-100, -21.273_453_560_965_322),
+            (1e-20, -9.262_340_089_798_407),
+            (1e-10, -6.361_340_902_404_057),
+            (1e-6, -4.753_424_308_822_899),
+            (0.001, -3.090_232_306_167_813),
+            (0.024_25, -1.972_961_051_311_884_5),
+            (0.05, -1.644_853_626_951_472_2),
+            (0.1, -1.281_551_565_544_600_6),
+            (0.25, -0.674_489_750_196_081_7),
+            (0.975, 1.959_963_984_540_053_4),
+            (1.0_f64.next_down(), 8.209_536_151_601_386),
+        ];
+        for (p, expected) in cases {
+            let actual = normal_inverse_cdf(p);
+            assert!(
+                (actual - expected).abs() <= expected.abs() * 2e-15,
+                "normal quantile at {p:e}: {actual:.17e} != {expected:.17e}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_normal_quantiles_resolve_probabilities_adjacent_to_half() {
+        for (p, expected) in [
+            (0.5_f64.next_down(), -1.391_458_212_335_883_3e-16),
+            (0.5_f64.next_up(), 2.782_916_424_671_766_6e-16),
+        ] {
+            let actual = normal_inverse_cdf(p);
+            assert!(
+                (actual - expected).abs() <= expected.abs() * 2e-15,
+                "normal quantile at {p:.17}: {actual:e} != {expected:e}"
+            );
+        }
+        assert_eq!(normal_inverse_cdf(0.5), 0.0);
+    }
+
+    #[test]
+    fn test_normal_quantile_preserves_endpoint_behavior() {
+        for p in [f64::NEG_INFINITY, -1.0, -0.0, 0.0] {
+            assert_eq!(normal_inverse_cdf(p), f64::NEG_INFINITY);
+        }
+        for p in [1.0, 2.0, f64::INFINITY] {
+            assert_eq!(normal_inverse_cdf(p), f64::INFINITY);
+        }
+        assert!(normal_inverse_cdf(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_two_sided_normal_quantiles_support_tiny_alpha() {
+        // R 4.6.1: qnorm(log(alpha) - log(2), lower.tail = FALSE,
+        // log.p = TRUE) for tiny alpha; direct qnorm(alpha / 2,
+        // lower.tail = FALSE) for ordinary alpha and near one.
+        let cases = [
+            (f64::from_bits(1), 38.485_408_335_567_335),
+            (1e-320, 38.287_221_166_827_78),
+            (1e-300, 37.065_787_880_772_13),
+            (1e-20, 9.336_044_849_234_06),
+            (1e-10, 6.466_951_087_240_516),
+            (0.01, 2.575_829_303_548_900_4),
+            (0.05, 1.959_963_984_540_054),
+            (0.5, 0.674_489_750_196_081_7),
+            (1.0_f64.next_down(), 1.391_458_212_335_883_3e-16),
+        ];
+        for (alpha, expected) in cases {
+            let actual = two_sided_normal_quantile(alpha).expect("valid finite alpha");
+            assert!(
+                (actual - expected).abs() <= expected * 2e-15,
+                "two-sided quantile at alpha {alpha:e}: {actual:.17e} != {expected:.17e}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_two_sided_normal_quantile_rejects_invalid_alpha() {
+        for alpha in [
+            f64::NEG_INFINITY,
+            -1.0,
+            0.0,
+            1.0,
+            2.0,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            assert!(two_sided_normal_quantile(alpha).is_none());
+        }
+    }
 
     fn assert_ranked_matches_quadratic(
         risk_scores: &[f64],

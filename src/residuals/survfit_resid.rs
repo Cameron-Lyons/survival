@@ -92,14 +92,14 @@ pub(crate) fn compute_quantile_residuals(
 
         let resid = if status[i] == 1 {
             if s_at_t > 0.0 && s_at_t < 1.0 {
-                normal_inverse_cdf(1.0 - s_at_t)
+                -normal_inverse_cdf(s_at_t)
             } else if s_at_t <= 0.0 {
                 f64::INFINITY
             } else {
                 f64::NEG_INFINITY
             }
         } else if s_at_t > 0.0 && s_at_t < 1.0 {
-            normal_inverse_cdf(1.0 - s_at_t / 2.0)
+            -normal_inverse_cdf(s_at_t / 2.0)
         } else {
             0.0
         };

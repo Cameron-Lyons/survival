@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 use crate::constants::exp_ci_bounds_95;
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::normal_sf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(eq, eq_int, from_py_object)]
@@ -434,7 +434,7 @@ pub fn functional_cox(
             } else {
                 0.0
             };
-            2.0 * (1.0 - normal_cdf(z.abs()))
+            2.0 * normal_sf(z.abs())
         })
         .collect();
 
