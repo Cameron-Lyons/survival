@@ -484,6 +484,7 @@ class ConcordanceResult:
     variance: float | list[float | None] | None = None
     conditional_variance: float | list[float] | None = None
     score_names: list[str] | None = None
+    covariance: list[list[float]] | None = None
 
     @property
     def c_index(self) -> float | list[float]:
@@ -14757,6 +14758,10 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
 def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
     """Return a fitted model variance-covariance matrix, like R's vcov generic."""
 
+    if isinstance(fit, ConcordanceResult):
+        if fit.covariance is None:
+            raise ValueError("concordance result does not contain a covariance matrix")
+        return [list(row) for row in fit.covariance]
     _require_model_fit(fit, "vcov")
     include_complete = _normalize_bool_option_with_default(complete, "complete", True)
     if _is_survreg_fit(fit):
@@ -18591,22 +18596,18 @@ def _single_score_concordance_result(
         if include_ranks
         else None
     )
-    influence_rows = None
-    dfbeta = None
-    variance = None
-    if influence_value or cluster_values is not None:
-        influence_rows, dfbeta, variance = _concordance_influence(
-            response,
-            risk_values,
-            weight_values,
-            strata_values,
-            fix_time,
-            time_weight,
-            lower_bound,
-            upper_bound,
-        )
-        if cluster_values is not None and dfbeta is not None:
-            dfbeta, variance = _clustered_concordance_dfbeta(dfbeta, cluster_values)
+    influence_rows, dfbeta, variance = _concordance_influence(
+        response,
+        risk_values,
+        weight_values,
+        strata_values,
+        fix_time,
+        time_weight,
+        lower_bound,
+        upper_bound,
+    )
+    if cluster_values is not None and dfbeta is not None:
+        dfbeta, variance = _clustered_concordance_dfbeta(dfbeta, cluster_values)
     return ConcordanceResult(
         concordance=float(summary["concordance"]),
         n=len(response),
@@ -18620,7 +18621,8 @@ def _single_score_concordance_result(
         ranks=rank_rows,
         dfbeta=dfbeta if influence_value in {1, 3} else None,
         influence=influence_rows if influence_value in {2, 3} else None,
-        variance=variance if influence_value or cluster_values is not None else None,
+        variance=variance,
+        covariance=[[float(variance)]] if variance is not None else None,
         conditional_variance=float(summary["conditional_variance"]),
     )
 
@@ -18652,10 +18654,17 @@ def _multi_score_concordance_result(
             time_weight,
             lower_bound,
             upper_bound,
-            influence_value,
+            influence_value | 1,
             include_ranks,
         )
         for score_values in score_columns
+    ]
+    # Retain dfbeta only while forming covariance; public diagnostics still
+    # follow the caller's influence flags. Clustered rows are already collapsed.
+    dfbeta_columns = [[float(value) for value in result.dfbeta] for result in results]
+    covariance = [
+        [math.fsum(a * b for a, b in zip(left, right, strict=True)) for right in dfbeta_columns]
+        for left in dfbeta_columns
     ]
     return ConcordanceResult(
         concordance=[float(result.concordance) for result in results],
@@ -18670,11 +18679,8 @@ def _multi_score_concordance_result(
         ranks=[result.ranks for result in results] if include_ranks else None,
         dfbeta=[result.dfbeta for result in results] if influence_value in {1, 3} else None,
         influence=[result.influence for result in results] if influence_value in {2, 3} else None,
-        variance=(
-            [result.variance for result in results]
-            if influence_value or cluster_values is not None
-            else None
-        ),
+        variance=[result.variance for result in results],
+        covariance=covariance,
         conditional_variance=[
             float(result.conditional_variance)
             if isinstance(result.conditional_variance, int | float)
@@ -18827,6 +18833,7 @@ def concordance(
                 dfbeta=result.dfbeta,
                 influence=result.influence,
                 variance=result.variance,
+                covariance=result.covariance,
                 conditional_variance=result.conditional_variance,
                 score_names=score_names,
             )

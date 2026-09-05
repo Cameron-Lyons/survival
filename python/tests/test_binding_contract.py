@@ -9661,7 +9661,13 @@ def test_counting_concordance_binding_is_typed():
         True,
     )
     assert exact["concordance"] == pytest.approx(0.5)
-    assert fixed["comparable"] == pytest.approx(1.0)
+    # R concordancefit retains the censor at the tied event time after timefix.
+    assert fixed["comparable"] == pytest.approx(2.0)
+    assert fixed["concordance"] == pytest.approx(0.5)
+    for summary in (exact, fixed):
+        assert [summary[key] for key in ("tied_x", "tied_y", "tied_xy")] == pytest.approx(
+            [0.0, 0.0, 0.0]
+        )
     assert stratified_right["concordance"] == pytest.approx(0.5)
     assert stratified_right["n_event"] == pytest.approx(2.0)
     assert stratified_right_ranks == pytest.approx([(1.0, 0.5, 2.0, 1.0), (1.0, -0.5, 2.0, 1.0)])

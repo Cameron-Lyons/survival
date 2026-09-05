@@ -135,18 +135,26 @@ def test_counting_concordance_summary_handles_duplicate_event_times():
     risk = [0.9, 0.2, 0.7, 0.4, 0.1, 0.8, 0.3]
     weights = [1.0, 0.0, 2.0, 1.5, 0.5, 3.0, 1.0]
 
+    # R survival 3.8.11 concordancefit, reverse=TRUE, timefix=FALSE:
+    # same-time censors remain comparators, while simultaneous events tie in y.
     summary = survival.core.counting_concordance_summary(start, stop, status, risk)
-    assert summary["concordant"] == pytest.approx(6.0)
-    assert summary["comparable"] == pytest.approx(8.0)
-    assert summary["concordance"] == pytest.approx(0.75)
+    assert summary["concordant"] == pytest.approx(8.0)
+    assert summary["comparable"] == pytest.approx(10.0)
+    assert summary["concordance"] == pytest.approx(0.8)
+    assert [summary[key] for key in ("tied_x", "tied_y", "tied_xy")] == pytest.approx(
+        [0.0, 3.0, 0.0]
+    )
     assert summary["conditional_variance"] == pytest.approx(0.075)
 
     weighted = survival.core.counting_concordance_summary(
         start, stop, status, risk, weights=weights
     )
-    assert weighted["concordant"] == pytest.approx(7.5)
-    assert weighted["comparable"] == pytest.approx(12.0)
-    assert weighted["concordance"] == pytest.approx(0.625)
+    assert weighted["concordant"] == pytest.approx(11.25)
+    assert weighted["comparable"] == pytest.approx(15.75)
+    assert weighted["concordance"] == pytest.approx(5.0 / 7.0)
+    assert [weighted[key] for key in ("tied_x", "tied_y", "tied_xy")] == pytest.approx(
+        [0.0, 2.0, 0.0]
+    )
     assert weighted["conditional_variance"] == pytest.approx(0.0472411186696901)
 
 

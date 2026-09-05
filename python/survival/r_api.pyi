@@ -390,6 +390,7 @@ class ConcordanceResult:
     variance: float | list[float | None] | None
     conditional_variance: float | list[float] | None
     score_names: list[str] | None
+    covariance: list[list[float]] | None
     @property
     def c_index(self) -> float | list[float]: ...
     @property

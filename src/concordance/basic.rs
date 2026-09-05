@@ -2,9 +2,7 @@ use crate::constants::{CONCORDANCE_COUNT_SIZE, PARALLEL_THRESHOLD_LARGE, TIME_EP
 use crate::internal::fenwick::FenwickTree;
 use crate::internal::statistical::{
     ConcordanceSummary, ConcordanceTimeWeight, concordance_index_with_horizon,
-    concordance_summary_with_horizon, concordance_summary_with_horizon_and_weights,
     concordance_summary_with_horizon_weights_and_time_weight, counting_process_concordance_index,
-    counting_process_concordance_summary, counting_process_concordance_summary_with_weights,
     counting_process_concordance_summary_with_weights_and_time_weight,
 };
 use crate::internal::validation::{
@@ -255,21 +253,6 @@ fn right_concordance_time_weight_multipliers(
     right_concordance_time_weight_multipliers_by(time, status, weights, time_weight, same_time)
 }
 
-fn right_concordance_exact_time_weight_multipliers(
-    time: &[f64],
-    status: &[i32],
-    weights: Option<&[f64]>,
-    time_weight: ConcordanceTimeWeight,
-) -> Vec<(f64, f64)> {
-    right_concordance_time_weight_multipliers_by(
-        time,
-        status,
-        weights,
-        time_weight,
-        |left, right| left == right,
-    )
-}
-
 fn right_concordance_time_weight_multipliers_by(
     time: &[f64],
     status: &[i32],
@@ -321,7 +304,10 @@ fn right_concordance_time_weight_multipliers_by(
             }
         }
 
-        if death_weight > 0.0 {
+        if time_order[group_start..group_end]
+            .iter()
+            .any(|&idx| status[idx] == 1)
+        {
             multipliers.push((
                 event_time,
                 concordance_time_weight_multiplier(
@@ -336,19 +322,14 @@ fn right_concordance_time_weight_multipliers_by(
                 survival *= ((nrisk - death_weight) / nrisk).max(0.0);
             }
         }
-        if censor_weight > 0.0 && nrisk > 0.0 {
-            censoring_survival *= ((nrisk - censor_weight) / nrisk).max(0.0);
+        let censor_risk = nrisk - death_weight;
+        if censor_weight > 0.0 && censor_risk > 0.0 {
+            censoring_survival *= ((censor_risk - censor_weight) / censor_risk).max(0.0);
         }
         nrisk = (nrisk - group_weight).max(0.0);
         group_start = group_end;
     }
     multipliers
-}
-
-fn exact_multiplier_at(multipliers: &[(f64, f64)], time: f64) -> f64 {
-    multipliers
-        .binary_search_by(|(candidate, _)| candidate.total_cmp(&time))
-        .map_or(0.0, |idx| multipliers[idx].1)
 }
 
 fn weighted_pairs(weights: &[f64]) -> f64 {
@@ -423,15 +404,14 @@ fn tied_event_risk_pairs(
     tied_weight
 }
 
-fn right_concordance_tie_counts_for_vectors(
+fn right_concordance_summary_counts_for_vectors(
     time: &[f64],
     status: &[i32],
     risk_scores: &[f64],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> (ConcordanceTieCounts, f64, f64) {
-    let multipliers =
-        right_concordance_exact_time_weight_multipliers(time, status, weights, time_weight);
+) -> (ConcordanceSummary, ConcordanceTieCounts, f64, f64) {
+    let multipliers = right_concordance_time_weight_multipliers(time, status, weights, time_weight);
     let mut risk_levels = risk_scores.to_vec();
     risk_levels.sort_by(f64::total_cmp);
     risk_levels.dedup();
@@ -443,6 +423,7 @@ fn right_concordance_tie_counts_for_vectors(
             .then_with(|| left.cmp(&right))
     });
     let mut at_risk = FenwickTree::new(risk_levels.len());
+    let mut summary = ConcordanceSummary::default();
     let mut counts = ConcordanceTieCounts::default();
     let mut z2 = 0.0;
     let mut conditional_variance_numerator = 0.0;
@@ -451,25 +432,40 @@ fn right_concordance_tie_counts_for_vectors(
     while group_start < time_order.len() {
         let event_time = time[time_order[group_start]];
         let mut group_end = group_start + 1;
-        while group_end < time_order.len() && time[time_order[group_end]] == event_time {
+        while group_end < time_order.len() && same_time(time[time_order[group_end]], event_time) {
             group_end += 1;
         }
 
-        let multiplier = exact_multiplier_at(&multipliers, event_time);
+        // Same-time censors are still at risk for the group's events.
+        for &idx in &time_order[group_start..group_end] {
+            if status[idx] == 0 {
+                add_conditional_variance_observation(
+                    &mut at_risk,
+                    &risk_levels,
+                    risk_scores[idx],
+                    concordance_case_weight(weights, idx),
+                    &mut z2,
+                );
+            }
+        }
+        let multiplier = multiplier_at(&multipliers, event_time);
         if multiplier > 0.0 {
             let event_indices: Vec<usize> = time_order[group_start..group_end]
                 .iter()
                 .copied()
                 .filter(|&idx| status[idx] == 1)
                 .collect();
+            let comparable_weight = at_risk.total();
             for &event_idx in &event_indices {
                 let lower_end = risk_levels.partition_point(|&risk| risk < risk_scores[event_idx]);
                 let tied_end = risk_levels.partition_point(|&risk| risk <= risk_scores[event_idx]);
                 let lower = rank_prefix_weight_before(&at_risk, lower_end);
                 let lower_or_tied = rank_prefix_weight_before(&at_risk, tied_end);
-                counts.tied_x += concordance_case_weight(weights, event_idx)
-                    * (lower_or_tied - lower)
-                    * multiplier;
+                let event_weight = concordance_case_weight(weights, event_idx) * multiplier;
+                let tied_weight = lower_or_tied - lower;
+                counts.tied_x += event_weight * tied_weight;
+                summary.concordant += event_weight * (lower + 0.5 * tied_weight);
+                summary.comparable += event_weight * comparable_weight;
             }
 
             if event_indices.len() > 1 {
@@ -485,6 +481,9 @@ fn right_concordance_tie_counts_for_vectors(
 
         let mut death_weight = 0.0;
         for &idx in &time_order[group_start..group_end] {
+            if status[idx] != 1 {
+                continue;
+            }
             let weight = concordance_case_weight(weights, idx);
             add_conditional_variance_observation(
                 &mut at_risk,
@@ -505,6 +504,7 @@ fn right_concordance_tie_counts_for_vectors(
         group_start = group_end;
     }
     (
+        summary,
         counts,
         conditional_variance_numerator,
         comparable_pair_weight,
@@ -594,14 +594,14 @@ fn counting_concordance_time_weight_multipliers(
     multipliers
 }
 
-fn counting_concordance_conditional_variance_numerator(
+fn counting_concordance_summary_counts_for_vectors(
     start: &[f64],
     stop: &[f64],
     status: &[i32],
     risk_scores: &[f64],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> (f64, f64) {
+) -> (ConcordanceSummary, ConcordanceTieCounts, f64, f64) {
     let multipliers =
         counting_concordance_time_weight_multipliers(start, stop, status, weights, time_weight);
     let mut event_indices: Vec<usize> = status
@@ -635,6 +635,8 @@ fn counting_concordance_conditional_variance_numerator(
     let mut active = vec![false; stop.len()];
     let mut z2 = 0.0;
     let mut numerator = 0.0;
+    let mut summary = ConcordanceSummary::default();
+    let mut ties = ConcordanceTieCounts::default();
     let mut comparable_pair_weight = 0.0;
     let mut start_cursor = 0usize;
     let mut stop_cursor = 0usize;
@@ -681,12 +683,47 @@ fn counting_concordance_conditional_variance_numerator(
         let risk_weight = at_risk.total();
         let multiplier = multiplier_at(&multipliers, event_time);
         if risk_weight > 0.0 && multiplier > 0.0 {
+            let events = &event_indices[event_group_start..event_group_end];
+            let event_weights: Vec<f64> = events
+                .iter()
+                .map(|&idx| concordance_case_weight(weights, idx))
+                .collect();
+            let tied_xy = tied_event_risk_pairs(events, risk_scores, weights);
+            ties.tied_xy += tied_xy * multiplier;
+            ties.tied_y += (weighted_pairs(&event_weights) - tied_xy).max(0.0) * multiplier;
             numerator += death_weight * multiplier * z2 / risk_weight;
             comparable_pair_weight += death_weight * (risk_weight - death_weight) * multiplier;
+
+            // The conditional variance uses the full risk set. Pair counts use
+            // the remaining censors and later exits after simultaneous deaths
+            // leave. Querying that set directly avoids subtracting large event
+            // pair totals from the concordant and predictor-tie counts.
+            for &idx in events {
+                remove_conditional_variance_observation(
+                    &mut at_risk,
+                    &risk_levels,
+                    risk_scores[idx],
+                    concordance_case_weight(weights, idx),
+                    &mut z2,
+                );
+                active[idx] = false;
+            }
+            let comparable_weight = at_risk.total();
+            if comparable_weight > 0.0 {
+                for &idx in events {
+                    let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                    let lower = rank_prefix_weight_before(&at_risk, rank);
+                    let tied_weight = (at_risk.prefix_sum(rank) - lower).max(0.0);
+                    let event_weight = concordance_case_weight(weights, idx) * multiplier;
+                    ties.tied_x += event_weight * tied_weight;
+                    summary.concordant += event_weight * (lower + 0.5 * tied_weight);
+                    summary.comparable += event_weight * comparable_weight;
+                }
+            }
         }
         event_group_start = event_group_end;
     }
-    (numerator, comparable_pair_weight)
+    (summary, ties, numerator, comparable_pair_weight)
 }
 
 fn rank_from_active_risk_set(
@@ -952,109 +989,225 @@ fn stratified_counting_concordance_rank_rows_for_strata(
     rows
 }
 
-fn add_influence_pair(
-    influence_rows: &mut [[f64; 5]],
-    left: usize,
-    right: usize,
-    column: usize,
-    value: f64,
-) {
-    let share = 0.5 * value;
-    influence_rows[left][column] += share;
-    influence_rows[right][column] += share;
-}
-
+/// Raw derivatives of the five pair counts with respect to each case weight.
+/// Time weights are held fixed, matching survival::concordancefit.
 fn influence_from_rows(
     influence_rows: Vec<[f64; 5]>,
-    concordant: f64,
-    comparable: f64,
+    weights: Option<&[f64]>,
 ) -> ConcordanceInfluenceOutput {
+    // Each pair occurs once in each endpoint's derivative. Weighting those
+    // derivatives recovers twice the pooled counts, including across strata.
+    let mut concordant = 0.0;
+    let mut comparable = 0.0;
+    for (idx, row) in influence_rows.iter().enumerate() {
+        let weight = 0.5 * concordance_case_weight(weights, idx);
+        concordant += weight * (row[0] + 0.5 * row[2]);
+        comparable += weight * (row[0] + row[1] + row[2]);
+    }
     let output_rows: Vec<Vec<f64>> = influence_rows.iter().map(|row| row.to_vec()).collect();
     if comparable <= 0.0 {
         return (output_rows, vec![0.0; influence_rows.len()], 0.0);
     }
 
-    let somer = (2.0 * concordant - comparable) / comparable;
+    let c_index = concordant / comparable;
     let dfbeta: Vec<f64> = influence_rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(idx, row)| {
             let comparable_row = row[0] + row[1] + row[2];
-            ((row[0] - row[1]) - comparable_row * somer) / (2.0 * comparable)
+            (row[0] + 0.5 * row[2] - comparable_row * c_index)
+                * concordance_case_weight(weights, idx)
+                / comparable
         })
         .collect();
     let variance = dfbeta.iter().map(|value| value * value).sum();
     (output_rows, dfbeta, variance)
 }
 
+/// Weights below, above, and at a predictor rank.
+fn influence_rank_weights(tree: &FenwickTree, rank: usize) -> [f64; 3] {
+    let lower = rank_prefix_weight_before(tree, rank);
+    let through_rank = tree.prefix_sum(rank);
+    [lower, tree.total() - through_rank, through_rank - lower]
+}
+
+fn finish_concordance_risk_influence(
+    row: &mut [f64; 5],
+    entry_counts: [f64; 3],
+    event_counts: [f64; 3],
+) {
+    // A larger predictor on the event, rather than the risk comparator, is
+    // concordant. Subtract events at/before entry for counting responses.
+    row[0] += event_counts[1] - entry_counts[1];
+    row[1] += event_counts[0] - entry_counts[0];
+    row[2] += event_counts[2] - entry_counts[2];
+}
+
+/// Two Fenwick trees accumulate both endpoint derivatives in O(n log n).
+/// Events leave the risk set before their time group's comparisons; censors
+/// leave afterward. A counting row enters only after its open start boundary.
+fn concordance_raw_influence_rows(
+    start: Option<&[f64]>,
+    stop: &[f64],
+    status: &[i32],
+    risk_scores: &[f64],
+    weights: Option<&[f64]>,
+    multipliers: &[(f64, f64)],
+) -> Vec<[f64; 5]> {
+    let n = stop.len();
+    let mut risk_levels = risk_scores.to_vec();
+    risk_levels.sort_by(f64::total_cmp);
+    risk_levels.dedup();
+    let ranks: Vec<usize> = risk_scores
+        .iter()
+        .map(|&risk| risk_levels.partition_point(|&value| value < risk))
+        .collect();
+    let mut stop_order: Vec<usize> = (0..n).collect();
+    stop_order.sort_by(|&left, &right| stop[left].total_cmp(&stop[right]));
+    let mut start_order: Vec<usize> = (0..n).collect();
+    if let Some(start) = start {
+        start_order.sort_by(|&left, &right| start[left].total_cmp(&start[right]));
+    }
+
+    let mut at_risk = FenwickTree::new(risk_levels.len());
+    let mut earlier_events = FenwickTree::new(risk_levels.len());
+    let mut entry_counts = vec![[0.0; 3]; n];
+    let mut rows = vec![[0.0; 5]; n];
+    if start.is_none() {
+        for (idx, &rank) in ranks.iter().enumerate() {
+            at_risk.update(rank, concordance_case_weight(weights, idx));
+        }
+    }
+    let mut start_cursor = 0;
+    let mut group_start = 0;
+    while group_start < n {
+        let event_time = stop[stop_order[group_start]];
+        let mut group_end = group_start + 1;
+        while group_end < n
+            && if start.is_some() {
+                stop[stop_order[group_end]] == event_time
+            } else {
+                same_time(stop[stop_order[group_end]], event_time)
+            }
+        {
+            group_end += 1;
+        }
+        if let Some(start) = start {
+            while start_cursor < n && start[start_order[start_cursor]] < event_time {
+                let idx = start_order[start_cursor];
+                entry_counts[idx] = influence_rank_weights(&earlier_events, ranks[idx]);
+                at_risk.update(ranks[idx], concordance_case_weight(weights, idx));
+                start_cursor += 1;
+            }
+        }
+
+        let mut events: Vec<usize> = stop_order[group_start..group_end]
+            .iter()
+            .copied()
+            .filter(|&idx| status[idx] == 1)
+            .collect();
+        for &idx in &events {
+            finish_concordance_risk_influence(
+                &mut rows[idx],
+                entry_counts[idx],
+                influence_rank_weights(&earlier_events, ranks[idx]),
+            );
+            at_risk.update(ranks[idx], -concordance_case_weight(weights, idx));
+        }
+
+        let multiplier = multiplier_at(multipliers, event_time);
+        for &idx in &events {
+            let counts = influence_rank_weights(&at_risk, ranks[idx]);
+            for column in 0..3 {
+                rows[idx][column] += counts[column] * multiplier;
+            }
+        }
+        // Simultaneous events are outcome ties, not risk comparators. Aggregate
+        // their predictor groups so even one large event tie stays O(n log n).
+        events.sort_unstable_by_key(|&idx| ranks[idx]);
+        let death_weight: f64 = events
+            .iter()
+            .map(|&idx| concordance_case_weight(weights, idx))
+            .sum();
+        let mut tie_start = 0;
+        while tie_start < events.len() {
+            let mut tie_end = tie_start + 1;
+            while tie_end < events.len() && ranks[events[tie_end]] == ranks[events[tie_start]] {
+                tie_end += 1;
+            }
+            let tie_weight: f64 = events[tie_start..tie_end]
+                .iter()
+                .map(|&idx| concordance_case_weight(weights, idx))
+                .sum();
+            for &idx in &events[tie_start..tie_end] {
+                rows[idx][3] += (death_weight - tie_weight) * multiplier;
+                rows[idx][4] += (tie_weight - concordance_case_weight(weights, idx)) * multiplier;
+            }
+            tie_start = tie_end;
+        }
+        for &idx in &events {
+            earlier_events.update(
+                ranks[idx],
+                concordance_case_weight(weights, idx) * multiplier,
+            );
+        }
+        for &idx in &stop_order[group_start..group_end] {
+            if status[idx] == 0 {
+                finish_concordance_risk_influence(
+                    &mut rows[idx],
+                    entry_counts[idx],
+                    influence_rank_weights(&earlier_events, ranks[idx]),
+                );
+                at_risk.update(ranks[idx], -concordance_case_weight(weights, idx));
+            }
+        }
+        group_start = group_end;
+    }
+    rows
+}
+
+fn right_concordance_raw_influence(
+    time: &[f64],
+    status: &[i32],
+    risk_scores: &[f64],
+    weights: Option<&[f64]>,
+    time_weight: ConcordanceTimeWeight,
+) -> Vec<[f64; 5]> {
+    let multipliers = right_concordance_time_weight_multipliers(time, status, weights, time_weight);
+    concordance_raw_influence_rows(None, time, status, risk_scores, weights, &multipliers)
+}
+
+fn counting_concordance_raw_influence(
+    start: &[f64],
+    stop: &[f64],
+    status: &[i32],
+    risk_scores: &[f64],
+    weights: Option<&[f64]>,
+    time_weight: ConcordanceTimeWeight,
+) -> Vec<[f64; 5]> {
+    let multipliers =
+        counting_concordance_time_weight_multipliers(start, stop, status, weights, time_weight);
+    concordance_raw_influence_rows(
+        Some(start),
+        stop,
+        status,
+        risk_scores,
+        weights,
+        &multipliers,
+    )
+}
+
 fn right_concordance_influence_rows_for_vectors(
     time: &[f64],
     status: &[i32],
     risk_scores: &[f64],
-    case_weights: Option<&[f64]>,
+    weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceInfluenceOutput {
-    let multipliers =
-        right_concordance_time_weight_multipliers(time, status, case_weights, time_weight);
-    let mut influence_rows = vec![[0.0; 5]; time.len()];
-    let mut concordant = 0.0;
-    let mut comparable = 0.0;
-
-    for left in 0..time.len() {
-        for right in left + 1..time.len() {
-            if status[left] == 1 && status[right] == 1 && same_time(time[left], time[right]) {
-                let multiplier = multiplier_at(&multipliers, time[left]);
-                let pair_weight = concordance_case_weight(case_weights, left)
-                    * concordance_case_weight(case_weights, right)
-                    * multiplier;
-                if pair_weight <= 0.0 {
-                    continue;
-                }
-                let column = if risk_scores[left] == risk_scores[right] {
-                    4
-                } else {
-                    3
-                };
-                add_influence_pair(&mut influence_rows, left, right, column, pair_weight);
-                continue;
-            }
-
-            let (event_idx, risk_idx) =
-                if status[left] == 1 && concordance_time_precedes(time[left], time[right]) {
-                    (left, right)
-                } else if status[right] == 1 && concordance_time_precedes(time[right], time[left]) {
-                    (right, left)
-                } else {
-                    continue;
-                };
-            let multiplier = multiplier_at(&multipliers, time[event_idx]);
-            let pair_weight = concordance_case_weight(case_weights, event_idx)
-                * concordance_case_weight(case_weights, risk_idx)
-                * multiplier;
-            if pair_weight <= 0.0 {
-                continue;
-            }
-            comparable += pair_weight;
-            let diff = risk_scores[event_idx] - risk_scores[risk_idx];
-            let column = if diff > 0.0 {
-                concordant += pair_weight;
-                0
-            } else if diff < 0.0 {
-                1
-            } else {
-                concordant += 0.5 * pair_weight;
-                2
-            };
-            add_influence_pair(
-                &mut influence_rows,
-                event_idx,
-                risk_idx,
-                column,
-                pair_weight,
-            );
-        }
-    }
-
-    influence_from_rows(influence_rows, concordant, comparable)
+    influence_from_rows(
+        right_concordance_raw_influence(time, status, risk_scores, weights, time_weight),
+        weights,
+    )
 }
 
 fn counting_concordance_influence_rows_for_vectors(
@@ -1062,103 +1215,29 @@ fn counting_concordance_influence_rows_for_vectors(
     stop: &[f64],
     status: &[i32],
     risk_scores: &[f64],
-    case_weights: Option<&[f64]>,
+    weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceInfluenceOutput {
-    let multipliers = counting_concordance_time_weight_multipliers(
-        start,
-        stop,
-        status,
-        case_weights,
-        time_weight,
-    );
-    let mut influence_rows = vec![[0.0; 5]; stop.len()];
-    let mut concordant = 0.0;
-    let mut comparable = 0.0;
-
-    for (event_idx, &event) in status.iter().enumerate() {
-        if event != 1 {
-            continue;
-        }
-        let event_time = stop[event_idx];
-        let multiplier = multiplier_at(&multipliers, event_time);
-        if multiplier <= 0.0 {
-            continue;
-        }
-        for risk_idx in 0..stop.len() {
-            if risk_idx == event_idx {
-                continue;
-            }
-            let pair_weight = concordance_case_weight(case_weights, event_idx)
-                * concordance_case_weight(case_weights, risk_idx)
-                * multiplier;
-            if pair_weight <= 0.0 {
-                continue;
-            }
-            if status[risk_idx] == 1 && stop[risk_idx] == event_time {
-                if event_idx < risk_idx {
-                    let column = if risk_scores[event_idx] == risk_scores[risk_idx] {
-                        4
-                    } else {
-                        3
-                    };
-                    add_influence_pair(
-                        &mut influence_rows,
-                        event_idx,
-                        risk_idx,
-                        column,
-                        pair_weight,
-                    );
-                }
-                continue;
-            }
-            if !(start[risk_idx] < event_time && event_time < stop[risk_idx]) {
-                continue;
-            }
-
-            comparable += pair_weight;
-            let diff = risk_scores[event_idx] - risk_scores[risk_idx];
-            let column = if diff > 0.0 {
-                concordant += pair_weight;
-                0
-            } else if diff < 0.0 {
-                1
-            } else {
-                concordant += 0.5 * pair_weight;
-                2
-            };
-            add_influence_pair(
-                &mut influence_rows,
-                event_idx,
-                risk_idx,
-                column,
-                pair_weight,
-            );
-        }
-    }
-
-    influence_from_rows(influence_rows, concordant, comparable)
+    influence_from_rows(
+        counting_concordance_raw_influence(start, stop, status, risk_scores, weights, time_weight),
+        weights,
+    )
 }
 
 fn remap_stratified_influence(
     n: usize,
     groups: Vec<Vec<usize>>,
-    mut compute_group: impl FnMut(&[usize]) -> ConcordanceInfluenceOutput,
+    weights: Option<&[f64]>,
+    mut compute_group: impl FnMut(&[usize]) -> Vec<[f64; 5]>,
 ) -> ConcordanceInfluenceOutput {
-    let mut influence_rows = vec![vec![0.0; 5]; n];
-    let mut dfbeta = vec![0.0; n];
-    let mut variance = 0.0;
-
+    let mut rows = vec![[0.0; 5]; n];
     for indices in groups {
-        let (group_influence, group_dfbeta, group_variance) = compute_group(&indices);
+        let group_rows = compute_group(&indices);
         for (local_idx, &original_idx) in indices.iter().enumerate() {
-            influence_rows[original_idx] = group_influence[local_idx].clone();
-            dfbeta[original_idx] = group_dfbeta[local_idx];
+            rows[original_idx] = group_rows[local_idx];
         }
-        variance += group_variance;
     }
-
-    (influence_rows, dfbeta, variance)
+    influence_from_rows(rows, weights)
 }
 
 fn stratified_right_concordance_influence_rows(
@@ -1169,13 +1248,13 @@ fn stratified_right_concordance_influence_rows(
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceInfluenceOutput {
-    remap_stratified_influence(time.len(), strata_groups(strata), |indices| {
+    remap_stratified_influence(time.len(), strata_groups(strata), weights, |indices| {
         let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
         let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
         let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
         let group_weights: Option<Vec<f64>> =
             weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
-        right_concordance_influence_rows_for_vectors(
+        right_concordance_raw_influence(
             &group_time,
             &group_status,
             &group_risk,
@@ -1194,14 +1273,14 @@ fn stratified_counting_concordance_influence_rows_for_strata(
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
 ) -> ConcordanceInfluenceOutput {
-    remap_stratified_influence(stop.len(), strata_groups(strata), |indices| {
+    remap_stratified_influence(stop.len(), strata_groups(strata), weights, |indices| {
         let group_start: Vec<f64> = indices.iter().map(|&idx| start[idx]).collect();
         let group_stop: Vec<f64> = indices.iter().map(|&idx| stop[idx]).collect();
         let group_status: Vec<i32> = indices.iter().map(|&idx| status[idx]).collect();
         let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
         let group_weights: Option<Vec<f64>> =
             weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
-        counting_concordance_influence_rows_for_vectors(
+        counting_concordance_raw_influence(
             &group_start,
             &group_stop,
             &group_status,
@@ -1209,83 +1288,6 @@ fn stratified_counting_concordance_influence_rows_for_strata(
             group_weights.as_deref(),
             time_weight,
         )
-    })
-}
-
-fn right_concordance_summary_for_vectors(
-    time: &[f64],
-    status: &[i32],
-    risk_scores: &[f64],
-    weights: Option<&[f64]>,
-    time_weight: ConcordanceTimeWeight,
-) -> ConcordanceSummary {
-    if time_weight == ConcordanceTimeWeight::N {
-        match weights {
-            Some(values) => concordance_summary_with_horizon_and_weights(
-                risk_scores,
-                time,
-                status,
-                Some(values),
-                None,
-            ),
-            None => concordance_summary_with_horizon(risk_scores, time, status, None),
-        }
-    } else {
-        concordance_summary_with_horizon_weights_and_time_weight(
-            risk_scores,
-            time,
-            status,
-            weights,
-            None,
-            time_weight,
-        )
-    }
-}
-
-fn counting_concordance_summary_for_vectors(
-    start: &[f64],
-    stop: &[f64],
-    status: &[i32],
-    risk_scores: &[f64],
-    weights: Option<&[f64]>,
-    time_weight: ConcordanceTimeWeight,
-) -> ConcordanceSummary {
-    if time_weight == ConcordanceTimeWeight::N {
-        match weights {
-            Some(values) => counting_process_concordance_summary_with_weights(
-                risk_scores,
-                start,
-                stop,
-                status,
-                Some(values),
-            ),
-            None => counting_process_concordance_summary(risk_scores, start, stop, status),
-        }
-    } else {
-        counting_process_concordance_summary_with_weights_and_time_weight(
-            risk_scores,
-            start,
-            stop,
-            status,
-            weights,
-            time_weight,
-        )
-    }
-}
-
-fn build_concordance_summary_with_events_dict(
-    summary: ConcordanceSummary,
-    n_event: f64,
-    conditional_variance: f64,
-) -> PyResult<Py<PyDict>> {
-    Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("concordance", summary.c_index())?;
-        dict.set_item("concordant", summary.concordant)?;
-        dict.set_item("comparable", summary.comparable)?;
-        dict.set_item("n_event", n_event)?;
-        dict.set_item("conditional_variance", conditional_variance)?;
-        Ok(dict.into())
     })
 }
 
@@ -1307,7 +1309,12 @@ fn stratified_right_concordance_summary_counts(
         let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
         let group_weights: Option<Vec<f64>> =
             weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
-        let summary = right_concordance_summary_for_vectors(
+        let (
+            summary,
+            group_ties,
+            group_conditional_variance_numerator,
+            group_comparable_pair_weight,
+        ) = right_concordance_summary_counts_for_vectors(
             &group_time,
             &group_status,
             &group_risk,
@@ -1316,14 +1323,6 @@ fn stratified_right_concordance_summary_counts(
         );
         total.concordant += summary.concordant;
         total.comparable += summary.comparable;
-        let (group_ties, group_conditional_variance_numerator, group_comparable_pair_weight) =
-            right_concordance_tie_counts_for_vectors(
-                &group_time,
-                &group_status,
-                &group_risk,
-                group_weights.as_deref(),
-                time_weight,
-            );
         ties.tied_x += group_ties.tied_x;
         ties.tied_y += group_ties.tied_y;
         ties.tied_xy += group_ties.tied_xy;
@@ -1348,8 +1347,9 @@ fn stratified_counting_concordance_summary_counts(
     strata: &[i32],
     weights: Option<&[f64]>,
     time_weight: ConcordanceTimeWeight,
-) -> (ConcordanceSummary, f64, f64, f64) {
+) -> (ConcordanceSummary, ConcordanceTieCounts, f64, f64, f64) {
     let mut total = ConcordanceSummary::default();
+    let mut ties = ConcordanceTieCounts::default();
     let mut conditional_variance_numerator = 0.0;
     let mut comparable_pair_weight = 0.0;
     for indices in strata_groups(strata) {
@@ -1359,7 +1359,12 @@ fn stratified_counting_concordance_summary_counts(
         let group_risk: Vec<f64> = indices.iter().map(|&idx| risk_scores[idx]).collect();
         let group_weights: Option<Vec<f64>> =
             weights.map(|values| indices.iter().map(|&idx| values[idx]).collect());
-        let summary = counting_concordance_summary_for_vectors(
+        let (
+            summary,
+            group_ties,
+            group_conditional_variance_numerator,
+            group_comparable_pair_weight,
+        ) = counting_concordance_summary_counts_for_vectors(
             &group_start,
             &group_stop,
             &group_status,
@@ -1369,21 +1374,16 @@ fn stratified_counting_concordance_summary_counts(
         );
         total.concordant += summary.concordant;
         total.comparable += summary.comparable;
-        let (group_conditional_variance_numerator, group_comparable_pair_weight) =
-            counting_concordance_conditional_variance_numerator(
-                &group_start,
-                &group_stop,
-                &group_status,
-                &group_risk,
-                group_weights.as_deref(),
-                time_weight,
-            );
+        ties.tied_x += group_ties.tied_x;
+        ties.tied_y += group_ties.tied_y;
+        ties.tied_xy += group_ties.tied_xy;
         conditional_variance_numerator += group_conditional_variance_numerator;
         comparable_pair_weight += group_comparable_pair_weight;
     }
     let n_event = status.iter().filter(|&&event| event == 1).count() as f64;
     (
         total,
+        ties,
         n_event,
         conditional_variance_numerator,
         comparable_pair_weight,
@@ -1478,20 +1478,6 @@ fn conditional_variance_from_numerator(numerator: f64, comparable: f64) -> f64 {
 
 fn build_concordance_summary_dict(
     summary: ConcordanceSummary,
-    conditional_variance: f64,
-) -> PyResult<Py<PyDict>> {
-    Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("concordance", summary.c_index())?;
-        dict.set_item("concordant", summary.concordant)?;
-        dict.set_item("comparable", summary.comparable)?;
-        dict.set_item("conditional_variance", conditional_variance)?;
-        Ok(dict.into())
-    })
-}
-
-fn build_right_concordance_summary_dict(
-    summary: ConcordanceSummary,
     ties: ConcordanceTieCounts,
     n_event: Option<f64>,
     conditional_variance: f64,
@@ -1524,15 +1510,8 @@ pub fn concordance_summary(
     validate_right_concordance_inputs(&time, &status, &risk_scores, weights.as_deref())?;
     let time_weight = parse_concordance_time_weight(&timewt)?;
 
-    let summary = right_concordance_summary_for_vectors(
-        &time,
-        &status,
-        &risk_scores,
-        weights.as_deref(),
-        time_weight,
-    );
-    let (ties, conditional_variance_numerator, comparable_pair_weight) =
-        right_concordance_tie_counts_for_vectors(
+    let (summary, ties, conditional_variance_numerator, comparable_pair_weight) =
+        right_concordance_summary_counts_for_vectors(
             &time,
             &status,
             &risk_scores,
@@ -1541,7 +1520,7 @@ pub fn concordance_summary(
         );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_right_concordance_summary_dict(summary, ties, None, conditional_variance)
+    build_concordance_summary_dict(summary, ties, None, conditional_variance)
 }
 
 #[pyfunction]
@@ -1568,7 +1547,7 @@ pub fn stratified_concordance_summary(
         );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_right_concordance_summary_dict(summary, ties, Some(n_event), conditional_variance)
+    build_concordance_summary_dict(summary, ties, Some(n_event), conditional_variance)
 }
 
 #[pyfunction]
@@ -1718,16 +1697,8 @@ pub fn counting_concordance_summary(
     )?;
     let time_weight = parse_counting_concordance_time_weight(&timewt)?;
 
-    let summary = counting_concordance_summary_for_vectors(
-        &start,
-        &stop,
-        &status,
-        &risk_scores,
-        weights.as_deref(),
-        time_weight,
-    );
-    let (conditional_variance_numerator, comparable_pair_weight) =
-        counting_concordance_conditional_variance_numerator(
+    let (summary, ties, conditional_variance_numerator, comparable_pair_weight) =
+        counting_concordance_summary_counts_for_vectors(
             &start,
             &stop,
             &status,
@@ -1737,7 +1708,7 @@ pub fn counting_concordance_summary(
         );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_concordance_summary_dict(summary, conditional_variance)
+    build_concordance_summary_dict(summary, ties, None, conditional_variance)
 }
 
 #[pyfunction]
@@ -1764,7 +1735,7 @@ pub fn stratified_counting_concordance_summary(
     )?;
     validate_strata_length(start.len(), &strata, "start")?;
     let time_weight = parse_counting_concordance_time_weight(&timewt)?;
-    let (summary, n_event, conditional_variance_numerator, comparable_pair_weight) =
+    let (summary, ties, n_event, conditional_variance_numerator, comparable_pair_weight) =
         stratified_counting_concordance_summary_counts(
             &start,
             &stop,
@@ -1776,7 +1747,7 @@ pub fn stratified_counting_concordance_summary(
         );
     let conditional_variance =
         conditional_variance_from_numerator(conditional_variance_numerator, comparable_pair_weight);
-    build_concordance_summary_with_events_dict(summary, n_event, conditional_variance)
+    build_concordance_summary_dict(summary, ties, Some(n_event), conditional_variance)
 }
 
 #[pyfunction]
@@ -2331,6 +2302,83 @@ mod tests {
     }
 
     #[test]
+    fn fused_summaries_match_weighted_r_counts() {
+        let start = [0.0, 0.0, 0.0, 1.0, 0.0, 2.0];
+        let stop = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0];
+        let status = [1, 0, 1, 1, 0, 1];
+        let risk = [3.0, 3.0, 2.0, 1.0, 2.0, 0.0];
+        let weights = [2.0, 1.0, 0.0, 1.5, 3.0, 0.5];
+
+        // survival 3.8.11 concordancefit, reverse=TRUE, timefix=FALSE.
+        for (time_weight, concordant, comparable, tied_x) in [
+            (ConcordanceTimeWeight::N, 11.75, 17.25, 2.0),
+            (ConcordanceTimeWeight::S, 11.9, 18.3, 2.0),
+            (ConcordanceTimeWeight::SOverG, 12.08, 19.56, 2.0),
+            (ConcordanceTimeWeight::NOverG2, 12.08, 19.56, 2.0),
+            (ConcordanceTimeWeight::I, 1.525, 2.55, 0.25),
+        ] {
+            let (summary, ties, _, _) = right_concordance_summary_counts_for_vectors(
+                &stop,
+                &status,
+                &risk,
+                Some(&weights),
+                time_weight,
+            );
+            assert!((summary.concordant - concordant).abs() < 1e-12);
+            assert!((summary.comparable - comparable).abs() < 1e-12);
+            assert!((ties.tied_x - tied_x).abs() < 1e-12);
+        }
+        for (time_weight, concordant, comparable, tied_x) in [
+            (ConcordanceTimeWeight::N, 7.0, 12.5, 2.0),
+            (ConcordanceTimeWeight::S, 28.0 / 3.0, 16.0, 8.0 / 3.0),
+            (ConcordanceTimeWeight::I, 7.0 / 6.0, 7.0 / 3.0, 1.0 / 3.0),
+        ] {
+            let (summary, ties, _, _) = counting_concordance_summary_counts_for_vectors(
+                &start,
+                &stop,
+                &status,
+                &risk,
+                Some(&weights),
+                time_weight,
+            );
+            assert!((summary.concordant - concordant).abs() < 1e-12);
+            assert!((summary.comparable - comparable).abs() < 1e-12);
+            assert!((ties.tied_x - tied_x).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn fused_summaries_preserve_small_concordant_weight() {
+        // Forming concordant=(signed+comparable)/2 would cancel the small
+        // concordant contribution against the large discordant contribution.
+        let start = [0.0; 3];
+        let stop = [1.0; 3];
+        let status = [1, 0, 0];
+        let risk = [1.0, 0.0, 2.0];
+        let weights = [1.0, 1e-8, 1e8];
+        let right = right_concordance_summary_counts_for_vectors(
+            &stop,
+            &status,
+            &risk,
+            Some(&weights),
+            ConcordanceTimeWeight::N,
+        );
+        let counting = counting_concordance_summary_counts_for_vectors(
+            &start,
+            &stop,
+            &status,
+            &risk,
+            Some(&weights),
+            ConcordanceTimeWeight::N,
+        );
+        for (summary, ties, _, _) in [right, counting] {
+            assert!((summary.concordant - 1e-8).abs() < 1e-22);
+            assert!((summary.comparable - 1e8).abs() < 1e-7);
+            assert_eq!(ties, ConcordanceTieCounts::default());
+        }
+    }
+
+    #[test]
     fn stratified_concordance_summary_counts_within_strata() {
         initialize_python();
 
@@ -2352,7 +2400,7 @@ mod tests {
 
     #[test]
     fn right_concordance_tie_counts_separate_risk_and_event_time_ties() {
-        let (risk_tie, _, _) = right_concordance_tie_counts_for_vectors(
+        let (_, risk_tie, _, _) = right_concordance_summary_counts_for_vectors(
             &[1.0, 2.0, 3.0, 4.0],
             &[1, 1, 0, 1],
             &[0.2, 0.4, 0.4, 1.0],
@@ -2368,7 +2416,7 @@ mod tests {
             }
         );
 
-        let (event_time_tie, _, _) = right_concordance_tie_counts_for_vectors(
+        let (_, event_time_tie, _, _) = right_concordance_summary_counts_for_vectors(
             &[1.0, 2.0, 2.0, 2.0, 4.0],
             &[1, 1, 1, 1, 1],
             &[0.2, 0.4, 0.4, 0.8, 1.0],
@@ -2384,7 +2432,7 @@ mod tests {
             }
         );
 
-        let (distinct_scores, _, _) = right_concordance_tie_counts_for_vectors(
+        let (_, distinct_scores, _, _) = right_concordance_summary_counts_for_vectors(
             &[1.0, 2.0, 3.0],
             &[1, 0, 0],
             &[0.0, 0.5e-12, 1e-12],
@@ -2396,7 +2444,7 @@ mod tests {
 
     #[test]
     fn right_concordance_tie_counts_apply_case_and_time_weights() {
-        let (counts, _, _) = right_concordance_tie_counts_for_vectors(
+        let (_, counts, _, _) = right_concordance_summary_counts_for_vectors(
             &[1.0, 2.0, 2.0, 3.0],
             &[1, 1, 1, 0],
             &[0.1, 0.5, 0.5, 0.5],
@@ -2414,13 +2462,14 @@ mod tests {
         let time = [1.0, 2.0, 3.0, 4.0];
         let status = [1, 1, 0, 1];
         let risk = [0.2, 0.4, 0.4, 1.0];
-        let (_, numerator, comparable_pair_weight) = right_concordance_tie_counts_for_vectors(
-            &time,
-            &status,
-            &risk,
-            None,
-            ConcordanceTimeWeight::N,
-        );
+        let (_, _, numerator, comparable_pair_weight) =
+            right_concordance_summary_counts_for_vectors(
+                &time,
+                &status,
+                &risk,
+                None,
+                ConcordanceTimeWeight::N,
+            );
 
         let variance = conditional_variance_from_numerator(numerator, comparable_pair_weight);
         assert!((variance - 0.065).abs() < 1e-12);
@@ -2432,8 +2481,8 @@ mod tests {
         let stop = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
         let status = [1, 1, 1, 1, 0, 1, 0];
         let risk = [0.9, 0.2, 0.7, 0.4, 0.1, 0.8, 0.3];
-        let (numerator, comparable_pair_weight) =
-            counting_concordance_conditional_variance_numerator(
+        let (_, _, numerator, comparable_pair_weight) =
+            counting_concordance_summary_counts_for_vectors(
                 &start,
                 &stop,
                 &status,
@@ -2450,7 +2499,7 @@ mod tests {
     fn stratified_counting_concordance_summary_counts_within_strata() {
         initialize_python();
 
-        let (summary, n_event, _, _) = stratified_counting_concordance_summary_counts(
+        let (summary, _, n_event, _, _) = stratified_counting_concordance_summary_counts(
             &[0.0, 0.0, 0.0, 0.0],
             &[1.0, 2.0, 1.0, 2.0],
             &[1, 0, 1, 0],
@@ -2516,12 +2565,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(influence[0], vec![0.5, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[1], vec![0.5, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[2], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[3], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
-        assert_eq!(dfbeta, vec![0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(variance, 0.0);
+        assert_eq!(influence[0], vec![1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[1], vec![1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[2], vec![0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[3], vec![0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(dfbeta, vec![0.25, 0.25, -0.25, -0.25]);
+        assert_eq!(variance, 0.25);
     }
 
     #[test]
@@ -2540,12 +2589,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(influence[0], vec![0.5, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[1], vec![0.5, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[2], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[3], vec![0.0, 0.5, 0.0, 0.0, 0.0]);
-        assert_eq!(dfbeta, vec![0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(variance, 0.0);
+        assert_eq!(influence[0], vec![1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[1], vec![1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[2], vec![0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[3], vec![0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(dfbeta, vec![0.25, 0.25, -0.25, -0.25]);
+        assert_eq!(variance, 0.25);
     }
 
     #[test]
@@ -2562,11 +2611,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(influence[0], vec![5.0, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[1], vec![1.0, 2.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[2], vec![4.5, 1.5, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[3], vec![2.5, 0.5, 0.0, 0.0, 0.0]);
-        assert!((dfbeta[0] - 20.0 / 289.0).abs() < 1e-12);
-        assert!((dfbeta[1] + 22.0 / 289.0).abs() < 1e-12);
+        assert_eq!(influence[1], vec![2.0, 4.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[2], vec![3.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[3], vec![5.0, 1.0, 0.0, 0.0, 0.0]);
+        assert!((dfbeta[0] - 40.0 / 289.0).abs() < 1e-12);
+        assert!((dfbeta[1] + 44.0 / 289.0).abs() < 1e-12);
         assert!((variance - dfbeta.iter().map(|value| value * value).sum::<f64>()).abs() < 1e-12);
     }
 
@@ -2670,12 +2719,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(influence[0], vec![1.0, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[1], vec![0.5, 1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[2], vec![1.0, 0.5, 0.0, 0.0, 0.0]);
-        assert_eq!(influence[3], vec![0.5, 0.5, 0.0, 0.0, 0.0]);
-        assert!((dfbeta[0] - 0.08).abs() < 1e-12);
-        assert!((dfbeta[1] + 0.08).abs() < 1e-12);
+        assert_eq!(influence[0], vec![2.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[1], vec![1.0, 2.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[2], vec![2.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(influence[3], vec![1.0, 1.0, 0.0, 0.0, 0.0]);
+        assert!((dfbeta[0] - 0.16).abs() < 1e-12);
+        assert!((dfbeta[1] + 0.16).abs() < 1e-12);
         assert!((variance - dfbeta.iter().map(|value| value * value).sum::<f64>()).abs() < 1e-12);
     }
 }

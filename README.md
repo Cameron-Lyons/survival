@@ -321,16 +321,22 @@ pspline.fit()
 ### Concordance Index
 
 ```python
-from survival import core
+from survival import Surv, concordance
 
-time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-weights = [1.0, 1.0, 1.0, 1.0, 1.0]
-indices = [0, 1, 2, 3, 4]
-ntree = 5
-
-result = core.perform_concordance1_calculation(time_data, weights, indices, ntree)
-print(f"Concordance index: {result['concordance_index']}")
+response = Surv([1.0, 1.0, 2.0], [1, 0, 1])
+result = concordance(response, risk_scores=[2.0, 1.0, 3.0], influence=1)
+print(result.concordance)  # 0.5
+print(result.variance)     # 0.125
 ```
+
+An observation censored at an event time remains a risk comparator; simultaneous
+events contribute outcome ties. Right-censored and counting-process summaries
+and influence calculations use O(n log n) risk-set sweeps. Raw influence rows are
+derivatives with respect to case weights, holding time-weight multipliers fixed;
+dfbeta applies case weights and uses pooled counts across strata. Variance is
+available with every result, while
+`influence` controls which diagnostic rows are returned. For multiple scores,
+`result.covariance` and `vcov(result)` include the covariance between scores.
 
 ### Cox Regression with Frailty
 
