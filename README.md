@@ -162,6 +162,14 @@ Multi-state fits with retained model frames also support influence residuals
 and pseudo-values for state probabilities, cumulative transition hazards, and
 integrated state occupancy, including grouped, weighted, and subject-collapsed
 counting-process results.
+Ordinary fitted curves support R-style influence residuals and pseudo-values for
+survival, cumulative hazard, and RMST, preserving case weights, subject IDs,
+grouping, estimator settings, and conditional start times. A native query kernel
+uses the fitted risk tables and event prefixes without refitting or building a
+full observation-by-event influence matrix. The fitted RMST path follows R's
+infinitesimal jackknife; the direct time/status pseudo-value API retains its
+existing delete-one RMST calculation. Tied `ctype=2` diagnostics follow R's
+approximation and report the same limitation.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves.
 The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use

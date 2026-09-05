@@ -21,6 +21,7 @@ pub(crate) mod statefig_module;
 #[path = "survfit_confint.rs"]
 pub(crate) mod survfit_confint_module;
 pub(crate) mod survfit_matrix;
+pub(crate) mod survfit_residuals;
 #[path = "survfitaj_extended.rs"]
 pub(crate) mod survfitaj_extended_module;
 #[path = "survfitaj.rs"]
@@ -71,6 +72,7 @@ pub use survfit_matrix::{
     step_matrix_values_at, step_values_at, survfit_from_cumhaz, survfit_from_hazard,
     survfit_from_matrix, survfit_multistate,
 };
+pub use survfit_residuals::survfit_residuals_at_times;
 pub use survfitaj_extended_module::{
     AalenJohansenExtendedConfig, AalenJohansenExtendedResult, TransitionMatrix, TransitionType,
     VarianceEstimator, survfitaj_extended,

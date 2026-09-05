@@ -6259,6 +6259,19 @@ def survfitaj_extended(
     config: AalenJohansenExtendedConfig,
     weights: list[float] | None = None,
 ) -> AalenJohansenExtendedResult: ...
+def survfit_residuals_at_times(
+    time: list[float],
+    status: list[int],
+    curve_time: list[float],
+    n_risk: list[float],
+    n_event: list[float],
+    survival: list[float],
+    cumhaz: list[float],
+    eval_times: list[float],
+    type_: str,
+    start: list[float] | None = None,
+    stype: int = 1,
+) -> list[list[float]]: ...
 def pseudo(
     time: list[float],
     status: list[int],
