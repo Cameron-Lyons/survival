@@ -70,11 +70,6 @@ pub(crate) fn erf(x: f64) -> f64 {
 }
 
 #[inline]
-pub(crate) fn erfc(x: f64) -> f64 {
-    1.0 - erf(x)
-}
-
-#[inline]
 pub(crate) fn normal_cdf(x: f64) -> f64 {
     0.5 * (1.0 + erf(x / SQRT_2))
 }
