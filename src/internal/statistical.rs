@@ -274,14 +274,14 @@ pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
             event_time_multiplier_at(&event_time_multipliers, event_time)
         };
 
-        while stop_cursor < n && stop[stop_order[stop_cursor]] <= event_time {
-            let idx = stop_order[stop_cursor];
+        // Simultaneous events cannot be compared with one another, but censors
+        // at this time remain at risk until all of these events are queried.
+        for &idx in &event_order[event_group_start..event_group_end] {
             if active[idx] {
                 let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
                 at_risk.update(rank, -observation_weight(weights, idx));
                 active[idx] = false;
             }
-            stop_cursor += 1;
         }
 
         let at_risk_total = at_risk.total();
@@ -292,6 +292,16 @@ pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
                 concordant += event_weight
                     * concordance_contribution_for_rank(&at_risk, &risk_levels, risk_scores[idx]);
             }
+        }
+
+        while stop_cursor < n && stop[stop_order[stop_cursor]] <= event_time {
+            let idx = stop_order[stop_cursor];
+            if active[idx] {
+                let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                at_risk.update(rank, -observation_weight(weights, idx));
+                active[idx] = false;
+            }
+            stop_cursor += 1;
         }
 
         event_group_start = event_group_end;
@@ -355,7 +365,10 @@ fn counting_process_concordance_summary_quadratic(
             if risk_idx == event_idx {
                 continue;
             }
-            if start[risk_idx] < event_time && stop[risk_idx] > event_time {
+            if start[risk_idx] < event_time
+                && (stop[risk_idx] > event_time
+                    || (stop[risk_idx] == event_time && event[risk_idx] != 1))
+            {
                 let pair_weight = observation_weight(weights, event_idx)
                     * observation_weight(weights, risk_idx)
                     * event_time_multiplier;
@@ -414,13 +427,15 @@ fn concordance_summary_quadratic(
     for i in 0..n {
         for j in (i + 1)..n {
             let i_comparable = event[i] == 1
-                && concordance_time_precedes(time[i], time[j])
+                && (concordance_time_precedes(time[i], time[j])
+                    || (event[j] != 1 && same_time(time[i], time[j])))
                 && match horizon {
                     Some(h) => concordance_at_or_before_horizon(time[i], h),
                     None => true,
                 };
             let j_comparable = event[j] == 1
-                && concordance_time_precedes(time[j], time[i])
+                && (concordance_time_precedes(time[j], time[i])
+                    || (event[i] != 1 && same_time(time[j], time[i])))
                 && match horizon {
                     Some(h) => concordance_at_or_before_horizon(time[j], h),
                     None => true,
@@ -517,6 +532,15 @@ fn concordance_summary_ranked(
             group_end += 1;
         }
 
+        // Same-time censors are comparable with each event in this group.
+        // Events enter the tree afterward so they only compare with earlier events.
+        for &idx in &time_order[group_start..group_end] {
+            if event[idx] != 1 {
+                let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                at_risk.update(rank, observation_weight(weights, idx));
+            }
+        }
+
         let at_risk_total = at_risk.total();
         let event_time_multiplier = if time_weight == ConcordanceTimeWeight::N {
             1.0
@@ -539,8 +563,10 @@ fn concordance_summary_ranked(
         }
 
         for &idx in &time_order[group_start..group_end] {
-            let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
-            at_risk.update(rank, observation_weight(weights, idx));
+            if event[idx] == 1 {
+                let rank = risk_levels.partition_point(|&risk| risk < risk_scores[idx]);
+                at_risk.update(rank, observation_weight(weights, idx));
+            }
         }
 
         group_start = group_end;
@@ -661,8 +687,10 @@ fn right_censored_time_weight_multipliers(
                 survival *= ((nrisk - death_weight) / nrisk).max(0.0);
             }
         }
-        if censor_weight > 0.0 && nrisk > 0.0 {
-            censoring_survival *= ((nrisk - censor_weight) / nrisk).max(0.0);
+        let censor_risk = nrisk - death_weight;
+        if censor_weight > 0.0 && censor_risk > 0.0 {
+            // Deaths precede censoring within a tied time group.
+            censoring_survival *= ((censor_risk - censor_weight) / censor_risk).max(0.0);
         }
         nrisk -= group_weight;
         group_start = group_end;
@@ -1384,6 +1412,229 @@ mod tests {
             (ranked - quadratic).abs() < 1e-12,
             "time-weighted counting ranked {ranked} differed from quadratic {quadratic}"
         );
+    }
+
+    #[test]
+    fn test_concordance_compares_events_with_same_time_censors() {
+        let time = [1.0, 1.0];
+        let start = [0.0, 0.0];
+        let weights = [2.0, 3.0];
+
+        for event in [[1, 0], [0, 1]] {
+            for (mut risk, concordant) in [([2.0, 1.0], 6.0), ([1.0, 2.0], 0.0), ([1.0, 1.0], 3.0)]
+            {
+                if event[0] == 0 {
+                    risk.reverse();
+                }
+                let expected = ConcordanceSummary {
+                    concordant,
+                    comparable: 6.0,
+                };
+                for actual in [
+                    concordance_summary_with_horizon_and_weights(
+                        &risk,
+                        &time,
+                        &event,
+                        Some(&weights),
+                        None,
+                    ),
+                    concordance_summary_quadratic(
+                        &risk,
+                        &time,
+                        &event,
+                        Some(&weights),
+                        None,
+                        ConcordanceTimeWeight::N,
+                    ),
+                    counting_process_concordance_summary_with_weights(
+                        &risk,
+                        &start,
+                        &time,
+                        &event,
+                        Some(&weights),
+                    ),
+                    counting_process_concordance_summary_quadratic(
+                        &risk,
+                        &start,
+                        &time,
+                        &event,
+                        Some(&weights),
+                        ConcordanceTimeWeight::N,
+                    ),
+                ] {
+                    assert_concordance_summary_close(actual, expected);
+                }
+            }
+        }
+
+        for event in [[1, 1], [0, 0]] {
+            let risk = [2.0, 1.0];
+            assert_eq!(
+                concordance_summary_with_horizon(&risk, &time, &event, None),
+                ConcordanceSummary::default(),
+            );
+            assert_eq!(
+                counting_process_concordance_summary(&risk, &start, &time, &event),
+                ConcordanceSummary::default(),
+            );
+        }
+    }
+
+    #[test]
+    fn test_concordance_keeps_same_time_censors_at_horizon() {
+        // R survival: concordance(Surv(time, event) ~ -risk, weights=weights,
+        //                         ymax=1, timefix=FALSE) has count c(2, 6, 0, 0, 0).
+        let risk = [-2.0, -1.0, -3.0];
+        let event = [1, 0, 1];
+        let weights = [2.0, 3.0, 1.0];
+        let expected = ConcordanceSummary {
+            concordant: 2.0,
+            comparable: 8.0,
+        };
+        for time in [[1.0, 1.0, 2.0], [1.0, 1.0 + TIME_EPSILON / 2.0, 2.0]] {
+            for horizon in [None, Some(1.0)] {
+                assert_concordance_summary_close(
+                    concordance_summary_with_horizon_and_weights(
+                        &risk,
+                        &time,
+                        &event,
+                        Some(&weights),
+                        horizon,
+                    ),
+                    expected,
+                );
+                assert_concordance_summary_close(
+                    concordance_summary_quadratic(
+                        &risk,
+                        &time,
+                        &event,
+                        Some(&weights),
+                        horizon,
+                        ConcordanceTimeWeight::N,
+                    ),
+                    expected,
+                );
+            }
+            assert_eq!(
+                concordance_summary_with_horizon_and_weights(
+                    &risk,
+                    &time,
+                    &event,
+                    Some(&weights),
+                    Some(0.5),
+                ),
+                ConcordanceSummary::default(),
+            );
+        }
+    }
+
+    #[test]
+    fn test_counting_concordance_removes_censors_after_tied_events() {
+        // At time 1, only row 1 can be compared with event row 0. Row 2
+        // enters at exactly 1 and is excluded. At time 2, row 1 has left,
+        // and event row 2 is compared only with the same-time censor row 3.
+        let start = [0.0, 0.0, 1.0, 1.0];
+        let stop = [1.0, 1.0, 2.0, 2.0];
+        let event = [1, 0, 1, 0];
+        let risk = [2.0, 1.0, 0.0, 1.0];
+        let weights = [2.0, 3.0, 4.0, 5.0];
+        let expected = ConcordanceSummary {
+            concordant: 6.0,
+            comparable: 26.0,
+        };
+        assert_concordance_summary_close(
+            counting_process_concordance_summary_with_weights(
+                &risk,
+                &start,
+                &stop,
+                &event,
+                Some(&weights),
+            ),
+            expected,
+        );
+        assert_concordance_summary_close(
+            counting_process_concordance_summary_quadratic(
+                &risk,
+                &start,
+                &stop,
+                &event,
+                Some(&weights),
+                ConcordanceTimeWeight::N,
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_weighted_concordance_with_same_time_censors_matches_r() {
+        // R survival::concordance(..., reverse=TRUE, timefix=FALSE), with
+        // numerator count[1] + count[3]/2 and denominator sum(count[1:3]).
+        let start = [0.0, 0.0, 0.0, 1.0, 0.0, 2.0];
+        let stop = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0];
+        let event = [1, 0, 1, 1, 0, 1];
+        let risk = [3.0, 3.0, 2.0, 1.0, 2.0, 0.0];
+        let weights = [2.0, 1.0, 0.0, 1.5, 3.0, 0.5];
+
+        for (time_weight, concordant, comparable) in [
+            (ConcordanceTimeWeight::N, 11.75, 17.25),
+            (ConcordanceTimeWeight::S, 11.9, 18.3),
+            (ConcordanceTimeWeight::SOverG, 12.08, 19.56),
+            (ConcordanceTimeWeight::NOverG2, 12.08, 19.56),
+            (ConcordanceTimeWeight::I, 1.525, 2.55),
+        ] {
+            let expected = ConcordanceSummary {
+                concordant,
+                comparable,
+            };
+            assert_concordance_summary_close(
+                concordance_summary_ranked(&risk, &stop, &event, Some(&weights), None, time_weight),
+                expected,
+            );
+            assert_concordance_summary_close(
+                concordance_summary_quadratic(
+                    &risk,
+                    &stop,
+                    &event,
+                    Some(&weights),
+                    None,
+                    time_weight,
+                ),
+                expected,
+            );
+        }
+
+        for (time_weight, concordant, comparable) in [
+            (ConcordanceTimeWeight::N, 7.0, 12.5),
+            (ConcordanceTimeWeight::S, 28.0 / 3.0, 16.0),
+            (ConcordanceTimeWeight::I, 7.0 / 6.0, 7.0 / 3.0),
+        ] {
+            let expected = ConcordanceSummary {
+                concordant,
+                comparable,
+            };
+            assert_concordance_summary_close(
+                counting_process_concordance_summary_with_weights_and_time_weight(
+                    &risk,
+                    &start,
+                    &stop,
+                    &event,
+                    Some(&weights),
+                    time_weight,
+                ),
+                expected,
+            );
+            assert_concordance_summary_close(
+                counting_process_concordance_summary_quadratic(
+                    &risk,
+                    &start,
+                    &stop,
+                    &event,
+                    Some(&weights),
+                    time_weight,
+                ),
+                expected,
+            );
+        }
     }
 
     #[test]

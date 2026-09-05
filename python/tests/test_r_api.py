@@ -1840,8 +1840,9 @@ def _manual_right_time_multipliers(time, status, weights, timewt):
             )
             if nrisk > 0.0:
                 survival *= max((nrisk - death_weight) / nrisk, 0.0)
-        if censor_weight > 0.0 and nrisk > 0.0:
-            censoring_survival *= max((nrisk - censor_weight) / nrisk, 0.0)
+        censor_risk = nrisk - death_weight
+        if censor_weight > 0.0 and censor_risk > 0.0:
+            censoring_survival *= max((censor_risk - censor_weight) / censor_risk, 0.0)
     return multipliers
 
 
@@ -1900,7 +1901,10 @@ def _manual_counting_concordance_counts(start, stop, status, scores, weights=Non
         for risk_idx in range(len(stop)):
             if risk_idx == event_idx:
                 continue
-            if start[risk_idx] < event_time and stop[risk_idx] > event_time:
+            if start[risk_idx] < event_time and (
+                stop[risk_idx] > event_time
+                or (stop[risk_idx] == event_time and status[risk_idx] == 0)
+            ):
                 pair_weight = (
                     1.0 if weights is None else weights[event_idx] * weights[risk_idx]
                 ) * multiplier
@@ -1919,9 +1923,13 @@ def _manual_right_concordance_counts(time, status, scores, weights=None, timewt=
     multipliers = _manual_right_time_multipliers(time, status, weights, timewt)
     for left in range(len(time)):
         for right in range(left + 1, len(time)):
-            if status[left] == 1 and time[left] < time[right]:
+            if status[left] == 1 and (
+                time[left] < time[right] or (time[left] == time[right] and status[right] == 0)
+            ):
                 event_idx, risk_idx = left, right
-            elif status[right] == 1 and time[right] < time[left]:
+            elif status[right] == 1 and (
+                time[right] < time[left] or (time[right] == time[left] and status[left] == 0)
+            ):
                 event_idx, risk_idx = right, left
             else:
                 continue
@@ -1936,6 +1944,15 @@ def _manual_right_concordance_counts(time, status, scores, weights=None, timewt=
             elif abs(diff) < 1e-12:
                 concordant += 0.5 * pair_weight
     return concordant, comparable
+
+
+def _concordance_counts_from_raw_influence(rows, weights=None):
+    # Euler's identity for quadratic pair counts: sum(w_i * dcount/dw_i) = 2*count.
+    weights = [1.0] * len(rows) if weights is None else weights
+    return [
+        sum(weight * row[column] for weight, row in zip(weights, rows, strict=True)) / 2
+        for column in range(5)
+    ]
 
 
 def _formula_predictor_scores(scores):
@@ -7118,15 +7135,15 @@ def test_concordance_influence_modes_return_r_style_diagnostics():
         assert both_row == pytest.approx(influence_row)
     assert both.variance == pytest.approx(sum(value * value for value in both.dfbeta))
     assert both.var == pytest.approx(both.variance)
-    assert [sum(row[col] for row in both.influence) for col in range(5)] == pytest.approx(
+    assert _concordance_counts_from_raw_influence(both.influence, data["wt"]) == pytest.approx(
         [both.concordant, both.comparable - both.concordant, 0.0, 0.0, 0.0]
     )
     assert sum(both.dfbeta) == pytest.approx(0.0)
     assert reversed_both.concordance == pytest.approx(1.0 - both.concordance)
     assert reversed_both.dfbeta == pytest.approx([-value for value in both.dfbeta])
-    assert [sum(row[col] for row in reversed_both.influence) for col in range(5)] == pytest.approx(
-        [both.comparable - both.concordant, both.concordant, 0.0, 0.0, 0.0]
-    )
+    assert _concordance_counts_from_raw_influence(
+        reversed_both.influence, data["wt"]
+    ) == pytest.approx([both.comparable - both.concordant, both.concordant, 0.0, 0.0, 0.0])
 
 
 def test_concordance_cluster_collapses_dfbeta_for_robust_variance():
@@ -7659,10 +7676,10 @@ def test_concordance_formula_accepts_strata_wrapper():
         {"time": 4.0, "rank": 0.0, "timewt": 1.0, "casewt": 1.0},
     ]
     assert influential.influence == [
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
     ]
     assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
     assert influential.variance == pytest.approx(0.0)
@@ -7693,13 +7710,13 @@ def test_concordance_formula_strata_ranks_support_counting_process_response():
         {"time": 1.0, "rank": 0.5, "timewt": 2.0, "casewt": 1.0},
     ]
     assert influential.influence == [
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.0, 0.5, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
-        [0.5, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0, 0.0],
     ]
-    assert influential.dfbeta == pytest.approx([0.0, 0.0, 0.0, 0.0])
-    assert influential.variance == pytest.approx(0.0)
+    assert influential.dfbeta == pytest.approx([-0.25, -0.25, 0.25, 0.25])
+    assert influential.variance == pytest.approx(0.25)
 
 
 def test_concordance_counting_process_uses_delayed_entry_risk_sets():
@@ -7814,9 +7831,9 @@ def test_concordance_counting_process_influence_uses_delayed_entry_risk_sets():
     assert result.influence is not None
     for formula_row, result_row in zip(formula.influence, formula_direction.influence, strict=True):
         assert formula_row == pytest.approx(result_row)
-    assert [sum(row[col] for row in result.influence) for col in range(5)] == pytest.approx(
-        [result.concordant, result.comparable - result.concordant, 0.0, 0.0, 0.0]
-    )
+    assert _concordance_counts_from_raw_influence(
+        result.influence, data.get("wt")
+    ) == pytest.approx([result.concordant, result.comparable - result.concordant, 0.0, 0.0, 0.0])
     assert result.variance == pytest.approx(sum(value * value for value in result.dfbeta))
     assert exact.variance == pytest.approx(sum(value * value for value in exact.dfbeta))
 
@@ -7824,7 +7841,7 @@ def test_concordance_counting_process_influence_uses_delayed_entry_risk_sets():
 def test_concordance_counting_process_timefix_false_uses_exact_risk_sets():
     data = {
         "start": [0.0, 0.0, 0.0],
-        "stop": [1.0, 1.0 + 5e-10, 2.0],
+        "stop": [1.0 + 5e-10, 1.0, 2.0],
         "status": [1, 0, 0],
         "score": [0.5, 0.9, 0.1],
     }
@@ -7866,7 +7883,7 @@ def test_concordance_counting_process_timefix_false_uses_exact_risk_sets():
 
     assert default.concordance == pytest.approx(fixed_expected)
     assert exact.concordance == pytest.approx(exact_expected)
-    assert exact_formula.concordance == pytest.approx(exact.concordance)
+    assert exact_formula.concordance == pytest.approx(1.0 - exact.concordance)
     assert default.concordance == pytest.approx(fixed_low_level["concordance"])
     assert exact.concordance == pytest.approx(exact_low_level["concordance"])
     assert default.concordance != pytest.approx(exact.concordance)
@@ -8148,7 +8165,7 @@ def test_counting_concordance_duplicate_event_times_share_survival_weight():
         ]
     )
     assert result.influence is not None
-    column_sums = [sum(row[col] for row in result.influence) for col in range(5)]
+    column_sums = _concordance_counts_from_raw_influence(result.influence, data.get("wt"))
     tied_event_weight = data["wt"][0] * data["wt"][1] * multipliers[1.0]
     assert column_sums[0] == pytest.approx(concordant)
     assert column_sums[1] == pytest.approx(comparable - concordant)
