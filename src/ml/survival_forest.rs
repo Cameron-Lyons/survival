@@ -4,7 +4,9 @@ use rayon::prelude::*;
 use super::config_validation::{
     ensure_positive_unit_interval, ensure_positive_usize, ensure_vec_capacity,
 };
-use super::input_validation::{validate_prediction_shape, validate_training_shape};
+use super::input_validation::{
+    validate_prediction_input, validate_training_shape, validate_training_values,
+};
 
 type NelsonAalenCurve = (Vec<f64>, Vec<f64>);
 type SplitCandidate = (usize, f64, Vec<usize>, Vec<usize>);
@@ -57,7 +59,8 @@ impl SurvivalForestInput {
             self.n_vars,
             self.time.len(),
             self.status.len(),
-        )
+        )?;
+        validate_training_values(&self.x, &self.time, &self.status)
     }
 }
 
@@ -539,6 +542,19 @@ pub struct SurvivalForest {
     _oob_indices: Vec<Vec<usize>>,
 }
 
+impl SurvivalForest {
+    fn fit_validated(
+        py: Python<'_>,
+        input: SurvivalForestInput,
+        config: SurvivalForestConfig,
+    ) -> Self {
+        py.detach(move || {
+            let data = SurvivalForestData::from(&input);
+            fit_survival_forest_inner(&data, &config)
+        })
+    }
+}
+
 #[pymethods]
 impl SurvivalForest {
     #[staticmethod]
@@ -550,12 +566,7 @@ impl SurvivalForest {
     ) -> PyResult<Self> {
         input.validate()?;
         config.validate()?;
-        let input = input.clone();
-        let config = config.clone();
-        Ok(py.detach(move || {
-            let data = SurvivalForestData::from(&input);
-            fit_survival_forest_inner(&data, &config)
-        }))
+        Ok(Self::fit_validated(py, input.clone(), config.clone()))
     }
 
     #[staticmethod]
@@ -570,7 +581,8 @@ impl SurvivalForest {
         config: &SurvivalForestConfig,
     ) -> PyResult<Self> {
         let input = SurvivalForestInput::new(x, n_obs, n_vars, time, status)?;
-        Self::fit_typed(py, &input, config)
+        config.validate()?;
+        Ok(Self::fit_validated(py, input, config.clone()))
     }
 
     #[pyo3(signature = (x_new, n_new))]
@@ -579,7 +591,7 @@ impl SurvivalForest {
         x_new: Vec<f64>,
         n_new: usize,
     ) -> PyResult<Vec<Vec<f64>>> {
-        validate_prediction_shape(x_new.len(), n_new, self.n_vars)?;
+        validate_prediction_input(&x_new, n_new, self.n_vars)?;
 
         let n_times = self.unique_times.len();
         let n_trees = self.trees.len() as f64;
@@ -817,8 +829,7 @@ pub fn survival_forest(
 ) -> PyResult<SurvivalForest> {
     let cfg = config.cloned().unwrap_or_default();
 
-    let input = SurvivalForestInput::new(x, n_obs, n_vars, time, status)?;
-    SurvivalForest::fit_typed(py, &input, &cfg)
+    SurvivalForest::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }
 
 #[cfg(test)]
