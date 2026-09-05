@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::input_validation::{validate_prediction_shape, validate_training_shape};
+
 type NelsonAalenCurve = (Vec<f64>, Vec<f64>);
 type SplitCandidate = (usize, f64, Vec<usize>, Vec<usize>);
 type TreeWithOob = (TreeNode, Vec<usize>);
@@ -46,17 +48,13 @@ impl SurvivalForestInput {
 
 impl SurvivalForestInput {
     fn validate(&self) -> PyResult<()> {
-        if self.x.len() != self.n_obs * self.n_vars {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "x length must equal n_obs * n_vars",
-            ));
-        }
-        if self.time.len() != self.n_obs || self.status.len() != self.n_obs {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "time and status must have length n_obs",
-            ));
-        }
-        Ok(())
+        validate_training_shape(
+            self.x.len(),
+            self.n_obs,
+            self.n_vars,
+            self.time.len(),
+            self.status.len(),
+        )
     }
 }
 
@@ -588,11 +586,7 @@ impl SurvivalForest {
         x_new: Vec<f64>,
         n_new: usize,
     ) -> PyResult<Vec<Vec<f64>>> {
-        if x_new.len() != n_new * self.n_vars {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "x_new dimensions don't match",
-            ));
-        }
+        validate_prediction_shape(x_new.len(), n_new, self.n_vars)?;
 
         let n_times = self.unique_times.len();
         let n_trees = self.trees.len() as f64;
