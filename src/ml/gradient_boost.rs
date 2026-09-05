@@ -1,6 +1,9 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::config_validation::{
+    ensure_positive_unit_interval, ensure_positive_usize, ensure_vec_capacity,
+};
 use super::input_validation::{validate_prediction_shape, validate_training_shape};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,23 +84,7 @@ impl GradientBoostSurvivalConfig {
         dropout_rate: f64,
         seed: Option<u64>,
     ) -> PyResult<Self> {
-        if n_estimators == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "n_estimators must be positive",
-            ));
-        }
-        if learning_rate <= 0.0 || learning_rate > 1.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "learning_rate must be in (0, 1]",
-            ));
-        }
-        if subsample <= 0.0 || subsample > 1.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "subsample must be in (0, 1]",
-            ));
-        }
-
-        Ok(GradientBoostSurvivalConfig {
+        let config = Self {
             n_estimators,
             learning_rate,
             max_depth,
@@ -108,7 +95,20 @@ impl GradientBoostSurvivalConfig {
             loss,
             dropout_rate,
             seed,
-        })
+        };
+        config.validate()?;
+        Ok(config)
+    }
+}
+
+impl GradientBoostSurvivalConfig {
+    fn validate(&self) -> PyResult<()> {
+        ensure_positive_usize("n_estimators", self.n_estimators)?;
+        ensure_vec_capacity::<RegressionTreeNode>("n_estimators", self.n_estimators)?;
+        ensure_positive_unit_interval("learning_rate", self.learning_rate)?;
+        ensure_positive_unit_interval("subsample", self.subsample)?;
+        ensure_positive_usize("min_samples_leaf", self.min_samples_leaf)?;
+        Ok(())
     }
 }
 
@@ -207,7 +207,7 @@ fn find_best_split_regression(
     min_samples_leaf: usize,
     rng: &mut crate::internal::rng::Rng,
 ) -> Option<(usize, f64, Vec<usize>, Vec<usize>)> {
-    if indices.len() < 2 * min_samples_leaf {
+    if indices.len() / 2 < min_samples_leaf {
         return None;
     }
 
@@ -474,6 +474,7 @@ impl GradientBoostSurvival {
         config: &GradientBoostSurvivalConfig,
     ) -> PyResult<Self> {
         validate_training_shape(x.len(), n_obs, n_vars, time.len(), status.len())?;
+        config.validate()?;
 
         let config = config.clone();
         Ok(py.detach(move || fit_gradient_boost_inner(&x, n_obs, n_vars, &time, &status, &config)))

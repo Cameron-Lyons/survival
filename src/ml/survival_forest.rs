@@ -1,6 +1,9 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::config_validation::{
+    ensure_positive_unit_interval, ensure_positive_usize, ensure_vec_capacity,
+};
 use super::input_validation::{validate_prediction_shape, validate_training_shape};
 
 type NelsonAalenCurve = (Vec<f64>, Vec<f64>);
@@ -187,7 +190,8 @@ impl Default for SurvivalForestConfig {
 
 impl SurvivalForestConfig {
     fn validate(&self) -> PyResult<()> {
-        validate_survival_forest_config(self.n_trees, self.sample_fraction, self.n_random_splits)
+        validate_survival_forest_config(self.n_trees, self.sample_fraction, self.n_random_splits)?;
+        ensure_vec_capacity::<TreeWithOob>("n_trees", self.n_trees)
     }
 }
 
@@ -196,21 +200,9 @@ fn validate_survival_forest_config(
     sample_fraction: f64,
     n_random_splits: usize,
 ) -> PyResult<()> {
-    if n_trees == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_trees must be positive",
-        ));
-    }
-    if sample_fraction <= 0.0 || sample_fraction > 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "sample_fraction must be in (0, 1]",
-        ));
-    }
-    if n_random_splits == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_random_splits must be positive",
-        ));
-    }
+    ensure_positive_usize("n_trees", n_trees)?;
+    ensure_positive_unit_interval("sample_fraction", sample_fraction)?;
+    ensure_positive_usize("n_random_splits", n_random_splits)?;
     Ok(())
 }
 
@@ -329,7 +321,7 @@ fn find_best_split(
     rng: &mut crate::internal::rng::Rng,
     split_rule: &SplitRule,
 ) -> Option<SplitCandidate> {
-    if indices.len() < 2 * min_node_size {
+    if indices.len() / 2 < min_node_size {
         return None;
     }
 
@@ -417,7 +409,7 @@ fn build_tree(
     let node_times: Vec<f64> = indices.iter().map(|&i| data.time[i]).collect();
     let node_status: Vec<i32> = indices.iter().map(|&i| data.status[i]).collect();
 
-    if indices.len() < 2 * config.min_node_size {
+    if indices.len() / 2 < config.min_node_size {
         return TreeNode::new_leaf(&node_times, &node_status, all_times);
     }
 
@@ -557,6 +549,7 @@ impl SurvivalForest {
         config: &SurvivalForestConfig,
     ) -> PyResult<Self> {
         input.validate()?;
+        config.validate()?;
         let input = input.clone();
         let config = config.clone();
         Ok(py.detach(move || {

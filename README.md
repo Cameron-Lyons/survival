@@ -271,6 +271,15 @@ See [`docs/repo-layout.md`](docs/repo-layout.md) for the full Rust and Python
 layout and [`examples/python_package_layout.py`](examples/python_package_layout.py)
 for a runnable module-oriented example.
 
+`DeepSurvConfig`, `GradientBoostSurvivalConfig`, and `SurvivalForestConfig`
+validate settings both when constructed and before fitting. Fields can be changed
+between fits; invalid settings raise `ValueError` before training starts.
+DeepSurv learning rates must remain positive and finite after conversion to
+float32, and its L2 penalty must be nonnegative and finite in that precision.
+Boosting requires `min_samples_leaf >= 1`. Empty DeepSurv hidden layers still
+create a linear network, tree `max_depth=0` creates stumps, and large leaf or node
+minimums disable splitting. Width and count checks use native array size limits.
+
 ## Usage
 
 ### Aalen's Additive Regression Model
