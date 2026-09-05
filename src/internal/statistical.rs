@@ -1,6 +1,8 @@
+#[cfg(test)]
+use crate::constants::DIVISION_FLOOR;
 use crate::constants::{
-    DEFAULT_CONCORDANCE, DIVISION_FLOOR, ITERATIVE_MAX_ITER, LCG64_INCREMENT, LCG64_MULTIPLIER,
-    TIED_PAIR_WEIGHT, TIME_EPSILON, same_time,
+    DEFAULT_CONCORDANCE, ITERATIVE_MAX_ITER, LCG64_INCREMENT, LCG64_MULTIPLIER, TIED_PAIR_WEIGHT,
+    TIME_EPSILON, same_time,
 };
 use crate::internal::fenwick::FenwickTree;
 use std::f64::consts::SQRT_2;
@@ -148,6 +150,7 @@ pub(crate) fn concordance_summary_with_horizon_weights_and_time_weight(
     concordance_summary_ranked(risk_scores, time, event, weights, horizon, time_weight)
 }
 
+#[cfg(test)]
 pub(crate) fn counting_process_concordance_index(
     risk_scores: &[f64],
     start: &[f64],
@@ -157,6 +160,7 @@ pub(crate) fn counting_process_concordance_index(
     counting_process_concordance_summary(risk_scores, start, stop, event).c_index()
 }
 
+#[cfg(test)]
 pub(crate) fn counting_process_concordance_summary(
     risk_scores: &[f64],
     start: &[f64],
@@ -166,6 +170,7 @@ pub(crate) fn counting_process_concordance_summary(
     counting_process_concordance_summary_with_weights(risk_scores, start, stop, event, None)
 }
 
+#[cfg(test)]
 pub(crate) fn counting_process_concordance_summary_with_weights(
     risk_scores: &[f64],
     start: &[f64],
@@ -183,6 +188,7 @@ pub(crate) fn counting_process_concordance_summary_with_weights(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn counting_process_concordance_summary_with_weights_and_time_weight(
     risk_scores: &[f64],
     start: &[f64],
@@ -331,6 +337,7 @@ fn counting_process_concordance_quadratic(
     .c_index()
 }
 
+#[cfg(test)]
 fn counting_process_concordance_summary_quadratic(
     risk_scores: &[f64],
     start: &[f64],
@@ -699,6 +706,7 @@ fn right_censored_time_weight_multipliers(
     multipliers
 }
 
+#[cfg(test)]
 fn counting_process_time_weight_multipliers(
     start: &[f64],
     stop: &[f64],
