@@ -686,6 +686,12 @@ experimental extension symbols, import from `survival._survival` explicitly.
 - [`python/survival/sklearn_compat.py`](python/survival/sklearn_compat.py):
   scikit-learn-compatible estimators and streaming wrappers.
 
+The sklearn estimators accept targets with shape `(n_samples, 2)` and columns
+`[time, status]`. Times must be finite real numbers; each model applies its own
+response-domain restrictions. Status must be exactly `0` (censored) or `1`
+(event), with boolean values also accepted. Missing, masked, complex, or
+fractional event indicators raise `ValueError` before fitting or scoring.
+
 To inspect available symbols at runtime:
 
 ```python
