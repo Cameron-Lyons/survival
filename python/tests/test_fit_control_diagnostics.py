@@ -146,11 +146,14 @@ def test_survreg_default_tolerance_matches_r_control_and_native_api():
         "x": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
     }
     assert survival.SurvregConfig().eps == 1e-9
-    default = survival.survreg("Surv(time, status) ~ x", data=data)
+    # Keep a common prescribed start so this comparison isolates the tolerance.
+    initial = [0.0, 0.0, 0.0]
+    default = survival.survreg("Surv(time, status) ~ x", data=data, init=initial)
     controlled = survival.survreg(
-        "Surv(time, status) ~ x", data=data, control={"rel.tolerance": 1e-9}
+        "Surv(time, status) ~ x", data=data, init=initial, control={"rel.tolerance": 1e-9}
     )
     native_kwargs = {
+        "initial_beta": initial,
         "time": data["time"],
         "status": data["status"],
         "covariates": [[1.0, value] for value in data["x"]],
@@ -168,6 +171,6 @@ def test_survreg_default_tolerance_matches_r_control_and_native_api():
         rel=0.0,
     )
     assert max(abs(value) for value in default.score_vector) < 1e-10
-    loose = survival.survreg("Surv(time, status) ~ x", data=data, eps=1e-6)
+    loose = survival.survreg("Surv(time, status) ~ x", data=data, init=initial, eps=1e-6)
     assert loose.iterations < default.iterations
     assert max(abs(value) for value in loose.score_vector) > 1e-8
