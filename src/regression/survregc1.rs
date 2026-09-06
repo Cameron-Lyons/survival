@@ -65,6 +65,35 @@ pub(crate) struct Derivatives {
     pub dsg: f64,
 }
 
+/// Return the unweighted location score and curvature for initialization.
+/// Times must already be on the distribution's fitting scale, as in survregc1.
+/// An unresolved interval probability cannot supply an initialization weight.
+pub(crate) fn survreg_location_derivatives(
+    time: f64,
+    time2: Option<f64>,
+    status: i32,
+    eta: f64,
+    sigma: f64,
+    dist: SurvivalDist,
+) -> Result<(f64, f64), Box<dyn std::error::Error>> {
+    let sz = time - eta;
+    let z = sz / sigma;
+    let (_, dg, ddg, _, _, _) = match status {
+        1 => compute_exact::<true>(z, sz, sigma, dist),
+        0 => compute_right_censored::<true>(z, sz, sigma, dist),
+        2 => compute_left_censored::<true>(z, sz, sigma, dist),
+        3 => compute_interval_censored_inner::<true, true>(
+            z,
+            time2.ok_or("Missing time2 for interval censored data")?,
+            eta,
+            sigma,
+            dist,
+        ),
+        _ => return Err("Invalid status value".into()),
+    }?;
+    Ok((dg, ddg))
+}
+
 /// Evaluate a retry without allocating score, information, or per-person
 /// result arrays. Both full paths accumulate in person order; keep that same
 /// order here so screening a candidate does not change its likelihood bits.
@@ -448,6 +477,17 @@ fn compute_interval_censored<const DERIVATIVES: bool>(
     sigma: f64,
     dist: SurvivalDist,
 ) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
+    compute_interval_censored_inner::<DERIVATIVES, false>(z, time2, eta, sigma, dist)
+}
+
+#[inline]
+fn compute_interval_censored_inner<const DERIVATIVES: bool, const REQUIRE_PROBABILITY: bool>(
+    z: f64,
+    time2: f64,
+    eta: f64,
+    sigma: f64,
+    dist: SurvivalDist,
+) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
     let sz2 = time2 - eta;
     let z2 = sz2 / sigma;
     let funs = match dist {
@@ -467,6 +507,12 @@ fn compute_interval_censored<const DERIVATIVES: bool>(
     } else {
         ufun[0] - funs[0]
     };
+    if REQUIRE_PROBABILITY && (!diff.is_finite() || diff <= 0.0) {
+        return Err(
+            "initial iteration failed: interval probability is not finite and positive (use starting estimates?)"
+                .into(),
+        );
+    }
     if diff <= 0.0 {
         Ok((SMALL, 1.0, 0.0, 0.0, 0.0, 0.0))
     } else {
@@ -654,6 +700,197 @@ fn update_derivatives(
 mod tests {
     use super::*;
     use ndarray::Array2;
+
+    #[test]
+    fn location_derivatives_match_single_row_fixed_scale_likelihood() {
+        for (distribution_index, distribution) in [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::Weibull,
+            SurvivalDist::LogNormal,
+            SurvivalDist::LogLogistic,
+            SurvivalDist::StudentT(4.5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for log_sigma in [-0.7_f64, 0.0, 0.8] {
+                let sigma = log_sigma.exp();
+                let eta = 0.75;
+                for z in [-40.0, -8.0, -0.25, 0.0, 8.0, 40.0] {
+                    let lower = eta + z * sigma;
+                    let upper = lower + 0.5 * sigma;
+                    for censoring in [0, 1, 2, 3] {
+                        let beta = Array1::from_vec(vec![eta, log_sigma]);
+                        let strata = Array1::from_vec(vec![1]);
+                        let offset = Array1::zeros(1);
+                        let time1 = Array1::from_vec(vec![lower]);
+                        let time2 = Array1::from_vec(vec![upper]);
+                        let status = Array1::from_vec(vec![censoring]);
+                        let weights = Array1::ones(1);
+                        let covariates = Array2::ones((1, 1));
+                        let frailty = Array1::zeros(1);
+                        let full = survregc1(
+                            1,
+                            1,
+                            0,
+                            false,
+                            &beta.view(),
+                            distribution,
+                            &strata.view(),
+                            &offset.view(),
+                            &time1.view(),
+                            Some(&time2.view()),
+                            &status.view(),
+                            &weights.view(),
+                            &covariates.view(),
+                            0,
+                            &frailty.view(),
+                        )
+                        .unwrap();
+                        let derivatives = survreg_location_derivatives(
+                            lower,
+                            Some(upper),
+                            censoring,
+                            eta,
+                            sigma,
+                            distribution,
+                        );
+                        if censoring == 3 && full.loglik == SMALL {
+                            assert!(derivatives.is_err());
+                            continue;
+                        }
+                        let (score, curvature) = derivatives.unwrap();
+                        // With one intercept and unit weight, the score is dg
+                        // and observed information is -ddg. The z=-.25 interval
+                        // places eta at the midpoint used by initialization.
+                        for (actual, expected) in
+                            [(score, full.u[0]), (curvature, -full.imat[[0, 0]])]
+                        {
+                            assert!(
+                                actual == expected || (actual.is_nan() && expected.is_nan()),
+                                "distribution={distribution_index}, status={censoring}, \
+                                 z={z}, log_sigma={log_sigma}: {actual} != {expected}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn location_derivatives_gaussian_exact_have_location_units() {
+        for sigma in [0.5, 1.0, 2.0] {
+            let (score, curvature) =
+                survreg_location_derivatives(3.0, None, 1, 2.0, sigma, SurvivalDist::Gaussian)
+                    .unwrap();
+            let inverse_variance = 1.0 / (sigma * sigma);
+            assert!((score - inverse_variance).abs() < 1e-14);
+            assert!((curvature + inverse_variance).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn location_derivatives_reject_unresolved_interval_probability() {
+        for distribution in [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::StudentT(4.5),
+        ] {
+            let lower = 1e-100_f64;
+            let upper = lower.next_up();
+            assert!(upper > lower);
+            let midpoint = lower + (upper - lower) / 2.0;
+            // Also cover endpoints that coincide after finite scale division,
+            // independently of the Gaussian CDF approximation.
+            let tiny_interval_scale = if matches!(distribution, SurvivalDist::Gaussian) {
+                1e300
+            } else {
+                1.0
+            };
+            for (time, time2, eta, sigma) in [
+                (lower, upper, midpoint, tiny_interval_scale),
+                (2.0, 1.0, 1.5, 1.0),
+                (1.0, f64::NAN, 1.0, 1.0),
+            ] {
+                let error =
+                    survreg_location_derivatives(time, Some(time2), 3, eta, sigma, distribution)
+                        .unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    "initial iteration failed: interval probability is not finite and positive (use starting estimates?)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn location_derivatives_preserve_resolvable_narrow_intervals() {
+        for distribution in [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::StudentT(4.5),
+        ] {
+            for half_width in [0.5, 1e-4] {
+                let beta = Array1::from_vec(vec![2.0, 0.0]);
+                let strata = Array1::from_vec(vec![1]);
+                let offset = Array1::zeros(1);
+                let time1 = Array1::from_vec(vec![2.0 - half_width]);
+                let time2 = Array1::from_vec(vec![2.0 + half_width]);
+                let status = Array1::from_vec(vec![3]);
+                let weights = Array1::ones(1);
+                let covariates = Array2::ones((1, 1));
+                let frailty = Array1::zeros(1);
+                let full = survregc1(
+                    1,
+                    1,
+                    0,
+                    false,
+                    &beta.view(),
+                    distribution,
+                    &strata.view(),
+                    &offset.view(),
+                    &time1.view(),
+                    Some(&time2.view()),
+                    &status.view(),
+                    &weights.view(),
+                    &covariates.view(),
+                    0,
+                    &frailty.view(),
+                )
+                .unwrap();
+                let (score, curvature) = survreg_location_derivatives(
+                    time1[0],
+                    Some(time2[0]),
+                    3,
+                    2.0,
+                    1.0,
+                    distribution,
+                )
+                .unwrap();
+                assert_eq!(score, full.u[0]);
+                assert_eq!(curvature, -full.imat[[0, 0]]);
+                assert!(curvature.is_finite() && curvature < 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn location_derivatives_require_valid_censoring_and_interval_endpoint() {
+        for (status, upper, message) in [
+            (3, None, "Missing time2 for interval censored data"),
+            (4, Some(2.0), "Invalid status value"),
+        ] {
+            let error =
+                survreg_location_derivatives(1.0, upper, status, 0.0, 1.0, SurvivalDist::Gaussian)
+                    .unwrap_err();
+            assert_eq!(error.to_string(), message);
+        }
+    }
 
     #[test]
     fn test_survival_dist_variants() {
