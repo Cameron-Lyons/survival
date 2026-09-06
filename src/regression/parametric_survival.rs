@@ -643,6 +643,18 @@ fn likelihood_is_finite(likelihood: &SurvivalLikelihood) -> bool {
         && likelihood.jj.iter().all(|value| value.is_finite())
 }
 
+fn stationary_within_roundoff(
+    loglik: f64,
+    eps: f64,
+    score: &Array1<f64>,
+    delta: &Array1<f64>,
+) -> bool {
+    let decrement = score.dot(delta);
+    loglik.is_finite()
+        && decrement >= 0.0
+        && decrement <= eps.min(f64::EPSILON * loglik.abs().max(1.0))
+}
+
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
@@ -1267,6 +1279,13 @@ fn compute_survreg(
                 break;
             }
         } else {
+            // At an optimum, summation roundoff can make every trial appear
+            // worse. Require a positive observed information matrix and a
+            // Newton decrement below both tolerance and numerical resolution.
+            converged = delta_candidates[0]
+                .1
+                .as_ref()
+                .is_some_and(|delta| stationary_within_roundoff(loglik, eps, &u, delta));
             break;
         }
     }
@@ -1514,6 +1533,23 @@ mod tests {
             requested_distribution_name(Some("student-t"), DistributionType::StudentT),
             "t"
         );
+    }
+
+    #[test]
+    fn stationary_fit_requires_a_small_nonnegative_newton_decrement() {
+        let score = Array1::from_vec(vec![1e-9, -2e-9]);
+        let delta = Array1::from_vec(vec![1e-10, -2e-10]);
+        assert!(stationary_within_roundoff(-100.0, 1e-13, &score, &delta));
+        assert!(!stationary_within_roundoff(-100.0, 1e-20, &score, &delta));
+        assert!(!stationary_within_roundoff(
+            -100.0,
+            1e-13,
+            &score,
+            &(-&delta)
+        ));
+        let large = Array1::from_vec(vec![1.0, 1.0]);
+        assert!(!stationary_within_roundoff(-100.0, 1e-13, &large, &large));
+        assert!(!stationary_within_roundoff(f64::NAN, 1e-13, &score, &delta));
     }
 
     #[test]
