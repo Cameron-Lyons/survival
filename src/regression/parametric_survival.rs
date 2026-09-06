@@ -2,8 +2,8 @@ use crate::constants::{
     CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
     STEP_HALVE_FACTOR,
 };
+use crate::internal::aft::transformed_interval_width;
 use crate::internal::matrix::regularized_lu_solve;
-use crate::internal::student_t::StudentT;
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
     compute_quantile_prediction_with_options, compute_response_prediction,
@@ -594,7 +594,7 @@ struct LikelihoodInput<'a> {
     strata: &'a ArrayView1<'a, i32>,
     offsets: &'a Array1<f64>,
     time1: &'a ArrayView1<'a, f64>,
-    time2: Option<&'a ArrayView1<'a, f64>>,
+    interval_widths: Option<&'a ArrayView1<'a, f64>>,
     status: &'a ArrayView1<'a, i32>,
     weights: &'a Array1<f64>,
     covariates: &'a Array2<f64>,
@@ -611,11 +611,11 @@ fn calculate_likelihood(
         DistributionType::Weibull => SurvivalDist::Weibull,
         DistributionType::LogNormal => SurvivalDist::LogNormal,
         DistributionType::LogLogistic => SurvivalDist::LogLogistic,
-        DistributionType::StudentT => SurvivalDist::StudentT(StudentT::new(
+        DistributionType::StudentT => SurvivalDist::StudentT(
             input
                 .distribution_parameter
                 .ok_or_else(|| "Student-t degrees of freedom are missing".to_string())?,
-        )),
+        ),
     };
     let beta = ArrayView1::from(input.beta);
     survregc1(
@@ -628,7 +628,7 @@ fn calculate_likelihood(
         input.strata,
         &input.offsets.view(),
         input.time1,
-        input.time2,
+        input.interval_widths,
         input.status,
         &input.weights.view(),
         &input.covariates.view(),
@@ -636,6 +636,13 @@ fn calculate_likelihood(
         input.frailty,
     )
 }
+fn likelihood_is_finite(likelihood: &SurvivalLikelihood) -> bool {
+    likelihood.loglik.is_finite()
+        && likelihood.u.iter().all(|value| value.is_finite())
+        && likelihood.imat.iter().all(|value| value.is_finite())
+        && likelihood.jj.iter().all(|value| value.is_finite())
+}
+
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
@@ -1127,21 +1134,35 @@ fn compute_survreg(
     } else {
         y.column(2).iter().map(|&status| status as i32).collect()
     };
-    let time2_vec: Option<Vec<f64>> = if ny == 3 {
-        Some(y.column(1).iter().map(|&t| transform_time(t)).collect())
+    let interval_widths_vec: Option<Vec<f64>> = if ny == 3 {
+        Some(
+            y.column(0)
+                .iter()
+                .zip(y.column(1).iter())
+                .zip(&status_vec)
+                .map(|((&lower, &upper), &event)| {
+                    if event == 3 {
+                        transformed_interval_width(lower, upper, uses_log_time)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect(),
+        )
     } else {
         None
     };
     let time1_arr = Array1::from_vec(time1_vec);
     let status_arr = Array1::from_vec(status_vec);
-    let time2_arr = time2_vec.map(Array1::from_vec);
+    let interval_widths_arr = interval_widths_vec.map(Array1::from_vec);
     let strata_arr = Array1::from_iter(strata.iter().map(|&value| (value + 1) as i32));
     let frailty_arr = Array1::<i32>::zeros(n);
     let time1 = time1_arr.view();
     let status = status_arr.view();
     let strata = strata_arr.view();
     let frailty = frailty_arr.view();
-    let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
+    let interval_widths_view: Option<ArrayView1<f64>> =
+        interval_widths_arr.as_ref().map(|v| v.view());
     let input = LikelihoodInput {
         n,
         nvar,
@@ -1152,13 +1173,16 @@ fn compute_survreg(
         strata: &strata,
         offsets,
         time1: &time1,
-        time2: time2_view.as_ref(),
+        interval_widths: interval_widths_view.as_ref(),
         status: &status,
         weights,
         covariates,
         frailty: &frailty,
     };
     let initial_likelihood = calculate_likelihood(&input)?;
+    if !likelihood_is_finite(&initial_likelihood) {
+        return Err("Initial parameters yield a non-finite likelihood or derivatives".into());
+    }
     let mut loglik = initial_likelihood.loglik;
     let mut imat = initial_likelihood.imat;
     let mut jj = initial_likelihood.jj;
@@ -1199,14 +1223,14 @@ fn compute_survreg(
                     strata: &strata,
                     offsets,
                     time1: &time1,
-                    time2: time2_view.as_ref(),
+                    interval_widths: interval_widths_view.as_ref(),
                     status: &status,
                     weights,
                     covariates,
                     frailty: &frailty,
                 };
                 let candidate = calculate_likelihood(&candidate_input)?;
-                if candidate.loglik.is_finite()
+                if likelihood_is_finite(&candidate)
                     && candidate.loglik >= old_loglik
                     && (!uses_observed_information
                         || is_positive_definite(&candidate.imat, tol_chol))

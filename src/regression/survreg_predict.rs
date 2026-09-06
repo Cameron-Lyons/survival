@@ -1127,13 +1127,15 @@ mod tests {
     #[test]
     fn test_student_t_quantile_predictions_use_fitted_degrees_of_freedom() {
         // R survival 3.8.11: qt(c(.1, .5, .9), df=7).
-        let predictions = compute_quantile_prediction_with_parameter(
+        let predictions = compute_quantile_prediction_with_options(
             &[-2.0, 0.0],
-            2.0,
+            &[2.0],
             &[0.1, 0.5, 0.9],
             "student-t",
             Some(7.0),
-        );
+            true,
+        )
+        .unwrap();
         let scores = [-1.4149239276505083, 0.0, 1.4149239276505086];
         for (row, location) in predictions.iter().zip([-2.0, 0.0]) {
             for (&actual, score) in row.iter().zip(scores) {

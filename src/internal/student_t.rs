@@ -59,10 +59,6 @@ impl StudentT {
         }
     }
 
-    pub(crate) fn degrees_of_freedom(self) -> f64 {
-        self.df
-    }
-
     fn is_valid(self) -> bool {
         self.df.is_finite() && self.df > 0.0
     }
