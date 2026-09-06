@@ -5,7 +5,7 @@ use crate::constants::{
     DEFAULT_CONFIDENCE_LEVEL, DIVISION_FLOOR, Z_SCORE_95, normal_ci, normal_ci_bounds,
     z_score_for_confidence,
 };
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::{normal_cdf, normal_sf};
 use crate::internal::validation::{validate_confidence_level, validate_positive_finite_slice};
 
 const REML_MAX_ITERATIONS: usize = 100;
@@ -197,7 +197,7 @@ pub fn survival_meta_analysis(
     } else {
         0.0
     };
-    let p_value = 2.0 * (1.0 - normal_cdf(z_value.abs()));
+    let p_value = 2.0 * normal_sf(z_value.abs());
 
     let i_squared = if q_stat > k as f64 - 1.0 {
         100.0 * (q_stat - (k as f64 - 1.0)) / q_stat
@@ -623,7 +623,7 @@ fn kendall_tau_test(effects: &[f64], std_errors: &[f64]) -> (f64, f64) {
 
     let var_tau = (2.0 * (2.0 * k as f64 + 5.0)) / (9.0 * k as f64 * (k as f64 - 1.0));
     let z = tau / var_tau.sqrt();
-    let p = 2.0 * (1.0 - normal_cdf(z.abs()));
+    let p = 2.0 * normal_sf(z.abs());
 
     (z, p)
 }

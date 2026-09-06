@@ -1,5 +1,7 @@
 use crate::constants::{DEFAULT_ALLOCATION_RATIO, DEFAULT_ALPHA, DEFAULT_POWER, DEFAULT_SIDED};
-use crate::internal::statistical::{normal_cdf as norm_cdf, normal_inverse_cdf as norm_ppf};
+use crate::internal::statistical::{
+    normal_cdf as norm_cdf, normal_inverse_cdf as norm_ppf, two_sided_normal_quantile,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -114,8 +116,11 @@ pub(crate) fn sample_size_logrank(
     allocation_ratio: f64,
     sided: usize,
 ) -> SampleSizeResult {
-    let alpha_adj = if sided == 1 { alpha } else { alpha / 2.0 };
-    let z_alpha = norm_ppf(1.0 - alpha_adj);
+    let z_alpha = if sided == 1 {
+        -norm_ppf(alpha)
+    } else {
+        two_sided_normal_quantile(alpha).unwrap_or_else(|| -norm_ppf(alpha / 2.0))
+    };
     let z_beta = norm_ppf(power);
     let theta = hazard_ratio.ln();
     let r = allocation_ratio;
@@ -142,8 +147,11 @@ pub(crate) fn sample_size_freedman(
     allocation_ratio: f64,
     sided: usize,
 ) -> SampleSizeResult {
-    let alpha_adj = if sided == 1 { alpha } else { alpha / 2.0 };
-    let z_alpha = norm_ppf(1.0 - alpha_adj);
+    let z_alpha = if sided == 1 {
+        -norm_ppf(alpha)
+    } else {
+        two_sided_normal_quantile(alpha).unwrap_or_else(|| -norm_ppf(alpha / 2.0))
+    };
     let z_beta = norm_ppf(power);
     let hr = hazard_ratio;
     let r = allocation_ratio;
@@ -172,8 +180,11 @@ pub(crate) fn power_logrank(
     allocation_ratio: f64,
     sided: usize,
 ) -> f64 {
-    let alpha_adj = if sided == 1 { alpha } else { alpha / 2.0 };
-    let z_alpha = norm_ppf(1.0 - alpha_adj);
+    let z_alpha = if sided == 1 {
+        -norm_ppf(alpha)
+    } else {
+        two_sided_normal_quantile(alpha).unwrap_or_else(|| -norm_ppf(alpha / 2.0))
+    };
     let theta = hazard_ratio.ln();
     let r = allocation_ratio;
     let se = ((1.0 + r).powi(2) / (r * n_events as f64)).sqrt();
@@ -365,6 +376,17 @@ pub fn expected_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_size_and_power_support_subnormal_alpha() {
+        let alpha = f64::from_bits(1);
+        let result = sample_size_survival(0.7, Some(0.8), Some(alpha), Some(1.0), Some(2)).unwrap();
+        // R qnorm(log(alpha) - log(2), lower.tail = FALSE, log.p = TRUE)
+        // in Schoenfeld's event-count formula, followed by its power calculation.
+        assert_eq!(result.n_events, 48_630);
+        let power = power_survival(result.n_events, 0.7, Some(alpha), Some(1.0), Some(2)).unwrap();
+        assert!((power - 0.800_091_153_668_757_4).abs() < 2e-13);
+    }
 
     #[test]
     fn public_sample_size_survival_validates_parameters() {
