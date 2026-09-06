@@ -33,6 +33,7 @@ impl DeepSurv {
         ensure_positive_usize("n_vars", n_vars)?;
         config.validate()?;
         config.validate_network_shape(n_obs, n_vars)?;
+        validate_deep_training_values(&x, &time, &status)?;
 
         let config = config.clone();
         Ok(py.detach(move || fit_deep_surv_inner(&x, n_obs, n_vars, &time, &status, &config)))
@@ -40,7 +41,7 @@ impl DeepSurv {
 
     #[pyo3(signature = (x_new, n_new))]
     pub fn predict_risk(&self, x_new: Vec<f64>, n_new: usize) -> PyResult<Vec<f64>> {
-        validate_prediction_shape(x_new.len(), n_new, self.n_vars)?;
+        validate_prediction_input(&x_new, n_new, self.n_vars)?;
 
         Ok(predict_with_weights(
             &x_new,

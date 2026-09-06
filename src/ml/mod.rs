@@ -45,6 +45,8 @@ pub(crate) mod utils;
 mod config_tests;
 #[cfg(test)]
 mod dimension_tests;
+#[cfg(test)]
+mod input_value_tests;
 
 #[cfg(feature = "ml")]
 pub use active_learning::{
