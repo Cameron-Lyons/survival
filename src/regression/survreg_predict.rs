@@ -480,28 +480,44 @@ pub(crate) fn compute_quantile_prediction(
     quantiles: &[f64],
     distribution: &str,
 ) -> Vec<Vec<f64>> {
-    let n = linear_pred.len();
-    let nq = quantiles.len();
+    compute_quantile_prediction_with_parameter(linear_pred, scale, quantiles, distribution, None)
+}
 
+pub(crate) fn compute_quantile_prediction_with_parameter(
+    linear_pred: &[f64],
+    scale: f64,
+    quantiles: &[f64],
+    distribution: &str,
+    distribution_parameter: Option<f64>,
+) -> Vec<Vec<f64>> {
     let key = validated_distribution_key(distribution);
-    let quantile_fn = quantile_fn_for_distribution(&key);
     let uses_log_transform = response_uses_log_transform(&key);
-
-    let mut predictions = Vec::with_capacity(n);
-    for lp in linear_pred.iter().take(n) {
-        let mut row = Vec::with_capacity(nq);
-        for &q in quantiles {
-            let z = quantile_fn(q);
-            let linear_quantile = lp + scale * z;
-            row.push(if uses_log_transform {
-                linear_quantile.exp()
-            } else {
-                linear_quantile
-            });
-        }
-        predictions.push(row);
-    }
-    predictions
+    let scores: Vec<f64> = if is_student_t_distribution(&key) {
+        let df = distribution_parameter.unwrap_or(4.0);
+        quantiles
+            .iter()
+            .map(|&q| student_t_inverse_cdf(q, df))
+            .collect()
+    } else {
+        let quantile_fn = quantile_fn_for_distribution(&key);
+        quantiles.iter().map(|&q| quantile_fn(q)).collect()
+    };
+    linear_pred
+        .iter()
+        .map(|&lp| {
+            scores
+                .iter()
+                .map(|&z| {
+                    let value = lp + scale * z;
+                    if uses_log_transform {
+                        value.exp()
+                    } else {
+                        value
+                    }
+                })
+                .collect()
+        })
+        .collect()
 }
 
 pub(crate) fn compute_se_linear_predictor(
@@ -858,6 +874,28 @@ mod tests {
         assert!((gaussian[0][0] - (1.0 + scale * normal_inverse_cdf(0.5))).abs() < 1e-10);
         assert!((lognormal[0][0] - gaussian[0][0].exp()).abs() < 1e-10);
         assert!((rayleigh[0][0] - weibull[0][0]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_student_t_quantile_predictions_use_fitted_degrees_of_freedom() {
+        // R survival 3.8.11: qt(c(.1, .5, .9), df=7).
+        let predictions = compute_quantile_prediction_with_parameter(
+            &[-2.0, 0.0],
+            2.0,
+            &[0.1, 0.5, 0.9],
+            "student-t",
+            Some(7.0),
+        );
+        let scores = [-1.4149239276505083, 0.0, 1.4149239276505086];
+        for (row, location) in predictions.iter().zip([-2.0, 0.0]) {
+            for (&actual, score) in row.iter().zip(scores) {
+                assert!((actual - (location + 2.0 * score)).abs() < 1e-10);
+            }
+        }
+        assert_eq!(
+            compute_quantile_prediction(&[-2.0, 0.0], 1.0, &[0.5], "t"),
+            vec![vec![-2.0], vec![0.0]]
+        );
     }
 
     #[test]

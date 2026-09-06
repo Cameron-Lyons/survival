@@ -162,6 +162,14 @@ Multi-state fits with retained model frames also support influence residuals
 and pseudo-values for state probabilities, cumulative transition hazards, and
 integrated state occupancy, including grouped, weighted, and subject-collapsed
 counting-process results.
+Ordinary fitted curves support R-style influence residuals and pseudo-values for
+survival, cumulative hazard, and RMST, preserving case weights, subject IDs,
+grouping, estimator settings, and conditional start times. A native query kernel
+uses the fitted risk tables and event prefixes without refitting or building a
+full observation-by-event influence matrix. The fitted RMST path follows R's
+infinitesimal jackknife; the direct time/status pseudo-value API retains its
+existing delete-one RMST calculation. Tied `ctype=2` diagnostics follow R's
+approximation and report the same limitation.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves.
 The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use
@@ -272,6 +280,12 @@ predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
 term contributions, and quantile predictions via `type="quantile"`.
+Gaussian, logistic, extreme-value, and Student-t AFT models accept finite real-valued
+responses, including negative values and zero, for all censoring types. Log-time
+families retain their positive-response requirement. Native and sklearn predictions
+use each family's response transformation; `predict_median` and `predict_quantile`
+return distribution quantiles. Right-censored concordance also accepts real-valued
+responses, so these models can be scored directly.
 The AFT optimizer uses positive-definite observed-information Newton steps when
 available and falls back to the stable outer-product system otherwise. The R
 bridge also routes built-in `survreg.fit` matrix calls through this kernel,
@@ -287,6 +301,10 @@ Common result objects can be converted to column-oriented tables with
 The `survival.residuals` name remains the residual diagnostics module; the
 R-style residual generic is available as `survival.r_api.residuals(...)` for
 fitted Cox and `survreg` models.
+For AFT models, `type="matrix"` returns six analytic diagnostic columns in R's
+order (`g`, `dg`, `ddg`, `ds`, `dds`, `dsg`), including its interval-censoring
+conventions. Working residuals use the location score divided by negative
+curvature; tail probabilities are evaluated directly to avoid cancellation.
 
 Other historical root-level algorithm names remain available for compatibility,
 but module imports are the preferred style because they match the current repo

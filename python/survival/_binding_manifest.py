@@ -969,6 +969,7 @@ BINDINGS = (
     "survfit_from_hazard",
     "survfit_from_matrix",
     "survfit_multistate",
+    "survfit_residuals_at_times",
     "survfitaj",
     "survfitaj_extended",
     "survfitkm",
@@ -1833,6 +1834,7 @@ MODULE_BINDINGS = {
         "survfitkm",
         "survfitkm_counting_influence",
         "survfitkm_influence",
+        "survfit_residuals_at_times",
         "survfitkm_with_options",
     ),
     "validation": (

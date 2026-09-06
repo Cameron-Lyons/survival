@@ -148,6 +148,61 @@ mod pseudo_bench {
     }
 }
 
+mod fitted_survfit_residuals {
+    use super::*;
+    use survival::surv_analysis::survfit_residuals_at_times;
+
+    fn run(bencher: divan::Bencher, n: usize, type_: &'static str) {
+        let (time, status, status_i32) = generate_survival_data(n);
+        let weights = generate_case_weights(n);
+        let curve = compute_survfitkm(
+            &time,
+            &status,
+            &weights,
+            None,
+            &vec![0; n],
+            &KaplanMeierConfig::default(),
+        );
+        let eval_times: Vec<f64> = [0.1, 0.3, 0.5, 0.7, 0.9]
+            .iter()
+            .map(|q| q * time[n - 1])
+            .collect();
+        bencher.bench_local(|| {
+            black_box(
+                survfit_residuals_at_times(
+                    time.clone(),
+                    status_i32.clone(),
+                    curve.time.clone(),
+                    curve.n_risk.clone(),
+                    curve.n_event.clone(),
+                    curve.estimate.clone(),
+                    curve.cumhaz.clone(),
+                    eval_times.clone(),
+                    type_,
+                    None,
+                    1,
+                )
+                .expect("fitted survival residual inputs should be valid"),
+            );
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn survival(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "survival");
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn cumulative_hazard(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "cumhaz");
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn restricted_mean(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "rmst");
+    }
+}
+
 mod aareg_bench {
     use super::*;
 
@@ -264,6 +319,42 @@ mod logrank {
                 WeightType::FlemingHarrington { p: 0.5, q: 0.5 },
             )
         });
+    }
+}
+
+mod survreg_residuals {
+    use super::*;
+    use survival::residuals::survreg_residual_matrix;
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn gaussian_mixed_censoring(bencher: divan::Bencher, n: usize) {
+        let time: Vec<f64> = (0..n).map(|i| 1.0 + (i % 41) as f64 * 0.1).collect();
+        let time2: Vec<f64> = time.iter().map(|time| time + 0.25).collect();
+        let status: Vec<i32> = (0..n).map(|i| (i % 4) as i32).collect();
+        let linear_pred = vec![2.5; n];
+        bencher
+            .with_inputs(|| {
+                (
+                    time.clone(),
+                    time2.clone(),
+                    status.clone(),
+                    linear_pred.clone(),
+                )
+            })
+            .bench_local_values(|(time, time2, status, linear_pred)| {
+                black_box(
+                    survreg_residual_matrix(
+                        time,
+                        status,
+                        linear_pred,
+                        1.3,
+                        "gaussian".to_string(),
+                        Some(time2),
+                        None,
+                    )
+                    .expect("benchmark residual inputs should be valid"),
+                )
+            });
     }
 }
 

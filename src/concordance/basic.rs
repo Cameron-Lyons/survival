@@ -39,7 +39,6 @@ fn validate_right_concordance_inputs(
     }
     validate_no_nan(time, "time")?;
     validate_finite(time, "time")?;
-    validate_non_negative(time, "time")?;
     validate_no_nan(risk_scores, "risk_scores")?;
     validate_finite(risk_scores, "risk_scores")?;
     validate_binary_i32(status, "status")?;
@@ -2017,6 +2016,50 @@ fn addin(nwt: &mut [f64], twt: &mut [f64], x: usize, weight: f64) {
 mod tests {
     use super::*;
     use crate::tests::common::initialize_python;
+
+    #[test]
+    fn right_concordance_accepts_real_responses_with_all_time_weights() {
+        // R survival 3.8.11, concordance(Surv(time, status) ~ risk,
+        // weights=weights, reverse=TRUE, timewt=...).
+        let time = vec![-2.0, -1.0, -0.5, 0.0, 1.0, 3.0];
+        let status = vec![1, 1, 0, 1, 0, 1];
+        let risk = vec![3.0, 2.0, 2.0, -1.0, 0.0, 1.0];
+        let weights = vec![1.0, 2.0, 1.0, 0.5, 2.0, 1.0];
+        for (timewt, expected) in [
+            ("n", 0.852941176470588),
+            ("S", 0.831967213114754),
+            ("S/G", 0.806469920544835),
+            ("n/G2", 0.806469920544835),
+            ("I", 0.782668124658283),
+        ] {
+            let actual = concordance_index(
+                time.clone(),
+                status.clone(),
+                risk.clone(),
+                Some(weights.clone()),
+                timewt.to_string(),
+            )
+            .unwrap();
+            assert!((actual - expected).abs() < 1e-12, "{timewt}: {actual}");
+        }
+        let unweighted = concordance_index(
+            time.clone(),
+            status.clone(),
+            risk.clone(),
+            None,
+            "n".to_string(),
+        )
+        .unwrap();
+        let shifted = concordance_index(
+            time.iter().map(|value| value + 4.0).collect(),
+            status,
+            risk,
+            None,
+            "n".to_string(),
+        )
+        .unwrap();
+        assert_eq!(unweighted, shifted);
+    }
 
     #[test]
     fn validate_right_concordance_rejects_malformed_inputs() {
