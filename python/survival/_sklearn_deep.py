@@ -97,6 +97,8 @@ class DeepSurvEstimator(BaseEstimator, RegressorMixin):
             Fitted estimator.
         """
         X, time, status = _validate_survival_data(X, y)
+        if X.shape[1] == 0:
+            raise ValueError("DeepSurv requires at least one feature")
         self.n_features_in_ = X.shape[1]
         n_obs = X.shape[0]
 

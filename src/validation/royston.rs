@@ -1,5 +1,5 @@
 use crate::constants::{ROYSTON_KAPPA_FACTOR, ROYSTON_VARIANCE_FACTOR};
-use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::statistical::{normal_inverse_cdf, normal_sf};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 use pyo3::prelude::*;
 
@@ -101,7 +101,7 @@ pub fn royston(
     let se = kappa * ((1.0 - correlation.powi(2)) / (n_events - 2).max(1) as f64).sqrt();
 
     let z = if se > 0.0 { d / se } else { 0.0 };
-    let p_value = 2.0 * (1.0 - normal_cdf(z.abs()));
+    let p_value = 2.0 * normal_sf(z.abs());
 
     let d_sq = d.powi(2);
     let r_squared_d = d_sq / (d_sq + std::f64::consts::PI.powi(2) / ROYSTON_VARIANCE_FACTOR);

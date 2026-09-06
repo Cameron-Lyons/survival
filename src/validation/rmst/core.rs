@@ -253,7 +253,7 @@ pub(crate) fn compare_rmst(
         (0.0, f64::INFINITY)
     };
     let z_stat = if diff_se > 0.0 { diff / diff_se } else { 0.0 };
-    let p_value = 2.0 * (1.0 - norm_cdf(z_stat.abs()));
+    let p_value = 2.0 * normal_sf(z_stat.abs());
     RMSTComparisonResult {
         rmst_diff: diff,
         rmst_ratio: ratio,
