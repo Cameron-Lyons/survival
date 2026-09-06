@@ -249,7 +249,9 @@ Newton steps, with a score-product fallback when needed. It honors R's
 [`survreg` pivot tolerance](https://github.com/cran/survival/blob/3.8-11/src/cholesky3.c),
 preserves supplied coefficients in aliased directions, and returns zero
 covariance rows and columns for discarded pivots. Each accepted factorization
-is reused for the next step and the final covariance. The R bridge also routes
+is reused for the next step and the final covariance. After the first rejected
+step, the optimizer screens shorter steps using only their likelihood and
+computes full derivatives for improving candidates. The R bridge also routes
 built-in `survreg.fit` matrix calls through this kernel,
 including fixed or stratified scales and interval-censored responses.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
@@ -518,7 +520,7 @@ result = regression.survreg(
     covariates=covariates,
     weights=None,          # Optional: observation weights
     offsets=None,          # Optional: offset values
-    initial_beta=None,     # Optional: initial coefficient values
+    initial_beta=None,     # Derive starting values from the observations
     strata=None,           # Optional: stratification variable
     distribution="weibull",  # "extreme_value", "logistic", "gaussian", "weibull", or "lognormal"
     max_iter=20,          # Optional: maximum iterations
@@ -532,6 +534,32 @@ print(f"Iterations: {result.iterations}")
 print(f"Variance matrix: {result.variance_matrix}")
 print(f"Convergence flag: {result.convergence_flag}")
 ```
+
+Omitted AFT starts use R's distribution-specific weighted variance estimates,
+censoring-aware working regression, and a preliminary intercept fit when scales
+must be estimated for a model with covariates. This applies to every built-in
+distribution, fixed scales, and stratified scales. `max_iter=0` returns the
+initialized model without taking a main-model optimization step.
+
+With omitted starts and a leading intercept, continuous covariates are centered
+and scaled during fitting; binary columns keep their coding. Coefficients and
+covariance are returned in the original units, while stored predictions are
+computed before converting back to preserve accuracy. As in R, `score_vector`
+uses the working design coordinates. Explicit complete starting vectors bypass
+initialization and rescaling.
+For an estimated-scale model other than an intercept-only model, a numeric
+start can contain just the location coefficients. The initializer retains those
+coefficients in the original design units and appends log-scales from a
+20-iteration intercept-only fit, including weights, offsets, censoring, and
+scale strata. It does not solve for the supplied locations. Intercept-only
+models require log-scales in a supplied starting vector; fixed-scale models
+require only location coefficients. The R `survreg.fit` matrix interface uses
+the same native initialization and returns R's null-fit metadata.
+Zero-weight observations do not determine starting values or working coordinates.
+
+Automatic initialization reports an error for an unusable response scale,
+constant nonbinary covariate that cannot be rescaled, or interval probability
+that rounds to zero. Complete explicit starts remain available for these cases.
 
 ### Cox Proportional Hazards Model
 
@@ -804,13 +832,16 @@ cargo bench -- --test
 
 The AFT benchmarks include matched weighted, stratified lognormal fits with
 full-rank and duplicated covariate columns. Five paired release runs on Apple
-Silicon with Rust 1.94 and one Rayon thread found no measurable change for the
-10,000-row full-rank fit (4.644 to 4.642 ms) after the rank/covariance correction.
-For duplicated columns, 100 and 10,000 rows improved by about 38% and 10%, while
-1,000 and 5,000 rows cost about 17% and 70% more. The 5,000-row fit requires six
-rejected early Newton trials; the corrected covariance matches R. These timings
-compare against revision `918c6456`, whose singular covariance was incorrect.
-Each run used at least 50 samples and 0.25 seconds per case:
+Silicon with Rust 1.94 and one Rayon thread compared automatic initialization
+against the zero starts in revision `6e687b37`. Main-model iterations fell from
+8–9 to R's 4–5, but the preliminary scale fit and working regressions increased
+total fitting time by about 11–34% in six of eight cases; the other two timing
+comparisons were inconclusive. For example, the 1,000-row full-rank fit took
+444 µs versus 367 µs, and the 10,000-row duplicated-column fit took 4.842 ms
+versus 3.595 ms. These measurements include all initialization work and input
+cloning. All eight fits converged and were checked against R's coefficients,
+covariance, and likelihood. Each run used at least 50 samples and 0.25 seconds
+per case:
 
 ```sh
 RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- \

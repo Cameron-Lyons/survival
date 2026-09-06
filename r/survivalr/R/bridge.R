@@ -6808,35 +6808,6 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
   list(name = distribution, parameter = parameter)
 }
 
-.survreg_fit_start <- function(y, x, weights, offset, strata, nstrat,
-                               fixed_scale, null_scale = NULL) {
-  status <- y[, ncol(y)]
-  proxy <- ifelse(status == 3, rowMeans(y[, 1:2, drop = FALSE]), y[, 1L])
-  target <- proxy - offset
-  location <- if (ncol(x) == 0L) {
-    numeric()
-  } else {
-    fitted <- try(stats::lm.wfit(x, target, weights)$coefficients, silent = TRUE)
-    if (inherits(fitted, "try-error")) rep(0, ncol(x)) else as.numeric(fitted)
-  }
-  location[!is.finite(location)] <- 0
-  if (!is.null(fixed_scale)) {
-    return(location)
-  }
-  if (!is.null(null_scale)) {
-    return(c(location, null_scale))
-  }
-
-  center <- sum(weights * target) / sum(weights)
-  residual <- target - center
-  log_scale <- vapply(seq_len(nstrat), function(group) {
-    keep <- strata == group
-    variance <- sum(weights[keep] * residual[keep]^2) / sum(weights[keep])
-    log(max(sqrt(variance), sqrt(.Machine$double.eps)))
-  }, numeric(1))
-  c(center, log_scale)
-}
-
 .survreg_fit_core <- function(x, y, weights, offset, initial, controlvals,
                               distribution, distribution_parameter,
                               fixed_scale, strata) {
@@ -6847,7 +6818,7 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
     covariates = .coxph_fit_covariates(x, nrow(x)),
     weights = .as_python_vector(weights),
     offsets = .as_python_vector(offset),
-    initial_beta = as.list(unname(initial)),
+    initial_beta = if (is.null(initial)) NULL else as.list(unname(initial)),
     strata = .as_python_vector(as.integer(strata) - 1L),
     distribution = distribution,
     max_iter = as.integer(controlvals$iter.max),
@@ -6908,32 +6879,43 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
     return(eval.parent(call))
   }
   fixed_scale <- if (scale > 0) as.numeric(scale) else NULL
-  null_x <- matrix(1, nrow = n, ncol = 1L)
-  null_start <- .survreg_fit_start(
-    y, null_x, weights, offset, strata, nstrat, fixed_scale
-  )
-  null_control <- controlvals
-  null_control$iter.max <- 20L
-  null_fit <- .survreg_fit_core(
-    null_x, y, weights, offset, null_start, null_control,
-    native_distribution$name, native_distribution$parameter,
-    fixed_scale, strata
-  )
-  null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
-  null_scale <- if (is.null(fixed_scale)) null_coef[-1L] else numeric()
-
-  if (missing(init) || is.null(init)) {
-    initial <- .survreg_fit_start(
-      y, x, weights, offset, strata, nstrat, fixed_scale, null_scale
-    )
-  } else {
-    initial <- as.numeric(init)
-    if (is.null(fixed_scale) && length(initial) == nvar) {
-      initial <- c(initial, null_scale)
-    }
+  mean_only <- nvar == 1L && all(x == 1)
+  initial <- if (missing(init) || is.null(init)) NULL else as.numeric(init)
+  if (!is.null(initial)) {
     expected <- nvar + if (is.null(fixed_scale)) nstrat else 0L
-    if (length(initial) != expected) {
+    partial <- is.null(fixed_scale) && length(initial) == nvar
+    if (length(initial) != expected && !partial) {
       stop("Wrong length for initial parameters", call. = FALSE)
+    }
+    if (any(!is.finite(initial))) {
+      stop("Initial parameters must contain only finite values", call. = FALSE)
+    }
+    if (partial && mean_only) {
+      stop("Mean-only models require a complete initial vector including log-scale parameters",
+           call. = FALSE)
+    }
+  }
+
+  # The native omitted-start path uses the distribution's variance estimate
+  # and censoring derivatives for the same preliminary fit as R.
+  null_fit <- NULL
+  if (!mean_only) {
+    null_control <- controlvals
+    null_control$iter.max <- 20L
+    null_fit <- .survreg_fit_core(
+      matrix(1, nrow = n, ncol = 1L), y, weights, offset, NULL, null_control,
+      native_distribution$name, native_distribution$parameter,
+      fixed_scale, strata
+    )
+    null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
+    null_loglik <- as.numeric(.result_field(null_fit, "log_likelihood"))
+    null_variance <- .as_numeric_matrix(.result_field(null_fit, "variance_matrix"))
+    if (any(!is.finite(null_coef)) || !is.finite(null_loglik) ||
+        any(!is.finite(null_variance))) {
+      stop("initial iteration failed (use starting estimates?)", call. = FALSE)
+    }
+    if (!is.null(initial) && is.null(fixed_scale) && length(initial) == nvar) {
+      initial <- c(initial, null_coef[-1L])
     }
   }
 
@@ -6956,18 +6938,18 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
   coefficients <- .as_numeric_vector(.result_field(fit, "coefficients"))
   names(coefficients) <- coefficient_names
   variance <- .as_numeric_matrix(.result_field(fit, "variance_matrix"))
-  dimnames(variance) <- NULL
-  icoef <- if (is.null(fixed_scale)) {
-    null_coef
-  } else {
-    c(null_coef, log(fixed_scale))
-  }
-  names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
+  rescaled <- is.null(initial) && nvar > 1L && all(x[, 1L] == 1) &&
+    any(vapply(seq_len(nvar), function(column) {
+      any(x[, column] != 0 & x[, column] != 1)
+    }, logical(1)))
+  dimnames(variance) <- if (rescaled) NULL else list(coefficient_names, coefficient_names)
   full_loglik <- as.numeric(.result_field(fit, "log_likelihood"))
-  null_loglik <- if (nvar == 1L && all(x == 1)) {
-    full_loglik
+  if (mean_only) {
+    icoef <- coefficients
+    null_loglik <- full_loglik
   } else {
-    as.numeric(.result_field(null_fit, "log_likelihood"))
+    icoef <- if (is.null(fixed_scale)) null_coef else c(null_coef, log(fixed_scale))
+    names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
   }
 
   list(
