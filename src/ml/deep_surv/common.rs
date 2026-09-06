@@ -84,13 +84,7 @@ impl DeepSurvConfig {
         early_stopping_patience: Option<usize>,
         validation_fraction: f64,
     ) -> PyResult<Self> {
-        ensure_open_unit_interval("dropout_rate", dropout_rate)?;
-        ensure_positive_f64("learning_rate", learning_rate)?;
-        ensure_positive_usize("batch_size", batch_size)?;
-        ensure_positive_usize("n_epochs", n_epochs)?;
-        ensure_open_unit_interval("validation_fraction", validation_fraction)?;
-
-        Ok(DeepSurvConfig {
+        let config = Self {
             hidden_layers: hidden_layers.unwrap_or_else(|| vec![64, 32]),
             activation,
             dropout_rate,
@@ -101,6 +95,44 @@ impl DeepSurvConfig {
             seed,
             early_stopping_patience,
             validation_fraction,
-        })
+        };
+        config.validate()?;
+        Ok(config)
+    }
+}
+
+impl DeepSurvConfig {
+    fn validate(&self) -> PyResult<()> {
+        ensure_open_unit_interval("dropout_rate", self.dropout_rate)?;
+        ensure_positive_f32("learning_rate", self.learning_rate)?;
+        ensure_positive_usize("batch_size", self.batch_size)?;
+        ensure_positive_usize("n_epochs", self.n_epochs)?;
+        ensure_vec_capacity::<f64>("n_epochs", self.n_epochs)?;
+        ensure_open_unit_interval("validation_fraction", self.validation_fraction)?;
+        ensure_nonnegative_f32("l2_reg", self.l2_reg)?;
+        for &width in &self.hidden_layers {
+            ensure_positive_usize("hidden_layers widths", width)?;
+            // CPU inference stores each layer's activations as f64.
+            ensure_vec_capacity::<f64>("hidden_layers", width)?;
+        }
+        for pair in self.hidden_layers.windows(2) {
+            ensure_matrix_capacity::<f32>("hidden_layers", pair[0], pair[1])?;
+        }
+        Ok(())
+    }
+
+    fn validate_network_shape(&self, n_obs: usize, n_vars: usize) -> PyResult<()> {
+        if let Some(&first_width) = self.hidden_layers.first() {
+            ensure_matrix_capacity::<f32>("hidden_layers", n_vars, first_width)?;
+        }
+        let n_val = ((n_obs as f64) * self.validation_fraction)
+            .floor()
+            .clamp(0.0, n_obs as f64) as usize;
+        let n_train = n_obs.saturating_sub(n_val);
+        let tensor_rows = self.batch_size.min(n_train).max(n_val);
+        for &width in &self.hidden_layers {
+            ensure_matrix_capacity::<f32>("hidden_layers", tensor_rows, width)?;
+        }
+        Ok(())
     }
 }
