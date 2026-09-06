@@ -747,6 +747,17 @@ metadata.
 - `load_myeloma()` - Myeloma Survival Data
 - `load_rhdnase()` - rhDNase Clinical Trial Data
 
+## Scikit-learn estimators
+
+`survival.sklearn_compat` provides estimators and streaming wrappers that accept
+two-dimensional feature arrays with finite real values, including when
+scikit-learn is not installed. Numeric strings are converted to float64; complex
+values, masked entries, and missing or infinite values are rejected before
+fitting or prediction. Streaming methods check each batch without materializing
+the full input. Direct calls require at least one sample; batched predictions can
+return empty outputs. Cox, AFT, and tree models support arrays with zero feature
+columns; DeepSurv requires at least one feature.
+
 ## API Reference
 
 The public Python surface is broad and evolves quickly. For the most accurate,
@@ -765,6 +776,12 @@ experimental extension symbols, import from `survival._survival` explicitly.
   top of the generated bindings.
 - [`python/survival/sklearn_compat.py`](python/survival/sklearn_compat.py):
   scikit-learn-compatible estimators and streaming wrappers.
+
+The sklearn estimators accept targets with shape `(n_samples, 2)` and columns
+`[time, status]`. Times must be finite real numbers; each model applies its own
+response-domain restrictions. Status must be exactly `0` (censored) or `1`
+(event), with boolean values also accepted. Missing, masked, complex, or
+fractional event indicators raise `ValueError` before fitting or scoring.
 
 To inspect available symbols at runtime:
 
