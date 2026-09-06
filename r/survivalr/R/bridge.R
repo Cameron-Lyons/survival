@@ -10742,13 +10742,18 @@ coef.survival_py_concordance <- function(object, ...) {
 }
 
 vcov.survival_py_concordance <- function(object, ...) {
+  covariance <- .result_field(object, "covariance")
+  if (!is.null(covariance)) {
+    covariance <- .as_numeric_matrix(covariance)
+    return(if (nrow(covariance) == 1L) covariance[[1L]] else covariance)
+  }
   frame <- as.data.frame(object)
   if (nrow(frame) == 1L) {
-    return(4 * as.numeric(frame$variance)[[1L]])
+    return(as.numeric(frame$variance)[[1L]])
   }
   dfbeta <- .result_field(object, "dfbeta")
   if (is.null(dfbeta)) {
-    values <- 4 * as.numeric(frame$variance)
+    values <- as.numeric(frame$variance)
     return(diag(values, nrow = length(values)))
   }
   dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
@@ -10757,7 +10762,7 @@ vcov.survival_py_concordance <- function(object, ...) {
     stop("concordance dfbeta values must be rectangular", call. = FALSE)
   }
   dfbeta_matrix <- do.call(cbind, dfbeta_columns)
-  4 * crossprod(dfbeta_matrix)
+  crossprod(dfbeta_matrix)
 }
 
 coef.concordance <- function(object, ...) {
@@ -10846,7 +10851,19 @@ survConcordance.fit <- function(y, x, strata, weight) {
   values
 }
 
-.concordancefit_count <- function(result, score_names = NULL) {
+.concordancefit_count <- function(result, score_names = NULL, strata = NULL) {
+  stratum_counts <- .result_field(result, "stratum_counts")
+  if (!is.null(stratum_counts)) {
+    count <- .as_numeric_matrix(stratum_counts)
+    labels <- as.character(unlist(.result_field(result, "stratum_labels"), use.names = FALSE))
+    # Python retains encounter order. R uses factor level order, including an
+    # explicitly ordered factor's levels, with unused levels omitted.
+    levels <- if (is.null(strata)) sort(labels) else levels(droplevels(as.factor(strata)))
+    order <- match(levels, labels)
+    count <- count[order, , drop = FALSE]
+    dimnames(count) <- list(levels, c("concordant", "discordant", "tied.x", "tied.y", "tied.xy"))
+    return(count)
+  }
   concordant <- .as_numeric_vector(.result_field(result, "concordant"))
   comparable <- .as_numeric_vector(.result_field(result, "comparable"))
   tied_x <- .as_numeric_vector(.result_field(result, "tied_x"))
@@ -10913,12 +10930,12 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     ranks <- FALSE
     influence <- 0L
   }
-  internal_influence <- if (isTRUE(std.err) && influence == 0L) 1L else influence
+  internal_influence <- if (isTRUE(std.err)) 3L else 0L
   result <- .call_r_api(
     "concordance",
     .as_python_surv(y),
     scores = .as_python_optional_vector(x),
-    strata = if (missing(strata)) NULL else .as_python_vector(strata),
+    strata = if (missing(strata) || length(strata) == 0L) NULL else .as_python_vector(strata),
     weights = if (missing(weights)) NULL else .as_python_vector(weights),
     ymin = ymin,
     ymax = ymax,
@@ -10943,12 +10960,18 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   }
   out <- list(
     concordance = if (length(concordance) == 1L) concordance[[1L]] else concordance,
-    count = .concordancefit_count(result, if (multi_score) score_names else NULL),
+    count = .concordancefit_count(
+      result,
+      if (multi_score) score_names else NULL,
+      if (missing(strata)) NULL else strata
+    ),
     n = as.integer(.result_field(result, "n"))
   )
   variance <- .result_field(result, "variance")
   conditional_variance <- .as_numeric_vector(.result_field(result, "conditional_variance"))
   dfbeta <- .result_field(result, "dfbeta")
+  cluster_levels <- if (!missing(cluster) && !is.null(cluster)) unique(cluster) else NULL
+  cluster_order <- if (!is.null(cluster_levels)) order(cluster_levels) else NULL
   dfbeta_matrix <- NULL
   if (multi_score && !is.null(dfbeta)) {
     dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
@@ -10957,12 +10980,16 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       stop("concordance dfbeta values must be rectangular", call. = FALSE)
     }
     dfbeta_matrix <- do.call(cbind, dfbeta_columns)
+    if (!is.null(cluster_order)) {
+      dfbeta_matrix <- dfbeta_matrix[cluster_order, , drop = FALSE]
+      rownames(dfbeta_matrix) <- as.character(cluster_levels[cluster_order])
+    }
   }
   if (isTRUE(std.err) && !is.null(variance)) {
     if (multi_score && !is.null(dfbeta_matrix)) {
-      out$var <- 4 * crossprod(dfbeta_matrix)
+      out$var <- crossprod(dfbeta_matrix)
     } else {
-      out$var <- 4 * .as_numeric_vector(variance)
+      out$var <- .as_numeric_vector(variance)
     }
     out$cvar <- if (length(conditional_variance) == 1L) {
       conditional_variance[[1L]]
@@ -10973,9 +11000,14 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (influence %in% c(1L, 3L)) {
     if (!is.null(dfbeta)) {
       out$dfbeta <- if (multi_score && !is.null(dfbeta_matrix)) {
-        2 * dfbeta_matrix
+        dfbeta_matrix
       } else {
-        2 * .as_numeric_vector(dfbeta)
+        values <- .as_numeric_vector(dfbeta)
+        if (!is.null(cluster_order)) {
+          values <- values[cluster_order]
+          names(values) <- as.character(cluster_levels[cluster_order])
+        }
+        values
       }
     }
   }
@@ -10989,7 +11021,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
           stop("concordance influence values must be rectangular", call. = FALSE)
         }
         out$influence <- array(
-          2 * unlist(influence_matrices, use.names = FALSE),
+          unlist(influence_matrices, use.names = FALSE),
           dim = c(matrix_dims[[1L]], length(influence_matrices))
         )
         dimnames(out$influence) <- list(
@@ -10998,7 +11030,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
           score_names
         )
       } else {
-        out$influence <- 2 * .as_numeric_matrix(influence_rows)
+        out$influence <- .as_numeric_matrix(influence_rows)
         colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
       }
     }

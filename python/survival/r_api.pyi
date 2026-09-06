@@ -390,6 +390,9 @@ class ConcordanceResult:
     variance: float | list[float | None] | None
     conditional_variance: float | list[float] | None
     score_names: list[str] | None
+    covariance: list[list[float]] | None
+    stratum_labels: list[Any] | None
+    stratum_counts: list[list[float]] | None
     @property
     def c_index(self) -> float | list[float]: ...
     @property
@@ -630,6 +633,7 @@ def concordance(
     subset: Any | None = None,
     na_action: str | None = "fail",
     cluster: Any | None = None,
+    strata: Any | None = None,
     ymin: Any | None = None,
     ymax: Any | None = None,
     timewt: Any = "n",

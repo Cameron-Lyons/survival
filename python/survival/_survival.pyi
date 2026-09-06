@@ -7500,6 +7500,9 @@ def concordance_index(
     risk_scores: list[float],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool = True,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> float: ...
 def concordance_summary(
     time: list[float],
@@ -7507,6 +7510,9 @@ def concordance_summary(
     risk_scores: list[float],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool = True,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> dict[str, float]: ...
 def stratified_concordance_summary(
     time: list[float],
@@ -7515,6 +7521,9 @@ def stratified_concordance_summary(
     strata: list[int],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool = True,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> dict[str, float]: ...
 def concordance_rank_rows(
     time: list[float],
@@ -7522,6 +7531,9 @@ def concordance_rank_rows(
     risk_scores: list[float],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool = True,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def stratified_concordance_rank_rows(
     time: list[float],
@@ -7530,6 +7542,9 @@ def stratified_concordance_rank_rows(
     strata: list[int],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool = True,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def concordance_influence_rows(
     time: list[float],
@@ -7537,6 +7552,9 @@ def concordance_influence_rows(
     risk_scores: list[float],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool = True,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> tuple[list[list[float]], list[float], float]: ...
 def stratified_concordance_influence_rows(
     time: list[float],
@@ -7545,6 +7563,9 @@ def stratified_concordance_influence_rows(
     strata: list[int],
     weights: list[float] | None = None,
     timewt: str = "n",
+    timefix: bool = True,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> tuple[list[list[float]], list[float], float]: ...
 def counting_concordance_index(
     start: list[float],
@@ -7554,6 +7575,8 @@ def counting_concordance_index(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> float: ...
 def counting_concordance_summary(
     start: list[float],
@@ -7563,6 +7586,8 @@ def counting_concordance_summary(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> dict[str, float]: ...
 def stratified_counting_concordance_summary(
     start: list[float],
@@ -7573,6 +7598,8 @@ def stratified_counting_concordance_summary(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> dict[str, float]: ...
 def counting_concordance_rank_rows(
     start: list[float],
@@ -7582,6 +7609,8 @@ def counting_concordance_rank_rows(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def stratified_counting_concordance_rank_rows(
     start: list[float],
@@ -7592,6 +7621,8 @@ def stratified_counting_concordance_rank_rows(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> list[tuple[float, float, float, float]]: ...
 def counting_concordance_influence_rows(
     start: list[float],
@@ -7601,6 +7632,8 @@ def counting_concordance_influence_rows(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> tuple[list[list[float]], list[float], float]: ...
 def stratified_counting_concordance_influence_rows(
     start: list[float],
@@ -7611,6 +7644,8 @@ def stratified_counting_concordance_influence_rows(
     weights: list[float] | None = None,
     timewt: str = "n",
     timefix: bool | None = None,
+    ymin: float | None = None,
+    ymax: float | None = None,
 ) -> tuple[list[list[float]], list[float], float]: ...
 def brier(
     time: list[float],

@@ -413,16 +413,33 @@ pspline.fit()
 ### Concordance Index
 
 ```python
-from survival import core
+from survival import Surv, concordance
 
-time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-weights = [1.0, 1.0, 1.0, 1.0, 1.0]
-indices = [0, 1, 2, 3, 4]
-ntree = 5
-
-result = core.perform_concordance1_calculation(time_data, weights, indices, ntree)
-print(f"Concordance index: {result['concordance_index']}")
+response = Surv([1.0, 1.0, 2.0], [1, 0, 1])
+result = concordance(response, risk_scores=[2.0, 1.0, 3.0], influence=1)
+print(result.concordance)  # 0.5
+print(result.variance)     # 0.125
 ```
+
+An observation censored at an event time remains a risk comparator; simultaneous
+events contribute outcome ties. Right-censored and counting-process summaries
+and influence calculations use O(n log n) risk-set sweeps. Raw influence rows are
+derivatives with respect to case weights, holding time-weight multipliers fixed;
+dfbeta applies case weights and uses pooled counts across strata. Variance is
+available with every result, while
+`influence` controls which diagnostic rows are returned. For multiple scores,
+`result.covariance` and `vcov(result)` include the covariance between scores.
+
+By default, `timefix=True` groups near-tied times using R's `aeqSurv` tolerance;
+`timefix=False` preserves exact observed times. `ymin` clips exit times and
+`ymax` limits contributing event times. Strata with fewer than two original
+events use unit time multipliers, including when a horizon is supplied.
+With no comparable pairs, concordance and its variance are `NaN`.
+
+Direct `Surv` inputs accept `strata=labels`. For a single score, `keepstrata`
+controls optional `stratum_labels` and `stratum_counts` fields; counts contain
+the five exclusive pair categories: concordant, discordant, tied predictors,
+tied outcomes, and ties in both. Concordance and covariance pool across strata.
 
 ### Cox Regression with Frailty
 
