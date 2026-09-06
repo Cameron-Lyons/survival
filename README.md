@@ -239,6 +239,8 @@ Student-t distribution helpers accept `distribution="t", parms=df` and retain
 precision near the median and in rare tails. For example,
 `qsurvreg(1e-20, distribution="t", parms=4)` returns approximately
 `-131607.4013`. Native, Python, and R bridge calls share these calculations.
+For `1000 <= df < 100000`, moderate tails use a short normal
+moment expansion. See the [derivation and validation](docs/student-t-normal-limit.md).
 The AFT optimizer uses positive-definite observed-information Newton steps when
 available and falls back to the stable outer-product system otherwise. The R
 bridge also routes built-in `survreg.fit` matrix calls through this kernel,
