@@ -70,8 +70,11 @@ pub fn aeq_surv(time: Vec<f64>, tolerance: Option<f64>) -> PyResult<AeqSurvResul
         });
     }
 
-    let mean_abs =
-        unique_times.iter().map(|value| value.abs()).sum::<f64>() / unique_times.len() as f64;
+    // Divide before summing so a finite mean remains finite for large times.
+    let mean_abs = unique_times
+        .iter()
+        .map(|value| value.abs() / unique_times.len() as f64)
+        .sum::<f64>();
     let mut cuts = Vec::with_capacity(unique_times.len());
     cuts.push(unique_times[0]);
     for pair in unique_times.windows(2) {
@@ -145,6 +148,14 @@ mod tests {
     fn test_aeq_surv_matches_r_relative_tolerance() {
         let result = aeq_surv(vec![1e9, 1e9 + 1.0, 1e9 + 20.0], Some(1e-8)).unwrap();
         assert_eq!(result.time, vec![1e9, 1e9, 1e9 + 20.0]);
+        assert_eq!(result.adjusted_indices, vec![1]);
+    }
+
+    #[test]
+    fn test_aeq_surv_relative_mean_does_not_overflow() {
+        let time = vec![1e308, 1e308 + 1e300, 1.1e308];
+        let result = aeq_surv(time, None).unwrap();
+        assert_eq!(result.time, vec![1e308, 1e308, 1.1e308]);
         assert_eq!(result.adjusted_indices, vec![1]);
     }
 
