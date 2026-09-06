@@ -271,6 +271,24 @@ See [`docs/repo-layout.md`](docs/repo-layout.md) for the full Rust and Python
 layout and [`examples/python_package_layout.py`](examples/python_package_layout.py)
 for a runnable module-oriented example.
 
+`DeepSurvConfig`, `GradientBoostSurvivalConfig`, and `SurvivalForestConfig`
+validate settings both when constructed and before fitting. Fields can be changed
+between fits; invalid settings raise `ValueError` before training starts.
+DeepSurv learning rates must remain positive and finite after conversion to
+float32, and its L2 penalty must be nonnegative and finite in that precision.
+Boosting requires `min_samples_leaf >= 1`. Empty DeepSurv hidden layers still
+create a linear network, tree `max_depth=0` creates stumps, and large leaf or node
+minimums disable splitting. Width and count checks use native array size limits.
+
+Native DeepSurv, gradient boosting, and survival forest fitting require finite
+features and times, with event statuses exactly `0` (censored) or `1` (event).
+Negative and zero times and all-censored data remain supported. DeepSurv training
+also requires features to stay finite when converted to float32; ordinary
+rounding and underflow are allowed. Predictions use finite float64 features,
+including values beyond the float32 range. Invalid values raise `ValueError`
+with the field and flattened input index. Forest input construction and typed
+fitting both validate the data; empty prediction batches remain supported.
+
 ## Usage
 
 ### Aalen's Additive Regression Model

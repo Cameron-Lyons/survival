@@ -42,7 +42,11 @@ pub(crate) mod transfer_learning;
 pub(crate) mod utils;
 
 #[cfg(test)]
+mod config_tests;
+#[cfg(test)]
 mod dimension_tests;
+#[cfg(test)]
+mod input_value_tests;
 
 #[cfg(feature = "ml")]
 pub use active_learning::{
