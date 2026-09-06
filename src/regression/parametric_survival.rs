@@ -2,6 +2,7 @@ use crate::constants::{
     CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
     STEP_HALVE_FACTOR,
 };
+use crate::internal::aft::transformed_interval_width;
 use crate::internal::matrix::regularized_lu_solve;
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
@@ -535,7 +536,7 @@ struct LikelihoodInput<'a> {
     strata: &'a ArrayView1<'a, i32>,
     offsets: &'a Array1<f64>,
     time1: &'a ArrayView1<'a, f64>,
-    time2: Option<&'a ArrayView1<'a, f64>>,
+    interval_widths: Option<&'a ArrayView1<'a, f64>>,
     status: &'a ArrayView1<'a, i32>,
     weights: &'a Array1<f64>,
     covariates: &'a Array2<f64>,
@@ -569,7 +570,7 @@ fn calculate_likelihood(
         input.strata,
         &input.offsets.view(),
         input.time1,
-        input.time2,
+        input.interval_widths,
         input.status,
         &input.weights.view(),
         &input.covariates.view(),
@@ -577,6 +578,25 @@ fn calculate_likelihood(
         input.frailty,
     )
 }
+fn likelihood_is_finite(likelihood: &SurvivalLikelihood) -> bool {
+    likelihood.loglik.is_finite()
+        && likelihood.u.iter().all(|value| value.is_finite())
+        && likelihood.imat.iter().all(|value| value.is_finite())
+        && likelihood.jj.iter().all(|value| value.is_finite())
+}
+
+fn stationary_within_roundoff(
+    loglik: f64,
+    eps: f64,
+    score: &Array1<f64>,
+    delta: &Array1<f64>,
+) -> bool {
+    let decrement = score.dot(delta);
+    loglik.is_finite()
+        && decrement >= 0.0
+        && decrement <= eps.min(f64::EPSILON * loglik.abs().max(1.0))
+}
+
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
@@ -1068,21 +1088,35 @@ fn compute_survreg(
     } else {
         y.column(2).iter().map(|&status| status as i32).collect()
     };
-    let time2_vec: Option<Vec<f64>> = if ny == 3 {
-        Some(y.column(1).iter().map(|&t| transform_time(t)).collect())
+    let interval_widths_vec: Option<Vec<f64>> = if ny == 3 {
+        Some(
+            y.column(0)
+                .iter()
+                .zip(y.column(1).iter())
+                .zip(&status_vec)
+                .map(|((&lower, &upper), &event)| {
+                    if event == 3 {
+                        transformed_interval_width(lower, upper, uses_log_time)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect(),
+        )
     } else {
         None
     };
     let time1_arr = Array1::from_vec(time1_vec);
     let status_arr = Array1::from_vec(status_vec);
-    let time2_arr = time2_vec.map(Array1::from_vec);
+    let interval_widths_arr = interval_widths_vec.map(Array1::from_vec);
     let strata_arr = Array1::from_iter(strata.iter().map(|&value| (value + 1) as i32));
     let frailty_arr = Array1::<i32>::zeros(n);
     let time1 = time1_arr.view();
     let status = status_arr.view();
     let strata = strata_arr.view();
     let frailty = frailty_arr.view();
-    let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
+    let interval_widths_view: Option<ArrayView1<f64>> =
+        interval_widths_arr.as_ref().map(|v| v.view());
     let input = LikelihoodInput {
         n,
         nvar,
@@ -1093,13 +1127,16 @@ fn compute_survreg(
         strata: &strata,
         offsets,
         time1: &time1,
-        time2: time2_view.as_ref(),
+        interval_widths: interval_widths_view.as_ref(),
         status: &status,
         weights,
         covariates,
         frailty: &frailty,
     };
     let initial_likelihood = calculate_likelihood(&input)?;
+    if !likelihood_is_finite(&initial_likelihood) {
+        return Err("Initial parameters yield a non-finite likelihood or derivatives".into());
+    }
     let mut loglik = initial_likelihood.loglik;
     let mut imat = initial_likelihood.imat;
     let mut jj = initial_likelihood.jj;
@@ -1140,14 +1177,14 @@ fn compute_survreg(
                     strata: &strata,
                     offsets,
                     time1: &time1,
-                    time2: time2_view.as_ref(),
+                    interval_widths: interval_widths_view.as_ref(),
                     status: &status,
                     weights,
                     covariates,
                     frailty: &frailty,
                 };
                 let candidate = calculate_likelihood(&candidate_input)?;
-                if candidate.loglik.is_finite()
+                if likelihood_is_finite(&candidate)
                     && candidate.loglik >= old_loglik
                     && (!uses_observed_information
                         || is_positive_definite(&candidate.imat, tol_chol))
@@ -1184,6 +1221,13 @@ fn compute_survreg(
                 break;
             }
         } else {
+            // At an optimum, summation roundoff can make every trial appear
+            // worse. Require a positive observed information matrix and a
+            // Newton decrement below both tolerance and numerical resolution.
+            converged = delta_candidates[0]
+                .1
+                .as_ref()
+                .is_some_and(|delta| stationary_within_roundoff(loglik, eps, &u, delta));
             break;
         }
     }
@@ -1318,6 +1362,23 @@ mod tests {
             requested_distribution_name(Some("student-t"), DistributionType::StudentT),
             "t"
         );
+    }
+
+    #[test]
+    fn stationary_fit_requires_a_small_nonnegative_newton_decrement() {
+        let score = Array1::from_vec(vec![1e-9, -2e-9]);
+        let delta = Array1::from_vec(vec![1e-10, -2e-10]);
+        assert!(stationary_within_roundoff(-100.0, 1e-13, &score, &delta));
+        assert!(!stationary_within_roundoff(-100.0, 1e-20, &score, &delta));
+        assert!(!stationary_within_roundoff(
+            -100.0,
+            1e-13,
+            &score,
+            &(-&delta)
+        ));
+        let large = Array1::from_vec(vec![1.0, 1.0]);
+        assert!(!stationary_within_roundoff(-100.0, 1e-13, &large, &large));
+        assert!(!stationary_within_roundoff(f64::NAN, 1e-13, &score, &delta));
     }
 
     #[test]
