@@ -547,11 +547,19 @@ covariance are returned in the original units, while stored predictions are
 computed before converting back to preserve accuracy. As in R, `score_vector`
 uses the working design coordinates. Explicit complete starting vectors bypass
 initialization and rescaling.
+For an estimated-scale model other than an intercept-only model, a numeric
+start can contain just the location coefficients. The initializer retains those
+coefficients in the original design units and appends log-scales from a
+20-iteration intercept-only fit, including weights, offsets, censoring, and
+scale strata. It does not solve for the supplied locations. Intercept-only
+models require log-scales in a supplied starting vector; fixed-scale models
+require only location coefficients. The R `survreg.fit` matrix interface uses
+the same native initialization and returns R's null-fit metadata.
 Zero-weight observations do not determine starting values or working coordinates.
 
 Automatic initialization reports an error for an unusable response scale,
 constant nonbinary covariate that cannot be rescaled, or interval probability
-that rounds to zero. Explicit starts remain available for these cases.
+that rounds to zero. Complete explicit starts remain available for these cases.
 
 ### Cox Proportional Hazards Model
 
