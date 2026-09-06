@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use crate::constants::TIME_EPSILON;
-use crate::internal::statistical::erf;
+use crate::internal::statistical::{normal_cdf, normal_sf};
 use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -279,11 +279,18 @@ fn lognormal_pdf(t: f64, mu: f64, sigma: f64) -> f64 {
         * (-0.5 * ((log_t - mu) / sigma).powi(2)).exp()
 }
 
+fn lognormal_survival(t: f64, mu: f64, sigma: f64) -> f64 {
+    if t <= 0.0 {
+        return 1.0;
+    }
+    normal_sf((t.ln() - mu) / sigma)
+}
+
 fn lognormal_cdf(t: f64, mu: f64, sigma: f64) -> f64 {
     if t <= 0.0 {
         return 0.0;
     }
-    0.5 * (1.0 + erf((t.ln() - mu) / (sigma * std::f64::consts::SQRT_2)))
+    normal_cdf((t.ln() - mu) / sigma)
 }
 
 fn gamma_pdf(t: f64, shape: f64, rate: f64) -> f64 {
@@ -624,7 +631,7 @@ pub fn fit_semi_markov(
                         }
                         SojournDistribution::Exponential => (-t / params.scale).exp(),
                         SojournDistribution::LogNormal => {
-                            1.0 - lognormal_cdf(t, params.location, params.shape)
+                            lognormal_survival(t, params.location, params.shape)
                         }
                         SojournDistribution::Gamma => (-t * params.shape / params.scale).exp(),
                     };

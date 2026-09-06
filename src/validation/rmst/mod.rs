@@ -2,7 +2,7 @@ use crate::constants::{
     DEFAULT_CONFIDENCE_LEVEL, PARALLEL_THRESHOLD_XLARGE, clamped_normal_ci, exp_ci, normal_ci,
     same_time, z_score_for_confidence,
 };
-use crate::internal::statistical::{chi2_cdf, normal_cdf as norm_cdf};
+use crate::internal::statistical::{chi2_cdf, normal_sf};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_non_negative};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
