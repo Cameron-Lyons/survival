@@ -326,6 +326,7 @@ class _FormulaFit:
     score_values: list[float] | None = None
     conditional_logistic: bool = False
     n_observations: int | None = None
+    survreg_aliases: tuple[bool, ...] | None = None
     penalty_diagnostics: Any | None = None
     requested_method: str | None = None
     initial_penalty: float = 0.0
@@ -334,6 +335,8 @@ class _FormulaFit:
     ridge_history: dict[str, Any] | None = None
 
     def __getattr__(self, name: str) -> Any:
+        if name == "coefficients" and self.survreg_aliases is not None:
+            return _survreg_reported_coefficients(self)
         if name == "history" and self.ridge_history is not None:
             return self.ridge_history
         if self.empty_penalized:
@@ -10357,10 +10360,10 @@ def _apply_coxph_control(
     max_iter: int,
     eps: float | None,
     toler: float | None,
-) -> tuple[int, float | None, float | None, bool, int]:
+) -> tuple[int, float | None, float | None, bool, int, float | None]:
     values = _control_mapping(control, "coxph control")
     if not values:
-        return max_iter, eps, toler, True, 10
+        return max_iter, eps, toler, True, 10, None
 
     max_iter_value, name = _pop_control_alias(
         values,
@@ -10395,12 +10398,14 @@ def _apply_coxph_control(
     )
     fix_time = _normalize_bool_option(timefix_value, f"control.{name}") if name else True
 
-    _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
+    toler_inf = _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
     outer = _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
     if outer is not None and not outer.is_integer():
         raise ValueError("control.outer.max must be a positive integer")
+    # R only consults this option for multistate fits.
+    values.pop("survcheckallow", None)
     _reject_unknown_control_options(values, "coxph")
-    return max_iter, eps, toler, fix_time, 10 if outer is None else int(outer)
+    return max_iter, eps, toler, fix_time, 10 if outer is None else int(outer), toler_inf
 
 
 def _apply_survreg_control(
@@ -10447,6 +10452,80 @@ def _apply_survreg_control(
     _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
     _reject_unknown_control_options(values, "survreg")
     return max_iter, eps, tol_chol
+
+
+def _cox_fit_diagnostic_messages(
+    fit: Any,
+    *,
+    max_iter: int,
+    counting: bool,
+    eps: float | None = None,
+    toler_inf: float | None = None,
+    offset_center: float = 0.0,
+) -> list[str]:
+    """Report R's convergence diagnostics using the unmodified native fit."""
+    if max_iter <= 1:
+        return []
+    beta = _cox_beta(fit)
+    if not beta:
+        return []
+    variance = fit.information_matrix
+    score = fit.score_vector
+    exact = fit.method == "exact"
+    if (
+        counting
+        and not exact
+        and (
+            any(not math.isfinite(value) for value in beta)
+            or any(not math.isfinite(value) for row in variance for value in row)
+        )
+    ):
+        raise RuntimeError("Cox fitting failed due to numeric overflow")
+    displacement = [
+        abs(sum(value * variance[row][column] for row, value in enumerate(score)))
+        for column in range(len(beta))
+    ]
+    if fit.convergence_flag == _COX_NONCONVERGENCE_FLAG:
+        messages = ["Ran out of iterations and did not converge"]
+        if not counting and not exact:
+            center = offset_center + sum(
+                value * mean for value, mean in zip(beta, fit.means, strict=True)
+            )
+            if any(value - center > 500.0 for value in fit.linear_predictors) or any(
+                not math.isfinite(value) for value in displacement
+            ):
+                messages.append("one or more coefficients may be infinite")
+        return messages
+
+    convergence_tolerance = 1e-9 if eps is None else eps
+    infinity_tolerance = math.sqrt(convergence_tolerance) if toler_inf is None else toler_inf
+    flagged = []
+    for column, (coefficient, step) in enumerate(zip(beta, displacement, strict=True)):
+        if counting and not exact:
+            infinite = not math.isfinite(score[column]) or step > infinity_tolerance * (
+                1.0 + abs(coefficient)
+            )
+        else:
+            infinite = step > convergence_tolerance and step > infinity_tolerance * abs(coefficient)
+            if not exact:
+                infinite = infinite or not math.isfinite(score[column])
+        if infinite:
+            flagged.append(str(column + 1))
+    if not flagged:
+        return []
+    noun = "beta" if counting or exact else "coefficient"
+    return [f"Loglik converged before variable {','.join(flagged)}; {noun} may be infinite."]
+
+
+def _survreg_fit_diagnostic_messages(fit: Any, *, max_iter: int | None = None) -> list[str]:
+    if (30 if max_iter is None else max_iter) > 1 and fit.convergence_flag != 0:
+        return ["Ran out of iterations and did not converge"]
+    return []
+
+
+def _warn_fit_diagnostics(messages: Sequence[str]) -> None:
+    for message in messages:
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
 
 
 def _normalize_survfit_type(
@@ -15039,12 +15118,42 @@ def _require_model_fit(fit: Any, generic: str) -> Any:
     return fit
 
 
+def _survreg_alias_mask(fit: Any, variance: list[list[float]] | None = None) -> list[bool]:
+    if variance is None and isinstance(fit, _FormulaFit) and fit.survreg_aliases is not None:
+        return list(fit.survreg_aliases)
+    model = _unwrap_formula_fit(fit)
+    if variance is None:
+        variance = fit.variance_matrix
+    # R marks location coefficients using the reported (possibly robust)
+    # variance. A discarded log(scale) pivot remains numeric, including
+    # at zero iterations.
+    return [variance[idx][idx] == 0.0 for idx in range(model.n_covariates)]
+
+
+def _survreg_reported_coefficients(fit: Any) -> list[float]:
+    values = list(_unwrap_formula_fit(fit).coefficients)
+    for idx, aliased in enumerate(_survreg_alias_mask(fit)):
+        if aliased:
+            values[idx] = math.nan
+    return values
+
+
+def _survreg_vcov_indices(fit: Any, complete: bool) -> list[int]:
+    width = len(_unwrap_formula_fit(fit).coefficients)
+    aliases = _survreg_alias_mask(fit)
+    if complete or not any(aliases):
+        return list(range(width))
+    # vcov.survreg recycles its location-coefficient logical index across
+    # the entire covariance matrix, including any estimated scale columns.
+    return [idx for idx in range(width) if not aliases[idx % len(aliases)]]
+
+
 def coef(fit: Any) -> list[float]:
     """Return fitted model coefficients, like R's coef generic."""
 
     _require_model_fit(fit, "coef")
     if _is_survreg_fit(fit):
-        return _location_beta(fit)
+        return _survreg_reported_coefficients(fit)[: len(_location_beta(fit))]
     beta = _cox_beta(fit)
     return [
         math.nan if aliased else value
@@ -15062,10 +15171,11 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
     if _is_survreg_fit(fit):
         location_width = len(_location_beta(fit))
         names = _fit_location_coef_names(fit, location_width)
-        if include_complete:
-            total_width = len(list(fit.coefficients))
-            names.extend(_survreg_scale_coef_names(fit, total_width - location_width))
-        return names
+        if complete is None:
+            return names
+        total_width = len(_unwrap_formula_fit(fit).coefficients)
+        names.extend(_survreg_scale_coef_names(fit, total_width - location_width))
+        return [names[idx] for idx in _survreg_vcov_indices(fit, include_complete)]
 
     beta = _cox_beta(fit)
     names = _fit_location_coef_names(fit, len(beta))
@@ -15084,8 +15194,10 @@ def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
     _require_model_fit(fit, "vcov")
     include_complete = _normalize_bool_option_with_default(complete, "complete", True)
     if _is_survreg_fit(fit):
-        width = len(list(fit.coefficients)) if include_complete else len(_location_beta(fit))
-        return _survreg_variance_matrix(fit, width)
+        width = len(_unwrap_formula_fit(fit).coefficients)
+        variance = _survreg_variance_matrix(fit, width)
+        keep = _survreg_vcov_indices(fit, include_complete)
+        return [[variance[row][column] for column in keep] for row in keep]
     variance = _cox_variance_matrix(fit, len(_cox_beta(fit)))
     if include_complete:
         return variance
@@ -15663,7 +15775,9 @@ def confint(
     z = -NormalDist().inv_cdf(alpha / 2.0)
     names = coef_names(fit)
     coefficients = coef(fit)
-    variance = vcov(fit, complete=not _is_survreg_fit(fit))
+    variance = (
+        _survreg_variance_matrix(fit, len(coefficients)) if _is_survreg_fit(fit) else vcov(fit)
+    )
     indices = _coefficient_selection_indices(parm, names)
 
     intervals = []
@@ -15689,7 +15803,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
     robust = bool(getattr(fit, "robust", False))
     if is_survreg:
         location_width = len(_location_beta(fit))
-        coefficients = [float(value) for value in fit.coefficients]
+        coefficients = _survreg_reported_coefficients(fit)
         names = _survreg_summary_coef_names(fit, location_width, len(coefficients))
         variance = vcov(fit, complete=True)
     else:
@@ -16902,7 +17016,7 @@ def _survreg_dfbeta_residuals(
         fit,
         rsigma=rsigma,
     )
-    return _core.survreg_dfbeta_residuals(
+    result = _core.survreg_dfbeta_residuals(
         matrix,
         rows,
         scales,
@@ -16911,6 +17025,13 @@ def _survreg_dfbeta_residuals(
         include_scale,
         residual_type == "dfbetas",
     )
+
+    if residual_type == "dfbetas":
+        undefined = [idx for idx, row in enumerate(variance) if not row[idx] > 0.0]
+        for row in result:
+            for idx in undefined:
+                row[idx] = math.nan
+    return result
 
 
 def _survreg_influence_residuals(
@@ -17072,7 +17193,7 @@ def _survreg_predict_terms(
     rows: list[list[float]] | None,
     terms: Any | None,
 ) -> list[list[float]]:
-    beta = _location_beta(fit)
+    beta = coef(fit)
     prediction_rows = _survreg_term_design_rows(fit, rows)
     groups = _cox_predict_term_groups(fit, len(beta))
     selected = _predict_terms_selection(terms, [name for name, _columns in groups])
@@ -17095,11 +17216,20 @@ def _survreg_term_prediction_se(
     variance = _location_variance_matrix(fit, len(beta))
     groups = _cox_predict_term_groups(fit, len(beta))
     selected = _predict_terms_selection(terms, [name for name, _columns in groups])
-    return _core.term_prediction_se_from_variance(
-        prediction_rows,
+    coefficient_rows = [
+        [value * beta[idx] for idx, value in enumerate(row)] for row in prediction_rows
+    ]
+    standard_errors = _core.term_prediction_se_from_variance(
+        coefficient_rows,
         variance,
         [groups[group_idx][1] for group_idx in selected],
     )
+    aliases = _survreg_alias_mask(fit)
+    for row in standard_errors:
+        for output_idx, group_idx in enumerate(selected):
+            if any(aliases[idx] for idx in groups[group_idx][1]):
+                row[output_idx] = math.nan
+    return standard_errors
 
 
 def _survreg_linear_prediction_se(
@@ -18990,6 +19120,7 @@ def predict(
                     _survreg_term_prediction_se(fit, rows, terms),
                 )
             return term_predictions
+        missing_newdata_predictions = rows is not None and any(_survreg_alias_mask(fit))
         if predict_type in {"quantile", "uquantile"}:
             if p is not None and quantiles is not None:
                 raise ValueError("use only one of p or quantiles")
@@ -19013,18 +19144,29 @@ def predict(
                     predict_type,
                     newdata,
                 )
+                if missing_newdata_predictions:
+                    predictions = [[math.nan] * len(q) for _ in predictions]
+                    if predict_type == "quantile" and _survreg_response_uses_log_transform(fit):
+                        se = [[math.nan] * len(q) for _ in se]
                 return PredictResult(
                     _drop_single_quantile(predictions, q),
                     _drop_single_quantile(se, q),
                 )
+            if missing_newdata_predictions:
+                predictions = [[math.nan] * len(q) for _ in predictions]
             return _drop_single_quantile(predictions, q)
         result = fit.predict(rows, predict_type, offsets, False)
+        predictions = (
+            [math.nan] * len(result.predictions)
+            if missing_newdata_predictions
+            else result.predictions
+        )
         if include_se:
             return PredictResult(
-                result.predictions,
-                _survreg_prediction_se(fit, rows, predict_type, result.predictions),
+                predictions,
+                _survreg_prediction_se(fit, rows, predict_type, predictions),
             )
-        return result.predictions
+        return predictions
 
     reference_name = _normalize_predict_reference(reference, centered_value, predict_type)
 
@@ -19896,7 +20038,7 @@ def coxph(
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
     max_iter = _integer_scalar(max_iter, "max_iter")
-    max_iter, eps, toler, fix_time, outer_max_iter = _apply_coxph_control(
+    max_iter, eps, toler, fix_time, outer_max_iter, toler_inf = _apply_coxph_control(
         control, max_iter, eps, toler
     )
 
@@ -20030,7 +20172,13 @@ def coxph(
             "coxph currently supports right-censored and counting Surv responses"
         )
 
+    diagnostic_offset_center = 0.0
     if time_transform_terms:
+        diagnostic_offset = _optional_float_vector(offset, "offset", len(response))
+        if diagnostic_offset:
+            diagnostic_offset_center = sum(
+                value / len(diagnostic_offset) for value in diagnostic_offset
+            )
         if formula_design is None or formula_model_data is None:
             raise AssertionError("tt terms require formula design metadata")
         time_transform_observed_n = len(response)
@@ -20078,6 +20226,8 @@ def coxph(
     fit_weights = _optional_float_vector(weights, "weights", n)
     case_weights = fit_weights if explicit_weights else None
     fit_offset = _optional_float_vector(offset, "offset", n)
+    if fit_offset and not time_transform_expanded:
+        diagnostic_offset_center = sum(value / len(fit_offset) for value in fit_offset)
     model_frame = None
     if keep_model:
         model_frame = (
@@ -20123,10 +20273,8 @@ def coxph(
     empty_penalized = ridge_design is not None and not penalized
     if empty_penalized:
         direct_coefficient_names = None
-    initial_values = (
-        _float_vector(initial_beta if initial_beta is not None else init, "init")
-        if init is not None or initial_beta is not None
-        else None
+    initial_values = _normalize_numeric_sequence_or_none(
+        initial_beta if initial_beta is not None else init, "init"
     )
     fit_options: dict[str, Any] = {
         "strata": fit_strata,
@@ -20179,6 +20327,17 @@ def coxph(
         initial_penalty = 0.5 * math.fsum(
             weight * value * value
             for weight, value in zip(ridge_design.diagonal, initial_values, strict=True)
+        )
+    if any(response.event) and not penalized:
+        _warn_fit_diagnostics(
+            _cox_fit_diagnostic_messages(
+                fit,
+                max_iter=max_iter,
+                counting=entry_times is not None,
+                eps=eps,
+                toler_inf=toler_inf,
+                offset_center=diagnostic_offset_center,
+            )
         )
     if not singular_ok_value and any(_cox_alias_mask(fit)):
         raise ValueError(
@@ -20679,9 +20838,7 @@ def survreg(
         ((name, value) for name, value in initial_options.items() if value is not None),
         ("initial", None),
     )
-    initial_values = (
-        _float_vector(initial_source, initial_name) if initial_source is not None else None
-    )
+    initial_values = _normalize_numeric_sequence_or_none(initial_source, initial_name)
 
     fixed_scale = (
         0.5
@@ -20706,6 +20863,7 @@ def survreg(
         fixed_scale=fixed_scale,
         distribution_parameter=distribution_parameter,
     )
+    _warn_fit_diagnostics(_survreg_fit_diagnostic_messages(fit, max_iter=max_iter))
     robust_cluster = cluster_values_for_validation
     if robust_value and robust_cluster is None:
         robust_cluster = list(range(n))
@@ -20718,6 +20876,7 @@ def survreg(
             robust_cluster,
         )
     score_values = list(fit.score_vector) if keep_score else None
+    survreg_aliases = tuple(_survreg_alias_mask(fit, robust_variance))
     return (
         _FormulaFit(
             fit,
@@ -20732,6 +20891,7 @@ def survreg(
             y_response=response if keep_y else None,
             model_frame=model_frame,
             score_values=score_values,
+            survreg_aliases=survreg_aliases,
         )
         if (
             formula_design is not None
@@ -20740,6 +20900,7 @@ def survreg(
             or robust_variance is not None
             or model_frame is not None
             or score_values is not None
+            or any(survreg_aliases)
         )
         else fit
     )

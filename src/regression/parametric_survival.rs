@@ -1,15 +1,11 @@
-use crate::constants::{
-    CHOLESKY_TOL, CONVERGENCE_EPSILON, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, NEAR_ZERO_MATRIX,
-    STEP_HALVE_FACTOR,
-};
+use crate::constants::{CHOLESKY_TOL, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, STEP_HALVE_FACTOR};
 use crate::internal::aft::transformed_interval_width;
-use crate::internal::matrix::regularized_lu_solve;
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
     compute_quantile_prediction_with_options, compute_response_prediction,
     compute_se_linear_predictor, transform_prediction_se,
 };
-use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survregc1};
+use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survreg_loglik, survregc1};
 use crate::residuals::survreg_resid::{
     SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg_with_parameter,
     compute_dfbeta_survreg_with_parameter, compute_ldcase_with_parameter,
@@ -20,7 +16,13 @@ use crate::residuals::survreg_resid::{
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
 
+mod initial;
+use initial::{SurvregRescaling, initialize_survreg, is_mean_only};
+
 type PredictionRows = (Vec<f64>, Option<Vec<Vec<f64>>>);
+
+// Matches survival::survreg.control() without changing other model families.
+const SURVREG_CONVERGENCE_TOLERANCE: f64 = 1e-9;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -51,7 +53,7 @@ impl SurvregConfig {
         Self {
             distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
             max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
-            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            eps: eps.unwrap_or(SURVREG_CONVERGENCE_TOLERANCE),
             tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
         }
     }
@@ -61,7 +63,7 @@ impl Default for SurvregConfig {
     fn default() -> Self {
         Self {
             max_iter: DEFAULT_MAX_ITER,
-            eps: CONVERGENCE_EPSILON,
+            eps: SURVREG_CONVERGENCE_TOLERANCE,
             tol_chol: CHOLESKY_TOL,
             distribution: DEFAULT_SURVREG_DISTRIBUTION,
         }
@@ -78,7 +80,7 @@ impl SurvregConfig {
         Self {
             distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
             max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
-            eps: eps.unwrap_or(CONVERGENCE_EPSILON),
+            eps: eps.unwrap_or(SURVREG_CONVERGENCE_TOLERANCE),
             tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
         }
     }
@@ -130,6 +132,23 @@ pub struct SurvivalFit {
 }
 
 impl DistributionType {
+    fn likelihood_distribution(
+        self,
+        distribution_parameter: Option<f64>,
+    ) -> Result<SurvivalDist, Box<dyn std::error::Error>> {
+        Ok(match self {
+            DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
+            DistributionType::Logistic => SurvivalDist::Logistic,
+            DistributionType::Gaussian => SurvivalDist::Gaussian,
+            DistributionType::Weibull => SurvivalDist::Weibull,
+            DistributionType::LogNormal => SurvivalDist::LogNormal,
+            DistributionType::LogLogistic => SurvivalDist::LogLogistic,
+            DistributionType::StudentT => SurvivalDist::StudentT(
+                distribution_parameter.ok_or("Student-t degrees of freedom are missing")?,
+            ),
+        })
+    }
+
     fn canonical_name(self) -> &'static str {
         match self {
             DistributionType::ExtremeValue => "extreme_value",
@@ -601,40 +620,47 @@ struct LikelihoodInput<'a> {
     frailty: &'a ArrayView1<'a, i32>,
 }
 
-fn calculate_likelihood(
-    input: &LikelihoodInput<'_>,
-) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
-    let dist = match input.distribution {
-        DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
-        DistributionType::Logistic => SurvivalDist::Logistic,
-        DistributionType::Gaussian => SurvivalDist::Gaussian,
-        DistributionType::Weibull => SurvivalDist::Weibull,
-        DistributionType::LogNormal => SurvivalDist::LogNormal,
-        DistributionType::LogLogistic => SurvivalDist::LogLogistic,
-        DistributionType::StudentT => SurvivalDist::StudentT(
-            input
-                .distribution_parameter
-                .ok_or_else(|| "Student-t degrees of freedom are missing".to_string())?,
-        ),
-    };
-    let beta = ArrayView1::from(input.beta);
-    survregc1(
-        input.n,
-        input.nvar,
-        input.nstrat,
-        false,
-        &beta,
-        dist,
-        input.strata,
-        &input.offsets.view(),
-        input.time1,
-        input.interval_widths,
-        input.status,
-        &input.weights.view(),
-        &input.covariates.view(),
-        0,
-        input.frailty,
-    )
+impl LikelihoodInput<'_> {
+    fn evaluate(&self) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
+        survregc1(
+            self.n,
+            self.nvar,
+            self.nstrat,
+            false,
+            &ArrayView1::from(self.beta),
+            self.distribution
+                .likelihood_distribution(self.distribution_parameter)?,
+            self.strata,
+            &self.offsets.view(),
+            self.time1,
+            self.interval_widths,
+            self.status,
+            &self.weights.view(),
+            &self.covariates.view(),
+            0,
+            self.frailty,
+        )
+    }
+
+    fn loglik(&self) -> Result<f64, Box<dyn std::error::Error>> {
+        survreg_loglik(
+            self.n,
+            self.nvar,
+            self.nstrat,
+            &ArrayView1::from(self.beta),
+            self.distribution
+                .likelihood_distribution(self.distribution_parameter)?,
+            self.strata,
+            &self.offsets.view(),
+            self.time1,
+            self.interval_widths,
+            self.status,
+            &self.weights.view(),
+            &self.covariates.view(),
+            0,
+            self.frailty,
+        )
+    }
 }
 fn likelihood_is_finite(likelihood: &SurvivalLikelihood) -> bool {
     likelihood.loglik.is_finite()
@@ -659,36 +685,136 @@ fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
 
-fn is_positive_definite(matrix: &Array2<f64>, tolerance: f64) -> bool {
-    if matrix.nrows() != matrix.ncols() {
-        return false;
-    }
-    let size = matrix.nrows();
-    let scale = matrix
-        .diag()
-        .iter()
-        .map(|value| value.abs())
-        .fold(1.0_f64, f64::max);
-    let threshold = tolerance * scale;
-    let mut lower = Array2::<f64>::zeros((size, size));
-    for row in 0..size {
-        for column in 0..=row {
-            let product_sum = (0..column)
-                .map(|index| lower[[row, index]] * lower[[column, index]])
-                .sum::<f64>();
-            if row == column {
-                let pivot = matrix[[row, row]] - product_sum;
-                if !pivot.is_finite() || pivot <= threshold {
-                    return false;
+/// Ordered LDL factorization used by the AFT information and score-product
+/// systems. Discarded pivots represent aliased parameters, not a request to
+/// add a ridge penalty. The tolerance and signed rank follow survreg's
+/// cholesky3 convention, which differs from the Cox factorization.
+struct SurvregInformation {
+    factors: Vec<f64>,
+    size: usize,
+    signed_rank: i32,
+}
+
+impl SurvregInformation {
+    fn factor(matrix: &Array2<f64>, tolerance: f64) -> Self {
+        let size = matrix.nrows();
+        debug_assert_eq!(size, matrix.ncols());
+        let mut factors: Vec<f64> = matrix.iter().copied().collect();
+        // R's dense cholesky3 uses an absolute threshold when the original
+        // diagonal is nonnegative, and scales by its minimum otherwise.
+        let minimum = matrix.diag().iter().copied().fold(0.0_f64, f64::min);
+        let threshold = if minimum == 0.0 {
+            tolerance
+        } else {
+            minimum * tolerance
+        };
+        let mut rank = 0;
+        let mut sign = 1;
+        for column in 0..size {
+            let pivot = factors[column * size + column];
+            if !pivot.is_finite() || pivot < threshold {
+                for row in column..size {
+                    factors[row * size + column] = 0.0;
                 }
-                lower[[row, column]] = pivot.sqrt();
-            } else {
-                lower[[row, column]] =
-                    (matrix[[row, column]] - product_sum) / lower[[column, column]];
+                if pivot < -8.0 * threshold {
+                    sign = -1;
+                }
+                continue;
+            }
+            rank += 1;
+            for row in column + 1..size {
+                let multiplier = factors[row * size + column] / pivot;
+                factors[row * size + column] = multiplier;
+                factors[row * size + row] -= multiplier * multiplier * pivot;
+                for following in row + 1..size {
+                    factors[following * size + row] -=
+                        multiplier * factors[following * size + column];
+                }
             }
         }
+        Self {
+            factors,
+            size,
+            signed_rank: rank * sign,
+        }
     }
-    true
+
+    fn solve(&self, score: &Array1<f64>) -> Option<Array1<f64>> {
+        debug_assert_eq!(score.len(), self.size);
+        let mut step = score.to_vec();
+        for row in 0..self.size {
+            let mut value = step[row];
+            for (column, previous) in step.iter().enumerate().take(row) {
+                value -= previous * self.factors[row * self.size + column];
+            }
+            step[row] = value;
+        }
+        for row in (0..self.size).rev() {
+            let diagonal = self.factors[row * self.size + row];
+            if diagonal == 0.0 {
+                step[row] = 0.0;
+                continue;
+            }
+            let mut value = step[row] / diagonal;
+            for (column, following) in step.iter().enumerate().skip(row + 1) {
+                value -= following * self.factors[column * self.size + row];
+            }
+            step[row] = value;
+        }
+        step.iter()
+            .all(|value| value.is_finite())
+            .then(|| Array1::from_vec(step))
+    }
+
+    fn covariance(mut self) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
+        let n = self.size;
+        // Invert the unit-lower factor and its positive diagonal weights.
+        // As in R's chinv2, an accepted nonpositive pivot is not reciprocated.
+        // This also preserves R's prescribed-parameter indefinite cases.
+        for column in 0..n {
+            if self.factors[column * n + column] > 0.0 {
+                self.factors[column * n + column] = 1.0 / self.factors[column * n + column];
+                for row in column + 1..n {
+                    self.factors[row * n + column] = -self.factors[row * n + column];
+                    for previous in 0..column {
+                        self.factors[row * n + previous] +=
+                            self.factors[row * n + column] * self.factors[column * n + previous];
+                    }
+                }
+            }
+        }
+        // Accumulate the symmetric covariance in the upper triangle. Zero
+        // rows and columns explicitly retain the discarded-pivot mask.
+        for row in 0..n {
+            if self.factors[row * n + row] == 0.0 {
+                for column in 0..row {
+                    self.factors[column * n + row] = 0.0;
+                }
+                for column in row..n {
+                    self.factors[row * n + column] = 0.0;
+                }
+            } else {
+                for following in row + 1..n {
+                    let weighted =
+                        self.factors[following * n + row] * self.factors[following * n + following];
+                    self.factors[row * n + following] = weighted;
+                    for column in row..following {
+                        self.factors[row * n + column] +=
+                            weighted * self.factors[following * n + column];
+                    }
+                }
+            }
+        }
+        for row in 1..n {
+            for column in 0..row {
+                self.factors[row * n + column] = self.factors[column * n + row];
+            }
+        }
+        if self.factors.iter().any(|value| !value.is_finite()) {
+            return Err("AFT covariance contains non-finite values".into());
+        }
+        Ok(Array2::from_shape_vec((n, n), self.factors)?)
+    }
 }
 
 fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) {
@@ -700,24 +826,6 @@ fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) 
                 *nb = b - 1.1;
             }
         });
-}
-fn calculate_variance_matrix(
-    imat: Array2<f64>,
-    _nvar2: usize,
-    _tol_chol: f64,
-) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
-    use crate::internal::matrix::matrix_inverse;
-    if imat.nrows() == 0 || imat.ncols() == 0 {
-        return Ok(imat);
-    }
-    let max_val = imat.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
-    if max_val < NEAR_ZERO_MATRIX {
-        return Ok(imat);
-    }
-    match matrix_inverse(&imat) {
-        Some(inv) => Ok(inv),
-        None => Ok(imat),
-    }
 }
 
 fn validate_time_values(time: &[f64], uses_log_time: bool) -> PyResult<()> {
@@ -994,19 +1102,29 @@ pub fn survreg(
     }
     let estimated_scale_count = if fixed_scale.is_some() { 0 } else { nstrat };
     let expected_initial_len = nvar + estimated_scale_count;
+    let initialize_scales = estimated_scale_count > 0
+        && initial_beta
+            .as_ref()
+            .is_some_and(|values| values.len() == nvar);
     if let Some(values) = initial_beta.as_ref()
         && values.len() != expected_initial_len
+        && !initialize_scales
     {
+        let expected = if estimated_scale_count > 0 {
+            format!("{nvar} location coefficients or {expected_initial_len} full parameters")
+        } else {
+            expected_initial_len.to_string()
+        };
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "initial_beta has {} values but model expects {}",
-            values.len(),
-            expected_initial_len
+            "initial_beta has {} values but model expects {expected}",
+            values.len()
         )));
     }
     if let Some(values) = initial_beta.as_ref() {
         validate_finite_values("initial_beta", values)?;
     }
-    let initial_beta = initial_beta.unwrap_or_else(|| vec![0.0; expected_initial_len]);
+    let initialize = initial_beta.is_none();
+    let initial_beta = initial_beta.unwrap_or_default();
     let y = {
         if let Some(time2) = time2_values.as_ref() {
             let mut y_data = Vec::with_capacity(n * 3);
@@ -1027,7 +1145,7 @@ pub fn survreg(
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
         }
     };
-    let cov_array = if nvar > 0 {
+    let mut cov_array = if nvar > 0 {
         let mut flat = Vec::with_capacity(n * nvar);
         for col_idx in 0..nvar {
             flat.extend(covariate_rows.iter().map(|row| row[col_idx]));
@@ -1039,9 +1157,20 @@ pub fn survreg(
     };
     let weights_arr = Array1::from_vec(weights_vec);
     let offsets_arr = Array1::from_vec(offsets_vec.clone());
+    if initialize_scales && is_mean_only(&cov_array, &weights_arr) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "an intercept-only model requires a full initial vector including log-scale parameters",
+        ));
+    }
     let distribution_type = config.distribution;
     let distribution_name = requested_distribution_name(distribution, distribution_type);
-    let result = compute_survreg(ComputeSurvregInput {
+    let rescaling = if initialize {
+        SurvregRescaling::apply(&mut cov_array, &weights_arr)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+    } else {
+        None
+    };
+    let mut input = ComputeSurvregInput {
         max_iter: config.max_iter,
         nvar,
         y: &y,
@@ -1056,8 +1185,27 @@ pub fn survreg(
         distribution: distribution_type,
         distribution_parameter,
         fixed_scale,
-    })
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
+    };
+    if initialize || initialize_scales {
+        let initial_location = (!initialize).then_some(input.beta.as_slice());
+        input.beta = initialize_survreg(&input, initial_location)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    }
+    let mut result = compute_survreg(input)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let rescaled_predictors = rescaling.as_ref().map(|_| {
+        (0..n)
+            .map(|person| {
+                (0..nvar)
+                    .map(|column| cov_array[[column, person]] * result.coefficients[column])
+                    .sum::<f64>()
+                    + offsets_vec[person]
+            })
+            .collect()
+    });
+    if let Some(rescaling) = rescaling {
+        rescaling.restore(&mut result);
+    }
     let variance_matrix = result
         .variance_matrix
         .outer_iter()
@@ -1072,8 +1220,9 @@ pub fn survreg(
             .map(|value| value.exp())
             .collect()
     };
-    let linear_predictors =
-        compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec));
+    let linear_predictors = rescaled_predictors.unwrap_or_else(|| {
+        compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec))
+    });
     let status_values: Vec<i32> = status.iter().map(|&value| value as i32).collect();
     let fitted_covariates = if nvar == 0 {
         vec![vec![]; n]
@@ -1191,12 +1340,12 @@ fn compute_survreg(
         covariates,
         frailty: &frailty,
     };
-    let initial_likelihood = calculate_likelihood(&input)?;
+    let initial_likelihood = input.evaluate()?;
     if !likelihood_is_finite(&initial_likelihood) {
         return Err("Initial parameters yield a non-finite likelihood or derivatives".into());
     }
     let mut loglik = initial_likelihood.loglik;
-    let mut imat = initial_likelihood.imat;
+    let mut information = SurvregInformation::factor(&initial_likelihood.imat, tol_chol);
     let mut jj = initial_likelihood.jj;
     let mut u = initial_likelihood.u;
     usave.assign(&u);
@@ -1205,18 +1354,19 @@ fn compute_survreg(
     while iter < max_iter {
         let old_loglik = loglik;
         let mut accepted = None;
-        let observed_delta = is_positive_definite(&imat, tol_chol)
-            .then(|| regularized_lu_solve(&imat, &u).ok())
-            .flatten();
-        let delta_candidates = [
-            (true, observed_delta),
-            (false, regularized_lu_solve(&jj, &u).ok()),
-        ];
-        for (uses_observed_information, delta) in delta_candidates
-            .iter()
-            .filter_map(|(observed, delta)| delta.as_ref().map(|delta| (*observed, delta)))
-        {
+        for uses_observed_information in [true, false] {
+            let delta = if uses_observed_information {
+                (information.signed_rank >= 0)
+                    .then(|| information.solve(&u))
+                    .flatten()
+            } else {
+                // Compute the score-product fallback only if an observed
+                // information step could not be accepted.
+                SurvregInformation::factor(&jj, tol_chol).solve(&u)
+            };
+            let Some(delta) = delta else { continue };
             let mut step_factor = 1.0;
+            let mut retry = false;
             for _ in 0..=MAX_HALVING_ITERATIONS {
                 let mut candidate_beta = beta.clone();
                 candidate_beta
@@ -1241,21 +1391,34 @@ fn compute_survreg(
                     covariates,
                     frailty: &frailty,
                 };
-                let candidate = calculate_likelihood(&candidate_input)?;
+                // The first trial usually succeeds. Once it fails, screen
+                // shorter steps without allocating or accumulating derivative
+                // matrices, then fully evaluate any improving candidate.
+                if retry {
+                    let trial_loglik = candidate_input.loglik()?;
+                    if !trial_loglik.is_finite() || trial_loglik < old_loglik {
+                        step_factor *= STEP_HALVE_FACTOR;
+                        continue;
+                    }
+                }
+                let candidate = candidate_input.evaluate()?;
                 if likelihood_is_finite(&candidate)
                     && candidate.loglik >= old_loglik
-                    && (!uses_observed_information
-                        || is_positive_definite(&candidate.imat, tol_chol))
+                    && candidate.u.iter().all(|value| value.is_finite())
+                    && candidate.imat.diag().iter().all(|value| value.is_finite())
                 {
+                    let candidate_information =
+                        SurvregInformation::factor(&candidate.imat, tol_chol);
                     accepted = Some((
                         candidate_beta,
                         candidate.loglik,
-                        candidate.imat,
+                        candidate_information,
                         candidate.jj,
                         candidate.u,
                     ));
                     break;
                 }
+                retry = true;
                 step_factor *= STEP_HALVE_FACTOR;
             }
             if accepted.is_some() {
@@ -1263,12 +1426,17 @@ fn compute_survreg(
             }
         }
 
-        if let Some((candidate_beta, candidate_loglik, candidate_imat, candidate_jj, candidate_u)) =
-            accepted
+        if let Some((
+            candidate_beta,
+            candidate_loglik,
+            candidate_information,
+            candidate_jj,
+            candidate_u,
+        )) = accepted
         {
             beta = candidate_beta;
             loglik = candidate_loglik;
-            imat = candidate_imat;
+            information = candidate_information;
             jj = candidate_jj;
             u = candidate_u;
             usave.assign(&u);
@@ -1280,17 +1448,18 @@ fn compute_survreg(
             }
         } else {
             // At an optimum, summation roundoff can make every trial appear
-            // worse. Require a positive observed information matrix and a
+            // worse. Require nonnegative observed-information rank and a
             // Newton decrement below both tolerance and numerical resolution.
-            converged = delta_candidates[0]
-                .1
-                .as_ref()
-                .is_some_and(|delta| stationary_within_roundoff(loglik, eps, &u, delta));
+            if information.signed_rank >= 0 {
+                converged = information
+                    .solve(&u)
+                    .is_some_and(|delta| stationary_within_roundoff(loglik, eps, &u, &delta));
+            }
             break;
         }
     }
     let convergence_flag = if converged { 0 } else { -1 };
-    let variance = calculate_variance_matrix(imat, nvar2, tol_chol)?;
+    let variance = information.covariance()?;
     Ok(SurvivalFitComputed {
         coefficients: beta,
         iterations: iter,
@@ -1444,12 +1613,286 @@ mod tests {
     }
 
     #[test]
+    fn partial_initial_values_use_fitted_null_scales_without_solving_locations() {
+        // For these exact Gaussian observations, the intercept-only MLE has
+        // mean 13/4 and variance 59/16. A zero location column would make the
+        // unused scalar GLIM update undefined (0/0).
+        let fit = |initial| {
+            survreg(
+                vec![1.0, 2.0, 4.0, 6.0],
+                vec![1.0; 4],
+                vec![vec![0.0]; 4],
+                None,
+                None,
+                Some(initial),
+                None,
+                Some("gaussian"),
+                Some(0),
+                Some(1e-12),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let partial = fit(vec![0.0]);
+        assert_eq!(partial.coefficients[0], 0.0);
+        assert!((partial.coefficients[1] - 0.5 * (59.0_f64 / 16.0).ln()).abs() < 1e-10);
+        let completed = fit(partial.coefficients.clone());
+        assert_eq!(partial.coefficients, completed.coefficients);
+        assert_eq!(partial.variance_matrix, completed.variance_matrix);
+        assert_eq!(partial.log_likelihood, completed.log_likelihood);
+        assert_eq!(partial.score_vector, completed.score_vector);
+    }
+
+    #[test]
+    fn partial_initial_values_require_full_vector_for_mean_only_estimated_scales() {
+        let fit = |initial, scale| {
+            survreg(
+                vec![1.0, 2.0, 4.0, 6.0],
+                vec![1.0; 4],
+                vec![vec![1.0]; 4],
+                None,
+                None,
+                Some(initial),
+                None,
+                Some("gaussian"),
+                Some(0),
+                None,
+                None,
+                None,
+                scale,
+                None,
+            )
+        };
+        let error = fit(vec![1.2], None).unwrap_err();
+        assert!(error.to_string().contains("full initial vector"));
+        assert_eq!(
+            fit(vec![1.2, 0.0], None).unwrap().coefficients,
+            vec![1.2, 0.0]
+        );
+        assert_eq!(fit(vec![1.2], Some(1.0)).unwrap().coefficients, vec![1.2]);
+    }
+
+    #[test]
+    fn empty_initial_locations_are_valid_only_for_a_zero_column_design() {
+        let fit = |row: Vec<f64>| {
+            survreg(
+                vec![1.0, 2.0, 4.0, 6.0],
+                vec![1.0; 4],
+                vec![row; 4],
+                None,
+                None,
+                Some(vec![]),
+                None,
+                Some("gaussian"),
+                Some(0),
+                Some(1e-12),
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let empty = fit(vec![]).unwrap();
+        assert_eq!(empty.n_covariates, 0);
+        assert_eq!(empty.coefficients.len(), 1);
+        assert!((empty.scales[0] - (59.0_f64 / 16.0).sqrt()).abs() < 1e-10);
+        assert_eq!(empty.linear_predictors, vec![0.0; 4]);
+        assert!(fit(vec![0.0]).is_err());
+    }
+
+    #[test]
     fn test_survreg_config_default() {
-        let config = SurvregConfig::default();
-        assert_eq!(config.max_iter, 30);
-        assert!((config.eps - 1e-6).abs() < 1e-10);
-        assert!((config.tol_chol - 1e-10).abs() < 1e-15);
-        assert_eq!(config.distribution, DistributionType::Weibull);
+        for config in [
+            SurvregConfig::default(),
+            SurvregConfig::new(None, None, None, None),
+            SurvregConfig::create(None, None, None, None),
+        ] {
+            assert_eq!(config.max_iter, 30);
+            assert_eq!(config.eps, 1e-9);
+            assert_eq!(config.tol_chol, 1e-10);
+            assert_eq!(config.distribution, DistributionType::Weibull);
+        }
+    }
+
+    #[test]
+    fn default_survreg_tolerance_matches_r_control_on_censored_data() {
+        let fit_with_tolerance = |eps| {
+            survreg(
+                vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0],
+                vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                vec![
+                    vec![1.0, 0.0],
+                    vec![1.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![1.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![1.0, 1.0],
+                ],
+                None,
+                None,
+                // Isolate the tolerance comparison from automatic initialization.
+                Some(vec![0.0; 3]),
+                None,
+                Some("weibull"),
+                None,
+                eps,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let default = fit_with_tolerance(None);
+        let explicit = fit_with_tolerance(Some(1e-9));
+        assert_eq!(default.coefficients, explicit.coefficients);
+        assert_eq!(default.iterations, explicit.iterations);
+        assert!(default.score_vector.iter().all(|score| score.abs() < 1e-10));
+        // R survival 3.8.11 default Weibull fit: intercept, x and log(scale).
+        let reference = [
+            2.201_004_230_665_683,
+            -0.412_866_281_489_401_24,
+            -0.280_610_838_292_473_6,
+        ];
+        for (actual, expected) in default.coefficients.iter().zip(reference) {
+            assert!((actual - expected).abs() < 2e-9);
+        }
+        let loose = fit_with_tolerance(Some(1e-6));
+        assert!(loose.iterations < default.iterations);
+        assert!(loose.score_vector.iter().any(|score| score.abs() > 1e-8));
+    }
+
+    #[test]
+    fn automatic_initialization_ignores_zero_weight_unresolved_intervals() {
+        let fit = |time: Vec<f64>, status, weights, time2| {
+            let n = time.len();
+            survreg(
+                time,
+                status,
+                vec![vec![1.0]; n],
+                Some(weights),
+                None,
+                None,
+                None,
+                Some("logistic"),
+                Some(0),
+                None,
+                None,
+                time2,
+                Some(1.0),
+                None,
+            )
+            .unwrap()
+        };
+        let reference = fit(vec![1.0, 3.0], vec![1.0; 2], vec![1.0; 2], None);
+        let with_ignored = fit(
+            vec![1.0, 3.0, 1e-100],
+            vec![1.0, 1.0, 3.0],
+            vec![1.0, 1.0, 0.0],
+            Some(vec![1.0, 3.0, 2e-100]),
+        );
+        assert_eq!(with_ignored.coefficients, reference.coefficients);
+        assert_eq!(with_ignored.variance_matrix, reference.variance_matrix);
+        assert_eq!(with_ignored.score_vector, reference.score_vector);
+        assert_eq!(with_ignored.log_likelihood, reference.log_likelihood);
+    }
+
+    #[test]
+    fn automatic_rescaling_ignores_zero_weight_extreme_covariates() {
+        for fixed_scale in [None, Some(1.0)] {
+            let fit = |ignored| {
+                let mut time = vec![1.0, 2.0, 3.0, 4.0];
+                let mut covariates: Vec<Vec<f64>> = time.iter().map(|&x| vec![1.0, x]).collect();
+                let mut weights = vec![1.0; 4];
+                if ignored {
+                    time.push(2.0);
+                    covariates.push(vec![1.0, 1e20]);
+                    weights.push(0.0);
+                }
+                let status = vec![1.0; time.len()];
+                survreg(
+                    time,
+                    status,
+                    covariates,
+                    Some(weights),
+                    None,
+                    None,
+                    None,
+                    Some("gaussian"),
+                    Some(0),
+                    None,
+                    None,
+                    None,
+                    fixed_scale,
+                    None,
+                )
+                .unwrap()
+            };
+            let reference = fit(false);
+            let with_ignored = fit(true);
+            assert_eq!(with_ignored.coefficients, reference.coefficients);
+            assert_eq!(with_ignored.variance_matrix, reference.variance_matrix);
+            assert_eq!(with_ignored.score_vector, reference.score_vector);
+            assert_eq!(with_ignored.log_likelihood, reference.log_likelihood);
+            assert_eq!(
+                &with_ignored.linear_predictors[..4],
+                reference.linear_predictors
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_gaussian_starts_match_r_without_optimizer_iterations() {
+        let time = vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0];
+        let all_event = survreg(
+            time.clone(),
+            vec![1.0; 6],
+            (0..6).map(|i| vec![1.0, f64::from(i)]).collect(),
+            None,
+            None,
+            None,
+            None,
+            Some("gaussian"),
+            Some(0),
+            None,
+            None,
+            None,
+            Some(1.0),
+            None,
+        )
+        .unwrap();
+        for (actual, expected) in all_event
+            .location_coefficients
+            .iter()
+            .zip([0.23809523809523903, 1.771_428_571_428_571_4])
+        {
+            assert!((actual - expected).abs() < 2e-14, "{actual} != {expected}");
+        }
+        assert_eq!(all_event.iterations, 0);
+        assert_eq!(all_event.scale, 1.0);
+        let censored = survreg(
+            time,
+            vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            vec![vec![1.0]; 6],
+            None,
+            None,
+            None,
+            None,
+            Some("gaussian"),
+            Some(0),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!((censored.location_coefficients[0] - 6.491_626_281_538_652).abs() < 2e-8);
+        assert!((censored.scale - 6.182412330330469).abs() < 2e-14);
+        assert_eq!(censored.iterations, 0);
     }
 
     #[test]
@@ -1562,12 +2005,17 @@ mod tests {
     }
 
     #[test]
-    fn positive_definite_check_rejects_saddle_information() {
+    fn information_rank_distinguishes_singular_and_indefinite_systems() {
         let positive = Array2::from_shape_vec((2, 2), vec![2.0, 0.5, 0.5, 1.0]).unwrap();
         let indefinite = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 2.0, 1.0]).unwrap();
+        let singular = Array2::from_shape_vec((2, 2), vec![1.0; 4]).unwrap();
 
-        assert!(is_positive_definite(&positive, 1e-10));
-        assert!(!is_positive_definite(&indefinite, 1e-10));
+        assert_eq!(SurvregInformation::factor(&positive, 1e-10).signed_rank, 2);
+        assert_eq!(
+            SurvregInformation::factor(&indefinite, 1e-10).signed_rank,
+            -1
+        );
+        assert_eq!(SurvregInformation::factor(&singular, 1e-10).signed_rank, 1);
     }
 
     #[test]
@@ -1899,7 +2347,7 @@ mod tests {
     #[test]
     fn test_calculate_variance_matrix_empty() {
         let imat = Array2::zeros((0, 0));
-        let result = calculate_variance_matrix(imat, 0, crate::constants::DIVISION_FLOOR);
+        let result = SurvregInformation::factor(&imat, 1e-10).covariance();
         assert!(result.is_ok());
         let var = result.unwrap();
         assert_eq!(var.nrows(), 0);
@@ -1913,10 +2361,118 @@ mod tests {
         imat[[1, 1]] = 2.0;
         imat[[0, 1]] = 0.5;
         imat[[1, 0]] = 0.5;
-        let result = calculate_variance_matrix(imat, 2, crate::constants::DIVISION_FLOOR);
+        let result = SurvregInformation::factor(&imat, 1e-10).covariance();
         assert!(result.is_ok());
         let var = result.unwrap();
         assert_eq!(var.nrows(), 2);
         assert_eq!(var.ncols(), 2);
+        let identity = imat.dot(&var);
+        for row in 0..2 {
+            for column in 0..2 {
+                let expected = if row == column { 1.0 } else { 0.0 };
+                assert!((identity[[row, column]] - expected).abs() < 1e-14);
+            }
+        }
+    }
+
+    #[test]
+    fn singular_information_returns_a_generalized_covariance_and_step() {
+        let imat = Array2::from_shape_vec(
+            (3, 3),
+            vec![6.0, 3.0, 3.0, 3.0, 19.0, 19.0, 3.0, 19.0, 19.0],
+        )
+        .unwrap();
+        let information = SurvregInformation::factor(&imat, 1e-10);
+        let step = information
+            .solve(&Array1::from_vec(vec![21.0, 28.0, 28.0]))
+            .unwrap();
+        assert!((step[0] - 3.0).abs() < 1e-14);
+        assert!((step[1] - 1.0).abs() < 1e-14);
+        assert_eq!(step[2], 0.0);
+        let variance = information.covariance().unwrap();
+        for index in 0..3 {
+            assert_eq!(variance[[2, index]], 0.0);
+            assert_eq!(variance[[index, 2]], 0.0);
+        }
+        // A V A = A characterizes the generalized inverse on the estimable
+        // column space; the selected coefficients preserve original order.
+        let reconstructed = imat.dot(&variance).dot(&imat);
+        for (actual, expected) in reconstructed.iter().zip(imat.iter()) {
+            assert!((actual - expected).abs() < 1e-13);
+        }
+        assert!((variance[[0, 0]] - 19.0 / 105.0).abs() < 1e-15);
+        assert!((variance[[1, 1]] - 6.0 / 105.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn information_uses_absolute_tolerance_for_positive_diagonals() {
+        // R Gaussian intercept fit, fixed scale 1e6 and three observations.
+        let information = Array2::from_shape_vec((1, 1), vec![3e-12]).unwrap();
+        let discarded = SurvregInformation::factor(&information, 1e-10)
+            .covariance()
+            .unwrap();
+        assert_eq!(discarded[[0, 0]], 0.0);
+        let retained = SurvregInformation::factor(&information, 1e-14)
+            .covariance()
+            .unwrap();
+        assert!((retained[[0, 0]] * 3e-12 - 1.0).abs() < 1e-15);
+        // cholesky3 discards pivots strictly below the threshold.
+        assert_eq!(
+            SurvregInformation::factor(&information, 3e-12).signed_rank,
+            1
+        );
+    }
+
+    #[test]
+    fn indefinite_prescribed_information_matches_r_generalized_covariance() {
+        // R survreg6 at Gaussian location/log(scale)=0 for y=1:4.
+        let information = Array2::from_shape_vec((2, 2), vec![4.0, 20.0, 20.0, 60.0]).unwrap();
+        let factor = SurvregInformation::factor(&information, 1e-10);
+        assert_eq!(factor.signed_rank, -1);
+        assert_eq!(
+            factor.covariance().unwrap().into_raw_vec_and_offset().0,
+            vec![0.25, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn information_retains_r_negative_cutoff_and_roundoff_rank_rules() {
+        // R cholesky3/chinv2 can retain a tiny negative diagonal when a
+        // larger original negative diagonal sets a negative cutoff.
+        let diagonal = Array2::from_diag(&Array1::from_vec(vec![-1.0, -1e-12, 2.0]));
+        let factor = SurvregInformation::factor(&diagonal, 1e-10);
+        assert_eq!(factor.signed_rank, -2);
+        assert_eq!(
+            factor.covariance().unwrap().diag().to_vec(),
+            vec![0.0, -1e-12, 0.5]
+        );
+        for (difference, rank) in [(1e-12, 1), (1e-8, -1)] {
+            let information =
+                Array2::from_shape_vec((2, 2), vec![1.0, 1.0, 1.0, 1.0 - difference]).unwrap();
+            assert_eq!(
+                SurvregInformation::factor(&information, 1e-10).signed_rank,
+                rank
+            );
+        }
+    }
+
+    #[test]
+    fn covariance_keeps_independent_columns_after_an_alias() {
+        let information =
+            Array2::from_shape_vec((3, 3), vec![2.0, 2.0, 1.0, 2.0, 2.0, 1.0, 1.0, 1.0, 3.0])
+                .unwrap();
+        let factor = SurvregInformation::factor(&information, 1e-10);
+        assert_eq!(factor.signed_rank, 2);
+        let variance = factor.covariance().unwrap();
+        assert_eq!(variance.row(1).to_vec(), vec![0.0; 3]);
+        assert_eq!(variance.column(1).to_vec(), vec![0.0; 3]);
+        for (actual, expected) in information
+            .dot(&variance)
+            .dot(&information)
+            .iter()
+            .zip(information.iter())
+        {
+            assert!((actual - expected).abs() < 1e-14);
+        }
     }
 }

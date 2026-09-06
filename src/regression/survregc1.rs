@@ -51,6 +51,100 @@ pub(crate) struct Derivatives {
     pub ddsig: f64,
     pub dsg: f64,
 }
+
+/// Return the unweighted location score and curvature for initialization.
+/// Times and interval widths must be on the fitting scale, as in survregc1.
+/// An unresolved interval probability cannot supply an initialization weight.
+pub(crate) fn survreg_location_derivatives(
+    time: f64,
+    interval_width: Option<f64>,
+    status: i32,
+    eta: f64,
+    sigma: f64,
+    dist: SurvivalDist,
+) -> Result<(f64, f64), Box<dyn std::error::Error>> {
+    let width = if status == 3 {
+        let width = interval_width.ok_or("Missing time2 for interval censored data")?;
+        if !width.is_finite() || !time.is_finite() || width <= 0.0 {
+            return Err("initial iteration failed: interval probability is not finite and positive (use starting estimates?)".into());
+        }
+        Some(width)
+    } else {
+        None
+    };
+    let row = likelihood_row(dist.family(), (time - eta) / sigma, sigma, status, width)?;
+    if status == 3 && !row[..3].iter().all(|value| value.is_finite()) {
+        return Err("initial iteration failed: interval probability is not finite and positive (use starting estimates?)".into());
+    }
+    Ok((row[1], row[2]))
+}
+
+/// Evaluate a retry without allocating score, information, or per-person
+/// result arrays. Both full paths accumulate in person order; keep that same
+/// order here so screening a candidate does not change its likelihood bits.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn survreg_loglik(
+    n: usize,
+    nvar: usize,
+    nstrat: usize,
+    beta: &ArrayView1<f64>,
+    dist: SurvivalDist,
+    strat: &ArrayView1<i32>,
+    offset: &ArrayView1<f64>,
+    time1: &ArrayView1<f64>,
+    interval_widths: Option<&ArrayView1<f64>>,
+    status: &ArrayView1<i32>,
+    wt: &ArrayView1<f64>,
+    covar: &ArrayView2<f64>,
+    nf: usize,
+    frail: &ArrayView1<i32>,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    // Full evaluation requires contiguous interval widths on its parallel
+    // path. Retain the same input requirement when screening those fits.
+    if n >= SURVREG_PARALLEL_THRESHOLD
+        && interval_widths.is_some_and(|upper| upper.as_slice().is_none())
+    {
+        return Err("interval_widths array must be contiguous in memory".into());
+    }
+
+    let family = dist.family();
+    let scales: Vec<f64> = (0..nstrat.max(1))
+        .map(|stratum| beta[nvar + nf + stratum].exp())
+        .collect();
+    let mut loglik = 0.0;
+    for person in 0..n {
+        if !matches!(status[person], 0..=3) {
+            return Err("Invalid status value".into());
+        }
+        if wt[person] == 0.0 {
+            continue;
+        }
+        let strata_idx = if nstrat > 1 {
+            (strat[person] - 1) as usize
+        } else {
+            0
+        };
+        let sigma = scales[strata_idx];
+        let mut eta = offset[person];
+        for column in 0..nvar {
+            eta += beta[column + nf] * covar[[column, person]];
+        }
+        if nf > 0 {
+            eta += beta[(frail[person] - 1) as usize];
+        }
+        let z = (time1[person] - eta) / sigma;
+        let contribution = likelihood_row(
+            family,
+            z,
+            sigma,
+            status[person],
+            interval_widths.map(|widths| widths[person]),
+        )?;
+        loglik += contribution[0] * wt[person];
+    }
+    Ok(loglik)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn survregc1(
     n: usize,
@@ -369,6 +463,193 @@ mod tests {
     use ndarray::Array2;
 
     #[test]
+    fn location_derivatives_match_single_row_fixed_scale_likelihood() {
+        for (distribution_index, distribution) in [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::Weibull,
+            SurvivalDist::LogNormal,
+            SurvivalDist::LogLogistic,
+            SurvivalDist::StudentT(4.5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for log_sigma in [-0.7_f64, 0.0, 0.8] {
+                let sigma = log_sigma.exp();
+                let eta = 0.75;
+                for z in [-40.0, -8.0, -0.25, 0.0, 8.0, 40.0] {
+                    let lower = eta + z * sigma;
+                    let upper = lower + 0.5 * sigma;
+                    for censoring in [0, 1, 2, 3] {
+                        let beta = Array1::from_vec(vec![eta, log_sigma]);
+                        let strata = Array1::from_vec(vec![1]);
+                        let offset = Array1::zeros(1);
+                        let time1 = Array1::from_vec(vec![lower]);
+                        let time2 = Array1::from_vec(vec![upper - lower]);
+                        let status = Array1::from_vec(vec![censoring]);
+                        let weights = Array1::ones(1);
+                        let covariates = Array2::ones((1, 1));
+                        let frailty = Array1::zeros(1);
+                        let full = survregc1(
+                            1,
+                            1,
+                            0,
+                            false,
+                            &beta.view(),
+                            distribution,
+                            &strata.view(),
+                            &offset.view(),
+                            &time1.view(),
+                            Some(&time2.view()),
+                            &status.view(),
+                            &weights.view(),
+                            &covariates.view(),
+                            0,
+                            &frailty.view(),
+                        )
+                        .unwrap();
+                        let derivatives = survreg_location_derivatives(
+                            lower,
+                            Some(upper - lower),
+                            censoring,
+                            eta,
+                            sigma,
+                            distribution,
+                        );
+                        if censoring == 3
+                            && ![full.loglik, full.u[0], full.imat[[0, 0]]]
+                                .iter()
+                                .all(|value| value.is_finite())
+                        {
+                            assert!(derivatives.is_err());
+                            continue;
+                        }
+                        let (score, curvature) = derivatives.unwrap();
+                        // With one intercept and unit weight, the score is dg
+                        // and observed information is -ddg. The z=-.25 interval
+                        // places eta at the midpoint used by initialization.
+                        for (actual, expected) in
+                            [(score, full.u[0]), (curvature, -full.imat[[0, 0]])]
+                        {
+                            assert!(
+                                actual == expected || (actual.is_nan() && expected.is_nan()),
+                                "distribution={distribution_index}, status={censoring}, \
+                                 z={z}, log_sigma={log_sigma}: {actual} != {expected}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn location_derivatives_gaussian_exact_have_location_units() {
+        for sigma in [0.5, 1.0, 2.0] {
+            let (score, curvature) =
+                survreg_location_derivatives(3.0, None, 1, 2.0, sigma, SurvivalDist::Gaussian)
+                    .unwrap();
+            let inverse_variance = 1.0 / (sigma * sigma);
+            assert!((score - inverse_variance).abs() < 1e-14);
+            assert!((curvature + inverse_variance).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn location_derivatives_reject_unresolved_interval_probability() {
+        for distribution in [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::StudentT(4.5),
+        ] {
+            for (time, time2, eta, sigma) in [(2.0, 1.0, 1.5, 1.0), (1.0, f64::NAN, 1.0, 1.0)] {
+                let error = survreg_location_derivatives(
+                    time,
+                    Some(time2 - time),
+                    3,
+                    eta,
+                    sigma,
+                    distribution,
+                )
+                .unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    "initial iteration failed: interval probability is not finite and positive (use starting estimates?)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn location_derivatives_preserve_resolvable_narrow_intervals() {
+        for distribution in [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::StudentT(4.5),
+        ] {
+            for half_width in [0.5, 1e-4, 1e-14] {
+                let beta = Array1::from_vec(vec![2.0, 0.0]);
+                let strata = Array1::from_vec(vec![1]);
+                let offset = Array1::zeros(1);
+                let time1 = Array1::from_vec(vec![2.0 - half_width]);
+                let upper = 2.0 + half_width;
+                let time2 = Array1::from_vec(vec![upper - time1[0]]);
+                let status = Array1::from_vec(vec![3]);
+                let weights = Array1::ones(1);
+                let covariates = Array2::ones((1, 1));
+                let frailty = Array1::zeros(1);
+                let full = survregc1(
+                    1,
+                    1,
+                    0,
+                    false,
+                    &beta.view(),
+                    distribution,
+                    &strata.view(),
+                    &offset.view(),
+                    &time1.view(),
+                    Some(&time2.view()),
+                    &status.view(),
+                    &weights.view(),
+                    &covariates.view(),
+                    0,
+                    &frailty.view(),
+                )
+                .unwrap();
+                let (score, curvature) = survreg_location_derivatives(
+                    time1[0],
+                    Some(time2[0]),
+                    3,
+                    2.0,
+                    1.0,
+                    distribution,
+                )
+                .unwrap();
+                assert_eq!(score, full.u[0]);
+                assert_eq!(curvature, -full.imat[[0, 0]]);
+                assert!(curvature.is_finite() && curvature < 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn location_derivatives_require_valid_censoring_and_interval_endpoint() {
+        for (status, upper, message) in [
+            (3, None, "Missing time2 for interval censored data"),
+            (4, Some(2.0), "Invalid status value"),
+        ] {
+            let error =
+                survreg_location_derivatives(1.0, upper, status, 0.0, 1.0, SurvivalDist::Gaussian)
+                    .unwrap_err();
+            assert_eq!(error.to_string(), message);
+        }
+    }
+
+    #[test]
     fn test_survival_dist_variants() {
         let variants = [
             SurvivalDist::ExtremeValue,
@@ -679,6 +960,326 @@ mod tests {
             assert_eq!(actual.imat, expected.imat);
             assert_eq!(actual.jj, expected.jj);
         }
+    }
+
+    fn assert_scalar_likelihood_matches_full(n: usize, nstrat: usize, nf: usize) {
+        let nvar = 3;
+        let mut beta_values = [0.12, -0.08][..nf].to_vec();
+        beta_values.extend([0.2, -0.4, 0.15]);
+        beta_values.extend([0.1, -0.05, 0.2][..nstrat.max(1)].iter());
+        let beta = Array1::from_vec(beta_values);
+        let strata = Array1::from_shape_fn(n, |person| (person % nstrat.max(1) + 1) as i32);
+        let offset = Array1::from_shape_fn(n, |person| (person % 7) as f64 * 0.03 - 0.09);
+        let time1 = Array1::from_shape_fn(n, |person| (person % 19) as f64 * 0.3 - 2.7);
+        let time2 = Array1::from_shape_fn(n, |person| 0.125 + (person % 7) as f64 * 0.03);
+        let status = Array1::from_shape_fn(n, |person| (person % 4) as i32);
+        let weights = Array1::from_shape_fn(n, |person| 0.5 + (person % 5) as f64 * 0.37);
+        let covariates = Array2::from_shape_fn((nvar, n), |(column, person)| {
+            if column == 0 {
+                1.0
+            } else {
+                (person % (11 + column)) as f64 * 0.02 - 0.1
+            }
+        });
+        let frailty = Array1::from_shape_fn(
+            n,
+            |person| if nf == 0 { 0 } else { (person % nf + 1) as i32 },
+        );
+        for (distribution_index, distribution) in [
+            SurvivalDist::ExtremeValue,
+            SurvivalDist::Weibull,
+            SurvivalDist::Logistic,
+            SurvivalDist::LogLogistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::LogNormal,
+            SurvivalDist::StudentT(4.5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let scalar = survreg_loglik(
+                n,
+                nvar,
+                nstrat,
+                &beta.view(),
+                distribution,
+                &strata.view(),
+                &offset.view(),
+                &time1.view(),
+                Some(&time2.view()),
+                &status.view(),
+                &weights.view(),
+                &covariates.view(),
+                nf,
+                &frailty.view(),
+            )
+            .unwrap();
+            let full = survregc1(
+                n,
+                nvar,
+                nstrat,
+                false,
+                &beta.view(),
+                distribution,
+                &strata.view(),
+                &offset.view(),
+                &time1.view(),
+                Some(&time2.view()),
+                &status.view(),
+                &weights.view(),
+                &covariates.view(),
+                nf,
+                &frailty.view(),
+            )
+            .unwrap();
+            let legacy = survregc1(
+                n,
+                nvar,
+                nstrat,
+                true,
+                &beta.view(),
+                distribution,
+                &strata.view(),
+                &offset.view(),
+                &time1.view(),
+                Some(&time2.view()),
+                &status.view(),
+                &weights.view(),
+                &covariates.view(),
+                nf,
+                &frailty.view(),
+            )
+            .unwrap();
+            assert_eq!(
+                scalar.to_bits(),
+                full.loglik.to_bits(),
+                "n={n}, nstrat={nstrat}, nf={nf}, distribution={distribution_index}"
+            );
+            assert_eq!(scalar.to_bits(), legacy.loglik.to_bits());
+            assert_eq!(legacy.u.len(), nvar + nstrat + nf);
+            assert_eq!(legacy.imat.dim(), (nvar + nstrat, nvar + nstrat + nf));
+            assert_eq!(legacy.jj.dim(), legacy.imat.dim());
+            assert_eq!(legacy.fdiag.len(), nf);
+            assert_eq!(legacy.jdiag.len(), nf);
+            assert!(
+                legacy
+                    .u
+                    .iter()
+                    .chain(legacy.imat.iter())
+                    .chain(legacy.jj.iter())
+                    .chain(legacy.fdiag.iter())
+                    .chain(legacy.jdiag.iter())
+                    .all(|&value| value == 0.0)
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_likelihood_matches_sequential_all_censoring_distributions_and_scales() {
+        for (nstrat, nf) in [(0, 0), (1, 0), (3, 0), (3, 2)] {
+            assert_scalar_likelihood_matches_full(37, nstrat, nf);
+        }
+    }
+
+    #[test]
+    fn scalar_likelihood_matches_parallel_all_censoring_distributions_and_scales() {
+        for (nstrat, nf) in [(0, 0), (1, 0), (3, 0), (3, 2)] {
+            assert_scalar_likelihood_matches_full(SURVREG_PARALLEL_THRESHOLD, nstrat, nf);
+        }
+        assert_scalar_likelihood_matches_full(SURVREG_PARALLEL_THRESHOLD + 7, 3, 0);
+    }
+
+    #[test]
+    fn scalar_likelihood_preserves_empty_input_and_legacy_output_shapes() {
+        assert_scalar_likelihood_matches_full(0, 0, 0);
+        assert_scalar_likelihood_matches_full(0, 3, 2);
+    }
+
+    #[test]
+    fn scalar_likelihood_preserves_tail_likelihoods_and_nonfinite_values() {
+        for distribution in [
+            SurvivalDist::Weibull,
+            SurvivalDist::Logistic,
+            SurvivalDist::Gaussian,
+            SurvivalDist::StudentT(4.5),
+        ] {
+            for z in [
+                -1000.0,
+                -40.0,
+                -8.0,
+                -0.0,
+                0.0,
+                8.0,
+                40.0,
+                1000.0,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                f64::NAN,
+            ] {
+                for censoring in 0..=3 {
+                    let beta = Array1::zeros(2);
+                    let strata = Array1::ones(1);
+                    let zeros = Array1::zeros(1);
+                    let times = Array1::from_vec(vec![z]);
+                    let widths = Array1::from_vec(vec![0.1]);
+                    let status = Array1::from_vec(vec![censoring]);
+                    let weights = Array1::ones(1);
+                    let covariates = Array2::ones((1, 1));
+                    let frailty = Array1::zeros(1);
+                    let scalar = survreg_loglik(
+                        1,
+                        1,
+                        1,
+                        &beta.view(),
+                        distribution,
+                        &strata.view(),
+                        &zeros.view(),
+                        &times.view(),
+                        Some(&widths.view()),
+                        &status.view(),
+                        &weights.view(),
+                        &covariates.view(),
+                        0,
+                        &frailty.view(),
+                    )
+                    .unwrap();
+                    let full = survregc1(
+                        1,
+                        1,
+                        1,
+                        false,
+                        &beta.view(),
+                        distribution,
+                        &strata.view(),
+                        &zeros.view(),
+                        &times.view(),
+                        Some(&widths.view()),
+                        &status.view(),
+                        &weights.view(),
+                        &covariates.view(),
+                        0,
+                        &frailty.view(),
+                    )
+                    .unwrap()
+                    .loglik;
+                    if full.is_nan() {
+                        assert!(scalar.is_nan(), "z={z}");
+                    } else {
+                        assert_eq!(full.to_bits(), scalar.to_bits(), "z={z}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_likelihood_preserves_full_evaluation_errors() {
+        for (n, status_value, missing_upper) in [
+            (1, 3, true),
+            (1, 4, false),
+            (SURVREG_PARALLEL_THRESHOLD, 3, true),
+            (SURVREG_PARALLEL_THRESHOLD, 4, false),
+        ] {
+            let beta = Array1::from_vec(vec![0.0, 0.0]);
+            let strata = Array1::from_elem(n, 1);
+            let zeros = Array1::zeros(n);
+            let status = Array1::from_elem(n, status_value);
+            let weights = Array1::ones(n);
+            let covariates = Array2::ones((1, n));
+            let frailty = Array1::zeros(n);
+            let upper_view = zeros.view();
+            let upper = (!missing_upper).then_some(&upper_view);
+            let scalar = survreg_loglik(
+                n,
+                1,
+                1,
+                &beta.view(),
+                SurvivalDist::Gaussian,
+                &strata.view(),
+                &zeros.view(),
+                &zeros.view(),
+                upper,
+                &status.view(),
+                &weights.view(),
+                &covariates.view(),
+                0,
+                &frailty.view(),
+            )
+            .err()
+            .unwrap();
+            let full = survregc1(
+                n,
+                1,
+                1,
+                false,
+                &beta.view(),
+                SurvivalDist::Gaussian,
+                &strata.view(),
+                &zeros.view(),
+                &zeros.view(),
+                upper,
+                &status.view(),
+                &weights.view(),
+                &covariates.view(),
+                0,
+                &frailty.view(),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(scalar.to_string(), full.to_string());
+        }
+    }
+
+    #[test]
+    fn scalar_likelihood_preserves_parallel_interval_width_layout_check() {
+        let n = SURVREG_PARALLEL_THRESHOLD;
+        let beta = Array1::from_vec(vec![0.0, 0.0]);
+        let strata = Array1::from_elem(n, 1);
+        let zeros = Array1::zeros(n);
+        let status = Array1::from_elem(n, 1);
+        let weights = Array1::ones(n);
+        let covariates = Array2::ones((1, n));
+        let frailty = Array1::zeros(n);
+        let upper_storage = Array1::ones(n * 2);
+        let upper = upper_storage.slice(ndarray::s![..;2]);
+        let scalar = survreg_loglik(
+            n,
+            1,
+            1,
+            &beta.view(),
+            SurvivalDist::Gaussian,
+            &strata.view(),
+            &zeros.view(),
+            &zeros.view(),
+            Some(&upper),
+            &status.view(),
+            &weights.view(),
+            &covariates.view(),
+            0,
+            &frailty.view(),
+        )
+        .err()
+        .unwrap();
+        let full = survregc1(
+            n,
+            1,
+            1,
+            false,
+            &beta.view(),
+            SurvivalDist::Gaussian,
+            &strata.view(),
+            &zeros.view(),
+            &zeros.view(),
+            Some(&upper),
+            &status.view(),
+            &weights.view(),
+            &covariates.view(),
+            0,
+            &frailty.view(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(scalar.to_string(), full.to_string());
     }
 
     #[test]
