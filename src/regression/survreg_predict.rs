@@ -1125,6 +1125,28 @@ mod tests {
     }
 
     #[test]
+    fn test_student_t_quantile_predictions_use_fitted_degrees_of_freedom() {
+        // R survival 3.8.11: qt(c(.1, .5, .9), df=7).
+        let predictions = compute_quantile_prediction_with_parameter(
+            &[-2.0, 0.0],
+            2.0,
+            &[0.1, 0.5, 0.9],
+            "student-t",
+            Some(7.0),
+        );
+        let scores = [-1.4149239276505083, 0.0, 1.4149239276505086];
+        for (row, location) in predictions.iter().zip([-2.0, 0.0]) {
+            for (&actual, score) in row.iter().zip(scores) {
+                assert!((actual - (location + 2.0 * score)).abs() < 1e-10);
+            }
+        }
+        assert_eq!(
+            compute_quantile_prediction(&[-2.0, 0.0], 1.0, &[0.5], "t"),
+            vec![vec![-2.0], vec![0.0]]
+        );
+    }
+
+    #[test]
     fn test_survreg_distribution_matches_r_reference_values() {
         let density = survreg_distribution(
             vec![1.0, 2.0],

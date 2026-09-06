@@ -242,7 +242,7 @@ pub(crate) fn compare_uno_c_indices_core(
         0.0
     };
 
-    let p_value = 2.0 * (1.0 - normal_cdf(z_statistic.abs()));
+    let p_value = 2.0 * normal_sf(z_statistic.abs());
 
     let (ci_lower, ci_upper) = normal_ci_95(difference, std_error_diff);
 

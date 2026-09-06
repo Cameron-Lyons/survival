@@ -113,7 +113,7 @@ fn lognormal_surv(t: f64, mu: f64, sigma: f64) -> f64 {
     if t <= 0.0 {
         return 1.0;
     }
-    1.0 - normal_cdf((t.ln() - mu) / sigma)
+    normal_sf((t.ln() - mu) / sigma)
 }
 
 fn lognormal_pdf(t: f64, mu: f64, sigma: f64) -> f64 {

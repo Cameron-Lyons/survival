@@ -1,5 +1,5 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
-use crate::internal::statistical::{erf, erfc};
+use crate::internal::statistical::normal_sf;
 use crate::internal::student_t::StudentT;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
@@ -10,7 +10,6 @@ type DistributionEval = [f64; 4];
 
 const SMALL: f64 = -200.0;
 const SPI: f64 = 2.506628274631001;
-const ROOT_2: f64 = std::f64::consts::SQRT_2;
 const SURVREG_PARALLEL_THRESHOLD: usize = 10_000;
 
 #[derive(Debug)]
@@ -452,12 +451,15 @@ fn gauss_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
             Ok(ans)
         }
         2 => {
+            // Evaluate the small tail once. Its complement is at least 0.5,
+            // so this subtraction cannot discard a small probability.
+            let tail = normal_sf(z.abs());
             if z > 0.0 {
-                ans[0] = (1.0 + erf(z / ROOT_2)) / 2.0;
-                ans[1] = erfc(z / ROOT_2) / 2.0;
+                ans[0] = 1.0 - tail;
+                ans[1] = tail;
             } else {
-                ans[1] = (1.0 + erf(-z / ROOT_2)) / 2.0;
-                ans[0] = erfc(-z / ROOT_2) / 2.0;
+                ans[0] = tail;
+                ans[1] = 1.0 - tail;
             }
             ans[2] = f;
             ans[3] = -z * f;

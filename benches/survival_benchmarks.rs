@@ -148,6 +148,61 @@ mod pseudo_bench {
     }
 }
 
+mod fitted_survfit_residuals {
+    use super::*;
+    use survival::surv_analysis::survfit_residuals_at_times;
+
+    fn run(bencher: divan::Bencher, n: usize, type_: &'static str) {
+        let (time, status, status_i32) = generate_survival_data(n);
+        let weights = generate_case_weights(n);
+        let curve = compute_survfitkm(
+            &time,
+            &status,
+            &weights,
+            None,
+            &vec![0; n],
+            &KaplanMeierConfig::default(),
+        );
+        let eval_times: Vec<f64> = [0.1, 0.3, 0.5, 0.7, 0.9]
+            .iter()
+            .map(|q| q * time[n - 1])
+            .collect();
+        bencher.bench_local(|| {
+            black_box(
+                survfit_residuals_at_times(
+                    time.clone(),
+                    status_i32.clone(),
+                    curve.time.clone(),
+                    curve.n_risk.clone(),
+                    curve.n_event.clone(),
+                    curve.estimate.clone(),
+                    curve.cumhaz.clone(),
+                    eval_times.clone(),
+                    type_,
+                    None,
+                    1,
+                )
+                .expect("fitted survival residual inputs should be valid"),
+            );
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn survival(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "survival");
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn cumulative_hazard(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "cumhaz");
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn restricted_mean(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, "rmst");
+    }
+}
+
 mod aareg_bench {
     use super::*;
 
@@ -264,6 +319,42 @@ mod logrank {
                 WeightType::FlemingHarrington { p: 0.5, q: 0.5 },
             )
         });
+    }
+}
+
+mod survreg_residuals {
+    use super::*;
+    use survival::residuals::survreg_residual_matrix;
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn gaussian_mixed_censoring(bencher: divan::Bencher, n: usize) {
+        let time: Vec<f64> = (0..n).map(|i| 1.0 + (i % 41) as f64 * 0.1).collect();
+        let time2: Vec<f64> = time.iter().map(|time| time + 0.25).collect();
+        let status: Vec<i32> = (0..n).map(|i| (i % 4) as i32).collect();
+        let linear_pred = vec![2.5; n];
+        bencher
+            .with_inputs(|| {
+                (
+                    time.clone(),
+                    time2.clone(),
+                    status.clone(),
+                    linear_pred.clone(),
+                )
+            })
+            .bench_local_values(|(time, time2, status, linear_pred)| {
+                black_box(
+                    survreg_residual_matrix(
+                        time,
+                        status,
+                        linear_pred,
+                        1.3,
+                        "gaussian".to_string(),
+                        Some(time2),
+                        None,
+                    )
+                    .expect("benchmark residual inputs should be valid"),
+                )
+            });
     }
 }
 
@@ -799,6 +890,176 @@ mod cox_regression {
     }
 }
 
+mod ridge_cox {
+    use super::*;
+    use survival::regression::{CoxPHFit, coxph_penalized_fit, coxph_ridge_fit};
+
+    #[derive(Clone)]
+    struct Inputs {
+        time: Vec<f64>,
+        status: Vec<i32>,
+        covariates: Vec<Vec<f64>>,
+        weights: Vec<f64>,
+        strata: Vec<i32>,
+        penalty: Vec<f64>,
+        groups: Vec<Vec<usize>>,
+    }
+
+    fn inputs(n: usize, penalized_columns: usize) -> Inputs {
+        const P: usize = 8;
+        let covariates: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                let index = (i + 1) as f64;
+                (0..P)
+                    .map(|j| (index * (j + 1) as f64 * 0.31).sin() + 0.55 * (index * 0.21).sin())
+                    .collect()
+            })
+            .collect();
+        // The same weighted, stratified data are used for each comparison.
+        // theta=20 uses R's unweighted sample-variance scaling before fitting.
+        let mut penalty = vec![0.0; P];
+        for column in (P - penalized_columns)..P {
+            let mean = covariates.iter().map(|row| row[column]).sum::<f64>() / n as f64;
+            penalty[column] = 20.0
+                * covariates
+                    .iter()
+                    .map(|row| (row[column] - mean).powi(2))
+                    .sum::<f64>()
+                / (n - 1) as f64;
+        }
+        let mut groups: Vec<Vec<usize>> = (0..(P - penalized_columns)).map(|i| vec![i]).collect();
+        if penalized_columns != 0 {
+            groups.push(((P - penalized_columns)..P).collect());
+        }
+        Inputs {
+            time: (0..n)
+                .map(|i| 1.0 + ((i * 37) % 201) as f64 / 10.0)
+                .collect(),
+            status: (0..n).map(|i| i32::from(i % 4 != 0)).collect(),
+            covariates,
+            weights: generate_case_weights(n),
+            strata: generate_strata(n, 3),
+            penalty,
+            groups,
+        }
+    }
+
+    fn fit(inputs: Inputs, penalized: bool) -> CoxPHFit {
+        if penalized {
+            let (fit, diagnostics) = coxph_penalized_fit(
+                inputs.time,
+                inputs.status,
+                inputs.covariates,
+                inputs.penalty,
+                inputs.groups,
+                Some(inputs.strata),
+                Some(inputs.weights),
+                None,
+                None,
+                Some(30),
+                Some(1e-9),
+                Some(1e-11),
+                Some("efron"),
+                None,
+                None,
+            )
+            .expect("benchmark ridge Cox inputs should be valid");
+            black_box(diagnostics);
+            fit
+        } else {
+            coxph_fit(
+                inputs.time,
+                inputs.status,
+                inputs.covariates,
+                Some(inputs.strata),
+                Some(inputs.weights),
+                None,
+                None,
+                Some(30),
+                Some(1e-9),
+                Some(1e-11),
+                Some("efron"),
+                None,
+                None,
+            )
+            .expect("benchmark ordinary Cox inputs should be valid")
+        }
+    }
+
+    fn run(bencher: divan::Bencher, n: usize, penalized_columns: usize) {
+        let inputs = inputs(n, penalized_columns);
+        let penalized = penalized_columns != 0;
+        let check = fit(inputs.clone(), penalized);
+        assert_eq!(
+            check.convergence_flag, 8,
+            "benchmark Cox fit must converge at full rank"
+        );
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|inputs| {
+                black_box(fit(inputs, penalized));
+            });
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn ordinary(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 0);
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn mixed_ridge(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 4);
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn grouped_ridge(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 8);
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn automatic_df_grouped(bencher: divan::Bencher, n: usize) {
+        let inputs = inputs(n, 8);
+        let fit_selected = |inputs: Inputs| {
+            let (fit, diagnostics, selection) = coxph_ridge_fit(
+                inputs.time,
+                inputs.status,
+                inputs.covariates,
+                inputs
+                    .penalty
+                    .into_iter()
+                    .map(|penalty| penalty / 20.0)
+                    .collect(),
+                inputs.groups,
+                vec![None],
+                vec![Some(4.0)],
+                vec![0.1],
+                Some(inputs.strata),
+                Some(inputs.weights),
+                None,
+                None,
+                Some(30),
+                Some(1e-9),
+                Some(1e-11),
+                Some("efron"),
+                None,
+                None,
+                None,
+            )
+            .expect("benchmark automatic ridge Cox inputs should be valid");
+            (fit, diagnostics, selection)
+        };
+        let (check, diagnostics, selection) = fit_selected(inputs.clone());
+        assert_eq!(check.convergence_flag, 8);
+        assert!(selection.done[0]);
+        assert!((diagnostics.term_df[0] - 4.0).abs() < 0.1);
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|inputs| {
+                black_box(fit_selected(inputs));
+            });
+    }
+}
+
 mod case_cohort_bench {
     use super::*;
 
@@ -973,6 +1234,69 @@ mod survreg_bench {
             .expect("benchmark weighted stratified lognormal survreg fit should converge");
             black_box(fit);
         });
+    }
+}
+
+mod gaussian_distribution_bench {
+    use super::*;
+    use survival::regression::survreg_distribution;
+
+    fn run(bencher: divan::Bencher, values: Vec<f64>, kind: &str) {
+        let n = values.len();
+        let inputs = (
+            values,
+            vec![0.0; n],
+            vec![1.0; n],
+            "gaussian".to_string(),
+            kind.to_string(),
+        );
+        bencher.with_inputs(|| inputs.clone()).bench_local_values(
+            |(values, mean, scale, distribution, kind)| {
+                black_box(
+                    survreg_distribution(values, mean, scale, distribution, kind, None)
+                        .expect("benchmark Gaussian distribution inputs should be valid"),
+                )
+            },
+        );
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn central_probabilities(bencher: divan::Bencher, n: usize) {
+        let values = (0..n)
+            .map(|idx| -4.0 + 8.0 * idx as f64 / (n - 1) as f64)
+            .collect();
+        run(bencher, values, "distribution");
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn tail_probabilities(bencher: divan::Bencher, n: usize) {
+        let tails = [-5.0, -8.0, -9.0, -12.0, -20.0, -30.0, -37.5, -38.0];
+        let values = (0..n).map(|idx| tails[idx % tails.len()]).collect();
+        run(bencher, values, "distribution");
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn central_quantiles(bencher: divan::Bencher, n: usize) {
+        let values = (0..n)
+            .map(|idx| 0.001 + 0.998 * idx as f64 / (n - 1) as f64)
+            .collect();
+        run(bencher, values, "quantile");
+    }
+
+    #[divan::bench(args = [100, 10000])]
+    fn tail_quantiles(bencher: divan::Bencher, n: usize) {
+        let tails = [
+            f64::from_bits(1),
+            1e-320,
+            1e-300,
+            1e-200,
+            1e-100,
+            1e-20,
+            1e-10,
+            1.0_f64.next_down(),
+        ];
+        let values = (0..n).map(|idx| tails[idx % tails.len()]).collect();
+        run(bencher, values, "quantile");
     }
 }
 

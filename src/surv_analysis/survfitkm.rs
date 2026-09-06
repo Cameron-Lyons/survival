@@ -689,7 +689,7 @@ pub(crate) fn compute_survfit_curve_from_tables(
     let mut cumulative_hazard = 0.0;
     let mut cumulative_hazard_variance = 0.0;
     let alpha = 1.0 - conf_level;
-    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    let z = -normal_inverse_cdf(alpha / 2.0);
 
     let mut estimate = Vec::with_capacity(time.len());
     let mut std_err = Vec::with_capacity(time.len());
@@ -1271,7 +1271,7 @@ pub fn compute_survfitkm_with_timefix(
     }
 
     let alpha = 1.0 - config.conf_level;
-    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    let z = -normal_inverse_cdf(alpha / 2.0);
 
     let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
         (vec![], vec![])
@@ -1579,7 +1579,7 @@ pub fn compute_robust_survfitkm_with_timefix(
     }
 
     let alpha = 1.0 - config.conf_level;
-    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    let z = -normal_inverse_cdf(alpha / 2.0);
     let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
         (vec![], vec![])
     } else {
@@ -1745,7 +1745,7 @@ fn compute_robust_right_survfit_variance_with_timefix(
     }
 
     let alpha = 1.0 - config.conf_level;
-    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    let z = -normal_inverse_cdf(alpha / 2.0);
     let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
         (vec![], vec![])
     } else {
@@ -1873,7 +1873,7 @@ fn compute_robust_counting_survfit_variance_with_timefix(
     }
 
     let alpha = 1.0 - config.conf_level;
-    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    let z = -normal_inverse_cdf(alpha / 2.0);
     let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
         (vec![], vec![])
     } else {

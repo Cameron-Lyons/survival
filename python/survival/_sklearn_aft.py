@@ -17,12 +17,21 @@ from ._sklearn_common import (
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
 
+_LOG_TIME_ERROR_DISTRIBUTIONS = {
+    "weibull": "extreme",
+    "exponential": "extreme",
+    "rayleigh": "extreme",
+    "lognormal": "gaussian",
+    "loglogistic": "logistic",
+}
+
 
 class AFTEstimator(BaseEstimator, RegressorMixin):
     """Scikit-learn compatible Accelerated Failure Time (AFT) model.
 
-    Log-time families model log(T) = X @ beta + sigma * epsilon. Gaussian,
-    logistic, extreme-value, and Student-t families model T directly.
+    Log-time distributions use log(T) = X @ beta + sigma * epsilon. Gaussian,
+    logistic, extreme-value, and Student-t distributions instead model T directly
+    and allow negative and zero responses.
 
     Parameters
     ----------
@@ -32,11 +41,12 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         - "lognormal": Log-normal distribution (Gaussian errors)
         - "loglogistic": Log-logistic distribution (logistic errors)
         - "exponential": Exponential distribution (special case of Weibull)
+        - "rayleigh": Rayleigh distribution (special case of Weibull)
         - "gaussian": Gaussian distribution (for linear models)
         - "logistic": Logistic distribution (for linear models)
-        - "extreme_value": Extreme-value distribution on the response scale
-        - "rayleigh": Weibull family with fixed scale 0.5
-        - "t": Student-t distribution with 4 degrees of freedom
+        - "extreme": Extreme-value distribution on the original response scale
+        - "t": Student-t distribution with four degrees of freedom
+        Native distribution aliases are also accepted.
     max_iter : int, default=200
         Maximum number of iterations for optimization.
     tol : float, default=1e-9
@@ -47,7 +57,7 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
     model_ : SurvivalFit
         The underlying fitted AFT model.
     coef_ : ndarray of shape (n_features,)
-        Estimated location coefficients, on the log-time scale for log families.
+        Estimated coefficients for the model location.
     scale_ : float
         Estimated scale parameter (sigma).
     n_features_in_ : int
@@ -65,10 +75,12 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
 
     Notes
     -----
-    For log-time families, the AFT model interprets coefficients as acceleration factors:
+    For log-time distributions, coefficients describe acceleration factors:
     - Positive coefficients increase expected survival time
     - Negative coefficients decrease expected survival time
     - exp(coef) gives the multiplicative effect on survival time
+    For distributions that model T directly, coefficients describe additive
+    changes in the response.
     """
 
     def __init__(
@@ -143,13 +155,7 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         self, linear_values: NDArray[np.float64]
     ) -> NDArray[np.float64]:
         # The fitted model stores the canonical name, including aliases used at fit.
-        if self.model_.distribution in {
-            "weibull",
-            "exponential",
-            "rayleigh",
-            "lognormal",
-            "loglogistic",
-        }:
+        if self.model_.distribution in _LOG_TIME_ERROR_DISTRIBUTIONS:
             with np.errstate(over="ignore", under="ignore"):
                 return np.exp(linear_values)
         return linear_values
@@ -235,13 +241,16 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
 
     @property
     def acceleration_factors(self) -> NDArray[np.float64]:
-        """Return exponentiated coefficients, or acceleration factors for log-time families.
+        """Return exponentiated coefficients.
+
+        These describe multiplicative time effects for log-time distributions.
 
         Returns
         -------
         af : ndarray of shape (n_features,)
-            Acceleration factors. Values > 1 increase survival time,
-            values < 1 decrease survival time.
+            exp(coef_) for every distribution. For log-time distributions,
+            values > 1 increase survival time and values < 1 decrease it.
+            Identity-time coefficients instead describe additive effects.
         """
         check_is_fitted(self)
         return np.exp(self.coef_)
