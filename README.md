@@ -280,6 +280,14 @@ predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
 term contributions, and quantile predictions via `type="quantile"`.
+Gaussian and lognormal calculations use direct lower and upper normal tails,
+preserving representable probabilities beyond eight standard deviations in
+distribution functions, censored likelihoods, and inference. Normal quantiles
+refine a rational approximation with Halley iteration in the central range and
+a log-probability Newton step in extreme tails, including subnormal probability
+inputs. The tail step uses the normal Mills ratio's
+[continued fraction](https://dlmf.nist.gov/7.9.E1). Shared inference routines use
+the upper-tail function directly to avoid reporting zero for small p-values.
 Gaussian, logistic, extreme-value, and Student-t AFT models accept finite real-valued
 responses, including negative values and zero, for all censoring types. Log-time
 families retain their positive-response requirement. Native and sklearn predictions
@@ -850,6 +858,16 @@ Smoke-test benchmarks:
 ```sh
 cargo bench -- --test
 ```
+
+The `gaussian_distribution_bench` group separates central and extreme-tail
+probabilities and quantiles. In a local single-thread Apple Silicon comparison
+against main, batches of 10,000 accurate quantiles took 197.8 microseconds in
+the central range and 340.8 microseconds in the tails, versus 57.7 and 90.77
+microseconds for the previous approximation. A weighted, stratified lognormal
+AFT fit with 10,000 rows took 5.026 ms versus 4.590 ms. The fit evaluates each
+small Gaussian tail once and derives its large complement, limiting the extra
+work required for accurate probabilities. Measurements used at least 50 samples
+per case; the benchmark definitions retain these comparisons for future tuning.
 
 Format and lint:
 ```sh
