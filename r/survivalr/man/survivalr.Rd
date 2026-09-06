@@ -1108,7 +1108,14 @@ labels.}
 \code{survobrien}.}
 \item{ymin, ymax, timewt, influence, ranks, reverse, keepstrata, std.err}{
 Low-level \code{concordancefit} controls matching the R \pkg{survival}
-entry point.}
+entry point. Near-tied times are adjudicated before applying \code{ymin};
+\code{ymax} limits contributing event times without changing the original
+event count used to select time weights. Infinite bounds are allowed.
+For a single score and multiple strata, \code{keepstrata = TRUE}, or a numeric
+threshold at least as large as the number of strata, retains a matrix of
+per-stratum pair counts. Otherwise counts are pooled. Concordance and its
+variance always use pooled counts. Estimates without comparable pairs are
+\code{NaN}.}
 \item{fit, object}{Bridged model or result object.}
 \item{model}{Logical flag accepted for R formula compatibility where
 supported.}

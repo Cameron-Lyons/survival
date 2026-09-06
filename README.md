@@ -338,6 +338,17 @@ available with every result, while
 `influence` controls which diagnostic rows are returned. For multiple scores,
 `result.covariance` and `vcov(result)` include the covariance between scores.
 
+By default, `timefix=True` groups near-tied times using R's `aeqSurv` tolerance;
+`timefix=False` preserves exact observed times. `ymin` clips exit times and
+`ymax` limits contributing event times. Strata with fewer than two original
+events use unit time multipliers, including when a horizon is supplied.
+With no comparable pairs, concordance and its variance are `NaN`.
+
+Direct `Surv` inputs accept `strata=labels`. For a single score, `keepstrata`
+controls optional `stratum_labels` and `stratum_counts` fields; counts contain
+the five exclusive pair categories: concordant, discordant, tied predictors,
+tied outcomes, and ties in both. Concordance and covariance pool across strata.
+
 ### Cox Regression with Frailty
 
 ```python

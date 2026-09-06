@@ -9444,6 +9444,9 @@ def test_counting_concordance_binding_is_typed():
         "risk_scores",
         "weights",
         "timewt",
+        "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "concordance_summary") == [
         "time",
@@ -9451,6 +9454,9 @@ def test_counting_concordance_binding_is_typed():
         "risk_scores",
         "weights",
         "timewt",
+        "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_concordance_summary") == [
         "time",
@@ -9459,6 +9465,9 @@ def test_counting_concordance_binding_is_typed():
         "strata",
         "weights",
         "timewt",
+        "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "concordance_rank_rows") == [
         "time",
@@ -9466,6 +9475,9 @@ def test_counting_concordance_binding_is_typed():
         "risk_scores",
         "weights",
         "timewt",
+        "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_concordance_rank_rows") == [
         "time",
@@ -9474,6 +9486,9 @@ def test_counting_concordance_binding_is_typed():
         "strata",
         "weights",
         "timewt",
+        "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "concordance_influence_rows") == [
         "time",
@@ -9481,6 +9496,9 @@ def test_counting_concordance_binding_is_typed():
         "risk_scores",
         "weights",
         "timewt",
+        "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_concordance_influence_rows") == [
         "time",
@@ -9489,6 +9507,9 @@ def test_counting_concordance_binding_is_typed():
         "strata",
         "weights",
         "timewt",
+        "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_index") == [
         "start",
@@ -9498,6 +9519,8 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_summary") == [
         "start",
@@ -9507,6 +9530,8 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_counting_concordance_summary") == [
         "start",
@@ -9517,6 +9542,8 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_rank_rows") == [
         "start",
@@ -9526,6 +9553,8 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_counting_concordance_rank_rows") == [
         "start",
@@ -9536,6 +9565,8 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "counting_concordance_influence_rows") == [
         "start",
@@ -9545,6 +9576,8 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "ymin",
+        "ymax",
     ]
     assert _pyi_function_arg_names(stub_path, "stratified_counting_concordance_influence_rows") == [
         "start",
@@ -9555,6 +9588,8 @@ def test_counting_concordance_binding_is_typed():
         "weights",
         "timewt",
         "timefix",
+        "ymin",
+        "ymax",
     ]
     assert "timefix" in inspect.signature(core.counting_concordance_index).parameters
     assert "timefix" in inspect.signature(core.counting_concordance_summary).parameters
@@ -9566,7 +9601,7 @@ def test_counting_concordance_binding_is_typed():
         "timefix"
         in inspect.signature(core.stratified_counting_concordance_influence_rows).parameters
     )
-    with pytest.raises(ValueError, match="start must be less than stop"):
+    with pytest.raises(ValueError, match="effective length 0"):
         core.counting_concordance_summary(
             [1.0],
             [1.0 + 5e-10],
@@ -12027,6 +12062,7 @@ def test_r_api_stub_tracks_concordance_public_signature():
         "subset",
         "na_action",
         "cluster",
+        "strata",
         "ymin",
         "ymax",
         "timewt",

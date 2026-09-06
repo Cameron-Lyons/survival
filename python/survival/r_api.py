@@ -4,7 +4,7 @@ import math
 import random
 import warnings
 from bisect import bisect_left, bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date as _Date
 from datetime import datetime as _DateTime
@@ -13,7 +13,7 @@ from itertools import combinations, product
 from numbers import Real
 from operator import index
 from statistics import NormalDist
-from typing import Any, NoReturn
+from typing import Any
 
 from . import _survival as _core
 
@@ -485,6 +485,8 @@ class ConcordanceResult:
     conditional_variance: float | list[float] | None = None
     score_names: list[str] | None = None
     covariance: list[list[float]] | None = None
+    stratum_labels: list[Any] | None = None
+    stratum_counts: list[list[float]] | None = None
 
     @property
     def c_index(self) -> float | list[float]:
@@ -13494,23 +13496,6 @@ def _survdiff_timefix_values(times: list[float], timefix: bool) -> list[float]:
     return fixed
 
 
-def _concordance_core_time_values(
-    times: list[float],
-    timefix: bool,
-) -> tuple[list[float], dict[float, float] | None]:
-    if timefix or len(times) < 2:
-        return times, None
-
-    unique_times = sorted(set(times))
-    if len(unique_times) < 2:
-        return times, None
-
-    step = _SURVFIT_TIME_EPSILON * 2.0
-    display_by_core_time = {index * step: value for index, value in enumerate(unique_times)}
-    core_by_display_time = {value: index * step for index, value in enumerate(unique_times)}
-    return [core_by_display_time[value] for value in times], display_by_core_time
-
-
 def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
     fixed = [list(vector) for vector in vectors]
     points = [
@@ -18084,18 +18069,28 @@ def _normalize_concordance_influence(influence: Any) -> int:
     return value
 
 
-def _validate_concordance_keepstrata(keepstrata: Any) -> None:
+def _normalize_concordance_keepstrata(keepstrata: Any) -> bool | float:
     if keepstrata is None:
-        return
+        return 10.0
     if _is_bool_like(keepstrata):
-        return
-    _finite_float(keepstrata, "keepstrata")
+        return bool(keepstrata)
+    return _concordance_numeric_option(keepstrata, "keepstrata")
+
+
+def _concordance_numeric_option(value: Any, name: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be numeric") from exc
+    if math.isnan(result):
+        raise ValueError(f"{name} must not be NaN")
+    return result
 
 
 def _normalize_concordance_time_bound(value: Any | None, name: str) -> float | None:
     if value is None:
         return None
-    return _finite_float(value, name)
+    return _concordance_numeric_option(value, name)
 
 
 def _formula_weight_values(data: Any, weights: Any | None) -> Any | None:
@@ -18121,308 +18116,82 @@ def _concordance_weight_values(weights: Any | None, n: int) -> list[float] | Non
     return values
 
 
-def _concordance_bounded_times_and_status(
-    times: list[float],
-    status: list[int],
-    ymin: float | None,
-    ymax: float | None,
-) -> tuple[list[float], list[int]]:
-    bounded_times = [max(value, ymin) for value in times] if ymin is not None else list(times)
-    bounded_status = list(status)
-    if ymax is not None:
-        bounded_status = [
-            0 if event == 1 and bounded_times[idx] > ymax else event
-            for idx, event in enumerate(bounded_status)
-        ]
-    return bounded_times, bounded_status
-
-
 def _concordance_rank_row_dicts(
     rows: list[tuple[float, float, float, float]],
-    display_by_core_time: dict[float, float] | None = None,
 ) -> list[dict[str, float]]:
     return [
-        {
-            "time": float(display_by_core_time.get(time, time) if display_by_core_time else time),
-            "rank": float(rank),
-            "timewt": float(time_weight),
-            "casewt": float(case_weight),
-        }
+        {"time": time, "rank": rank, "timewt": time_weight, "casewt": case_weight}
         for time, rank, time_weight, case_weight in rows
     ]
 
 
-@dataclass(frozen=True)
-class _RightConcordanceData:
-    times: list[float]
-    status: list[int]
-    display_by_core_time: dict[float, float] | None
-
-
-@dataclass(frozen=True)
-class _CountingConcordanceData:
-    start: list[float]
-    stop: list[float]
-    status: list[int]
-
-
-def _unsupported_concordance_response() -> NoReturn:
-    raise NotImplementedError(
-        "concordance currently supports right-censored and counting Surv responses"
-    )
-
-
-def _right_concordance_data(
-    response: Surv,
-    timefix: bool,
-    ymin: float | None,
-    ymax: float | None,
-) -> _RightConcordanceData:
-    times = _survdiff_timefix_values(list(response.time), timefix)
-    status = list(response.event)
-    times, status = _concordance_bounded_times_and_status(times, status, ymin, ymax)
-    core_times, display_by_core_time = _concordance_core_time_values(times, timefix)
-    return _RightConcordanceData(core_times, status, display_by_core_time)
-
-
-def _counting_concordance_data(
-    response: Surv,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-    *,
-    preapply_timefix: bool,
-) -> _CountingConcordanceData:
-    if timewt in {"S/G", "n/G2"}:
-        raise ValueError("S/G and n/G2 timewt options are not supported for counting-process data")
-    if response.start is None:
-        raise ValueError("counting-process concordance requires start times")
-
-    start = list(response.start)
-    stop = list(response.time)
-    if preapply_timefix and timefix:
-        start, stop = _timefix_vectors(start, stop)
-    status = list(response.event)
-    stop, status = _concordance_bounded_times_and_status(stop, status, ymin, ymax)
-    return _CountingConcordanceData(start, stop, status)
-
-
-def _single_concordance_ranks(
+def _concordance_native_call(
     response: Surv,
     risk_values: list[float],
     weights: list[float] | None,
+    strata_values: list[Any] | None,
     timefix: bool,
     timewt: str,
     ymin: float | None,
     ymax: float | None,
-) -> list[dict[str, float]]:
-    case_weights = None if weights is None else list(weights)
-    if response.type == "right":
-        data = _right_concordance_data(response, timefix, ymin, ymax)
-        return _concordance_rank_row_dicts(
-            _core.concordance_rank_rows(
-                data.times,
-                data.status,
-                risk_values,
-                case_weights,
-                timewt,
-            ),
-            data.display_by_core_time,
+) -> Callable[[str], Any]:
+    """Share native time adjudication across counts, ranks, and influence."""
+    if response.type not in {"right", "counting"}:
+        raise NotImplementedError(
+            "concordance currently supports right-censored and counting Surv responses"
         )
+    if timefix:
+        response = aeqSurv(response)
+    args: list[Any] = [response.time, response.event, risk_values]
+    prefix = ""
     if response.type == "counting":
-        data = _counting_concordance_data(
-            response,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-            preapply_timefix=True,
+        args.insert(0, response.start)
+        prefix = "counting_"
+    if strata_values is not None:
+        args.append(_encode_groups(strata_values, len(response)))
+        prefix = "stratified_" + prefix
+
+    def calculate(operation: str) -> Any:
+        return getattr(_core, prefix + "concordance_" + operation)(
+            *args,
+            weights=weights,
+            timewt=timewt,
+            timefix=False,
+            ymin=ymin,
+            ymax=ymax,
         )
-        return _concordance_rank_row_dicts(
-            _core.counting_concordance_rank_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                case_weights,
-                timewt,
-                False,
-            )
-        )
-    return _unsupported_concordance_response()
+
+    return calculate
 
 
-def _concordance_ranks(
-    response: Surv,
-    risk_values: list[float],
+def _concordance_stratum_counts(
+    strata_values: list[Any] | None,
     weights: list[float] | None,
-    strata: Any | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> list[dict[str, float]]:
-    if strata is None:
-        return _single_concordance_ranks(
-            response,
-            risk_values,
-            weights,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-        )
-    strata_codes = _encode_groups(strata, len(response))
-    case_weights = None if weights is None else list(weights)
-    if response.type == "right":
-        data = _right_concordance_data(response, timefix, ymin, ymax)
-        return _concordance_rank_row_dicts(
-            _core.stratified_concordance_rank_rows(
-                data.times,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
-                timewt,
-            ),
-            data.display_by_core_time,
-        )
-    if response.type == "counting":
-        data = _counting_concordance_data(
-            response,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-            preapply_timefix=True,
-        )
-        return _concordance_rank_row_dicts(
-            _core.stratified_counting_concordance_rank_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
-                timewt,
-                False,
+    influence_rows: list[list[float]],
+    keepstrata: bool | float,
+) -> tuple[list[Any] | None, list[list[float]] | None]:
+    if strata_values is None or keepstrata is False:
+        return None, None
+    labels = list(_label_levels(strata_values, "strata"))
+    if len(labels) < 2 or (keepstrata is not True and len(labels) > keepstrata):
+        return None, None
+    groups: dict[Any, list[int]] = {label: [] for label in labels}
+    for row, label in enumerate(strata_values):
+        groups[label].append(row)
+    # Each pair contributes once at each endpoint. Euler's identity recovers
+    # its case-weighted count without fitting the strata a second time.
+    counts = [
+        [
+            0.5
+            * math.fsum(
+                (1.0 if weights is None else weights[row]) * influence_rows[row][column]
+                for row in groups[label]
             )
-        )
-    return _unsupported_concordance_response()
-
-
-def _concordance_influence_result(
-    result: tuple[list[list[float]], list[float], float],
-) -> tuple[list[list[float]], list[float], float]:
-    influence_rows, dfbeta, variance = result
-    return (
-        [[float(value) for value in row] for row in influence_rows],
-        [float(value) for value in dfbeta],
-        float(variance),
-    )
-
-
-def _single_concordance_influence(
-    response: Surv,
-    risk_values: list[float],
-    weights: list[float] | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> tuple[list[list[float]], list[float], float | None]:
-    case_weights = None if weights is None else list(weights)
-    if response.type == "right":
-        data = _right_concordance_data(response, timefix, ymin, ymax)
-        return _concordance_influence_result(
-            _core.concordance_influence_rows(
-                data.times,
-                data.status,
-                risk_values,
-                case_weights,
-                timewt,
-            )
-        )
-    if response.type == "counting":
-        data = _counting_concordance_data(
-            response,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-            preapply_timefix=True,
-        )
-        return _concordance_influence_result(
-            _core.counting_concordance_influence_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                case_weights,
-                timewt,
-                False,
-            )
-        )
-    return _unsupported_concordance_response()
-
-
-def _concordance_influence(
-    response: Surv,
-    risk_values: list[float],
-    weights: list[float] | None,
-    strata: Any | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> tuple[list[list[float]], list[float], float | None]:
-    if strata is None:
-        return _single_concordance_influence(
-            response,
-            risk_values,
-            weights,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-        )
-    strata_codes = _encode_groups(strata, len(response))
-    case_weights = None if weights is None else list(weights)
-    if response.type == "right":
-        data = _right_concordance_data(response, timefix, ymin, ymax)
-        return _concordance_influence_result(
-            _core.stratified_concordance_influence_rows(
-                data.times,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
-                timewt,
-            )
-        )
-    if response.type == "counting":
-        data = _counting_concordance_data(
-            response,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-            preapply_timefix=True,
-        )
-        return _concordance_influence_result(
-            _core.stratified_counting_concordance_influence_rows(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                strata_codes,
-                case_weights,
-                timewt,
-                False,
-            )
-        )
-    return _unsupported_concordance_response()
+            for column in range(5)
+        ]
+        for label in labels
+    ]
+    return labels, counts
 
 
 def _concordance_cluster_values(cluster: Any, n: int) -> list[Any]:
@@ -18448,109 +18217,6 @@ def _clustered_concordance_dfbeta(
     return cluster_dfbeta, math.fsum(value * value for value in cluster_dfbeta)
 
 
-def _single_concordance_summary(
-    response: Surv,
-    risk_values: list[float],
-    weights: list[float] | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> dict[str, float]:
-    if response.type == "right":
-        data = _right_concordance_data(response, timefix, ymin, ymax)
-        summary = _core.concordance_summary(
-            data.times,
-            data.status,
-            risk_values,
-            weights,
-            timewt,
-        )
-        summary["n_event"] = float(sum(1 for event in data.status if event == 1))
-        return summary
-    if response.type == "counting":
-        data = _counting_concordance_data(
-            response,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-            preapply_timefix=False,
-        )
-        summary = _core.counting_concordance_summary(
-            data.start,
-            data.stop,
-            data.status,
-            risk_values,
-            weights,
-            timewt,
-            timefix,
-        )
-        summary["n_event"] = float(sum(1 for event in data.status if event == 1))
-        return summary
-    return _unsupported_concordance_response()
-
-
-def _concordance_summary(
-    response: Surv,
-    risk_values: list[float],
-    weights: list[float] | None,
-    strata: Any | None,
-    timefix: bool,
-    timewt: str,
-    ymin: float | None,
-    ymax: float | None,
-) -> dict[str, float]:
-    if strata is None:
-        return _single_concordance_summary(
-            response,
-            risk_values,
-            weights,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-        )
-
-    strata_codes = _encode_groups(strata, len(response))
-    if response.type == "right":
-        data = _right_concordance_data(response, timefix, ymin, ymax)
-        return {
-            key: float(value)
-            for key, value in _core.stratified_concordance_summary(
-                data.times,
-                data.status,
-                risk_values,
-                strata_codes,
-                weights,
-                timewt,
-            ).items()
-        }
-    if response.type == "counting":
-        data = _counting_concordance_data(
-            response,
-            timefix,
-            timewt,
-            ymin,
-            ymax,
-            preapply_timefix=False,
-        )
-        return {
-            key: float(value)
-            for key, value in _core.stratified_counting_concordance_summary(
-                data.start,
-                data.stop,
-                data.status,
-                risk_values,
-                strata_codes,
-                weights,
-                timewt,
-                timefix,
-            ).items()
-        }
-    return _unsupported_concordance_response()
-
-
 def _single_score_concordance_result(
     response: Surv,
     score_values: list[float],
@@ -18564,12 +18230,13 @@ def _single_score_concordance_result(
     upper_bound: float | None,
     influence_value: int,
     include_ranks: bool,
+    keepstrata: bool | float = 10.0,
 ) -> ConcordanceResult:
     if len(score_values) != len(response):
         raise ValueError("scores must have the same length as the Surv response")
 
     risk_values = [-value for value in score_values] if reverse_scores else score_values
-    summary = _concordance_summary(
+    native = _concordance_native_call(
         response,
         risk_values,
         weight_values,
@@ -18579,32 +18246,11 @@ def _single_score_concordance_result(
         lower_bound,
         upper_bound,
     )
-    tied_x = float(summary.get("tied_x", 0.0))
-    tied_y = float(summary.get("tied_y", 0.0))
-    tied_xy = float(summary.get("tied_xy", 0.0))
-    rank_rows = (
-        _concordance_ranks(
-            response,
-            risk_values,
-            weight_values,
-            strata_values,
-            fix_time,
-            time_weight,
-            lower_bound,
-            upper_bound,
-        )
-        if include_ranks
-        else None
-    )
-    influence_rows, dfbeta, variance = _concordance_influence(
-        response,
-        risk_values,
-        weight_values,
-        strata_values,
-        fix_time,
-        time_weight,
-        lower_bound,
-        upper_bound,
+    summary = native("summary")
+    rank_rows = _concordance_rank_row_dicts(native("rank_rows")) if include_ranks else None
+    influence_rows, dfbeta, variance = native("influence_rows")
+    stratum_labels, stratum_counts = _concordance_stratum_counts(
+        strata_values, weight_values, influence_rows, keepstrata
     )
     if cluster_values is not None and dfbeta is not None:
         dfbeta, variance = _clustered_concordance_dfbeta(dfbeta, cluster_values)
@@ -18615,15 +18261,17 @@ def _single_score_concordance_result(
         reverse=reverse_scores,
         concordant=float(summary["concordant"]),
         comparable=float(summary["comparable"]),
-        tied_x=tied_x,
-        tied_y=tied_y,
-        tied_xy=tied_xy,
+        tied_x=float(summary["tied_x"]),
+        tied_y=float(summary["tied_y"]),
+        tied_xy=float(summary["tied_xy"]),
         ranks=rank_rows,
         dfbeta=dfbeta if influence_value in {1, 3} else None,
         influence=influence_rows if influence_value in {2, 3} else None,
         variance=variance,
         covariance=[[float(variance)]] if variance is not None else None,
         conditional_variance=float(summary["conditional_variance"]),
+        stratum_labels=stratum_labels,
+        stratum_counts=stratum_counts,
     )
 
 
@@ -18656,6 +18304,7 @@ def _multi_score_concordance_result(
             upper_bound,
             influence_value | 1,
             include_ranks,
+            False,
         )
         for score_values in score_columns
     ]
@@ -18701,6 +18350,7 @@ def concordance(
     subset: Any | None = None,
     na_action: str | None = "fail",
     cluster: Any | None = None,
+    strata: Any | None = None,
     ymin: Any | None = None,
     ymax: Any | None = None,
     timewt: Any = "n",
@@ -18726,7 +18376,7 @@ def concordance(
     upper_bound = _normalize_concordance_time_bound(ymax, "ymax")
     influence_value = _normalize_concordance_influence(influence)
     include_ranks = _normalize_bool_option(ranks, "ranks")
-    _validate_concordance_keepstrata(keepstrata)
+    keep_strata = _normalize_concordance_keepstrata(keepstrata)
     if scores is not None and risk_scores is not None:
         raise ValueError("use only one of scores or risk_scores")
     external_scores = risk_scores if risk_scores is not None else scores
@@ -18742,6 +18392,8 @@ def concordance(
             raise ValueError("concordance formula input cannot be combined with scores")
         weights = _formula_weight_values(data, weights)
         cluster = _formula_cluster_values(data, cluster)
+        if isinstance(strata, str):
+            strata = _column(data, strata)
         if subset is not None:
             data, aligned = _subset_formula_inputs(
                 response,
@@ -18749,9 +18401,11 @@ def concordance(
                 subset,
                 weights=weights,
                 cluster=cluster,
+                strata=strata,
             )
             weights = aligned["weights"]
             cluster = aligned["cluster"]
+            strata = aligned["strata"]
             subset = None
         data, aligned = _apply_formula_na_action(
             response,
@@ -18759,9 +18413,11 @@ def concordance(
             na_action,
             weights=weights,
             cluster=cluster,
+            strata=strata,
         )
         weights = aligned["weights"]
         cluster = aligned["cluster"]
+        strata = aligned["strata"]
         na_action = "pass"
         response, terms = _parse_formula(response, data)
         if terms.clusters:
@@ -18770,7 +18426,9 @@ def concordance(
             cluster = _combined_columns(data, terms.clusters, len(response))
         score_columns, score_names = _concordance_score_columns(data, terms, len(response))
         if terms.strata:
-            strata_values = _combined_columns(data, terms.strata, len(response))
+            if strata is not None:
+                raise ValueError("use only one of formula strata(...) or strata")
+            strata = _combined_columns(data, terms.strata, len(response))
         weight_values = _concordance_weight_values(weights, len(response))
     else:
         if not isinstance(response, Surv):
@@ -18783,6 +18441,7 @@ def concordance(
             external_scores = _subset_sequence(external_scores, indices, "scores")
             weights = _subset_optional_sequence(weights, indices, "weights")
             cluster = _subset_optional_sequence(cluster, indices, "cluster")
+            strata = _subset_optional_sequence(strata, indices, "strata")
         response, aligned = _apply_surv_na_action(
             response,
             na_action,
@@ -18790,15 +18449,23 @@ def concordance(
             scores=external_scores,
             weights=weights,
             cluster=cluster,
+            strata=strata,
         )
         external_scores = aligned["scores"]
         weights = aligned["weights"]
         cluster = aligned["cluster"]
+        strata = aligned["strata"]
         score_columns, score_names = _external_concordance_score_columns(
             external_scores,
             len(response),
         )
         weight_values = _concordance_weight_values(weights, len(response))
+
+    if strata is not None:
+        strata_values = _materialize_labels(strata, "strata")
+        if len(strata_values) != len(response):
+            raise ValueError("strata must have the same length as the Surv response")
+        _label_levels(strata_values, "strata")
 
     if cluster is not None:
         cluster_values = _concordance_cluster_values(cluster, len(response))
@@ -18817,29 +18484,9 @@ def concordance(
             upper_bound,
             influence_value,
             include_ranks,
+            keep_strata,
         )
-        return (
-            ConcordanceResult(
-                concordance=result.concordance,
-                n=result.n,
-                n_event=result.n_event,
-                reverse=result.reverse,
-                concordant=result.concordant,
-                comparable=result.comparable,
-                tied_x=result.tied_x,
-                tied_y=result.tied_y,
-                tied_xy=result.tied_xy,
-                ranks=result.ranks,
-                dfbeta=result.dfbeta,
-                influence=result.influence,
-                variance=result.variance,
-                covariance=result.covariance,
-                conditional_variance=result.conditional_variance,
-                score_names=score_names,
-            )
-            if score_names is not None
-            else result
-        )
+        return replace(result, score_names=score_names) if score_names is not None else result
 
     return _multi_score_concordance_result(
         response,
