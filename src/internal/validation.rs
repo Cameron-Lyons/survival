@@ -1,36 +1,6 @@
 use pyo3::PyErr;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use std::fmt;
-
-#[derive(Debug, Clone)]
-pub(crate) enum MatrixError {
-    SingularMatrix,
-    EmptyMatrix,
-}
-
-impl fmt::Display for MatrixError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MatrixError::SingularMatrix => {
-                write!(
-                    f,
-                    "matrix is singular or nearly singular and cannot be solved"
-                )
-            }
-            MatrixError::EmptyMatrix => {
-                write!(f, "matrix is empty when non-empty matrix was expected")
-            }
-        }
-    }
-}
-
-impl std::error::Error for MatrixError {}
-
-impl From<MatrixError> for PyErr {
-    fn from(err: MatrixError) -> PyErr {
-        PyRuntimeError::new_err(err.to_string())
-    }
-}
 
 #[derive(Debug)]
 pub enum ValidationError {

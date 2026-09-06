@@ -237,9 +237,22 @@ predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
 term contributions, and quantile predictions via `type="quantile"`.
-The AFT optimizer uses positive-definite observed-information Newton steps when
-available and falls back to the stable outer-product system otherwise. The R
-bridge also routes built-in `survreg.fit` matrix calls through this kernel,
+AFT coefficient accessors report aliased location coefficients as `NaN`, while
+stored training predictions and residuals retain the fitted numeric values.
+As in R, an aliased coefficient makes ordinary `newdata` predictions missing;
+term predictions retain contributions from other terms. AFT `newdata` predictions
+omit formula offsets, while training predictions retain them; the native
+`fit.predict(...)` method still accepts explicit offsets. `vcov(complete=False)`
+retains estimated scale parameters when the model has no aliases.
+The AFT optimizer uses an ordered LDL factorization for its observed-information
+Newton steps, with a score-product fallback when needed. It honors R's
+[`survreg` pivot tolerance](https://github.com/cran/survival/blob/3.8-11/src/cholesky3.c),
+preserves supplied coefficients in aliased directions, and returns zero
+covariance rows and columns for discarded pivots. Each accepted factorization
+is reused for the next step and the final covariance. After the first rejected
+step, the optimizer screens shorter steps using only their likelihood and
+computes full derivatives for improving candidates. The R bridge also routes
+built-in `survreg.fit` matrix calls through this kernel,
 including fixed or stratified scales and interval-censored responses.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
@@ -507,7 +520,7 @@ result = regression.survreg(
     covariates=covariates,
     weights=None,          # Optional: observation weights
     offsets=None,          # Optional: offset values
-    initial_beta=None,     # Optional: initial coefficient values
+    initial_beta=None,     # Derive starting values from the observations
     strata=None,           # Optional: stratification variable
     distribution="weibull",  # "extreme_value", "logistic", "gaussian", "weibull", or "lognormal"
     max_iter=20,          # Optional: maximum iterations
@@ -521,6 +534,32 @@ print(f"Iterations: {result.iterations}")
 print(f"Variance matrix: {result.variance_matrix}")
 print(f"Convergence flag: {result.convergence_flag}")
 ```
+
+Omitted AFT starts use R's distribution-specific weighted variance estimates,
+censoring-aware working regression, and a preliminary intercept fit when scales
+must be estimated for a model with covariates. This applies to every built-in
+distribution, fixed scales, and stratified scales. `max_iter=0` returns the
+initialized model without taking a main-model optimization step.
+
+With omitted starts and a leading intercept, continuous covariates are centered
+and scaled during fitting; binary columns keep their coding. Coefficients and
+covariance are returned in the original units, while stored predictions are
+computed before converting back to preserve accuracy. As in R, `score_vector`
+uses the working design coordinates. Explicit complete starting vectors bypass
+initialization and rescaling.
+For an estimated-scale model other than an intercept-only model, a numeric
+start can contain just the location coefficients. The initializer retains those
+coefficients in the original design units and appends log-scales from a
+20-iteration intercept-only fit, including weights, offsets, censoring, and
+scale strata. It does not solve for the supplied locations. Intercept-only
+models require log-scales in a supplied starting vector; fixed-scale models
+require only location coefficients. The R `survreg.fit` matrix interface uses
+the same native initialization and returns R's null-fit metadata.
+Zero-weight observations do not determine starting values or working coordinates.
+
+Automatic initialization reports an error for an unusable response scale,
+constant nonbinary covariate that cannot be rescaled, or interval probability
+that rounds to zero. Complete explicit starts remain available for these cases.
 
 ### Cox Proportional Hazards Model
 
@@ -789,6 +828,25 @@ uv run --no-sync pytest python/tests -v
 Smoke-test benchmarks:
 ```sh
 cargo bench -- --test
+```
+
+The AFT benchmarks include matched weighted, stratified lognormal fits with
+full-rank and duplicated covariate columns. Five paired release runs on Apple
+Silicon with Rust 1.94 and one Rayon thread compared automatic initialization
+against the zero starts in revision `6e687b37`. Main-model iterations fell from
+8–9 to R's 4–5, but the preliminary scale fit and working regressions increased
+total fitting time by about 11–34% in six of eight cases; the other two timing
+comparisons were inconclusive. For example, the 1,000-row full-rank fit took
+444 µs versus 367 µs, and the 10,000-row duplicated-column fit took 4.842 ms
+versus 3.595 ms. These measurements include all initialization work and input
+cloning. All eight fits converged and were checked against R's coefficients,
+covariance, and likelihood. Each run used at least 50 samples and 0.25 seconds
+per case:
+
+```sh
+RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- \
+  survreg_bench::weighted_stratified_survreg_lognormal --sample-count 50 \
+  --sample-size 1 --min-time 0.25 --timer os
 ```
 
 Format and lint:

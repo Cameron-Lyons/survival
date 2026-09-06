@@ -635,7 +635,7 @@ attrassign <- function(object, tt) {
   if (n_row > 0L && any(vapply(rows, length, integer(1)) != n_col)) {
     stop("vcov result must be rectangular")
   }
-  matrix(unlist(rows, use.names = FALSE), nrow = n_row, ncol = n_col, byrow = TRUE)
+  matrix(as.numeric(unlist(rows, use.names = FALSE)), nrow = n_row, ncol = n_col, byrow = TRUE)
 }
 
 .as_coefficient_table <- function(rows, model_type = "coxph", robust = FALSE,
@@ -686,7 +686,11 @@ attrassign <- function(object, tt) {
       if (robust) {
         values <- c(values, row_numeric(row, "naive_se", fallback_name = "se"))
       }
-      return(c(values, statistic, row_numeric(row, "p")))
+      result <- c(values, statistic, row_numeric(row, "p"))
+      if (is.na(coefficient)) {
+        result[is.na(result)] <- NA_real_
+      }
+      return(result)
     }
 
     coefficient <- coefficient * cox_scale
@@ -1270,6 +1274,15 @@ attrassign <- function(object, tt) {
     return(list(fit = fit, se.fit = se.fit))
   }
   .as_prediction_value(value, matrix_result = matrix_result, col.names = col.names)
+}
+
+.survreg_alias_prediction_missing <- function(value) {
+  if (is.numeric(value)) {
+    value[is.nan(value)] <- NA_real_
+  } else if (is.list(value)) {
+    value <- lapply(value, .survreg_alias_prediction_missing)
+  }
+  value
 }
 
 .model_term_names <- function(object, terms = NULL) {
@@ -6795,35 +6808,6 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
   list(name = distribution, parameter = parameter)
 }
 
-.survreg_fit_start <- function(y, x, weights, offset, strata, nstrat,
-                               fixed_scale, null_scale = NULL) {
-  status <- y[, ncol(y)]
-  proxy <- ifelse(status == 3, rowMeans(y[, 1:2, drop = FALSE]), y[, 1L])
-  target <- proxy - offset
-  location <- if (ncol(x) == 0L) {
-    numeric()
-  } else {
-    fitted <- try(stats::lm.wfit(x, target, weights)$coefficients, silent = TRUE)
-    if (inherits(fitted, "try-error")) rep(0, ncol(x)) else as.numeric(fitted)
-  }
-  location[!is.finite(location)] <- 0
-  if (!is.null(fixed_scale)) {
-    return(location)
-  }
-  if (!is.null(null_scale)) {
-    return(c(location, null_scale))
-  }
-
-  center <- sum(weights * target) / sum(weights)
-  residual <- target - center
-  log_scale <- vapply(seq_len(nstrat), function(group) {
-    keep <- strata == group
-    variance <- sum(weights[keep] * residual[keep]^2) / sum(weights[keep])
-    log(max(sqrt(variance), sqrt(.Machine$double.eps)))
-  }, numeric(1))
-  c(center, log_scale)
-}
-
 .survreg_fit_core <- function(x, y, weights, offset, initial, controlvals,
                               distribution, distribution_parameter,
                               fixed_scale, strata) {
@@ -6834,7 +6818,7 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
     covariates = .coxph_fit_covariates(x, nrow(x)),
     weights = .as_python_vector(weights),
     offsets = .as_python_vector(offset),
-    initial_beta = as.list(unname(initial)),
+    initial_beta = if (is.null(initial)) NULL else as.list(unname(initial)),
     strata = .as_python_vector(as.integer(strata) - 1L),
     distribution = distribution,
     max_iter = as.integer(controlvals$iter.max),
@@ -6895,32 +6879,43 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
     return(eval.parent(call))
   }
   fixed_scale <- if (scale > 0) as.numeric(scale) else NULL
-  null_x <- matrix(1, nrow = n, ncol = 1L)
-  null_start <- .survreg_fit_start(
-    y, null_x, weights, offset, strata, nstrat, fixed_scale
-  )
-  null_control <- controlvals
-  null_control$iter.max <- 20L
-  null_fit <- .survreg_fit_core(
-    null_x, y, weights, offset, null_start, null_control,
-    native_distribution$name, native_distribution$parameter,
-    fixed_scale, strata
-  )
-  null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
-  null_scale <- if (is.null(fixed_scale)) null_coef[-1L] else numeric()
-
-  if (missing(init) || is.null(init)) {
-    initial <- .survreg_fit_start(
-      y, x, weights, offset, strata, nstrat, fixed_scale, null_scale
-    )
-  } else {
-    initial <- as.numeric(init)
-    if (is.null(fixed_scale) && length(initial) == nvar) {
-      initial <- c(initial, null_scale)
-    }
+  mean_only <- nvar == 1L && all(x == 1)
+  initial <- if (missing(init) || is.null(init)) NULL else as.numeric(init)
+  if (!is.null(initial)) {
     expected <- nvar + if (is.null(fixed_scale)) nstrat else 0L
-    if (length(initial) != expected) {
+    partial <- is.null(fixed_scale) && length(initial) == nvar
+    if (length(initial) != expected && !partial) {
       stop("Wrong length for initial parameters", call. = FALSE)
+    }
+    if (any(!is.finite(initial))) {
+      stop("Initial parameters must contain only finite values", call. = FALSE)
+    }
+    if (partial && mean_only) {
+      stop("Mean-only models require a complete initial vector including log-scale parameters",
+           call. = FALSE)
+    }
+  }
+
+  # The native omitted-start path uses the distribution's variance estimate
+  # and censoring derivatives for the same preliminary fit as R.
+  null_fit <- NULL
+  if (!mean_only) {
+    null_control <- controlvals
+    null_control$iter.max <- 20L
+    null_fit <- .survreg_fit_core(
+      matrix(1, nrow = n, ncol = 1L), y, weights, offset, NULL, null_control,
+      native_distribution$name, native_distribution$parameter,
+      fixed_scale, strata
+    )
+    null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
+    null_loglik <- as.numeric(.result_field(null_fit, "log_likelihood"))
+    null_variance <- .as_numeric_matrix(.result_field(null_fit, "variance_matrix"))
+    if (any(!is.finite(null_coef)) || !is.finite(null_loglik) ||
+        any(!is.finite(null_variance))) {
+      stop("initial iteration failed (use starting estimates?)", call. = FALSE)
+    }
+    if (!is.null(initial) && is.null(fixed_scale) && length(initial) == nvar) {
+      initial <- c(initial, null_coef[-1L])
     }
   }
 
@@ -6943,18 +6938,18 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
   coefficients <- .as_numeric_vector(.result_field(fit, "coefficients"))
   names(coefficients) <- coefficient_names
   variance <- .as_numeric_matrix(.result_field(fit, "variance_matrix"))
-  dimnames(variance) <- NULL
-  icoef <- if (is.null(fixed_scale)) {
-    null_coef
-  } else {
-    c(null_coef, log(fixed_scale))
-  }
-  names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
+  rescaled <- is.null(initial) && nvar > 1L && all(x[, 1L] == 1) &&
+    any(vapply(seq_len(nvar), function(column) {
+      any(x[, column] != 0 & x[, column] != 1)
+    }, logical(1)))
+  dimnames(variance) <- if (rescaled) NULL else list(coefficient_names, coefficient_names)
   full_loglik <- as.numeric(.result_field(fit, "log_likelihood"))
-  null_loglik <- if (nvar == 1L && all(x == 1)) {
-    full_loglik
+  if (mean_only) {
+    icoef <- coefficients
+    null_loglik <- full_loglik
   } else {
-    as.numeric(.result_field(null_fit, "log_likelihood"))
+    icoef <- if (is.null(fixed_scale)) null_coef else c(null_coef, log(fixed_scale))
+    names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
   }
 
   list(
@@ -11079,7 +11074,12 @@ coxph.wtest <- function(var, b, toler.chol = 1e-09) {
 }
 
 coef.survival_py_model <- function(object, ...) {
-  values <- .as_numeric_vector(.call_r_api("coef", object, ...))
+  values <- .call_r_api("coef", object, ...)
+  values <- if (inherits(object, "survival_py_survreg")) {
+    .as_nullable_numeric_vector(values)
+  } else {
+    .as_numeric_vector(values)
+  }
   names(values) <- as.character(.call_r_api("coef_names", object))
   values
 }
@@ -11094,7 +11094,11 @@ vcov.survival_py_model <- function(object, ..., complete = TRUE) {
 confint.survival_py_model <- function(object, parm, level = 0.95, ...) {
   selected <- if (missing(parm)) NULL else parm
   result <- .call_r_api("confint", object, parm = selected, level = level, ...)
-  .as_confint_matrix(result, level)
+  values <- .as_confint_matrix(result, level)
+  if (inherits(object, "survival_py_survreg")) {
+    values[is.nan(values)] <- NA_real_
+  }
+  values
 }
 
 logLik.survival_py_model <- function(object, ...) {
@@ -11183,6 +11187,9 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     matrix_result = .predict_matrix_result(type),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
+    value <- .survreg_alias_prediction_missing(value)
+  }
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
@@ -11197,13 +11204,17 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
     scale = scale
   )
   if (identical(model_type, "survreg")) {
+    if (all(is.na(coefficient_table[, 1L]))) {
+      warning("This model has zero rank --- no summary is provided", call. = FALSE)
+      return(invisible(object))
+    }
     location_coefficients <- result$location_coefficients
     location_names <- result$location_coefficient_names
     if (is.null(location_coefficients) || is.null(location_names)) {
       location_coefficients <- coef(object)
       location_names <- names(location_coefficients)
     }
-    location_coefficients <- .as_numeric_vector(location_coefficients)
+    location_coefficients <- .as_nullable_numeric_vector(location_coefficients)
     location_names <- as.character(location_names)
     if (length(location_coefficients) != length(location_names)) {
       stop("survreg summary coefficient names must match its location coefficients", call. = FALSE)
@@ -11289,6 +11300,9 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
     matrix_result = .predict_matrix_result(type),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
+    value <- .survreg_alias_prediction_missing(value)
+  }
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
