@@ -32,15 +32,18 @@ def test_backtracking_preserves_converged_aft_state(case):
         sum(value * score for value, score in zip(row, initial.score_vector, strict=True))
         for row in initial.variance_matrix
     ]
-    full_step = survival.survreg(
-        REFERENCE["formula"],
-        **{
-            **arguments,
-            "init": [value + change for value, change in zip(case["initial"], delta, strict=True)],
-        },
-        max_iter=0,
-    )
-    assert survival.loglik(full_step) < survival.loglik(initial)
+    full_step_arguments = {
+        **arguments,
+        "init": [value + change for value, change in zip(case["initial"], delta, strict=True)],
+    }
+    if case["distribution"] == "weibull":
+        # The full Newton trial overflows the true likelihood; backtracking
+        # must recover even though these values cannot initialize a fresh fit.
+        with pytest.raises(RuntimeError, match="non-finite likelihood or derivatives"):
+            survival.survreg(REFERENCE["formula"], **full_step_arguments, max_iter=0)
+    else:
+        full_step = survival.survreg(REFERENCE["formula"], **full_step_arguments, max_iter=0)
+        assert survival.loglik(full_step) < survival.loglik(initial)
 
     fit = survival.survreg(REFERENCE["formula"], **arguments, max_iter=150)
     assert fit.convergence_flag == 0

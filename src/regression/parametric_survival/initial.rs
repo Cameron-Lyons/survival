@@ -1,4 +1,5 @@
 use super::{ComputeSurvregInput, DistributionType, SurvivalFitComputed, compute_survreg};
+use crate::internal::aft::transformed_interval_width;
 use crate::regression::coxph_wtest_module::coxph_wtest_core;
 use crate::regression::survregc1::survreg_location_derivatives;
 use ndarray::{Array1, Array2, ArrayView1};
@@ -109,10 +110,16 @@ fn initial_location_coefficients(
             continue;
         }
         let time = transform(input.y[[person, 0]]);
-        let time2 = (status_column == 2).then(|| transform(input.y[[person, 1]]));
+        let interval_width = (input.y[[person, status_column]] == 3.0).then(|| {
+            transformed_interval_width(
+                input.y[[person, 0]],
+                input.y[[person, 1]],
+                input.distribution.uses_log_time(),
+            )
+        });
         let (dg, ddg) = survreg_location_derivatives(
             time,
-            time2,
+            interval_width,
             input.y[[person, status_column]] as i32,
             eta,
             log_scales[input.strata[person]].exp(),

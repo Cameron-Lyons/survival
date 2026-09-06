@@ -171,6 +171,55 @@ class _CovariateTerm:
     categorical_wrapper: str | None = None
     transform: str | None = None
     arithmetic: str | None = None
+    ridge: _RidgeTerm | None = None
+
+
+@dataclass(frozen=True)
+class _RidgeTerm:
+    arguments: tuple[_CovariateTerm, ...]
+    theta: float | None
+    scale: bool
+    df: float | None = None
+    eps: float = 0.1
+
+
+@dataclass(frozen=True)
+class _RidgeDesignPenalty:
+    scales: list[float]
+    groups: list[list[int]]
+    theta: list[float | None]
+    df: list[float | None]
+    eps: list[float]
+    labels: list[str | None]
+    coefficient_names: tuple[str, ...]
+
+    @property
+    def automatic(self) -> bool:
+        return any(value is not None for value in self.df)
+
+    @property
+    def diagonal(self) -> list[float]:
+        diagonal = [0.0] * len(self.scales)
+        for group, theta in zip(self.groups, self.theta, strict=True):
+            for column in group:
+                diagonal[column] = self.scales[column] * (1.0 if theta is None else theta)
+        return diagonal
+
+    def history(self, selection: Any | None) -> dict[str, Any]:
+        history: dict[str, Any] = {}
+        proposed = self.theta if selection is None else selection.proposed_theta
+        done = [True] * len(self.groups) if selection is None else selection.done
+        paths = [[] for _group in self.groups] if selection is None else selection.histories
+        for idx, label in enumerate(self.labels):
+            if label is not None:
+                history[label] = {
+                    "theta": proposed[idx],
+                    "done": done[idx],
+                    "history": paths[idx] or None,
+                }
+                if selection is not None and self.df[idx] is not None:
+                    history[label]["half"] = selection.halves[idx]
+        return history
 
 
 @dataclass(frozen=True)
@@ -278,10 +327,53 @@ class _FormulaFit:
     conditional_logistic: bool = False
     n_observations: int | None = None
     survreg_aliases: tuple[bool, ...] | None = None
+    penalty_diagnostics: Any | None = None
+    requested_method: str | None = None
+    initial_penalty: float = 0.0
+    empty_penalized: bool = False
+    ridge_selection: Any | None = None
+    ridge_history: dict[str, Any] | None = None
 
     def __getattr__(self, name: str) -> Any:
         if name == "coefficients" and self.survreg_aliases is not None:
             return _survreg_reported_coefficients(self)
+        if name == "history" and self.ridge_history is not None:
+            return self.ridge_history
+        if self.empty_penalized:
+            if name in {"iterations", "iter", "convergence_flag"}:
+                return 0
+            if name == "method":
+                return self.requested_method
+            if name == "means":
+                rows = self.fit.covariates
+                return [math.fsum(column) / len(rows) for column in zip(*rows, strict=True)]
+        if self.penalty_diagnostics is not None:
+            if name == "log_likelihood":
+                values = list(self.fit.log_likelihood)
+                if self.ridge_selection is None:
+                    values[0] -= self.initial_penalty
+                else:
+                    values[0] = self.ridge_selection.initial_loglik
+                return values
+            if name == "df":
+                return self.penalty_diagnostics.term_df
+            if name in {"variance2", "var2"}:
+                return self.penalty_diagnostics.variance2
+            if name == "penalty":
+                return (
+                    [self.penalty_diagnostics.penalty] * 2
+                    if self.ridge_selection is None
+                    else self.ridge_selection.penalty
+                )
+            if name == "iter":
+                return (
+                    [1, self.fit.iterations]
+                    if self.ridge_selection is None
+                    else [
+                        self.ridge_selection.outer_iterations,
+                        self.ridge_selection.inner_iterations,
+                    ]
+                )
         if self.conditional_logistic and name in {
             "basehaz",
             "basehaz_with_strata",
@@ -289,7 +381,10 @@ class _FormulaFit:
             "survival_curve_with_strata",
         }:
             raise ValueError("predicted survival curves are not defined for a clogit model")
-        if self.conditional_logistic and getattr(self.fit, "method", None) == "exact":
+        if (self.conditional_logistic and getattr(self.fit, "method", None) == "exact") or (
+            (self.penalty_diagnostics is not None or self.empty_penalized)
+            and self.requested_method == "exact"
+        ):
             unavailable = {
                 "score_residuals": "score",
                 "schoenfeld_residuals": "schoenfeld",
@@ -839,6 +934,13 @@ class SurvfitResult:
     n_censor_count: list[float] | None = None
     n_enter_count: list[float] | None = None
     model: dict[str, Any] | None = None
+    stype: int | None = None
+    ctype: int | None = None
+    timefix: bool = True
+    start_time: float | None = None
+    n: int | None = None
+    n_id: int | None = None
+    model_groups: list[Any] | None = None
 
     @property
     def surv(self) -> list[float]:
@@ -950,6 +1052,7 @@ class TurnbullSurvfitResult:
 class _PseudoMatrixResult:
     pseudo: list[list[float]]
     time: list[float]
+    id: list[Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -2506,6 +2609,11 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
 
 
 def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
+    if term.ridge is not None:
+        columns: list[str] = []
+        for argument in term.ridge.arguments:
+            _append_unique(columns, _covariate_term_columns(argument))
+        return columns
     if term.arithmetic is not None:
         return _arithmetic_expression_columns(term.arithmetic)
     return [term.column]
@@ -2798,6 +2906,8 @@ def _interaction_from_factors(factors: list[_CovariateTerm]) -> _CovariateSpec:
 
 def _interaction_from_terms(terms: tuple[_CovariateSpec, ...]) -> _CovariateSpec:
     factors = [factor for term in terms for factor in _covariate_factors(term)]
+    if len(factors) > 1 and any(factor.ridge is not None for factor in factors):
+        raise NotImplementedError("interactions involving ridge() are not yet supported")
     return _interaction_from_factors(factors)
 
 
@@ -2807,9 +2917,213 @@ def _dot_covariate_terms(dot_terms: Sequence[str] | None) -> list[_CovariateSpec
     return [_CovariateTerm(column) for column in dot_terms]
 
 
+def _ridge_number_label(value: float) -> str:
+    mantissa, exponent = format(value, ".14e").split("e")
+    scientific = f"{mantissa.rstrip('0').rstrip('.')}e{exponent}"
+    fixed = format(value, f".{max(0, 14 - int(exponent))}f")
+    if "." in fixed:
+        fixed = fixed.rstrip("0").rstrip(".")
+    return scientific if len(scientific) < len(fixed) else fixed
+
+
+def _ridge_column_label(column: str) -> str:
+    syntactic = (
+        bool(column)
+        and (column[0].isalpha() or (column[0] == "." and not column[1:2].isdigit()))
+        and all(char.isalnum() or char in {".", "_"} for char in column)
+        and column not in _R_RESERVED_NAMES
+    )
+    return column if syntactic else f"`{column}`"
+
+
+def _ridge_arithmetic_label(expression: str, *, display: bool = True) -> str:
+    expression = expression.strip()
+    if _strip_outer_formula_parentheses(expression) != expression:
+        return f"({_ridge_arithmetic_label(expression[1:-1], display=display)})"
+    split = _find_top_level_arithmetic_operator(expression, {"+", "-"})
+    if split is None:
+        split = _find_top_level_arithmetic_operator(expression, {"*", "/"})
+    if split is not None:
+        left, operator, right = split
+        separator = "/" if operator == "/" else f" {operator} "
+        return (
+            f"{_ridge_arithmetic_label(left, display=display)}{separator}"
+            f"{_ridge_arithmetic_label(right, display=display)}"
+        )
+    if expression.startswith(("+", "-")):
+        return expression[0] + _ridge_arithmetic_label(expression[1:], display=display)
+    split = _find_top_level_power_operator(expression)
+    if split is not None:
+        left, _operator, right = split
+        return (
+            f"{_ridge_arithmetic_label(left, display=display)}^"
+            f"{_ridge_arithmetic_label(right, display=display)}"
+        )
+    literal = _arithmetic_literal(expression)
+    if literal is not None:
+        return _ridge_number_label(literal) if display else repr(literal)
+    return _ridge_column_label(_formula_name(expression)[0])
+
+
+def _ridge_argument_name(term: _CovariateTerm) -> str:
+    value = (
+        _ridge_arithmetic_label(term.arithmetic)
+        if term.arithmetic is not None
+        else _ridge_column_label(term.column)
+    )
+    return f"{term.transform}({value})" if term.transform is not None else value
+
+
+def _parse_ridge_term(term: str) -> _CovariateTerm:
+    arguments: list[_CovariateTerm] = []
+    options: dict[str, float | bool] = {}
+    labels: list[str] = []
+    for item in _split_top_level(term[6:-1], ","):
+        parts = _split_top_level(item, "=")
+        if len(parts) == 1:
+            argument = _parse_covariate_atom(item)
+            if argument.categorical or argument.ridge is not None or argument.transform == "tt":
+                raise ValueError("ridge() requires numeric columns or numeric transforms")
+            if argument.arithmetic is not None:
+                expression = _ridge_arithmetic_label(argument.arithmetic, display=False)
+                argument = replace(argument, column=expression, arithmetic=expression)
+            arguments.append(argument)
+            labels.append(_ridge_argument_name(argument))
+            continue
+        if len(parts) != 2 or parts[0] not in {"theta", "scale", "df", "eps"}:
+            raise ValueError(f"unsupported ridge() argument: {item}")
+        name, value = parts
+        if name in options:
+            raise ValueError(f"ridge() received duplicate {name}")
+        if name == "scale":
+            if value not in {"TRUE", "FALSE", "True", "False", "T", "F"}:
+                raise ValueError("ridge() scale must be TRUE or FALSE")
+            options[name] = value in {"TRUE", "True", "T"}
+            label = "TRUE" if options[name] else "FALSE"
+        else:
+            try:
+                number = float(value)
+            except ValueError as exc:
+                raise ValueError(f"ridge() {name} must be a finite numeric literal") from exc
+            if not math.isfinite(number) or number < 0.0 or (name == "eps" and number == 0.0):
+                raise ValueError(f"ridge() {name} must be finite and nonnegative (eps positive)")
+            options[name] = number
+            label = _ridge_number_label(number)
+        labels.append(f"{name} = {label}")
+    if not arguments:
+        raise ValueError("ridge() requires at least one numeric covariate")
+    if "theta" in options and "df" in options:
+        raise ValueError("only one of df or theta can be specified for ridge()")
+    theta = float(options["theta"]) if "theta" in options else None
+    df = float(options.get("df", len(arguments) / 2)) if theta is None else None
+    if df is not None and df > len(arguments):
+        raise ValueError("ridge() df must not exceed the number of covariates in the term")
+    return _CovariateTerm(
+        f"ridge({', '.join(labels)})",
+        ridge=_RidgeTerm(
+            tuple(arguments),
+            theta,
+            bool(options.get("scale", True)),
+            df,
+            float(options.get("eps", 0.1)),
+        ),
+    )
+
+
+def _ridge_numeric_columns(data: Any, term: _CovariateTerm, n: int) -> list[list[float]]:
+    if term.ridge is None:
+        raise AssertionError("ridge metadata is required")
+    columns: list[list[float]] = []
+    for argument in term.ridge.arguments:
+        try:
+            values = _numeric_term_values(_term_raw_values(data, argument, n), argument)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ridge() requires numeric covariates") from exc
+        columns.append(values)
+    return columns
+
+
+def _freeze_ridge_scales(formula: str, data: Any) -> dict[_CovariateTerm, tuple[float, ...]]:
+    """Evaluate R's ridge scaling before model-frame subset and NA removal."""
+    response_spec = _formula_response_spec(formula)
+    terms = _split_terms(formula.partition("~")[2], _dot_terms(data, list(response_spec.columns)))
+    penalties: dict[_CovariateTerm, tuple[float, ...]] = {}
+    for term in terms.covariates:
+        if isinstance(term, _InteractionTerm) or term.ridge is None:
+            continue
+        ridge = term.ridge
+        diagonal: list[float] = []
+        for argument in ridge.arguments:
+            if not ridge.scale:
+                diagonal.append(1.0)
+                continue
+            columns = [_column(data, name) for name in _covariate_term_columns(argument)]
+            n = (
+                len(columns[0])
+                if columns
+                else len(_formula_response_values(data, response_spec)[0])
+            )
+            if any(len(column) != n for column in columns):
+                raise ValueError("ridge() columns must have matching lengths")
+            keep = [
+                i for i in range(n) if not any(_is_missing_value(column[i]) for column in columns)
+            ]
+            clean = _subset_data(data, keep) if len(keep) != n else data
+            values = _numeric_term_values(_term_raw_values(clean, argument, len(keep)), argument)
+            values = [value for value in values if not _is_missing_value(value)]
+            if len(values) < 2 or any(not math.isfinite(value) for value in values):
+                raise ValueError("scaled ridge() requires at least two finite values per covariate")
+            mean = math.fsum(values) / len(values)
+            variance = math.fsum((value - mean) ** 2 for value in values) / (len(values) - 1)
+            diagonal.append(variance)
+        penalties[term] = tuple(diagonal)
+    return penalties
+
+
+def _ridge_design_penalty(
+    design: _FormulaDesign, frozen: Mapping[_CovariateTerm, tuple[float, ...]]
+) -> _RidgeDesignPenalty:
+    penalty: list[float] = []
+    groups: list[list[int]] = []
+    names: list[str] = []
+    theta: list[float | None] = []
+    df: list[float | None] = []
+    eps: list[float] = []
+    labels: list[str | None] = []
+    for spec in design.covariates:
+        matrix_names = _design_term_output_names(spec)
+        groups.append(list(range(len(penalty), len(penalty) + len(matrix_names))))
+        if isinstance(spec, _NumericDesignTerm) and spec.term.ridge is not None:
+            ridge = spec.term.ridge
+            penalty.extend(frozen[spec.term])
+            names.extend(f"ridge({_ridge_argument_name(arg)})" for arg in ridge.arguments)
+            theta.append(ridge.theta)
+            df.append(ridge.df)
+            eps.append(ridge.eps)
+            labels.append(spec.term.column)
+        else:
+            penalty.extend([0.0] * len(matrix_names))
+            names.extend(matrix_names)
+            theta.append(0.0)
+            df.append(None)
+            eps.append(0.1)
+            labels.append(None)
+    return _RidgeDesignPenalty(penalty, groups, theta, df, eps, labels, tuple(names))
+
+
+def _reject_formula_penalties(terms: _FormulaTerms, function: str) -> None:
+    if any(
+        factor.ridge is not None for term in terms.covariates for factor in _covariate_factors(term)
+    ):
+        raise NotImplementedError(f"ridge() penalties are not yet supported by {function}")
+
+
 def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if not term:
         raise ValueError("formula interaction terms must not be empty")
+
+    if term.startswith("ridge(") and term.endswith(")"):
+        return _parse_ridge_term(term)
 
     factor_items = _factor_column_items(term)
     if factor_items is not None:
@@ -2872,7 +3186,7 @@ def _parse_offset_term(expression: str) -> _CovariateTerm:
         _arithmetic_expression_columns(expression)
         return _CovariateTerm(expression, arithmetic=expression)
     offset_term = _parse_covariate_atom(expression)
-    if offset_term.categorical:
+    if offset_term.categorical or offset_term.ridge is not None:
         raise ValueError("offset() requires a numeric column or transform")
     return offset_term
 
@@ -3368,6 +3682,8 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
             return [tuple(values[idx] for values in factor_values) for idx in range(n)]
         return [math.prod(values[idx] for values in numeric_values) for idx in range(n)]
 
+    if term.ridge is not None:
+        return list(zip(*_ridge_numeric_columns(data, term, n), strict=True))
     values = _term_raw_values(data, term, n)
     if term.transform is None:
         return values
@@ -3388,6 +3704,8 @@ def _term_columns(
             )
         return interaction_columns
 
+    if term.ridge is not None:
+        return _ridge_numeric_columns(data, term, n)
     values = _term_raw_values(data, term, n)
     if not term.categorical:
         if term.transform is not None:
@@ -3422,6 +3740,9 @@ def _fit_single_design_term(
     term: _CovariateTerm,
     n: int,
 ) -> _SingleDesignTerm:
+    if term.ridge is not None:
+        _ridge_numeric_columns(data, term, n)
+        return _NumericDesignTerm(term)
     values = _term_raw_values(data, term, n)
     if not term.categorical:
         if term.transform is not None:
@@ -3509,7 +3830,10 @@ def _fit_formula_design(
     n: int,
     *,
     include_intercept: bool = False,
+    allow_ridge: bool = False,
 ) -> _FormulaDesign:
+    if not allow_ridge:
+        _reject_formula_penalties(terms, "this model")
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
     factor_order = _formula_factor_order(terms.covariates)
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
@@ -3567,6 +3891,8 @@ def _single_design_columns(
     n: int,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
 ) -> list[list[float]]:
+    if spec.term.ridge is not None:
+        return _ridge_numeric_columns(data, spec.term, n)
     if (
         isinstance(spec, _NumericDesignTerm)
         and spec.term.transform == "tt"
@@ -3648,6 +3974,16 @@ def _design_term_name(spec: _DesignTerm) -> str:
 
 def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
     term = spec.term
+    if term.ridge is not None:
+        if len(term.ridge.arguments) == 1:
+            return [term.column]
+        arguments = term.ridge.arguments
+        if all(argument.transform is not None for argument in arguments):
+            return [f"{term.column}{idx + 1}" for idx in range(len(arguments))]
+        return [
+            f"{term.column}{argument.column if argument.transform is None else ''}"
+            for argument in arguments
+        ]
     if isinstance(spec, _CategoricalDesignTerm):
         prefix = _covariate_term_name(term)
         levels = spec.levels if spec.full else spec.levels[1:]
@@ -3702,6 +4038,11 @@ def _formula_model_frame(
     _append_unique(columns, list(extra_columns))
     for column in columns:
         frame[column] = _column(data, column)
+    for spec in design.covariates:
+        if isinstance(spec, _NumericDesignTerm) and spec.term.ridge is not None:
+            frame[spec.term.column] = [
+                list(row) for row in _term_values(data, spec.term, len(response))
+            ]
     for name, values in (
         ("(weights)", weights),
         ("(offset)", offsets if offsets is not None else offset),
@@ -3860,6 +4201,7 @@ def _combined_formula_groups(
     covariate_terms: list[_CovariateSpec],
     n: int,
 ) -> list[Any]:
+    _reject_formula_penalties(_FormulaTerms(covariate_terms, [], [], []), "formula grouping")
     columns = [
         *[_column(data, term) for term in strata_terms],
         *[_term_values(data, term, n) for term in covariate_terms],
@@ -6160,6 +6502,7 @@ def _pyears_formula_inputs(
     data, aligned = _apply_formula_na_action(formula, data, na_action, weights=aligned_weights)
     aligned_weights = aligned["weights"]
     response, terms = _parse_formula(formula, data)
+    _reject_formula_penalties(terms, "pyears")
     if any(isinstance(term, _InteractionTerm) for term in terms.covariates):
         raise ValueError("pyears formula does not support interaction terms")
     group, group_levels = _pyears_formula_group_and_levels(data, terms, len(response))
@@ -6568,6 +6911,7 @@ def _finegray_model_columns(
     terms: _FormulaTerms,
     n: int,
 ) -> list[tuple[str, list[Any]]]:
+    _reject_formula_penalties(terms, "finegray")
     columns: list[tuple[str, list[Any]]] = []
     seen: set[str] = set()
 
@@ -7109,6 +7453,7 @@ def _survobrien_formula_terms(
     terms: _FormulaTerms,
     n: int,
 ) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
+    _reject_formula_penalties(terms, "survobrien")
     keepers: list[tuple[str, list[Any]]] = []
     continuous: list[tuple[str, list[float]]] = []
     for term in terms.covariates:
@@ -7654,6 +7999,7 @@ def _survcondense_model_columns(
     terms: _FormulaTerms,
     n: int,
 ) -> list[tuple[str, list[Any]]]:
+    _reject_formula_penalties(terms, "survcondense")
     columns: list[tuple[str, list[Any]]] = []
     model_terms: Sequence[_FormulaModelTerm]
     model_terms = terms.model_terms or [_ModelCovariateTerm(term) for term in terms.covariates]
@@ -8396,35 +8742,6 @@ def _pseudo_subset_model_frame(
     return subset
 
 
-def _pseudo_rmst_values(
-    curve_time: Sequence[float],
-    curve_survival: Sequence[float],
-    eval_times: Sequence[float],
-) -> list[float]:
-    result: list[float] = []
-    times = [float(value) for value in curve_time]
-    survival = [float(value) for value in curve_survival]
-    for eval_time in eval_times:
-        target = float(eval_time)
-        area = 0.0
-        previous_time = 0.0
-        previous_survival = 1.0
-        for time, estimate in zip(times, survival, strict=True):
-            if target <= previous_time:
-                break
-            upper = min(target, time)
-            if upper > previous_time:
-                area += previous_survival * (upper - previous_time)
-                previous_time = upper
-            if time > target:
-                break
-            previous_survival = estimate
-        if target > previous_time:
-            area += previous_survival * (target - previous_time)
-        result.append(area)
-    return result
-
-
 def _pseudo_curve_values(
     curve: SurvfitResult,
     eval_times: Sequence[float],
@@ -8440,7 +8757,13 @@ def _pseudo_curve_values(
             [float(value) for value in eval_times],
             0.0,
         )
-    return _pseudo_rmst_values(times, [float(value) for value in curve.estimate], eval_times)
+    return _integrated_step_values(
+        times,
+        curve.estimate,
+        eval_times,
+        start_time=curve.start_time if curve.start_time is not None else min(0.0, *times),
+        initial_value=1.0,
+    )
 
 
 def _integrated_step_values(
@@ -8548,6 +8871,8 @@ def _pseudo_values_close(
 
 
 def _pseudo_counting_computation(fit: SurvfitResult) -> _SurvfitComputation:
+    if fit.stype is not None and fit.ctype is not None:
+        return _SurvfitComputation(fit.stype, fit.ctype)
     ctype1_hazard = _pseudo_counting_candidate_cumhaz(fit, 1)
     ctype2_hazard = _pseudo_counting_candidate_cumhaz(fit, 2)
     ctype = 2 if _pseudo_values_close(fit.cumhaz, ctype2_hazard) else 1
@@ -8557,25 +8882,53 @@ def _pseudo_counting_computation(fit: SurvfitResult) -> _SurvfitComputation:
     return _SurvfitComputation(stype, ctype)
 
 
-def _pseudo_counting_residual_rows(
-    influence: Any,
+def _survfit_residual_block(
     fit: SurvfitResult,
+    response: Surv,
     eval_times: Sequence[float],
     pseudo_type: str,
 ) -> list[list[float]]:
-    times = [float(value) for value in fit.time]
-    requested_times = [float(value) for value in eval_times]
-    if pseudo_type == "survival":
-        return _core.step_matrix_values_at(times, influence.influence_surv, requested_times, 0.0)
-    if pseudo_type == "cumhaz":
-        return _core.step_matrix_values_at(times, influence.influence_chaz, requested_times, 0.0)
-    return [
-        _pseudo_integrated_step_values(times, [float(value) for value in row], requested_times)
-        for row in influence.influence_surv
-    ]
+    computation = _pseudo_counting_computation(fit)
+    if computation.ctype == 2 and (
+        pseudo_type == "cumhaz" or (pseudo_type == "survival" and computation.stype == 2)
+    ):
+        warnings.warn(
+            "ctype=2 residuals use R's approximate tied-event calculation",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    if fit.timefix:
+        eval_times = _core.aeq_surv(list(eval_times), None).time
+    return _core.survfit_residuals_at_times(
+        list(response.time),
+        list(response.event),
+        list(fit.time),
+        list(fit.n_risk),
+        list(fit.n_event),
+        list(fit.estimate),
+        list(fit.cumhaz),
+        list(eval_times),
+        pseudo_type,
+        None if response.start is None else list(response.start),
+        computation.stype,
+    )
 
 
-def _pseudo_counting_survfit(
+def _survfit_collapse_ids(model: Mapping[Any, Any], response: Surv) -> bool:
+    ids = _pseudo_model_id_values(model, response)
+    if ids is None or len(_label_levels(ids, "id")) == len(response):
+        return False
+    cluster = model.get("(cluster)")
+    if cluster is not None:
+        values = _materialize_labels(cluster, "cluster")
+        if len(values) != len(response):
+            raise ValueError("cluster must have the same length as the Surv response")
+        if len(_label_levels(values, "cluster")) == len(response):
+            return False
+    return True
+
+
+def _pseudo_survfit(
     fit: SurvfitResult,
     response: Surv,
     model: Mapping[Any, Any],
@@ -8585,46 +8938,30 @@ def _pseudo_counting_survfit(
     data_frame: bool,
 ) -> Any:
     if eval_times is None:
-        raise TypeError("times are required for counting-process pseudo-values")
+        raise TypeError("times are required for fitted pseudo-values")
     id_values = _pseudo_model_id_values(model, response)
     weights = _pseudo_model_weights(model, response)
     n_rows = len(response)
-    if id_values is None:
-        id_values = list(range(n_rows))
-        subject_count = n_rows
-    else:
-        subject_count = len(_label_levels(id_values, "id"))
-    if subject_count == 0:
-        result = _PseudoMatrixResult([], [float(value) for value in eval_times])
-        return _pseudo_matrix_or_frame(result, data_frame)
-
+    subject_count = fit.n_id if fit.n_id is not None else fit.n
+    if subject_count is None:
+        subject_count = n_rows if id_values is None else len(_label_levels(id_values, "id"))
     full_values = _pseudo_curve_values(fit, eval_times, pseudo_type)
-    computation = _pseudo_counting_computation(fit)
-    start_values = [] if response.start is None else list(response.start)
-    influence = survfitkm_counting_influence(
-        start_values,
-        list(response.time),
-        [int(value) for value in response.event],
-        [float(value) for value in fit.time],
-        [float(value) for value in fit.estimate],
-        cluster=id_values if collapse else list(range(n_rows)),
-        weights=weights,
-        stype=computation.stype,
-        ctype=computation.ctype,
-    )
-    residual_rows = _pseudo_counting_residual_rows(influence, fit, eval_times, pseudo_type)
-    scale = float(subject_count)
-    pseudo_matrix: list[list[float]] = []
-    for residuals in residual_rows:
-        pseudo_matrix.append(
-            [
-                full_value + scale * residual
-                for full_value, residual in zip(full_values, residuals, strict=True)
-            ]
+    residual_rows = _survfit_residual_block(fit, response, eval_times, pseudo_type)
+    row_weights = weights if collapse else None
+    if collapse and _survfit_collapse_ids(model, response):
+        case_weights = [1.0] * n_rows if weights is None else weights
+        residual_rows, id_values, _ = _collapse_survfit_residual_matrix(
+            residual_rows, id_values, case_weights, None
         )
-
-    result = _PseudoMatrixResult(pseudo_matrix, [float(value) for value in eval_times])
-    return _pseudo_matrix_or_frame(result, data_frame)
+        row_weights = None
+    scale = float(subject_count)
+    matrix = []
+    for row_idx, row in enumerate(residual_rows):
+        row_scale = scale if row_weights is None else scale * row_weights[row_idx]
+        matrix.append(
+            [value + row_scale * residual for value, residual in zip(full_values, row, strict=True)]
+        )
+    return _pseudo_matrix_or_frame(_PseudoMatrixResult(matrix, eval_times, id_values), data_frame)
 
 
 def _pseudo_for_grouped_survfit(
@@ -8635,36 +8972,33 @@ def _pseudo_for_grouped_survfit(
     data_frame: bool,
 ) -> Any:
     grouped_result: dict[Any, Any] = {}
+    seen_ids: set[Any] = set()
     for label, curve in fit.items():
         response = _pseudo_model_response(curve)
         if response.type not in {"right", "counting"}:
             raise NotImplementedError(
                 "pseudo currently supports right-censored or counting survfit results"
             )
-        group_values = _pseudo_group_values_from_model(curve.model, response)
+        group_values = (
+            curve.model_groups
+            if curve.model_groups is not None
+            else _pseudo_group_values_from_model(curve.model, response)
+        )
         indices = [idx for idx, value in enumerate(group_values) if value == label]
         if not indices:
             raise TypeError("stored grouped survfit model frame does not match curve labels")
         group_response = _subset_surv(response, indices)
-        if response.type == "counting":
-            group_model = _pseudo_subset_model_frame(curve.model, group_response, indices)
-            grouped_result[label] = _pseudo_counting_survfit(
-                curve,
-                group_response,
-                group_model,
-                eval_times,
-                pseudo_type,
-                collapse,
-                data_frame,
-            )
-            continue
-        result = _core.pseudo(
-            list(group_response.time),
-            list(group_response.event),
-            eval_times,
-            pseudo_type,
+        group_model = _pseudo_subset_model_frame(curve.model, group_response, indices)
+        if collapse and _survfit_collapse_ids(curve.model, response):
+            ids = _pseudo_model_id_values(group_model, group_response)
+            if ids is not None:
+                levels = set(_label_levels(ids, "id"))
+                if seen_ids.intersection(levels):
+                    raise ValueError("same id appears in multiple curves, cannot collapse")
+                seen_ids.update(levels)
+        grouped_result[label] = _pseudo_survfit(
+            curve, group_response, group_model, eval_times, pseudo_type, collapse, data_frame
         )
-        grouped_result[label] = _pseudo_matrix_or_frame(result, data_frame)
 
     if not data_frame:
         return grouped_result
@@ -8680,13 +9014,18 @@ def _pseudo_for_grouped_survfit(
 
 
 def _pseudo_matrix_or_frame(result: Any, data_frame: bool) -> Any:
-    matrix = [[float(value) for value in row] for row in result.pseudo]
+    matrix = (
+        result.pseudo
+        if isinstance(result, _PseudoMatrixResult)
+        else [[float(value) for value in row] for row in result.pseudo]
+    )
     if not data_frame:
         return matrix
-    frame: dict[str, list[float | int]] = {"id": [], "time": [], "pseudo": []}
+    frame: dict[str, list[Any]] = {"id": [], "time": [], "pseudo": []}
+    ids = getattr(result, "id", None)
     for row_idx, row in enumerate(matrix, start=1):
         for time, value in zip(result.time, row, strict=True):
-            frame["id"].append(row_idx)
+            frame["id"].append(row_idx if ids is None else ids[row_idx - 1])
             frame["time"].append(float(time))
             frame["pseudo"].append(float(value))
     return frame
@@ -8863,29 +9202,13 @@ def pseudo(
 
     response = _pseudo_model_response(fit)
     model = getattr(fit, "model", None)
-    if response.type == "counting":
-        if not isinstance(fit, SurvfitResult) or not isinstance(model, Mapping):
-            raise TypeError(
-                "counting-process pseudo-values require a survfit result with a stored model frame"
-            )
-        return _pseudo_counting_survfit(
-            fit,
-            response,
-            model,
-            eval_time_values,
-            pseudo_type,
-            collapse_value,
-            data_frame,
-        )
-    if response.type != "right":
-        raise NotImplementedError("pseudo currently supports right-censored survfit results")
-    result = _core.pseudo(
-        list(response.time),
-        list(response.event),
-        eval_time_values,
-        pseudo_type,
+    if response.type not in {"right", "counting"}:
+        raise NotImplementedError("pseudo supports right-censored or counting survfit results")
+    if not isinstance(fit, SurvfitResult) or not isinstance(model, Mapping):
+        raise TypeError("pseudo requires a survfit result with a stored model frame")
+    return _pseudo_survfit(
+        fit, response, model, eval_time_values, pseudo_type, collapse_value, data_frame
     )
-    return _pseudo_matrix_or_frame(result, data_frame)
 
 
 def rttright(
@@ -10034,10 +10357,10 @@ def _apply_coxph_control(
     max_iter: int,
     eps: float | None,
     toler: float | None,
-) -> tuple[int, float | None, float | None, bool, float | None]:
+) -> tuple[int, float | None, float | None, bool, int, float | None]:
     values = _control_mapping(control, "coxph control")
     if not values:
-        return max_iter, eps, toler, True, None
+        return max_iter, eps, toler, True, 10, None
 
     max_iter_value, name = _pop_control_alias(
         values,
@@ -10073,12 +10396,13 @@ def _apply_coxph_control(
     fix_time = _normalize_bool_option(timefix_value, f"control.{name}") if name else True
 
     toler_inf = _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
-    _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
-    # R only consults this option for multistate fits, which coxph rejects
-    # below. Ordinary right/counting fits accept it without inspecting it.
+    outer = _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
+    if outer is not None and not outer.is_integer():
+        raise ValueError("control.outer.max must be a positive integer")
+    # R only consults this option for multistate fits.
     values.pop("survcheckallow", None)
     _reject_unknown_control_options(values, "coxph")
-    return max_iter, eps, toler, fix_time, toler_inf
+    return max_iter, eps, toler, fix_time, 10 if outer is None else int(outer), toler_inf
 
 
 def _apply_survreg_control(
@@ -10330,7 +10654,7 @@ def survfit_confint(
     p_values = _r_numeric_vector(p, "p")
     se_values = _r_numeric_vector(se, "se")
     confidence = _normalize_conf_level(conf_int, "conf_int")
-    zval = NormalDist().inv_cdf(1.0 - (1.0 - confidence) / 2.0)
+    zval = -NormalDist().inv_cdf((1.0 - confidence) / 2.0)
     selow_values = None if selow is None else _r_numeric_vector(selow, "selow")
     lower, upper = _core.survfit_confint_native(
         p_values,
@@ -10595,9 +10919,13 @@ def _survfit_residual_curve_specs(
     n: int,
 ) -> list[tuple[Any, Any, list[int], int]]:
     if isinstance(fit, Mapping):
+        first_curve = next(iter(fit.values()))
+        groups = getattr(first_curve, "model_groups", None)
+        if groups is None:
+            groups = _survfit_residual_group_values(frame, n)
         return _survfit_residual_grouped_indices(
             fit,
-            _survfit_residual_group_values(frame, n),
+            groups,
             n,
         )
     return [(None, fit, list(range(n)), 1)]
@@ -10826,68 +11154,20 @@ def _survfit_multistate_residual_result(
     }
 
 
-def _survfit_residual_rows_at_times(
-    influence: Any,
-    times: Sequence[float],
-    residual_type: str,
-) -> list[list[float]]:
-    curve_times = [float(value) for value in influence.time]
-    eval_times = [float(value) for value in times]
-    if residual_type == "cumhaz":
-        return _core.step_matrix_values_at(curve_times, influence.influence_chaz, eval_times, 0.0)
-    if residual_type == "auc":
-        return [
-            _pseudo_integrated_step_values(curve_times, [float(value) for value in row], eval_times)
-            for row in influence.influence_surv
-        ]
-    return _core.step_matrix_values_at(curve_times, influence.influence_surv, eval_times, 0.0)
-
-
 def _survfit_residual_matrix(
     response: Surv,
-    weights: list[float],
     curve_specs: list[tuple[Any, Any, list[int], int]],
     times: Sequence[float],
     residual_type: str,
 ) -> tuple[list[list[float]], list[int] | None]:
     matrix = [[0.0 for _ in times] for _ in range(len(response))]
     curve_numbers = [0 for _ in range(len(response))] if len(curve_specs) > 1 else None
+    pseudo_type = {"pstate": "survival", "cumhaz": "cumhaz", "auc": "rmst"}[residual_type]
     for _label, curve, indices, curve_idx in curve_specs:
         if not isinstance(curve, SurvfitResult):
-            raise TypeError("residuals.survfit currently supports Kaplan-Meier survfit results")
+            raise TypeError("residuals.survfit requires a Kaplan-Meier survfit result")
         group_response = _subset_surv(response, indices)
-        if group_response.type == "counting":
-            if group_response.start is None:
-                raise ValueError("counting-process Surv response is missing start times")
-            group_weights = [weights[idx] for idx in indices]
-            computation = _pseudo_counting_computation(curve)
-            influence = survfitkm_counting_influence(
-                list(group_response.start),
-                list(group_response.time),
-                [int(value) for value in group_response.event],
-                [float(value) for value in curve.time],
-                [float(value) for value in curve.estimate],
-                list(range(len(indices))),
-                weights=group_weights,
-                stype=computation.stype,
-                ctype=computation.ctype,
-            )
-        elif group_response.type == "right" and group_response.start is None:
-            group_weights = [weights[idx] for idx in indices]
-            computation = _pseudo_counting_computation(curve)
-            influence = survfitkm_influence(
-                list(group_response.time),
-                [int(value) for value in group_response.event],
-                list(range(len(indices))),
-                weights=group_weights,
-                stype=computation.stype,
-                ctype=computation.ctype,
-            )
-        else:
-            raise NotImplementedError(
-                "residuals.survfit currently supports right-censored or counting Kaplan-Meier fits"
-            )
-        rows = _survfit_residual_rows_at_times(influence, times, residual_type)
+        rows = _survfit_residual_block(curve, group_response, times, pseudo_type)
         for local_idx, source_idx in enumerate(indices):
             matrix[source_idx] = rows[local_idx]
             if curve_numbers is not None:
@@ -10907,6 +11187,11 @@ def _collapse_survfit_residual_matrix(
     collapsed_curve = [0 for _ in levels] if curve_numbers is not None else None
     for row_idx, id_value in enumerate(ids):
         target = index_by_id[id_value]
+        if collapsed_curve is not None and collapsed_curve[target] not in {
+            0,
+            curve_numbers[row_idx],
+        }:
+            raise ValueError("same id appears in multiple curves, cannot collapse")
         collapsed[target] = [
             current + float(weights[row_idx]) * float(value)
             for current, value in zip(collapsed[target], matrix[row_idx], strict=True)
@@ -10932,7 +11217,7 @@ def survfit_residuals(
     *,
     type: str = "pstate",
     collapse: Any = False,
-    weighted: Any = False,
+    weighted: Any = None,
     data_frame: Any = False,
     extra: Any = False,
     **kwargs: Any,
@@ -10951,11 +11236,11 @@ def survfit_residuals(
     eval_times = _survfit_residual_times(times)
     residual_type = _survfit_residual_type(type)
     collapse_value = _normalize_bool_option(collapse, "collapse")
-    weighted_value = _normalize_bool_option(weighted, "weighted")
+    weighted_value = (
+        collapse_value if weighted is None else _normalize_bool_option(weighted, "weighted")
+    )
     data_frame_value = _normalize_bool_option(data_frame, "data_frame")
     extra_value = _normalize_bool_option(extra, "extra")
-    if collapse_value and not weighted_value:
-        raise ValueError("invalid combination of options: collapse=True and weighted=False")
 
     frame = _survfit_residual_model_frame(fit)
     response = _survfit_residual_response(frame)
@@ -10963,13 +11248,17 @@ def survfit_residuals(
     if n == 0:
         raise ValueError("data set has no non-missing observations")
     weights_values, has_case_weights = _survfit_residual_weights(frame, n)
-    id_values, id_name, has_id = _survfit_residual_ids(frame, n)
+    id_values, id_name, _has_id = _survfit_residual_ids(frame, n)
+    if not _survfit_collapse_ids(frame, response):
+        collapse_value = False
+    if collapse_value and not weighted_value:
+        raise ValueError("invalid combination of options: collapse=True and weighted=False")
     if not has_case_weights:
         weighted_value = False
-    if not has_id or len(_label_levels(id_values, "id")) == n:
-        collapse_value = False
 
     curve_specs = _survfit_residual_curve_specs(fit, frame, n)
+    if getattr(curve_specs[0][1], "timefix", True):
+        eval_times = list(_core.aeq_surv(eval_times, None).time)
     if response.type in {"mright", "mcounting"}:
         return _survfit_multistate_residual_result(
             frame,
@@ -10988,7 +11277,6 @@ def survfit_residuals(
 
     matrix, curve_numbers = _survfit_residual_matrix(
         response,
-        weights_values,
         curve_specs,
         eval_times,
         residual_type,
@@ -11583,7 +11871,7 @@ def _prepend_matrix_time0(values: list[list[float]], initial: float) -> list[lis
 
 
 def _survfit0_default_time(result: Any) -> float:
-    if isinstance(result, CoxSurvfitResult) and result.start_time is not None:
+    if isinstance(result, (CoxSurvfitResult, SurvfitResult)) and result.start_time is not None:
         return float(result.start_time)
     times = getattr(result, "time", None)
     if times is None:
@@ -11599,7 +11887,8 @@ def _survfit0_result(result: SurvfitResult, t0: float | None = None) -> SurvfitR
     if not _needs_time0_insert(result.time, initial_time):
         return result
     n_risk0 = float(result.n_risk[0]) if result.n_risk else 0.0
-    return SurvfitResult(
+    return replace(
+        result,
         time=_prepend_curve_time0(result.time, initial_time),
         n_risk=_prepend_curve_time0(result.n_risk, n_risk0),
         n_event=_prepend_curve_time0(result.n_event, 0.0),
@@ -12101,24 +12390,7 @@ def _survfit_without_standard_errors(result: Any) -> Any:
 
 def _survfit_with_model_frame(result: Any, model_frame: dict[str, Any]) -> Any:
     if isinstance(result, SurvfitResult):
-        return SurvfitResult(
-            time=result.time,
-            n_risk=result.n_risk,
-            n_event=result.n_event,
-            n_censor=result.n_censor,
-            estimate=result.estimate,
-            std_err=result.std_err,
-            conf_lower=result.conf_lower,
-            conf_upper=result.conf_upper,
-            cumhaz=result.cumhaz,
-            std_chaz=result.std_chaz,
-            n_enter=result.n_enter,
-            n_risk_count=result.n_risk_count,
-            n_event_count=result.n_event_count,
-            n_censor_count=result.n_censor_count,
-            n_enter_count=result.n_enter_count,
-            model=model_frame,
-        )
+        return replace(result, model=model_frame)
     if all(
         hasattr(result, name)
         for name in (
@@ -12191,16 +12463,39 @@ def _cox_flat_basehaz_with_training_times(
     fit: Any,
     centered: bool,
 ) -> CoxBaseHazardResult:
+    penalty = getattr(fit, "penalty_diagnostics", None)
+    native_centered = centered if penalty is None else False
+    penalty_scale = 1.0
+    if penalty is not None:
+        beta = _cox_beta(fit)
+        offsets = _cox_prediction_offset_vector(fit, len(fit.event_times))
+        weights = _model_residual_weights(fit, len(offsets))
+        total_weight = sum(weights)
+        offset_center = (
+            sum(value * weight for value, weight in zip(offsets, weights, strict=True))
+            / total_weight
+            if total_weight > 0.0
+            else 0.0
+        )
+        covariate_center = (
+            sum(
+                mean * coefficient
+                for mean, coefficient in zip(_cox_reference_means(fit, "sample"), beta, strict=True)
+            )
+            if centered
+            else 0.0
+        )
+        penalty_scale = _safe_exp(covariate_center + offset_center)
     with_strata = getattr(fit, "basehaz_with_strata", None)
     if with_strata is None:
-        base_times, base_hazards = fit.basehaz(centered)
+        base_times, base_hazards = fit.basehaz(native_centered)
         event_times = getattr(fit, "event_times", None)
         training_times = (
             sorted({float(value) for value in event_times})
             if event_times is not None
             else [float(value) for value in base_times]
         )
-        hazards = [float(value) for value in base_hazards]
+        hazards = [float(value) * penalty_scale for value in base_hazards]
         times = [float(value) for value in base_times]
         return CoxBaseHazardResult(
             time=training_times,
@@ -12208,7 +12503,9 @@ def _cox_flat_basehaz_with_training_times(
             centered=centered,
         )
 
-    base_times, base_hazards, base_strata = with_strata(centered)
+    base_times, base_hazards, base_strata = with_strata(native_centered)
+    if penalty is not None:
+        base_hazards = [float(value) * penalty_scale for value in base_hazards]
     event_times = getattr(fit, "event_times", None)
     if event_times is None:
         strata_values = [int(value) for value in base_strata]
@@ -13211,6 +13508,7 @@ def survfit(
         if normalized_start_time is not None
         else _survfit_default_time0(response)
     )
+    model_groups = None if group is None else _materialize_labels(group, "group")
     if normalized_start_time is not None:
         indices = _survfit_start_time_indices(response, normalized_start_time, fix_time)
         response = _subset_surv(response, indices)
@@ -13229,6 +13527,34 @@ def survfit(
             "survfit robust variance is currently supported only for right-censored or "
             "counting-process curves"
         )
+
+    def finish(result: Any) -> Any:
+        if model_frame is None:
+            return result
+        result = _survfit_with_model_frame(result, model_frame)
+
+        def with_metadata(curve: SurvfitResult, indices: Sequence[int]) -> SurvfitResult:
+            subject_count = (
+                None
+                if id_values is None
+                else len(_label_levels([id_values[idx] for idx in indices], "id"))
+            )
+            return replace(
+                curve,
+                stype=computation.stype,
+                ctype=computation.ctype,
+                timefix=fix_time,
+                start_time=normalized_start_time,
+                n=len(indices),
+                n_id=subject_count,
+                model_groups=model_groups,
+            )
+
+        if isinstance(result, Mapping):
+            groups = _group_indices(group, len(response), levels=formula_group_levels)
+            return {label: with_metadata(curve, groups[label]) for label, curve in result.items()}
+        return with_metadata(result, range(len(response)))
+
     if group is None:
         km = (
             _survfit_counting_with_id(
@@ -13278,11 +13604,7 @@ def survfit(
                 else km
             )
             result = _survfit_without_standard_errors(result) if not include_se else result
-            return (
-                _survfit_with_model_frame(result, model_frame)
-                if model_frame is not None
-                else result
-            )
+            return finish(result)
         result = _survfit_from_km_counts(
             km,
             normalized_conf_level,
@@ -13326,7 +13648,7 @@ def survfit(
             else result
         )
         result = _survfit_without_standard_errors(result) if not include_se else result
-        return _survfit_with_model_frame(result, model_frame) if model_frame is not None else result
+        return finish(result)
 
     grouped_indices = _group_indices(group, len(response), levels=formula_group_levels)
     batched_km: dict[int, Any] | None = None
@@ -13495,11 +13817,7 @@ def survfit(
                 else result
             )
     result = _survfit_without_standard_errors(results) if not include_se else results
-    return (
-        _survfit_with_model_frame(result, model_frame)
-        if model_frame is not None and batched_km is None
-        else result
-    )
+    return finish(result)
 
 
 def _survdiff_weight_type(rho: float) -> str:
@@ -13998,6 +14316,8 @@ def cox_zph(
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"unexpected cox_zph argument(s): {unexpected}")
+    if _cox_penalty_diagnostics(fit) is not None:
+        raise NotImplementedError("cox_zph is not yet supported for penalized Cox models")
     if _is_clogit_fit(fit) and getattr(_unwrap_formula_fit(fit), "method", None) == "exact":
         raise ValueError("schoenfeld residuals are not available for the exact method")
     if _is_survreg_fit(fit) or not hasattr(fit, "schoenfeld_residuals"):
@@ -14214,6 +14534,7 @@ def _normalize_survreg_distribution(distribution: Any | None) -> str | None:
         "extremevalue": "extreme_value",
         "student": "t",
         "student-t": "t",
+        "studentt": "t",
     }
     if value in aliases:
         return aliases[value]
@@ -14694,6 +15015,8 @@ def _cox_alias_mask(fit: Any) -> list[bool]:
 
     model = _unwrap_formula_fit(fit)
     width = len(_cox_beta(model))
+    if isinstance(fit, _FormulaFit) and fit.empty_penalized:
+        return [True] * width
     aliases = [False] * width
     if width == 0 or int(getattr(model, "iterations", 0)) <= 0:
         return aliases
@@ -14749,7 +15072,17 @@ def _cox_full_loglik(fit: Any) -> float:
     return _cox_loglik_values(fit)[-1]
 
 
-def _cox_degrees_of_freedom(fit: Any) -> int:
+def _cox_penalty_diagnostics(fit: Any) -> Any | None:
+    diagnostics = getattr(fit, "penalty_diagnostics", None)
+    if diagnostics is None:
+        diagnostics = getattr(_unwrap_formula_fit(fit), "penalty_diagnostics", None)
+    return diagnostics
+
+
+def _cox_degrees_of_freedom(fit: Any) -> int | float:
+    diagnostics = _cox_penalty_diagnostics(fit)
+    if diagnostics is not None:
+        return math.fsum(float(value) for value in diagnostics.term_df)
     if _cox_event_count(fit) == 0:
         return 0
     return sum(not aliased for aliased in _cox_alias_mask(fit))
@@ -14767,14 +15100,14 @@ def _fallback_coef_names(width: int) -> list[str]:
 
 
 def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
+    coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
+    if coefficient_names is not None and len(coefficient_names) == width:
+        return list(coefficient_names)
     design = _formula_design_for_fit(fit)
     if design is not None:
         names = _formula_design_output_names(design)
         if len(names) == width:
             return names
-    coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
-    if coefficient_names is not None and len(coefficient_names) == width:
-        return list(coefficient_names)
     return _fallback_coef_names(width)
 
 
@@ -14911,13 +15244,13 @@ def nobs(fit: Any) -> int:
     return _model_row_count(fit)
 
 
-def degrees_freedom(fit: Any) -> int:
-    """Return the number of fitted parameters counted by model log likelihoods."""
+def degrees_freedom(fit: Any) -> int | float:
+    """Return parameter count or penalized effective degrees of freedom."""
 
     _require_model_fit(fit, "degrees_freedom")
     if _is_survreg_fit(fit):
         return len(list(fit.coefficients))
-    return _cox_degrees_of_freedom(_unwrap_formula_fit(fit))
+    return _cox_degrees_of_freedom(fit)
 
 
 def df_residual(fit: Any) -> int:
@@ -14926,7 +15259,7 @@ def df_residual(fit: Any) -> int:
     _require_model_fit(fit, "df_residual")
     if not _is_survreg_fit(fit):
         raise TypeError("df_residual is only defined for fitted survreg models")
-    return nobs(fit) - degrees_freedom(fit)
+    return nobs(fit) - len(list(fit.coefficients))
 
 
 def _finite_numeric_option(value: Any, name: str) -> float:
@@ -15238,7 +15571,7 @@ def model_frame(fit: Any) -> dict[str, list[Any]]:
         if text_name in {"group", "(id)", "(cluster)", "(strata)"}:
             columns[text_name] = _materialize_labels(values, text_name)
             continue
-        materialized = _materialize_1d(values, text_name)
+        materialized = _coerce_array_like(values, text_name)
         if materialized and isinstance(materialized[0], list | tuple):
             continue
         columns[text_name] = list(materialized)
@@ -15286,7 +15619,7 @@ def _normal_two_sided_p_value(statistic: float) -> float:
         return math.nan
     if math.isinf(statistic):
         return 0.0
-    return 2.0 * NormalDist().cdf(-abs(statistic))
+    return math.erfc(abs(statistic) / math.sqrt(2.0))
 
 
 def _coefficient_exp(value: float) -> float:
@@ -15449,7 +15782,7 @@ def confint(
     _require_model_fit(fit, "confint")
     confidence_level = _normalize_conf_level(level, "level")
     alpha = 1.0 - confidence_level
-    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    z = -NormalDist().inv_cdf(alpha / 2.0)
     names = coef_names(fit)
     coefficients = coef(fit)
     variance = (
@@ -15476,6 +15809,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
 
     _require_model_fit(fit, "model_summary")
     is_survreg = _is_survreg_fit(fit)
+    penalty_diagnostics = None if is_survreg else _cox_penalty_diagnostics(fit)
     robust = bool(getattr(fit, "robust", False))
     if is_survreg:
         location_width = len(_location_beta(fit))
@@ -15519,11 +15853,28 @@ def model_summary(fit: Any) -> dict[str, Any]:
                 result["distribution_parameters"] = parameter_values
     else:
         model = _unwrap_formula_fit(fit)
-        logliks = _cox_loglik_values(model)
+        logliks = _cox_loglik_values(fit)
         result["null_loglik"] = logliks[0]
-        result["score_test"] = float(model.score_test)
         result["n_event"] = sum(1 for event in model.status if int(event) == 1)
         result["method"] = str(getattr(model, "method", "breslow"))
+        if penalty_diagnostics is None:
+            result["score_test"] = float(model.score_test)
+        else:
+            result["method"] = str(getattr(fit, "requested_method", None) or result["method"])
+            variance2 = [[float(value) for value in row] for row in penalty_diagnostics.variance2]
+            if len(variance2) != len(coefficients) or any(
+                len(row) != len(coefficients) for row in variance2
+            ):
+                raise ValueError("penalized variance matrix does not match coefficient width")
+            for idx, row in enumerate(result["coefficients"]):
+                row["se2"] = math.sqrt(max(variance2[idx][idx], 0.0))
+                row["chisq"] = float(row["statistic"]) ** 2
+                row["df"] = 1.0
+            result["penalized"] = True
+            result["term_df"] = [float(value) for value in penalty_diagnostics.term_df]
+            result["variance2"] = variance2
+            result["penalty"] = list(fit.penalty)
+            result["iter"] = list(fit.iter)
     return result
 
 
@@ -16267,6 +16618,8 @@ def _cox_refit_loglik_and_df(
 
 
 def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
+    if _cox_penalty_diagnostics(fit) is not None:
+        raise NotImplementedError("anova for penalized Cox models is not yet supported")
     model = _require_coxph_fit(fit)
     beta = _cox_beta(model)
     n_columns = len(beta)
@@ -16293,6 +16646,8 @@ def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
 
 
 def _anova_multiple_coxph(fits: tuple[Any, ...], test_name: str, with_tests: bool) -> Any:
+    if any(_cox_penalty_diagnostics(fit) is not None for fit in fits):
+        raise NotImplementedError("anova for penalized Cox models is not yet supported")
     models = [_require_coxph_fit(fit) for fit in fits]
     logliks = [_cox_full_loglik(model) for model in models]
     dfs = [_cox_degrees_of_freedom(model) for model in models]
@@ -16526,6 +16881,13 @@ def _cox_reference_means_for_rows(
     newdata: Any | None,
 ) -> list[list[float]]:
     beta = _cox_beta(fit)
+    design = _formula_design_for_fit(fit)
+    if (
+        reference == "strata"
+        and getattr(fit, "penalty_diagnostics", None) is not None
+        and (design is None or not design.strata)
+    ):
+        reference = "sample"
     if reference != "strata":
         means = _cox_reference_means(fit, reference)
         return [means for _row in rows]
@@ -16950,31 +17312,26 @@ def _survreg_distribution_family(fit: Any) -> str:
 
 def _survreg_quantile_probabilities(values: Any | None) -> list[float]:
     probabilities = _quantile_vector(values, "p") if values is not None else [0.1, 0.9]
-    if any(not math.isfinite(value) or value <= 0.0 or value >= 1.0 for value in probabilities):
+    if any(not math.isfinite(value) or value < 0.0 or value > 1.0 for value in probabilities):
         raise ValueError("p must be between 0 and 1")
     return probabilities
 
 
 def _survreg_quantile_scores(fit: Any, probabilities: list[float]) -> list[float]:
     family = _survreg_distribution_family(fit)
-    if family == "logistic":
-        return [math.log(value / (1.0 - value)) for value in probabilities]
-    if family == "gaussian":
-        normal = NormalDist()
-        return [normal.inv_cdf(value) for value in probabilities]
-    if family == "t":
-        df = _survreg_t_fit_degrees_of_freedom(
-            getattr(fit, "distribution_parameters", None),
-        )
-        return _core.survreg_distribution(
-            probabilities,
-            [0.0] * len(probabilities),
-            [1.0] * len(probabilities),
-            "t",
-            "quantile",
-            df,
-        )
-    return [math.log(-math.log1p(-value)) for value in probabilities]
+    parameter = (
+        _survreg_t_fit_degrees_of_freedom(getattr(fit, "distribution_parameters", None))
+        if family == "t"
+        else None
+    )
+    return _core.survreg_distribution(
+        probabilities,
+        [0.0] * len(probabilities),
+        [1.0] * len(probabilities),
+        family,
+        "quantile",
+        parameter,
+    )
 
 
 def _normalize_survreg_distribution_helper(distribution: Any | None) -> str:
@@ -17206,41 +17563,22 @@ def _survreg_quantile_variance_matrix(
     raise ValueError("fitted survreg variance matrix does not match quantile width")
 
 
-def _survreg_quantile_linear_values(
-    fit: Any,
-    rows: list[list[float]] | None,
-    offsets: list[float] | None,
-    quantile_scores: list[float],
-    newdata: Any | None,
-) -> list[list[float]]:
-    result = fit.predict(rows, "lp", offsets, False)
-    linear_predictors = [float(value) for value in result.predictions]
-    strata = _survreg_prediction_strata(fit, newdata, len(linear_predictors))
-    scales = _survreg_scales(fit)
-    return [
-        [linear_predictor + score * scales[strata[row_idx]] for score in quantile_scores]
-        for row_idx, linear_predictor in enumerate(linear_predictors)
-    ]
-
-
 def _survreg_quantile_prediction_matrix(
     fit: Any,
     rows: list[list[float]] | None,
     offsets: list[float] | None,
-    quantile_scores: list[float],
+    probabilities: list[float],
     predict_type: str,
     newdata: Any | None,
 ) -> list[list[float]]:
-    linear_values = _survreg_quantile_linear_values(
-        fit,
+    strata = None if rows is None else _survreg_prediction_strata(fit, newdata, len(rows))
+    return fit.predict_quantile(
         rows,
+        probabilities,
         offsets,
-        quantile_scores,
-        newdata,
-    )
-    if predict_type != "quantile" or not _survreg_response_uses_log_transform(fit):
-        return linear_values
-    return [[_safe_exp(value) for value in row] for row in linear_values]
+        strata=strata,
+        transform=predict_type == "quantile",
+    ).predictions
 
 
 def _survreg_quantile_prediction_se_matrix(
@@ -17284,6 +17622,13 @@ def _cox_reference_centers(
         return [0.0] * n
     beta = _cox_beta(fit)
     offset_center = _cox_training_offset_center(fit, beta)
+    design = _formula_design_for_fit(fit)
+    if (
+        reference == "strata"
+        and getattr(fit, "penalty_diagnostics", None) is not None
+        and (design is None or not design.strata)
+    ):
+        reference = "sample"
     if reference != "strata":
         return [_cox_reference_center(fit, reference)] * n
 
@@ -17548,6 +17893,7 @@ def _cox_expected_events_with_se(
     offsets: list[float] | None,
     newdata: Any | None,
 ) -> PredictResult:
+    is_training = rows is None
     model = _unwrap_formula_fit(fit)
     beta = _cox_beta(model)
     nvar = len(beta)
@@ -17627,6 +17973,8 @@ def _cox_expected_events_with_se(
         risks,
         variance,
     )
+    if is_training and getattr(fit, "penalty_diagnostics", None) is not None:
+        predictions = [float(value) for value in fit.expected_events()]
     return PredictResult(predictions, se)
 
 
@@ -17956,7 +18304,7 @@ def _cox_survfit_with_confidence(
     variance = _cox_variance_matrix(model, nvar)
     baselines = _cox_expected_baseline_by_stratum(model)
     means = _cox_reference_means(model, "sample")
-    z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
+    z = -NormalDist().inv_cdf((1.0 - conf_level) / 2.0)
 
     std_err: list[list[float]] = []
     std_chaz: list[list[float]] = []
@@ -18156,6 +18504,7 @@ def _concordance_score_columns(
     terms: _FormulaTerms,
     n: int,
 ) -> tuple[list[list[float]], list[str]]:
+    _reject_formula_penalties(terms, "concordance formula input")
     if terms.offsets:
         raise ValueError("Offset terms not allowed")
     if not terms.covariates:
@@ -19117,25 +19466,22 @@ def predict(
                     _survreg_term_prediction_se(fit, rows, terms),
                 )
             return term_predictions
-        # R uses stored fitted values for training rows, but omits formula
-        # offsets when evaluating the model matrix for newdata.
-        offsets = None
         missing_newdata_predictions = rows is not None and any(_survreg_alias_mask(fit))
         if predict_type in {"quantile", "uquantile"}:
             if p is not None and quantiles is not None:
                 raise ValueError("use only one of p or quantiles")
             q_values = quantiles if quantiles is not None else p
             q = _survreg_quantile_probabilities(q_values)
-            scores = _survreg_quantile_scores(fit, q)
             predictions = _survreg_quantile_prediction_matrix(
                 fit,
                 rows,
                 offsets,
-                scores,
+                q,
                 predict_type,
                 newdata,
             )
             if include_se:
+                scores = _survreg_quantile_scores(fit, q)
                 se = _survreg_quantile_prediction_se_matrix(
                     fit,
                     rows,
@@ -19268,7 +19614,13 @@ def predict(
         if include_se:
             if linear_se is None:
                 raise AssertionError("se_fit risk predictions require linear SEs")
-            risk_se = [float(se) * risk for se, risk in zip(linear_se, risks, strict=True)]
+            if getattr(fit, "penalty_diagnostics", None) is not None:
+                # Preserve predict.coxph's reported risk-scale SE convention.
+                risk_se = [
+                    float(se) * math.sqrt(risk) for se, risk in zip(linear_se, risks, strict=True)
+                ]
+            else:
+                risk_se = [float(se) * risk for se, risk in zip(linear_se, risks, strict=True)]
             return PredictResult(
                 _collapse_prediction_result(risks, collapse),
                 _collapse_prediction_se(risk_se, collapse),
@@ -19477,6 +19829,11 @@ def coxph_detail(
         raise TypeError("coxph_detail requires a fitted Cox model")
     if not _is_coxph_fit(fit):
         raise TypeError("coxph_detail requires a fitted Cox model")
+    if (
+        _cox_penalty_diagnostics(fit) is not None
+        and getattr(fit, "requested_method", None) == "exact"
+    ):
+        raise ValueError("detailed output is not available for the exact method")
     rorder_name = _cox_detail_rorder(rorder)
     model = _unwrap_formula_fit(fit)
     method = _cox_detail_method(model)
@@ -20027,7 +20384,9 @@ def coxph(
     if init is not None and initial_beta is not None:
         raise ValueError("use only one of init or initial_beta")
     max_iter = _integer_scalar(max_iter, "max_iter")
-    max_iter, eps, toler, fix_time, toler_inf = _apply_coxph_control(control, max_iter, eps, toler)
+    max_iter, eps, toler, fix_time, outer_max_iter, toler_inf = _apply_coxph_control(
+        control, max_iter, eps, toler
+    )
 
     formula_design: _FormulaDesign | None = None
     formula_string: str | None = None
@@ -20041,9 +20400,12 @@ def coxph(
     time_transform_observed_n: int | None = None
     formula_x = False
     istate_column: str | None = None
+    frozen_ridge_scales: dict[_CovariateTerm, tuple[float, ...]] = {}
+    ridge_design: _RidgeDesignPenalty | None = None
     if isinstance(response, str):
         formula_string = response
         response_spec = _formula_response_spec(response)
+        frozen_ridge_scales = _freeze_ridge_scales(response, data)
         weights = _column_or_values(data, weights, "weights") if weights is not None else None
         id_arg = _column_or_values(data, id_arg, "id") if id_arg is not None else None
         istate_column = istate if isinstance(istate, str) else None
@@ -20108,7 +20470,12 @@ def coxph(
                 raise ValueError("use only one of formula cluster(...) or cluster")
             cluster = _combined_columns(data, terms.clusters, len(response))
             formula_cluster_columns = tuple(terms.clusters)
-        formula_design = _fit_formula_design(data, response_spec, terms, len(response))
+        formula_design = _fit_formula_design(
+            data, response_spec, terms, len(response), allow_ridge=True
+        )
+        if frozen_ridge_scales:
+            ridge_design = _ridge_design_penalty(formula_design, frozen_ridge_scales)
+            direct_coefficient_names = ridge_design.coefficient_names
         x = _design_rows_from_spec(data, formula_design, len(response))
         formula_x_matrix = [list(row) for row in x] if formula_x else None
         formula_model_data = data
@@ -20248,24 +20615,66 @@ def coxph(
             fit_times = _survdiff_timefix_values(fit_times, True)
         else:
             entry_times, fit_times = _timefix_vectors(entry_times, fit_times)
-    fit = _core.coxph_fit(
-        fit_times,
-        list(response.event),
-        rows,
-        strata=fit_strata,
-        weights=fit_weights,
-        offset=fit_offset,
-        initial_beta=_normalize_numeric_sequence_or_none(
-            initial_beta if initial_beta is not None else init, "init"
-        ),
-        max_iter=max_iter,
-        eps=eps,
-        toler=toler,
-        method=method_name,
-        entry_times=entry_times,
-        nocenter=nocenter_values,
+    penalized = ridge_design is not None and any(response.event)
+    empty_penalized = ridge_design is not None and not penalized
+    if empty_penalized:
+        direct_coefficient_names = None
+    initial_values = _normalize_numeric_sequence_or_none(
+        initial_beta if initial_beta is not None else init, "init"
     )
-    if any(response.event):
+    fit_options: dict[str, Any] = {
+        "strata": fit_strata,
+        "weights": fit_weights,
+        "offset": fit_offset,
+        "initial_beta": None if empty_penalized else initial_values,
+        "max_iter": 0 if empty_penalized else max_iter,
+        "eps": eps,
+        "toler": toler,
+        "method": "breslow" if empty_penalized else method_name,
+        "entry_times": entry_times,
+        "nocenter": nocenter_values,
+    }
+    ridge_selection = None
+    if penalized and ridge_design is not None:
+        if ridge_design.automatic:
+            fit, penalty_diagnostics, ridge_selection = _core.coxph_ridge_fit(
+                fit_times,
+                list(response.event),
+                rows,
+                ridge_design.scales,
+                ridge_design.groups,
+                ridge_design.theta,
+                ridge_design.df,
+                ridge_design.eps,
+                outer_max_iter=outer_max_iter,
+                **fit_options,
+            )
+            if ridge_selection.inner_failures:
+                failed_iterations = " ".join(map(str, ridge_selection.inner_failures))
+                warnings.warn(
+                    f"Inner loop failed to converge for iterations {failed_iterations}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        else:
+            fit, penalty_diagnostics = _core.coxph_penalized_fit(
+                fit_times,
+                list(response.event),
+                rows,
+                ridge_design.diagonal,
+                ridge_design.groups,
+                **fit_options,
+            )
+    else:
+        fit = _core.coxph_fit(fit_times, list(response.event), rows, **fit_options)
+        penalty_diagnostics = None
+    initial_penalty = 0.0
+    if penalized and initial_values is not None and ridge_design is not None:
+        initial_penalty = 0.5 * math.fsum(
+            weight * value * value
+            for weight, value in zip(ridge_design.diagonal, initial_values, strict=True)
+        )
+    if any(response.event) and not penalized:
         _warn_fit_diagnostics(
             _cox_fit_diagnostic_messages(
                 fit,
@@ -20289,6 +20698,17 @@ def coxph(
     )
     automatically_robust = cluster is not None or has_fractional_weights or has_repeated_event_id
     use_robust_variance = automatically_robust if robust_value is None else robust_value
+    if empty_penalized:
+        use_robust_variance = False
+        cluster = None
+    if penalized and use_robust_variance:
+        warnings.warn(
+            "the robust variance is not defined for a penalized model, option ignored",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        use_robust_variance = False
+        cluster = None
     if cluster is not None and not use_robust_variance:
         warnings.warn(
             "cluster specified with robust=FALSE, cluster ignored",
@@ -20337,6 +20757,16 @@ def coxph(
             y_response=response if formula_design is not None and keep_y else None,
             model_frame=model_frame,
             n_observations=time_transform_observed_n,
+            penalty_diagnostics=penalty_diagnostics,
+            requested_method=method_name if ridge_design is not None else None,
+            initial_penalty=initial_penalty,
+            empty_penalized=empty_penalized,
+            ridge_selection=ridge_selection,
+            ridge_history=(
+                ridge_design.history(ridge_selection)
+                if penalized and ridge_design is not None
+                else None
+            ),
         )
     return fit
 

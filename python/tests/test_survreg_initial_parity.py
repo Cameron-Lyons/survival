@@ -157,7 +157,7 @@ def test_explicit_initial_values_bypass_nonbinary_constant_rescaling():
     assert fit.iterations == 0
 
 
-def test_explicit_initial_values_bypass_unrepresentable_interval_start_derivative():
+def test_narrow_interval_initialization_matches_the_exact_density_limit():
     time = [1e-100, 2.0, 3.0]
     data = {
         "time": time,
@@ -166,8 +166,18 @@ def test_explicit_initial_values_bypass_unrepresentable_interval_start_derivativ
     }
     formula = "Surv(time, upper, status, type='interval') ~ 1"
     arguments = {"data": data, "dist": "logistic", "scale": 1.0, "max_iter": 0}
-    with pytest.raises(RuntimeError, match="interval probability is not finite and positive"):
-        survival.survreg(formula, **arguments)
+    automatic = survival.survreg(formula, **arguments)
+    exact = survival.survreg("Surv(time) ~ 1", **arguments)
+    assert automatic.fit.coefficients == pytest.approx(exact.fit.coefficients, abs=1e-14)
+    for actual, expected in zip(automatic.variance_matrix, exact.variance_matrix, strict=True):
+        assert actual == pytest.approx(expected, abs=1e-14)
+    assert automatic.score_vector == pytest.approx(exact.score_vector, abs=1e-14)
+    log_width = sum(
+        math.log(upper - lower) for lower, upper in zip(time, data["upper"], strict=True)
+    )
+    assert survival.loglik(automatic) == pytest.approx(
+        survival.loglik(exact) + log_width, abs=1e-12
+    )
     fit = survival.survreg(formula, **arguments, init=[0.0])
     assert fit.fit.coefficients == [0.0]
     assert fit.iterations == 0

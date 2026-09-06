@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from statistics import NormalDist
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -18,13 +17,21 @@ from ._sklearn_common import (
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
 
+_LOG_TIME_ERROR_DISTRIBUTIONS = {
+    "weibull": "extreme",
+    "exponential": "extreme",
+    "rayleigh": "extreme",
+    "lognormal": "gaussian",
+    "loglogistic": "logistic",
+}
+
 
 class AFTEstimator(BaseEstimator, RegressorMixin):
     """Scikit-learn compatible Accelerated Failure Time (AFT) model.
 
-    AFT models assume that covariates act multiplicatively on the survival time,
-    i.e., log(T) = X @ beta + sigma * epsilon, where epsilon follows a specified
-    error distribution.
+    Log-time distributions use log(T) = X @ beta + sigma * epsilon. Gaussian,
+    logistic, extreme-value, and Student-t distributions instead model T directly
+    and allow negative and zero responses.
 
     Parameters
     ----------
@@ -34,9 +41,13 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         - "lognormal": Log-normal distribution (Gaussian errors)
         - "loglogistic": Log-logistic distribution (logistic errors)
         - "exponential": Exponential distribution (special case of Weibull)
+        - "rayleigh": Rayleigh distribution (special case of Weibull)
         - "gaussian": Gaussian distribution (for linear models)
         - "logistic": Logistic distribution (for linear models)
-    max_iter : int, default=100
+        - "extreme": Extreme-value distribution on the original response scale
+        - "t": Student-t distribution with four degrees of freedom
+        Native distribution aliases are also accepted.
+    max_iter : int, default=200
         Maximum number of iterations for optimization.
     tol : float, default=1e-9
         Convergence tolerance.
@@ -46,7 +57,7 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
     model_ : SurvivalFit
         The underlying fitted AFT model.
     coef_ : ndarray of shape (n_features,)
-        Estimated coefficients (acceleration factors in log scale).
+        Estimated coefficients for the model location.
     scale_ : float
         Estimated scale parameter (sigma).
     n_features_in_ : int
@@ -64,10 +75,12 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
 
     Notes
     -----
-    The AFT model interprets coefficients as acceleration factors:
+    For log-time distributions, coefficients describe acceleration factors:
     - Positive coefficients increase expected survival time
     - Negative coefficients decrease expected survival time
     - exp(coef) gives the multiplicative effect on survival time
+    For distributions that model T directly, coefficients describe additive
+    changes in the response.
     """
 
     def __init__(
@@ -127,8 +140,28 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         self.is_fitted_ = True
         return self
 
+    def _prediction_linear_values(self, X: ArrayLike) -> NDArray[np.float64]:
+        check_is_fitted(self)
+        X = check_array(X, dtype=np.float64, ensure_2d=True)
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
+            )
+        if not np.isfinite(X).all():
+            raise ValueError("X must contain only finite values")
+        return self.intercept_ + X @ self.coef_
+
+    def _prediction_response_values(
+        self, linear_values: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        # The fitted model stores the canonical name, including aliases used at fit.
+        if self.model_.distribution in _LOG_TIME_ERROR_DISTRIBUTIONS:
+            with np.errstate(over="ignore", under="ignore"):
+                return np.exp(linear_values)
+        return linear_values
+
     def predict(self, X: ArrayLike) -> NDArray[np.float64]:
-        """Predict expected survival time for samples.
+        """Predict the fitted location on the response scale, as in R survreg.
 
         Parameters
         ----------
@@ -138,18 +171,10 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         Returns
         -------
         survival_times : ndarray of shape (n_samples,)
-            Predicted survival times (median by default).
+            Exponentiated linear predictors for log-time families, or linear
+            predictors for identity families. Use predict_median for medians.
         """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        if X.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
-            )
-
-        linear_pred = self.intercept_ + X @ self.coef_
-        return np.exp(linear_pred)
+        return self._prediction_response_values(self._prediction_linear_values(X))
 
     def predict_median(self, X: ArrayLike) -> NDArray[np.float64]:
         """Predict median survival time for samples.
@@ -164,19 +189,7 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         median_times : ndarray of shape (n_samples,)
             Predicted median survival times.
         """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        linear_pred = self.intercept_ + X @ self.coef_
-
-        if self.distribution in ("weibull", "exponential", "extreme_value"):
-            median_z = np.log(np.log(2))
-        elif self.distribution in ("lognormal", "gaussian", "loglogistic", "logistic"):
-            median_z = 0.0
-        else:
-            median_z = 0.0
-
-        return np.exp(linear_pred + self.scale_ * median_z)
+        return self.predict_quantile(X, q=0.5)
 
     def predict_quantile(self, X: ArrayLike, q: float = 0.5) -> NDArray[np.float64]:
         """Predict survival time quantile for samples.
@@ -186,31 +199,33 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         X : array-like of shape (n_samples, n_features)
             Samples to predict.
         q : float, default=0.5
-            Quantile to predict (0 < q < 1). Default is median (0.5).
+            Quantile to predict (0 <= q <= 1). Default is median (0.5).
+            Endpoints return the distribution's lower and upper limits.
 
         Returns
         -------
         quantile_times : ndarray of shape (n_samples,)
             Predicted survival times at the given quantile.
         """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
+        linear_pred = self._prediction_linear_values(X)
 
-        if not np.isfinite(q) or not 0 < q < 1:
+        if not np.isfinite(q) or not 0 <= q <= 1:
             raise ValueError("q must be between 0 and 1")
 
-        linear_pred = self.intercept_ + X @ self.coef_
-
-        if self.distribution in ("weibull", "exponential", "extreme_value"):
-            z_q = np.log(-np.log(1 - q))
-        elif self.distribution in ("lognormal", "gaussian"):
-            z_q = NormalDist().inv_cdf(q)
-        elif self.distribution in ("loglogistic", "logistic"):
-            z_q = np.log(q / (1 - q))
-        else:
-            z_q = 0.0
-
-        return np.exp(linear_pred + self.scale_ * z_q)
+        # Evaluate one standardized quantile, then combine location and scale
+        # before transforming the response to avoid intermediate overflow.
+        distribution = self.model_.distribution
+        error_distribution = _LOG_TIME_ERROR_DISTRIBUTIONS.get(distribution, distribution)
+        parameters = self.model_.distribution_parameters
+        quantile = _surv.survreg_distribution(
+            values=[float(q)],
+            mean=[0.0],
+            scale=[1.0],
+            distribution=error_distribution,
+            kind="quantile",
+            parms=parameters[0] if parameters else None,
+        )[0]
+        return self._prediction_response_values(linear_pred + self.scale_ * quantile)
 
     def score(self, X: ArrayLike, y: ArrayLike) -> float:
         """Return the concordance index on the given test data.
@@ -234,13 +249,16 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
 
     @property
     def acceleration_factors(self) -> NDArray[np.float64]:
-        """Return acceleration factors (exp of coefficients).
+        """Return exponentiated coefficients.
+
+        These describe multiplicative time effects for log-time distributions.
 
         Returns
         -------
         af : ndarray of shape (n_features,)
-            Acceleration factors. Values > 1 increase survival time,
-            values < 1 decrease survival time.
+            exp(coef_) for every distribution. For log-time distributions,
+            values > 1 increase survival time and values < 1 decrease it.
+            Identity-time coefficients instead describe additive effects.
         """
         check_is_fitted(self)
         return np.exp(self.coef_)

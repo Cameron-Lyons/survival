@@ -1,7 +1,9 @@
 use crate::constants::{CHOLESKY_TOL, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, STEP_HALVE_FACTOR};
+use crate::internal::aft::transformed_interval_width;
 use crate::regression::survreg_predict::{
     SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
-    compute_quantile_prediction, compute_response_prediction, compute_se_linear_predictor,
+    compute_quantile_prediction_with_options, compute_response_prediction,
+    compute_se_linear_predictor, transform_prediction_se,
 };
 use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survreg_loglik, survregc1};
 use crate::residuals::survreg_resid::{
@@ -316,6 +318,82 @@ impl SurvivalFit {
             Ok((self.linear_predictors.clone(), None))
         }
     }
+
+    /// Predict response quantiles using stored training strata by default.
+    /// Retains the original Rust API; explicit new-data strata are available
+    /// through `predict_quantile_with_options`.
+    pub fn predict_quantile(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        quantiles: Option<Vec<f64>>,
+        offset: Option<Vec<f64>>,
+    ) -> PyResult<SurvregQuantilePrediction> {
+        self.predict_quantile_with_options(covariates, quantiles, offset, None, true)
+    }
+
+    /// Predict quantiles with optional zero-based stratum indices per row.
+    /// Training predictions use the stored strata when none are supplied;
+    /// new rows require indices when the fit has multiple scales. Set
+    /// `transform` to false to retain the model's linear response scale.
+    /// Probabilities include 0 and 1, returning the distribution's limits.
+    pub fn predict_quantile_with_options(
+        &self,
+        covariates: Option<Vec<Vec<f64>>>,
+        quantiles: Option<Vec<f64>>,
+        offset: Option<Vec<f64>>,
+        strata: Option<Vec<usize>>,
+        transform: bool,
+    ) -> PyResult<SurvregQuantilePrediction> {
+        let new_data = covariates.is_some();
+        let (linear_predictors, _rows) = self.prediction_rows(covariates, offset)?;
+        let n = linear_predictors.len();
+        if self.scales.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "fitted scales must not be empty",
+            ));
+        }
+        let prediction_strata = match strata {
+            Some(values) => values,
+            None if !new_data => self.strata.clone(),
+            None if self.scales.len() == 1 => vec![0; n],
+            None => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "strata is required for new covariates when the fit has multiple scales",
+                ));
+            }
+        };
+        if prediction_strata.len() != n {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "strata length must match prediction rows",
+            ));
+        }
+        let row_scales = prediction_strata
+            .iter()
+            .enumerate()
+            .map(|(idx, &stratum)| {
+                self.scales.get(stratum).copied().ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "strata contains value {stratum} at row {idx}, expected < {}",
+                        self.scales.len()
+                    ))
+                })
+            })
+            .collect::<PyResult<Vec<f64>>>()?;
+        let quantiles = quantiles.unwrap_or_else(|| vec![0.5]);
+        let predictions = compute_quantile_prediction_with_options(
+            &linear_predictors,
+            &row_scales,
+            &quantiles,
+            &self.distribution,
+            self.distribution_parameter(),
+            transform,
+        )?;
+        Ok(SurvregQuantilePrediction {
+            n,
+            quantiles,
+            predictions,
+        })
+    }
 }
 
 #[pymethods]
@@ -349,8 +427,10 @@ impl SurvivalFit {
         };
 
         let se = if se_fit {
-            rows.as_ref()
-                .map(|values| compute_se_linear_predictor(values, &self.location_variance_matrix()))
+            let values = rows.as_deref().unwrap_or(&self.covariates);
+            let mut se = compute_se_linear_predictor(values, &self.location_variance_matrix());
+            transform_prediction_se(&mut se, &predictions, &self.distribution, prediction_type);
+            Some(se)
         } else {
             None
         };
@@ -363,35 +443,16 @@ impl SurvivalFit {
         })
     }
 
-    #[pyo3(signature = (covariates=None, quantiles=None, offset=None))]
-    pub fn predict_quantile(
+    #[pyo3(name = "predict_quantile", signature = (covariates=None, quantiles=None, offset=None, strata=None, transform=true))]
+    fn predict_quantile_py(
         &self,
         covariates: Option<Vec<Vec<f64>>>,
         quantiles: Option<Vec<f64>>,
         offset: Option<Vec<f64>>,
+        strata: Option<Vec<usize>>,
+        transform: bool,
     ) -> PyResult<SurvregQuantilePrediction> {
-        let quantiles = quantiles.unwrap_or_else(|| vec![0.5]);
-        for &q in &quantiles {
-            if !q.is_finite() || q <= 0.0 || q >= 1.0 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Quantiles must be between 0 and 1 (exclusive)",
-                ));
-            }
-        }
-
-        let (linear_predictors, _rows) = self.prediction_rows(covariates, offset)?;
-        let predictions = compute_quantile_prediction(
-            &linear_predictors,
-            self.scale,
-            &quantiles,
-            &self.distribution,
-        );
-
-        Ok(SurvregQuantilePrediction {
-            n: predictions.len(),
-            quantiles,
-            predictions,
-        })
+        self.predict_quantile_with_options(covariates, quantiles, offset, strata, transform)
     }
 
     #[pyo3(signature = (residual_type="deviance".to_string()))]
@@ -552,7 +613,7 @@ struct LikelihoodInput<'a> {
     strata: &'a ArrayView1<'a, i32>,
     offsets: &'a Array1<f64>,
     time1: &'a ArrayView1<'a, f64>,
-    time2: Option<&'a ArrayView1<'a, f64>>,
+    interval_widths: Option<&'a ArrayView1<'a, f64>>,
     status: &'a ArrayView1<'a, i32>,
     weights: &'a Array1<f64>,
     covariates: &'a Array2<f64>,
@@ -572,7 +633,7 @@ impl LikelihoodInput<'_> {
             self.strata,
             &self.offsets.view(),
             self.time1,
-            self.time2,
+            self.interval_widths,
             self.status,
             &self.weights.view(),
             &self.covariates.view(),
@@ -592,7 +653,7 @@ impl LikelihoodInput<'_> {
             self.strata,
             &self.offsets.view(),
             self.time1,
-            self.time2,
+            self.interval_widths,
             self.status,
             &self.weights.view(),
             &self.covariates.view(),
@@ -601,6 +662,13 @@ impl LikelihoodInput<'_> {
         )
     }
 }
+fn likelihood_is_finite(likelihood: &SurvivalLikelihood) -> bool {
+    likelihood.loglik.is_finite()
+        && likelihood.u.iter().all(|value| value.is_finite())
+        && likelihood.imat.iter().all(|value| value.is_finite())
+        && likelihood.jj.iter().all(|value| value.is_finite())
+}
+
 fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
     (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
 }
@@ -748,7 +816,7 @@ fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) 
         });
 }
 
-fn validate_time_values(time: &[f64]) -> PyResult<()> {
+fn validate_time_values(time: &[f64], uses_log_time: bool) -> PyResult<()> {
     if time.is_empty() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "time must not be empty",
@@ -761,7 +829,7 @@ fn validate_time_values(time: &[f64]) -> PyResult<()> {
                 idx
             )));
         }
-        if value <= 0.0 {
+        if uses_log_time && value <= 0.0 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "time[{}] must be positive",
                 idx
@@ -792,6 +860,7 @@ fn validate_time2_values(
     time: &[f64],
     status: &[f64],
     time2: Option<Vec<f64>>,
+    uses_log_time: bool,
 ) -> PyResult<Option<Vec<f64>>> {
     let has_interval_rows = status.contains(&3.0);
     if !has_interval_rows && time2.is_none() {
@@ -824,7 +893,7 @@ fn validate_time2_values(
                     idx
                 )));
             }
-            if end <= 0.0 {
+            if uses_log_time && end <= 0.0 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "time2[{}] must be positive",
                     idx
@@ -960,9 +1029,10 @@ pub fn survreg(
             status.len()
         )));
     }
-    validate_time_values(&time)?;
+    let uses_log_time = config.distribution.uses_log_time();
+    validate_time_values(&time, uses_log_time)?;
     validate_status_values(&status)?;
-    let time2_values = validate_time2_values(&time, &status, time2)?;
+    let time2_values = validate_time2_values(&time, &status, time2, uses_log_time)?;
     if !config.eps.is_finite() || config.eps <= 0.0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "eps must be a finite positive value",
@@ -1213,21 +1283,35 @@ fn compute_survreg(
     } else {
         y.column(2).iter().map(|&status| status as i32).collect()
     };
-    let time2_vec: Option<Vec<f64>> = if ny == 3 {
-        Some(y.column(1).iter().map(|&t| transform_time(t)).collect())
+    let interval_widths_vec: Option<Vec<f64>> = if ny == 3 {
+        Some(
+            y.column(0)
+                .iter()
+                .zip(y.column(1).iter())
+                .zip(&status_vec)
+                .map(|((&lower, &upper), &event)| {
+                    if event == 3 {
+                        transformed_interval_width(lower, upper, uses_log_time)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect(),
+        )
     } else {
         None
     };
     let time1_arr = Array1::from_vec(time1_vec);
     let status_arr = Array1::from_vec(status_vec);
-    let time2_arr = time2_vec.map(Array1::from_vec);
+    let interval_widths_arr = interval_widths_vec.map(Array1::from_vec);
     let strata_arr = Array1::from_iter(strata.iter().map(|&value| (value + 1) as i32));
     let frailty_arr = Array1::<i32>::zeros(n);
     let time1 = time1_arr.view();
     let status = status_arr.view();
     let strata = strata_arr.view();
     let frailty = frailty_arr.view();
-    let time2_view: Option<ArrayView1<f64>> = time2_arr.as_ref().map(|v| v.view());
+    let interval_widths_view: Option<ArrayView1<f64>> =
+        interval_widths_arr.as_ref().map(|v| v.view());
     let input = LikelihoodInput {
         n,
         nvar,
@@ -1238,13 +1322,16 @@ fn compute_survreg(
         strata: &strata,
         offsets,
         time1: &time1,
-        time2: time2_view.as_ref(),
+        interval_widths: interval_widths_view.as_ref(),
         status: &status,
         weights,
         covariates,
         frailty: &frailty,
     };
     let initial_likelihood = input.evaluate()?;
+    if !likelihood_is_finite(&initial_likelihood) {
+        return Err("Initial parameters yield a non-finite likelihood or derivatives".into());
+    }
     let mut loglik = initial_likelihood.loglik;
     let mut information = SurvregInformation::factor(&initial_likelihood.imat, tol_chol);
     let mut jj = initial_likelihood.jj;
@@ -1286,7 +1373,7 @@ fn compute_survreg(
                     strata: &strata,
                     offsets,
                     time1: &time1,
-                    time2: time2_view.as_ref(),
+                    interval_widths: interval_widths_view.as_ref(),
                     status: &status,
                     weights,
                     covariates,
@@ -1303,7 +1390,7 @@ fn compute_survreg(
                     }
                 }
                 let candidate = candidate_input.evaluate()?;
-                if candidate.loglik.is_finite()
+                if likelihood_is_finite(&candidate)
                     && candidate.loglik >= old_loglik
                     && candidate.u.iter().all(|value| value.is_finite())
                     && candidate.imat.diag().iter().all(|value| value.is_finite())
@@ -1401,6 +1488,119 @@ struct ComputeSurvregInput<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prediction_test_fit(distribution: &str) -> SurvivalFit {
+        SurvivalFit {
+            coefficients: vec![1.0, 0.5, 0.5_f64.ln(), 2.0_f64.ln()],
+            location_coefficients: vec![1.0, 0.5],
+            scale: 0.5,
+            scales: vec![0.5, 2.0],
+            distribution: distribution.into(),
+            distribution_parameters: vec![],
+            n_covariates: 2,
+            n_strata: 2,
+            // The second training row includes an offset of 0.25.
+            linear_predictors: vec![1.0, 2.25],
+            time: vec![1.0, 2.0],
+            time2: None,
+            status: vec![1, 1],
+            covariates: vec![vec![1.0, 0.0], vec![1.0, 2.0]],
+            strata: vec![1, 0],
+            weights: vec![1.0; 2],
+            iterations: 0,
+            variance_matrix: vec![
+                vec![0.04, 0.0, 0.0, 0.0],
+                vec![0.0, 0.09, 0.0, 0.0],
+                vec![0.0, 0.0, 0.16, 0.0],
+                vec![0.0, 0.0, 0.0, 0.25],
+            ],
+            log_likelihood: 0.0,
+            convergence_flag: 0,
+            score_vector: vec![0.0; 4],
+        }
+    }
+
+    #[test]
+    fn test_prediction_quantiles_use_training_strata_and_transform_option() {
+        let fit = prediction_test_fit("loglogistic");
+        let response = fit
+            .predict_quantile(None, Some(vec![0.0, 0.75, 1.0]), None)
+            .unwrap();
+        let linear = fit
+            .predict_quantile_with_options(None, Some(vec![0.0, 0.75, 1.0]), None, None, false)
+            .unwrap();
+        for (idx, expected) in [1.0 + 2.0 * 3.0_f64.ln(), 2.25 + 0.5 * 3.0_f64.ln()]
+            .into_iter()
+            .enumerate()
+        {
+            assert!((linear.predictions[idx][1] - expected).abs() < 1e-12);
+            assert!((response.predictions[idx][1] - expected.exp()).abs() < 1e-12);
+            assert_eq!(linear.predictions[idx][0], f64::NEG_INFINITY);
+            assert_eq!(response.predictions[idx][0], 0.0);
+            assert_eq!(response.predictions[idx][2], f64::INFINITY);
+        }
+    }
+
+    #[test]
+    fn test_prediction_quantiles_require_valid_new_data_strata() {
+        let fit = prediction_test_fit("logistic");
+        let covariates = vec![vec![1.0, 0.0], vec![1.0, 2.0]];
+        for strata in [None, Some(vec![0]), Some(vec![0, 2])] {
+            assert!(
+                fit.predict_quantile_with_options(
+                    Some(covariates.clone()),
+                    Some(vec![0.75]),
+                    None,
+                    strata,
+                    true
+                )
+                .is_err()
+            );
+        }
+        let result = fit
+            .predict_quantile_with_options(
+                Some(covariates),
+                Some(vec![0.75]),
+                Some(vec![0.25, -0.25]),
+                Some(vec![0, 1]),
+                true,
+            )
+            .unwrap();
+        assert!((result.predictions[0][0] - (1.25 + 0.5 * 3.0_f64.ln())).abs() < 1e-12);
+        assert!((result.predictions[1][0] - (1.75 + 2.0 * 3.0_f64.ln())).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_prediction_student_t_quantiles_use_fitted_degrees_of_freedom() {
+        let mut fit = prediction_test_fit("t");
+        fit.distribution_parameters = vec![7.0];
+        let result = fit.predict_quantile(None, Some(vec![0.75]), None).unwrap();
+        // R 3.8.11 qt(.75, df=7).
+        let score = 0.711_141_778_081_786_6;
+        assert!((result.predictions[0][0] - (1.0 + 2.0 * score)).abs() < 1e-10);
+        assert!((result.predictions[1][0] - (2.25 + 0.5 * score)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_prediction_training_standard_errors_use_stored_covariates() {
+        for distribution in ["lognormal", "gaussian"] {
+            let fit = prediction_test_fit(distribution);
+            let lp = fit.predict(None, "lp".into(), None, true).unwrap();
+            let response = fit.predict(None, "response".into(), None, true).unwrap();
+            assert_eq!(lp.predictions, vec![1.0, 2.25]);
+            for (idx, expected_lp_se) in [0.2, 0.4_f64.sqrt()].into_iter().enumerate() {
+                assert!((lp.se.as_ref().unwrap()[idx] - expected_lp_se).abs() < 1e-12);
+                let factor = if distribution == "lognormal" {
+                    lp.predictions[idx].exp()
+                } else {
+                    1.0
+                };
+                assert!(
+                    (response.se.as_ref().unwrap()[idx] - expected_lp_se * factor).abs() < 1e-12
+                );
+            }
+        }
+    }
 
     #[test]
     fn partial_initial_values_use_fitted_null_scales_without_solving_locations() {

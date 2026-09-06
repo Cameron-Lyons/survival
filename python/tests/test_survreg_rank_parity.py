@@ -95,7 +95,14 @@ def test_aft_rank_reporting_and_confidence_match_r(rank_fit):
 def test_aft_alias_predictions_preserve_stored_predictors_and_r_missing_values(rank_fit):
     case, fit = rank_fit
     _assert_vector(survival.predict(fit, type="lp"), case["training_prediction"])
-    _assert_vector(survival.predict(fit, case["data"], type="lp"), case["newdata_prediction"])
+    expected_newdata = _vector(case["newdata_prediction"])
+    if "offset(off)" in case["formula"]:
+        # Keep the mathematical offset effect that R omits for newdata.
+        expected_newdata = [
+            None if value is None else value + offset
+            for value, offset in zip(expected_newdata, case["data"]["off"], strict=True)
+        ]
+    _assert_vector(survival.predict(fit, case["data"], type="lp"), expected_newdata)
     _assert_vector(survival.r_api.residuals(fit, type="response"), case["response_residuals"])
     if case["terms"] is not None:
         terms = survival.predict(fit, type="terms", se_fit=True)

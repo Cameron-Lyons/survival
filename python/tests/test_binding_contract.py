@@ -557,7 +557,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
 
     expected_method_args = {
         "predict": ["self", "covariates", "predict_type", "offset", "se_fit"],
-        "predict_quantile": ["self", "covariates", "quantiles", "offset"],
+        "predict_quantile": ["self", "covariates", "quantiles", "offset", "strata", "transform"],
         "residuals": ["self", "residual_type"],
         "dfbeta": ["self"],
     }
@@ -12776,3 +12776,38 @@ def test_package_root_lazy_loads_streaming_sklearn_exports():
         streaming_cox,
         importlib.import_module("survival._sklearn_cox").CoxPHEstimator,
     )
+
+
+def test_survfit_residual_query_binding_is_typed():
+    import survival
+    from survival import _survival as core
+
+    expected = [
+        "time",
+        "status",
+        "curve_time",
+        "n_risk",
+        "n_event",
+        "survival",
+        "cumhaz",
+        "eval_times",
+        "type_",
+        "start",
+        "stype",
+    ]
+    stub_path = Path(survival.__file__).with_name("_survival.pyi")
+    assert list(inspect.signature(core.survfit_residuals_at_times).parameters) == expected
+    assert _pyi_function_arg_names(stub_path, "survfit_residuals_at_times") == expected
+    assert survival.surv_analysis.survfit_residuals_at_times is core.survfit_residuals_at_times
+    rows = core.survfit_residuals_at_times(
+        [1.0, 2.0],
+        [1, 0],
+        [1.0, 2.0],
+        [2.0, 1.0],
+        [1.0, 0.0],
+        [0.5, 0.5],
+        [0.5, 0.5],
+        [1.0],
+        "survival",
+    )
+    assert rows == [[-0.25], [0.25]]

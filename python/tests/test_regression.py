@@ -583,7 +583,7 @@ def test_predict_survreg_quantiles_and_validation():
             coefficients=[0.1, 0.2],
             scale=1.0,
             distribution="weibull",
-            quantiles=[0.0],
+            quantiles=[-0.01],
         )
 
 

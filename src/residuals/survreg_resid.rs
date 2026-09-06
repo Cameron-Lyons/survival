@@ -1,9 +1,9 @@
-use crate::internal::statistical::{normal_cdf, student_t_cdf, student_t_pdf};
+use crate::internal::aft::{AftDistribution, transformed_interval_width as aft_interval_width};
+use crate::internal::statistical::{student_t_cdf, student_t_pdf};
 use pyo3::prelude::*;
 
 const LOG_PROBABILITY_FLOOR: f64 = -690.0;
 const PROBABILITY_FLOOR: f64 = 1e-300;
-const SURVREG_MATRIX_STEP: f64 = 1e-4;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SurvregResidType {
@@ -56,34 +56,9 @@ impl SurvregResiduals {
     }
 }
 
-fn extreme_value_cdf(z: f64) -> f64 {
-    1.0 - (-z.exp()).exp()
-}
-
-fn extreme_value_pdf(z: f64) -> f64 {
-    let ez = z.exp();
-    ez * (-ez).exp()
-}
-
-fn logistic_cdf(z: f64) -> f64 {
-    1.0 / (1.0 + (-z).exp())
-}
-
-fn logistic_pdf(z: f64) -> f64 {
-    let ez = (-z).exp();
-    ez / ((1.0 + ez) * (1.0 + ez))
-}
-
-fn gaussian_cdf(z: f64) -> f64 {
-    normal_cdf(z)
-}
-
+#[cfg(test)]
 fn gaussian_pdf(z: f64) -> f64 {
-    (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
-}
-
-fn student_t_pdf_derivative(z: f64, df: f64) -> f64 {
-    student_t_pdf(z, df) * (-(df + 1.0) * z / (df + z * z))
+    (-0.5 * z * z).exp() / std::f64::consts::TAU.sqrt()
 }
 
 fn distribution_key(distribution: &str) -> String {
@@ -225,62 +200,6 @@ fn validated_distribution_parameter_for_key(
     }
 }
 
-fn cdf_for_key(key: &str, distribution_parameter: Option<f64>, z: f64) -> f64 {
-    match key {
-        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
-            extreme_value_cdf(z)
-        }
-        "logistic" | "loglogistic" | "log_logistic" => logistic_cdf(z),
-        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            gaussian_cdf(z)
-        }
-        "t" | "student" | "student_t" | "studentt" => student_t_cdf(
-            z,
-            distribution_parameter.expect("Student-t df was validated"),
-        ),
-        _ => unreachable!("distribution was validated"),
-    }
-}
-
-fn pdf_for_key(key: &str, distribution_parameter: Option<f64>, z: f64) -> f64 {
-    match key {
-        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
-            extreme_value_pdf(z)
-        }
-        "logistic" | "loglogistic" | "log_logistic" => logistic_pdf(z),
-        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            gaussian_pdf(z)
-        }
-        "t" | "student" | "student_t" | "studentt" => student_t_pdf(
-            z,
-            distribution_parameter.expect("Student-t df was validated"),
-        ),
-        _ => unreachable!("distribution was validated"),
-    }
-}
-
-fn pdf_derivative_for_key(key: &str, distribution_parameter: Option<f64>, z: f64) -> f64 {
-    match key {
-        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
-            let ez = z.exp();
-            ez * (-ez).exp() * (1.0 - ez)
-        }
-        "logistic" | "loglogistic" | "log_logistic" => {
-            let ez = (-z).exp();
-            let denom = (1.0 + ez).powi(3);
-            ez * (ez - 1.0) / denom
-        }
-        "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
-            -z * gaussian_pdf(z)
-        }
-        "t" | "student" | "student_t" | "studentt" => student_t_pdf_derivative(
-            z,
-            distribution_parameter.expect("Student-t df was validated"),
-        ),
-        _ => unreachable!("distribution was validated"),
-    }
-}
-
 fn log_expm1_positive(value: f64) -> f64 {
     if value < 40.0 {
         value.exp_m1().ln()
@@ -297,6 +216,10 @@ fn log_one_minus_exp_neg(value: f64) -> f64 {
     log_positive(probability)
 }
 
+fn standardized_interval_width(lower: f64, upper: f64, scale: f64, log_transform: bool) -> f64 {
+    aft_interval_width(lower, upper, log_transform) / scale
+}
+
 fn transformed_interval_width(
     time: &[f64],
     time2: Option<&[f64]>,
@@ -305,8 +228,12 @@ fn transformed_interval_width(
     distribution: &str,
 ) -> f64 {
     let upper = time2.expect("validated time2 length")[idx];
-    (response_time_value(upper, distribution) - response_time_value(time[idx], distribution))
-        / scale
+    standardized_interval_width(
+        time[idx],
+        upper,
+        scale,
+        response_uses_log_transform(distribution),
+    )
 }
 
 fn survreg_saturated_center_loglik(
@@ -366,7 +293,7 @@ fn survreg_saturated_center_loglik(
         }
         "gaussian" | "normal" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
             let center = (y + upper) / 2.0;
-            let probability = 2.0 * normal_cdf(width / 2.0) - 1.0;
+            let probability = libm::erf(width / (2.0 * std::f64::consts::SQRT_2));
             Ok((center, log_positive(probability)))
         }
         "t" | "student" | "student_t" | "studentt" => {
@@ -385,21 +312,6 @@ fn log_positive(value: f64) -> f64 {
         value.ln()
     } else {
         LOG_PROBABILITY_FLOOR
-    }
-}
-
-fn interval_probability_for_key(
-    key: &str,
-    distribution_parameter: Option<f64>,
-    lower_z: f64,
-    upper_z: f64,
-) -> f64 {
-    if lower_z > 0.0 {
-        (1.0 - cdf_for_key(key, distribution_parameter, lower_z))
-            - (1.0 - cdf_for_key(key, distribution_parameter, upper_z))
-    } else {
-        cdf_for_key(key, distribution_parameter, upper_z)
-            - cdf_for_key(key, distribution_parameter, lower_z)
     }
 }
 
@@ -492,11 +404,8 @@ fn validate_time2_for_interval_residuals(
                 "time2 contains non-finite interval endpoint at index {idx}"
             )));
         }
-        if end <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "time2[{idx}] must be positive"
-            )));
-        }
+        // The response validator enforces positive lower endpoints for log-time
+        // families, so ordering also enforces their upper endpoint domain.
         if end <= start {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "time2[{idx}] must be greater than time[{idx}] for interval-censored rows"
@@ -511,8 +420,20 @@ fn validate_survreg_residual_inputs(
     status: &[i32],
     linear_pred: &[f64],
     scale: f64,
+    distribution: &str,
 ) -> PyResult<()> {
-    validate_positive_finite("time", time)?;
+    validate_distribution(distribution)?;
+    let key = validated_distribution_key(distribution);
+    if response_uses_log_transform_key(&key) {
+        validate_positive_finite("time", time)?;
+    } else {
+        if time.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "time must not be empty",
+            ));
+        }
+        validate_finite_values("time", time)?;
+    }
     validate_status_values(status)?;
     validate_finite_values("linear_pred", linear_pred)?;
     validate_scale(scale)
@@ -790,32 +711,19 @@ pub(crate) fn compute_working_residuals_with_parameter(
     distribution: &str,
     distribution_parameter: Option<f64>,
 ) -> Vec<f64> {
-    let n = time.len();
-    let mut residuals = Vec::with_capacity(n);
-
     let key = validated_distribution_key(distribution);
-    let distribution_parameter =
-        validated_distribution_parameter_for_key(&key, distribution_parameter)
-            .expect("distribution parameter was validated");
-
-    for i in 0..n {
-        let y = response_time_value_for_key(time[i], &key);
-        let z = (y - linear_pred[i]) / scale;
-
-        let resid = if status[i] == 1 {
-            let f = pdf_for_key(&key, distribution_parameter, z);
-            let f_prime = pdf_derivative_for_key(&key, distribution_parameter, z);
-            if f.abs() > 1e-300 { -f_prime / f } else { 0.0 }
-        } else {
-            let surv = 1.0 - cdf_for_key(&key, distribution_parameter, z);
-            let f = pdf_for_key(&key, distribution_parameter, z);
-            if surv.abs() > 1e-300 { f / surv } else { 0.0 }
-        };
-
-        residuals.push(resid);
-    }
-
-    residuals
+    let parameter = validated_distribution_parameter_for_key(&key, distribution_parameter)
+        .expect("distribution parameter was validated");
+    let family = AftDistribution::from_key(&key, parameter);
+    time.iter()
+        .zip(status)
+        .zip(linear_pred)
+        .map(|((&time, &event), &eta)| {
+            let z = (response_time_value_for_key(time, &key) - eta) / scale;
+            let row = family.single(z, scale, event);
+            -row[1] / row[2]
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -836,24 +744,22 @@ pub(crate) fn compute_dfbeta_survreg_with_parameter(
         return vec![];
     };
 
-    let working = compute_working_residuals_with_parameter(
-        time,
-        status,
-        linear_pred,
-        scale,
-        distribution,
-        distribution_parameter,
-    );
+    let key = validated_distribution_key(distribution);
+    let parameter = validated_distribution_parameter_for_key(&key, distribution_parameter)
+        .expect("distribution parameter was validated");
+    let family = AftDistribution::from_key(&key, parameter);
 
     let mut dfbeta = Vec::with_capacity(n);
 
     for i in 0..n {
+        let z = (response_time_value_for_key(time[i], &key) - linear_pred[i]) / scale;
+        let score = family.single(z, scale, status[i])[1];
         let mut row = Vec::with_capacity(nvar);
         for j in 0..nvar {
             let mut val = 0.0;
             for k in 0..nvar {
                 if k < var_matrix.len() && j < var_matrix[k].len() {
-                    val += var_matrix[k][j] * covariates[i][k] * working[i];
+                    val += var_matrix[k][j] * covariates[i][k] * score;
                 }
             }
             row.push(val);
@@ -874,98 +780,37 @@ pub(crate) fn compute_ldcase_with_parameter(
     distribution_parameter: Option<f64>,
 ) -> PyResult<Vec<f64>> {
     validate_time2_for_interval_residuals(time, status, time2)?;
-    let n = time.len();
-
-    let mut ld = Vec::with_capacity(n);
-
     let key = validated_distribution_key(distribution);
-    let distribution_parameter =
-        validated_distribution_parameter_for_key(&key, distribution_parameter)?;
-
-    for i in 0..n {
-        let y = response_time_value_for_key(time[i], &key);
-        let z = (y - linear_pred[i]) / scale;
-
-        let contrib = match status[i] {
-            1 => {
-                let f = pdf_for_key(&key, distribution_parameter, z) / scale;
-                if f > 1e-300 { f.ln() } else { -690.0 }
+    let parameter = validated_distribution_parameter_for_key(&key, distribution_parameter)?;
+    let family = AftDistribution::from_key(&key, parameter);
+    let log_transform = response_uses_log_transform_key(&key);
+    let transform = |value: f64| if log_transform { value.ln() } else { value };
+    Ok(time
+        .iter()
+        .zip(status)
+        .zip(linear_pred)
+        .enumerate()
+        .map(|(idx, ((&time, &event), &eta))| {
+            let z = (transform(time) - eta) / scale;
+            if event == 3 {
+                let upper = time2.expect("validated time2 length")[idx];
+                let width = aft_interval_width(time, upper, log_transform);
+                family.interval_from_response_width(z, width, scale)[0]
+            } else {
+                family.single(z, scale, event)[0]
             }
-            0 => {
-                let surv = 1.0 - cdf_for_key(&key, distribution_parameter, z);
-                if surv > 1e-300 { surv.ln() } else { -690.0 }
-            }
-            2 => {
-                let cdf = cdf_for_key(&key, distribution_parameter, z);
-                if cdf > 1e-300 { cdf.ln() } else { -690.0 }
-            }
-            3 => {
-                let end =
-                    response_time_value_for_key(time2.expect("validated time2 length")[i], &key);
-                let z2 = (end - linear_pred[i]) / scale;
-                let prob = cdf_for_key(&key, distribution_parameter, z2)
-                    - cdf_for_key(&key, distribution_parameter, z);
-                if prob > 1e-300 { prob.ln() } else { -690.0 }
-            }
-            _ => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "status must contain only 0/1/2/3 values",
-                ));
-            }
-        };
-
-        ld.push(contrib);
-    }
-
-    Ok(ld)
+        })
+        .collect())
 }
 
-fn survreg_loglik_contribution(
-    time: f64,
-    time2: Option<f64>,
-    status: i32,
-    linear_pred: f64,
-    log_scale: f64,
-    distribution: &str,
-    distribution_parameter: Option<f64>,
-) -> PyResult<f64> {
-    let scale = log_scale.exp();
-    let key = validated_distribution_key(distribution);
-    let distribution_parameter =
-        validated_distribution_parameter_for_key(&key, distribution_parameter)?;
-    let y = response_time_value_for_key(time, &key);
-    let z = (y - linear_pred) / scale;
-
-    match status {
-        1 => Ok(log_positive(
-            pdf_for_key(&key, distribution_parameter, z) / scale,
-        )),
-        0 => Ok(log_positive(
-            1.0 - cdf_for_key(&key, distribution_parameter, z),
-        )),
-        2 => Ok(log_positive(cdf_for_key(&key, distribution_parameter, z))),
-        3 => {
-            let Some(end) = time2 else {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "time2 is required for interval-censored rows",
-                ));
-            };
-            let z2 = (response_time_value_for_key(end, &key) - linear_pred) / scale;
-            Ok(log_positive(interval_probability_for_key(
-                &key,
-                distribution_parameter,
-                z,
-                z2,
-            )))
-        }
-        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "status must contain only 0/1/2/3 values",
-        )),
-    }
-}
-
-fn eta_derivative_step(scale: f64) -> f64 {
-    (SURVREG_MATRIX_STEP * scale).clamp(1e-6, 1e-3)
+/// R's interval diagnostic columns use a different scale convention from a
+/// likelihood Hessian. Keep this conversion shared by integration and tail limits.
+fn interval_scale_convention(mut row: [f64; 6], scale: f64) -> [f64; 6] {
+    let ds = row[3];
+    row[3] = -ds;
+    row[4] += 2.0 * ds;
+    row[5] = scale * row[5] + row[1] * (scale * (1.0 + ds) - 1.0 + ds);
+    row
 }
 
 #[cfg(test)]
@@ -1001,41 +846,21 @@ pub(crate) fn compute_survreg_residual_matrix_with_parameter(
     let key = validated_distribution_key(distribution);
     let distribution_parameter =
         validated_distribution_parameter_for_key(&key, distribution_parameter)?;
-    let log_scale = scale.ln();
-    let h_eta = eta_derivative_step(scale);
-    let h_scale = SURVREG_MATRIX_STEP;
+    let family = AftDistribution::from_key(&key, distribution_parameter);
+    let log_transform = response_uses_log_transform_key(&key);
+    let transform = |value: f64| if log_transform { value.ln() } else { value };
     let mut matrix = Vec::with_capacity(time.len());
 
     for i in 0..time.len() {
-        let time2_i = time2.map(|values| values[i]);
-        let eta = linear_pred[i];
-        let eval = |eta_shift: f64, scale_shift: f64| {
-            survreg_loglik_contribution(
-                time[i],
-                time2_i,
-                status[i],
-                eta + eta_shift,
-                log_scale + scale_shift,
-                distribution,
-                distribution_parameter,
-            )
+        let z = (transform(time[i]) - linear_pred[i]) / scale;
+        let row = if status[i] == 3 {
+            let upper = time2.expect("validated time2 length")[i];
+            let width = aft_interval_width(time[i], upper, log_transform);
+            interval_scale_convention(family.interval_from_response_width(z, width, scale), scale)
+        } else {
+            family.single(z, scale, status[i])
         };
-
-        let g = eval(0.0, 0.0)?;
-        let eta_plus = eval(h_eta, 0.0)?;
-        let eta_minus = eval(-h_eta, 0.0)?;
-        let scale_plus = eval(0.0, h_scale)?;
-        let scale_minus = eval(0.0, -h_scale)?;
-
-        let dg = (eta_plus - eta_minus) / (2.0 * h_eta);
-        let ddg = (eta_plus - 2.0 * g + eta_minus) / (h_eta * h_eta);
-        let ds = (scale_plus - scale_minus) / (2.0 * h_scale);
-        let dds = (scale_plus - 2.0 * g + scale_minus) / (h_scale * h_scale);
-        let dsg = (eval(h_eta, h_scale)? - eval(h_eta, -h_scale)? - eval(-h_eta, h_scale)?
-            + eval(-h_eta, -h_scale)?)
-            / (4.0 * h_eta * h_scale);
-
-        matrix.push(vec![g, dg, ddg, ds, dds, dsg]);
+        matrix.push(row.to_vec());
     }
 
     Ok(matrix)
@@ -1047,14 +872,7 @@ pub(crate) fn compute_working_residuals_from_derivative_matrix(
     validate_derivative_matrix(derivative_matrix)?;
     Ok(derivative_matrix
         .iter()
-        .map(|row| {
-            let curvature = row[2];
-            if curvature.abs() > 1e-12 {
-                -row[1] / curvature
-            } else {
-                0.0
-            }
-        })
+        .map(|row| -row[1] / row[2])
         .collect())
 }
 
@@ -1229,8 +1047,7 @@ pub fn survreg_residual_matrix(
             "time, status, and linear_pred must have the same length",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
@@ -1342,8 +1159,7 @@ pub fn residuals_survreg(
             "survreg matrix residuals are matrix-valued; use survreg_residual_matrix",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
 
@@ -1437,8 +1253,7 @@ pub fn dfbeta_survreg(
             "All inputs must have the same length",
         ));
     }
-    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale)?;
-    validate_distribution(&distribution)?;
+    validate_survreg_residual_inputs(&time, &status, &linear_pred, scale, &distribution)?;
     let key = validated_distribution_key(&distribution);
     validated_distribution_parameter_for_key(&key, distribution_parameter)?;
     let width = validate_covariates(&covariates)?;
@@ -1482,6 +1297,260 @@ pub fn dfbeta_survreg(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_relative(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance * expected.abs().max(1.0),
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn gaussian_exact_derivatives_preserve_extreme_scales() {
+        for scale in [1e-12, 1.0, 1e12] {
+            let matrix = compute_survreg_residual_matrix(
+                &[2.5 * scale],
+                None,
+                &[1],
+                &[0.5 * scale],
+                scale,
+                "gaussian",
+            )
+            .unwrap();
+            let expected = [
+                -2.0 - 0.5 * std::f64::consts::TAU.ln() - scale.ln(),
+                2.0 / scale,
+                -1.0 / scale / scale,
+                3.0,
+                -8.0,
+                -4.0 / scale,
+            ];
+            for (actual, expected) in matrix[0].iter().zip(expected) {
+                assert_relative(*actual, expected, 2e-14);
+            }
+            let working = compute_working_residuals_from_derivative_matrix(&matrix).unwrap();
+            assert_relative(working[0], 2.0 * scale, 2e-14);
+        }
+    }
+
+    #[test]
+    fn censored_gaussian_tail_derivatives_match_r_reference() {
+        let matrix = compute_survreg_residual_matrix(
+            &[9.0, 1.0],
+            None,
+            &[0, 2],
+            &[0.0, 10.0],
+            1.0,
+            "gaussian",
+        )
+        .unwrap();
+        let expected = [
+            -43.62814911333211,
+            9.108523105002869,
+            -0.9884852093452707,
+            81.97670794502582,
+            -162.0440099019934,
+            -18.00488998911032,
+        ];
+        for (i, &value) in expected.iter().enumerate() {
+            assert_relative(matrix[0][i], value, 2e-12);
+            let reflected = if i == 1 || i == 5 { -value } else { value };
+            assert_relative(matrix[1][i], reflected, 2e-12);
+        }
+    }
+
+    #[test]
+    fn censored_logistic_tail_retains_small_curvature() {
+        let matrix =
+            compute_survreg_residual_matrix(&[40.0], None, &[0], &[0.0], 1.0, "logistic").unwrap();
+        assert_eq!(matrix[0][0], -40.0);
+        assert_eq!(matrix[0][1], 1.0);
+        assert_relative(matrix[0][2] / (-40.0_f64).exp(), -1.0, 1e-14);
+        assert_eq!(matrix[0][3], 40.0);
+        let working = compute_working_residuals_from_derivative_matrix(&matrix).unwrap();
+        assert_relative(working[0], 40.0_f64.exp(), 1e-14);
+    }
+
+    #[test]
+    fn narrow_gaussian_interval_has_density_limit_and_r_scale_columns() {
+        let time = 1.5;
+        let upper = time + 1e-9;
+        let eta = 0.2;
+        let scale = 1.3;
+        let z = ((time + upper) / 2.0 - eta) / scale;
+        let matrix = compute_survreg_residual_matrix(
+            &[time],
+            Some(&[upper]),
+            &[3],
+            &[eta],
+            scale,
+            "gaussian",
+        )
+        .unwrap();
+        let expected = [
+            gaussian_pdf(z).ln() + ((upper - time) / scale).ln(),
+            z / scale,
+            -1.0 / scale / scale,
+            1.0 - z * z,
+            -2.0,
+            z * z * z - 2.0 * z + (z * z * z - 2.0 * z) / scale,
+        ];
+        for (actual, expected) in matrix[0].iter().zip(expected) {
+            assert_relative(*actual, expected, 2e-14);
+        }
+    }
+
+    #[test]
+    fn large_gaussian_tail_keeps_negative_unit_curvature() {
+        for z in [1e4, 1e5, 1e8] {
+            let matrix =
+                compute_survreg_residual_matrix(&[z], None, &[0], &[0.0], 1.0, "gaussian").unwrap();
+            // The Mills expansion gives h(z)=z+1/z+O(z^-3) and
+            // d² log(S(z))/dz²=-1+1/z²+O(z^-4).
+            assert_relative(matrix[0][1], z + 1.0 / z, 1e-14);
+            assert_relative(matrix[0][2], -1.0 + 1.0 / (z * z), 1e-14);
+            let working = compute_working_residuals_from_derivative_matrix(&matrix).unwrap();
+            assert!(working[0] > 0.0);
+        }
+    }
+
+    #[test]
+    fn narrow_extreme_interval_checks_density_variation() {
+        for lower in [15.0_f64, 20.0] {
+            let upper = lower + 1e-5;
+            let matrix = compute_survreg_residual_matrix(
+                &[lower],
+                Some(&[upper]),
+                &[3],
+                &[0.0],
+                1.0,
+                "extreme",
+            )
+            .unwrap();
+            let mass_delta = lower.exp() * (upper - lower).exp_m1();
+            let expected = -lower.exp() + (-(-mass_delta).exp_m1()).ln();
+            assert_relative(matrix[0][0], expected, 2e-15);
+        }
+    }
+
+    #[test]
+    fn narrow_log_interval_preserves_adjacent_response_bounds() {
+        let lower = 1e6_f64;
+        let upper = f64::from_bits(lower.to_bits() + 1);
+        let matrix = compute_survreg_residual_matrix(
+            &[lower],
+            Some(&[upper]),
+            &[3],
+            &[0.0],
+            1.0,
+            "lognormal",
+        )
+        .unwrap();
+        let z = lower.ln();
+        let width = ((upper - lower) / lower).ln_1p();
+        let expected = gaussian_pdf(z).ln() + width.ln();
+        assert_relative(matrix[0][0], expected, 2e-15);
+    }
+
+    #[test]
+    fn distant_gaussian_interval_matches_dominant_censored_bound() {
+        for (lower, eta, status) in [(1e5, 0.0, 0), (1.0, 100002.0, 2)] {
+            let upper = lower + 1.0;
+            let interval = compute_survreg_residual_matrix(
+                &[lower],
+                Some(&[upper]),
+                &[3],
+                &[eta],
+                1.0,
+                "gaussian",
+            )
+            .unwrap();
+            let bound = if status == 0 { lower } else { upper };
+            let censored =
+                compute_survreg_residual_matrix(&[bound], None, &[status], &[eta], 1.0, "gaussian")
+                    .unwrap();
+            for i in 0..3 {
+                assert_eq!(interval[0][i], censored[0][i]);
+            }
+        }
+    }
+
+    #[test]
+    fn distant_gaussian_interval_retains_curvature_with_two_relevant_bounds() {
+        let lower = 1e5_f64;
+        let upper = lower + 1e-5;
+        let width = upper - lower;
+        let matrix = compute_survreg_residual_matrix(
+            &[lower],
+            Some(&[upper]),
+            &[3],
+            &[0.0],
+            1.0,
+            "gaussian",
+        )
+        .unwrap();
+        // For a normal interval, the location score is its conditional mean
+        // and curvature is Var(Z | interval)-1. Both have independent bounds.
+        assert!(matrix[0][1] >= lower && matrix[0][1] <= upper);
+        assert!(matrix[0][2] >= -1.0 - 1e-14);
+        assert!(matrix[0][2] <= -1.0 + width * width / 4.0 + 1e-14);
+    }
+
+    #[test]
+    fn flat_student_interval_preserves_density_limit() {
+        let lower = 1e10;
+        let upper = lower + 1.0;
+        let matrix = compute_survreg_residual_matrix_with_parameter(
+            &[lower],
+            Some(&[upper]),
+            &[3],
+            &[0.0],
+            1.0,
+            "t",
+            Some(4.0),
+        )
+        .unwrap();
+        // For df=4 the normalizer is 3/8; the relative density change is
+        // 5e-10 and the midpoint integration error is smaller than 1e-19.
+        let midpoint = (lower + upper) / 2.0;
+        let expected = (3.0_f64 / 8.0).ln() - 2.5 * (midpoint * midpoint / 4.0).ln_1p();
+        assert_relative(matrix[0][0], expected, 2e-15);
+    }
+
+    #[test]
+    fn narrow_log_interval_deviance_uses_the_same_preserved_width() {
+        let lower = 1e6_f64;
+        let upper = f64::from_bits(lower.to_bits() + 1);
+        let residuals = compute_deviance_residuals_survreg(
+            &[lower],
+            Some(&[upper]),
+            &[3],
+            &[0.0],
+            1.0,
+            "lognormal",
+        )
+        .unwrap();
+        assert_relative(residuals[0], lower.ln(), 2e-14);
+    }
+
+    #[test]
+    fn location_dfbeta_uses_score_instead_of_working_residual() {
+        let dfbeta = compute_dfbeta_survreg_with_parameter(
+            &[5.0],
+            &[1],
+            &[vec![1.0]],
+            &[1.0],
+            2.0,
+            &[vec![3.0]],
+            "gaussian",
+            None,
+        );
+        assert_eq!(dfbeta, vec![vec![3.0]]);
+        assert_eq!(
+            compute_working_residuals(&[5.0], &[1], &[1.0], 2.0, "gaussian"),
+            vec![4.0]
+        );
+    }
 
     #[test]
     fn test_response_residuals() {
@@ -1575,7 +1644,7 @@ mod tests {
 
         assert!((working[0] - 0.5).abs() < 1e-12);
         assert!((working[1] + 0.5).abs() < 1e-12);
-        assert_eq!(working[2], 0.0);
+        assert_eq!(working[2], f64::NEG_INFINITY);
     }
 
     #[test]

@@ -1,35 +1,11 @@
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
-use crate::internal::statistical::{erf, erfc, student_t_cdf, student_t_pdf};
+use crate::internal::aft::AftDistribution;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
-use std::fmt;
 
-type SurvregDerivatives = (f64, f64, f64, f64, f64, f64);
-type DistributionEval = [f64; 4];
+type SurvregDerivatives = [f64; 6];
 
-const SMALL: f64 = -200.0;
-const SPI: f64 = 2.506628274631001;
-const ROOT_2: f64 = std::f64::consts::SQRT_2;
 const SURVREG_PARALLEL_THRESHOLD: usize = 10_000;
 
-#[derive(Debug)]
-pub(crate) enum DistributionError {
-    InvalidCase { case: i32, distribution: String },
-}
-
-impl fmt::Display for DistributionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DistributionError::InvalidCase { case, distribution } => write!(
-                f,
-                "Invalid case {} for {} distribution. Valid cases are 1 (density) and 2 (CDF)",
-                case, distribution
-            ),
-        }
-    }
-}
-
-impl std::error::Error for DistributionError {}
 #[derive(Clone, Copy)]
 pub(crate) enum SurvivalDist {
     ExtremeValue,
@@ -40,6 +16,17 @@ pub(crate) enum SurvivalDist {
     LogLogistic,
     StudentT(f64),
 }
+impl SurvivalDist {
+    fn family(self) -> AftDistribution {
+        match self {
+            Self::ExtremeValue | Self::Weibull => AftDistribution::Extreme,
+            Self::Logistic | Self::LogLogistic => AftDistribution::Logistic,
+            Self::Gaussian | Self::LogNormal => AftDistribution::Gaussian,
+            Self::StudentT(df) => AftDistribution::from_key("t", Some(df)),
+        }
+    }
+}
+
 pub(crate) struct SurvivalLikelihood {
     pub loglik: f64,
     pub u: Array1<f64>,
@@ -66,32 +53,30 @@ pub(crate) struct Derivatives {
 }
 
 /// Return the unweighted location score and curvature for initialization.
-/// Times must already be on the distribution's fitting scale, as in survregc1.
+/// Times and interval widths must be on the fitting scale, as in survregc1.
 /// An unresolved interval probability cannot supply an initialization weight.
 pub(crate) fn survreg_location_derivatives(
     time: f64,
-    time2: Option<f64>,
+    interval_width: Option<f64>,
     status: i32,
     eta: f64,
     sigma: f64,
     dist: SurvivalDist,
 ) -> Result<(f64, f64), Box<dyn std::error::Error>> {
-    let sz = time - eta;
-    let z = sz / sigma;
-    let (_, dg, ddg, _, _, _) = match status {
-        1 => compute_exact::<true>(z, sz, sigma, dist),
-        0 => compute_right_censored::<true>(z, sz, sigma, dist),
-        2 => compute_left_censored::<true>(z, sz, sigma, dist),
-        3 => compute_interval_censored_inner::<true, true>(
-            z,
-            time2.ok_or("Missing time2 for interval censored data")?,
-            eta,
-            sigma,
-            dist,
-        ),
-        _ => return Err("Invalid status value".into()),
-    }?;
-    Ok((dg, ddg))
+    let width = if status == 3 {
+        let width = interval_width.ok_or("Missing time2 for interval censored data")?;
+        if !width.is_finite() || !time.is_finite() || width <= 0.0 {
+            return Err("initial iteration failed: interval probability is not finite and positive (use starting estimates?)".into());
+        }
+        Some(width)
+    } else {
+        None
+    };
+    let row = likelihood_row(dist.family(), (time - eta) / sigma, sigma, status, width)?;
+    if status == 3 && !row[..3].iter().all(|value| value.is_finite()) {
+        return Err("initial iteration failed: interval probability is not finite and positive (use starting estimates?)".into());
+    }
+    Ok((row[1], row[2]))
 }
 
 /// Evaluate a retry without allocating score, information, or per-person
@@ -107,27 +92,39 @@ pub(crate) fn survreg_loglik(
     strat: &ArrayView1<i32>,
     offset: &ArrayView1<f64>,
     time1: &ArrayView1<f64>,
-    time2: Option<&ArrayView1<f64>>,
+    interval_widths: Option<&ArrayView1<f64>>,
     status: &ArrayView1<i32>,
     wt: &ArrayView1<f64>,
     covar: &ArrayView2<f64>,
     nf: usize,
     frail: &ArrayView1<i32>,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    // Full evaluation requires contiguous upper endpoints on its parallel
+    // Full evaluation requires contiguous interval widths on its parallel
     // path. Retain the same input requirement when screening those fits.
-    if n >= SURVREG_PARALLEL_THRESHOLD && time2.is_some_and(|upper| upper.as_slice().is_none()) {
-        return Err("time2 array must be contiguous in memory".into());
+    if n >= SURVREG_PARALLEL_THRESHOLD
+        && interval_widths.is_some_and(|upper| upper.as_slice().is_none())
+    {
+        return Err("interval_widths array must be contiguous in memory".into());
     }
 
+    let family = dist.family();
+    let scales: Vec<f64> = (0..nstrat.max(1))
+        .map(|stratum| beta[nvar + nf + stratum].exp())
+        .collect();
     let mut loglik = 0.0;
     for person in 0..n {
+        if !matches!(status[person], 0..=3) {
+            return Err("Invalid status value".into());
+        }
+        if wt[person] == 0.0 {
+            continue;
+        }
         let strata_idx = if nstrat > 1 {
             (strat[person] - 1) as usize
         } else {
             0
         };
-        let sigma = beta[nvar + nf + strata_idx].exp();
+        let sigma = scales[strata_idx];
         let mut eta = offset[person];
         for column in 0..nvar {
             eta += beta[column + nf] * covar[[column, person]];
@@ -135,20 +132,15 @@ pub(crate) fn survreg_loglik(
         if nf > 0 {
             eta += beta[(frail[person] - 1) as usize];
         }
-        let sz = time1[person] - eta;
-        let z = sz / sigma;
-        let contribution = match status[person] {
-            1 => compute_exact::<false>(z, sz, sigma, dist),
-            0 => compute_right_censored::<false>(z, sz, sigma, dist),
-            2 => compute_left_censored::<false>(z, sz, sigma, dist),
-            3 => {
-                let upper = time2
-                    .ok_or_else(|| "Missing time2 for interval censored data".to_string())?[person];
-                compute_interval_censored::<false>(z, upper, eta, sigma, dist)
-            }
-            _ => return Err("Invalid status value".into()),
-        }?;
-        loglik += contribution.0 * wt[person];
+        let z = (time1[person] - eta) / sigma;
+        let contribution = likelihood_row(
+            family,
+            z,
+            sigma,
+            status[person],
+            interval_widths.map(|widths| widths[person]),
+        )?;
+        loglik += contribution[0] * wt[person];
     }
     Ok(loglik)
 }
@@ -164,7 +156,7 @@ pub(crate) fn survregc1(
     strat: &ArrayView1<i32>,
     offset: &ArrayView1<f64>,
     time1: &ArrayView1<f64>,
-    time2: Option<&ArrayView1<f64>>,
+    interval_widths: Option<&ArrayView1<f64>>,
     status: &ArrayView1<i32>,
     wt: &ArrayView1<f64>,
     covar: &ArrayView2<f64>,
@@ -176,40 +168,57 @@ pub(crate) fn survregc1(
 
     if n < SURVREG_PARALLEL_THRESHOLD || whichcase {
         return survregc1_sequential(
-            n, nvar, nstrat, whichcase, beta, dist, strat, offset, time1, time2, status, wt, covar,
-            nf, frail,
+            n,
+            nvar,
+            nstrat,
+            whichcase,
+            beta,
+            dist,
+            strat,
+            offset,
+            time1,
+            interval_widths,
+            status,
+            wt,
+            covar,
+            nf,
+            frail,
         );
     }
 
-    let time2_slice = match time2 {
+    let interval_widths_slice = match interval_widths {
         Some(t) => Some(
             t.as_slice()
-                .ok_or_else(|| "time2 array must be contiguous in memory".to_string())?,
+                .ok_or_else(|| "interval_widths array must be contiguous in memory".to_string())?,
         ),
         None => None,
     };
 
-    type PersonResult = (usize, usize, usize, f64, f64, f64, SurvregDerivatives);
+    let family = dist.family();
+    let scales: Vec<f64> = (0..nstrat.max(1))
+        .map(|stratum| beta[nvar + nf + stratum].exp())
+        .collect();
+    type PersonResult = (usize, usize, usize, f64, SurvregDerivatives);
     let partial_results: Result<Vec<PersonResult>, Box<dyn std::error::Error + Send + Sync>> = (0
         ..n)
         .into_par_iter()
         .map(|person| {
+            if !matches!(status[person], 0..=3) {
+                return Err("Invalid status value".into());
+            }
+            if wt[person] == 0.0 {
+                return Ok((person, 0, 0, 0.0, [0.0; 6]));
+            }
             let strata_idx = if nstrat > 1 {
                 (strat[person] - 1) as usize
             } else {
                 0
             };
-            let sigma = if nstrat > 1 {
-                beta[nvar + nf + strata_idx].exp()
-            } else {
-                beta[nvar + nf].exp()
-            };
-
+            let sigma = scales[strata_idx];
             let mut eta = offset[person];
             for i in 0..nvar {
                 eta += beta[i + nf] * covar[[i, person]];
             }
-
             let fgrp = if nf > 0 {
                 (frail[person] - 1) as usize
             } else {
@@ -218,27 +227,15 @@ pub(crate) fn survregc1(
             if nf > 0 {
                 eta += beta[fgrp];
             }
-
-            let sz = time1[person] - eta;
-            let z = sz / sigma;
-
-            let derivs: SurvregDerivatives = match status[person] {
-                1 => compute_exact::<true>(z, sz, sigma, dist),
-                0 => compute_right_censored::<true>(z, sz, sigma, dist),
-                2 => compute_left_censored::<true>(z, sz, sigma, dist),
-                3 => {
-                    let time2_val = time2_slice.ok_or_else(|| {
-                        Box::<dyn std::error::Error + Send + Sync>::from(
-                            "Missing time2 for interval censored data",
-                        )
-                    })?[person];
-                    compute_interval_censored::<true>(z, time2_val, eta, sigma, dist)
-                }
-                _ => Err("Invalid status value".into()),
-            }
-            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))?;
-
-            Ok((person, fgrp, strata_idx, sigma, sz, wt[person], derivs))
+            let z = (time1[person] - eta) / sigma;
+            let row = likelihood_row(
+                family,
+                z,
+                sigma,
+                status[person],
+                interval_widths_slice.map(|widths| widths[person]),
+            )?;
+            Ok((person, fgrp, strata_idx, wt[person], row))
         })
         .collect();
 
@@ -255,9 +252,10 @@ pub(crate) fn survregc1(
     };
 
     let dims = SurvregDimensions { nvar, nstrat, nf };
-    for (person, fgrp, strata_idx, _sigma, _sz, w, (g, dg, ddg, dsig, ddsig, dsg)) in
-        partial_results
-    {
+    for (person, fgrp, strata_idx, w, [g, dg, ddg, dsig, ddsig, dsg]) in partial_results {
+        if w == 0.0 {
+            continue;
+        }
         result.loglik += g * w;
         let derivs = Derivatives {
             dg,
@@ -305,7 +303,7 @@ fn survregc1_sequential(
     strat: &ArrayView1<i32>,
     offset: &ArrayView1<f64>,
     time1: &ArrayView1<f64>,
-    time2: Option<&ArrayView1<f64>>,
+    interval_widths: Option<&ArrayView1<f64>>,
     status: &ArrayView1<i32>,
     wt: &ArrayView1<f64>,
     covar: &ArrayView2<f64>,
@@ -323,17 +321,23 @@ fn survregc1_sequential(
         fdiag: Array1::zeros(nf),
         jdiag: Array1::zeros(nf),
     };
-    let mut sigma;
-    let mut _sig2;
-    let mut strata = 0;
+    let family = dist.family();
+    let scales: Vec<f64> = (0..nstrat.max(1))
+        .map(|stratum| beta[nvar + nf + stratum].exp())
+        .collect();
     for person in 0..n {
-        if nstrat > 1 {
-            strata = (strat[person] - 1) as usize;
-            sigma = beta[nvar + nf + strata].exp();
-        } else {
-            sigma = beta[nvar + nf].exp();
+        if !matches!(status[person], 0..=3) {
+            return Err("Invalid status value".into());
         }
-        _sig2 = 1.0 / (sigma * sigma);
+        if wt[person] == 0.0 {
+            continue;
+        }
+        let strata = if nstrat > 1 {
+            (strat[person] - 1) as usize
+        } else {
+            0
+        };
+        let sigma = scales[strata];
         let mut eta = offset[person];
         for i in 0..nvar {
             eta += beta[i + nf] * covar[[i, person]];
@@ -346,19 +350,14 @@ fn survregc1_sequential(
         if nf > 0 {
             eta += beta[fgrp];
         }
-        let sz = time1[person] - eta;
-        let z = sz / sigma;
-        let (g, dg, ddg, dsig, ddsig, dsg) = match status[person] {
-            1 => compute_exact::<true>(z, sz, sigma, dist),
-            0 => compute_right_censored::<true>(z, sz, sigma, dist),
-            2 => compute_left_censored::<true>(z, sz, sigma, dist),
-            3 => {
-                let time2_val = time2
-                    .ok_or_else(|| "Missing time2 for interval censored data".to_string())?[person];
-                compute_interval_censored::<true>(z, time2_val, eta, sigma, dist)
-            }
-            _ => return Err("Invalid status value".into()),
-        }?;
+        let z = (time1[person] - eta) / sigma;
+        let [g, dg, ddg, dsig, ddsig, dsg] = likelihood_row(
+            family,
+            z,
+            sigma,
+            status[person],
+            interval_widths.map(|widths| widths[person]),
+        )?;
         result.loglik += g * wt[person];
         if whichcase {
             continue;
@@ -379,265 +378,27 @@ fn survregc1_sequential(
 
     Ok(result)
 }
+/// Derivatives with respect to location and log(scale). Interval widths are
+/// transformed once from the original response endpoints before optimization.
 #[inline]
-fn compute_exact<const DERIVATIVES: bool>(
+fn likelihood_row(
+    family: AftDistribution,
     z: f64,
-    sz: f64,
     sigma: f64,
-    dist: SurvivalDist,
-) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let funs = match dist {
-        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 1)?,
-        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 1)?,
-        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 1)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 1, df)?,
-    };
-    if funs[1] <= 0.0 {
-        Ok((SMALL, -z / sigma, -1.0 / sigma, 0.0, 0.0, 0.0))
-    } else {
-        let g = funs[1].ln() - sigma.ln();
-        if !DERIVATIVES {
-            return Ok((g, 0.0, 0.0, 0.0, 0.0, 0.0));
+    status: i32,
+    interval_width: Option<f64>,
+) -> Result<SurvregDerivatives, &'static str> {
+    match status {
+        0..=2 => Ok(family.single(z, sigma, status)),
+        3 => {
+            let width =
+                interval_width.ok_or("Missing interval widths for interval censored data")?;
+            Ok(family.interval_from_response_width(z, width, sigma))
         }
-        let temp = funs[2] / sigma;
-        let temp2 = funs[3] / (sigma * sigma);
-        let dg = -temp;
-        let dsig = -temp * sz;
-        let ddg = temp2 - dg.powi(2);
-        let dsg = sz * temp2 - dg * (dsig + 1.0);
-        let ddsig = sz.powi(2) * temp2 - dsig * (1.0 + dsig);
-        Ok((g, dg, ddg, dsig - 1.0, ddsig, dsg))
-    }
-}
-#[inline]
-fn compute_right_censored<const DERIVATIVES: bool>(
-    z: f64,
-    sz: f64,
-    sigma: f64,
-    dist: SurvivalDist,
-) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let funs = match dist {
-        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
-        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
-        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
-    };
-    if funs[1] <= 0.0 {
-        Ok((SMALL, z / sigma, 0.0, 0.0, 0.0, 0.0))
-    } else {
-        let g = funs[1].ln();
-        if !DERIVATIVES {
-            return Ok((g, 0.0, 0.0, 0.0, 0.0, 0.0));
-        }
-        let temp = -funs[2] / (funs[1] * sigma);
-        let temp2 = -funs[3] / (funs[1] * sigma * sigma);
-        let dg = -temp;
-        let dsig = -temp * sz;
-        let ddg = temp2 - dg.powi(2);
-        let dsg = sz * temp2 - dg * (dsig + 1.0);
-        let ddsig = sz.powi(2) * temp2 - dsig * (1.0 + dsig);
-        Ok((g, dg, ddg, dsig, ddsig, dsg))
-    }
-}
-#[inline]
-fn compute_left_censored<const DERIVATIVES: bool>(
-    z: f64,
-    sz: f64,
-    sigma: f64,
-    dist: SurvivalDist,
-) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let funs = match dist {
-        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
-        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
-        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
-    };
-    if funs[0] <= 0.0 {
-        Ok((SMALL, -z / sigma, 0.0, 0.0, 0.0, 0.0))
-    } else {
-        let g = funs[0].ln();
-        if !DERIVATIVES {
-            return Ok((g, 0.0, 0.0, 0.0, 0.0, 0.0));
-        }
-        let temp = funs[2] / (funs[0] * sigma);
-        let temp2 = funs[3] / (funs[0] * sigma * sigma);
-        let dg = -temp;
-        let dsig = -temp * sz;
-        let ddg = temp2 - dg.powi(2);
-        let dsg = sz * temp2 - dg * (dsig + 1.0);
-        let ddsig = sz.powi(2) * temp2 - dsig * (1.0 + dsig);
-        Ok((g, dg, ddg, dsig, ddsig, dsg))
-    }
-}
-#[inline]
-fn compute_interval_censored<const DERIVATIVES: bool>(
-    z: f64,
-    time2: f64,
-    eta: f64,
-    sigma: f64,
-    dist: SurvivalDist,
-) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    compute_interval_censored_inner::<DERIVATIVES, false>(z, time2, eta, sigma, dist)
-}
-
-#[inline]
-fn compute_interval_censored_inner<const DERIVATIVES: bool, const REQUIRE_PROBABILITY: bool>(
-    z: f64,
-    time2: f64,
-    eta: f64,
-    sigma: f64,
-    dist: SurvivalDist,
-) -> Result<SurvregDerivatives, Box<dyn std::error::Error>> {
-    let sz2 = time2 - eta;
-    let z2 = sz2 / sigma;
-    let funs = match dist {
-        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
-        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
-        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
-    };
-    let ufun = match dist {
-        SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z2, 2)?,
-        SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z2, 2)?,
-        SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z2, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z2, 2, df)?,
-    };
-    let diff = if z > 0.0 {
-        funs[1] - ufun[1]
-    } else {
-        ufun[0] - funs[0]
-    };
-    if REQUIRE_PROBABILITY && (!diff.is_finite() || diff <= 0.0) {
-        return Err(
-            "initial iteration failed: interval probability is not finite and positive (use starting estimates?)"
-                .into(),
-        );
-    }
-    if diff <= 0.0 {
-        Ok((SMALL, 1.0, 0.0, 0.0, 0.0, 0.0))
-    } else {
-        let g = diff.ln();
-        if !DERIVATIVES {
-            return Ok((g, 0.0, 0.0, 0.0, 0.0, 0.0));
-        }
-        let dg = -(ufun[2] - funs[2]) / (diff * sigma);
-        let ddg = (ufun[3] - funs[3]) / (diff * sigma * sigma) - dg.powi(2);
-        let dsig = (z * funs[2] - z2 * ufun[2]) / diff;
-        let ddsig = (z2 * z2 * ufun[3] - z * z * funs[3]) / diff - dsig * (1.0 + dsig);
-        let dsg = (z2 * ufun[3] - z * funs[3]) / (diff * sigma) - dg * (dsig + 1.0);
-        Ok((g, dg, ddg, dsig, ddsig, dsg))
-    }
-}
-#[inline]
-fn logistic_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
-    let mut ans = [0.0; 4];
-    let (w, sign, ii) = if z > 0.0 {
-        ((-z).exp(), -1.0, 0usize)
-    } else {
-        (z.exp(), 1.0, 1usize)
-    };
-    let temp = 1.0 + w;
-    match case {
-        1 => {
-            ans[1] = w / temp.powi(2);
-            ans[2] = sign * (1.0 - w) / temp;
-            ans[3] = (w.powi(2) - 4.0 * w + 1.0) / temp.powi(2);
-            Ok(ans)
-        }
-        2 => {
-            ans[1 - ii] = w / temp;
-            ans[ii] = 1.0 / temp;
-            ans[2] = w / temp.powi(2);
-            ans[3] = sign * ans[2] * (1.0 - w) / temp;
-            Ok(ans)
-        }
-        _ => Err(DistributionError::InvalidCase {
-            case,
-            distribution: "logistic".to_string(),
-        }),
-    }
-}
-#[inline]
-fn gauss_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
-    let mut ans = [0.0; 4];
-    let f = (-z.powi(2) / 2.0).exp() / SPI;
-    match case {
-        1 => {
-            ans[1] = f;
-            ans[2] = -z;
-            ans[3] = z.powi(2) - 1.0;
-            Ok(ans)
-        }
-        2 => {
-            if z > 0.0 {
-                ans[0] = (1.0 + erf(z / ROOT_2)) / 2.0;
-                ans[1] = erfc(z / ROOT_2) / 2.0;
-            } else {
-                ans[1] = (1.0 + erf(-z / ROOT_2)) / 2.0;
-                ans[0] = erfc(-z / ROOT_2) / 2.0;
-            }
-            ans[2] = f;
-            ans[3] = -z * f;
-            Ok(ans)
-        }
-        _ => Err(DistributionError::InvalidCase {
-            case,
-            distribution: "Gaussian".to_string(),
-        }),
-    }
-}
-#[inline]
-fn exvalue_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
-    let mut ans = [0.0; 4];
-    let w = z.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp();
-    let temp = (-w).exp();
-    match case {
-        1 => {
-            ans[1] = w * temp;
-            ans[2] = 1.0 - w;
-            ans[3] = w * (w - 3.0) + 1.0;
-            Ok(ans)
-        }
-        2 => {
-            ans[0] = 1.0 - temp;
-            ans[1] = temp;
-            ans[2] = w * temp;
-            ans[3] = w * temp * (1.0 - w);
-            Ok(ans)
-        }
-        _ => Err(DistributionError::InvalidCase {
-            case,
-            distribution: "extreme value".to_string(),
-        }),
+        _ => Err("Invalid status value"),
     }
 }
 
-#[inline]
-fn student_t_d(z: f64, case: i32, df: f64) -> Result<DistributionEval, DistributionError> {
-    let mut ans = [0.0; 4];
-    let f = student_t_pdf(z, df);
-    let denom = df + z * z;
-    let score = -((df + 1.0) * z) / denom;
-    match case {
-        1 => {
-            ans[1] = f;
-            ans[2] = score;
-            ans[3] = ((df + 1.0) * (df + 3.0) * z * z / denom.powi(2)) - ((df + 1.0) / denom);
-            Ok(ans)
-        }
-        2 => {
-            ans[0] = student_t_cdf(z, df);
-            ans[1] = 1.0 - ans[0];
-            ans[2] = f;
-            ans[3] = f * score;
-            Ok(ans)
-        }
-        _ => Err(DistributionError::InvalidCase {
-            case,
-            distribution: "Student-t".to_string(),
-        }),
-    }
-}
 #[allow(clippy::too_many_arguments)]
 fn update_derivatives(
     res: &mut SurvivalLikelihood,
@@ -726,7 +487,7 @@ mod tests {
                         let strata = Array1::from_vec(vec![1]);
                         let offset = Array1::zeros(1);
                         let time1 = Array1::from_vec(vec![lower]);
-                        let time2 = Array1::from_vec(vec![upper]);
+                        let time2 = Array1::from_vec(vec![upper - lower]);
                         let status = Array1::from_vec(vec![censoring]);
                         let weights = Array1::ones(1);
                         let covariates = Array2::ones((1, 1));
@@ -751,13 +512,17 @@ mod tests {
                         .unwrap();
                         let derivatives = survreg_location_derivatives(
                             lower,
-                            Some(upper),
+                            Some(upper - lower),
                             censoring,
                             eta,
                             sigma,
                             distribution,
                         );
-                        if censoring == 3 && full.loglik == SMALL {
+                        if censoring == 3
+                            && ![full.loglik, full.u[0], full.imat[[0, 0]]]
+                                .iter()
+                                .all(|value| value.is_finite())
+                        {
                             assert!(derivatives.is_err());
                             continue;
                         }
@@ -800,25 +565,16 @@ mod tests {
             SurvivalDist::Gaussian,
             SurvivalDist::StudentT(4.5),
         ] {
-            let lower = 1e-100_f64;
-            let upper = lower.next_up();
-            assert!(upper > lower);
-            let midpoint = lower + (upper - lower) / 2.0;
-            // Also cover endpoints that coincide after finite scale division,
-            // independently of the Gaussian CDF approximation.
-            let tiny_interval_scale = if matches!(distribution, SurvivalDist::Gaussian) {
-                1e300
-            } else {
-                1.0
-            };
-            for (time, time2, eta, sigma) in [
-                (lower, upper, midpoint, tiny_interval_scale),
-                (2.0, 1.0, 1.5, 1.0),
-                (1.0, f64::NAN, 1.0, 1.0),
-            ] {
-                let error =
-                    survreg_location_derivatives(time, Some(time2), 3, eta, sigma, distribution)
-                        .unwrap_err();
+            for (time, time2, eta, sigma) in [(2.0, 1.0, 1.5, 1.0), (1.0, f64::NAN, 1.0, 1.0)] {
+                let error = survreg_location_derivatives(
+                    time,
+                    Some(time2 - time),
+                    3,
+                    eta,
+                    sigma,
+                    distribution,
+                )
+                .unwrap_err();
                 assert_eq!(
                     error.to_string(),
                     "initial iteration failed: interval probability is not finite and positive (use starting estimates?)"
@@ -835,12 +591,13 @@ mod tests {
             SurvivalDist::Gaussian,
             SurvivalDist::StudentT(4.5),
         ] {
-            for half_width in [0.5, 1e-4] {
+            for half_width in [0.5, 1e-4, 1e-14] {
                 let beta = Array1::from_vec(vec![2.0, 0.0]);
                 let strata = Array1::from_vec(vec![1]);
                 let offset = Array1::zeros(1);
                 let time1 = Array1::from_vec(vec![2.0 - half_width]);
-                let time2 = Array1::from_vec(vec![2.0 + half_width]);
+                let upper = 2.0 + half_width;
+                let time2 = Array1::from_vec(vec![upper - time1[0]]);
                 let status = Array1::from_vec(vec![3]);
                 let weights = Array1::ones(1);
                 let covariates = Array2::ones((1, 1));
@@ -956,15 +713,14 @@ mod tests {
         dist: SurvivalDist,
     ) -> SurvregDerivatives {
         let sigma = log_sigma.exp();
-        let sz = y - eta;
-        let z = sz / sigma;
-        match status {
-            0 => compute_right_censored::<true>(z, sz, sigma, dist).unwrap(),
-            1 => compute_exact::<true>(z, sz, sigma, dist).unwrap(),
-            2 => compute_left_censored::<true>(z, sz, sigma, dist).unwrap(),
-            3 => compute_interval_censored::<true>(z, upper.unwrap(), eta, sigma, dist).unwrap(),
-            _ => unreachable!(),
-        }
+        likelihood_row(
+            dist.family(),
+            (y - eta) / sigma,
+            sigma,
+            status,
+            upper.map(|upper| upper - y),
+        )
+        .unwrap()
     }
 
     fn assert_derivatives_match_finite_difference(
@@ -977,22 +733,22 @@ mod tests {
     ) {
         let h = 1e-5;
         let h2 = 1e-4;
-        let (g, dg, ddg, dsig, ddsig, dsg) = contribution(status, y, upper, eta, log_sigma, dist);
+        let [g, dg, ddg, dsig, ddsig, dsg] = contribution(status, y, upper, eta, log_sigma, dist);
 
-        let g_eta_plus = contribution(status, y, upper, eta + h, log_sigma, dist).0;
-        let g_eta_minus = contribution(status, y, upper, eta - h, log_sigma, dist).0;
+        let g_eta_plus = contribution(status, y, upper, eta + h, log_sigma, dist)[0];
+        let g_eta_minus = contribution(status, y, upper, eta - h, log_sigma, dist)[0];
         let eta_score = (g_eta_plus - g_eta_minus) / (2.0 * h);
         let eta_hessian = (g_eta_plus - 2.0 * g + g_eta_minus) / (h * h);
 
-        let g_sigma_plus = contribution(status, y, upper, eta, log_sigma + h, dist).0;
-        let g_sigma_minus = contribution(status, y, upper, eta, log_sigma - h, dist).0;
+        let g_sigma_plus = contribution(status, y, upper, eta, log_sigma + h, dist)[0];
+        let g_sigma_minus = contribution(status, y, upper, eta, log_sigma - h, dist)[0];
         let sigma_score = (g_sigma_plus - g_sigma_minus) / (2.0 * h);
         let sigma_hessian = (g_sigma_plus - 2.0 * g + g_sigma_minus) / (h * h);
 
-        let cross = (contribution(status, y, upper, eta + h2, log_sigma + h2, dist).0
-            - contribution(status, y, upper, eta + h2, log_sigma - h2, dist).0
-            - contribution(status, y, upper, eta - h2, log_sigma + h2, dist).0
-            + contribution(status, y, upper, eta - h2, log_sigma - h2, dist).0)
+        let cross = (contribution(status, y, upper, eta + h2, log_sigma + h2, dist)[0]
+            - contribution(status, y, upper, eta + h2, log_sigma - h2, dist)[0]
+            - contribution(status, y, upper, eta - h2, log_sigma + h2, dist)[0]
+            + contribution(status, y, upper, eta - h2, log_sigma - h2, dist)[0])
             / (4.0 * h2 * h2);
 
         assert_close(dg, eta_score, 1e-5);
@@ -1003,158 +759,44 @@ mod tests {
     }
 
     #[test]
-    fn test_exvalue_d_density() {
-        let result = exvalue_d(0.0, 1);
-        assert!(result.is_ok());
-        let funs = result.unwrap();
-        assert!(funs[1] > 0.0);
-        assert!((funs[2] - 0.0).abs() < 1e-10);
-        assert!(funs[3].is_finite());
+    fn likelihood_density_at_the_location_matches_distribution_references() {
+        for (dist, log_density, curvature) in [
+            (SurvivalDist::Weibull, -1.0, -1.0),
+            (
+                SurvivalDist::LogNormal,
+                -0.5 * std::f64::consts::TAU.ln(),
+                -1.0,
+            ),
+            (SurvivalDist::LogLogistic, -4.0_f64.ln(), -0.5),
+            (SurvivalDist::StudentT(4.0), 0.375_f64.ln(), -1.25),
+        ] {
+            let expected = [log_density, 0.0, curvature, -1.0, 0.0, 0.0];
+            let row = contribution(1, 0.0, None, 0.0, 0.0, dist);
+            for (actual, expected) in row.into_iter().zip(expected) {
+                assert_close(actual, expected, 1e-12);
+            }
+        }
     }
 
     #[test]
-    fn test_exvalue_d_survival() {
-        let result = exvalue_d(0.0, 2);
-        assert!(result.is_ok());
-        let funs = result.unwrap();
-        assert_close(funs[0], 1.0 - (-1.0f64).exp(), 1e-12);
-        assert_close(funs[1], (-1.0f64).exp(), 1e-12);
-        assert!(funs[2] > 0.0);
-    }
-
-    #[test]
-    fn test_gauss_d_density() {
-        let result = gauss_d(0.0, 1);
-        assert!(result.is_ok());
-        let funs = result.unwrap();
-        assert!(funs[1] > 0.0);
-        assert!((funs[2] - 0.0).abs() < 1e-10);
-        assert!(funs[3].is_finite());
-    }
-
-    #[test]
-    fn test_gauss_d_survival() {
-        let result = gauss_d(0.0, 2);
-        assert!(result.is_ok());
-        let funs = result.unwrap();
-        assert!((funs[0] - 0.5).abs() < 0.01);
-        assert!((funs[1] - 0.5).abs() < 0.01);
-        assert!(funs[2] > 0.0);
-    }
-
-    #[test]
-    fn test_logistic_d_density() {
-        let result = logistic_d(0.0, 1);
-        assert!(result.is_ok());
-        let funs = result.unwrap();
-        assert!(funs[1] > 0.0);
-        assert!((funs[2] - 0.0).abs() < 1e-10);
-        assert!(funs[3].is_finite());
-    }
-
-    #[test]
-    fn test_logistic_d_survival() {
-        let result = logistic_d(2.0, 2);
-        assert!(result.is_ok());
-        let funs = result.unwrap();
-        let cdf = 1.0 / (1.0 + (-2.0f64).exp());
-        assert_close(funs[0], cdf, 1e-12);
-        assert_close(funs[1], 1.0 - cdf, 1e-12);
-        assert_close(funs[2], cdf * (1.0 - cdf), 1e-12);
-    }
-
-    #[test]
-    fn test_compute_exact_weibull() {
-        let result = compute_exact::<true>(0.0, 0.0, 1.0, SurvivalDist::Weibull);
-        assert!(result.is_ok());
-        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
-        assert!(g.is_finite());
-        assert!(dg.is_finite());
-        assert!(ddg.is_finite());
-        assert!(dsig.is_finite());
-        assert!(ddsig.is_finite());
-        assert!(dsg.is_finite());
-    }
-
-    #[test]
-    fn test_compute_exact_lognormal() {
-        let result = compute_exact::<true>(0.0, 0.0, 1.0, SurvivalDist::LogNormal);
-        assert!(result.is_ok());
-        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
-        assert!(g.is_finite());
-        assert!(dg.is_finite());
-        assert!(ddg.is_finite());
-        assert!(dsig.is_finite());
-        assert!(ddsig.is_finite());
-        assert!(dsg.is_finite());
-    }
-
-    #[test]
-    fn test_compute_exact_loglogistic() {
-        let result = compute_exact::<true>(0.0, 0.0, 1.0, SurvivalDist::LogLogistic);
-        assert!(result.is_ok());
-        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
-        assert!(g.is_finite());
-        assert!(dg.is_finite());
-        assert!(ddg.is_finite());
-        assert!(dsig.is_finite());
-        assert!(ddsig.is_finite());
-        assert!(dsg.is_finite());
-    }
-
-    #[test]
-    fn test_compute_right_censored_weibull() {
-        let result = compute_right_censored::<true>(0.0, 0.0, 1.0, SurvivalDist::Weibull);
-        assert!(result.is_ok());
-        let (g, dg, ddg, dsig, ddsig, dsg) = result.unwrap();
-        assert!(g.is_finite());
-        assert_close(g, -1.0, 1e-12);
-        assert!(dg.is_finite());
-        assert!(ddg.is_finite());
-        assert!(dsig.is_finite());
-        assert!(ddsig.is_finite());
-        assert!(dsg.is_finite());
-    }
-
-    #[test]
-    fn test_compute_right_censored_lognormal() {
-        let result = compute_right_censored::<true>(0.0, 0.0, 1.0, SurvivalDist::LogNormal);
-        assert!(result.is_ok());
-        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
-        assert!(g.is_finite());
-    }
-
-    #[test]
-    fn test_compute_right_censored_loglogistic() {
-        let result = compute_right_censored::<true>(0.0, 0.0, 1.0, SurvivalDist::LogLogistic);
-        assert!(result.is_ok());
-        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
-        assert!(g.is_finite());
-    }
-
-    #[test]
-    fn test_compute_left_censored_weibull() {
-        let result = compute_left_censored::<true>(0.0, 0.0, 1.0, SurvivalDist::Weibull);
-        assert!(result.is_ok());
-        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
-        assert_close(g, (1.0 - (-1.0f64).exp()).ln(), 1e-12);
-    }
-
-    #[test]
-    fn test_compute_interval_censored_weibull() {
-        let upper = 2.0f64.ln();
-        let result = compute_interval_censored::<true>(0.0, upper, 0.0, 1.0, SurvivalDist::Weibull);
-        assert!(result.is_ok());
-        let (g, _dg, _ddg, _dsig, _ddsig, _dsg) = result.unwrap();
-        assert_close(g, ((-1.0f64).exp() - (-2.0f64).exp()).ln(), 1e-12);
-    }
-
-    #[test]
-    fn test_censored_derivatives_match_finite_difference() {
-        let dist = SurvivalDist::Weibull;
-        assert_derivatives_match_finite_difference(0, 0.4, None, -0.2, 0.15, dist);
-        assert_derivatives_match_finite_difference(2, 0.4, None, -0.2, 0.15, dist);
-        assert_derivatives_match_finite_difference(3, 0.4, Some(1.1), -0.2, 0.15, dist);
+    fn likelihood_derivatives_match_finite_difference_for_every_censoring_type() {
+        for dist in [
+            SurvivalDist::Weibull,
+            SurvivalDist::LogNormal,
+            SurvivalDist::LogLogistic,
+            SurvivalDist::StudentT(4.0),
+        ] {
+            for status in 0..=3 {
+                assert_derivatives_match_finite_difference(
+                    status,
+                    0.4,
+                    Some(1.1),
+                    -0.2,
+                    0.15,
+                    dist,
+                );
+            }
+        }
     }
 
     #[test]
@@ -1200,20 +842,16 @@ mod tests {
     fn parallel_likelihood_matches_sequential_at_threshold() {
         let n = SURVREG_PARALLEL_THRESHOLD;
         let nvar = 2;
-        let nstrat = 1;
-        let beta = Array1::from_vec(vec![0.1, -0.2, 0.05]);
-        let strat = Array1::from_vec(vec![1i32; n]);
+        let nstrat = 2;
+        let beta = Array1::from_vec(vec![0.1, -0.2, 0.05, -0.1]);
+        let strat = Array1::from_iter((0..n).map(|person| (person % 2 + 1) as i32));
         let offset = Array1::from_vec((0..n).map(|person| (person % 7) as f64 * 0.01).collect());
         let time1 = Array1::from_vec(
             (0..n)
                 .map(|person| 0.2 + (person % 101) as f64 * 0.01)
                 .collect(),
         );
-        let status = Array1::from_vec(
-            (0..n)
-                .map(|person| if person % 3 == 0 { 0 } else { 1 })
-                .collect(),
-        );
+        let status = Array1::from_vec((0..n).map(|person| (person % 4) as i32).collect());
         let weights = Array1::from_vec(
             (0..n)
                 .map(|person| 0.75 + (person % 5) as f64 * 0.05)
@@ -1224,52 +862,103 @@ mod tests {
         });
         let frailty = Array1::from_vec(vec![0i32; n]);
 
-        let parallel = survregc1(
-            n,
-            nvar,
-            nstrat,
-            false,
-            &beta.view(),
+        let interval_widths =
+            Array1::from_iter((0..n).map(|person| if person % 3 == 0 { 1e-8 } else { 0.2 }));
+        for dist in [
             SurvivalDist::Weibull,
-            &strat.view(),
-            &offset.view(),
-            &time1.view(),
-            None,
-            &status.view(),
-            &weights.view(),
-            &covariates.view(),
-            0,
-            &frailty.view(),
-        )
-        .unwrap();
-        let sequential = survregc1_sequential(
-            n,
-            nvar,
-            nstrat,
-            false,
-            &beta.view(),
-            SurvivalDist::Weibull,
-            &strat.view(),
-            &offset.view(),
-            &time1.view(),
-            None,
-            &status.view(),
-            &weights.view(),
-            &covariates.view(),
-            0,
-            &frailty.view(),
-        )
-        .unwrap();
+            SurvivalDist::LogNormal,
+            SurvivalDist::LogLogistic,
+            SurvivalDist::StudentT(4.0),
+        ] {
+            let parallel = survregc1(
+                n,
+                nvar,
+                nstrat,
+                false,
+                &beta.view(),
+                dist,
+                &strat.view(),
+                &offset.view(),
+                &time1.view(),
+                Some(&interval_widths.view()),
+                &status.view(),
+                &weights.view(),
+                &covariates.view(),
+                0,
+                &frailty.view(),
+            )
+            .unwrap();
+            let sequential = survregc1_sequential(
+                n,
+                nvar,
+                nstrat,
+                false,
+                &beta.view(),
+                dist,
+                &strat.view(),
+                &offset.view(),
+                &time1.view(),
+                Some(&interval_widths.view()),
+                &status.view(),
+                &weights.view(),
+                &covariates.view(),
+                0,
+                &frailty.view(),
+            )
+            .unwrap();
 
-        assert_close(parallel.loglik, sequential.loglik, 1e-10);
-        for (actual, expected) in parallel.u.iter().zip(sequential.u.iter()) {
-            assert_close(*actual, *expected, 1e-10);
+            assert_close(parallel.loglik, sequential.loglik, 1e-10);
+            for (actual, expected) in parallel.u.iter().zip(sequential.u.iter()) {
+                assert_close(*actual, *expected, 1e-10);
+            }
+            for (actual, expected) in parallel.imat.iter().zip(sequential.imat.iter()) {
+                assert_close(*actual, *expected, 1e-10);
+            }
+            for (actual, expected) in parallel.jj.iter().zip(sequential.jj.iter()) {
+                assert_close(*actual, *expected, 1e-10);
+            }
         }
-        for (actual, expected) in parallel.imat.iter().zip(sequential.imat.iter()) {
-            assert_close(*actual, *expected, 1e-10);
-        }
-        for (actual, expected) in parallel.jj.iter().zip(sequential.jj.iter()) {
-            assert_close(*actual, *expected, 1e-10);
+    }
+
+    #[test]
+    fn zero_weight_overflowing_responses_do_not_affect_likelihood() {
+        for n in [2, SURVREG_PARALLEL_THRESHOLD] {
+            let beta = Array1::from_vec(vec![0.0, 0.0]);
+            let strata = Array1::from_elem(n, 1);
+            let offsets = Array1::zeros(n);
+            let mut times = Array1::zeros(n);
+            times[n - 1] = 1e200;
+            let status = Array1::from_elem(n, 1);
+            let mut weights = Array1::ones(n);
+            weights[n - 1] = 0.0;
+            let rows = Array2::ones((1, n));
+            let frailty = Array1::zeros(n);
+            let evaluate = |count| {
+                survregc1(
+                    count,
+                    1,
+                    1,
+                    false,
+                    &beta.view(),
+                    SurvivalDist::Gaussian,
+                    &strata.view(),
+                    &offsets.view(),
+                    &times.view(),
+                    None,
+                    &status.view(),
+                    &weights.view(),
+                    &rows.view(),
+                    0,
+                    &frailty.view(),
+                )
+                .unwrap()
+            };
+            let actual = evaluate(n);
+            let expected = evaluate(n - 1);
+            assert_eq!(actual.loglik, expected.loglik);
+            assert_eq!(actual.u, expected.u);
+            assert_eq!(actual.imat, expected.imat);
+            assert_eq!(actual.jj, expected.jj);
         }
     }
 
@@ -1282,9 +971,7 @@ mod tests {
         let strata = Array1::from_shape_fn(n, |person| (person % nstrat.max(1) + 1) as i32);
         let offset = Array1::from_shape_fn(n, |person| (person % 7) as f64 * 0.03 - 0.09);
         let time1 = Array1::from_shape_fn(n, |person| (person % 19) as f64 * 0.3 - 2.7);
-        let time2 = Array1::from_shape_fn(n, |person| {
-            time1[person] + 0.125 + (person % 7) as f64 * 0.03
-        });
+        let time2 = Array1::from_shape_fn(n, |person| 0.125 + (person % 7) as f64 * 0.03);
         let status = Array1::from_shape_fn(n, |person| (person % 4) as i32);
         let weights = Array1::from_shape_fn(n, |person| 0.5 + (person % 5) as f64 * 0.37);
         let covariates = Array2::from_shape_fn((nvar, n), |(column, person)| {
@@ -1409,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_censor_contributions_preserve_tail_floors_and_nonfinite_values() {
+    fn scalar_likelihood_preserves_tail_likelihoods_and_nonfinite_values() {
         for distribution in [
             SurvivalDist::Weibull,
             SurvivalDist::Logistic,
@@ -1429,26 +1116,52 @@ mod tests {
                 f64::INFINITY,
                 f64::NAN,
             ] {
-                for (full, scalar) in [
-                    (
-                        compute_exact::<true>(z, z, 1.0, distribution),
-                        compute_exact::<false>(z, z, 1.0, distribution),
-                    ),
-                    (
-                        compute_right_censored::<true>(z, z, 1.0, distribution),
-                        compute_right_censored::<false>(z, z, 1.0, distribution),
-                    ),
-                    (
-                        compute_left_censored::<true>(z, z, 1.0, distribution),
-                        compute_left_censored::<false>(z, z, 1.0, distribution),
-                    ),
-                    (
-                        compute_interval_censored::<true>(z, z + 0.1, 0.0, 1.0, distribution),
-                        compute_interval_censored::<false>(z, z + 0.1, 0.0, 1.0, distribution),
-                    ),
-                ] {
-                    let full = full.unwrap().0;
-                    let scalar = scalar.unwrap().0;
+                for censoring in 0..=3 {
+                    let beta = Array1::zeros(2);
+                    let strata = Array1::ones(1);
+                    let zeros = Array1::zeros(1);
+                    let times = Array1::from_vec(vec![z]);
+                    let widths = Array1::from_vec(vec![0.1]);
+                    let status = Array1::from_vec(vec![censoring]);
+                    let weights = Array1::ones(1);
+                    let covariates = Array2::ones((1, 1));
+                    let frailty = Array1::zeros(1);
+                    let scalar = survreg_loglik(
+                        1,
+                        1,
+                        1,
+                        &beta.view(),
+                        distribution,
+                        &strata.view(),
+                        &zeros.view(),
+                        &times.view(),
+                        Some(&widths.view()),
+                        &status.view(),
+                        &weights.view(),
+                        &covariates.view(),
+                        0,
+                        &frailty.view(),
+                    )
+                    .unwrap();
+                    let full = survregc1(
+                        1,
+                        1,
+                        1,
+                        false,
+                        &beta.view(),
+                        distribution,
+                        &strata.view(),
+                        &zeros.view(),
+                        &times.view(),
+                        Some(&widths.view()),
+                        &status.view(),
+                        &weights.view(),
+                        &covariates.view(),
+                        0,
+                        &frailty.view(),
+                    )
+                    .unwrap()
+                    .loglik;
                     if full.is_nan() {
                         assert!(scalar.is_nan(), "z={z}");
                     } else {
@@ -1518,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_likelihood_preserves_parallel_upper_endpoint_layout_check() {
+    fn scalar_likelihood_preserves_parallel_interval_width_layout_check() {
         let n = SURVREG_PARALLEL_THRESHOLD;
         let beta = Array1::from_vec(vec![0.0, 0.0]);
         let strata = Array1::from_elem(n, 1);

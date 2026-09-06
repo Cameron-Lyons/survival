@@ -135,7 +135,7 @@ def test_discarded_scale_pivot_does_not_alias_location_or_scale():
 @pytest.mark.parametrize("distribution", ["gaussian", "lognormal"])
 @pytest.mark.parametrize("aliased", [False, True])
 @pytest.mark.parametrize("kind", ["lp", "response", "quantile", "uquantile", "terms"])
-def test_survreg_newdata_offset_predictions_match_r(distribution, aliased, kind):
+def test_survreg_newdata_preserves_offsets_and_alias_reporting(distribution, aliased, kind):
     data = {
         "time": [2.0 + 3.0 * idx for idx in range(6)],
         "status": [1] * 6,
@@ -165,8 +165,8 @@ def test_survreg_newdata_offset_predictions_match_r(distribution, aliased, kind)
         return
 
     # R survival 3.8.11, prescribed coefficients and qnorm(c(.25, .75)).
-    # Stored training LP retains offsets and raw aliased coefficients;
-    # newdata uses the reported coefficients and omits formula offsets.
+    # Preserve formula offsets for newdata as well as training rows, while
+    # newdata still reports missing values for aliased coefficients.
     scores = [-0.6744897501960817, 0.6744897501960817] if options else [0.0]
     transform = (
         math.exp if distribution == "lognormal" and kind in {"response", "quantile"} else float
@@ -179,4 +179,4 @@ def test_survreg_newdata_offset_predictions_match_r(distribution, aliased, kind)
         if aliased:
             assert all(math.isnan(value) for value in new)
         else:
-            assert new == pytest.approx([transform(2.0 + idx + score) for score in scores])
+            assert new == pytest.approx([transform(lp + score) for score in scores])
