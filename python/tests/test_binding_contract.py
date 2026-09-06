@@ -557,7 +557,7 @@ def test_survreg_prediction_bindings_are_typed_to_runtime_surface():
 
     expected_method_args = {
         "predict": ["self", "covariates", "predict_type", "offset", "se_fit"],
-        "predict_quantile": ["self", "covariates", "quantiles", "offset"],
+        "predict_quantile": ["self", "covariates", "quantiles", "offset", "strata", "transform"],
         "residuals": ["self", "residual_type"],
         "dfbeta": ["self"],
     }

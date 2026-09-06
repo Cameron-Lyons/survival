@@ -210,7 +210,7 @@ class TestAFTEstimator:
         assert len(quantiles) == n
         assert all(quantiles > 0)
 
-    @pytest.mark.parametrize("q", [np.nan, np.inf, -np.inf, 0.0, 1.0, -0.1, 1.1])
+    @pytest.mark.parametrize("q", [np.nan, np.inf, -np.inf, -0.1, 1.1])
     def test_predict_quantile_rejects_invalid_q(self, q):
         X = np.array([[0.1], [0.2], [0.3], [0.4]], dtype=np.float64)
         y = np.column_stack([[1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0]])

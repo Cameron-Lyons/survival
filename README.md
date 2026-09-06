@@ -279,7 +279,24 @@ The R-style `predict(...)` and `fitted(...)` generics support Cox linear
 predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
-term contributions, and quantile predictions via `type="quantile"`.
+term contributions, and quantile predictions via `type="quantile"` or
+`type="uquantile"` for the model's linear scale. Probabilities include 0 and 1,
+which return the distribution's limits. Quantiles use each row's fitted scale
+and retain Student-t degrees of freedom.
+The native `fit.predict_quantile()` method uses training strata by default;
+new covariates for a model with multiple scales require zero-based
+`strata=...` indices. Pass `transform=False` for linear-scale quantiles.
+`AFTEstimator.predict()` returns the fitted response-scale location, matching
+R's default prediction; `predict_median()` and `predict_quantile()` return
+actual distribution quantiles. Gaussian, logistic, extreme-value, and Student-t
+responses use the identity transform. Native prediction standard errors are
+available for training and new rows and follow the requested response scale.
+Student-t distribution helpers accept `distribution="t", parms=df` and retain
+precision near the median and in rare tails. For example,
+`qsurvreg(1e-20, distribution="t", parms=4)` returns approximately
+`-131607.4013`. Native, Python, and R bridge calls share these calculations.
+For `1000 <= df < 100000`, moderate tails use a short normal
+moment expansion. See the [derivation and validation](docs/student-t-normal-limit.md).
 Gaussian and lognormal calculations use direct lower and upper normal tails,
 preserving representable probabilities beyond eight standard deviations in
 distribution functions, censored likelihoods, and inference. Normal quantiles

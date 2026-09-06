@@ -140,24 +140,28 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         self.is_fitted_ = True
         return self
 
-    def _prediction_linear_predictor(self, X: ArrayLike) -> NDArray[np.float64]:
+    def _prediction_linear_values(self, X: ArrayLike) -> NDArray[np.float64]:
         check_is_fitted(self)
         X = check_array(X, dtype=np.float64, ensure_2d=True)
-
         if X.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
             )
-
+        if not np.isfinite(X).all():
+            raise ValueError("X must contain only finite values")
         return self.intercept_ + X @ self.coef_
 
-    def _inverse_response_transform(self, values: NDArray[np.float64]) -> NDArray[np.float64]:
+    def _prediction_response_values(
+        self, linear_values: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        # The fitted model stores the canonical name, including aliases used at fit.
         if self.model_.distribution in _LOG_TIME_ERROR_DISTRIBUTIONS:
-            return np.exp(values)
-        return values
+            with np.errstate(over="ignore", under="ignore"):
+                return np.exp(linear_values)
+        return linear_values
 
     def predict(self, X: ArrayLike) -> NDArray[np.float64]:
-        """Predict the fitted location on the response scale.
+        """Predict the fitted location on the response scale, as in R survreg.
 
         Parameters
         ----------
@@ -167,11 +171,10 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         Returns
         -------
         survival_times : ndarray of shape (n_samples,)
-            The linear predictor for distributions that model T directly, or
-            its exponential for log-time distributions. This matches
-            ``survreg`` response prediction; use ``predict_median`` for medians.
+            Exponentiated linear predictors for log-time families, or linear
+            predictors for identity families. Use predict_median for medians.
         """
-        return self._inverse_response_transform(self._prediction_linear_predictor(X))
+        return self._prediction_response_values(self._prediction_linear_values(X))
 
     def predict_median(self, X: ArrayLike) -> NDArray[np.float64]:
         """Predict median survival time for samples.
@@ -196,30 +199,33 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         X : array-like of shape (n_samples, n_features)
             Samples to predict.
         q : float, default=0.5
-            Quantile to predict (0 < q < 1). Default is median (0.5).
+            Quantile to predict (0 <= q <= 1). Default is median (0.5).
+            Endpoints return the distribution's lower and upper limits.
 
         Returns
         -------
         quantile_times : ndarray of shape (n_samples,)
             Predicted survival times at the given quantile.
         """
-        linear_pred = self._prediction_linear_predictor(X)
+        linear_pred = self._prediction_linear_values(X)
 
-        if not np.isfinite(q) or not 0 < q < 1:
+        if not np.isfinite(q) or not 0 <= q <= 1:
             raise ValueError("q must be between 0 and 1")
 
+        # Evaluate one standardized quantile, then combine location and scale
+        # before transforming the response to avoid intermediate overflow.
         distribution = self.model_.distribution
         error_distribution = _LOG_TIME_ERROR_DISTRIBUTIONS.get(distribution, distribution)
         parameters = self.model_.distribution_parameters
         quantile = _surv.survreg_distribution(
-            values=[q],
+            values=[float(q)],
             mean=[0.0],
             scale=[1.0],
             distribution=error_distribution,
             kind="quantile",
             parms=parameters[0] if parameters else None,
         )[0]
-        return self._inverse_response_transform(linear_pred + self.scale_ * quantile)
+        return self._prediction_response_values(linear_pred + self.scale_ * quantile)
 
     def score(self, X: ArrayLike, y: ArrayLike) -> float:
         """Return the concordance index on the given test data.
