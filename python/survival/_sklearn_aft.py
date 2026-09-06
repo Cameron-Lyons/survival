@@ -212,12 +212,20 @@ class AFTEstimator(BaseEstimator, RegressorMixin):
         if not np.isfinite(q) or not 0 <= q <= 1:
             raise ValueError("q must be between 0 and 1")
 
-        # A zero-location row evaluates the fitted distribution and scale once;
-        # NumPy keeps the large covariate multiplication and response transform.
-        shift = self.model_.predict_quantile(
-            [[0.0] * (self.n_features_in_ + 1)], [float(q)], transform=False
-        ).predictions[0][0]
-        return self._prediction_response_values(linear_pred + shift)
+        # Evaluate one standardized quantile, then combine location and scale
+        # before transforming the response to avoid intermediate overflow.
+        distribution = self.model_.distribution
+        error_distribution = _LOG_TIME_ERROR_DISTRIBUTIONS.get(distribution, distribution)
+        parameters = self.model_.distribution_parameters
+        quantile = _surv.survreg_distribution(
+            values=[float(q)],
+            mean=[0.0],
+            scale=[1.0],
+            distribution=error_distribution,
+            kind="quantile",
+            parms=parameters[0] if parameters else None,
+        )[0]
+        return self._prediction_response_values(linear_pred + self.scale_ * quantile)
 
     def score(self, X: ArrayLike, y: ArrayLike) -> float:
         """Return the concordance index on the given test data.
