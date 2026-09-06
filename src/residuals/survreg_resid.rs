@@ -1,4 +1,5 @@
 use crate::internal::statistical::{normal_cdf, student_t_cdf, student_t_pdf};
+use crate::internal::student_t::StudentT;
 use pyo3::prelude::*;
 
 const LOG_PROBABILITY_FLOOR: f64 = -690.0;
@@ -388,18 +389,11 @@ fn log_positive(value: f64) -> f64 {
     }
 }
 
-fn interval_probability_for_key(
-    key: &str,
-    distribution_parameter: Option<f64>,
-    lower_z: f64,
-    upper_z: f64,
-) -> f64 {
+fn interval_probability(lower_z: f64, upper_z: f64, cdf: impl Fn(f64) -> f64) -> f64 {
     if lower_z > 0.0 {
-        (1.0 - cdf_for_key(key, distribution_parameter, lower_z))
-            - (1.0 - cdf_for_key(key, distribution_parameter, upper_z))
+        (1.0 - cdf(lower_z)) - (1.0 - cdf(upper_z))
     } else {
-        cdf_for_key(key, distribution_parameter, upper_z)
-            - cdf_for_key(key, distribution_parameter, lower_z)
+        cdf(upper_z) - cdf(lower_z)
     }
 }
 
@@ -926,37 +920,35 @@ fn survreg_loglik_contribution(
     status: i32,
     linear_pred: f64,
     log_scale: f64,
-    distribution: &str,
-    distribution_parameter: Option<f64>,
+    key: &str,
+    student: Option<StudentT>,
 ) -> PyResult<f64> {
     let scale = log_scale.exp();
-    let key = validated_distribution_key(distribution);
-    let distribution_parameter =
-        validated_distribution_parameter_for_key(&key, distribution_parameter)?;
-    let y = response_time_value_for_key(time, &key);
+    let y = response_time_value_for_key(time, key);
     let z = (y - linear_pred) / scale;
+    let cdf = |z| match student {
+        Some(distribution) => distribution.cdf(z),
+        None => cdf_for_key(key, None, z),
+    };
 
     match status {
-        1 => Ok(log_positive(
-            pdf_for_key(&key, distribution_parameter, z) / scale,
-        )),
-        0 => Ok(log_positive(
-            1.0 - cdf_for_key(&key, distribution_parameter, z),
-        )),
-        2 => Ok(log_positive(cdf_for_key(&key, distribution_parameter, z))),
+        1 => {
+            let density = match student {
+                Some(distribution) => distribution.pdf(z),
+                None => pdf_for_key(key, None, z),
+            };
+            Ok(log_positive(density / scale))
+        }
+        0 => Ok(log_positive(1.0 - cdf(z))),
+        2 => Ok(log_positive(cdf(z))),
         3 => {
             let Some(end) = time2 else {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                     "time2 is required for interval-censored rows",
                 ));
             };
-            let z2 = (response_time_value_for_key(end, &key) - linear_pred) / scale;
-            Ok(log_positive(interval_probability_for_key(
-                &key,
-                distribution_parameter,
-                z,
-                z2,
-            )))
+            let z2 = (response_time_value_for_key(end, key) - linear_pred) / scale;
+            Ok(log_positive(interval_probability(z, z2, cdf)))
         }
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "status must contain only 0/1/2/3 values",
@@ -1001,6 +993,7 @@ pub(crate) fn compute_survreg_residual_matrix_with_parameter(
     let key = validated_distribution_key(distribution);
     let distribution_parameter =
         validated_distribution_parameter_for_key(&key, distribution_parameter)?;
+    let student = distribution_parameter.map(StudentT::new);
     let log_scale = scale.ln();
     let h_eta = eta_derivative_step(scale);
     let h_scale = SURVREG_MATRIX_STEP;
@@ -1016,8 +1009,8 @@ pub(crate) fn compute_survreg_residual_matrix_with_parameter(
                 status[i],
                 eta + eta_shift,
                 log_scale + scale_shift,
-                distribution,
-                distribution_parameter,
+                &key,
+                student,
             )
         };
 

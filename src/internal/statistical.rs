@@ -1018,138 +1018,13 @@ pub(crate) fn ln_gamma(x: f64) -> f64 {
 }
 
 #[inline]
-fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
-    const EPSILON: f64 = 3e-14;
-    const MIN_VALUE: f64 = 1e-300;
-
-    let qab = a + b;
-    let qap = a + 1.0;
-    let qam = a - 1.0;
-    let mut c = 1.0;
-    let mut d = 1.0 - qab * x / qap;
-    if d.abs() < MIN_VALUE {
-        d = MIN_VALUE;
-    }
-    d = d.recip();
-    let mut h = d;
-
-    for m in 1..=200 {
-        let m = m as f64;
-        let m2 = 2.0 * m;
-        let mut numerator = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 + numerator * d;
-        if d.abs() < MIN_VALUE {
-            d = MIN_VALUE;
-        }
-        c = 1.0 + numerator / c;
-        if c.abs() < MIN_VALUE {
-            c = MIN_VALUE;
-        }
-        d = d.recip();
-        h *= d * c;
-
-        numerator = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 + numerator * d;
-        if d.abs() < MIN_VALUE {
-            d = MIN_VALUE;
-        }
-        c = 1.0 + numerator / c;
-        if c.abs() < MIN_VALUE {
-            c = MIN_VALUE;
-        }
-        d = d.recip();
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() <= EPSILON {
-            break;
-        }
-    }
-    h
-}
-
-#[inline]
-fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-
-    let front = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (-x).ln_1p()).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        front * beta_continued_fraction(a, b, x) / a
-    } else {
-        1.0 - front * beta_continued_fraction(b, a, 1.0 - x) / b
-    }
-}
-
-#[inline]
 pub(crate) fn student_t_pdf(value: f64, df: f64) -> f64 {
-    if !value.is_finite() {
-        return if value.is_nan() { f64::NAN } else { 0.0 };
-    }
-    let log_coefficient = ln_gamma((df + 1.0) / 2.0)
-        - ln_gamma(df / 2.0)
-        - 0.5 * (df.ln() + std::f64::consts::PI.ln());
-    (log_coefficient - ((df + 1.0) / 2.0) * (1.0 + value * value / df).ln()).exp()
+    super::student_t::StudentT::new(df).pdf(value)
 }
 
 #[inline]
 pub(crate) fn student_t_cdf(value: f64, df: f64) -> f64 {
-    if value == f64::INFINITY {
-        return 1.0;
-    }
-    if value == f64::NEG_INFINITY {
-        return 0.0;
-    }
-    if value == 0.0 {
-        return 0.5;
-    }
-
-    let x = df / (df + value * value);
-    let beta = regularized_beta(df / 2.0, 0.5, x);
-    if value > 0.0 {
-        1.0 - 0.5 * beta
-    } else {
-        0.5 * beta
-    }
-}
-
-pub(crate) fn student_t_inverse_cdf(probability: f64, df: f64) -> f64 {
-    if probability.is_nan() || !(0.0..=1.0).contains(&probability) {
-        return f64::NAN;
-    }
-    if probability == 0.0 {
-        return f64::NEG_INFINITY;
-    }
-    if probability == 1.0 {
-        return f64::INFINITY;
-    }
-    if probability == 0.5 {
-        return 0.0;
-    }
-    if probability < 0.5 {
-        return -student_t_inverse_cdf(1.0 - probability, df);
-    }
-
-    let mut low = 0.0;
-    let mut high = 1.0;
-    while student_t_cdf(high, df) < probability {
-        high *= 2.0;
-        if high.is_infinite() {
-            return high;
-        }
-    }
-    for _ in 0..120 {
-        let middle = (low + high) / 2.0;
-        if student_t_cdf(middle, df) < probability {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    (low + high) / 2.0
+    super::student_t::StudentT::new(df).cdf(value)
 }
 
 #[inline]
@@ -1765,16 +1640,17 @@ mod tests {
 
     #[test]
     fn student_t_helpers_match_reference_values_and_boundaries() {
+        let distribution = super::super::student_t::StudentT::new(5.0);
         assert!((student_t_pdf(1.0, 5.0) - 0.2196797973509805).abs() < 1e-12);
         assert!((student_t_cdf(1.0, 5.0) - 0.8183912661754387).abs() < 1e-12);
         assert_eq!(student_t_pdf(f64::INFINITY, 5.0), 0.0);
         assert_eq!(student_t_cdf(f64::NEG_INFINITY, 5.0), 0.0);
         assert_eq!(student_t_cdf(f64::INFINITY, 5.0), 1.0);
-        assert_eq!(student_t_inverse_cdf(0.0, 5.0), f64::NEG_INFINITY);
-        assert_eq!(student_t_inverse_cdf(1.0, 5.0), f64::INFINITY);
+        assert_eq!(distribution.inverse_cdf(0.0), f64::NEG_INFINITY);
+        assert_eq!(distribution.inverse_cdf(1.0), f64::INFINITY);
 
         for probability in [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999] {
-            let quantile = student_t_inverse_cdf(probability, 5.0);
+            let quantile = distribution.inverse_cdf(probability);
             assert!((student_t_cdf(quantile, 5.0) - probability).abs() < 1e-12);
         }
     }

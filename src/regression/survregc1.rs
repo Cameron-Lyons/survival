@@ -1,5 +1,6 @@
 use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN};
-use crate::internal::statistical::{erf, erfc, student_t_cdf, student_t_pdf};
+use crate::internal::statistical::{erf, erfc};
+use crate::internal::student_t::StudentT;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
 use std::fmt;
@@ -38,7 +39,7 @@ pub(crate) enum SurvivalDist {
     Weibull,
     LogNormal,
     LogLogistic,
-    StudentT(f64),
+    StudentT(StudentT),
 }
 pub(crate) struct SurvivalLikelihood {
     pub loglik: f64,
@@ -301,7 +302,7 @@ fn compute_exact(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 1)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 1)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 1)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 1, df)?,
+        SurvivalDist::StudentT(student) => student_t_d(z, 1, student)?,
     };
     if funs[1] <= 0.0 {
         Ok((SMALL, -z / sigma, -1.0 / sigma, 0.0, 0.0, 0.0))
@@ -328,7 +329,7 @@ fn compute_right_censored(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
+        SurvivalDist::StudentT(student) => student_t_d(z, 2, student)?,
     };
     if funs[1] <= 0.0 {
         Ok((SMALL, z / sigma, 0.0, 0.0, 0.0, 0.0))
@@ -355,7 +356,7 @@ fn compute_left_censored(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
+        SurvivalDist::StudentT(student) => student_t_d(z, 2, student)?,
     };
     if funs[0] <= 0.0 {
         Ok((SMALL, -z / sigma, 0.0, 0.0, 0.0, 0.0))
@@ -385,13 +386,13 @@ fn compute_interval_censored(
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z, 2, df)?,
+        SurvivalDist::StudentT(student) => student_t_d(z, 2, student)?,
     };
     let ufun = match dist {
         SurvivalDist::ExtremeValue | SurvivalDist::Weibull => exvalue_d(z2, 2)?,
         SurvivalDist::Logistic | SurvivalDist::LogLogistic => logistic_d(z2, 2)?,
         SurvivalDist::Gaussian | SurvivalDist::LogNormal => gauss_d(z2, 2)?,
-        SurvivalDist::StudentT(df) => student_t_d(z2, 2, df)?,
+        SurvivalDist::StudentT(student) => student_t_d(z2, 2, student)?,
     };
     let diff = if z > 0.0 {
         funs[1] - ufun[1]
@@ -495,9 +496,14 @@ fn exvalue_d(z: f64, case: i32) -> Result<DistributionEval, DistributionError> {
 }
 
 #[inline]
-fn student_t_d(z: f64, case: i32, df: f64) -> Result<DistributionEval, DistributionError> {
+fn student_t_d(
+    z: f64,
+    case: i32,
+    student: StudentT,
+) -> Result<DistributionEval, DistributionError> {
     let mut ans = [0.0; 4];
-    let f = student_t_pdf(z, df);
+    let df = student.degrees_of_freedom();
+    let f = student.pdf(z);
     let denom = df + z * z;
     let score = -((df + 1.0) * z) / denom;
     match case {
@@ -508,7 +514,7 @@ fn student_t_d(z: f64, case: i32, df: f64) -> Result<DistributionEval, Distribut
             Ok(ans)
         }
         2 => {
-            ans[0] = student_t_cdf(z, df);
+            ans[0] = student.cdf(z);
             ans[1] = 1.0 - ans[0];
             ans[2] = f;
             ans[3] = f * score;
@@ -592,7 +598,7 @@ mod tests {
             SurvivalDist::Weibull,
             SurvivalDist::LogNormal,
             SurvivalDist::LogLogistic,
-            SurvivalDist::StudentT(4.0),
+            SurvivalDist::StudentT(StudentT::new(4.0)),
         ];
         assert_eq!(variants.len(), 7);
     }
