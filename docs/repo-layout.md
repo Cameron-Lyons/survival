@@ -35,7 +35,41 @@ The Python package in `python/survival/` mirrors the Rust domains:
 - `population`, `monitoring`, `ml`
 - `bayesian`, `causal`, `joint`, `interpretability`, `spatial`, and related domains
 - `r_api`: R-style formula façade for `Surv`, `survfit`, `survdiff`, `coxph`,
-  `clogit`, `survreg`, Cox `predict`, and residual dispatch
+  `clogit`, `survreg`, Cox `predict`, and residual dispatch. The implementation
+  lives in the `survival.r` package and `r_api` is a thin re-export of its
+  public surface (plus the private helpers the R bridge reaches through
+  `python_attr`), so `survival.r_api` stays the stable import path.
+
+The `python/survival/r/` package exposes only the R-style API from
+`survival.r` itself; the implementation modules are private (underscore
+names) and layered so imports form a DAG (each module only imports from the
+ones above it):
+
+- `_types`: result containers and formula/design dataclasses. `reticulate`
+  names R classes after each Python class's `__module__.__name__`, so any
+  `inherits(x, "survival.r._types.<Class>")` guard in `r/survivalr/R/bridge.R`
+  must be updated if a result class moves to another module
+- `_coerce`: input coercion, option normalisation, shared numeric helpers
+- `_surv`: `Surv`, `Surv2`, timeline conversion, `format_surv`, `strata`
+- `_formula`: tokenizer/parser, terms, design matrices, model-frame builders
+- `_fit`: accessors on fitted models and prediction-input helpers shared by
+  `_coxph`, `_survreg`, and `_models`
+- `_survdiff`, `_concordance`, `_data_prep` (tmerge, survSplit, survcondense,
+  neardate, tcut, aeqSurv, lvcf, nostutter, rttright), `_pyears`, `_finegray`
+- `_coxph`: `coxph`/`clogit`, Cox tests, `basehaz`, `cox_zph`, `anova`, Cox
+  curves and expected events
+- `_survfit`: KM/AJ/Turnbull/Cox curves, `survfit0`, aggregation, confint,
+  influence; `_survfit_residuals`: `survfit_residuals` and `pseudo`
+- `_survreg`: `survreg` fitting, prediction/residual helpers, d/p/q/rsurvreg
+- `_models`: generics (`predict`, `residuals`, `coef`, `vcov`, `confint`,
+  `model_summary`, `as_data_frame`, ...)
+- `_misc`: statefig, brier, royston, yates, cipoisson, bounded links,
+  survobrien, survcheck, nsk, pspline; `_aareg`; `_cch`
+
+The typed surface is declared once in `python/survival/r_api.pyi`;
+`python/survival/r/__init__.pyi` re-exports it. Tests live in
+`python/tests/test_r_<module>.py` with shared builders in
+`python/tests/r_api_support.py`.
 
 Preferred usage is module-oriented:
 

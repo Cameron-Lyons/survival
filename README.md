@@ -238,7 +238,8 @@ Common result objects can be converted to column-oriented tables with
 `Surv` responses also support table conversion for quick data inspection.
 The `survival.residuals` name remains the residual diagnostics module; the
 R-style residual generic is available as `survival.r_api.residuals(...)` for
-fitted Cox and `survreg` models.
+fitted Cox and `survreg` models (`survival.r_api` re-exports the `survival.r`
+package, which holds the implementation split by concern).
 
 Other historical root-level algorithm names remain available for compatibility,
 but module imports are the preferred style because they match the current repo
