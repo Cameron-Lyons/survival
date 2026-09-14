@@ -1,22 +1,22 @@
+//! Typed input containers shared by the Rust API and the PyO3 bindings.
+//!
+//! Each container validates once at construction so downstream code can rely
+//! on lengths, finiteness and sign without re-checking. Validation goes
+//! through `crate::internal::validation`, so error wording is uniform across
+//! the crate.
+//!
+//! The `#[new]` constructors copy their component arguments because Python
+//! keeps ownership of the objects it passes in; Rust callers should use the
+//! `try_new` constructors, which take ownership and never copy.
+
 use crate::internal::validation::{
-    validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
+    validate_equal_len, validate_finite, validate_length, validate_matrix_shape,
+    validate_non_empty, validate_non_negative,
 };
 use crate::{SurvivalError, SurvivalResult};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::borrow::Cow;
-
-fn validate_finite(slice: &[f64], field: &'static str) -> SurvivalResult<()> {
-    for (index, value) in slice.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(SurvivalError::invalid_input(format!(
-                "{} contains non-finite value {} at index {}",
-                field, value, index
-            )));
-        }
-    }
-    Ok(())
-}
 
 fn validate_status_values(status: &[i32], field: &'static str) -> SurvivalResult<()> {
     for (index, value) in status.iter().enumerate() {
@@ -35,6 +35,12 @@ fn validate_strata_len(strata: &[i32], expected: usize) -> SurvivalResult<()> {
     Ok(())
 }
 
+/// Right-censored outcome, the equivalent of R's `Surv(time, status)`.
+///
+/// Times must be finite but may be negative, as in R (`Surv` accepts any
+/// numeric time; only individual routines such as `survreg` restrict the
+/// sign). `status` is any non-negative code so that multi-state outcomes can
+/// share the container; routines needing 0/1 validate that themselves.
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SurvivalData {
@@ -70,9 +76,7 @@ impl SurvivalData {
     pub(crate) fn validate_parts(time: &[f64], status: &[i32]) -> SurvivalResult<()> {
         validate_non_empty(time, "time")?;
         validate_length(time.len(), status.len(), "status")?;
-        validate_no_nan(time, "time")?;
         validate_finite(time, "time")?;
-        validate_non_negative(time, "time")?;
         validate_status_values(status, "status")?;
         Ok(())
     }
@@ -82,6 +86,7 @@ impl SurvivalData {
     }
 }
 
+/// Row-major `n_obs x n_vars` design matrix with finite entries.
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct CovariateMatrix {
@@ -133,11 +138,7 @@ impl CovariateMatrix {
             return Err(SurvivalError::invalid_input("n_vars must be positive"));
         }
 
-        let expected = n_obs
-            .checked_mul(n_vars)
-            .ok_or_else(|| SurvivalError::invalid_input("n_obs * n_vars overflows usize"))?;
-        validate_length(expected, values.len(), "values")?;
-        validate_no_nan(values, "values")?;
+        validate_matrix_shape(values, n_obs, n_vars, "values")?;
         validate_finite(values, "values")?;
         Ok(())
     }
@@ -181,7 +182,6 @@ impl Weights {
 
     pub(crate) fn validate_values(values: &[f64]) -> SurvivalResult<()> {
         validate_non_empty(values, "weights")?;
-        validate_no_nan(values, "weights")?;
         validate_finite(values, "weights")?;
         validate_non_negative(values, "weights")?;
         Ok(())
@@ -220,10 +220,11 @@ impl CountingProcessData {
 impl CountingProcessData {
     pub fn try_new(start: Vec<f64>, stop: Vec<f64>, event: Vec<i32>) -> SurvivalResult<Self> {
         validate_non_empty(&start, "start")?;
-        validate_length(start.len(), stop.len(), "stop")?;
-        validate_length(start.len(), event.len(), "event")?;
-        validate_no_nan(&start, "start")?;
-        validate_no_nan(&stop, "stop")?;
+        validate_equal_len(&[
+            ("start", start.len()),
+            ("stop", stop.len()),
+            ("event", event.len()),
+        ])?;
         validate_finite(&start, "start")?;
         validate_finite(&stop, "stop")?;
         validate_status_values(&event, "event")?;
@@ -320,7 +321,6 @@ impl CoxRegressionInput {
 
         if let Some(offset) = offset {
             validate_length(n_obs, offset.len(), "offset")?;
-            validate_no_nan(offset, "offset")?;
             validate_finite(offset, "offset")?;
         }
 
@@ -341,7 +341,6 @@ impl CoxRegressionInput {
 
         if let Some(offset) = offset {
             validate_length(covariates.n_obs, offset.len(), "offset")?;
-            validate_no_nan(offset, "offset")?;
             validate_finite(offset, "offset")?;
         }
 
@@ -400,7 +399,6 @@ impl CoxMartInput {
     ) -> SurvivalResult<Self> {
         let n_obs = survival.len();
         validate_length(n_obs, score.len(), "score")?;
-        validate_no_nan(&score, "score")?;
         validate_finite(&score, "score")?;
 
         if let Some(weights) = &weights {
@@ -470,7 +468,6 @@ impl AndersenGillInput {
     ) -> SurvivalResult<Self> {
         let n_obs = counting.len();
         validate_length(n_obs, score.len(), "score")?;
-        validate_no_nan(&score, "score")?;
         validate_finite(&score, "score")?;
 
         if let Some(weights) = &weights {
@@ -587,6 +584,55 @@ mod tests {
         assert!(matches!(ag_input.strata_or_default_cow(), Cow::Owned(_)));
         assert_eq!(ag_input.weights_or_unit_cow().as_ref(), [1.0, 1.0]);
         assert_eq!(ag_input.strata_or_default_cow().as_ref(), [0, 0]);
+    }
+
+    #[test]
+    fn survival_data_accepts_negative_times_like_r_surv() {
+        let data = SurvivalData::try_new(vec![-2.5, 0.0, 3.0], vec![1, 0, 2]).unwrap();
+        assert_eq!(data.len(), 3);
+        assert_eq!(data.time, vec![-2.5, 0.0, 3.0]);
+    }
+
+    #[test]
+    fn survival_data_rejects_non_finite_times_and_negative_status() {
+        let err = SurvivalData::try_new(vec![1.0, f64::NAN], vec![1, 0]).unwrap_err();
+        assert!(matches!(err, SurvivalError::Validation(_)));
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = SurvivalData::try_new(vec![1.0, f64::INFINITY], vec![1, 0]).unwrap_err();
+        assert!(err.to_string().contains("time contains non-finite"));
+
+        let err = SurvivalData::try_new(vec![1.0], vec![-1]).unwrap_err();
+        assert!(err.to_string().contains("status contains negative status"));
+
+        let err = SurvivalData::try_new(vec![], vec![]).unwrap_err();
+        assert!(err.to_string().contains("time cannot be empty"));
+
+        let err = SurvivalData::try_new(vec![1.0, 2.0], vec![1]).unwrap_err();
+        assert!(err.to_string().contains("status length mismatch"));
+    }
+
+    #[test]
+    fn covariate_matrix_validates_shape_and_finiteness() {
+        let err = CovariateMatrix::try_new(vec![1.0, 2.0, 3.0], 2, 2).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("values must have 2 x 2 = 4 entries, got 3")
+        );
+        assert!(CovariateMatrix::try_new(vec![1.0], 0, 1).is_err());
+        assert!(CovariateMatrix::try_new(vec![1.0], 1, 0).is_err());
+        let err = CovariateMatrix::try_new(vec![1.0, f64::NAN], 1, 2).unwrap_err();
+        assert!(err.to_string().contains("values contains non-finite"));
+    }
+
+    #[test]
+    fn weights_reject_negative_and_non_finite_values() {
+        assert!(Weights::try_new(vec![0.0, 1.5]).is_ok());
+        let err = Weights::try_new(vec![1.0, -1.0]).unwrap_err();
+        assert!(err.to_string().contains("weights contains negative value"));
+        let err = Weights::try_new(vec![f64::INFINITY]).unwrap_err();
+        assert!(err.to_string().contains("weights contains non-finite"));
+        assert!(Weights::try_new(vec![]).is_err());
     }
 
     #[test]

@@ -13,6 +13,9 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survexp_us, m)?)?;
     m.add_function(wrap_pyfunction!(survexp_mn, m)?)?;
     m.add_function(wrap_pyfunction!(survexp_usr, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_us_table, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_usr_table, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_mn_table, m)?)?;
     m.add_function(wrap_pyfunction!(compute_expected_survival, m)?)?;
 
     register_classes!(

@@ -10055,48 +10055,18 @@ def test_qol_bindings_are_typed_to_runtime_surface():
 def test_survival_dataset_loaders_are_typed_and_well_formed():
     setup_survival_import()
     core = importlib.import_module("survival._survival")
+    datasets = importlib.import_module("survival.datasets")
     stub_path = PACKAGE_ROOT / "_survival.pyi"
     stub_names = _pyi_top_level_names(stub_path)
 
-    expected_shapes = {
-        "load_lung": (228, 10),
-        "load_aml": (23, 3),
-        "load_veteran": (137, 8),
-        "load_ovarian": (26, 6),
-        "load_colon": (1858, 16),
-        "load_pbc": (418, 20),
-        "load_cgd": (203, 16),
-        "load_bladder": (340, 7),
-        "load_heart": (172, 8),
-        "load_kidney": (76, 7),
-        "load_rats": (32, 3),
-        "load_stanford2": (184, 5),
-        "load_udca": (170, 15),
-        "load_myeloid": (646, 9),
-        "load_flchain": (7874, 11),
-        "load_transplant": (815, 6),
-        "load_mgus": (241, 12),
-        "load_mgus2": (1384, 11),
-        "load_diabetic": (394, 8),
-        "load_retinopathy": (394, 9),
-        "load_gbsg": (686, 11),
-        "load_rotterdam": (2982, 15),
-        "load_logan": (838, 4),
-        "load_nwtco": (4028, 9),
-        "load_solder": (900, 6),
-        "load_tobin": (20, 3),
-        "load_rats2": (253, 6),
-        "load_nafld": (17549, 9),
-        "load_cgd0": (128, 20),
-        "load_pbcseq": (1945, 19),
-        "load_hoel": (43, 3),
-        "load_myeloma": (61, 8),
-        "load_rhdnase": (40, 8),
-    }
+    loaders = [name for name in datasets.__all__ if name.startswith("load_")]
+    assert loaders
+    assert set(loaders) <= stub_names
 
-    assert set(expected_shapes) <= stub_names
-
-    for name, (n_rows, n_cols) in expected_shapes.items():
+    # Exact shapes and column checksums against R live in the fixture suite
+    # (python/tests/test_r_fixtures.py, datasets.json) and in the Rust
+    # catalog tests; here we only check the binding contract.
+    for name in loaders:
         loader = getattr(core, name)
         assert list(inspect.signature(loader).parameters) == []
         assert _pyi_function_arg_names(stub_path, name) == []
@@ -10104,10 +10074,9 @@ def test_survival_dataset_loaders_are_typed_and_well_formed():
         data = loader()
         columns = [key for key in data if not key.startswith("_")]
 
-        assert data["_nrow"] == n_rows
-        assert data["_ncol"] == n_cols
-        assert len(columns) == n_cols
-        assert {len(data[column]) for column in columns} == {n_rows}
+        assert data["_nrow"] > 0
+        assert data["_ncol"] == len(columns)
+        assert {len(data[column]) for column in columns} == {data["_nrow"]}
 
 
 def test_interpretability_bindings_are_typed_to_runtime_surface():

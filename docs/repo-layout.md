@@ -74,6 +74,16 @@ familiar R-style entry points:
 This bridge uses `reticulate` to call `survival.r_api` and should remain a thin
 facade until native R/extendr bindings are introduced.
 
+## Test Layout
+
+- Rust unit tests live next to the code they cover; cross-cutting R-parity
+  suites live in `src/tests/`.
+- Python tests live in `python/tests/`.
+- `test/r/` holds the R differential fixtures (`generate_fixtures.R` ->
+  `fixtures/*.json`) read by `python/tests/test_r_fixtures.py` and
+  `src/tests/r_fixtures.rs`, kept stable by the `r-fixture-stability` CI job.
+  There is no archived Rust reference code in the repo.
+
 ## Naming Notes
 
 - `survival.reliability` is the callable reliability function.

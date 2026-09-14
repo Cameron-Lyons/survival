@@ -1,9 +1,9 @@
 use crate::constants::{
-    DEFAULT_CONCORDANCE, DIVISION_FLOOR, ITERATIVE_MAX_ITER, LCG64_INCREMENT, LCG64_MULTIPLIER,
-    TIED_PAIR_WEIGHT, TIME_EPSILON, same_time,
+    DEFAULT_CONCORDANCE, DIVISION_FLOOR, LCG64_INCREMENT, LCG64_MULTIPLIER, TIED_PAIR_WEIGHT,
+    TIME_EPSILON, same_time,
 };
+use crate::internal::dist::{lgammafn, pchisq, pgamma, pnorm, pt, qgamma, qnorm, qt};
 use crate::internal::fenwick::FenwickTree;
-use std::f64::consts::SQRT_2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ConcordanceSummary {
@@ -48,35 +48,30 @@ pub(crate) fn sample_normal(rng: &mut crate::internal::rng::Rng) -> f64 {
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
 }
 
+/// Standard normal quantile (R's `qnorm(p)`); `p` outside `(0, 1)` maps to
+/// the corresponding infinity so callers may pass slightly out-of-range
+/// probabilities without triggering NaN.
 #[inline]
 pub(crate) fn probit(p: f64) -> f64 {
     normal_inverse_cdf(p)
 }
 
+/// Error function, `erf(x) = 2 pnorm(x sqrt 2) - 1`.
 #[inline]
 pub(crate) fn erf(x: f64) -> f64 {
-    let a1 = 0.254829592;
-    let a2 = -0.284496736;
-    let a3 = 1.421413741;
-    let a4 = -1.453152027;
-    let a5 = 1.061405429;
-    let p = 0.3275911;
-
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x = x.abs();
-    let t = 1.0 / (1.0 + p * x);
-    let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-    sign * y
+    crate::internal::dist::erf(x)
 }
 
+/// Complementary error function, `erfc(x) = 2 pnorm(x sqrt 2, lower = FALSE)`.
 #[inline]
 pub(crate) fn erfc(x: f64) -> f64 {
-    1.0 - erf(x)
+    crate::internal::dist::erfc(x)
 }
 
+/// Standard normal distribution function (R's `pnorm(x)`).
 #[inline]
 pub(crate) fn normal_cdf(x: f64) -> f64 {
-    0.5 * (1.0 + erf(x / SQRT_2))
+    pnorm(x, true, false)
 }
 
 #[inline]
@@ -856,8 +851,9 @@ pub(crate) fn km_step_prob_at(t: f64, unique_times: &[f64], km_values: &[f64]) -
     if left == 0 { 1.0 } else { km_values[left - 1] }
 }
 
+/// Standard normal quantile (R's `qnorm(p)`); `p <= 0` gives `-Inf` and
+/// `p >= 1` gives `+Inf` instead of R's NaN for out-of-range input.
 #[inline]
-#[allow(clippy::excessive_precision)]
 pub(crate) fn normal_inverse_cdf(p: f64) -> f64 {
     if p <= 0.0 {
         return f64::NEG_INFINITY;
@@ -865,77 +861,23 @@ pub(crate) fn normal_inverse_cdf(p: f64) -> f64 {
     if p >= 1.0 {
         return f64::INFINITY;
     }
-    if p == 0.5 {
-        return 0.0;
-    }
-
-    let a = [
-        -3.969683028665376e+01,
-        2.209460984245205e+02,
-        -2.759285104469687e+02,
-        1.383577518672690e+02,
-        -3.066479806614716e+01,
-        2.506628277459239e+00,
-    ];
-    let b = [
-        -5.447609879822406e+01,
-        1.615858368580409e+02,
-        -1.556989798598866e+02,
-        6.680131188771972e+01,
-        -1.328068155288572e+01,
-    ];
-    let c = [
-        -7.784894002430293e-03,
-        -3.223964580411365e-01,
-        -2.400758277161838e+00,
-        -2.549732539343734e+00,
-        4.374664141464968e+00,
-        2.938163982698783e+00,
-    ];
-    let d = [
-        7.784695709041462e-03,
-        3.224671290700398e-01,
-        2.445134137142996e+00,
-        3.754408661907416e+00,
-    ];
-
-    let p_low = 0.02425;
-    let p_high = 1.0 - p_low;
-
-    if p < p_low {
-        let q = (-2.0 * p.ln()).sqrt();
-        (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
-    } else if p <= p_high {
-        let q = p - 0.5;
-        let r = q * q;
-        (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
-            / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
-    } else {
-        let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
-            / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
-    }
+    qnorm(p, true, false)
 }
 
+/// `qnorm(1 - alpha/2)`, the two-sided normal critical value, or `None`
+/// when `alpha` is not in `(0, 1)`.
 #[inline]
 pub(crate) fn two_sided_normal_quantile(alpha: f64) -> Option<f64> {
     if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
         return None;
     }
 
-    let z = normal_inverse_cdf(1.0 - alpha / 2.0);
+    let z = qnorm(alpha / 2.0, false, false);
     z.is_finite().then_some(z)
 }
 
-#[inline]
-pub(crate) fn gamma_cdf(x: f64, a: f64) -> f64 {
-    if x <= 0.0 || a <= 0.0 {
-        return 0.0;
-    }
-    lower_incomplete_gamma(a, x)
-}
-
+/// Gamma quantile with unit scale (R's `qgamma(p, a)`); `p <= 0` gives 0
+/// and `p >= 1` gives `+Inf`.
 #[inline]
 pub(crate) fn gamma_inverse_cdf(p: f64, a: f64) -> f64 {
     if p <= 0.0 {
@@ -944,269 +886,61 @@ pub(crate) fn gamma_inverse_cdf(p: f64, a: f64) -> f64 {
     if p >= 1.0 {
         return f64::INFINITY;
     }
-
-    let mut x = if a > 1.0 {
-        let d = 1.0 / (9.0 * a);
-        let z = normal_inverse_cdf(p);
-        a * (1.0 - d + z * d.sqrt()).powi(3).max(0.001)
-    } else {
-        (p * ln_gamma(a).exp() * a).powf(1.0 / a).max(0.001)
-    };
-
-    let eps = 1e-10;
-    let max_iter = 50;
-    for _ in 0..max_iter {
-        let cdf = gamma_cdf(x, a);
-        let pdf = gamma_pdf(x, a);
-        if pdf < 1e-300 {
-            break;
-        }
-        let delta = (cdf - p) / pdf;
-        x -= delta;
-        x = x.max(1e-10);
-        if delta.abs() < eps * x {
-            break;
-        }
-    }
-    x
+    qgamma(p, a, 1.0, true, false)
 }
 
-#[inline]
-fn gamma_pdf(x: f64, a: f64) -> f64 {
-    if x <= 0.0 || a <= 0.0 {
-        return 0.0;
-    }
-    ((a - 1.0) * x.ln() - x - ln_gamma(a)).exp()
-}
-
+/// Chi-squared survival function (R's `pchisq(x, df, lower.tail = FALSE)`),
+/// evaluated directly in the upper tail; 1 for `x <= 0` or `df == 0`.
 #[inline]
 pub(crate) fn chi2_sf(x: f64, df: usize) -> f64 {
     if x <= 0.0 || df == 0 {
         return 1.0;
     }
-    let k = df as f64 / 2.0;
-    let x_half = x / 2.0;
-    1.0 - lower_incomplete_gamma(k, x_half)
+    pchisq(x, df as f64, false, false)
 }
 
+/// Chi-squared distribution function (R's `pchisq(x, df)`); zero for
+/// `x <= 0` or a non-positive `df`.
 #[inline]
 pub(crate) fn chi2_cdf(x: f64, df: f64) -> f64 {
     if x <= 0.0 || df <= 0.0 {
         return 0.0;
     }
-    lower_incomplete_gamma(df / 2.0, x / 2.0)
+    pchisq(x, df, true, false)
 }
 
+/// `log|gamma(x)|` (R's `lgamma(x)`).
 #[inline]
 pub(crate) fn ln_gamma(x: f64) -> f64 {
-    let coeffs = [
-        76.18009172947146,
-        -86.50532032941677,
-        24.01409824083091,
-        -1.231739572450155,
-        0.1208650973866179e-2,
-        -0.5395239384953e-5,
-    ];
-    let y = x;
-    let tmp = x + 5.5;
-    let tmp = tmp - (x + 0.5) * tmp.ln();
-    let mut ser = 1.000000000190015;
-    for (j, &c) in coeffs.iter().enumerate() {
-        ser += c / (y + 1.0 + j as f64);
-    }
-    -tmp + (2.5066282746310005 * ser / x).ln()
+    lgammafn(x)
 }
 
-#[inline]
-fn beta_continued_fraction(a: f64, b: f64, x: f64) -> f64 {
-    const EPSILON: f64 = 3e-14;
-    const MIN_VALUE: f64 = 1e-300;
-
-    let qab = a + b;
-    let qap = a + 1.0;
-    let qam = a - 1.0;
-    let mut c = 1.0;
-    let mut d = 1.0 - qab * x / qap;
-    if d.abs() < MIN_VALUE {
-        d = MIN_VALUE;
-    }
-    d = d.recip();
-    let mut h = d;
-
-    for m in 1..=200 {
-        let m = m as f64;
-        let m2 = 2.0 * m;
-        let mut numerator = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 + numerator * d;
-        if d.abs() < MIN_VALUE {
-            d = MIN_VALUE;
-        }
-        c = 1.0 + numerator / c;
-        if c.abs() < MIN_VALUE {
-            c = MIN_VALUE;
-        }
-        d = d.recip();
-        h *= d * c;
-
-        numerator = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 + numerator * d;
-        if d.abs() < MIN_VALUE {
-            d = MIN_VALUE;
-        }
-        c = 1.0 + numerator / c;
-        if c.abs() < MIN_VALUE {
-            c = MIN_VALUE;
-        }
-        d = d.recip();
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() <= EPSILON {
-            break;
-        }
-    }
-    h
-}
-
-#[inline]
-fn regularized_beta(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-
-    let front = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (-x).ln_1p()).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        front * beta_continued_fraction(a, b, x) / a
-    } else {
-        1.0 - front * beta_continued_fraction(b, a, 1.0 - x) / b
-    }
-}
-
+/// Student t density (R's `dt(x, df)`).
 #[inline]
 pub(crate) fn student_t_pdf(value: f64, df: f64) -> f64 {
-    if !value.is_finite() {
-        return if value.is_nan() { f64::NAN } else { 0.0 };
-    }
-    let log_coefficient = ln_gamma((df + 1.0) / 2.0)
-        - ln_gamma(df / 2.0)
-        - 0.5 * (df.ln() + std::f64::consts::PI.ln());
-    (log_coefficient - ((df + 1.0) / 2.0) * (1.0 + value * value / df).ln()).exp()
+    crate::internal::dist::dt(value, df, false)
 }
 
+/// Student t distribution function (R's `pt(x, df)`).
 #[inline]
 pub(crate) fn student_t_cdf(value: f64, df: f64) -> f64 {
-    if value == f64::INFINITY {
-        return 1.0;
-    }
-    if value == f64::NEG_INFINITY {
-        return 0.0;
-    }
-    if value == 0.0 {
-        return 0.5;
-    }
-
-    let x = df / (df + value * value);
-    let beta = regularized_beta(df / 2.0, 0.5, x);
-    if value > 0.0 {
-        1.0 - 0.5 * beta
-    } else {
-        0.5 * beta
-    }
+    pt(value, df, true, false)
 }
 
+/// Student t quantile (R's `qt(p, df)`); NaN outside `[0, 1]`.
+#[inline]
 pub(crate) fn student_t_inverse_cdf(probability: f64, df: f64) -> f64 {
-    if probability.is_nan() || !(0.0..=1.0).contains(&probability) {
-        return f64::NAN;
-    }
-    if probability == 0.0 {
-        return f64::NEG_INFINITY;
-    }
-    if probability == 1.0 {
-        return f64::INFINITY;
-    }
-    if probability == 0.5 {
-        return 0.0;
-    }
-    if probability < 0.5 {
-        return -student_t_inverse_cdf(1.0 - probability, df);
-    }
-
-    let mut low = 0.0;
-    let mut high = 1.0;
-    while student_t_cdf(high, df) < probability {
-        high *= 2.0;
-        if high.is_infinite() {
-            return high;
-        }
-    }
-    for _ in 0..120 {
-        let middle = (low + high) / 2.0;
-        if student_t_cdf(middle, df) < probability {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    (low + high) / 2.0
+    qt(probability, df, true, false)
 }
 
+/// Regularized lower incomplete gamma function `P(a, x)` (R's
+/// `pgamma(x, a)`); zero for `x < 0` or a non-positive shape.
 #[inline]
 pub(crate) fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
     if x < 0.0 || a <= 0.0 {
         return 0.0;
     }
-    if x < a + 1.0 {
-        gamma_series(a, x)
-    } else {
-        1.0 - gamma_continued_fraction(a, x)
-    }
-}
-
-#[inline]
-pub(crate) fn gamma_series(a: f64, x: f64) -> f64 {
-    let eps = 1e-10;
-    let max_iter = ITERATIVE_MAX_ITER;
-    let mut sum = 1.0 / a;
-    let mut term = sum;
-    for n in 1..max_iter {
-        term *= x / (a + n as f64);
-        sum += term;
-        if term.abs() < eps * sum.abs() {
-            break;
-        }
-    }
-    sum * (-x + a * x.ln() - ln_gamma(a)).exp()
-}
-
-#[inline]
-pub(crate) fn gamma_continued_fraction(a: f64, x: f64) -> f64 {
-    let eps = 1e-10;
-    let max_iter = ITERATIVE_MAX_ITER;
-    let mut b = x + 1.0 - a;
-    let mut c = 1.0 / 1e-30;
-    let mut d = 1.0 / b;
-    let mut h = d;
-    for i in 1..max_iter {
-        let an = -(i as f64) * (i as f64 - a);
-        b += 2.0;
-        d = an * d + b;
-        if d.abs() < 1e-30 {
-            d = 1e-30;
-        }
-        c = b + an / c;
-        if c.abs() < 1e-30 {
-            c = 1e-30;
-        }
-        d = 1.0 / d;
-        let del = d * c;
-        h *= del;
-        if (del - 1.0).abs() < eps {
-            break;
-        }
-    }
-    (-x + a * x.ln() - ln_gamma(a)).exp() * h
+    pgamma(x, a, 1.0, true, false)
 }
 
 #[cfg(test)]
@@ -1751,48 +1485,91 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_chi2_sf_basic() {
         assert!((chi2_sf(0.0, 1) - 1.0).abs() < 1e-10);
         assert!((chi2_sf(-1.0, 1) - 1.0).abs() < 1e-10);
         assert!((chi2_sf(1.0, 0) - 1.0).abs() < 1e-10);
+        // R: pchisq(3.84, 1, lower.tail = FALSE)
+        assert!((chi2_sf(3.84, 1) - 0.050043521248705224).abs() < 1e-16);
+        assert!((chi2_cdf(3.84, 1.0) - 0.94995647875129474).abs() < 1e-15);
+        assert_eq!(chi2_cdf(0.0, 1.0), 0.0);
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_ln_gamma() {
         assert!(ln_gamma(1.0).abs() < 1e-10);
         assert!(ln_gamma(2.0).abs() < 1e-10);
+        // R: lgamma(0.5) = log(sqrt(pi))
+        assert!((ln_gamma(0.5) - 0.57236494292470008).abs() < 1e-15);
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
+    fn normal_helpers_match_r() {
+        // R: pnorm(1.96), qnorm(0.975), pnorm(-10)
+        assert!((normal_cdf(1.96) - 0.97500210485177963).abs() < 1e-15);
+        assert!((normal_inverse_cdf(0.975) - 1.9599639845400536).abs() < 1e-15);
+        assert!((normal_cdf(-10.0) / 7.6198530241605269e-24 - 1.0).abs() < 1e-14);
+        assert_eq!(normal_inverse_cdf(0.0), f64::NEG_INFINITY);
+        assert_eq!(normal_inverse_cdf(1.0), f64::INFINITY);
+        assert_eq!(normal_inverse_cdf(-0.1), f64::NEG_INFINITY);
+        assert!(normal_inverse_cdf(f64::NAN).is_nan());
+        assert!((probit(0.025) + 1.9599639845400536).abs() < 1e-15);
+        assert!((two_sided_normal_quantile(0.05).unwrap() - 1.9599639845400536).abs() < 1e-15);
+        assert_eq!(two_sided_normal_quantile(0.0), None);
+        assert_eq!(two_sided_normal_quantile(1.0), None);
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)]
+    fn erf_helpers_match_reference_values() {
+        // R: 2 * pnorm(x * sqrt(2)) - 1 and 2 * pnorm(x * sqrt(2), lower = FALSE),
+        // erf(3) against its true value 0.99997790950300141456...; erf(1e-8) is
+        // compared with 2/sqrt(pi) * 1e-8, which R's own expression cannot
+        // resolve.
+        assert!((erf(0.5) - 0.52049987781304652).abs() < 1e-16);
+        assert!((erf(-0.5) + 0.52049987781304652).abs() < 1e-16);
+        assert!((erf(3.0) - 0.99997790950300141).abs() < 1.2e-16);
+        assert!((erfc(3.0) / 2.2090496998585394e-05 - 1.0).abs() < 1e-15);
+        assert!((erf(1e-8) / 1.1283791670955126e-08 - 1.0).abs() < 1e-15);
+        assert!((erfc(-3.0) - (2.0 - 2.2090496998585394e-05)).abs() < 1e-15);
+        assert_eq!(erf(0.0), 0.0);
+        assert_eq!(erfc(0.0), 1.0);
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)]
     fn student_t_helpers_match_reference_values_and_boundaries() {
-        assert!((student_t_pdf(1.0, 5.0) - 0.2196797973509805).abs() < 1e-12);
-        assert!((student_t_cdf(1.0, 5.0) - 0.8183912661754387).abs() < 1e-12);
+        assert!((student_t_pdf(1.0, 5.0) - 0.21967979735098059).abs() < 1e-16);
+        assert!((student_t_cdf(1.0, 5.0) - 0.81839126617543867).abs() < 1e-15);
         assert_eq!(student_t_pdf(f64::INFINITY, 5.0), 0.0);
+        assert!(student_t_pdf(f64::NAN, 5.0).is_nan());
         assert_eq!(student_t_cdf(f64::NEG_INFINITY, 5.0), 0.0);
         assert_eq!(student_t_cdf(f64::INFINITY, 5.0), 1.0);
         assert_eq!(student_t_inverse_cdf(0.0, 5.0), f64::NEG_INFINITY);
         assert_eq!(student_t_inverse_cdf(1.0, 5.0), f64::INFINITY);
+        assert!(student_t_inverse_cdf(1.5, 5.0).is_nan());
+        assert!(student_t_inverse_cdf(f64::NAN, 5.0).is_nan());
 
         for probability in [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999] {
             let quantile = student_t_inverse_cdf(probability, 5.0);
-            assert!((student_t_cdf(quantile, 5.0) - probability).abs() < 1e-12);
+            assert!((student_t_cdf(quantile, 5.0) - probability).abs() < 1e-15);
         }
     }
 
     #[test]
-    fn test_gamma_inverse_cdf() {
-        let result = gamma_inverse_cdf(0.475, 5.0);
-        assert!(
-            result > 4.0 && result < 5.0,
-            "Expected ~4.5, got {}",
-            result
-        );
-
-        let result2 = gamma_inverse_cdf(0.525, 6.0);
-        assert!(
-            result2 > 5.0 && result2 < 7.0,
-            "Expected ~6, got {}",
-            result2
-        );
+    #[allow(clippy::excessive_precision)]
+    fn test_gamma_helpers() {
+        // R: qgamma(0.475, 5), qgamma(0.525, 6), pgamma(4.5, 5)
+        assert!((gamma_inverse_cdf(0.475, 5.0) - 4.5375048990088311).abs() < 1e-14);
+        assert!((gamma_inverse_cdf(0.525, 6.0) - 5.8200445519969533).abs() < 1e-14);
+        assert!((lower_incomplete_gamma(5.0, 4.5) - 0.46789642362528439).abs() < 1e-15);
+        assert_eq!(gamma_inverse_cdf(0.0, 5.0), 0.0);
+        assert_eq!(gamma_inverse_cdf(1.0, 5.0), f64::INFINITY);
+        assert_eq!(lower_incomplete_gamma(5.0, 0.0), 0.0);
+        assert_eq!(lower_incomplete_gamma(0.0, 1.0), 0.0);
+        assert_eq!(lower_incomplete_gamma(5.0, -1.0), 0.0);
     }
 }
