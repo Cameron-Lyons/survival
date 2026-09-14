@@ -5,7 +5,8 @@ import pytest
 
 from .helpers import setup_survival_import
 
-_surv = setup_survival_import()
+survival = setup_survival_import()
+_surv = survival.regression
 sklearn_compat = importlib.import_module("survival.sklearn_compat")
 AFTEstimator = sklearn_compat.AFTEstimator
 StreamingAFTEstimator = sklearn_compat.StreamingAFTEstimator
@@ -97,7 +98,7 @@ class TestSurvreg:
         assert len(result.coefficients) == 3
         assert np.isfinite(result.log_likelihood)
 
-    def test_survreg_small_sample(self):
+    def test_survreg_small_sample_matches_r(self):
         time = [1.0, 2.0, 3.0, 4.0, 5.0]
         status = [1.0, 1.0, 1.0, 1.0, 1.0]
         X = [[1.0], [1.0], [1.0], [1.0], [1.0]]
@@ -110,8 +111,98 @@ class TestSurvreg:
             max_iter=100,
         )
 
-        assert len(result.coefficients) == 2
-        assert result.log_likelihood < 0
+        # survreg(Surv(1:5, rep(1, 5)) ~ 1): (Intercept), Log(scale), scale, loglik
+        assert isinstance(result, _surv.SurvregFit)
+        assert result.coefficients == pytest.approx(
+            [1.2220948192663361, np.log(0.43595653120301259)]
+        )
+        assert result.scale == pytest.approx([0.43595653120301259])
+        assert result.log_likelihood == pytest.approx(-8.6710937992775285)
+        assert result.intercept_only_log_likelihood == pytest.approx(-8.6710937992775285)
+        assert result.converged
+        assert result.distribution.name == "Weibull"
+
+
+# R: d <- data.frame(t = 1:8, s = c(1,1,0,1,1,1,0,1), x = c(.5,.2,.9,.1,.7,.3,.8,.4))
+#    survreg(Surv(t, s) ~ x, d, dist = <dist>); predict(newdata = data.frame(x = c(.25, .75)))
+_TOY_X = np.array([[0.5], [0.2], [0.9], [0.1], [0.7], [0.3], [0.8], [0.4]], dtype=np.float64)
+_TOY_Y = np.column_stack([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], [1, 1, 0, 1, 1, 1, 0, 1]])
+_TOY_NEW = np.array([[0.25], [0.75]], dtype=np.float64)
+_R_SURVREG = {
+    "weibull": {
+        "coef": (1.1636656987433951, 1.3788867351883287),
+        "scale": 0.497638477465639,
+        "loglik": -14.307025676163946,
+        "response": (4.5194367919992153, 9.0054572090245308),
+        "q50": (3.765936055880589, 7.504027064432754),
+        "q90": (6.8444220326719512, 13.638236924753228),
+    },
+    "lognormal": {
+        "coef": (0.87233357022867131, 1.3801613779637922),
+        "scale": 0.75008271096402956,
+        "loglik": -15.235456438042803,
+        "response": (3.3783043591269042, 6.7359213695243323),
+        "q50": (3.3783043591269042, 6.7359213695243323),
+        "q90": (8.8343151503484076, 17.614532582174917),
+    },
+    "gaussian": {
+        "coef": (2.7599598137086114, 5.2840325854668642),
+        "scale": 2.4821327719353752,
+        "loglik": -14.77042276067333,
+        "response": (4.080967960075327, 6.7229842528087591),
+        "q50": (4.080967960075327, 6.7229842528087591),
+        "q90": (7.2619490998386667, 9.9039653925720987),
+    },
+    "logistic": {
+        "coef": (2.9386494175551521, 5.1242398913335849),
+        "scale": 1.4791564979637573,
+        "loglik": -14.992074618789822,
+        "response": (4.2197093903885481, 6.781829336055341),
+        "q50": (4.2197093903885481, 6.781829336055341),
+        "q90": (7.4697484014410875, 10.031868347107881),
+    },
+}
+
+
+class TestAFTEstimatorAgainstR:
+    @pytest.mark.parametrize("distribution", sorted(_R_SURVREG))
+    def test_fit_and_predictions_match_r_survreg(self, distribution):
+        reference = _R_SURVREG[distribution]
+        model = AFTEstimator(distribution=distribution).fit(_TOY_X, _TOY_Y)
+
+        assert model.intercept_ == pytest.approx(reference["coef"][0])
+        assert model.coef_ == pytest.approx([reference["coef"][1]])
+        assert model.scale_ == pytest.approx(reference["scale"])
+        assert model.converged_
+        assert model.model_.log_likelihood == pytest.approx(reference["loglik"])
+
+        # type = "response": exp(lp) for the log-transformed distributions, lp otherwise
+        assert model.predict(_TOY_NEW) == pytest.approx(reference["response"])
+        assert model.predict_median(_TOY_NEW) == pytest.approx(reference["q50"])
+        assert model.predict_quantile(_TOY_NEW, q=0.9) == pytest.approx(reference["q90"])
+        # concordance(fit): larger predicted time goes with longer survival
+        assert model.score(_TOY_X, _TOY_Y) == pytest.approx(0.68181818181818188)
+
+    def test_untransformed_distributions_are_not_exponentiated(self):
+        gaussian = AFTEstimator(distribution="gaussian").fit(_TOY_X, _TOY_Y)
+        design = np.column_stack([np.ones(2), _TOY_NEW])
+        linear = design @ np.array([gaussian.intercept_, *gaussian.coef_])
+
+        assert gaussian.predict(_TOY_NEW) == pytest.approx(linear)
+        assert gaussian.predict_median(_TOY_NEW) == pytest.approx(linear)
+
+        weibull = AFTEstimator(distribution="weibull").fit(_TOY_X, _TOY_Y)
+        linear = design @ np.array([weibull.intercept_, *weibull.coef_])
+        assert weibull.predict(_TOY_NEW) == pytest.approx(np.exp(linear))
+
+    def test_feature_count_is_validated(self):
+        model = AFTEstimator().fit(_TOY_X, _TOY_Y)
+        with pytest.raises(ValueError, match="expects 1"):
+            model.predict(np.array([[0.1, 0.2]], dtype=np.float64))
+        with pytest.raises(ValueError, match="expects 1"):
+            model.predict_quantile(np.array([[0.1, 0.2]], dtype=np.float64))
+        with pytest.raises(ValueError, match="not fitted"):
+            AFTEstimator().predict(_TOY_NEW)
 
 
 class TestAFTEstimator:

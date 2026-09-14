@@ -1,6 +1,19 @@
-from importlib import import_module as _import_module
+"""Survival analysis in Rust with Python bindings.
 
-from ._binding_manifest import MODULE_BINDINGS
+The root package exposes three things, all loaded lazily on first access:
+
+* the domain modules (``survival.regression``, ``survival.surv_analysis``, ...), each binding
+  a documented subset of the Rust extension ``survival._survival``;
+* the R-style API of :mod:`survival.r` under the R names (``Surv``, ``survfit``, ``coxph``,
+  ...), listed in ``_R_EXPORTS``;
+* the scikit-learn compatible estimators of :mod:`survival.sklearn_compat`, listed in
+  ``_SKLEARN_EXPORTS``.
+
+``__all__`` is derived from these three lists; ``__init__.pyi`` mirrors them and
+``python/tests/test_binding_contract.py`` checks that the two agree.
+"""
+
+from importlib import import_module as _import_module
 
 __version__ = "1.3.0"
 
@@ -19,12 +32,14 @@ _PUBLIC_MODULES = {
     "population": ".population",
     "pybridge": ".pybridge",
     "qol": ".qol",
+    "r": ".r",
     "recurrent": ".recurrent",
     "regression": ".regression",
     "relative": ".relative",
     "reliability_tools": ".reliability_tools",
     "residuals": ".residuals",
     "r_api": ".r_api",
+    "sklearn_compat": ".sklearn_compat",
     "spatial": ".spatial",
     "surv_analysis": ".surv_analysis",
     "validation": ".validation",
@@ -154,32 +169,13 @@ _R_EXPORTS = [
     "yates_pairwise",
 ]
 
-_PREFERRED_EXPORTS = list(_PUBLIC_MODULES) + _R_EXPORTS + _SKLEARN_EXPORTS
-
-_LEGACY_EXPORT_MODULES = {
-    name: module_name
-    for module_name in _PUBLIC_MODULES
-    for name in MODULE_BINDINGS.get(module_name, ())
-    if name not in _PREFERRED_EXPORTS
-}
-
-__preferred__ = tuple(_PREFERRED_EXPORTS)
-__legacy_root_exports__ = tuple(_LEGACY_EXPORT_MODULES)
-__deprecated_root_exports__ = __legacy_root_exports__
-__deprecated_root_export_reason__ = (
-    "Root-level algorithm and result exports are retained for compatibility. "
-    "Prefer importing from domain modules such as survival.regression, "
-    "survival.surv_analysis, or survival.validation."
-)
-
-__all__ = list(dict.fromkeys(_PREFERRED_EXPORTS))
+__all__ = list(dict.fromkeys([*_PUBLIC_MODULES, *_R_EXPORTS, *_SKLEARN_EXPORTS]))
 
 
 def _load_public_module(name):
-    module_path = _PUBLIC_MODULES[name]
     module = globals().get(name)
     if module is None:
-        module = _import_module(module_path, __name__)
+        module = _import_module(_PUBLIC_MODULES[name], __name__)
         globals()[name] = module
     return module
 
@@ -194,20 +190,17 @@ def __getattr__(name):
         return _load_public_module(name)
 
     if name in _R_EXPORTS:
-        value = getattr(_load_public_module("r_api"), name)
+        value = getattr(_load_public_module("r"), name)
         globals()[name] = value
         return value
 
     if name in _SKLEARN_EXPORTS:
-        value = getattr(_import_module(".sklearn_compat", __name__), name)
+        value = getattr(_load_public_module("sklearn_compat"), name)
         globals()[name] = value
         return value
 
-    module_name = _LEGACY_EXPORT_MODULES.get(name)
-    if module_name is not None:
-        return getattr(_load_public_module(module_name), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__():
-    return sorted(set(__all__) | {"__preferred__", "__deprecated_root_exports__", "__version__"})
+    return sorted({*__all__, "__version__"})

@@ -7,6 +7,7 @@ _PUBLIC_EXPORTS = (
     "AFTEstimator",
     "CoxPHEstimator",
     "DeepSurvEstimator",
+    "FlatModelPredictMixin",
     "GradientBoostSurvivalEstimator",
     "StreamingAFTEstimator",
     "StreamingCoxPHEstimator",
@@ -24,6 +25,7 @@ _PUBLIC_EXPORTS = (
 _EXPORT_MODULES = {
     "_HAS_SKLEARN": "._sklearn_common",
     "SurvivalScoreMixin": "._sklearn_common",
+    "FlatModelPredictMixin": "._sklearn_common",
     "AFTEstimator": "._sklearn_aft",
     "CoxPHEstimator": "._sklearn_cox",
     "DeepSurvEstimator": "._sklearn_deep",
