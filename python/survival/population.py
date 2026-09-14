@@ -24,5 +24,8 @@ __all__ = bind_names(
         "survexp_mn",
         "survexp_us",
         "survexp_usr",
+        "survexp_mn_table",
+        "survexp_us_table",
+        "survexp_usr_table",
     ],
 )

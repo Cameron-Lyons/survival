@@ -11,15 +11,54 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUSTUP_TOOLCHAIN: 1.94.0
+  # Warnings are denied in CI only (not in .cargo/config.toml) so local
+  # iteration is not blocked while the gate is still enforced on every PR.
+  RUSTFLAGS: -Dwarnings
 
 jobs:
-  build-and-test:
-    name: Build & Test (${{ matrix.os }})
+  rust-tests:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Install Rust
+        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-tests-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-tests-
+
+      - name: Run Rust tests (once per feature set)
+        run: |
+          cargo test --lib --no-default-features
+          cargo test --lib --features ml
+          cargo test --lib --features python,ml
+
+      - name: Run doctests
+        run: cargo test --doc
+
+  build-smoke:
+    name: Build Smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
 
     steps:
       - name: Checkout code
@@ -41,30 +80,19 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-py3.14-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-smoke-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-py3.14-
+            ${{ runner.os }}-cargo-smoke-
 
-      - name: Install maturin and test dependencies
-        run: pip install maturin numpy pandas polars pytest
+      - name: Install maturin
+        run: pip install maturin
 
       - name: Clean old wheels
         run: rm -rf target/wheels || true
         shell: bash
 
-      - name: Build with maturin
+      - name: Build wheel with maturin
         run: maturin build --release --interpreter python --features extension-module,ml
-
-      - name: Run Rust tests
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          cargo test --lib --no-default-features
-          cargo test --lib --features ml
-          cargo test --lib --features python,ml
-
-      - name: Run doctests
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo test --doc
 
       - name: Install wheel (Unix)
         if: matrix.os != 'windows-latest'
@@ -76,8 +104,11 @@ jobs:
           $wheel = Get-ChildItem -Path target/wheels -Filter "survival-*.whl" | Select-Object -First 1
           pip install $wheel.FullName
 
-      - name: Run Python tests
-        run: python -m pytest --import-mode=importlib python/tests/ -v
+      # Only verify the extension loads on this platform; the test suites run on
+      # ubuntu in the rust-tests and python-matrix jobs.
+      - name: Import installed extension
+        working-directory: ${{ runner.temp }}
+        run: python -c "import survival._survival as m; print(m.__file__)"
 
   python-matrix:
     name: Python ${{ matrix.python-version }}
@@ -122,15 +153,11 @@ jobs:
           maturin build --release --interpreter python --features extension-module,ml
           pip install target/wheels/survival-*.whl
 
-      - name: Run Rust tests
-        run: |
-          cargo test --lib --no-default-features
-          cargo test --lib --features ml
-          cargo test --lib --features python,ml
-
       - name: Run Python tests
         run: python -m pytest --import-mode=importlib python/tests/ -v
 
+  # Builds with the lean `extension-module` feature set (no `ml`), so this is
+  # the one run of the Python suite that exercises the no-ML skip paths.
   python-source-tree:
     name: Python Source Tree
     runs-on: ubuntu-latest
@@ -189,35 +216,58 @@ jobs:
       - name: Run Python tests against source-tree install
         run: .venv/bin/python -m pytest python/tests/ -v
 
-  r-validation:
-    name: R Survival Package Validation
+  # Regenerates test/r/fixtures with the exact survival version recorded in
+  # the fixture metadata and fails on any diff. This checks that the committed
+  # fixtures are reproducible, not that the crate matches R (that is what
+  # python/tests/test_r_fixtures.py and src/tests/r_fixtures.rs do).
+  r-fixture-stability:
+    name: R Fixture Stability
     runs-on: ubuntu-latest
+    env:
+      # CRAN spelling of test/r/fixtures/*.json -> metadata.survival_version
+      # (packageVersion() reports it as 3.8.11).
+      R_SURVIVAL_VERSION: '3.8-11'
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Check the pin matches the fixture metadata
+        run: |
+          recorded="$(jq -r '.metadata.survival_version' test/r/fixtures/coxph.json)"
+          pinned="${R_SURVIVAL_VERSION//-/.}"
+          if [ "$recorded" != "$pinned" ]; then
+            echo "R_SURVIVAL_VERSION ($pinned) does not match test/r/fixtures metadata ($recorded)" >&2
+            exit 1
+          fi
+          echo "survival pin $R_SURVIVAL_VERSION matches fixture metadata"
+
       - name: Install R
         uses: r-lib/actions/setup-r@v2
         with:
-          r-version: '4.5.2'
+          r-version: '4.5.3'
 
-      - name: Install R dependencies
+      - name: Install pinned survival and jsonlite
         run: |
-          install.packages(c("survival", "jsonlite"), repos = "https://cloud.r-project.org")
+          repos <- c(CRAN = "https://cloud.r-project.org")
+          install.packages(c("remotes", "jsonlite"), repos = repos)
+          wanted <- Sys.getenv("R_SURVIVAL_VERSION")
+          remotes::install_version("survival", version = wanted, repos = repos, upgrade = "never")
+          installed <- as.character(packageVersion("survival"))
+          if (installed != gsub("-", ".", wanted, fixed = TRUE)) {
+            stop(sprintf("installed survival %s but expected %s", installed, wanted))
+          }
+          cat("survival", installed, "installed\n")
         shell: Rscript {0}
 
-      - name: Regenerate expected values
-        run: |
-          cd test
-          Rscript generate_r_expected_values.R
+      - name: Regenerate fixtures
+        run: Rscript test/r/generate_fixtures.R
 
       - name: Check for differences
         run: |
-          if git diff --exit-code test/r_expected_values.json; then
-            echo "✓ R expected values are up to date"
+          if git diff --exit-code test/r/fixtures; then
+            echo "R fixtures are up to date"
           else
-            echo "✗ R expected values have changed!"
-            echo "Please run 'Rscript test/generate_r_expected_values.R' and commit the changes"
+            echo "R fixtures changed. Regenerate with survival ${R_SURVIVAL_VERSION} and commit, or bump R_SURVIVAL_VERSION together with the fixture metadata." >&2
             exit 1
           fi
 

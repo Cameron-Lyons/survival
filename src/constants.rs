@@ -13,25 +13,20 @@ pub const DEFAULT_MAX_ITER: usize = 30;
 pub const DEFAULT_CONFIDENCE_LEVEL: f64 = 0.95;
 pub const DEFAULT_BOOTSTRAP_SAMPLES: usize = 1000;
 
-pub const Z_SCORE_80: f64 = 1.28;
-pub const Z_SCORE_90: f64 = 1.645;
-pub const Z_SCORE_95: f64 = 1.96;
-pub const Z_SCORE_99: f64 = 2.576;
+/// `qnorm(0.95)`, `qnorm(0.975)` and `qnorm(0.995)` to full precision, as R
+/// computes them; prefer `z_score_for_confidence` for other levels.
+pub const Z_SCORE_90: f64 = 1.6448536269514715;
+pub const Z_SCORE_95: f64 = 1.9599639845400536;
+pub const Z_SCORE_99: f64 = 2.5758293035489;
 
 pub const TIED_PAIR_WEIGHT: f64 = 0.5;
 pub const DEFAULT_CONCORDANCE: f64 = 0.5;
 
+/// Two-sided normal critical value for a confidence level, exactly as R's
+/// survival package computes it: `qnorm((1 + conf.int) / 2)`.
 #[inline]
 pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
-    if confidence_level >= 0.99 {
-        Z_SCORE_99
-    } else if confidence_level >= 0.95 {
-        Z_SCORE_95
-    } else if confidence_level >= 0.90 {
-        Z_SCORE_90
-    } else {
-        Z_SCORE_80
-    }
+    crate::internal::dist::qnorm((1.0 + confidence_level) / 2.0, true, false)
 }
 
 #[inline]

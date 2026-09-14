@@ -50,15 +50,15 @@ harness = false
 name = "survfitaj_benchmarks"
 harness = false
 
+# `panic = "abort"` is deliberately NOT set: the release profile builds every
+# maturin wheel, and a PyO3 extension module must be able to unwind so that a
+# Rust panic surfaces in Python as `pyo3_runtime.PanicException` instead of
+# aborting the interpreter.
 [profile.release]
 lto = true
 codegen-units = 1
 opt-level = 3
 strip = false
-panic = "abort"
-
-[profile.release-native]
-inherits = "release"
 
 [profile.bench]
 inherits = "release"

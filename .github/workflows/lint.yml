@@ -4,13 +4,17 @@ permissions:
   contents: read
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The single place that runs rustfmt + clippy for the main crate.
   rust-lint:
     name: Rust Lint & Format
     runs-on: ubuntu-latest
@@ -48,6 +52,42 @@ jobs:
         run: |
           cargo install cargo-machete --locked --version 0.9.1 --force
           cargo machete
+
+  # The fuzz and proc-macro shim crates are separate packages, so `cargo fmt
+  # --all` / `cargo clippy` at the repo root do not cover them.
+  rust-lint-aux:
+    name: Rust Lint & Format (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [fuzz, survival-pyo3-macros-shim]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ matrix.crate }}/target/
+          key: ${{ runner.os }}-cargo-lint-${{ matrix.crate }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-${{ matrix.crate }}-
+
+      - name: Check formatting
+        run: cargo fmt --all --manifest-path ${{ matrix.crate }}/Cargo.toml -- --check
+
+      - name: Run clippy
+        run: cargo clippy --manifest-path ${{ matrix.crate }}/Cargo.toml --all-targets --all-features -- -D warnings
 
   python-lint:
     name: Python Lint & Format
@@ -91,12 +131,13 @@ jobs:
   veto:
     name: Veto
     runs-on: ubuntu-latest
-    needs: [rust-lint, python-lint, typos]
+    needs: [rust-lint, rust-lint-aux, python-lint, typos]
     if: always()
     steps:
       - name: Check all lint jobs passed
         run: |
           if [[ "${{ needs.rust-lint.result }}" != "success" ]] || \
+             [[ "${{ needs.rust-lint-aux.result }}" != "success" ]] || \
              [[ "${{ needs.python-lint.result }}" != "success" ]] || \
              [[ "${{ needs.typos.result }}" != "success" ]]; then
             echo "One or more lint jobs failed"

@@ -34,9 +34,9 @@ mod tests {
                     .split(',')
                     .map(|value| value.trim().parse::<i32>().expect("valid bladder integer"))
                     .collect();
-                assert_eq!(values.len(), 8, "unexpected bladder row width");
+                assert_eq!(values.len(), 7, "unexpected bladder row width");
                 (
-                    values[1], values[2], values[3], values[4], values[5], values[6], values[7],
+                    values[0], values[1], values[2], values[3], values[4], values[5], values[6],
                 )
             })
             .collect();

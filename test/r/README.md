@@ -1,0 +1,178 @@
+# R differential fixtures
+
+`test/r/fixtures/*.json` hold reference values computed by R's `survival`
+package.  Two test suites read them:
+
+- `python/tests/test_r_fixtures.py` calls the public Python API
+  (`survival.r_api`) with the same data and compares every recorded quantity.
+- `src/tests/r_fixtures.rs` does the same for the kernels reachable without
+  Python (`compute_survfitkm`, `survdiff2`, `coxph_fit` and its residuals,
+  `survreg`, `concordance_index`, `neardate`, `aeq_surv`).
+
+Both suites keep a `KNOWN_FAILURES` burndown list (see below) so they stay
+green while the implementation catches up.
+
+## Regenerating
+
+The generator needs R with `survival` and `jsonlite`.  A throw-away
+environment via micromamba:
+
+```sh
+micromamba create -p renv -c conda-forge r-base r-survival r-jsonlite
+renv/bin/Rscript test/r/generate_fixtures.R
+```
+
+The script is deterministic (no RNG, no timestamps); rerunning it with the
+same package versions reproduces the files byte for byte, and
+`generate_fixtures.R --check` verifies that by generating a second copy into
+a scratch directory and comparing the two.  (`R_FIXTURES_DIR` overrides the
+output directory.)  The versions used are recorded in every file's
+`metadata` (currently survival 3.8.11; generated on R 4.5.3, which CI pins).  Regenerate everything
+rather than editing a fixture by hand, and commit the fixtures together with
+the generator change that produced them.
+
+One R quirk is worked around in the generator: `survfitAJ`'s C code
+(`src/survfitaj.c`) zeroes only the first `nstate` slots of its `std.chaz`
+accumulator, so for a multistate curve with more transition types than
+states the rows before its first event carry uninitialised memory in the
+remaining columns (their values differ between runs and machines; the
+myeloid illness-death cases hit it).  `clean_survfitms` sets those cells to
+the value the code would produce had the buffer been initialised, 0, before
+encoding; `--check` catches any similar leak.
+
+One JSON file per topic:
+
+| file | R functions |
+| --- | --- |
+| `datasets.json` | shape/column checksums of the bundled datasets |
+| `survfit_km.json` | `survfit` Kaplan-Meier / Fleming-Harrington, `summary`, `quantile` |
+| `survfit_multistate.json` | `survfit` Aalen-Johansen (mgus2, myeloid, transplant, synthetic with `istate`) |
+| `survfit_interval.json` | `survfit` Turnbull for interval-censored data |
+| `survdiff.json` | `survdiff` (rho, strata, one-sample vs `survexp`) |
+| `coxph.json` | `coxph` core fit, `summary`, `anova`, `coxph.wtest`, `concordance(fit)` |
+| `coxph_predict.json` | `basehaz`, `survfit(fit)`, `survfit(fit, newdata)`, `predict` |
+| `coxph_diagnostics.json` | all `residuals` types, `cox.zph`, `coxph.detail` |
+| `coxph_penalized.json` | `ridge`, `pspline`, `frailty` terms |
+| `survreg.json` | `survreg` (all distributions), `residuals`, `predict`, `dsurvreg`/`psurvreg`/`qsurvreg` |
+| `concordance.json` | `concordance` (weights, reverse, timewt, cluster, influence, fits) |
+| `aareg.json`, `cch.json`, `clogit.json`, `finegray.json`, `survobrien.json`, `yates.json`, `royston_brier.json`, `rttright.json` | the corresponding functions |
+| `pseudo.json` | `pseudo`, `residuals.survfit`, `survfit0` |
+| `survcheck.json`, `survSplit.json`, `survcondense.json`, `tmerge.json`, `neardate.json` | data-preparation helpers |
+| `pyears.json`, `survexp.json` | `pyears`/`tcut` (incl. `survexp.us` rate tables), `survexp`, `ratetableDate` |
+| `utilities.json` | `cipoisson`, bounded links, `nsk`, `pspline` basis, `aeqSurv`, `Surv` types, `statefig` |
+
+Files stay under 2 MB; larger datasets are subset (the case name and `note`
+say so, e.g. `flchain_sex_500`).
+
+## Schema
+
+```json
+{
+  "topic": "coxph",
+  "metadata": {"survival_version": "3.8.11", "r_version": "...", "encoding": {...}},
+  "n_cases": 53,
+  "data": {"<ref>": {"nrow": 16, "columns": {"time": [...]}, "factors": {"g": ["a", "b"]}}},
+  "cases": [
+    {
+      "name": "lung_age_sex_efron",
+      "topic": "coxph",
+      "dataset": "lung",            // bundled dataset, or
+      "data_ref": "synthetic_ties", // an inline frame from the "data" section
+      "rows": [1, 2, 5],            // optional 1-based row subset (R order)
+      "factors": {"celltype": ["squamous", "smallcell", "adeno", "large"]},
+      "formula": "Surv(time, status) ~ age + sex",
+      "args": {"ties": "breslow", "weights": [...]},
+      "expected": {...},
+      "note": "free text"
+    }
+  ]
+}
+```
+
+- `args` are the R call arguments beyond `formula`/`data`, with R names
+  (`conf.type`, `start.time`, ...).  Column-name arguments (`id = "id"`) refer
+  to columns of the case data.  Empty `args` is written as `[]` by jsonlite.
+- `factors` lists the R factor levels of factor columns used by the case so a
+  consumer can reproduce R's level order (treatment contrasts, strata order).
+- `expected` is topic specific; keys mirror R's component names with `.`
+  replaced by `_` (`n_risk`, `std_err`, `conf_int`).  An aspect R itself could
+  not compute is stored as `{"r_error": "<message>"}` and skipped by the tests.
+
+Value encoding (jsonlite, `digits = NA`, `auto_unbox`):
+
+- numeric vectors are arrays even when of length one;
+- matrices are row-major nested arrays; a matrix with dimnames is
+  `{"rownames": [...], "colnames": [...], "values": [[...]]}`;
+- 3-d arrays are lists of matrices along the third dimension;
+- named vectors are JSON objects keyed by name; because not every JSON reader
+  keeps object order, the order is also stored in a sibling `<key>_names`
+  array where it matters (`coef` / `coef_names`);
+- `NA` is `null`, and the non-finite numbers are the strings `"NaN"`,
+  `"Inf"`, `"-Inf"`;
+- survfit objects are `{"n", "strata", "conf_type", "conf_int", "type",
+  "curves": [{"name": "sex=1", "time": [...], "n_risk": [...], ...}]}` with
+  one entry per stratum; matrix-valued fields (multi-state `pstate`, Cox
+  curves for several `newdata` rows) are row-major matrices inside the curve.
+
+## Tolerances
+
+Relative: `1e-8` for coefficients, curves, residuals and linear predictors;
+`1e-6` for variances, standard errors, test statistics and p-values; exact for
+counts (`n.risk`, `n.event`, degrees of freedom, iteration counts).
+
+A scalar is compared as `|a - e| <= rtol * |e|`.  For a vector or matrix the
+absolute tolerance is raised to `rtol * max|expected|` over the whole object
+(the way R's `all.equal` measures a difference relative to the size of the
+object), so floating-point noise around zero, `1e-17` against an exact `0`
+inside an otherwise matching residual vector, is not a mismatch, while a
+zero-floor comparison of a scalar still is.  Exact comparisons (`rtol = 0`)
+keep a zero floor.  Values R itself rounds before reporting are compared to
+the reported precision (`summary(fit)$waldtest["test"]` is
+`round(fit$wald.test, 2)`; the unrounded statistic is the `wald_test`
+aspect).
+
+## KNOWN_FAILURES
+
+Both suites test every (case, aspect) pair.  Test ids are
+`topic/case/aspect`, e.g. `coxph/lung_age_sex_efron/residuals.martingale`.
+Pairs the implementation cannot reproduce yet are listed in
+
+- `KNOWN_FAILURES` in `python/tests/test_r_fixtures.py` (a dict), and
+- `KNOWN_FAILURES` in `src/tests/r_fixtures.rs` (a const slice),
+
+keyed by `topic/case/aspect`, or by `topic/case` when every aspect of a case
+fails.  The reason string starts with the failure category:
+
+- `missing feature:` the API cannot express the case (formula term, argument,
+  result field, ...);
+- `mismatch:` the call runs but a number, shape or name differs from R;
+- `error:` the call raises;
+- `dataset mismatch:` the bundled dataset differs from R's (columns, rows).
+
+A listed pair is expected to fail: Python marks it `xfail(strict=True)`, the
+Rust report tolerates it.  When an entry starts passing the suite fails with
+"remove it from KNOWN_FAILURES", so the list can only shrink as a side effect
+of real fixes.  Keys are exact matches; refine a case-level key into aspect
+keys when only part of a case is fixed.
+
+To rebuild the lists after a large change, set `R_FIXTURES_COLLECT` to a
+file: both suites append one JSON line `{"id", "kind", "message"}` per
+check, and `test/r/burndown.py` turns such a file into the `KNOWN_FAILURES`
+literal (grouping by case, collapsing to a case key when every aspect fails
+for the same category, shortening the reasons) and with `--write` replaces
+the list in the suite in place.  A run whose list is stale fails on XPASS
+entries but still records every outcome, so one pass is enough.
+
+```sh
+R_FIXTURES_COLLECT=/tmp/py.jsonl PYTHONPATH=.:python pytest python/tests/test_r_fixtures.py -q
+python test/r/burndown.py /tmp/py.jsonl python --summary --write
+R_FIXTURES_COLLECT=/tmp/rs.jsonl cargo test --lib --no-default-features r_fixtures -- --test-threads=1
+python test/r/burndown.py /tmp/rs.jsonl rust --summary --write && cargo fmt
+```
+
+`--summary` prints the per-topic counts by category, the burndown numbers
+quoted in progress reports.
+
+Set `R_FIXTURES_FULL_TRACEBACK=1` to get full Python tracebacks (the suite
+re-raises from the test frame by default because pytest's traceback rendering
+of the large `r_api.py` dominates the runtime otherwise).

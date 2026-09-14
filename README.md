@@ -632,40 +632,24 @@ veteran = datasets.load_veteran()
 Datasets are returned as column-oriented dictionaries with `_nrow` and `_ncol`
 metadata.
 
-**Available datasets:**
-- `load_lung()` - NCCTG Lung Cancer Data
-- `load_aml()` - Acute Myelogenous Leukemia Survival Data
-- `load_veteran()` - Veterans' Administration Lung Cancer Study
-- `load_ovarian()` - Ovarian Cancer Survival Data
-- `load_colon()` - Colon Cancer Data
-- `load_pbc()` - Primary Biliary Cholangitis Data
-- `load_cgd()` - Chronic Granulomatous Disease Data
-- `load_bladder()` - Bladder Cancer Recurrences
-- `load_heart()` - Stanford Heart Transplant Data
-- `load_kidney()` - Kidney Catheter Data
-- `load_rats()` - Rat Treatment Data
-- `load_stanford2()` - Stanford Heart Transplant Data (Extended)
-- `load_udca()` - UDCA Clinical Trial Data
-- `load_myeloid()` - Acute Myeloid Leukemia Clinical Trial
-- `load_flchain()` - Free Light Chain Data
-- `load_transplant()` - Liver Transplant Data
-- `load_mgus()` - Monoclonal Gammopathy Data
-- `load_mgus2()` - Monoclonal Gammopathy Data (Updated)
-- `load_diabetic()` - Diabetic Retinopathy Data
-- `load_retinopathy()` - Retinopathy Data
-- `load_gbsg()` - German Breast Cancer Study Group Data
-- `load_rotterdam()` - Rotterdam Tumor Bank Data
-- `load_logan()` - Logan Unemployment Data
-- `load_nwtco()` - National Wilms Tumor Study Data
-- `load_solder()` - Solder Joint Data
-- `load_tobin()` - Tobin's Tobit Data
-- `load_rats2()` - Rat Tumorigenesis Data
-- `load_nafld()` - Non-Alcoholic Fatty Liver Disease Data
-- `load_cgd0()` - CGD Baseline Data
-- `load_pbcseq()` - PBC Sequential Data
-- `load_hoel()` - Hoel's Cancer Survival Data
-- `load_myeloma()` - Myeloma Survival Data
-- `load_rhdnase()` - rhDNase Clinical Trial Data
+**Available datasets** (every data frame shipped by R's `survival` 3.8, with R's
+exact values, column names and storage modes: R `double` -> `float`, `integer`
+-> `int`, factor/character/Date -> `str` (ISO dates), logical -> `bool`, `NA`
+-> `None`):
+
+`aml` (alias `leukemia`), `bladder`, `bladder1`, `bladder2`, `braking`,
+`capacitor`, `cgd`, `cgd0`, `colon`, `cracks`, `diabetic`, `flchain`, `gbsg`,
+`genfan`, `heart`, `hoel`, `ifluid`, `imotor`, `jasa`, `jasa1`, `kidney`,
+`logan`, `lung` (alias `cancer`), `mgus`, `mgus1`, `mgus2`, `myeloid`,
+`myeloma`, `nafld1`, `nafld2`, `nafld3`, `nwtco`, `ovarian`, `pbc`, `pbcseq`,
+`rats`, `rats2`, `retinopathy`, `rhDNase` (`load_rhdnase`), `rotterdam`,
+`solder`, `stanford2`, `tobin`, `transplant`, `turbine`, `udca`, `udca1`,
+`udca2`, `valveSeat` (`load_valveseat`), `veteran` — each as
+`datasets.load_<name>()`.
+
+The US, US-by-race and Minnesota population rate tables (`survexp.us`,
+`survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
+`survival.population`.
 
 ## API Reference
 
@@ -796,7 +780,7 @@ The codebase is organized with:
 - Developer-facing layout notes in `docs/`
 - Rust unit/integration tests in `src/tests/`
 - Python binding tests in `python/tests/`
-- R validation fixtures and archived reference cases in `test/`
+- R reference fixtures in `test/r`
 
 ## Dependencies
 
