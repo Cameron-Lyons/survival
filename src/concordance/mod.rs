@@ -1,11 +1,16 @@
-pub(crate) mod basic;
-pub(crate) mod common;
-#[path = "concordance1.rs"]
-pub(crate) mod concordance1_module;
-pub(crate) mod concordance3;
-pub(crate) mod concordance5;
+//! R's `concordance` (survival 3.8-12): the concordance statistic with its
+//! influence-based and Cox-model variances, for right-censored and
+//! (start, stop] data, several predictors, strata, case weights, time
+//! weights and clustering.
+//!
+//! `kernels` ports the C sweeps (`concordance3.c`, `concordance5.c`,
+//! `fastkm.c`) and the `btree` rank tree; `fit` ports the R-level
+//! `concordancefit` that drives them.
 
-pub use basic::concordance as compute_concordance;
-pub use concordance1_module::{concordance1, perform_concordance1_calculation};
-pub use concordance3::perform_concordance3_calculation;
-pub use concordance5::perform_concordance_calculation;
+pub mod fit;
+pub mod kernels;
+
+pub use fit::{
+    ConcordanceCounts, ConcordanceFit, ConcordanceOptions, ConcordanceRanks, TimeWeight,
+    concordancefit,
+};

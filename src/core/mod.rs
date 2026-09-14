@@ -1,11 +1,18 @@
-#[path = "coxcount1.rs"]
-pub(crate) mod coxcount1_module;
-pub(crate) mod coxscho;
-#[path = "nsk.rs"]
-pub(crate) mod nsk_module;
-pub(crate) mod pspline;
+//! Ports of the small C routines and R helpers of `survival` that other
+//! modules build on: risk-set expansion for `tt()` terms (`coxcount1.c`),
+//! Schoenfeld residuals (`coxscho.c`), the `nsk` natural spline and the
+//! `pspline` basis, plus the data conventions the kernels share
+//! (`strata_order`).
 
-pub use coxcount1_module::{CoxCountOutput, coxcount1, coxcount2};
-pub use coxscho::schoenfeld_residuals;
-pub use nsk_module::{NaturalSplineKnot, SplineBasisResult, nsk};
-pub use pspline::{PSpline, pspline_basis};
+pub mod bspline;
+pub mod coxcount1;
+pub mod coxscho;
+pub mod natural_spline;
+pub mod pspline;
+pub mod strata_order;
+
+pub use coxcount1::{CoxCountOutput, coxcount1, coxcount2};
+pub use coxscho::{CoxschoResiduals, schoenfeld_residuals};
+pub use natural_spline::{NaturalSplineKnot, SplineBasisResult, nsk, nsk_basis};
+pub use pspline::{PsplineBasis, pspline_basis};
+pub use strata_order::SurvResponse;

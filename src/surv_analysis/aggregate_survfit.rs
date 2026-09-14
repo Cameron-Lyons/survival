@@ -1,601 +1,552 @@
-use crate::constants::{TIME_EPSILON, clamped_normal_ci_bounds};
-use crate::internal::statistical::normal_inverse_cdf;
-use pyo3::exceptions::PyValueError;
+//! Population-averaged curves: the port of R's `aggregate.survfit`
+//! (`R/aggregate.survfit.R`).  A `survfit(coxfit, newdata)` object holds one
+//! curve per row of `newdata`, its `data` margin; the method summarises the
+//! `surv` (time x data) and `pstate` (time x data x state) columns within
+//! groups of that margin with `FUN` and drops the components that do not
+//! collapse (`std.err`, `std.cumhaz`, `lower`, `upper`, `conf.int`,
+//! `conf.type`, `logse`, `cumhaz`).  The remaining components of the object
+//! (`time`, `n.risk`, `strata`, ...) are unchanged and stay with the caller.
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::validation::validate_length;
+use ndarray::{Array2, Array3};
 use pyo3::prelude::*;
-use std::collections::BTreeMap;
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    PyErr::new::<PyValueError, _>(message.into())
+/// The `FUN` argument: the summary of one group's curve values at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AggregateFun {
+    /// `mean`, the default: the population average.
+    #[default]
+    Mean,
+    /// `median`; an even count averages the two middle values, as R.
+    Median,
+    Min,
+    Max,
 }
 
-fn validate_probability_curve(name: &str, values: &[f64]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{name} contains non-finite value at index {idx}"
-            )));
-        }
-        if !(0.0..=1.0).contains(&value) {
-            return Err(value_error(format!(
-                "{name} values must be between 0 and 1; got {value} at index {idx}"
-            )));
+impl AggregateFun {
+    pub fn parse(name: &str) -> SurvivalResult<Self> {
+        match name {
+            "mean" => Ok(Self::Mean),
+            "median" => Ok(Self::Median),
+            "min" => Ok(Self::Min),
+            "max" => Ok(Self::Max),
+            other => Err(SurvivalError::invalid_input(format!(
+                "FUN must be one of mean, median, min or max; got {other:?}"
+            ))),
         }
     }
-    Ok(())
-}
 
-fn validate_nonnegative_finite_curve(name: &str, values: &[f64]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{name} contains non-finite value at index {idx}"
-            )));
+    /// The summary of `values`, which are reordered in place; an `NA`
+    /// (`NaN`) makes the summary `NA`, as R's `mean`, `median`, `min` and
+    /// `max` do.
+    fn apply(self, values: &mut [f64]) -> f64 {
+        if values.iter().any(|value| value.is_nan()) {
+            return f64::NAN;
         }
-        if value < 0.0 {
-            return Err(value_error(format!(
-                "{name} values must be non-negative; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_time_curve(name: &str, values: &[f64]) -> PyResult<()> {
-    let mut previous = f64::NEG_INFINITY;
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{name} contains non-finite value at index {idx}"
-            )));
-        }
-        if value < 0.0 {
-            return Err(value_error(format!(
-                "{name} values must be non-negative; got {value} at index {idx}"
-            )));
-        }
-        if value + TIME_EPSILON < previous {
-            return Err(value_error(format!(
-                "{name} values must be sorted in non-decreasing order"
-            )));
-        }
-        previous = value;
-    }
-    Ok(())
-}
-
-fn validate_conf_level(conf_level: f64) -> PyResult<()> {
-    if !conf_level.is_finite() || !(0.0..1.0).contains(&conf_level) {
-        return Err(value_error("conf_level must be finite and between 0 and 1"));
-    }
-    Ok(())
-}
-
-fn normalized_weights(weights: Option<Vec<f64>>, n_curves: usize) -> PyResult<Vec<f64>> {
-    match weights {
-        Some(wts) => {
-            if wts.len() != n_curves {
-                return Err(value_error(
-                    "weights must have same length as number of curves",
-                ));
+        let n = values.len() as f64;
+        match self {
+            Self::Mean => {
+                // R's mean: the sum divided by n, then refined by the mean
+                // of the residuals (`src/main/summary.c`)
+                let first: f64 = values.iter().sum::<f64>() / n;
+                first + values.iter().map(|value| value - first).sum::<f64>() / n
             }
-            validate_nonnegative_finite_curve("weights", &wts)?;
-            let sum: f64 = wts.iter().sum();
-            if sum <= 0.0 {
-                return Err(value_error(
-                    "weights must include at least one positive value",
-                ));
+            Self::Median => {
+                values.sort_by(f64::total_cmp);
+                let half = values.len() / 2;
+                if values.len() % 2 == 1 {
+                    values[half]
+                } else {
+                    (values[half - 1] + values[half]) / 2.0
+                }
             }
-            Ok(wts.iter().map(|&x| x / sum).collect())
+            Self::Min => values.iter().copied().fold(f64::INFINITY, f64::min),
+            Self::Max => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
         }
-        None => Ok(vec![1.0 / n_curves as f64; n_curves]),
     }
 }
 
-fn validate_curve_inputs(
-    times: &[&[f64]],
-    survs: &[&[f64]],
-    std_errs: Option<&[&[f64]]>,
-) -> PyResult<()> {
-    for (idx, (time, surv)) in times.iter().zip(survs.iter()).enumerate() {
-        if time.len() != surv.len() {
-            return Err(value_error(format!(
-                "times[{idx}] and survs[{idx}] must have the same length"
+/// One element of R's `by` list after `as.factor`: a level code per data
+/// column (`codes[j]` indexes `levels`) and, for a named list, the element's
+/// name.
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct GroupingFactor {
+    #[pyo3(get)]
+    pub name: Option<String>,
+    #[pyo3(get)]
+    pub codes: Vec<usize>,
+    #[pyo3(get)]
+    pub levels: Vec<String>,
+}
+
+impl GroupingFactor {
+    pub fn try_new(
+        codes: Vec<usize>,
+        levels: Vec<String>,
+        name: Option<String>,
+    ) -> SurvivalResult<Self> {
+        if let Some((index, &code)) = codes
+            .iter()
+            .enumerate()
+            .find(|&(_, &code)| code >= levels.len())
+        {
+            return Err(SurvivalError::invalid_input(format!(
+                "by: level code {code} at index {index} is not below the number of levels {}",
+                levels.len()
             )));
         }
-        validate_time_curve(&format!("times[{idx}]"), time)?;
-        validate_probability_curve(&format!("survs[{idx}]"), surv)?;
+        Ok(Self {
+            name,
+            codes,
+            levels,
+        })
     }
-
-    if let Some(ses) = std_errs {
-        if ses.len() != times.len() {
-            return Err(value_error(
-                "std_errs must have same length as number of curves",
-            ));
-        }
-        for (idx, se) in ses.iter().enumerate() {
-            if se.len() != times[idx].len() {
-                return Err(value_error(format!(
-                    "std_errs[{idx}] must have the same length as times[{idx}]"
-                )));
-            }
-            validate_nonnegative_finite_curve(&format!("std_errs[{idx}]"), se)?;
-        }
-    }
-    Ok(())
 }
 
+#[pymethods]
+impl GroupingFactor {
+    #[new]
+    #[pyo3(signature = (codes, levels, name=None))]
+    pub fn new(codes: Vec<usize>, levels: Vec<String>, name: Option<String>) -> PyResult<Self> {
+        Ok(Self::try_new(codes, levels, name)?)
+    }
+}
+
+/// The `newdata` of the aggregated object: one row per group with the level
+/// label of every grouping variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[pyclass(from_py_object)]
+pub struct AggregateGroups {
+    /// The column names: the names of `by`, `Group.k` for an unnamed element
+    /// of a list, or the single column `aggregate` for a bare vector.
+    #[pyo3(get)]
+    pub names: Vec<String>,
+    /// `labels[group][column]`.
+    #[pyo3(get)]
+    pub labels: Vec<Vec<String>>,
+}
+
+/// The collapsed columns of the aggregated survfit object.
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct AggregateSurvfitResult {
+    /// `surv[time][group]`; absent when the object had no `surv`.
     #[pyo3(get)]
-    pub time: Vec<f64>,
+    pub surv: Option<Vec<Vec<f64>>>,
+    /// `pstate[time][group][state]`; absent when the object had no `pstate`.
     #[pyo3(get)]
-    pub surv: Vec<f64>,
+    pub pstate: Option<Vec<Vec<Vec<f64>>>>,
+    /// The group labels; `None` without `by` (or when every column falls
+    /// in one group), where R drops the group dimension and `newdata`.
     #[pyo3(get)]
-    pub std_err: Vec<f64>,
-    #[pyo3(get)]
-    pub lower: Vec<f64>,
-    #[pyo3(get)]
-    pub upper: Vec<f64>,
-    #[pyo3(get)]
-    pub n_curves: usize,
-    #[pyo3(get)]
-    pub weights: Vec<f64>,
+    pub newdata: Option<AggregateGroups>,
 }
 
-#[pyfunction]
-#[pyo3(signature = (times, survs, std_errs=None, weights=None, conf_level=None))]
-pub fn aggregate_survfit(
-    times: Vec<Vec<f64>>,
-    survs: Vec<Vec<f64>>,
-    std_errs: Option<Vec<Vec<f64>>>,
-    weights: Option<Vec<f64>>,
-    conf_level: Option<f64>,
-) -> PyResult<AggregateSurvfitResult> {
-    let time_refs: Vec<&[f64]> = times.iter().map(|curve| curve.as_slice()).collect();
-    let surv_refs: Vec<&[f64]> = survs.iter().map(|curve| curve.as_slice()).collect();
-    let std_err_refs = std_errs
-        .as_ref()
-        .map(|ses| ses.iter().map(|curve| curve.as_slice()).collect::<Vec<_>>());
-
-    aggregate_survfit_slices(
-        &time_refs,
-        &surv_refs,
-        std_err_refs.as_deref(),
-        weights,
-        conf_level,
-    )
+/// The `data` margin of the object and the group of every column.
+struct Grouping {
+    n_data: usize,
+    /// `index` of the R code, 0-based and without holes.
+    index: Vec<usize>,
+    n_groups: usize,
+    newdata: Option<AggregateGroups>,
 }
 
-fn aggregate_survfit_slices(
-    times: &[&[f64]],
-    survs: &[&[f64]],
-    std_errs: Option<&[&[f64]]>,
-    weights: Option<Vec<f64>>,
-    conf_level: Option<f64>,
-) -> PyResult<AggregateSurvfitResult> {
-    let n_curves = times.len();
-
-    if survs.len() != n_curves {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "times and survs must have same length",
-        ));
+/// The size of the data margin the two arrays share.
+fn data_margin(surv: Option<&Array2<f64>>, pstate: Option<&Array3<f64>>) -> SurvivalResult<usize> {
+    match (surv, pstate) {
+        (None, None) => Err(SurvivalError::invalid_input(
+            "aggregate.survfit needs a surv or a pstate matrix",
+        )),
+        (Some(surv), None) => Ok(surv.ncols()),
+        (None, Some(pstate)) => Ok(pstate.dim().1),
+        (Some(surv), Some(pstate)) => {
+            let (n_time, n_data, _) = pstate.dim();
+            validate_length(surv.nrows(), n_time, "pstate times")?;
+            validate_length(surv.ncols(), n_data, "pstate data margin")?;
+            Ok(n_data)
+        }
     }
+}
 
-    if n_curves == 0 {
-        if let Some(wts) = weights.as_ref()
-            && !wts.is_empty()
-        {
-            return Err(value_error(
-                "weights must be empty when no curves are supplied",
-            ));
+/// `index <- match(tapply(by[[1]], by), sort(unique(...)))`: the group of
+/// every column, the first grouping variable varying fastest, renumbered
+/// without holes; plus the labels `aggregate.survfit` stores as `newdata`.
+fn grouping(by: &[GroupingFactor], n_data: usize) -> SurvivalResult<Grouping> {
+    if by.is_empty() {
+        return Ok(Grouping {
+            n_data,
+            index: vec![0; n_data],
+            n_groups: 1,
+            newdata: None,
+        });
+    }
+    for factor in by {
+        validate_length(n_data, factor.codes.len(), "by")?;
+    }
+    // the tapply group: 1 + sum_k code_k * prod_{j < k} nlevels_j
+    let mut keys = vec![0usize; n_data];
+    let mut stride = 1usize;
+    for factor in by {
+        for (key, &code) in keys.iter_mut().zip(&factor.codes) {
+            *key += code * stride;
         }
-        if let Some(ses) = std_errs
-            && !ses.is_empty()
-        {
-            return Err(value_error(
-                "std_errs must be empty when no curves are supplied",
-            ));
-        }
-        return Ok(AggregateSurvfitResult {
-            time: vec![],
-            surv: vec![],
-            std_err: vec![],
-            lower: vec![],
-            upper: vec![],
-            n_curves: 0,
-            weights: vec![],
+        stride *= factor.levels.len();
+    }
+    let mut present = keys.clone();
+    present.sort_unstable();
+    present.dedup();
+    let index: Vec<usize> = keys
+        .iter()
+        .map(|key| present.binary_search(key).expect("every key is present"))
+        .collect();
+    if present.len() == 1 {
+        // all in one group: R drops back to the no-`by` case
+        return Ok(Grouping {
+            n_data,
+            index,
+            n_groups: 1,
+            newdata: None,
         });
     }
 
-    let conf = conf_level.unwrap_or(0.95);
-    validate_conf_level(conf)?;
-    let z = z_score(conf);
-
-    validate_curve_inputs(times, survs, std_errs)?;
-    let w = normalized_weights(weights, n_curves)?;
-
-    let mut all_times = Vec::with_capacity(times.iter().map(|curve| curve.len()).sum());
-    for curve in times {
-        all_times.extend_from_slice(curve);
-    }
-    all_times.sort_by(|a, b| a.total_cmp(b));
-    all_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
-
-    let mut agg_surv = vec![0.0; all_times.len()];
-    let mut agg_se = vec![0.0; all_times.len()];
-
-    for (i, (time, surv)) in times.iter().zip(survs.iter()).enumerate() {
-        let weight = w[i];
-        let weight_sq = weight * weight;
-        let se_curve = std_errs.map(|ses| ses[i]);
-
-        for (j, &eval_t) in all_times.iter().enumerate() {
-            agg_surv[j] += weight * interpolate_step(time, surv, eval_t, 1.0);
-
-            if let Some(se) = se_curve {
-                let interpolated_se = interpolate_step(time, se, eval_t, 0.0);
-                agg_se[j] += weight_sq * interpolated_se * interpolated_se;
-            }
-        }
-    }
-    for se in &mut agg_se {
-        *se = se.sqrt();
-    }
-
-    let (lower, upper) = clamped_normal_ci_bounds(&agg_surv, &agg_se, z, 0.0, 1.0);
-
-    Ok(AggregateSurvfitResult {
-        time: all_times,
-        surv: agg_surv,
-        std_err: agg_se,
-        lower,
-        upper,
-        n_curves,
-        weights: w,
+    // The labels: `levels(as.factor(by[[1]]))` for a bare vector (its
+    // levels are exactly the groups unless the factor carried unused
+    // levels, where R's newdata would have more rows than the curves have
+    // columns; the groups are listed here), the `aggregate` data frame of
+    // the combinations present otherwise.
+    let names: Vec<String> = if by.len() == 1 && by[0].name.is_none() {
+        vec!["aggregate".to_string()]
+    } else {
+        by.iter()
+            .enumerate()
+            .map(|(k, factor)| {
+                factor
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("Group.{}", k + 1))
+            })
+            .collect()
+    };
+    let labels = present
+        .iter()
+        .map(|&key| {
+            let mut rest = key;
+            by.iter()
+                .map(|factor| {
+                    let code = rest % factor.levels.len();
+                    rest /= factor.levels.len();
+                    factor.levels[code].clone()
+                })
+                .collect()
+        })
+        .collect();
+    Ok(Grouping {
+        n_data,
+        index,
+        n_groups: present.len(),
+        newdata: Some(AggregateGroups { names, labels }),
     })
 }
 
-fn interpolate_step(times: &[f64], values: &[f64], at: f64, default_value: f64) -> f64 {
-    if times.is_empty() || values.is_empty() {
-        return default_value;
+/// Apply `fun` within each group to the `n_data` values `column(j)`.
+fn collapse(
+    grouping: &Grouping,
+    fun: AggregateFun,
+    column: impl Fn(usize) -> f64,
+    scratch: &mut [Vec<f64>],
+) -> Vec<f64> {
+    for group in scratch.iter_mut() {
+        group.clear();
     }
-
-    if at + TIME_EPSILON < times[0] {
-        return default_value;
+    for j in 0..grouping.n_data {
+        scratch[grouping.index[j]].push(column(j));
     }
-
-    let idx = times
-        .iter()
-        .position(|&t| t > at + TIME_EPSILON)
-        .unwrap_or(times.len());
-
-    if idx == 0 { 1.0 } else { values[idx - 1] }
+    scratch.iter_mut().map(|group| fun.apply(group)).collect()
 }
 
-fn z_score(conf_level: f64) -> f64 {
-    let p = (1.0 + conf_level) / 2.0;
-    normal_inverse_cdf(p)
-}
-
-#[pyfunction]
-#[pyo3(signature = (times, survs, groups, weights=None))]
-pub fn aggregate_survfit_by_group(
-    times: Vec<Vec<f64>>,
-    survs: Vec<Vec<f64>>,
-    groups: Vec<i32>,
-    weights: Option<Vec<f64>>,
-) -> PyResult<Vec<AggregateSurvfitResult>> {
-    let n = times.len();
-    if survs.len() != n || groups.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "times, survs, and groups must have same length",
+/// Port of `aggregate.survfit`: `surv` is the time x data matrix and
+/// `pstate` the time x data x state array of the object (the rows of every
+/// stratum stacked, as R stores them); `by` is empty for the plain average
+/// over all columns.  The group order is R's: the first grouping variable
+/// varies fastest and only the combinations present get a column.
+pub fn aggregate_survfit(
+    surv: Option<&Array2<f64>>,
+    pstate: Option<&Array3<f64>>,
+    by: &[GroupingFactor],
+    fun: AggregateFun,
+) -> SurvivalResult<AggregateSurvfitResult> {
+    let n_data = data_margin(surv, pstate)?;
+    if n_data == 0 {
+        return Err(SurvivalError::invalid_input(
+            "survfit object does not have a 'data' margin",
         ));
     }
-    if let Some(values) = weights.as_ref()
-        && values.len() != n
-    {
-        return Err(value_error(
-            "weights must have same length as number of curves",
-        ));
-    }
+    let grouping = grouping(by, n_data)?;
+    let mut scratch = vec![Vec::with_capacity(n_data); grouping.n_groups];
 
-    let mut grouped: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (i, &g) in groups.iter().enumerate() {
-        grouped.entry(g).or_default().push(i);
-    }
-
-    let mut results = Vec::new();
-
-    for (_group, indices) in grouped {
-        let group_times: Vec<&[f64]> = indices.iter().map(|&i| times[i].as_slice()).collect();
-        let group_survs: Vec<&[f64]> = indices.iter().map(|&i| survs[i].as_slice()).collect();
-        let group_weights: Option<Vec<f64>> = weights
-            .as_ref()
-            .map(|w| indices.iter().map(|&i| w[i]).collect());
-
-        let result =
-            aggregate_survfit_slices(&group_times, &group_survs, None, group_weights, None)?;
-        results.push(result);
-    }
-
-    Ok(results)
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, survs, std_errs=None, weights=None, groups=None))]
-pub fn aggregate_shared_survfit(
-    time: Vec<f64>,
-    survs: Vec<Vec<f64>>,
-    std_errs: Option<Vec<Vec<f64>>>,
-    weights: Option<Vec<f64>>,
-    groups: Option<Vec<i32>>,
-) -> PyResult<Vec<AggregateSurvfitResult>> {
-    let n_curves = survs.len();
-    if let Some(values) = std_errs.as_ref()
-        && values.len() != n_curves
-    {
-        return Err(value_error(
-            "std_errs must have same length as number of curves",
-        ));
-    }
-    if let Some(values) = weights.as_ref()
-        && values.len() != n_curves
-    {
-        return Err(value_error(
-            "weights must have same length as number of curves",
-        ));
-    }
-    if let Some(values) = groups.as_ref()
-        && values.len() != n_curves
-    {
-        return Err(value_error(
-            "groups must have same length as number of curves",
-        ));
-    }
-    validate_time_curve("time", &time)?;
-    for (index, curve) in survs.iter().enumerate() {
-        if curve.len() != time.len() {
-            return Err(value_error(format!(
-                "survs[{index}] must have the same length as time"
-            )));
-        }
-        validate_probability_curve(&format!("survs[{index}]"), curve)?;
-    }
-    if let Some(curves) = std_errs.as_ref() {
-        for (index, curve) in curves.iter().enumerate() {
-            if curve.len() != time.len() {
-                return Err(value_error(format!(
-                    "std_errs[{index}] must have the same length as time"
-                )));
-            }
-            validate_nonnegative_finite_curve(&format!("std_errs[{index}]"), curve)?;
-        }
-    }
-    if let Some(values) = weights.as_ref() {
-        validate_nonnegative_finite_curve("weights", values)?;
-    }
-    if n_curves == 0 {
-        return Ok(Vec::new());
-    }
-
-    let mut aggregate_time = time.clone();
-    aggregate_time.sort_by(|a, b| a.total_cmp(b));
-    aggregate_time.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
-    let source_indices = aggregate_time
-        .iter()
-        .map(|&eval_time| {
-            time.iter()
-                .position(|&source_time| source_time > eval_time + TIME_EPSILON)
-                .unwrap_or(time.len())
-                .checked_sub(1)
-        })
-        .collect::<Vec<_>>();
-
-    let group_values = groups.unwrap_or_else(|| vec![0; n_curves]);
-    let mut grouped: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (index, group) in group_values.into_iter().enumerate() {
-        grouped.entry(group).or_default().push(index);
-    }
-
-    let mut results = Vec::with_capacity(grouped.len());
-    for indices in grouped.into_values() {
-        let group_weights = weights
-            .as_ref()
-            .map(|values| indices.iter().map(|&index| values[index]).collect());
-        let normalized = normalized_weights(group_weights, indices.len())?;
-        let mut surv = vec![0.0; aggregate_time.len()];
-        let mut variance = vec![0.0; aggregate_time.len()];
-        for (&curve_index, &weight) in indices.iter().zip(&normalized) {
-            for (aggregate, source_index) in surv.iter_mut().zip(&source_indices) {
-                let value = source_index
-                    .map(|index| survs[curve_index][index])
-                    .unwrap_or(1.0);
-                *aggregate += weight * value;
-            }
-            if let Some(curves) = std_errs.as_ref() {
-                let weight_squared = weight * weight;
-                for (aggregate, source_index) in variance.iter_mut().zip(&source_indices) {
-                    let value = source_index
-                        .map(|index| curves[curve_index][index])
-                        .unwrap_or(0.0);
-                    *aggregate += weight_squared * value * value;
+    // apply(x$surv, 1, function(z) tapply(z, index, FUN))
+    let surv = surv.map(|surv| {
+        (0..surv.nrows())
+            .map(|t| collapse(&grouping, fun, |j| surv[[t, j]], &mut scratch))
+            .collect()
+    });
+    // apply(x$pstate, c(1, 3), function(z) tapply(z, index, FUN)), permuted
+    // back to time x group x state
+    let pstate = pstate.map(|pstate| {
+        let (n_time, _, n_state) = pstate.dim();
+        (0..n_time)
+            .map(|t| {
+                let mut by_group = vec![Vec::with_capacity(n_state); grouping.n_groups];
+                for s in 0..n_state {
+                    let values = collapse(&grouping, fun, |j| pstate[[t, j, s]], &mut scratch);
+                    for (row, value) in by_group.iter_mut().zip(values) {
+                        row.push(value);
+                    }
                 }
-            }
-        }
-        let std_err = variance.into_iter().map(f64::sqrt).collect::<Vec<_>>();
-        let (lower, upper) = clamped_normal_ci_bounds(&surv, &std_err, z_score(0.95), 0.0, 1.0);
-        results.push(AggregateSurvfitResult {
-            time: aggregate_time.clone(),
-            surv,
-            std_err,
-            lower,
-            upper,
-            n_curves: indices.len(),
-            weights: normalized,
-        });
+                by_group
+            })
+            .collect()
+    });
+    Ok(AggregateSurvfitResult {
+        surv,
+        pstate,
+        newdata: grouping.newdata,
+    })
+}
+
+/// The `[time][data]` rows of `surv` as a matrix.
+fn surv_matrix(rows: &[Vec<f64>]) -> SurvivalResult<Array2<f64>> {
+    let n_data = rows.first().map_or(0, Vec::len);
+    let mut flat = Vec::with_capacity(rows.len() * n_data);
+    for (t, row) in rows.iter().enumerate() {
+        validate_length(n_data, row.len(), &format!("surv row {t}"))?;
+        flat.extend_from_slice(row);
     }
-    Ok(results)
+    Array2::from_shape_vec((rows.len(), n_data), flat)
+        .map_err(|err| SurvivalError::invalid_input(format!("surv: {err}")))
+}
+
+/// The `[time][data][state]` entries of `pstate` as an array.
+fn pstate_array(entries: &[Vec<Vec<f64>>]) -> SurvivalResult<Array3<f64>> {
+    let n_data = entries.first().map_or(0, Vec::len);
+    let n_state = entries
+        .first()
+        .and_then(|row| row.first())
+        .map_or(0, Vec::len);
+    let mut flat = Vec::with_capacity(entries.len() * n_data * n_state);
+    for (t, row) in entries.iter().enumerate() {
+        validate_length(n_data, row.len(), &format!("pstate time {t}"))?;
+        for (j, states) in row.iter().enumerate() {
+            validate_length(n_state, states.len(), &format!("pstate time {t} data {j}"))?;
+            flat.extend_from_slice(states);
+        }
+    }
+    Array3::from_shape_vec((entries.len(), n_data, n_state), flat)
+        .map_err(|err| SurvivalError::invalid_input(format!("pstate: {err}")))
+}
+
+/// Python binding of [`aggregate_survfit`]; `fun` is `"mean"`, `"median"`,
+/// `"min"` or `"max"`.
+#[pyfunction(name = "aggregate_survfit")]
+#[pyo3(signature = (surv=None, pstate=None, by=None, fun="mean"))]
+pub fn aggregate_survfit_py(
+    surv: Option<Vec<Vec<f64>>>,
+    pstate: Option<Vec<Vec<Vec<f64>>>>,
+    by: Option<Vec<GroupingFactor>>,
+    fun: &str,
+) -> PyResult<AggregateSurvfitResult> {
+    let surv = surv.as_deref().map(surv_matrix).transpose()?;
+    let pstate = pstate.as_deref().map(pstate_array).transpose()?;
+    Ok(aggregate_survfit(
+        surv.as_ref(),
+        pstate.as_ref(),
+        by.as_deref().unwrap_or_default(),
+        AggregateFun::parse(fun)?,
+    )?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_aggregate_survfit_basic() {
-        let times = vec![vec![1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0]];
-        let survs = vec![vec![0.9, 0.8, 0.7], vec![0.95, 0.85, 0.75]];
+    // three times x four newdata rows, column by column
+    fn surv() -> Array2<f64> {
+        Array2::from_shape_vec(
+            (4, 3),
+            vec![
+                0.9, 0.8, 0.7, 0.95, 0.85, 0.6, 0.8, 0.5, 0.4, 0.7, 0.65, 0.3,
+            ],
+        )
+        .unwrap()
+        .reversed_axes()
+    }
 
-        let result = aggregate_survfit(times, survs, None, None, None).unwrap();
+    fn by_ab() -> GroupingFactor {
+        // as.factor(c("b", "a", "b", "a"))
+        GroupingFactor::try_new(
+            vec![1, 0, 1, 0],
+            vec!["a".to_string(), "b".to_string()],
+            None,
+        )
+        .unwrap()
+    }
 
-        assert_eq!(result.n_curves, 2);
-        assert!(!result.time.is_empty());
-
-        for s in &result.surv {
-            assert!(*s >= 0.7 && *s <= 0.95);
+    fn assert_rows_close(actual: &[Vec<f64>], expected: &[&[f64]]) {
+        assert_eq!(actual.len(), expected.len());
+        for (row, (left, right)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(left.len(), right.len(), "row {row}");
+            for (col, (a, e)) in left.iter().zip(right.iter()).enumerate() {
+                assert!(
+                    (a - e).abs() < 1e-12 || (a.is_nan() && e.is_nan()),
+                    "row {row} col {col}: {a} != {e}"
+                );
+            }
         }
     }
 
     #[test]
-    fn test_aggregate_survfit_weighted() {
-        let times = vec![vec![1.0, 2.0], vec![1.0, 2.0]];
-        let survs = vec![vec![0.9, 0.8], vec![0.8, 0.6]];
-        let weights = vec![0.75, 0.25];
-
-        let result = aggregate_survfit(times, survs, None, Some(weights), None).unwrap();
-
-        assert!(result.surv[0] > 0.85);
+    fn plain_average_matches_r() {
+        // aggregate(x)$surv
+        let result = aggregate_survfit(Some(&surv()), None, &[], AggregateFun::Mean).unwrap();
+        assert_rows_close(result.surv.as_ref().unwrap(), &[&[0.8375], &[0.7], &[0.5]]);
+        assert!(result.pstate.is_none());
+        assert!(result.newdata.is_none());
     }
 
     #[test]
-    fn test_aggregate_survfit_validates_inputs() {
-        assert!(
-            aggregate_survfit(vec![vec![1.0, 2.0]], vec![vec![0.9]], None, None, None).is_err()
+    fn grouped_summaries_match_r() {
+        let surv = surv();
+        let by = [by_ab()];
+        // aggregate(x, by = c("b", "a", "b", "a"))
+        let mean = aggregate_survfit(Some(&surv), None, &by, AggregateFun::Mean).unwrap();
+        assert_rows_close(
+            mean.surv.as_ref().unwrap(),
+            &[&[0.825, 0.85], &[0.75, 0.65], &[0.45, 0.55]],
         );
-        assert!(aggregate_survfit(vec![vec![1.0]], vec![vec![1.1]], None, None, None).is_err());
-        assert!(
-            aggregate_survfit(
-                vec![vec![1.0]],
-                vec![vec![0.9]],
-                Some(vec![vec![-0.1]]),
-                None,
-                None
-            )
-            .is_err()
+        assert_eq!(
+            mean.newdata.unwrap(),
+            AggregateGroups {
+                names: vec!["aggregate".to_string()],
+                labels: vec![vec!["a".to_string()], vec!["b".to_string()]],
+            }
         );
-        assert!(
-            aggregate_survfit(
-                vec![vec![1.0]],
-                vec![vec![0.9]],
-                None,
-                Some(vec![0.0]),
-                None
-            )
-            .is_err()
+        // FUN = median (two values per group: their average), max, min
+        let median = aggregate_survfit(Some(&surv), None, &by, AggregateFun::Median).unwrap();
+        assert_rows_close(
+            median.surv.as_ref().unwrap(),
+            &[&[0.825, 0.85], &[0.75, 0.65], &[0.45, 0.55]],
         );
-        assert!(
-            aggregate_survfit(vec![vec![1.0]], vec![vec![0.9]], None, None, Some(1.0)).is_err()
+        let max = aggregate_survfit(Some(&surv), None, &by, AggregateFun::Max).unwrap();
+        assert_rows_close(
+            max.surv.as_ref().unwrap(),
+            &[&[0.95, 0.9], &[0.85, 0.8], &[0.6, 0.7]],
+        );
+        let min = aggregate_survfit(Some(&surv), None, &by, AggregateFun::Min).unwrap();
+        assert_rows_close(
+            min.surv.as_ref().unwrap(),
+            &[&[0.7, 0.8], &[0.65, 0.5], &[0.3, 0.4]],
         );
     }
 
     #[test]
-    fn test_aggregate_survfit_deduplicates_near_times() {
-        let result = aggregate_survfit(
-            vec![vec![1.0, 2.0], vec![1.0 + TIME_EPSILON / 2.0, 2.0]],
-            vec![vec![0.9, 0.8], vec![0.95, 0.85]],
-            None,
-            None,
-            None,
+    fn two_grouping_variables_order_the_first_fastest() {
+        // aggregate(x, by = list(g = c("b","a","b","a"), h = c(1, 1, 2, 1)))
+        let h = GroupingFactor::try_new(
+            vec![0, 0, 1, 0],
+            vec!["1".to_string(), "2".to_string()],
+            Some("h".to_string()),
         )
         .unwrap();
-
-        assert_eq!(result.time, vec![1.0, 2.0]);
-        assert_eq!(result.surv, vec![0.925, 0.825]);
-    }
-
-    #[test]
-    fn test_aggregate_survfit_empty() {
-        let times: Vec<Vec<f64>> = vec![];
-        let survs: Vec<Vec<f64>> = vec![];
-
-        let result = aggregate_survfit(times, survs, None, None, None).unwrap();
-        assert_eq!(result.n_curves, 0);
-    }
-
-    #[test]
-    fn test_aggregate_survfit_by_group_weighted() {
-        let result = aggregate_survfit_by_group(
-            vec![vec![1.0, 2.0], vec![1.0, 2.0], vec![1.5, 2.5]],
-            vec![vec![0.9, 0.8], vec![0.8, 0.7], vec![0.95, 0.85]],
-            vec![2, 2, 1],
-            Some(vec![1.0, 2.0, 1.0]),
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].n_curves, 1);
-        assert_eq!(result[0].time, vec![1.5, 2.5]);
-        assert_eq!(result[0].surv, vec![0.95, 0.85]);
-        assert_eq!(result[1].n_curves, 2);
-        assert_eq!(result[1].weights, vec![1.0 / 3.0, 2.0 / 3.0]);
-        assert!((result[1].surv[0] - 0.8333333333333333).abs() < 1e-12);
-        assert!((result[1].surv[1] - 0.7333333333333333).abs() < 1e-12);
-    }
-
-    #[test]
-    fn aggregate_shared_survfit_groups_weighted_curves_and_errors() {
-        let result = aggregate_shared_survfit(
-            vec![1.0, 2.0],
-            vec![vec![0.9, 0.8], vec![0.8, 0.6], vec![0.7, 0.4]],
-            Some(vec![vec![0.1, 0.2], vec![0.3, 0.4], vec![0.2, 0.1]]),
-            Some(vec![1.0, 2.0, 3.0]),
-            Some(vec![2, 1, 2]),
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].n_curves, 1);
-        assert_eq!(result[0].surv, vec![0.8, 0.6]);
-        assert_eq!(result[0].std_err, vec![0.3, 0.4]);
-        assert_eq!(result[1].n_curves, 2);
-        assert_eq!(result[1].weights, vec![0.25, 0.75]);
-        assert!((result[1].surv[0] - 0.75).abs() < 1e-12);
-        assert!((result[1].surv[1] - 0.5).abs() < 1e-12);
-        assert!((result[1].std_err[0] - 0.152_069_063_257_455_5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn aggregate_shared_survfit_validates_shared_shapes_and_group_weights() {
-        assert!(
-            aggregate_shared_survfit(vec![1.0], vec![vec![0.9, 0.8]], None, None, None).is_err()
+        let mut g = by_ab();
+        g.name = Some("g".to_string());
+        let result =
+            aggregate_survfit(Some(&surv()), None, &[g, h.clone()], AggregateFun::Mean).unwrap();
+        assert_rows_close(
+            result.surv.as_ref().unwrap(),
+            &[&[0.825, 0.9, 0.8], &[0.75, 0.8, 0.5], &[0.45, 0.7, 0.4]],
         );
-        assert!(
-            aggregate_shared_survfit(
-                vec![1.0],
-                vec![vec![0.9], vec![0.8]],
-                None,
-                Some(vec![0.0, 1.0]),
-                Some(vec![1, 2]),
-            )
-            .is_err()
+        let newdata = result.newdata.unwrap();
+        assert_eq!(newdata.names, vec!["g", "h"]);
+        assert_eq!(
+            newdata.labels,
+            vec![vec!["a", "1"], vec!["b", "1"], vec!["b", "2"]]
+        );
+        // an unnamed element of a list is `Group.k`
+        let unnamed = aggregate_survfit(Some(&surv()), None, &[by_ab(), h], AggregateFun::Mean)
+            .unwrap()
+            .newdata
+            .unwrap();
+        assert_eq!(unnamed.names, vec!["Group.1", "h"]);
+    }
+
+    #[test]
+    fn a_single_group_drops_back_to_the_plain_average() {
+        // aggregate(x, by = c(2, 2, 2, 2))
+        let by = GroupingFactor::try_new(vec![0; 4], vec!["2".to_string()], None).unwrap();
+        let result = aggregate_survfit(Some(&surv()), None, &[by], AggregateFun::Mean).unwrap();
+        assert_rows_close(result.surv.as_ref().unwrap(), &[&[0.8375], &[0.7], &[0.5]]);
+        assert!(result.newdata.is_none());
+    }
+
+    #[test]
+    fn pstate_is_collapsed_per_state() {
+        // array(seq(0.01, by = 0.01, length.out = 36), c(3, 4, 3)): R fills
+        // the first index fastest
+        let mut pstate = Array3::zeros((3, 4, 3));
+        for s in 0..3 {
+            for j in 0..4 {
+                for t in 0..3 {
+                    pstate[[t, j, s]] = 0.01 * (1 + t + 3 * j + 12 * s) as f64;
+                }
+            }
+        }
+        let plain = aggregate_survfit(None, Some(&pstate), &[], AggregateFun::Mean).unwrap();
+        let plain = plain.pstate.unwrap();
+        assert_eq!(plain.len(), 3);
+        assert_rows_close(&plain[0], &[&[0.055, 0.175, 0.295]]);
+        assert_rows_close(&plain[2], &[&[0.075, 0.195, 0.315]]);
+        let grouped =
+            aggregate_survfit(None, Some(&pstate), &[by_ab()], AggregateFun::Mean).unwrap();
+        let grouped = grouped.pstate.unwrap();
+        assert_rows_close(&grouped[0], &[&[0.07, 0.19, 0.31], &[0.04, 0.16, 0.28]]);
+        assert_rows_close(&grouped[1], &[&[0.08, 0.20, 0.32], &[0.05, 0.17, 0.29]]);
+        assert_rows_close(&grouped[2], &[&[0.09, 0.21, 0.33], &[0.06, 0.18, 0.30]]);
+    }
+
+    #[test]
+    fn na_propagates_like_r() {
+        let mut surv = surv();
+        surv[[1, 0]] = f64::NAN;
+        let max = aggregate_survfit(Some(&surv), None, &[by_ab()], AggregateFun::Max).unwrap();
+        assert_rows_close(
+            max.surv.as_ref().unwrap(),
+            &[&[0.95, 0.9], &[0.85, f64::NAN], &[0.6, 0.7]],
+        );
+        let mean = aggregate_survfit(Some(&surv), None, &[], AggregateFun::Mean).unwrap();
+        assert_rows_close(
+            mean.surv.as_ref().unwrap(),
+            &[&[0.8375], &[f64::NAN], &[0.5]],
         );
     }
 
     #[test]
-    fn aggregate_shared_survfit_preserves_step_deduplication() {
-        let result = aggregate_shared_survfit(
-            vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0],
-            vec![vec![0.9, 0.8, 0.7], vec![0.7, 0.6, 0.5]],
-            Some(vec![vec![0.1, 0.2, 0.3], vec![0.3, 0.4, 0.5]]),
-            None,
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].time, vec![1.0, 2.0]);
-        assert_eq!(result[0].surv, vec![0.7, 0.6]);
-        assert!((result[0].std_err[0] - 0.223_606_797_749_978_96).abs() < 1e-12);
+    fn rejects_bad_inputs() {
+        let err = aggregate_survfit(None, None, &[], AggregateFun::Mean).unwrap_err();
+        assert!(err.to_string().contains("surv or a pstate"));
+        let short =
+            GroupingFactor::try_new(vec![0, 1], vec!["a".into(), "b".into()], None).unwrap();
+        let err = aggregate_survfit(Some(&surv()), None, &[short], AggregateFun::Mean).unwrap_err();
+        assert!(err.to_string().contains("by length mismatch"));
+        assert!(GroupingFactor::try_new(vec![0, 2], vec!["a".into(), "b".into()], None).is_err());
+        assert!(AggregateFun::parse("sd").is_err());
+        let pstate = Array3::zeros((3, 2, 2));
+        let err =
+            aggregate_survfit(Some(&surv()), Some(&pstate), &[], AggregateFun::Mean).unwrap_err();
+        assert!(err.to_string().contains("pstate data margin"));
+        let ragged =
+            aggregate_survfit_py(Some(vec![vec![0.9, 0.8], vec![0.7]]), None, None, "mean");
+        assert!(ragged.is_err());
     }
 }

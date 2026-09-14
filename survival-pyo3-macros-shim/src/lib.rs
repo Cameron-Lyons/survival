@@ -1,3 +1,14 @@
+//! No-op replacements for PyO3's attribute macros, used by the `survival`
+//! crate when it is compiled without the `python` feature (see
+//! `src/pyo3_shim.rs` for the full contract).
+//!
+//! `pyclass`, `pyfunction` and `pymethods` return their item unchanged except
+//! that the helper attributes PyO3 itself consumes (`#[pyo3(...)]`, `#[new]`,
+//! `#[staticmethod]`, `#[getter]`, `#[setter]`) are stripped recursively, so
+//! the compiler never sees an unknown attribute. The helpers only ever appear
+//! inside one of those three items, which is why they need no macro of their
+//! own.
+
 use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
 
 #[proc_macro_attribute]
@@ -12,41 +23,6 @@ pub fn pyfunction(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn pymethods(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    strip_pyo3_helpers(item)
-}
-
-#[proc_macro_attribute]
-pub fn pymodule(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    strip_pyo3_helpers(item)
-}
-
-#[proc_macro_attribute]
-pub fn pyo3(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    strip_pyo3_helpers(item)
-}
-
-#[proc_macro_attribute]
-pub fn new(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    strip_pyo3_helpers(item)
-}
-
-#[proc_macro_attribute]
-pub fn staticmethod(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    strip_pyo3_helpers(item)
-}
-
-#[proc_macro_attribute]
-pub fn classmethod(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    strip_pyo3_helpers(item)
-}
-
-#[proc_macro_attribute]
-pub fn getter(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    strip_pyo3_helpers(item)
-}
-
-#[proc_macro_attribute]
-pub fn setter(_attr: TokenStream, item: TokenStream) -> TokenStream {
     strip_pyo3_helpers(item)
 }
 
@@ -89,6 +65,6 @@ fn is_pyo3_helper_attr(group: &Group) -> bool {
 
     matches!(
         ident.to_string().as_str(),
-        "pyo3" | "new" | "staticmethod" | "classmethod" | "getter" | "setter"
+        "pyo3" | "new" | "staticmethod" | "getter" | "setter"
     )
 }

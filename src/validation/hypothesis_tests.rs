@@ -1,394 +1,143 @@
-use crate::internal::matrix::matrix_inverse;
-use crate::internal::statistical::chi2_sf;
+//! Global tests of a Cox model's coefficients: the likelihood ratio, Wald
+//! and score tests reported by R's `summary.coxph` (`R/summary.coxph.R`),
+//! with the Wald quadratic form computed like `coxph.wtest`
+//! (`src/coxph_wtest.c`: generalised Cholesky, redundant columns dropped).
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::dist::pchisq;
+use crate::internal::matrix::{cholesky2, chsolve2};
+use crate::internal::validation::{validate_finite, validate_length};
 use ndarray::Array2;
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    PyValueError::new_err(message.into())
+/// R's `coxph.wtest` default `toler.chol`.
+const WTEST_TOLERANCE: f64 = 1e-9;
+
+/// A chi-square test statistic with its degrees of freedom and upper-tail
+/// p-value.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct TestResult {
+    pub statistic: f64,
+    pub df: usize,
+    pub p_value: f64,
+    pub test_name: String,
 }
 
-fn invalid_test_result(test_name: &'static str, df: usize) -> TestResult {
+fn chi_square_result(statistic: f64, df: usize, test_name: &str) -> TestResult {
     TestResult {
-        statistic: f64::NAN,
+        statistic,
         df,
-        p_value: f64::NAN,
+        p_value: pchisq(statistic, df as f64, false, false),
         test_name: test_name.to_string(),
     }
 }
 
-fn validate_finite_slice(values: &[f64], field: &'static str) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{field} contains non-finite value at index {idx}"
-            )));
+/// Quadratic form `b' V^{-1} b` through R's `coxph.wtest`: the generalised
+/// Cholesky factorisation of `var` with tolerance `toler`, redundant
+/// (near-singular) columns contributing nothing.  Returns the statistic
+/// and the rank of `var`.
+fn quadratic_form(var: &[Vec<f64>], b: &[f64], toler: f64) -> SurvivalResult<(f64, usize)> {
+    let n = b.len();
+    validate_length(n, var.len(), "var rows")?;
+    let mut chol = Array2::zeros((n, n));
+    for (i, row) in var.iter().enumerate() {
+        validate_length(n, row.len(), "var columns")?;
+        validate_finite(row, "var")?;
+        for (j, &value) in row.iter().enumerate() {
+            chol[[i, j]] = value;
         }
     }
-    Ok(())
+    let rank = cholesky2(&mut chol, toler);
+    let mut solution = b.to_vec();
+    chsolve2(&chol, &mut solution);
+    let statistic = b
+        .iter()
+        .zip(&solution)
+        .map(|(&value, &coefficient)| value * coefficient)
+        .sum();
+    Ok((statistic, rank.unsigned_abs() as usize))
 }
 
-fn validate_positive_finite_slice(values: &[f64], field: &'static str) -> PyResult<()> {
-    validate_finite_slice(values, field)?;
-    for (idx, &value) in values.iter().enumerate() {
-        if value <= 0.0 {
-            return Err(value_error(format!(
-                "{field} must contain positive values; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_square_finite_matrix(
-    matrix: &[Vec<f64>],
-    expected_width: usize,
-    field: &'static str,
-) -> PyResult<()> {
-    if matrix.len() != expected_width {
-        return Err(value_error(format!(
-            "{field} must have {expected_width} rows"
-        )));
-    }
-    for (row_idx, row) in matrix.iter().enumerate() {
-        if row.len() != expected_width {
-            return Err(value_error(format!(
-                "{field} must be a square matrix; row {row_idx} has length {}, expected {expected_width}",
-                row.len()
-            )));
-        }
-        validate_finite_slice(row, field)?;
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct TestResult {
-    #[pyo3(get)]
-    pub statistic: f64,
-    #[pyo3(get)]
-    pub df: usize,
-    #[pyo3(get)]
-    pub p_value: f64,
-    #[pyo3(get)]
-    pub test_name: String,
-}
-#[pymethods]
-impl TestResult {
-    #[new]
-    fn new(statistic: f64, df: usize, p_value: f64, test_name: String) -> Self {
-        Self {
-            statistic,
-            df,
-            p_value,
-            test_name,
-        }
-    }
-    fn __repr__(&self) -> String {
-        format!(
-            "{}(statistic={:.4}, df={}, p_value={:.4})",
-            self.test_name, self.statistic, self.df, self.p_value
-        )
-    }
-}
-pub(crate) fn likelihood_ratio_test(
+/// Likelihood ratio test `2 (loglik_full - loglik_reduced)` on `df`
+/// degrees of freedom (R's `logtest`).
+pub fn likelihood_ratio_test(
     loglik_full: f64,
     loglik_reduced: f64,
     df: usize,
-) -> TestResult {
-    let statistic = 2.0 * (loglik_full - loglik_reduced);
-    let p_value = chi2_sf(statistic, df);
-    TestResult {
-        statistic,
-        df,
-        p_value,
-        test_name: "LikelihoodRatioTest".to_string(),
-    }
-}
-pub fn wald_test(coefficients: &[f64], std_errors: &[f64]) -> TestResult {
-    let n = coefficients.len();
-    let mut statistic = 0.0;
-    for i in 0..n {
-        if std_errors[i] > 0.0 {
-            let z = coefficients[i] / std_errors[i];
-            statistic += z * z;
-        }
-    }
-    let p_value = chi2_sf(statistic, n);
-    TestResult {
-        statistic,
-        df: n,
-        p_value,
-        test_name: "WaldTest".to_string(),
-    }
-}
-pub fn score_test(score_vector: &[f64], information_matrix: &[Vec<f64>]) -> TestResult {
-    let n = score_vector.len();
-    if n == 0 {
-        return TestResult {
-            statistic: 0.0,
-            df: 0,
-            p_value: 1.0,
-            test_name: "ScoreTest".to_string(),
-        };
-    }
-
-    let mat = match vec_to_square_array2(information_matrix, n) {
-        Some(mat) if score_vector.iter().all(|value| value.is_finite()) => mat,
-        _ => return invalid_test_result("ScoreTest", n),
-    };
-    let inv_info = match matrix_inverse(&mat) {
-        Some(inv) => inv,
-        None => return invalid_test_result("ScoreTest", n),
-    };
-
-    let mut statistic = 0.0;
-    for i in 0..n {
-        for j in 0..n {
-            statistic += score_vector[i] * inv_info[[i, j]] * score_vector[j];
-        }
-    }
-    if !statistic.is_finite() {
-        return invalid_test_result("ScoreTest", n);
-    }
-    let p_value = chi2_sf(statistic, n);
-    if !p_value.is_finite() {
-        return invalid_test_result("ScoreTest", n);
-    }
-    TestResult {
-        statistic,
-        df: n,
-        p_value,
-        test_name: "ScoreTest".to_string(),
-    }
-}
-
-fn vec_to_square_array2(matrix: &[Vec<f64>], n: usize) -> Option<Array2<f64>> {
-    if n == 0 {
-        return Some(Array2::zeros((0, 0)));
-    }
-    if matrix.len() != n || matrix.iter().any(|row| row.len() != n) {
-        return None;
-    }
-    let mut arr = Array2::zeros((n, n));
-    for (i, row) in matrix.iter().enumerate() {
-        for (j, &val) in row.iter().enumerate() {
-            if !val.is_finite() {
-                return None;
-            }
-            arr[[i, j]] = val;
-        }
-    }
-    Some(arr)
-}
-#[pyfunction]
-pub fn lrt_test(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult<TestResult> {
-    if !loglik_full.is_finite() {
-        return Err(value_error("loglik_full must be finite"));
-    }
-    if !loglik_reduced.is_finite() {
-        return Err(value_error("loglik_reduced must be finite"));
+) -> SurvivalResult<TestResult> {
+    if !loglik_full.is_finite() || !loglik_reduced.is_finite() {
+        return Err(SurvivalError::invalid_input(
+            "log-likelihoods must be finite",
+        ));
     }
     if df == 0 {
-        return Err(value_error("df must be positive"));
+        return Err(SurvivalError::invalid_input("df must be positive"));
     }
-    Ok(likelihood_ratio_test(loglik_full, loglik_reduced, df))
-}
-#[pyfunction]
-pub(crate) fn wald_test_py(coefficients: Vec<f64>, std_errors: Vec<f64>) -> PyResult<TestResult> {
-    if coefficients.len() != std_errors.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "coefficients and std_errors must have the same length",
-        ));
-    }
-    if coefficients.is_empty() {
-        return Err(value_error("coefficients cannot be empty"));
-    }
-    validate_finite_slice(&coefficients, "coefficients")?;
-    validate_positive_finite_slice(&std_errors, "std_errors")?;
-    Ok(wald_test(&coefficients, &std_errors))
-}
-#[pyfunction]
-pub(crate) fn score_test_py(
-    score_vector: Vec<f64>,
-    information_matrix: Vec<Vec<f64>>,
-) -> PyResult<TestResult> {
-    if score_vector.len() != information_matrix.len() {
-        return Err(PyErr::new::<PyValueError, _>(
-            "score_vector length must match information_matrix dimensions",
-        ));
-    }
-    if score_vector.is_empty() {
-        return Err(value_error("score_vector cannot be empty"));
-    }
-    validate_finite_slice(&score_vector, "score_vector")?;
-    validate_square_finite_matrix(
-        &information_matrix,
-        score_vector.len(),
-        "information_matrix",
-    )?;
-    let result = score_test(&score_vector, &information_matrix);
-    if !result.statistic.is_finite() || !result.p_value.is_finite() {
-        return Err(value_error(
-            "information_matrix is singular or invalid for score test",
-        ));
-    }
-    Ok(result)
-}
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct ProportionalityTest {
-    #[pyo3(get)]
-    pub variable_names: Vec<String>,
-    #[pyo3(get)]
-    pub chi2_values: Vec<f64>,
-    #[pyo3(get)]
-    pub p_values: Vec<f64>,
-    #[pyo3(get)]
-    pub global_chi2: f64,
-    #[pyo3(get)]
-    pub global_df: usize,
-    #[pyo3(get)]
-    pub global_p_value: f64,
-}
-#[pymethods]
-impl ProportionalityTest {
-    #[new]
-    fn new(
-        variable_names: Vec<String>,
-        chi2_values: Vec<f64>,
-        p_values: Vec<f64>,
-        global_chi2: f64,
-        global_df: usize,
-        global_p_value: f64,
-    ) -> Self {
-        Self {
-            variable_names,
-            chi2_values,
-            p_values,
-            global_chi2,
-            global_df,
-            global_p_value,
-        }
-    }
-}
-pub(crate) fn proportional_hazards_chi2(
-    schoenfeld_residuals: &[Vec<f64>],
-    event_times: &[f64],
-) -> Vec<f64> {
-    let n_events = schoenfeld_residuals.len();
-    let n_vars = if n_events > 0 {
-        schoenfeld_residuals[0].len()
-    } else {
-        0
-    };
-    if n_events < 2 || n_vars == 0 {
-        return vec![];
-    }
-    let mut sorted_indices: Vec<usize> = (0..n_events).collect();
-    sorted_indices.sort_by(|&a, &b| event_times[a].total_cmp(&event_times[b]));
-    let transformed_time: Vec<f64> = sorted_indices.iter().map(|&idx| event_times[idx]).collect();
-    let mean_time = transformed_time.iter().sum::<f64>() / n_events as f64;
-    let centered_time: Vec<f64> = transformed_time
-        .iter()
-        .map(|&value| value - mean_time)
-        .collect();
-    let var_time = centered_time.iter().map(|value| value * value).sum::<f64>();
-    let mut chi2_values = Vec::with_capacity(n_vars);
-    for var in 0..n_vars {
-        let residuals: Vec<f64> = sorted_indices
-            .iter()
-            .filter_map(|&i| {
-                schoenfeld_residuals
-                    .get(i)
-                    .and_then(|row| row.get(var).copied())
-            })
-            .collect();
-        let mean_resid: f64 = residuals.iter().sum::<f64>() / n_events as f64;
-        let mut cov = 0.0;
-        let mut var_resid = 0.0;
-        for i in 0..n_events {
-            let r_diff = centered_time[i];
-            let resid_diff = residuals[i] - mean_resid;
-            cov += r_diff * resid_diff;
-            var_resid += resid_diff * resid_diff;
-        }
-        let correlation = if var_time > 0.0 && var_resid > 0.0 {
-            cov / (var_time.sqrt() * var_resid.sqrt())
-        } else {
-            0.0
-        };
-        let chi2 = correlation * correlation * (n_events - 2) as f64;
-        chi2_values.push(chi2);
-    }
-    chi2_values
+    Ok(chi_square_result(
+        2.0 * (loglik_full - loglik_reduced),
+        df,
+        "LikelihoodRatioTest",
+    ))
 }
 
-pub(crate) fn proportional_hazards_test(
-    schoenfeld_residuals: &[Vec<f64>],
-    event_times: &[f64],
-    _weights: Option<&[f64]>,
-) -> ProportionalityTest {
-    let chi2_values = proportional_hazards_chi2(schoenfeld_residuals, event_times);
-    let n_vars = chi2_values.len();
-    let p_values = chi2_values.iter().map(|&chi2| chi2_sf(chi2, 1)).collect();
-    let global_chi2 = chi2_values.iter().sum();
-    let global_p_value = chi2_sf(global_chi2, n_vars);
-    ProportionalityTest {
-        variable_names: (0..n_vars).map(|i| format!("var{}", i)).collect(),
-        chi2_values,
-        p_values,
-        global_chi2,
-        global_df: n_vars,
-        global_p_value,
+/// Wald test `(beta - init)' V^{-1} (beta - init)` on `length(beta)` degrees
+/// of freedom, as `coxph` stores in `fit$wald.test` and `summary.coxph`
+/// reports (`coef` and `var` restricted to the non-`NA` coefficients).
+pub fn wald_test(
+    coef: &[f64],
+    var: &[Vec<f64>],
+    init: Option<&[f64]>,
+) -> SurvivalResult<TestResult> {
+    if coef.is_empty() {
+        return Err(SurvivalError::invalid_input("coef must not be empty"));
     }
+    validate_finite(coef, "coef")?;
+    let centred: Vec<f64> = match init {
+        Some(init) => {
+            validate_length(coef.len(), init.len(), "init")?;
+            validate_finite(init, "init")?;
+            coef.iter().zip(init).map(|(b, i)| b - i).collect()
+        }
+        None => coef.to_vec(),
+    };
+    let (statistic, _) = quadratic_form(var, &centred, WTEST_TOLERANCE)?;
+    Ok(chi_square_result(statistic, coef.len(), "WaldTest"))
 }
-#[pyfunction]
-pub fn ph_test(
-    schoenfeld_residuals: Vec<Vec<f64>>,
-    event_times: Vec<f64>,
-    weights: Option<Vec<f64>>,
-) -> PyResult<ProportionalityTest> {
-    if event_times.len() != schoenfeld_residuals.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "event_times must have the same length as schoenfeld_residuals",
-        ));
+
+/// Score test `U' I^{-1} U` on `length(U)` degrees of freedom, `U` and `I`
+/// being the score vector and information matrix at the initial
+/// coefficients (R's `sctest`, computed by `coxfit6` on its first
+/// iteration).
+pub fn score_test(score: &[f64], information: &[Vec<f64>]) -> SurvivalResult<TestResult> {
+    if score.is_empty() {
+        return Err(SurvivalError::invalid_input("score must not be empty"));
     }
-    if event_times.len() < 2 {
-        return Err(value_error("at least two event_times are required"));
-    }
-    validate_finite_slice(&event_times, "event_times")?;
-    if let Some(first_row) = schoenfeld_residuals.first() {
-        let width = first_row.len();
-        if width == 0 {
-            return Err(value_error("schoenfeld_residuals rows cannot be empty"));
-        }
-        if schoenfeld_residuals.iter().any(|row| row.len() != width) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "schoenfeld_residuals must be rectangular",
-            ));
-        }
-        for row in &schoenfeld_residuals {
-            validate_finite_slice(row, "schoenfeld_residuals")?;
-        }
-    } else {
-        return Err(value_error("schoenfeld_residuals cannot be empty"));
-    }
-    if let Some(weights) = weights.as_ref() {
-        if weights.len() != event_times.len() {
-            return Err(value_error(
-                "weights must have the same length as event_times",
-            ));
-        }
-        validate_finite_slice(weights, "weights")?;
-    }
-    let weights_ref = weights.as_deref();
-    Ok(proportional_hazards_test(
-        &schoenfeld_residuals,
-        &event_times,
-        weights_ref,
-    ))
+    validate_finite(score, "score")?;
+    let (statistic, _) = quadratic_form(information, score, WTEST_TOLERANCE)?;
+    Ok(chi_square_result(statistic, score.len(), "ScoreTest"))
+}
+
+#[pyfunction(name = "lrt_test")]
+pub fn lrt_test_py(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult<TestResult> {
+    Ok(likelihood_ratio_test(loglik_full, loglik_reduced, df)?)
+}
+
+/// `wald_test(coef, var, init=None)`: `var` is the coefficient variance
+/// matrix as nested rows.
+#[pyfunction(name = "wald_test")]
+#[pyo3(signature = (coef, var, init=None))]
+pub fn wald_test_py(
+    coef: Vec<f64>,
+    var: Vec<Vec<f64>>,
+    init: Option<Vec<f64>>,
+) -> PyResult<TestResult> {
+    Ok(wald_test(&coef, &var, init.as_deref())?)
+}
+
+#[pyfunction(name = "score_test")]
+pub fn score_test_py(score: Vec<f64>, information: Vec<Vec<f64>>) -> PyResult<TestResult> {
+    Ok(score_test(&score, &information)?)
 }
 
 #[cfg(test)]
@@ -396,51 +145,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn proportional_hazards_test_uses_supplied_transformed_time_axis() {
-        let residuals = vec![vec![0.0], vec![1.0], vec![0.0], vec![1.0]];
-        let rank_time = vec![1.0, 2.0, 3.0, 4.0];
-        let uneven_time = vec![1.0, 2.0, 10.0, 11.0];
-
-        let rank_result = proportional_hazards_test(&residuals, &rank_time, None);
-        let uneven_result = proportional_hazards_test(&residuals, &uneven_time, None);
-
-        assert_ne!(rank_result.chi2_values[0], uneven_result.chi2_values[0]);
+    fn wald_test_uses_the_full_covariance() {
+        // beta' V^-1 beta with V = [[2, 0.5], [0.5, 1]], beta = (1, 2):
+        // V^-1 = [[4, -2], [-2, 8]] / 7  ->  (4 - 8 + 32) / 7 = 4
+        let result = wald_test(&[1.0, 2.0], &[vec![2.0, 0.5], vec![0.5, 1.0]], None).unwrap();
+        assert!((result.statistic - 4.0).abs() < 1e-12);
+        assert_eq!(result.df, 2);
+        assert!((result.p_value - pchisq(4.0, 2.0, false, false)).abs() < 1e-15);
+        let shifted = wald_test(
+            &[1.0, 2.0],
+            &[vec![2.0, 0.5], vec![0.5, 1.0]],
+            Some(&[1.0, 2.0]),
+        )
+        .unwrap();
+        assert_eq!(shifted.statistic, 0.0);
+        assert_eq!(shifted.p_value, 1.0);
     }
 
     #[test]
-    fn ph_test_validates_time_length_and_rectangular_residuals() {
-        assert!(ph_test(vec![vec![1.0], vec![2.0]], vec![1.0], None).is_err());
-        assert!(ph_test(vec![vec![1.0], vec![2.0, 3.0]], vec![1.0, 2.0], None).is_err());
+    fn singular_variance_drops_redundant_columns_like_coxph_wtest() {
+        let var = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![2.0, 4.0, 6.0],
+            vec![3.0, 6.0, 9.0],
+        ];
+        let result = wald_test(&[1.0, 2.0, 3.0], &var, None).unwrap();
+        assert!((result.statistic - 1.0).abs() < 1e-12);
     }
 
     #[test]
-    fn public_hypothesis_tests_validate_numeric_inputs() {
-        assert!(lrt_test(f64::NAN, -12.0, 1).is_err());
-        assert!(lrt_test(-10.0, -12.0, 0).is_err());
-        assert!(wald_test_py(vec![], vec![]).is_err());
-        assert!(wald_test_py(vec![f64::INFINITY], vec![1.0]).is_err());
-        assert!(wald_test_py(vec![1.0], vec![0.0]).is_err());
-        assert!(score_test_py(vec![], vec![]).is_err());
-        assert!(score_test_py(vec![1.0], vec![vec![f64::NAN]]).is_err());
-        assert!(score_test_py(vec![1.0, 2.0], vec![vec![1.0], vec![0.0, 1.0]]).is_err());
-        assert!(ph_test(vec![vec![1.0]], vec![1.0], None).is_err());
-        assert!(ph_test(vec![vec![f64::NAN], vec![2.0]], vec![1.0, 2.0], None).is_err());
-        assert!(ph_test(vec![vec![1.0], vec![2.0]], vec![1.0, 2.0], Some(vec![1.0])).is_err());
-        assert!(
-            ph_test(
-                vec![vec![1.0], vec![2.0]],
-                vec![1.0, 2.0],
-                Some(vec![1.0, f64::INFINITY]),
-            )
-            .is_err()
-        );
+    fn score_test_matches_quadratic_form() {
+        let result = score_test(&[1.0, 1.0], &[vec![2.0, 0.0], vec![0.0, 4.0]]).unwrap();
+        assert!((result.statistic - 0.75).abs() < 1e-12);
+        assert_eq!(result.df, 2);
     }
 
     #[test]
-    fn direct_score_test_handles_bad_matrix_shape_without_panicking() {
-        let result = score_test(&[1.0, 2.0], &[vec![1.0], vec![0.0, 1.0]]);
+    fn likelihood_ratio_test_is_twice_the_difference() {
+        let result = likelihood_ratio_test(-10.0, -12.0, 1).unwrap();
+        assert!((result.statistic - 4.0).abs() < 1e-12);
+        assert!((result.p_value - 0.04550026).abs() < 1e-7);
+        assert!(likelihood_ratio_test(f64::NAN, -12.0, 1).is_err());
+        assert!(likelihood_ratio_test(-10.0, -12.0, 0).is_err());
+    }
 
-        assert!(result.statistic.is_nan());
-        assert!(result.p_value.is_nan());
+    #[test]
+    fn inputs_are_validated() {
+        assert!(wald_test(&[], &[], None).is_err());
+        assert!(wald_test(&[f64::INFINITY], &[vec![1.0]], None).is_err());
+        assert!(wald_test(&[1.0], &[vec![1.0, 2.0]], None).is_err());
+        assert!(wald_test(&[1.0], &[vec![1.0]], Some(&[1.0, 2.0])).is_err());
+        assert!(score_test(&[], &[]).is_err());
+        assert!(score_test(&[1.0], &[vec![f64::NAN]]).is_err());
+        assert!(score_test(&[1.0, 2.0], &[vec![1.0], vec![0.0, 1.0]]).is_err());
     }
 }

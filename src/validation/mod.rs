@@ -1,11 +1,9 @@
 pub(crate) mod anova;
 pub(crate) mod bootstrap;
-#[path = "brier.rs"]
-pub(crate) mod brier_module;
+pub(crate) mod brier;
 #[path = "calibration.rs"]
 pub(crate) mod calibration_module;
-#[path = "cipoisson.rs"]
-pub(crate) mod cipoisson_module;
+pub(crate) mod cipoisson;
 pub(crate) mod conformal;
 pub(crate) mod crossval;
 #[path = "d_calibration/mod.rs"]
@@ -22,31 +20,26 @@ pub(crate) mod power;
 #[path = "rcll.rs"]
 pub(crate) mod rcll_module;
 pub(crate) mod reporting;
-#[path = "rmst/mod.rs"]
-pub(crate) mod rmst_module;
-#[path = "royston.rs"]
-pub(crate) mod royston_module;
-#[path = "survcheck.rs"]
-pub(crate) mod survcheck_module;
-#[path = "survobrien.rs"]
-pub(crate) mod survobrien_module;
+pub(crate) mod rmst;
+pub(crate) mod royston;
+pub(crate) mod survcheck;
+pub(crate) mod survobrien;
 #[path = "time_dependent_auc.rs"]
 pub(crate) mod time_dependent_auc_module;
 pub(crate) mod uncertainty;
 #[path = "uno_c_index/mod.rs"]
 pub(crate) mod uno_c_index_module;
-#[path = "yates.rs"]
-pub(crate) mod yates_module;
+pub(crate) mod yates;
 
-pub use anova::{AnovaCoxphResult, AnovaRow, anova_coxph, anova_coxph_single};
+pub use anova::{AnovaCoxphResult, AnovaKind, AnovaRow, anova_coxph, anova_coxph_py};
 pub use bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
-pub use brier_module::{brier, compute_brier, integrated_brier};
+pub use brier::{BrierInput, BrierResult, brier};
 pub use calibration_module::{
     AdvancedCalibrationResult, CalibrationResult, PredictionResult, RiskStratificationResult,
     TdAUCResult, TimeDependentCalibrationResult, advanced_calibration_metrics, calibration,
     predict_cox, risk_stratification, td_auc, time_dependent_calibration,
 };
-pub use cipoisson_module::{cipoisson, cipoisson_anscombe, cipoisson_exact};
+pub use cipoisson::{CipoissonMethod, CipoissonResult, cipoisson, cipoisson_py};
 pub use conformal::{
     BootstrapConformalResult, CQRConformalResult, CVPlusCalibrationResult, CVPlusConformalResult,
     ConformalCalibrationPlot, ConformalCalibrationResult, ConformalDiagnostics,
@@ -82,17 +75,15 @@ pub use hyperparameter::{
     SearchStrategy, benchmark_models, hyperparameter_search, nested_cross_validation,
 };
 pub use hypothesis_tests::{
-    ProportionalityTest, TestResult, lrt_test, ph_test, score_test, wald_test,
+    TestResult, likelihood_ratio_test, lrt_test_py, score_test, score_test_py, wald_test,
+    wald_test_py,
 };
 pub use landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
     SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis,
     landmark_analysis_batch, life_table, survival_at_times,
 };
-pub use logrank::{
-    LogRankResult, TrendTestResult, WeightType, fleming_harrington_test, logrank_test,
-    logrank_trend, weighted_logrank_test,
-};
+pub use logrank::{LogRankResult, logrank_test, logrank_test_py};
 pub use meta_analysis::{
     MetaAnalysisConfig, MetaAnalysisResult, MetaForestPlotData, PublicationBiasResult,
     generate_forest_plot_data, publication_bias_tests, survival_meta_analysis,
@@ -110,15 +101,19 @@ pub use reporting::{
     CalibrationCurveData, ForestPlotData, KaplanMeierPlotData, ROCPlotData, SurvivalReport,
     calibration_plot_data, forest_plot_data, generate_survival_report, km_plot_data, roc_plot_data,
 };
-pub use rmst_module::{
-    ChangepointInfo, CumulativeIncidenceResult, MedianSurvivalResult, NNTResult,
-    RMSTComparisonResult, RMSTOptimalThresholdResult, RMSTResult, compute_rmst,
-    cumulative_incidence, number_needed_to_treat, rmst, rmst_comparison, rmst_optimal_threshold,
-    survival_quantile,
+pub use rmst::{
+    ChangepointInfo, NNTResult, RMSTOptimalThresholdResult, RmeanOption, RmstComparisonResult,
+    RmstGroupResult, SurvfitCurve, SurvfitCurveQuantiles, SurvfitSummaryRow,
+    number_needed_to_treat, number_needed_to_treat_py, quantile_survfit,
+    quantile_survfit_curves_py, rmst_comparison, rmst_comparison_py, rmst_optimal_threshold,
+    rmst_optimal_threshold_py, survmean, survmean_curves_py,
 };
-pub use royston_module::{RoystonResult, royston, royston_from_model};
-pub use survcheck_module::{SurvCheckResult, survcheck, survcheck_simple};
-pub use survobrien_module::{SurvObrienResult, survobrien, survobrien_transform_groups};
+pub use royston::{RoystonInput, RoystonResult, royston, royston_py};
+pub use survcheck::{
+    SurvCheckEvents, SurvCheckFlags, SurvCheckInput, SurvCheckIstate, SurvCheckProblem,
+    SurvCheckResult, SurvCheckTransitions, survcheck, survcheck_py,
+};
+pub use survobrien::{SurvObrienExpansion, SurvObrienInput, survobrien, survobrien_py};
 pub use time_dependent_auc_module::{
     CumulativeDynamicAUCResult, TimeDepAUCResult, cumulative_dynamic_auc,
     cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,
@@ -135,4 +130,7 @@ pub use uno_c_index_module::{
     CIndexDecompositionResult, ConcordanceComparisonResult, GonenHellerResult, UnoCIndexResult,
     c_index_decomposition, compare_uno_c_indices, gonen_heller_concordance, uno_c_index,
 };
-pub use yates_module::{YatesPairwiseResult, YatesResult, yates, yates_contrast, yates_pairwise};
+pub use yates::{
+    YatesContrast, YatesEstimate, YatesInput, YatesResult, YatesTest, population_means,
+    population_means_py, yates, yates_py,
+};

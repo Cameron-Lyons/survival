@@ -1,357 +1,222 @@
-use crate::constants::same_time;
-use crate::internal::numpy_utils::{extract_vec_f64, extract_vec_i32};
-use crate::internal::statistical::chi2_sf;
-use crate::internal::validation::{
-    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
-};
-use pyo3::exceptions::PyValueError;
+//! O'Brien's logit-rank transformation of a survival data set.
+//!
+//! Port of R survival `R/survobrien.R`: the data set is expanded into one
+//! block per event time containing everybody at risk, and within each block
+//! every continuous covariate is replaced by the logit of its (mid-)rank
+//! percentile.  A Cox model on the expanded data, stratified on the block,
+//! gives O'Brien's test.  Formula handling (which terms are continuous,
+//! keeper columns, cluster terms) belongs to the caller: it passes the
+//! continuous columns and copies its keeper columns with [`SurvObrienExpansion::row`].
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use pyo3::prelude::*;
-use std::cmp::Ordering;
 
-const RANK_TIE_TOLERANCE: f64 = 1e-10;
-
-fn validate_survobrien_inputs(
-    time: &[f64],
-    status: &[i32],
-    covariate: &[f64],
-    strata: Option<&[i32]>,
-) -> PyResult<()> {
-    validate_length(time.len(), status.len(), "status")?;
-    validate_length(time.len(), covariate.len(), "covariate")?;
-    if let Some(strata) = strata {
-        validate_length(time.len(), strata.len(), "strata")?;
-    }
-    validate_no_nan(time, "time")?;
-    validate_finite(time, "time")?;
-    validate_non_negative(time, "time")?;
-    validate_binary_i32(status, "status")?;
-    validate_no_nan(covariate, "covariate")?;
-    validate_finite(covariate, "covariate")?;
-    Ok(())
-}
-
+/// Inputs of [`survobrien`].
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct SurvObrienResult {
-    #[pyo3(get)]
-    pub statistic: f64,
-    #[pyo3(get)]
-    pub p_value: f64,
-    #[pyo3(get)]
-    pub df: usize,
-    #[pyo3(get)]
-    pub scores: Vec<f64>,
-    #[pyo3(get)]
-    pub score_sum: f64,
-    #[pyo3(get)]
-    pub expected: f64,
-    #[pyo3(get)]
-    pub variance: f64,
+pub struct SurvObrienInput<'a> {
+    /// Start times of (start, stop] data; `None` for right-censored data.
+    pub start: Option<&'a [f64]>,
+    pub time: &'a [f64],
+    pub status: &'a [i32],
+    /// Strata codes; risk sets are formed within a stratum.
+    pub strata: Option<&'a [i32]>,
+    /// The continuous covariates to transform, one column each.
+    pub continuous: &'a [Vec<f64>],
 }
 
-#[pymethods]
-impl SurvObrienResult {
-    #[new]
-    fn new(
-        statistic: f64,
-        p_value: f64,
-        df: usize,
-        scores: Vec<f64>,
-        score_sum: f64,
-        expected: f64,
-        variance: f64,
-    ) -> Self {
-        Self {
-            statistic,
-            p_value,
-            df,
-            scores,
-            score_sum,
-            expected,
-            variance,
+/// The expanded data set (R's returned data frame).
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct SurvObrienExpansion {
+    /// Original (0-based) row of each expanded row; R's `.id.` is `row + 1`.
+    pub row: Vec<usize>,
+    pub start: Option<Vec<f64>>,
+    pub time: Vec<f64>,
+    /// 1 for the event(s) defining the block, 0 for the rest of the risk set.
+    pub status: Vec<i32>,
+    /// R's `.strata.`: 1-based index of the risk set.
+    pub strata: Vec<usize>,
+    /// The transformed continuous columns, in input order.
+    pub transformed: Vec<Vec<f64>>,
+    /// The event time defining each risk set, in block order.
+    pub event_times: Vec<f64>,
+}
+
+/// O'Brien's default transform: logits of the mid-rank percentiles.
+fn logit_rank_transform(values: &[f64]) -> Vec<f64> {
+    let n = values.len();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
+    let mut ranks = vec![0.0; n];
+    let mut start = 0;
+    while start < n {
+        let mut end = start + 1;
+        while end < n && values[order[end]] == values[order[start]] {
+            end += 1;
+        }
+        let average_rank = ((start + 1) + end) as f64 / 2.0;
+        for &idx in &order[start..end] {
+            ranks[idx] = average_rank;
+        }
+        start = end;
+    }
+    ranks
+        .iter()
+        .map(|&rank| {
+            let percentile = (rank - 0.5) / n as f64;
+            (percentile / (1.0 - percentile)).ln()
+        })
+        .collect()
+}
+
+fn validate(input: &SurvObrienInput<'_>) -> SurvivalResult<()> {
+    let n = input.time.len();
+    if n == 0 {
+        return Err(SurvivalError::invalid_input(
+            "No (non-missing) observations",
+        ));
+    }
+    validate_length(n, input.status.len(), "status")?;
+    validate_finite(input.time, "time")?;
+    validate_binary_i32(input.status, "status")?;
+    if let Some(start) = input.start {
+        validate_length(n, start.len(), "start")?;
+        validate_finite(start, "start")?;
+        if let Some(index) = (0..n).find(|&i| start[i] >= input.time[i]) {
+            return Err(SurvivalError::invalid_input(format!(
+                "Stop time must be > start time (row {index})"
+            )));
         }
     }
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, covariate, strata=None))]
-pub fn survobrien(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    covariate: &Bound<'_, PyAny>,
-    strata: Option<&Bound<'_, PyAny>>,
-) -> PyResult<SurvObrienResult> {
-    let time_vec = extract_vec_f64(time)?;
-    let status_vec = extract_vec_i32(status)?;
-    let covariate_vec = extract_vec_f64(covariate)?;
-    let strata_vec = strata.map(extract_vec_i32).transpose()?;
-    let strata = strata_vec.as_deref();
-
-    validate_survobrien_inputs(&time_vec, &status_vec, &covariate_vec, strata)?;
-    let result = compute_survobrien(&time_vec, &status_vec, &covariate_vec, strata);
-    Ok(result)
-}
-
-fn validate_survobrien_transform_groups(
-    columns: &[Vec<f64>],
-    row_indices: &[usize],
-    group_sizes: &[usize],
-) -> PyResult<()> {
-    let n_rows = columns.first().map_or(0, Vec::len);
-    for column in columns {
-        if column.len() != n_rows {
-            return Err(PyValueError::new_err(
-                "survobrien transform columns must have equal lengths",
-            ));
-        }
-        validate_finite(column, "columns")?;
+    if let Some(strata) = input.strata {
+        validate_length(n, strata.len(), "strata")?;
     }
-
-    if columns.is_empty() && !row_indices.is_empty() {
-        return Err(PyValueError::new_err(
-            "survobrien transform requires columns when row indices are present",
+    if input.continuous.is_empty() {
+        return Err(SurvivalError::invalid_input(
+            "No continuous variables to modify",
         ));
     }
-    if row_indices.iter().any(|&index| index >= n_rows) {
-        return Err(PyValueError::new_err(
-            "survobrien transform row index is out of bounds",
-        ));
-    }
-
-    let grouped_rows = group_sizes.iter().try_fold(0usize, |total, &size| {
-        total
-            .checked_add(size)
-            .ok_or_else(|| PyValueError::new_err("survobrien transform group sizes overflowed"))
-    })?;
-    if grouped_rows != row_indices.len() {
-        return Err(PyValueError::new_err(
-            "survobrien transform group sizes must sum to the row index count",
-        ));
+    for (column, values) in input.continuous.iter().enumerate() {
+        validate_length(n, values.len(), &format!("continuous[{column}]"))?;
+        validate_finite(values, "continuous")?;
     }
     Ok(())
 }
 
-fn transform_survobrien_groups(
-    columns: &[Vec<f64>],
-    row_indices: &[usize],
-    group_sizes: &[usize],
-) -> Vec<Vec<f64>> {
-    let mut transformed = columns
-        .iter()
-        .map(|_| vec![0.0; row_indices.len()])
-        .collect::<Vec<_>>();
-
-    for (column, output) in columns.iter().zip(transformed.iter_mut()) {
-        let mut offset = 0;
-        let mut order = Vec::new();
-        for &group_size in group_sizes {
-            let group_end = offset + group_size;
-            order.clear();
-            order.extend(offset..group_end);
-            order.sort_unstable_by(|&left, &right| {
-                let left_value = column[row_indices[left]];
-                let right_value = column[row_indices[right]];
-                if left_value == right_value {
-                    Ordering::Equal
-                } else {
-                    left_value.total_cmp(&right_value)
-                }
-            });
-
-            let mut start = 0;
-            while start < group_size {
-                let mut end = start + 1;
-                let tie_value = column[row_indices[order[start]]];
-                while end < group_size && column[row_indices[order[end]]] == tie_value {
-                    end += 1;
-                }
-                let rank = ((start + 1) as f64 + end as f64) / 2.0;
-                let probability = (rank - 0.5) / group_size as f64;
-                let value = (probability / (1.0 - probability)).ln();
-                for position in start..end {
-                    output[order[position]] = value;
-                }
-                start = end;
-            }
-            offset = group_end;
-        }
-    }
-    transformed
-}
-
-#[pyfunction]
-pub fn survobrien_transform_groups(
-    py: Python<'_>,
-    columns: Vec<Vec<f64>>,
-    row_indices: Vec<usize>,
-    group_sizes: Vec<usize>,
-) -> PyResult<Vec<Vec<f64>>> {
-    validate_survobrien_transform_groups(&columns, &row_indices, &group_sizes)?;
-    Ok(py.detach(move || transform_survobrien_groups(&columns, &row_indices, &group_sizes)))
-}
-
-fn compute_survobrien(
-    time: &[f64],
-    status: &[i32],
-    covariate: &[f64],
-    strata: Option<&[i32]>,
-) -> SurvObrienResult {
-    let n = time.len();
-    if n == 0 {
-        return SurvObrienResult {
-            statistic: 0.0,
-            p_value: 1.0,
-            df: 1,
-            scores: Vec::new(),
-            score_sum: 0.0,
-            expected: 0.0,
-            variance: 0.0,
-        };
-    }
-
-    let mut scores = vec![0.0; n];
-
-    let mut total_score_sum = 0.0;
-    let mut total_variance = 0.0;
-
-    if let Some(strata) = strata {
-        let mut unique_strata: Vec<i32> = strata.to_vec();
-        unique_strata.sort();
-        unique_strata.dedup();
-
-        for &stratum in &unique_strata {
-            let mut sorted_indices: Vec<usize> = (0..n).filter(|&i| strata[i] == stratum).collect();
-            if sorted_indices.is_empty() {
-                continue;
-            }
-            sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-            let (score_sum, variance) =
-                compute_survobrien_stratum(time, status, covariate, &sorted_indices, &mut scores);
-            total_score_sum += score_sum;
-            total_variance += variance;
-        }
-    } else {
-        let mut sorted_indices: Vec<usize> = (0..n).collect();
-        sorted_indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-        let (score_sum, variance) =
-            compute_survobrien_stratum(time, status, covariate, &sorted_indices, &mut scores);
-        total_score_sum += score_sum;
-        total_variance += variance;
-    }
-
-    let statistic = if total_variance > 0.0 {
-        total_score_sum * total_score_sum / total_variance
-    } else {
-        0.0
+/// The risk sets: one `(event time, stratum, rows at risk)` per distinct
+/// event time (per stratum), in R's order.
+fn risk_sets(input: &SurvObrienInput<'_>) -> Vec<(f64, Vec<usize>)> {
+    let n = input.time.len();
+    let at_risk = |i: usize, at: f64| match input.start {
+        Some(start) => start[i] < at && input.time[i] >= at,
+        None => input.time[i] >= at,
     };
-
-    let p_value = chi2_sf(statistic, 1);
-
-    SurvObrienResult {
-        statistic,
-        p_value,
-        df: 1,
-        scores,
-        score_sum: total_score_sum,
-        expected: 0.0,
-        variance: total_variance,
+    match input.strata {
+        None => {
+            // etime <- sort(unique(y[event, time]))
+            let mut event_times: Vec<f64> = (0..n)
+                .filter(|&i| input.status[i] == 1)
+                .map(|i| input.time[i])
+                .collect();
+            event_times.sort_by(f64::total_cmp);
+            event_times.dedup();
+            event_times
+                .into_iter()
+                .map(|at| (at, (0..n).filter(|&i| at_risk(i, at)).collect()))
+                .collect()
+        }
+        Some(strata) => {
+            // unique(data.frame(time, strata)[event, ]): first-appearance
+            // order of the (time, stratum) pairs among the events.  R's own
+            // stratified branches compare the status column with the time
+            // (right-censored data) and select the *other* strata for
+            // (start, stop] data; both are typos, the intent — everybody
+            // at risk in the same stratum — is implemented here.
+            let mut pairs: Vec<(f64, i32)> = Vec::new();
+            for i in (0..n).filter(|&i| input.status[i] == 1) {
+                let pair = (input.time[i], strata[i]);
+                if !pairs.contains(&pair) {
+                    pairs.push(pair);
+                }
+            }
+            pairs
+                .into_iter()
+                .map(|(at, stratum)| {
+                    (
+                        at,
+                        (0..n)
+                            .filter(|&i| at_risk(i, at) && strata[i] == stratum)
+                            .collect(),
+                    )
+                })
+                .collect()
+        }
     }
 }
 
-fn compute_survobrien_stratum(
-    time: &[f64],
-    status: &[i32],
-    covariate: &[f64],
-    sorted_indices: &[usize],
-    scores: &mut [f64],
-) -> (f64, f64) {
-    let n_stratum = sorted_indices.len();
-    let mut score_sum = 0.0;
-    let mut variance = 0.0;
-
-    if n_stratum == 0 {
-        return (score_sum, variance);
+/// Expand the data into risk sets with the logit-rank transform applied
+/// to every continuous covariate within each risk set.
+pub fn survobrien(input: &SurvObrienInput<'_>) -> SurvivalResult<SurvObrienExpansion> {
+    validate(input)?;
+    let sets = risk_sets(input);
+    let total: usize = sets.iter().map(|(_, rows)| rows.len()).sum();
+    let mut row = Vec::with_capacity(total);
+    let mut time = Vec::with_capacity(total);
+    let mut status = Vec::with_capacity(total);
+    let mut strata = Vec::with_capacity(total);
+    let mut start = input.start.map(|_| Vec::with_capacity(total));
+    let mut transformed: Vec<Vec<f64>> = input
+        .continuous
+        .iter()
+        .map(|_| Vec::with_capacity(total))
+        .collect();
+    let mut event_times = Vec::with_capacity(sets.len());
+    for (set_index, (at, rows)) in sets.iter().enumerate() {
+        event_times.push(*at);
+        for &i in rows {
+            row.push(i);
+            time.push(input.time[i]);
+            status.push(i32::from(input.time[i] == *at && input.status[i] == 1));
+            strata.push(set_index + 1);
+            if let (Some(start_values), Some(out)) = (input.start, start.as_mut()) {
+                out.push(start_values[i]);
+            }
+        }
+        for (column, values) in input.continuous.iter().enumerate() {
+            let block: Vec<f64> = rows.iter().map(|&i| values[i]).collect();
+            transformed[column].extend(logit_rank_transform(&block));
+        }
     }
+    Ok(SurvObrienExpansion {
+        row,
+        start,
+        time,
+        status,
+        strata,
+        transformed,
+        event_times,
+    })
+}
 
-    let mut at_risk: Vec<bool> = vec![true; n_stratum];
-    let mut at_risk_values: Vec<(usize, f64)> = Vec::with_capacity(n_stratum);
-    let mut ranks = vec![0.0; n_stratum];
-
-    let mut i = 0;
-    while i < n_stratum {
-        let current_time = time[sorted_indices[i]];
-
-        let mut event_indices: Vec<usize> = Vec::new();
-        let mut j = i;
-        while j < n_stratum && same_time(time[sorted_indices[j]], current_time) {
-            if status[sorted_indices[j]] == 1 {
-                event_indices.push(j);
-            }
-            j += 1;
-        }
-
-        if !event_indices.is_empty() {
-            at_risk_values.clear();
-            for (k, &idx) in sorted_indices.iter().enumerate() {
-                if at_risk[k] {
-                    at_risk_values.push((k, covariate[idx]));
-                }
-            }
-
-            let n_at_risk = at_risk_values.len();
-            if n_at_risk > 0 {
-                at_risk_values.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-                let mut k = 0;
-                while k < n_at_risk {
-                    let current_value = at_risk_values[k].1;
-                    let mut tie_count = 1;
-                    let mut rank_sum = (k + 1) as f64;
-
-                    while k + tie_count < n_at_risk
-                        && (at_risk_values[k + tie_count].1 - current_value).abs()
-                            < RANK_TIE_TOLERANCE
-                    {
-                        rank_sum += (k + tie_count + 1) as f64;
-                        tie_count += 1;
-                    }
-
-                    let avg_rank = rank_sum / tie_count as f64;
-                    for t in 0..tie_count {
-                        ranks[at_risk_values[k + t].0] = avg_rank;
-                    }
-                    k += tie_count;
-                }
-
-                let mean_rank = (n_at_risk as f64 + 1.0) / 2.0;
-                let var_rank = (n_at_risk as f64 * n_at_risk as f64 - 1.0) / 12.0;
-
-                for &event_local_idx in &event_indices {
-                    let rank = ranks[event_local_idx];
-                    let orig_idx = sorted_indices[event_local_idx];
-                    if var_rank > 0.0 {
-                        scores[orig_idx] = (rank - mean_rank) / var_rank.sqrt();
-                    } else {
-                        scores[orig_idx] = 0.0;
-                    }
-                    score_sum += scores[orig_idx];
-                }
-
-                let n_events = event_indices.len() as f64;
-                if var_rank > 0.0 {
-                    variance += n_events / var_rank * var_rank;
-                }
-            }
-        }
-
-        for item in at_risk.iter_mut().take(j).skip(i) {
-            *item = false;
-        }
-
-        i = j;
-    }
-
-    (score_sum, variance)
+/// Python entry point: `survobrien(time, status, continuous, start=None,
+/// strata=None)`; `continuous` is a list of columns.
+#[pyfunction(name = "survobrien")]
+#[pyo3(signature = (time, status, continuous, start=None, strata=None))]
+pub fn survobrien_py(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    continuous: Vec<Vec<f64>>,
+    start: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+) -> PyResult<SurvObrienExpansion> {
+    Ok(survobrien(&SurvObrienInput {
+        start: start.as_deref(),
+        time: &time,
+        status: &status,
+        strata: strata.as_deref(),
+        continuous: &continuous,
+    })?)
 }
 
 #[cfg(test)]
@@ -359,140 +224,85 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_survobrien_basic() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1, 1, 0, 1, 0];
-        let covariate = vec![10.0, 20.0, 15.0, 30.0, 25.0];
-        let strata = vec![1, 1, 1, 1, 1];
-
-        let result = compute_survobrien(&time, &status, &covariate, Some(&strata));
-
-        assert!(result.statistic >= 0.0);
-        assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
-        assert_eq!(result.df, 1);
+    fn expands_risk_sets_and_transforms_within_each() {
+        let result = survobrien(&SurvObrienInput {
+            start: None,
+            time: &[1.0, 2.0, 2.0, 3.0],
+            status: &[1, 1, 0, 1],
+            strata: None,
+            continuous: &[vec![4.0, 1.0, 1.0, 3.0]],
+        })
+        .unwrap();
+        assert_eq!(result.event_times, vec![1.0, 2.0, 3.0]);
+        assert_eq!(result.row, vec![0, 1, 2, 3, 1, 2, 3, 3]);
+        assert_eq!(result.status, vec![1, 0, 0, 0, 1, 0, 0, 1]);
+        assert_eq!(result.strata, vec![1, 1, 1, 1, 2, 2, 2, 3]);
+        // first block: values 4, 1, 1, 3 -> ranks 4, 1.5, 1.5, 3 over n = 4
+        let logit = |rank: f64| {
+            let p = (rank - 0.5) / 4.0;
+            (p / (1.0 - p)).ln()
+        };
+        assert!((result.transformed[0][0] - logit(4.0)).abs() < 1e-12);
+        assert!((result.transformed[0][1] - logit(1.5)).abs() < 1e-12);
+        assert!((result.transformed[0][2] - logit(1.5)).abs() < 1e-12);
+        // a block of one has percentile 0.5 -> logit 0
+        assert!(result.transformed[0][7].abs() < 1e-12);
     }
 
     #[test]
-    fn test_survobrien_empty() {
-        let result = compute_survobrien(&[], &[], &[], None);
-        assert_eq!(result.statistic, 0.0);
-        assert_eq!(result.p_value, 1.0);
+    fn counting_process_risk_sets_use_the_open_interval() {
+        let result = survobrien(&SurvObrienInput {
+            start: Some(&[0.0, 1.0, 0.0]),
+            time: &[2.0, 3.0, 1.0],
+            status: &[1, 1, 1],
+            strata: None,
+            continuous: &[vec![1.0, 2.0, 3.0]],
+        })
+        .unwrap();
+        // event at 1: rows with start < 1 <= stop -> rows 0 and 2
+        assert_eq!(result.event_times, vec![1.0, 2.0, 3.0]);
+        assert_eq!(result.row, vec![0, 2, 0, 1, 1]);
+        assert_eq!(
+            result.start.as_deref(),
+            Some(&[0.0, 0.0, 0.0, 1.0, 1.0][..])
+        );
     }
 
     #[test]
-    fn test_survobrien_stratified() {
-        let time = vec![1.0, 2.0, 1.0, 2.0];
-        let status = vec![1, 0, 1, 0];
-        let covariate = vec![10.0, 20.0, 30.0, 40.0];
-        let strata = vec![1, 1, 2, 2];
-
-        let result = compute_survobrien(&time, &status, &covariate, Some(&strata));
-
-        assert!(result.statistic >= 0.0);
-        assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+    fn strata_keep_risk_sets_within_a_stratum() {
+        let result = survobrien(&SurvObrienInput {
+            start: None,
+            time: &[1.0, 2.0, 1.0, 2.0],
+            status: &[1, 0, 1, 1],
+            strata: Some(&[1, 1, 2, 2]),
+            continuous: &[vec![1.0, 2.0, 3.0, 4.0]],
+        })
+        .unwrap();
+        assert_eq!(result.event_times, vec![1.0, 1.0, 2.0]);
+        assert_eq!(result.row, vec![0, 1, 2, 3, 3]);
     }
 
     #[test]
-    fn test_survobrien_default_strata_matches_explicit_single_stratum() {
-        let time = vec![1.0, 2.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1, 0, 1, 1, 0, 1];
-        let covariate = vec![10.0, 20.0, 15.0, 30.0, 25.0, 35.0];
-        let strata = vec![1; time.len()];
-
-        let default = compute_survobrien(&time, &status, &covariate, None);
-        let explicit = compute_survobrien(&time, &status, &covariate, Some(&strata));
-
-        assert!((default.statistic - explicit.statistic).abs() < 1e-12);
-        assert!((default.p_value - explicit.p_value).abs() < 1e-12);
-        assert!((default.score_sum - explicit.score_sum).abs() < 1e-12);
-        assert!((default.expected - explicit.expected).abs() < 1e-12);
-        assert!((default.variance - explicit.variance).abs() < 1e-12);
-        for (default, explicit) in default.scores.iter().zip(explicit.scores.iter()) {
-            assert!((*default - *explicit).abs() < 1e-12);
-        }
-    }
-
-    #[test]
-    fn test_survobrien_groups_near_tied_event_times() {
-        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
-        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
-        let status = vec![1, 1, 0, 0];
-        let covariate = vec![10.0, 30.0, 20.0, 40.0];
-        let strata = vec![1, 1, 1, 1];
-
-        let expected = compute_survobrien(&exact_time, &status, &covariate, Some(&strata));
-        let actual = compute_survobrien(&near_time, &status, &covariate, Some(&strata));
-
-        assert!((actual.statistic - expected.statistic).abs() < 1e-12);
-        assert!((actual.p_value - expected.p_value).abs() < 1e-12);
-        assert!((actual.score_sum - expected.score_sum).abs() < 1e-12);
-        assert!((actual.variance - expected.variance).abs() < 1e-12);
-        for (actual, expected) in actual.scores.iter().zip(expected.scores.iter()) {
-            assert!((*actual - *expected).abs() < 1e-12);
-        }
-    }
-
-    #[test]
-    fn test_survobrien_validates_public_inputs() {
-        let err = validate_survobrien_inputs(&[1.0, 2.0], &[1], &[0.1, 0.2], Some(&[1, 1]))
-            .expect_err("status length mismatch should fail");
-        assert!(err.to_string().contains("status length mismatch"));
-
-        let err = validate_survobrien_inputs(&[1.0], &[2], &[0.1], Some(&[1]))
-            .expect_err("non-binary status should fail");
-        assert!(err.to_string().contains("status must contain only 0/1"));
-
-        let err = validate_survobrien_inputs(&[1.0], &[1], &[f64::INFINITY], Some(&[1]))
-            .expect_err("non-finite covariate should fail");
-        assert!(err.to_string().contains("covariate contains non-finite"));
-
-        let err = validate_survobrien_inputs(&[1.0, 2.0], &[1, 0], &[0.1, 0.2], Some(&[1]))
-            .expect_err("strata length mismatch should fail");
-        assert!(err.to_string().contains("strata length mismatch"));
-    }
-
-    #[test]
-    fn test_survobrien_transform_groups_handles_ties_and_empty_groups() {
-        let columns = vec![vec![4.0, 1.0, 1.0, 3.0], vec![0.0, 2.0, 1.0, 2.0]];
-        let rows = vec![0, 1, 2, 3, 2];
-        let actual = transform_survobrien_groups(&columns, &rows, &[4, 0, 1]);
-
-        let low_tie = (0.25_f64 / 0.75).ln();
-        let high = (0.875_f64 / 0.125).ln();
-        assert_eq!(actual.len(), 2);
-        assert!((actual[0][0] - high).abs() < 1e-12);
-        assert!((actual[0][1] - low_tie).abs() < 1e-12);
-        assert!((actual[0][2] - low_tie).abs() < 1e-12);
-        assert_eq!(actual[0][4], 0.0);
-        assert_eq!(actual[1][4], 0.0);
-    }
-
-    #[test]
-    fn test_survobrien_transform_groups_ties_signed_zero() {
-        let columns = vec![vec![-0.0, 0.0, 1.0]];
-        let actual = transform_survobrien_groups(&columns, &[0, 1, 2], &[3]);
-
-        assert_eq!(actual[0][0], actual[0][1]);
-        assert!(actual[0][0] < 0.0);
-        assert!(actual[0][2] > 0.0);
-    }
-
-    #[test]
-    fn test_survobrien_transform_groups_validates_shape_and_indices() {
-        let err = validate_survobrien_transform_groups(&[vec![1.0, 2.0], vec![1.0]], &[0], &[1])
-            .expect_err("unequal column lengths should fail");
-        assert!(err.to_string().contains("equal lengths"));
-
-        let err = validate_survobrien_transform_groups(&[vec![1.0]], &[1], &[1])
-            .expect_err("out-of-bounds index should fail");
-        assert!(err.to_string().contains("out of bounds"));
-
-        let err = validate_survobrien_transform_groups(&[vec![1.0]], &[0], &[0])
-            .expect_err("incorrect group size total should fail");
-        assert!(err.to_string().contains("must sum"));
-
-        let err = validate_survobrien_transform_groups(&[vec![f64::INFINITY]], &[0], &[1])
-            .expect_err("non-finite values should fail");
-        assert!(err.to_string().contains("non-finite"));
+    fn inputs_are_validated() {
+        assert!(
+            survobrien(&SurvObrienInput {
+                start: None,
+                time: &[1.0],
+                status: &[1],
+                strata: None,
+                continuous: &[],
+            })
+            .is_err()
+        );
+        assert!(
+            survobrien(&SurvObrienInput {
+                start: Some(&[2.0]),
+                time: &[1.0],
+                status: &[1],
+                strata: None,
+                continuous: &[vec![1.0]],
+            })
+            .is_err()
+        );
     }
 }

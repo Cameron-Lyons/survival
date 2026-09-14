@@ -1,851 +1,183 @@
-use crate::constants::STRICT_EPSILON;
-use crate::internal::matrix::lu_solve;
-use ndarray::{Array1, Array2};
-use pyo3::exceptions::PyValueError;
+//! The P-spline basis of R's `pspline()` term (survival 3.8-12,
+//! `pspline.R`): `nterm + degree` B-splines on equally spaced knots that
+//! extend `degree` steps beyond each boundary knot, evaluated with
+//! `spline.des`; beyond the boundary the basis is continued linearly,
+//! `f(edge) + (x - edge) f'(edge)`.  The difference penalty, the smoothing
+//! parameter search and the `combine` argument live at the R level
+//! (`pspline.R`, `coxpenal.fit`) and are not ported here.
+
+use crate::core::bspline::spline_design;
+use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
-use rayon::prelude::*;
-use std::fmt;
 
-#[derive(Debug)]
-pub enum PSplineError {
-    UnsupportedMethod(String),
-    MatrixCreationError {
-        rows: usize,
-        cols: usize,
-        reason: String,
-    },
-    LinearSolveError,
+/// The full (intercept-included) P-spline basis and its knots.
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct PsplineBasis {
+    /// `n x (nterm + degree)` basis rows; a missing `x` gives a `NaN` row.
+    #[pyo3(get)]
+    pub basis: Vec<Vec<f64>>,
+    /// The `nterm + 2 * degree + 1` equally spaced knots.
+    #[pyo3(get)]
+    pub knots: Vec<f64>,
+    #[pyo3(get)]
+    pub nterm: usize,
+    #[pyo3(get)]
+    pub degree: usize,
+    #[pyo3(get)]
+    pub boundary_knots: (f64, f64),
 }
 
-impl fmt::Display for PSplineError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PSplineError::UnsupportedMethod(method) => write!(
-                f,
-                "Unsupported penalty method: {}. Supported methods are: GCV, UBRE, REML, AIC, BIC",
-                method
-            ),
-            PSplineError::MatrixCreationError { rows, cols, reason } => {
-                write!(
-                    f,
-                    "Failed to create matrix with shape ({}, {}): {}",
-                    rows, cols, reason
-                )
-            }
-            PSplineError::LinearSolveError => {
-                write!(
-                    f,
-                    "Failed to solve linear system: matrix may be singular or ill-conditioned"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for PSplineError {}
-impl From<PSplineError> for PyErr {
-    fn from(err: PSplineError) -> PyErr {
-        PyValueError::new_err(err.to_string())
-    }
-}
-
-fn value_error(message: impl Into<String>) -> PyErr {
-    PyValueError::new_err(message.into())
-}
-
-fn validate_finite_slice(values: &[f64], field: &str) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{field} contains non-finite value {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_boundary_knots(boundary_knots: (f64, f64)) -> PyResult<()> {
-    let (lower, upper) = boundary_knots;
-    if !lower.is_finite() || !upper.is_finite() || lower >= upper {
-        return Err(value_error(
-            "boundary_knots must be finite and strictly increasing",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_scalar(value: f64, field: &str) -> PyResult<()> {
-    if !value.is_finite() {
-        return Err(value_error(format!("{field} must be finite")));
-    }
-    Ok(())
-}
-
-fn validate_positive_scalar(value: f64, field: &str) -> PyResult<()> {
-    validate_scalar(value, field)?;
-    if value <= 0.0 {
-        return Err(value_error(format!("{field} must be positive")));
-    }
-    Ok(())
-}
-
-fn r_pspline_basis_row(knots: &[f64], x: f64, order: usize) -> Vec<f64> {
-    let n_basis = knots.len() - order;
-    let mut values = vec![0.0; knots.len() - 1];
-    for idx in 0..knots.len() - 1 {
-        if (knots[idx] <= x && x < knots[idx + 1])
-            || (x == knots[knots.len() - 1] && knots[idx] <= x && x <= knots[idx + 1])
-        {
-            values[idx] = 1.0;
-        }
-    }
-
-    for current_order in 2..=order {
-        let mut next_values = vec![0.0; knots.len() - current_order];
-        for idx in 0..next_values.len() {
-            let left_denominator = knots[idx + current_order - 1] - knots[idx];
-            let right_denominator = knots[idx + current_order] - knots[idx + 1];
-            let left = if left_denominator == 0.0 {
-                0.0
-            } else {
-                (x - knots[idx]) / left_denominator * values[idx]
-            };
-            let right = if right_denominator == 0.0 {
-                0.0
-            } else {
-                (knots[idx + current_order] - x) / right_denominator * values[idx + 1]
-            };
-            next_values[idx] = left + right;
-        }
-        values = next_values;
-    }
-    values.truncate(n_basis);
-    values
-}
-
-fn r_pspline_basis_derivative_row(knots: &[f64], x: f64, order: usize) -> Vec<f64> {
-    let lower_order = r_pspline_basis_row(knots, x, order - 1);
-    let n_basis = knots.len() - order;
-    (0..n_basis)
-        .map(|idx| {
-            let left_denominator = knots[idx + order - 1] - knots[idx];
-            let right_denominator = knots[idx + order] - knots[idx + 1];
-            let left = if left_denominator == 0.0 {
-                0.0
-            } else {
-                (order - 1) as f64 / left_denominator * lower_order[idx]
-            };
-            let right = if right_denominator == 0.0 {
-                0.0
-            } else {
-                (order - 1) as f64 / right_denominator * lower_order[idx + 1]
-            };
-            left - right
-        })
-        .collect()
-}
-
-fn r_pspline_knots(boundary_knots: (f64, f64), nterm: usize, degree: usize) -> PyResult<Vec<f64>> {
-    let knot_count = nterm
-        .checked_add(
-            degree
-                .checked_mul(2)
-                .and_then(|value| value.checked_add(1))
-                .ok_or_else(|| value_error("degree is too large"))?,
-        )
-        .ok_or_else(|| value_error("nterm and degree are too large"))?;
-    let (lower, upper) = boundary_knots;
-    let dx = (upper - lower) / nterm as f64;
-    let mut knots = Vec::with_capacity(knot_count);
-    for idx in 0..nterm + degree {
-        knots.push(lower + dx * (idx as f64 - degree as f64));
-    }
-    for idx in 0..=degree {
-        knots.push(upper + dx * idx as f64);
-    }
-    Ok(knots)
-}
-
-pub(crate) fn pspline_basis_core(
+/// `pspline(x, nterm, degree, Boundary.knots)` without the penalty
+/// attributes.  `boundary_knots` may be equal only when every observed `x`
+/// equals it (a constant covariate), in which case the middle basis
+/// function is 1 as in R.
+pub fn pspline_basis(
     x: &[f64],
     nterm: usize,
     degree: usize,
     boundary_knots: (f64, f64),
-) -> PyResult<(Vec<Vec<f64>>, Vec<f64>)> {
+) -> SurvivalResult<PsplineBasis> {
     if nterm < 3 {
-        return Err(value_error("nterm must be at least 3"));
+        return Err(SurvivalError::invalid_input("Too few basis functions"));
     }
     if degree == 0 {
-        return Err(value_error("degree must be positive"));
+        return Err(SurvivalError::invalid_input("degree must be positive"));
     }
     let (lower, upper) = boundary_knots;
     if !lower.is_finite() || !upper.is_finite() || lower > upper {
-        return Err(value_error(
-            "boundary_knots must be finite and non-decreasing",
+        return Err(SurvivalError::invalid_input(
+            "Invalid values for Boundary.knots",
         ));
     }
-    for (idx, value) in x.iter().copied().enumerate() {
-        if value.is_infinite() {
-            return Err(value_error(format!(
-                "x contains infinite value {value} at index {idx}"
-            )));
-        }
+    if let Some(value) = x.iter().find(|value| value.is_infinite()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "x contains infinite value {value}"
+        )));
     }
+    let n_basis = nterm + degree;
+    let dx = (upper - lower) / nterm as f64;
+    let knots: Vec<f64> = (0..nterm + degree)
+        .map(|idx| lower + dx * (idx as f64 - degree as f64))
+        .chain((0..=degree).map(|idx| upper + dx * idx as f64))
+        .collect();
 
-    let n_basis = nterm
-        .checked_add(degree)
-        .ok_or_else(|| value_error("nterm and degree are too large"))?;
-    let knots = r_pspline_knots(boundary_knots, nterm, degree)?;
+    let nan_row = vec![f64::NAN; n_basis];
     if lower == upper {
         if x.iter().any(|value| !value.is_nan() && *value != lower) {
-            return Err(value_error(
+            return Err(SurvivalError::invalid_input(
                 "zero-width boundary_knots require all observed x values to match the boundary",
             ));
         }
+        let mut constant = vec![0.0; n_basis];
+        constant[nterm - 1] = 1.0;
         let basis = x
             .iter()
             .map(|value| {
                 if value.is_nan() {
-                    vec![f64::NAN; n_basis]
+                    nan_row.clone()
                 } else {
-                    let mut row = vec![0.0; n_basis];
-                    row[nterm - 1] = 1.0;
-                    row
+                    constant.clone()
                 }
             })
             .collect();
-        return Ok((basis, knots));
+        return Ok(PsplineBasis {
+            basis,
+            knots,
+            nterm,
+            degree,
+            boundary_knots,
+        });
     }
 
     let order = degree + 1;
-    let left_basis = r_pspline_basis_row(&knots, lower, order);
-    let left_derivative = r_pspline_basis_derivative_row(&knots, lower, order);
-    let right_basis = r_pspline_basis_row(&knots, upper, order);
-    let right_derivative = r_pspline_basis_derivative_row(&knots, upper, order);
+    let edge = |pivot: f64| spline_design(&knots, &[pivot, pivot], order, &[0, 1]);
+    let left = edge(lower)?;
+    let right = edge(upper)?;
+    let inside: Vec<f64> = x
+        .iter()
+        .copied()
+        .filter(|value| *value >= lower && *value <= upper)
+        .collect();
+    let inside_rows = spline_design(&knots, &inside, order, &[0])?;
+    let mut inside_cursor = 0;
     let basis = x
-        .par_iter()
-        .map(|value| {
+        .iter()
+        .map(|&value| {
             if value.is_nan() {
-                vec![f64::NAN; n_basis]
-            } else if *value < lower {
-                left_basis
-                    .iter()
-                    .zip(&left_derivative)
-                    .map(|(basis, derivative)| basis + (value - lower) * derivative)
-                    .collect()
-            } else if *value > upper {
-                right_basis
-                    .iter()
-                    .zip(&right_derivative)
-                    .map(|(basis, derivative)| basis + (value - upper) * derivative)
+                nan_row.clone()
+            } else if value < lower || value > upper {
+                let (tt, pivot) = if value < lower {
+                    (&left, lower)
+                } else {
+                    (&right, upper)
+                };
+                (0..n_basis)
+                    .map(|col| tt[[0, col]] + (value - pivot) * tt[[1, col]])
                     .collect()
             } else {
-                r_pspline_basis_row(&knots, *value, order)
+                let row = inside_rows.row(inside_cursor).to_vec();
+                inside_cursor += 1;
+                row
             }
         })
         .collect();
-    Ok((basis, knots))
-}
-
-#[pyfunction]
-pub fn pspline_basis(
-    x: Vec<f64>,
-    nterm: usize,
-    degree: usize,
-    boundary_knots: (f64, f64),
-) -> PyResult<(Vec<Vec<f64>>, Vec<f64>)> {
-    pspline_basis_core(&x, nterm, degree, boundary_knots)
-}
-
-#[pyclass]
-pub struct PSpline {
-    x: Vec<f64>,
-    df: u32,
-    theta: f64,
-    nterm: u32,
-    degree: u32,
-    eps: f64,
-    method: String,
-    boundary_knots: (f64, f64),
-    intercept: bool,
-    penalty: bool,
-    #[pyo3(get)]
-    coefficients: Option<Vec<f64>>,
-    #[pyo3(get)]
-    fitted: bool,
-}
-
-#[pyclass]
-pub struct PSplineBuilder {
-    x: Vec<f64>,
-    df: u32,
-    theta: f64,
-    eps: f64,
-    method: String,
-    boundary_knots: Option<(f64, f64)>,
-    intercept: bool,
-    penalty: bool,
-}
-
-#[pymethods]
-impl PSplineBuilder {
-    #[new]
-    pub fn new(x: Vec<f64>) -> Self {
-        Self {
-            x,
-            df: 4,
-            theta: 1.0,
-            eps: STRICT_EPSILON,
-            method: "GCV".to_string(),
-            boundary_knots: None,
-            intercept: true,
-            penalty: true,
-        }
-    }
-
-    pub fn df(mut self_: PyRefMut<'_, Self>, df: u32) -> PyRefMut<'_, Self> {
-        self_.df = df;
-        self_
-    }
-
-    pub fn theta(mut self_: PyRefMut<'_, Self>, theta: f64) -> PyRefMut<'_, Self> {
-        self_.theta = theta;
-        self_
-    }
-
-    pub fn eps(mut self_: PyRefMut<'_, Self>, eps: f64) -> PyRefMut<'_, Self> {
-        self_.eps = eps;
-        self_
-    }
-
-    pub fn method(mut self_: PyRefMut<'_, Self>, method: String) -> PyRefMut<'_, Self> {
-        self_.method = method;
-        self_
-    }
-
-    pub fn boundary_knots(
-        mut self_: PyRefMut<'_, Self>,
-        lower: f64,
-        upper: f64,
-    ) -> PyRefMut<'_, Self> {
-        self_.boundary_knots = Some((lower, upper));
-        self_
-    }
-
-    pub fn intercept(mut self_: PyRefMut<'_, Self>, intercept: bool) -> PyRefMut<'_, Self> {
-        self_.intercept = intercept;
-        self_
-    }
-
-    pub fn penalty(mut self_: PyRefMut<'_, Self>, penalty: bool) -> PyRefMut<'_, Self> {
-        self_.penalty = penalty;
-        self_
-    }
-
-    pub fn build(&self) -> PyResult<PSpline> {
-        validate_finite_slice(&self.x, "x")?;
-        let boundary_knots = self.boundary_knots.unwrap_or_else(|| {
-            let min = self.x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-            let max = self.x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            (min, max)
-        });
-
-        PSpline::try_new(
-            self.x.clone(),
-            self.df,
-            self.theta,
-            self.eps,
-            self.method.clone(),
-            boundary_knots,
-            self.intercept,
-            self.penalty,
-        )
-    }
-}
-#[pymethods]
-impl PSpline {
-    #[new]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        x: Vec<f64>,
-        df: u32,
-        theta: f64,
-        eps: f64,
-        method: String,
-        boundary_knots: (f64, f64),
-        intercept: bool,
-        penalty: bool,
-    ) -> PyResult<Self> {
-        Self::try_new(
-            x,
-            df,
-            theta,
-            eps,
-            method,
-            boundary_knots,
-            intercept,
-            penalty,
-        )
-    }
-    pub fn fit(&mut self) -> PyResult<Vec<f64>> {
-        self.validate()?;
-        let basis = self.create_basis();
-        let penalized_basis = self
-            .apply_penalty(basis)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let coefficients = self
-            .optimize_fit(penalized_basis)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        self.fitted = true;
-        self.coefficients = Some(coefficients.clone());
-        Ok(coefficients)
-    }
-    pub fn predict(&self, new_x: Vec<f64>) -> PyResult<Vec<f64>> {
-        let coefficients = self
-            .coefficients
-            .as_ref()
-            .ok_or_else(|| PyValueError::new_err("Model not fitted. Call fit() first."))?;
-        validate_finite_slice(&new_x, "new_x")?;
-        let mut predictions = Vec::with_capacity(new_x.len());
-        for x_val in &new_x {
-            let mut pred = 0.0;
-            for (j, coef) in coefficients.iter().enumerate() {
-                pred += coef * self.basis_function(*x_val, j as u32);
-            }
-            predictions.push(pred);
-        }
-        Ok(predictions)
-    }
-    #[getter]
-    pub fn get_df(&self) -> u32 {
-        self.df
-    }
-    #[getter]
-    pub fn get_eps(&self) -> f64 {
-        self.eps
-    }
-}
-
-impl PSpline {
-    #[allow(clippy::too_many_arguments)]
-    fn try_new(
-        x: Vec<f64>,
-        df: u32,
-        theta: f64,
-        eps: f64,
-        method: String,
-        boundary_knots: (f64, f64),
-        intercept: bool,
-        penalty: bool,
-    ) -> PyResult<Self> {
-        validate_finite_slice(&x, "x")?;
-        validate_boundary_knots(boundary_knots)?;
-        validate_scalar(theta, "theta")?;
-        if theta < 0.0 {
-            return Err(value_error("theta must be non-negative"));
-        }
-        validate_positive_scalar(eps, "eps")?;
-        if df == 0 {
-            return Err(value_error("df must be positive"));
-        }
-        let nterm = df
-            .checked_add(1)
-            .ok_or_else(|| value_error("df is too large"))?;
-        if x.len() < nterm as usize {
-            return Err(value_error(format!(
-                "x length ({}) must be at least df + 1 ({nterm})",
-                x.len()
-            )));
-        }
-        let degree = 3;
-        Ok(PSpline {
-            x,
-            df,
-            theta,
-            nterm,
-            degree,
-            eps,
-            method,
-            boundary_knots,
-            intercept,
-            penalty,
-            coefficients: None,
-            fitted: false,
-        })
-    }
-
-    fn validate(&self) -> PyResult<()> {
-        validate_finite_slice(&self.x, "x")?;
-        validate_boundary_knots(self.boundary_knots)?;
-        validate_scalar(self.theta, "theta")?;
-        if self.theta < 0.0 {
-            return Err(value_error("theta must be non-negative"));
-        }
-        validate_positive_scalar(self.eps, "eps")?;
-        if self.df == 0 {
-            return Err(value_error("df must be positive"));
-        }
-        let expected_nterm = self
-            .df
-            .checked_add(1)
-            .ok_or_else(|| value_error("df is too large"))?;
-        if self.nterm != expected_nterm {
-            return Err(value_error("nterm must equal df + 1"));
-        }
-        if self.x.len() < self.nterm as usize {
-            return Err(value_error(format!(
-                "x length ({}) must be at least df + 1 ({})",
-                self.x.len(),
-                self.nterm
-            )));
-        }
-        Ok(())
-    }
-
-    fn create_basis(&self) -> Vec<Vec<f64>> {
-        let n = self.x.len();
-        let mut basis = vec![vec![0.0; self.nterm as usize]; n];
-        for (i, x_val) in self.x.iter().enumerate() {
-            for j in 0..self.nterm {
-                basis[i][j as usize] = self.basis_function(*x_val, j);
-            }
-        }
-        basis
-    }
-    fn basis_function(&self, x: f64, j: u32) -> f64 {
-        let mut b = 0.0;
-        if self.intercept {
-            b += 1.0;
-        }
-        if j == 0 {
-            return b;
-        }
-        let (a, b) = self.boundary_knots;
-        let t = (x - a) / (b - a);
-        let knots = self.knots();
-        let mut d = vec![0.0; self.degree as usize + 1];
-        d[0] = 1.0;
-        for k in 1..=self.degree {
-            for i in 0..=(self.degree - k) {
-                let i_usize = i as usize;
-                let k_usize = k as usize;
-                let denom = knots[i_usize + k_usize] - knots[i_usize];
-                let w = if denom.abs() > 1e-10 {
-                    ((t - knots[i_usize]) / denom).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                d[i_usize] = (1.0 - w) * d[i_usize] + w * d[i_usize + 1];
-            }
-        }
-        b * d[0]
-    }
-    fn knots(&self) -> Vec<f64> {
-        let (a, b) = self.boundary_knots;
-        let mut knots = vec![0.0; self.nterm as usize + self.degree as usize + 1];
-        for i in 0..self.degree + 1 {
-            knots[i as usize] = a;
-            knots[(self.nterm + self.degree - i) as usize] = b;
-        }
-        knots
-    }
-    fn apply_penalty(&self, basis: Vec<Vec<f64>>) -> Result<Vec<Vec<f64>>, PSplineError> {
-        if !self.penalty {
-            return Ok(basis);
-        }
-
-        let n = self.nterm as usize;
-        let penalty_basis = self.compute_penalty_basis();
-
-        let mut penalty = vec![vec![0.0; n]; n];
-        for i in 0..self.nterm {
-            for j in 0..self.nterm {
-                penalty[i as usize][j as usize] = self.penalty_function(i, j, &penalty_basis)?;
-            }
-        }
-
-        let basis_arr = Array2::from_shape_fn((n, n), |(i, j)| basis[i][j]);
-        let penalty_arr = Array2::from_shape_fn((n, n), |(i, j)| penalty[i][j]);
-        let result_arr = &basis_arr - self.theta * penalty_arr.dot(&basis_arr);
-
-        let mut result = vec![vec![0.0; n]; n];
-        for i in 0..n {
-            for j in 0..n {
-                result[i][j] = result_arr[[i, j]];
-            }
-        }
-        Ok(result)
-    }
-
-    fn compute_penalty_basis(&self) -> Vec<Vec<f64>> {
-        let n = self.nterm as usize;
-        let mut basis = vec![vec![0.0; n]; n];
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                basis[k as usize][l as usize] = self.basis_function(self.x[k as usize], l);
-            }
-        }
-        basis
-    }
-
-    fn penalty_function(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> Result<f64, PSplineError> {
-        match self.method.as_str() {
-            "GCV" => Ok(self.gcv(i, j, basis)),
-            "UBRE" => Ok(self.ubre(i, j, basis)),
-            "REML" => Ok(self.reml(i, j, basis)),
-            "AIC" => Ok(self.aic(i, j, basis)),
-            "BIC" => Ok(self.bic(i, j, basis)),
-            _ => Err(PSplineError::UnsupportedMethod(self.method.clone())),
-        }
-    }
-
-    fn compute_df_trace(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> (f64, f64) {
-        let mut df = 0.0;
-        let mut trace = 0.0;
-        for k in 0..self.nterm {
-            for l in 0..self.nterm {
-                df += basis[k as usize][i as usize]
-                    * basis[l as usize][j as usize]
-                    * basis[k as usize][l as usize];
-                trace += basis[k as usize][i as usize]
-                    * basis[k as usize][l as usize]
-                    * basis[l as usize][j as usize];
-            }
-        }
-        (df, trace)
-    }
-
-    fn reml(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
-        if i == j {
-            return self.nterm as f64;
-        }
-        let (df, trace) = self.compute_df_trace(i, j, basis);
-        let n = self.nterm as f64;
-        let edf = trace / n;
-        df / (1.0 - edf).powi(2) + (n - edf).ln()
-    }
-
-    fn aic(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
-        if i == j {
-            return self.nterm as f64;
-        }
-        let (df, trace) = self.compute_df_trace(i, j, basis);
-        let n = self.nterm as f64;
-        let edf = trace / n;
-        df / (1.0 - edf).powi(2) + 2.0 * edf
-    }
-
-    fn bic(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
-        if i == j {
-            return self.nterm as f64;
-        }
-        let (df, trace) = self.compute_df_trace(i, j, basis);
-        let n = self.nterm as f64;
-        let edf = trace / n;
-        df / (1.0 - edf).powi(2) + n.ln() * edf
-    }
-
-    fn gcv(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
-        if i == j {
-            return self.nterm as f64;
-        }
-        let (df, trace) = self.compute_df_trace(i, j, basis);
-        df / (1.0 - trace / self.nterm as f64).powi(2)
-    }
-
-    fn ubre(&self, i: u32, j: u32, basis: &[Vec<f64>]) -> f64 {
-        if i == j {
-            return self.nterm as f64;
-        }
-        let (df, trace) = self.compute_df_trace(i, j, basis);
-        df / (1.0 - trace / self.nterm as f64).powi(2)
-    }
-    fn optimize_fit(&self, basis: Vec<Vec<f64>>) -> Result<Vec<f64>, PSplineError> {
-        let mut a = vec![vec![0.0; self.nterm as usize]; self.nterm as usize];
-        let mut b = vec![0.0; self.nterm as usize];
-        for i in 0..self.nterm {
-            for j in 0..self.nterm {
-                for k in 0..self.nterm {
-                    a[i as usize][j as usize] +=
-                        basis[k as usize][i as usize] * basis[k as usize][j as usize];
-                }
-            }
-        }
-        for i in 0..self.nterm {
-            for j in 0..self.nterm {
-                b[i as usize] += basis[j as usize][i as usize];
-            }
-        }
-        self.solve(a, b)
-    }
-    fn solve(&self, a: Vec<Vec<f64>>, b: Vec<f64>) -> Result<Vec<f64>, PSplineError> {
-        let n = a.len();
-        let a_array =
-            Array2::from_shape_vec((n, n), a.into_iter().flatten().collect()).map_err(|e| {
-                PSplineError::MatrixCreationError {
-                    rows: n,
-                    cols: n,
-                    reason: e.to_string(),
-                }
-            })?;
-        let b_array = Array1::from_vec(b);
-        let x = lu_solve(&a_array, &b_array).ok_or(PSplineError::LinearSolveError)?;
-        Ok(x.to_vec())
-    }
+    Ok(PsplineBasis {
+        basis,
+        knots,
+        nterm,
+        degree,
+        boundary_knots,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn valid_pspline() -> PSpline {
-        PSpline::new(
-            vec![1.0, 2.0, 3.0, 4.0],
-            1,
-            0.1,
-            1e-6,
-            "GCV".to_string(),
-            (0.0, 5.0),
-            false,
-            false,
-        )
-        .unwrap()
-    }
-
     #[test]
-    fn pspline_rejects_malformed_constructor_inputs() {
-        assert!(
-            PSpline::new(
-                vec![1.0, f64::NAN],
-                1,
-                0.1,
-                1e-6,
-                "GCV".to_string(),
-                (0.0, 5.0),
-                false,
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            PSpline::new(
-                vec![1.0, 2.0],
-                1,
-                0.1,
-                1e-6,
-                "GCV".to_string(),
-                (5.0, 5.0),
-                false,
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            PSpline::new(
-                vec![1.0, 2.0],
-                0,
-                0.1,
-                1e-6,
-                "GCV".to_string(),
-                (0.0, 5.0),
-                false,
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            PSpline::new(
-                vec![1.0, 2.0],
-                1,
-                -0.1,
-                1e-6,
-                "GCV".to_string(),
-                (0.0, 5.0),
-                false,
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            PSpline::new(
-                vec![1.0, 2.0],
-                1,
-                0.1,
-                0.0,
-                "GCV".to_string(),
-                (0.0, 5.0),
-                false,
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            PSpline::new(
-                vec![1.0, 2.0],
-                3,
-                0.1,
-                1e-6,
-                "GCV".to_string(),
-                (0.0, 5.0),
-                false,
-                false,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn pspline_builder_rejects_bad_auto_boundary() {
-        let builder = PSplineBuilder::new(vec![1.0, 1.0]);
-
-        assert!(builder.build().is_err());
-    }
-
-    #[test]
-    fn pspline_predict_rejects_non_finite_new_x() {
-        let mut spline = valid_pspline();
-        spline.coefficients = Some(vec![1.0; spline.nterm as usize]);
-        spline.fitted = true;
-        let err = spline
-            .predict(vec![1.0, f64::INFINITY])
-            .expect_err("non-finite prediction input should be rejected");
-
-        assert!(err.to_string().contains("new_x contains non-finite"));
-    }
-
-    #[test]
-    fn r_pspline_basis_matches_boundary_and_extrapolation_rows() {
-        let (basis, knots) = pspline_basis_core(&[0.0, 1.0, 5.0, 6.0], 8, 3, (1.0, 5.0)).unwrap();
-
-        assert_eq!(basis.len(), 4);
-        assert_eq!(basis[0].len(), 11);
-        assert_eq!(knots.len(), 15);
+    fn matches_r_at_boundary_and_extrapolation_rows() {
+        let out = pspline_basis(&[0.0, 1.0, 5.0, 6.0], 8, 3, (1.0, 5.0)).unwrap();
+        assert_eq!(out.basis.len(), 4);
+        assert_eq!(out.basis[0].len(), 11);
+        assert_eq!(out.knots.len(), 15);
         let expected_left = [7.0 / 6.0, 2.0 / 3.0, -5.0 / 6.0];
-        for (actual, expected) in basis[0][..3].iter().zip(expected_left) {
+        for (actual, expected) in out.basis[0][..3].iter().zip(expected_left) {
             assert!((actual - expected).abs() < 1e-12);
         }
         let expected_right = [-5.0 / 6.0, 2.0 / 3.0, 7.0 / 6.0];
-        for (actual, expected) in basis[3][8..].iter().zip(expected_right) {
+        for (actual, expected) in out.basis[3][8..].iter().zip(expected_right) {
             assert!((actual - expected).abs() < 1e-12);
+        }
+        // At the boundary knots the basis is the B-spline value itself.
+        assert!((out.basis[1][0] - 1.0 / 6.0).abs() < 1e-12);
+        assert!((out.basis[1][1] - 2.0 / 3.0).abs() < 1e-12);
+        assert!((out.basis[1][2] - 1.0 / 6.0).abs() < 1e-12);
+        for row in &out.basis[1..3] {
+            assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-12);
         }
     }
 
     #[test]
-    fn r_pspline_basis_preserves_missing_and_constant_rows() {
-        let (basis, knots) = pspline_basis_core(&[2.0, f64::NAN, 2.0], 5, 3, (2.0, 2.0)).unwrap();
+    fn preserves_missing_and_constant_rows() {
+        let out = pspline_basis(&[2.0, f64::NAN, 2.0], 5, 3, (2.0, 2.0)).unwrap();
+        assert_eq!(out.knots, vec![2.0; 12]);
+        assert_eq!(out.basis[0], vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert!(out.basis[1].iter().all(|value| value.is_nan()));
+        assert_eq!(out.basis[2], out.basis[0]);
 
-        assert_eq!(knots, vec![2.0; 12]);
-        assert_eq!(basis[0], vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
-        assert!(basis[1].iter().all(|value| value.is_nan()));
-        assert_eq!(basis[2], basis[0]);
+        let out = pspline_basis(&[1.5, f64::NAN, 4.0], 4, 2, (1.0, 5.0)).unwrap();
+        assert!(out.basis[1].iter().all(|value| value.is_nan()));
+        assert!((out.basis[0].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((out.basis[2].iter().sum::<f64>() - 1.0).abs() < 1e-12);
     }
 
     #[test]
-    fn r_pspline_basis_rejects_invalid_inputs() {
-        assert!(pspline_basis_core(&[1.0], 2, 3, (0.0, 1.0)).is_err());
-        assert!(pspline_basis_core(&[1.0], 3, 0, (0.0, 1.0)).is_err());
-        assert!(pspline_basis_core(&[f64::INFINITY], 3, 1, (0.0, 1.0)).is_err());
-        assert!(pspline_basis_core(&[1.0], 3, 1, (1.0, 0.0)).is_err());
-        assert!(pspline_basis_core(&[2.0], 3, 1, (1.0, 1.0)).is_err());
+    fn rejects_invalid_inputs() {
+        assert!(pspline_basis(&[1.0], 2, 3, (0.0, 1.0)).is_err());
+        assert!(pspline_basis(&[1.0], 3, 0, (0.0, 1.0)).is_err());
+        assert!(pspline_basis(&[f64::INFINITY], 3, 1, (0.0, 1.0)).is_err());
+        assert!(pspline_basis(&[1.0], 3, 1, (1.0, 0.0)).is_err());
+        assert!(pspline_basis(&[2.0], 3, 1, (1.0, 1.0)).is_err());
     }
 }

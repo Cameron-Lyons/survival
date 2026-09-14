@@ -10,261 +10,143 @@
 //! the shortest decimal that a correctly rounded parser reads back as the
 //! identical double, so the rates are bit-exact copies of R's.
 //!
-//! Type codes follow `?ratetable`: 1 = factor, 2 = continuous (age in
-//! days), 3 = date, 4 = the calendar-year date axis of the US census tables.
 //! R 3.8 tables carry no `dimid` attribute; as in R, `names(dimnames)` is
 //! used instead.
 
+use super::ratetable::{DimType, RateTable};
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use std::sync::OnceLock;
 
 const SURVEXP_US_TSV: &str = include_str!("data/survexp_us.tsv");
 const SURVEXP_USR_TSV: &str = include_str!("data/survexp_usr.tsv");
 const SURVEXP_MN_TSV: &str = include_str!("data/survexp_mn.tsv");
 
-/// An R `ratetable` array with its attributes, exactly as exported from R.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RawRateTable {
-    /// R name of the table, e.g. `survexp.us`.
-    pub name: &'static str,
-    /// `dim(x)`.
-    pub dims: Vec<usize>,
-    /// `names(dimnames(x))` (R's `dimid`), one per dimension.
-    pub dimid: Vec<String>,
-    /// `dimnames(x)`, one label vector per dimension.
-    pub dimnames: Vec<Vec<String>>,
-    /// `attr(x, "cutpoints")`: lower bounds per dimension, `None` for factor
-    /// dimensions (R `NULL`). Dates are days since 1970-01-01.
-    pub cutpoints: Vec<Option<Vec<f64>>>,
-    /// `attr(x, "type")`: R type code (1-4) per dimension.
-    pub types: Vec<u8>,
-    /// The daily hazard rates in column-major order, `dims.iter().product()`
-    /// long.
-    pub rates: Vec<f64>,
-}
+/// Parse one of the embedded TSV rate tables.
+fn parse(name: &str, text: &str) -> SurvivalResult<RateTable> {
+    let err = |message: String| SurvivalError::invalid_input(format!("{name}: {message}"));
+    let mut dims = Vec::new();
+    let mut dimid = Vec::new();
+    let mut types = Vec::new();
+    let mut dimnames: Vec<(String, Vec<String>)> = Vec::new();
+    let mut cutpoints: Vec<(String, Option<Vec<f64>>)> = Vec::new();
+    let mut rates = Vec::new();
 
-impl RawRateTable {
-    fn parse(name: &'static str, text: &str) -> SurvivalResult<Self> {
-        let err = |message: String| SurvivalError::invalid_input(format!("{name}: {message}"));
-        let mut dims = Vec::new();
-        let mut dimid = Vec::new();
-        let mut types = Vec::new();
-        let mut dimnames: Vec<(String, Vec<String>)> = Vec::new();
-        let mut cutpoints: Vec<(String, Option<Vec<f64>>)> = Vec::new();
-        let mut rates = Vec::new();
-
-        for (line_no, line) in text.lines().enumerate() {
-            let mut fields = line.split('\t');
-            let key = fields.next().unwrap_or_default();
-            let line_err = |message: String| err(format!("line {}: {message}", line_no + 1));
-            match key {
-                "dim" => {
-                    dims = fields
-                        .map(|f| f.parse::<usize>().map_err(|e| line_err(e.to_string())))
-                        .collect::<SurvivalResult<_>>()?;
-                    rates.reserve(dims.iter().product());
-                }
-                "dimid" => dimid = fields.map(str::to_string).collect(),
-                "type" => {
-                    types = fields
-                        .map(|f| f.parse::<u8>().map_err(|e| line_err(e.to_string())))
-                        .collect::<SurvivalResult<_>>()?;
-                }
-                "dimnames" => {
-                    let id = fields.next().unwrap_or_default().to_string();
-                    dimnames.push((id, fields.map(str::to_string).collect()));
-                }
-                "cutpoints" => {
-                    let id = fields.next().unwrap_or_default().to_string();
-                    let values: Vec<f64> = fields
-                        .map(|f| f.parse::<f64>().map_err(|e| line_err(e.to_string())))
-                        .collect::<SurvivalResult<_>>()?;
-                    cutpoints.push((id, (!values.is_empty()).then_some(values)));
-                }
-                "rate" => {
-                    let value = fields
-                        .next()
-                        .ok_or_else(|| line_err("missing rate".to_string()))?
-                        .parse::<f64>()
-                        .map_err(|e| line_err(e.to_string()))?;
-                    rates.push(value);
-                }
-                other => return Err(line_err(format!("unknown key {other:?}"))),
+    for (line_no, line) in text.lines().enumerate() {
+        let mut fields = line.split('\t');
+        let key = fields.next().unwrap_or_default();
+        let line_err = |message: String| err(format!("line {}: {message}", line_no + 1));
+        match key {
+            "dim" => {
+                dims = fields
+                    .map(|f| f.parse::<usize>().map_err(|e| line_err(e.to_string())))
+                    .collect::<SurvivalResult<_>>()?;
+                rates.reserve(dims.iter().product());
             }
-        }
-
-        let ndim = dims.len();
-        if ndim == 0 {
-            return Err(err("missing dim line".to_string()));
-        }
-        if dimid.len() != ndim || types.len() != ndim {
-            return Err(err("dimid/type length does not match dim".to_string()));
-        }
-        if types.iter().any(|&t| !(1..=4).contains(&t)) {
-            return Err(err("type codes must be 1, 2, 3 or 4".to_string()));
-        }
-        let ordered = |entries: Vec<(String, Option<Vec<f64>>)>| -> SurvivalResult<Vec<_>> {
-            if entries.len() != ndim {
-                return Err(err("one cutpoints line per dimension required".to_string()));
+            "dimid" => dimid = fields.map(str::to_string).collect(),
+            "type" => {
+                types = fields
+                    .map(|f| {
+                        f.parse::<i64>()
+                            .ok()
+                            .and_then(DimType::from_code)
+                            .ok_or_else(|| line_err("type codes must be 1, 2, 3 or 4".into()))
+                    })
+                    .collect::<SurvivalResult<_>>()?;
             }
-            dimid
-                .iter()
-                .map(|id| {
-                    entries
-                        .iter()
-                        .find(|(name, _)| name == id)
-                        .map(|(_, values)| values.clone())
-                        .ok_or_else(|| err(format!("missing cutpoints for dimension {id:?}")))
-                })
-                .collect()
-        };
-        let dimnames: Vec<Vec<String>> = dimid
+            "dimnames" => {
+                let id = fields.next().unwrap_or_default().to_string();
+                dimnames.push((id, fields.map(str::to_string).collect()));
+            }
+            "cutpoints" => {
+                let id = fields.next().unwrap_or_default().to_string();
+                let values: Vec<f64> = fields
+                    .map(|f| f.parse::<f64>().map_err(|e| line_err(e.to_string())))
+                    .collect::<SurvivalResult<_>>()?;
+                cutpoints.push((id, (!values.is_empty()).then_some(values)));
+            }
+            "rate" => {
+                let value = fields
+                    .next()
+                    .ok_or_else(|| line_err("missing rate".to_string()))?
+                    .parse::<f64>()
+                    .map_err(|e| line_err(e.to_string()))?;
+                rates.push(value);
+            }
+            other => return Err(line_err(format!("unknown key {other:?}"))),
+        }
+    }
+
+    // Reorder the per-dimension lines to the `dimid` order.
+    fn by_dimid<T: Clone>(
+        dimid: &[String],
+        entries: &[(String, T)],
+        what: &str,
+        err: &impl Fn(String) -> SurvivalError,
+    ) -> SurvivalResult<Vec<T>> {
+        if entries.len() != dimid.len() {
+            return Err(err(format!("one {what} line per dimension required")));
+        }
+        dimid
             .iter()
             .map(|id| {
-                dimnames
+                entries
                     .iter()
                     .find(|(name, _)| name == id)
-                    .map(|(_, labels)| labels.clone())
-                    .ok_or_else(|| err(format!("missing dimnames for dimension {id:?}")))
+                    .map(|(_, value)| value.clone())
+                    .ok_or_else(|| err(format!("missing {what} for dimension {id:?}")))
             })
-            .collect::<SurvivalResult<_>>()?;
-        let cutpoints = ordered(cutpoints)?;
-
-        for (d, (&n, ty)) in dims.iter().zip(&types).enumerate() {
-            if dimnames[d].len() != n {
-                return Err(err(format!(
-                    "dimnames[{d}] has {} labels, dim is {n}",
-                    dimnames[d].len()
-                )));
-            }
-            match (&cutpoints[d], *ty) {
-                (None, 1) => {}
-                (Some(values), 2..=4) if values.len() == n => {
-                    if values.windows(2).any(|w| w[1] <= w[0]) {
-                        return Err(err(format!("cutpoints[{d}] must be strictly increasing")));
-                    }
-                }
-                _ => {
-                    return Err(err(format!(
-                        "cutpoints[{d}] do not match type {ty} with dim {n}"
-                    )));
-                }
-            }
-        }
-        let expected: usize = dims.iter().product();
-        if rates.len() != expected {
-            return Err(err(format!(
-                "expected {expected} rates, found {}",
-                rates.len()
-            )));
-        }
-        if rates.iter().any(|r| !r.is_finite() || *r < 0.0) {
-            return Err(err("rates must be finite and non-negative".to_string()));
-        }
-
-        Ok(Self {
-            name,
-            dims,
-            dimid,
-            dimnames,
-            cutpoints,
-            types,
-            rates,
-        })
+            .collect()
     }
-
-    /// Zero-based position of `label` along dimension `dim` (R's
-    /// `match(label, dimnames(x)[[dim]])`).
-    pub fn level(&self, dim: usize, label: &str) -> Option<usize> {
-        self.dimnames.get(dim)?.iter().position(|l| l == label)
-    }
-
-    /// The rate at a zero-based multi-index, e.g. `[50, 0, 60]` for
-    /// `survexp.us["50", "male", "2000"]`.
-    pub fn rate(&self, index: &[usize]) -> Option<f64> {
-        if index.len() != self.dims.len() {
-            return None;
-        }
-        let mut offset = 0;
-        let mut stride = 1;
-        for (&i, &n) in index.iter().zip(&self.dims) {
-            if i >= n {
-                return None;
-            }
-            offset += i * stride;
-            stride *= n;
-        }
-        self.rates.get(offset).copied()
-    }
-
-    /// Dictionary keyed by R's attribute names: `name`, `dim`, `dimid`,
-    /// `dimnames`, `cutpoints` (`None` for factor dimensions), `type`, and
-    /// `rates` (column-major).
-    fn to_pydict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
-        let dict = PyDict::new(py);
-        dict.set_item("name", self.name)?;
-        dict.set_item("dim", &self.dims)?;
-        dict.set_item("dimid", &self.dimid)?;
-        dict.set_item("dimnames", &self.dimnames)?;
-        dict.set_item("cutpoints", &self.cutpoints)?;
-        // `Vec<u8>` would become Python `bytes`; R's type codes are integers.
-        let types: Vec<i32> = self.types.iter().map(|&t| i32::from(t)).collect();
-        dict.set_item("type", types)?;
-        dict.set_item("rates", &self.rates)?;
-        Ok(dict.into())
-    }
+    let dimnames = by_dimid(&dimid, &dimnames, "dimnames", &err)?;
+    let cutpoints = by_dimid(&dimid, &cutpoints, "cutpoints", &err)?;
+    RateTable::try_new(dims, dimid, dimnames, cutpoints, types, rates)
+        .map_err(|e| err(e.to_string()))
 }
 
-fn load(
-    cell: &'static OnceLock<RawRateTable>,
-    name: &'static str,
-    text: &str,
-) -> &'static RawRateTable {
+fn load(cell: &'static OnceLock<RateTable>, name: &'static str, text: &str) -> &'static RateTable {
     cell.get_or_init(|| {
-        RawRateTable::parse(name, text)
-            .unwrap_or_else(|e| panic!("embedded rate table is malformed: {e}"))
+        parse(name, text).unwrap_or_else(|e| panic!("embedded rate table is malformed: {e}"))
     })
 }
 
 /// R's `survexp.us`: US total population daily hazards by single year of
 /// age (0-109), sex, and calendar year 1940-2020.
-pub fn survexp_us_raw() -> &'static RawRateTable {
-    static TABLE: OnceLock<RawRateTable> = OnceLock::new();
+pub fn survexp_us_table() -> &'static RateTable {
+    static TABLE: OnceLock<RateTable> = OnceLock::new();
     load(&TABLE, "survexp.us", SURVEXP_US_TSV)
 }
 
 /// R's `survexp.usr`: US daily hazards by age, sex, race (white/black), and
 /// calendar year 1940-2020.
-pub fn survexp_usr_raw() -> &'static RawRateTable {
-    static TABLE: OnceLock<RawRateTable> = OnceLock::new();
+pub fn survexp_usr_table() -> &'static RateTable {
+    static TABLE: OnceLock<RateTable> = OnceLock::new();
     load(&TABLE, "survexp.usr", SURVEXP_USR_TSV)
 }
 
 /// R's `survexp.mn`: Minnesota daily hazards by age, sex, and calendar year
 /// 1970-2020.
-pub fn survexp_mn_raw() -> &'static RawRateTable {
-    static TABLE: OnceLock<RawRateTable> = OnceLock::new();
+pub fn survexp_mn_table() -> &'static RateTable {
+    static TABLE: OnceLock<RateTable> = OnceLock::new();
     load(&TABLE, "survexp.mn", SURVEXP_MN_TSV)
 }
 
-/// R's `survexp.us` as a dictionary of its array and attributes.
+/// R's `survexp.us` rate table.
 #[pyfunction]
-pub fn survexp_us_table(py: Python<'_>) -> PyResult<Py<PyDict>> {
-    survexp_us_raw().to_pydict(py)
+pub fn survexp_us() -> RateTable {
+    survexp_us_table().clone()
 }
 
-/// R's `survexp.usr` as a dictionary of its array and attributes.
+/// R's `survexp.usr` rate table.
 #[pyfunction]
-pub fn survexp_usr_table(py: Python<'_>) -> PyResult<Py<PyDict>> {
-    survexp_usr_raw().to_pydict(py)
+pub fn survexp_usr() -> RateTable {
+    survexp_usr_table().clone()
 }
 
-/// R's `survexp.mn` as a dictionary of its array and attributes.
+/// R's `survexp.mn` rate table.
 #[pyfunction]
-pub fn survexp_mn_table(py: Python<'_>) -> PyResult<Py<PyDict>> {
-    survexp_mn_raw().to_pydict(py)
+pub fn survexp_mn() -> RateTable {
+    survexp_mn_table().clone()
 }
 
 #[cfg(test)]
@@ -285,20 +167,20 @@ mod tests {
         })
     }
 
-    fn lookup(table: &RawRateTable, labels: &[&str]) -> f64 {
+    fn lookup(table: &RateTable, labels: &[&str]) -> f64 {
         let index: Vec<usize> = labels
             .iter()
             .enumerate()
             .map(|(d, label)| {
                 table
                     .level(d, label)
-                    .unwrap_or_else(|| panic!("{}: no level {label:?} on axis {d}", table.name))
+                    .unwrap_or_else(|| panic!("no level {label:?} on axis {d}"))
             })
             .collect();
         table.rate(&index).unwrap()
     }
 
-    fn check_common_shape(table: &RawRateTable, years: (&str, &str), n_years: usize) {
+    fn check_common_shape(table: &RateTable, years: (&str, &str), n_years: usize) {
         assert_eq!(table.dims[0], 110);
         assert_eq!(table.dims[1], 2);
         assert_eq!(*table.dims.last().unwrap(), n_years);
@@ -306,9 +188,9 @@ mod tests {
         assert_eq!(table.dimid[0], "age");
         assert_eq!(table.dimid[1], "sex");
         assert_eq!(table.dimid.last().unwrap(), "year");
-        assert_eq!(table.types[0], 2);
-        assert_eq!(table.types[1], 1);
-        assert_eq!(*table.types.last().unwrap(), 4);
+        assert_eq!(table.types[0], DimType::Continuous);
+        assert_eq!(table.types[1], DimType::Factor);
+        assert_eq!(*table.types.last().unwrap(), DimType::UsYear);
         assert_eq!(table.dimnames[1], ["male", "female"]);
         assert_eq!(table.dimnames[0][0], "0");
         assert_eq!(table.dimnames[0][109], "109");
@@ -331,7 +213,7 @@ mod tests {
 
     #[test]
     fn survexp_us_matches_r() {
-        let table = survexp_us_raw();
+        let table = survexp_us_table();
         assert_eq!(table.dims, [110, 2, 81]);
         check_common_shape(table, ("1940", "2020"), 81);
         // 1940-01-01 as days since 1970-01-01.
@@ -351,14 +233,23 @@ mod tests {
         );
         assert_eq!(table.rate(&[110, 0, 0]), None);
         assert_eq!(table.rate(&[0, 0]), None);
+        assert_eq!(survexp_us(), *table);
     }
 
     #[test]
     fn survexp_usr_matches_r() {
-        let table = survexp_usr_raw();
+        let table = survexp_usr_table();
         assert_eq!(table.dims, [110, 2, 2, 81]);
         assert_eq!(table.dimid, ["age", "sex", "race", "year"]);
-        assert_eq!(table.types, [2, 1, 1, 4]);
+        assert_eq!(
+            table.types,
+            [
+                DimType::Continuous,
+                DimType::Factor,
+                DimType::Factor,
+                DimType::UsYear
+            ]
+        );
         assert_eq!(table.dimnames[2], ["white", "black"]);
         assert_eq!(table.cutpoints[2], None);
         check_common_shape(table, ("1940", "2020"), 81);
@@ -373,11 +264,12 @@ mod tests {
             1_345_443_196,
             "rates are not bit-exact"
         );
+        assert_eq!(survexp_usr().dims, table.dims);
     }
 
     #[test]
     fn survexp_mn_matches_r() {
-        let table = survexp_mn_raw();
+        let table = survexp_mn_table();
         assert_eq!(table.dims, [110, 2, 51]);
         check_common_shape(table, ("1970", "2020"), 51);
         assert_eq!(table.cutpoints[2].as_ref().unwrap()[0], 0.0);
@@ -392,30 +284,32 @@ mod tests {
             3_951_088_110,
             "rates are not bit-exact"
         );
+        assert_eq!(survexp_mn().dims, table.dims);
     }
 
     #[test]
     fn loaders_are_cached() {
-        assert!(std::ptr::eq(survexp_us_raw(), survexp_us_raw()));
+        assert!(std::ptr::eq(survexp_us_table(), survexp_us_table()));
     }
 
     #[test]
     fn parse_rejects_inconsistent_tables() {
         let good = "dim\t2\t2\ndimid\tage\tsex\ntype\t2\t1\ndimnames\tage\t0\t1\ndimnames\tsex\tmale\tfemale\ncutpoints\tage\t0\t365.25\ncutpoints\tsex\nrate\t1\nrate\t2\nrate\t3\nrate\t4\n";
-        let table = RawRateTable::parse("toy", good).unwrap();
+        let table = parse("toy", good).unwrap();
         assert_eq!(table.rate(&[1, 0]), Some(2.0));
         assert_eq!(table.rate(&[0, 1]), Some(3.0));
         assert_eq!(table.level(1, "female"), Some(1));
-        assert_eq!(table.level(2, "female"), None);
 
         let too_few_rates = good.trim_end_matches("rate\t4\n");
-        assert!(RawRateTable::parse("toy", too_few_rates).is_err());
+        assert!(parse("toy", too_few_rates).is_err());
         let factor_with_cutpoints = good.replace("cutpoints\tsex\n", "cutpoints\tsex\t0\t1\n");
-        assert!(RawRateTable::parse("toy", &factor_with_cutpoints).is_err());
+        assert!(parse("toy", &factor_with_cutpoints).is_err());
         let bad_type = good.replace("type\t2\t1", "type\t2\t5");
-        assert!(RawRateTable::parse("toy", &bad_type).is_err());
+        assert!(parse("toy", &bad_type).is_err());
         let decreasing = good.replace("cutpoints\tage\t0\t365.25", "cutpoints\tage\t365.25\t0");
-        assert!(RawRateTable::parse("toy", &decreasing).is_err());
-        assert!(RawRateTable::parse("toy", "").is_err());
+        assert!(parse("toy", &decreasing).is_err());
+        let missing_cutpoints = good.replace("cutpoints\tsex\n", "");
+        assert!(parse("toy", &missing_cutpoints).is_err());
+        assert!(parse("toy", "").is_err());
     }
 }

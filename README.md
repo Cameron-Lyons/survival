@@ -300,37 +300,39 @@ case weights, factors and interactions, clustered influence estimates, tapering,
 and retained model, design, and response data. The risk-set sweep and linear
 algebra are implemented in Rust.
 
-### Penalized Splines (P-splines)
+### P-spline and natural spline bases
 
 ```python
 from survival import core
 
 x = [0.1 * i for i in range(100)]
-pspline = core.PSpline(
-    x=x,
-    df=10,
-    theta=1.0,
-    eps=1e-6,
-    method="GCV",
-    boundary_knots=(0.0, 10.0),
-    intercept=True,
-    penalty=True,
-)
-pspline.fit()
+# The B-spline basis of R's pspline(x, nterm = 10, degree = 3); the
+# difference penalty is applied by the penalised Cox fit.
+basis = core.pspline_basis(x, 10, 3, (0.0, 10.0))
+print(len(basis.basis[0]), basis.knots[:4])
+
+# R's nsk(): a natural spline whose coefficients are the values at the knots.
+spline = core.nsk(x, df=4)
+print(spline.n_cols, spline.knots, spline.boundary_knots)
 ```
 
-### Concordance Index
+### Concordance
 
 ```python
 from survival import core
 
-time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-weights = [1.0, 1.0, 1.0, 1.0, 1.0]
-indices = [0, 1, 2, 3, 4]
-ntree = 5
+time = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]
+status = [1, 1, 0, 1, 1, 1, 0, 1]
+risk = [0.5, 0.2, 0.5, 0.9, 0.2, 0.7, 0.1, 0.9]
 
-result = core.perform_concordance1_calculation(time_data, weights, indices, ntree)
-print(f"Concordance index: {result['concordance_index']}")
+# R's concordance(Surv(time, status) ~ risk, reverse = TRUE, influence = 1)
+fit = core.concordancefit(
+    core.SurvivalData(time, status),
+    core.CovariateMatrix(risk, len(risk), 1),
+    reverse=True,
+    influence=1,
+)
+print(fit.concordance[0], fit.count[0].concordant, fit.var[0][0], fit.dfbeta[0])
 ```
 
 ### Cox Regression with Frailty
@@ -689,35 +691,6 @@ from survival import regression, validation
 print(regression.__all__[:10])
 print(validation.__all__[:10])
 ```
-
-## PSpline Options
-
-The `PSpline` class provides penalized spline smoothing:
-
-**Constructor Parameters:**
-- `x`: Covariate vector (list of floats)
-- `df`: Degrees of freedom (integer)
-- `theta`: Roughness penalty (float)
-- `eps`: Accuracy for degrees of freedom (float)
-- `method`: Penalty method for tuning parameter selection. Supported methods:
-  - `"GCV"` - Generalized Cross-Validation
-  - `"UBRE"` - Unbiased Risk Estimator
-  - `"REML"` - Restricted Maximum Likelihood
-  - `"AIC"` - Akaike Information Criterion
-  - `"BIC"` - Bayesian Information Criterion
-- `boundary_knots`: Tuple of (min, max) for the spline basis
-- `intercept`: Whether to include an intercept in the basis
-- `penalty`: Whether or not to apply the penalty
-
-**Methods:**
-- `fit()`: Fit the spline model, returns coefficients
-- `predict(new_x)`: Predict values at new x points
-
-**Properties:**
-- `coefficients`: Fitted coefficients (None if not fitted)
-- `fitted`: Whether the model has been fitted
-- `df`: Degrees of freedom
-- `eps`: Convergence tolerance
 
 ## Development
 

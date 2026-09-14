@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use survival::nelson_aalen;
+use survival::surv_analysis::nelson_aalen;
 
 fuzz_target!(|data: &[u8]| {
     if data.len() < 12 {

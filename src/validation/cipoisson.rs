@@ -1,87 +1,130 @@
-use crate::internal::statistical::{gamma_inverse_cdf, normal_inverse_cdf};
-use pyo3::exceptions::PyValueError;
+//! Confidence limits for a Poisson rate.
+//!
+//! Port of R survival `R/cipoisson.R`: the exact (gamma quantile) and
+//! Anscombe limits, vectorised over `k`, `time` and `p` with R's recycling
+//! rule.  A non-positive `time` yields `NaN` limits (R returns `NA`; the
+//! `summary.pyears` code calls this with `time = 0`).
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::dist::{qgamma, qnorm};
 use pyo3::prelude::*;
 
-fn validate_cipoisson_inputs(k: f64, time: f64, p: f64) -> PyResult<()> {
-    if k.is_nan() || k < 0.0 {
-        return Err(PyValueError::new_err("k must be non-negative"));
-    }
-    if time.is_nan() || time <= 0.0 {
-        return Err(PyValueError::new_err("time must be positive"));
-    }
-    if !p.is_finite() || !(0.0..=1.0).contains(&p) {
-        return Err(PyValueError::new_err(
-            "p must be a confidence level between 0 and 1 inclusive",
-        ));
-    }
-    Ok(())
+/// Which approximation to use for the limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CipoissonMethod {
+    /// Gamma-quantile limits (`qgamma(p, k)`, `qgamma(1 - p, k + 1)`).
+    Exact,
+    /// Anscombe's square-root transformation.
+    Anscombe,
 }
 
-fn poisson_gamma_quantile(probability: f64, shape: f64) -> f64 {
-    if probability <= 0.0 {
-        0.0
-    } else if probability >= 1.0 || shape.is_infinite() {
-        f64::INFINITY
-    } else {
-        gamma_inverse_cdf(probability, shape)
+impl CipoissonMethod {
+    /// R's `match.arg`: any unambiguous prefix of `"exact"` or `"anscombe"`.
+    pub fn parse(name: &str) -> SurvivalResult<Self> {
+        match name {
+            value if !value.is_empty() && "exact".starts_with(value) => Ok(Self::Exact),
+            value if !value.is_empty() && "anscombe".starts_with(value) => Ok(Self::Anscombe),
+            _ => Err(SurvivalError::invalid_input(
+                "method must uniquely match 'exact' or 'anscombe'",
+            )),
+        }
     }
 }
 
-fn parse_cipoisson_method(method: &str) -> PyResult<&'static str> {
-    match method {
-        value if "exact".starts_with(value) && !value.is_empty() => Ok("exact"),
-        value if "anscombe".starts_with(value) && !value.is_empty() => Ok("anscombe"),
-        _ => Err(PyValueError::new_err(
-            "method must uniquely match 'exact' or 'anscombe'",
-        )),
+/// Lower and upper limits, one pair per recycled input.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct CipoissonResult {
+    pub lower: Vec<f64>,
+    pub upper: Vec<f64>,
+}
+
+fn recycled(values: &[f64], length: usize, name: &str) -> SurvivalResult<Vec<f64>> {
+    if values.is_empty() {
+        return Err(SurvivalError::invalid_input(format!(
+            "{name} must not be empty"
+        )));
     }
+    Ok((0..length).map(|i| values[i % values.len()]).collect())
 }
 
-#[pyfunction]
-#[pyo3(signature = (k, time=1.0, p=0.95))]
-pub fn cipoisson_exact(k: f64, time: f64, p: f64) -> PyResult<(f64, f64)> {
-    validate_cipoisson_inputs(k, time, p)?;
-    let alpha = (1.0 - p) / 2.0;
-
-    let lower_bound = if k == 0.0 {
-        0.0
-    } else {
-        poisson_gamma_quantile(alpha, k)
-    };
-
-    let upper_bound = poisson_gamma_quantile(1.0 - alpha, k + 1.0);
-
-    Ok((lower_bound / time, upper_bound / time))
-}
-
-#[pyfunction]
-#[pyo3(signature = (k, time=1.0, p=0.95))]
-pub fn cipoisson_anscombe(k: f64, time: f64, p: f64) -> PyResult<(f64, f64)> {
-    validate_cipoisson_inputs(k, time, p)?;
-    let alpha = (1.0 - p) / 2.0;
-    let z = normal_inverse_cdf(alpha);
-    let lower_bound = ((k - 1.0 / 8.0).sqrt() + z / 2.0).powi(2);
-    let upper_bound = ((k + 7.0 / 8.0).sqrt() - z / 2.0).powi(2);
-    Ok((lower_bound / time, upper_bound / time))
-}
-
-#[pyfunction]
-#[pyo3(
-    signature = (k, time=1.0, p=0.95, method="exact".to_string()),
-    text_signature = "(k, time=1.0, p=0.95, method='exact')"
-)]
-pub fn cipoisson(k: f64, time: f64, p: f64, method: String) -> PyResult<(f64, f64)> {
-    match parse_cipoisson_method(&method)? {
-        "exact" => cipoisson_exact(k, time, p),
-        "anscombe" => cipoisson_anscombe(k, time, p),
-        _ => unreachable!(),
+/// Confidence limits for Poisson counts `k` observed over `time`, at
+/// confidence level `p` (R `cipoisson(k, time, p, method)`).
+pub fn cipoisson(
+    k: &[f64],
+    time: &[f64],
+    p: &[f64],
+    method: CipoissonMethod,
+) -> SurvivalResult<CipoissonResult> {
+    let n = k.len().max(time.len()).max(p.len());
+    let k = recycled(k, n, "k")?;
+    let time = recycled(time, n, "time")?;
+    let p = recycled(p, n, "p")?;
+    for (index, &count) in k.iter().enumerate() {
+        if count.is_nan() || count < 0.0 {
+            return Err(SurvivalError::invalid_input(format!(
+                "k[{index}] must be a non-negative count"
+            )));
+        }
     }
+    for (index, &level) in p.iter().enumerate() {
+        if !level.is_finite() || !(0.0..=1.0).contains(&level) {
+            return Err(SurvivalError::invalid_input(format!(
+                "p[{index}] must be a confidence level between 0 and 1 inclusive"
+            )));
+        }
+    }
+    let mut lower = Vec::with_capacity(n);
+    let mut upper = Vec::with_capacity(n);
+    for i in 0..n {
+        let alpha = (1.0 - p[i]) / 2.0;
+        let (low, high) = match method {
+            CipoissonMethod::Exact => {
+                let low = if k[i] == 0.0 {
+                    0.0
+                } else {
+                    qgamma(alpha, k[i], 1.0, true, false)
+                };
+                (low, qgamma(1.0 - alpha, k[i] + 1.0, 1.0, true, false))
+            }
+            CipoissonMethod::Anscombe => {
+                let z = qnorm(alpha, true, false);
+                (
+                    ((k[i] - 1.0 / 8.0).sqrt() + z / 2.0).powi(2),
+                    ((k[i] + 7.0 / 8.0).sqrt() - z / 2.0).powi(2),
+                )
+            }
+        };
+        if time[i].is_nan() || time[i] <= 0.0 {
+            lower.push(f64::NAN);
+            upper.push(f64::NAN);
+        } else {
+            lower.push(low / time[i]);
+            upper.push(high / time[i]);
+        }
+    }
+    Ok(CipoissonResult { lower, upper })
+}
+
+/// Python entry point: `cipoisson(k, time=None, p=None, method="exact")`;
+/// `time` defaults to 1 and `p` to 0.95, and `k`, `time`, `p` recycle like
+/// R vectors.
+#[pyfunction(name = "cipoisson")]
+#[pyo3(signature = (k, time=None, p=None, method="exact"))]
+pub fn cipoisson_py(
+    k: Vec<f64>,
+    time: Option<Vec<f64>>,
+    p: Option<Vec<f64>>,
+    method: &str,
+) -> PyResult<CipoissonResult> {
+    let time = time.unwrap_or_else(|| vec![1.0]);
+    let p = p.unwrap_or_else(|| vec![0.95]);
+    Ok(cipoisson(&k, &time, &p, CipoissonMethod::parse(method)?)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::common::initialize_python;
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -91,79 +134,65 @@ mod tests {
     }
 
     #[test]
-    fn cipoisson_exact_matches_r_survival_reference() {
-        let (lower, upper) = cipoisson_exact(5.0, 10.0, 0.95).unwrap();
-        assert_close(lower, 0.1623486, 1e-6);
-        assert_close(upper, 1.1668332, 1e-6);
-
-        let (lower, upper) = cipoisson_exact(20.0, 4.0, 0.90).unwrap();
-        assert_close(lower, 3.313663, 1e-6);
-        assert_close(upper, 7.265505, 1e-6);
+    fn exact_limits_match_r() {
+        let result = cipoisson(&[5.0], &[10.0], &[0.95], CipoissonMethod::Exact).unwrap();
+        assert_close(result.lower[0], 0.1623486, 1e-6);
+        assert_close(result.upper[0], 1.1668332, 1e-6);
+        let result = cipoisson(&[20.0], &[4.0], &[0.90], CipoissonMethod::Exact).unwrap();
+        assert_close(result.lower[0], 3.313663, 1e-6);
+        assert_close(result.upper[0], 7.265505, 1e-6);
     }
 
     #[test]
-    fn cipoisson_anscombe_matches_r_survival_reference() {
-        let (lower, upper) = cipoisson_anscombe(5.0, 10.0, 0.95).unwrap();
-        assert_close(lower, 0.1507881, 1e-6);
-        assert_close(upper, 1.1586004, 1e-6);
-
-        let (lower, upper) = cipoisson_anscombe(20.0, 4.0, 0.90).unwrap();
-        assert_close(lower, 3.304600, 1e-6);
-        assert_close(upper, 7.266646, 1e-6);
+    fn anscombe_limits_match_r() {
+        let result = cipoisson(&[5.0], &[10.0], &[0.95], CipoissonMethod::Anscombe).unwrap();
+        assert_close(result.lower[0], 0.1507881, 1e-6);
+        assert_close(result.upper[0], 1.1586004, 1e-6);
+        let result = cipoisson(&[20.0], &[4.0], &[0.90], CipoissonMethod::Anscombe).unwrap();
+        assert_close(result.lower[0], 3.304600, 1e-6);
+        assert_close(result.upper[0], 7.266646, 1e-6);
     }
 
     #[test]
-    fn cipoisson_uses_r_style_method_prefixes_and_defaults() {
-        let exact = cipoisson(5.0, 10.0, 0.95, "e".to_string()).unwrap();
-        assert_eq!(exact, cipoisson_exact(5.0, 10.0, 0.95).unwrap());
-
-        let anscombe = cipoisson(5.0, 10.0, 0.95, "a".to_string()).unwrap();
-        assert_eq!(anscombe, cipoisson_anscombe(5.0, 10.0, 0.95).unwrap());
-
-        let default = cipoisson(5.0, 1.0, 0.95, "exact".to_string()).unwrap();
-        assert_eq!(default, cipoisson_exact(5.0, 1.0, 0.95).unwrap());
+    fn recycles_arguments_and_flags_non_positive_time() {
+        let result = cipoisson(
+            &[0.0, 5.0, 20.0],
+            &[1.0, 0.0],
+            &[0.95],
+            CipoissonMethod::Exact,
+        )
+        .unwrap();
+        assert_eq!(result.lower.len(), 3);
+        assert_eq!(result.lower[0], 0.0);
+        assert!(result.lower[1].is_nan() && result.upper[1].is_nan());
+        assert_close(result.lower[2], 12.21652, 1e-4);
     }
 
     #[test]
-    fn cipoisson_rejects_malformed_inputs() {
-        initialize_python();
-
-        let err = cipoisson_exact(1.0, f64::NAN, 0.95).unwrap_err();
-        assert!(err.to_string().contains("time must be positive"));
-
-        let err = cipoisson_anscombe(1.0, 1.0, 1.1).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("p must be a confidence level between 0 and 1")
-        );
-
-        let err = cipoisson(1.0, 1.0, 0.95, "".to_string()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("method must uniquely match 'exact' or 'anscombe'")
-        );
-    }
-
-    #[test]
-    fn cipoisson_matches_r_for_fractional_counts_and_boundary_inputs() {
-        let fractional = cipoisson_exact(1.2, 2.0, 0.0).unwrap();
-        assert_close(fractional.0, 0.443968106737396, 1e-10);
-        assert_close(fractional.1, 0.938570591679505, 1e-10);
-
+    fn method_prefixes_follow_match_arg() {
+        assert_eq!(CipoissonMethod::parse("e").unwrap(), CipoissonMethod::Exact);
         assert_eq!(
-            cipoisson_exact(1.2, 1.0, 1.0).unwrap(),
-            (0.0, f64::INFINITY)
+            CipoissonMethod::parse("ans").unwrap(),
+            CipoissonMethod::Anscombe
         );
-        assert_eq!(
-            cipoisson_exact(1.2, f64::INFINITY, 0.95).unwrap(),
-            (0.0, 0.0)
-        );
+        assert!(CipoissonMethod::parse("").is_err());
+        assert!(CipoissonMethod::parse("bogus").is_err());
+    }
 
-        let infinite_count = cipoisson_exact(f64::INFINITY, 1.0, 0.95).unwrap();
-        assert!(infinite_count.0.is_infinite());
-        assert!(infinite_count.1.is_infinite());
-        let indeterminate = cipoisson_exact(f64::INFINITY, f64::INFINITY, 0.95).unwrap();
-        assert!(indeterminate.0.is_nan());
-        assert!(indeterminate.1.is_nan());
+    #[test]
+    fn rejects_bad_counts_and_levels() {
+        assert!(cipoisson(&[-1.0], &[1.0], &[0.95], CipoissonMethod::Exact).is_err());
+        assert!(cipoisson(&[1.0], &[1.0], &[1.5], CipoissonMethod::Exact).is_err());
+        assert!(cipoisson(&[], &[1.0], &[0.95], CipoissonMethod::Exact).is_err());
+    }
+
+    #[test]
+    fn boundary_levels_give_degenerate_limits() {
+        let result = cipoisson(&[1.2], &[1.0], &[1.0], CipoissonMethod::Exact).unwrap();
+        assert_eq!(result.lower[0], 0.0);
+        assert_eq!(result.upper[0], f64::INFINITY);
+        let result = cipoisson(&[1.2], &[2.0], &[0.0], CipoissonMethod::Exact).unwrap();
+        assert_close(result.lower[0], 0.443968106737396, 1e-10);
+        assert_close(result.upper[0], 0.938570591679505, 1e-10);
     }
 }

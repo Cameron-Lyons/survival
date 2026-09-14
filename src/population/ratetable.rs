@@ -1,19 +1,433 @@
-use pyo3::exceptions::PyValueError;
+//! R's `ratetable` object (`?ratetable`, `R/ratetable.R`,
+//! `R/is.ratetable.R`, `R/summary.ratetable.R`, `R/ratetableDate.R`).
+//!
+//! A rate table is a multi-way array of hazard rates together with, per
+//! dimension, a name (`dimid`), labels (`dimnames`), a type code and, for
+//! non-factor dimensions, the lower cutpoint of every category.  Types follow
+//! `?ratetable`: 1 = factor, 2 = continuous (age in days), 3 = date, 4 = the
+//! calendar-year axis of the US census tables (see [`DimType`]).  Date
+//! cutpoints are stored the way `ratetableDate` returns them: days since
+//! 1970-01-01, which is how R's `Date` class counts.  Rates are stored in
+//! R's column-major order (the first index varies fastest).
+
+use crate::error::{SurvivalError, SurvivalResult};
+use ndarray::Array2;
 use pyo3::prelude::*;
-use std::collections::HashMap;
 use std::fmt;
 
-const DAYS_PER_YEAR: f64 = 365.25;
-const DAYS_BEFORE_MONTH: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+/// R's `type` attribute of a `ratetable` dimension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[pyclass(eq, eq_int, from_py_object)]
+pub enum DimType {
+    /// Type 1: a categorical dimension, indexed by level (`sex`, `race`).
+    Factor = 1,
+    /// Type 2: a continuous, time-advancing dimension, usually age in days.
+    Continuous = 2,
+    /// Type 3: a calendar-date dimension (days since 1970-01-01).
+    Date = 3,
+    /// Type 4: the calendar-year axis of the US census tables, whose rates
+    /// change on the subject's birthday rather than on January 1st.
+    UsYear = 4,
+}
 
-fn is_leap_year(year: i32) -> bool {
+impl DimType {
+    /// R's integer type code.
+    pub fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// Parse R's integer type code.
+    pub fn from_code(code: i64) -> Option<Self> {
+        match code {
+            1 => Some(Self::Factor),
+            2 => Some(Self::Continuous),
+            3 => Some(Self::Date),
+            4 => Some(Self::UsYear),
+            _ => None,
+        }
+    }
+
+    /// Whether the dimension advances with follow-up time.
+    pub fn is_time_based(self) -> bool {
+        self != Self::Factor
+    }
+}
+
+/// Outcome of R's `is.ratetable(x, verbose = TRUE)`: an empty `messages`
+/// list means the structure is a valid rate table.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct RatetableCheck {
+    #[pyo3(get)]
+    pub valid: bool,
+    #[pyo3(get)]
+    pub messages: Vec<String>,
+}
+
+/// A rate table with R's attributes.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct RateTable {
+    /// `dim(x)`.
+    #[pyo3(get)]
+    pub dims: Vec<usize>,
+    /// `names(dimnames(x))` (R's `dimid`), one per dimension.
+    #[pyo3(get)]
+    pub dimid: Vec<String>,
+    /// `dimnames(x)`, one label vector per dimension.
+    #[pyo3(get)]
+    pub dimnames: Vec<Vec<String>>,
+    /// `attr(x, "cutpoints")`: lower bounds per dimension, `None` for factor
+    /// dimensions (R `NULL`).  Dates are days since 1970-01-01.
+    #[pyo3(get)]
+    pub cutpoints: Vec<Option<Vec<f64>>>,
+    /// `attr(x, "type")` per dimension.
+    #[pyo3(get)]
+    pub types: Vec<DimType>,
+    /// The hazard rates in column-major order, `dims.iter().product()` long.
+    #[pyo3(get)]
+    pub rates: Vec<f64>,
+}
+
+impl fmt::Display for RateTable {
+    /// The text of R's `summary.ratetable` (`R/summary.ratetable.R`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, " Rate table with {} dimensions:", self.dims.len())?;
+        for (d, name) in self.dimid.iter().enumerate() {
+            let cuts = self.cutpoints[d].as_deref().unwrap_or_default();
+            let first = cuts.first().copied().unwrap_or(f64::NAN);
+            let last = cuts.last().copied().unwrap_or(f64::NAN);
+            match self.types[d] {
+                DimType::Factor => {
+                    writeln!(f, "\t{name} has levels of: {}", self.dimnames[d].join(" "))?;
+                }
+                DimType::Continuous => writeln!(
+                    f,
+                    "\t{name} ranges from {first} to {last}; with {} categories",
+                    self.dims[d]
+                )?,
+                DimType::Date | DimType::UsYear => writeln!(
+                    f,
+                    "\t{name} ranges from {} to {}; with {} categories",
+                    days_to_date(first),
+                    days_to_date(last),
+                    self.dims[d]
+                )?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// R's `is.ratetable(x, verbose = TRUE)` structural checks
+/// (`R/is.ratetable.R`), reported as its messages; an empty list is R's
+/// `TRUE`.  `types` are R's integer codes so that malformed codes can be
+/// reported rather than rejected up front.
+pub fn ratetable_problems(
+    dims: &[usize],
+    dimid: &[String],
+    dimnames: &[Vec<String>],
+    cutpoints: &[Option<Vec<f64>>],
+    types: &[i64],
+    n_rates: usize,
+) -> Vec<String> {
+    let mut msg = Vec::new();
+    let nd = dims.len();
+    let expected: usize = dims.iter().product();
+    if nd == 0 {
+        msg.push("missing attribute: dim".to_string());
+    }
+    if n_rates != expected {
+        msg.push("length of the data does not match prod(dim)".to_string());
+    }
+    if dimnames.len() != nd {
+        msg.push("wrong length for dimnames".to_string());
+    }
+    if dimid.len() != nd {
+        msg.push("wrong length for dimid, or dimnames do not have names".to_string());
+    }
+    if dimid.iter().any(|id| id.is_empty()) {
+        msg.push("one of the dimnames identifiers is blank".to_string());
+    }
+    if cutpoints.len() != nd {
+        msg.push("wrong length for cutpoints".to_string());
+    }
+    if types.iter().any(|&t| DimType::from_code(t).is_none()) {
+        msg.push("type attribute must be 1, 2, 3, or 4".to_string());
+    }
+    if types.len() != nd {
+        msg.push("wrong length for type attribute".to_string());
+    }
+    if types.iter().filter(|&&t| t == 4).count() > 1 {
+        msg.push("two dimenesions idenitied as US ratetable years".to_string());
+    }
+    for i in 0..nd.min(types.len()) {
+        let n = dims[i];
+        let one_based = i + 1;
+        if let Some(labels) = dimnames.get(i)
+            && labels.len() != n
+        {
+            msg.push(format!("dimname {one_based} is the wrong length"));
+        }
+        let Some(dim_type) = DimType::from_code(types[i]) else {
+            continue;
+        };
+        let cuts = cutpoints.get(i).map(Option::as_deref).unwrap_or_default();
+        if dim_type.is_time_based() {
+            match cuts {
+                Some(values) if values.len() == n => {
+                    if values.iter().any(|v| !v.is_finite()) {
+                        msg.push(format!("cutpoints {one_based} must be finite"));
+                    } else if values.windows(2).any(|w| w[1] <= w[0]) {
+                        msg.push(format!("unsorted cutpoints for dimension {one_based}"));
+                    }
+                }
+                _ => msg.push(format!("wrong length for cutpoints {one_based}")),
+            }
+        } else if cuts.is_some() {
+            msg.push(format!(
+                "attribute type[{one_based}] is continuous; cutpoint should be null"
+            ));
+        }
+    }
+    msg
+}
+
+impl RateTable {
+    /// Build and validate a rate table from R's attributes.
+    pub fn try_new(
+        dims: Vec<usize>,
+        dimid: Vec<String>,
+        dimnames: Vec<Vec<String>>,
+        cutpoints: Vec<Option<Vec<f64>>>,
+        types: Vec<DimType>,
+        rates: Vec<f64>,
+    ) -> SurvivalResult<Self> {
+        let codes: Vec<i64> = types.iter().map(|t| i64::from(t.code())).collect();
+        let problems =
+            ratetable_problems(&dims, &dimid, &dimnames, &cutpoints, &codes, rates.len());
+        if !problems.is_empty() {
+            return Err(SurvivalError::invalid_input(format!(
+                "not a valid ratetable: {}",
+                problems.join("; ")
+            )));
+        }
+        if rates.iter().any(|r| !r.is_finite() || *r < 0.0) {
+            return Err(SurvivalError::invalid_input(
+                "ratetable rates must be finite and non-negative",
+            ));
+        }
+        Ok(Self {
+            dims,
+            dimid,
+            dimnames,
+            cutpoints,
+            types,
+            rates,
+        })
+    }
+
+    /// Number of dimensions.
+    pub fn ndim(&self) -> usize {
+        self.dims.len()
+    }
+
+    /// Zero-based position of `label` along dimension `dim` (R's
+    /// `match(label, dimnames(x)[[dim]])`).
+    pub fn level(&self, dim: usize, label: &str) -> Option<usize> {
+        self.dimnames.get(dim)?.iter().position(|l| l == label)
+    }
+
+    /// The rate at a zero-based multi-index, e.g. `[50, 0, 60]` for
+    /// `survexp.us["50", "male", "2000"]`.
+    pub fn rate(&self, index: &[usize]) -> Option<f64> {
+        if index.len() != self.dims.len() {
+            return None;
+        }
+        let mut offset = 0;
+        let mut stride = 1;
+        for (&i, &n) in index.iter().zip(&self.dims) {
+            if i >= n {
+                return None;
+            }
+            offset += i * stride;
+            stride *= n;
+        }
+        self.rates.get(offset).copied()
+    }
+
+    /// Position of the type-4 (US calendar year) dimension, if any.
+    pub fn us_year_dimension(&self) -> Option<usize> {
+        self.types.iter().position(|t| *t == DimType::UsYear)
+    }
+
+    /// R's `rfac <- 1*(atts$type == 1)`: the factor flags handed to the C
+    /// person-years code.
+    pub fn factor_flags(&self) -> Vec<i32> {
+        self.types
+            .iter()
+            .map(|t| i32::from(*t == DimType::Factor))
+            .collect()
+    }
+
+    /// The per-dimension cutpoints as ragged slices, empty for factor
+    /// dimensions, in the layout `pystep` expects.
+    pub fn cut_slices(&self) -> Vec<&[f64]> {
+        self.cutpoints
+            .iter()
+            .map(|c| c.as_deref().unwrap_or_default())
+            .collect()
+    }
+
+    /// Check a matrix of starting positions in the table (one row per
+    /// subject, one column per dimension in the table's order, the `R` of
+    /// `match.ratetable`): every entry is finite and, on a factor
+    /// dimension, an integer level subscript between 1 and the number of
+    /// levels, the invariants `match.ratetable` establishes and the C
+    /// person-years code relies on when it indexes the rate array.
+    pub fn validate_positions(&self, positions: &Array2<f64>) -> SurvivalResult<()> {
+        if positions.ncols() != self.ndim() {
+            return Err(SurvivalError::invalid_input(format!(
+                "ratetable positions must have one column per dimension: {} expected, got {}",
+                self.ndim(),
+                positions.ncols()
+            )));
+        }
+        for (dim, column) in positions.columns().into_iter().enumerate() {
+            let dimid = &self.dimid[dim];
+            if column.iter().any(|v| v.is_nan()) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "The variable {dimid} contains missing values"
+                )));
+            }
+            if column.iter().any(|v| v.is_infinite()) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "The variable {dimid} must be finite"
+                )));
+            }
+            if self.types[dim] == DimType::Factor {
+                let n_levels = self.dims[dim] as f64;
+                if column
+                    .iter()
+                    .any(|&v| v.fract() != 0.0 || v <= 0.0 || v > n_levels)
+                {
+                    return Err(SurvivalError::invalid_input(format!(
+                        "The variable {dimid} is out of range"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl RateTable {
+    /// Construct from R's attributes; `types` are R's integer codes 1-4.
+    #[new]
+    #[pyo3(signature = (dims, dimid, dimnames, cutpoints, types, rates))]
+    fn new(
+        dims: Vec<usize>,
+        dimid: Vec<String>,
+        dimnames: Vec<Vec<String>>,
+        cutpoints: Vec<Option<Vec<f64>>>,
+        types: Vec<i64>,
+        rates: Vec<f64>,
+    ) -> PyResult<Self> {
+        let types = types
+            .iter()
+            .map(|&code| {
+                DimType::from_code(code).ok_or_else(|| {
+                    SurvivalError::invalid_input("type attribute must be 1, 2, 3, or 4")
+                })
+            })
+            .collect::<SurvivalResult<Vec<_>>>()?;
+        Ok(Self::try_new(
+            dims, dimid, dimnames, cutpoints, types, rates,
+        )?)
+    }
+
+    /// R's integer type codes, one per dimension.
+    fn type_codes(&self) -> Vec<i64> {
+        self.types.iter().map(|t| i64::from(t.code())).collect()
+    }
+
+    /// The text of R's `summary.ratetable`.
+    fn __str__(&self) -> String {
+        self.to_string()
+    }
+
+    /// The rate at a zero-based multi-index (`None` when out of range).
+    #[pyo3(name = "rate")]
+    fn rate_py(&self, index: Vec<usize>) -> Option<f64> {
+        self.rate(&index)
+    }
+}
+
+/// R's `is.ratetable(x, verbose = TRUE)` on raw attributes (`types` are
+/// R's integer codes).  The `valid` flag is R's non-verbose result.
+#[pyfunction]
+#[pyo3(signature = (dims, dimid, dimnames, cutpoints, types, n_rates))]
+pub fn is_ratetable(
+    dims: Vec<usize>,
+    dimid: Vec<String>,
+    dimnames: Vec<Vec<String>>,
+    cutpoints: Vec<Option<Vec<f64>>>,
+    types: Vec<i64>,
+    n_rates: usize,
+) -> RatetableCheck {
+    let messages = ratetable_problems(&dims, &dimid, &dimnames, &cutpoints, &types, n_rates);
+    RatetableCheck {
+        valid: messages.is_empty(),
+        messages,
+    }
+}
+
+/// A proleptic Gregorian calendar date, the components of an R `Date`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[pyclass(from_py_object)]
+pub struct CalendarDate {
+    #[pyo3(get)]
+    pub year: i32,
+    #[pyo3(get)]
+    pub month: u32,
+    #[pyo3(get)]
+    pub day: u32,
+}
+
+impl fmt::Display for CalendarDate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+}
+
+const DAYS_BEFORE_MONTH: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+/// Days from 0000-03-01 to 1970-01-01 in the proleptic Gregorian calendar.
+const EPOCH_DAY_NUMBER: i64 = 719_468;
+/// Days from 0001-01-01 to 1970-01-01.
+const EPOCH_FROM_YEAR_ONE: i64 = 719_162;
+
+/// Whether `year` is a leap year in the proleptic Gregorian calendar.
+pub fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-fn days_in_year(year: i32) -> i32 {
-    if is_leap_year(year) { 366 } else { 365 }
+/// Number of days in a month.
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+    }
 }
 
+/// Days from 1970-01-01 to `year-month-day`, i.e. `as.numeric(as.Date(...))`.
 fn day_number(year: i32, month: u32, day: u32) -> i64 {
     let previous_year = i64::from(year) - 1;
     let days_before_year = 365 * previous_year + previous_year.div_euclid(4)
@@ -21,698 +435,226 @@ fn day_number(year: i32, month: u32, day: u32) -> i64 {
         + previous_year.div_euclid(400);
     let leap_day = i64::from(month > 2 && is_leap_year(year));
     days_before_year + DAYS_BEFORE_MONTH[(month - 1) as usize] + i64::from(day - 1) + leap_day
+        - EPOCH_FROM_YEAR_ONE
 }
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    PyValueError::new_err(message.into())
-}
-
-fn validate_cutpoints(cutpoints: &[f64], field: &str) -> PyResult<()> {
-    for (index, &value) in cutpoints.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{field} contains non-finite value at index {index}"
-            )));
-        }
-    }
-    for (index, pair) in cutpoints.windows(2).enumerate() {
-        if pair[1] <= pair[0] {
-            return Err(value_error(format!(
-                "{field} must be strictly increasing; index {} is not greater than index {}",
-                index + 1,
-                index
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_rates(rates: &[f64], field: &str) -> PyResult<()> {
-    for (index, &rate) in rates.iter().enumerate() {
-        if !rate.is_finite() {
-            return Err(value_error(format!(
-                "{field} contains non-finite value at index {index}"
-            )));
-        }
-        if rate < 0.0 {
-            return Err(value_error(format!(
-                "{field} contains negative value {rate} at index {index}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
-pub enum DimType {
-    Factor,
-    Age,
-    Year,
-    Continuous,
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct RateDimension {
-    #[pyo3(get)]
-    pub name: String,
-    #[pyo3(get)]
-    pub dim_type: DimType,
-    #[pyo3(get)]
-    pub levels: Option<Vec<String>>,
-    #[pyo3(get)]
-    pub cutpoints: Vec<f64>,
-}
-
-#[pymethods]
-impl RateDimension {
-    #[new]
-    #[pyo3(signature = (name, dim_type, cutpoints, levels=None))]
-    pub fn new(
-        name: String,
-        dim_type: DimType,
-        cutpoints: Vec<f64>,
-        levels: Option<Vec<String>>,
-    ) -> Self {
-        RateDimension {
-            name,
-            dim_type,
-            levels,
-            cutpoints,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct RateTable {
-    dimensions: Vec<RateDimension>,
-    rates: Vec<f64>,
-    shape: Vec<usize>,
-    #[pyo3(get)]
-    pub summary: String,
-}
-
-#[pymethods]
-impl RateTable {
-    #[new]
-    #[pyo3(signature = (dimensions, rates, summary=None))]
-    pub fn new(
-        dimensions: Vec<RateDimension>,
-        rates: Vec<f64>,
-        summary: Option<String>,
-    ) -> PyResult<Self> {
-        if dimensions.is_empty() {
-            return Err(value_error("dimensions cannot be empty"));
-        }
-        for dim in &dimensions {
-            if dim.name.trim().is_empty() {
-                return Err(value_error("dimension names cannot be empty"));
-            }
-            if dim.dim_type == DimType::Factor {
-                if let Some(levels) = &dim.levels
-                    && levels.is_empty()
-                {
-                    return Err(value_error(format!(
-                        "factor dimension '{}' must have at least one level",
-                        dim.name
-                    )));
-                }
-            } else {
-                validate_cutpoints(&dim.cutpoints, &format!("{} cutpoints", dim.name))?;
-            }
-        }
-        validate_rates(&rates, "rates")?;
-
-        let shape: Vec<usize> = dimensions
-            .iter()
-            .map(|d| {
-                if d.dim_type == DimType::Factor {
-                    d.levels.as_ref().map_or(1, |l| l.len())
-                } else {
-                    d.cutpoints.len().saturating_sub(1).max(1)
-                }
-            })
-            .collect();
-
-        let expected_size: usize = shape.iter().product();
-        if rates.len() != expected_size {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "rates length ({}) doesn't match dimensions (expected {})",
-                rates.len(),
-                expected_size
-            )));
-        }
-
-        Ok(RateTable {
-            dimensions,
-            rates,
-            shape,
-            summary: summary.unwrap_or_else(|| "Custom rate table".to_string()),
-        })
-    }
-
-    pub fn ndim(&self) -> usize {
-        self.dimensions.len()
-    }
-
-    pub fn dim_names(&self) -> Vec<String> {
-        self.dimensions.iter().map(|d| d.name.clone()).collect()
-    }
-
-    pub fn lookup(&self, coords: HashMap<String, f64>) -> PyResult<f64> {
-        let indices = self.coords_to_indices(&coords)?;
-        let flat_idx = self.indices_to_flat(&indices);
-        Ok(self.rates[flat_idx])
-    }
-
-    pub fn lookup_interpolate(&self, coords: HashMap<String, f64>) -> PyResult<f64> {
-        self.lookup(coords)
-    }
-
-    #[pyo3(signature = (age_start, age_end, year_start, sex=None))]
-    pub fn cumulative_hazard(
-        &self,
-        age_start: f64,
-        age_end: f64,
-        year_start: f64,
-        sex: Option<i32>,
-    ) -> PyResult<f64> {
-        if !age_start.is_finite() || !age_end.is_finite() || !year_start.is_finite() {
-            return Err(value_error(
-                "age_start, age_end, and year_start must be finite",
-            ));
-        }
-        if age_start < 0.0 || age_end < 0.0 {
-            return Err(value_error("age_start and age_end must be non-negative"));
-        }
-        if matches!(sex, Some(value) if value < 0) {
-            return Err(value_error("sex must be non-negative"));
-        }
-        if age_end <= age_start {
-            return Ok(0.0);
-        }
-
-        let mut indices: Vec<usize> = self
-            .dimensions
-            .iter()
-            .map(|dimension| match dimension.dim_type {
-                DimType::Factor if is_sex_dimension(&dimension.name) => {
-                    factor_index(dimension, sex.unwrap_or(0) as usize)
-                }
-                DimType::Factor => factor_index(dimension, 0),
-                DimType::Continuous => find_interval(&dimension.cutpoints, 0.0),
-                DimType::Age | DimType::Year => 0,
-            })
-            .collect();
-        let mut cumhaz = 0.0;
-        let mut current_age = age_start;
-        let mut current_year = year_start;
-        let mut remaining = age_end - age_start;
-
-        while remaining > 0.0 {
-            let mut interval = remaining;
-            for (index, dimension) in self.dimensions.iter().enumerate() {
-                match dimension.dim_type {
-                    DimType::Age => {
-                        indices[index] = find_interval(&dimension.cutpoints, current_age);
-                        if let Some(boundary) = next_cutpoint(&dimension.cutpoints, current_age) {
-                            interval = interval.min(boundary - current_age);
-                        }
-                    }
-                    DimType::Year => {
-                        indices[index] = find_interval(&dimension.cutpoints, current_year);
-                        if let Some(boundary) = next_cutpoint(&dimension.cutpoints, current_year) {
-                            interval = interval.min((boundary - current_year) * DAYS_PER_YEAR);
-                        }
-                    }
-                    DimType::Factor | DimType::Continuous => {}
-                }
-            }
-
-            cumhaz += self.rates[self.indices_to_flat(&indices)] * interval;
-            remaining -= interval;
-            current_age += interval;
-            current_year += interval / DAYS_PER_YEAR;
-        }
-
-        Ok(cumhaz)
-    }
-
-    #[pyo3(signature = (age_start, age_end, year_start, sex=None))]
-    pub fn expected_survival(
-        &self,
-        age_start: f64,
-        age_end: f64,
-        year_start: f64,
-        sex: Option<i32>,
-    ) -> PyResult<f64> {
-        let cumhaz = self.cumulative_hazard(age_start, age_end, year_start, sex)?;
-        Ok((-cumhaz).exp())
-    }
-}
-
-impl RateTable {
-    fn coords_to_indices(&self, coords: &HashMap<String, f64>) -> PyResult<Vec<usize>> {
-        let mut indices = Vec::with_capacity(self.dimensions.len());
-
-        for dim in &self.dimensions {
-            let value = coords.get(&dim.name).copied().unwrap_or(0.0);
-            if !value.is_finite() {
-                return Err(value_error(format!(
-                    "{} coordinate must be finite",
-                    dim.name
-                )));
-            }
-
-            let idx = match dim.dim_type {
-                DimType::Factor => {
-                    if value < 0.0 {
-                        return Err(value_error(format!(
-                            "{} coordinate must be non-negative",
-                            dim.name
-                        )));
-                    }
-                    let max_idx = dim.levels.as_ref().map_or(0, |l| l.len().saturating_sub(1));
-                    (value as usize).min(max_idx)
-                }
-                DimType::Age | DimType::Year | DimType::Continuous => {
-                    find_interval(&dim.cutpoints, value)
-                }
-            };
-            indices.push(idx);
-        }
-
-        Ok(indices)
-    }
-
-    fn indices_to_flat(&self, indices: &[usize]) -> usize {
-        let mut flat_idx = 0;
-        let mut multiplier = 1;
-
-        for (i, &idx) in indices.iter().rev().enumerate() {
-            let dim_idx = self.shape.len() - 1 - i;
-            flat_idx += idx.min(self.shape[dim_idx].saturating_sub(1)) * multiplier;
-            multiplier *= self.shape[dim_idx];
-        }
-
-        flat_idx.min(self.rates.len().saturating_sub(1))
-    }
-}
-
-fn is_sex_dimension(name: &str) -> bool {
-    name.as_bytes()
-        .windows(3)
-        .any(|window| window.eq_ignore_ascii_case(b"sex"))
-}
-
-fn factor_index(dimension: &RateDimension, value: usize) -> usize {
-    value.min(
-        dimension
-            .levels
-            .as_ref()
-            .map_or(0, |levels| levels.len().saturating_sub(1)),
-    )
-}
-
-fn next_cutpoint(cutpoints: &[f64], value: f64) -> Option<f64> {
-    let index = match cutpoints.binary_search_by(|probe| probe.total_cmp(&value)) {
-        Ok(index) => index + 1,
-        Err(index) => index,
-    };
-    cutpoints.get(index).copied()
-}
-
-fn find_interval(cutpoints: &[f64], value: f64) -> usize {
-    if cutpoints.len() < 2 {
-        return 0;
-    }
-
-    match cutpoints.binary_search_by(|probe| probe.total_cmp(&value)) {
-        Ok(i) => {
-            if i >= cutpoints.len() - 1 {
-                cutpoints.len() - 2
-            } else {
-                i
-            }
-        }
-        Err(i) => {
-            if i == 0 {
-                0
-            } else if i >= cutpoints.len() {
-                cutpoints.len() - 2
-            } else {
-                i - 1
-            }
-        }
-    }
-}
-
-#[pyfunction]
-pub fn create_simple_ratetable(
-    age_breaks: Vec<f64>,
-    year_breaks: Vec<f64>,
-    rates_male: Vec<f64>,
-    rates_female: Vec<f64>,
-) -> PyResult<RateTable> {
-    if age_breaks.len() < 2 {
-        return Err(value_error(
-            "age_breaks must contain at least two cutpoints",
-        ));
-    }
-    if year_breaks.len() < 2 {
-        return Err(value_error(
-            "year_breaks must contain at least two cutpoints",
-        ));
-    }
-    validate_cutpoints(&age_breaks, "age_breaks")?;
-    validate_cutpoints(&year_breaks, "year_breaks")?;
-    validate_rates(&rates_male, "rates_male")?;
-    validate_rates(&rates_female, "rates_female")?;
-
-    let n_age = age_breaks.len().saturating_sub(1).max(1);
-    let n_year = year_breaks.len().saturating_sub(1).max(1);
-
-    if rates_male.len() != n_age * n_year || rates_female.len() != n_age * n_year {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "rates arrays must match age x year dimensions",
-        ));
-    }
-
-    let mut rates = Vec::with_capacity(rates_male.len() + rates_female.len());
-    for i in 0..(n_age * n_year) {
-        rates.push(rates_male[i]);
-        rates.push(rates_female[i]);
-    }
-
-    let dimensions = vec![
-        RateDimension::new("age".to_string(), DimType::Age, age_breaks, None),
-        RateDimension::new("year".to_string(), DimType::Year, year_breaks, None),
-        RateDimension::new(
-            "sex".to_string(),
-            DimType::Factor,
-            vec![],
-            Some(vec!["male".to_string(), "female".to_string()]),
-        ),
-    ];
-
-    RateTable::new(dimensions, rates, Some("Simple rate table".to_string()))
-}
-
-#[pyfunction]
-pub fn is_ratetable(ndim: usize, has_rates: bool, has_dims: bool) -> bool {
-    ndim > 0 && has_rates && has_dims
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(str, from_py_object)]
-pub struct RatetableDateResult {
-    #[pyo3(get)]
-    pub days: f64,
-    #[pyo3(get)]
-    pub years: f64,
-    #[pyo3(get)]
-    pub origin_year: i32,
-}
-
-impl fmt::Display for RatetableDateResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "RatetableDateResult(days={:.1}, years={:.4}, origin={})",
-            self.days, self.years, self.origin_year
-        )
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (year, month=1, day=1, origin_year=1960))]
-pub fn ratetable_date(
-    year: i32,
-    month: u32,
-    day: u32,
-    origin_year: i32,
-) -> PyResult<RatetableDateResult> {
-    if !(1..=12).contains(&month) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+/// Days since 1970-01-01 of a calendar date.
+pub fn calendar_to_days(date: CalendarDate) -> SurvivalResult<i64> {
+    if !(1..=12).contains(&date.month) {
+        return Err(SurvivalError::invalid_input(
             "month must be between 1 and 12",
         ));
     }
-    if !(1..=31).contains(&day) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "day must be between 1 and 31",
+    if date.day < 1 || date.day > days_in_month(date.year, date.month) {
+        return Err(SurvivalError::invalid_input(
+            "day is invalid for the given month and year",
         ));
     }
-
-    let days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-    let max_day = if month == 2 && is_leap_year(year) {
-        29
-    } else {
-        days_per_month[(month - 1) as usize]
-    };
-    if day > max_day {
-        return Err(value_error("day is invalid for the given month and year"));
-    }
-
-    let total_days = (day_number(year, month, day) - day_number(origin_year, 1, 1)) as f64;
-
-    let years = total_days / 365.25;
-
-    Ok(RatetableDateResult {
-        days: total_days,
-        years,
-        origin_year,
-    })
+    Ok(day_number(date.year, date.month, date.day))
 }
 
+/// R's `ratetableDate` for a calendar date: the number of days since
+/// 1970-01-01, which is how `Date` objects are stored (`R/ratetableDate.R`).
+/// Numeric values pass through `ratetableDate` unchanged, so callers holding
+/// day counts need no conversion.
 #[pyfunction]
-pub fn days_to_date(days: f64, origin_year: i32) -> PyResult<(i32, u32, u32)> {
-    if !days.is_finite() || days < 0.0 {
-        return Err(value_error("days must be a finite non-negative value"));
-    }
+#[pyo3(signature = (year, month=1, day=1))]
+pub fn ratetable_date(year: i32, month: u32, day: u32) -> PyResult<f64> {
+    Ok(calendar_to_days(CalendarDate { year, month, day })? as f64)
+}
 
-    let days_per_month_normal = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let days_per_month_leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+/// The calendar date `days` after 1970-01-01 (`as.Date(days, origin =
+/// "1970-01-01")`); fractional days are truncated towards negative infinity
+/// as R's `Date` printing does.
+#[pyfunction]
+pub fn days_to_date(days: f64) -> CalendarDate {
+    // Howard Hinnant's civil-from-days algorithm on a March-based year.
+    let z = days.floor() as i64 + EPOCH_DAY_NUMBER;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = (yoe + era * 400 + i64::from(month <= 2)) as i32;
+    CalendarDate { year, month, day }
+}
 
-    let mut remaining_days = days as i32;
-    let mut year = origin_year;
-
-    while remaining_days >= days_in_year(year) {
-        remaining_days -= days_in_year(year);
-        year += 1;
-    }
-
-    let days_per_month = if is_leap_year(year) {
-        &days_per_month_leap
-    } else {
-        &days_per_month_normal
-    };
-
-    let mut month = 1u32;
-    for &d in days_per_month.iter() {
-        if remaining_days < d {
-            break;
-        }
-        remaining_days -= d;
-        month += 1;
-    }
-
-    let day = (remaining_days + 1) as u32;
-
-    Ok((year, month, day))
+/// R's `as.Date(paste0(format(bdate, "%Y"), "-01-01"))`: January 1st of the
+/// year containing day `days`, as days since 1970-01-01.
+pub fn start_of_year(days: f64) -> f64 {
+    day_number(days_to_date(days).year, 1, 1) as f64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_ratetable_basic() {
-        let age_breaks = vec![0.0, 365.0, 3650.0, 36500.0];
-        let year_breaks = vec![1990.0, 2000.0, 2010.0];
-
-        let rates_male = vec![0.001, 0.0008, 0.0005, 0.0004, 0.0003, 0.0002];
-        let rates_female = vec![0.0008, 0.0006, 0.0004, 0.0003, 0.0002, 0.00015];
-
-        let rt = create_simple_ratetable(age_breaks, year_breaks, rates_male, rates_female);
-        assert!(rt.is_ok());
-
-        let rt = rt.unwrap();
-        assert_eq!(rt.ndim(), 3);
-    }
-
-    #[test]
-    fn test_ratetable_lookup() {
-        let dimensions = vec![RateDimension::new(
-            "age".to_string(),
-            DimType::Age,
-            vec![0.0, 10.0, 20.0],
-            None,
-        )];
-        let rates = vec![0.01, 0.02];
-
-        let rt = RateTable::new(dimensions, rates, None).unwrap();
-
-        let mut coords = HashMap::new();
-        coords.insert("age".to_string(), 5.0);
-        assert_eq!(rt.lookup(coords).unwrap(), 0.01);
-
-        let mut coords = HashMap::new();
-        coords.insert("age".to_string(), 15.0);
-        assert_eq!(rt.lookup(coords).unwrap(), 0.02);
-    }
-
-    #[test]
-    fn cumulative_hazard_integrates_exactly_across_age_cutpoints() {
-        let dimensions = vec![RateDimension::new(
-            "age".to_string(),
-            DimType::Age,
-            vec![0.0, 10.0, 20.0],
-            None,
-        )];
-        let table = RateTable::new(dimensions, vec![0.1, 0.2], None).unwrap();
-
-        assert!((table.cumulative_hazard(8.0, 12.0, 2000.0, None).unwrap() - 0.6).abs() < 1e-12);
-    }
-
-    #[test]
-    fn cumulative_hazard_integrates_exactly_across_year_cutpoints() {
-        let dimensions = vec![RateDimension::new(
-            "year".to_string(),
-            DimType::Year,
-            vec![2000.0, 2001.0, 2002.0],
-            None,
-        )];
-        let table = RateTable::new(dimensions, vec![0.1, 0.2], None).unwrap();
-        let expected = 0.5 * DAYS_PER_YEAR * 0.1 + 0.5 * DAYS_PER_YEAR * 0.2;
-
-        assert!(
-            (table
-                .cumulative_hazard(0.0, DAYS_PER_YEAR, 2000.5, None)
-                .unwrap()
-                - expected)
-                .abs()
-                < 1e-12
-        );
-    }
-
-    #[test]
-    fn cumulative_hazard_splits_at_the_earliest_dimension_boundary() {
-        let dimensions = vec![
-            RateDimension::new("age".to_string(), DimType::Age, vec![0.0, 10.0, 20.0], None),
-            RateDimension::new(
-                "year".to_string(),
-                DimType::Year,
-                vec![2000.0, 2001.0, 2002.0],
-                None,
-            ),
-            RateDimension::new(
-                "sex".to_string(),
-                DimType::Factor,
-                vec![],
-                Some(vec!["male".to_string(), "female".to_string()]),
-            ),
-        ];
-        let table = RateTable::new(
-            dimensions,
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            None,
+    fn toy_table() -> RateTable {
+        RateTable::try_new(
+            vec![2, 2],
+            vec!["age".into(), "sex".into()],
+            vec![
+                vec!["0".into(), "1".into()],
+                vec!["male".into(), "female".into()],
+            ],
+            vec![Some(vec![0.0, 365.25]), None],
+            vec![DimType::Continuous, DimType::Factor],
+            vec![1.0, 2.0, 3.0, 4.0],
         )
-        .unwrap();
-        let year_interval = 0.01 * DAYS_PER_YEAR;
-        let expected = 2.0 * 2.0 + (year_interval - 2.0) * 6.0 + (4.0 - year_interval) * 8.0;
+        .unwrap()
+    }
 
+    #[test]
+    fn rates_are_column_major_and_levels_match_by_label() {
+        let table = toy_table();
+        assert_eq!(table.rate(&[1, 0]), Some(2.0));
+        assert_eq!(table.rate(&[0, 1]), Some(3.0));
+        assert_eq!(table.rate(&[2, 0]), None);
+        assert_eq!(table.rate(&[0]), None);
+        assert_eq!(table.level(1, "female"), Some(1));
+        assert_eq!(table.level(2, "female"), None);
+        assert_eq!(table.factor_flags(), vec![0, 1]);
+        assert_eq!(table.cut_slices()[1], &[] as &[f64]);
+        assert!(table.to_string().contains("sex has levels of: male female"));
+        assert_eq!(DimType::from_code(4), Some(DimType::UsYear));
+        assert_eq!(DimType::UsYear.code(), 4);
+    }
+
+    #[test]
+    fn positions_must_be_finite_with_factor_codes_in_range() {
+        let table = toy_table();
+        let err = |rows: &[[f64; 2]]| {
+            table
+                .validate_positions(
+                    &Array2::from_shape_vec(
+                        (rows.len(), 2),
+                        rows.iter().flatten().copied().collect(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap_err()
+                .to_string()
+        };
         assert!(
-            (table
-                .cumulative_hazard(8.0, 12.0, 2000.99, Some(1))
-                .unwrap()
-                - expected)
-                .abs()
-                < 1e-10
+            table
+                .validate_positions(&ndarray::arr2(&[[-5.0, 1.0], [800.0, 2.0]]))
+                .is_ok()
+        );
+        assert!(err(&[[0.0, 0.0]]).contains("sex is out of range"));
+        assert!(err(&[[0.0, 3.0]]).contains("sex is out of range"));
+        assert!(err(&[[0.0, 1.5]]).contains("sex is out of range"));
+        assert!(err(&[[f64::NAN, 1.0]]).contains("age contains missing values"));
+        assert!(err(&[[f64::INFINITY, 1.0]]).contains("age must be finite"));
+        assert!(
+            table
+                .validate_positions(&ndarray::arr2(&[[0.0]]))
+                .unwrap_err()
+                .to_string()
+                .contains("one column per dimension")
         );
     }
 
     #[test]
-    fn ratetable_date_supports_pre_origin_and_century_boundaries() {
-        let pre_origin = ratetable_date(1940, 1, 1, 1960).unwrap();
-        assert_eq!(pre_origin.days, -7305.0);
-        assert_eq!(ratetable_date(1959, 12, 31, 1960).unwrap().days, -1.0);
+    fn structural_checks_follow_is_ratetable() {
+        let ok = ratetable_problems(
+            &[2, 2],
+            &["age".into(), "sex".into()],
+            &[vec!["0".into(), "1".into()], vec!["m".into(), "f".into()]],
+            &[Some(vec![0.0, 1.0]), None],
+            &[2, 1],
+            4,
+        );
+        assert!(ok.is_empty());
 
-        assert_eq!(ratetable_date(1900, 3, 1, 1900).unwrap().days, 59.0);
-        assert_eq!(ratetable_date(2000, 3, 1, 2000).unwrap().days, 60.0);
+        let bad = ratetable_problems(
+            &[2, 2],
+            &["age".into(), "".into()],
+            &[vec!["0".into()], vec!["m".into(), "f".into()]],
+            &[Some(vec![1.0, 0.0]), Some(vec![0.0])],
+            &[2, 5, 4],
+            3,
+        );
+        assert!(bad.contains(&"length of the data does not match prod(dim)".to_string()));
+        assert!(bad.contains(&"one of the dimnames identifiers is blank".to_string()));
+        assert!(bad.contains(&"type attribute must be 1, 2, 3, or 4".to_string()));
+        assert!(bad.contains(&"wrong length for type attribute".to_string()));
+        assert!(bad.contains(&"dimname 1 is the wrong length".to_string()));
+        assert!(bad.contains(&"unsorted cutpoints for dimension 1".to_string()));
+
+        let two_us_years = ratetable_problems(
+            &[1, 1],
+            &["a".into(), "b".into()],
+            &[vec!["x".into()], vec!["y".into()]],
+            &[Some(vec![0.0]), Some(vec![0.0])],
+            &[4, 4],
+            1,
+        );
+        assert!(
+            two_us_years
+                .iter()
+                .any(|m| m.contains("US ratetable years"))
+        );
+
+        let factor_with_cuts = ratetable_problems(
+            &[1],
+            &["a".into()],
+            &[vec!["x".into()]],
+            &[Some(vec![0.0])],
+            &[1],
+            1,
+        );
+        assert_eq!(
+            factor_with_cuts,
+            vec!["attribute type[1] is continuous; cutpoint should be null"]
+        );
+
+        assert!(
+            RateTable::try_new(
+                vec![1],
+                vec!["a".into()],
+                vec![vec!["x".into()]],
+                vec![Some(vec![0.0])],
+                vec![DimType::Continuous],
+                vec![-1.0],
+            )
+            .is_err()
+        );
+        let check = is_ratetable(vec![], vec![], vec![], vec![], vec![], 0);
+        assert!(!check.valid);
     }
 
     #[test]
-    fn ratetable_validates_public_inputs() {
-        assert!(
-            RateTable::new(vec![], vec![], None)
-                .expect_err("empty dimensions should fail")
-                .to_string()
-                .contains("dimensions cannot be empty")
-        );
-        assert!(
-            create_simple_ratetable(vec![0.0], vec![1990.0, 2000.0], vec![0.1], vec![0.1])
-                .expect_err("short age breaks should fail")
-                .to_string()
-                .contains("age_breaks")
-        );
-        assert!(
-            create_simple_ratetable(
-                vec![0.0, 10.0, 5.0],
-                vec![1990.0, 2000.0],
-                vec![0.1, 0.2],
-                vec![0.1, 0.2],
-            )
-            .expect_err("unsorted age breaks should fail")
-            .to_string()
-            .contains("age_breaks must be strictly increasing")
-        );
-        assert!(
-            create_simple_ratetable(
-                vec![0.0, 10.0],
-                vec![1990.0, 2000.0],
-                vec![f64::NAN],
-                vec![0.1],
-            )
-            .expect_err("non-finite rate should fail")
-            .to_string()
-            .contains("rates_male contains non-finite")
-        );
+    fn ratetable_date_counts_days_from_1970() {
+        assert_eq!(ratetable_date(1970, 1, 1).unwrap(), 0.0);
+        assert_eq!(ratetable_date(1960, 1, 1).unwrap(), -3653.0);
+        assert_eq!(ratetable_date(1990, 6, 15).unwrap(), 7470.0);
+        assert_eq!(ratetable_date(2000, 2, 29).unwrap(), 11016.0);
+        assert_eq!(ratetable_date(2020, 12, 31).unwrap(), 18627.0);
+        assert_eq!(ratetable_date(1900, 3, 1).unwrap(), -25508.0);
+        assert!(ratetable_date(2001, 2, 29).is_err());
+        assert!(ratetable_date(2001, 13, 1).is_err());
+    }
 
-        let rt = create_simple_ratetable(
-            vec![0.0, 365.0],
-            vec![1990.0, 2000.0],
-            vec![0.001],
-            vec![0.0008],
-        )
-        .unwrap();
-        let mut coords = HashMap::new();
-        coords.insert("age".to_string(), f64::NAN);
-        assert!(
-            rt.lookup(coords)
-                .expect_err("non-finite coordinate should fail")
-                .to_string()
-                .contains("age coordinate must be finite")
-        );
-        assert!(
-            rt.cumulative_hazard(0.0, f64::INFINITY, 2000.0, Some(0))
-                .expect_err("non-finite age end should fail")
-                .to_string()
-                .contains("must be finite")
-        );
-        assert!(
-            days_to_date(-1.0, 1960)
-                .expect_err("negative days should fail")
-                .to_string()
-                .contains("days must be a finite non-negative value")
-        );
-        assert!(
-            ratetable_date(2001, 2, 29, 1960)
-                .expect_err("invalid calendar date should fail")
-                .to_string()
-                .contains("day is invalid")
-        );
+    #[test]
+    fn days_to_date_inverts_ratetable_date() {
+        for (year, month, day) in [
+            (1970, 1, 1),
+            (1960, 1, 1),
+            (1990, 6, 15),
+            (2000, 2, 29),
+            (2020, 12, 31),
+            (1900, 3, 1),
+            (1899, 12, 31),
+            (2100, 2, 28),
+        ] {
+            let days = ratetable_date(year, month, day).unwrap();
+            assert_eq!(days_to_date(days), CalendarDate { year, month, day });
+        }
+        assert_eq!(days_to_date(7470.5).to_string(), "1990-06-15");
+        assert_eq!(days_to_date(-0.5).to_string(), "1969-12-31");
+        assert_eq!(start_of_year(7470.0), ratetable_date(1990, 1, 1).unwrap());
+        assert_eq!(start_of_year(-1.0), ratetable_date(1969, 1, 1).unwrap());
     }
 }

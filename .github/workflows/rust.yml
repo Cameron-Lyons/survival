@@ -28,6 +28,11 @@ jobs:
         with:
           python-version: '3.14'
 
+      # The `python` feature tests embed this interpreter and exercise the
+      # NumPy boundary types, so NumPy must be importable from it.
+      - name: Install NumPy for the embedded-interpreter tests
+        run: python -m pip install numpy
+
       - name: Install Rust
         run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
 

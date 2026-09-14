@@ -2416,6 +2416,298 @@ run_case("utilities", "statefig", function() {
 })
 
 # ---------------------------------------------------------------------------
+# km: aggregate.survfit (population averages of survfit(coxfit, newdata))
+#
+# The consumer receives the curves of the survfit object as R stores them
+# (surv: time x data, pstate: time x data x state) rather than refitting the
+# Cox model, so the case records that input matrix next to the aggregate.
+# The file is km-aggregate_survfit.json.
+# ---------------------------------------------------------------------------
+
+aggregate_topic <- "km-aggregate_survfit"
+
+# by (a vector, or a named list of vectors) and FUN as recorded in the case.
+aggregate_case <- function(name, csurv, by = NULL, fun = NULL, note = NULL) {
+  run_case(aggregate_topic, name, function() {
+    agg <- if (is.null(fun)) aggregate(csurv, by = by) else aggregate(csurv, by = by, FUN = fun)
+    args <- list()
+    if (!is.null(csurv$surv)) args$surv <- jmat(csurv$surv)
+    if (!is.null(csurv$pstate)) args$pstate <- jarray3(csurv$pstate)
+    if (!is.null(by)) {
+      args$by <- if (is.list(by)) lapply(by, jvec) else list(jvec(by))
+      if (is.list(by) && !is.null(names(by))) args$by_names <- I(names(by))
+    }
+    args$fun <- if (is.null(fun)) "mean" else fun
+    expected <- list()
+    if (!is.null(agg$surv)) expected$surv <- if (is.matrix(agg$surv)) jmat(agg$surv) else jvec(agg$surv)
+    if (!is.null(agg$pstate)) {
+      expected$pstate <- if (length(dim(agg$pstate)) == 3) jarray3(agg$pstate) else jmat(agg$pstate)
+    }
+    # `$<- NULL` would drop the entry; keep it so the case records "no newdata"
+    expected["newdata"] <- list(if (is.null(agg$newdata)) NULL else jframe(agg$newdata))
+    add_case(aggregate_topic, name, list(args = args), expected, note)
+  })
+}
+
+lung_cfit <- coxph(Surv(time, status) ~ age + sex, data = lung)
+lung_population <- data.frame(age = c(50, 60, 70, 55, 65, 75), sex = c(1, 1, 2, 2, 1, 2))
+lung_csurv <- survfit(lung_cfit, newdata = lung_population)
+aggregate_case("lung_mean", lung_csurv)
+aggregate_case("lung_constant_by", lung_csurv, by = rep(2, 6),
+               note = "every column in one group: R drops back to the no-by case")
+aggregate_case("lung_by_sex", lung_csurv, by = lung_population$sex)
+aggregate_case("lung_by_sex_median", lung_csurv, by = lung_population$sex, fun = "median")
+aggregate_case("lung_by_sex_grp_max", lung_csurv,
+               by = list(sex = lung_population$sex, grp = c(1, 2, 3, 1, 2, 3)), fun = "max",
+               note = "two grouping vectors: groups ordered with the first varying fastest")
+lung_sfit <- coxph(Surv(time, status) ~ age + strata(sex), data = lung)
+lung_scsurv <- survfit(lung_sfit, newdata = data.frame(age = c(45, 55, 65, 75)))
+aggregate_case("lung_strata_by", lung_scsurv, by = c(1, 1, 2, 2),
+               note = "stratified fit: the rows of both strata are stacked")
+mgus2_mfit <- coxph(Surv(etime, event) ~ age + sex, data = mgus2_cr[mgus2_rows, ], id = id)
+mgus2_msurv <- survfit(mgus2_mfit, newdata = data.frame(age = c(60, 70, 80, 65),
+                                                        sex = c("F", "M", "F", "M")))
+aggregate_case("mgus2_pstate_mean", mgus2_msurv, note = "multi-state fit on the first 400 rows of mgus2")
+aggregate_case("mgus2_pstate_by", mgus2_msurv, by = c(1, 2, 1, 2),
+               note = "multi-state fit on the first 400 rows of mgus2")
+
+# ---------------------------------------------------------------------------
+# survreg-extra (key: survreg): families, censoring types and options the
+# survreg topic leaves light -- extreme/t/logistic with left censoring, the
+# fixed-scale and strata paths with every residual and prediction type, an
+# offset, and the iteration limits (iter.max = 0 returns the starting values).
+# ---------------------------------------------------------------------------
+
+survreg_extra_case <- function(name, dataset, formula, rows = NULL, args = list(),
+                               data_ref = NULL, newdata = NULL, full = TRUE, note = NULL) {
+  run_case("survreg-extra", name, function() {
+    df <- case_frame(dataset, data_ref, rows)
+    call_args <- c(list(formula = as.formula(formula), data = df), resolve_column_args(args, df))
+    fit <- suppressWarnings(do.call(survreg, call_args))
+    inputs <- case_inputs(dataset, data_ref, rows, formula, args, df)
+    add_case("survreg-extra", name, inputs, survreg_expected(fit, newdata, full), note)
+  })
+}
+
+tobin_newdata <- data.frame(age = c(40, 55), quant = c(220, 260))
+survreg_extra_case("tobin_extreme_left", "tobin",
+                   "Surv(durable, durable > 0, type = \"left\") ~ age + quant",
+                   args = list(dist = "extreme"), newdata = tobin_newdata)
+survreg_extra_case("tobin_t_left", "tobin",
+                   "Surv(durable, durable > 0, type = \"left\") ~ age + quant",
+                   args = list(dist = "t"), newdata = tobin_newdata)
+survreg_extra_case("tobin_t_df6_left", "tobin",
+                   "Surv(durable, durable > 0, type = \"left\") ~ age + quant",
+                   args = list(dist = "t", parms = 6), newdata = tobin_newdata)
+survreg_extra_case("tobin_logistic_left_full", "tobin",
+                   "Surv(durable, durable > 0, type = \"left\") ~ age + quant",
+                   args = list(dist = "logistic"), newdata = tobin_newdata)
+survreg_extra_case("ovarian_rayleigh_age", "ovarian", "Surv(futime, fustat) ~ age",
+                   args = list(dist = "rayleigh"), newdata = data.frame(age = c(50, 65)))
+survreg_extra_case("ovarian_exponential_ecog_rx_full", "ovarian",
+                   "Surv(futime, fustat) ~ ecog.ps + rx", args = list(dist = "exponential"),
+                   newdata = data.frame(ecog.ps = c(1, 2), rx = c(1, 2)))
+survreg_extra_case("ovarian_loglogistic_age_full", "ovarian", "Surv(futime, fustat) ~ age",
+                   args = list(dist = "loglogistic"), newdata = data.frame(age = c(50, 65)))
+survreg_extra_case("lung_lognormal_strata_sex_full", "lung",
+                   "Surv(time, status) ~ age + ph.ecog + strata(sex)", rows = lung_cc,
+                   args = list(dist = "lognormal"),
+                   newdata = data.frame(age = c(50, 70), ph.ecog = c(0, 2), sex = c(1, 2)))
+survreg_extra_case("lung_weibull_offset_sex", "lung", "Surv(time, status) ~ age + offset(sex)",
+                   args = list(dist = "weibull"), newdata = lung_newdata)
+survreg_extra_case("lung_weibull_weighted_strata_sex", "lung",
+                   "Surv(time, status) ~ age + strata(sex)",
+                   args = list(dist = "weibull", weights = jvec(lung_weights)),
+                   newdata = lung_newdata)
+survreg_extra_case("lung_weibull_iter_max_2", "lung", "Surv(time, status) ~ age + sex",
+                   args = list(dist = "weibull", control = list(iter.max = 2)), full = FALSE,
+                   note = "stops before convergence (R warns)")
+survreg_extra_case("lung_weibull_iter_max_0", "lung", "Surv(time, status) ~ age + sex",
+                   args = list(dist = "weibull", control = list(iter.max = 0)), full = FALSE,
+                   note = "returns the starting values of survreg.fit")
+survreg_extra_case("lung_gaussian_iter_max_0", "lung", "Surv(time, status) ~ age + sex",
+                   args = list(dist = "gaussian", control = list(iter.max = 0)), full = FALSE,
+                   note = "returns the starting values of survreg.fit")
+survreg_extra_case("lung_weibull_init_all", "lung", "Surv(time, status) ~ age + sex",
+                   args = list(dist = "weibull", init = c(6.5, 0, -0.5, -0.2)), full = FALSE,
+                   note = "starting values for the coefficients and log(scale)")
+survreg_extra_case("interval2_synthetic_gaussian_g", NULL,
+                   "Surv(left, right, type = \"interval2\") ~ g", data_ref = "synthetic_interval",
+                   args = list(dist = "gaussian"), full = "light")
+
+# ---------------------------------------------------------------------------
+# dataprep: tmerge last-value-carried-forward (tmerge2's `k--`) -- a tdc
+# applied to subjects that already have several intervals, with update
+# times that miss some interval starts (na.rm dropping NA covariate rows,
+# or an event split from an earlier argument).  Written to
+# dataprep-tmerge.json.
+# ---------------------------------------------------------------------------
+
+register_data("tmerge_lvcf_base", data.frame(id = 1:3, futime = c(15, 12, 20),
+                                             death = c(1, 0, 1)))
+register_data("tmerge_lvcf_long", data.frame(
+  id = c(1, 1, 1, 1, 2, 2, 3, 3, 3),
+  time = c(-1, 5, 7, 10, 3, 6, 8, 12, 15),
+  x = c(7, NA, 8, NA, 4, NA, 1, NA, 2),
+  visit = c(0, 1, 0, 1, 1, 1, 1, 1, 0)
+))
+
+run_case("dataprep-tmerge", "lvcf_after_event_split", function() {
+  base <- inline_data[["tmerge_lvcf_base"]]
+  long <- inline_data[["tmerge_lvcf_long"]]
+  d1 <- tmerge(base, base, id = id, death = event(futime, death))
+  d2 <- tmerge(d1, long, id = id, visit = event(time, visit))
+  d3 <- tmerge(d2, long, id = id, x = tdc(time, x))
+  d4 <- tmerge(d3, long, id = id, nx = cumtdc(time, x))
+  d5 <- tmerge(d4, long, id = id, seen = tdc(time))
+  d6 <- tmerge(d2, long, id = id, x = tdc(time, x), options = list(na.rm = FALSE))
+  d7 <- tmerge(d2, long, id = id, x = tdc(time, x, 0))
+  add_case("dataprep-tmerge", "lvcf_after_event_split",
+           list(data_ref = "tmerge_lvcf_base", data_ref2 = "tmerge_lvcf_long", args = list()),
+           list(step2_visit_event = jframe(d2),
+                step3_x_tdc = jframe(d3),
+                step4_nx_cumtdc = jframe(d4),
+                step5_seen_tdc = jframe(d5),
+                x_tdc_na_kept = jframe(d6),
+                x_tdc_init_0 = jframe(d7),
+                tcount_step5 = jmat_named(attr(d5, "tcount"))),
+           note = "x has NA values on rows that split the intervals, so the tdc must carry values across interval starts without an update")
+})
+
+run_case("dataprep-tmerge", "pbcseq_20_chol_na", function() {
+  pbc1 <- pbc[pbc$id <= 20, c("id", "time", "status", "trt", "age", "sex")]
+  seq2 <- pbcseq[pbcseq$id <= 20, c("id", "day", "bili", "chol", "ascites", "hepato")]
+  register_data("pbc_20", pbc1)
+  register_data("pbcseq_20_chol", seq2)
+  pbc2 <- tmerge(pbc1, pbc1, id = id, death = event(time, status == 2))
+  pbc3 <- tmerge(pbc2, seq2, id = id, bili = tdc(day, bili), chol = tdc(day, chol),
+                 ascites = tdc(day, ascites), hepato = tdc(day, hepato))
+  pbc4 <- tmerge(pbc2, seq2, id = id, chol = tdc(day, chol), options = list(na.rm = FALSE))
+  add_case("dataprep-tmerge", "pbcseq_20_chol_na",
+           list(data_ref = "pbc_20", data_ref2 = "pbcseq_20_chol", args = list()),
+           list(frame = jframe(pbc3), tcount = jmat_named(attr(pbc3, "tcount")),
+                chol_na_kept = jframe(pbc4)),
+           note = "chol, ascites and hepato have NA rows in pbcseq; na.rm drops them so their values carry forward over the bili split")
+})
+
+# ---------------------------------------------------------------------------
+# validation: extra cases for survobrien, yates, anova, survcheck and the
+# survfit summaries (topic file validation-extra.json)
+# ---------------------------------------------------------------------------
+
+run_case("validation-extra", "survobrien_cgd_counting", function() {
+  df <- cgd[cgd$id <= 40, ]
+  ob <- survobrien(Surv(tstart, tstop, status) ~ age + height, data = df)
+  cfit <- coxph(Surv(start, stop, status) ~ age + height + strata(.strata.), data = ob)
+  add_case("validation-extra", "survobrien_cgd_counting",
+           list(dataset = "cgd", rows = I(which(cgd$id <= 40)),
+                formula = "Surv(tstart, tstop, status) ~ age + height", args = list()),
+           list(frame = jframe(ob),
+                cox_formula = "Surv(start, stop, status) ~ age + height + strata(.strata.)",
+                coxph_coef = jnamed(cfit$coefficients)),
+           note = "counting-process risk sets: start < t <= stop")
+})
+
+run_case("validation-extra", "yates_veteran_celltype_pairwise", function() {
+  fit <- coxph(Surv(time, status) ~ celltype + karno, veteran)
+  y <- yates(fit, "celltype", test = "pairwise")
+  add_case("validation-extra", "yates_veteran_celltype_pairwise",
+           list(dataset = "veteran", formula = "Surv(time, status) ~ celltype + karno",
+                factors = factor_levels(veteran, "celltype"),
+                args = list(term = "celltype", test = "pairwise"), fit = "coxph"),
+           jyates(y))
+})
+
+run_case("validation-extra", "anova_lung_model_list", function() {
+  df <- lung[lung_cc, ]
+  fit1 <- coxph(Surv(time, status) ~ age, df)
+  fit2 <- coxph(Surv(time, status) ~ age + sex, df)
+  fit3 <- coxph(Surv(time, status) ~ age + sex + ph.ecog, df)
+  a <- anova(fit1, fit2, fit3)
+  add_case("validation-extra", "anova_lung_model_list",
+           list(dataset = "lung", rows = I(lung_cc),
+                formulas = I(c("Surv(time, status) ~ age", "Surv(time, status) ~ age + sex",
+                               "Surv(time, status) ~ age + sex + ph.ecog")),
+                args = list()),
+           list(loglik = jvec(a$loglik), chisq = jvec(a$Chisq), df = jvec(a$Df),
+                p = jvec(a[["Pr(>|Chi|)"]])),
+           note = "anova.coxphlist: absolute differences between the fits")
+})
+
+register_data("synthetic_right_dupid", data.frame(
+  id = c(1, 1, 2, 3, 3, 4),
+  time = c(5, 8, 3, 2, 6, 4),
+  status = c(0, 1, 1, 0, 1, 0)
+))
+run_case("validation-extra", "survcheck_right_censored_dupid", function() {
+  df <- inline_data[["synthetic_right_dupid"]]
+  sc <- survcheck(Surv(time, status) ~ 1, data = df, id = id)
+  add_case("validation-extra", "survcheck_right_censored_dupid",
+           inline_input("synthetic_right_dupid", "Surv(time, status) ~ 1", list(id = "id")),
+           jsurvcheck(sc),
+           note = "right-censored rows of one id all start at 0: R flags them as overlaps")
+})
+
+run_case("validation-extra", "survfit_lung_sex_rmean_individual", function() {
+  fit <- survfit(Surv(time, status) ~ sex, lung)
+  add_case("validation-extra", "survfit_lung_sex_rmean_individual",
+           dataset_input("lung", NULL, "Surv(time, status) ~ sex", list()),
+           list(summary_table_individual = jsurvfit_summary_table(fit, rmean = "individual"),
+                summary_table_none = jsurvfit_summary_table(fit, rmean = "none"),
+                summary_table_scale = jsurvfit_summary_table(fit, rmean = 365.25, scale = 365.25),
+                quantile_scale = jquantile(fit),
+                quantile_probs = local({
+                  q <- quantile(fit, probs = c(0.1, 0.3, 0.9), conf.int = TRUE)
+                  list(probs = jvec(c(0.1, 0.3, 0.9)), quantile = jmat(q$quantile),
+                       lower = jmat(q$lower), upper = jmat(q$upper))
+                })))
+})
+
+# Turnbull with a jump point that ends the EM with zero mass: survfitKM
+# keeps the zero-weight pseudo-observation row (n.event = 0).
+register_data("synthetic_interval_dead_jump", data.frame(
+  time = c(7, 12, 12, 12, 18, 24, 30),
+  time2 = c(NA, NA, NA, NA, NA, 27, 33),
+  status = c(1, 0, 2, 2, 2, 3, 3)
+))
+run_case("validation-extra", "turnbull_dead_jump", function() {
+  df <- inline_data[["synthetic_interval_dead_jump"]]
+  fit <- survfit(Surv(time, time2, status, type = "interval") ~ 1, data = df)
+  add_case("validation-extra", "turnbull_dead_jump",
+           inline_input("synthetic_interval_dead_jump",
+                        "Surv(time, time2, status, type = \"interval\") ~ 1"),
+           turnbull_expected(fit),
+           note = "the jump at 15 (between the right-censored 12 and the left-censored 18) ends with zero EM mass")
+})
+
+# Two larger curves (a fixed draw of exponential times with random status
+# codes); curve "a" has a dead jump at 24.55 in the middle of the curve.
+register_data("synthetic_interval_dead_jump_groups", data.frame(
+  time = c(4, 13.2, 5.7, 0.8, 9.5, 29.3, 6.3, 8.2, 23.8, 14.3, 26.9, 48.2, 1.9, 1.1,
+           25.1, 6.2, 9.5, 12.4, 24.9, 7.4, 97.3, 13.3, 99.9, 4.5, 24.2, 14.4, 26.2,
+           5.6, 4.6, 25.7, 5.7, 30.2, 5, 3.5, 17.6, 7.4, 0.3, 3.5, 3.9, 19, 7.8, 6.6,
+           3.9, 14.2, 15.2, 4.4, 41.7, 12, 0.3, 68.5, 1.6, 16.5, 11.3, 2.9, 5.5, 1.3,
+           14.5, 9.1, 3.3, 84.6),
+  time2 = c(NA, NA, 7, NA, NA, NA, 12.3, NA, NA, NA, NA, 53.3, NA, 3.1, NA, 13.8, NA,
+            17.1, NA, NA, NA, NA, NA, NA, NA, NA, 35, 9.5, NA, 33.4, NA, NA, 13.1, NA,
+            NA, NA, NA, NA, NA, NA, 9.3, 12.4, NA, NA, NA, NA, NA, NA, NA, NA, NA, 26.2,
+            NA, NA, NA, NA, 21.3, NA, NA, NA),
+  status = c(1, 0, 3, 1, 1, 1, 3, 0, 1, 0, 1, 3, 2, 3, 0, 3, 0, 3, 2, 1, 1, 2, 0, 0, 1,
+             2, 3, 3, 1, 3, 0, 0, 3, 0, 0, 0, 1, 2, 0, 1, 3, 3, 0, 2, 1, 0, 0, 1, 0, 0,
+             2, 3, 1, 2, 1, 1, 3, 0, 2, 0),
+  g = rep(c("a", "b"), each = 30)
+))
+run_case("validation-extra", "turnbull_dead_jump_groups", function() {
+  df <- inline_data[["synthetic_interval_dead_jump_groups"]]
+  fit <- survfit(Surv(time, time2, status, type = "interval") ~ g, data = df)
+  add_case("validation-extra", "turnbull_dead_jump_groups",
+           inline_input("synthetic_interval_dead_jump_groups",
+                        "Surv(time, time2, status, type = \"interval\") ~ g"),
+           list(fit = jsurvfit(fit)),
+           note = "curve a has a dead jump at 24.55 (n.event = 0) before later events")
+})
+
+# ---------------------------------------------------------------------------
 # Write everything
 # ---------------------------------------------------------------------------
 
