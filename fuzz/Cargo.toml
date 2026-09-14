@@ -9,6 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+ndarray = "0.17.2"
 
 [dependencies.survival]
 path = ".."

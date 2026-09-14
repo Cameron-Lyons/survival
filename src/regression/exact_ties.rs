@@ -62,76 +62,6 @@ fn log_add_exp(lhs: f64, rhs: f64) -> f64 {
     largest + ((lhs - largest).exp() + (rhs - largest).exp()).ln()
 }
 
-pub(crate) fn exact_inclusion_probabilities(
-    risk_indices: &[usize],
-    deaths: usize,
-    log_risk: &[f64],
-) -> Option<Vec<(usize, f64)>> {
-    if deaths == 0 || deaths > risk_indices.len() {
-        return None;
-    }
-    let shift = risk_indices
-        .iter()
-        .map(|&person| log_risk[person])
-        .fold(f64::NEG_INFINITY, f64::max);
-    if !shift.is_finite() {
-        return None;
-    }
-
-    let n_risk = risk_indices.len();
-    let mut prefix = vec![vec![f64::NEG_INFINITY; deaths + 1]; n_risk + 1];
-    prefix[0][0] = 0.0;
-    for pos in 0..n_risk {
-        let (previous_rows, current_rows) = prefix.split_at_mut(pos + 1);
-        let previous = &previous_rows[pos];
-        let current = &mut current_rows[0];
-        current.copy_from_slice(previous);
-        let log_weight = log_risk[risk_indices[pos]] - shift;
-        for size in 1..=deaths.min(pos + 1) {
-            current[size] = log_add_exp(current[size], previous[size - 1] + log_weight);
-        }
-    }
-
-    let mut suffix = vec![vec![f64::NEG_INFINITY; deaths + 1]; n_risk + 1];
-    suffix[n_risk][0] = 0.0;
-    for pos in (0..n_risk).rev() {
-        let (current_rows, following_rows) = suffix.split_at_mut(pos + 1);
-        let current = &mut current_rows[pos];
-        let following = &following_rows[0];
-        current.copy_from_slice(following);
-        let log_weight = log_risk[risk_indices[pos]] - shift;
-        for size in 1..=deaths.min(n_risk - pos) {
-            current[size] = log_add_exp(current[size], following[size - 1] + log_weight);
-        }
-    }
-
-    let log_denom = prefix[n_risk][deaths];
-    if !log_denom.is_finite() {
-        return None;
-    }
-    Some(
-        (0..n_risk)
-            .map(|pos| {
-                let mut excluded_log_weight = f64::NEG_INFINITY;
-                for (left_size, &left_log_weight) in prefix[pos].iter().take(deaths).enumerate() {
-                    let right_size = deaths - 1 - left_size;
-                    excluded_log_weight = log_add_exp(
-                        excluded_log_weight,
-                        left_log_weight + suffix[pos + 1][right_size],
-                    );
-                }
-                let log_weight = log_risk[risk_indices[pos]] - shift;
-                (
-                    risk_indices[pos],
-                    (log_weight + excluded_log_weight - log_denom)
-                        .exp()
-                        .clamp(0.0, 1.0),
-                )
-            })
-            .collect(),
-    )
-}
-
 pub(crate) fn exact_tied_moments(
     risk_indices: &[usize],
     deaths: usize,
@@ -275,26 +205,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn inclusion_probabilities_match_pairwise_weights_and_log_shifts() {
-        let base_logs = vec![2.0_f64.ln(), 3.0_f64.ln(), 5.0_f64.ln()];
-        let shifted_logs: Vec<f64> = base_logs.iter().map(|value| value + 1_000.0).collect();
-        let expected = [16.0 / 31.0, 21.0 / 31.0, 25.0 / 31.0];
-
-        let base = exact_inclusion_probabilities(&[0, 1, 2], 2, &base_logs)
-            .expect("pairwise inclusion probabilities should compute");
-        let shifted = exact_inclusion_probabilities(&[0, 1, 2], 2, &shifted_logs)
-            .expect("shifted inclusion probabilities should compute");
-
-        for (((_, base_value), (_, shifted_value)), expected_value) in
-            base.iter().zip(&shifted).zip(expected)
-        {
-            assert_close(*base_value, expected_value, 1e-12);
-            assert_close(*shifted_value, expected_value, 1e-12);
-        }
-        assert_close(base.iter().map(|(_, value)| value).sum(), 2.0, 1e-12);
     }
 
     #[test]

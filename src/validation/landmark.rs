@@ -1,13 +1,71 @@
+//! Landmark, conditional-survival and life-table summaries of a
+//! Kaplan-Meier curve (no direct R `survival` counterpart).  Every curve
+//! is taken from `surv_analysis::survfitkm`.
+
 use crate::constants::{
     PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, same_time, z_score_for_confidence,
 };
-use crate::internal::statistical::normal_cdf as norm_cdf;
+use crate::internal::dist::pnorm;
 use crate::internal::validation::{
     validate_binary_i32, validate_confidence_level, validate_finite, validate_no_nan,
 };
+use crate::surv_analysis::{SurvfitKMData, SurvfitKMOptions, survfitkm};
+use crate::validation::logrank::logrank_test;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+/// One event time of a Kaplan-Meier curve: the survival, the Greenwood
+/// sum `sum d / (n (n - d))`, the number at risk and the cumulative
+/// number of events.
+struct KmStep {
+    time: f64,
+    survival: f64,
+    greenwood: f64,
+    n_risk: usize,
+    cumulative_events: usize,
+}
+
+/// The Kaplan-Meier event times of right-censored data.
+fn kaplan_meier_steps(time: &[f64], status: &[i32]) -> Vec<KmStep> {
+    let Ok(data) = SurvfitKMData::right_censored(time.to_vec(), status.to_vec()) else {
+        return Vec::new();
+    };
+    let options = SurvfitKMOptions {
+        se_fit: false,
+        ..SurvfitKMOptions::default()
+    };
+    let Ok(km) = survfitkm(&data, &options) else {
+        return Vec::new();
+    };
+    let mut greenwood = 0.0;
+    let mut cumulative_events = 0usize;
+    let mut steps = Vec::new();
+    for i in 0..km.time.len() {
+        let (n_risk, d) = (km.n_risk[i], km.n_event[i]);
+        if d <= 0.0 {
+            continue;
+        }
+        cumulative_events += d as usize;
+        if n_risk > d {
+            greenwood += d / (n_risk * (n_risk - d));
+        }
+        steps.push(KmStep {
+            time: km.time[i],
+            survival: km.surv[i],
+            greenwood,
+            n_risk: n_risk as usize,
+            cumulative_events,
+        });
+    }
+    steps
+}
+
+/// The last step at or before `at` (with the near-tie tolerance).
+fn step_at(steps: &[KmStep], at: f64) -> Option<&KmStep> {
+    let idx = steps.partition_point(|step| step.time <= at || same_time(step.time, at));
+    idx.checked_sub(1).map(|i| &steps[i])
+}
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct LandmarkResult {
@@ -184,46 +242,16 @@ pub(crate) fn compute_conditional_survival(
             n_at_risk: 0,
         };
     }
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let mut surv_given = 1.0;
-    let mut surv_target = 1.0;
-    let mut var_given = 0.0;
-    let mut var_target = 0.0;
-    let mut total_at_risk = n as f64;
-    let mut n_at_given = 0usize;
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut events = 0.0;
-        let mut removed = 0.0;
-        while i < n && same_time(time[indices[i]], current_time) {
-            removed += 1.0;
-            if status[indices[i]] == 1 {
-                events += 1.0;
-            }
-            i += 1;
-        }
-        if events > 0.0 && total_at_risk > 0.0 {
-            let hazard = events / total_at_risk;
-            if current_time <= given_time || same_time(current_time, given_time) {
-                surv_given *= 1.0 - hazard;
-                if total_at_risk > events {
-                    var_given += events / (total_at_risk * (total_at_risk - events));
-                }
-            }
-            if current_time <= target_time || same_time(current_time, target_time) {
-                surv_target *= 1.0 - hazard;
-                if total_at_risk > events {
-                    var_target += events / (total_at_risk * (total_at_risk - events));
-                }
-            }
-        }
-        if current_time <= given_time || same_time(current_time, given_time) {
-            n_at_given = (total_at_risk - removed) as usize;
-        }
-        total_at_risk -= removed;
-    }
+    let steps = kaplan_meier_steps(time, status);
+    let (surv_given, var_given) =
+        step_at(&steps, given_time).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
+    let (surv_target, var_target) =
+        step_at(&steps, target_time).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
+    // number still at risk just after the given time
+    let n_at_given = time
+        .iter()
+        .filter(|&&t| t > given_time && !same_time(t, given_time))
+        .count();
     let conditional = if surv_given > 0.0 {
         surv_target / surv_given
     } else {
@@ -304,84 +332,40 @@ impl HazardRatioResult {
         }
     }
 }
+/// Log-rank (Peto) estimate of the hazard ratio of the second group
+/// against the first: `exp((O - E) / V)` with the log-rank variance `V`.
 pub(crate) fn compute_hazard_ratio(
     time: &[f64],
     status: &[i32],
     group: &[i32],
     confidence_level: f64,
 ) -> HazardRatioResult {
-    let n = time.len();
-    if n == 0 {
-        return HazardRatioResult {
-            hazard_ratio: 1.0,
-            ci_lower: 1.0,
-            ci_upper: 1.0,
-            se_log_hr: 0.0,
-            z_statistic: 0.0,
-            p_value: 1.0,
-        };
-    }
+    let neutral = HazardRatioResult {
+        hazard_ratio: 1.0,
+        ci_lower: 1.0,
+        ci_upper: 1.0,
+        se_log_hr: 0.0,
+        z_statistic: 0.0,
+        p_value: 1.0,
+    };
     let mut unique_groups: Vec<i32> = group.to_vec();
-    unique_groups.sort();
+    unique_groups.sort_unstable();
     unique_groups.dedup();
     if unique_groups.len() < 2 {
-        return HazardRatioResult {
-            hazard_ratio: 1.0,
-            ci_lower: 1.0,
-            ci_upper: 1.0,
-            se_log_hr: 0.0,
-            z_statistic: 0.0,
-            p_value: 1.0,
-        };
+        return neutral;
     }
-    let g1 = unique_groups[0];
-    let g2 = unique_groups[1];
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let mut n1_at_risk = 0.0;
-    let mut n2_at_risk = 0.0;
-    for &grp in group {
-        if grp == g1 {
-            n1_at_risk += 1.0;
-        } else if grp == g2 {
-            n2_at_risk += 1.0;
-        }
-    }
-    let mut sum_o_e: f64 = 0.0;
-    let mut sum_var: f64 = 0.0;
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut d1 = 0.0;
-        let mut d2 = 0.0;
-        let mut r1 = 0.0;
-        let mut r2 = 0.0;
-        while i < n && same_time(time[indices[i]], current_time) {
-            let idx = indices[i];
-            if group[idx] == g1 {
-                r1 += 1.0;
-                if status[idx] == 1 {
-                    d1 += 1.0;
-                }
-            } else if group[idx] == g2 {
-                r2 += 1.0;
-                if status[idx] == 1 {
-                    d2 += 1.0;
-                }
-            }
-            i += 1;
-        }
-        let d = d1 + d2;
-        let y = n1_at_risk + n2_at_risk;
-        if d > 0.0 && y > 1.0 {
-            let e1 = d * n1_at_risk / y;
-            sum_o_e += d1 - e1;
-            let v = d * n1_at_risk * n2_at_risk * (y - d) / (y * y * (y - 1.0));
-            sum_var += v;
-        }
-        n1_at_risk -= r1;
-        n2_at_risk -= r2;
-    }
+    // Only the first two groups take part in the comparison.
+    let rows: Vec<usize> = (0..time.len())
+        .filter(|&i| group[i] == unique_groups[0] || group[i] == unique_groups[1])
+        .collect();
+    let time: Vec<f64> = rows.iter().map(|&i| time[i]).collect();
+    let status: Vec<i32> = rows.iter().map(|&i| status[i]).collect();
+    let group: Vec<i32> = rows.iter().map(|&i| group[i]).collect();
+    let Ok(test) = logrank_test(&time, &status, &group, None, None, 0.0, true) else {
+        return neutral;
+    };
+    let sum_o_e = test.observed[0] - test.expected[0];
+    let sum_var = test.variance[0][0];
     let log_hr: f64 = if sum_var > 0.0 {
         sum_o_e / sum_var
     } else {
@@ -400,7 +384,7 @@ pub(crate) fn compute_hazard_ratio(
     } else {
         0.0
     };
-    let p_value = 2.0 * (1.0 - norm_cdf(z_statistic.abs()));
+    let p_value = 2.0 * pnorm(z_statistic.abs(), false, false);
     HazardRatioResult {
         hazard_ratio,
         ci_lower,
@@ -473,124 +457,37 @@ pub(crate) fn compute_survival_at_times(
     confidence_level: f64,
 ) -> Vec<SurvivalAtTimeResult> {
     let n = time.len();
-    if n == 0 {
-        return eval_times
-            .iter()
-            .map(|&t| SurvivalAtTimeResult {
-                time: t,
-                survival: 1.0,
-                ci_lower: 1.0,
-                ci_upper: 1.0,
-                n_at_risk: 0,
-                n_events: 0,
-            })
-            .collect();
-    }
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let mut event_times: Vec<f64> = Vec::new();
-    let mut survival_vals: Vec<f64> = Vec::new();
-    let mut var_vals: Vec<f64> = Vec::new();
-    let mut n_risk_vals: Vec<usize> = Vec::new();
-    let mut cum_events: Vec<usize> = Vec::new();
-    let mut surv = 1.0;
-    let mut var_sum = 0.0;
-    let mut total_at_risk = n as f64;
-    let mut total_events = 0usize;
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut events = 0.0;
-        let mut removed = 0.0;
-        while i < n && same_time(time[indices[i]], current_time) {
-            removed += 1.0;
-            if status[indices[i]] == 1 {
-                events += 1.0;
-                total_events += 1;
-            }
-            i += 1;
-        }
-        if events > 0.0 && total_at_risk > 0.0 {
-            surv *= 1.0 - events / total_at_risk;
-            if total_at_risk > events {
-                var_sum += events / (total_at_risk * (total_at_risk - events));
-            }
-            event_times.push(current_time);
-            survival_vals.push(surv);
-            var_vals.push(surv * surv * var_sum);
-            n_risk_vals.push(total_at_risk as usize);
-            cum_events.push(total_events);
-        }
-        total_at_risk -= removed;
-    }
-    let z = z_score_for_confidence(confidence_level);
-    let results: Vec<SurvivalAtTimeResult> = if eval_times.len() > PARALLEL_THRESHOLD_SMALL {
-        eval_times
-            .par_iter()
-            .map(|&t| {
-                let (survival, var, n_risk, n_ev) = if event_times.is_empty()
-                    || (t < event_times[0] && !same_time(t, event_times[0]))
-                {
-                    (1.0, 0.0, n, 0)
-                } else {
-                    let idx = event_times.partition_point(|&et| et <= t || same_time(et, t));
-                    if idx == 0 {
-                        (1.0, 0.0, n, 0)
-                    } else {
-                        (
-                            survival_vals[idx - 1],
-                            var_vals[idx - 1],
-                            n_risk_vals[idx - 1],
-                            cum_events[idx - 1],
-                        )
-                    }
-                };
-                let se = var.sqrt();
-                let (ci_lower, ci_upper) = clamped_normal_ci(survival, se, z, 0.0, 1.0);
-                SurvivalAtTimeResult {
-                    time: t,
-                    survival,
-                    ci_lower,
-                    ci_upper,
-                    n_at_risk: n_risk,
-                    n_events: n_ev,
-                }
-            })
-            .collect()
+    let steps = if n == 0 {
+        Vec::new()
     } else {
-        let mut results = Vec::with_capacity(eval_times.len());
-        for &t in eval_times {
-            let (survival, var, n_risk, n_ev) = if event_times.is_empty()
-                || (t < event_times[0] && !same_time(t, event_times[0]))
-            {
-                (1.0, 0.0, n, 0)
-            } else {
-                let idx = event_times.partition_point(|&et| et <= t || same_time(et, t));
-                if idx == 0 {
-                    (1.0, 0.0, n, 0)
-                } else {
-                    (
-                        survival_vals[idx - 1],
-                        var_vals[idx - 1],
-                        n_risk_vals[idx - 1],
-                        cum_events[idx - 1],
-                    )
-                }
-            };
-            let se = var.sqrt();
-            let (ci_lower, ci_upper) = clamped_normal_ci(survival, se, z, 0.0, 1.0);
-            results.push(SurvivalAtTimeResult {
-                time: t,
-                survival,
-                ci_lower,
-                ci_upper,
-                n_at_risk: n_risk,
-                n_events: n_ev,
-            });
-        }
-        results
+        kaplan_meier_steps(time, status)
     };
-    results
+    let z = z_score_for_confidence(confidence_level);
+    let evaluate = |t: f64| {
+        let (survival, var, n_risk, n_events) = match step_at(&steps, t) {
+            Some(step) => (
+                step.survival,
+                step.survival * step.survival * step.greenwood,
+                step.n_risk,
+                step.cumulative_events,
+            ),
+            None => (1.0, 0.0, n, 0),
+        };
+        let (ci_lower, ci_upper) = clamped_normal_ci(survival, var.sqrt(), z, 0.0, 1.0);
+        SurvivalAtTimeResult {
+            time: t,
+            survival,
+            ci_lower,
+            ci_upper,
+            n_at_risk: n_risk,
+            n_events,
+        }
+    };
+    if eval_times.len() > PARALLEL_THRESHOLD_SMALL {
+        eval_times.par_iter().map(|&t| evaluate(t)).collect()
+    } else {
+        eval_times.iter().map(|&t| evaluate(t)).collect()
+    }
 }
 #[pyfunction]
 #[pyo3(signature = (time, status, eval_times, confidence_level=None))]

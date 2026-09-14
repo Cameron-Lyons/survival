@@ -2923,6 +2923,14 @@ KNOWN_FAILURES: dict[str, str] = {
     "coxph_predict/veteran_celltype_karno_trt/survfit_newdata:curves.std_err": (
         "mismatch: curve[0].std_err[0]: 0.0079853 != 0.0080744"
     ),
+    "km-aggregate_survfit/lung_mean": "missing feature: no handler for topic km-aggregate_survfit",
+    "km-aggregate_survfit/lung_constant_by": "missing feature: no handler for topic km-aggregate_survfit",
+    "km-aggregate_survfit/lung_by_sex": "missing feature: no handler for topic km-aggregate_survfit",
+    "km-aggregate_survfit/lung_by_sex_median": "missing feature: no handler for topic km-aggregate_survfit",
+    "km-aggregate_survfit/lung_by_sex_grp_max": "missing feature: no handler for topic km-aggregate_survfit",
+    "km-aggregate_survfit/lung_strata_by": "missing feature: no handler for topic km-aggregate_survfit",
+    "km-aggregate_survfit/mgus2_pstate_mean": "missing feature: no handler for topic km-aggregate_survfit",
+    "km-aggregate_survfit/mgus2_pstate_by": "missing feature: no handler for topic km-aggregate_survfit",
     "pseudo/aml_1/pseudo_rmst": "mismatch: pseudo_rmst[3][1]: 17.165 != 17.224",
     "pseudo/aml_1/pseudo_auc": "mismatch: pseudo_auc[3][1]: 17.165 != 17.224",
     "pseudo/aml_1/pseudo_sojourn": "mismatch: pseudo_sojourn[3][1]: 17.165 != 17.224",
@@ -6256,6 +6264,16 @@ def _check_survreg_distribution(key: str, exp: Mapping[str, Any]) -> None:
     assert_close(
         as_float_list(r.qsurvreg(exp["p"], **kwargs)), exp["q"], rtol=RTOL_COEF, path=f"{key}.q"
     )
+
+
+# --- survreg-extra (key: survreg) ------------------------------------------
+
+
+class SurvregExtraHandler(SurvregHandler):
+    """``test/r/fixtures/survreg-extra.json``: the families, censoring types and
+    control options the ``survreg`` topic leaves light; same aspects."""
+
+    topic = "survreg-extra"
 
 
 # --- concordance ------------------------------------------------------------

@@ -1,18 +1,21 @@
 #[cfg(test)]
 mod tests {
-    use crate::regression::cox_optimizer::{CoxFit, CoxFitBuilder, Method as CoxMethod};
-    use crate::residuals::coxmart_module::compute_coxmart;
-    use crate::surv_analysis::logrank_components::{
-        SurvDiffInput, SurvDiffOutput, SurvDiffParams, compute_survdiff,
-    };
+    use crate::concordance::{ConcordanceCounts, ConcordanceOptions, concordancefit};
+    use crate::core::SurvResponse;
+    use crate::internal::typed_inputs::SurvivalData;
+    use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod as CoxMethod};
+    use crate::residuals::coxmart::coxmart_sorted;
     use crate::surv_analysis::nelson_aalen;
-    use crate::surv_analysis::{KaplanMeierConfig, compute_survfitkm};
+    use crate::surv_analysis::{
+        SurvdiffData, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survdiff, survfitkm,
+    };
     use crate::tests::common::{
         STANDARD_TOL, STRICT_TOL, aml_combined_sorted as aml_combined, aml_maintained,
         aml_nonmaintained, approx_eq, lung_data, rel_approx_eq,
     };
-    use crate::validation::compute_rmst;
-    use crate::validation::logrank::{WeightType, weighted_logrank_test};
+    use crate::validation::{
+        RmeanOption, SurvfitCurve, logrank_test, quantile_survfit, rmst_comparison, survmean,
+    };
     use ndarray::{Array1, Array2};
 
     #[test]
@@ -39,9 +42,10 @@ mod tests {
             .build()
             .expect("Cox fit initialization failed");
 
-        cox_fit.fit().expect("Cox fit failed");
+        cox_fit.fit();
 
-        let (beta, _means, _u, _imat, loglik, _sctest, _flag, _iter) = cox_fit.results();
+        let results = cox_fit.results();
+        let (beta, loglik) = (results.coefficients, results.loglik);
 
         let hr = beta[0].exp();
 
@@ -86,29 +90,19 @@ mod tests {
 
         let time_arr = Array1::from_vec(time);
         let status_arr = Array1::from_vec(status);
-        let strata = Array1::zeros(n);
-        let offset = Array1::zeros(n);
-        let weights = Array1::from_elem(n, 1.0);
 
-        let mut cox_fit = CoxFit::new(
-            time_arr,
-            status_arr,
-            covar,
-            strata,
-            offset,
-            weights,
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true, true],
-            vec![0.0, 0.0],
-        )
-        .expect("Cox fit initialization failed");
+        let mut cox_fit = CoxFitBuilder::new(time_arr, status_arr, covar)
+            .method(CoxMethod::Breslow)
+            .max_iter(25)
+            .eps(1e-9)
+            .toler(1e-9)
+            .build()
+            .expect("Cox fit initialization failed");
 
-        cox_fit.fit().expect("Cox fit failed");
+        cox_fit.fit();
 
-        let (beta, _means, _u, _imat, _loglik, _sctest, flag, iter) = cox_fit.results();
+        let results = cox_fit.results();
+        let (beta, flag, iter) = (results.coefficients, results.flag, results.iter);
 
         assert!(
             iter < 25 || flag == 1000,
@@ -131,18 +125,11 @@ mod tests {
     #[test]
     fn test_survfit_km_aml_maintained() {
         let (time, status) = aml_maintained();
-        let status_f64: Vec<f64> = status.iter().map(|&s| s as f64).collect();
-        let weights = vec![1.0; time.len()];
-        let position = vec![0i32; time.len()];
-
-        let result = compute_survfitkm(
-            &time,
-            &status_f64,
-            &weights,
-            None,
-            &position,
-            &KaplanMeierConfig::default(),
-        );
+        let result = survfitkm(
+            &SurvfitKMData::try_new(None, time, status, None, None, None, None).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap();
 
         let expected_times = [9.0, 13.0, 18.0, 23.0, 31.0, 34.0, 48.0];
         let expected_survival = [0.909, 0.818, 0.716, 0.614, 0.491, 0.368, 0.184];
@@ -150,11 +137,11 @@ mod tests {
         for (i, &t) in expected_times.iter().enumerate() {
             if let Some(pos) = result.time.iter().position(|&rt| (rt - t).abs() < 0.01) {
                 assert!(
-                    rel_approx_eq(result.estimate[pos], expected_survival[i], 0.15),
+                    rel_approx_eq(result.surv[pos], expected_survival[i], 0.15),
                     "At time {}: expected {}, got {}",
                     t,
                     expected_survival[i],
-                    result.estimate[pos]
+                    result.surv[pos]
                 );
             }
         }
@@ -163,25 +150,19 @@ mod tests {
     #[test]
     fn test_survfit_km_all_censored() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![0.0, 0.0, 0.0, 0.0, 0.0];
-        let weights = vec![1.0; 5];
-        let position = vec![0i32; 5];
-
-        let result = compute_survfitkm(
-            &time,
-            &status,
-            &weights,
-            None,
-            &position,
-            &KaplanMeierConfig::default(),
-        );
+        let status = vec![0, 0, 0, 0, 0];
+        let result = survfitkm(
+            &SurvfitKMData::try_new(None, time.clone(), status, None, None, None, None).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap();
 
         assert_eq!(result.time, time, "Expected censor rows with all censored");
         assert_eq!(result.n_event, vec![0.0; 5]);
         assert_eq!(result.n_censor, vec![1.0; 5]);
         assert!(
             result
-                .estimate
+                .surv
                 .iter()
                 .all(|estimate| approx_eq(*estimate, 1.0, STRICT_TOL))
         );
@@ -190,26 +171,20 @@ mod tests {
     #[test]
     fn test_survfit_km_tied_events() {
         let time = vec![5.0, 5.0, 5.0, 10.0, 10.0, 15.0];
-        let status = vec![1.0, 1.0, 0.0, 1.0, 1.0, 1.0];
-        let weights = vec![1.0; 6];
-        let position = vec![0i32; 6];
-
-        let result = compute_survfitkm(
-            &time,
-            &status,
-            &weights,
-            None,
-            &position,
-            &KaplanMeierConfig::default(),
-        );
+        let status = vec![1, 1, 0, 1, 1, 1];
+        let result = survfitkm(
+            &SurvfitKMData::try_new(None, time, status, None, None, None, None).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap();
 
         assert_eq!(result.time.len(), 3, "Expected 3 unique event times");
 
         if let Some(pos) = result.time.iter().position(|&t| (t - 5.0).abs() < 0.01) {
             assert!(
-                rel_approx_eq(result.estimate[pos], 0.667, 0.1),
+                rel_approx_eq(result.surv[pos], 0.667, 0.1),
                 "At time 5: expected ~0.667, got {}",
-                result.estimate[pos]
+                result.surv[pos]
             );
         }
     }
@@ -217,7 +192,7 @@ mod tests {
     #[test]
     fn test_nelson_aalen_aml_maintained() {
         let (time, status) = aml_maintained();
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert!(
             approx_eq(result.cumulative_hazard[0], 1.0 / 11.0, STRICT_TOL),
@@ -249,7 +224,7 @@ mod tests {
     fn test_nelson_aalen_variance() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 1, 1, 1];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert!(result.variance[0] >= 0.0, "Variance should be non-negative");
 
@@ -265,11 +240,11 @@ mod tests {
     #[test]
     fn test_survdiff_aml_logrank() {
         let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
 
         eprintln!("Observed: {:?}", result.observed);
         eprintln!("Expected: {:?}", result.expected);
-        eprintln!("Variance: {}", result.variance);
+        eprintln!("Variance: {:?}", result.variance);
         eprintln!("Statistic: {}", result.statistic);
 
         assert!(
@@ -288,65 +263,18 @@ mod tests {
     }
 
     #[test]
-    fn test_survdiff_aml_wilcoxon() {
-        let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::Wilcoxon);
-
-        assert_eq!(result.weight_type, "Wilcoxon");
-        assert!(result.statistic >= 0.0, "Chi-squared must be non-negative");
-        assert!(
-            result.p_value >= 0.0 && result.p_value <= 1.0,
-            "P-value must be between 0 and 1"
-        );
-    }
-
-    #[test]
     fn test_survdiff_internal() {
         let (time, status, group) = aml_combined();
-        let strata = vec![0i32; time.len()];
-        let n = time.len();
-        let ngroup = 2;
+        let total_events: f64 = status.iter().map(|&s| s as f64).sum();
+        let group: Vec<i32> = group.iter().map(|&g| g + 1).collect();
+        let result = survdiff(
+            &SurvdiffData::try_new(None, time, status, group, None).unwrap(),
+            0.0,
+            false,
+        )
+        .unwrap();
 
-        let mut obs = vec![0.0; ngroup];
-        let mut exp = vec![0.0; ngroup];
-        let mut var = vec![0.0; ngroup * ngroup];
-        let mut risk = vec![0.0; ngroup];
-        let mut kaplan = vec![0.0; n];
-
-        let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-
-        let sorted_time: Vec<f64> = indices.iter().map(|&i| time[i]).collect();
-        let sorted_status: Vec<i32> = indices.iter().map(|&i| status[i]).collect();
-        let sorted_group: Vec<i32> = indices.iter().map(|&i| group[i] + 1).collect();
-
-        let params = SurvDiffParams {
-            nn: n as i32,
-            nngroup: ngroup as i32,
-            _nstrat: 1,
-            rho: 0.0,
-        };
-
-        let input = SurvDiffInput {
-            time: &sorted_time,
-            status: &sorted_status,
-            group: &sorted_group,
-            strata: &strata,
-            timefix: false,
-        };
-
-        let mut output = SurvDiffOutput {
-            obs: &mut obs,
-            exp: &mut exp,
-            var: &mut var,
-            risk: &mut risk,
-            kaplan: &mut kaplan,
-        };
-
-        compute_survdiff(params, input, &mut output);
-
-        let total_events: f64 = sorted_status.iter().map(|&s| s as f64).sum();
-        let total_obs: f64 = obs.iter().sum();
+        let total_obs: f64 = result.obs_totals().iter().sum();
         assert!(
             approx_eq(total_obs, total_events, STRICT_TOL),
             "Total observed {} should equal total events {}",
@@ -370,22 +298,14 @@ mod tests {
         let weights = vec![1.0; n];
         let strata = vec![0i32; n];
 
-        use crate::residuals::coxmart_module::{CoxMartSurvivalData, CoxMartWeights};
-
-        let mut expect = vec![0.0; n];
-
-        let surv_data = CoxMartSurvivalData {
-            time: &sorted_time,
-            status: &sorted_status,
-            strata: &strata,
-        };
-
-        let weights_data = CoxMartWeights {
-            score: &score,
-            wt: &weights,
-        };
-
-        compute_coxmart(n, 0, surv_data, weights_data, &mut expect);
+        let expect = coxmart_sorted(
+            &sorted_time,
+            &sorted_status,
+            &score,
+            &weights,
+            &strata,
+            crate::residuals::TieMethod::Breslow,
+        );
 
         let resid_sum: f64 = expect.iter().sum();
         assert!(
@@ -406,44 +326,52 @@ mod tests {
         }
     }
 
+    fn kaplan_meier(time: &[f64], status: &[i32]) -> SurvfitKMResult {
+        survfitkm(
+            &SurvfitKMData::right_censored(time.to_vec(), status.to_vec()).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap()
+    }
+
+    fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> (f64, f64) {
+        let km = kaplan_meier(time, status);
+        let rows = survmean(
+            &[SurvfitCurve::from_km(&km)],
+            &[time.len() as f64],
+            None,
+            0.0,
+            RmeanOption::At(tau),
+            1.0,
+        )
+        .unwrap();
+        (rows[0].rmean.unwrap(), rows[0].se_rmean.unwrap())
+    }
+
     #[test]
     fn test_rmst_aml() {
         let (time, status) = aml_maintained();
         let tau = 30.0;
 
-        let result = compute_rmst(&time, &status, tau, 0.95);
+        let (rmean, se) = restricted_mean(&time, &status, tau);
 
-        assert!(result.rmst > 0.0, "RMST must be positive");
-        assert!(result.rmst < tau, "RMST must be less than tau");
-
-        assert!(result.se > 0.0, "Standard error must be positive");
-
-        assert!(
-            result.ci_lower <= result.rmst,
-            "CI lower {} should be <= RMST {}",
-            result.ci_lower,
-            result.rmst
-        );
-        assert!(
-            result.ci_upper >= result.rmst,
-            "CI upper {} should be >= RMST {}",
-            result.ci_upper,
-            result.rmst
-        );
+        assert!(rmean > 0.0, "RMST must be positive");
+        assert!(rmean < tau, "RMST must be less than tau");
+        assert!(se > 0.0, "Standard error must be positive");
     }
 
     #[test]
     fn test_rmst_no_events() {
         let time = vec![10.0, 20.0, 30.0];
         let status = vec![0, 0, 0];
-        let tau = 5.0;
+        let tau = 15.0;
 
-        let result = compute_rmst(&time, &status, tau, 0.95);
+        let (rmean, _) = restricted_mean(&time, &status, tau);
 
         assert!(
-            approx_eq(result.rmst, tau, STANDARD_TOL),
+            approx_eq(rmean, tau, STANDARD_TOL),
             "RMST {} should equal tau {} when no events",
-            result.rmst,
+            rmean,
             tau
         );
     }
@@ -453,7 +381,7 @@ mod tests {
         let time = vec![5.0];
         let status = vec![1];
 
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert_eq!(result.time.len(), 1);
         assert!(approx_eq(result.cumulative_hazard[0], 1.0, STRICT_TOL));
     }
@@ -463,7 +391,7 @@ mod tests {
         let time = vec![10.0, 10.0, 10.0, 10.0];
         let status = vec![1, 1, 1, 1];
 
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert_eq!(result.time.len(), 1);
     }
 
@@ -473,7 +401,7 @@ mod tests {
         let time: Vec<f64> = (1..=n).map(|i| i as f64).collect();
         let status: Vec<i32> = (0..n).map(|i| if i % 3 == 0 { 1 } else { 0 }).collect();
 
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert!(!result.cumulative_hazard.is_empty());
         assert!(result.cumulative_hazard.last().unwrap().is_finite());
@@ -488,7 +416,7 @@ mod tests {
         let time = vec![0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0];
         let status = vec![1, 1, 1, 1, 1, 1, 1];
 
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         for &h in &result.cumulative_hazard {
             assert!(h.is_finite(), "Cumulative hazard should be finite");
@@ -501,22 +429,17 @@ mod tests {
     #[test]
     fn test_weighted_km() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1.0, 1.0, 1.0, 1.0, 1.0];
+        let status = vec![1, 1, 1, 1, 1];
         let weights = vec![1.0, 2.0, 1.0, 2.0, 1.0];
-        let position = vec![0i32; 5];
+        let result = survfitkm(
+            &SurvfitKMData::try_new(None, time, status, Some(weights), None, None, None).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap();
 
-        let result = compute_survfitkm(
-            &time,
-            &status,
-            &weights,
-            None,
-            &position,
-            &KaplanMeierConfig::default(),
-        );
-
-        for i in 1..result.estimate.len() {
+        for i in 1..result.surv.len() {
             assert!(
-                result.estimate[i] <= result.estimate[i - 1] + 1e-10,
+                result.surv[i] <= result.surv[i - 1] + 1e-10,
                 "Weighted KM survival should be monotonically decreasing"
             );
         }
@@ -540,25 +463,20 @@ mod tests {
 
         let weights: Vec<f64> = (0..n).map(|i| if i % 2 == 0 { 1.0 } else { 2.0 }).collect();
 
-        let mut cox_fit = CoxFit::new(
-            Array1::from_vec(time),
-            Array1::from_vec(status),
-            covar,
-            Array1::zeros(n),
-            Array1::zeros(n),
-            Array1::from_vec(weights),
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Weighted Cox fit init failed");
+        let mut cox_fit =
+            CoxFitBuilder::new(Array1::from_vec(time), Array1::from_vec(status), covar)
+                .weights(Array1::from_vec(weights))
+                .method(CoxMethod::Breslow)
+                .max_iter(25)
+                .eps(1e-9)
+                .toler(1e-9)
+                .build()
+                .expect("Weighted Cox fit init failed");
 
-        cox_fit.fit().expect("Weighted Cox fit failed");
+        cox_fit.fit();
 
-        let (beta, _means, _u, _imat, _loglik, _sctest, _flag, iter) = cox_fit.results();
+        let results = cox_fit.results();
+        let (beta, iter) = (results.coefficients, results.iter);
 
         assert!(iter < 25, "Weighted Cox should converge");
         assert!(beta[0].is_finite(), "Coefficient should be finite");
@@ -574,35 +492,22 @@ mod tests {
             covar[[i, 0]] = group[i] as f64;
         }
 
-        let mut strata = Array1::zeros(n);
-        for i in 0..n {
-            if i < n / 2 {
-                strata[i] = 0;
-            } else {
-                strata[i] = 1;
-            }
-        }
-        strata[n / 2 - 1] = 1;
+        let strata = Array1::from_iter((0..n).map(|i| i32::from(i >= n / 2)));
 
-        let mut cox_fit = CoxFit::new(
-            Array1::from_vec(time),
-            Array1::from_vec(status),
-            covar,
-            strata,
-            Array1::zeros(n),
-            Array1::from_elem(n, 1.0),
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Stratified Cox fit init failed");
+        let mut cox_fit =
+            CoxFitBuilder::new(Array1::from_vec(time), Array1::from_vec(status), covar)
+                .strata(strata)
+                .method(CoxMethod::Breslow)
+                .max_iter(25)
+                .eps(1e-9)
+                .toler(1e-9)
+                .build()
+                .expect("Stratified Cox fit init failed");
 
-        cox_fit.fit().expect("Stratified Cox fit failed");
+        cox_fit.fit();
 
-        let (beta, _means, _u, _imat, _loglik, _sctest, _flag, iter) = cox_fit.results();
+        let results = cox_fit.results();
+        let (beta, iter) = (results.coefficients, results.iter);
 
         assert!(iter < 25, "Stratified Cox should converge");
         assert!(
@@ -612,99 +517,53 @@ mod tests {
     }
 
     #[test]
-    fn test_fleming_harrington_weights() {
+    fn test_g_rho_family_weights() {
         let (time, status, group) = aml_combined();
 
-        let fh_01 = weighted_logrank_test(
-            &time,
-            &status,
-            &group,
-            WeightType::FlemingHarrington { p: 0.0, q: 1.0 },
-        );
-        assert!(fh_01.statistic >= 0.0);
-        assert!(fh_01.p_value >= 0.0 && fh_01.p_value <= 1.0);
+        let rho1 = logrank_test(&time, &status, &group, None, None, 1.0, true).unwrap();
+        assert!(rho1.statistic >= 0.0);
+        assert!(rho1.p_value >= 0.0 && rho1.p_value <= 1.0);
+        assert_eq!(rho1.rho, 1.0);
 
-        let fh_10 = weighted_logrank_test(
-            &time,
-            &status,
-            &group,
-            WeightType::FlemingHarrington { p: 1.0, q: 0.0 },
-        );
-        assert!(fh_10.statistic >= 0.0);
-        assert!(fh_10.p_value >= 0.0 && fh_10.p_value <= 1.0);
-
-        let fh_11 = weighted_logrank_test(
-            &time,
-            &status,
-            &group,
-            WeightType::FlemingHarrington { p: 1.0, q: 1.0 },
-        );
-        assert!(fh_11.statistic >= 0.0);
-        assert!(fh_11.p_value >= 0.0 && fh_11.p_value <= 1.0);
-    }
-
-    #[test]
-    fn test_peto_peto() {
-        let (time, status, group) = aml_combined();
-
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::PetoPeto);
-
-        assert_eq!(result.weight_type, "PetoPeto");
-        assert!(result.statistic >= 0.0);
-        assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
-    }
-
-    #[test]
-    fn test_tarone_ware() {
-        let (time, status, group) = aml_combined();
-
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::TaroneWare);
-
-        assert_eq!(result.weight_type, "TaroneWare");
-        assert!(result.statistic >= 0.0);
-        assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+        let rho0 = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
+        assert!((rho0.statistic - rho1.statistic).abs() > 1e-8);
     }
 
     #[test]
     fn test_km_confidence_intervals() {
         let (time, status) = aml_maintained();
-        let status_f64: Vec<f64> = status.iter().map(|&s| s as f64).collect();
-        let weights = vec![1.0; time.len()];
-        let position = vec![0i32; time.len()];
+        let result = survfitkm(
+            &SurvfitKMData::try_new(None, time, status, None, None, None, None).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap();
+        let lower = result.lower.as_ref().unwrap();
+        let upper = result.upper.as_ref().unwrap();
 
-        let result = compute_survfitkm(
-            &time,
-            &status_f64,
-            &weights,
-            None,
-            &position,
-            &KaplanMeierConfig::default(),
-        );
-
-        for i in 0..result.estimate.len() {
+        for i in 0..result.surv.len() {
             assert!(
-                result.conf_lower[i] <= result.estimate[i] + 1e-10,
+                lower[i] <= result.surv[i] + 1e-10,
                 "CI lower {} should be <= estimate {}",
-                result.conf_lower[i],
-                result.estimate[i]
+                lower[i],
+                result.surv[i]
             );
 
             assert!(
-                result.conf_upper[i] >= result.estimate[i] - 1e-10,
+                upper[i] >= result.surv[i] - 1e-10,
                 "CI upper {} should be >= estimate {}",
-                result.conf_upper[i],
-                result.estimate[i]
+                upper[i],
+                result.surv[i]
             );
 
             assert!(
-                result.conf_lower[i] >= 0.0 && result.conf_lower[i] <= 1.0,
+                lower[i] >= 0.0 && lower[i] <= 1.0,
                 "CI lower {} should be in [0, 1]",
-                result.conf_lower[i]
+                lower[i]
             );
             assert!(
-                result.conf_upper[i] >= 0.0 && result.conf_upper[i] <= 1.0,
+                upper[i] >= 0.0 && upper[i] <= 1.0,
                 "CI upper {} should be in [0, 1]",
-                result.conf_upper[i]
+                upper[i]
             );
         }
     }
@@ -712,7 +571,7 @@ mod tests {
     #[test]
     fn test_na_confidence_intervals() {
         let (time, status) = aml_maintained();
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         for i in 0..result.cumulative_hazard.len() {
             assert!(
@@ -731,74 +590,54 @@ mod tests {
         }
     }
 
+    fn concordance_counts(time: &[f64], status: &[i32], x: &[f64]) -> ConcordanceCounts {
+        let data = SurvivalData::try_new(time.to_vec(), status.to_vec()).unwrap();
+        let x = ndarray::Array2::from_shape_vec((x.len(), 1), x.to_vec()).unwrap();
+        concordancefit(
+            SurvResponse::Right(&data),
+            x.view(),
+            None,
+            None,
+            None,
+            &ConcordanceOptions::default(),
+        )
+        .unwrap()
+        .count[0]
+    }
+
     #[test]
     fn test_concordance_basic() {
-        use crate::concordance::concordance1;
-
-        let n = 5;
-        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-        let wt = vec![1.0; n];
-        let indx = vec![4, 3, 2, 1, 0];
-        let ntree = 8;
-
-        let count = concordance1(&y, &wt, &indx, ntree);
-
-        let concordant = count[0];
-        let discordant = count[1];
-
-        assert!(concordant >= 0.0, "Concordant pairs should be non-negative");
-        assert!(discordant >= 0.0, "Discordant pairs should be non-negative");
-
-        let total_pairs = concordant + discordant + count[2];
-        assert!(
-            total_pairs > 0.0,
-            "Should have at least some pairs for comparison"
+        let count = concordance_counts(
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[1, 1, 1, 1, 1],
+            &[5.0, 4.0, 3.0, 2.0, 1.0],
         );
+        assert_eq!(count.concordant, 0.0);
+        assert_eq!(count.discordant, 10.0);
+        assert_eq!(count.tied_x, 0.0);
     }
 
     #[test]
     fn test_concordance_ties() {
-        use crate::concordance::concordance1;
-
-        let n = 4;
-        let y = vec![1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 1.0, 1.0];
-        let wt = vec![1.0; n];
-        let indx = vec![0, 0, 0, 0];
-        let ntree = 4;
-
-        let count = concordance1(&y, &wt, &indx, ntree);
-
-        let tied = count[2];
-        assert!(tied >= 0.0, "Tied pairs should be non-negative");
+        let count = concordance_counts(&[1.0, 2.0, 3.0, 4.0], &[1, 1, 1, 1], &[1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(count.tied_x, 6.0);
+        assert_eq!(count.concordant + count.discordant, 0.0);
     }
 
     #[test]
     fn test_concordance_range() {
-        use crate::concordance::concordance1;
-
-        let n = 10;
-        let y = vec![
-            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0,
-            1.0, 1.0, 1.0,
-        ];
-        let wt = vec![1.0; n];
-        let indx = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let ntree = 16;
-
-        let count = concordance1(&y, &wt, &indx, ntree);
-
-        let concordant = count[0];
-        let discordant = count[1];
-        let tied = count[2];
-
-        if concordant + discordant + tied > 0.0 {
-            let c_index = concordant / (concordant + discordant + tied);
-            assert!(
-                (0.0..=1.0).contains(&c_index),
-                "C-index {} should be in [0, 1]",
-                c_index
-            );
-        }
+        let count = concordance_counts(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            &[1, 1, 1, 1, 1, 0, 0, 1, 1, 1],
+            &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        );
+        let total = count.concordant + count.discordant + count.tied_x;
+        assert!(total > 0.0);
+        let c_index = (count.concordant + count.tied_x / 2.0) / total;
+        assert!(
+            (c_index - 1.0).abs() < 1e-12,
+            "C-index {c_index} should be 1"
+        );
     }
 
     #[test]
@@ -828,7 +667,7 @@ mod tests {
         ];
         let status: Vec<i32> = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1];
 
-        let na_result = nelson_aalen(&time, &status, None, 0.95);
+        let na_result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         for i in 1..na_result.cumulative_hazard.len() {
             assert!(
@@ -867,7 +706,7 @@ mod tests {
             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
         ];
 
-        let lr_result = weighted_logrank_test(&time, &status, &rx, WeightType::LogRank);
+        let lr_result = logrank_test(&time, &status, &rx, None, None, 0.0, true).unwrap();
 
         assert!(
             lr_result.statistic >= 0.0,
@@ -879,7 +718,7 @@ mod tests {
         );
         assert_eq!(lr_result.df, 1, "Should have 1 degree of freedom");
 
-        let na_result = nelson_aalen(&time, &status, None, 0.95);
+        let na_result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert!(!na_result.time.is_empty(), "Should have event times");
     }
 
@@ -887,7 +726,7 @@ mod tests {
     fn test_aml_logrank_exact_r_values() {
         let (time, status, group) = aml_combined();
 
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
 
         assert!(
             result.statistic > 2.5 && result.statistic < 4.5,
@@ -903,36 +742,34 @@ mod tests {
 
     #[test]
     fn test_rmst_comparison() {
-        use crate::validation::rmst_module::compare_rmst;
-
         let (time, status, group) = aml_combined();
         let tau = 48.0;
 
-        let result = compare_rmst(&time, &status, &group, tau, 0.95);
+        let result = rmst_comparison(&time, &status, &group, None, tau, 0.95).unwrap();
 
-        assert!(
-            result.rmst_group1.rmst > 0.0 && result.rmst_group1.rmst <= tau,
-            "Group 1 RMST {} should be in (0, {}]",
-            result.rmst_group1.rmst,
-            tau
-        );
-        assert!(
-            result.rmst_group2.rmst > 0.0 && result.rmst_group2.rmst <= tau,
-            "Group 2 RMST {} should be in (0, {}]",
-            result.rmst_group2.rmst,
-            tau
-        );
+        for arm in &result.groups {
+            assert!(
+                arm.rmean > 0.0 && arm.rmean <= tau,
+                "Group {} RMST {} should be in (0, {}]",
+                arm.group,
+                arm.rmean,
+                tau
+            );
+        }
 
-        let expected_diff = result.rmst_group1.rmst - result.rmst_group2.rmst;
+        let expected_diff = result.groups[1].rmean - result.groups[0].rmean;
         assert!(
-            approx_eq(result.rmst_diff, expected_diff, STANDARD_TOL),
+            approx_eq(result.difference[0], expected_diff, STANDARD_TOL),
             "RMST diff {} should equal {} - {}",
-            result.rmst_diff,
-            result.rmst_group1.rmst,
-            result.rmst_group2.rmst
+            result.difference[0],
+            result.groups[1].rmean,
+            result.groups[0].rmean
         );
 
-        assert!(result.diff_se > 0.0, "Difference SE should be positive");
+        assert!(
+            result.difference_se[0] > 0.0,
+            "Difference SE should be positive"
+        );
 
         assert!(
             result.p_value >= 0.0 && result.p_value <= 1.0,
@@ -943,19 +780,25 @@ mod tests {
 
     #[test]
     fn test_median_survival() {
-        use crate::validation::rmst_module::compute_survival_quantile;
-
         let (time, status) = aml_nonmaintained();
+        let km = kaplan_meier(&time, &status);
 
-        let result = compute_survival_quantile(&time, &status, 0.5, 0.95);
+        let result = quantile_survfit(
+            &[SurvfitCurve::from_km(&km)],
+            &[0.5],
+            true,
+            0.0,
+            1.0,
+            f64::EPSILON.sqrt(),
+        )
+        .unwrap();
 
-        if let Some(median) = result.median {
-            assert!(
-                median > 15.0 && median < 35.0,
-                "Median {} should be close to 23",
-                median
-            );
-        }
+        let median = result.quantile[0][0];
+        assert!(
+            median > 15.0 && median < 35.0,
+            "Median {} should be close to 23",
+            median
+        );
     }
 
     #[test]
@@ -970,25 +813,20 @@ mod tests {
 
         let offset: Vec<f64> = (0..n).map(|i| if i < n / 2 { 0.1 } else { -0.1 }).collect();
 
-        let mut cox_fit = CoxFit::new(
-            Array1::from_vec(time),
-            Array1::from_vec(status),
-            covar,
-            Array1::zeros(n),
-            Array1::from_vec(offset),
-            Array1::from_elem(n, 1.0),
-            CoxMethod::Breslow,
-            25,
-            1e-9,
-            1e-9,
-            vec![true],
-            vec![0.0],
-        )
-        .expect("Cox fit with offset init failed");
+        let mut cox_fit =
+            CoxFitBuilder::new(Array1::from_vec(time), Array1::from_vec(status), covar)
+                .offset(Array1::from_vec(offset))
+                .method(CoxMethod::Breslow)
+                .max_iter(25)
+                .eps(1e-9)
+                .toler(1e-9)
+                .build()
+                .expect("Cox fit with offset init failed");
 
-        cox_fit.fit().expect("Cox fit with offset failed");
+        cox_fit.fit();
 
-        let (beta, _means, _u, _imat, _loglik, _sctest, _flag, iter) = cox_fit.results();
+        let results = cox_fit.results();
+        let (beta, iter) = (results.coefficients, results.iter);
 
         assert!(iter < 25, "Should converge");
         assert!(beta[0].is_finite(), "Coefficient should be finite");
@@ -999,7 +837,7 @@ mod tests {
         let time = vec![1.0, 2.0];
         let status = vec![1, 1];
 
-        let na_result = nelson_aalen(&time, &status, None, 0.95);
+        let na_result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert_eq!(na_result.time.len(), 2);
         assert!(na_result.cumulative_hazard[0].is_finite());
@@ -1011,7 +849,7 @@ mod tests {
         let time = vec![5.0, 5.0, 5.0, 5.0, 5.0];
         let status = vec![1, 1, 1, 1, 1];
 
-        let na_result = nelson_aalen(&time, &status, None, 0.95);
+        let na_result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert_eq!(na_result.time.len(), 1);
         assert_eq!(na_result.time[0], 5.0);
@@ -1023,7 +861,7 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let status = vec![1, 0, 1, 0, 1, 0, 1, 0];
 
-        let na_result = nelson_aalen(&time, &status, None, 0.95);
+        let na_result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert_eq!(na_result.time.len(), 4);
 
@@ -1037,7 +875,7 @@ mod tests {
         let time = vec![5.0, 5.0, 5.0, 10.0, 10.0];
         let status = vec![1, 1, 0, 1, 0];
 
-        let na_result = nelson_aalen(&time, &status, None, 0.95);
+        let na_result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert!(na_result.n_risk[0] >= 2);
         assert_eq!(na_result.n_events[0], 2);
@@ -1049,7 +887,7 @@ mod tests {
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
 
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
 
         assert!(
             result.statistic < 0.5,

@@ -1,11 +1,14 @@
 use std::hint::black_box;
+use survival::concordance::{ConcordanceOptions, concordancefit};
+use survival::core::SurvResponse;
+use survival::data_types::SurvivalData;
 use survival::regression::{
-    CoxPHModel, aareg_fit, agexact, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg,
+    CoxPHFit, aareg_fit, agexact_py, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg,
 };
-use survival::{
-    KaplanMeierConfig, WeightType, compute_brier, compute_rmst, compute_survfitkm, concordance1,
-    nelson_aalen, pseudo, uno_c_index, weighted_logrank_test,
+use survival::surv_analysis::{
+    self, ResidualType, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
 };
+use survival::validation::{BrierInput, RmeanOption, SurvfitCurve, brier, survmean, uno_c_index};
 
 fn generate_survival_data(n: usize) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
     let mut time = Vec::with_capacity(n);
@@ -71,15 +74,26 @@ fn generate_strata(n: usize, n_strata: usize) -> Vec<i32> {
     (0..n).map(|i| (i % n_strata) as i32).collect()
 }
 
-fn fitted_coxph_model(n: usize, p: usize) -> CoxPHModel {
+fn fitted_coxph_model(n: usize, p: usize) -> CoxPHFit {
     let (time, status, covariates) = generate_tied_regression_data(n, p);
-    let status: Vec<u8> = status.into_iter().map(|value| value as u8).collect();
-    let mut model = CoxPHModel::new_with_data(covariates, time, status)
-        .expect("benchmark CoxPHModel data should be valid");
-    model
-        .fit(20)
-        .expect("benchmark CoxPHModel fit should converge");
-    model
+    coxph_fit(
+        time,
+        status,
+        covariates,
+        None,
+        None,
+        None,
+        None,
+        "breslow",
+        None,
+        Some(20),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("benchmark Cox PH fit should converge")
 }
 
 mod kaplan_meier {
@@ -87,13 +101,12 @@ mod kaplan_meier {
 
     #[divan::bench(args = [100, 1000, 10000])]
     fn survfitkm(bencher: divan::Bencher, n: usize) {
-        let (time, status, _) = generate_survival_data(n);
-        let weights: Vec<f64> = vec![1.0; n];
-        let position: Vec<i32> = vec![0; n];
-        let config = KaplanMeierConfig::default();
+        let (time, _, status) = generate_survival_data(n);
+        let data = SurvfitKMData::right_censored(time, status)
+            .expect("benchmark survival data should be valid");
+        let options = SurvfitKMOptions::default();
 
-        bencher
-            .bench_local(|| compute_survfitkm(&time, &status, &weights, None, &position, &config));
+        bencher.bench_local(|| surv_analysis::survfitkm(&data, &options));
     }
 }
 
@@ -119,15 +132,14 @@ mod pseudo_bench {
 
     fn run(bencher: divan::Bencher, n: usize, type_: &'static str) {
         let (time, status, eval_times) = inputs(n);
+        let data = SurvfitKMData::right_censored(time, status)
+            .expect("benchmark pseudo-value inputs should be valid");
+        let options = SurvfitKMOptions::default();
+        let kind = ResidualType::parse(type_).expect("known residual type");
         bencher.bench_local(|| {
             black_box(
-                pseudo(
-                    time.clone(),
-                    status.clone(),
-                    Some(eval_times.clone()),
-                    Some(type_),
-                )
-                .expect("benchmark pseudo-value inputs should be valid"),
+                pseudo(&data, &options, &eval_times, kind)
+                    .expect("benchmark pseudo-value inputs should be valid"),
             )
         });
     }
@@ -217,26 +229,22 @@ mod logrank {
     use super::*;
 
     #[divan::bench(args = [100, 1000, 10000])]
-    fn logrank_test(bencher: divan::Bencher, n: usize) {
-        let (time, _, status_i32) = generate_survival_data(n);
-        let group = generate_group_data(n);
-
-        bencher
-            .bench_local(|| weighted_logrank_test(&time, &status_i32, &group, WeightType::LogRank));
-    }
-
-    #[divan::bench(args = [100, 1000, 10000])]
-    fn fleming_harrington_test(bencher: divan::Bencher, n: usize) {
+    fn logrank(bencher: divan::Bencher, n: usize) {
         let (time, _, status_i32) = generate_survival_data(n);
         let group = generate_group_data(n);
 
         bencher.bench_local(|| {
-            weighted_logrank_test(
-                &time,
-                &status_i32,
-                &group,
-                WeightType::FlemingHarrington { p: 0.5, q: 0.5 },
-            )
+            survival::validation::logrank_test(&time, &status_i32, &group, None, None, 0.0, true)
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn g_rho(bencher: divan::Bencher, n: usize) {
+        let (time, _, status_i32) = generate_survival_data(n);
+        let group = generate_group_data(n);
+
+        bencher.bench_local(|| {
+            survival::validation::logrank_test(&time, &status_i32, &group, None, None, 1.0, true)
         });
     }
 }
@@ -244,21 +252,59 @@ mod logrank {
 mod brier_score {
     use super::*;
 
-    #[divan::bench(args = [100, 1000, 10000, 100000])]
-    fn brier(bencher: divan::Bencher, n: usize) {
+    fn brier_inputs(n: usize) -> (Vec<f64>, Vec<i32>, Vec<f64>, Vec<Vec<f64>>) {
+        let (time, _, status_i32) = generate_survival_data(n);
+        let max_time = time.iter().cloned().fold(0.0_f64, f64::max);
+        let times: Vec<f64> = (1..=4).map(|k| max_time * k as f64 / 5.0).collect();
         let predictions = generate_predictions(n);
-        let (_, _, outcomes) = generate_survival_data(n);
-
-        bencher.bench_local(|| compute_brier(&predictions, &outcomes, None));
+        let phat: Vec<Vec<f64>> = times
+            .iter()
+            .enumerate()
+            .map(|(k, _)| {
+                predictions
+                    .iter()
+                    .map(|p| p * (k + 1) as f64 / 4.0)
+                    .collect()
+            })
+            .collect();
+        (time, status_i32, times, phat)
     }
 
     #[divan::bench(args = [100, 1000, 10000, 100000])]
-    fn brier_weighted(bencher: divan::Bencher, n: usize) {
-        let predictions = generate_predictions(n);
-        let (_, _, outcomes) = generate_survival_data(n);
+    fn brier_ipcw(bencher: divan::Bencher, n: usize) {
+        let (time, status, times, phat) = brier_inputs(n);
+
+        bencher.bench_local(|| {
+            brier(&BrierInput {
+                time: &time,
+                status: &status,
+                weights: None,
+                times: &times,
+                phat: &phat,
+                ties: true,
+                efron: false,
+                timefix: true,
+            })
+        });
+    }
+
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn brier_ipcw_weighted(bencher: divan::Bencher, n: usize) {
+        let (time, status, times, phat) = brier_inputs(n);
         let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 5) as f64 * 0.1).collect();
 
-        bencher.bench_local(|| compute_brier(&predictions, &outcomes, Some(&weights)));
+        bencher.bench_local(|| {
+            brier(&BrierInput {
+                time: &time,
+                status: &status,
+                weights: Some(&weights),
+                times: &times,
+                phat: &phat,
+                ties: true,
+                efron: false,
+                timefix: true,
+            })
+        });
     }
 }
 
@@ -267,40 +313,69 @@ mod rmst_bench {
 
     #[divan::bench(args = [100, 1000, 10000])]
     fn rmst(bencher: divan::Bencher, n: usize) {
-        let (time, _, status_i32) = generate_survival_data(n);
+        let (time, _, status) = generate_survival_data(n);
         let tau = time.iter().cloned().fold(0.0_f64, f64::max) * 0.8;
+        let data = SurvfitKMData::right_censored(time, status)
+            .expect("benchmark survival data should be valid");
+        let options = SurvfitKMOptions::default();
 
-        bencher.bench_local(|| compute_rmst(&time, &status_i32, tau, 0.95));
+        bencher.bench_local(|| {
+            let km = surv_analysis::survfitkm(&data, &options).expect("valid curve");
+            survmean(
+                &[SurvfitCurve::from_km(&km)],
+                &[n as f64],
+                None,
+                0.0,
+                RmeanOption::At(tau),
+                1.0,
+            )
+        });
     }
 }
 
 mod concordance_bench {
     use super::*;
 
+    fn risk_column(n: usize, levels: usize) -> ndarray::Array2<f64> {
+        ndarray::Array2::from_shape_fn((n, 1), |(i, _)| (i % levels) as f64)
+    }
+
     #[divan::bench(args = [100, 1000, 5000])]
     fn concordance(bencher: divan::Bencher, n: usize) {
-        let (time, status, _) = generate_survival_data(n);
-        let mut y = Vec::with_capacity(2 * n);
-        y.extend_from_slice(&time);
-        y.extend_from_slice(&status);
+        let (time, _, status) = generate_survival_data(n);
+        let data = SurvivalData::try_new(time, status).unwrap();
+        let x = risk_column(n, 10);
+        let options = ConcordanceOptions::default();
 
-        let weights: Vec<f64> = vec![1.0; n];
-        let ntree = 10i32;
-        let indx: Vec<i32> = (0..n).map(|i| (i % ntree as usize) as i32).collect();
-
-        bencher.bench_local(|| concordance1(&y, &weights, &indx, ntree));
+        bencher.bench_local(|| {
+            concordancefit(
+                SurvResponse::Right(&data),
+                x.view(),
+                None,
+                None,
+                None,
+                &options,
+            )
+        });
     }
 
     #[divan::bench(args = [100, 1000, 5000])]
     fn concordance_tied_events(bencher: divan::Bencher, n: usize) {
-        let mut y = vec![1.0; n];
-        y.extend(vec![1.0; n]);
-
+        let data = SurvivalData::try_new(vec![1.0; n], vec![1; n]).unwrap();
         let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64 * 0.1).collect();
-        let ntree = 16i32;
-        let indx: Vec<i32> = (0..n).map(|i| (i % ntree as usize) as i32).collect();
+        let x = risk_column(n, 16);
+        let options = ConcordanceOptions::default();
 
-        bencher.bench_local(|| concordance1(&y, &weights, &indx, ntree));
+        bencher.bench_local(|| {
+            concordancefit(
+                SurvResponse::Right(&data),
+                x.view(),
+                Some(&weights),
+                None,
+                None,
+                &options,
+            )
+        });
     }
 }
 
@@ -404,41 +479,29 @@ mod exact_counting_process_cox {
         let start = vec![0.0; n];
         let stop: Vec<f64> = (1..=n).map(|value| value as f64).collect();
         let event = vec![1; n];
-        let covar: Vec<f64> = (0..n).map(|value| (value % 17) as f64).collect();
-        let offset = vec![0.0; n];
-        let strata = vec![0; n];
-        let work = vec![0.0; n + 4];
-        let work2 = vec![0; 2 * n];
-        let inputs = (start, stop, event, covar, offset, strata, work, work2);
+        let x: Vec<Vec<f64>> = (0..n).map(|value| vec![(value % 17) as f64]).collect();
+        let inputs = (start, stop, event, x);
 
-        bencher.with_inputs(|| inputs.clone()).bench_local_values(
-            |(start, stop, event, covar, offset, strata, work, work2)| {
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact(
-                        0,
-                        n as i32,
-                        1,
+                    agexact_py(
                         start,
                         stop,
                         event,
-                        covar,
-                        offset,
-                        strata,
-                        vec![0.0],
-                        vec![0.0],
-                        vec![0.0],
-                        vec![0.0],
-                        vec![0.0; 2],
-                        work,
-                        work2,
-                        1e-9,
-                        1e-9,
-                        vec![0],
+                        x,
+                        None,
+                        None,
+                        None,
+                        Some(0),
+                        Some(1e-9),
+                        Some(1e-9),
+                        None,
                     )
                     .expect("untied exact counting-process benchmark should succeed"),
                 )
-            },
-        );
+            });
     }
 
     #[divan::bench]
@@ -451,41 +514,29 @@ mod exact_counting_process_cox {
         let start = vec![0.0; N];
         let stop = vec![1.0; N];
         let event: Vec<i32> = (0..N).map(|person| i32::from(person < DEATHS)).collect();
-        let covar: Vec<f64> = (0..N).map(|value| value as f64).collect();
-        let offset = vec![0.0; N];
-        let strata = vec![0; N];
-        let work = vec![0.0; N + 4];
-        let work2 = vec![0; 2 * N];
-        let inputs = (start, stop, event, covar, offset, strata, work, work2);
+        let x: Vec<Vec<f64>> = (0..N).map(|value| vec![value as f64]).collect();
+        let inputs = (start, stop, event, x);
 
-        bencher.with_inputs(|| inputs.clone()).bench_local_values(
-            |(start, stop, event, covar, offset, strata, work, work2)| {
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact(
-                        0,
-                        N as i32,
-                        1,
+                    agexact_py(
                         start,
                         stop,
                         event,
-                        covar,
-                        offset,
-                        strata,
-                        vec![0.0],
-                        vec![0.0],
-                        vec![0.0],
-                        vec![0.0],
-                        vec![0.0; 2],
-                        work,
-                        work2,
-                        1e-9,
-                        1e-9,
-                        vec![0],
+                        x,
+                        None,
+                        None,
+                        None,
+                        Some(0),
+                        Some(1e-9),
+                        Some(1e-9),
+                        None,
                     )
                     .expect("benchmark exact counting-process fit should succeed"),
                 )
-            },
-        );
+            });
     }
 }
 
@@ -505,10 +556,12 @@ mod cox_regression {
                 None,
                 None,
                 None,
+                "efron",
+                None,
                 Some(20),
                 Some(1e-7),
                 Some(1e-9),
-                Some("efron"),
+                None,
                 None,
                 None,
             )
@@ -527,15 +580,17 @@ mod cox_regression {
                 time.clone(),
                 status.clone(),
                 covariates.clone(),
+                Some(entry_times.clone()),
                 None,
                 None,
                 None,
+                "efron",
                 None,
                 Some(20),
                 Some(1e-7),
                 Some(1e-9),
-                Some("efron"),
-                Some(entry_times.clone()),
+                None,
+                None,
                 None,
             )
             .expect("benchmark counting-process Cox PH Efron fit should converge");
@@ -556,10 +611,12 @@ mod cox_regression {
                 None,
                 None,
                 None,
+                "breslow",
+                None,
                 Some(20),
                 Some(1e-7),
                 Some(1e-9),
-                Some("breslow"),
+                None,
                 None,
                 None,
             )
@@ -579,14 +636,16 @@ mod cox_regression {
                 time.clone(),
                 status.clone(),
                 covariates.clone(),
+                None,
                 Some(strata.clone()),
                 Some(weights.clone()),
                 None,
+                "efron",
                 None,
                 Some(20),
                 Some(1e-7),
                 Some(1e-9),
-                Some("efron"),
+                None,
                 None,
                 None,
             )
@@ -605,22 +664,24 @@ mod cox_regression {
             time,
             status,
             covariates,
+            Some(entry_times),
             Some(strata),
             Some(weights),
             None,
+            "efron",
             None,
             Some(20),
             Some(1e-7),
             Some(1e-9),
-            Some("efron"),
-            Some(entry_times),
+            None,
+            None,
             None,
         )
         .expect("benchmark Cox PH fit should converge");
 
         bencher.bench_local(|| {
             let expected = fit
-                .expected_events()
+                .predict_expected(None, false)
                 .expect("benchmark expected event prediction should succeed");
             black_box(expected);
         });
@@ -635,24 +696,37 @@ mod cox_regression {
             time,
             status,
             covariates,
+            None,
             Some(strata),
             Some(weights),
             None,
+            "efron",
             None,
             Some(20),
             Some(1e-7),
             Some(1e-9),
-            Some("efron"),
+            None,
             None,
             None,
         )
         .expect("benchmark Cox PH fit should converge");
         let rows = generate_covariates(3, 4);
-        let prediction_strata = vec![0, 1, 2];
+        let newdata = survival::regression::CoxNewData::try_new(
+            ndarray::Array2::from_shape_vec((3, 4), rows.into_iter().flatten().collect())
+                .expect("rectangular rows"),
+            Some(vec![0, 1, 2]),
+            None,
+            None,
+            None,
+        )
+        .expect("benchmark newdata should be valid");
 
         bencher.bench_local(|| {
             let curves = fit
-                .survival_curve_with_strata(rows.clone(), prediction_strata.clone(), true)
+                .survfit(
+                    Some(&newdata),
+                    survival::regression::SurvfitOptions::default(),
+                )
                 .expect("benchmark stratified survival curve should succeed");
             black_box(curves);
         });
@@ -668,22 +742,29 @@ mod cox_regression {
             time,
             status,
             covariates,
+            Some(entry_times),
             Some(strata),
             Some(weights),
             None,
+            "efron",
             None,
             Some(20),
             Some(1e-7),
             Some(1e-9),
-            Some("efron"),
-            Some(entry_times),
+            None,
+            None,
             None,
         )
         .expect("benchmark Cox PH fit should converge");
 
         bencher.bench_local(|| {
             let residuals = fit
-                .schoenfeld_residuals()
+                .residuals(
+                    survival::regression::ResidualType::Schoenfeld,
+                    None,
+                    None,
+                    None,
+                )
                 .expect("benchmark Schoenfeld residuals should succeed");
             black_box(residuals);
         });
@@ -699,56 +780,26 @@ mod cox_regression {
             time,
             status,
             covariates,
+            Some(entry_times),
             Some(strata),
             Some(weights),
             None,
+            "efron",
             None,
             Some(20),
             Some(1e-7),
             Some(1e-9),
-            Some("efron"),
-            Some(entry_times),
+            None,
+            None,
             None,
         )
         .expect("benchmark Cox PH fit should converge");
 
         bencher.bench_local(|| {
             let residuals = fit
-                .score_residuals()
+                .residuals(survival::regression::ResidualType::Score, None, None, None)
                 .expect("benchmark score residuals should succeed");
             black_box(residuals);
-        });
-    }
-
-    #[divan::bench(args = [100, 1000, 5000])]
-    fn coxph_model_log_likelihood(bencher: divan::Bencher, n: usize) {
-        let model = fitted_coxph_model(n, 4);
-
-        bencher.bench_local(|| {
-            let log_likelihood = black_box(&model).log_likelihood();
-            black_box(log_likelihood);
-        });
-    }
-
-    #[divan::bench(args = [100, 1000, 5000])]
-    fn coxph_model_brier_score(bencher: divan::Bencher, n: usize) {
-        let model = fitted_coxph_model(n, 4);
-
-        bencher.bench_local(|| {
-            let score = model
-                .brier_score(None)
-                .expect("benchmark Brier score should succeed");
-            black_box(score);
-        });
-    }
-
-    #[divan::bench(args = [100, 1000, 5000])]
-    fn coxph_model_std_errors(bencher: divan::Bencher, n: usize) {
-        let model = fitted_coxph_model(n, 4);
-
-        bencher.bench_local(|| {
-            let standard_errors = black_box(&model).std_errors();
-            black_box(standard_errors);
         });
     }
 
@@ -757,18 +808,22 @@ mod cox_regression {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let residuals = black_box(&model).dfbeta();
+            let residuals = black_box(&model)
+                .residuals(survival::regression::ResidualType::Dfbeta, None, None, None)
+                .expect("benchmark dfbeta residuals should succeed");
             black_box(residuals);
         });
     }
 
     #[divan::bench(args = [100, 1000, 5000])]
-    fn coxph_model_vcov(bencher: divan::Bencher, n: usize) {
+    fn coxph_model_basehaz(bencher: divan::Bencher, n: usize) {
         let model = fitted_coxph_model(n, 4);
 
         bencher.bench_local(|| {
-            let variance = black_box(&model).vcov();
-            black_box(variance);
+            let basehaz = black_box(&model)
+                .basehaz(true)
+                .expect("benchmark baseline hazard should succeed");
+            black_box(basehaz);
         });
     }
 }
@@ -1014,26 +1069,21 @@ mod simd_bench {
 
 mod timeline_range_bench {
     use super::*;
-    use survival::data_prep::to_timeline;
+    use survival::data_prep::totimeline;
 
     #[divan::bench(args = [1_000, 10_000, 100_000])]
     fn interval_projection(bencher: divan::Bencher, n: usize) {
         let subjects = 100;
-        let id: Vec<i32> = (0..n).map(|row| (row % subjects) as i32).collect();
-        let time1: Vec<f64> = (0..n).map(|row| (row / subjects) as f64).collect();
+        let id: Vec<i64> = (0..n).map(|row| (row / subjects) as i64).collect();
+        let time1: Vec<f64> = (0..n).map(|row| (row % subjects) as f64).collect();
         let time2: Vec<f64> = time1.iter().map(|time| time + 1.0).collect();
         let status: Vec<i32> = (0..n).map(|row| (row % 4) as i32).collect();
+        let istate = vec![1; n];
 
         bencher.bench_local(|| {
             black_box(
-                to_timeline(
-                    id.clone(),
-                    time1.clone(),
-                    time2.clone(),
-                    status.clone(),
-                    None,
-                )
-                .expect("benchmark timeline intervals should be valid"),
+                totimeline(&id, &time1, &time2, &status, &istate)
+                    .expect("benchmark timeline intervals should be valid"),
             )
         });
     }
@@ -1041,31 +1091,26 @@ mod timeline_range_bench {
 
 mod tmerge_bench {
     use super::*;
-    use survival::data_prep::{tmerge, tmerge2};
+    use survival::data_prep::{tmerge_cumulative, tmerge_lookup};
 
     #[divan::bench(args = [1_000, 10_000, 100_000])]
     fn last_value_sweep(bencher: divan::Bencher, n: usize) {
-        let id: Vec<i32> = (0..n).map(|row| (row / 10) as i32).collect();
+        let id: Vec<usize> = (0..n).map(|row| row / 10).collect();
         let time: Vec<f64> = (0..n).map(|row| (row % 10) as f64).collect();
         let update_id = id.clone();
         let update_time: Vec<f64> = time.iter().map(|value| value - 0.5).collect();
 
         bencher.bench_local(|| {
             black_box(
-                tmerge2(
-                    id.clone(),
-                    time.clone(),
-                    update_id.clone(),
-                    update_time.clone(),
-                )
-                .expect("benchmark tmerge inputs should be valid"),
+                tmerge_lookup(&id, &time, &update_id, &update_time)
+                    .expect("benchmark tmerge inputs should be valid"),
             )
         });
     }
 
     #[divan::bench(args = [1_000, 10_000, 100_000])]
     fn cumulative_sweep(bencher: divan::Bencher, n: usize) {
-        let id: Vec<i32> = (0..n).map(|row| (row / 10) as i32).collect();
+        let id: Vec<usize> = (0..n).map(|row| row / 10).collect();
         let time: Vec<f64> = (0..n).map(|row| (row % 10) as f64).collect();
         let initial = vec![f64::NAN; n];
         let update_id = id.clone();
@@ -1074,32 +1119,25 @@ mod tmerge_bench {
 
         bencher.bench_local(|| {
             black_box(
-                tmerge(
-                    id.clone(),
-                    time.clone(),
-                    initial.clone(),
-                    update_id.clone(),
-                    update_time.clone(),
-                    increment.clone(),
-                )
-                .expect("benchmark tmerge inputs should be valid"),
+                tmerge_cumulative(&id, &time, &initial, &update_id, &update_time, &increment)
+                    .expect("benchmark tmerge inputs should be valid"),
             )
         });
     }
 }
 
-mod surv2data_bench {
+mod surv2counting_bench {
     use super::*;
-    use survival::data_prep::surv2data_timeline;
+    use survival::data_prep::{Repeated, surv2counting};
 
     #[divan::bench(args = [1_000, 10_000, 100_000])]
-    fn timeline_construction(bencher: divan::Bencher, n: usize) {
+    fn timeline_to_counting(bencher: divan::Bencher, n: usize) {
         let id: Vec<i64> = (0..n).map(|row| (row / 10) as i64).collect();
         let time: Vec<f64> = (0..n).map(|row| (9 - row % 10) as f64).collect();
         let status: Vec<Option<i32>> = (0..n)
             .map(|row| {
-                Some(if row % 4 == 0 {
-                    0
+                Some(if row % 10 == 9 {
+                    1
                 } else {
                     (row % 3 + 1) as i32
                 })
@@ -1108,8 +1146,8 @@ mod surv2data_bench {
 
         bencher.bench_local(|| {
             black_box(
-                surv2data_timeline(id.clone(), time.clone(), status.clone(), false)
-                    .expect("benchmark Surv2data timeline should be valid"),
+                surv2counting(&id, &time, &status, true, Repeated::No, &[])
+                    .expect("benchmark timeline data should be valid"),
             )
         });
     }

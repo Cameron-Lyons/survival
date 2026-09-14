@@ -1,8 +1,5 @@
 pub const CHOLESKY_TOL: f64 = 1e-10;
-pub const RIDGE_REGULARIZATION: f64 = 1e-6;
-pub const NEAR_ZERO_MATRIX: f64 = 1e-10;
 pub const TIME_EPSILON: f64 = 1e-9;
-pub const PYEARS_TIME_EPSILON: f64 = 1e-8;
 pub const CONVERGENCE_EPSILON: f64 = 1e-6;
 pub const STRICT_EPSILON: f64 = 1e-5;
 pub const CLOGIT_TOLERANCE: f64 = 1e-6;
@@ -161,7 +158,6 @@ pub const PARALLEL_THRESHOLD_XLARGE: usize = 10000;
 pub const COX_MAX_ITER: usize = 20;
 pub const COX_CONVERGENCE_TOLERANCE: f64 = 1e-9;
 pub const COX_RANK_TOLERANCE: f64 = 1.818_989_403_545_856_5e-12;
-pub const ITERATIVE_MAX_ITER: usize = 100;
 pub const LINEAR_PRED_CLAMP_MIN: f64 = -20.0;
 pub const LINEAR_PRED_CLAMP_MAX: f64 = 20.0;
 
@@ -202,14 +198,6 @@ pub const CONCORDANCE_COUNT_SIZE_EXTENDED: usize = 6;
 pub const MAX_HALVING_ITERATIONS: usize = 10;
 pub const STEP_HALVE_FACTOR: f64 = 0.5;
 pub const STEP_DOUBLE_FACTOR: f64 = 2.0;
-
-pub const HARTLEY_A1: f64 = 0.2316419;
-pub const HARTLEY_NORM: f64 = 0.3989423;
-pub const HARTLEY_B1: f64 = 0.3193815;
-pub const HARTLEY_B2: f64 = -0.3565638;
-pub const HARTLEY_B3: f64 = 1.781478;
-pub const HARTLEY_B4: f64 = -1.821256;
-pub const HARTLEY_B5: f64 = 1.330274;
 
 pub const ROYSTON_KAPPA_FACTOR: f64 = 8.0;
 pub const ROYSTON_VARIANCE_FACTOR: f64 = 6.0;

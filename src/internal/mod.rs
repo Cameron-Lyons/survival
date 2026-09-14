@@ -1,7 +1,6 @@
 pub(crate) mod cox_risk;
 pub(crate) mod dist;
 pub(crate) mod fenwick;
-pub(crate) mod logrank;
 pub(crate) mod matrix;
 pub(crate) mod numpy_utils;
 pub(crate) mod rng;

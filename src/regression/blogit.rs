@@ -1,13 +1,22 @@
+//! Bounded link functions for pseudo-value regression: a port of
+//! `R/blogit.R` from the CRAN `survival` package (`blogit`, `bprobit`,
+//! `bcloglog`, `blog`).  Each link clamps its argument away from the edges
+//! of the unit interval before applying the usual transform, so pseudo
+//! values slightly outside `[0, 1]` stay usable.
+
 use crate::internal::statistical::probit;
 use pyo3::prelude::*;
-fn cloglog(p: f64) -> f64 {
-    (-(1.0 - p).ln()).ln()
-}
 
+/// `pmax(edge, pmin(mu, 1 - edge))`, evaluated in R's order so an `edge`
+/// above one half still yields `edge`; `NaN` stays `NaN` as R's `NA` does.
 fn bounded_unit_interval(input: f64, edge: f64) -> f64 {
+    if input.is_nan() {
+        return f64::NAN;
+    }
     input.min(1.0 - edge).max(edge)
 }
 
+/// The bounded links of `blogit.R` for one `edge` (R default 0.05).
 #[pyclass]
 pub struct LinkFunctionParams {
     edge: f64,
@@ -33,13 +42,15 @@ impl LinkFunctionParams {
         LinkFunctionParams { edge }
     }
 
+    /// `blogit(edge)$linkfun`: `log(x / (1 - x))` of the bounded value.
     fn blogit(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
-        adjusted_input.ln() - (1.0 - adjusted_input).ln()
+        (adjusted_input / (1.0 - adjusted_input)).ln()
     }
     fn blogit_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::blogit)
     }
+    /// `bprobit(edge)$linkfun`: `qnorm` of the bounded value.
     fn bprobit(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
         probit(adjusted_input)
@@ -47,16 +58,20 @@ impl LinkFunctionParams {
     fn bprobit_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::bprobit)
     }
+    /// `bcloglog(edge)$linkfun`: `log(-log(1 - x))` of the bounded value.
     fn bcloglog(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
-        cloglog(adjusted_input)
+        (-(1.0 - adjusted_input).ln()).ln()
     }
     fn bcloglog_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::bcloglog)
     }
+    /// `blog(edge)$linkfun`: `log(pmax(edge, mu))`.
     fn blog(&self, input: f64) -> f64 {
-        let adjusted_input = if input < self.edge { self.edge } else { input };
-        adjusted_input.ln()
+        if input.is_nan() {
+            return f64::NAN;
+        }
+        input.max(self.edge).ln()
     }
     fn blog_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::blog)
@@ -90,6 +105,15 @@ mod tests {
             assert!((link.bprobit(input) - 0.2533471031357997).abs() < 1e-8);
             assert!((link.bcloglog(input) - -0.08742157179075517).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn bounded_links_propagate_nan() {
+        let link = LinkFunctionParams { edge: 0.05 };
+        assert!(link.blogit(f64::NAN).is_nan());
+        assert!(link.bprobit(f64::NAN).is_nan());
+        assert!(link.bcloglog(f64::NAN).is_nan());
+        assert!(link.blog(f64::NAN).is_nan());
     }
 
     #[test]

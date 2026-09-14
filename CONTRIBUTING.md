@@ -55,10 +55,12 @@ ML or optional-model change:
 cargo test --lib --features ml
 ```
 
-PyO3 binding or Python-facing Rust change:
+PyO3 binding or Python-facing Rust change (the `python` feature tests embed an
+interpreter that must be able to import NumPy, so point PyO3 at the project
+venv):
 
 ```sh
-cargo test --lib --features python,ml
+PYO3_PYTHON=$PWD/.venv/bin/python PATH=$PWD/.venv/bin:$PATH cargo test --lib --features python,ml
 uv run --with maturin maturin develop --features python,ml
 PYTHONPATH=.:python uv run --no-sync pytest python/tests -q
 ```

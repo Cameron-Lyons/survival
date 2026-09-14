@@ -61,12 +61,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MNARSurvivalResult>()?;
 
     m.add_function(wrap_pyfunction!(interval_censored_regression, m)?)?;
-    m.add_function(wrap_pyfunction!(turnbull_estimator, m)?)?;
-    m.add_function(wrap_pyfunction!(turnbull_estimator_grouped, m)?)?;
-    m.add_function(wrap_pyfunction!(npmle_interval, m)?)?;
     m.add_class::<IntervalCensoredResult>()?;
-    m.add_class::<TurnbullResult>()?;
-    m.add_class::<GroupedTurnbullResult>()?;
     m.add_class::<IntervalDistribution>()?;
 
     m.add_function(wrap_pyfunction!(joint_model, m)?)?;

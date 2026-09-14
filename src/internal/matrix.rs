@@ -13,7 +13,7 @@
 //! Matrices are `ndarray::Array2<f64>` indexed `m[[row, col]]`; the C sources
 //! index `matrix[i][j]`, which maps to `m[[i, j]]` below.
 
-use crate::constants::{GAUSSIAN_ELIMINATION_TOL, NEAR_ZERO_MATRIX, RIDGE_REGULARIZATION};
+use crate::constants::GAUSSIAN_ELIMINATION_TOL;
 use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::{Array1, Array2};
 use std::borrow::Cow;
@@ -500,52 +500,6 @@ pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Ve
     }
 }
 
-/// LU solve that retries with a ridge (`max|a_ij| * RIDGE_REGULARIZATION` on
-/// the diagonal) when the system is singular. This is not an R algorithm:
-/// `survreg` steps through a singular Hessian with `cholesky2`/`chsolve2`
-/// instead. Kept only for `parametric_survival`, whose Newton loop still
-/// relies on the damped step; new callers should use [`lu_solve`] or
-/// [`chsolve2`] and handle singularity explicitly.
-pub(crate) fn regularized_lu_solve(
-    matrix: &Array2<f64>,
-    vector: &Array1<f64>,
-) -> SurvivalResult<Array1<f64>> {
-    const CONTEXT: &str = "regularized LU solve";
-    let n = require_square(matrix, CONTEXT)?;
-    if n == 0 {
-        if vector.is_empty() {
-            return Ok(Array1::zeros(0));
-        }
-        return Err(SurvivalError::invalid_input(format!(
-            "{CONTEXT}: empty matrix with a right-hand side of length {}",
-            vector.len()
-        )));
-    }
-
-    let max_val = matrix.iter().map(|&x| x.abs()).fold(0.0f64, f64::max);
-    if max_val < NEAR_ZERO_MATRIX {
-        return Err(SurvivalError::singular(CONTEXT));
-    }
-
-    match LuDecomposition::decompose(matrix) {
-        Ok(factorization) => {
-            let rhs = vector.as_slice().ok_or_else(|| {
-                SurvivalError::invalid_input(format!("{CONTEXT}: non-contiguous right-hand side"))
-            })?;
-            factorization.solve(rhs).map(Array1::from_vec)
-        }
-        Err(SurvivalError::Singular { .. }) => {
-            let ridge = max_val * RIDGE_REGULARIZATION;
-            let mut reg_matrix = matrix.clone();
-            for i in 0..n {
-                reg_matrix[[i, i]] += ridge;
-            }
-            lu_solve(&reg_matrix, vector).ok_or_else(|| SurvivalError::singular(CONTEXT))
-        }
-        Err(err) => Err(err),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -897,43 +851,6 @@ mod tests {
             invert_flat_square_matrix_with_fallback(&[0.0], 1),
             vec![0.0]
         );
-    }
-
-    #[test]
-    fn test_regularized_lu_solve_identity() {
-        let matrix = arr2(&[[1.0, 0.0], [0.0, 1.0]]);
-        let vector = Array1::from_vec(vec![1.0, 2.0]);
-        let result = regularized_lu_solve(&matrix, &vector).unwrap();
-        assert_close(result[0], 1.0, 1e-10);
-        assert_close(result[1], 2.0, 1e-10);
-    }
-
-    #[test]
-    fn test_regularized_lu_solve_empty() {
-        let matrix: Array2<f64> = Array2::zeros((0, 0));
-        let vector: Array1<f64> = Array1::zeros(0);
-        let result = regularized_lu_solve(&matrix, &vector).unwrap();
-        assert_eq!(result.len(), 0);
-        assert!(regularized_lu_solve(&matrix, &Array1::zeros(1)).is_err());
-    }
-
-    #[test]
-    fn test_regularized_lu_solve_near_zero_matrix() {
-        let matrix = arr2(&[[1e-15, 0.0], [0.0, 1e-15]]);
-        let vector = Array1::from_vec(vec![1.0, 2.0]);
-        assert!(matches!(
-            regularized_lu_solve(&matrix, &vector),
-            Err(SurvivalError::Singular { .. })
-        ));
-    }
-
-    #[test]
-    fn test_regularized_lu_solve_ridges_singular_system() {
-        let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
-        let vector = Array1::from_vec(vec![1.0, 2.0]);
-        let result = regularized_lu_solve(&singular, &vector).unwrap();
-        // The ridged system (A + ridge I) x = b is consistent with A x ~ b.
-        assert_close(result[0] + 2.0 * result[1], 1.0, 1e-4);
     }
 
     #[test]

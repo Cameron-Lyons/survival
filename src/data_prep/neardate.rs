@@ -1,364 +1,203 @@
-use pyo3::exceptions::PyValueError;
+//! R's `neardate` (`R/neardate.R`): for every row of one data set, the
+//! row of a second data set with the same identifier and the closest date
+//! on or after (`best = "after"`) or on or before (`best = "prior"`) it.
+
+use super::id_value::{IdValue, SubjectId};
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
-use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct NearDateResult {
-    #[pyo3(get)]
-    pub indices: Vec<Option<usize>>,
-    #[pyo3(get)]
-    pub distances: Vec<Option<f64>>,
-    #[pyo3(get)]
-    pub n_matched: usize,
+/// R's `best` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NeardateBest {
+    /// The closest date on or after the query date.
+    After,
+    /// The closest date on or before the query date.
+    Prior,
 }
 
-fn validate_direction(best: Option<&str>) -> PyResult<&'static str> {
-    let direction = best.unwrap_or("closest");
-    let mut matches = ["prior", "after", "closest"]
-        .into_iter()
-        .filter(|choice| choice.starts_with(direction));
-    let Some(first) = matches.next() else {
-        return Err(PyErr::new::<PyValueError, _>(
-            "best must be 'prior', 'after', or 'closest'",
-        ));
-    };
-    if direction.is_empty() || matches.next().is_some() {
-        return Err(PyErr::new::<PyValueError, _>(
-            "best must be 'prior', 'after', or 'closest'",
-        ));
-    }
-    Ok(first)
-}
-
-fn neardate_impl<Id>(
-    id1: &[Id],
-    date1: &[f64],
-    id2: &[Id],
-    date2: &[f64],
-    direction: &str,
-    nomatch: Option<usize>,
-) -> PyResult<NearDateResult>
-where
-    Id: Clone + Eq + Hash,
-{
-    if date1.len() != id1.len() {
-        return Err(PyErr::new::<PyValueError, _>(
-            "id1 and date1 must have same length",
-        ));
-    }
-    if date2.len() != id2.len() {
-        return Err(PyErr::new::<PyValueError, _>(
-            "id2 and date2 must have same length",
-        ));
-    }
-
-    let query_ids: HashSet<Id> = id1.iter().cloned().collect();
-    let mut ref_by_id: HashMap<Id, Vec<(usize, f64)>> = HashMap::new();
-    for (idx, (id, &date)) in id2.iter().zip(date2).enumerate() {
-        if date.is_nan() || !query_ids.contains(id) {
-            continue;
+impl NeardateBest {
+    /// `match.arg(best)`: a unique prefix of `"after"` or `"prior"`.
+    pub fn parse(value: &str) -> SurvivalResult<Self> {
+        match value {
+            v if !v.is_empty() && "after".starts_with(v) => Ok(Self::After),
+            v if !v.is_empty() && "prior".starts_with(v) => Ok(Self::Prior),
+            _ => Err(SurvivalError::invalid_input(
+                "best must be 'after' or 'prior'",
+            )),
         }
-        ref_by_id.entry(id.clone()).or_default().push((idx, date));
     }
-    if ref_by_id.is_empty() {
-        return Err(PyErr::new::<PyValueError, _>(
+}
+
+/// Zero-based row of data set 2 matched to each row of data set 1, `None`
+/// where there is no match (R's `nomatch`).  Missing dates (`NaN`) in
+/// either set never match.  Among tied dates R keeps the first row for
+/// `after` and the last row for `prior`.
+pub fn neardate<I: SubjectId>(
+    id1: &[I],
+    y1: &[f64],
+    id2: &[I],
+    y2: &[f64],
+    best: NeardateBest,
+) -> SurvivalResult<Vec<Option<usize>>> {
+    validate_length(id1.len(), y1.len(), "y1")?;
+    validate_length(id2.len(), y2.len(), "y2")?;
+
+    // Rows of data set 2 with a usable date, grouped by id and sorted by
+    // date (stable, so ties keep data order).
+    let mut by_id: HashMap<I::Key, Vec<(f64, usize)>> = HashMap::new();
+    for (row, (id, &date)) in id2.iter().zip(y2).enumerate() {
+        if !date.is_nan() {
+            by_id.entry(id.key()).or_default().push((date, row));
+        }
+    }
+    if by_id.is_empty() {
+        return Err(SurvivalError::invalid_input(
             "No valid entries in data set 2",
         ));
     }
-    for entries in ref_by_id.values_mut() {
-        entries.sort_by(|left, right| left.1.total_cmp(&right.1));
+    let query_keys: Vec<I::Key> = id1.iter().map(SubjectId::key).collect();
+    if !query_keys.iter().any(|key| by_id.contains_key(key)) {
+        return Err(SurvivalError::invalid_input(
+            "No valid entries in data set 2",
+        ));
+    }
+    for rows in by_id.values_mut() {
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
     }
 
-    let mut indices = Vec::with_capacity(id1.len());
-    let mut distances = Vec::with_capacity(id1.len());
-    let mut n_matched = 0;
-    for (id, &date) in id1.iter().zip(date1) {
-        let matched = if date.is_nan() {
-            None
-        } else {
-            ref_by_id
-                .get(id)
-                .and_then(|references| find_nearest(references, date, direction))
-        };
-        if let Some((idx, distance)) = matched {
-            indices.push(Some(idx));
-            distances.push(Some(distance));
-            n_matched += 1;
-        } else {
-            indices.push(nomatch);
-            distances.push(None);
-        }
-    }
-
-    Ok(NearDateResult {
-        indices,
-        distances,
-        n_matched,
-    })
+    Ok(query_keys
+        .iter()
+        .zip(y1)
+        .map(|(key, &date)| {
+            if date.is_nan() {
+                return None;
+            }
+            let rows = by_id.get(key)?;
+            match best {
+                NeardateBest::After => {
+                    let position = rows.partition_point(|(d, _)| *d < date);
+                    rows.get(position).map(|(_, row)| *row)
+                }
+                NeardateBest::Prior => {
+                    let position = rows.partition_point(|(d, _)| *d <= date);
+                    position.checked_sub(1).map(|p| rows[p].1)
+                }
+            }
+        })
+        .collect())
 }
 
-#[pyfunction]
-#[pyo3(signature = (id1, date1, id2, date2, best=None, nomatch=None))]
-pub fn neardate(
-    id1: Vec<i64>,
-    date1: Vec<f64>,
-    id2: Vec<i64>,
-    date2: Vec<f64>,
-    best: Option<&str>,
-    nomatch: Option<usize>,
-) -> PyResult<NearDateResult> {
-    let direction = validate_direction(best)?;
-    neardate_impl(&id1, &date1, &id2, &date2, direction, nomatch)
-}
-
-fn find_nearest(refs: &[(usize, f64)], target: f64, direction: &str) -> Option<(usize, f64)> {
-    if refs.is_empty() {
-        return None;
-    }
-
-    match direction {
-        "prior" => {
-            let pos = refs.partition_point(|entry| entry.1 <= target);
-            if pos == 0 {
-                None
-            } else {
-                let (idx, val) = refs[pos - 1];
-                Some((idx, ordered_distance(val, target)))
-            }
-        }
-        "after" => {
-            let pos = refs.partition_point(|entry| entry.1 < target);
-            refs.get(pos)
-                .map(|&(idx, val)| (idx, ordered_distance(target, val)))
-        }
-        "closest" => {
-            let pos = refs.partition_point(|entry| entry.1 < target);
-            if pos == 0 {
-                let (idx, val) = refs[0];
-                return Some((idx, ordered_distance(target, val)));
-            }
-            if pos == refs.len() {
-                let (idx, val) = refs[refs.len() - 1];
-                return Some((idx, ordered_distance(val, target)));
-            }
-
-            let (_, before_val) = refs[pos - 1];
-            let (after_idx, after_val) = refs[pos];
-            let before_dist = ordered_distance(before_val, target);
-            let after_dist = ordered_distance(target, after_val);
-            if before_dist <= after_dist {
-                let first_before_pos = refs.partition_point(|entry| entry.1 < before_val);
-                Some((refs[first_before_pos].0, before_dist))
-            } else {
-                Some((after_idx, after_dist))
-            }
-        }
-        _ => None,
-    }
-}
-
-fn ordered_distance(lower: f64, upper: f64) -> f64 {
-    if lower == upper { 0.0 } else { upper - lower }
-}
-
-#[pyfunction]
-#[pyo3(signature = (id1, date1, id2, date2, best=None, nomatch=None))]
-pub fn neardate_str(
-    id1: Vec<String>,
-    date1: Vec<f64>,
-    id2: Vec<String>,
-    date2: Vec<f64>,
-    best: Option<&str>,
-    nomatch: Option<usize>,
-) -> PyResult<NearDateResult> {
-    let direction = validate_direction(best)?;
-    neardate_impl(&id1, &date1, &id2, &date2, direction, nomatch)
+/// Python entry point of [`neardate`].
+#[pyfunction(name = "neardate")]
+#[pyo3(signature = (id1, y1, id2, y2, best="after"))]
+pub fn neardate_py(
+    id1: Vec<IdValue>,
+    y1: Vec<f64>,
+    id2: Vec<IdValue>,
+    y2: Vec<f64>,
+    best: &str,
+) -> PyResult<Vec<Option<usize>>> {
+    Ok(neardate(&id1, &y1, &id2, &y2, NeardateBest::parse(best)?)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_neardate_basic() {
-        let id1 = vec![1, 1, 2];
-        let date1 = vec![5.0, 15.0, 10.0];
-        let id2 = vec![1, 1, 1, 2, 2];
-        let date2 = vec![1.0, 10.0, 20.0, 5.0, 15.0];
+    /// The example from `?neardate`, with R's one-based answers.
+    fn doc_example() -> (Vec<i64>, Vec<f64>, Vec<i64>, Vec<f64>) {
+        (
+            vec![1, 1, 2, 2, 2, 3, 4, 4, 5],
+            vec![10.0, 20.0, 5.0, 15.0, 25.0, 30.0, 4.0, 12.0, 7.0],
+            vec![1, 1, 1, 2, 2, 3, 4, 4, 4, 6],
+            vec![8.0, 12.0, 22.0, 4.0, 26.0, 30.0, 3.0, 11.0, 13.0, 1.0],
+        )
+    }
 
-        let result = neardate(id1, date1, id2, date2, Some("closest"), None).unwrap();
-        assert_eq!(result.n_matched, 3);
+    fn one_based(indices: &[Option<usize>]) -> Vec<Option<usize>> {
+        indices.iter().map(|i| i.map(|v| v + 1)).collect()
     }
 
     #[test]
-    fn test_neardate_prior() {
-        let id1 = vec![1];
-        let date1 = vec![15.0];
-        let id2 = vec![1, 1, 1];
-        let date2 = vec![10.0, 20.0, 5.0];
-
-        let result = neardate(id1, date1, id2, date2, Some("prior"), None).unwrap();
-        assert_eq!(result.n_matched, 1);
-        assert_eq!(result.indices[0], Some(0));
-    }
-
-    #[test]
-    fn test_neardate_after() {
-        let id1 = vec![1];
-        let date1 = vec![15.0];
-        let id2 = vec![1, 1, 1];
-        let date2 = vec![10.0, 20.0, 25.0];
-
-        let result = neardate(id1, date1, id2, date2, Some("after"), None).unwrap();
-        assert_eq!(result.n_matched, 1);
-        assert_eq!(result.indices[0], Some(1));
-    }
-
-    #[test]
-    fn test_neardate_accepts_unique_best_prefixes() {
-        let after = neardate(
-            vec![1],
-            vec![15.0],
-            vec![1, 1],
-            vec![10.0, 20.0],
-            Some("a"),
-            None,
-        )
-        .unwrap();
-        assert_eq!(after.indices, vec![Some(1)]);
-
-        let prior = neardate(
-            vec![1],
-            vec![15.0],
-            vec![1, 1],
-            vec![10.0, 20.0],
-            Some("pr"),
-            None,
-        )
-        .unwrap();
-        assert_eq!(prior.indices, vec![Some(0)]);
-
-        let closest = neardate(
-            vec![1],
-            vec![18.0],
-            vec![1, 1],
-            vec![10.0, 20.0],
-            Some("cl"),
-            None,
-        )
-        .unwrap();
-        assert_eq!(closest.indices, vec![Some(1)]);
-    }
-
-    #[test]
-    fn test_neardate_no_match() {
-        let id1 = vec![1, 2];
-        let date1 = vec![10.0, 10.0];
-        let id2 = vec![2];
-        let date2 = vec![10.0];
-
-        let result = neardate(id1, date1, id2, date2, None, None).unwrap();
-        assert_eq!(result.n_matched, 1);
-        assert_eq!(result.indices[0], None);
-        assert_eq!(result.indices[1], Some(0));
-    }
-
-    #[test]
-    fn test_neardate_preserves_tie_and_duplicate_behavior() {
-        let result = neardate(
-            vec![1, 1, 1],
-            vec![15.0, 10.0, 11.0],
-            vec![1, 1, 1, 1],
-            vec![10.0, 20.0, 10.0, 12.0],
-            Some("closest"),
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(result.indices, vec![Some(3), Some(0), Some(0)]);
-        assert_eq!(result.distances, vec![Some(3.0), Some(0.0), Some(1.0)]);
-
-        let prior = neardate(
-            vec![1],
-            vec![10.0],
-            vec![1, 1],
-            vec![10.0, 10.0],
-            Some("prior"),
-            None,
-        )
-        .unwrap();
-        assert_eq!(prior.indices[0], Some(1));
-
-        let after = neardate(
-            vec![1],
-            vec![10.0],
-            vec![1, 1],
-            vec![10.0, 10.0],
-            Some("after"),
-            None,
-        )
-        .unwrap();
-        assert_eq!(after.indices[0], Some(0));
-    }
-
-    #[test]
-    fn test_neardate_skips_missing_dates_and_accepts_infinite_endpoints() {
-        let after = neardate(
-            vec![1, 1, 1, 1],
-            vec![f64::NAN, 2.0, f64::INFINITY, f64::NEG_INFINITY],
-            vec![1, 1, 1, 1],
-            vec![1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY],
-            Some("after"),
-            None,
-        )
-        .unwrap();
-        let prior = neardate(
-            vec![1, 1, 1, 1],
-            vec![f64::NAN, 2.0, f64::INFINITY, f64::NEG_INFINITY],
-            vec![1, 1, 1, 1],
-            vec![1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY],
-            Some("prior"),
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(after.indices, vec![None, Some(2), Some(2), Some(3)]);
-        assert_eq!(prior.indices, vec![None, Some(0), Some(2), Some(3)]);
+    fn matches_the_documentation_example() {
+        let (id1, y1, id2, y2) = doc_example();
+        let after = neardate(&id1, &y1, &id2, &y2, NeardateBest::After).unwrap();
         assert_eq!(
-            after.distances,
-            vec![None, Some(f64::INFINITY), Some(0.0), Some(0.0)]
+            one_based(&after),
+            vec![
+                Some(2),
+                Some(3),
+                Some(5),
+                Some(5),
+                Some(5),
+                Some(6),
+                Some(8),
+                Some(9),
+                None
+            ]
         );
-        assert_eq!(prior.distances, vec![None, Some(1.0), Some(0.0), Some(0.0)]);
-        assert_eq!(after.n_matched, 3);
-        assert_eq!(prior.n_matched, 3);
+        let prior = neardate(&id1, &y1, &id2, &y2, NeardateBest::Prior).unwrap();
+        assert_eq!(
+            one_based(&prior),
+            vec![
+                Some(1),
+                Some(2),
+                Some(4),
+                Some(4),
+                Some(4),
+                Some(6),
+                Some(7),
+                Some(8),
+                None
+            ]
+        );
     }
 
     #[test]
-    fn test_neardate_requires_a_valid_reference_for_a_query_id() {
-        let missing =
-            neardate(vec![1], vec![1.0], vec![1], vec![f64::NAN], None, None).unwrap_err();
-        let unmatched = neardate_str(
-            vec!["a".to_string()],
-            vec![1.0],
-            vec!["b".to_string()],
-            vec![1.0],
-            None,
-            None,
+    fn ties_keep_the_first_row_after_and_the_last_row_prior() {
+        let after = neardate(
+            &[1i64],
+            &[10.0],
+            &[1, 1],
+            &[10.0, 10.0],
+            NeardateBest::After,
         )
-        .unwrap_err();
+        .unwrap();
+        assert_eq!(after, vec![Some(0)]);
+        let prior = neardate(
+            &[1i64],
+            &[10.0],
+            &[1, 1],
+            &[10.0, 10.0],
+            NeardateBest::Prior,
+        )
+        .unwrap();
+        assert_eq!(prior, vec![Some(1)]);
+    }
 
-        assert!(
-            missing
-                .to_string()
-                .contains("No valid entries in data set 2")
-        );
-        assert!(
-            unmatched
-                .to_string()
-                .contains("No valid entries in data set 2")
-        );
-        assert!(neardate(vec![1], vec![1.0], vec![1], vec![1.0], Some(""), None).is_err());
+    #[test]
+    fn missing_dates_never_match_and_prefixes_are_accepted() {
+        let after = neardate(
+            &["a", "a", "a"],
+            &[f64::NAN, 2.0, f64::INFINITY],
+            &["a", "a", "a"],
+            &[1.0, f64::NAN, f64::INFINITY],
+            NeardateBest::After,
+        )
+        .unwrap();
+        assert_eq!(after, vec![None, Some(2), Some(2)]);
+        assert_eq!(NeardateBest::parse("a").unwrap(), NeardateBest::After);
+        assert_eq!(NeardateBest::parse("pr").unwrap(), NeardateBest::Prior);
+        assert!(NeardateBest::parse("").is_err());
+        assert!(NeardateBest::parse("closest").is_err());
+    }
+
+    #[test]
+    fn requires_a_usable_reference_row() {
+        assert!(neardate(&[1i64], &[1.0], &[1], &[f64::NAN], NeardateBest::After).is_err());
+        assert!(neardate(&[1i64], &[1.0], &[2], &[1.0], NeardateBest::After).is_err());
+        assert!(neardate(&[1i64], &[], &[1], &[1.0], NeardateBest::After).is_err());
     }
 }

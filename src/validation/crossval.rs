@@ -168,7 +168,7 @@ pub(crate) fn cv_cox(
     weights: Option<&[f64]>,
     config: &CVConfig,
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
+    use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod as CoxMethod};
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
@@ -215,12 +215,8 @@ pub(crate) fn cv_cox(
             }
             let beta = match builder.build() {
                 Ok(mut fit) => {
-                    if fit.fit().is_ok() {
-                        let (b, _, _, _, _, _, _, _) = fit.results();
-                        b
-                    } else {
-                        vec![0.0; nvar]
-                    }
+                    fit.fit();
+                    fit.results().coefficients
                 }
                 Err(_) => vec![0.0; nvar],
             };

@@ -1,127 +1,312 @@
-use crate::internal::typed_inputs::{AndersenGillInput, CountingProcessData, Weights};
-use pyo3::prelude::*;
+//! Martingale residuals of a Cox model on (start, stop] data.
+//!
+//! `agmart3` is a port of `agmart3.c` (survival 3.8-12), the O(n log n)
+//! kernel `agreg.fit` calls; [`agmart`] reproduces the R-side preparation in
+//! `agreg.fit`: observations whose interval contains no event time of their
+//! stratum are set aside (`ignore`, residual 0, never added to a sum), and
+//! the remaining ones are walked from the largest stop time down.
 
-struct AgmartData<'a> {
-    start: &'a [f64],
-    stop: &'a [f64],
-    event: &'a [i32],
-    score: &'a [f64],
-    wt: &'a [f64],
-    strata: &'a [i32],
+use crate::core::strata_order::{stratum_groups, validate_intervals};
+use crate::error::SurvivalResult;
+use crate::internal::typed_inputs::AndersenGillInput;
+use crate::internal::validation::validate_binary_i32;
+use crate::residuals::TieMethod;
+
+/// Martingale residuals `status - score * (H(stop) - H(start))` for
+/// (start, stop] data, in the order of `input`.
+pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
+    let start = &input.counting.start;
+    let stop = &input.counting.stop;
+    let event = &input.counting.event;
+    validate_binary_i32(event, "event")?;
+    validate_intervals(start, stop)?;
+    let weights = input.weights_or_unit_cow();
+    let strata = input.strata_or_default_cow();
+    let n = start.len();
+
+    // `agreg.fit`: an interval that spans no event time of its stratum never
+    // enters a risk set.  Sorting those observations last and stopping the
+    // sweep before them (`nused`) keeps a huge risk score from poisoning
+    // the running sums.
+    let mut ignore = vec![true; n];
+    for (_, rows) in stratum_groups(&strata) {
+        let mut event_times: Vec<f64> = rows
+            .iter()
+            .filter(|&&i| event[i] == 1)
+            .map(|&i| stop[i])
+            .collect();
+        event_times.sort_by(f64::total_cmp);
+        event_times.dedup();
+        for &i in &rows {
+            let below_start = event_times.partition_point(|&t| t <= start[i]);
+            let below_stop = event_times.partition_point(|&t| t <= stop[i]);
+            ignore[i] = below_start == below_stop;
+        }
+    }
+    let nused = ignore.iter().filter(|&&flag| !flag).count();
+
+    let mut sort_stop: Vec<usize> = (0..n).collect();
+    sort_stop.sort_by(|&a, &b| {
+        ignore[a]
+            .cmp(&ignore[b])
+            .then_with(|| strata[a].cmp(&strata[b]))
+            .then_with(|| stop[b].total_cmp(&stop[a]))
+    });
+    let mut sort_start: Vec<usize> = (0..n).collect();
+    sort_start.sort_by(|&a, &b| {
+        ignore[a]
+            .cmp(&ignore[b])
+            .then_with(|| strata[a].cmp(&strata[b]))
+            .then_with(|| start[b].total_cmp(&start[a]))
+    });
+
+    Ok(agmart3(
+        nused,
+        start,
+        stop,
+        event,
+        &input.score,
+        &weights,
+        &strata,
+        &sort_start,
+        &sort_stop,
+        method,
+    ))
 }
 
-fn compute_agmart(method: i32, input: AgmartData) -> Vec<f64> {
-    let n = input.start.len();
-    let start_slice = input.start;
-    let stop_slice = input.stop;
-    let event_slice = input.event;
-    let score_slice = input.score;
-    let wt_slice = input.wt;
-    let strata_slice = input.strata;
-    let mut resid = vec![0.0; n];
-    let nused = n;
-    for i in 0..nused {
-        resid[i] = event_slice[i] as f64;
+/// `agmart3.c`.  `sort1`/`sort2` order the observations by decreasing start
+/// and stop time within stratum, with the `n - nused` ignored observations
+/// last; `strata` are labels, compared directly as the C code does.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn agmart3(
+    nused: usize,
+    tstart: &[f64],
+    tstop: &[f64],
+    event: &[i32],
+    score: &[f64],
+    weight: &[f64],
+    strata: &[i32],
+    sort1: &[usize],
+    sort2: &[usize],
+    method: TieMethod,
+) -> Vec<f64> {
+    let nr = tstart.len();
+    let mut resid = vec![0.0; nr];
+    let mut atrisk = vec![false; nr];
+    if nused == 0 {
+        return resid;
     }
-    let mut person = 0;
-    while person < nused {
-        if event_slice[person] == 0 {
-            person += 1;
-            continue;
+
+    let mut person1 = 0;
+    let mut denom = 0.0;
+    let mut cumhaz = 0.0;
+    let mut istrat = strata[sort2[0]];
+    let mut person2 = 0;
+    while person2 < nused {
+        // Find the next event time, closing the previous stratum when the
+        // walk crosses into a new one.
+        let mut dtime = 0.0;
+        let mut k = person2;
+        while k < nused {
+            let p2 = sort2[k];
+            if strata[p2] != istrat {
+                while person1 < nused {
+                    let p1 = sort1[person1];
+                    if strata[p1] != istrat {
+                        break;
+                    }
+                    resid[p1] -= cumhaz * score[p1];
+                    person1 += 1;
+                }
+                cumhaz = 0.0;
+                denom = 0.0;
+                istrat = strata[p2];
+                person2 = person1;
+            }
+            if event[p2] > 0 {
+                dtime = tstop[p2];
+                break;
+            }
+            k += 1;
         }
-        let time = stop_slice[person];
-        let mut denom = 0.0;
+        if k == nused {
+            break;
+        }
+
+        // Remove those whose start time is at or beyond `dtime` and finish
+        // their residual.
+        while person1 < nused {
+            let p1 = sort1[person1];
+            if tstart[p1] < dtime || strata[p1] != istrat {
+                break;
+            }
+            if atrisk[p1] {
+                denom -= score[p1] * weight[p1];
+                resid[p1] -= cumhaz * score[p1];
+            }
+            person1 += 1;
+        }
+
+        // Add the newly at-risk subjects.
+        let mut deaths = 0.0;
         let mut e_denom = 0.0;
-        let mut deaths = 0;
         let mut wtsum = 0.0;
-        let mut k = person;
+        k = person2;
         while k < nused {
-            if start_slice[k] < time {
-                denom += score_slice[k] * wt_slice[k];
-                if stop_slice[k] == time && event_slice[k] == 1 {
-                    deaths += 1;
-                    wtsum += wt_slice[k];
-                    e_denom += score_slice[k] * wt_slice[k];
-                }
-            }
-            if strata_slice[k] == 1 || k == nused - 1 {
+            let p2 = sort2[k];
+            if tstop[p2] < dtime || strata[p2] != istrat {
                 break;
+            }
+            if event[p2] == 1 {
+                atrisk[p2] = true;
+                resid[p2] = 1.0 + cumhaz * score[p2];
+                deaths += 1.0;
+                denom += score[p2] * weight[p2];
+                e_denom += score[p2] * weight[p2];
+                wtsum += weight[p2];
+            } else if tstart[p2] < dtime {
+                denom += score[p2] * weight[p2];
+                atrisk[p2] = true;
+                resid[p2] = cumhaz * score[p2];
             }
             k += 1;
         }
-        let (hazard, e_hazard) = if deaths == 0 {
-            (0.0, 0.0)
+
+        let hazard;
+        if method == TieMethod::Breslow || deaths == 1.0 {
+            hazard = wtsum / denom;
+            person2 = k;
         } else {
-            let wtsum_normalized = wtsum / deaths as f64;
-            let mut hazard_total = 0.0;
-            let mut e_hazard_total = 0.0;
-            for i in 0..deaths {
-                let temp = method as f64 * (i as f64 / deaths as f64);
-                let denominator = denom - temp * e_denom;
-                hazard_total += wtsum_normalized / denominator;
-                e_hazard_total += wtsum_normalized * (1.0 - temp) / denominator;
+            let mut total = 0.0;
+            let mut e_hazard = 0.0;
+            wtsum /= deaths;
+            for i in 0..deaths as usize {
+                let temp = i as f64 / deaths;
+                total += wtsum / (denom - temp * e_denom);
+                e_hazard += wtsum * (1.0 - temp) / (denom - temp * e_denom);
             }
-            (hazard_total, e_hazard_total)
-        };
-        let initial_person = person;
-        let mut k = initial_person;
-        while k < nused {
-            if start_slice[k] < time {
-                if stop_slice[k] == time && event_slice[k] == 1 {
-                    resid[k] -= score_slice[k] * e_hazard;
-                } else {
-                    resid[k] -= score_slice[k] * hazard;
+            hazard = total;
+            // Tied deaths do not receive the full hazard increment.
+            let temp = hazard - e_hazard;
+            while person2 < k {
+                let p2 = sort2[person2];
+                if event[p2] > 0 {
+                    resid[p2] += temp * score[p2];
                 }
+                person2 += 1;
             }
-            if stop_slice[k] == time {
-                person += 1;
-            }
-            if strata_slice[k] == 1 || k == nused - 1 {
-                break;
-            }
-            k += 1;
         }
+        cumhaz += hazard;
+    }
+
+    while person1 < nused {
+        let p1 = sort1[person1];
+        if atrisk[p1] {
+            resid[p1] -= cumhaz * score[p1];
+        }
+        person1 += 1;
     }
     resid
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn agmart(
-    n: usize,
-    method: i32,
-    start: Vec<f64>,
-    stop: Vec<f64>,
-    event: Vec<i32>,
-    score: Vec<f64>,
-    wt: Vec<f64>,
-    strata: Vec<i32>,
-) -> PyResult<Vec<f64>> {
-    let input = AndersenGillInput::try_new(
-        CountingProcessData::try_new(start, stop, event)?,
-        score,
-        Some(Weights::try_new(wt)?),
-        Some(strata),
-    )?;
-    if input.counting.start.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "start length must equal n",
-        ));
-    }
-    agmart_typed(&input, Some(method))
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::internal::typed_inputs::{CountingProcessData, CoxMartInput, SurvivalData, Weights};
+    use crate::residuals::coxmart;
 
-#[pyfunction(name = "agmart")]
-#[pyo3(signature = (input, method=None))]
-pub(crate) fn agmart_typed(input: &AndersenGillInput, method: Option<i32>) -> PyResult<Vec<f64>> {
-    let weights = input.weights_or_unit_cow();
-    let strata = input.strata_or_default_cow();
-    let data = AgmartData {
-        start: &input.counting.start,
-        stop: &input.counting.stop,
-        event: &input.counting.event,
-        score: &input.score,
-        wt: weights.as_ref(),
-        strata: strata.as_ref(),
-    };
-    Ok(compute_agmart(method.unwrap_or(0), data))
+    fn ag_input(
+        start: Vec<f64>,
+        stop: Vec<f64>,
+        event: Vec<i32>,
+        score: Vec<f64>,
+        weights: Option<Vec<f64>>,
+        strata: Option<Vec<i32>>,
+    ) -> AndersenGillInput {
+        AndersenGillInput::try_new(
+            CountingProcessData::try_new(start, stop, event).unwrap(),
+            score,
+            weights.map(|w| Weights::try_new(w).unwrap()),
+            strata,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn zero_start_times_reduce_to_coxmart() {
+        let time = vec![5.0, 3.0, 3.0, 8.0, 1.0, 3.0, 8.0];
+        let status = vec![1, 1, 0, 1, 0, 1, 0];
+        let score = vec![1.0, 0.5, 2.0, 1.5, 0.7, 1.1, 0.3];
+        let weights = vec![1.0, 2.0, 1.0, 0.5, 1.0, 1.0, 3.0];
+        let strata = vec![1, 1, 1, 2, 2, 2, 2];
+        for method in [TieMethod::Breslow, TieMethod::Efron] {
+            let right = coxmart(
+                &CoxMartInput::try_new(
+                    SurvivalData::try_new(time.clone(), status.clone()).unwrap(),
+                    score.clone(),
+                    Some(Weights::try_new(weights.clone()).unwrap()),
+                    Some(strata.clone()),
+                )
+                .unwrap(),
+                method,
+            )
+            .unwrap();
+            let counting = agmart(
+                &ag_input(
+                    vec![0.0; 7],
+                    time.clone(),
+                    status.clone(),
+                    score.clone(),
+                    Some(weights.clone()),
+                    Some(strata.clone()),
+                ),
+                method,
+            )
+            .unwrap();
+            for (a, b) in right.iter().zip(&counting) {
+                assert!((a - b).abs() < 1e-12, "{a} != {b} ({method:?})");
+            }
+        }
+    }
+
+    #[test]
+    fn delayed_entry_subtracts_the_hazard_before_entry() {
+        // Subject 2 enters at 2 and so is not at risk for the event at 1.
+        let resid = agmart(
+            &ag_input(
+                vec![0.0, 2.0, 0.0],
+                vec![1.0, 4.0, 4.0],
+                vec![1, 1, 0],
+                vec![1.0; 3],
+                None,
+                None,
+            ),
+            TieMethod::Breslow,
+        )
+        .unwrap();
+        let h1 = 1.0 / 2.0;
+        let h4 = 1.0 / 2.0;
+        assert!((resid[0] - (1.0 - h1)).abs() < 1e-12);
+        assert!((resid[1] - (1.0 - h4)).abs() < 1e-12);
+        assert!((resid[2] - (0.0 - h1 - h4)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn interval_without_events_has_zero_residual() {
+        let resid = agmart(
+            &ag_input(
+                vec![0.0, 5.0, 0.0],
+                vec![2.0, 9.0, 3.0],
+                vec![1, 0, 1],
+                vec![1.0, 1e300, 1.0],
+                None,
+                None,
+            ),
+            TieMethod::Efron,
+        )
+        .unwrap();
+        assert_eq!(resid[1], 0.0);
+        assert!((resid[0] - 0.5).abs() < 1e-12);
+        assert!((resid[2] - (1.0 - 0.5 - 1.0)).abs() < 1e-12);
+    }
 }

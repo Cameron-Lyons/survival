@@ -16,7 +16,20 @@ Top-level Rust modules in `src/` map to major feature areas:
 - `population/`: expected-survival and rate-table routines
 - `monitoring/`: drift and monitoring helpers
 - `residuals/`: residual and diagnostic calculations
-- `internal/`: shared non-public helpers
+- `internal/`: shared non-public helpers (`validation`, `matrix`, `dist`,
+  `statistical`, `sorting`, the typed inputs, and the boundary types below)
+- `api/python/`: registration of every `#[pyclass]`/`#[pyfunction]` with the
+  `_survival` extension module, split by domain; `api/registration_audit.rs`
+  scans `src/` at test time and fails when a declared binding is missing from
+  the registration files, or registered twice
+- `pybridge/`: `#[pyfunction]`s that exist only as Python entry points, such as
+  `cox_callback` (the R `cox_Rcallback.c` hook `coxpenal.fit` uses)
+
+The crate root exposes the domain modules, `error` (`SurvivalError`,
+`SurvivalResult`, also re-exported at the root), `data_types` (the typed inputs)
+and `prelude` (domain modules, error types, typed inputs). There are no other
+root-level re-exports: name items through their domain module
+(`survival::regression::coxph_fit`).
 
 Guidelines used in the current layout:
 
@@ -25,6 +38,58 @@ Guidelines used in the current layout:
 - Put reusable internal helpers in `src/internal/`; otherwise keep helpers next
   to the feature they support.
 - Avoid new bucket modules like `utilities` or `specialized`.
+- Core algorithms return `SurvivalResult`; `PyResult` appears only in
+  `#[pyfunction]`/`#[pymethods]` wrappers (`From<SurvivalError> for PyErr`
+  makes `?` work there). Results crossing into Python are typed `#[pyclass]`
+  structs with named fields.
+
+### Feature flags and the PyO3 shim
+
+The crate compiles with and without the `python` feature. Without it,
+`src/lib.rs` declares `extern crate self as pyo3;` and `src/pyo3_shim.rs`
+supplies the handful of PyO3 items domain code names (`PyErr` with its
+exception class, `PyResult`, `Python`, `Py`, `Bound`, `PyRefMut`, an inert
+`PyDict`), while `survival-pyo3-macros-shim` turns the attribute macros into
+no-ops. The shim's module docs spell out its contract; keep it small and add an
+item only when a Rust-only build needs it, copying PyO3's signature. Code that
+must inspect or build Python objects belongs behind `#[cfg(feature =
+"python")]`, or better, behind a typed `#[pyclass]`.
+
+`build.rs` links `libpython` only for a plain `cargo` invocation with the
+`extension-module` feature (`cargo test --all-features`); maturin sets
+`PYO3_BUILD_EXTENSION_MODULE=1`, so wheels never depend on `libpython`.
+
+### Boundary input types
+
+`src/internal/numpy_utils.rs` (re-exported from `survival::data_types`)
+defines the argument types for `#[pyfunction]` signatures:
+
+| Type          | Accepts                                                                 | Converts to   |
+| ------------- | ----------------------------------------------------------------------- | ------------- |
+| `FloatVec`    | 1-D NumPy array of any dtype/strides, pandas/polars column, sequence    | `Vec<f64>`    |
+| `IntVec`      | integer/bool arrays, integral floats, sequences (checked `i32` narrowing) | `Vec<i32>`    |
+| `BoolVec`     | bool arrays, `0`/`1` numerics, sequences                                 | `Vec<bool>`   |
+| `FloatMatrix` | 2-D array of any layout, list of rows, 1-D input (as one column)        | `Array2<f64>` (row-major) |
+
+Each also implements `IntoPyObject`, so returning one (or exposing it through a
+`#[pyo3(get)]` field) hands Python a NumPy array without a `.tolist()` round
+trip; `FloatMatrix::from_flat(values, ncol)` covers flat buffers with an
+explicit column count.
+
+Migration for binding owners, one signature at a time:
+
+1. Replace `Vec<f64>`/`Vec<i32>`/`Vec<bool>` parameters with `FloatVec`/
+   `IntVec`/`BoolVec`, and `Vec<Vec<f64>>` or flat-plus-`ncol` pairs with
+   `FloatMatrix`; call `.into_inner()` (or deref to a slice / `Array2`) where
+   the core routine is invoked. Python callers keep passing lists; NumPy and
+   DataFrame columns now work too.
+2. Replace `&Bound<PyAny>` parameters that went through `extract_vec_f64`/
+   `extract_vec_i32`/`extract_matrix_f64` with the same types; those helpers
+   now delegate to them and disappear once the last caller moves.
+3. Return `FloatVec`/`FloatMatrix` (or use them as `#[pyo3(get)]` field types)
+   for large numeric results so Python receives NumPy arrays.
+4. Do not call `Python::attach` inside a `#[pyfunction]`: it already runs
+   attached, and typed `#[pyclass]` results need no `PyDict`.
 
 ## Python Layout
 

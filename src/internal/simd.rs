@@ -75,48 +75,6 @@ pub fn variance(values: &[f64]) -> f64 {
     sum_of_squares(&centered) / (values.len() - 1) as f64
 }
 
-/// `sum(w_i * (p_i - o_i)^2)` over the common prefix of the three slices.
-pub fn weighted_squared_diff_sum(predictions: &[f64], outcomes: &[f64], weights: &[f64]) -> f64 {
-    let n = predictions.len().min(outcomes.len()).min(weights.len());
-    let mut accumulators = [0.0; LANES];
-    let mut index = 0;
-    while index + LANES <= n {
-        for (lane, accumulator) in accumulators.iter_mut().enumerate() {
-            let diff = predictions[index + lane] - outcomes[index + lane];
-            *accumulator = (weights[index + lane] * diff).mul_add(diff, *accumulator);
-        }
-        index += LANES;
-    }
-    let mut total = combine(accumulators);
-    while index < n {
-        let diff = predictions[index] - outcomes[index];
-        total = (weights[index] * diff).mul_add(diff, total);
-        index += 1;
-    }
-    total
-}
-
-/// `sum((p_i - o_i)^2)` over the common prefix of the two slices.
-pub fn squared_diff_sum(predictions: &[f64], outcomes: &[f64]) -> f64 {
-    let n = predictions.len().min(outcomes.len());
-    let mut accumulators = [0.0; LANES];
-    let mut index = 0;
-    while index + LANES <= n {
-        for (lane, accumulator) in accumulators.iter_mut().enumerate() {
-            let diff = predictions[index + lane] - outcomes[index + lane];
-            *accumulator = diff.mul_add(diff, *accumulator);
-        }
-        index += LANES;
-    }
-    let mut total = combine(accumulators);
-    while index < n {
-        let diff = predictions[index] - outcomes[index];
-        total = diff.mul_add(diff, total);
-        index += 1;
-    }
-    total
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,14 +105,6 @@ mod tests {
         assert_eq!(mean(&[]), 0.0);
         assert_eq!(variance(&[1.0]), 0.0);
         assert_eq!(subtract_scalar(&[5.0, 10.0], 5.0), vec![0.0, 5.0]);
-    }
-
-    #[test]
-    fn test_squared_diff() {
-        let a = vec![1.0, 2.0, 3.0];
-        let b = vec![2.0, 4.0, 6.0];
-        assert!((squared_diff_sum(&a, &b) - 14.0).abs() < 1e-10);
-        assert!((weighted_squared_diff_sum(&a, &b, &[1.0, 0.5, 2.0]) - 21.0).abs() < 1e-10);
     }
 
     #[test]

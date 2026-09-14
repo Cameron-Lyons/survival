@@ -1,1170 +1,614 @@
-use crate::constants::{TIME_EPSILON, same_time};
-use crate::internal::logrank::logrank_statistic_from_flat_covariance;
+//! The G-rho family of tests for a difference between survival curves:
+//! R's `survdiff` (`R/survdiff.R`, `R/survdiff.fit.R`) and its C kernel
+//! `survdiff2` (`src/survdiff2.c`), including the one-sample test against
+//! expected survival probabilities.
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::dist::pchisq;
+use crate::internal::matrix::LuDecomposition;
 use crate::internal::validation::{
-    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
+    validate_binary_i32, validate_finite, validate_length, validate_non_empty,
 };
+use ndarray::Array2;
 use pyo3::prelude::*;
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+/// The data of a `survdiff(Surv(...) ~ group + strata(s))` call.
+///
+/// `group` and `strata` are integer codes; groups and strata are ordered by
+/// ascending code (R's factor levels).  `start` extends the test to
+/// `(start, stop]` intervals, which R itself refuses: the risk set at each
+/// event time is then the set of intervals containing it.
+#[derive(Debug, Clone)]
+pub struct SurvdiffData {
+    pub start: Option<Vec<f64>>,
+    pub time: Vec<f64>,
+    pub status: Vec<i32>,
+    pub group: Vec<i32>,
+    pub strata: Option<Vec<i32>>,
 }
 
-#[derive(Debug, Clone)]
+impl SurvdiffData {
+    pub fn try_new(
+        start: Option<Vec<f64>>,
+        time: Vec<f64>,
+        status: Vec<i32>,
+        group: Vec<i32>,
+        strata: Option<Vec<i32>>,
+    ) -> SurvivalResult<Self> {
+        validate_non_empty(&time, "time")?;
+        validate_finite(&time, "time")?;
+        validate_length(time.len(), status.len(), "status")?;
+        validate_binary_i32(&status, "status")?;
+        validate_length(time.len(), group.len(), "group")?;
+        if let Some(start) = &start {
+            validate_length(time.len(), start.len(), "start")?;
+            validate_finite(start, "start")?;
+            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "Stop time must be > start time (observation {index})"
+                )));
+            }
+        }
+        if let Some(strata) = &strata {
+            validate_length(time.len(), strata.len(), "strata")?;
+        }
+        Ok(Self {
+            start,
+            time,
+            status,
+            group,
+            strata,
+        })
+    }
+}
+
+/// A `survdiff` object.  `obs` and `exp` are `groups x strata` (one column
+/// without strata), `var` is the `groups x groups` covariance of `obs - exp`.
+#[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SurvDiffResult {
+    /// Observations per group (`table(groups)`).
     #[pyo3(get)]
-    pub observed: Vec<f64>,
+    pub n: Vec<usize>,
     #[pyo3(get)]
-    pub expected: Vec<f64>,
+    pub obs: Vec<Vec<f64>>,
     #[pyo3(get)]
-    pub variance: Vec<Vec<f64>>,
+    pub exp: Vec<Vec<f64>>,
     #[pyo3(get)]
-    pub chi_squared: f64,
+    pub var: Vec<Vec<f64>>,
     #[pyo3(get)]
-    pub degrees_of_freedom: usize,
+    pub chisq: f64,
+    #[pyo3(get)]
+    pub pvalue: f64,
+    #[pyo3(get)]
+    pub df: usize,
+    /// Observations per stratum when strata were given.
+    #[pyo3(get)]
+    pub strata: Option<Vec<usize>>,
+    /// The group code of each row of `obs`, in ascending order.
+    #[pyo3(get)]
+    pub group_codes: Vec<i32>,
 }
 
-#[pyfunction]
-#[pyo3(signature = (time, status, group, strata=None, rho=None, timefix=false))]
-pub fn compute_logrank_components(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    strata: Option<Vec<i32>>,
-    rho: Option<f64>,
-    timefix: bool,
-) -> PyResult<SurvDiffResult> {
-    let n = time.len();
-    if n > i32::MAX as usize {
-        return Err(value_error("time length exceeds i32 calculation capacity"));
-    }
-    validate_length(n, status.len(), "status")?;
-    validate_length(n, group.len(), "group")?;
-    validate_no_nan(&time, "time")?;
-    validate_finite(&time, "time")?;
-    validate_non_negative(&time, "time")?;
-    validate_binary_i32(&status, "status")?;
-    validate_group_codes(&group, n)?;
-    let strata = strata.as_deref();
-    if let Some(strata) = strata {
-        validate_length(n, strata.len(), "strata")?;
-        validate_strata_markers(strata)?;
-    }
-    let rho_val = rho.unwrap_or(0.0);
-    if !rho_val.is_finite() {
-        return Err(value_error("rho must be finite"));
-    }
-    let max_group = group.iter().max().copied().unwrap_or(0);
-    let ngroup = if max_group > 0 { max_group as usize } else { 1 };
-    let nstrat = strata_range_count(strata);
-    let prepared = prepare_right_logrank_inputs(&time, &status, &group, strata, timefix);
-    let mut obs = vec![0.0; ngroup * nstrat];
-    let mut exp = vec![0.0; ngroup * nstrat];
-    let mut var = vec![0.0; ngroup * ngroup];
-    let mut risk = vec![0.0; ngroup];
-    let mut kaplan = vec![0.0; n];
-    let params = SurvDiffParams {
-        nn: n as i32,
-        nngroup: ngroup as i32,
-        _nstrat: nstrat as i32,
-        rho: rho_val,
-    };
-    let input = SurvDiffInput {
-        time: &prepared.time,
-        status: &prepared.status,
-        group: &prepared.group,
-        strata: &prepared.strata,
-        timefix,
-    };
-    let mut output = SurvDiffOutput {
-        obs: &mut obs,
-        exp: &mut exp,
-        var: &mut var,
-        risk: &mut risk,
-        kaplan: &mut kaplan,
-    };
-    compute_survdiff(params, input, &mut output);
-    let mut observed_by_group = vec![0.0; ngroup];
-    let mut expected_by_group = vec![0.0; ngroup];
-    for stratum_idx in 0..nstrat {
-        let offset = stratum_idx * ngroup;
-        for group_idx in 0..ngroup {
-            observed_by_group[group_idx] += obs[offset + group_idx];
-            expected_by_group[group_idx] += exp[offset + group_idx];
-        }
+impl SurvDiffResult {
+    /// `obs` summed over strata, one entry per group.
+    pub fn obs_totals(&self) -> Vec<f64> {
+        self.obs.iter().map(|row| row.iter().sum()).collect()
     }
 
-    Ok(survdiff_result_from_flat_components(
-        observed_by_group,
-        expected_by_group,
-        var,
-        ngroup,
-    ))
+    /// `exp` summed over strata, one entry per group.
+    pub fn exp_totals(&self) -> Vec<f64> {
+        self.exp.iter().map(|row| row.iter().sum()).collect()
+    }
 }
 
-struct PreparedLogrankInput {
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    strata: Vec<i32>,
+fn sorted_levels(codes: &[i32]) -> Vec<i32> {
+    let mut levels = codes.to_vec();
+    levels.sort_unstable();
+    levels.dedup();
+    levels
 }
 
-fn prepare_right_logrank_inputs(
+fn level_index(levels: &[i32], code: i32) -> usize {
+    levels
+        .binary_search(&code)
+        .expect("code is one of its own levels")
+}
+
+/// Port of `survdiff2` (`src/survdiff2.c`) for one stratum, given its rows
+/// ordered by `(time, -status)`.  Accumulates into `obs[group][stratum]`,
+/// `exp[group][stratum]` and `var`.
+#[allow(clippy::too_many_arguments)]
+fn survdiff_stratum(
+    rows: &[usize],
+    stratum: usize,
+    start: Option<&[f64]>,
     time: &[f64],
     status: &[i32],
-    group: &[i32],
-    strata: Option<&[i32]>,
-    timefix: bool,
-) -> PreparedLogrankInput {
-    let mut prepared = PreparedLogrankInput {
-        time: Vec::with_capacity(time.len()),
-        status: Vec::with_capacity(status.len()),
-        group: Vec::with_capacity(group.len()),
-        strata: Vec::with_capacity(time.len()),
+    group: &[usize],
+    rho: f64,
+    obs: &mut [Vec<f64>],
+    exp: &mut [Vec<f64>],
+    var: &mut Array2<f64>,
+) {
+    let n = rows.len();
+    let ngroup = obs.len();
+    // entry times of the stratum, descending, for the counting-process case
+    let mut entries_desc: Vec<usize> = match start {
+        Some(_) => rows.to_vec(),
+        None => Vec::new(),
     };
-
-    for_each_strata_range(time.len(), strata, |start, end| {
-        let mut indices: Vec<usize> = (start..end).collect();
-        indices.sort_by(|&left, &right| {
-            time[left]
-                .total_cmp(&time[right])
-                .then_with(|| left.cmp(&right))
-        });
-
-        let range_start = prepared.time.len();
-        for idx in indices {
-            prepared.time.push(time[idx]);
-            prepared.status.push(status[idx]);
-            prepared.group.push(group[idx]);
-            prepared.strata.push(0);
-        }
-        if let Some(marker) = prepared.strata.last_mut() {
-            *marker = 1;
-        }
-        if timefix {
-            coalesce_near_times(&mut prepared.time[range_start..]);
-        }
-    });
-
-    prepared
-}
-
-fn coalesce_near_times(times: &mut [f64]) {
-    let mut cursor = 0;
-    while cursor < times.len() {
-        let base = times[cursor];
-        let mut scan = cursor + 1;
-        while scan < times.len() && times[scan] - base < TIME_EPSILON {
-            times[scan] = base;
-            scan += 1;
-        }
-        cursor = scan;
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, group, entry_times, strata=None, rho=None, timefix=true))]
-pub fn compute_counting_logrank_components(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    entry_times: Vec<f64>,
-    strata: Option<Vec<i32>>,
-    rho: Option<f64>,
-    timefix: bool,
-) -> PyResult<SurvDiffResult> {
-    let n = time.len();
-    if n > i32::MAX as usize {
-        return Err(value_error("time length exceeds i32 calculation capacity"));
-    }
-    validate_length(n, status.len(), "status")?;
-    validate_length(n, group.len(), "group")?;
-    validate_length(n, entry_times.len(), "entry_times")?;
-    validate_no_nan(&time, "time")?;
-    validate_finite(&time, "time")?;
-    validate_non_negative(&time, "time")?;
-    validate_no_nan(&entry_times, "entry_times")?;
-    validate_finite(&entry_times, "entry_times")?;
-    validate_non_negative(&entry_times, "entry_times")?;
-    validate_binary_i32(&status, "status")?;
-    validate_group_codes(&group, n)?;
-    validate_counting_intervals(&entry_times, &time, timefix)?;
-    let strata = strata.as_deref();
-    if let Some(strata) = strata {
-        validate_length(n, strata.len(), "strata")?;
-        validate_strata_markers(strata)?;
-    }
-    let rho_val = rho.unwrap_or(0.0);
-    if !rho_val.is_finite() {
-        return Err(value_error("rho must be finite"));
+    if let Some(start) = start {
+        entries_desc.sort_by(|&a, &b| start[b].total_cmp(&start[a]));
     }
 
-    let max_group = group.iter().max().copied().unwrap_or(0);
-    let ngroup = if max_group > 0 { max_group as usize } else { 1 };
-    let mut observed = vec![0.0; ngroup];
-    let mut expected = vec![0.0; ngroup];
-    let mut variance = vec![0.0; ngroup * ngroup];
-
-    for_each_strata_range(n, strata, |start, end| {
-        accumulate_counting_logrank_stratum(
-            start,
-            end,
-            CountingLogrankInput {
-                time: &time,
-                status: &status,
-                group: &group,
-                entry_times: &entry_times,
-                rho: rho_val,
-                timefix,
-            },
-            &mut observed,
-            &mut expected,
-            &mut variance,
-        );
-    });
-
-    Ok(survdiff_result_from_flat_components(
-        observed, expected, variance, ngroup,
-    ))
-}
-
-fn validate_group_codes(values: &[i32], n: usize) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if value < 1 {
-            return Err(value_error(format!(
-                "group must be >= 1; got {value} at index {idx}"
-            )));
-        }
-        if value as usize > n {
-            return Err(value_error(format!(
-                "group values must be between 1 and the number of observations ({n}); got {value} at index {idx}"
-            )));
+    // The Kaplan-Meier weight, only needed if rho != 0, set up as a
+    // left-continuous function (unusual).
+    let mut kaplan = vec![1.0; n];
+    if rho != 0.0 {
+        let mut km = 1.0;
+        let mut entered = 0; // intervals with start < current time
+        let mut entries_asc = entries_desc.clone();
+        entries_asc.reverse();
+        let mut i = 0;
+        while i < n {
+            let current = time[rows[i]];
+            let mut j = i;
+            let mut deaths = 0.0;
+            while j < n && time[rows[j]] == current {
+                kaplan[j] = km;
+                deaths += f64::from(status[rows[j]]);
+                j += 1;
+            }
+            let nrisk = match start {
+                Some(start) => {
+                    while entered < n && start[entries_asc[entered]] < current {
+                        entered += 1;
+                    }
+                    // intervals with stop >= t minus those with start >= t
+                    (n - i) as f64 - (n - entered) as f64
+                }
+                None => (n - i) as f64,
+            };
+            km *= (nrisk - deaths) / nrisk;
+            i = j;
         }
     }
-    Ok(())
-}
 
-fn validate_strata_markers(values: &[i32]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if value < 0 {
-            return Err(value_error(format!(
-                "strata must be >= 0; got {value} at index {idx}"
-            )));
-        }
-        if value > 1 {
-            return Err(value_error(format!(
-                "strata values must be 0 or 1; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_strata_codes(values: &[i32]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if value < 0 {
-            return Err(value_error(format!(
-                "strata must be >= 0; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn strata_code_order(strata: &[i32]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..strata.len()).collect();
-    order.sort_by(|&left, &right| {
-        strata[left]
-            .cmp(&strata[right])
-            .then_with(|| left.cmp(&right))
-    });
-    order
-}
-
-fn marker_for_order(strata: &[i32], order: &[usize]) -> Vec<i32> {
-    let mut markers = vec![0; order.len()];
-    for (position, &idx) in order.iter().enumerate() {
-        if position + 1 == order.len() || strata[order[position + 1]] != strata[idx] {
-            markers[position] = 1;
-        }
-    }
-    markers
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, group, strata, rho=None, timefix=false))]
-pub fn stratified_logrank_components(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    strata: Vec<i32>,
-    rho: Option<f64>,
-    timefix: bool,
-) -> PyResult<SurvDiffResult> {
-    let n = time.len();
-    validate_length(n, strata.len(), "strata")?;
-    validate_strata_codes(&strata)?;
-
-    let order = strata_code_order(&strata);
-    let markers = marker_for_order(&strata, &order);
-    let sorted_time = order.iter().map(|&idx| time[idx]).collect();
-    let sorted_status = order.iter().map(|&idx| status[idx]).collect();
-    let sorted_group = order.iter().map(|&idx| group[idx]).collect();
-
-    compute_logrank_components(
-        sorted_time,
-        sorted_status,
-        sorted_group,
-        Some(markers),
-        rho,
-        timefix,
-    )
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, group, entry_times, strata, rho=None, timefix=true))]
-pub fn stratified_counting_logrank_components(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    entry_times: Vec<f64>,
-    strata: Vec<i32>,
-    rho: Option<f64>,
-    timefix: bool,
-) -> PyResult<SurvDiffResult> {
-    let n = time.len();
-    validate_length(n, entry_times.len(), "entry_times")?;
-    validate_length(n, strata.len(), "strata")?;
-    validate_strata_codes(&strata)?;
-
-    let order = strata_code_order(&strata);
-    let markers = marker_for_order(&strata, &order);
-    let sorted_time = order.iter().map(|&idx| time[idx]).collect();
-    let sorted_status = order.iter().map(|&idx| status[idx]).collect();
-    let sorted_group = order.iter().map(|&idx| group[idx]).collect();
-    let sorted_entry_times = order.iter().map(|&idx| entry_times[idx]).collect();
-
-    compute_counting_logrank_components(
-        sorted_time,
-        sorted_status,
-        sorted_group,
-        sorted_entry_times,
-        Some(markers),
-        rho,
-        timefix,
-    )
-}
-
-fn validate_counting_intervals(entry_times: &[f64], time: &[f64], timefix: bool) -> PyResult<()> {
-    for (idx, (&entry_time, &exit_time)) in entry_times.iter().zip(time.iter()).enumerate() {
-        let invalid = if timefix {
-            entry_time >= exit_time - TIME_EPSILON
+    // Now for the actual test, walking backwards so risk sets accumulate.
+    let mut risk = vec![0.0; ngroup];
+    let mut left = 0; // intervals with start >= current time, already removed
+    let mut i = n;
+    while i > 0 {
+        let current = time[rows[i - 1]];
+        let wt = if rho == 0.0 {
+            1.0
         } else {
-            entry_time >= exit_time
+            kaplan[i - 1].powf(rho)
         };
-        if invalid {
-            return Err(value_error(format!(
-                "entry_times must be less than time for observation {idx}"
-            )));
+        let mut deaths = 0.0;
+        let mut j = i;
+        while j > 0 && time[rows[j - 1]] == current {
+            let row = rows[j - 1];
+            let k = group[row];
+            deaths += f64::from(status[row]);
+            risk[k] += 1.0;
+            obs[k][stratum] += f64::from(status[row]) * wt;
+            j -= 1;
         }
-    }
-    Ok(())
-}
-
-fn survdiff_result_from_flat_components(
-    observed: Vec<f64>,
-    expected: Vec<f64>,
-    variance: Vec<f64>,
-    n_groups: usize,
-) -> SurvDiffResult {
-    let (chi_sq, df) =
-        logrank_statistic_from_flat_covariance(&observed, &expected, &variance, n_groups);
-    let mut variance_matrix = Vec::new();
-    for group_idx in 0..n_groups {
-        let start = group_idx * n_groups;
-        let end = start + n_groups;
-        variance_matrix.push(variance[start..end].to_vec());
-    }
-    SurvDiffResult {
-        observed,
-        expected,
-        variance: variance_matrix,
-        chi_squared: chi_sq,
-        degrees_of_freedom: df,
-    }
-}
-
-fn for_each_strata_range(n: usize, strata: Option<&[i32]>, mut visit: impl FnMut(usize, usize)) {
-    match strata {
-        Some(strata) => {
-            let mut start = 0;
-            for (idx, &marker) in strata.iter().enumerate() {
-                if marker == 1 {
-                    visit(start, idx + 1);
-                    start = idx + 1;
+        i = j;
+        if let Some(start) = start {
+            // intervals that begin at or after this time are not at risk
+            while left < n && start[entries_desc[left]] >= current {
+                risk[group[entries_desc[left]]] -= 1.0;
+                left += 1;
+            }
+        }
+        let nrisk: f64 = risk.iter().sum();
+        if deaths > 0.0 {
+            for k in 0..ngroup {
+                exp[k][stratum] += wt * deaths * risk[k] / nrisk;
+            }
+            if nrisk == 1.0 {
+                continue; // only 1 subject, so no variance
+            }
+            let wt2 = wt * wt;
+            for j in 0..ngroup {
+                let tmp = wt2 * deaths * risk[j] * (nrisk - deaths) / (nrisk * (nrisk - 1.0));
+                var[[j, j]] += tmp;
+                for k in 0..ngroup {
+                    var[[j, k]] -= tmp * risk[k] / nrisk;
                 }
             }
-            if start < strata.len() {
-                visit(start, strata.len());
-            }
         }
-        None if n > 0 => visit(0, n),
-        None => {}
     }
 }
 
-fn strata_range_count(strata: Option<&[i32]>) -> usize {
-    match strata {
-        Some(strata) => {
-            let mut count = 0;
-            let mut start = 0;
-            for (idx, &marker) in strata.iter().enumerate() {
-                if marker == 1 {
-                    count += 1;
-                    start = idx + 1;
-                }
-            }
-            if start < strata.len() {
-                count += 1;
-            }
-            count.max(1)
-        }
-        None => 1,
+/// R's `survdiff` chi-square: groups with no expected events are dropped,
+/// the first remaining group is the reference.
+fn survdiff_chisq(
+    obs_totals: &[f64],
+    exp_totals: &[f64],
+    var: &Array2<f64>,
+) -> SurvivalResult<(f64, usize)> {
+    let keep: Vec<usize> = (0..exp_totals.len())
+        .filter(|&k| exp_totals[k] > 0.0)
+        .collect();
+    let df = keep.len().saturating_sub(1);
+    if keep.len() < 2 {
+        return Ok((0.0, df)); // No test, actually
     }
+    let contrast: Vec<f64> = keep[1..]
+        .iter()
+        .map(|&k| obs_totals[k] - exp_totals[k])
+        .collect();
+    let mut vv = Array2::zeros((df, df));
+    for (r, &j) in keep[1..].iter().enumerate() {
+        for (c, &k) in keep[1..].iter().enumerate() {
+            vv[[r, c]] = var[[j, k]];
+        }
+    }
+    let solution = LuDecomposition::decompose(&vv)?.solve(&contrast)?;
+    let chisq = solution
+        .iter()
+        .zip(&contrast)
+        .map(|(s, c)| s * c)
+        .sum::<f64>();
+    Ok((chisq, df))
 }
 
-struct CountingLogrankInput<'a> {
-    time: &'a [f64],
-    status: &'a [i32],
-    group: &'a [i32],
-    entry_times: &'a [f64],
+/// `aeqSurv` on the time columns.
+fn timefix_times(
+    start: Option<&[f64]>,
+    time: &[f64],
+) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
+    let fixed = crate::data_prep::aeq_surv(time, start, None)?;
+    Ok((fixed.time2, fixed.time))
+}
+
+/// Port of `survdiff` (`R/survdiff.R`) for the k-sample test.
+///
+/// `rho = 0` is the log-rank test, `rho = 1` the Peto & Peto modification
+/// of the Gehan-Wilcoxon test.
+pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<SurvDiffResult> {
+    if !rho.is_finite() {
+        return Err(SurvivalError::invalid_input("rho must be finite"));
+    }
+    let (start, time) = if timefix {
+        timefix_times(data.start.as_deref(), &data.time)?
+    } else {
+        (data.start.clone(), data.time.clone())
+    };
+    let n = time.len();
+    let group_levels = sorted_levels(&data.group);
+    let ngroup = group_levels.len();
+    if ngroup < 2 {
+        return Err(SurvivalError::invalid_input("There is only 1 group"));
+    }
+    let group: Vec<usize> = data
+        .group
+        .iter()
+        .map(|&code| level_index(&group_levels, code))
+        .collect();
+    let strata_levels = data.strata.as_deref().map(sorted_levels);
+    let nstrat = strata_levels.as_ref().map_or(1, Vec::len);
+    let stratum: Vec<usize> = (0..n)
+        .map(|i| match (&data.strata, &strata_levels) {
+            (Some(strata), Some(levels)) => level_index(levels, strata[i]),
+            _ => 0,
+        })
+        .collect();
+
+    let mut obs = vec![vec![0.0; nstrat]; ngroup];
+    let mut exp = vec![vec![0.0; nstrat]; ngroup];
+    let mut var = Array2::zeros((ngroup, ngroup));
+    let mut strata_counts = Vec::with_capacity(nstrat);
+    for s in 0..nstrat {
+        // order(strat, time, -status)
+        let mut rows: Vec<usize> = (0..n).filter(|&i| stratum[i] == s).collect();
+        rows.sort_by(|&a, &b| {
+            time[a]
+                .total_cmp(&time[b])
+                .then_with(|| data.status[b].cmp(&data.status[a]))
+                .then_with(|| a.cmp(&b))
+        });
+        strata_counts.push(rows.len());
+        survdiff_stratum(
+            &rows,
+            s,
+            start.as_deref(),
+            &time,
+            &data.status,
+            &group,
+            rho,
+            &mut obs,
+            &mut exp,
+            &mut var,
+        );
+    }
+    let obs_totals: Vec<f64> = obs.iter().map(|row| row.iter().sum()).collect();
+    let exp_totals: Vec<f64> = exp.iter().map(|row| row.iter().sum()).collect();
+    let (chisq, df) = survdiff_chisq(&obs_totals, &exp_totals, &var)?;
+    let mut counts = vec![0usize; ngroup];
+    for &g in &group {
+        counts[g] += 1;
+    }
+    Ok(SurvDiffResult {
+        n: counts,
+        obs,
+        exp,
+        var: var.outer_iter().map(|row| row.to_vec()).collect(),
+        chisq,
+        pvalue: pchisq(chisq, df as f64, false, false),
+        df,
+        strata: strata_levels.map(|_| strata_counts),
+        group_codes: group_levels,
+    })
+}
+
+/// The one-sample test of `survdiff(Surv(time, status) ~ offset(expected))`:
+/// observed events against the expected number `sum(-log(expected))` from
+/// the survival probabilities `expected` (usually `survexp(...,
+/// cohort = FALSE)`).
+pub fn survdiff_one_sample(
+    status: &[i32],
+    expected: &[f64],
+    rho: f64,
+) -> SurvivalResult<SurvDiffResult> {
+    validate_non_empty(status, "status")?;
+    validate_binary_i32(status, "status")?;
+    validate_length(status.len(), expected.len(), "expected")?;
+    if !rho.is_finite() {
+        return Err(SurvivalError::invalid_input("rho must be finite"));
+    }
+    if expected.iter().any(|p| !(0.0..=1.0).contains(p)) {
+        return Err(SurvivalError::invalid_input(
+            "The offset must be a survival probability",
+        ));
+    }
+    let exp: f64 = expected.iter().map(|p| -p.ln()).sum();
+    let obs: f64 = status.iter().map(|&s| f64::from(s)).sum();
+    let (num, var) = if rho != 0.0 {
+        let num = status
+            .iter()
+            .zip(expected)
+            .map(|(&s, &p)| 1.0 / rho - (1.0 / rho + f64::from(s)) * p.powf(rho))
+            .sum::<f64>();
+        let var = expected
+            .iter()
+            .map(|p| 1.0 - p.powf(2.0 * rho))
+            .sum::<f64>()
+            / (2.0 * rho);
+        (num, var)
+    } else {
+        (obs - exp, exp)
+    };
+    let chisq = num * num / var;
+    Ok(SurvDiffResult {
+        n: vec![status.len()],
+        obs: vec![vec![obs]],
+        exp: vec![vec![exp]],
+        var: vec![vec![var]],
+        chisq,
+        pvalue: pchisq(chisq, 1.0, false, false),
+        df: 1,
+        strata: None,
+        group_codes: vec![1],
+    })
+}
+
+/// Python binding of [`survdiff`].
+#[pyfunction(name = "survdiff")]
+#[pyo3(signature = (time, status, group, start=None, strata=None, rho=0.0, timefix=true))]
+pub fn survdiff_py(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    group: Vec<i32>,
+    start: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
     rho: f64,
     timefix: bool,
-}
-
-fn accumulate_counting_logrank_stratum(
-    start: usize,
-    end: usize,
-    input: CountingLogrankInput<'_>,
-    observed: &mut [f64],
-    expected: &mut [f64],
-    variance: &mut [f64],
-) {
-    if start >= end {
-        return;
-    }
-
-    let n_groups = observed.len();
-    let mut exit_indices: Vec<usize> = (start..end).collect();
-    exit_indices.sort_by(|&left, &right| input.time[left].total_cmp(&input.time[right]));
-    let mut entry_indices: Vec<usize> = (start..end).collect();
-    entry_indices
-        .sort_by(|&left, &right| input.entry_times[left].total_cmp(&input.entry_times[right]));
-
-    let mut at_risk = vec![0.0; n_groups];
-    let mut entry_cursor = 0;
-    let mut km_survival = 1.0_f64;
-    let mut cursor = 0;
-    while cursor < exit_indices.len() {
-        let current_time = input.time[exit_indices[cursor]];
-        while entry_cursor < entry_indices.len()
-            && entry_precedes_event(
-                input.entry_times[entry_indices[entry_cursor]],
-                current_time,
-                input.timefix,
-            )
-        {
-            let idx = entry_indices[entry_cursor];
-            let group_idx = (input.group[idx] - 1) as usize;
-            at_risk[group_idx] += 1.0;
-            entry_cursor += 1;
-        }
-
-        let mut events_by_group = vec![0.0; n_groups];
-        let mut removed_by_group = vec![0.0; n_groups];
-        let mut total_events = 0.0;
-        while cursor < exit_indices.len()
-            && same_logrank_time(
-                input.time[exit_indices[cursor]],
-                current_time,
-                input.timefix,
-            )
-        {
-            let idx = exit_indices[cursor];
-            let group_idx = (input.group[idx] - 1) as usize;
-            removed_by_group[group_idx] += 1.0;
-            if input.status[idx] == 1 {
-                events_by_group[group_idx] += 1.0;
-                total_events += 1.0;
-            }
-            cursor += 1;
-        }
-
-        if total_events > 0.0 {
-            let total_at_risk: f64 = at_risk.iter().sum();
-            if total_at_risk > 0.0 {
-                let weight = km_survival.powf(input.rho);
-                for group_idx in 0..n_groups {
-                    observed[group_idx] += weight * events_by_group[group_idx];
-                    expected[group_idx] +=
-                        weight * total_events * at_risk[group_idx] / total_at_risk;
-                }
-
-                if total_at_risk > 1.0 {
-                    let var_factor =
-                        weight * weight * total_events * (total_at_risk - total_events)
-                            / (total_at_risk * (total_at_risk - 1.0));
-                    for row in 0..n_groups {
-                        let row_start = row * n_groups;
-                        for col in 0..n_groups {
-                            let diagonal = if row == col { 1.0 } else { 0.0 };
-                            variance[row_start + col] += var_factor
-                                * at_risk[row]
-                                * (diagonal - at_risk[col] / total_at_risk);
-                        }
-                    }
-                }
-
-                km_survival *= 1.0 - total_events / total_at_risk;
-            }
-        }
-
-        for group_idx in 0..n_groups {
-            at_risk[group_idx] -= removed_by_group[group_idx];
-        }
-    }
-}
-
-fn entry_precedes_event(entry_time: f64, event_time: f64, timefix: bool) -> bool {
-    if timefix {
-        entry_time < event_time - TIME_EPSILON
-    } else {
-        entry_time < event_time
-    }
-}
-
-fn same_logrank_time(left: f64, right: f64, timefix: bool) -> bool {
-    if timefix {
-        same_time(left, right)
-    } else {
-        left == right
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, group, strata=None, rho=None, timefix=None))]
-pub fn survdiff2(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    strata: Option<Vec<i32>>,
-    rho: Option<f64>,
-    timefix: Option<bool>,
 ) -> PyResult<SurvDiffResult> {
-    compute_logrank_components(time, status, group, strata, rho, timefix.unwrap_or(false))
+    let data = SurvdiffData::try_new(start, time, status, group, strata)?;
+    Ok(survdiff(&data, rho, timefix)?)
 }
 
-pub(crate) struct SurvDiffInput<'a> {
-    pub(crate) time: &'a [f64],
-    pub(crate) status: &'a [i32],
-    pub(crate) group: &'a [i32],
-    pub(crate) strata: &'a [i32],
-    pub(crate) timefix: bool,
-}
-
-pub(crate) struct SurvDiffOutput<'a> {
-    pub(crate) obs: &'a mut [f64],
-    pub(crate) exp: &'a mut [f64],
-    pub(crate) var: &'a mut [f64],
-    pub(crate) risk: &'a mut [f64],
-    pub(crate) kaplan: &'a mut [f64],
-}
-
-pub(crate) struct SurvDiffParams {
-    pub(crate) nn: i32,
-    pub(crate) nngroup: i32,
-    pub(crate) _nstrat: i32,
-    pub(crate) rho: f64,
-}
-
-pub(crate) fn compute_survdiff(
-    params: SurvDiffParams,
-    input: SurvDiffInput,
-    output: &mut SurvDiffOutput,
-) {
-    let ntotal = params.nn as usize;
-    let ngroup = params.nngroup as usize;
-    let mut istart = 0;
-    let mut koff = 0;
-    for v in output.var.iter_mut() {
-        *v = 0.0;
-    }
-    for o in output.obs.iter_mut() {
-        *o = 0.0;
-    }
-    for e in output.exp.iter_mut() {
-        *e = 0.0;
-    }
-    while istart < ntotal {
-        let mut n = istart;
-        while n < ntotal && input.strata[n] != 1 {
-            n += 1;
-        }
-        if n < ntotal {
-            n += 1;
-        }
-        if params.rho != 0.0 {
-            let mut km = 1.0;
-            let mut i = istart;
-            while i < n {
-                let current_time = input.time[i];
-                let mut deaths = 0;
-                let mut j = i;
-                while j < n && same_logrank_time(input.time[j], current_time, input.timefix) {
-                    output.kaplan[j] = km;
-                    deaths += input.status[j] as usize;
-                    j += 1;
-                }
-                let nrisk = (n - i) as f64;
-                if nrisk > 0.0 && deaths > 0 {
-                    km *= (nrisk - deaths as f64) / nrisk;
-                }
-                i = j;
-            }
-        }
-        for r in output.risk.iter_mut().take(ngroup) {
-            *r = 0.0;
-        }
-        let mut i = n.saturating_sub(1);
-        loop {
-            if i < istart || (istart == 0 && n == 0) {
-                break;
-            }
-            let current_time = input.time[i];
-            let mut deaths = 0;
-            let mut j = i;
-            let wt = if params.rho == 0.0 {
-                1.0
-            } else {
-                output.kaplan[i].powf(params.rho)
-            };
-            loop {
-                let k = (input.group[j] - 1) as usize;
-                output.risk[k] += 1.0;
-                deaths += input.status[j] as usize;
-                if j == istart {
-                    break;
-                }
-                if !same_logrank_time(input.time[j - 1], current_time, input.timefix) {
-                    break;
-                }
-                j -= 1;
-            }
-            let nrisk = (n - j) as f64;
-            if deaths > 0 {
-                for (k, risk_val) in output.risk.iter().take(ngroup).enumerate() {
-                    let exp_index = koff + k;
-                    output.exp[exp_index] += wt * (deaths as f64) * risk_val / nrisk;
-                }
-                for ti in j..=i {
-                    if input.status[ti] == 1 {
-                        let obs_index = koff + (input.group[ti] - 1) as usize;
-                        output.obs[obs_index] += wt;
-                    }
-                }
-                if nrisk > 1.0 {
-                    let wt_sq = wt * wt;
-                    let factor =
-                        wt_sq * (deaths as f64) * (nrisk - deaths as f64) / (nrisk * (nrisk - 1.0));
-                    for (j_group, &rj) in output.risk.iter().take(ngroup).enumerate() {
-                        let var_start = j_group * ngroup;
-                        let tmp = factor * rj;
-                        for (k_group, &rk) in output.risk.iter().take(ngroup).enumerate() {
-                            output.var[var_start + k_group] += tmp
-                                * (if j_group == k_group {
-                                    1.0 - rk / nrisk
-                                } else {
-                                    -rk / nrisk
-                                });
-                        }
-                    }
-                }
-            }
-            if j == istart {
-                break;
-            }
-            i = j - 1;
-        }
-        istart = n;
-        koff += ngroup;
-    }
+/// Python binding of [`survdiff_one_sample`].
+#[pyfunction(name = "survdiff_one_sample")]
+#[pyo3(signature = (status, expected, rho=0.0))]
+pub fn survdiff_one_sample_py(
+    status: Vec<i32>,
+    expected: Vec<f64>,
+    rho: f64,
+) -> PyResult<SurvDiffResult> {
+    Ok(survdiff_one_sample(&status, &expected, rho)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn assert_survdiff_eq(left: &SurvDiffResult, right: &SurvDiffResult) {
-        assert_eq!(left.observed, right.observed);
-        assert_eq!(left.expected, right.expected);
-        assert_eq!(left.variance, right.variance);
-        assert_eq!(left.chi_squared, right.chi_squared);
-        assert_eq!(left.degrees_of_freedom, right.degrees_of_freedom);
+    fn right(time: Vec<f64>, status: Vec<i32>, group: Vec<i32>) -> SurvdiffData {
+        SurvdiffData::try_new(None, time, status, group, None).unwrap()
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-12
     }
 
     #[test]
-    fn compute_logrank_components_all_censored_has_zero_degrees_of_freedom() {
-        let result = compute_logrank_components(
-            vec![1.0, 2.0, 3.0, 4.0],
-            vec![0, 0, 0, 0],
-            vec![1, 1, 2, 2],
-            None,
-            None,
+    fn three_group_logrank_matches_r() {
+        // survdiff(Surv(time, status) ~ g) with the data below
+        let result = survdiff(
+            &right(
+                vec![1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+                vec![1, 1, 1, 0, 1, 0, 1, 1, 0],
+                vec![1, 1, 2, 1, 3, 2, 3, 2, 3],
+            ),
+            0.0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.n, vec![3, 3, 3]);
+        assert_eq!(result.df, 2);
+        assert_eq!(result.obs_totals(), vec![2.0, 2.0, 2.0]);
+        assert_eq!(result.exp_totals(), vec![1.0, 2.25, 2.75]);
+        assert!(close(result.var[0][0], 0.6825396825396826));
+        assert!(close(result.var[0][1], -0.3273809523809524));
+        assert!(close(result.chisq, 1.5105257668985863));
+        assert!(result.pvalue > 0.0 && result.pvalue < 1.0);
+        assert!(result.strata.is_none());
+    }
+
+    #[test]
+    fn two_group_test_by_hand() {
+        let result = survdiff(
+            &right(
+                vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
+                vec![1, 1, 0, 1],
+                vec![1, 2, 1, 2],
+            ),
+            0.0,
             false,
         )
-        .expect("all-censored logrank components should not underflow df");
-
-        assert_eq!(result.chi_squared, 0.0);
-        assert_eq!(result.degrees_of_freedom, 0);
-    }
-
-    #[test]
-    fn compute_logrank_components_default_strata_matches_explicit_markers() {
-        let time = vec![3.0, 1.0, 2.0, 4.0, 5.0];
-        let status = vec![1, 1, 0, 1, 0];
-        let group = vec![2, 1, 1, 2, 1];
-        let strata = vec![0; time.len()];
-
-        let default = compute_logrank_components(
-            time.clone(),
-            status.clone(),
-            group.clone(),
-            None,
-            Some(0.5),
+        .unwrap();
+        assert_eq!(result.obs_totals(), vec![1.0, 2.0]);
+        assert!(close(result.exp_totals()[0], 5.0 / 6.0));
+        assert!(close(result.exp_totals()[1], 13.0 / 6.0));
+        assert!(close(result.var[0][0], 17.0 / 36.0));
+        assert!(close(result.chisq, 1.0 / 17.0));
+        // timefix bins the near-tie and the groups balance exactly
+        let fixed = survdiff(
+            &right(
+                vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
+                vec![1, 1, 0, 1],
+                vec![1, 2, 1, 2],
+            ),
+            0.0,
             true,
         )
-        .expect("default strata should compute");
-        let explicit =
-            compute_logrank_components(time, status, group, Some(strata), Some(0.5), true)
-                .expect("explicit zero strata should compute");
-
-        assert_survdiff_eq(&default, &explicit);
+        .unwrap();
+        assert_eq!(fixed.chisq, 0.0);
     }
 
     #[test]
-    fn compute_counting_logrank_components_default_strata_matches_explicit_markers() {
-        let time = vec![2.0, 4.0, 3.0, 5.0, 6.0];
-        let status = vec![1, 0, 1, 1, 0];
-        let group = vec![1, 2, 1, 2, 1];
-        let entry_times = vec![0.0, 1.0, 0.5, 2.0, 3.0];
-        let strata = vec![0; time.len()];
-
-        let default = compute_counting_logrank_components(
-            time.clone(),
-            status.clone(),
-            group.clone(),
-            entry_times.clone(),
-            None,
-            Some(0.5),
+    fn strata_accumulate_per_stratum_columns() {
+        let stratified = survdiff(
+            &SurvdiffData::try_new(
+                None,
+                vec![1.0, 2.0, 1.0, 2.0],
+                vec![1, 0, 0, 1],
+                vec![1, 2, 1, 2],
+                Some(vec![7, 7, 9, 9]),
+            )
+            .unwrap(),
+            0.0,
             true,
         )
-        .expect("default counting strata should compute");
-        let explicit = compute_counting_logrank_components(
-            time,
-            status,
-            group,
-            entry_times,
-            Some(strata),
-            Some(0.5),
-            true,
-        )
-        .expect("explicit zero counting strata should compute");
-
-        assert_survdiff_eq(&default, &explicit);
-    }
-
-    #[test]
-    fn compute_logrank_components_rejects_non_binary_status() {
-        let err = compute_logrank_components(vec![1.0], vec![2], vec![1], None, None, false)
-            .expect_err("non-binary status should fail");
-
-        assert!(err.to_string().contains("status must contain only 0/1"));
-    }
-
-    #[test]
-    fn compute_logrank_components_rejects_sparse_huge_group_codes() {
-        let err =
-            compute_logrank_components(vec![1.0, 2.0], vec![1, 0], vec![1, 3], None, None, false)
-                .expect_err("group code beyond n should fail");
-
-        assert!(err.to_string().contains("group values must be between 1"));
-    }
-
-    #[test]
-    fn compute_logrank_components_rejects_non_marker_strata() {
-        let err =
-            compute_logrank_components(vec![1.0], vec![1], vec![1], Some(vec![2]), None, false)
-                .expect_err("strata markers should be 0 or 1");
-
-        assert!(err.to_string().contains("strata values must be 0 or 1"));
-    }
-
-    #[test]
-    fn compute_logrank_components_aggregates_strata() {
-        let stratified = compute_logrank_components(
-            vec![1.0, 2.0, 1.0, 2.0],
-            vec![1, 0, 0, 1],
-            vec![1, 2, 1, 2],
-            Some(vec![0, 1, 0, 1]),
-            None,
-            false,
-        )
-        .expect("stratified components should compute");
-        let first_stratum =
-            compute_logrank_components(vec![1.0, 2.0], vec![1, 0], vec![1, 2], None, None, false)
-                .expect("first stratum should compute");
-        let second_stratum =
-            compute_logrank_components(vec![1.0, 2.0], vec![0, 1], vec![1, 2], None, None, false)
-                .expect("second stratum should compute");
-
-        assert_eq!(stratified.observed.len(), 2);
-        assert_eq!(stratified.expected.len(), 2);
-        assert!(
-            (stratified.observed[0] - first_stratum.observed[0] - second_stratum.observed[0]).abs()
-                < 1e-12
-        );
-        assert!(
-            (stratified.observed[1] - first_stratum.observed[1] - second_stratum.observed[1]).abs()
-                < 1e-12
-        );
-        assert!(
-            (stratified.expected[0] - first_stratum.expected[0] - second_stratum.expected[0]).abs()
-                < 1e-12
-        );
-        assert!(
-            (stratified.expected[1] - first_stratum.expected[1] - second_stratum.expected[1]).abs()
-                < 1e-12
-        );
-        for row in 0..2 {
-            for col in 0..2 {
-                assert!(
-                    (stratified.variance[row][col]
-                        - first_stratum.variance[row][col]
-                        - second_stratum.variance[row][col])
-                        .abs()
-                        < 1e-12
-                );
+        .unwrap();
+        let first = survdiff(&right(vec![1.0, 2.0], vec![1, 0], vec![1, 2]), 0.0, true).unwrap();
+        let second = survdiff(&right(vec![1.0, 2.0], vec![0, 1], vec![1, 2]), 0.0, true).unwrap();
+        assert_eq!(stratified.strata, Some(vec![2, 2]));
+        for g in 0..2 {
+            assert_eq!(stratified.obs[g], vec![first.obs[g][0], second.obs[g][0]]);
+            assert!(close(
+                stratified.exp[g][0] + stratified.exp[g][1],
+                first.exp[g][0] + second.exp[g][0]
+            ));
+            for k in 0..2 {
+                assert!(close(
+                    stratified.var[g][k],
+                    first.var[g][k] + second.var[g][k]
+                ));
             }
         }
     }
 
     #[test]
-    fn compute_logrank_components_counts_trailing_unmarked_stratum() {
-        let stratified = compute_logrank_components(
-            vec![1.0, 2.0, 1.0, 2.0],
-            vec![1, 0, 0, 1],
-            vec![1, 2, 1, 2],
-            Some(vec![0, 1, 0, 0]),
-            None,
-            false,
-        )
-        .expect("stratified components should compute with trailing unmarked stratum");
-        let first_stratum =
-            compute_logrank_components(vec![1.0, 2.0], vec![1, 0], vec![1, 2], None, None, false)
-                .expect("first stratum should compute");
-        let second_stratum =
-            compute_logrank_components(vec![1.0, 2.0], vec![0, 1], vec![1, 2], None, None, false)
-                .expect("second stratum should compute");
-
-        for group_idx in 0..2 {
-            assert!(
-                (stratified.observed[group_idx]
-                    - first_stratum.observed[group_idx]
-                    - second_stratum.observed[group_idx])
-                    .abs()
-                    < 1e-12
-            );
-            assert!(
-                (stratified.expected[group_idx]
-                    - first_stratum.expected[group_idx]
-                    - second_stratum.expected[group_idx])
-                    .abs()
-                    < 1e-12
-            );
-        }
-    }
-
-    #[test]
-    fn compute_logrank_components_honors_exact_timefix() {
-        let fixed = compute_logrank_components(
-            vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
-            vec![1, 1, 0, 1],
-            vec![1, 2, 1, 2],
-            None,
-            None,
-            true,
-        )
-        .expect("time-fixed right-censored components should compute");
-        let exact = compute_logrank_components(
-            vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
-            vec![1, 1, 0, 1],
-            vec![1, 2, 1, 2],
-            None,
-            None,
-            false,
-        )
-        .expect("exact right-censored components should compute");
-
-        assert_eq!(exact.observed, vec![1.0, 2.0]);
-        assert!((exact.expected[0] - 5.0 / 6.0).abs() < 1e-12);
-        assert!((exact.expected[1] - 13.0 / 6.0).abs() < 1e-12);
-        assert!((exact.variance[0][0] - 17.0 / 36.0).abs() < 1e-12);
-        assert!((exact.chi_squared - 1.0 / 17.0).abs() < 1e-12);
-        assert_eq!(fixed.chi_squared, 0.0);
-    }
-
-    #[test]
-    fn compute_survdiff_core_honors_timefix_grouping() {
-        fn run_core(timefix: bool) -> SurvDiffResult {
-            let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0, 3.0];
-            let status = vec![1, 1, 0, 1];
-            let group = vec![1, 2, 1, 2];
-            let strata = vec![0, 0, 0, 1];
-            let ngroup = 2;
-            let n = time.len();
-            let mut obs = vec![0.0; ngroup];
-            let mut exp = vec![0.0; ngroup];
-            let mut var = vec![0.0; ngroup * ngroup];
-            let mut risk = vec![0.0; ngroup];
-            let mut kaplan = vec![0.0; n];
-            let params = SurvDiffParams {
-                nn: n as i32,
-                nngroup: ngroup as i32,
-                _nstrat: 1,
-                rho: 0.0,
-            };
-            let input = SurvDiffInput {
-                time: &time,
-                status: &status,
-                group: &group,
-                strata: &strata,
-                timefix,
-            };
-            let mut output = SurvDiffOutput {
-                obs: &mut obs,
-                exp: &mut exp,
-                var: &mut var,
-                risk: &mut risk,
-                kaplan: &mut kaplan,
-            };
-            compute_survdiff(params, input, &mut output);
-            survdiff_result_from_flat_components(obs, exp, var, ngroup)
-        }
-
-        let fixed = run_core(true);
-        let exact = run_core(false);
-
-        assert_eq!(exact.observed, vec![1.0, 2.0]);
-        assert!((exact.expected[0] - 5.0 / 6.0).abs() < 1e-12);
-        assert!((exact.expected[1] - 13.0 / 6.0).abs() < 1e-12);
-        assert!((exact.chi_squared - 1.0 / 17.0).abs() < 1e-12);
-        assert_eq!(fixed.observed, vec![1.0, 2.0]);
-        assert_eq!(fixed.expected, vec![1.0, 2.0]);
-        assert_eq!(fixed.chi_squared, 0.0);
-    }
-
-    #[test]
-    fn compute_logrank_components_sorts_within_strata() {
-        let sorted = compute_logrank_components(
-            vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
-            vec![1, 1, 0, 1],
-            vec![1, 2, 1, 2],
-            None,
-            None,
-            false,
-        )
-        .expect("sorted components should compute");
-        let unsorted = compute_logrank_components(
-            vec![3.0, 1.0 + 5e-10, 2.0, 1.0],
-            vec![1, 1, 0, 1],
-            vec![2, 2, 1, 1],
-            None,
-            None,
-            false,
-        )
-        .expect("unsorted components should compute");
-
-        assert_eq!(unsorted.observed, sorted.observed);
-        assert_eq!(unsorted.expected, sorted.expected);
-        assert_eq!(unsorted.variance, sorted.variance);
-        assert_eq!(unsorted.chi_squared, sorted.chi_squared);
-    }
-
-    #[test]
-    fn compute_counting_logrank_components_honors_exact_timefix() {
-        let fixed = compute_counting_logrank_components(
-            vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
-            vec![1, 1, 0, 1],
-            vec![1, 2, 1, 2],
-            vec![0.0, 0.0, 0.0, 0.0],
-            None,
-            None,
-            true,
-        )
-        .expect("time-fixed counting components should compute");
-        let exact = compute_counting_logrank_components(
-            vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
-            vec![1, 1, 0, 1],
-            vec![1, 2, 1, 2],
-            vec![0.0, 0.0, 0.0, 0.0],
-            None,
-            None,
-            false,
-        )
-        .expect("exact counting components should compute");
-
-        assert_eq!(exact.observed, vec![1.0, 2.0]);
-        assert!((exact.expected[0] - 5.0 / 6.0).abs() < 1e-12);
-        assert!((exact.expected[1] - 13.0 / 6.0).abs() < 1e-12);
-        assert!((exact.variance[0][0] - 17.0 / 36.0).abs() < 1e-12);
-        assert!((exact.chi_squared - 1.0 / 17.0).abs() < 1e-12);
-        assert_eq!(fixed.chi_squared, 0.0);
-    }
-
-    #[test]
-    fn compute_counting_logrank_components_aggregates_strata_covariance() {
-        let stratified = compute_counting_logrank_components(
-            vec![1.0, 2.0, 3.0, 1.5, 2.5, 3.5],
-            vec![1, 1, 0, 0, 1, 1],
-            vec![1, 2, 3, 1, 2, 3],
-            vec![0.0; 6],
-            Some(vec![0, 0, 1, 0, 0, 1]),
-            None,
-            true,
-        )
-        .expect("stratified counting components should compute");
-        let first = compute_counting_logrank_components(
-            vec![1.0, 2.0, 3.0],
-            vec![1, 1, 0],
-            vec![1, 2, 3],
-            vec![0.0; 3],
-            None,
-            None,
-            true,
-        )
-        .expect("first counting stratum should compute");
-        let second = compute_counting_logrank_components(
-            vec![1.5, 2.5, 3.5],
-            vec![0, 1, 1],
-            vec![1, 2, 3],
-            vec![0.0; 3],
-            None,
-            None,
-            true,
-        )
-        .expect("second counting stratum should compute");
-
-        for group_idx in 0..3 {
-            assert!(
-                (stratified.observed[group_idx]
-                    - first.observed[group_idx]
-                    - second.observed[group_idx])
-                    .abs()
-                    < 1e-12
-            );
-            assert!(
-                (stratified.expected[group_idx]
-                    - first.expected[group_idx]
-                    - second.expected[group_idx])
-                    .abs()
-                    < 1e-12
-            );
-            for col_idx in 0..3 {
-                assert!(
-                    (stratified.variance[group_idx][col_idx]
-                        - first.variance[group_idx][col_idx]
-                        - second.variance[group_idx][col_idx])
-                        .abs()
-                        < 1e-12
-                );
-            }
-        }
-        assert_eq!(stratified.degrees_of_freedom, 2);
-    }
-
-    #[test]
-    fn stratified_logrank_components_accepts_unsorted_strata_codes() {
-        let raw = stratified_logrank_components(
-            vec![2.0, 1.0, 3.0, 1.5, 2.5, 3.5],
-            vec![0, 1, 1, 1, 1, 0],
-            vec![2, 1, 2, 1, 2, 1],
-            vec![1, 0, 0, 1, 0, 1],
-            Some(0.5),
-            true,
-        )
-        .expect("raw-strata right-censored components should compute");
-        let marker = compute_logrank_components(
-            vec![1.0, 3.0, 2.5, 2.0, 1.5, 3.5],
-            vec![1, 1, 1, 0, 1, 0],
-            vec![1, 2, 2, 2, 1, 1],
-            Some(vec![0, 0, 1, 0, 0, 1]),
-            Some(0.5),
-            true,
-        )
-        .expect("marker-strata right-censored components should compute");
-
-        assert_eq!(raw.observed, marker.observed);
-        assert_eq!(raw.expected, marker.expected);
-        assert_eq!(raw.variance, marker.variance);
-        assert_eq!(raw.chi_squared, marker.chi_squared);
-    }
-
-    #[test]
-    fn stratified_counting_logrank_components_accepts_unsorted_strata_codes() {
-        let raw = stratified_counting_logrank_components(
-            vec![2.0, 2.5, 4.0, 4.5, 3.0, 5.0],
-            vec![1, 1, 0, 0, 1, 1],
-            vec![1, 1, 2, 2, 1, 2],
-            vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0],
-            vec![0, 1, 0, 1, 0, 0],
-            Some(0.5),
-            true,
-        )
-        .expect("raw-strata counting components should compute");
-        let marker = compute_counting_logrank_components(
-            vec![2.0, 4.0, 3.0, 5.0, 2.5, 4.5],
-            vec![1, 0, 1, 1, 1, 0],
+    fn rho_weights_by_the_left_continuous_kaplan_meier() {
+        let data = right(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![1, 1, 1, 0, 1, 1],
             vec![1, 2, 1, 2, 1, 2],
-            vec![0.0, 0.0, 1.0, 2.0, 0.0, 1.0],
-            Some(vec![0, 0, 0, 1, 0, 1]),
-            Some(0.5),
-            true,
-        )
-        .expect("marker-strata counting components should compute");
-
-        assert_eq!(raw.observed, marker.observed);
-        assert_eq!(raw.expected, marker.expected);
-        assert_eq!(raw.variance, marker.variance);
-        assert_eq!(raw.chi_squared, marker.chi_squared);
+        );
+        let logrank = survdiff(&data, 0.0, true).unwrap();
+        let wilcoxon = survdiff(&data, 1.0, true).unwrap();
+        // the first event has weight 1 under both tests
+        assert!(close(logrank.obs[0][0], 3.0));
+        assert!(wilcoxon.obs[0][0] < logrank.obs[0][0]);
+        assert!(wilcoxon.obs[0][0] > 1.0);
     }
 
     #[test]
-    fn compute_logrank_components_uses_full_multigroup_covariance_statistic() {
-        let result = compute_logrank_components(
-            vec![1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0, 7.0],
-            vec![1, 1, 1, 0, 1, 0, 1, 1, 0],
-            vec![1, 1, 2, 1, 3, 2, 3, 2, 3],
-            None,
-            None,
-            false,
+    fn counting_process_intervals_shrink_the_risk_set() {
+        let right_censored = survdiff(
+            &right(vec![2.0, 4.0, 3.0, 5.0], vec![1, 0, 1, 1], vec![1, 2, 1, 2]),
+            0.0,
+            true,
         )
-        .expect("three-group survdiff components should compute");
+        .unwrap();
+        let delayed = survdiff(
+            &SurvdiffData::try_new(
+                Some(vec![0.0, 0.0, 2.5, 0.0]),
+                vec![2.0, 4.0, 3.0, 5.0],
+                vec![1, 0, 1, 1],
+                vec![1, 2, 1, 2],
+                None,
+            )
+            .unwrap(),
+            0.0,
+            true,
+        )
+        .unwrap();
+        // the third subject enters after the first event
+        assert!(delayed.exp_totals()[0] < right_censored.exp_totals()[0]);
+        assert_eq!(delayed.obs_totals(), right_censored.obs_totals());
+    }
 
-        assert_eq!(result.degrees_of_freedom, 2);
-        assert_eq!(result.observed, vec![2.0, 2.0, 2.0]);
-        assert_eq!(result.expected, vec![1.0, 2.25, 2.75]);
-        assert!((result.variance[0][0] - 0.6825396825396826).abs() < 1e-12);
-        assert!((result.variance[0][1] + 0.3273809523809524).abs() < 1e-12);
-        assert!((result.chi_squared - 1.5105257668985863).abs() < 1e-12);
+    #[test]
+    fn all_censored_gives_no_test() {
+        let result = survdiff(
+            &right(vec![1.0, 2.0, 3.0, 4.0], vec![0, 0, 0, 0], vec![1, 1, 2, 2]),
+            0.0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.chisq, 0.0);
+        assert_eq!(result.df, 0);
+    }
+
+    #[test]
+    fn one_sample_test_matches_r_formulas() {
+        let status = [1, 0, 1, 1];
+        let expected = [0.9, 0.8, 0.7, 0.95];
+        let result = survdiff_one_sample(&status, &expected, 0.0).unwrap();
+        let exp: f64 = expected.iter().map(|p| -p.ln()).sum();
+        assert_eq!(result.n, vec![4]);
+        assert_eq!(result.obs, vec![vec![3.0]]);
+        assert!(close(result.exp[0][0], exp));
+        assert!(close(result.chisq, (3.0 - exp).powi(2) / exp));
+        let rho = survdiff_one_sample(&status, &expected, 0.5).unwrap();
+        assert!(rho.chisq.is_finite());
+        assert!(survdiff_one_sample(&status, &[1.5, 0.8, 0.7, 0.9], 0.0).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_inputs() {
+        assert!(SurvdiffData::try_new(None, vec![1.0], vec![2], vec![1], None).is_err());
+        assert!(SurvdiffData::try_new(None, vec![1.0, 2.0], vec![1, 0], vec![1], None).is_err());
+        assert!(
+            survdiff(&right(vec![1.0, 2.0], vec![1, 0], vec![1, 1]), 0.0, true)
+                .unwrap_err()
+                .to_string()
+                .contains("only 1 group")
+        );
+        assert!(
+            survdiff(
+                &right(vec![1.0, 2.0], vec![1, 0], vec![1, 2]),
+                f64::NAN,
+                true
+            )
+            .is_err()
+        );
     }
 }

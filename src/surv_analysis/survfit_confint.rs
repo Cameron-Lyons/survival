@@ -1,67 +1,111 @@
-use pyo3::exceptions::PyValueError;
+//! Confidence bands for survival-type curves: the port of `survfit_confint`
+//! in R's `survfit.R`, used by every Kaplan-Meier, Nelson-Aalen and
+//! Aalen-Johansen curve in this crate.
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::dist::qnorm;
+use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
-const EXP_CLAMP_MIN: f64 = -745.0;
-const EXP_CLAMP_MAX: f64 = 709.0;
-
-#[derive(Clone, Copy)]
-enum ConfidenceType {
-    Plain,
+/// The `conf.type` argument of `survfit`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConfType {
+    #[default]
     Log,
     LogLog,
+    Plain,
+    None,
     Logit,
     Arcsin,
 }
 
-impl ConfidenceType {
-    fn parse(value: &str) -> PyResult<Self> {
-        match value {
-            "plain" => Ok(Self::Plain),
+impl ConfType {
+    /// Parse R's spelling (`"log-log"`); `"loglog"` and `"log_log"` are
+    /// accepted as well since Python callers cannot type the hyphen in a
+    /// keyword.
+    pub fn parse(value: &str) -> SurvivalResult<Self> {
+        match value.to_ascii_lowercase().as_str() {
             "log" => Ok(Self::Log),
-            "log-log" => Ok(Self::LogLog),
+            "log-log" | "loglog" | "log_log" => Ok(Self::LogLog),
+            "plain" => Ok(Self::Plain),
+            "none" => Ok(Self::None),
             "logit" => Ok(Self::Logit),
             "arcsin" => Ok(Self::Arcsin),
-            _ => Err(PyErr::new::<PyValueError, _>("invalid conf.int type")),
+            other => Err(SurvivalError::invalid_input(format!(
+                "conf.type must be one of 'log', 'log-log', 'plain', 'none', 'logit', 'arcsin'; got {other:?}"
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Log => "log",
+            Self::LogLog => "log-log",
+            Self::Plain => "plain",
+            Self::None => "none",
+            Self::Logit => "logit",
+            Self::Arcsin => "arcsin",
         }
     }
 }
 
-fn safe_exp(value: f64) -> f64 {
-    value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
+/// The `conf.lower` argument of `survfit`: how the lower band is widened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConfLower {
+    #[default]
+    Usual,
+    Peto,
+    Modified,
 }
 
+impl ConfLower {
+    pub fn parse(value: &str) -> SurvivalResult<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "usual" => Ok(Self::Usual),
+            "peto" => Ok(Self::Peto),
+            "modified" => Ok(Self::Modified),
+            other => Err(SurvivalError::invalid_input(format!(
+                "conf.lower must be one of 'usual', 'peto', 'modified'; got {other:?}"
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Usual => "usual",
+            Self::Peto => "peto",
+            Self::Modified => "modified",
+        }
+    }
+}
+
+/// Lower and upper confidence limits, element for element with the curve
+/// they were computed for.  `NaN` marks a limit R reports as `NA`.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct ConfidenceBands {
+    #[pyo3(get)]
+    pub lower: Vec<f64>,
+    #[pyo3(get)]
+    pub upper: Vec<f64>,
+}
+
+/// Validate a confidence level the way `survfit_confint` does.
+pub(crate) fn validate_conf_int(conf_int: f64) -> SurvivalResult<()> {
+    if !(conf_int > 0.0 && conf_int < 1.0) {
+        return Err(SurvivalError::invalid_input(
+            "confidence intervals must be between 0 and 1",
+        ));
+    }
+    Ok(())
+}
+
+/// R's `log()` on a value that may be `NA`: non-positive arguments give NaN.
 fn r_log(value: f64) -> f64 {
-    if value.is_nan() || value <= 0.0 {
-        f64::NAN
-    } else {
-        value.ln()
-    }
+    if value > 0.0 { value.ln() } else { f64::NAN }
 }
 
-fn r_sqrt(value: f64) -> f64 {
-    if value.is_nan() || value < 0.0 {
-        f64::NAN
-    } else {
-        value.sqrt()
-    }
-}
-
-fn r_asin(value: f64) -> f64 {
-    if value.is_nan() || !(-1.0..=1.0).contains(&value) {
-        f64::NAN
-    } else {
-        value.asin()
-    }
-}
-
-fn r_pmax_zero(value: f64) -> f64 {
-    if value.is_nan() {
-        f64::NAN
-    } else {
-        value.max(0.0)
-    }
-}
-
+/// `pmin(value, limit)` with R's NA propagation.
 fn r_pmin(value: f64, limit: f64) -> f64 {
     if value.is_nan() {
         f64::NAN
@@ -70,284 +114,165 @@ fn r_pmin(value: f64, limit: f64) -> f64 {
     }
 }
 
-fn prepared_se_at(p: &[f64], se: &[f64], logse: bool, index: usize) -> f64 {
-    let vector_index = index % se.len();
-    let value = se[vector_index];
-    if logse {
-        value
-    } else if value.is_nan() {
-        f64::NAN
-    } else if value == 0.0 {
-        0.0
-    } else {
-        value / p[vector_index % p.len()]
-    }
-}
-
-fn scale_at(selow: Option<&[f64]>, se: &[f64], index: usize) -> f64 {
-    let Some(values) = selow else {
-        return 1.0;
-    };
-    let vector_index = index % values.len();
-    let value = values[vector_index];
+/// `pmax(value, limit)` with R's NA propagation.
+fn r_pmax(value: f64, limit: f64) -> f64 {
     if value.is_nan() {
         f64::NAN
-    } else if value == 0.0 {
-        1.0
     } else {
-        value / se[vector_index % se.len()]
+        value.max(limit)
     }
 }
 
-fn plain_intervals(
+/// Port of `survfit_confint` (R `survfit.R`).
+///
+/// `p` is the estimate, `se` its standard error: on the log scale when
+/// `logse` is true (the simple Greenwood variance of a Kaplan-Meier curve),
+/// otherwise on the scale of `p` (robust variances, multi-state curves).
+/// `selow`, when given, widens only the lower limit (`conf.lower = "peto"` /
+/// `"modified"`); `ulimit` caps the upper limit at 1 for the `plain` and
+/// `log` transforms, which R turns off for cumulative hazards.
+///
+/// Edge rule, as in R: when `se == 0` both limits equal `p`; otherwise a
+/// transform that cannot be evaluated at `p` (`log(0)`, `log(-log(1))`) gives
+/// `NA`, so a curve that reaches 0 has `NA` limits there rather than limits
+/// that dive to zero.
+pub fn survfit_confint(
     p: &[f64],
     se: &[f64],
     logse: bool,
-    z: f64,
+    conf_type: ConfType,
+    conf_int: f64,
     selow: Option<&[f64]>,
     ulimit: bool,
-) -> (Vec<f64>, Vec<f64>) {
-    let base_len = p.len().max(se.len());
-    let scale_len = selow.map_or(1, <[f64]>::len);
-    let lower_len = if scale_len == 0 {
-        0
-    } else {
-        base_len.max(scale_len)
-    };
-
-    let lower = (0..lower_len)
-        .map(|index| {
-            let base_index = index % base_len;
-            let se2 = prepared_se_at(p, se, logse, base_index) * p[base_index % p.len()] * z;
-            let scale = scale_at(selow, se, index % scale_len);
-            r_pmax_zero(p[index % p.len()] - se2 * scale)
-        })
-        .collect();
-    let upper = (0..base_len)
-        .map(|index| {
-            let se2 = prepared_se_at(p, se, logse, index) * p[index % p.len()] * z;
-            let value = p[index % p.len()] + se2;
-            if ulimit { r_pmin(value, 1.0) } else { value }
-        })
-        .collect();
-    (lower, upper)
-}
-
-fn log_xx(value: f64, exclude_one: bool) -> f64 {
-    if value.is_nan() || value == 0.0 || (exclude_one && value == 1.0) {
-        f64::NAN
-    } else {
-        r_log(value)
+) -> SurvivalResult<ConfidenceBands> {
+    validate_conf_int(conf_int)?;
+    validate_length(p.len(), se.len(), "se")?;
+    if let Some(selow) = selow {
+        validate_length(p.len(), selow.len(), "selow")?;
     }
-}
-
-fn log_intervals(
-    p: &[f64],
-    se: &[f64],
-    logse: bool,
-    z: f64,
-    selow: Option<&[f64]>,
-    ulimit: bool,
-) -> (Vec<f64>, Vec<f64>) {
-    let scale_len = selow.map_or(1, <[f64]>::len);
-    let lower = if scale_len == 0 {
-        Vec::new()
-    } else {
-        (0..se.len())
-            .map(|index| {
-                let prepared = prepared_se_at(p, se, logse, index);
-                if prepared.is_nan() {
-                    return f64::NAN;
-                }
-                if prepared == 0.0 {
-                    return p[index % p.len()];
-                }
-                let log_p = log_xx(p[index % p.len()], false);
-                let scale = scale_at(selow, se, index % scale_len);
-                safe_exp(log_p - z * prepared * scale)
-            })
-            .collect()
-    };
-    let upper = (0..se.len())
-        .map(|index| {
-            let prepared = prepared_se_at(p, se, logse, index);
-            if prepared.is_nan() {
-                return f64::NAN;
+    let zval = qnorm(1.0 - (1.0 - conf_int) / 2.0, true, false);
+    let n = p.len();
+    let mut lower = Vec::with_capacity(n);
+    let mut upper = Vec::with_capacity(n);
+    for i in 0..n {
+        let p_i = p[i];
+        // scale = ifelse(selow == 0, 1, selow / se); avoids 0/0 at the origin
+        let scale = match selow {
+            Some(selow) if selow[i] != 0.0 => selow[i] / se[i],
+            _ => 1.0,
+        };
+        // se of log(survival) when the caller supplied se(S)
+        let se_i = if logse {
+            se[i]
+        } else if se[i] == 0.0 {
+            0.0
+        } else {
+            se[i] / p_i
+        };
+        let (lo, hi) = match conf_type {
+            ConfType::Plain => {
+                // equation 4.3.1 in Klein & Moeschberger
+                let se2 = se_i * p_i * zval;
+                let hi = p_i + se2;
+                (
+                    r_pmax(p_i - se2 * scale, 0.0),
+                    if ulimit { r_pmin(hi, 1.0) } else { hi },
+                )
             }
-            if prepared == 0.0 {
-                return p[index % p.len()];
+            ConfType::Log => {
+                let xx = if p_i == 0.0 { f64::NAN } else { p_i };
+                let se2 = zval * se_i;
+                let lo = if se_i == 0.0 {
+                    p_i
+                } else {
+                    (r_log(xx) - se2 * scale).exp()
+                };
+                let hi = if se_i == 0.0 {
+                    p_i
+                } else {
+                    (r_log(xx) + se2).exp()
+                };
+                (lo, if ulimit { r_pmin(hi, 1.0) } else { hi })
             }
-            let value = safe_exp(log_xx(p[index % p.len()], false) + z * prepared);
-            if ulimit { r_pmin(value, 1.0) } else { value }
-        })
-        .collect();
-    (lower, upper)
-}
-
-fn log_log_intervals(
-    p: &[f64],
-    se: &[f64],
-    logse: bool,
-    z: f64,
-    selow: Option<&[f64]>,
-) -> (Vec<f64>, Vec<f64>) {
-    let scale_len = selow.map_or(1, <[f64]>::len);
-    let calculate = |index: usize, lower: bool| {
-        let prepared = prepared_se_at(p, se, logse, index);
-        if prepared.is_nan() {
-            return f64::NAN;
-        }
-        if prepared == 0.0 {
-            return p[index % p.len()];
-        }
-        let log_p = log_xx(p[index % p.len()], true);
-        let se2 = z * prepared / log_p;
-        let transformed = r_log(-log_p);
-        let adjusted = if lower {
-            transformed - se2 * scale_at(selow, se, index % scale_len)
-        } else {
-            transformed + se2
-        };
-        safe_exp(-safe_exp(adjusted))
-    };
-    let lower = if scale_len == 0 {
-        Vec::new()
-    } else {
-        (0..se.len()).map(|index| calculate(index, true)).collect()
-    };
-    let upper = (0..se.len()).map(|index| calculate(index, false)).collect();
-    (lower, upper)
-}
-
-fn logit_intervals(
-    p: &[f64],
-    se: &[f64],
-    logse: bool,
-    z: f64,
-    selow: Option<&[f64]>,
-) -> (Vec<f64>, Vec<f64>) {
-    let scale_len = selow.map_or(1, <[f64]>::len);
-    let calculate = |index: usize, lower: bool| {
-        let prepared = prepared_se_at(p, se, logse, index);
-        if prepared.is_nan() {
-            return f64::NAN;
-        }
-        if prepared == 0.0 {
-            return p[index % p.len()];
-        }
-        let probability = p[index % p.len()];
-        let xx = if probability == 0.0 {
-            f64::NAN
-        } else {
-            probability
-        };
-        let se2 = z * prepared * (1.0 + xx / (1.0 - xx));
-        let logit = r_log(probability / (1.0 - probability));
-        let adjusted = if lower {
-            logit - se2 * scale_at(selow, se, index % scale_len)
-        } else {
-            logit + se2
-        };
-        1.0 - 1.0 / (1.0 + safe_exp(adjusted))
-    };
-    let lower = if scale_len == 0 {
-        Vec::new()
-    } else {
-        (0..se.len()).map(|index| calculate(index, true)).collect()
-    };
-    let upper = (0..se.len()).map(|index| calculate(index, false)).collect();
-    (lower, upper)
-}
-
-fn arcsin_intervals(
-    p: &[f64],
-    se: &[f64],
-    logse: bool,
-    z: f64,
-    selow: Option<&[f64]>,
-) -> (Vec<f64>, Vec<f64>) {
-    let base_len = p.len().max(se.len());
-    let scale_len = selow.map_or(1, <[f64]>::len);
-    let se2_at = |index: usize| {
-        let probability = p[index % p.len()];
-        let xx = if probability == 0.0 {
-            f64::NAN
-        } else {
-            probability
-        };
-        0.5 * z * prepared_se_at(p, se, logse, index) * r_sqrt(xx / (1.0 - xx))
-    };
-    let angle_at = |index: usize| {
-        let probability = p[index % p.len()];
-        let xx = if probability == 0.0 {
-            f64::NAN
-        } else {
-            probability
-        };
-        r_asin(r_sqrt(xx))
-    };
-    let lower_len = if scale_len == 0 {
-        0
-    } else {
-        base_len.max(scale_len)
-    };
-    let lower = (0..lower_len)
-        .map(|index| {
-            let angle = angle_at(index);
-            let se2 = se2_at(index % base_len);
-            let scale = scale_at(selow, se, index % scale_len);
-            let adjusted = r_pmax_zero(angle - se2 * scale);
-            if adjusted.is_nan() {
-                f64::NAN
-            } else {
-                adjusted.sin().powi(2)
+            ConfType::LogLog => {
+                let xx = if p_i == 0.0 || p_i == 1.0 {
+                    f64::NAN
+                } else {
+                    p_i
+                };
+                let se2 = zval * se_i / r_log(xx);
+                let base = r_log(-r_log(xx));
+                let lo = if se_i == 0.0 {
+                    p_i
+                } else {
+                    (-(base - se2 * scale).exp()).exp()
+                };
+                let hi = if se_i == 0.0 {
+                    p_i
+                } else {
+                    (-(base + se2).exp()).exp()
+                };
+                (lo, hi)
             }
-        })
-        .collect();
-    let upper = (0..base_len)
-        .map(|index| {
-            let adjusted = r_pmin(angle_at(index) + se2_at(index), std::f64::consts::FRAC_PI_2);
-            if adjusted.is_nan() {
-                f64::NAN
-            } else {
-                adjusted.sin().powi(2)
+            ConfType::Logit => {
+                let xx = if p_i == 0.0 { f64::NAN } else { p_i };
+                let se2 = zval * se_i * (1.0 + xx / (1.0 - xx));
+                let logit = r_log(p_i / (1.0 - p_i));
+                let lo = if se_i == 0.0 {
+                    p_i
+                } else {
+                    1.0 - 1.0 / (1.0 + (logit - se2 * scale).exp())
+                };
+                let hi = if se_i == 0.0 {
+                    p_i
+                } else {
+                    1.0 - 1.0 / (1.0 + (logit + se2).exp())
+                };
+                (lo, hi)
             }
-        })
-        .collect();
-    (lower, upper)
+            ConfType::Arcsin => {
+                let xx = if p_i == 0.0 { f64::NAN } else { p_i };
+                let se2 = 0.5 * zval * se_i * (xx / (1.0 - xx)).sqrt();
+                let angle = xx.sqrt().asin();
+                (
+                    r_pmax(angle - se2 * scale, 0.0).sin().powi(2),
+                    r_pmin(angle + se2, std::f64::consts::FRAC_PI_2)
+                        .sin()
+                        .powi(2),
+                )
+            }
+            ConfType::None => {
+                return Err(SurvivalError::invalid_input("invalid conf.int type"));
+            }
+        };
+        lower.push(lo);
+        upper.push(hi);
+    }
+    Ok(ConfidenceBands { lower, upper })
 }
 
-#[pyfunction]
-#[pyo3(signature = (p, se, logse, conf_type, z, selow=None, ulimit=true))]
-pub fn survfit_confint_native(
+/// Python binding of [`survfit_confint`].
+#[pyfunction(name = "survfit_confint")]
+#[pyo3(signature = (p, se, logse=true, conf_type="log", conf_int=0.95, selow=None, ulimit=true))]
+pub fn survfit_confint_py(
     p: Vec<f64>,
     se: Vec<f64>,
     logse: bool,
     conf_type: &str,
-    z: f64,
+    conf_int: f64,
     selow: Option<Vec<f64>>,
     ulimit: bool,
-) -> PyResult<(Vec<f64>, Vec<f64>)> {
-    let interval_type = ConfidenceType::parse(conf_type)?;
-    if !z.is_finite() || z < 0.0 {
-        return Err(PyErr::new::<PyValueError, _>(
-            "z must be finite and non-negative",
-        ));
-    }
-    if se.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-    if p.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-    let selow = selow.as_deref();
-    Ok(match interval_type {
-        ConfidenceType::Plain => plain_intervals(&p, &se, logse, z, selow, ulimit),
-        ConfidenceType::Log => log_intervals(&p, &se, logse, z, selow, ulimit),
-        ConfidenceType::LogLog => log_log_intervals(&p, &se, logse, z, selow),
-        ConfidenceType::Logit => logit_intervals(&p, &se, logse, z, selow),
-        ConfidenceType::Arcsin => arcsin_intervals(&p, &se, logse, z, selow),
-    })
+) -> PyResult<ConfidenceBands> {
+    let conf_type = ConfType::parse(conf_type)?;
+    Ok(survfit_confint(
+        &p,
+        &se,
+        logse,
+        conf_type,
+        conf_int,
+        selow.as_deref(),
+        ulimit,
+    )?)
 }
 
 #[cfg(test)]
@@ -358,131 +283,95 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         for (&left, &right) in actual.iter().zip(expected) {
             if right.is_nan() {
-                assert!(left.is_nan());
+                assert!(left.is_nan(), "{left} should be NaN");
             } else {
                 assert!((left - right).abs() < 1e-7, "{left} != {right}");
             }
         }
     }
 
+    fn bands(p: &[f64], se: &[f64], conf_type: ConfType) -> ConfidenceBands {
+        survfit_confint(p, se, true, conf_type, 0.95, None, true).unwrap()
+    }
+
     #[test]
     fn matches_r_confidence_transforms() {
-        let p = vec![0.2, 0.5, 0.9];
-        let z = 1.959_963_984_540_054;
-        let cases = [
-            (
-                "plain",
-                vec![0.16080072, 0.4020018, 0.7236032],
-                vec![0.23919928, 0.5979982, 1.0],
-            ),
-            (
-                "arcsin",
-                vec![0.1623028, 0.4026280, 0.6664164],
-                vec![0.2405760, 0.5973720, 0.9992298],
-            ),
-        ];
-        for (kind, expected_lower, expected_upper) in cases {
-            let (lower, upper) =
-                survfit_confint_native(p.clone(), vec![0.1], true, kind, z, None, true).unwrap();
-            assert_close(&lower, &expected_lower);
-            assert_close(&upper, &expected_upper);
-        }
-
-        for (kind, expected_lower, expected_upper) in [
-            ("log", 0.164403, 0.2433045),
-            ("log-log", 0.1623716, 0.2405312),
-            ("logit", 0.1636537, 0.242082),
+        // survfit_confint(c(.2, .5, .9), .1, conf.type=...) in R
+        let p = [0.2, 0.5, 0.9];
+        let se = [0.1; 3];
+        let plain = bands(&p, &se, ConfType::Plain);
+        assert_close(&plain.lower, &[0.16080072, 0.4020018, 0.7236032]);
+        assert_close(&plain.upper, &[0.23919928, 0.5979982, 1.0]);
+        let arcsin = bands(&p, &se, ConfType::Arcsin);
+        assert_close(&arcsin.lower, &[0.1623028, 0.4026280, 0.6664164]);
+        assert_close(&arcsin.upper, &[0.2405760, 0.5973720, 0.9992298]);
+        for (kind, lower, upper) in [
+            (ConfType::Log, 0.164403, 0.2433045),
+            (ConfType::LogLog, 0.1623716, 0.2405312),
+            (ConfType::Logit, 0.1636537, 0.242082),
         ] {
-            let (lower, upper) =
-                survfit_confint_native(p.clone(), vec![0.1], true, kind, z, None, true).unwrap();
-            assert_close(&lower, &[expected_lower]);
-            assert_close(&upper, &[expected_upper]);
+            let out = bands(&p[..1], &se[..1], kind);
+            assert_close(&out.lower, &[lower]);
+            assert_close(&out.upper, &[upper]);
         }
     }
 
     #[test]
-    fn preserves_recycling_missing_values_and_asymmetric_lengths() {
-        let z = 1.959_963_984_540_054;
-        let (lower, upper) = survfit_confint_native(
-            vec![0.2, 0.5],
-            vec![0.1, 0.2, 0.3],
-            true,
-            "plain",
-            z,
-            None,
-            true,
-        )
-        .unwrap();
-        assert_close(&lower, &[0.16080072, 0.30400360, 0.08240216]);
-        assert_close(&upper, &[0.23919928, 0.69599640, 0.31759784]);
-
-        let (lower, upper) = survfit_confint_native(
-            vec![0.2, 0.5],
-            vec![0.1],
-            true,
-            "plain",
-            z,
-            Some(Vec::new()),
-            true,
-        )
-        .unwrap();
-        assert!(lower.is_empty());
-        assert_eq!(upper.len(), 2);
-
-        let (lower, upper) = survfit_confint_native(
-            vec![0.0, 1.0, f64::NAN],
-            vec![0.1, 0.1, 0.1],
-            true,
-            "log-log",
-            z,
-            None,
-            true,
-        )
-        .unwrap();
-        assert!(lower.iter().all(|value| value.is_nan()));
-        assert!(upper.iter().all(|value| value.is_nan()));
-
-        let (lower, upper) =
-            survfit_confint_native(vec![0.2, 0.5], vec![0.1], false, "plain", z, None, true)
-                .unwrap();
-        assert_close(&lower, &[0.004003602, 0.010009004]);
-        assert_close(&upper, &[0.3959964, 0.9899910]);
-
-        let (lower, upper) = survfit_confint_native(
-            vec![0.2, 0.5],
-            vec![0.0, 0.1],
-            true,
-            "log",
-            z,
-            Some(Vec::new()),
-            true,
-        )
-        .unwrap();
-        assert!(lower.is_empty());
-        assert_eq!(upper.len(), 2);
-
-        let (lower, upper) =
-            survfit_confint_native(Vec::new(), vec![0.1, 0.2], true, "log-log", z, None, true)
-                .unwrap();
-        assert!(lower.is_empty());
-        assert!(upper.is_empty());
-
-        for kind in ["log", "log-log", "logit"] {
-            let (lower, upper) =
-                survfit_confint_native(vec![0.0], vec![0.0], true, kind, z, None, true).unwrap();
-            assert_close(&lower, &[0.0]);
-            assert_close(&upper, &[0.0]);
+    fn edge_rules_follow_r() {
+        // se == 0 -> both limits equal p, even at p = 0
+        for kind in [ConfType::Log, ConfType::LogLog, ConfType::Logit] {
+            let out = bands(&[0.0], &[0.0], kind);
+            assert_close(&out.lower, &[0.0]);
+            assert_close(&out.upper, &[0.0]);
         }
+        // p == 0 with se > 0 -> NA for the transforms that need log(p)
+        let out = bands(&[0.0, 1.0], &[0.1, 0.1], ConfType::LogLog);
+        assert!(out.lower.iter().all(|v| v.is_nan()));
+        assert!(out.upper.iter().all(|v| v.is_nan()));
+        // logse = FALSE rescales se(S) to se(log S)
+        let out = survfit_confint(
+            &[0.2, 0.5],
+            &[0.1, 0.1],
+            false,
+            ConfType::Plain,
+            0.95,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_close(&out.lower, &[0.004003602, 0.304003602]);
+        assert_close(&out.upper, &[0.3959964, 0.695996398]);
+        // no upper cap for cumulative hazards
+        let out = survfit_confint(&[0.9], &[0.5], true, ConfType::Log, 0.95, None, false).unwrap();
+        assert!(out.upper[0] > 1.0);
     }
 
     #[test]
-    fn rejects_invalid_native_options() {
+    fn selow_widens_only_the_lower_limit() {
+        let plain = bands(&[0.5], &[0.1], ConfType::Log);
+        let out = survfit_confint(
+            &[0.5],
+            &[0.1],
+            true,
+            ConfType::Log,
+            0.95,
+            Some(&[0.2]),
+            true,
+        )
+        .unwrap();
+        assert!(out.lower[0] < plain.lower[0]);
+        assert_close(&out.upper, &plain.upper);
+    }
+
+    #[test]
+    fn rejects_invalid_arguments() {
+        assert!(ConfType::parse("bad").is_err());
+        assert!(ConfLower::parse("bad").is_err());
+        assert_eq!(ConfType::parse("Log-Log").unwrap(), ConfType::LogLog);
+        assert!(survfit_confint(&[0.5], &[0.1], true, ConfType::Log, 1.0, None, true).is_err());
+        assert!(survfit_confint(&[0.5], &[0.1], true, ConfType::None, 0.95, None, true).is_err());
         assert!(
-            survfit_confint_native(vec![0.5], vec![0.1], true, "bad", 1.96, None, true).is_err()
-        );
-        assert!(
-            survfit_confint_native(vec![0.5], vec![0.1], true, "plain", f64::NAN, None, true,)
-                .is_err()
+            survfit_confint(&[0.5], &[0.1, 0.2], true, ConfType::Log, 0.95, None, true).is_err()
         );
     }
 }

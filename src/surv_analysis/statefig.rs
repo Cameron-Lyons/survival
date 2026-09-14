@@ -1,275 +1,325 @@
-use pyo3::prelude::*;
-use std::collections::HashMap;
+//! Box coordinates and arrows of a multi-state diagram: the layout half of
+//! R's `statefig` (`R/statefig.R`).  R draws the figure; this returns what
+//! it computes, the centre of each state's box (`statefig`'s invisible
+//! return value) and the arrows implied by the connection matrix, so any
+//! plotting front end can draw it.
 
-#[derive(Debug, Clone)]
+use crate::error::{SurvivalError, SurvivalResult};
+use pyo3::prelude::*;
+
+/// The `layout` argument of `statefig`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StateFigLayout {
+    /// A vector: `counts[k]` boxes in the `k`-th column, columns left to
+    /// right, boxes top to bottom within a column.
+    LeftToRight(Vec<usize>),
+    /// A one-column matrix: `counts[k]` boxes in the `k`-th row, rows top
+    /// to bottom, boxes left to right within a row.
+    TopToBottom(Vec<usize>),
+    /// A two-column matrix of `(x, y)` centres in `[0, 1]`, one per state.
+    Coordinates(Vec<(f64, f64)>),
+}
+
+/// One arrow of the diagram.  `curvature` is `connect[from, to] - 1`: 0 for
+/// a straight line, positive for an arc bending counter-clockwise, negative
+/// for clockwise; `offset` marks the arrows that R shifts sideways because
+/// the reverse arrow is drawn with the mirrored curvature.
+#[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
-pub struct StateFigData {
+pub struct StateFigArrow {
+    #[pyo3(get)]
+    pub from_state: usize,
+    #[pyo3(get)]
+    pub to_state: usize,
+    #[pyo3(get)]
+    pub curvature: f64,
+    #[pyo3(get)]
+    pub offset: bool,
+}
+
+/// The diagram: box centres (`x`, `y` in `[0, 1]`) and arrows, in the
+/// order R draws them (by destination state, then origin).
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct StateFigResult {
     #[pyo3(get)]
     pub states: Vec<String>,
     #[pyo3(get)]
-    pub positions: Vec<(f64, f64)>,
+    pub x: Vec<f64>,
     #[pyo3(get)]
-    pub edges: Vec<(usize, usize, usize)>,
+    pub y: Vec<f64>,
     #[pyo3(get)]
-    pub box_sizes: Vec<(f64, f64)>,
-    #[pyo3(get)]
-    pub layout: Vec<usize>,
+    pub arrows: Vec<StateFigArrow>,
 }
 
-#[pyfunction]
-#[pyo3(signature = (states, transitions, layout=None))]
+/// Centres of `n` boxes spread over `[0, 1]`: `(1:n - .5) / n`.
+fn space(n: usize) -> Vec<f64> {
+    (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect()
+}
+
+/// Port of the layout logic of `statefig`.  `connect` is the square
+/// connection matrix (`0` = no arrow, `1` = straight, `1 + d` = an arc of
+/// height `d`); `states` names its rows.
 pub fn statefig(
-    states: Vec<String>,
-    transitions: HashMap<(String, String), usize>,
-    layout: Option<Vec<usize>>,
-) -> PyResult<StateFigData> {
-    let n_states = states.len();
-
-    if n_states == 0 {
-        return Ok(StateFigData {
-            states: vec![],
-            positions: vec![],
-            edges: vec![],
-            box_sizes: vec![],
-            layout: vec![],
-        });
+    layout: &StateFigLayout,
+    connect: &[Vec<f64>],
+    states: &[String],
+) -> SurvivalResult<StateFigResult> {
+    let nstate = connect.len();
+    if nstate == 0 || connect.iter().any(|row| row.len() != nstate) {
+        return Err(SurvivalError::invalid_input(
+            "connect must be a square matrix",
+        ));
     }
-
-    let state_idx: HashMap<String, usize> = states
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.clone(), i))
-        .collect();
-
-    let mut edges = Vec::new();
-    for ((from, to), count) in &transitions {
-        if let (Some(&from_idx), Some(&to_idx)) = (state_idx.get(from), state_idx.get(to))
-            && *count > 0
-        {
-            edges.push((from_idx, to_idx, *count));
+    if states.len() != nstate {
+        return Err(SurvivalError::invalid_input(
+            "connect must have the state names as dimnames",
+        ));
+    }
+    if let Some(value) = connect.iter().flatten().find(|v| !v.is_finite()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "connect must be numeric; got {value}"
+        )));
+    }
+    let (x, y) = match layout {
+        StateFigLayout::Coordinates(centres) => {
+            if centres.len() != nstate {
+                return Err(SurvivalError::invalid_input(
+                    "layout matrix should have one row per state",
+                ));
+            }
+            if centres
+                .iter()
+                .any(|&(x, y)| !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y))
+            {
+                return Err(SurvivalError::invalid_input(
+                    "layout coordinates must be between 0 and 1",
+                ));
+            }
+            centres.iter().copied().unzip()
+        }
+        StateFigLayout::LeftToRight(counts) | StateFigLayout::TopToBottom(counts) => {
+            if counts.contains(&0) {
+                return Err(SurvivalError::invalid_input(
+                    "non-integer number of states in layout argument",
+                ));
+            }
+            if counts.iter().sum::<usize>() != nstate {
+                return Err(SurvivalError::invalid_input(
+                    "number of boxes != number of states",
+                ));
+            }
+            let groups = space(counts.len());
+            let mut x = Vec::with_capacity(nstate);
+            let mut y = Vec::with_capacity(nstate);
+            for (group, &count) in counts.iter().enumerate() {
+                for within in space(count) {
+                    match layout {
+                        StateFigLayout::LeftToRight(_) => {
+                            x.push(groups[group]);
+                            y.push(1.0 - within);
+                        }
+                        _ => {
+                            x.push(within);
+                            y.push(1.0 - groups[group]);
+                        }
+                    }
+                }
+            }
+            (x, y)
+        }
+    };
+    let mut arrows = Vec::new();
+    for j in 0..nstate {
+        for (i, row) in connect.iter().enumerate() {
+            if i != j && row[j] != 0.0 {
+                arrows.push(StateFigArrow {
+                    from_state: i,
+                    to_state: j,
+                    curvature: row[j] - 1.0,
+                    offset: row[j] == 2.0 - connect[j][i],
+                });
+            }
         }
     }
-
-    let layout_spec = layout.unwrap_or_else(|| compute_default_layout(n_states, &edges));
-    let positions = compute_positions(&layout_spec, n_states);
-    let box_sizes = vec![(1.0, 0.5); n_states];
-
-    Ok(StateFigData {
-        states,
-        positions,
-        edges,
-        box_sizes,
-        layout: layout_spec,
+    Ok(StateFigResult {
+        states: states.to_vec(),
+        x,
+        y,
+        arrows,
     })
 }
 
-fn compute_default_layout(n_states: usize, edges: &[(usize, usize, usize)]) -> Vec<usize> {
-    let mut out_degree = vec![0usize; n_states];
-    let mut in_degree = vec![0usize; n_states];
-
-    for &(from, to, _) in edges {
-        out_degree[from] += 1;
-        in_degree[to] += 1;
-    }
-
-    let mut state_scores: Vec<(usize, i32)> = (0..n_states)
-        .map(|i| (i, out_degree[i] as i32 - in_degree[i] as i32))
-        .collect();
-    state_scores.sort_by_key(|state| std::cmp::Reverse(state.1));
-
-    let n_cols = (n_states as f64).sqrt().ceil() as usize;
-    let n_rows = n_states.div_ceil(n_cols);
-
-    let mut layout = Vec::new();
-    let mut remaining = n_states;
-
-    for _ in 0..n_rows {
-        let row_size = remaining.min(n_cols);
-        layout.push(row_size);
-        remaining -= row_size;
-    }
-
-    layout
-}
-
-fn compute_positions(layout: &[usize], n_states: usize) -> Vec<(f64, f64)> {
-    let mut positions = vec![(0.0, 0.0); n_states];
-
-    let n_rows = layout.len();
-    let mut state_idx = 0;
-
-    for (row, &n_in_row) in layout.iter().enumerate() {
-        let y = 1.0 - (row as f64 + 0.5) / n_rows as f64;
-
-        for col in 0..n_in_row {
-            if state_idx >= n_states {
-                break;
-            }
-
-            let x = (col as f64 + 0.5) / n_in_row as f64;
-            positions[state_idx] = (x, y);
-            state_idx += 1;
+/// Python binding of [`statefig`].  `layout` is R's vector form (boxes per
+/// column, left to right), `column = True` turns it into the one-column
+/// matrix form (boxes per row, top to bottom), and `coordinates` gives the
+/// centres directly.
+#[pyfunction(name = "statefig")]
+#[pyo3(signature = (connect, states, layout=None, column=false, coordinates=None))]
+pub fn statefig_py(
+    connect: Vec<Vec<f64>>,
+    states: Vec<String>,
+    layout: Option<Vec<usize>>,
+    column: bool,
+    coordinates: Option<Vec<Vec<f64>>>,
+) -> PyResult<StateFigResult> {
+    let layout = match (layout, coordinates) {
+        (None, Some(coordinates)) => {
+            let centres = coordinates
+                .iter()
+                .map(|row| match row.as_slice() {
+                    [x, y] => Ok((*x, *y)),
+                    _ => Err(SurvivalError::invalid_input(
+                        "coordinates must have two columns",
+                    )),
+                })
+                .collect::<SurvivalResult<Vec<_>>>()?;
+            StateFigLayout::Coordinates(centres)
         }
-    }
-
-    positions
-}
-
-#[pyfunction]
-pub fn statefig_matplotlib_code(data: &StateFigData) -> String {
-    let mut code = String::new();
-
-    code.push_str("import matplotlib.pyplot as plt\n");
-    code.push_str("import matplotlib.patches as mpatches\n");
-    code.push_str("from matplotlib.patches import FancyArrowPatch\n\n");
-
-    code.push_str("fig, ax = plt.subplots(figsize=(10, 8))\n");
-    code.push_str("ax.set_xlim(-0.1, 1.1)\n");
-    code.push_str("ax.set_ylim(-0.1, 1.1)\n");
-    code.push_str("ax.set_aspect('equal')\n");
-    code.push_str("ax.axis('off')\n\n");
-
-    for (i, (state, &(x, y))) in data.states.iter().zip(data.positions.iter()).enumerate() {
-        let (w, h) = data.box_sizes[i];
-        code.push_str(&format!(
-            "rect = mpatches.FancyBboxPatch(({:.3} - {:.3}/2, {:.3} - {:.3}/2), {:.3}, {:.3}, ",
-            x,
-            w * 0.15,
-            y,
-            h * 0.15,
-            w * 0.15,
-            h * 0.15
-        ));
-        code.push_str("boxstyle='round,pad=0.01', facecolor='lightblue', edgecolor='black')\n");
-        code.push_str("ax.add_patch(rect)\n");
-        code.push_str(&format!(
-            "ax.text({:.3}, {:.3}, '{}', ha='center', va='center', fontsize=10)\n\n",
-            x, y, state
-        ));
-    }
-
-    for &(from, to, count) in &data.edges {
-        let (x1, y1) = data.positions[from];
-        let (x2, y2) = data.positions[to];
-
-        code.push_str(&format!(
-            "arrow = FancyArrowPatch(({:.3}, {:.3}), ({:.3}, {:.3}), ",
-            x1, y1, x2, y2
-        ));
-        code.push_str(
-            "arrowstyle='->', mutation_scale=15, color='black', connectionstyle='arc3,rad=0.1')\n",
-        );
-        code.push_str("ax.add_patch(arrow)\n");
-
-        let mid_x = (x1 + x2) / 2.0;
-        let mid_y = (y1 + y2) / 2.0;
-        code.push_str(&format!(
-            "ax.text({:.3}, {:.3}, '{}', ha='center', va='center', fontsize=8, color='red')\n\n",
-            mid_x, mid_y, count
-        ));
-    }
-
-    code.push_str("plt.title('State Transition Diagram')\n");
-    code.push_str("plt.tight_layout()\n");
-    code.push_str("plt.show()\n");
-
-    code
-}
-
-#[pyfunction]
-pub fn statefig_transition_matrix(data: &StateFigData) -> Vec<Vec<usize>> {
-    let n = data.states.len();
-    let mut matrix = vec![vec![0usize; n]; n];
-
-    for &(from, to, count) in &data.edges {
-        matrix[from][to] = count;
-    }
-
-    matrix
-}
-
-#[pyfunction]
-pub fn statefig_validate(
-    data: &StateFigData,
-    allowed_transitions: HashMap<(String, String), bool>,
-) -> PyResult<Vec<String>> {
-    let mut issues = Vec::new();
-
-    for &(from_idx, to_idx, count) in &data.edges {
-        if count > 0 {
-            let from_state = &data.states[from_idx];
-            let to_state = &data.states[to_idx];
-
-            let key = (from_state.clone(), to_state.clone());
-            if !allowed_transitions.get(&key).copied().unwrap_or(true) {
-                issues.push(format!(
-                    "Invalid transition: {} -> {} ({} occurrences)",
-                    from_state, to_state, count
-                ));
-            }
+        (Some(counts), None) if column => StateFigLayout::TopToBottom(counts),
+        (Some(counts), None) => StateFigLayout::LeftToRight(counts),
+        _ => {
+            return Err(SurvivalError::invalid_input("give either layout or coordinates").into());
         }
-    }
-
-    Ok(issues)
+    };
+    Ok(statefig(&layout, &connect, &states)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn connect3() -> Vec<Vec<f64>> {
+        vec![
+            vec![0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0],
+            vec![0.0, 0.0, 0.0],
+        ]
+    }
+
     #[test]
-    fn test_statefig_basic() {
-        let states = vec![
-            "Healthy".to_string(),
-            "Sick".to_string(),
-            "Dead".to_string(),
+    fn matches_r_layouts() {
+        // statefig(c(1, 2), connect) and statefig(matrix(c(1, 2), ncol = 1), connect)
+        let row = statefig(
+            &StateFigLayout::LeftToRight(vec![1, 2]),
+            &connect3(),
+            &names(&["A", "B", "C"]),
+        )
+        .unwrap();
+        assert_eq!(row.x, vec![0.25, 0.75, 0.75]);
+        assert_eq!(row.y, vec![0.5, 0.75, 0.25]);
+        let column = statefig(
+            &StateFigLayout::TopToBottom(vec![1, 2]),
+            &connect3(),
+            &names(&["A", "B", "C"]),
+        )
+        .unwrap();
+        assert_eq!(column.x, vec![0.5, 0.25, 0.75]);
+        assert_eq!(column.y, vec![0.75, 0.25, 0.25]);
+        let connect4 = vec![
+            vec![0.0, 1.0, 1.0, 0.0],
+            vec![0.0, 0.0, 0.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0],
         ];
-        let mut transitions = HashMap::new();
-        transitions.insert(("Healthy".to_string(), "Sick".to_string()), 50);
-        transitions.insert(("Healthy".to_string(), "Dead".to_string()), 10);
-        transitions.insert(("Sick".to_string(), "Dead".to_string()), 40);
-
-        let result = statefig(states, transitions, None).unwrap();
-
-        assert_eq!(result.states.len(), 3);
-        assert_eq!(result.positions.len(), 3);
-        assert_eq!(result.edges.len(), 3);
+        let four = statefig(
+            &StateFigLayout::LeftToRight(vec![1, 2, 1]),
+            &connect4,
+            &names(&["A", "B", "C", "D"]),
+        )
+        .unwrap();
+        assert!((four.x[0] - 1.0 / 6.0).abs() < 1e-12);
+        assert_eq!(four.y, vec![0.5, 0.75, 0.25, 0.5]);
+        let four_column = statefig(
+            &StateFigLayout::TopToBottom(vec![1, 2, 1]),
+            &connect4,
+            &names(&["A", "B", "C", "D"]),
+        )
+        .unwrap();
+        assert_eq!(four_column.x, vec![0.5, 0.25, 0.75, 0.5]);
+        assert!((four_column.y[3] - 1.0 / 6.0).abs() < 1e-12);
     }
 
     #[test]
-    fn test_statefig_with_layout() {
-        let states = vec!["A".to_string(), "B".to_string(), "C".to_string()];
-        let transitions = HashMap::new();
-        let layout = vec![1, 2];
-
-        let result = statefig(states, transitions, Some(layout.clone())).unwrap();
-
-        assert_eq!(result.layout, layout);
+    fn arrows_follow_the_connection_matrix() {
+        let mut connect = connect3();
+        connect[1][0] = 1.5; // B -> A as an arc, opposite of A -> B's 1.0
+        connect[0][1] = 0.5;
+        let out = statefig(
+            &StateFigLayout::LeftToRight(vec![1, 2]),
+            &connect,
+            &names(&["A", "B", "C"]),
+        )
+        .unwrap();
+        let arrows: Vec<(usize, usize, f64, bool)> = out
+            .arrows
+            .iter()
+            .map(|a| (a.from_state, a.to_state, a.curvature, a.offset))
+            .collect();
+        assert_eq!(
+            arrows,
+            vec![
+                (1, 0, 0.5, true),
+                (0, 1, -0.5, true),
+                (0, 2, 0.0, false),
+                (1, 2, 0.0, false)
+            ]
+        );
+        let coords = statefig(
+            &StateFigLayout::Coordinates(vec![(0.1, 0.9), (0.5, 0.5), (0.9, 0.1)]),
+            &connect3(),
+            &names(&["A", "B", "C"]),
+        )
+        .unwrap();
+        assert_eq!(coords.x, vec![0.1, 0.5, 0.9]);
     }
 
     #[test]
-    fn test_statefig_empty() {
-        let states: Vec<String> = vec![];
-        let transitions = HashMap::new();
-
-        let result = statefig(states, transitions, None).unwrap();
-
-        assert!(result.states.is_empty());
-    }
-
-    #[test]
-    fn test_transition_matrix() {
-        let data = StateFigData {
-            states: vec!["A".to_string(), "B".to_string()],
-            positions: vec![(0.0, 0.0), (1.0, 0.0)],
-            edges: vec![(0, 1, 5)],
-            box_sizes: vec![(1.0, 0.5), (1.0, 0.5)],
-            layout: vec![2],
-        };
-
-        let matrix = statefig_transition_matrix(&data);
-
-        assert_eq!(matrix[0][1], 5);
-        assert_eq!(matrix[1][0], 0);
+    fn rejects_bad_layouts() {
+        let states = names(&["A", "B", "C"]);
+        assert!(
+            statefig(
+                &StateFigLayout::LeftToRight(vec![1, 1]),
+                &connect3(),
+                &states
+            )
+            .is_err()
+        );
+        assert!(
+            statefig(
+                &StateFigLayout::LeftToRight(vec![0, 3]),
+                &connect3(),
+                &states
+            )
+            .is_err()
+        );
+        assert!(
+            statefig(
+                &StateFigLayout::Coordinates(vec![(0.0, 2.0); 3]),
+                &connect3(),
+                &states
+            )
+            .is_err()
+        );
+        assert!(
+            statefig(
+                &StateFigLayout::LeftToRight(vec![3]),
+                &connect3(),
+                &names(&["A"])
+            )
+            .is_err()
+        );
+        assert!(
+            statefig(
+                &StateFigLayout::LeftToRight(vec![3]),
+                &vec![vec![0.0; 2]; 3],
+                &states
+            )
+            .is_err()
+        );
     }
 }
