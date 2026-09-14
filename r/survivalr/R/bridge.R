@@ -7888,7 +7888,11 @@ points.survival_py_survfit <- function(x, fun, censor = FALSE, col = 1,
 residuals.survival_py_survfit <- function(object, times, type = "pstate",
                                           collapse = FALSE, weighted = collapse,
                                           data.frame = FALSE, extra = FALSE, ...) {
-  if (inherits(object, "survival.r_api.CoxSurvfitResult")) {
+  # reticulate derives the class vector from each Python class's
+  # `__module__.__name__`; CoxSurvfitResult lives in survival.r._types and is
+  # re-exported by survival.r_api, so accept both spellings.
+  if (inherits(object, c("survival.r_api.CoxSurvfitResult",
+                         "survival.r._types.CoxSurvfitResult"))) {
     stop("residuals method for coxph survival curve not found", call. = FALSE)
   }
   if (missing(times)) {
