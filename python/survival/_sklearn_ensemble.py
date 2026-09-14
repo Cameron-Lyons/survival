@@ -7,18 +7,19 @@ import numpy as np
 from . import _survival as _surv
 from ._sklearn_common import (
     BaseEstimator,
+    FlatModelPredictMixin,
     RegressorMixin,
     SurvivalScoreMixin,
     _validate_survival_data,
-    check_array,
-    check_is_fitted,
 )
 
 if TYPE_CHECKING:
-    from numpy.typing import ArrayLike, NDArray
+    from numpy.typing import ArrayLike
 
 
-class GradientBoostSurvivalEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
+class GradientBoostSurvivalEstimator(
+    FlatModelPredictMixin, SurvivalScoreMixin, BaseEstimator, RegressorMixin
+):
     """Scikit-learn compatible Gradient Boosting Survival model.
 
     Parameters
@@ -109,86 +110,10 @@ class GradientBoostSurvivalEstimator(SurvivalScoreMixin, BaseEstimator, Regresso
         self.is_fitted_ = True
         return self
 
-    def predict(self, X: ArrayLike) -> NDArray[np.float64]:
-        """Predict risk scores for samples.
 
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Samples to predict.
-
-        Returns
-        -------
-        risk_scores : ndarray of shape (n_samples,)
-            Predicted risk scores (higher = higher risk).
-        """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        if X.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
-            )
-
-        x_flat = X.flatten().tolist()
-        return np.array(self.model_.predict_risk(x_flat, X.shape[0]))
-
-    def predict_survival_function(
-        self, X: ArrayLike
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Predict survival function for samples.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Samples to predict.
-
-        Returns
-        -------
-        times : ndarray of shape (n_times,)
-            Time points.
-        survival : ndarray of shape (n_samples, n_times)
-            Survival probabilities.
-        """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        if X.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
-            )
-
-        x_flat = X.flatten().tolist()
-        survival = self.model_.predict_survival(x_flat, X.shape[0])
-        return np.array(self.model_.unique_times), np.array(survival)
-
-    def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]:
-        """Predict median survival time for samples.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Samples to predict.
-
-        Returns
-        -------
-        median_times : ndarray of shape (n_samples,)
-            Predicted median survival times (NaN if survival never drops below 0.5).
-        """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        if X.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
-            )
-
-        x_flat = X.flatten().tolist()
-        result = self.model_.predict_median_survival_time(x_flat, X.shape[0])
-        return np.array([t if t is not None else np.nan for t in result])
-
-
-class SurvivalForestEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
+class SurvivalForestEstimator(
+    FlatModelPredictMixin, SurvivalScoreMixin, BaseEstimator, RegressorMixin
+):
     """Scikit-learn compatible Random Survival Forest model.
 
     Parameters
@@ -276,81 +201,3 @@ class SurvivalForestEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin)
         self.oob_error_ = self.model_.oob_error
         self.is_fitted_ = True
         return self
-
-    def predict(self, X: ArrayLike) -> NDArray[np.float64]:
-        """Predict risk scores for samples.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Samples to predict.
-
-        Returns
-        -------
-        risk_scores : ndarray of shape (n_samples,)
-            Predicted risk scores (cumulative hazard at last time point).
-        """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        if X.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
-            )
-
-        x_flat = X.flatten().tolist()
-        return np.array(self.model_.predict_risk(x_flat, X.shape[0]))
-
-    def predict_survival_function(
-        self, X: ArrayLike
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Predict survival function for samples.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Samples to predict.
-
-        Returns
-        -------
-        times : ndarray of shape (n_times,)
-            Time points.
-        survival : ndarray of shape (n_samples, n_times)
-            Survival probabilities.
-        """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        if X.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
-            )
-
-        x_flat = X.flatten().tolist()
-        survival = self.model_.predict_survival(x_flat, X.shape[0])
-        return np.array(self.model_.unique_times), np.array(survival)
-
-    def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]:
-        """Predict median survival time for samples.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Samples to predict.
-
-        Returns
-        -------
-        median_times : ndarray of shape (n_samples,)
-            Predicted median survival times (NaN if survival never drops below 0.5).
-        """
-        check_is_fitted(self)
-        X = check_array(X, dtype=np.float64, ensure_2d=True)
-
-        if X.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X.shape[1]} features, but model expects {self.n_features_in_}"
-            )
-
-        x_flat = X.flatten().tolist()
-        result = self.model_.predict_median_survival_time(x_flat, X.shape[0])
-        return np.array([t if t is not None else np.nan for t in result])

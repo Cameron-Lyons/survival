@@ -1,33 +1,39 @@
+"""Typed inputs and the low-level kernels shared by the classical routines.
+
+The typed input classes (``SurvivalData``, ``CountingProcessData``, ``CovariateMatrix``,
+``Weights`` and the ``*Input`` bundles) are bound here once; the other domain modules take
+them as arguments but do not re-export them.
+"""
+
 from ._binding_utils import bind_names
 
 __all__ = bind_names(
     globals(),
     [
-        "concordance",
-        "concordance_index",
-        "concordance_summary",
-        "counting_concordance_index",
-        "counting_concordance_summary",
-        "perform_concordance1_calculation",
-        "perform_concordance3_calculation",
-        "perform_concordance_calculation",
-        "CoxCountOutput",
-        "coxcount1",
-        "coxcount2",
-        "schoenfeld_residuals",
-        "NaturalSplineKnot",
-        "SplineBasisResult",
-        "nsk",
-        "PSpline",
-        "perform_score_calculation",
-        "perform_agscore3_calculation",
-        "cox_score_residuals",
         "SurvivalData",
+        "CountingProcessData",
         "CovariateMatrix",
         "Weights",
-        "CountingProcessData",
         "CoxRegressionInput",
         "CoxMartInput",
         "AndersenGillInput",
+        "ConcordanceCounts",
+        "ConcordanceFit",
+        "ConcordanceRanks",
+        "concordancefit",
+        "concordancefit_counting",
+        "CoxCountOutput",
+        "coxcount1",
+        "coxcount2",
+        "coxscore2",
+        "agscore3",
+        "CoxschoResiduals",
+        "schoenfeld_residuals",
+        "schoenfeld_residuals_counting",
+        "NaturalSplineKnot",
+        "SplineBasisResult",
+        "nsk",
+        "PsplineBasis",
+        "pspline_basis",
     ],
 )

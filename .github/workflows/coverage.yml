@@ -95,18 +95,26 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Create virtualenv
-        run: python -m venv .venv
+        # Later steps call .venv/bin/python explicitly; .venv/bin also goes first on PATH so the
+        # subprocesses they spawn (ruff, run by scripts/generate_stubs.py directly and again from
+        # test_binding_contract.py) resolve to the venv's pinned copy.
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Install maturin and test dependencies
         run: |
           .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install maturin numpy pandas polars pytest pytest-cov
+          .venv/bin/python -m pip install maturin numpy pandas polars pytest pytest-cov ruff==0.16.4
 
       - name: Install extension with maturin develop
         run: .venv/bin/maturin develop --release --features extension-module,ml
 
       - name: Check generated binding manifest
         run: .venv/bin/python scripts/generate_binding_manifest.py --check
+
+      - name: Check generated extension stub
+        run: .venv/bin/python scripts/generate_stubs.py --check
 
       - name: Check API/stub/example consistency
         run: .venv/bin/python -m pytest python/tests/test_binding_contract.py -v

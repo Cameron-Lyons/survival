@@ -1,544 +1,292 @@
+"""``survival.data_prep`` against R survival 3.8.11 (``strata``, ``neardate``, ``aeqSurv``,
+``survSplit``, ``survcondense``, ``tcut``, ``tmerge``, ``rttright``, ``fromtimeline``).
+
+Every row index returned by these bindings is zero-based.
+"""
+
 import math
 
 import pytest
 
 from .helpers import setup_survival_import
 
-survival_package = setup_survival_import()
-survival = survival_package.data_prep
+survival = setup_survival_import()
+data_prep = survival.data_prep
 
 
-def test_collapse():
-    y = [1.0, 2.0, 3.0, 4.0, 2.0, 3.0, 4.0, 5.0, 0.0, 0.0, 1.0, 0.0]
-    x = [1, 1, 1, 1]
-    istate = [0, 0, 0, 0]
-    subject_id = [1, 1, 2, 2]
-    wt = [1.0, 1.0, 1.0, 1.0]
-    order = [0, 1, 2, 3]
+def test_cluster_recodes_ids_in_order_of_appearance():
+    numeric = data_prep.cluster([2, 2, 1, 3])
+    assert isinstance(numeric, data_prep.ClusterResult)
+    assert numeric.codes == [0, 0, 1, 2]
+    assert numeric.levels == ["2", "1", "3"]
+    assert numeric.sizes == [2, 1, 1]
 
-    result = survival.collapse(y, x, istate, subject_id, wt, order)
-    assert isinstance(result, dict)
-    assert result["matrix"] == [[1, 2], [3, 3], [4, 4]]
-    assert result["dimnames"] == ["start", "end"]
+    strings = data_prep.cluster(["b", "a", "b"])
+    assert strings.codes == [0, 1, 0]
+    assert strings.levels == ["b", "a"]
+    assert strings.sizes == [2, 1]
 
-    with pytest.raises(ValueError, match="y must have 3 columns"):
-        survival.collapse(y[:-1], x, istate, subject_id, wt, order)
-    with pytest.raises(ValueError, match="x length mismatch"):
-        survival.collapse(y, x[:-1], istate, subject_id, wt, order)
-    with pytest.raises(ValueError, match="y values must be finite"):
-        survival.collapse([float("nan"), *y[1:]], x, istate, subject_id, wt, order)
-    with pytest.raises(ValueError, match="wt values must be finite"):
-        survival.collapse(y, x, istate, subject_id, [float("inf"), 1.0, 1.0, 1.0], order)
-    with pytest.raises(ValueError, match="order values must be non-negative"):
-        survival.collapse(y, x, istate, subject_id, wt, [-1, 1, 2, 3])
-    with pytest.raises(ValueError, match="order values must be less than"):
-        survival.collapse(y, x, istate, subject_id, wt, [0, 1, 2, 4])
-    with pytest.raises(ValueError, match="order must be a permutation"):
-        survival.collapse(y, x, istate, subject_id, wt, [0, 1, 1, 3])
+    floats = data_prep.cluster([2.5, 1.0, 2.5])
+    assert floats.codes == [0, 1, 0]
+    assert floats.levels == ["2.5", "1"]
 
 
-def test_cluster_and_strata_public_apis():
-    clusters = survival.cluster([2, 2, 1, 3])
-    string_clusters = survival.cluster_str(["b", "a", "b"])
-    numeric_strata = survival.strata([[2, 1, 2], [1, 2, 1]])
-    string_strata = survival.strata_str([["b", "a", "b"], ["x", "y", "x"]])
-
-    assert clusters.cluster_ids == [0, 0, 1, 2]
-    assert clusters.levels == ["2", "1", "3"]
-    assert clusters.cluster_sizes == [2, 1, 1]
-
-    assert string_clusters.cluster_ids == [0, 1, 0]
-    assert string_clusters.levels == ["b", "a"]
-    assert string_clusters.cluster_sizes == [2, 1]
-
-    assert numeric_strata.strata == [1, 0, 1]
-    assert numeric_strata.levels == ["v1=1, v2=2", "v1=2, v2=1"]
-    assert numeric_strata.counts == [1, 2]
-    assert numeric_strata.n_strata == 2
-
-    assert string_strata.strata == [1, 0, 1]
-    assert string_strata.levels == ["a, y", "b, x"]
-    assert string_strata.counts == [1, 2]
-    assert string_strata.n_strata == 2
-
-    with pytest.raises(ValueError, match="Variable 1 has length"):
-        survival.strata([[1, 2], [1]])
-
-
-def test_tmerge_family_public_apis():
-    merged = survival.tmerge(
-        [1, 1, 2],
-        [1.0, 2.0, 1.0],
-        [0.0, float("nan"), 0.0],
-        [1, 1, 2],
-        [0.5, 1.5, 0.5],
-        [2.0, 3.0, 4.0],
+def test_strata_labels_match_r():
+    # R: strata of two numeric vectors; levels are name=level pairs joined by a comma
+    numeric = data_prep.strata(
+        ["c(2, 1, 2)", "c(1, 2, 1)"], [["1", "2"], ["1", "2"]], [[1, 0, 1], [0, 1, 0]]
     )
-    indices = survival.tmerge2(
-        [1, 1, 2],
-        [1.0, 2.0, 1.0],
-        [1, 1, 2],
-        [0.5, 1.5, 0.5],
+    assert isinstance(numeric, data_prep.StrataResult)
+    assert numeric.codes == [1, 0, 1]
+    assert numeric.levels == ["c(2, 1, 2)=1, c(1, 2, 1)=2", "c(2, 1, 2)=2, c(1, 2, 1)=1"]
+    assert numeric.counts == [1, 2]
+
+    # R: shortlabel = TRUE drops the variable names from the levels
+    short = data_prep.strata(
+        ["a", "b"], [["a", "b"], ["x", "y"]], [[1, 0, 1], [0, 1, 0]], shortlabel=True
     )
-    carry = survival.tmerge3([1, 1, 1, 2, 2], [False, True, False, True, False])
-    plan = survival.tmerge_plan(
-        [1, 1],
-        [0.0, 7.0],
-        [5.0, 10.0],
-        [1] * 10,
-        [-1.0, 0.0, 3.0, 5.0, 6.0, 7.0, 8.0, 8.0, 10.0, 11.0],
-    )
+    assert short.codes == [1, 0, 1]
+    assert short.levels == ["a, y", "b, x"]
+    assert short.counts == [1, 2]
 
-    assert merged == pytest.approx([2.0, 5.0, 4.0])
-    assert indices == [1, 2, 3]
-    assert carry == [1, 1, 3, 0, 5]
-    assert plan.kind == [0, 5, 3, 6, 2, 5, 3, 3, 6, 1]
-    assert plan.count == [1, 1, 1, 3, 0, 2, 2, 1]
-    assert plan.row == [0, 0, 1, 1]
-    assert plan.start == [0.0, 3.0, 7.0, 8.0]
-    assert plan.stop == [3.0, 5.0, 8.0, 10.0]
-    assert plan.censor == [True, False, True, False]
+    # R: na.group = TRUE keeps a v=NA level, without it the code is NA
+    with_na = data_prep.strata(["v"], [["1", "2"]], [[0, None, 1, 0]], na_group=True)
+    assert with_na.codes == [0, 2, 1, 0]
+    assert with_na.levels == ["v=1", "v=2", "v=NA"]
+    assert with_na.counts == [2, 1, 1]
+    without_na = data_prep.strata(["v"], [["1", "2"]], [[0, None, 1, 0]])
+    assert without_na.codes == [0, None, 1, 0]
+    assert without_na.levels == ["v=1", "v=2"]
 
-    negative_ids = survival.tmerge(
-        [-1, -1],
-        [1.0, 2.0],
-        [float("nan"), float("nan")],
-        [-1],
-        [0.5],
-        [4.0],
-    )
-    assert negative_ids == pytest.approx([4.0, 4.0])
-
-    with pytest.raises(ValueError, match="time1 must have same length as id"):
-        survival.tmerge([1], [], [0.0], [], [], [])
-    with pytest.raises(ValueError, match="ntime must have same length as nid"):
-        survival.tmerge2([1], [1.0], [1], [])
-    with pytest.raises(ValueError, match="intervals must not overlap"):
-        survival.tmerge_plan([1, 1], [0.0, 4.0], [5.0, 10.0], [], [])
-    with pytest.raises(ValueError, match="miss must have same length as id"):
-        survival.tmerge3([1], [])
-    with pytest.raises(ValueError, match="time1 values must be finite"):
-        survival.tmerge([1], [float("nan")], [0.0], [], [], [])
-    with pytest.raises(ValueError, match="newx values may be finite or NaN"):
-        survival.tmerge([1], [1.0], [float("inf")], [], [], [])
-    with pytest.raises(ValueError, match="id must be sorted in non-decreasing order"):
-        survival.tmerge([2, 1], [1.0, 1.0], [0.0, 0.0], [], [], [])
-    with pytest.raises(ValueError, match="time1 must be non-decreasing within id"):
-        survival.tmerge([1, 1], [2.0, 1.0], [0.0, 0.0], [], [], [])
-    with pytest.raises(ValueError, match="ntime values must be finite"):
-        survival.tmerge([1], [1.0], [0.0], [1], [float("inf")], [1.0])
-    missing_increment = survival.tmerge([1], [1.0], [0.0], [1], [0.5], [float("nan")])
-    assert math.isnan(missing_increment[0])
-    with pytest.raises(ValueError, match="x values may be finite or NaN"):
-        survival.tmerge([1], [1.0], [0.0], [1], [0.5], [float("inf")])
-    with pytest.raises(ValueError, match="nid must be sorted in non-decreasing order"):
-        survival.tmerge2([1], [1.0], [2, 1], [0.5, 0.5])
-    with pytest.raises(ValueError, match="id must be sorted in non-decreasing order"):
-        survival.tmerge3([2, 1], [False, False])
+    with pytest.raises(ValueError, match="length"):
+        data_prep.strata(["a", "b"], [["1"], ["1"]], [[0, 0], [0]])
 
 
-def test_survsplit_public_api_and_validation():
-    result = survival.survsplit(
-        [0.0],
-        [10.0],
-        [7.0, 3.0, 3.0],
-    )
-    boundary_result = survival.survsplit([0.0], [10.0], [0.0, 3.0, 10.0])
+def test_neardate_matches_r():
+    id1, y1 = [1, 1, 2, 3], [10.0, 20.0, 5.0, 7.0]
+    id2, y2 = [1, 1, 2, 2, 4], [8.0, 15.0, 6.0, 1.0, 3.0]
 
-    assert result.row == [1, 1, 1]
-    assert result.interval == [1, 2, 3]
-    assert result.start == pytest.approx([0.0, 3.0, 7.0])
-    assert result.end == pytest.approx([3.0, 7.0, 10.0])
-    assert result.censor == [True, True, False]
+    # R neardate: first date in y2 at or after y1, as zero-based rows of y2
+    assert data_prep.neardate(id1, y1, id2, y2) == [1, None, 2, None]
+    # best = "prior": last date at or before
+    assert data_prep.neardate(id1, y1, id2, y2, best="prior") == [0, 1, 3, None]
 
-    assert boundary_result.row == [1, 1]
-    assert boundary_result.interval == [1, 2]
-    assert boundary_result.start == pytest.approx([0.0, 3.0])
-    assert boundary_result.end == pytest.approx([3.0, 10.0])
-    assert boundary_result.censor == [True, False]
-
-    with pytest.raises(ValueError, match="tstart and tstop must have same length"):
-        survival.survsplit([0.0], [], [1.0])
-    with pytest.raises(ValueError, match="cut must be a vector of finite numbers"):
-        survival.survsplit([0.0], [10.0], [3.0, float("nan")])
-    with pytest.raises(ValueError, match="cut must be a vector of finite numbers"):
-        survival.survsplit([0.0], [10.0], [float("inf")])
-    with pytest.raises(ValueError, match="not infinite"):
-        survival.survsplit([0.0], [float("inf")], [5.0])
-    with pytest.raises(ValueError, match="not infinite"):
-        survival.survsplit([float("-inf")], [10.0], [5.0])
+    with pytest.raises(ValueError, match="best"):
+        data_prep.neardate(id1, y1, id2, y2, best="nearest")
 
 
-def test_surv2data_and_survcondense_public_apis():
-    surv2data = survival.surv2data(
-        [2, 1, 1, 2],
-        [3.0, 0.0, 2.0, 0.0],
-        [5.0, 4.0, 4.0, 5.0],
-        [0, 1, 1, 0],
-    )
-    timeline = survival.surv2data_timeline(
-        [1, 2, 1, 1, 2],
-        [0.0, 0.0, 5.0, 2.0, 3.0],
-        [1, 1, 3, 2, None],
-    )
-    condensed = survival.survcondense(
-        [2, 1, 1, 2],
-        [0.0, 0.0, 5.0, 3.0],
-        [3.0, 5.0, 8.0, 5.0],
-        [1, 0, 0, 0],
-    )
+def test_lvcf_and_nostutter():
+    # last value carried forward within subject: row 1 is missing, row 3 starts subject 2
+    assert data_prep.lvcf([1, 1, 1, 2, 2], [False, True, False, True, False]) == [0, 0, 2, 3, 4]
+    assert data_prep.lvcf(
+        [1, 1, 1, 2, 2], [False, True, False, True, False], time=[0.0, 1.0, 2.0, 0.0, 1.0]
+    ) == [0, 0, 2, 3, 4]
 
-    assert surv2data.id == [1, 1, 2, 2]
-    assert surv2data.time1 == pytest.approx([0.0, 2.0, 0.0, 3.0])
-    assert surv2data.time2 == pytest.approx([2.0, 4.0, 3.0, 5.0])
-    assert surv2data.status == [0, 1, 0, 0]
-    assert surv2data.row_index == [2, 3, 4, 1]
-    assert timeline.row_index == [0, 1, 3]
-    assert timeline.start == pytest.approx([0.0, 0.0, 2.0])
-    assert timeline.stop == pytest.approx([2.0, 3.0, 5.0])
-    assert timeline.status == [2, 0, 3]
-    assert timeline.istate == [1, 1, 2]
-
-    assert condensed.id == [1, 2, 2]
-    assert condensed.time1 == pytest.approx([0.0, 0.0, 3.0])
-    assert condensed.time2 == pytest.approx([8.0, 3.0, 5.0])
-    assert condensed.status == [0, 1, 0]
-    assert condensed.row_map == [[2, 3], [1], [4]]
-
-    with pytest.raises(ValueError, match="time must have same length as id"):
-        survival.surv2data([1], [])
-    with pytest.raises(
-        ValueError,
-        match="event_time and event_status must both be provided or both be None",
-    ):
-        survival.surv2data([1], [0.0], [1.0])
-    with pytest.raises(ValueError, match="event_status must have same length as id"):
-        survival.surv2data([1], [0.0], [1.0], [])
-    with pytest.raises(ValueError, match="time contains NaN"):
-        survival.surv2data([1], [float("nan")])
-    with pytest.raises(ValueError, match="event_time contains non-finite"):
-        survival.surv2data([1], [0.0], [float("inf")], [1])
-    with pytest.raises(ValueError, match="event_status must contain only 0/1"):
-        survival.surv2data([1], [0.0], [1.0], [2])
-    with pytest.raises(ValueError, match="event_time/event_status must be constant within id"):
-        survival.surv2data([1, 1], [0.0, 1.0], [3.0, 4.0], [1, 1])
-    with pytest.raises(ValueError, match="event_time must be >= time"):
-        survival.surv2data([1], [2.0], [1.0], [1])
-    with pytest.raises(ValueError, match="duplicated time values for a single id"):
-        survival.surv2data([1, 1], [2.0, 2.0])
-    with pytest.raises(ValueError, match="same length"):
-        survival.surv2data_timeline([1], [], [1])
-    with pytest.raises(ValueError, match="time contains NaN"):
-        survival.surv2data_timeline([1], [float("nan")], [1])
-    with pytest.raises(ValueError, match="duplicated time values"):
-        survival.surv2data_timeline([1, 1], [2.0, 2.0], [1, 2])
-    with pytest.raises(ValueError, match="time1 must have same length as id"):
-        survival.survcondense([1], [], [1.0], [0])
-    with pytest.raises(ValueError, match="time2 must have same length as id"):
-        survival.survcondense([1], [0.0], [], [0])
-    with pytest.raises(ValueError, match="status must have same length as id"):
-        survival.survcondense([1], [0.0], [1.0], [])
-    with pytest.raises(ValueError, match="time1 contains NaN"):
-        survival.survcondense([1], [float("nan")], [1.0], [0])
-    with pytest.raises(ValueError, match="time2 contains non-finite"):
-        survival.survcondense([1], [0.0], [float("inf")], [0])
-    with pytest.raises(ValueError, match="time1 must be <= time2"):
-        survival.survcondense([1], [2.0], [1.0], [0])
-    with pytest.raises(ValueError, match="status must contain only 0/1"):
-        survival.survcondense([1], [0.0], [1.0], [2])
-    with pytest.raises(ValueError, match="intervals must not overlap within id"):
-        survival.survcondense([1, 1], [0.0, 4.0], [5.0, 6.0], [0, 0])
-
-
-def test_aeq_surv_neardate_and_tcut_public_apis():
-    adjusted = survival.aeq_surv([1.0, 1.0 + 1e-10, 2.0], 1e-8)
-    transitive_adjusted = survival.aeq_surv([1.0, 1.0 + 9e-9, 1.0 + 18e-9], 1e-8)
-    relative_adjusted = survival.aeq_surv([1e9, 1e9 + 1.0, 1e9 + 20.0], 1e-8)
-    no_adjust = survival.aeq_surv([1.0, 1.0 + 1e-10], -1.0)
-    nearest = survival.neardate([1, 1, 2], [4.0, 12.0, 7.0], [1, 1, 2], [5.0, 10.0, 9.0])
-    nearest_tie = survival.neardate(
-        [1, 1, 1],
-        [15.0, 10.0, 11.0],
-        [1, 1, 1, 1],
-        [10.0, 20.0, 10.0, 12.0],
-    )
-    nearest_str = survival.neardate_str(["a"], [4.0], ["a"], [1.0], "prior")
-    nearest_after_prefix = survival.neardate([1], [15.0], [1, 1], [10.0, 20.0], "a")
-    nearest_prior_prefix = survival.neardate([1], [15.0], [1, 1], [10.0, 20.0], "pr")
-    nearest_closest_prefix = survival.neardate([1], [18.0], [1, 1], [10.0, 20.0], "cl")
-    cut = survival.tcut([5.0, 15.0, 30.0], [0.0, 10.0, 20.0, 30.0])
-    cut_boundaries = survival.tcut([0.0, 10.0, 20.0, 30.0], [0.0, 10.0, 20.0, 30.0])
-    cut_generated = survival.tcut([5.0, 15.0, 25.0], 3.0)
-    cut_duplicate_break = survival.tcut([5.0, 15.0, 25.0], [0.0, 10.0, 10.0, 30.0])
-    cut_missing = survival.tcut([float("nan")], [0.0, 1.0])
-    expanded = survival.tcut_expand([0.0], [25.0], [0.0, 10.0, 20.0, 30.0])
-    expanded_edges = survival.tcut_expand([-5.0, 35.0], [25.0, 40.0], [0.0, 10.0, 20.0])
-
-    assert adjusted.time[0] == pytest.approx(adjusted.time[1])
-    assert adjusted.adjusted_count == 1
-    assert adjusted.adjusted_indices == [1]
-    assert transitive_adjusted.time == pytest.approx([1.0, 1.0, 1.0])
-    assert transitive_adjusted.adjusted_indices == [1, 2]
-    assert relative_adjusted.time == pytest.approx([1e9, 1e9, 1e9 + 20.0])
-    assert relative_adjusted.adjusted_indices == [1]
-    assert no_adjust.time == pytest.approx([1.0, 1.0 + 1e-10])
-    assert no_adjust.adjusted_count == 0
-
-    assert nearest.indices == [0, 1, 2]
-    assert nearest.distances == pytest.approx([1.0, 2.0, 2.0])
-    assert nearest.n_matched == 3
-    assert nearest_tie.indices == [3, 0, 0]
-    assert nearest_tie.distances == pytest.approx([3.0, 0.0, 1.0])
-    assert nearest_str.indices == [0]
-    assert nearest_str.distances == pytest.approx([3.0])
-    assert nearest_after_prefix.indices == [1]
-    assert nearest_after_prefix.distances == pytest.approx([5.0])
-    assert nearest_prior_prefix.indices == [0]
-    assert nearest_prior_prefix.distances == pytest.approx([5.0])
-    assert nearest_closest_prefix.indices == [1]
-    assert nearest_closest_prefix.distances == pytest.approx([2.0])
-
-    assert cut.codes == [0, 1, 2]
-    assert cut.counts == [1, 1, 1]
-    assert cut.breaks == pytest.approx([0.0, 10.0, 20.0, 30.0])
-    assert cut_boundaries.codes == [0, 1, 2, 2]
-    assert cut_boundaries.counts == [1, 1, 2]
-    assert cut_generated.codes == [0, 1, 2]
-    assert cut_generated.levels == ["Range 1", "Range 2", "Range 3"]
-    assert cut_generated.breaks == pytest.approx([4.8, 11.6, 18.4, 25.2])
-    assert cut_generated.counts == [1, 1, 1]
-    assert cut_duplicate_break.codes == [0, 2, 2]
-    assert cut_duplicate_break.counts == [1, 0, 2]
-    assert cut_missing.codes == [-1]
-    assert cut_missing.counts == [0]
-
-    start, stop, codes, original = expanded
-    assert start == pytest.approx([0.0, 10.0, 20.0])
-    assert stop == pytest.approx([10.0, 20.0, 25.0])
-    assert codes == [0, 1, 2]
-    assert original == [0, 0, 0]
-    edge_start, edge_stop, edge_codes, edge_original = expanded_edges
-    assert edge_start == pytest.approx([-5.0, 0.0, 10.0, 20.0, 35.0])
-    assert edge_stop == pytest.approx([0.0, 10.0, 20.0, 25.0, 40.0])
-    assert edge_codes == [-1, 0, 1, 2, 2]
-    assert edge_original == [0, 0, 0, 0, 1]
-
-    with pytest.raises(ValueError, match="best must be 'prior', 'after', or 'closest'"):
-        survival.neardate([1], [1.0], [1], [1.0], "sideways")
-    with pytest.raises(ValueError, match="best must be 'prior', 'after', or 'closest'"):
-        survival.neardate([1], [1.0], [1], [1.0], "")
-    with pytest.raises(ValueError, match="labels length"):
-        survival.tcut([1.0], [0.0, 1.0, 2.0], ["only-one"])
-    with pytest.raises(ValueError, match="tolerance must be finite"):
-        survival.aeq_surv([1.0], float("inf"))
-    with pytest.raises(ValueError, match="time values must be finite"):
-        survival.aeq_surv([1.0, float("nan")])
-    missing_query = survival.neardate([1], [float("nan")], [1], [1.0])
-    infinite_reference = survival.neardate_str(["a"], [1.0], ["a"], [float("inf")])
-    assert missing_query.indices == [None]
-    assert missing_query.distances == [None]
-    assert infinite_reference.indices == [0]
-    assert infinite_reference.distances == [float("inf")]
-    with pytest.raises(ValueError, match="breaks must be given in ascending order"):
-        survival.tcut([0.5], [2.0, 1.0])
-    with pytest.raises(ValueError, match="Must specify at least one interval"):
-        survival.tcut([0.5], 0.0)
-    with pytest.raises(ValueError, match="start values must be finite"):
-        survival.tcut_expand([float("nan")], [1.0], [0.0])
-    with pytest.raises(ValueError, match="cuts must contain unique values"):
-        survival.tcut_expand([0.0], [1.0], [0.0, 0.0])
-
-
-def test_timeline_public_apis_and_validation():
-    timeline = survival.to_timeline(
-        [1, 1, 2],
-        [0.0, 5.0, 0.0],
-        [5.0, 10.0, 10.0],
-        [0, 1, 2],
-        [0.0, 5.0, 10.0],
-    )
-    intervals = survival.from_timeline(timeline.id, timeline.states, timeline.time_points)
-    precise = survival.to_timeline([1, 1], [0.0, 1.0004], [1.0004, 1.0008], [0, 1])
-    tolerance_reversed = survival.to_timeline([1], [1.0 + 0.5e-9], [1.0], [9])
-
-    assert timeline.id == [1, 2]
-    assert timeline.time_points == pytest.approx([0.0, 5.0, 10.0])
-    assert timeline.states == [[0, 1, 1], [2, 2, 2]]
-    assert intervals.id == [1, 1, 2, 2]
-    assert intervals.time1 == pytest.approx([0.0, 5.0, 0.0, 5.0])
-    assert intervals.time2 == pytest.approx([5.0, 10.0, 5.0, 10.0])
-    assert intervals.status == [0, 1, 2, 2]
-    assert precise.time_points == pytest.approx([0.0, 1.0004, 1.0008])
-    assert precise.states == [[0, 1, 1]]
-    assert tolerance_reversed.states == [[9]]
-
-    with pytest.raises(ValueError, match="time1 must have same length as id"):
-        survival.to_timeline([1], [], [1.0], [0])
-    with pytest.raises(ValueError, match="time1 contains NaN"):
-        survival.to_timeline([1], [float("nan")], [1.0], [0])
-    with pytest.raises(ValueError, match="time2 contains non-finite"):
-        survival.to_timeline([1], [0.0], [float("inf")], [0])
-    with pytest.raises(ValueError, match="time1 must be <= time2"):
-        survival.to_timeline([1], [2.0], [1.0], [0])
-    with pytest.raises(ValueError, match="intervals must not overlap within id"):
-        survival.to_timeline([1, 1], [0.0, 4.0], [5.0, 6.0], [0, 1])
-    with pytest.raises(ValueError, match="time_points must be strictly increasing"):
-        survival.to_timeline([1], [0.0], [1.0], [0], [0.0, 0.0])
-    with pytest.raises(ValueError, match="states must have one row per id"):
-        survival.from_timeline([1, 2], [[0]], [0.0])
-    with pytest.raises(ValueError, match="states row 0 has length 2 but expected 1"):
-        survival.from_timeline([1], [[0, 1]], [0.0])
-    with pytest.raises(ValueError, match="time_points contains NaN"):
-        survival.from_timeline([1], [[0]], [float("nan")])
-    with pytest.raises(ValueError, match="time_points must be strictly increasing"):
-        survival.from_timeline([1], [[0, 1]], [1.0, 0.0])
-
-
-def test_rttright_public_apis_and_validation():
-    result = survival.rttright([3.0, 1.0, 2.0], [1, 0, 1])
-    stratified = survival.rttright_stratified(
-        [3.0, 1.0, 2.0, 1.5],
-        [1, 0, 1, 1],
-        [0, 0, 1, 1],
-    )
-
-    assert result.time == pytest.approx([1.0, 2.0, 3.0])
-    assert result.status == [0, 1, 1]
-    assert result.weights == pytest.approx([0.0, 0.5, 0.5])
-    assert result.order == [1, 2, 0]
-
-    raw = survival.rttright([1.0, 2.0, 3.0], [0, 1, 1], renorm=False)
-    assert raw.weights == pytest.approx([0.0, 1.5, 1.5])
-
-    weighted = survival.rttright([1.0, 2.0, 3.0], [0, 1, 1], [2.0, 1.0, 3.0])
-    weighted_raw = survival.rttright(
-        [1.0, 2.0, 3.0],
-        [0, 1, 1],
-        [2.0, 1.0, 3.0],
-        renorm=False,
-    )
-    assert weighted.weights == pytest.approx([0.0, 0.25, 0.75])
-    assert weighted_raw.weights == pytest.approx([0.0, 1.5, 4.5])
-
-    tied = survival.rttright([1.0, 2.0, 2.0, 3.0], [0, 1, 1, 1])
-    assert tied.weights == pytest.approx([0.0, 1 / 3, 1 / 3, 1 / 3])
-
-    fixed = survival.rttright([1.0, 1.0 + 5e-10, 2.0], [0, 1, 1], renorm=False)
-    exact = survival.rttright(
-        [1.0, 1.0 + 5e-10, 2.0],
-        [0, 1, 1],
-        timefix=False,
-        renorm=False,
-    )
-    assert fixed.weights == pytest.approx([0.0, 1.0, 2.0])
-    assert exact.weights == pytest.approx([0.0, 1.5, 1.5])
-
-    assert stratified.time == pytest.approx([3.0, 1.0, 2.0, 1.5])
-    assert stratified.status == [1, 0, 1, 1]
-    assert stratified.weights == pytest.approx([1.0, 0.0, 0.5, 0.5])
-    assert stratified.order == [1, 0, 3, 2]
-
-    with pytest.raises(ValueError, match="time and status must have same length"):
-        survival.rttright([1.0], [1, 0])
-    with pytest.raises(ValueError, match="weights must have same length as time"):
-        survival.rttright_stratified([1.0], [1], [0], [1.0, 2.0])
-    with pytest.raises(ValueError, match="time contains NaN"):
-        survival.rttright([float("nan")], [1])
-    with pytest.raises(ValueError, match="status must contain only 0/1"):
-        survival.rttright([1.0], [2])
-    with pytest.raises(ValueError, match="weights contains negative value"):
-        survival.rttright([1.0], [1], [-1.0])
-    with pytest.raises(ValueError, match="weights contains non-finite"):
-        survival.rttright_stratified([1.0], [1], [0], [float("inf")])
-    with pytest.raises(ValueError, match="weights must have positive sum"):
-        survival.rttright([1.0], [1], [0.0])
-
-
-def test_agexact_public_api_and_validation():
-    result = survival_package.agexact(
-        0,
-        1,
-        1,
-        [0.0],
-        [1.0],
-        [1],
-        [1.0],
-        [0.0],
-        [0],
-        [0.0],
-        [0.0],
-        [0.0],
-        [0.0],
-        [0.0, 0.0],
-        [0.0] * 5,
-        [0, 0],
-        1e-9,
-        1e-9,
-        [1],
-    )
-
-    assert sorted(result) == [
-        "beta",
-        "covar",
-        "flag",
-        "imat",
-        "loglik",
-        "maxiter",
-        "means",
-        "sctest",
-        "u",
+    # nostutter: a repeat of the subject's current state is censored
+    assert data_prep.nostutter([1, 1, 1, 2, 2], ["a", "a", "b", "a", "a"], "censor") == [
+        False,
+        True,
+        False,
+        False,
+        True,
     ]
-    assert result["beta"] == pytest.approx([0.0])
-    assert result["loglik"] == pytest.approx([0.0, 0.0])
-    assert result["flag"] == 0
+    assert data_prep.nostutter([1, 1, 1, 2, 2], [1, 1, 2, 1, 1], 0) == [
+        False,
+        True,
+        False,
+        False,
+        True,
+    ]
 
-    fitted = survival_package.agexact(
-        20,
-        6,
-        1,
-        [0.0] * 6,
-        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        [1, 0, 1, 1, 0, 1],
-        [0.2, 1.1, -0.4, 0.8, 1.5, -0.2],
-        [0.0] * 6,
-        [0] * 6,
-        [0.0],
-        [0.0],
-        [0.0],
-        [0.0],
-        [0.0, 0.0],
-        [0.0] * 10,
-        [0] * 12,
-        1e-9,
-        1e-9,
-        [1],
+
+def test_aeq_surv_folds_near_ties_like_r():
+    result = data_prep.aeq_surv([1.0, 1.0 + 1e-12, 2.0, 3.0 - 1e-13])
+    assert isinstance(result, data_prep.AeqSurvResult)
+    # R aeqSurv: near-ties become equal, 3 - 1e-13 stays put
+    assert result.time == pytest.approx([1.0, 1.0, 2.0, 2.9999999999999])
+    assert result.time[0] == result.time[1]
+    assert result.time2 is None
+    assert result.changed == [1]
+
+    two_column = data_prep.aeq_surv([0.0, 0.0, 1.0], [1.0, 1.0 + 1e-12, 2.0])
+    assert two_column.time == pytest.approx([0.0, 0.0, 1.0])
+    assert two_column.time2 == pytest.approx([1.0, 1.0, 2.0])
+    assert two_column.time2[0] == two_column.time2[1]
+
+    with pytest.raises(ValueError, match="length"):
+        data_prep.aeq_surv([1.0, 2.0], [1.0])
+
+
+def test_survsplit_matches_r():
+    result = data_prep.survsplit([5.0, 12.0, 20.0], [1, 0, 1], [4.0, 10.0])
+
+    # R survSplit at cut points 4 and 10
+    assert isinstance(result, data_prep.SurvSplitResult)
+    assert result.row == [0, 0, 1, 1, 1, 2, 2, 2]
+    assert result.interval == [0, 1, 0, 1, 2, 0, 1, 2]
+    assert result.start == pytest.approx([0.0, 4.0, 0.0, 4.0, 10.0, 0.0, 4.0, 10.0])
+    assert result.end == pytest.approx([4.0, 5.0, 4.0, 10.0, 12.0, 4.0, 10.0, 20.0])
+    assert result.status == pytest.approx([0, 1, 0, 0, 0, 0, 0, 1])
+    assert result.censor == [True, False, True, True, False, True, True, False]
+    assert result.cut == pytest.approx([4.0, 10.0])
+
+    # R survSplit with zero = -1: the first interval starts at -1
+    shifted = data_prep.survsplit([5.0, 12.0, 20.0], [1, 0, 1], [4.0, 10.0], zero=-1.0)
+    assert shifted.start[:3] == pytest.approx([-1.0, 4.0, -1.0])
+
+    with pytest.raises(ValueError, match="length"):
+        data_prep.survsplit([5.0, 12.0], [1], [4.0])
+
+
+def test_survcondense_matches_r():
+    # R survcondense: consecutive rows of a subject with the same covariate value merge
+    result = data_prep.survcondense(
+        [1, 1, 1, 2, 2], [0.0, 5.0, 10.0, 0.0, 3.0], [5.0, 10.0, 15.0, 3.0, 8.0], [0, 0, 1, 1, 1]
     )
-    assert fitted["beta"] == pytest.approx([-0.716230334066463], abs=1e-10)
-    assert fitted["loglik"] == pytest.approx([-4.276666119016055, -3.923517065659742], abs=1e-10)
-    assert fitted["imat"] == pytest.approx([0.8099422437616611], abs=1e-10)
-    assert fitted["sctest"] == pytest.approx(0.6770036246476036, abs=1e-10)
-    assert fitted["maxiter"] == 4
-    assert fitted["flag"] == 1
+    assert isinstance(result, data_prep.SurvcondenseResult)
+    assert result.keep == [1, 2, 4]
+    assert [result.start[i] for i in result.keep] == pytest.approx([0.0, 10.0, 0.0])
 
-    with pytest.raises(ValueError, match="work must have length at least 5"):
-        survival_package.agexact(
-            1,
-            1,
-            1,
-            [0.0],
-            [1.0],
-            [1],
-            [1.0],
-            [0.0],
-            [0],
-            [0.0],
-            [0.0],
-            [0.0],
-            [1.0],
-            [0.0, 0.0],
-            [0.0],
-            [0, 0],
-            1e-9,
-            1e-9,
-            [1],
-        )
+    with pytest.raises(ValueError, match="length"):
+        data_prep.survcondense([1, 1], [0.0], [5.0, 10.0], [0, 0])
+
+
+def test_tcut_matches_r():
+    result = data_prep.tcut([1.0, 5.0, 12.0, 25.0], [0.0, 4.0, 10.0, 30.0])
+    assert isinstance(result, data_prep.TcutResult)
+    assert result.values == pytest.approx([1.0, 5.0, 12.0, 25.0])
+    assert result.cutpoints == pytest.approx([0.0, 4.0, 10.0, 30.0])
+    # R tcut labels use formatReal
+    assert result.labels == [" 0+ thru  4", " 4+ thru 10", "10+ thru 30"]
+
+    labelled = data_prep.tcut(
+        [1.0, 5.0, 12.0, 25.0], [0.0, 4.0, 10.0, 30.0], labels=["a", "b", "c"]
+    )
+    assert labelled.labels == ["a", "b", "c"]
+
+    # R tcut with a count: three equal-width ranges over the data (with R's 1% padding)
+    counted = data_prep.tcut([1.0, 5.0, 12.0, 25.0], [3.0])
+    assert counted.labels == ["Range 1", "Range 2", "Range 3"]
+    assert counted.cutpoints == pytest.approx([0.76, 8.92, 17.08, 25.24])
+
+    with pytest.raises(ValueError, match="labels"):
+        data_prep.tcut([1.0], [0.0, 4.0, 10.0], labels=["a"])
+
+
+def test_tmerge_step_matches_r_tmerge():
+    # R tmerge: death = event(tstop, c(1, 0)) on the base data
+    death = data_prep.tmerge_step(
+        [1, 2], [0.0, 0.0], [10.0, 8.0], [1, 2], [10.0, 8.0], "event", value=[1.0, 0.0]
+    )
+    assert isinstance(death, data_prep.TmergeStep)
+    assert death.row == [0, 1]
+    assert death.start == pytest.approx([0.0, 0.0])
+    assert death.stop == pytest.approx([10.0, 8.0])
+    assert death.censor_rows == []
+    # tcount columns: early, late, gap, within, boundary, leading, trailing, tied, missid
+    assert death.tcount == [0, 0, 0, 0, 0, 0, 2, 0, 0]
+    assert death.event_row == [0, 1]
+    assert death.event_source == [0, 1]
+    assert death.event_value == pytest.approx([1.0, 0.0])
+
+    # R tmerge: x = tdc(t, v) splits the intervals at the update times
+    tdc = data_prep.tmerge_step(
+        [1, 2], [0.0, 0.0], [10.0, 8.0], [1, 1, 2], [3.0, 7.0, 4.0], "tdc", value=[1.5, 2.5, 3.5]
+    )
+    assert tdc.row == [0, 0, 0, 1, 1]
+    assert tdc.start == pytest.approx([0.0, 3.0, 7.0, 0.0, 4.0])
+    assert tdc.stop == pytest.approx([3.0, 7.0, 10.0, 4.0, 8.0])
+    assert tdc.censor_rows == [0, 1, 3]
+    assert tdc.tcount == [0, 0, 0, 3, 0, 0, 0, 0, 0]
+    assert tdc.source == [None, 0, 1, None, 2]
+    values = [1.5, 2.5, 3.5]
+    assert [values[s] if s is not None else math.nan for s in tdc.source][1:3] == [1.5, 2.5]
+
+    # nevt = cumevent(t) on the split data: counts 1, 2 for subject 1 and 1 for subject 2
+    ids = [[1, 2][r] for r in tdc.row]
+    cumevent = data_prep.tmerge_step(
+        ids, tdc.start, tdc.stop, [1, 1, 2], [3.0, 7.0, 4.0], "cumevent"
+    )
+    assert cumevent.row == [0, 1, 2, 3, 4]
+    assert cumevent.tcount == [0, 0, 0, 0, 3, 0, 0, 0, 0]
+    assert cumevent.event_row == [0, 1, 3]
+    assert cumevent.event_value == pytest.approx([1.0, 2.0, 1.0])
+
+    cumtdc = data_prep.tmerge_step(
+        ids,
+        tdc.start,
+        tdc.stop,
+        [1, 1, 2],
+        [3.0, 7.0, 4.0],
+        "cumtdc",
+        value=[1.0, 1.0, 1.0],
+        prior=[0.0] * 5,
+        default=0.0,
+    )
+    assert cumtdc.cumulative == pytest.approx([0.0, 1.0, 2.0, 0.0, 1.0])
+
+    with pytest.raises(ValueError, match="not a recognized type"):
+        data_prep.tmerge_step([1, 2], [0.0, 0.0], [10.0, 8.0], [1], [3.0], "bogus")
+    with pytest.raises(ValueError, match="length"):
+        data_prep.tmerge_step([1, 2], [0.0], [10.0, 8.0], [1], [3.0], "tdc", value=[1.0])
+
+
+def test_rttright_matches_r():
+    time, status = [1.0, 2.0, 2.0, 3.0, 4.0], [1, 0, 1, 0, 1]
+
+    result = data_prep.rttright(time, status)
+    # R rttright: redistribute-to-the-right weights
+    assert isinstance(result, data_prep.RttrightResult)
+    assert [row[0] for row in result.weights] == pytest.approx([0.2, 0.0, 0.2, 0.0, 0.6])
+    assert result.times == []
+
+    at_times = data_prep.rttright(time, status, times=[2.0, 3.0])
+    # R rttright with reporting times 2 and 3: one column per time
+    assert at_times.times == pytest.approx([2.0, 3.0])
+    assert [row[0] for row in at_times.weights] == pytest.approx([0.2, 0.2, 0.2, 0.2, 0.2])
+    assert [row[1] for row in at_times.weights] == pytest.approx([0.2, 0.0, 0.2, 0.3, 0.3])
+
+    stratified = data_prep.rttright(time, status, strata=[0, 0, 1, 1, 1])
+    # R rttright by group: weights renormalised within stratum
+    assert [row[0] for row in stratified.weights] == pytest.approx([0.5, 0.0, 1 / 3, 0.0, 2 / 3])
+
+    raw = data_prep.rttright(time, status, strata=[0, 0, 1, 1, 1], renorm=False)
+    assert [row[0] for row in raw.weights] == pytest.approx([1.0, 0.0, 1.0, 0.0, 2.0])
+
+    with pytest.raises(ValueError, match="length"):
+        data_prep.rttright(time, status[:-1])
+
+
+def test_surv2counting_and_totimeline():
+    # timeline rows per subject: (id, time, state) with the state entered at each time
+    counting = data_prep.surv2counting(
+        [1, 1, 1, 2, 2], [0.0, 3.0, 7.0, 0.0, 5.0], [None, 1, 2, None, 1], has_states=True
+    )
+    assert isinstance(counting, data_prep.Surv2CountingResult)
+    assert counting.row == [0, 1, 3]
+    assert counting.tstart == pytest.approx([0.0, 3.0, 0.0])
+    assert counting.tstop == pytest.approx([3.0, 7.0, 5.0])
+    assert counting.status == [1, 2, 1]
+    assert counting.counting is True
+
+    with_missing = data_prep.surv2counting(
+        [1, 1, 1, 2, 2],
+        [0.0, 3.0, 7.0, 0.0, 5.0],
+        [None, 1, 2, None, 1],
+        has_states=True,
+        missing=[[False, True, False, False, False]],
+    )
+    # a covariate missing on row 1 is carried forward from row 0
+    assert with_missing.carry_from == [[0, 0, 3]]
+
+    with pytest.raises(ValueError, match="repeated"):
+        data_prep.surv2counting([1, 1], [0.0, 1.0], [None, 1], repeated="sometimes")
+
+    timeline = data_prep.totimeline(
+        [1, 1, 2], [0.0, 3.0, 0.0], [3.0, 7.0, 5.0], [1, 2, 1], [0, 1, 0]
+    )
+    assert isinstance(timeline, data_prep.TotimelineResult)
+    assert timeline.time_row == [0, 0, 1, 2, 2]
+    assert timeline.covariate_row == [0, 1, 1, 2, 2]
+    assert timeline.time == pytest.approx([0.0, 3.0, 7.0, 0.0, 5.0])
+    assert timeline.state == [0, 1, 2, 0, 1]

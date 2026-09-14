@@ -112,28 +112,45 @@ When adding, removing, or renaming a PyO3 binding:
    python3 scripts/generate_binding_manifest.py
    ```
 
-3. Update `python/survival/_survival.pyi` for the low-level binding signature.
-4. Add the symbol to the appropriate domain wrapper in `python/survival/*.py`
-   if it should be available through a curated module.
-5. Update `python/survival/__init__.pyi` only when the package-level typed
-   surface changes.
+3. Add the symbol to exactly one domain module's `bind_names` list in
+   `python/survival/*.py` (every registered binding is bound by one module) and
+   regenerate the manifest again, since its `MODULE_BINDINGS` section is derived
+   from those lists.
+4. Rebuild the extension with `--features extension-module,ml` and regenerate
+   `python/survival/_survival.pyi`:
+
+   ```sh
+   python3 scripts/generate_stubs.py
+   ```
+
+   The stub's structure (names, signatures, defaults, properties, enum
+   variants) is introspected from the built extension and its annotations are
+   inferred from the Rust sources (`#[pyo3(get)]` field types, `#[pymethods]`
+   and `#[pyfunction]` signatures); improve the Rust types rather than editing
+   the stub by hand. The generator emits ruff's layout itself and uses `ruff`
+   (from `PATH` or the running interpreter's environment) only to verify that,
+   so it fails loudly when ruff is missing or would reformat its output.
+5. Update `python/survival/__init__.py` (and mirror it in `__init__.pyi`) only
+   when the package-level surface changes; `python/survival/sklearn_compat.pyi`
+   is still maintained by hand.
 6. Run:
 
    ```sh
    python3 scripts/generate_binding_manifest.py --check
+   python3 scripts/generate_stubs.py --check
    PYTHONPATH=.:python uv run --no-sync pytest python/tests/test_binding_contract.py -q
    ```
 
-The manifest is generated. The stubs are checked in and maintained by hand.
-Treat stub edits like API changes: keep names, optional arguments, and return
-types consistent with the Rust `#[pyfunction]`, `#[pymethods]`, and wrapper
-module surface.
+The manifest and `_survival.pyi` are generated; `test_binding_contract.py`
+checks every manifest symbol's stub signature against `inspect.signature` of the
+runtime object, so a stale stub fails the suite.
 
 ## Python Module Layout
 
 New Python API should live in a domain module rather than adding another
-flattened root export. `python/survival/__init__.py` keeps compatibility exports
-for older callers, but the preferred surface is domain-oriented:
+flattened root export. `python/survival/__init__.py` re-exports only the domain
+modules, the R-style names of `survival.r` and the scikit-learn estimators; the
+surface is domain-oriented:
 
 - `core.py`: low-level shared routines and typed input containers
 - `regression.py`: Cox, AFT, competing risks, cure, and recurrent models

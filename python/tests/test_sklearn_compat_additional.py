@@ -34,11 +34,12 @@ HAS_TREE_BINDINGS = all(
 
 
 def _toy_data():
-    x = np.array([[0.1], [0.2], [0.3], [0.4], [0.5], [0.6], [0.7], [0.8]], dtype=np.float64)
+    """Eight rows: t = 1:8, s = c(1,1,0,1,1,1,0,1), x = c(.5,.2,.9,.1,.7,.3,.8,.4) in R."""
+    x = np.array([[0.5], [0.2], [0.9], [0.1], [0.7], [0.3], [0.8], [0.4]], dtype=np.float64)
     y = np.column_stack(
         [
             [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            [1, 1, 0, 1, 0, 1, 1, 0],
+            [1, 1, 0, 1, 1, 1, 0, 1],
         ]
     )
     return x, y
@@ -81,70 +82,131 @@ class _LazyRows:
         return np.asarray(self._data, dtype=dtype)
 
 
-def test_score_uses_rust_concordance(monkeypatch):
+def test_score_uses_rust_concordancefit(monkeypatch):
     common = importlib.import_module("survival._sklearn_common")
     calls = []
+    real_concordancefit = common._surv.concordancefit
 
-    def fake_concordance_index(time, status, risk_scores):
-        calls.append((time, status, risk_scores))
-        return 0.8125
+    def spy(survival_data, x, **kwargs):
+        calls.append((survival_data.time, survival_data.status, x.values, kwargs))
+        return real_concordancefit(survival_data, x, **kwargs)
 
-    monkeypatch.setattr(common._surv, "concordance_index", fake_concordance_index, raising=False)
+    monkeypatch.setattr(common._surv, "concordancefit", spy)
 
     score = common._compute_concordance_index(
-        np.array([1.0, 2.0], dtype=np.float64),
-        np.array([1, 0], dtype=np.int32),
-        np.array([0.7, 0.2], dtype=np.float64),
+        np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+        np.array([1, 1, 0, 1], dtype=np.int32),
+        np.array([0.7, 0.2, 0.5, 0.1], dtype=np.float64),
     )
 
-    assert score == 0.8125
-    assert calls == [([1.0, 2.0], [1, 0], [0.7, 0.2])]
+    # concordance(Surv(time, status) ~ risk, reverse = TRUE): 4 concordant of 5 comparable pairs
+    assert score == pytest.approx(0.8)
+    assert len(calls) == 1
+    time, status, risk, kwargs = calls[0]
+    assert time == [1.0, 2.0, 3.0, 4.0]
+    assert status == [1, 1, 0, 1]
+    assert risk == [0.7, 0.2, 0.5, 0.1]
+    assert kwargs == {"reverse": True, "std_err": False}
 
 
-def test_coxph_estimator_smoke():
+def test_concordance_index_counts_tied_risk_scores_as_half():
+    common = importlib.import_module("survival._sklearn_common")
+    score = common._compute_concordance_index(
+        np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        np.array([1, 1, 1], dtype=np.int32),
+        np.array([0.5, 0.5, 0.1], dtype=np.float64),
+    )
+    # pairs (1,2) tied in x (1/2), (1,3) concordant, (2,3) concordant
+    assert score == pytest.approx(2.5 / 3.0)
+
+
+def test_coxph_estimator_matches_r_coxph():
     x, y = _toy_data()
     estimator = CoxPHEstimator(n_iters=10)
     estimator.fit(x, y)
 
     assert isinstance(estimator.model_, core.CoxPHFit)
-    assert estimator.coef_.shape == (x.shape[1],)
+    # coxph(Surv(t, s) ~ x, d)
+    assert estimator.coef_ == pytest.approx([-2.5113057727233947])
 
     risk = estimator.predict(x)
     times, survival = estimator.predict_survival_function(x)
     median = estimator.predict_median_survival_time(x)
 
-    assert risk.shape == (x.shape[0],)
-    assert times.shape == (x.shape[0],)
+    # predict(fit, type = "lp") on the training rows
+    assert risk == pytest.approx(
+        [
+            -0.031391322159042501,
+            0.72200040965797585,
+            -1.0359136312484003,
+            0.9731309869303153,
+            -0.5336524767037214,
+            0.47086983238563651,
+            -0.78478305397606118,
+            0.21973925511329684,
+        ]
+    )
+    assert times.tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
     assert survival.shape == (x.shape[0], x.shape[0])
     assert median.shape == (x.shape[0],)
-    assert 0.0 <= estimator.score(x, y) <= 1.0
+    # R concordance of the fitted model
+    assert estimator.score(x, y) == pytest.approx(0.68181818181818188)
+
+    breslow = CoxPHEstimator(ties="breslow").fit(x, y)
+    assert breslow.model_.method == core.TieMethod.Breslow
+    assert breslow.coef_ == pytest.approx([-2.5113057727233947])
 
 
-def test_coxph_estimator_custom_times_and_feature_validation():
+def test_coxph_estimator_survival_curves_match_r_survfit():
     x, y = _toy_data()
     estimator = CoxPHEstimator(n_iters=10)
     estimator.fit(x, y)
+    new_x = np.array([[0.25], [0.75]], dtype=np.float64)
 
-    custom_times = np.array([2.0, 4.0, 6.0], dtype=np.float64)
-    returned_times, survival = estimator.predict_survival_function(x[:2], times=custom_times)
+    # R linear predictor on new data
+    assert estimator.predict(new_x) == pytest.approx([0.59643512102180618, -0.65921776533989118])
 
+    times, survival = estimator.predict_survival_function(new_x)
+    # survfit(fit, newdata = data.frame(x = c(.25, .75)))$surv, one column per new row
+    assert times.tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    assert survival[0] == pytest.approx(
+        [
+            0.83272324379982243,
+            0.67981818400153027,
+            0.67981818400153027,
+            0.51493304919211669,
+            0.3228767511518843,
+            0.18635202048747801,
+            0.18635202048747801,
+            0.043387721655328455,
+        ]
+    )
+    assert survival[1] == pytest.approx(
+        [
+            0.94918629237163887,
+            0.89588118129769456,
+            0.89588118129769456,
+            0.82771483162123671,
+            0.7246521605255537,
+            0.61962030183299699,
+            0.61962030183299699,
+            0.40907197828345665,
+        ]
+    )
+    # summary(survfit(...))$table[, "median"]
+    assert estimator.predict_median_survival_time(new_x).tolist() == pytest.approx([5.0, 8.0])
+
+    custom_times = np.array([0.5, 2.0, 3.5, 100.0], dtype=np.float64)
+    returned_times, at_custom = estimator.predict_survival_function(new_x, times=custom_times)
     assert returned_times.tolist() == pytest.approx(custom_times.tolist())
-    assert survival.shape == (2, 3)
-    assert np.all((survival >= 0.0) & (survival <= 1.0))
-
-    baseline_times, baseline_hazard = estimator.model_.basehaz(True)
-    positions = np.searchsorted(np.asarray(baseline_times), custom_times, side="right") - 1
-    expected_hazard = np.zeros_like(custom_times)
-    valid = positions >= 0
-    expected_hazard[valid] = np.asarray(baseline_hazard)[positions[valid]]
-    linear_predictors = np.asarray(estimator.model_.predict(x[:2].tolist()))
-    center = np.mean(np.asarray(estimator.model_.linear_predictors))
-    expected_survival = np.exp(-np.outer(np.exp(linear_predictors - center), expected_hazard))
-
-    assert survival == pytest.approx(expected_survival)
+    assert at_custom[0] == pytest.approx(
+        [1.0, 0.67981818400153027, 0.67981818400153027, 0.043387721655328455]
+    )
 
     with pytest.raises(ValueError, match="expects 1"):
         estimator.predict(np.array([[0.1, 0.2]], dtype=np.float64))
+    with pytest.raises(ValueError, match="expects 1"):
+        estimator.predict_survival_function(np.array([[0.1, 0.2]], dtype=np.float64))
 
 
 @pytest.mark.skipif(
@@ -438,7 +500,7 @@ def test_sklearn_compat_fallback_without_sklearn(monkeypatch):
         common.check_array([1.0, 2.0], dtype=np.float64, ensure_2d=True)
 
     estimator = module.CoxPHEstimator()
-    assert estimator.get_params() == {"n_iters": 20}
+    assert estimator.get_params() == {"n_iters": 20, "ties": "efron"}
     estimator.set_params(n_iters=7)
     assert estimator.n_iters == 7
 

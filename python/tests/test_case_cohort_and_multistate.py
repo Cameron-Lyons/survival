@@ -1,544 +1,368 @@
+"""Case-cohort (``cch_fit``), conditional logistic (``coxph`` with exact ties) and multi-state
+(``survfitaj``) entry points against R survival 3.8.11."""
+
 import math
 
+import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
+regression = survival.regression
+surv_analysis = survival.surv_analysis
 
 
-def _matched_clogit_dataset():
-    dataset = survival.ClogitDataSet()
-    for case_status, stratum, covariates in [
-        (1, 0, [2.0]),
-        (0, 0, [1.0]),
-        (1, 1, [3.0]),
-        (0, 1, [1.0]),
-    ]:
-        dataset.add_observation(case_status, stratum, covariates)
-    return dataset
+# ---------------------------------------------------------------------------------------------
+# clogit = coxph(Surv(rep(1, n), case) ~ x + strata(stratum), ties = "exact")
+# ---------------------------------------------------------------------------------------------
 
 
-def _simple_subject(subject_id, covariate, *, is_case, is_subcohort):
-    return survival.Subject(
-        id=subject_id,
-        covariates=[covariate],
-        is_case=is_case,
-        is_subcohort=is_subcohort,
-        stratum=0,
+def _clogit(case, x, stratum):
+    return regression.coxph_fit(
+        [1.0] * len(case), case, [[v] for v in x], strata=stratum, method="exact"
     )
 
 
-def _survfitaj_kwargs(*, sefit):
-    return {
-        "y": [0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 2.0, 0.0],
-        "sort1": [0, 1, 2],
-        "sort2": [0, 1, 2],
-        "utime": [1.0, 2.0],
-        "cstate": [0, 0, 0],
-        "wt": [1.0, 1.0, 1.0],
-        "grp": [0, 1, 2],
-        "ngrp": 3,
-        "p0": [1.0, 0.0],
-        "i0": [0.0] * 6,
-        "sefit": sefit,
-        "entry": False,
-        "position": [3, 3, 3],
-        "hindx": [[1, 0], [1, 1]],
-        "trmat": [[0, 1]],
-        "t0": 0.0,
-    }
+def test_conditional_logistic_regression_is_a_stratified_exact_cox_fit():
+    fit = _clogit([1, 0, 1, 0], [2.0, 1.0, 3.0, 1.0], [0, 0, 1, 1])
 
+    # both matched pairs are perfectly separated: the exact partial likelihood diverges
+    assert fit.method == regression.TieMethod.Exact
+    assert fit.nevent == 2
+    assert fit.coefficients[0] > 5.0
+    assert fit.loglik[1] > fit.loglik[0]
 
-def _competing_survfitaj_kwargs(*, sefit):
-    return {
-        "y": [
-            0.0,
-            1.0,
-            2.0,
-            0.0,
-            1.0,
-            3.0,
-            0.0,
-            2.0,
-            0.0,
-            0.0,
-            2.0,
-            0.0,
-        ],
-        "sort1": [0, 1, 2, 3],
-        "sort2": [0, 1, 2, 3],
-        "utime": [1.0, 2.0],
-        "cstate": [0, 0, 0, 0],
-        "wt": [1.0, 1.0, 1.0, 1.0],
-        "grp": [0, 1, 2, 3],
-        "ngrp": 4,
-        "p0": [1.0, 0.0, 0.0],
-        "i0": [0.0] * 12,
-        "sefit": sefit,
-        "entry": False,
-        "position": [3, 3, 3, 3],
-        "hindx": [[2, 0, 1], [2, 2, 2], [2, 2, 2]],
-        "trmat": [[0, 1], [0, 2]],
-        "t0": 0.0,
-    }
-
-
-def test_clogit_dataset_tracks_observations_and_covariates():
-    dataset = _matched_clogit_dataset()
-
-    assert dataset.get_num_observations() == 4
-    assert dataset.get_num_covariates() == 1
-    assert len(dataset) == 4
-    assert dataset.is_empty() is False
-
-
-def test_clogit_dataset_rejects_invalid_observations():
-    dataset = survival.ClogitDataSet()
-    assert len(dataset) == 0
-    assert dataset.is_empty() is True
-
-    with pytest.raises(ValueError, match="0 or 1"):
-        dataset.add_observation(2, 0, [1.0])
-    with pytest.raises(ValueError, match="finite"):
-        dataset.add_observation(1, 0, [math.nan])
-
-    dataset.add_observation(1, 0, [1.0])
-
-    with pytest.raises(ValueError, match="same number of covariates"):
-        dataset.add_observation(0, 0, [1.0, 2.0])
-    assert len(dataset) == 1
-
-
-def test_conditional_logistic_regression_rejects_invalid_controls():
-    dataset = _matched_clogit_dataset()
-
-    with pytest.raises(ValueError, match="max_iter"):
-        survival.ConditionalLogisticRegression(dataset, max_iter=0)
-    with pytest.raises(ValueError, match="tol"):
-        survival.ConditionalLogisticRegression(dataset, tol=0.0)
-    with pytest.raises(ValueError, match="tol"):
-        survival.ConditionalLogisticRegression(dataset, tol=math.inf)
-
-
-def test_conditional_logistic_regression_fit_populates_outputs():
-    model = survival.ConditionalLogisticRegression(_matched_clogit_dataset(), max_iter=20, tol=1e-9)
-    model.fit()
-
-    assert len(model.coefficients) == 1
-    assert 1 <= model.iterations <= 20
-    assert isinstance(model.converged, bool)
-    assert model.coefficients[0] > 0.0
-    assert model.predict([2.0]) > model.predict([1.0])
-    assert model.odds_ratios()[0] == pytest.approx(math.exp(model.coefficients[0]))
-
-
-def test_conditional_logistic_regression_predict_validates_rows():
-    model = survival.ConditionalLogisticRegression(_matched_clogit_dataset(), max_iter=20, tol=1e-9)
-
-    with pytest.raises(ValueError, match="fit before prediction"):
-        model.predict([1.0])
-
-    model.fit()
-
-    with pytest.raises(ValueError, match="expected 1"):
-        model.predict([])
-    with pytest.raises(ValueError, match="finite"):
-        model.predict([math.nan])
-
-    assert math.isfinite(model.predict([2.0]))
+    balanced = _clogit([1, 0, 0, 1, 0, 0], [2.0, 1.0, 3.0, 1.0, 2.0, 0.5], [0, 0, 0, 1, 1, 1])
+    assert math.isfinite(balanced.coefficients[0])
+    assert balanced.var[0][0] > 0.0
 
 
 def test_conditional_logistic_regression_is_invariant_to_row_order():
-    forward = survival.ConditionalLogisticRegression(
-        _matched_clogit_dataset(), max_iter=20, tol=1e-9
-    )
-
-    reversed_dataset = survival.ClogitDataSet()
-    for case_status, stratum, covariates in reversed(
-        [
-            (1, 0, [2.0]),
-            (0, 0, [1.0]),
-            (1, 1, [3.0]),
-            (0, 1, [1.0]),
-        ]
-    ):
-        reversed_dataset.add_observation(case_status, stratum, covariates)
-    backward = survival.ConditionalLogisticRegression(reversed_dataset, max_iter=20, tol=1e-9)
-
-    forward.fit()
-    backward.fit()
+    case, x, stratum = [1, 0, 0, 1, 0, 0], [2.0, 1.0, 3.0, 1.0, 2.0, 0.5], [0, 0, 0, 1, 1, 1]
+    forward = _clogit(case, x, stratum)
+    backward = _clogit(case[::-1], x[::-1], stratum[::-1])
 
     assert backward.coefficients == pytest.approx(forward.coefficients)
+    assert backward.loglik == pytest.approx(forward.loglik)
+    assert backward.var[0] == pytest.approx(forward.var[0])
 
 
 def test_conditional_logistic_regression_uses_strata():
-    pooled_dataset = survival.ClogitDataSet()
-    for case_status, _stratum, covariates in [
-        (1, 0, [5.0]),
-        (0, 0, [0.0]),
-        (1, 1, [1.0]),
-        (0, 1, [-4.0]),
-    ]:
-        pooled_dataset.add_observation(case_status, 0, covariates)
+    case, x = [1, 0, 0, 1, 0, 0], [2.0, 1.0, 3.0, 1.0, 2.0, 0.5]
+    matched = _clogit(case, x, [0, 0, 0, 1, 1, 1])
+    pooled = _clogit(case, x, [0] * 6)
 
-    matched_dataset = survival.ClogitDataSet()
-    for case_status, stratum, covariates in [
-        (1, 0, [5.0]),
-        (0, 0, [0.0]),
-        (1, 1, [1.0]),
-        (0, 1, [-4.0]),
-    ]:
-        matched_dataset.add_observation(case_status, stratum, covariates)
-
-    matched = survival.ConditionalLogisticRegression(matched_dataset, max_iter=20, tol=1e-9)
-    pooled = survival.ConditionalLogisticRegression(pooled_dataset, max_iter=20, tol=1e-9)
-
-    matched.fit()
-    pooled.fit()
-
-    assert matched.coefficients[0] != pytest.approx(pooled.coefficients[0])
+    assert matched.coefficients != pytest.approx(pooled.coefficients)
+    assert matched.loglik[1] != pytest.approx(pooled.loglik[1])
 
 
-def test_conditional_logistic_regression_handles_multi_case_strata():
-    dataset = survival.ClogitDataSet()
-    for case_status, stratum, covariates in [
-        (1, 0, [3.0]),
-        (1, 0, [2.5]),
-        (0, 0, [0.5]),
-        (0, 0, [0.0]),
-        (1, 1, [4.0]),
-        (1, 1, [3.0]),
-        (0, 1, [1.0]),
-        (0, 1, [0.0]),
-    ]:
-        dataset.add_observation(case_status, stratum, covariates)
-
-    model = survival.ConditionalLogisticRegression(dataset, max_iter=40, tol=1e-9)
-    model.fit()
-
-    assert len(model.coefficients) == 1
-    assert model.coefficients[0] > 0.0
-    assert model.predict([3.0]) > model.predict([0.0])
+# ---------------------------------------------------------------------------------------------
+# cch on the nwtco case-cohort subset (?cch), age in years as the only covariate
+# ---------------------------------------------------------------------------------------------
 
 
-def test_case_cohort_prentice_accepts_public_enum_value():
-    cohort = survival.CohortData.new()
-    assert len(cohort) == 0
-    assert cohort.is_empty() is True
-
-    cohort.add_subject(_simple_subject(1, 0.1, is_case=True, is_subcohort=True))
-    cohort.add_subject(_simple_subject(2, 0.2, is_case=False, is_subcohort=True))
-    assert len(cohort) == 2
-    assert cohort.is_empty() is False
-
-    fitted = cohort.fit(survival.CchMethod.Prentice, max_iter=5)
-
-    assert hasattr(fitted, "coefficients")
-    assert len(fitted.coefficients) == 1
+def _nwtco_case_cohort():
+    data = survival.datasets.load_nwtco()
+    rel = [int(v) for v in data["rel"]]
+    in_subcohort = [bool(v) for v in data["in.subcohort"]]
+    rows = [i for i in range(len(rel)) if rel[i] == 1 or in_subcohort[i]]
+    return {
+        "stop": [float(data["edrel"][i]) for i in rows],
+        "status": [rel[i] for i in rows],
+        "x": [[float(data["age"][i]) / 12.0] for i in rows],
+        "subcohort": [in_subcohort[i] for i in rows],
+        "id": [int(data["seqno"][i]) for i in rows],
+        "stratum": [0 if int(data["instit"][i]) == 1 else 1 for i in rows],
+    }
 
 
 @pytest.mark.parametrize(
-    "method",
+    ("method", "coef", "var"),
     [
-        survival.CchMethod.SelfPrentice,
-        survival.CchMethod.LinYing,
-        survival.CchMethod.IBorgan,
-        survival.CchMethod.IIBorgan,
+        ("Prentice", 0.0794648551679581, 0.000379759657941196),
+        ("SelfPrentice", 0.079638780238827866, 0.00037975965794117265),
+        ("LinYing", 0.080359785868969108, 0.00036037403539673535),
     ],
 )
-def test_legacy_case_cohort_methods_require_real_time_api(method):
-    cohort = survival.CohortData.new()
-    cohort.add_subject(_simple_subject(1, 0.1, is_case=True, is_subcohort=True))
-    cohort.add_subject(_simple_subject(2, 0.2, is_case=False, is_subcohort=True))
-
-    with pytest.raises(NotImplementedError, match="use cch_fit with real survival times"):
-        cohort.fit(method, max_iter=5)
-
-
-def test_case_cohort_fit_ignores_noncase_outside_subcohort_subjects():
-    base = survival.CohortData.new()
-    base.add_subject(_simple_subject(1, 0.1, is_case=True, is_subcohort=True))
-    base.add_subject(_simple_subject(2, 0.2, is_case=False, is_subcohort=True))
-
-    with_extra = survival.CohortData.new()
-    with_extra.add_subject(_simple_subject(1, 0.1, is_case=True, is_subcohort=True))
-    with_extra.add_subject(_simple_subject(2, 0.2, is_case=False, is_subcohort=True))
-    with_extra.add_subject(_simple_subject(3, 10.0, is_case=False, is_subcohort=False))
-
-    base_fit = base.fit(survival.CchMethod.Prentice, max_iter=5)
-    extra_fit = with_extra.fit(survival.CchMethod.Prentice, max_iter=5)
-
-    assert extra_fit.coefficients == base_fit.coefficients
-
-
-def test_case_cohort_fit_includes_cases_outside_subcohort():
-    cohort = survival.CohortData.new()
-    cohort.add_subject(_simple_subject(1, 0.1, is_case=True, is_subcohort=False))
-    cohort.add_subject(_simple_subject(2, 0.2, is_case=False, is_subcohort=True))
-
-    fitted = cohort.fit(survival.CchMethod.Prentice, max_iter=5)
-
-    assert len(fitted.risk_scores) == 2
-
-
-def test_cohort_data_returns_added_subject():
-    cohort = survival.CohortData.new()
-    cohort.add_subject(_simple_subject(7, 1.5, is_case=True, is_subcohort=True))
-
-    subject = cohort.get_subject(0)
-
-    assert subject.id == 7
-    assert subject.covariates == [1.5]
-    assert subject.is_subcohort is True
-
-
-def test_cohort_data_rejects_out_of_range_subject_index():
-    cohort = survival.CohortData.new()
-    cohort.add_subject(_simple_subject(7, 1.5, is_case=True, is_subcohort=True))
-
-    with pytest.raises(IndexError, match="subject index 1 out of range"):
-        cohort.get_subject(1)
-
-
-def test_survfitaj_basic_outputs_are_consistent():
-    result = survival.survfitaj(**_survfitaj_kwargs(sefit=0))
-
-    assert len(result.pstate) == 2
-    assert result.n_enter is None
-    assert result.std_err is None
-    assert result.influence is None
-    assert result.pstate[0] == pytest.approx([2 / 3, 1 / 3])
-    assert result.pstate[1] == pytest.approx([1 / 3, 2 / 3])
-    assert result.cumhaz[0][0] <= result.cumhaz[1][0]
-    assert sum(result.pstate[0]) == pytest.approx(1.0)
-    assert sum(result.pstate[1]) == pytest.approx(1.0)
-    assert result.n_censor[1][0] == pytest.approx(1.0)
-    assert result.n_transition[1] == pytest.approx([1.0, 1.0])
-
-
-def test_survfitaj_returns_standard_errors_when_requested():
-    result = survival.survfitaj(**_survfitaj_kwargs(sefit=1))
-
-    assert result.std_err is not None
-    assert result.std_chaz is not None
-    assert result.std_auc is not None
-    assert result.influence is None
-    assert len(result.std_err) == len(result.pstate)
-    assert len(result.std_err[0]) == len(result.pstate[0])
-    assert len(result.std_chaz[0]) == len(result.cumhaz[0])
-    assert result.std_err[0] == pytest.approx([0.272165526975909] * 2)
-    assert result.std_err[1] == pytest.approx([0.272165526975909] * 2)
-
-
-def test_survfitaj_zero_weights_match_r_case_weight_semantics():
-    kwargs = _competing_survfitaj_kwargs(sefit=1)
-    kwargs["wt"] = [1.0, 0.0, 1.0, 1.0]
-
-    result = survival.survfitaj(**kwargs)
-
-    assert result.n_risk[0] == pytest.approx([3.0, 0.0, 0.0, 4.0, 0.0, 0.0])
-    assert result.n_event[0] == pytest.approx([0.0, 1.0, 0.0])
-    assert result.pstate[0] == pytest.approx([2 / 3, 1 / 3, 0.0])
-    assert result.std_err is not None
-    assert all(math.isfinite(value) for row in result.std_err for value in row)
-
-    kwargs["wt"] = [0.0, 0.0, 0.0, 0.0]
-    all_zero = survival.survfitaj(**kwargs)
-    assert all(row == pytest.approx([1.0, 0.0, 0.0]) for row in all_zero.pstate)
-    assert all_zero.std_err is not None
-    assert all(row == pytest.approx([0.0, 0.0, 0.0]) for row in all_zero.std_err)
-
-
-def test_survfitaj_matches_r_for_simultaneous_competing_transitions():
-    result = survival.survfitaj(**_competing_survfitaj_kwargs(sefit=3))
-
-    assert result.n_risk[0] == pytest.approx([4.0, 0.0, 0.0, 4.0, 0.0, 0.0])
-    assert result.n_event[0] == pytest.approx([0.0, 1.0, 1.0])
-    assert result.pstate[0] == pytest.approx([0.5, 0.25, 0.25])
-    assert result.pstate[1] == pytest.approx([0.5, 0.25, 0.25])
-    assert result.cumhaz[0] == pytest.approx([0.25, 0.25])
-    assert result.n_transition[0] == pytest.approx([1.0, 1.0, 1.0, 1.0])
-    tied_error = math.sqrt(3) / 8
-    for row in result.std_err:
-        assert row == pytest.approx([0.25, tied_error, tied_error])
-    for row in result.std_chaz:
-        assert row == pytest.approx([tied_error, tied_error])
-    assert result.std_auc[0] == pytest.approx([0.0, 0.0, 0.0])
-    assert result.std_auc[1] == pytest.approx([0.25, tied_error, tied_error])
-    expected_influence = [
-        -0.125,
-        -0.125,
-        0.125,
-        0.125,
-        0.1875,
-        -0.0625,
-        -0.0625,
-        -0.0625,
-        -0.0625,
-        0.1875,
-        -0.0625,
-        -0.0625,
-    ]
-    for row, expected in zip(result.influence, expected_influence, strict=True):
-        assert row == pytest.approx([expected, expected])
-
-
-def test_survfitaj_matches_r_for_weighted_clustered_influence():
-    result = survival.survfitaj(
-        y=[0.0, 1.0, 2.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0],
-        sort1=[0, 1, 2],
-        sort2=[0, 1, 2],
-        utime=[1.0, 2.0],
-        cstate=[0, 0, 0],
-        wt=[2.0, 1.0, 1.0],
-        grp=[0, 0, 1],
-        ngrp=2,
-        p0=[1.0, 0.0],
-        i0=[0.0] * 4,
-        sefit=3,
-        entry=False,
-        position=[3, 3, 3],
-        hindx=[[1, 0], [1, 1]],
-        trmat=[[0, 1]],
-        t0=0.0,
+def test_cch_fit_matches_r(method, coef, var):
+    data = _nwtco_case_cohort()
+    fit = regression.cch_fit(
+        data["stop"], data["status"], data["x"], data["subcohort"], data["id"], 4028, method=method
     )
 
-    standard_error = math.sqrt(1 / 32)
-    for row in result.pstate:
-        assert row == pytest.approx([0.5, 0.5])
-    for row in result.std_err:
-        assert row == pytest.approx([standard_error, standard_error])
-    for row in result.std_chaz:
-        assert row == pytest.approx([standard_error])
-    assert result.std_auc[1] == pytest.approx([standard_error, standard_error])
-    expected_influence = [-0.125, 0.125, 0.125, -0.125]
-    for row, expected in zip(result.influence, expected_influence, strict=True):
-        assert row == pytest.approx([expected, expected])
+    # cch(Surv(edrel, rel) ~ age, subcoh = ~subcohort, id = ~seqno, cohort.size = 4028)
+    assert isinstance(fit, regression.CchFitResult)
+    assert fit.method == method
+    assert fit.coefficients == pytest.approx([coef])
+    assert fit.var[0] == pytest.approx([var])
+    assert fit.naive_var[0] == pytest.approx([var])
+    assert fit.cohort_size == [4028]
+    assert fit.subcohort_size == [668]
+    assert fit.stratified is False
+    assert isinstance(fit.fit, regression.CoxPHFit)
 
 
-def test_survfitaj_is_invariant_to_row_order():
-    original = survival.survfitaj(**_competing_survfitaj_kwargs(sefit=3))
-    permuted_kwargs = _competing_survfitaj_kwargs(sefit=3)
-    rows = [permuted_kwargs["y"][idx : idx + 3] for idx in range(0, 12, 3)]
-    permutation = [3, 1, 2, 0]
-    permuted_kwargs["y"] = [value for idx in permutation for value in rows[idx]]
-    for field in ["cstate", "wt", "grp", "position"]:
-        values = permuted_kwargs[field]
-        permuted_kwargs[field] = [values[idx] for idx in permutation]
-    permuted_kwargs["sort1"] = [0, 1, 2, 3]
-    permuted_kwargs["sort2"] = [1, 3, 0, 2]
-
-    permuted = survival.survfitaj(**permuted_kwargs)
-
-    for field in [
-        "n_risk",
-        "n_event",
-        "n_censor",
-        "pstate",
-        "cumhaz",
-        "std_err",
-        "std_chaz",
-        "std_auc",
-        "influence",
-        "n_transition",
-    ]:
-        for actual, expected in zip(
-            getattr(permuted, field), getattr(original, field), strict=True
-        ):
-            assert actual == pytest.approx(expected)
-    assert permuted.n_enter is original.n_enter is None
-
-
-def test_survfitaj_accepts_negative_times_and_zero_hazards():
-    result = survival.survfitaj(
-        y=[-2.0, -1.0, 0.0, -2.0, 1.0, 0.0, -2.0, 1.0, 0.0],
-        sort1=[0, 1, 2],
-        sort2=[0, 1, 2],
-        utime=[-1.0, 1.0],
-        cstate=[0, 0, 1],
-        wt=[1.0, 1.0, 1.0],
-        grp=[0, 1, 2],
-        ngrp=3,
-        p0=[2 / 3, 1 / 3],
-        i0=[1 / 9, 1 / 9, -2 / 9, -1 / 9, -1 / 9, 2 / 9],
-        sefit=3,
-        entry=False,
-        position=[3, 3, 3],
-        hindx=[[0, 0], [0, 0]],
-        trmat=[],
-        t0=-2.0,
+@pytest.mark.parametrize(
+    ("method", "coef", "var"),
+    [
+        ("I.Borgan", 0.07966642104375915, 0.0003802667380415622),
+        ("II.Borgan", 0.080369599617685111, 0.00036089744345170179),
+    ],
+)
+def test_cch_borgan_fit_matches_r(method, coef, var):
+    data = _nwtco_case_cohort()
+    fit = regression.cch_borgan_fit(
+        data["stop"],
+        data["status"],
+        data["x"],
+        data["subcohort"],
+        data["id"],
+        data["stratum"],
+        [3622, 406],
+        method=method,
     )
 
-    for row in result.pstate:
-        assert row == pytest.approx([2 / 3, 1 / 3])
-    assert result.cumhaz == [[], []]
-    assert result.n_transition == [[], []]
-    standard_error = math.sqrt(2 / 27)
-    assert result.std_err[0] == pytest.approx([standard_error] * 2)
-    assert result.std_auc[1] == pytest.approx([3 * standard_error] * 2)
-    expected_influence = [1 / 9, 1 / 9, -2 / 9, -1 / 9, -1 / 9, 2 / 9]
-    for row, expected in zip(result.influence, expected_influence, strict=True):
-        assert row == pytest.approx([expected, expected])
+    # cch(..., stratum = ~stratum, cohort.size = c("1" = 3622, "2" = 406))
+    assert fit.method == method
+    assert fit.coefficients == pytest.approx([coef])
+    assert fit.var[0] == pytest.approx([var])
+    assert fit.subcohort_size == [952, 202]
+    assert fit.cohort_size == [3622, 406]
+    assert fit.stratified is True
+    assert fit.stratum[:3] == data["stratum"][:3]
 
 
-def test_survfitaj_rejects_ragged_hindx():
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["hindx"] = [[0, 1], [2]]
+def test_cch_validates_inputs():
+    data = _nwtco_case_cohort()
+    with pytest.raises(ValueError, match="method"):
+        regression.cch_fit(
+            data["stop"],
+            data["status"],
+            data["x"],
+            data["subcohort"],
+            data["id"],
+            4028,
+            method="bogus",
+        )
+    with pytest.raises(ValueError, match="stratum codes must index every value"):
+        regression.cch_borgan_fit(
+            data["stop"],
+            data["status"],
+            data["x"],
+            data["subcohort"],
+            data["id"],
+            [s + 1 for s in data["stratum"]],
+            [3622, 406],
+        )
 
-    with pytest.raises(ValueError, match="Invalid hindx array"):
-        survival.survfitaj(**kwargs)
+
+# ---------------------------------------------------------------------------------------------
+# survfitaj = survfit(Surv(time, state) ~ 1) for multi-state responses
+# ---------------------------------------------------------------------------------------------
+
+_AJ_TIME = [1.0, 2.0, 2.0, 3.0, 4.0, 5.0]
+_AJ_STATE = [1, 2, 0, 1, 2, 0]  # 0 censored, 1 = "a", 2 = "b"
+
+
+def test_survfitaj_competing_risks_match_r():
+    fit = surv_analysis.survfitaj(_AJ_TIME, _AJ_STATE, ["a", "b"])
+
+    # survfit(Surv(time, factor(state, levels = c("cens", "a", "b"))) ~ 1)
+    assert isinstance(fit, surv_analysis.SurvfitAJResult)
+    assert fit.states == ["(s0)", "a", "b"]
+    assert fit.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0])
+    assert fit.n == [6]
+    assert [row[0] for row in fit.n_risk] == pytest.approx([6.0, 5.0, 3.0, 2.0, 1.0])
+    np.testing.assert_allclose(fit.n_event, [[0, 1, 0], [0, 0, 1], [0, 1, 0], [0, 0, 1], [0, 0, 0]])
+    assert [row[0] for row in fit.n_censor] == pytest.approx([0.0, 1.0, 0.0, 0.0, 1.0])
+    np.testing.assert_allclose(
+        fit.pstate,
+        [
+            [5 / 6, 1 / 6, 0.0],
+            [2 / 3, 1 / 6, 1 / 6],
+            [0.44444444444444453, 0.38888888888888890, 1 / 6],
+            [0.22222222222222227, 0.38888888888888890, 0.38888888888888895],
+            [0.22222222222222227, 0.38888888888888890, 0.38888888888888895],
+        ],
+    )
+    np.testing.assert_allclose(
+        fit.cumhaz, [[1 / 6, 0.0], [1 / 6, 0.2], [0.5, 0.2], [0.5, 0.7], [0.5, 0.7]]
+    )
+    np.testing.assert_allclose(
+        fit.std_err[:2],
+        [
+            [0.15214515486254615, 0.15214515486254615, 0.0],
+            [0.19245008972987526, 0.15214515486254615, 0.15214515486254618],
+        ],
+    )
+    np.testing.assert_allclose(fit.std_chaz[1], [0.15214515486254615, 0.17888543819998318])
+    np.testing.assert_allclose(fit.lower[0], [0.582654795477139609, 0.027849128299274488, 0.0])
+    np.testing.assert_allclose(fit.upper[1], [1.0, 0.99743796212470426, 0.99743796212470448])
+    assert fit.p0[0] == pytest.approx([1.0, 0.0, 0.0])
+    assert fit.transitions == [[0.0, 2.0, 2.0, 2.0], [0.0] * 4, [0.0] * 4]
+    assert (fit.hazard_from, fit.hazard_to) == ([0, 0], [1, 2])
+    np.testing.assert_allclose(fit.n_transition, [[1, 0], [0, 1], [1, 0], [0, 1], [0, 0]])
+    assert fit.influence_pstate is None
+    assert fit.strata is None
+    assert fit.type == "mright"
+
+
+def test_survfitaj_weights_cluster_and_influence_match_r():
+    fit = surv_analysis.survfitaj(
+        _AJ_TIME,
+        _AJ_STATE,
+        ["a", "b"],
+        weights=[2.0, 1.0, 1.0, 1.0, 2.0, 1.0],
+        cluster=[1, 1, 2, 2, 3, 3],
+        influence=True,
+    )
+
+    # survfit(Surv(time, state) ~ 1, weights = w, cluster = cl, influence = TRUE) with the rows
+    # in this order: cluster 1 = {(1, a, w=2), (2, b)}, cluster 2 = {(2, censored), (3, a)},
+    # cluster 3 = {(4, b, w=2), (5, censored)}.  Which cluster owns the time-2 "b" event is
+    # decided by the row order of the two tied rows (see the next test), so every value below
+    # is R's for exactly _AJ_STATE.
+    assert [row[0] for row in fit.n_risk] == pytest.approx([8.0, 6.0, 4.0, 3.0, 1.0])
+    np.testing.assert_allclose(
+        fit.pstate,
+        [
+            [0.75, 0.25, 0.0],
+            [0.625, 0.25, 0.125],
+            [0.46875, 0.40625, 0.125],
+            [0.15625, 0.40625, 0.4375],
+            [0.15625, 0.40625, 0.4375],
+        ],
+    )
+    np.testing.assert_allclose(
+        fit.std_err,
+        [
+            [0.1926379375927805, 0.1926379375927805, 0.0],
+            [0.28895690638917082, 0.1926379375927805, 0.096318968796390278],
+            [0.28752759718090543, 0.21572970736693869, 0.096318968796390278],
+            [0.095842532393635146, 0.21572970736693869, 0.12548733128288289],
+            [0.095842532393635146, 0.21572970736693869, 0.12548733128288289],
+        ],
+    )
+    (influence,) = fit.influence_pstate
+    assert isinstance(influence, surv_analysis.SurvfitAJInfluence)
+    # influence.pstate[cluster, time, state]: three clusters x five times x three states
+    np.testing.assert_allclose(
+        influence.values,
+        [
+            [
+                [-0.15625, 0.15625, 0.0],
+                [-0.234375, 0.15625, 0.078125],
+                [-0.17578125, 0.09765625, 0.078125],
+                [-0.05859375, 0.09765625, -0.0390625],
+                [-0.05859375, 0.09765625, -0.0390625],
+            ],
+            [
+                [0.0625, -0.0625, 0.0],
+                [0.09375, -0.0625, -0.03125],
+                [-0.046875, 0.078125, -0.03125],
+                [-0.015625, 0.078125, -0.0625],
+                [-0.015625, 0.078125, -0.0625],
+            ],
+            [
+                [0.09375, -0.09375, 0.0],
+                [0.140625, -0.09375, -0.046875],
+                [0.22265625, -0.17578125, -0.046875],
+                [0.07421875, -0.17578125, 0.1015625],
+                [0.07421875, -0.17578125, 0.1015625],
+            ],
+        ],
+    )
+
+
+def test_survfitaj_cluster_influence_follows_the_row_order_of_tied_times_like_r():
+    # Rows 2 and 3 are tied at time 2: one is the "b" event, the other is censored.  R (and
+    # this port) attribute the event's influence to the cluster of the row that carries it, so
+    # transposing the two rows moves the event from cluster 1 to cluster 2 and changes the
+    # robust variance from time 2 on.  Both orderings are R 3.8.11's survfit(..., cluster = cl,
+    # influence = TRUE) output for the unweighted data.
+    cluster = [1, 1, 2, 2, 3, 3]
+
+    fit = surv_analysis.survfitaj(_AJ_TIME, _AJ_STATE, ["a", "b"], cluster=cluster, influence=True)
+    np.testing.assert_allclose(
+        fit.std_err,
+        [
+            [0.13608276348795434, 0.13608276348795434, 0.0],
+            [0.27216552697590868, 0.13608276348795434, 0.13608276348795437],
+            [0.27715980642769938, 0.21436735005167087, 0.13608276348795437],
+            [0.13857990321384969, 0.21436735005167087, 0.11415581486979588],
+            [0.13857990321384969, 0.21436735005167087, 0.11415581486979588],
+        ],
+    )
+    np.testing.assert_allclose(
+        np.asarray(fit.influence_pstate[0].values)[:, 1, :],
+        [
+            [-0.22222222222222221, 0.1111111111111111, 0.11111111111111113],
+            [0.1111111111111111, -0.055555555555555552, -0.055555555555555552],
+            [0.1111111111111111, -0.055555555555555552, -0.055555555555555552],
+        ],
+    )
+
+    swapped_state = [1, 0, 2, 1, 2, 0]  # the "b" event now sits in cluster 2's row
+    swapped = surv_analysis.survfitaj(
+        _AJ_TIME, swapped_state, ["a", "b"], cluster=cluster, influence=True
+    )
+    np.testing.assert_allclose(swapped.pstate, fit.pstate)  # the estimate itself is unchanged
+    np.testing.assert_allclose(
+        swapped.std_err,
+        [
+            [0.13608276348795434, 0.13608276348795434, 0.0],
+            [0.13608276348795434, 0.13608276348795434, 0.13608276348795434],
+            [0.29162992125969672, 0.20454372254050485, 0.13608276348795434],
+            [0.14581496062984836, 0.20454372254050485, 0.094426287288755281],
+            [0.14581496062984836, 0.20454372254050485, 0.094426287288755281],
+        ],
+    )
+    np.testing.assert_allclose(
+        np.asarray(swapped.influence_pstate[0].values)[:, 1, :],
+        [
+            [-0.055555555555555546, 0.1111111111111111, -0.055555555555555552],
+            [-0.05555555555555558, -0.055555555555555552, 0.11111111111111112],
+            [0.1111111111111111, -0.055555555555555552, -0.055555555555555552],
+        ],
+    )
+
+
+def test_survfitaj_counting_process_with_initial_states_matches_r():
+    fit = surv_analysis.survfitaj(
+        [2.0, 5.0, 4.0, 3.0, 6.0, 4.0],
+        [2, 0, 2, 1, 2, 0],
+        ["a", "b"],
+        start=[0.0, 2.0, 0.0, 0.0, 3.0, 0.0],
+        id=[1, 1, 2, 3, 3, 4],
+        istate=["a", "b", "a", "a", "a", "a"],
+        istate_levels=["a", "b"],
+    )
+
+    # survfit(Surv(start, stop, state) ~ 1, id = id, istate = istate)
+    assert fit.states == ["a", "b"]
+    assert fit.time == pytest.approx([2.0, 3.0, 4.0, 5.0, 6.0])
+    np.testing.assert_allclose(
+        fit.pstate, [[0.75, 0.25], [0.75, 0.25], [0.5, 0.5], [0.5, 0.5], [0.0, 1.0]]
+    )
+    np.testing.assert_allclose(fit.n_risk, [[4, 0], [3, 1], [3, 1], [1, 1], [1, 0]])
+    assert fit.p0[0] == pytest.approx([1.0, 0.0])
+    assert fit.transitions == [[1.0, 3.0, 1.0], [0.0, 0.0, 1.0]]
 
 
 def test_survfitaj_validates_public_inputs():
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["y"] = [0.0, 1.0]
-    with pytest.raises(ValueError, match="y length must be a multiple of 3"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["sort1"] = [0, 4, 2]
-    with pytest.raises(ValueError, match="sort index 4"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["wt"] = [1.0, float("inf"), 1.0]
-    with pytest.raises(ValueError, match="wt contains non-finite"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["cstate"] = [0, 2, 0]
-    with pytest.raises(ValueError, match="cstate value 2"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=1)
-    kwargs["i0"] = [0.0]
-    with pytest.raises(ValueError, match="i0 length must equal ngrp"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["p0"] = [0.6, 0.6]
-    with pytest.raises(ValueError, match="p0 probabilities must sum to 1"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["p0"] = [-1.0, 2.0]
-    with pytest.raises(ValueError, match="p0 contains negative value"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["trmat"] = [[0, 1, 2]]
-    with pytest.raises(ValueError, match="trmat array: matrix must have exactly 2 columns"):
-        survival.survfitaj(**kwargs)
-
-    kwargs = _survfitaj_kwargs(sefit=0)
-    kwargs["hindx"] = [[2, 0], [1, 1]]
-    with pytest.raises(ValueError, match="hindx hazard index 2"):
-        survival.survfitaj(**kwargs)
+    with pytest.raises(ValueError, match="state"):
+        surv_analysis.survfitaj([1.0, 2.0], [1, 3], ["a", "b"])
+    with pytest.raises(ValueError, match="length"):
+        surv_analysis.survfitaj([1.0, 2.0], [1, 0], ["a", "b"], weights=[1.0])
+    with pytest.raises(ValueError, match="length"):
+        surv_analysis.survfitaj([1.0, 2.0], [1, 0], ["a", "b"], start=[0.0])
+    with pytest.raises(ValueError, match="conf.type"):
+        surv_analysis.survfitaj(_AJ_TIME, _AJ_STATE, ["a", "b"], conf_type="weird")
 
 
 def test_illness_death_public_apis_and_validation():
-    model = survival.fit_illness_death(
+    model = survival.surv_analysis.fit_illness_death(
         entry_time=[0.0, 0.0, 0.0],
         transition_time=[1.0, 0.0, 1.0 + 5e-10],
         exit_time=[2.0, 2.0, 2.0],
@@ -547,7 +371,7 @@ def test_illness_death_public_apis_and_validation():
         covariates=[[10.0], [20.0], [30.0]],
         config=None,
     )
-    prediction = survival.predict_illness_death(
+    prediction = survival.surv_analysis.predict_illness_death(
         model,
         current_state=0,
         time_in_state=0.0,
@@ -563,19 +387,19 @@ def test_illness_death_public_apis_and_validation():
     assert prediction.survival_prob[0] > 0.0
 
     with pytest.raises(ValueError, match="input vectors must be non-empty"):
-        survival.fit_illness_death([], [], [], [], [], None, None)
+        survival.surv_analysis.fit_illness_death([], [], [], [], [], None, None)
 
     with pytest.raises(ValueError, match="exit_time contains non-finite"):
-        survival.fit_illness_death([0.0], [0.0], [float("inf")], [0], [0], None, None)
+        survival.surv_analysis.fit_illness_death([0.0], [0.0], [float("inf")], [0], [0], None, None)
 
     with pytest.raises(ValueError, match="from_state must contain only 0/1"):
-        survival.fit_illness_death([0.0], [0.0], [1.0], [3], [0], None, None)
+        survival.surv_analysis.fit_illness_death([0.0], [0.0], [1.0], [3], [0], None, None)
 
     with pytest.raises(ValueError, match="transition_time must be between"):
-        survival.fit_illness_death([0.0], [3.0], [2.0], [0], [1], None, None)
+        survival.surv_analysis.fit_illness_death([0.0], [3.0], [2.0], [0], [1], None, None)
 
     with pytest.raises(ValueError, match="covariates row 1 has 2 columns"):
-        survival.fit_illness_death(
+        survival.surv_analysis.fit_illness_death(
             [0.0, 0.0],
             [1.0, 0.0],
             [2.0, 2.0],
@@ -586,25 +410,25 @@ def test_illness_death_public_apis_and_validation():
         )
 
     with pytest.raises(ValueError, match="current_state must be"):
-        survival.predict_illness_death(model, 3, 0.0, [1.0], None)
+        survival.surv_analysis.predict_illness_death(model, 3, 0.0, [1.0], None)
 
     with pytest.raises(ValueError, match="time_in_state must be finite"):
-        survival.predict_illness_death(model, 0, float("inf"), [1.0], None)
+        survival.surv_analysis.predict_illness_death(model, 0, float("inf"), [1.0], None)
 
     with pytest.raises(ValueError, match="prediction_times contains negative value"):
-        survival.predict_illness_death(model, 0, 0.0, [-1.0], None)
+        survival.surv_analysis.predict_illness_death(model, 0, 0.0, [-1.0], None)
 
 
 def test_semi_markov_public_apis_and_validation():
-    config = survival.SemiMarkovConfig(3)
-    model = survival.fit_semi_markov(
+    config = survival.surv_analysis.SemiMarkovConfig(3)
+    model = survival.surv_analysis.fit_semi_markov(
         [0.0, 1.0, 2.0, 0.5],
         [1.0, 2.0, 3.0, 1.5],
         [0, 0, 1, 1],
         [1, 1, 2, 2],
         config,
     )
-    prediction = survival.predict_semi_markov(model, 0, 0.5, [0.5, 1.0])
+    prediction = survival.surv_analysis.predict_semi_markov(model, 0, 0.5, [0.5, 1.0])
 
     assert len(model.sojourn_params) == 3
     assert model.get_transition_prob(0, 1) == pytest.approx(1.0)
@@ -612,31 +436,31 @@ def test_semi_markov_public_apis_and_validation():
     assert prediction.time_points == pytest.approx([0.5, 1.0])
 
     with pytest.raises(ValueError, match="n_states must be positive"):
-        survival.SemiMarkovConfig(0)
+        survival.surv_analysis.SemiMarkovConfig(0)
 
     with pytest.raises(ValueError, match="state_names length"):
-        survival.SemiMarkovConfig(3, ["A"])
+        survival.surv_analysis.SemiMarkovConfig(3, ["A"])
 
     with pytest.raises(ValueError, match="absorbing_states must contain values"):
-        survival.SemiMarkovConfig(3, None, None, [3])
+        survival.surv_analysis.SemiMarkovConfig(3, None, None, [3])
 
     with pytest.raises(ValueError, match="input vectors must be non-empty"):
-        survival.fit_semi_markov([], [], [], [], config)
+        survival.surv_analysis.fit_semi_markov([], [], [], [], config)
 
     with pytest.raises(ValueError, match="exit_times contains non-finite"):
-        survival.fit_semi_markov([0.0], [float("inf")], [0], [1], config)
+        survival.surv_analysis.fit_semi_markov([0.0], [float("inf")], [0], [1], config)
 
     with pytest.raises(ValueError, match="entry_times must be <= exit_times"):
-        survival.fit_semi_markov([2.0], [1.0], [0], [1], config)
+        survival.surv_analysis.fit_semi_markov([2.0], [1.0], [0], [1], config)
 
     with pytest.raises(ValueError, match="from_states must contain values"):
-        survival.fit_semi_markov([0.0], [1.0], [-1], [1], config)
+        survival.surv_analysis.fit_semi_markov([0.0], [1.0], [-1], [1], config)
 
     with pytest.raises(ValueError, match="current_state must be"):
-        survival.predict_semi_markov(model, 3, 0.0, [1.0])
+        survival.surv_analysis.predict_semi_markov(model, 3, 0.0, [1.0])
 
     with pytest.raises(ValueError, match="time_in_state must be finite"):
-        survival.predict_semi_markov(model, 0, float("inf"), [1.0])
+        survival.surv_analysis.predict_semi_markov(model, 0, float("inf"), [1.0])
 
     with pytest.raises(ValueError, match="prediction_times contains negative value"):
-        survival.predict_semi_markov(model, 0, 0.0, [-1.0])
+        survival.surv_analysis.predict_semi_markov(model, 0, 0.0, [-1.0])

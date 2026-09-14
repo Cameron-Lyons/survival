@@ -14,11 +14,15 @@ if TYPE_CHECKING:
     from ._surv import Surv
 
 
+# _core class re-exports.  ``SurvObrienResult`` and ``YatesPairwiseResult`` were removed from
+# the Rust core (``survobrien`` returns a ``SurvObrienExpansion``; ``yates`` returns one
+# ``YatesResult`` carrying both the global and the pairwise contrasts).  They are aliased here
+# only so that ``survival.r`` keeps importing until its survobrien/yates wrappers are ported.
 FineGrayOutput = _core.FineGrayOutput
 RateTable = _core.RateTable
-SurvObrienResult = _core.SurvObrienResult
+SurvObrienResult = _core.SurvObrienExpansion
 TcutResult = _core.TcutResult
-YatesPairwiseResult = _core.YatesPairwiseResult
+YatesPairwiseResult = _core.YatesResult
 YatesResult = _core.YatesResult
 
 
