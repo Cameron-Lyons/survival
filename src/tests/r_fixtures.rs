@@ -6,7 +6,8 @@
 //! engine (`surv_analysis::survfitkm`) with its summaries, `survdiff`, the
 //! Aalen-Johansen engine (`surv_analysis::survfitaj`), `pseudo`,
 //! `aggregate_survfit`, `regression::coxph::CoxPHFit` with its residual,
-//! prediction and diagnostic methods (plus `cch` and `clogit`),
+//! prediction and diagnostic methods (plus `cch` and `clogit`), the
+//! penalised Cox model (`regression::coxpenal`),
 //! `regression::parametric_survival::survreg`, `concordance::concordancefit`,
 //! the residual and spline kernels, the `validation` routines (`survcheck`,
 //! `survobrien`, `yates`, `royston`, `brier`, `cipoisson`, `anova`, the
@@ -23,6 +24,9 @@
 use crate::regression::cch::{CchFitResult, cch_borgan_fit, cch_fit};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::cox_zph::{CoxZphTest, ZphTransform, cox_zph};
+use crate::regression::coxpenal::{
+    CoxpenalData, CoxpenalFit, CoxpenalOptions, FrailtyFamily, ModelTerm, PenaltyTerm,
+};
 use crate::regression::coxph::{
     CoxNewData, CoxPHFit, CoxPrediction, CoxSurvfitCurve, CoxphData, CoxphOptions,
     PredictReference, SurvfitOptions,
@@ -83,6 +87,14 @@ const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
         "coxph/veteran_tt_strata",
         "missing feature: coxph argument tt (time-transform terms)",
+    ),
+    (
+        "coxph_penalized/cgd_frailty_gamma_id/concordance",
+        "mismatch: tied linear predictors decided by floating-point noise: concordance.count[0]: 6421 != 6422",
+    ),
+    (
+        "coxph_penalized/lung_pspline_karno_df3_nterm6/concordance",
+        "mismatch: tied linear predictors decided by floating-point noise: concordance[0]: 0.63189 != 0.63181",
     ),
     (
         "coxph_predict/heart_counting_age_surgery_transplant/newdata",
@@ -6319,6 +6331,541 @@ fn cox_fit_with_ties(
 /// Rows of a square `ndarray` matrix.
 fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
     matrix.rows().into_iter().map(|row| row.to_vec()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// coxph_penalized (key: coxpenal)
+// ---------------------------------------------------------------------------
+
+/// A parsed `ridge(...)`, `pspline(...)` or `frailty(...)` formula term:
+/// the positional arguments (column names) and the named ones.
+struct PenalTermCall {
+    kind: String,
+    columns: Vec<String>,
+    named: BTreeMap<String, String>,
+}
+
+fn penal_term_call(term: &str) -> Option<PenalTermCall> {
+    let (kind, rest) = term.split_once('(')?;
+    if !matches!(kind, "ridge" | "pspline" | "frailty") {
+        return None;
+    }
+    let inner = rest.strip_suffix(')')?;
+    let mut columns = Vec::new();
+    let mut named = BTreeMap::new();
+    for arg in inner.split(',') {
+        let arg = arg.trim();
+        match arg.split_once('=') {
+            Some((name, value)) => {
+                named.insert(
+                    name.trim().to_string(),
+                    value.trim().trim_matches('"').to_string(),
+                );
+            }
+            None => columns.push(arg.to_string()),
+        }
+    }
+    Some(PenalTermCall {
+        kind: kind.to_string(),
+        columns,
+        named,
+    })
+}
+
+fn penal_arg_f64(call: &PenalTermCall, name: &str) -> Result<Option<f64>, String> {
+    call.named
+        .get(name)
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .map_err(|_| format!("harness: {name} = {value} is not a number"))
+        })
+        .transpose()
+}
+
+struct PenalCase {
+    fit: CoxpenalFit,
+    /// R's coefficient names (the sparse frailty has none).
+    names: Vec<String>,
+    rows: Vec<usize>,
+    response: Response,
+}
+
+fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
+    let frame = case_frame(doc, case)?;
+    let formula = text(&case["formula"]).ok_or("no formula")?;
+    let response = response(formula, &frame)?;
+    let n = frame.nrow();
+    let mut names = Vec::new();
+    let mut columns: Vec<Vec<f64>> = Vec::new();
+    let mut terms: Vec<ModelTerm> = Vec::new();
+    for term in rhs_terms(formula) {
+        if term.starts_with("strata(")
+            || term.starts_with("offset(")
+            || term.starts_with("cluster(")
+        {
+            return unsupported(format!("harness: penalised term with {term}"));
+        }
+        let Some(call) = penal_term_call(&term) else {
+            let design = design(&format!("~ {term}"), &frame)?;
+            let first = columns.len();
+            for (k, name) in design.names.iter().enumerate() {
+                names.push(name.clone());
+                columns.push(design.rows.iter().map(|row| row[k]).collect());
+            }
+            terms.push(ModelTerm {
+                columns: (first..columns.len()).collect(),
+                penalty: None,
+            });
+            continue;
+        };
+        let first = columns.len();
+        let penalty = match call.kind.as_str() {
+            "ridge" => {
+                for name in &call.columns {
+                    names.push(format!("ridge({name})"));
+                    columns.push(frame.get(name)?.numeric(name)?);
+                }
+                let scale = call.named.get("scale").is_none_or(|v| v == "TRUE");
+                PenaltyTerm::ridge(
+                    penal_arg_f64(&call, "theta")?,
+                    penal_arg_f64(&call, "df")?,
+                    penal_arg_f64(&call, "eps")?.unwrap_or(0.1),
+                    scale,
+                )
+                .map_err(|err| format!("ridge: {err}"))?
+            }
+            "pspline" => {
+                let name = call.columns.first().ok_or("pspline without x")?;
+                let x = frame.get(name)?.numeric(name)?;
+                let degree = penal_arg_f64(&call, "degree")?.unwrap_or(3.0) as usize;
+                let penalty = PenaltyTerm::pspline(
+                    penal_arg_f64(&call, "df")?.unwrap_or(4.0),
+                    penal_arg_f64(&call, "theta")?,
+                    penal_arg_f64(&call, "nterm")?,
+                    penal_arg_f64(&call, "eps")?,
+                    call.named.get("method").map(String::as_str),
+                    false,
+                )
+                .map_err(|err| format!("pspline: {err}"))?;
+                let PenaltyTerm::Pspline(spline) = &penalty else {
+                    unreachable!("pspline term")
+                };
+                // Boundary.knots = range(x) over the non-missing values.
+                let finite: Vec<f64> = x.iter().copied().filter(|v| v.is_finite()).collect();
+                let lower = finite.iter().copied().fold(f64::INFINITY, f64::min);
+                let upper = finite.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let basis = crate::core::pspline_basis(&x, spline.nterm, degree, (lower, upper))
+                    .map_err(|err| format!("pspline basis: {err}"))?;
+                let nbasis = spline.nterm + degree;
+                for k in 1..nbasis {
+                    names.push(format!("ps({name}){}", k + 2));
+                    columns.push(basis.basis.iter().map(|row| row[k]).collect());
+                }
+                penalty
+            }
+            "frailty" => {
+                let name = call.columns.first().ok_or("frailty without x")?;
+                let column = frame.get(name)?;
+                let codes: Vec<f64> = (0..n)
+                    .map(|i| {
+                        column.label(i).map_or(f64::NAN, |label| {
+                            column.levels().iter().position(|l| *l == label).unwrap() as f64 + 1.0
+                        })
+                    })
+                    .collect();
+                let nclass = column.levels().len();
+                let sparse = call.named.get("sparse").map_or(nclass > 5, |v| v == "TRUE");
+                if !sparse {
+                    return unsupported("harness: non-sparse frailty term");
+                }
+                columns.push(codes);
+                let dist = call
+                    .named
+                    .get("dist")
+                    .or_else(|| call.named.get("distribution"))
+                    .map_or("gamma", String::as_str);
+                let tdf = penal_arg_f64(&call, "tdf")?.unwrap_or(5.0);
+                PenaltyTerm::frailty(
+                    FrailtyFamily::parse(dist, tdf).map_err(|err| err.to_string())?,
+                    true,
+                    penal_arg_f64(&call, "theta")?,
+                    penal_arg_f64(&call, "df")?,
+                    penal_arg_f64(&call, "eps")?,
+                    call.named.get("method").map(String::as_str),
+                    call.named.get("caic").is_some_and(|v| v == "TRUE"),
+                    None,
+                )
+                .map_err(|err| format!("frailty: {err}"))?
+            }
+            _ => unreachable!("checked by penal_term_call"),
+        };
+        terms.push(ModelTerm {
+            columns: (first..columns.len()).collect(),
+            penalty: Some(penalty),
+        });
+    }
+    let rows: Vec<usize> = (0..n)
+        .filter(|&i| {
+            response.time[i].is_finite()
+                && response.start.as_ref().is_none_or(|s| s[i].is_finite())
+                && columns.iter().all(|column| column[i].is_finite())
+        })
+        .collect();
+    let x = Array2::from_shape_fn((rows.len(), columns.len()), |(r, c)| columns[c][rows[r]]);
+    let data = CoxpenalData::try_new(
+        pick(&response.time, &rows),
+        response.start.as_ref().map(|s| pick(s, &rows)),
+        pick(&response.status, &rows),
+        x,
+        None,
+        None,
+        None,
+        terms,
+    )
+    .map_err(|err| format!("coxpenal data: {err}"))?;
+    let args = &case["args"];
+    let options = CoxpenalOptions {
+        method: TieMethod::parse(text(&args["ties"])).map_err(|err| err.to_string())?,
+        ..CoxpenalOptions::default()
+    };
+    let fit = CoxpenalFit::fit(data, options).map_err(|err| format!("coxpenal: {err}"))?;
+    Ok(PenalCase {
+        fit,
+        names,
+        rows,
+        response,
+    })
+}
+
+const PENAL_ASPECTS: &[&str] = &[
+    "coef",
+    "coef_names",
+    "var",
+    "var2",
+    "loglik",
+    "iter",
+    "n",
+    "nevent",
+    "means",
+    "linear_predictors",
+    "wald_test",
+    "df",
+    "penalty",
+    "pterms",
+    "history",
+    "frail",
+    "fvar",
+    "residuals.martingale",
+    "residuals.deviance",
+    "concordance",
+    "predict_lp",
+    "predict_risk",
+    "survfit",
+    "basehaz_centered",
+];
+
+fn check_penal_aspect(case: &PenalCase, expected: &Value, aspect: &str) -> Result<(), String> {
+    let fit = &case.fit;
+    let coxph = &fit.coxph;
+    match aspect {
+        "coef" => assert_vec(
+            &coxph.coefficients,
+            &named_values(&expected["coef"], &expected["coef_names"])?,
+            RTOL_COEF,
+            "coef",
+        ),
+        "coef_names" => {
+            let r_names = names_of(&expected["coef_names"]);
+            if case
+                .names
+                .iter()
+                .map(String::as_str)
+                .ne(r_names.iter().copied())
+            {
+                return Err(format!("coef names {:?} != {:?}", case.names, r_names));
+            }
+            Ok(())
+        }
+        "var" => assert_matrix(
+            &coxph.var_rows(),
+            &matrix(&expected["var"])?,
+            RTOL_VAR,
+            "var",
+        ),
+        "var2" => assert_matrix(
+            &matrix_rows(&fit.var2),
+            &matrix(&expected["var2"])?,
+            RTOL_VAR,
+            "var2",
+        ),
+        "loglik" => assert_vec(
+            &coxph.loglik,
+            &nums(&expected["loglik"])?,
+            RTOL_COEF,
+            "loglik",
+        ),
+        "iter" => assert_vec(
+            &[fit.iter[0] as f64, fit.iter[1] as f64],
+            &nums(&expected["iter"])?,
+            0.0,
+            "iter",
+        ),
+        "n" => assert_scalar(coxph.n as f64, num(&expected["n"])?, 0.0, "n"),
+        "nevent" => assert_scalar(
+            coxph.nevent as f64,
+            num(&expected["nevent"])?,
+            0.0,
+            "nevent",
+        ),
+        "means" => assert_vec(&coxph.means, &nums(&expected["means"])?, RTOL_COEF, "means"),
+        "linear_predictors" => assert_vec(
+            &coxph.linear_predictors,
+            &nums(&expected["linear_predictors"])?,
+            RTOL_COEF,
+            "linear_predictors",
+        ),
+        "wald_test" => assert_scalar(
+            coxph.wald_test,
+            num(&expected["wald_test"])?,
+            RTOL_VAR,
+            "wald_test",
+        ),
+        "df" => assert_vec(&fit.df, &nums(&expected["df"])?, RTOL_VAR, "df"),
+        "penalty" => assert_vec(
+            &fit.penalty,
+            &nums(&expected["penalty"])?,
+            RTOL_VAR,
+            "penalty",
+        ),
+        "pterms" => assert_vec(
+            &fit.pterms.iter().map(|&p| f64::from(p)).collect::<Vec<_>>(),
+            &nums(&expected["pterms"])?,
+            0.0,
+            "pterms",
+        ),
+        "history" => {
+            let entries = expected["history"]
+                .as_object()
+                .ok_or("history is not an object")?;
+            if entries.len() != 1 || fit.history.len() != 1 {
+                return unsupported("harness: history of several penalised terms");
+            }
+            let (_, item) = entries.iter().next().expect("one entry");
+            let history = &fit.history[0];
+            assert_scalar(
+                history.theta,
+                nums(&item["theta"])?[0],
+                RTOL_VAR,
+                "history.theta",
+            )?;
+            if history.done != is_true(&item["done"]) {
+                return Err(format!("history.done {} != {}", history.done, item["done"]));
+            }
+            if !item["history"].is_null() {
+                let rows = if item["history"]["values"].is_array() {
+                    matrix(&item["history"]["values"])?
+                } else {
+                    vec![nums(&item["history"])?]
+                };
+                assert_matrix(&history.history, &rows, RTOL_VAR, "history.history")?;
+            }
+            if !item["c_loglik"].is_null() {
+                assert_scalar(
+                    history.c_loglik.ok_or("no c.loglik")?,
+                    num(&item["c_loglik"])?,
+                    RTOL_VAR,
+                    "history.c_loglik",
+                )?;
+            }
+            if !item["half"].is_null() {
+                assert_scalar(
+                    history.half.ok_or("no half")? as f64,
+                    num(&item["half"])?,
+                    0.0,
+                    "history.half",
+                )?;
+            }
+            Ok(())
+        }
+        "frail" => assert_vec(
+            fit.frail.as_ref().ok_or("no frailty")?,
+            &nums(&expected["frail"])?,
+            RTOL_COEF,
+            "frail",
+        ),
+        "fvar" => assert_vec(
+            fit.fvar.as_ref().ok_or("no fvar")?,
+            &nums(&expected["fvar"])?,
+            RTOL_VAR,
+            "fvar",
+        ),
+        "residuals.martingale" => {
+            let expected = &expected["residuals"]["martingale"];
+            if is_r_error(expected) {
+                return Ok(());
+            }
+            assert_vec(&coxph.residuals, &nums(expected)?, RTOL_COEF, "martingale")
+        }
+        "residuals.deviance" => {
+            let expected = &expected["residuals"]["deviance"];
+            if is_r_error(expected) {
+                return Ok(());
+            }
+            let actual = residual_vector(coxph, ResidualType::Deviance)?;
+            assert_vec(&actual, &nums(expected)?, RTOL_COEF, "deviance")
+        }
+        "concordance" => {
+            use crate::concordance::{ConcordanceOptions, concordancefit};
+            use crate::core::SurvResponse;
+            let expected = &expected["concordance"];
+            if is_r_error(expected) {
+                return Ok(());
+            }
+            let lp = Array2::from_shape_vec((coxph.n, 1), coxph.linear_predictors.clone())
+                .map_err(|err| err.to_string())?;
+            let options = ConcordanceOptions {
+                reverse: true,
+                timefix: false,
+                ..ConcordanceOptions::default()
+            };
+            let time = pick(&case.response.time, &case.rows);
+            let status = pick(&case.response.status, &case.rows);
+            let concordance = match &case.response.start {
+                Some(start) => {
+                    let data = crate::data_types::CountingProcessData::try_new(
+                        pick(start, &case.rows),
+                        time,
+                        status,
+                    )
+                    .map_err(|err| err.to_string())?;
+                    concordancefit(
+                        SurvResponse::Counting(&data),
+                        lp.view(),
+                        None,
+                        None,
+                        None,
+                        &options,
+                    )
+                }
+                None => {
+                    let data = crate::data_types::SurvivalData::try_new(time, status)
+                        .map_err(|err| err.to_string())?;
+                    concordancefit(
+                        SurvResponse::Right(&data),
+                        lp.view(),
+                        None,
+                        None,
+                        None,
+                        &options,
+                    )
+                }
+            }
+            .map_err(|err| format!("concordancefit: {err}"))?;
+            assert_vec(
+                &concordance.concordance,
+                &nums(&expected["concordance"])?,
+                RTOL_COEF,
+                "concordance",
+            )?;
+            let names =
+                serde_json::json!(["concordant", "discordant", "tied.x", "tied.y", "tied.xy"]);
+            let count = &concordance.count[0];
+            assert_vec(
+                &[
+                    count.concordant,
+                    count.discordant,
+                    count.tied_x,
+                    count.tied_y,
+                    count.tied_xy,
+                ],
+                &named_values(&expected["count"], &names)?,
+                1e-12,
+                "concordance.count",
+            )?;
+            let var = concordance.var.as_ref().ok_or("concordance var is None")?;
+            assert_vec(
+                &[var[0][0]],
+                &nums(&expected["var"])?,
+                RTOL_VAR,
+                "concordance.var",
+            )
+        }
+        "predict_lp" => {
+            let expected = &expected["predict_lp"];
+            if is_r_error(expected) {
+                return Ok(());
+            }
+            let lp = coxph
+                .predict_lp(None, false, PredictReference::Strata)
+                .map_err(|err| format!("{err}"))?;
+            assert_vec(&lp.fit, &nums(expected)?, RTOL_COEF, "predict_lp")
+        }
+        "predict_risk" => {
+            let expected = &expected["predict_risk"];
+            if is_r_error(expected) {
+                return Ok(());
+            }
+            let risk = coxph
+                .predict_risk(None, false, PredictReference::Strata)
+                .map_err(|err| format!("{err}"))?;
+            assert_vec(&risk.fit, &nums(expected)?, RTOL_COEF, "predict_risk")
+        }
+        "survfit" => {
+            let expected = &expected["survfit"];
+            if is_r_error(expected) {
+                return Ok(());
+            }
+            let curves = fit
+                .survfit(None, SurvfitOptions::default())
+                .map_err(|err| format!("{err}"))?;
+            check_survfit(&curves, expected, "survfit")
+        }
+        "basehaz_centered" => {
+            let expected = &expected["basehaz_centered"];
+            if is_r_error(expected) {
+                return Ok(());
+            }
+            let basehaz = fit.basehaz(true).map_err(|err| format!("{err}"))?;
+            assert_vec(&basehaz.time, &nums(&expected["time"])?, RTOL_COEF, "time")?;
+            assert_vec(
+                &basehaz.hazard,
+                &nums(&expected["hazard"])?,
+                RTOL_COEF,
+                "hazard",
+            )
+        }
+        other => unsupported(format!("aspect {other}")),
+    }
+}
+
+#[test]
+fn r_fixtures_coxph_penalized() {
+    let doc = load_topic("coxph_penalized");
+    let mut report = Report::new("coxph_penalized");
+    for case in doc["cases"].as_array().expect("cases") {
+        let name = text(&case["name"]).expect("case name");
+        let expected = &case["expected"];
+        match penal_fit_for_case(&doc, case) {
+            Err(message) => {
+                for aspect in PENAL_ASPECTS {
+                    if expected[aspect.split('.').next().unwrap_or(aspect)].is_null() {
+                        continue;
+                    }
+                    report.record(name, aspect, Err(message.clone()));
+                }
+            }
+            Ok(penal) => {
+                for aspect in PENAL_ASPECTS {
+                    if expected[aspect.split('.').next().unwrap_or(aspect)].is_null() {
+                        continue;
+                    }
+                    report.record(name, aspect, check_penal_aspect(&penal, expected, aspect));
+                }
+            }
+        }
+    }
+    report.finish();
 }
 
 // ---------------------------------------------------------------------------

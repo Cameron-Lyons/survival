@@ -4,8 +4,7 @@
 //! its residuals in `coxph_diagnostics`, `coxph.detail` in `coxph_detail`,
 //! `cox.zph` in `cox_zph` and the case-cohort estimators in `cch`.
 //! Penalised Cox models (R's `coxpenal.fit`: `ridge()`, `pspline()` and
-//! `frailty()` terms) are not implemented yet; they are a follow-up on top
-//! of the same engine.
+//! `frailty()` terms) live in `coxpenal`.
 
 #[path = "aareg_fit.rs"]
 pub(crate) mod aareg_fit_module;
@@ -18,6 +17,7 @@ pub(crate) mod cause_specific_cox_module;
 pub(crate) mod cch;
 pub(crate) mod cox_optimizer;
 pub(crate) mod cox_zph;
+pub(crate) mod coxpenal;
 pub(crate) mod coxph;
 pub(crate) mod coxph_detail;
 pub(crate) mod coxph_diagnostics;
@@ -55,6 +55,13 @@ pub use cause_specific_cox_module::{
 pub use cch::{CchFitResult, cch_borgan_fit, cch_fit};
 pub use cox_optimizer::TieMethod;
 pub use cox_zph::{CoxZph, CoxZphTest, ZphTransform, cox_zph, cox_zph_py};
+#[cfg(feature = "python")]
+pub use coxpenal::CallbackPenalty;
+pub use coxpenal::{
+    COXPENAL_OUTER_MAX, CoxPenalty, CoxPenaltyTerms, CoxpenalData, CoxpenalFit, CoxpenalOptions,
+    FrailtyFamily, FrailtyMethod, FrailtyPenalty, ModelTerm, PenaltyHistory, PenaltyTerm,
+    PsplineMethod, PsplinePenalty, RidgePenalty, coxpenal_fit,
+};
 pub use coxph::{
     Basehaz, CoxNewData, CoxPHFit, CoxPrediction, CoxSurvfitCurve, CoxTermsPrediction, CoxphData,
     CoxphOptions, PredictReference, SurvfitOptions, coxph_fit,
