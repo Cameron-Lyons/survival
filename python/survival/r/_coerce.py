@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from operator import index
 from typing import Any
 
+from .. import _survival as _core
 from ._types import _SurvfitComputation
 
 _EXP_CLAMP_MIN = -745.0
@@ -163,31 +164,8 @@ def _event_vector(values: Any, name: str) -> list[int]:
     raise ValueError(f"{name} must use 0/1 or 1/2 event coding")
 
 
-def _mstate_event_label(value: Any) -> str:
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return _surv_format_number(value)
-    return str(value)
-
-
-def _mstate_inferred_levels(values: Sequence[Any]) -> list[str]:
-    observed = [value for value in values if not _is_missing_value(value)]
-    labels = {_mstate_event_label(value) for value in observed}
-    if observed and all(
-        isinstance(value, int | float) and not isinstance(value, bool) for value in observed
-    ):
-        return sorted(labels, key=float)
-    return sorted(labels)
-
-
 def _mstate_categories(values: Any) -> Any | None:
-    categories = getattr(values, "categories", None)
-    if categories is not None:
-        return categories
-    return getattr(getattr(values, "dtype", None), "categories", None)
+    return _categories(values)
 
 
 def _mstate_event_vector(values: Any, name: str) -> tuple[list[int | None], tuple[str, ...]]:
@@ -541,18 +519,115 @@ def _match_string_arg(
     raise ValueError(message)
 
 
-def _strata_value_label(value: Any) -> str:
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
+# ---------------------------------------------------------------------------
+# R's factor() / as.character() / format(): the single level and label path.
+# ---------------------------------------------------------------------------
+
+
+def _categories(values: Any) -> list[Any] | None:
+    """The declared levels of a factor-like column, or ``None``.
+
+    A pandas ``Categorical`` (``dtype.categories``), the test suite's ``RFactor`` and the
+    reticulate bridge's ``_RFactorVector`` all expose ``categories``; R keeps the
+    level order they declare, so every level helper starts here.
+    """
+
+    categories = getattr(values, "categories", None)
+    if categories is None:
+        categories = getattr(getattr(values, "dtype", None), "categories", None)
+    if categories is None:
+        return None
+    return list(_coerce_array_like(categories, "categories"))
+
+
+def _r_scientific(value: float, digits: int) -> tuple[bool, int, int]:
+    """R's ``scientific()`` (format.c): sign, decimal exponent and significant digits."""
+
+    mantissa, exponent = f"{abs(value):.{digits - 1}e}".split("e")
+    significant = mantissa.replace(".", "").rstrip("0") or "0"
+    return value < 0.0, int(exponent), len(significant)
+
+
+def _r_format_numbers(values: Sequence[Any], digits: int = 7) -> list[str]:
+    """R's ``formatReal``: a numeric vector in a common fixed or scientific layout.
+
+    Every finite element shares the decimals (``format(c(1.5, 10))`` is
+    ``" 1.5"``, ``"10.0"``) and the layout is fixed unless scientific notation is
+    narrower; missing values print as ``NA`` and the infinities as ``Inf``.  ``as.character``
+    formats each value on its own with 15 significant digits, ``format`` and
+    ``print`` a whole vector with 7.
+    """
+
+    numbers = [None if _is_missing_value(value) else float(value) for value in values]
+    finite = [number for number in numbers if number is not None and math.isfinite(number)]
+    negative = any(number < 0.0 for number in finite)
+    rgt = mxsl = mxns = -(10**9)
+    mxl = -(10**9)
+    mnl = 10**9
+    for number in finite:
+        neg, kpower, nsig = _r_scientific(number, digits) if number != 0.0 else (False, 0, 1)
+        left = kpower + 1
+        sleft = int(neg) + (left if left > 0 else 1)
+        rgt = max(rgt, nsig - left)
+        mxl, mnl = max(mxl, left), min(mnl, left)
+        mxsl = max(mxsl, sleft)
+        mxns = max(mxns, nsig)
+    fixed, decimals = True, 0
+    if finite:
+        if mxl < 0:
+            mxsl = 1 + int(negative)
+        rgt = max(rgt, 0)
+        fixed_width = mxsl + rgt + (1 if rgt else 0)
+        exponent_width = 2 if mxl > 100 or mnl <= -99 else 1
+        sci_decimals = mxns - 1
+        scientific_width = (
+            int(negative) + (1 if sci_decimals else 0) + sci_decimals + 4 + exponent_width
+        )
+        fixed = fixed_width <= scientific_width
+        decimals = rgt if fixed else sci_decimals
+    out: list[str] = []
+    for number in numbers:
+        if number is None or math.isnan(number):
+            out.append("NA")  # NaN is the package's numeric NA
+        elif math.isinf(number):
+            out.append("Inf" if number > 0.0 else "-Inf")
+        elif fixed:
+            out.append(f"{number:.{decimals}f}")
+        else:
+            mantissa, exponent = f"{number:.{decimals}e}".split("e")
+            out.append(f"{mantissa}e{'-' if int(exponent) < 0 else '+'}{abs(int(exponent)):02d}")
+    width = max((len(label) for label in out), default=0)
+    return [label.rjust(width) for label in out]
+
+
+def _r_format_number(value: Any, digits: int = 7) -> str:
+    """R's ``formatReal`` for one number (``as.character`` with ``digits=15``)."""
+
+    if _is_missing_value(value):
+        return "NA"
+    return _r_format_numbers([value], digits)[0]
+
+
+def _as_character(value: Any) -> str:
+    """R's ``as.character`` of one atomic value (``"TRUE"``, ``"1"`` not ``"1.0"``, ``"NA"``)."""
+
+    if _is_bool_like(value):
+        return "TRUE" if bool(value) else "FALSE"
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
-        return _surv_format_number(value)
+        return _r_format_number(value, 15)
+    if _is_missing_value(value):
+        return "NA"
     return str(value)
 
 
-def _strata_level_sort_key(value: Any) -> tuple[int, Any]:
-    if isinstance(value, bool):
+def _r_sort_key(value: Any) -> tuple[Any, ...]:
+    """R's ``sort`` order for factor levels: numbers (and logicals) before strings."""
+
+    if isinstance(value, tuple):
+        return tuple(_r_sort_key(part) for part in value)
+    if _is_bool_like(value):
         return (0, int(value))
     try:
         numeric = float(value)
@@ -563,14 +638,64 @@ def _strata_level_sort_key(value: Any) -> tuple[int, Any]:
     return (1, str(value))
 
 
+def _factor_levels(values: Any, name: str = "values") -> list[Any]:
+    """R's ``levels(factor(x))``: the declared categories, else the sorted unique values.
+
+    Missing values never form a level; the returned levels are the raw values so
+    that codes can be looked up, ``_as_character`` renders them as R labels them.
+    """
+
+    declared = _categories(values)
+    if declared is not None:
+        return [level for level in declared if not _is_missing_value(level)]
+    unique: dict[Any, None] = {}
+    for value in _materialize_labels(values, name):
+        if _is_missing_value(value):
+            continue
+        try:
+            unique.setdefault(value, None)
+        except TypeError as exc:
+            raise TypeError(f"{name} contains unhashable labels") from exc
+    return sorted(unique, key=_r_sort_key)
+
+
+def _factor(values: Any, name: str = "values") -> tuple[list[int | None], list[str]]:
+    """R's ``factor(x)`` as zero-based codes (``None`` for ``NA``) and level labels."""
+
+    levels = _factor_levels(values, name)
+    index = {level: code for code, level in enumerate(levels)}
+    codes: list[int | None] = []
+    for value in _materialize_labels(values, name):
+        if _is_missing_value(value):
+            codes.append(None)
+            continue
+        try:
+            codes.append(index[value])
+        except KeyError as exc:
+            raise ValueError(f"{name} contains a value outside the declared categories") from exc
+    return codes, [_as_character(level) for level in levels]
+
+
 def _surv_format_number(value: float) -> str:
-    if math.isnan(value):
-        return "NA"
-    if math.isinf(value):
-        return "Inf" if value > 0.0 else "-Inf"
-    if float(value).is_integer():
-        return str(int(value))
-    return f"{value:g}"
+    """R's ``format()`` of one time value (7 significant digits)."""
+
+    return _r_format_number(value, 7)
+
+
+# Older spellings kept for the modules that still import them; each is an alias of
+# the single implementation above.
+_strata_value_label = _as_character
+_strata_level_sort_key = _r_sort_key
+_mstate_event_label = _as_character
+_survdiff_r_level_sort_key = _r_sort_key
+
+
+def _r_formula_ordered_levels(values: list[Any], name: str) -> tuple[Any, ...]:
+    return tuple(_factor_levels(values, name))
+
+
+def _mstate_inferred_levels(values: Sequence[Any]) -> list[str]:
+    return [_as_character(level) for level in _factor_levels(values, "event")]
 
 
 def _normalize_positive_scale(value: Any) -> float:
@@ -1009,37 +1134,38 @@ def _r_numeric_vector(values: Any, name: str) -> list[float]:
     return result
 
 
-def _survdiff_r_level_sort_key(value: Any) -> Any:
-    if isinstance(value, tuple):
-        return tuple(_survdiff_r_level_sort_key(part) for part in value)
-    return _strata_level_sort_key(value)
+def _aeq_times(
+    *columns: Sequence[float], tolerance: float | None = None
+) -> tuple[list[float], ...]:
+    """R's ``aeqSurv`` on one or two time columns (``time``, or ``start``/``stop``).
 
+    This is the package's only timefix path: the Rust ``aeq_surv`` kernel snaps
+    near-tied times exactly as R does, and raises R's "an interval has effective
+    length 0" error when a ``(start, stop]`` interval collapses.
+    """
 
-def _r_formula_ordered_levels(values: list[Any], name: str) -> tuple[Any, ...]:
-    levels: dict[Any, None] = {}
-    for value in values:
-        try:
-            levels.setdefault(value, None)
-        except TypeError as exc:
-            raise TypeError(f"{name} contain unhashable labels") from exc
-    return tuple(sorted(levels, key=_survdiff_r_level_sort_key))
+    if len(columns) not in {1, 2}:
+        raise ValueError("_aeq_times takes one or two time columns")
+    first = [float(value) for value in columns[0]]
+    if len(columns) == 1:
+        return (list(_core.aeq_surv(first, None, tolerance).time),)
+    second = [float(value) for value in columns[1]]
+    result = _core.aeq_surv(first, second, tolerance)
+    return list(result.time), list(result.time2 or [])
 
 
 def _survdiff_timefix_values(times: list[float], timefix: bool) -> list[float]:
+    """Alias of :func:`_aeq_times` for one column (kept for the modules that import it)."""
+
     if not timefix:
         return times
+    return _aeq_times(times)[0]
 
-    fixed = list(times)
-    order = sorted(range(len(times)), key=lambda idx: (times[idx], idx))
-    cursor = 0
-    while cursor < len(order):
-        base = fixed[order[cursor]]
-        scan = cursor + 1
-        while scan < len(order) and fixed[order[scan]] - base < _SURVFIT_TIME_EPSILON:
-            fixed[order[scan]] = base
-            scan += 1
-        cursor = scan
-    return fixed
+
+def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
+    """Alias of :func:`_aeq_times` (kept for the modules that import it)."""
+
+    return _aeq_times(*vectors)
 
 
 def _concordance_core_time_values(
@@ -1057,26 +1183,6 @@ def _concordance_core_time_values(
     display_by_core_time = {index * step: value for index, value in enumerate(unique_times)}
     core_by_display_time = {value: index * step for index, value in enumerate(unique_times)}
     return [core_by_display_time[value] for value in times], display_by_core_time
-
-
-def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
-    fixed = [list(vector) for vector in vectors]
-    points = [
-        (value, vector_idx, row_idx)
-        for vector_idx, vector in enumerate(fixed)
-        for row_idx, value in enumerate(vector)
-    ]
-    points.sort(key=lambda item: (item[0], item[1], item[2]))
-    cursor = 0
-    while cursor < len(points):
-        base = points[cursor][0]
-        scan = cursor + 1
-        while scan < len(points) and points[scan][0] - base < _SURVFIT_TIME_EPSILON:
-            _value, vector_idx, row_idx = points[scan]
-            fixed[vector_idx][row_idx] = base
-            scan += 1
-        cursor = scan
-    return tuple(fixed)
 
 
 def _normalize_predict_type(predict_type: Any, *, survreg: bool) -> str:

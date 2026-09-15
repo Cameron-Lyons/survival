@@ -36,6 +36,8 @@ from ._surv import (
 )
 from ._types import (
     _MISSING,
+    ModelFrame,
+    StrataFactor,
     _CachedFormulaTerms,
     _CategoricalDesignTerm,
     _CovariateSpec,
@@ -85,26 +87,97 @@ def _formula_name(name: str) -> tuple[str, bool]:
     return name, False
 
 
-def _formula_name_items(segment: str) -> list[tuple[str, bool]]:
-    names: list[tuple[str, bool]] = []
-    start = 0
-    in_backtick = False
+# ---------------------------------------------------------------------------
+# The formula tokenizer: one scanner that knows about parentheses, backtick
+# names and string literals, and the splitters built on it.
+# ---------------------------------------------------------------------------
 
-    for idx, char in enumerate(segment):
+
+def _scan(text: str, *, quotes: bool = True) -> list[tuple[int, str, int]]:
+    """Every character of *text* outside backtick names (and string literals) with its depth.
+
+    Parentheses are reported with the depth outside them, so an item with depth 0
+    is a top-level character; the scanner raises R's unterminated-backtick and
+    unterminated-quote errors.
+    """
+
+    items: list[tuple[int, str, int]] = []
+    depth = 0
+    in_backtick = False
+    quote: str | None = None
+    for idx, char in enumerate(text):
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
         if char == "`":
             in_backtick = not in_backtick
-        elif char == "," and not in_backtick:
-            name = segment[start:idx].strip()
-            if name:
-                names.append(_formula_name(name))
-            start = idx + 1
-
-    name = segment[start:].strip()
+            continue
+        if in_backtick:
+            continue
+        if quotes and char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "(":
+            items.append((idx, char, depth))
+            depth += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            items.append((idx, char, depth))
+            continue
+        items.append((idx, char, depth))
     if in_backtick:
         raise ValueError("unterminated backtick in formula")
-    if name:
-        names.append(_formula_name(name))
-    return names
+    if quote is not None:
+        raise ValueError("unterminated quote in formula")
+    return items
+
+
+def _top_level(text: str, *, quotes: bool = True) -> list[tuple[int, str]]:
+    """The top-level characters of *text* (depth 0, outside names and literals)."""
+
+    return [(idx, char) for idx, char, depth in _scan(text, quotes=quotes) if depth == 0]
+
+
+def _split_at(text: str, positions: Sequence[tuple[int, int]], *, keep_empty: bool) -> list[str]:
+    """Split *text* around the ``(start, end)`` character spans in *positions*."""
+
+    parts: list[str] = []
+    cursor = 0
+    for start, end in positions:
+        parts.append(text[cursor:start].strip())
+        cursor = end
+    parts.append(text[cursor:].strip())
+    return parts if keep_empty else [part for part in parts if part]
+
+
+def _split_top_level(segment: str, separator: str) -> list[str]:
+    """Split at every top-level *separator* character (empty pieces kept, as R's terms)."""
+
+    positions = [
+        (idx, idx + 1) for idx, char in _top_level(segment, quotes=False) if char == separator
+    ]
+    return _split_at(segment, positions, keep_empty=True)
+
+
+def _split_top_level_token(segment: str, token: str) -> list[str]:
+    """Split at every top-level occurrence of the multi-character *token* (``%in%``)."""
+
+    positions: list[tuple[int, int]] = []
+    for idx, char in _top_level(segment, quotes=False):
+        if char == token[0] and segment.startswith(token, idx):
+            if positions and idx < positions[-1][1]:
+                continue
+            positions.append((idx, idx + len(token)))
+    return _split_at(segment, positions, keep_empty=True)
+
+
+def _formula_name_items(segment: str) -> list[tuple[str, bool]]:
+    """The comma-separated names of a ``strata(a, b)``-style argument list."""
+
+    positions = [(idx, idx + 1) for idx, char in _top_level(segment, quotes=False) if char == ","]
+    return [_formula_name(name) for name in _split_at(segment, positions, keep_empty=False)]
 
 
 def _formula_names(segment: str) -> list[str]:
@@ -112,129 +185,102 @@ def _formula_names(segment: str) -> list[str]:
 
 
 def _formula_response_parts(segment: str) -> list[str]:
-    parts: list[str] = []
-    start = 0
-    depth = 0
-    in_backtick = False
-    quote: str | None = None
+    """The top-level comma-separated arguments of a ``Surv(...)`` call."""
 
-    for idx, char in enumerate(segment):
-        if quote is not None:
-            if char == quote:
-                quote = None
-        elif char in {"'", '"'} and not in_backtick:
-            quote = char
-        elif char == "`":
-            in_backtick = not in_backtick
-        elif not in_backtick and char == "(":
-            depth += 1
-        elif not in_backtick and char == ")":
-            depth = max(0, depth - 1)
-        elif char == "," and not in_backtick and depth == 0:
-            part = segment[start:idx].strip()
-            if part:
-                parts.append(part)
-            start = idx + 1
-
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    if quote is not None:
-        raise ValueError("unterminated quote in formula")
-
-    part = segment[start:].strip()
-    if part:
-        parts.append(part)
-    return parts
+    positions = [(idx, idx + 1) for idx, char in _top_level(segment) if char == ","]
+    return _split_at(segment, positions, keep_empty=False)
 
 
 def _formula_named_option(part: str) -> tuple[str, str] | None:
-    depth = 0
-    in_backtick = False
-    quote: str | None = None
+    """``name = value`` at the top level of *part*, ignoring ``==``, ``!=``, ``<=`` and ``>=``."""
 
-    for idx, char in enumerate(part):
-        if quote is not None:
-            if char == quote:
-                quote = None
+    for idx, char in _top_level(part):
+        if char != "=":
             continue
-        if char in {"'", '"'} and not in_backtick:
-            quote = char
-            continue
-        if char == "`":
-            in_backtick = not in_backtick
-            continue
-        if in_backtick:
-            continue
-        if char == "(":
-            depth += 1
-            continue
-        if char == ")":
-            depth = max(0, depth - 1)
-            continue
-        if char != "=" or depth != 0:
-            continue
-
         previous = part[idx - 1] if idx > 0 else ""
-        next_char = part[idx + 1] if idx + 1 < len(part) else ""
-        if previous in {"=", "!", "<", ">"} or next_char == "=":
+        following = part[idx + 1] if idx + 1 < len(part) else ""
+        if previous in {"=", "!", "<", ">"} or following == "=":
             continue
         return part[:idx].strip(), part[idx + 1 :].strip()
-
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    if quote is not None:
-        raise ValueError("unterminated quote in formula")
     return None
 
 
 def _top_level_comparison(part: str) -> tuple[str, str, str] | None:
-    depth = 0
-    in_backtick = False
-    quote: str | None = None
-    operators = ("==", "!=", "<=", ">=", "<", ">")
+    """The first top-level comparison ``left <op> right`` of a response argument."""
 
-    idx = 0
-    while idx < len(part):
-        char = part[idx]
-        if quote is not None:
-            if char == quote:
-                quote = None
-            idx += 1
-            continue
-        if char in {"'", '"'} and not in_backtick:
-            quote = char
-            idx += 1
-            continue
-        if char == "`":
-            in_backtick = not in_backtick
-            idx += 1
-            continue
-        if in_backtick:
-            idx += 1
-            continue
-        if char == "(":
-            depth += 1
-            idx += 1
-            continue
-        if char == ")":
-            depth = max(0, depth - 1)
-            idx += 1
-            continue
-        if depth == 0:
-            for operator in operators:
-                if part.startswith(operator, idx):
-                    left = part[:idx].strip()
-                    right = part[idx + len(operator) :].strip()
-                    if not left or not right:
-                        raise ValueError("formula response comparisons require both operands")
-                    return left, operator, right
-        idx += 1
-
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    if quote is not None:
-        raise ValueError("unterminated quote in formula")
+    for idx, _char in _top_level(part):
+        for operator in ("==", "!=", "<=", ">=", "<", ">"):
+            if part.startswith(operator, idx):
+                left = part[:idx].strip()
+                right = part[idx + len(operator) :].strip()
+                if not left or not right:
+                    raise ValueError("formula response comparisons require both operands")
+                return left, operator, right
     return None
+
+
+def _formula_tokens(rhs: str) -> list[tuple[str, str]]:
+    """The ``+``/``-`` separated terms of a right-hand side with their sign."""
+
+    positions = [(idx, idx + 1) for idx, char in _top_level(rhs, quotes=False) if char in "+-"]
+    parts = _split_at(rhs, positions, keep_empty=True)
+    operators = ["+", *(rhs[idx] for idx, _end in positions)]
+    return [(op, term) for op, term in zip(operators, parts, strict=True) if term]
+
+
+def _find_top_level_arithmetic_operator(
+    expression: str,
+    operators: set[str],
+) -> tuple[str, str, str] | None:
+    """The right-most top-level binary operator of *operators* (unary signs skipped)."""
+
+    for idx, char in reversed(_top_level(expression, quotes=False)):
+        if char not in operators:
+            continue
+        previous = _previous_non_space(expression, idx)
+        if previous is None or previous in "+-*/(^":
+            continue
+        left = expression[:idx].strip()
+        right = expression[idx + 1 :].strip()
+        if not left or not right:
+            raise ValueError("formula arithmetic terms require both operands")
+        return left, char, right
+    return None
+
+
+def _find_top_level_power_operator(expression: str) -> tuple[str, str, str] | None:
+    """The left-most top-level ``^``."""
+
+    for idx, char in _top_level(expression, quotes=False):
+        if char != "^":
+            continue
+        left = expression[:idx].strip()
+        right = expression[idx + 1 :].strip()
+        if not left or not right:
+            raise ValueError("formula arithmetic terms require both operands")
+        return left, char, right
+    return None
+
+
+def _previous_non_space(text: str, idx: int) -> str | None:
+    cursor = idx - 1
+    while cursor >= 0:
+        if not text[cursor].isspace():
+            return text[cursor]
+        cursor -= 1
+    return None
+
+
+def _strip_outer_formula_parentheses(term: str) -> str:
+    """Remove every pair of parentheses that encloses the whole term."""
+
+    value = term.strip()
+    while value.startswith("(") and value.endswith(")"):
+        items = _scan(value, quotes=False)
+        if any(depth == 0 for idx, _char, depth in items if 0 < idx < len(value) - 1):
+            break
+        value = value[1:-1].strip()
+    return value
 
 
 def _parse_formula_literal(value: str) -> Any:
@@ -334,6 +380,8 @@ def _response_arg_columns(part: str) -> list[str]:
     part = _unwrap_response_identity(part)
     if _response_rep_call(part) is not None:
         return []
+    if _is_formula_arithmetic_expression(part):
+        return _arithmetic_expression_columns(part)
     comparison = _top_level_comparison(part)
     if comparison is None:
         operand = _response_operand(part, allow_literal=False)
@@ -405,6 +453,12 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
         repeated_value, count_expression = rep_call
         return [repeated_value] * _response_rep_count(count_expression, inferred_length)
 
+    if _is_formula_arithmetic_expression(part):
+        columns = _arithmetic_expression_columns(part)
+        n = len(_column(data, columns[0])) if columns else inferred_length
+        if n is None:
+            raise ValueError("formula response arithmetic requires a data column")
+        return _arithmetic_expression_values(data, part, n)
     comparison = _top_level_comparison(part)
     if comparison is None:
         operand = _response_operand(part, allow_literal=False)
@@ -530,6 +584,47 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
 
 def _formula_response_args(formula: str) -> list[str]:
     return list(_formula_response_spec(formula).columns)
+
+
+@lru_cache(maxsize=512)
+def _response_spec(formula: str) -> _SurvResponseSpec | None:
+    """The left-hand side of any survival formula.
+
+    ``Surv(...)`` responses go through :func:`_formula_response_spec`; an empty
+    left-hand side (``~ sex``) gives ``None`` and a plain expression (``time ~ 1``,
+    ``stop / 365.25 ~ surgery``) a numeric response spec with ``surv=False``.
+    """
+
+    lhs, sep, _rhs = formula.partition("~")
+    if not sep:
+        raise ValueError("formula must contain '~'")
+    lhs = lhs.strip()
+    if not lhs:
+        return None
+    if lhs.startswith(("Surv(", "survival::Surv(")) and lhs.endswith(")"):
+        return _formula_response_spec(formula)
+    return _SurvResponseSpec(
+        arguments=(lhs,),
+        columns=tuple(_response_arg_columns(lhs)),
+        type=None,
+        origin=0.0,
+        surv=False,
+    )
+
+
+def _data_row_count(data: Any, formula: str | None = None) -> int:
+    """The number of rows of *data*: the first response column, else the first column."""
+
+    spec = None if formula is None else _response_spec(formula)
+    if spec is not None and spec.columns:
+        return len(_column(data, spec.columns[0]))
+    names = _data_column_names(data)
+    if names:
+        return len(_column(data, str(names[0])))
+    try:
+        return len(data)
+    except TypeError as exc:
+        raise ValueError("data must have at least one column") from exc
 
 
 def _covariate_factors(term: _CovariateSpec) -> tuple[_CovariateTerm, ...]:
@@ -670,7 +765,8 @@ def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
 
 
 def _formula_columns(formula: str, data: Any) -> list[str]:
-    args = _formula_response_args(formula)
+    spec = _response_spec(formula)
+    args = [] if spec is None else list(spec.columns)
     _lhs, _sep, rhs = formula.partition("~")
     terms = _split_terms(rhs, _dot_terms(data, args))
     columns = (
@@ -689,8 +785,7 @@ def _subset_formula_inputs(
     subset: Any,
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any]]:
-    n = len(_column(data, _formula_response_args(formula)[0]))
-    indices = _subset_indices(subset, n)
+    indices = _subset_indices(subset, _data_row_count(data, formula))
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
         for name, values in row_aligned.items()
@@ -712,7 +807,7 @@ def _apply_formula_na_action(
 
     excluded = set(exclude_columns)
     columns = [column for column in _formula_columns(formula, data) if column not in excluded]
-    n = len(_column(data, columns[0]))
+    n = _data_row_count(data, formula)
     missing = _missing_row_indices(
         [
             *[(column, _column(data, column)) for column in columns],
@@ -769,159 +864,6 @@ def _append_unique(target: list[Any], values: list[Any]) -> None:
 def _remove_values(target: list[Any], values: list[Any]) -> None:
     remove = set(values)
     target[:] = [value for value in target if value not in remove]
-
-
-def _split_top_level(segment: str, separator: str) -> list[str]:
-    parts: list[str] = []
-    start = 0
-    depth = 0
-    in_backtick = False
-
-    for idx, char in enumerate(segment):
-        if char == "`":
-            in_backtick = not in_backtick
-        elif not in_backtick and char == "(":
-            depth += 1
-        elif not in_backtick and char == ")":
-            depth = max(0, depth - 1)
-        elif char == separator and not in_backtick and depth == 0:
-            parts.append(segment[start:idx].strip())
-            start = idx + 1
-
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    parts.append(segment[start:].strip())
-    return parts
-
-
-def _split_top_level_token(segment: str, token: str) -> list[str]:
-    parts: list[str] = []
-    start = 0
-    idx = 0
-    depth = 0
-    in_backtick = False
-
-    while idx < len(segment):
-        char = segment[idx]
-        if char == "`":
-            in_backtick = not in_backtick
-            idx += 1
-            continue
-        if not in_backtick and char == "(":
-            depth += 1
-        elif not in_backtick and char == ")":
-            depth = max(0, depth - 1)
-        elif not in_backtick and depth == 0 and segment.startswith(token, idx):
-            parts.append(segment[start:idx].strip())
-            idx += len(token)
-            start = idx
-            continue
-        idx += 1
-
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    parts.append(segment[start:].strip())
-    return parts
-
-
-def _previous_non_space(text: str, idx: int) -> str | None:
-    cursor = idx - 1
-    while cursor >= 0:
-        if not text[cursor].isspace():
-            return text[cursor]
-        cursor -= 1
-    return None
-
-
-def _find_top_level_arithmetic_operator(
-    expression: str,
-    operators: set[str],
-) -> tuple[str, str, str] | None:
-    depth = 0
-    in_backtick = False
-    for idx in range(len(expression) - 1, -1, -1):
-        char = expression[idx]
-        if char == "`":
-            in_backtick = not in_backtick
-            continue
-        if in_backtick:
-            continue
-        if char == ")":
-            depth += 1
-            continue
-        if char == "(":
-            depth -= 1
-            continue
-        if depth == 0 and char in operators:
-            previous = _previous_non_space(expression, idx)
-            if previous is None or previous in "+-*/(^":
-                continue
-            left = expression[:idx].strip()
-            right = expression[idx + 1 :].strip()
-            if not left or not right:
-                raise ValueError("formula arithmetic terms require both operands")
-            return left, char, right
-
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    return None
-
-
-def _find_top_level_power_operator(expression: str) -> tuple[str, str, str] | None:
-    depth = 0
-    in_backtick = False
-
-    for idx, char in enumerate(expression):
-        if char == "`":
-            in_backtick = not in_backtick
-            continue
-        if in_backtick:
-            continue
-        if char == "(":
-            depth += 1
-            continue
-        if char == ")":
-            depth = max(0, depth - 1)
-            continue
-        if char == "^" and depth == 0:
-            left = expression[:idx].strip()
-            right = expression[idx + 1 :].strip()
-            if not left or not right:
-                raise ValueError("formula arithmetic terms require both operands")
-            return left, char, right
-
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    return None
-
-
-def _formula_tokens(rhs: str) -> list[tuple[str, str]]:
-    tokens: list[tuple[str, str]] = []
-    op = "+"
-    start = 0
-    depth = 0
-    in_backtick = False
-
-    for idx, char in enumerate(rhs):
-        if char == "`":
-            in_backtick = not in_backtick
-        elif not in_backtick and char == "(":
-            depth += 1
-        elif not in_backtick and char == ")":
-            depth = max(0, depth - 1)
-        elif not in_backtick and depth == 0 and char in "+-":
-            term = rhs[start:idx].strip()
-            if term:
-                tokens.append((op, term))
-            op = char
-            start = idx + 1
-
-    term = rhs[start:].strip()
-    if in_backtick:
-        raise ValueError("unterminated backtick in formula")
-    if term:
-        tokens.append((op, term))
-    return tokens
 
 
 def _unsupported_formula_name(name: str, quoted: bool) -> bool:
@@ -1001,10 +943,40 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
             raise ValueError(f"unsupported formula term(s): {columns[0]}")
         return _CovariateTerm(columns[0], transform=transform)
 
+    call_term = _parse_call_term(term)
+    if call_term is not None:
+        return call_term
+
     term_name, quoted = _formula_name(term)
     if _unsupported_formula_name(term_name, quoted):
         raise ValueError(f"unsupported formula term(s): {term_name}")
     return _CovariateTerm(term_name)
+
+
+_CALL_TERMS = ("tcut", "cut")
+
+
+def _parse_call_term(term: str) -> _CovariateTerm | None:
+    """A ``tcut(x, ...)``/``cut(x, ...)`` term: categorical, reading the column of ``x``."""
+
+    for function in _CALL_TERMS:
+        prefix = f"{function}("
+        if not (term.startswith(prefix) and term.endswith(")")):
+            continue
+        arguments = _formula_response_parts(term[len(prefix) : -1])
+        if not arguments:
+            raise ValueError(f"{function}() requires a variable")
+        first = arguments[0]
+        if _is_formula_arithmetic_expression(first):
+            columns = _arithmetic_expression_columns(first)
+            if not columns:
+                raise ValueError(f"{function}() requires a data column")
+            return _CovariateTerm(columns[0], categorical=True, arithmetic=first, call=term)
+        column, quoted = _formula_name(first)
+        if _unsupported_formula_name(column, quoted):
+            raise ValueError(f"unsupported formula term(s): {term}")
+        return _CovariateTerm(column, categorical=True, call=term)
+    return None
 
 
 def _parse_interaction_term(
@@ -1033,33 +1005,6 @@ def _parse_offset_term(expression: str) -> _CovariateTerm:
     if offset_term.categorical:
         raise ValueError("offset() requires a numeric column or transform")
     return offset_term
-
-
-def _strip_outer_formula_parentheses(term: str) -> str:
-    value = term.strip()
-    while value.startswith("(") and value.endswith(")"):
-        depth = 0
-        in_backtick = False
-        wraps = True
-        for idx, char in enumerate(value):
-            if char == "`":
-                in_backtick = not in_backtick
-            elif not in_backtick and char == "(":
-                depth += 1
-            elif not in_backtick and char == ")":
-                depth -= 1
-                if depth == 0 and idx != len(value) - 1:
-                    wraps = False
-                    break
-                if depth < 0:
-                    wraps = False
-                    break
-        if in_backtick:
-            raise ValueError("unterminated backtick in formula")
-        if not wraps or depth != 0:
-            break
-        value = value[1:-1].strip()
-    return value
 
 
 def _parse_formula_power_degree(value: str) -> int:
@@ -1446,27 +1391,7 @@ def _parse_formula(formula: str, data: Any) -> tuple[Surv, _FormulaTerms]:
         raise ValueError("formula must contain '~'")
 
     response_spec = _formula_response_spec(formula)
-    args = _formula_response_values(data, response_spec)
-    if len(args) == 1:
-        surv = Surv(args[0], type=response_spec.type, origin=response_spec.origin)
-    elif len(args) == 2:
-        surv = Surv(
-            args[0],
-            args[1],
-            type=response_spec.type,
-            origin=response_spec.origin,
-        )
-    elif len(args) == 3:
-        surv = Surv(
-            args[0],
-            args[1],
-            args[2],
-            type=response_spec.type,
-            origin=response_spec.origin,
-        )
-    else:
-        raise ValueError("Surv(...) formula response must have 1, 2, or 3 column arguments")
-
+    surv = _surv_from_spec(data, response_spec)
     terms = _split_terms(rhs, _dot_terms(data, response_spec.columns))
     return surv, terms
 
@@ -1507,6 +1432,8 @@ def _numeric_term_values(values: list[Any], term: _CovariateTerm) -> list[float]
 
 
 def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
+    if term.call is not None:
+        raise ValueError(f"unsupported formula term(s): {term.call}")
     if term.arithmetic is not None:
         return _arithmetic_expression_values(data, term.arithmetic, n)
     values = _column(data, term.column)
@@ -1787,6 +1714,8 @@ def _design_rows_from_spec(
 
 
 def _covariate_term_name(term: _CovariateTerm) -> str:
+    if term.call is not None:
+        return term.call
     if term.transform is not None:
         return f"{term.transform}({term.column})"
     if term.categorical_wrapper is not None:
@@ -2038,3 +1967,186 @@ def _column_or_values(data: Any, values: Any, name: str) -> Any:
             raise ValueError(f"{name} column lookup requires data")
         return _column(data, values)
     return values
+
+
+# ---------------------------------------------------------------------------
+# model.frame: the one path from (formula, data, subset, na.action, weights,
+# ...) to a row-aligned frame that every fitter starts from.
+# ---------------------------------------------------------------------------
+
+_MODEL_FRAME_ARGUMENTS = ("weights", "offset", "id", "cluster", "istate")
+
+
+def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
+    """Evaluate a ``Surv(...)`` response spec against *data*."""
+
+    args = _formula_response_values(data, spec)
+    if len(args) not in {1, 2, 3}:
+        raise ValueError("Surv(...) formula response must have 1, 2, or 3 column arguments")
+    return Surv(*args, type=spec.type, origin=spec.origin)
+
+
+def _numeric_response(data: Any, spec: _SurvResponseSpec, n: int) -> list[float]:
+    values = _response_arg_values(data, spec.arguments[0], n)
+    try:
+        return [math.nan if _is_missing_value(value) else float(value) for value in values]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"formula response {spec.arguments[0]!r} must be numeric") from exc
+
+
+def model_frame(
+    formula: str,
+    data: Any,
+    *,
+    subset: Any | None = None,
+    na_action: str | None = None,
+    weights: Any | None = None,
+    offset: Any | None = None,
+    id: Any | None = None,
+    cluster: Any | None = None,
+    istate: Any | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> ModelFrame:
+    """R's ``model.frame`` call every survival fitter starts with.
+
+    The extra arguments may be column names of *data* or row-aligned vectors, as
+    R evaluates ``weights = wt`` in the data; ``extra`` names further such
+    columns (``pyears``' ``rmap`` variables).  ``subset`` (a mask or row indices)
+    and then ``na_action`` (``"na.pass"``, ``"na.omit"``, ``"na.fail"``; R's
+    ``model.frame`` default is ``na.omit``, each caller passes its own default) are
+    applied to the data and the arguments together, after which the response and
+    the terms are evaluated.
+    """
+
+    if not isinstance(formula, str):
+        raise TypeError("a formula argument is required")
+    if data is None:
+        raise ValueError("a data argument is required")
+    _lhs, sep, rhs = formula.partition("~")
+    if not sep:
+        raise ValueError("formula must contain '~'")
+    action = _normalize_na_action(na_action)
+    arguments: dict[str, Any] = {
+        name: None if value is None else _column_or_values(data, value, name)
+        for name, value in zip(
+            _MODEL_FRAME_ARGUMENTS, (weights, offset, id, cluster, istate), strict=True
+        )
+    }
+    extra_names = [] if extra is None else [str(name) for name in extra]
+    if set(extra_names) & set(_MODEL_FRAME_ARGUMENTS):
+        raise ValueError("extra columns must not be named like a model.frame argument")
+    for name in extra_names:
+        arguments[name] = _column_or_values(data, extra[name], name)
+    if subset is not None:
+        data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
+    data, arguments = _apply_formula_na_action(formula, data, action, **arguments)
+
+    spec = _response_spec(formula)
+    n = _data_row_count(data, formula)
+    response: Surv | None = None
+    y: list[float] | None = None
+    if spec is not None and spec.surv:
+        response = _surv_from_spec(data, spec)
+        n = len(response)
+    elif spec is not None:
+        y = _numeric_response(data, spec, n)
+        n = len(y)
+    terms = _split_terms(rhs, _dot_terms(data, list(spec.columns) if spec else []))
+
+    aligned: dict[str, list[Any] | None] = {}
+    for name, values in arguments.items():
+        if values is None:
+            aligned[name] = None
+            continue
+        materialized = _materialize_labels(values, name)
+        if len(materialized) == 1 and n != 1 and name in extra_names:
+            materialized = materialized * n
+        if len(materialized) != n:
+            raise ValueError(f"{name} must have the same length as the response")
+        aligned[name] = materialized
+    formula_offset = _offset_vector(data, terms.offsets, n)
+    offset_values = aligned["offset"]
+    if offset_values is not None:
+        offset_values = [float(value) for value in offset_values]
+        if formula_offset is not None:
+            offset_values = [a + b for a, b in zip(offset_values, formula_offset, strict=True)]
+    else:
+        offset_values = formula_offset
+    return ModelFrame(
+        formula=formula,
+        data=data,
+        n=n,
+        spec=spec,
+        response=response,
+        y=y,
+        terms=terms,
+        weights=aligned["weights"],
+        offset=offset_values,
+        id=aligned["id"],
+        cluster=aligned["cluster"],
+        istate=aligned["istate"],
+        na_action=action,
+        extra={name: aligned[name] or [] for name in extra_names},
+    )
+
+
+def _strata_term_values(mf: ModelFrame, columns: Sequence[str]) -> list[Any]:
+    """R's ``strata(a, b)`` model-frame column: the stratum label of each row."""
+
+    from ._surv import strata
+
+    factor = strata(*[_column(mf.data, column) for column in columns], labels=list(columns))
+    return list(factor.labels)
+
+
+def _model_variables(mf: ModelFrame) -> list[tuple[str, list[Any]]]:
+    """R's ``mf[-1]``: one evaluated column per formula term, in formula order.
+
+    Interactions contribute their factors; ``strata()`` becomes the strata label,
+    ``offset()`` the numeric offset; ``cluster()`` terms are left out.
+    """
+
+    columns: list[tuple[str, list[Any]]] = []
+    seen: set[str] = set()
+
+    def add(name: str, values: list[Any]) -> None:
+        if name not in seen:
+            seen.add(name)
+            columns.append((name, values))
+
+    terms = mf.terms
+    model_terms: Sequence[_FormulaModelTerm]
+    model_terms = terms.model_terms or [_ModelCovariateTerm(term) for term in terms.covariates]
+    for model_term in model_terms:
+        if isinstance(model_term, _ModelCovariateTerm):
+            for factor in _covariate_factors(model_term.term):
+                add(_covariate_term_name(factor), _term_values(mf.data, factor, mf.n))
+        elif isinstance(model_term, _ModelStrataTerm):
+            name = f"strata({', '.join(model_term.columns)})"
+            add(name, _strata_term_values(mf, model_term.columns))
+        elif isinstance(model_term, _ModelOffsetTerm):
+            term = model_term.term
+            values = _numeric_term_values(_term_raw_values(mf.data, term, mf.n), term)
+            add(f"offset({_covariate_term_name(term)})", values)
+    return columns
+
+
+def _model_strata(mf: ModelFrame) -> StrataFactor | None:
+    """R's ``strata(mf[ll])`` over the term labels: the grouping factor, or ``None``.
+
+    Used where a right-hand side only groups the observations (``rttright``,
+    ``survexp``): every term variable, ``strata()`` included, is a component of
+    the grouping factor, whose ``codes`` are zero based.
+    """
+
+    from ._surv import strata
+
+    terms = mf.terms
+    if any(isinstance(term, _InteractionTerm) for term in terms.covariates):
+        raise ValueError("Interaction terms are not valid for this function")
+    variables = [
+        (name, values) for name, values in _model_variables(mf) if not name.startswith("offset(")
+    ]
+    if not variables:
+        return None
+    return strata(*[values for _name, values in variables], labels=[n for n, _v in variables])
