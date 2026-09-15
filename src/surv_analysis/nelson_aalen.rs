@@ -83,7 +83,7 @@ pub fn nelson_aalen(
     let std_chaz = fit.std_chaz.as_deref().expect("se.fit is on");
     let unweighted = |weighted: &[f64], counts: Option<&Vec<f64>>| -> Vec<usize> {
         counts
-            .unwrap_or(&weighted.to_vec())
+            .map_or(weighted, Vec::as_slice)
             .iter()
             .map(|&value| value as usize)
             .collect()

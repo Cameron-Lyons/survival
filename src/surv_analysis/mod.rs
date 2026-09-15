@@ -76,9 +76,9 @@ pub use survfit_matrix::{
     survfit_from_matrix, survfit_multistate,
 };
 pub use survfit_summary::{
-    RmeanOption, SurvfitQuantiles, SurvmeanTable, quantile_survfit, quantile_survfit_py,
-    summary_survfit, summary_survfit_py, summary_survfit_times, survfit0, survfit0_aj,
-    survfit0_aj_py, survfit0_py, survmean, survmean_py,
+    RmeanOption, SurvfitQuantiles, SurvmeanTable, quantile_survfit, quantile_survfit_from,
+    quantile_survfit_py, summary_survfit, summary_survfit_py, summary_survfit_times, survfit0,
+    survfit0_aj, survfit0_aj_py, survfit0_py, survmean, survmean_py,
 };
 pub use survfitaj::{
     SurvfitAJCounts, SurvfitAJData, SurvfitAJInfluence, SurvfitAJOptions, SurvfitAJResult,

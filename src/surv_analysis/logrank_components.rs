@@ -3,6 +3,9 @@
 //! `survdiff2` (`src/survdiff2.c`), including the one-sample test against
 //! expected survival probabilities.
 
+use super::survfit_confint::ConfType;
+use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
@@ -11,6 +14,7 @@ use crate::internal::validation::{
 };
 use ndarray::Array2;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 /// The data of a `survdiff(Surv(...) ~ group + strata(s))` call.
 ///
@@ -115,9 +119,27 @@ fn level_index(levels: &[i32], code: i32) -> usize {
         .expect("code is one of its own levels")
 }
 
+/// The Kaplan-Meier curve of one stratum as `survdiff2.c` uses it for the
+/// G-rho weights: a left-continuous function, `S(t-)`, read off the
+/// `survfitkm` curve of the stratum.
+struct LeftContinuousKM<'a> {
+    time: &'a [f64],
+    surv: &'a [f64],
+}
+
+impl LeftContinuousKM<'_> {
+    fn at(&self, t: f64) -> f64 {
+        match self.time.partition_point(|&x| x < t) {
+            0 => 1.0,
+            k => self.surv[k - 1],
+        }
+    }
+}
+
 /// Port of `survdiff2` (`src/survdiff2.c`) for one stratum, given its rows
-/// ordered by `(time, -status)`.  Accumulates into `obs[group][stratum]`,
-/// `exp[group][stratum]` and `var`.
+/// ordered by `(time, -status)` and, for `rho != 0`, its Kaplan-Meier
+/// curve.  Accumulates into `obs[group][stratum]`, `exp[group][stratum]`
+/// and `var`.
 #[allow(clippy::too_many_arguments)]
 fn survdiff_stratum(
     rows: &[usize],
@@ -127,6 +149,7 @@ fn survdiff_stratum(
     status: &[i32],
     group: &[usize],
     rho: f64,
+    kaplan: Option<LeftContinuousKM<'_>>,
     obs: &mut [Vec<f64>],
     exp: &mut [Vec<f64>],
     var: &mut Array2<f64>,
@@ -134,57 +157,25 @@ fn survdiff_stratum(
     let n = rows.len();
     let ngroup = obs.len();
     // entry times of the stratum, descending, for the counting-process case
-    let mut entries_desc: Vec<usize> = match start {
-        Some(_) => rows.to_vec(),
+    let entries_desc: Vec<usize> = match start {
+        Some(start) => {
+            let mut entries = rows.to_vec();
+            entries.sort_by(|&a, &b| start[b].total_cmp(&start[a]));
+            entries
+        }
         None => Vec::new(),
     };
-    if let Some(start) = start {
-        entries_desc.sort_by(|&a, &b| start[b].total_cmp(&start[a]));
-    }
 
-    // The Kaplan-Meier weight, only needed if rho != 0, set up as a
-    // left-continuous function (unusual).
-    let mut kaplan = vec![1.0; n];
-    if rho != 0.0 {
-        let mut km = 1.0;
-        let mut entered = 0; // intervals with start < current time
-        let mut entries_asc = entries_desc.clone();
-        entries_asc.reverse();
-        let mut i = 0;
-        while i < n {
-            let current = time[rows[i]];
-            let mut j = i;
-            let mut deaths = 0.0;
-            while j < n && time[rows[j]] == current {
-                kaplan[j] = km;
-                deaths += f64::from(status[rows[j]]);
-                j += 1;
-            }
-            let nrisk = match start {
-                Some(start) => {
-                    while entered < n && start[entries_asc[entered]] < current {
-                        entered += 1;
-                    }
-                    // intervals with stop >= t minus those with start >= t
-                    (n - i) as f64 - (n - entered) as f64
-                }
-                None => (n - i) as f64,
-            };
-            km *= (nrisk - deaths) / nrisk;
-            i = j;
-        }
-    }
-
-    // Now for the actual test, walking backwards so risk sets accumulate.
+    // Walk backwards so risk sets accumulate.
     let mut risk = vec![0.0; ngroup];
     let mut left = 0; // intervals with start >= current time, already removed
     let mut i = n;
     while i > 0 {
         let current = time[rows[i - 1]];
-        let wt = if rho == 0.0 {
-            1.0
-        } else {
-            kaplan[i - 1].powf(rho)
+        // the G-rho weight is the left-continuous Kaplan-Meier, S(t-)^rho
+        let wt = match &kaplan {
+            Some(kaplan) => kaplan.at(current).powf(rho),
+            None => 1.0,
         };
         let mut deaths = 0.0;
         let mut j = i;
@@ -266,10 +257,37 @@ fn timefix_times(
     Ok((fixed.time2, fixed.time))
 }
 
+/// `survfit(Surv(...) ~ strata)` on the (already binned) data: the
+/// Kaplan-Meier curves the G-rho weights are read from.
+fn stratum_curves(
+    start: Option<&[f64]>,
+    time: &[f64],
+    status: &[i32],
+    stratum: &[usize],
+) -> SurvivalResult<SurvfitKMResult> {
+    let data = SurvfitKMData::try_new(
+        start.map(<[f64]>::to_vec),
+        time.to_vec(),
+        status.to_vec(),
+        None,
+        Some(stratum.iter().map(|&s| s as i32).collect()),
+        None,
+        None,
+    )?;
+    let options = SurvfitKMOptions {
+        se_fit: false,
+        conf_type: ConfType::None,
+        timefix: false,
+        ..SurvfitKMOptions::default()
+    };
+    survfitkm(&data, &options)
+}
+
 /// Port of `survdiff` (`R/survdiff.R`) for the k-sample test.
 ///
 /// `rho = 0` is the log-rank test, `rho = 1` the Peto & Peto modification
-/// of the Gehan-Wilcoxon test.
+/// of the Gehan-Wilcoxon test, whose weights are the left-continuous
+/// Kaplan-Meier curve of each stratum ([`survfitkm`]).
 pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<SurvDiffResult> {
     if !rho.is_finite() {
         return Err(SurvivalError::invalid_input("rho must be finite"));
@@ -298,29 +316,69 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
             _ => 0,
         })
         .collect();
+    let kaplan = if rho == 0.0 {
+        None
+    } else {
+        Some(stratum_curves(
+            start.as_deref(),
+            &time,
+            &data.status,
+            &stratum,
+        )?)
+    };
+    let curve_ranges = kaplan.as_ref().map(SurvfitKMResult::curve_ranges);
+
+    // the rows of each stratum in order(strat, time, -status): one pass
+    // to bucket them, then a sort per stratum; sorting (time, -status,
+    // row) keys rather than indices keeps the comparisons local in memory
+    let mut rows_by_stratum: Vec<Vec<usize>> = vec![Vec::new(); nstrat];
+    for (i, &s) in stratum.iter().enumerate() {
+        rows_by_stratum[s].push(i);
+    }
+    let rows_by_stratum: Vec<Vec<usize>> = rows_by_stratum
+        .into_iter()
+        .map(|rows| {
+            let mut keys: Vec<(f64, i32, usize)> = rows
+                .into_iter()
+                .map(|i| (time[i], -data.status[i], i))
+                .collect();
+            let order = |a: &(f64, i32, usize), b: &(f64, i32, usize)| {
+                a.0.total_cmp(&b.0)
+                    .then_with(|| (a.1, a.2).cmp(&(b.1, b.2)))
+            };
+            if keys.len() > PARALLEL_THRESHOLD_LARGE {
+                keys.par_sort_unstable_by(order);
+            } else {
+                keys.sort_unstable_by(order);
+            }
+            keys.into_iter().map(|(_, _, i)| i).collect()
+        })
+        .collect();
 
     let mut obs = vec![vec![0.0; nstrat]; ngroup];
     let mut exp = vec![vec![0.0; nstrat]; ngroup];
     let mut var = Array2::zeros((ngroup, ngroup));
-    let mut strata_counts = Vec::with_capacity(nstrat);
-    for s in 0..nstrat {
-        // order(strat, time, -status)
-        let mut rows: Vec<usize> = (0..n).filter(|&i| stratum[i] == s).collect();
-        rows.sort_by(|&a, &b| {
-            time[a]
-                .total_cmp(&time[b])
-                .then_with(|| data.status[b].cmp(&data.status[a]))
-                .then_with(|| a.cmp(&b))
-        });
-        strata_counts.push(rows.len());
+    let strata_counts: Vec<usize> = rows_by_stratum.iter().map(Vec::len).collect();
+    for (s, rows) in rows_by_stratum.iter().enumerate() {
+        let curve = kaplan
+            .as_ref()
+            .zip(curve_ranges.as_ref())
+            .map(|(km, ranges)| {
+                let range = ranges[s].clone();
+                LeftContinuousKM {
+                    time: &km.time[range.clone()],
+                    surv: &km.surv[range],
+                }
+            });
         survdiff_stratum(
-            &rows,
+            rows,
             s,
             start.as_deref(),
             &time,
             &data.status,
             &group,
             rho,
+            curve,
             &mut obs,
             &mut exp,
             &mut var,

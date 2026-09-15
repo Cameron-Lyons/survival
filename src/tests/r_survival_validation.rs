@@ -7,15 +7,14 @@ mod tests {
     use crate::residuals::coxmart::coxmart_sorted;
     use crate::surv_analysis::nelson_aalen;
     use crate::surv_analysis::{
-        SurvdiffData, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survdiff, survfitkm,
+        RmeanOption, SurvdiffData, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult,
+        quantile_survfit, survdiff, survfitkm, survmean,
     };
     use crate::tests::common::{
         STANDARD_TOL, STRICT_TOL, aml_combined_sorted as aml_combined, aml_maintained,
         aml_nonmaintained, approx_eq, lung_data, rel_approx_eq,
     };
-    use crate::validation::{
-        RmeanOption, SurvfitCurve, logrank_test, quantile_survfit, rmst_comparison, survmean,
-    };
+    use crate::validation::{logrank_test, rmst_comparison};
     use ndarray::{Array1, Array2};
 
     #[test]
@@ -336,16 +335,8 @@ mod tests {
 
     fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> (f64, f64) {
         let km = kaplan_meier(time, status);
-        let rows = survmean(
-            &[SurvfitCurve::from_km(&km)],
-            &[time.len() as f64],
-            None,
-            0.0,
-            RmeanOption::At(tau),
-            1.0,
-        )
-        .unwrap();
-        (rows[0].rmean.unwrap(), rows[0].se_rmean.unwrap())
+        let table = survmean(&km, 1.0, RmeanOption::At(tau)).unwrap();
+        (table.rmean.unwrap()[0], table.se_rmean.unwrap()[0])
     }
 
     #[test]
@@ -783,15 +774,7 @@ mod tests {
         let (time, status) = aml_nonmaintained();
         let km = kaplan_meier(&time, &status);
 
-        let result = quantile_survfit(
-            &[SurvfitCurve::from_km(&km)],
-            &[0.5],
-            true,
-            0.0,
-            1.0,
-            f64::EPSILON.sqrt(),
-        )
-        .unwrap();
+        let result = quantile_survfit(&km, &[0.5], true, 1.0, None).unwrap();
 
         let median = result.quantile[0][0];
         assert!(

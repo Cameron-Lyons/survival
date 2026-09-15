@@ -4,9 +4,8 @@
 //! on, and its C kernel `survfitaj` (`src/survfitaj.c`).
 
 use super::survfit_confint::{ConfType, survfit_confint, validate_conf_int};
-use super::survfitkm::survflag;
+use super::survfitkm::{ordered_subset, rows_by_curve, survflag};
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::sorting::sorted_indices_by;
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_non_negative,
 };
@@ -768,14 +767,6 @@ fn codes_by_first_appearance(values: &[i64]) -> (Vec<usize>, Vec<i64>) {
     (codes, levels)
 }
 
-fn ordered_subset(keep: &[usize], values: &[f64]) -> Vec<usize> {
-    let subset: Vec<f64> = keep.iter().map(|&i| values[i]).collect();
-    sorted_indices_by(&subset)
-        .into_iter()
-        .map(|k| keep[k])
-        .collect()
-}
-
 fn rows_to_vec(matrix: &Array2<f64>, columns: std::ops::Range<usize>) -> Vec<Vec<f64>> {
     matrix
         .outer_iter()
@@ -917,11 +908,8 @@ pub fn survfitaj(
                     "start.time must be a single numeric value",
                 ));
             }
-            for curve in 0..strata_levels.len() {
-                let cmax = (0..n_all)
-                    .filter(|&i| x_all[i] == curve)
-                    .map(|i| time[i])
-                    .fold(f64::NAN, f64::max);
+            for keep in rows_by_curve(&x_all, strata_levels.len()) {
+                let cmax = keep.iter().map(|&i| time[i]).fold(f64::NAN, f64::max);
                 if cmax <= start_time {
                     return Err(SurvivalError::invalid_input(
                         "start.time has removed all the observations from at least one curve",
@@ -1009,15 +997,9 @@ pub fn survfitaj(
                 .filter(|&i| stat2[i] != 0)
                 .map(|i| time[i])
                 .fold(f64::INFINITY, f64::min);
-            for curve in 0..strata_levels.len() {
-                let cmax = (0..n)
-                    .filter(|&i| x[i] == curve)
-                    .map(|i| time[i])
-                    .fold(f64::NAN, f64::max);
-                let cmin = (0..n)
-                    .filter(|&i| x[i] == curve)
-                    .map(|i| start[i])
-                    .fold(f64::NAN, f64::min);
+            for keep in rows_by_curve(&x, strata_levels.len()) {
+                let cmax = keep.iter().map(|&i| time[i]).fold(f64::NAN, f64::max);
+                let cmin = keep.iter().map(|&i| start[i]).fold(f64::NAN, f64::min);
                 if cmax < t0 || cmin >= t0 {
                     return Err(SurvivalError::invalid_input(format!(
                         "no obs overlap the default start time of {t0} in at least one curve; specify a start.time"
@@ -1069,13 +1051,17 @@ pub fn survfitaj(
     }
     let mut curves: Vec<Curve> = Vec::with_capacity(n_curves);
     let mut c2 = vec![0usize; n];
-    for (curve, &code) in strata_levels.iter().enumerate() {
-        let keep: Vec<usize> = (0..n).filter(|&i| x[i] == curve).collect();
+    let single = n_curves == 1;
+    for ((curve, &code), keep) in strata_levels
+        .iter()
+        .enumerate()
+        .zip(rows_by_curve(&x, n_curves))
+    {
         if keep.is_empty() {
             continue;
         }
-        let sort1 = ordered_subset(&keep, &time1);
-        let sort2 = ordered_subset(&keep, &time);
+        let sort1 = ordered_subset(&keep, &time1, single);
+        let sort2 = ordered_subset(&keep, &time, single);
         // reporting times, survival 3.8-11's rule (the fixture version)
         let mut utime: Vec<f64> = if entry {
             keep.iter()

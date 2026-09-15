@@ -316,6 +316,11 @@ fn prepare_times(times: &[f64], timefix: bool) -> SurvivalResult<Vec<f64>> {
 /// frame of the fit).  `collapse` sums the weighted residuals of the rows
 /// of each `id` (only meaningful with an id that repeats); `weighted`
 /// multiplies the rows by the case weights.
+///
+/// A `start_time` in the options drops observations from the curve but
+/// not from the residuals: R hands the whole model frame to `rsurvpart1`,
+/// where a row that ends before the first event time of the curve has no
+/// event-time index and therefore a residual of 0 at every time.
 pub fn survfitresid(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
@@ -337,11 +342,6 @@ fn residuals_from_fit(
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitResid> {
-    if options.start_time.is_some() {
-        return Err(SurvivalError::invalid_input(
-            "residuals are not available for a curve with a start.time",
-        ));
-    }
     let times = prepare_times(times, options.timefix)?;
     let n = data.time.len();
     // the rows of each curve, in data order
@@ -457,8 +457,10 @@ fn residuals_from_fit(
 
 /// Port of `pseudo` (`R/pseudo.R`) for single-endpoint curves: the
 /// jackknife pseudo values `S(t) + n * residual` at `times`, with `n` the
-/// number of observations (subjects, with an id) of the curve.  Rows are
-/// collapsed by id when an id repeats.
+/// number of observations (subjects, with an id) of the curve after any
+/// `start_time`.  Rows are collapsed by id when an id repeats; rows that a
+/// `start_time` removed from the curve keep the curve's estimate (their
+/// residual is 0, see [`survfitresid`]).
 pub fn pseudo(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
@@ -467,6 +469,14 @@ pub fn pseudo(
 ) -> SurvivalResult<SurvfitResid> {
     let fit = survfitkm(data, options)?;
     let mut residuals = residuals_from_fit(data, options, &fit, times, kind, true, true)?;
+    // summary(fit, rmean = t) refuses a truncation point before the first
+    // time of the fit (survfitKM objects carry no start.time)
+    let smallest = fit.time.iter().copied().fold(f64::INFINITY, f64::min);
+    if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
+        return Err(SurvivalError::invalid_input(
+            "Truncation point for the mean time in state is < smallest survival",
+        ));
+    }
     let nn: Vec<f64> = fit
         .n_id
         .as_ref()
@@ -843,6 +853,12 @@ fn rsurvpart2_cumhaz(
 
 /// Port of `residuals.survfit` for multi-state curves (`rsurvpart2`).
 /// `collapse` sums the weighted rows of each cluster (the id by default).
+///
+/// As for single-endpoint curves, a `start_time` does not remove rows
+/// from the residuals: R passes the whole model frame to `survfitresid.c`,
+/// which walks every observation from the smallest event time (the curve's
+/// `t0` only zeroes the influence at reporting times before it and starts
+/// the area under the curve).
 pub fn survfitresid_aj(
     data: &SurvfitAJData,
     options: &SurvfitAJOptions,
@@ -864,11 +880,6 @@ fn residuals_aj_from_fit(
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
-    if options.start_time.is_some() {
-        return Err(SurvivalError::invalid_input(
-            "residuals are not available for a curve with a start.time",
-        ));
-    }
     let times = prepare_times(times, options.timefix)?;
     let n = data.time.len();
     let AJPrepared {
@@ -1135,7 +1146,12 @@ pub fn pseudo_aj(
     let fit = survfitaj(data, options)?;
     let mut residuals = residuals_aj_from_fit(data, options, &fit, times, kind, true, true)?;
     let ranges = fit.curve_ranges();
-    let smallest = fit.time.iter().copied().fold(f64::INFINITY, f64::min);
+    // summary(fit, rmean = t) checks the truncation point against the
+    // start.time when the fit has one (survfitAJ keeps it), the smallest
+    // time otherwise
+    let smallest = options
+        .start_time
+        .unwrap_or_else(|| fit.time.iter().copied().fold(f64::INFINITY, f64::min));
     if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
         return Err(SurvivalError::invalid_input(
             "Truncation point for the mean time in state is < smallest survival",
@@ -1581,6 +1597,82 @@ mod tests {
         let cumhaz =
             survfitresid_aj(&data, &options, &times, ResidualType::Cumhaz, false, false).unwrap();
         assert_eq!(cumhaz.columns, vec!["1:2", "1:3"]);
+    }
+
+    #[test]
+    fn start_time_keeps_every_row_as_r_does() {
+        // fit <- survfit(Surv(time, status) ~ 1, aml, start.time = 10)
+        // residuals(fit, times = c(12, 24, 48)); pseudo(fit, times = ...)
+        let options = SurvfitKMOptions {
+            start_time: Some(10.0),
+            ..Default::default()
+        };
+        let times = [12.0, 24.0, 48.0];
+        let resid =
+            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        assert_eq!(resid.values.len(), 23);
+        // the observation at time 9 is not part of the curve: residual 0
+        assert_eq!(resid.values[0], vec![0.0, 0.0, 0.0]);
+        assert!(close(resid.values[1][0], 0.00308641975308642));
+        assert!(close(resid.values[1][1], -0.03880070546737213));
+        assert!(close(resid.values[3][2], -0.006823717141177459));
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate).unwrap();
+        // ... and its pseudo value is the estimate, inflated by fit$n = 18
+        assert!(close(ps.values[0][0], 0.944444444444444));
+        assert!(close(ps.values[0][2], 0.1058201058201058));
+        assert!(close(ps.values[1][0], 1.0));
+        assert!(ps.values[1][1].abs() < 1e-12);
+        assert!(close(ps.values[3][1], -0.112244897959184));
+        let auc = pseudo(&aml(), &options, &times, ResidualType::Auc).unwrap();
+        assert!(close(auc.values[0][0], 2.0)); // the area from t0 = 10 to 12
+        assert!(close(auc.values[0][1], 12.2142857142857));
+        assert!(close(auc.values[2][2], 25.0714285714286));
+        let resid_auc =
+            survfitresid(&aml(), &options, &times, ResidualType::Auc, false, false).unwrap();
+        assert!(close(resid_auc.values[1][1], -0.511_904_761_904_762));
+        assert!(close(resid_auc.values[2][2], 0.139329805996473));
+        // summary(fit, rmean = 5) refuses a point before the first time
+        assert!(
+            pseudo(&aml(), &options, &[5.0, 24.0], ResidualType::Auc)
+                .unwrap_err()
+                .to_string()
+                .contains("smallest survival")
+        );
+    }
+
+    #[test]
+    fn multistate_start_time_keeps_every_row_as_r_does() {
+        // fit <- survfit(Surv(time, event) ~ 1, start.time = 2) on the
+        // synthetic_ties_mstate frame; residuals(fit, times = c(2, 5, 8))
+        let data = ties_mstate();
+        let options = SurvfitAJOptions {
+            start_time: Some(2.0),
+            ..Default::default()
+        };
+        let times = [2.0, 5.0, 8.0];
+        let resid =
+            survfitresid_aj(&data, &options, &times, ResidualType::Pstate, false, false).unwrap();
+        assert_eq!(resid.values.len(), 16);
+        // values[row][state][time]: the rows before the start take part
+        assert!(close(resid.values[0][0][1], -0.03312800480769231));
+        assert!(close(resid.values[0][1][1], 0.04965444711538462));
+        assert!(close(resid.values[1][2][1], 0.045_973_557_692_307_7));
+        assert!(close(resid.values[2][1][1], -0.00262920673076923));
+        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate).unwrap();
+        assert!(close(ps.values[0][0][1], 0.175105168269231));
+        assert!(close(ps.values[0][1][1], 0.808_969_350_961_538_4));
+        assert!(close(ps.values[2][2][1], 0.2034254807692308));
+        let auc = pseudo_aj(&data, &options, &times, ResidualType::Auc).unwrap();
+        assert!(close(auc.values[0][0][2], 0.350116436298077));
+        assert!(close(auc.values[0][1][2], 5.621_788_611_778_847));
+        assert!(close(auc.values[2][2][2], 1.1062199519230769));
+        // the truncation point is checked against the start.time
+        assert!(
+            pseudo_aj(&data, &options, &[1.5, 5.0], ResidualType::Auc)
+                .unwrap_err()
+                .to_string()
+                .contains("smallest survival")
+        );
     }
 
     #[test]

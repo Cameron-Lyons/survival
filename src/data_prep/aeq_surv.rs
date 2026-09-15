@@ -35,7 +35,7 @@ fn tie_cuts(columns: &[&[f64]], tolerance: f64) -> Option<Vec<f64>> {
         .flat_map(|c| c.iter().copied())
         .filter(|v| v.is_finite())
         .collect();
-    y.sort_by(|a, b| a.total_cmp(b));
+    y.sort_unstable_by(f64::total_cmp);
     y.dedup();
     if y.len() < 2 {
         return None;
