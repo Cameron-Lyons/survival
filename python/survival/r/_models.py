@@ -8,7 +8,6 @@ from operator import index
 from statistics import NormalDist
 from typing import Any
 
-from .. import _survival as _core
 from ._coerce import (
     _clamp_probability,
     _collapse_is_false,
@@ -26,10 +25,8 @@ from ._coerce import (
     _normalize_optional_bool_option,
     _normalize_predict_type,
     _normalize_residual_type,
-    _normalize_survreg_residual_type,
     _pop_dotted_keyword,
     _safe_exp,
-    _strata_value_label,
     _weight_residual_result,
 )
 from ._coxph import (
@@ -70,29 +67,20 @@ from ._fit import (
     _normalize_predict_reference,
     _prediction_inputs,
     _require_model_fit,
-    _survreg_scale_coef_names,
-    _survreg_scales,
-    _survreg_variance_matrix,
     _unwrap_formula_fit,
 )
 from ._formula import _design_term_output_names
 from ._pyears import _finegray_frame, _pyears_result_frame
 from ._surv import Surv
 from ._survfit import _optional_float_list
-from ._survreg import (
-    _drop_single_quantile,
-    _survreg_dfbeta_residuals,
-    _survreg_distribution_family,
-    _survreg_influence_residuals,
-    _survreg_original_scale_loglik,
-    _survreg_predict_terms,
-    _survreg_prediction_se,
-    _survreg_quantile_prediction_matrix,
-    _survreg_quantile_prediction_se_matrix,
-    _survreg_quantile_probabilities,
-    _survreg_quantile_scores,
-    _survreg_t_fit_degrees_of_freedom,
-    _survreg_term_prediction_se,
+from ._survreg import (  # survreg methods (owned by the survreg module)
+    SurvregAnovaResult,
+    predict_survreg,
+    residuals_survreg,
+    survreg_scale_names,
+    survreg_summary,
+    survreg_summary_names,
+    survreg_vcov,
 )
 from ._types import (
     ConcordanceResult,
@@ -133,12 +121,10 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
     include_complete = (
         _is_coxph_fit(fit) if complete is None else _normalize_bool_option(complete, "complete")
     )
-    if _is_survreg_fit(fit):
-        location_width = len(_location_beta(fit))
-        names = _fit_location_coef_names(fit, location_width)
+    if _is_survreg_fit(fit):  # survreg: location names, plus Log(scale) when complete
+        names = _fit_location_coef_names(fit, len(_location_beta(fit)))
         if include_complete:
-            total_width = len(list(fit.coefficients))
-            names.extend(_survreg_scale_coef_names(fit, total_width - location_width))
+            names.extend(survreg_scale_names(fit))
         return names
 
     beta = _cox_beta(fit)
@@ -153,9 +139,8 @@ def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
 
     _require_model_fit(fit, "vcov")
     include_complete = _normalize_bool_option_with_default(complete, "complete", True)
-    if _is_survreg_fit(fit):
-        width = len(list(fit.coefficients)) if include_complete else len(_location_beta(fit))
-        return _survreg_variance_matrix(fit, width)
+    if _is_survreg_fit(fit):  # survreg: fit$var, or its location block
+        return survreg_vcov(fit, include_complete)
     variance = _cox_variance_matrix(fit, len(_cox_beta(fit)))
     if include_complete:
         return variance
@@ -167,8 +152,8 @@ def loglik(fit: Any) -> float:
     """Return a fitted model log likelihood."""
 
     _require_model_fit(fit, "loglik")
-    if _is_survreg_fit(fit):
-        return _survreg_original_scale_loglik(fit)
+    if _is_survreg_fit(fit):  # survreg: loglik[2], on the original response scale
+        return float(_unwrap_formula_fit(fit).log_likelihood)
     return _cox_full_loglik(_unwrap_formula_fit(fit))
 
 
@@ -196,8 +181,8 @@ def degrees_freedom(fit: Any) -> int:
     """Return the number of fitted parameters counted by model log likelihoods."""
 
     _require_model_fit(fit, "degrees_freedom")
-    if _is_survreg_fit(fit):
-        return len(list(fit.coefficients))
+    if _is_survreg_fit(fit):  # survreg: sum(fit$df) (coefficients plus estimated scales)
+        return int(_unwrap_formula_fit(fit).df)
     return _cox_degrees_of_freedom(_unwrap_formula_fit(fit))
 
 
@@ -207,7 +192,7 @@ def df_residual(fit: Any) -> int:
     _require_model_fit(fit, "df_residual")
     if not _is_survreg_fit(fit):
         raise TypeError("df_residual is only defined for fitted survreg models")
-    return nobs(fit) - degrees_freedom(fit)
+    return int(_unwrap_formula_fit(fit).df_residual)
 
 
 def _finite_numeric_option(value: Any, name: str) -> float:
@@ -499,39 +484,6 @@ def _summary_naive_variance(
     return variance
 
 
-def _survreg_summary_coef_names(fit: Any, location_width: int, total_width: int) -> list[str]:
-    names = _fit_location_coef_names(fit, location_width)
-    scale_width = total_width - location_width
-    if scale_width <= 0:
-        return names
-    if scale_width == 1:
-        names.append("Log(scale)")
-        return names
-
-    design = _formula_design_for_fit(fit)
-    if design is not None and len(design.strata_levels) == scale_width:
-        level_parts = [
-            (level,) if len(design.strata) == 1 else tuple(level) for level in design.strata_levels
-        ]
-        short_labels = all(
-            len(parts) == len(design.strata) and all(isinstance(value, str) for value in parts)
-            for parts in level_parts
-        )
-        for parts in level_parts:
-            if len(parts) != len(design.strata):
-                names.append(str(parts))
-                continue
-            labels = [_strata_value_label(value) for value in parts]
-            if not short_labels:
-                labels = [
-                    f"{term}={label}" for term, label in zip(design.strata, labels, strict=True)
-                ]
-            names.append(", ".join(labels))
-    else:
-        names.extend(_survreg_scale_coef_names(fit, scale_width))
-    return names
-
-
 def _coefficient_selection_indices(parm: Any, names: list[str]) -> list[int]:
     if parm is None:
         return list(range(len(names)))
@@ -611,17 +563,19 @@ def model_summary(fit: Any) -> dict[str, Any]:
 
     _require_model_fit(fit, "model_summary")
     is_survreg = _is_survreg_fit(fit)
-    robust = bool(getattr(fit, "robust", False))
-    if is_survreg:
-        location_width = len(_location_beta(fit))
-        coefficients = [float(value) for value in fit.coefficients]
-        names = _survreg_summary_coef_names(fit, location_width, len(coefficients))
-        variance = vcov(fit, complete=True)
+    if is_survreg:  # survreg: summary.survreg's table rows are coefficients + scales
+        model = _unwrap_formula_fit(fit)
+        coefficients = [float(value) for value in model.coefficients]
+        names = survreg_summary_names(fit)
+        variance = survreg_vcov(fit, True)
+        naive_variance = model.naive_variance_matrix
+        robust = naive_variance is not None
     else:
+        robust = bool(getattr(fit, "robust", False))
         names = coef_names(fit)
         coefficients = coef(fit)
         variance = vcov(fit, complete=True)
-    naive_variance = _summary_naive_variance(fit, len(coefficients), variance)
+        naive_variance = _summary_naive_variance(fit, len(coefficients), variance)
     result: dict[str, Any] = {
         "model_type": "survreg" if is_survreg else "coxph",
         "coefficients": _coefficient_summary_rows(
@@ -640,18 +594,7 @@ def model_summary(fit: Any) -> dict[str, Any]:
         "robust": robust,
     }
     if is_survreg:
-        result["location_coefficients"] = coef(fit)
-        result["location_coefficient_names"] = coef_names(fit)
-        result["scale"] = float(fit.scale)
-        result["scales"] = _survreg_scales(fit)
-        distribution = getattr(fit, "distribution", None)
-        if distribution is not None:
-            result["distribution"] = str(distribution)
-        distribution_parameters = getattr(fit, "distribution_parameters", None)
-        if distribution_parameters is not None:
-            parameter_values = [float(value) for value in distribution_parameters]
-            if parameter_values:
-                result["distribution_parameters"] = parameter_values
+        result.update(survreg_summary(fit))
     else:
         model = _unwrap_formula_fit(fit)
         logliks = _cox_loglik_values(model)
@@ -1294,6 +1237,8 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _survdiff_frame(result)
     if hasattr(result, "rows") and hasattr(result, "test_type"):
         return _anova_frame(result)
+    if isinstance(result, SurvregAnovaResult):  # survreg: anova.survreg's data frame
+        return result.frame()
     raise TypeError("as_data_frame requires a survival result object")
 
 
@@ -1319,67 +1264,29 @@ def predict(
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"predict got unexpected keyword argument(s): {unexpected}")
 
-    is_survreg = _is_survreg_fit(fit)
-    predict_type = _normalize_predict_type(
-        type if type is not None else ("response" if is_survreg else "lp"),
-        survreg=is_survreg,
-    )
+    if _is_survreg_fit(fit):  # survreg: predict.survreg(object, newdata, type, se.fit, terms, p)
+        for name, value in (
+            ("centered", centered),
+            ("collapse", None if _collapse_is_false(collapse) else collapse),
+            ("reference", reference),
+            ("times", times),
+            ("quantiles", quantiles),
+        ):
+            if value is not None:
+                raise ValueError(f"{name} is not an argument of predict.survreg")
+        return predict_survreg(
+            fit,
+            newdata,
+            type="response" if type is None else type,
+            se_fit=se_fit,
+            terms=terms,
+            p=(0.1, 0.9) if p is None else p,
+        )
+
+    predict_type = _normalize_predict_type(type if type is not None else "lp", survreg=False)
     centered_value = _normalize_optional_bool_option(centered, "centered")
     include_se = _normalize_bool_option(se_fit, "se_fit")
     rows, offsets = _prediction_inputs(fit, newdata)
-
-    if is_survreg:
-        if not _collapse_is_false(collapse):
-            raise ValueError("collapse is only supported for Cox model predictions")
-        if reference is not None:
-            raise ValueError("reference is only supported for Cox model predictions")
-        if centered_value:
-            raise ValueError("centered predictions are only supported for Cox models")
-        if predict_type in {"survival", "expected", "risk"}:
-            raise ValueError(f"predict type={predict_type!r} is not supported for survreg fits")
-        if predict_type == "terms":
-            term_predictions = _survreg_predict_terms(fit, rows, terms)
-            if include_se:
-                return PredictResult(
-                    term_predictions,
-                    _survreg_term_prediction_se(fit, rows, terms),
-                )
-            return term_predictions
-        if predict_type in {"quantile", "uquantile"}:
-            if p is not None and quantiles is not None:
-                raise ValueError("use only one of p or quantiles")
-            q_values = quantiles if quantiles is not None else p
-            q = _survreg_quantile_probabilities(q_values)
-            scores = _survreg_quantile_scores(fit, q)
-            predictions = _survreg_quantile_prediction_matrix(
-                fit,
-                rows,
-                offsets,
-                scores,
-                predict_type,
-                newdata,
-            )
-            if include_se:
-                se = _survreg_quantile_prediction_se_matrix(
-                    fit,
-                    rows,
-                    scores,
-                    predictions,
-                    predict_type,
-                    newdata,
-                )
-                return PredictResult(
-                    _drop_single_quantile(predictions, q),
-                    _drop_single_quantile(se, q),
-                )
-            return _drop_single_quantile(predictions, q)
-        result = fit.predict(rows, predict_type, offsets, False)
-        if include_se:
-            return PredictResult(
-                result.predictions,
-                _survreg_prediction_se(fit, rows, predict_type, result.predictions),
-            )
-        return result.predictions
 
     reference_name = _normalize_predict_reference(reference, centered_value, predict_type)
 
@@ -1506,62 +1413,16 @@ def residuals(
     """R-style residual generic for fitted survival models."""
 
     weighted_value = _normalize_optional_bool_option(weighted, "weighted")
-    rsigma_value = _normalize_optional_bool_option(rsigma, "rsigma")
-    if _is_survreg_fit(fit):
+    if _is_survreg_fit(fit):  # survreg: residuals.survreg(object, type, rsigma, collapse, weighted)
         if terms is not None:
             raise ValueError("terms is only supported for Cox partial residuals")
-        residual_type = _normalize_survreg_residual_type(type)
-        if residual_type in {"dfbeta", "dfbetas"}:
-            dfbeta_values = _survreg_dfbeta_residuals(fit, residual_type, rsigma=rsigma_value)
-            if weighted_value:
-                dfbeta_values = _weight_residual_result(
-                    dfbeta_values,
-                    _model_residual_weights(fit, len(dfbeta_values)),
-                )
-            return _collapse_residual_result(dfbeta_values, collapse, len(dfbeta_values))
-        if residual_type == "matrix":
-            matrix_values = _core.survreg_residual_matrix(
-                fit.time,
-                fit.status,
-                fit.linear_predictors,
-                fit.scale,
-                fit.distribution,
-                time2=getattr(fit, "time2", None),
-                distribution_parameter=(
-                    _survreg_t_fit_degrees_of_freedom(
-                        getattr(fit, "distribution_parameters", None),
-                    )
-                    if _survreg_distribution_family(fit) == "t"
-                    else None
-                ),
-            )
-            if weighted_value:
-                matrix_values = _weight_residual_result(
-                    matrix_values,
-                    _model_residual_weights(fit, len(matrix_values)),
-                )
-            return _collapse_residual_result(matrix_values, collapse, len(matrix_values))
-        if residual_type in {"ldcase", "ldresp", "ldshape"}:
-            influence_values = _survreg_influence_residuals(
-                fit,
-                residual_type,
-                rsigma=rsigma_value,
-            )
-            if weighted_value:
-                influence_values = _weight_residual_result(
-                    influence_values,
-                    _model_residual_weights(fit, len(influence_values)),
-                )
-            return _collapse_residual_result(influence_values, collapse, len(influence_values))
-        if residual_type in {"response", "deviance", "working"}:
-            scalar_values = fit.residuals(residual_type).residuals
-            if weighted_value:
-                scalar_values = _weight_residual_result(
-                    scalar_values,
-                    _model_residual_weights(fit, len(scalar_values)),
-                )
-            return _collapse_residual_result(scalar_values, collapse, len(scalar_values))
-        raise AssertionError(f"unhandled survreg residual type {residual_type!r}")
+        return residuals_survreg(
+            fit,
+            type="response" if type is None else type,
+            rsigma=True if rsigma is None else rsigma,
+            collapse=None if _collapse_is_false(collapse) else collapse,
+            weighted=bool(weighted_value),
+        )
 
     residual_type = _normalize_residual_type(type)
     if (
