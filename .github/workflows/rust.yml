@@ -272,10 +272,12 @@ jobs:
 
       # The fixtures are single-line JSON, so `git diff` would print one
       # unreadable line per file; compare_fixtures.py names the case and
-      # field of every differing value instead.
+      # field of every differing value instead.  The tolerance absorbs
+      # last-ulp differences between builds of R (BLAS, libm); anything a
+      # survival release or generator edit changes is far larger.
       - name: Check for differences
         run: |
-          if python3 test/r/compare_fixtures.py "$RUNNER_TEMP/committed-fixtures" test/r/fixtures; then
+          if python3 test/r/compare_fixtures.py "$RUNNER_TEMP/committed-fixtures" test/r/fixtures --rtol 1e-9 --atol 1e-12; then
             echo "R fixtures are up to date"
           else
             echo "R fixtures changed. Regenerate with survival ${R_SURVIVAL_VERSION} and commit, or bump R_SURVIVAL_VERSION together with the fixture metadata." >&2

@@ -36,21 +36,34 @@ renv/bin/Rscript test/r/generate_fixtures.R
 ```
 
 The script is deterministic (no RNG, no timestamps); rerunning it with the
-same package versions reproduces the files byte for byte, and
-`generate_fixtures.R --check` verifies that by generating a second copy into
-a scratch directory and comparing the two.  (`R_FIXTURES_DIR` overrides the
-output directory.)  The versions used are recorded in every file's
-`metadata` (currently survival 3.8.11; generated on R 4.5.3, which CI pins).  Regenerate everything
-rather than editing a fixture by hand, and commit the fixtures together with
-the generator change that produced them.  CI's "R Fixture Stability" job
-regenerates with the pinned versions and compares value by value with
-`test/r/compare_fixtures.py` (`git diff` is useless on single-line JSON);
-when it fails, the regenerated files are attached to the run as the
-`regenerated-r-fixtures` artifact:
+same package versions on the same machine reproduces the files byte for
+byte, and `generate_fixtures.R --check` verifies that by generating a second
+copy into a scratch directory and comparing the two.  (`R_FIXTURES_DIR`
+overrides the output directory.)  The versions used are recorded in every
+file's `metadata` (currently survival 3.8.11; generated on R 4.5.3, which CI
+pins).  Regenerate everything rather than editing a fixture by hand, and
+commit the fixtures together with the generator change that produced them.
+
+Different builds of R do not agree to the last bit: a conda-forge R with
+OpenBLAS and CRAN's Ubuntu build with the reference BLAS differ at 1e-15
+relative in most model output, and a few quantities are discontinuous in
+that noise (`concordance` decides ties in the linear predictor by exact
+equality, and `aareg`'s late-time increments sit on a rank decision).  The
+committed fixtures are therefore the ones CI's "R Fixture Stability" job
+regenerates on `ubuntu-latest`; the job compares value by value with
+`test/r/compare_fixtures.py` (`git diff` is useless on single-line JSON)
+inside a 1e-9 relative tolerance, and on failure attaches the regenerated
+files to the run as the `regenerated-r-fixtures` artifact.  To refresh the
+fixtures, take them from that artifact rather than from a local R:
 
 ```sh
-python test/r/compare_fixtures.py test/r/fixtures regenerated-r-fixtures/
+gh run download <run-id> -n regenerated-r-fixtures -D regenerated/
+python test/r/compare_fixtures.py test/r/fixtures regenerated/   # what moved
+cp regenerated/*.json test/r/fixtures/
 ```
+
+The platform-sensitive cases are listed in both suites' `KNOWN_FAILURES`
+with the reason "tied linear predictors decided by floating-point noise".
 
 One R quirk is worked around in the generator: `survfitAJ`'s C code
 (`src/survfitaj.c`) zeroes only the first `nstate` slots of its `std.chaz`

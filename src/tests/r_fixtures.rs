@@ -70,6 +70,14 @@ const KNOWN_FAILURES: &[(&str, &str)] = &[
         "missing feature: concordance of a survreg fit",
     ),
     (
+        "coxph/lung_age_sex_cluster_inst/concordance",
+        "mismatch: tied linear predictors decided by floating-point noise: cvar[0]: 0.00069155 != 0.00069155",
+    ),
+    (
+        "coxph/lung_age_sex_init_iter0/concordance",
+        "mismatch: tied linear predictors decided by floating-point noise: concordance[0]: 0.60258 != 0.60255",
+    ),
+    (
         "coxph/lung_interaction",
         "missing feature: harness: formula term age * sex",
     ),
@@ -92,10 +100,6 @@ const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
         "coxph_penalized/cgd_frailty_gamma_id/concordance",
         "mismatch: tied linear predictors decided by floating-point noise: concordance.count[0]: 6421 != 6422",
-    ),
-    (
-        "coxph_penalized/lung_pspline_karno_df3_nterm6/concordance",
-        "mismatch: tied linear predictors decided by floating-point noise: concordance[0]: 0.63189 != 0.63181",
     ),
     (
         "survcondense/lung_split_age_sex_epi",
