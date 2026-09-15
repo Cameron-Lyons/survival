@@ -1293,14 +1293,11 @@ fn linear_predictor_concordance(
     }
 }
 
-/// Checks that `assign` groups existing columns.
+/// Checks that `assign` groups existing columns.  A term may have no
+/// columns left (all of them aliased); its prediction is then 0, as in
+/// `predict.coxph`.
 pub(crate) fn validate_assign(assign: &[Vec<usize>], nvar: usize) -> SurvivalResult<()> {
     for (term, columns) in assign.iter().enumerate() {
-        if columns.is_empty() {
-            return Err(SurvivalError::invalid_input(format!(
-                "assign[{term}] cannot be empty"
-            )));
-        }
         if let Some(column) = columns.iter().find(|&&c| c >= nvar) {
             return Err(SurvivalError::invalid_input(format!(
                 "assign[{term}] refers to column {column}, but the model has {nvar}"

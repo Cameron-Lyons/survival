@@ -458,17 +458,19 @@ fn residuals_from_fit(
 /// Port of `pseudo` (`R/pseudo.R`) for single-endpoint curves: the
 /// jackknife pseudo values `S(t) + n * residual` at `times`, with `n` the
 /// number of observations (subjects, with an id) of the curve after any
-/// `start_time`.  Rows are collapsed by id when an id repeats; rows that a
-/// `start_time` removed from the curve keep the curve's estimate (their
-/// residual is 0, see [`survfitresid`]).
+/// `start_time`.  With `collapse` the rows are collapsed by id when an id
+/// repeats (and the residuals weighted, R's `weighted = collapse`); rows
+/// that a `start_time` removed from the curve keep the curve's estimate
+/// (their residual is 0, see [`survfitresid`]).
 pub fn pseudo(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     times: &[f64],
     kind: ResidualType,
+    collapse: bool,
 ) -> SurvivalResult<SurvfitResid> {
     let fit = survfitkm(data, options)?;
-    let mut residuals = residuals_from_fit(data, options, &fit, times, kind, true, true)?;
+    let mut residuals = residuals_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
     // summary(fit, rmean = t) refuses a truncation point before the first
     // time of the fit (survfitKM objects carry no start.time)
     let smallest = fit.time.iter().copied().fold(f64::INFINITY, f64::min);
@@ -1142,9 +1144,11 @@ pub fn pseudo_aj(
     options: &SurvfitAJOptions,
     times: &[f64],
     kind: ResidualType,
+    collapse: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
     let fit = survfitaj(data, options)?;
-    let mut residuals = residuals_aj_from_fit(data, options, &fit, times, kind, true, true)?;
+    let mut residuals =
+        residuals_aj_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
     let ranges = fit.curve_ranges();
     // summary(fit, rmean = t) checks the truncation point against the
     // start.time when the fit has one (survfitAJ keeps it), the smallest
@@ -1267,7 +1271,7 @@ pub fn survfitresid_aj_py(
 
 /// Python binding of [`pseudo_aj`].
 #[pyfunction(name = "pseudo_aj")]
-#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true))]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_aj_py(
     time: Vec<f64>,
@@ -1284,6 +1288,7 @@ pub fn pseudo_aj_py(
     p0: Option<Vec<f64>>,
     type_: &str,
     timefix: bool,
+    collapse: bool,
 ) -> PyResult<SurvfitAJResid> {
     let (data, options) = aj_inputs(
         time,
@@ -1304,6 +1309,7 @@ pub fn pseudo_aj_py(
         &options,
         &times,
         ResidualType::parse(type_)?,
+        collapse,
     )?)
 }
 
@@ -1363,7 +1369,7 @@ pub fn survfitresid_py(
 
 /// Python binding of [`pseudo`].
 #[pyfunction(name = "pseudo")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_py(
     time: Vec<f64>,
@@ -1377,6 +1383,7 @@ pub fn pseudo_py(
     stype: i32,
     ctype: i32,
     timefix: bool,
+    collapse: bool,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
         time, status, start, weights, strata, id, stype, ctype, timefix,
@@ -1386,6 +1393,7 @@ pub fn pseudo_py(
         &options,
         &times,
         ResidualType::parse(type_)?,
+        collapse,
     )?)
 }
 
@@ -1431,14 +1439,14 @@ mod tests {
         assert!(close(auc.values[0][2], -0.782878746961923));
         assert!(close(auc.values[2][2], 0.350661625708885));
         // pseudo(fit, times, type)
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate).unwrap();
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
         assert!(ps.values[0][0].abs() < 1e-12);
         assert!(close(ps.values[2][1], 0.785714285714286));
         assert!(close(ps.values[2][2], 0.119047619047619));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Cumhaz).unwrap();
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Cumhaz, true).unwrap();
         assert!(close(ps.values[0][0], 1.24593124415048));
         assert!(close(ps.values[2][2], 1.75547476518401));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Auc).unwrap();
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
         for value in &ps.values[0] {
             assert!(close(*value, 9.0));
         }
@@ -1492,7 +1500,7 @@ mod tests {
         ));
         assert!(survfitresid(&data, &options, &[5.0], ResidualType::Pstate, true, false).is_err());
         // pseudo values are inflated by the number of subjects
-        let ps = pseudo(&data, &options, &[5.0], ResidualType::Pstate).unwrap();
+        let ps = pseudo(&data, &options, &[5.0], ResidualType::Pstate, true).unwrap();
         assert_eq!(ps.values.len(), 3);
         let fit = survfitkm(&data, &options).unwrap();
         let s5 = fit.surv[fit.time.partition_point(|&t| t <= 5.0) - 1];
@@ -1504,13 +1512,27 @@ mod tests {
         let mut data = aml();
         data.strata = Some(vec![1; 11].into_iter().chain(vec![2; 12]).collect());
         let options = SurvfitKMOptions::default();
-        let both = pseudo(&data, &options, &[12.0, 24.0, 48.0], ResidualType::Pstate).unwrap();
+        let both = pseudo(
+            &data,
+            &options,
+            &[12.0, 24.0, 48.0],
+            ResidualType::Pstate,
+            true,
+        )
+        .unwrap();
         assert_eq!(both.curve[0], 0);
         assert_eq!(both.curve[11], 1);
         let mut second = aml();
         second.time = second.time[11..].to_vec();
         second.status = second.status[11..].to_vec();
-        let alone = pseudo(&second, &options, &[12.0, 24.0, 48.0], ResidualType::Pstate).unwrap();
+        let alone = pseudo(
+            &second,
+            &options,
+            &[12.0, 24.0, 48.0],
+            ResidualType::Pstate,
+            true,
+        )
+        .unwrap();
         for (row, expected) in both.values[11..].iter().zip(&alone.values) {
             for (a, b) in row.iter().zip(expected) {
                 assert!(close(*a, *b));
@@ -1578,7 +1600,7 @@ mod tests {
             );
         }
         // pseudo values average to the estimate
-        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate).unwrap();
+        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
         for j in 0..3 {
             let mean = ps.values.iter().map(|by_col| by_col[j][0]).sum::<f64>() / 16.0;
             assert!(close(mean, fit.pstate[row_at_2][j]));
@@ -1616,14 +1638,14 @@ mod tests {
         assert!(close(resid.values[1][0], 0.00308641975308642));
         assert!(close(resid.values[1][1], -0.03880070546737213));
         assert!(close(resid.values[3][2], -0.006823717141177459));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate).unwrap();
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
         // ... and its pseudo value is the estimate, inflated by fit$n = 18
         assert!(close(ps.values[0][0], 0.944444444444444));
         assert!(close(ps.values[0][2], 0.1058201058201058));
         assert!(close(ps.values[1][0], 1.0));
         assert!(ps.values[1][1].abs() < 1e-12);
         assert!(close(ps.values[3][1], -0.112244897959184));
-        let auc = pseudo(&aml(), &options, &times, ResidualType::Auc).unwrap();
+        let auc = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
         assert!(close(auc.values[0][0], 2.0)); // the area from t0 = 10 to 12
         assert!(close(auc.values[0][1], 12.2142857142857));
         assert!(close(auc.values[2][2], 25.0714285714286));
@@ -1633,7 +1655,7 @@ mod tests {
         assert!(close(resid_auc.values[2][2], 0.139329805996473));
         // summary(fit, rmean = 5) refuses a point before the first time
         assert!(
-            pseudo(&aml(), &options, &[5.0, 24.0], ResidualType::Auc)
+            pseudo(&aml(), &options, &[5.0, 24.0], ResidualType::Auc, true)
                 .unwrap_err()
                 .to_string()
                 .contains("smallest survival")
@@ -1658,17 +1680,17 @@ mod tests {
         assert!(close(resid.values[0][1][1], 0.04965444711538462));
         assert!(close(resid.values[1][2][1], 0.045_973_557_692_307_7));
         assert!(close(resid.values[2][1][1], -0.00262920673076923));
-        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate).unwrap();
+        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
         assert!(close(ps.values[0][0][1], 0.175105168269231));
         assert!(close(ps.values[0][1][1], 0.808_969_350_961_538_4));
         assert!(close(ps.values[2][2][1], 0.2034254807692308));
-        let auc = pseudo_aj(&data, &options, &times, ResidualType::Auc).unwrap();
+        let auc = pseudo_aj(&data, &options, &times, ResidualType::Auc, true).unwrap();
         assert!(close(auc.values[0][0][2], 0.350116436298077));
         assert!(close(auc.values[0][1][2], 5.621_788_611_778_847));
         assert!(close(auc.values[2][2][2], 1.1062199519230769));
         // the truncation point is checked against the start.time
         assert!(
-            pseudo_aj(&data, &options, &[1.5, 5.0], ResidualType::Auc)
+            pseudo_aj(&data, &options, &[1.5, 5.0], ResidualType::Auc, true)
                 .unwrap_err()
                 .to_string()
                 .contains("smallest survival")

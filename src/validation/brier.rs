@@ -1,6 +1,7 @@
 //! Brier score of a Cox model with inverse-probability-of-censoring weights.
 //!
-//! Port of R survival `R/brier.R` for right-censored data (R stops with
+//! Port of R survival `R/brier.R` for right-censored data and for (start,
+//! stop] data whose subjects all enter at the same time (R stops with
 //! "delayed entry is not yet implemented" otherwise).  The model's predicted
 //! event probabilities at the evaluation times come from the caller (R
 //! evaluates `survfit(fit, newdata)` there); the null model, the censoring
@@ -19,6 +20,9 @@ const PARALLEL_WORK_THRESHOLD: usize = 8_192;
 /// Inputs of [`brier`].
 #[derive(Debug, Clone)]
 pub struct BrierInput<'a> {
+    /// Entry times of (start, stop] rows, which only the null model's
+    /// risk sets see (R's `survfit(Y ~ 1)`); `None` for right-censored data.
+    pub start: Option<&'a [f64]>,
     pub time: &'a [f64],
     pub status: &'a [i32],
     /// Case weights (R `weights`); `None` for unit weights.
@@ -66,13 +70,14 @@ fn step_value_at(times: &[f64], values: &[f64], at: f64) -> f64 {
 /// Kaplan-Meier curve, or `exp(-H)` with the Efron-corrected hazard
 /// (`ctype = 2`, `stype = 2`) that matches an Efron Cox fit's baseline.
 fn survfit_curve(
+    start: Option<&[f64]>,
     time: &[f64],
     status: &[i32],
     weights: &[f64],
     efron: bool,
 ) -> SurvivalResult<(Vec<f64>, Vec<f64>)> {
     let data = SurvfitKMData::try_new(
-        None,
+        start.map(<[f64]>::to_vec),
         time.to_vec(),
         status.to_vec(),
         Some(weights.to_vec()),
@@ -102,6 +107,10 @@ fn validate(input: &BrierInput<'_>) -> SurvivalResult<()> {
     }
     validate_length(n, input.status.len(), "status")?;
     validate_finite(input.time, "time")?;
+    if let Some(start) = input.start {
+        validate_length(n, start.len(), "start")?;
+        validate_finite(start, "start")?;
+    }
     validate_binary_i32(input.status, "status")?;
     if let Some(weights) = input.weights {
         validate_length(n, weights.len(), "weights")?;
@@ -124,10 +133,16 @@ fn validate(input: &BrierInput<'_>) -> SurvivalResult<()> {
 pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
     validate(input)?;
     let n = input.time.len();
-    let time: Vec<f64> = if input.timefix {
-        aeq_surv(input.time, None, None)?.time
-    } else {
-        input.time.to_vec()
+    let (start, time): (Option<Vec<f64>>, Vec<f64>) = match (input.timefix, input.start) {
+        (false, start) => (start.map(<[f64]>::to_vec), input.time.to_vec()),
+        (true, None) => (None, aeq_surv(input.time, None, None)?.time),
+        (true, Some(start)) => {
+            let fixed = aeq_surv(start, Some(input.time), None)?;
+            let stop = fixed
+                .time2
+                .ok_or_else(|| SurvivalError::computation("aeqSurv dropped the stop times"))?;
+            (Some(fixed.time), stop)
+        }
     };
     let status: Vec<f64> = input.status.iter().map(|&s| f64::from(s)).collect();
     let weights: Vec<f64> = input.weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
@@ -138,7 +153,8 @@ pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
         ));
     }
     // Null model: survfit(Y ~ 1, weights = casewt), evaluated with extend = TRUE.
-    let (null_time, null_surv) = survfit_curve(&time, input.status, &weights, input.efron)?;
+    let (null_time, null_surv) =
+        survfit_curve(start.as_deref(), &time, input.status, &weights, input.efron)?;
     let p0: Vec<f64> = input
         .times
         .iter()
@@ -162,7 +178,8 @@ pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
         time.clone()
     };
     let censor_status: Vec<i32> = input.status.iter().map(|&s| 1 - s).collect();
-    let (censor_time, censor_surv) = survfit_curve(&shifted, &censor_status, &weights, false)?;
+    let (censor_time, censor_surv) =
+        survfit_curve(None, &shifted, &censor_status, &weights, false)?;
 
     let case_weight: Vec<f64> = weights.iter().map(|w| w / total_weight).collect();
     let score_at = |i: usize| -> (f64, f64, f64) {
@@ -231,6 +248,7 @@ mod tests {
         // weights are the normalised case weights.
         let phat = vec![vec![0.2, 0.6]];
         let result = brier(&BrierInput {
+            start: None,
             time: &[1.0, 3.0],
             status: &[1, 1],
             weights: None,
@@ -257,6 +275,7 @@ mod tests {
         // 3; the others are reweighted by the censoring survival.
         let phat = vec![vec![0.3, 0.3, 0.3]];
         let result = brier(&BrierInput {
+            start: None,
             time: &[1.0, 2.0, 4.0],
             status: &[1, 0, 1],
             weights: None,
@@ -279,6 +298,7 @@ mod tests {
     fn efron_null_model_uses_the_corrected_hazard() {
         let phat = vec![vec![0.5; 3]];
         let km = brier(&BrierInput {
+            start: None,
             time: &[1.0, 1.0, 2.0],
             status: &[1, 1, 0],
             weights: None,
@@ -290,6 +310,7 @@ mod tests {
         })
         .unwrap();
         let efron = brier(&BrierInput {
+            start: None,
             time: &[1.0, 1.0, 2.0],
             status: &[1, 1, 0],
             weights: None,
@@ -308,6 +329,7 @@ mod tests {
     #[test]
     fn shapes_are_validated() {
         let bad = brier(&BrierInput {
+            start: None,
             time: &[1.0, 2.0],
             status: &[1, 0],
             weights: None,

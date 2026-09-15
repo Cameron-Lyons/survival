@@ -231,6 +231,26 @@ pub struct SurvfitCounts {
     pub n_enter: Option<Vec<f64>>,
 }
 
+#[pymethods]
+impl SurvfitCounts {
+    /// The counts of one stratum, for callers that split a curve set.
+    #[new]
+    #[pyo3(signature = (n_risk, n_event, n_censor, n_enter = None))]
+    fn py_new(
+        n_risk: Vec<f64>,
+        n_event: Vec<f64>,
+        n_censor: Vec<f64>,
+        n_enter: Option<Vec<f64>>,
+    ) -> Self {
+        Self {
+            n_risk,
+            n_event,
+            n_censor,
+            n_enter,
+        }
+    }
+}
+
 /// One curve's influence matrix: `values[k][t]` is the influence of cluster
 /// `cluster[k]` on the estimate at the curve's `t`-th time.
 #[derive(Debug, Clone, PartialEq)]

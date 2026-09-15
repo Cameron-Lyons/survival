@@ -152,7 +152,7 @@ mod pseudo_bench {
         let kind = ResidualType::parse(type_).expect("known residual type");
         bencher.bench_local(|| {
             black_box(
-                pseudo(&data, &options, &eval_times, kind)
+                pseudo(&data, &options, &eval_times, kind, true)
                     .expect("benchmark pseudo-value inputs should be valid"),
             )
         });
@@ -303,6 +303,7 @@ mod brier_score {
 
         bencher.bench_local(|| {
             brier(&BrierInput {
+                start: None,
                 time: &time,
                 status: &status,
                 weights: None,
@@ -322,6 +323,7 @@ mod brier_score {
 
         bencher.bench_local(|| {
             brier(&BrierInput {
+                start: None,
                 time: &time,
                 status: &status,
                 weights: Some(&weights),

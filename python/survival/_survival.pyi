@@ -9255,6 +9255,13 @@ class SurvfitAJResult:
     def upper(self) -> list[list[float]] | None: ...
 
 class SurvfitCounts:
+    def __init__(
+        self,
+        n_risk: Sequence[float],
+        n_event: Sequence[float],
+        n_censor: Sequence[float],
+        n_enter: Sequence[float] | None = None,
+    ) -> None: ...
     @property
     def n_censor(self) -> list[float]: ...
     @property
@@ -11267,6 +11274,7 @@ def brier(
     ties: bool = True,
     efron: bool = False,
     timefix: bool = True,
+    start: Sequence[float] | None = None,
 ) -> BrierResult: ...
 def brier_calibration(
     time: Sequence[float],
@@ -12981,6 +12989,7 @@ def pseudo(
     stype: int = 1,
     ctype: int = 1,
     timefix: bool = True,
+    collapse: bool = True,
 ) -> SurvfitResid: ...
 def pseudo_aj(
     time: Sequence[float],
@@ -12997,6 +13006,7 @@ def pseudo_aj(
     p0: Sequence[float] | None = None,
     type_: str = "pstate",
     timefix: bool = True,
+    collapse: bool = True,
 ) -> SurvfitAJResid: ...
 def pseudo_gee_regression(
     pseudo_values: Sequence[Sequence[float]],

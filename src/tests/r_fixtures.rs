@@ -2192,7 +2192,7 @@ fn r_fixtures_pseudo() {
                                 let kind = PseudoResidualType::parse(kind)
                                     .map_err(|err| err.to_string())?;
                                 let values = if prefix == "pseudo" {
-                                    pseudo_aj(&data, &options, &times, kind)
+                                    pseudo_aj(&data, &options, &times, kind, true)
                                 } else {
                                     survfitresid_aj(&data, &options, &times, kind, false, false)
                                 }
@@ -2245,7 +2245,7 @@ fn r_fixtures_pseudo() {
                             let kind =
                                 PseudoResidualType::parse(kind).map_err(|err| err.to_string())?;
                             let values = if prefix == "pseudo" {
-                                pseudo(&data, &options, &times, kind)
+                                pseudo(&data, &options, &times, kind, true)
                             } else {
                                 survfitresid(&data, &options, &times, kind, false, false)
                             }
@@ -5774,6 +5774,7 @@ fn r_fixtures_royston_brier() {
                         })
                         .collect();
                     let result = brier(&BrierInput {
+                        start: None,
                         time: &fit.time,
                         status: &fit.status,
                         weights: None,

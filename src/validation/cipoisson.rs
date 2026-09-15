@@ -67,8 +67,10 @@ pub fn cipoisson(
             )));
         }
     }
+    // R lets a missing p through (the quantiles come back NA); anything else
+    // outside [0, 1] is rejected up front rather than by qgamma's NaN.
     for (index, &level) in p.iter().enumerate() {
-        if !level.is_finite() || !(0.0..=1.0).contains(&level) {
+        if !level.is_nan() && (!level.is_finite() || !(0.0..=1.0).contains(&level)) {
             return Err(SurvivalError::invalid_input(format!(
                 "p[{index}] must be a confidence level between 0 and 1 inclusive"
             )));
