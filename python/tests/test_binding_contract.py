@@ -347,6 +347,9 @@ def test_survival_stub_is_generated_from_the_extension():
     core = importlib.import_module("survival._survival")
     if not _has_ml_bindings(core):
         pytest.skip("stub generation needs the extension built with the ml feature")
+    if importlib.util.find_spec("ruff") is None:
+        # the coverage job runs `scripts/generate_stubs.py --check` with ruff installed
+        pytest.skip("stub generation needs ruff in this interpreter's environment")
     result = subprocess.run(  # noqa: S603 - fixed interpreter and script arguments
         [sys.executable, str(ROOT / "scripts/generate_stubs.py"), "--check"],
         capture_output=True,

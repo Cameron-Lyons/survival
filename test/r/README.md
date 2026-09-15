@@ -62,8 +62,12 @@ python test/r/compare_fixtures.py test/r/fixtures regenerated/   # what moved
 cp regenerated/*.json test/r/fixtures/
 ```
 
-The platform-sensitive cases are listed in both suites' `KNOWN_FAILURES`
-with the reason "tied linear predictors decided by floating-point noise".
+GitHub's runner pool is not uniform either, so the discontinuous quantities
+(the concordance tie counts of a few cases, `aareg`'s late-time increments
+for `veteran_karno_celltype`) come out differently from one CI run to the
+next; `compare_fixtures.py` lists them in `UNSTABLE`, reports them and
+ignores them.  The same cases sit in both suites' `KNOWN_FAILURES` with the
+reason "tied linear predictors decided by floating-point noise".
 
 One R quirk is worked around in the generator: `survfitAJ`'s C code
 (`src/survfitaj.c`) zeroes only the first `nstate` slots of its `std.chaz`

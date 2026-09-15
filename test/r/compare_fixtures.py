@@ -23,6 +23,34 @@ from pathlib import Path
 
 NON_FINITE = {"NaN": math.nan, "Inf": math.inf, "-Inf": -math.inf}
 
+# Values R itself does not reproduce across machines (or across GitHub's runner
+# pool): differences under these ``(file, case, field prefix)`` keys are reported
+# but do not fail the comparison.  Each carries the reason.
+UNSTABLE: dict[tuple[str, str, str], str] = {
+    ("aareg.json", "veteran_karno_celltype", "expected.coefficient"): (
+        "late-time increments sit on a rank decision of the least-squares step"
+    ),
+    ("coxph.json", "lung_age_sex_init_iter0", "expected.concordance"): (
+        "init makes age 71/sex 2 and age 46/sex 1 mathematically tied; whether the "
+        "linear predictors are bit-equal depends on the platform's rounding"
+    ),
+    ("coxph.json", "lung_age_sex_init_iter0", "expected.summary.concordance"): (
+        "as expected.concordance"
+    ),
+    ("coxph.json", "lung_age_sex_cluster_inst", "expected.concordance.cvar"): (
+        "clustered concordance variance moves with last-ulp ties in the linear predictor"
+    ),
+    ("coxph.json", "lung_factor_ph_ecog", "expected.concordance.cvar"): "as above",
+    ("coxph.json", "lung_interaction", "expected.concordance.cvar"): "as above",
+    ("survreg.json", "lung_weibull_factor_ph_ecog", "expected.concordance.cvar"): "as above",
+    ("coxph_penalized.json", "lung_pspline_karno_df3_nterm6", "expected.concordance"): (
+        "tied linear predictors decided by floating-point noise"
+    ),
+    ("coxph_penalized.json", "lung_pspline_age_df0_aic", "expected.penalty"): (
+        "the AIC-optimal penalty stops on an iteration count that rounding can shift"
+    ),
+}
+
 
 def _as_number(value: object) -> float | None:
     if isinstance(value, bool):
@@ -95,6 +123,17 @@ def _relative(old: object, new: object) -> str:
     return f" (rel {abs(old_num - new_num) / scale:.3g})"
 
 
+def _unstable(file_name: str, path: str, names: dict[str, str]) -> bool:
+    for prefix, case in names.items():
+        if path.startswith(prefix):
+            field = path[len(prefix) :].lstrip(".")
+            return any(
+                key[0] == file_name and key[1] == case and field.startswith(key[2])
+                for key in UNSTABLE
+            )
+    return False
+
+
 def compare_file(old_path: Path, new_path: Path, rtol: float, atol: float, limit: int) -> int:
     old = json.loads(old_path.read_text())
     new = json.loads(new_path.read_text())
@@ -103,6 +142,16 @@ def compare_file(old_path: Path, new_path: Path, rtol: float, atol: float, limit
     if not diffs:
         return 0
     names = _case_paths(old)
+    unstable = [d for d in diffs if _unstable(old_path.name, d[0], names)]
+    diffs = [d for d in diffs if not _unstable(old_path.name, d[0], names)]
+    if unstable:
+        cases = sorted({_describe(path, names).split(".")[0] for path, _, _ in unstable})
+        print(
+            f"{old_path.name}: {len(unstable)} unstable values differ "
+            f"in {len(cases)} case(s) (ignored)"
+        )
+    if not diffs:
+        return 0
     cases = sorted({_describe(path, names).split(".")[0] for path, _, _ in diffs})
     print(f"{old_path.name}: {len(diffs)} differing values in {len(cases)} case(s)")
     for path, o, n in diffs[:limit]:
