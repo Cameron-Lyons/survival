@@ -1,113 +1,74 @@
-"""``Surv``/``Surv2`` responses, timeline conversion, formatting, and ``strata``."""
+"""``Surv``/``Surv2`` responses, ``strata``, and the timeline conversions.
+
+Ports of ``R/Surv.R``, ``R/Surv2.R``, ``R/strata.R`` and the data side of
+``R/fromtimeline.R``: the Python layer builds the response columns the way R's
+``Surv`` does (status coding, ``origin``, the ``interval2`` to ``interval``
+conversion, multi-state factors) and hands every kernel (``strata``,
+``surv2counting``, ``totimeline``) R's inputs.
+"""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import groupby
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
     _SURV_RESPONSE_TYPES,
     _SURV_TYPES,
-    _encode_labels,
-    _event_vector,
+    _as_character,
+    _categories,
+    _factor,
+    _factor_levels,
     _finite_float,
-    _float_vector,
-    _hashable_group_value,
-    _int_vector,
-    _interval_endpoint_vector,
-    _interval_status_vector,
     _is_bool_like,
     _is_missing_value,
     _keep_rows_after_na_action,
+    _match_string_arg,
     _materialize_1d,
     _materialize_labels,
     _missing_row_indices,
-    _mstate_categories,
-    _mstate_event_label,
-    _mstate_event_vector,
-    _mstate_levels,
-    _normalize_bool_option,
     _normalize_na_action,
-    _strata_level_sort_key,
-    _strata_value_label,
+    _r_format_numbers,
     _subset_sequence,
-    _surv_format_number,
 )
-from ._types import _MISSING, StrataFactor
+from ._types import _MISSING, StrataFactor, Surv2Data, Timeline
 
-
-def _survfit_response_with_etype(response: Surv, etype: Any) -> Surv:
-    if response.type not in {"right", "counting"}:
-        raise ValueError(
-            "etype can only be used with a right-censored or counting-process Surv response"
-        )
-    raw, levels = _mstate_levels(etype, "etype")
-    if len(raw) != len(response):
-        raise ValueError("etype must have the same length as the Surv response")
-
-    event_labels = {
-        _mstate_event_label(value)
-        for value, status in zip(raw, response.event, strict=True)
-        if status == 1 and not _is_missing_value(value)
-    }
-    states = tuple(level for level in levels if level in event_labels)
-    state_index = {state: idx + 1 for idx, state in enumerate(states)}
-    events: list[int | None] = []
-    for value, status in zip(raw, response.event, strict=True):
-        if status is None or _is_missing_value(value):
-            events.append(None)
-        elif status == 0:
-            events.append(0)
-        else:
-            events.append(state_index[_mstate_event_label(value)])
-    return Surv._from_normalized(
-        time=response.time,
-        event=events,
-        start=response.start,
-        time2=None,
-        surv_type="mright" if response.start is None else "mcounting",
-        states=states,
-    )
+# ---------------------------------------------------------------------------
+# Surv
+# ---------------------------------------------------------------------------
 
 
 def _normalize_surv_type(value: Any) -> str:
-    if not isinstance(value, str):
-        raise TypeError("Surv type must be a string")
-    normalized = value.strip().lower()
-    if normalized in _SURV_TYPES:
-        return normalized
-    matches = [choice for choice in _SURV_TYPES if choice.startswith(normalized)]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        raise ValueError("Surv type is ambiguous; use a full type name")
-    raise ValueError(
-        "Surv type must be 'right', 'left', 'counting', 'interval', 'interval2', or 'mstate'"
+    """R's ``match.arg(type)`` for ``Surv`` (``"mstate"`` accepted, deprecated in R)."""
+
+    return _match_string_arg(
+        value,
+        "type",
+        _SURV_TYPES,
+        "Surv type must be 'right', 'left', 'counting', 'interval', 'interval2', or 'mstate'",
     )
 
 
-_FORMULA_RESPONSE_ARGUMENT_ALIASES = {
-    "event": "event",
-    "start": "time",
-    "status": "event",
-    "stop": "time2",
-    "time": "time",
-    "time1": "time",
-    "time2": "time2",
-}
-
-
 def _formula_response_argument_name(name: str) -> str | None:
-    return _FORMULA_RESPONSE_ARGUMENT_ALIASES.get(name.strip().lower())
+    """The canonical ``Surv`` argument for a named formula argument (R's names only)."""
+
+    key = name.strip()
+    return key if key in {"time", "time2", "event"} else None
 
 
-def _ordered_named_response_arguments(named_arguments: dict[str, str]) -> list[str]:
+def _ordered_named_response_arguments(named_arguments: dict[str, Any]) -> list[Any]:
+    """Positional order of ``time=``, ``time2=``, ``event=`` arguments.
+
+    As in R, ``Surv(time, event)`` matches the second argument to ``event``, so a
+    call without ``time2`` keeps the two-argument form.
+    """
+
     if "time" not in named_arguments:
-        raise ValueError("named Surv(...) formula response requires time=")
+        raise ValueError("Must have a time argument")
     arguments = [named_arguments["time"]]
     if "time2" in named_arguments:
         arguments.append(named_arguments["time2"])
@@ -116,407 +77,101 @@ def _ordered_named_response_arguments(named_arguments: dict[str, str]) -> list[s
     return arguments
 
 
-def _ordered_named_surv_arguments(named_arguments: Mapping[str, Any]) -> tuple[Any, ...]:
-    if "time" not in named_arguments:
-        raise ValueError("named Surv(...) requires time=, time1=, or start=")
-    arguments = [named_arguments["time"]]
-    if "time2" in named_arguments:
-        arguments.append(named_arguments["time2"])
-    if "event" in named_arguments:
-        arguments.append(named_arguments["event"])
-    return tuple(arguments)
+def _time_column(values: Any, name: str, message: str) -> list[float]:
+    """A numeric time column with ``NaN`` for missing values."""
 
-
-def _collect_named_surv_arguments(arguments: Mapping[str, Any]) -> tuple[Any, ...] | None:
-    named_arguments: dict[str, Any] = {}
-    for option, value in arguments.items():
-        if value is _MISSING:
+    result: list[float] = []
+    for value in _materialize_1d(values, name):
+        if _is_missing_value(value):
+            result.append(math.nan)
             continue
-        argument_name = _formula_response_argument_name(option)
-        if argument_name is None:
-            raise TypeError(f"Surv got an unexpected keyword argument {option!r}")
-        if argument_name in named_arguments:
-            raise ValueError(f"Surv(...) contains multiple {argument_name}= arguments")
-        named_arguments[argument_name] = value
-    if not named_arguments:
-        return None
-    return _ordered_named_surv_arguments(named_arguments)
+        if isinstance(value, str) or _is_bool_like(value):
+            raise ValueError(message)
+        try:
+            result.append(float(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(message) from exc
+    return result
 
 
-def _derive_interval2_status(left: list[float], right: list[float]) -> list[int]:
-    if len(left) != len(right):
-        raise ValueError("Surv inputs must have the same length")
+def _binary_status(values: Any, name: str) -> list[int | None]:
+    """R's status coding for right/left/counting data: logical, 0/1 or 1/2."""
 
-    status: list[int] = []
-    for idx, (lo, hi) in enumerate(zip(left, right, strict=True)):
-        lo_missing = math.isinf(lo) and lo < 0.0
-        hi_missing = math.isinf(hi) and hi > 0.0
-        if lo_missing and hi_missing:
-            raise ValueError("interval2 observations cannot have both endpoints missing")
-        if lo_missing:
-            status.append(2)
-        elif hi_missing:
-            status.append(0)
-        elif hi < lo:
-            raise ValueError(f"interval2 right endpoint is less than left endpoint at index {idx}")
-        elif hi == lo:
-            status.append(1)
+    raw = _materialize_1d(values, name)
+    if all(_is_bool_like(value) or _is_missing_value(value) for value in raw):
+        return [None if _is_missing_value(value) else int(bool(value)) for value in raw]
+    numeric: list[float] = []
+    for value in raw:
+        if _is_missing_value(value):
+            numeric.append(math.nan)
+            continue
+        if isinstance(value, str):
+            raise ValueError("Invalid status value, must be logical or numeric")
+        try:
+            numeric.append(float(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid status value, must be logical or numeric") from exc
+    observed = [value for value in numeric if not math.isnan(value)]
+    if observed and max(observed) == 2.0:
+        numeric = [value - 1.0 for value in numeric]
+    status: list[int | None] = []
+    invalid = False
+    for value in numeric:
+        if math.isnan(value):
+            status.append(None)
+        elif value in (0.0, 1.0):
+            status.append(int(value))
         else:
-            status.append(3)
+            status.append(None)
+            invalid = True
+    if invalid:
+        warnings.warn("Invalid status value, converted to NA", stacklevel=3)
     return status
 
 
-def _validate_surv_intervals(
-    time: list[float],
-    time2: list[float] | None,
-    event: list[int],
-    surv_type: str,
-) -> None:
-    if surv_type in {"right", "left"}:
-        if any(value not in {0, 1} for value in event):
-            raise ValueError(f"{surv_type} Surv status must contain only 0/1 values")
-        return
-    if surv_type == "interval":
-        if time2 is None:
-            raise ValueError("interval Surv requires time2")
-        for idx, status in enumerate(event):
-            if status == 3 and time2[idx] < time[idx]:
-                raise ValueError(
-                    f"interval right endpoint is less than left endpoint at index {idx}"
-                )
-        return
-    if surv_type == "interval2" and time2 is None:
-        raise ValueError("interval2 Surv requires time2")
+def _mstate_status(values: Any) -> tuple[list[int | None], tuple[str, ...]]:
+    """``as.numeric(as.factor(event)) - 1`` and the states (every level but the first)."""
+
+    codes, labels = _factor(values, "event")
+    states = tuple(labels[1:])
+    if any(state == "" or state == "NA" for state in states):
+        raise ValueError("each state must have a non-blank name")
+    return codes, states
 
 
-def _validate_surv_time_values(name: str, values: list[float]) -> None:
-    for idx, value in enumerate(values):
-        if math.isnan(value):
-            continue
-        if not math.isfinite(value):
-            raise ValueError(f"{name} contains non-finite value at index {idx}")
-
-
-def _validate_surv_time_structure(
-    time: list[float],
-    time2: list[float] | None,
-    event: list[int],
-    start: list[float] | None,
-    surv_type: str,
-) -> None:
-    if surv_type == "interval2":
-        return
-
-    _validate_surv_time_values("stop" if start is not None else "time", time)
-    if time2 is not None:
-        if surv_type == "interval":
-            for idx, (status, value) in enumerate(zip(event, time2, strict=True)):
-                if status == 3 and not (math.isnan(value) or math.isfinite(value)):
-                    raise ValueError(f"time2 contains non-finite value at index {idx}")
-        else:
-            _validate_surv_time_values("time2", time2)
-    if start is None:
-        return
-
-    _validate_surv_time_values("start", start)
-    for idx, (start_value, stop_value) in enumerate(zip(start, time, strict=True)):
-        if math.isnan(start_value) or math.isnan(stop_value):
-            continue
-        if start_value >= stop_value:
-            raise ValueError(f"start[{idx}] must be less than stop[{idx}]")
-
-
-def _turnbull_intervals(response: Surv) -> tuple[list[float], list[float]]:
-    left: list[float] = []
-    right: list[float] = []
-    if response.type == "left":
-        for time, event in zip(response.time, response.event, strict=True):
-            if event == 1:
-                left.append(time)
-                right.append(time)
-            else:
-                left.append(0.0)
-                right.append(time)
-        return left, right
-
-    if response.type == "interval":
-        if response.time2 is None:
-            raise ValueError("interval Surv response is missing time2")
-        for time, time2, status in zip(
-            response.time,
-            response.time2,
-            response.event,
-            strict=True,
-        ):
-            if status == 0:
-                left.append(time)
-                right.append(float("inf"))
-            elif status == 1:
-                left.append(time)
-                right.append(time)
-            elif status == 2:
-                left.append(0.0)
-                right.append(time)
-            elif status == 3:
-                left.append(time)
-                right.append(time2)
-        return left, right
-
-    if response.type == "interval2":
-        if response.time2 is None:
-            raise ValueError("interval2 Surv response is missing time2")
-        for time, time2, status in zip(
-            response.time,
-            response.time2,
-            response.event,
-            strict=True,
-        ):
-            if status == 2:
-                left.append(0.0)
-                right.append(time2)
-            else:
-                left.append(time)
-                right.append(time2)
-        return left, right
-
-    raise TypeError("Turnbull intervals require left or interval-censored Surv responses")
-
-
-def _survreg_response_arrays(response: Surv) -> tuple[list[float], list[float], list[float] | None]:
-    if response.type == "right":
-        return list(response.time), [float(value) for value in response.event], None
-
-    if response.type == "left":
-        return (
-            list(response.time),
-            [1.0 if value == 1 else 2.0 for value in response.event],
-            None,
-        )
-
-    if response.type == "interval":
-        if response.time2 is None:
-            raise ValueError("interval Surv response is missing time2")
-        return (
-            list(response.time),
-            [float(value) for value in response.event],
-            list(response.time2),
-        )
-
-    if response.type == "interval2":
-        if response.time2 is None:
-            raise ValueError("interval2 Surv response is missing time2")
-        time: list[float] = []
-        time2: list[float] = []
-        for left, right, status in zip(
-            response.time,
-            response.time2,
-            response.event,
-            strict=True,
-        ):
-            if status == 2:
-                time.append(right)
-                time2.append(right)
-            elif status == 0:
-                time.append(left)
-                time2.append(left)
-            else:
-                time.append(left)
-                time2.append(right)
-        return time, [float(value) for value in response.event], time2
-
-    raise NotImplementedError(
-        "survreg currently supports right, left, interval, and interval2 Surv responses"
-    )
-
-
-def _strata_is_vector_sequence(value: Any) -> bool:
-    if isinstance(value, str | bytes | Mapping):
-        return False
-    try:
-        items = list(value)
-    except TypeError:
-        return False
-    if not items or isinstance(items[0], str | bytes | Mapping):
-        return False
-    try:
-        list(items[0])
-    except TypeError:
-        return False
-    return True
-
-
-def _strata_legacy_core_call(
-    variables: tuple[Any, ...],
-    na_group: bool,
-    shortlabel: Any,
-    sep: str,
-    labels: Any,
-) -> bool:
-    if na_group or shortlabel is not None or sep != ", " or labels is not None:
-        return False
-    if len(variables) != 1 or not _strata_is_vector_sequence(variables[0]):
-        return False
-    try:
-        columns = [list(column) for column in variables[0]]
-    except TypeError:
-        return False
-    if not columns:
-        return False
-    for column in columns:
-        for value in column:
-            if isinstance(value, bool) or _is_missing_value(value):
-                return False
-            try:
-                numeric = float(value)
-            except (TypeError, ValueError):
-                return False
-            if not math.isfinite(numeric) or not numeric.is_integer():
-                return False
-    return True
-
-
-def _strata_variables_from_args(variables: tuple[Any, ...]) -> list[list[Any]]:
-    if not variables:
-        raise ValueError("strata requires at least one variable")
-    if len(variables) == 1 and _strata_is_vector_sequence(variables[0]):
-        variables = tuple(variables[0])
-    columns = [
-        _materialize_1d(variable, f"variable {idx + 1}") for idx, variable in enumerate(variables)
-    ]
-    n = len(columns[0])
-    if any(len(column) != n for column in columns):
-        raise ValueError("all arguments must be the same length")
-    return columns
-
-
-def _strata_column_levels(
-    column: Sequence[Any],
-    na_group: bool,
-) -> tuple[list[Any], list[str], list[int | None]]:
-    values: dict[Any, None] = {}
-    saw_missing = False
-    missing = object()
-    normalized: list[Any] = []
-    for value in column:
+def _interval_status(values: Any) -> list[int | None]:
+    raw = _materialize_1d(values, "event")
+    if any(isinstance(value, str) for value in raw):
+        raise ValueError("Invalid status value, must be logical or numeric")
+    status: list[int | None] = []
+    invalid = False
+    for value in raw:
         if _is_missing_value(value):
-            saw_missing = True
-            normalized.append(missing)
-            continue
-        try:
-            values.setdefault(value, None)
-        except TypeError as exc:
-            raise TypeError("strata variables must contain hashable values") from exc
-        normalized.append(value)
-    levels = sorted(values, key=_strata_level_sort_key)
-    labels = [_strata_value_label(value) for value in levels]
-    if na_group and saw_missing:
-        levels.append(None)
-        labels.append("NA")
-    level_map = {value: idx for idx, value in enumerate(levels)}
-    try:
-        codes = [
-            (level_map[None] if na_group else None) if value is missing else level_map[value]
-            for value in normalized
-        ]
-    except KeyError as exc:
-        raise ValueError("missing strata level could not be encoded") from exc
-    return levels, labels, codes
+            status.append(None)
+        elif float(value) in (0.0, 1.0, 2.0, 3.0):
+            status.append(int(float(value)))
+        else:
+            status.append(None)
+            invalid = True
+    if invalid:
+        warnings.warn("Status must be 0, 1, 2 or 3; converted to NA", stacklevel=3)
+    return status
 
 
-def _strata_default_labels(n_terms: int) -> list[str]:
-    return [f"v{idx + 1}" for idx in range(n_terms)]
-
-
-def _strata_normalize_labels(labels: Any, n_terms: int) -> list[str]:
-    if labels is None:
-        return _strata_default_labels(n_terms)
-    result = [str(label) for label in _materialize_1d(labels, "labels")]
-    if len(result) != n_terms:
-        raise ValueError("labels must have one entry per strata variable")
-    return result
-
-
-def _strata_default_shortlabel(columns: Sequence[Sequence[Any]], labels: Any) -> bool:
-    if labels is not None:
-        return False
-    return all(
-        all(_is_missing_value(value) or isinstance(value, str) for value in column)
-        for column in columns
-    )
-
-
-def _strata_combination_labels(
-    term_labels: Sequence[str],
-    column_level_labels: Sequence[Sequence[str]],
-    short: bool,
-) -> list[list[str]]:
-    """Match ``survival::strata`` formatting of component labels."""
-
-    result: list[list[str]] = []
-    for term_idx, level_labels in enumerate(column_level_labels):
-        pieces = (
-            list(level_labels)
-            if short
-            else [f"{term_labels[term_idx]}={level_label}" for level_label in level_labels]
-        )
-        if not short and term_idx > 0 and pieces:
-            width = max(map(len, pieces))
-            pieces = [piece.ljust(width) for piece in pieces]
-        result.append(pieces)
-    return result
-
-
-def strata(
-    *variables: Any,
-    na_group: bool = False,
-    shortlabel: bool | None = None,
-    sep: str = ", ",
-    labels: Any | None = None,
-) -> Any:
-    """Create R-style strata factor codes and labels."""
-
-    if _strata_legacy_core_call(variables, na_group, shortlabel, sep, labels):
-        return _core.strata([[int(value) for value in column] for column in variables[0]])
-    if not isinstance(na_group, bool):
-        raise TypeError("na_group must be True or False")
-    if shortlabel is not None and not isinstance(shortlabel, bool):
-        raise TypeError("shortlabel must be True, False, or None")
-    if not isinstance(sep, str):
-        raise TypeError("sep must be a string")
-
-    columns = _strata_variables_from_args(variables)
-    term_labels = _strata_normalize_labels(labels, len(columns))
-    short = _strata_default_shortlabel(columns, labels) if shortlabel is None else shortlabel
-
-    column_levels: list[list[Any]] = []
-    column_level_labels: list[list[str]] = []
-    column_codes: list[list[int | None]] = []
-    for column in columns:
-        levels, level_labels, codes = _strata_column_levels(column, na_group)
-        column_levels.append(levels)
-        column_level_labels.append(level_labels)
-        column_codes.append(codes)
-
-    codes, observed_parts, counts = _core.strata_compact(
-        column_codes,
-        [len(levels) for levels in column_levels],
-    )
-    combination_labels = _strata_combination_labels(
-        term_labels,
-        column_level_labels,
-        short,
-    )
-    levels: list[str] = []
-    for parts in observed_parts:
-        pieces = [combination_labels[term_idx][part_idx] for term_idx, part_idx in enumerate(parts)]
-        levels.append(sep.join(pieces))
-    row_labels = [None if code is None else levels[code - 1] for code in codes]
-    return StrataFactor(codes=codes, levels=levels, labels=row_labels, counts=counts)
+def _is_factor_like(values: Any) -> bool:
+    return _categories(values) is not None
 
 
 @dataclass(frozen=True, init=False)
 class Surv:
-    """Survival response container, like R's Surv."""
+    """R's ``Surv`` response object.
+
+    ``time`` and ``event`` are the last two R columns (``NaN``/``None`` for ``NA``);
+    counting-process data adds ``start``, interval data ``time2`` (R's dummy ``1``
+    where the status is not 3).  ``type`` is one of R's ``right``, ``left``,
+    ``interval``, ``counting``, ``mright`` and ``mcounting``; ``states`` lists the
+    multi-state levels after the censoring level.
+    """
 
     time: tuple[float, ...]
     event: tuple[int | None, ...]
@@ -531,118 +186,101 @@ class Surv:
         type: str | None = None,
         origin: Any = 0.0,
         time: Any = _MISSING,
-        time1: Any = _MISSING,
         time2: Any = _MISSING,
         event: Any = _MISSING,
-        status: Any = _MISSING,
-        start: Any = _MISSING,
-        stop: Any = _MISSING,
     ) -> None:
-        named_options = {
-            "time": time,
-            "time1": time1,
-            "time2": time2,
-            "event": event,
-            "status": status,
-            "start": start,
-            "stop": stop,
+        named = {
+            name: value
+            for name, value in (("time", time), ("time2", time2), ("event", event))
+            if value is not _MISSING
         }
-        if args and any(value is not _MISSING for value in named_options.values()):
-            raise TypeError(
-                "Surv(...) must not mix positional and named time/time2/event arguments"
-            )
-        named_args = _collect_named_surv_arguments(named_options)
-        if named_args is not None:
-            args = named_args
-
-        surv_type = _normalize_surv_type(type) if type is not None else None
-        categorical_event = len(args) in {2, 3} and _mstate_categories(args[-1]) is not None
-        if categorical_event and (
-            (len(args) == 2 and surv_type in {None, "right", "left", "mstate"})
-            or (len(args) == 3 and surv_type in {None, "counting", "mstate"})
-        ):
-            surv_type = "mstate"
-        states: tuple[str, ...] = ()
+        if args and named:
+            raise TypeError("Surv(...) must not mix positional and named arguments")
+        if named:
+            args = tuple(_ordered_named_response_arguments(named))
+        if not args:
+            raise ValueError("Must have a time argument")
+        if len(args) > 3:
+            raise TypeError("Surv expects (time), (time, event), or (time, time2, event)")
+        ng = len(args)
+        mtype = None if type is None else _normalize_surv_type(type)
+        if mtype is None or mtype == "mstate":
+            surv_type = "counting" if ng == 3 else "right"
+        else:
+            surv_type = mtype
+            if ng != 3 and surv_type in {"interval", "counting"}:
+                raise ValueError("Wrong number of args for this type of survival data")
+            if ng != 2 and surv_type in {"right", "left", "interval2"}:
+                raise ValueError("Wrong number of args for this type of survival data")
         origin_value = _finite_float(origin, "origin")
+        columns = self._build(args, surv_type, mtype == "mstate", origin_value)
+        for name, value in columns.items():
+            object.__setattr__(self, name, value)
+
+    @staticmethod
+    def _build(args: tuple[Any, ...], surv_type: str, mstate: bool, origin: float) -> dict:
+        time = _time_column(args[0], "time", "Time variable is not numeric")
+        nn = len(time)
+        start: list[float] | None = None
+        time2: list[float] | None = None
+        states: tuple[str, ...] = ()
         if len(args) == 1:
-            if surv_type is not None:
-                raise ValueError("one-argument Surv does not accept an explicit type")
-            start = None
-            time = [value - origin_value for value in _float_vector(args[0], "time")]
-            time2 = None
-            event = [1] * len(time)
+            status: list[int | None] = [1] * nn
             surv_type = "right"
-        elif len(args) == 2:
-            start = None
-            if surv_type == "interval2":
-                time = [
-                    value - origin_value
-                    for value in _interval_endpoint_vector(args[0], "time", float("-inf"))
-                ]
-                time2 = [
-                    value - origin_value
-                    for value in _interval_endpoint_vector(args[1], "time2", float("inf"))
-                ]
-                event = _derive_interval2_status(time, time2)
-            elif surv_type == "mstate":
-                time = [value - origin_value for value in _float_vector(args[0], "time")]
-                time2 = None
-                event, states = _mstate_event_vector(args[1], "event")
+        elif surv_type in {"right", "left"}:
+            event = args[1]
+            if len(_materialize_1d(event, "event")) != nn:
+                raise ValueError("Time and status are different lengths")
+            if mstate or _is_factor_like(event):
+                status, states = _mstate_status(event)
                 surv_type = "mright"
             else:
-                time = [value - origin_value for value in _float_vector(args[0], "time")]
-                time2 = None
-                event = _event_vector(args[1], "event")
-                if surv_type not in {None, "right", "left"}:
-                    raise ValueError(
-                        "two-argument Surv supports type='right', 'left', or 'interval2'"
-                    )
-                surv_type = surv_type or "right"
-        elif len(args) == 3:
-            if surv_type == "interval":
-                start = None
-                time = [value - origin_value for value in _float_vector(args[0], "time")]
-                time2 = [value - origin_value for value in _float_vector(args[1], "time2")]
-                event = _interval_status_vector(args[2], "event")
-            elif surv_type == "mstate":
-                start = [value - origin_value for value in _float_vector(args[0], "start")]
-                time = [value - origin_value for value in _float_vector(args[1], "stop")]
-                time2 = None
-                event, states = _mstate_event_vector(args[2], "event")
+                status = _binary_status(event, "event")
+        elif surv_type == "counting":
+            start = time
+            time = _time_column(args[1], "time2", "Stop time is not numeric")
+            if len(time) != nn:
+                raise ValueError("Start and stop are different lengths")
+            if len(_materialize_1d(args[2], "event")) != nn:
+                raise ValueError("Start and event are different lengths")
+            backwards = [
+                not (math.isnan(a) or math.isnan(b)) and a >= b
+                for a, b in zip(start, time, strict=True)
+            ]
+            if any(backwards):
+                start = [
+                    math.nan if bad else value for value, bad in zip(start, backwards, strict=True)
+                ]
+                warnings.warn("Stop time must be > start time, NA created", stacklevel=4)
+            if mstate or _is_factor_like(args[2]):
+                status, states = _mstate_status(args[2])
                 surv_type = "mcounting"
             else:
-                start = [value - origin_value for value in _float_vector(args[0], "start")]
-                time = [value - origin_value for value in _float_vector(args[1], "stop")]
-                time2 = None
-                event = _event_vector(args[2], "event")
-                if surv_type not in {None, "counting"}:
-                    raise ValueError("three-argument Surv supports type='counting' or 'interval'")
-                surv_type = surv_type or "counting"
-        else:
-            raise TypeError("Surv expects (time), (time, event), or (start, stop, event)")
-
-        if (
-            len(time) != len(event)
-            or (start is not None and len(start) != len(time))
-            or (time2 is not None and len(time2) != len(time))
-        ):
-            raise ValueError("Surv inputs must have the same length")
-        if not time:
-            raise ValueError("Surv inputs must not be empty")
-        if surv_type not in _SURV_RESPONSE_TYPES:
-            raise ValueError(
-                "Surv type must be 'right', 'left', 'counting', 'interval', 'interval2', "
-                "or 'mstate'"
-            )
-        _validate_surv_intervals(time, time2, event, surv_type)
-        _validate_surv_time_structure(time, time2, event, start, surv_type)
-
-        object.__setattr__(self, "time", tuple(time))
-        object.__setattr__(self, "event", tuple(event))
-        object.__setattr__(self, "start", tuple(start) if start is not None else None)
-        object.__setattr__(self, "time2", tuple(time2) if time2 is not None else None)
-        object.__setattr__(self, "type", surv_type)
-        object.__setattr__(self, "states", states)
+                status = _binary_status(args[2], "event")
+        elif surv_type == "interval2":
+            time, time2, status = _interval2_columns(time, args[1])
+            surv_type = "interval"
+        else:  # interval
+            status = _interval_status(args[2])
+            if len(status) != nn:
+                raise ValueError("Time and status are different lengths")
+            time2 = _interval_time2(time, args[1], status)
+        if start is not None:
+            start = [value - origin for value in start]
+        time = [value - origin for value in time]
+        if time2 is not None:
+            time2 = [
+                value - origin if code == 3 else 1.0
+                for value, code in zip(time2, status, strict=True)
+            ]
+        return {
+            "time": tuple(time),
+            "event": tuple(status),
+            "start": None if start is None else tuple(start),
+            "time2": None if time2 is None else tuple(time2),
+            "type": surv_type,
+            "states": states,
+        }
 
     def __len__(self) -> int:
         return len(self.time)
@@ -650,6 +288,52 @@ class Surv:
     @property
     def status(self) -> tuple[int | None, ...]:
         return self.event
+
+    @property
+    def ncol(self) -> int:
+        """R's ``ncol(Surv)``: 2 for (time, status) data, 3 otherwise."""
+
+        return 2 if self.start is None and self.time2 is None else 3
+
+    def as_matrix(self) -> list[list[Any]]:
+        """R's ``as.matrix(Surv)``: one row per observation in R's column order."""
+
+        if self.start is not None:
+            return [list(row) for row in zip(self.start, self.time, self.event, strict=True)]
+        if self.time2 is not None:
+            return [list(row) for row in zip(self.time, self.time2, self.event, strict=True)]
+        return [list(row) for row in zip(self.time, self.event, strict=True)]
+
+    def replace_times(
+        self,
+        *,
+        time: Sequence[float] | None = None,
+        start: Sequence[float] | None = None,
+        time2: Sequence[float] | None = None,
+    ) -> Surv:
+        """The same response with one or more time columns replaced (``aeqSurv``)."""
+
+        return Surv._from_normalized(
+            time=self.time if time is None else time,
+            event=self.event,
+            start=self.start if start is None else start,
+            time2=self.time2 if time2 is None else time2,
+            surv_type=self.type,
+            states=self.states,
+        )
+
+    def subset(self, indices: Sequence[int]) -> Surv:
+        """R's ``x[i]`` on a ``Surv`` object."""
+
+        rows = list(indices)
+        return Surv._from_normalized(
+            time=[self.time[idx] for idx in rows],
+            event=[self.event[idx] for idx in rows],
+            start=None if self.start is None else [self.start[idx] for idx in rows],
+            time2=None if self.time2 is None else [self.time2[idx] for idx in rows],
+            surv_type=self.type,
+            states=self.states,
+        )
 
     @classmethod
     def _from_normalized(
@@ -662,6 +346,8 @@ class Surv:
         surv_type: str,
         states: Sequence[str] = (),
     ) -> Surv:
+        if surv_type not in _SURV_RESPONSE_TYPES:
+            raise ValueError(f"unsupported Surv type {surv_type!r}")
         result = object.__new__(cls)
         object.__setattr__(result, "time", tuple(time))
         object.__setattr__(result, "event", tuple(event))
@@ -672,9 +358,361 @@ class Surv:
         return result
 
 
+def _interval2_columns(
+    time: list[float], right: Any
+) -> tuple[list[float], list[float], list[int | None]]:
+    """R's ``interval2`` branch: infer the status and convert to ``interval`` columns."""
+
+    time2 = _time_column(right, "time2", "Time2 must be numeric")
+    if len(time2) != len(time):
+        raise ValueError("time and time2 are different lengths")
+    backwards = [
+        not (math.isnan(a) or math.isnan(b)) and a > b for a, b in zip(time, time2, strict=True)
+    ]
+    time = [value if math.isfinite(value) else math.nan for value in time]
+    time2 = [value if math.isfinite(value) else math.nan for value in time2]
+    status: list[int | None] = []
+    for left, right_value, bad in zip(time, time2, backwards, strict=True):
+        if bad or (math.isnan(left) and math.isnan(right_value)):
+            status.append(None)
+        elif math.isnan(left):
+            status.append(2)
+        elif math.isnan(right_value):
+            status.append(0)
+        elif left == right_value:
+            status.append(1)
+        else:
+            status.append(3)
+    if any(backwards):
+        warnings.warn("Invalid interval: start > stop, NA created", stacklevel=4)
+    time = [
+        right_value if code == 2 else left
+        for left, right_value, code in zip(time, time2, status, strict=True)
+    ]
+    return time, time2, status
+
+
+def _interval_time2(time: list[float], right: Any, status: list[int | None]) -> list[float]:
+    """R's ``interval`` branch: ``time2`` is only read where the status is 3."""
+
+    if not any(code == 3 for code in status):
+        return [1.0] * len(time)
+    time2 = _time_column(right, "time2", "Time2 must be numeric")
+    if len(time2) != len(time):
+        raise ValueError("time and time2 are different lengths")
+    backwards = [
+        code == 3 and not (math.isnan(a) or math.isnan(b)) and a > b
+        for a, b, code in zip(time, time2, status, strict=True)
+    ]
+    if any(backwards):
+        for idx, bad in enumerate(backwards):
+            if bad:
+                status[idx] = None
+        warnings.warn("Invalid interval: start > stop, NA created", stacklevel=4)
+    return time2
+
+
+def is_surv(value: Any) -> bool:
+    """R's ``is.Surv``."""
+
+    return isinstance(value, Surv)
+
+
+def is_na_surv(x: Any) -> list[bool]:
+    """R's ``is.na.Surv``/``is.na.Surv2``: rows with a missing entry in any column."""
+
+    if isinstance(x, Surv2):
+        return [
+            math.isnan(time) or status is None
+            for time, status in zip(x.time, x.status, strict=True)
+        ]
+    if not isinstance(x, Surv):
+        raise TypeError("argument is not a Surv object")
+    return [
+        any(value is None or (isinstance(value, float) and math.isnan(value)) for value in row)
+        for row in x.as_matrix()
+    ]
+
+
+def _pad(labels: list[str]) -> list[str]:
+    """R's ``format()`` of a character vector: pad to a common width."""
+
+    width = max((len(label) for label in labels), default=0)
+    return [label.ljust(width) for label in labels]
+
+
+def _format_times(values: Sequence[float]) -> list[str]:
+    """R's ``format()`` of a numeric column: common decimals and width."""
+
+    return _r_format_numbers(values, 7)
+
+
+def _event_suffixes(x: Surv | Surv2, censor: str) -> list[str]:
+    if x.states:
+        return ["+", *(f":{state}" for state in x.states)]
+    return [censor, ""]
+
+
+def format_surv(x: Any) -> list[str]:
+    """R's ``format(Surv)`` / ``as.character.Surv``."""
+
+    if isinstance(x, Surv2):
+        suffixes = _event_suffixes(x, "+")
+        return _pad(
+            [
+                f"{time}{'?' if status is None else suffixes[status]}"
+                for time, status in zip(_format_times(x.time), x.status, strict=True)
+            ]
+        )
+    if not isinstance(x, Surv):
+        raise TypeError("argument is not a Surv object")
+    if x.type == "interval":
+        times = _format_times(x.time)
+        times2 = _format_times(x.time2 or ())
+        labels = []
+        for left, right, status in zip(times, times2, x.event, strict=True):
+            if status is None:
+                labels.append("NA")
+            elif status == 3:
+                labels.append(f"[{left}, {right}]")
+            else:
+                labels.append(f"{left}{['+', '', '-'][status]}")
+        return _pad(labels)
+    suffixes = _event_suffixes(x, "-" if x.type == "left" else "+")
+    marks = ["?" if status is None else suffixes[status] for status in x.event]
+    if x.start is None:
+        return _pad(
+            [f"{time}{mark}" for time, mark in zip(_format_times(x.time), marks, strict=True)]
+        )
+    return _pad(
+        [
+            f"({start},{stop}{mark}]"
+            for start, stop, mark in zip(
+                _format_times(x.start), _format_times(x.time), marks, strict=True
+            )
+        ]
+    )
+
+
+def _subset_surv(response: Surv, indices: list[int]) -> Surv:
+    """Alias of :meth:`Surv.subset` kept for the modules that import it."""
+
+    return response.subset(indices)
+
+
+def _apply_surv_na_action(
+    response: Surv,
+    na_action: str | None,
+    context: str,
+    **row_aligned: Any,
+) -> tuple[Surv, dict[str, Any]]:
+    """Apply an ``na.action`` to a ``Surv`` response and its row-aligned vectors."""
+
+    action = _normalize_na_action(na_action)
+    if action == "pass":
+        return response, row_aligned
+    columns: list[tuple[str, Any]] = [("response", response.as_matrix())]
+    columns.extend((name, values) for name, values in row_aligned.items() if values is not None)
+    keep = _keep_rows_after_na_action(
+        _missing_row_indices(columns, len(response)), len(response), action, context
+    )
+    if keep is None:
+        return response, row_aligned
+    filtered = {
+        name: _subset_sequence(values, keep, name) if values is not None else None
+        for name, values in row_aligned.items()
+    }
+    return response.subset(keep), filtered
+
+
+# --- helpers other modules build on ------------------------------------------
+
+
+def _survfit_response_with_etype(response: Surv, etype: Any) -> Surv:
+    """``survfit``'s old ``etype`` argument: a right/counting response plus event types."""
+
+    if response.type not in {"right", "counting"}:
+        raise ValueError(
+            "etype can only be used with a right-censored or counting-process Surv response"
+        )
+    raw = _materialize_labels(etype, "etype")
+    if len(raw) != len(response):
+        raise ValueError("etype must have the same length as the Surv response")
+    levels = _factor_levels(etype, "etype")
+    observed = {
+        _as_character(value)
+        for value, status in zip(raw, response.event, strict=True)
+        if status == 1 and not _is_missing_value(value)
+    }
+    states = tuple(_as_character(level) for level in levels if _as_character(level) in observed)
+    index = {state: code + 1 for code, state in enumerate(states)}
+    events: list[int | None] = []
+    for value, status in zip(raw, response.event, strict=True):
+        if status is None or _is_missing_value(value):
+            events.append(None)
+        elif status == 0:
+            events.append(0)
+        else:
+            events.append(index[_as_character(value)])
+    return Surv._from_normalized(
+        time=response.time,
+        event=events,
+        start=response.start,
+        time2=None,
+        surv_type="mright" if response.start is None else "mcounting",
+        states=states,
+    )
+
+
+def _turnbull_intervals(response: Surv) -> tuple[list[float], list[float]]:
+    """The ``(left, right]`` intervals of a left/interval-censored response."""
+
+    left: list[float] = []
+    right: list[float] = []
+    if response.type == "left":
+        for time, event in zip(response.time, response.event, strict=True):
+            left.append(time if event == 1 else 0.0)
+            right.append(time)
+        return left, right
+    if response.type != "interval":
+        raise TypeError("Turnbull intervals require left or interval-censored Surv responses")
+    for time, time2, status in zip(
+        response.time, response.time2 or (), response.event, strict=True
+    ):
+        if status == 0:
+            left.append(time)
+            right.append(math.inf)
+        elif status == 1:
+            left.append(time)
+            right.append(time)
+        elif status == 2:
+            left.append(0.0)
+            right.append(time)
+        else:
+            left.append(time)
+            right.append(time2)
+    return left, right
+
+
+def _survreg_response_arrays(
+    response: Surv,
+) -> tuple[list[float], list[float], list[float] | None]:
+    """R's ``survreg`` response columns: time, status code and (interval data) time2."""
+
+    if response.type == "right":
+        return list(response.time), [float(value or 0) for value in response.event], None
+    if response.type == "left":
+        return (
+            list(response.time),
+            [1.0 if value == 1 else 2.0 for value in response.event],
+            None,
+        )
+    if response.type == "interval":
+        return (
+            list(response.time),
+            [float(value or 0) for value in response.event],
+            list(response.time2 or ()),
+        )
+    raise NotImplementedError("survreg supports right, left, and interval Surv responses")
+
+
+# ---------------------------------------------------------------------------
+# strata
+# ---------------------------------------------------------------------------
+
+
+def _strata_arguments(variables: tuple[Any, ...]) -> tuple[list[Any], list[str] | None]:
+    """R's ``allf`` and its names: the ``...`` arguments, or the one list argument.
+
+    A mapping or data frame supplies both the variables and their names.
+    """
+
+    if not variables:
+        raise ValueError("all arguments must be vectors")
+    if len(variables) == 1:
+        (single,) = variables
+        if isinstance(single, dict):
+            return list(single.values()), [str(key) for key in single]
+        columns = getattr(single, "columns", None)
+        if columns is not None and hasattr(single, "__getitem__"):
+            names = [str(column) for column in columns]
+            return [single[column] for column in columns], names
+        if not isinstance(single, str | bytes) and not _is_factor_like(single):
+            items = list(single) if hasattr(single, "__iter__") else []
+            if items and all(
+                not isinstance(item, str | bytes)
+                and not _is_bool_like(item)
+                and hasattr(item, "__iter__")
+                for item in items
+            ):
+                return items, None
+    return list(variables), None
+
+
+def strata(
+    *variables: Any,
+    na_group: bool = False,
+    shortlabel: bool | None = None,
+    sep: str = ", ",
+    labels: Sequence[str] | None = None,
+) -> StrataFactor:
+    """R's ``strata(..., na.group, shortlabel, sep)``.
+
+    Python cannot recover the argument expressions R uses as labels, so unnamed
+    arguments are called ``v1``, ``v2``, ...; pass ``labels`` (or a mapping) to name
+    them.  As in R, ``shortlabel`` defaults to ``True`` when every argument is
+    character or factor and no argument is named.
+    """
+
+    if not isinstance(na_group, bool):
+        raise TypeError("na.group must be TRUE or FALSE")
+    if shortlabel is not None and not isinstance(shortlabel, bool):
+        raise TypeError("shortlabel must be TRUE, FALSE, or missing")
+    if not isinstance(sep, str):
+        raise TypeError("sep must be a string")
+    columns, names = _strata_arguments(variables)
+    nterms = len(columns)
+    if labels is not None:
+        names = [str(label) for label in _materialize_1d(labels, "labels")]
+        if len(names) != nterms:
+            raise ValueError("labels must have one entry per strata variable")
+    if shortlabel is None:
+        shortlabel = names is None and all(
+            _is_factor_like(column)
+            or all(
+                isinstance(value, str) or _is_missing_value(value)
+                for value in _materialize_labels(column, "strata")
+            )
+            for column in columns
+        )
+    if names is None:
+        names = [f"v{idx + 1}" for idx in range(nterms)]
+    lengths = {len(_materialize_labels(column, "strata")) for column in columns}
+    if len(lengths) > 1:
+        raise ValueError("all arguments must be the same length")
+    codes: list[list[int | None]] = []
+    levels: list[list[str]] = []
+    for column in columns:
+        column_codes, column_levels = _factor(column, "strata")
+        codes.append(column_codes)
+        levels.append(column_levels)
+    result = _core.strata(names, levels, codes, na_group, shortlabel, sep)
+    return StrataFactor(
+        codes=list(result.codes),
+        levels=list(result.levels),
+        labels=[None if code is None else result.levels[code] for code in result.codes],
+        counts=list(result.counts),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Surv2 and the timeline conversions
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True, init=False)
 class Surv2:
-    """Multi-state response container, like R's ``Surv2``."""
+    """R's ``Surv2``: a timeline response of ``(time, event)`` rows per subject."""
 
     time: tuple[float, ...]
     status: tuple[int | None, ...]
@@ -682,83 +720,37 @@ class Surv2:
     repeated: bool | str
 
     def __init__(self, time: Any, event: Any, repeated: Any = False) -> None:
-        time_values = [
-            math.nan if _is_missing_value(value) else float(value)
-            for value in _materialize_1d(time, "time")
-        ]
-        event_values = _materialize_1d(event, "event")
-        if len(event_values) != len(time_values):
-            raise ValueError("Time and event are different lengths")
-        repeated_is_first = isinstance(repeated, str) and repeated.lower() == "first"
-        if not (_is_bool_like(repeated) or repeated_is_first):
+        time_values = _time_column(time, "time", "Time variable is not numeric")
+        if isinstance(repeated, str):
+            if repeated.lower() != "first":
+                raise ValueError("invalid value for repeated option")
+            repeated_value: bool | str = "first"
+        elif _is_bool_like(repeated):
+            repeated_value = bool(repeated)
+        else:
             raise ValueError("invalid value for repeated option")
-        repeated_value: bool | str = "first" if repeated_is_first else bool(repeated)
-
-        levels = _surv2_levels(event)
-        states = levels[1:]
-        if any(state == "" for state in states):
-            raise ValueError("each state must have a non-blank name")
-        level_index = {level: idx for idx, level in enumerate(levels)}
-        status = [
-            None if _is_missing_value(value) else level_index[_surv2_event_label(value)]
-            for value in event_values
-        ]
-
+        if len(_materialize_1d(event, "event")) != len(time_values):
+            raise ValueError("Time and event are different lengths")
+        states: tuple[str, ...] = ()
+        if _is_factor_like(event):
+            status, states = _mstate_status(event)
+        else:
+            status = _binary_status(event, "event")
         object.__setattr__(self, "time", tuple(time_values))
         object.__setattr__(self, "status", tuple(status))
-        object.__setattr__(self, "states", tuple(states))
+        object.__setattr__(self, "states", states)
         object.__setattr__(self, "repeated", repeated_value)
 
     def __len__(self) -> int:
         return len(self.time)
 
 
-def _surv2_event_label(value: Any) -> str:
-    if isinstance(value, bool):
-        return "FALSE" if not value else "TRUE"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return _surv_format_number(value)
-    return str(value)
-
-
-def _surv2_level_sort_key(label: str) -> tuple[int, Any]:
-    try:
-        numeric = float(label)
-    except ValueError:
-        return (1, label)
-    if math.isfinite(numeric):
-        return (0, numeric)
-    return (1, label)
-
-
-def _surv2_levels(events: Any) -> list[str]:
-    categories = _mstate_categories(events)
-    if categories is not None:
-        return [
-            _surv2_event_label(value)
-            for value in _materialize_1d(categories, "event categories")
-            if not _is_missing_value(value)
-        ]
-    levels: dict[str, None] = {}
-    for value in _materialize_1d(events, "event"):
-        if not _is_missing_value(value):
-            levels.setdefault(_surv2_event_label(value), None)
-    return sorted(levels, key=_surv2_level_sort_key)
-
-
-def _surv2data_status_values(status: Any) -> list[int | None]:
-    values: list[int | None] = []
-    for value in _materialize_1d(status, "status"):
-        if _is_missing_value(value):
-            values.append(None)
-            continue
-        numeric = float(value)
-        if not math.isfinite(numeric) or not numeric.is_integer():
-            raise ValueError("Surv2 status values must be integer codes")
-        values.append(int(numeric))
-    return values
+def _repeated_option(repeated: Any) -> str:
+    if isinstance(repeated, str) and repeated.lower() == "first":
+        return "first"
+    if _is_bool_like(repeated):
+        return "true" if repeated else "false"
+    raise ValueError("invalid value for repeated option")
 
 
 def Surv2data(
@@ -768,143 +760,60 @@ def Surv2data(
     states: Any | None = None,
     repeated: Any = False,
     id: Any,
-) -> dict[str, Any]:
-    """Convert R ``Surv2`` timeline rows into start-stop transition rows."""
+) -> Surv2Data:
+    """The data side of R's ``surv2counting``: timeline rows to counting-process rows.
 
-    time_values = _float_vector(time, "time")
-    status_values = _surv2data_status_values(status)
+    ``status`` holds R's integer codes (0 censored, otherwise the state number) and
+    ``states`` the state names of a multi-state timeline; the result's ``row`` gives
+    the input row each interval starts from.
+    """
+
+    time_values = _time_column(time, "time", "Time variable is not numeric")
+    status_values: list[int | None] = []
+    for value in _materialize_1d(status, "status"):
+        if _is_missing_value(value):
+            status_values.append(None)
+            continue
+        numeric = float(value)
+        if not math.isfinite(numeric) or not numeric.is_integer():
+            raise ValueError("Surv2 status values must be integer codes")
+        status_values.append(int(numeric))
     id_values = _materialize_labels(id, "id")
     if len(status_values) != len(time_values) or len(id_values) != len(time_values):
-        raise ValueError("time, status, and id must have the same length")
+        raise ValueError("id statement is required")
     if any(_is_missing_value(value) for value in id_values) or any(
         math.isnan(value) for value in time_values
     ):
         raise ValueError("id and time cannot be missing")
-    state_values = (
-        [str(value) for value in _materialize_1d(states, "states")] if states is not None else []
+    state_names = (
+        [] if states is None else [str(value) for value in _materialize_1d(states, "states")]
+    )
+    result = _core.surv2counting(
+        id_values, time_values, status_values, bool(state_names), _repeated_option(repeated)
+    )
+    kind = "counting" if result.counting else "right"
+    return Surv2Data(
+        row=list(result.row),
+        start=list(result.tstart),
+        stop=list(result.tstop),
+        status=list(result.status),
+        istate=None if result.istate is None else list(result.istate),
+        states=state_names,
+        type=f"m{kind}" if state_names else kind,
     )
 
-    id_codes = _encode_labels(id_values, "id")
-    repeated_is_first = isinstance(repeated, str) and repeated.lower() == "first"
-    if repeated_is_first:
-        seen_by_id: dict[int, set[int]] = {}
-        for row_idx in sorted(
-            range(len(time_values)),
-            key=lambda idx: (id_codes[idx], time_values[idx]),
-        ):
-            status_value = status_values[row_idx]
-            if status_value in (None, 0):
-                continue
-            seen = seen_by_id.setdefault(id_codes[row_idx], set())
-            if status_value in seen:
-                status_values[row_idx] = 0
-            else:
-                seen.add(status_value)
-        repeated_value = True
-    else:
-        repeated_value = _normalize_bool_option(repeated, "repeated")
-    if not state_values:
-        order = sorted(
-            range(len(time_values)),
-            key=lambda idx: (id_codes[idx], time_values[idx]),
-        )
-        intervals: list[tuple[int, float, float, int, Any]] = []
-        for _, grouped_rows_iter in groupby(order, key=lambda idx: id_codes[idx]):
-            grouped_rows = list(grouped_rows_iter)
-            for current_row, next_row in zip(grouped_rows[:-1], grouped_rows[1:], strict=True):
-                next_status = status_values[next_row]
-                intervals.append(
-                    (
-                        current_row,
-                        time_values[current_row],
-                        time_values[next_row],
-                        0 if next_status is None else next_status,
-                        id_values[current_row],
-                    )
-                )
-        intervals.sort(key=lambda interval: interval[0])
-        rows = [interval[0] for interval in intervals]
-        starts = [interval[1] for interval in intervals]
-        stops = [interval[2] for interval in intervals]
-        output_status = [interval[3] for interval in intervals]
-        output_ids = [interval[4] for interval in intervals]
-        response_type = "right" if starts and all(value == 0.0 for value in starts) else "counting"
-        return {
-            "row": rows,
-            "start": starts,
-            "stop": stops,
-            "status": output_status,
-            "id": output_ids,
-            "istate": [0] * len(rows),
-            "states": [],
-            "type": response_type,
-        }
-    result = _core.surv2data_timeline(
-        id_codes,
-        time_values,
-        status_values,
-        repeated_value,
-    )
-    rows = [int(value) for value in result.row_index]
-    starts = [float(value) for value in result.start]
-    response_type = (
-        "mright"
-        if state_values and starts and all(value == 0.0 for value in starts)
-        else "mcounting"
-        if state_values
-        else "right"
-        if starts and all(value == 0.0 for value in starts)
-        else "counting"
-    )
-    return {
-        "row": rows,
-        "start": starts,
-        "stop": [float(value) for value in result.stop],
-        "status": [int(value) for value in result.status],
-        "id": [id_values[row] for row in rows],
-        "istate": [None if value is None else int(value) for value in result.istate],
-        "states": state_values,
-        "type": response_type,
-    }
 
+def fromtimeline(
+    time: Any,
+    status: Any,
+    *,
+    id: Any,
+    states: Any | None = None,
+    repeated: Any = False,
+) -> Surv2Data:
+    """R's ``fromtimeline`` data side: :func:`Surv2data` under its exported name."""
 
-def _totimeline_state_values(states: Any | None) -> list[str]:
-    return [str(value) for value in _materialize_1d(states, "states")] if states is not None else []
-
-
-def _totimeline_check_states(
-    event_states: Sequence[str],
-    istate_levels: Any | None,
-) -> list[str]:
-    if istate_levels is None:
-        return ["(s0)", *event_states]
-    levels = [str(value) for value in _materialize_1d(istate_levels, "istate_levels")]
-    return [level for level in levels if level not in event_states] + list(event_states)
-
-
-def _totimeline_istate_codes(
-    istate: Any | None,
-    check_states: Sequence[str],
-    n: int,
-) -> list[int]:
-    if istate is None:
-        return [1] * n
-    labels = [
-        None if _is_missing_value(value) else str(value)
-        for value in _materialize_1d(istate, "istate")
-    ]
-    if len(labels) != n:
-        raise ValueError("istate must have the same length as the Surv response")
-    code_by_state = {state: idx + 1 for idx, state in enumerate(check_states)}
-    result: list[int] = []
-    for label in labels:
-        if label is None:
-            raise ValueError("istate contains missing values")
-        try:
-            result.append(code_by_state[label])
-        except KeyError as exc:
-            raise ValueError(f"istate level {label!r} is not a recognized state") from exc
-    return result
+    return Surv2data(time, status, states=states, repeated=repeated, id=id)
 
 
 def totimeline(
@@ -916,350 +825,56 @@ def totimeline(
     id: Any,
     istate: Any | None = None,
     istate_levels: Any | None = None,
-) -> dict[str, Any]:
-    """Convert start-stop multi-state rows into R ``totimeline`` rows."""
+) -> Timeline:
+    """R's ``totimeline`` (draft): counting-process rows to timeline rows.
 
-    start_values = _float_vector(start, "start")
-    stop_values = _float_vector(stop, "stop")
-    status_values = [int(value) for value in _int_vector(status, "status")]
+    Rows of a subject must be consecutive and in time order.  ``status`` holds the
+    ``Surv`` codes, ``states`` the response states, and ``istate`` (with its
+    ``istate_levels``) the state each subject starts in, ``(s0)`` by default.
+    """
+
+    start_values = _time_column(start, "start", "Start time is not numeric")
+    stop_values = _time_column(stop, "stop", "Stop time is not numeric")
+    status_values = [int(value) for value in _materialize_1d(status, "status")]
     id_values = _materialize_labels(id, "id")
     n = len(start_values)
     if len(stop_values) != n or len(status_values) != n or len(id_values) != n:
         raise ValueError("start, stop, status, and id must have the same length")
-    if any(not math.isfinite(value) for value in [*start_values, *stop_values]):
-        raise ValueError("start and stop times must be finite")
-    event_states = _totimeline_state_values(states)
+    event_states = [str(value) for value in _materialize_1d(states, "states")]
     if not event_states:
         raise ValueError("states must contain at least one event state")
-    check_states = _totimeline_check_states(event_states, istate_levels)
-    istate_codes = _totimeline_istate_codes(istate, check_states, n)
-    event_code_by_status = {
-        status_idx + 1: check_states.index(state) + 1
-        for status_idx, state in enumerate(event_states)
-    }
-
-    first = []
-    seen: set[Any] = set()
-    for id_value in id_values:
-        key = _hashable_group_value(id_value)
-        first.append(key not in seen)
-        seen.add(key)
-
-    last = [False] * n
-    seen.clear()
-    for row_idx in range(n - 1, -1, -1):
-        key = _hashable_group_value(id_values[row_idx])
-        last[row_idx] = key not in seen
-        seen.add(key)
-
-    times: list[float] = []
-    state_codes: list[int] = []
-    data_rows: list[int] = []
-    for row_idx in range(n):
-        if first[row_idx]:
-            times.append(start_values[row_idx])
-            state_codes.append(istate_codes[row_idx])
-            data_rows.append(row_idx)
-
-        times.append(stop_values[row_idx])
-        status_value = status_values[row_idx]
-        if status_value < 0 or status_value > len(event_states):
-            raise ValueError("status code is outside the event state range")
-        state_codes.append(0 if status_value == 0 else event_code_by_status[status_value])
-        data_rows.append(row_idx if last[row_idx] else row_idx + 1)
-
-    state_levels = (
-        ["(censor)", *check_states]
-        if any(state == "censor" for state in check_states)
-        else ["censor", *check_states]
-    )
-    return {
-        "time": times,
-        "status": state_codes,
-        "data_row": data_rows,
-        "state_levels": state_levels,
-    }
-
-
-def _fromtimeline_data_columns(data: Any | None, n: int) -> tuple[list[str], list[list[Any]]]:
-    if data is None:
-        return [], []
-    if not isinstance(data, Mapping):
-        raise TypeError("data must be mapping-like")
-    names = [str(name) for name in data]
-    columns = [_materialize_1d(data[name], str(name)) for name in data]
-    for name, column in zip(names, columns, strict=True):
-        if len(column) != n:
-            raise ValueError(f"{name} must have the same length as the Surv response")
-    return names, columns
-
-
-def _fromtimeline_static_columns(
-    columns: Sequence[Sequence[Any]],
-    id_values: Sequence[Any],
-    column_names: Sequence[str],
-    id_name: str,
-) -> list[bool]:
-    result: list[bool] = []
-    for name, column in zip(column_names, columns, strict=True):
-        if name == id_name:
-            result.append(True)
-            continue
-        if any(_is_missing_value(value) for value in column):
-            result.append(False)
-            continue
-        first_by_id: dict[Any, Any] = {}
-        static = True
-        for value, id_value in zip(column, id_values, strict=True):
-            key = _hashable_group_value(id_value)
-            if key not in first_by_id:
-                first_by_id[key] = value
-            elif value != first_by_id[key]:
-                static = False
-                break
-        result.append(static)
-    return result
-
-
-def fromtimeline(
-    time: Any,
-    status: Any,
-    *,
-    id: Any,
-    states: Any | None = None,
-    data: Any | None = None,
-    id_name: Any = "id",
-) -> dict[str, Any]:
-    """Convert right-censored timeline rows into R ``fromtimeline`` intervals."""
-
-    time_values = _float_vector(time, "time")
-    status_values = [int(value) for value in _int_vector(status, "status")]
-    id_values = _materialize_labels(id, "id")
-    n = len(time_values)
-    if len(status_values) != n or len(id_values) != n:
-        raise ValueError("time, status, and id must have the same length")
-    if any(not math.isfinite(value) for value in time_values):
-        raise ValueError("time values must be finite")
-    id_name_value = str(id_name)
-    column_names, columns = _fromtimeline_data_columns(data, n)
-    static_columns = _fromtimeline_static_columns(columns, id_values, column_names, id_name_value)
-    id_codes = _encode_labels(
-        [_hashable_group_value(value) for value in id_values],
-        "id",
-    )
-    plan = _core.from_timeline_rows(id_codes, time_values, status_values)
-    removed_ids = [id_values[int(row)] for row in plan.removed_row]
-
-    state_values = _totimeline_state_values(states) if states is not None else []
-    if state_values:
-        state_levels = ["censor", *state_values]
-        istate_levels = state_values
+    if istate is None:
+        istate_labels = ["(s0)"] * n
+        levels = ["(s0)"]
     else:
-        state_levels = []
-        istate_levels = []
-
-    return {
-        "start": plan.start,
-        "stop": plan.stop,
-        "status": plan.status,
-        "istate": plan.istate,
-        "static": static_columns,
-        "static_row": plan.static_row,
-        "dynamic_row": plan.dynamic_row,
-        "state_levels": state_levels,
-        "istate_levels": istate_levels,
-        "removed_id": removed_ids,
-    }
-
-
-def is_surv(value: Any) -> bool:
-    """Return whether *value* is a survival response object, like R's is.Surv."""
-
-    return isinstance(value, Surv)
-
-
-def _surv_missing_row(response: Surv, idx: int) -> bool:
-    if response.event[idx] is None:
-        return True
-    if response.start is not None and math.isnan(response.start[idx]):
-        return True
-    if math.isnan(response.time[idx]):
-        return True
-    return response.time2 is not None and math.isnan(response.time2[idx])
-
-
-def is_na_surv(x: Any) -> list[bool]:
-    """Return row-wise missingness for a ``Surv`` response, like R's ``is.na.Surv``."""
-
-    if isinstance(x, Surv2):
-        return [
-            math.isnan(time) or status is None
-            for time, status in zip(x.time, x.status, strict=True)
-        ]
-    if not isinstance(x, Surv):
-        raise TypeError("argument is not a Surv object")
-    return [_surv_missing_row(x, idx) for idx in range(len(x))]
-
-
-def _format_surv_right_or_left(response: Surv) -> list[str]:
-    suffix = "+" if response.type == "right" else "-"
-    times = [_surv_format_number(value) for value in response.time]
-    width = max(len(value) for value in times)
-    return [
-        f"{time.rjust(width)}{' ' if event else suffix}"
-        for time, event in zip(times, response.event, strict=True)
-    ]
-
-
-def _format_surv_counting(response: Surv) -> list[str]:
-    if response.start is None:
-        raise ValueError("counting Surv response is missing start times")
-    starts = [_surv_format_number(value) for value in response.start]
-    stops = [_surv_format_number(value) for value in response.time]
-    start_width = max(len(value) for value in starts)
-    stop_width = max(len(value) for value in stops)
-    labels = [
-        f"({start.rjust(start_width)}, {stop.rjust(stop_width)}{'' if event else '+'}]"
-        for start, stop, event in zip(starts, stops, response.event, strict=True)
-    ]
-    width = max(len(value) for value in labels)
-    return [value.ljust(width) for value in labels]
-
-
-def _format_surv_mstate(response: Surv) -> list[str]:
-    suffixes = ["+", *(f":{state}" for state in response.states)]
-
-    def suffix(event: int | None) -> str:
-        return "?" if event is None else suffixes[event]
-
-    if response.type == "mright":
-        labels = [
-            f"{_surv_format_number(time)}{suffix(event)}"
-            for time, event in zip(response.time, response.event, strict=True)
-        ]
-    else:
-        if response.start is None:
-            raise ValueError("mcounting Surv response is missing start times")
-        labels = [
-            f"({_surv_format_number(start)},{_surv_format_number(stop)}{suffix(event)}]"
-            for start, stop, event in zip(
-                response.start,
-                response.time,
-                response.event,
-                strict=True,
-            )
-        ]
-    width = max(len(value) for value in labels) if labels else 0
-    return [value.ljust(width) for value in labels]
-
-
-def _format_surv_interval(response: Surv) -> list[str]:
-    if response.time2 is None:
-        raise ValueError(f"{response.type} Surv response is missing time2")
-    labels: list[str] = []
-    for left, right, status in zip(response.time, response.time2, response.event, strict=True):
-        left_label = _surv_format_number(left)
-        right_label = _surv_format_number(right)
-        if status == 0:
-            labels.append(f"{left_label}+")
-        elif status == 1:
-            labels.append(left_label)
-        elif status == 2:
-            labels.append(f"{right_label}-")
-        else:
-            labels.append(f"[{left_label}, {right_label}]")
-    width = max(len(value) for value in labels)
-    return [value.ljust(width) for value in labels]
-
-
-def _format_surv2(response: Surv2) -> list[str]:
-    labels: list[str] = []
-    suffixes = ["+", *(f":{state}" for state in response.states)]
-    for time, status in zip(response.time, response.status, strict=True):
-        suffix = "?" if status is None else suffixes[status]
-        labels.append(f"{_surv_format_number(time)}{suffix}")
-    width = max(len(value) for value in labels) if labels else 0
-    return [value.ljust(width) for value in labels]
-
-
-def format_surv(x: Any) -> list[str]:
-    """Return R-style display strings for a ``Surv`` response."""
-
-    if isinstance(x, Surv2):
-        return _format_surv2(x)
-    if not isinstance(x, Surv):
-        raise TypeError("argument is not a Surv object")
-    if x.type in {"right", "left"}:
-        return _format_surv_right_or_left(x)
-    if x.type == "counting":
-        return _format_surv_counting(x)
-    if x.type in {"mright", "mcounting"}:
-        return _format_surv_mstate(x)
-    if x.type in {"interval", "interval2"}:
-        return _format_surv_interval(x)
-    raise ValueError(f"unsupported Surv type {x.type!r}")
-
-
-def _subset_surv(response: Surv, indices: list[int]) -> Surv:
-    times = [response.time[idx] for idx in indices]
-    events = [response.event[idx] for idx in indices]
-    if response.type in {"mright", "mcounting"}:
-        return Surv._from_normalized(
-            time=times,
-            event=events,
-            start=(None if response.start is None else [response.start[idx] for idx in indices]),
-            time2=None,
-            surv_type=response.type,
-            states=response.states,
+        istate_labels = [str(value) for value in _materialize_1d(istate, "istate")]
+        if len(istate_labels) != n:
+            raise ValueError("istate must have the same length as the Surv response")
+        levels = (
+            [str(level) for level in _factor_levels(istate_labels, "istate")]
+            if istate_levels is None
+            else [str(value) for value in _materialize_1d(istate_levels, "istate_levels")]
         )
-    if response.type in {"right", "left"}:
-        return Surv(times, events, type=response.type)
-    if response.type == "interval":
-        if response.time2 is None:
-            raise ValueError("interval Surv response is missing time2")
-        return Surv(
-            times,
-            [response.time2[idx] for idx in indices],
-            events,
-            type="interval",
-        )
-    if response.type == "interval2":
-        if response.time2 is None:
-            raise ValueError("interval2 Surv response is missing time2")
-        return Surv(times, [response.time2[idx] for idx in indices], type="interval2")
-    if response.start is None:
-        raise ValueError("counting Surv response is missing start times")
-    return Surv([response.start[idx] for idx in indices], times, events)
-
-
-def _apply_surv_na_action(
-    response: Surv,
-    na_action: str | None,
-    context: str,
-    **row_aligned: Any,
-) -> tuple[Surv, dict[str, Any]]:
-    action = _normalize_na_action(na_action)
-    if action == "pass":
-        return response, row_aligned
-
-    columns: list[tuple[str, Any]] = [("time", response.time), ("event", response.event)]
-    if response.start is not None:
-        columns.append(("start", response.start))
-    if response.time2 is not None:
-        columns.append(("time2", response.time2))
-    columns.extend((name, values) for name, values in row_aligned.items() if values is not None)
-
-    keep = _keep_rows_after_na_action(
-        _missing_row_indices(columns, len(response)),
-        len(response),
-        action,
-        context,
+    check_states = [level for level in levels if level not in event_states] + event_states
+    code_of = {state: idx + 1 for idx, state in enumerate(check_states)}
+    try:
+        istate_codes = [code_of[label] for label in istate_labels]
+    except KeyError as exc:
+        raise ValueError(f"istate level {exc.args[0]!r} is not a recognized state") from exc
+    if any(value < 0 or value > len(event_states) for value in status_values):
+        raise ValueError("status code is outside the event state range")
+    state_codes = [0, *(code_of[state] for state in event_states)]
+    result = _core.totimeline(
+        id_values,
+        start_values,
+        stop_values,
+        [state_codes[value] for value in status_values],
+        istate_codes,
     )
-    if keep is None:
-        return response, row_aligned
-
-    filtered = {
-        name: _subset_sequence(values, keep, name) if values is not None else None
-        for name, values in row_aligned.items()
-    }
-    return _subset_surv(response, keep), filtered
+    censor = "(censor)" if "censor" in check_states else "censor"
+    return Timeline(
+        time=list(result.time),
+        status=list(result.state),
+        data_row=list(result.covariate_row),
+        state_levels=[censor, *check_states],
+    )

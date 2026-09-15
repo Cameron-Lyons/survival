@@ -79,34 +79,6 @@ class _NamedMatrix:
         return [list(row) for row in self._rows]
 
 
-def _reference_lvcf_with_time(ids, values, times):
-    def id_key(value):
-        return (0, float(value)) if isinstance(value, int | float) else (1, str(value))
-
-    def time_key(value):
-        if value is None or isinstance(value, float) and math.isnan(value):
-            return (2, "")
-        if isinstance(value, int | float):
-            return (0, float(value))
-        return (1, str(value))
-
-    result = list(values)
-    order = sorted(
-        range(len(ids)),
-        key=lambda idx: (id_key(ids[idx]), time_key(times[idx]), idx),
-    )
-    current = None
-    previous_id = None
-    for position, row_idx in enumerate(order):
-        value = result[row_idx]
-        if position == 0 or value is not None or ids[row_idx] != previous_id:
-            current = value
-        else:
-            result[row_idx] = current
-        previous_id = ids[row_idx]
-    return result
-
-
 def _backtick_data():
     data = _toy_data()
     return {

@@ -32,11 +32,19 @@ _MISSING = _MissingArgument()
 
 @dataclass(frozen=True)
 class _CovariateTerm:
+    """One factor of a formula term.
+
+    ``call`` carries the text of an opaque categorising call (``tcut(...)``,
+    ``cut(...)``) that only ``pyears`` evaluates; ``column`` is then the data
+    column it reads (or the first column of its ``arithmetic`` argument).
+    """
+
     column: str
     categorical: bool = False
     categorical_wrapper: str | None = None
     transform: str | None = None
     arithmetic: str | None = None
+    call: str | None = None
 
 
 @dataclass(frozen=True)
@@ -281,10 +289,57 @@ class AaregModelResult:
 
 @dataclass(frozen=True)
 class _SurvResponseSpec:
+    """The left-hand side of a formula: a ``Surv(...)`` call, or a plain numeric response.
+
+    ``surv`` is ``False`` for a formula such as ``time ~ 1`` (``pyears``, ``survexp``),
+    whose single argument is the follow-up expression.
+    """
+
     arguments: tuple[str, ...]
     columns: tuple[str, ...]
     type: str | None
     origin: float = 0.0
+    surv: bool = True
+
+    @property
+    def name(self) -> str:
+        """R's name of the response column in the model frame."""
+
+        return f"Surv({', '.join(self.arguments)})" if self.surv else self.arguments[0]
+
+
+@dataclass(frozen=True)
+class ModelFrame:
+    """R's ``model.frame`` for a survival formula.
+
+    ``data`` is the caller's data after ``subset`` and the ``na.action``; ``response``
+    is the ``Surv`` response (``y`` a plain numeric response such as ``time ~ 1``, or
+    both ``None`` for ``~ x``); the R-style extra arguments (``weights``, ``offset``,
+    ``id``, ``cluster``, ``istate``) are row aligned with it.
+    """
+
+    formula: str
+    data: Any
+    n: int
+    spec: _SurvResponseSpec | None
+    response: Surv | None
+    y: list[float] | None
+    terms: _FormulaTerms
+    weights: list[Any] | None = None
+    offset: list[float] | None = None
+    id: list[Any] | None = None
+    cluster: list[Any] | None = None
+    istate: list[Any] | None = None
+    na_action: str = "pass"
+    extra: dict[str, list[Any]] = field(default_factory=dict)
+
+    @property
+    def response_name(self) -> str | None:
+        return None if self.spec is None else self.spec.name
+
+    @property
+    def response_columns(self) -> tuple[str, ...]:
+        return () if self.spec is None else self.spec.columns
 
 
 @dataclass(frozen=True)
@@ -359,25 +414,101 @@ class StrataFactor:
 
 
 @dataclass(frozen=True)
-class SurvExpResult:
+class Surv2Data:
+    """Counting-process rows built from a ``Surv2`` timeline (R's ``surv2counting``).
+
+    ``row`` is the zero-based input row each interval starts from; ``type`` is the
+    ``Surv`` type of the ``(start, stop, status)`` response; ``istate`` holds the
+    state codes each interval starts in when the timeline records initial states.
+    """
+
+    row: list[int]
+    start: list[float]
+    stop: list[float]
+    status: list[int | None]
+    istate: list[int] | None
+    states: list[str]
+    type: str
+
+
+@dataclass(frozen=True)
+class Timeline:
+    """Timeline rows built from counting-process data (R's ``totimeline``).
+
+    ``status`` codes index ``state_levels`` (0 is the censoring level) and
+    ``data_row`` is the zero-based input row that supplies the covariates.
+    """
+
     time: list[float]
-    surv: list[float]
-    n_risk: list[float]
-    cumhaz: list[float]
+    status: list[int]
+    data_row: list[int]
+    state_levels: list[str]
+
+
+@dataclass(frozen=True)
+class SurvExpResult:
+    """R's ``survexp`` object: expected survival at ``time`` for each group.
+
+    ``surv`` and ``n_risk`` are vectors for one curve and row-major
+    ``ntime x ngroup`` matrices (``strata`` naming the columns) otherwise; the
+    individual methods return a plain list instead.
+    """
+
+    time: list[float]
+    surv: list[float] | list[list[float]]
+    n_risk: list[float] | list[list[float]]
     method: str
     n: int
+    strata: list[str] | None = None
+
+    @property
+    def cumhaz(self) -> list[float] | list[list[float]]:
+        """``-log(surv)``, the expected cumulative hazard."""
+
+        def negative_log(value: float) -> float:
+            return -math.log(value) if value > 0.0 else math.inf
+
+        if self.surv and isinstance(self.surv[0], list):
+            return [[negative_log(value) for value in row] for row in self.surv]
+        return [negative_log(value) for value in self.surv]
 
 
 @dataclass(frozen=True)
 class PyearsResult:
-    pyears: list[float]
-    n: list[float]
+    """R's ``pyears`` object.
+
+    ``pyears``, ``n``, ``event`` and ``expected`` are the R arrays as row-major
+    nested lists over ``dim`` (a flat list for one dimension, a scalar list for no
+    grouping); ``dimnames`` maps each term label to its level labels, in formula
+    order.  ``data`` is the ``data.frame = TRUE`` layout instead.
+    """
+
+    pyears: Any
+    n: Any
     offtable: float
-    group: list[str]
     observations: int
-    event: list[float] | None = None
-    expected: list[float] | None = None
-    tcut: bool = False
+    tcut: bool
+    dim: list[int]
+    dimnames: dict[str, list[str]]
+    event: Any = None
+    expected: Any = None
+    data: dict[str, list[Any]] | None = None
+
+    @property
+    def group(self) -> list[str]:
+        """The cell labels in column-major order (the reticulate bridge's view)."""
+
+        if not self.dimnames:
+            return ["(all)"]
+        labels = [""] * math.prod(self.dim)
+        for cell in range(len(labels)):
+            parts = []
+            remainder = cell
+            for extent, levels in zip(self.dim, self.dimnames.values(), strict=True):
+                parts.append(levels[remainder % extent])
+                remainder //= extent
+            labels[cell] = ", ".join(parts)
+        return labels
 
 
 class FineGrayFrame(dict[str, list[Any]]):

@@ -33,16 +33,23 @@ class Surv:
         type: str | None = None,
         origin: Any = 0.0,
         time: Any = ...,
-        time1: Any = ...,
         time2: Any = ...,
         event: Any = ...,
-        status: Any = ...,
-        start: Any = ...,
-        stop: Any = ...,
     ) -> None: ...
     def __len__(self) -> int: ...
     @property
     def status(self) -> tuple[int | None, ...]: ...
+    @property
+    def ncol(self) -> int: ...
+    def as_matrix(self) -> list[list[Any]]: ...
+    def replace_times(
+        self,
+        *,
+        time: Sequence[float] | None = None,
+        start: Sequence[float] | None = None,
+        time2: Sequence[float] | None = None,
+    ) -> Surv: ...
+    def subset(self, indices: Sequence[int]) -> Surv: ...
 
 class Surv2:
     time: tuple[float, ...]
@@ -59,7 +66,7 @@ def Surv2data(
     states: Any | None = None,
     repeated: Any = False,
     id: Any,
-) -> dict[str, Any]: ...
+) -> Surv2Data: ...
 def totimeline(
     start: Any,
     stop: Any,
@@ -69,31 +76,75 @@ def totimeline(
     id: Any,
     istate: Any | None = None,
     istate_levels: Any | None = None,
-) -> dict[str, Any]: ...
+) -> Timeline: ...
+
+class Surv2Data:
+    row: list[int]
+    start: list[float]
+    stop: list[float]
+    status: list[int | None]
+    istate: list[int] | None
+    states: list[str]
+    type: str
+
+class Timeline:
+    time: list[float]
+    status: list[int]
+    data_row: list[int]
+    state_levels: list[str]
+
+class ModelFrame:
+    formula: str
+    data: Any
+    n: int
+    spec: Any
+    response: Surv | None
+    y: list[float] | None
+    terms: Any
+    weights: list[Any] | None
+    offset: list[float] | None
+    id: list[Any] | None
+    cluster: list[Any] | None
+    istate: list[Any] | None
+    na_action: str
+    extra: dict[str, list[Any]]
+    @property
+    def response_name(self) -> str | None: ...
+    @property
+    def response_columns(self) -> tuple[str, ...]: ...
 
 class RateTable:
-    summary: str
-    def ndim(self) -> int: ...
-    def dim_names(self) -> list[str]: ...
-    def lookup(self, coords: dict[str, float]) -> float: ...
+    dims: list[int]
+    dimid: list[str]
+    dimnames: list[list[str]]
+    cutpoints: list[list[float] | None]
+    rates: list[float]
+    def type_codes(self) -> list[int]: ...
+    def rate(self, index: Sequence[int]) -> float | None: ...
 
 class SurvExpResult:
     time: list[float]
-    surv: list[float]
-    n_risk: list[float]
-    cumhaz: list[float]
+    surv: list[float] | list[list[float]]
+    n_risk: list[float] | list[list[float]]
     method: str
     n: int
+    strata: list[str] | None
+    @property
+    def cumhaz(self) -> list[float] | list[list[float]]: ...
 
 class PyearsResult:
-    pyears: list[float]
-    n: list[float]
+    pyears: Any
+    n: Any
     offtable: float
-    group: list[str]
     observations: int
-    event: list[float] | None
-    expected: list[float] | None
     tcut: bool
+    dim: list[int]
+    dimnames: dict[str, list[str]]
+    event: Any
+    expected: Any
+    data: dict[str, list[Any]] | None
+    @property
+    def group(self) -> list[str]: ...
 
 class FineGrayOutput:
     row: list[int]
@@ -131,10 +182,9 @@ class TMergeFrame(Mapping[str, list[Any]]):
     def copy(self) -> TMergeFrame: ...
 
 class TcutResult:
-    codes: list[int]
-    levels: list[str]
-    breaks: list[float]
-    counts: list[int]
+    values: list[float]
+    cutpoints: list[float]
+    labels: list[str]
 
 class SurvObrienResult:
     statistic: float
@@ -202,35 +252,33 @@ def fromtimeline(
     *,
     id: Any,
     states: Any | None = None,
-    data: Any | None = None,
-    id_name: Any = "id",
-) -> dict[str, Any]: ...
-def is_ratetable(
-    x: Any,
-    has_rates: Any | None = None,
-    has_dims: Any | None = None,
-    verbose: Any = False,
-) -> bool: ...
-def ratetableDate(
-    x: Any,
-    month: Any | None = None,
-    day: Any | None = None,
-    *,
-    origin_year: Any = 1970,
-) -> Any: ...
+    repeated: Any = False,
+) -> Surv2Data: ...
+def is_ratetable(x: Any, verbose: bool = False) -> bool | list[str]: ...
+def ratetableDate(x: Any) -> float | list[float]: ...
 def survexp(
-    time: Any,
-    age: Any,
-    year: Any,
-    ratetable: Any | None = None,
-    sex: Any | None = None,
+    formula: Any = None,
+    data: Any | None = None,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = None,
+    rmap: Mapping[str, Any] | None = None,
     times: Any | None = None,
-    method: Any | None = None,
+    method: str | None = None,
+    cohort: bool = True,
+    conditional: bool = False,
+    ratetable: Any | None = None,
+    scale: Any = 1,
+    se_fit: bool | None = None,
+    model: bool = False,
+    x: bool = False,
+    y: bool = False,
     *,
-    cohort: Any = True,
-    conditional: Any = False,
-    scale: Any = 1.0,
-    se_fit: Any | None = None,
+    time: Any = None,
+    age: Any = None,
+    year: Any = None,
+    sex: Any = None,
+    **kwargs: Any,
 ) -> SurvExpResult | list[float]: ...
 def survexp_individual(
     time: Any,
@@ -240,27 +288,33 @@ def survexp_individual(
     sex: Any | None = None,
 ) -> list[float]: ...
 def pyears(
-    response: Any = None,
+    formula: Any = None,
     data: Any | None = None,
-    *,
-    time: Any = ...,
-    start: Any = ...,
-    stop: Any = ...,
-    event: Any = ...,
-    group: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = None,
+    rmap: Mapping[str, Any] | None = None,
+    ratetable: Any | None = None,
     scale: Any = 365.25,
-    data_frame: Any = False,
-) -> PyearsResult | dict[str, list[Any]]: ...
+    expect: str = "event",
+    model: bool = False,
+    x: bool = False,
+    y: bool = False,
+    data_frame: bool = False,
+    *,
+    time: Any = None,
+    start: Any = None,
+    stop: Any = None,
+    event: Any = None,
+    group: Any = None,
+    **kwargs: Any,
+) -> PyearsResult: ...
 def finegray(
     formula: str,
     data: Any | None = None,
-    *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "pass",
+    na_action: str | None = "na.pass",
     etype: Any | None = None,
     prefix: str = "fg",
     count: str | None = None,
@@ -294,7 +348,7 @@ def tmerge(
     options: Mapping[str, Any] | None = None,
     operations: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
-    **updates: Any,
+    **args: Any,
 ) -> TMergeFrame: ...
 def cipoisson(
     k: Any,
@@ -311,8 +365,8 @@ def neardate(
     id2: Any,
     y1: Any,
     y2: Any,
-    best: Any = "after",
-    nomatch: Any | None = None,
+    best: str = "after",
+    nomatch: int | None = None,
 ) -> list[int | None]: ...
 def tcut(
     x: Any,
@@ -379,8 +433,8 @@ def strata(
     na_group: bool = False,
     shortlabel: bool | None = None,
     sep: str = ", ",
-    labels: Any | None = None,
-) -> Any: ...
+    labels: Sequence[str] | None = None,
+) -> StrataFactor: ...
 
 class ConcordanceResult:
     concordance: float | list[float]
@@ -759,19 +813,17 @@ def survdiff(
     **kwargs: Any,
 ) -> SurvDiffResult: ...
 def rttright(
-    response: Any,
-    status: Any | None = None,
-    weights: Any | None = None,
-    *,
+    formula: Any = None,
     data: Any | None = None,
+    weights: Any | None = None,
     subset: Any | None = None,
-    na_action: Any | None = "pass",
+    na_action: str | None = None,
     times: Any | None = None,
     id: Any | None = None,
     timefix: bool = True,
     renorm: bool = True,
     **kwargs: Any,
-) -> Any: ...
+) -> list[float] | list[list[float]]: ...
 def statefig(
     layout: Any,
     connect: Any,
@@ -957,31 +1009,37 @@ def survfit_residuals(
 ) -> Any: ...
 def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv: ...
 def survcondense(
-    formula: Any,
+    formula: str,
     data: Any | None = None,
     subset: Any | None = None,
     weights: Any | None = None,
-    na_action: Any | None = "pass",
+    na_action: str | None = "na.pass",
     *,
-    id: Any | None = None,
-    start: str = "tstart",
-    end: str = "tstop",
-    event: str = "event",
+    id: Any,
+    start: str | None = None,
+    end: str | None = None,
+    event: str | None = None,
     **kwargs: Any,
-) -> Any: ...
+) -> dict[str, list[Any]]: ...
 def survSplit(
-    response: Surv,
+    formula: Any = None,
     data: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "na.pass",
+    id: Any | None = None,
     *,
     cut: Any,
-    start: str = "tstart",
-    end: str = "tstop",
-    event: str = "event",
-    episode: str | None = None,
-    id: str | None = None,
     zero: Any = 0,
+    episode: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    event: str | None = None,
+    added: str | None = None,
+    timefix: bool = True,
+    response: Any | None = None,
+    **kwargs: Any,
 ) -> dict[str, list[Any]]: ...
-def lvcf(id: Any, x: Any, time: Any | None = None) -> list[Any]: ...
+def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[Any]: ...
 def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> list[Any]: ...
 def dsurvreg(
     x: Any,

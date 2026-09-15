@@ -6458,7 +6458,7 @@ class ClogitHandler(TopicHandler):
             _check_summary(fit, aspect, _expect(case, aspect))
 
 
-# --- finegray -----------------------------------------------------------------
+# --- finegray (r-data section) --------------------------------------------------
 
 
 class FinegrayHandler(TopicHandler):
@@ -6479,36 +6479,21 @@ class FinegrayHandler(TopicHandler):
             return r.finegray(_mstate_formula(case["formula"], data), data, **kwargs)
 
         frame = _cached(_fit_key("finegray", case), build)
-        r_frame = decode_frame(expected["frame"])
         if aspect == "frame":
-            if nrow(frame) != nrow(r_frame):
-                raise FixtureMismatchError(f"finegray rows {nrow(frame)} != {nrow(r_frame)}")
-            for name, values in r_frame.items():
-                if name not in frame:
-                    raise FixtureMismatchError(
-                        f"finegray frame lacks column {name!r} ({list(frame)})"
-                    )
-                actual = list(frame[name])
-                if isinstance(values, RFactor) or (values and isinstance(values[0], str)):
-                    if [str(v) for v in actual] != [str(v) for v in values]:
-                        raise FixtureMismatchError(f"column {name} differs")
-                else:
-                    assert_close(
-                        as_float_list(actual), values, rtol=RTOL_COEF, path=f"frame.{name}"
-                    )
+            _compare_frames(frame, expected["frame"])
+            return
+        fit = r.coxph(expected["cox_formula"], frame, weights="fgwt")
+        if aspect == "coxph.coef":
+            assert_named_values(
+                _coef_names(fit), r.coef(fit), expected["coxph"]["coef"], path="coef"
+            )
         else:
-            fit = r.coxph(expected["cox_formula"], frame, weights="fgwt")
-            if aspect == "coxph.coef":
-                assert_named_values(
-                    _coef_names(fit), r.coef(fit), expected["coxph"]["coef"], path="coef"
-                )
-            else:
-                assert_close(
-                    as_float_list(_attr(fit, "log_likelihood")),
-                    expected["coxph"]["loglik"],
-                    rtol=RTOL_COEF,
-                    path="loglik",
-                )
+            assert_close(
+                as_float_list(_attr(fit, "log_likelihood")),
+                expected["coxph"]["loglik"],
+                rtol=RTOL_COEF,
+                path="loglik",
+            )
 
 
 # --- survobrien ---------------------------------------------------------------
@@ -6664,28 +6649,6 @@ class RoystonBrierHandler(TopicHandler):
                 rtol=RTOL_VAR,
                 path=f"{aspect}.rsquared",
             )
-
-
-# --- rttright -----------------------------------------------------------------
-
-
-class RttrightHandler(TopicHandler):
-    topic = "rttright"
-
-    def aspects(self, case):
-        return ["weights"]
-
-    def check(self, case, aspect):
-        expected = case["expected"]
-        data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
-        result = r.rttright(_mstate_formula(case["formula"], data), data=data, **kwargs)
-        if hasattr(result, "tolist"):
-            result = result.tolist()
-        if "times" in expected:
-            assert_matrix_close(result, expected["weights"], rtol=RTOL_COEF, path="weights")
-        else:
-            assert_close(as_float_list(result), expected["weights"], rtol=RTOL_COEF, path="weights")
 
 
 # --- pseudo / residuals.survfit / survfit0 -------------------------------------
@@ -6908,7 +6871,8 @@ class ValidationExtraHandler(TopicHandler):
         handler.check_in_topic(self.topic, case, aspect)
 
 
-# --- survSplit / survcondense --------------------------------------------------
+# --- survSplit / survcondense / tmerge / neardate (r-data section) --------------
+# Owner: the r-data module (python/survival/r/_data_prep.py).
 
 
 def _compare_frames(
@@ -6917,16 +6881,20 @@ def _compare_frames(
     *,
     rtol: float = RTOL_COEF,
     columns: Sequence[str] | None = None,
+    renames: Mapping[str, str] | None = None,
 ) -> None:
+    """Compare a column dict against a fixture frame (``renames`` maps R names to ours)."""
+
     r_frame = decode_frame(expected_frame)
     if nrow(actual) != nrow(r_frame):
         raise FixtureMismatchError(f"rows {nrow(actual)} != {nrow(r_frame)}")
     for name, values in r_frame.items():
         if columns is not None and name not in columns:
             continue
-        if name not in actual:
+        our_name = (renames or {}).get(name, name)
+        if our_name not in actual:
             raise FixtureMismatchError(f"frame lacks column {name!r} (has {list(actual)})")
-        actual_values = list(actual[name])
+        actual_values = list(actual[our_name])
         if isinstance(values, RFactor) or (values and isinstance(values[0], str)):
             if [str(v) for v in actual_values] != [str(v) for v in values]:
                 raise FixtureMismatchError(f"column {name!r} differs")
@@ -6957,19 +6925,35 @@ class SurvcondenseHandler(TopicHandler):
         data = case_data(self.topic, case)
         kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
         frame = r.survcondense(case["formula"], data, **kwargs)
-        _compare_frames(frame, case["expected"]["frame"])
+        # R names the id column after the deparsed ``id`` argument, which the
+        # generator's do.call turns into the first id value ("1").
+        _compare_frames(frame, case["expected"]["frame"], renames={"1": kwargs["id"]})
 
 
-# --- tmerge -------------------------------------------------------------------
+def _check_tcount(frame: Any, expected: Mapping[str, Any], path: str) -> None:
+    """The ``tcount`` attribute: one row per tmerge argument in call order."""
+
+    names = list(expected["rownames"])
+    actual = [
+        [frame.tcount[name][column] for column in expected["colnames"]]
+        for name in dict.fromkeys(names)
+    ]
+    rows = [list(row) for row in expected["values"]]
+    # R stacks one row per argument, repeats included; ours keys by name.
+    seen: dict[str, int] = {}
+    unique_rows = []
+    for name, row in zip(names, rows, strict=True):
+        seen[name] = seen.get(name, 0) + 1
+        if seen[name] == names.count(name):
+            unique_rows.append(row)
+    assert_matrix_close(actual, unique_rows, rtol=0.0, path=path)
 
 
 class TmergeHandler(TopicHandler):
     topic = "tmerge"
 
     def aspects(self, case):
-        return [
-            key for key in case["expected"] if key not in ("tcount", "tcount_final", "matches_cgd")
-        ]
+        return [key for key in case["expected"] if key != "matches_cgd"]
 
     def check(self, case, aspect):
         expected = case["expected"]
@@ -6984,11 +6968,13 @@ class TmergeHandler(TopicHandler):
             if aspect == "after_events":
                 return _compare_frames(frame, expected["after_events"])
             frame = r.tmerge(frame, frame, id="id", enum=r.cumtdc("tstart"))
+            if aspect == "tcount":
+                return _check_tcount(frame, expected["tcount"], "tcount")
             return _compare_frames(frame, expected["final"])
         doc_data = case_data(self.topic, {"data_ref": case["data_ref"]})
         long = decode_frame(load_topic(self.topic)["data"][case["data_ref2"]])
         if case["name"] == "pbcseq_20_vignette":
-            death = [int(value == 2) for value in doc_data["status"]]
+            death = [value == 2 for value in doc_data["status"]]
             frame = r.tmerge(doc_data, doc_data, id="id", death=r.event("time", death))
             frame = r.tmerge(
                 frame,
@@ -6999,6 +6985,8 @@ class TmergeHandler(TopicHandler):
                 protime=r.tdc("day", "protime"),
                 edema=r.tdc("day", "edema"),
             )
+            if aspect == "tcount":
+                return _check_tcount(frame, expected["tcount"], "tcount")
             return _compare_frames(frame, expected["frame"])
         d1 = r.tmerge(doc_data, doc_data, id="id", death=r.event("futime", "death"))
         if aspect == "step1_death_event":
@@ -7022,10 +7010,62 @@ class TmergeHandler(TopicHandler):
         if aspect == "step4_infect_event":
             return _compare_frames(d4, expected[aspect])
         d5 = r.tmerge(d4, long, id="id", ninfect=r.cumevent("time", "infection"))
+        if aspect == "tcount_final":
+            return _check_tcount(d5, expected["tcount_final"], "tcount_final")
         return _compare_frames(d5, expected["step5_ninfect_cumevent"])
 
 
-# --- neardate -----------------------------------------------------------------
+class DataprepTmergeHandler(TopicHandler):
+    topic = "dataprep-tmerge"
+
+    def aspects(self, case):
+        return list(case["expected"])
+
+    def check(self, case, aspect):
+        expected = case["expected"]
+        base = case_data(self.topic, {"data_ref": case["data_ref"]})
+        long = decode_frame(load_topic(self.topic)["data"][case["data_ref2"]])
+        if case["name"] == "lvcf_after_event_split":
+            d1 = r.tmerge(base, base, id="id", death=r.event("futime", "death"))
+            d2 = r.tmerge(d1, long, id="id", visit=r.event("time", "visit"))
+            if aspect == "step2_visit_event":
+                return _compare_frames(d2, expected[aspect])
+            if aspect == "x_tdc_na_kept":
+                frame = r.tmerge(d2, long, id="id", x=r.tdc("time", "x"), options={"na.rm": False})
+                return _compare_frames(frame, expected[aspect])
+            if aspect == "x_tdc_init_0":
+                return _compare_frames(
+                    r.tmerge(d2, long, id="id", x=r.tdc("time", "x", 0)), expected[aspect]
+                )
+            d3 = r.tmerge(d2, long, id="id", x=r.tdc("time", "x"))
+            if aspect == "step3_x_tdc":
+                return _compare_frames(d3, expected[aspect])
+            d4 = r.tmerge(d3, long, id="id", nx=r.cumtdc("time", "x"))
+            if aspect == "step4_nx_cumtdc":
+                return _compare_frames(d4, expected[aspect])
+            d5 = r.tmerge(d4, long, id="id", seen=r.tdc("time"))
+            if aspect == "tcount_step5":
+                return _check_tcount(d5, expected[aspect], aspect)
+            return _compare_frames(d5, expected["step5_seen_tdc"])
+        death = [value == 2 for value in base["status"]]
+        pbc2 = r.tmerge(base, base, id="id", death=r.event("time", death))
+        if aspect == "chol_na_kept":
+            frame = r.tmerge(
+                pbc2, long, id="id", chol=r.tdc("day", "chol"), options={"na.rm": False}
+            )
+            return _compare_frames(frame, expected[aspect])
+        pbc3 = r.tmerge(
+            pbc2,
+            long,
+            id="id",
+            bili=r.tdc("day", "bili"),
+            chol=r.tdc("day", "chol"),
+            ascites=r.tdc("day", "ascites"),
+            hepato=r.tdc("day", "hepato"),
+        )
+        if aspect == "tcount":
+            return _check_tcount(pbc3, expected["tcount"], "tcount")
+        return _compare_frames(pbc3, expected["frame"])
 
 
 class NeardateHandler(TopicHandler):
@@ -7039,12 +7079,63 @@ class NeardateHandler(TopicHandler):
         best, _, nomatch = aspect.partition("_")
         kwargs: dict[str, Any] = {"best": best}
         if nomatch == "nomatch0":
-            kwargs["nomatch"] = 0
+            kwargs["nomatch"] = -1  # R's nomatch = 0 is one-based; ours is zero-based
         result = r.neardate(args["id1"], args["id2"], args["y1"], args["y2"], **kwargs)
-        assert_exact(list(result), case["expected"][aspect], path=aspect)
+        # R reports one-based row numbers, Python zero-based ones.
+        actual = [None if value is None else value + 1 for value in result]
+        assert_exact(actual, case["expected"][aspect], path=aspect)
 
 
-# --- pyears -------------------------------------------------------------------
+# --- rttright (r-data section) ----------------------------------------------------
+
+
+class RttrightHandler(TopicHandler):
+    topic = "rttright"
+
+    def aspects(self, case):
+        return ["weights"]
+
+    def check(self, case, aspect):
+        expected = case["expected"]
+        data = case_data(self.topic, case)
+        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+        result = r.rttright(_mstate_formula(case["formula"], data), data=data, **kwargs)
+        if "times" in expected and len(expected["times"]) > 1:
+            assert_matrix_close(result, expected["weights"], rtol=RTOL_COEF, path="weights")
+        else:
+            assert_close(as_float_list(result), expected["weights"], rtol=RTOL_COEF, path="weights")
+
+
+# --- pyears / survexp (r-data section) --------------------------------------------
+
+
+def _pyears_call(case: Mapping[str, Any]) -> Any:
+    data = case_data("pyears", case)
+    args = dict(case.get("args", {}))
+    kwargs = _kwargs(args, data, na_omit=False, drop=("ratetable", "rmap"))
+    if "ratetable" in args:
+        kwargs["ratetable"] = _ratetable_by_name(args["ratetable"])
+        kwargs["rmap"] = _rmap_arguments(args["rmap"])
+    return r.pyears(case["formula"], data, **kwargs)
+
+
+def _ratetable_by_name(name: str) -> Any:
+    tables = {"survexp.us": r.survexp_us, "survexp.usr": r.survexp_usr, "survexp.mn": r.survexp_mn}
+    if name not in tables:
+        raise UnsupportedCaseError(f"ratetable {name} is not a bundled rate table")
+    return tables[name]()
+
+
+def _rmap_arguments(rmap: str) -> dict[str, Any]:
+    """``list(age = agedays, race = "white")`` as a Python mapping."""
+
+    inner = rmap.strip()[len("list(") : -1]
+    out: dict[str, Any] = {}
+    for part in inner.split(","):
+        name, _sep, value = part.partition("=")
+        value = value.strip()
+        out[name.strip()] = value.strip('"') if value.startswith('"') else value
+    return out
 
 
 class PyearsHandler(TopicHandler):
@@ -7054,36 +7145,57 @@ class PyearsHandler(TopicHandler):
         expected = case["expected"]
         if case["name"] == "tcut_basis":
             return ["tcut"]
-        return [key for key in ("pyears", "n", "event", "expected", "offtable") if key in expected]
+        if "data" in expected:
+            return ["data", "offtable", "observations"]
+        return [
+            key
+            for key in ("pyears", "n", "event", "expected", "offtable", "observations", "dimnames")
+            if key in expected
+        ]
 
     def check(self, case, aspect):
         expected = case["expected"]
         if case["name"] == "tcut_basis":
             args = case["args"]
             tc = r.tcut(args["x"], args["breaks"])
-            assert_exact(as_float_list(_attr(tc, "values")), expected["values"], path="values")
+            assert_exact(as_float_list(tc.values), expected["values"], path="values")
+            assert_exact(as_float_list(tc.cutpoints), expected["cutpoints"], path="cutpoints")
+            assert_exact(list(tc.labels), expected["labels"], path="labels")
+            labelled = r.tcut(args["x"], args["breaks"], labels=expected["labelled"])
+            assert_exact(list(labelled.labels), expected["labelled"], path="labelled")
+            three = r.tcut(args["x"], 3)
+            assert_close(
+                as_float_list(three.cutpoints),
+                expected["scalar_breaks_cutpoints"],
+                rtol=1e-12,
+                path="scalar_breaks_cutpoints",
+            )
             assert_exact(
-                as_float_list(_attr(tc, "breaks", "cutpoints")),
-                expected["cutpoints"],
-                path="cutpoints",
+                as_float_list(three.values), expected["scalar_breaks_values"], path="values"
             )
             return
-        if "ratetable" in case.get("args", {}):
-            raise UnsupportedCaseError("pyears with a ratetable/rmap is not available")
-        if "tcut(" in case["formula"] or "cut(" in case["formula"]:
-            raise UnsupportedCaseError("pyears formula with tcut()/cut() terms is not available")
-        data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
-        result = r.pyears(case["formula"], data, **kwargs)
-        actual = _attr(result, aspect if aspect != "offtable" else "off_table")
+        result = _cached(_fit_key("pyears", case), lambda: _pyears_call(case))
+        if aspect == "data":
+            _compare_frames(result.data, expected["data"], rtol=RTOL_COEF)
+            return
+        if aspect == "dimnames":
+            assert_exact(list(result.dim), expected["dim"], path="dim")
+            for label, levels in expected["dimnames"].items():
+                if label not in result.dimnames:
+                    raise FixtureMismatchError(
+                        f"dimnames lacks {label!r} ({list(result.dimnames)})"
+                    )
+                assert_exact(list(result.dimnames[label]), levels, path=f"dimnames[{label}]")
+            return
+        actual = getattr(result, aspect)
         exp = expected[aspect]
+        rtol = RTOL_COEF if aspect in ("pyears", "expected", "offtable") else 0.0
         if isinstance(exp, list) and exp and isinstance(exp[0], list):
-            assert_matrix_close(actual, exp, rtol=RTOL_COEF, path=aspect)
+            assert_matrix_close(actual, exp, rtol=rtol, path=aspect)
+        elif isinstance(exp, list):
+            assert_close(as_float_list(actual), exp, rtol=rtol, path=aspect)
         else:
-            assert_close(actual, exp, rtol=RTOL_COEF, path=aspect)
-
-
-# --- survexp ------------------------------------------------------------------
+            assert_close(float(actual), exp, rtol=rtol, path=aspect)
 
 
 class SurvexpHandler(TopicHandler):
@@ -7094,10 +7206,12 @@ class SurvexpHandler(TopicHandler):
         if name == "ratetableDate":
             return ["from_date", "from_numeric"]
         if name == "survexp_us_table":
-            return ["dim", "sample"]
+            return ["dim", "dimnames", "type", "cutpoints", "sample", "summary"]
         if name == "lung_coxph_ratetable":
             return ["by_sex", "overall", "individual"]
-        return ["surv"]
+        if "time" not in case["expected"]:
+            return ["surv"]
+        return ["time", "n", "surv", "n_risk", "method"]
 
     def check(self, case, aspect):
         expected = case["expected"]
@@ -7109,53 +7223,89 @@ class SurvexpHandler(TopicHandler):
             else:
                 import datetime
 
-                dates = [datetime.date.fromisoformat(value) for value in args["dates"]]
-                result = r.ratetableDate(dates)
+                result = r.ratetableDate([datetime.date.fromisoformat(v) for v in args["dates"]])
             assert_close(as_float_list(result), expected[aspect], rtol=1e-12, path=aspect)
             return
         if name == "survexp_us_table":
-            table = r.survexp_us()
-            if aspect == "dim":
-                dims = _attr(table, "dim", "shape")
-                assert_exact(list(dims), expected["dim"], path="dim")
-            else:
-                raise UnsupportedCaseError("rate table cell access by dimnames is not exposed")
+            self._check_table(aspect, expected)
             return
         if name == "lung_coxph_ratetable":
             raise UnsupportedCaseError("survexp with a coxph fit as ratetable is not available")
-        args = case["args"]
-        if args.get("ratetable") != "survexp.us" or "race" in args.get("rmap", ""):
-            raise UnsupportedCaseError(
-                "only survexp.us is supported by the direct survexp interface "
-                f"({args.get('ratetable')})"
-            )
-        if "~ sex" in case["formula"]:
-            raise UnsupportedCaseError("survexp grouped by a formula term is not available")
+        args = dict(case.get("args", {}))
         data = case_data(self.topic, case)
-        method = args.get("method", "ederer")
-        if args.get("cohort") is False:
-            result = r.survexp_individual(
-                data["time"], data["agedays"], data["entry"], r.survexp_us(), sex=data["sex"]
-            )
+        kwargs = _kwargs(args, data, na_omit=False, drop=("ratetable", "rmap"))
+        kwargs["ratetable"] = _ratetable_by_name(args["ratetable"])
+        kwargs["rmap"] = _rmap_arguments(args["rmap"])
+        result = _cached(
+            _fit_key("survexp", case), lambda: r.survexp(case["formula"], data, **kwargs)
+        )
+        if "time" not in expected:
             assert_close(as_float_list(result), expected["surv"], rtol=RTOL_VAR, path="surv")
             return
-        times = args.get("times")
-        result = r.survexp(
-            data["time"],
-            data["agedays"],
-            data["entry"],
-            r.survexp_us(),
-            sex=data["sex"],
-            times=times,
-            method=method,
-        )
-        assert_close(as_float_list(_attr(result, "time")), expected["time"], path="time")
-        assert_close(
-            as_float_list(_attr(result, "surv", "survival")),
-            expected["surv"],
-            rtol=RTOL_VAR,
-            path="surv",
-        )
+        if aspect == "method":
+            assert_exact(result.method, expected["method"], path="method")
+        elif aspect == "time":
+            assert_close(as_float_list(result.time), expected["time"], rtol=1e-12, path="time")
+        elif aspect == "n":
+            n_risk = result.n_risk
+            if n_risk and isinstance(n_risk[0], list):
+                flat = [row[g] for g in range(len(n_risk[0])) for row in n_risk]
+            else:
+                flat = list(n_risk)
+            assert_exact(as_float_list(flat), expected["n"], path="n")
+        elif "strata_names" in expected:
+            assert_exact(list(result.strata), expected["strata_names"], path="strata")
+            rtol = RTOL_VAR if aspect == "surv" else 0.0
+            assert_matrix_close(getattr(result, aspect), expected[aspect], rtol=rtol, path=aspect)
+        else:
+            rtol = RTOL_VAR if aspect == "surv" else 0.0
+            assert_close(
+                as_float_list(getattr(result, aspect)), expected[aspect], rtol=rtol, path=aspect
+            )
+
+    @staticmethod
+    def _check_table(aspect: str, expected: Mapping[str, Any]) -> None:
+        table = r.survexp_us()
+        if aspect == "dim":
+            assert_exact(list(table.dims), expected["dim"], path="dim")
+        elif aspect == "type":
+            assert_exact(list(table.type_codes()), expected["type"], path="type")
+        elif aspect == "dimnames":
+            for d, dimid in enumerate(table.dimid):
+                assert_exact(list(table.dimnames[d]), expected["dimnames"][dimid], path=dimid)
+        elif aspect == "cutpoints":
+            for d, cuts in enumerate(expected["cutpoints"]):
+                actual = table.cutpoints[d]
+                if cuts is None:
+                    assert_exact(actual, None, path=f"cutpoints[{d}]")
+                else:
+                    assert_close(as_float_list(actual), cuts, rtol=0.0, path=f"cutpoints[{d}]")
+        elif aspect == "sample":
+            sample = expected["sample"]
+
+            def at(labels: Sequence[str]) -> float:
+                index = [list(table.dimnames[d]).index(label) for d, label in enumerate(labels)]
+                return float(table.rate(index))
+
+            assert_close(at(["0", "male", "1990"]), sample["age0_male_1990"], rtol=1e-14, path="s1")
+            assert_close(
+                at(["50", "female", "2000"]), sample["age50_female_2000"], rtol=1e-14, path="s2"
+            )
+            assert_close(
+                at(["100", "male", "1940"]), sample["age100_male_1940"], rtol=1e-14, path="s3"
+            )
+            assert_close(sum(table.rates), sample["sum"], rtol=1e-10, path="sum")
+        else:
+            summary = expected["summary"]
+            usr, mn = r.survexp_usr(), r.survexp_mn()
+            assert_exact(list(usr.dims), summary["usr_dim"], path="usr_dim")
+            assert_exact(list(mn.dims), summary["mn_dim"], path="mn_dim")
+            assert_close(sum(usr.rates), summary["usr_sum"], rtol=1e-10, path="usr_sum")
+            assert_close(sum(mn.rates), summary["mn_sum"], rtol=1e-10, path="mn_sum")
+            for d, dimid in enumerate(usr.dimid):
+                assert_exact(list(usr.dimnames[d]), summary["usr_dimnames"][dimid], path=dimid)
+            for d, dimid in enumerate(mn.dimid):
+                assert_exact(list(mn.dimnames[d]), summary["mn_dimnames"][dimid], path=dimid)
 
 
 # --- utilities ----------------------------------------------------------------
