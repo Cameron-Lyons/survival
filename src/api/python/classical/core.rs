@@ -39,6 +39,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;
     m.add_function(wrap_pyfunction!(coxph_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(coxpenal_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_borgan_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount1_py, m)?)?;
@@ -64,6 +65,9 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         PsplineBasis,
         CoxCountOutput,
         CoxPHFit,
+        CoxPenalty,
+        CoxpenalFit,
+        PenaltyHistory,
         crate::regression::TieMethod,
         CoxPrediction,
         CoxTermsPrediction,
