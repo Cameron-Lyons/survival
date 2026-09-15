@@ -139,7 +139,8 @@ mod pseudo_bench {
 
     fn inputs(n: usize) -> (Vec<f64>, Vec<i32>, Vec<f64>) {
         let (time, _, status) = generate_survival_data(n);
-        let eval_times = (0..n).map(|idx| idx as f64 * 0.5 + 0.25).collect();
+        // rmst refuses a truncation point before the first time (0.5)
+        let eval_times = (1..=n).map(|idx| idx as f64 * 0.5 + 0.25).collect();
         (time, status, eval_times)
     }
 
