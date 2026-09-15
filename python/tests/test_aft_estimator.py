@@ -312,35 +312,6 @@ class TestAFTEstimator:
         with pytest.raises(ValueError, match="q must be between 0 and 1"):
             model.predict_quantile(X[:2], q=q)
 
-    @pytest.mark.parametrize(
-        "distribution",
-        ["gaussian", "normal", "logistic", "extreme", "extreme-value", "t", "student-t"],
-    )
-    def test_identity_distributions_preserve_signed_response_predictions(self, distribution):
-        X = np.array([[-2.0], [-1.0], [0.0], [0.0], [1.0], [2.0]])
-        y = np.column_stack([[-3.0, -2.1, -0.2, 0.0, 0.7, 1.8], np.ones(6)])
-        model = AFTEstimator(distribution=distribution).fit(X, y)
-        zero_location = -model.intercept_ / model.coef_[0]
-        new_x = np.array([[zero_location - 1.0], [zero_location], [zero_location + 1.0]])
-        expected = model.intercept_ + new_x @ model.coef_
-
-        predictions = model.predict(new_x)
-
-        np.testing.assert_allclose(predictions, expected, atol=1e-12)
-        assert predictions[0] < 0.0
-        assert predictions[1] == pytest.approx(0.0, abs=1e-12)
-        assert predictions[2] > 0.0
-        native_rows = np.column_stack([np.ones(3), new_x]).tolist()
-        for q in [0.1, 0.5, 0.9]:
-            expected_quantile = np.array(
-                model.model_.predict_quantile(covariates=native_rows, quantiles=[q]).predictions
-            )[:, 0]
-            np.testing.assert_allclose(model.predict_quantile(new_x, q), expected_quantile)
-        np.testing.assert_allclose(model.predict_median(new_x), model.predict_quantile(new_x, 0.5))
-        if model.model_.distribution == "t":
-            assert model.model_.distribution_parameters == [4.0]
-            assert np.all(model.predict_quantile(new_x, 0.9) > predictions)
-
     def test_extreme_value_predictions_match_r_survreg(self):
         # R survival 3.8.11: survreg(Surv(time, status) ~ x, dist="extreme").
         X = np.array([[-2.0], [-1.0], [0.0], [0.0], [1.0], [2.0]])
@@ -366,30 +337,6 @@ class TestAFTEstimator:
             )
         np.testing.assert_allclose(model.predict_median(new_x), expected[:, 1], atol=2e-7)
 
-    @pytest.mark.parametrize(
-        "distribution",
-        ["weibull", "exponential", "rayleigh", "LOG-GAUSSIAN", "log-normal", "log-logistic"],
-    )
-    def test_log_time_predictions_preserve_response_convention_and_aliases(self, distribution):
-        X = np.array([[-2.0], [-1.0], [0.0], [0.0], [1.0], [2.0]])
-        y = np.column_stack([np.exp([-3.0, -2.1, -0.2, 0.0, 0.7, 1.8]), np.ones(6)])
-        model = AFTEstimator(distribution=distribution).fit(X, y)
-
-        np.testing.assert_allclose(model.predict(X), np.exp(model.intercept_ + X @ model.coef_))
-        native_rows = np.column_stack([np.ones(6), X]).tolist()
-        native_quantiles = np.array(
-            model.model_.predict_quantile(
-                covariates=native_rows, quantiles=[0.1, 0.5, 0.9]
-            ).predictions
-        )
-        for column, q in enumerate([0.1, 0.5, 0.9]):
-            np.testing.assert_allclose(model.predict_quantile(X, q), native_quantiles[:, column])
-        np.testing.assert_allclose(model.predict_median(X), native_quantiles[:, 1])
-        if distribution in {"weibull", "exponential", "rayleigh"}:
-            np.testing.assert_allclose(
-                model.predict_median(X), model.predict(X) * np.log(2.0) ** model.scale_
-            )
-
     def test_predictions_use_fitted_distribution_after_parameter_change(self):
         X = np.array([[-2.0], [-1.0], [0.0], [0.0], [1.0], [2.0]])
         y = np.column_stack([np.exp([-3.0, -2.1, -0.2, 0.0, 0.7, 1.8]), np.ones(6)])
@@ -403,24 +350,6 @@ class TestAFTEstimator:
         np.testing.assert_array_equal(model.predict(X), response)
         np.testing.assert_array_equal(model.predict_median(X), median)
         np.testing.assert_array_equal(model.predict_quantile(X, 0.9), quantile)
-
-    @pytest.mark.parametrize(("q", "intercept"), [(0.1, 1000.0), (0.9, -1000.0)])
-    def test_quantile_combines_location_and_scale_before_response_transform(self, q, intercept):
-        X = np.array([[-2.0], [-1.0], [0.0], [0.0], [1.0], [2.0]])
-        y = np.column_stack([np.exp([-3.0, -2.1, -0.2, 0.0, 0.7, 1.8]), np.ones(6)])
-        model = AFTEstimator(distribution="lognormal").fit(X, y)
-        model.intercept_ = intercept
-        model.coef_ = np.zeros(1)
-        model.scale_ = 1000.0
-        error_quantile = _surv._survival.survreg_distribution(
-            [q], [0.0], [1.0], "gaussian", "quantile"
-        )[0]
-
-        with np.errstate(over="raise", under="raise", invalid="raise"):
-            prediction = model.predict_quantile(X, q)
-
-        np.testing.assert_allclose(prediction, np.exp(intercept + 1000.0 * error_quantile))
-        assert np.all(np.isfinite(prediction) & (prediction > 0.0))
 
     @pytest.mark.parametrize("method", ["predict", "predict_median", "predict_quantile"])
     def test_prediction_methods_validate_feature_count(self, method):

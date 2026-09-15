@@ -270,11 +270,16 @@ def test_streaming_rejects_masked_lazy_slice_without_materializing_all_rows(tmp_
     estimator = _boundary_estimator("StreamingCoxPHEstimator")
     predicted_rows = []
 
-    def predict_valid_rows(covariates):
-        predicted_rows.append(len(covariates))
-        return [0.0] * len(covariates)
+    def predict_valid_rows(_type, *, newdata):
+        predicted_rows.append(len(newdata))
+        return SimpleNamespace(fit=[0.0] * len(newdata))
+
+    def survfit_valid_rows(*, newdata, se_fit):
+        predicted_rows.append(len(newdata))
+        return [SimpleNamespace(time=[1.0, 2.0], surv=[[1.0] * len(newdata)] * 2)]
 
     estimator.model_.predict = predict_valid_rows
+    estimator.model_.survfit = survfit_valid_rows
 
     def run_prediction():
         if route == "predict_large_dataset":

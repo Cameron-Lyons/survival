@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -159,6 +160,13 @@ def _restore_survival_modules():
     finally:
         _remove_survival_modules()
         sys.modules.update(saved)
+        # The package caches the submodules it lazily loaded in its globals; a
+        # submodule first imported during this test must stay registered, or the
+        # next test sees the attribute without its sys.modules entry.
+        root = saved.get("survival")
+        for value in list(vars(root).values()) if root is not None else []:
+            if isinstance(value, ModuleType) and value.__name__.startswith("survival."):
+                sys.modules.setdefault(value.__name__, value)
 
 
 def _pyi_top_level_names(path: Path) -> set[str]:

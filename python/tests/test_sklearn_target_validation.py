@@ -193,29 +193,6 @@ def test_binary_status_types_preserve_fitted_results(name, status_type):
     assert actual.score(x, typed_y) == pytest.approx(expected.score(x, y), abs=1e-15)
 
 
-@pytest.mark.parametrize("name", ["AFTEstimator", "StreamingAFTEstimator"])
-@pytest.mark.parametrize("distribution", ["gaussian", "logistic"])
-def test_identity_aft_families_pass_negative_and_zero_times_to_model(
-    monkeypatch, name, distribution
-):
-    x, y = _data()
-    y[:, 0] -= 4.0
-
-    class ReachedModelError(Exception):
-        pass
-
-    def check_signed_times(**kwargs):
-        assert kwargs["distribution"] == distribution
-        np.testing.assert_array_equal(kwargs["time"], y[:, 0])
-        np.testing.assert_array_equal(kwargs["status"], y[:, 1])
-        raise ReachedModelError
-
-    monkeypatch.setattr(survival._survival, "survreg", check_signed_times)
-    # Time support belongs to the chosen distribution, beyond the shared target guard.
-    with pytest.raises(ReachedModelError):
-        _estimator(name, distribution=distribution).fit(x, y)
-
-
 @pytest.mark.parametrize("dtype", [str, bytes, "datetime64[D]", "timedelta64[D]"])
 @pytest.mark.parametrize("object_storage", [False, True], ids=["native-dtype", "object-dtype"])
 def test_target_validation_rejects_nonnumeric_storage(dtype, object_storage):

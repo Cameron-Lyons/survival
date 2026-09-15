@@ -545,7 +545,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   yates_py_cox_fit <- coxph(
     Surv(time, status) ~ x,
     data = yates_cox_data,
-    max_iter = 0
+    iter.max = 0
   )
   expect_null(yates_setup(yates_py_cox_fit, predict = "lp"))
   expect_equal(yates_setup(yates_py_cox_fit, predict = "risk")(c(-1, 0, 1), NULL), exp(c(-1, 0, 1)))
@@ -2444,14 +2444,14 @@ test_that("R formula wrappers delegate to the Python survival package", {
     tolerance = 1e-8
   )
 
-  fit <- coxph(Surv(time, status) ~ x, data = data, max_iter = 0, model = TRUE)
+  fit <- coxph(Surv(time, status) ~ x, data = data, iter.max = 0, model = TRUE)
   controlled_fit <- coxph(Surv(time, status) ~ x, data = data, control = cox_control)
   expect_equal(coef(controlled_fit), coef(fit))
   aft_fit <- survreg(Surv(time, status) ~ x, data = data, control = survreg_control)
   expect_s3_class(aft_fit, "survival_py_survreg")
   expect_s3_class(aft_fit, "survival_py_model")
   expect_equal(df.residual(aft_fit), nobs(aft_fit) - attr(logLik(aft_fit), "df"))
-  direct_cox_fit <- coxph(response, x = data.frame(x = data$x), max_iter = 0)
+  direct_cox_fit <- coxph(response, x = data.frame(x = data$x), iter.max = 0)
   direct_aft_fit <- survreg(response, x = data.frame(x = data$x), control = survreg_control)
   expect_equal(names(coef(direct_cox_fit)), "x")
   expect_equal(names(coef(direct_aft_fit)), "x")
@@ -2516,7 +2516,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(deparse(formula(fit)), "Surv(time, status) ~ x")
   expect_s3_class(terms(fit), "terms")
   expect_null(weights(fit))
-  weighted_fit <- coxph(Surv(time, status) ~ x, data = data, weights = wt, max_iter = 0)
+  weighted_fit <- coxph(Surv(time, status) ~ x, data = data, weights = wt, iter.max = 0)
   expect_equal(weights(weighted_fit), data$wt)
   expect_error(
     coxph(
@@ -2524,7 +2524,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
       data = data,
       weights = wt,
       method = "exact",
-      max_iter = 0
+      iter.max = 0
     ),
     "Case weights are not supported for the exact method"
   )
@@ -2561,7 +2561,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_true(is.matrix(partial_residuals))
   expect_equal(dim(partial_residuals), c(nrow(data), 1L))
   expect_equal(colnames(partial_residuals), "x")
-  multi_fit <- coxph(Surv(time, status) ~ x + wt, data = data, max_iter = 0)
+  multi_fit <- coxph(Surv(time, status) ~ x + wt, data = data, iter.max = 0)
   score_residuals <- residuals(multi_fit, type = "score")
   expect_true(is.matrix(score_residuals))
   expect_equal(dim(score_residuals), c(nrow(data), 2L))
@@ -2619,7 +2619,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_error(aggregate(cox_aggregate_curves, by = "lo"), "same length")
   expect_error(aggregate(cox_aggregate_curves, FUN = max), "FUN must be mean")
   stratified_curves <- survfit(
-    coxph(Surv(time, status) ~ x + strata(group), data = data, max_iter = 0),
+    coxph(Surv(time, status) ~ x + strata(group), data = data, iter.max = 0),
     newdata = data.frame(x = c(0.5, 0.7), group = c("control", "treated")),
     se.fit = FALSE
   )
@@ -2630,7 +2630,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   hazard_frame <- as.data.frame(basehaz(fit))
   expect_s3_class(hazard_frame, "data.frame")
   expect_true(all(c("time", "cumhaz") %in% names(hazard_frame)))
-  stratified_fit <- coxph(Surv(time, status) ~ x + strata(group), data = data, max_iter = 0)
+  stratified_fit <- coxph(Surv(time, status) ~ x + strata(group), data = data, iter.max = 0)
   stratified_hazard_frame <- as.data.frame(basehaz(stratified_fit, centered = FALSE))
   expect_equal(unique(stratified_hazard_frame$strata), c("control", "treated"))
   hazard_summary <- summary(basehaz(fit))
@@ -2648,7 +2648,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     status = c(1, 1, 0, 1, 1, 0),
     x = c(0.1, 0.5, 0.2, 1.0, 0.7, 0.3)
   )
-  royston_fit <- coxph(Surv(time, status) ~ x, data = royston_data, max_iter = 50, model = TRUE)
+  royston_fit <- coxph(Surv(time, status) ~ x, data = royston_data, iter.max = 50, model = TRUE)
   reference_royston_fit <- survival::coxph(
     survival::Surv(time, status) ~ x,
     data = royston_data,
@@ -2671,7 +2671,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     status = c(1, 1, 0, 1, 0, 1, 1, 0),
     x = c(0.2, 0.4, 0.1, 0.8, 1.0, 1.2, 0.6, 1.4)
   )
-  brier_fit <- coxph(Surv(time, status) ~ x, data = brier_data, max_iter = 50, model = TRUE)
+  brier_fit <- coxph(Surv(time, status) ~ x, data = brier_data, iter.max = 50, model = TRUE)
   reference_brier_fit <- survival::coxph(
     survival::Surv(time, status) ~ x,
     data = brier_data,
@@ -2703,7 +2703,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     Surv(time, status) ~ x,
     data = brier_weighted_data,
     weights = wt,
-    max_iter = 50,
+    iter.max = 50,
     model = TRUE
   )
   reference_brier_weighted_fit <- survival::coxph(
@@ -2751,7 +2751,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     Surv(start, stop, status) ~ x,
     data = brier_counting_data,
     id = id,
-    max_iter = 50,
+    iter.max = 50,
     model = TRUE
   )
   reference_brier_counting_fit <- survival::coxph(
@@ -2791,7 +2791,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     Surv(start, stop, status) ~ x,
     data = brier_common_start_data,
     id = id,
-    max_iter = 0,
+    iter.max = 0,
     model = TRUE
   )
   reference_brier_common_start_fit <- survival::coxph(
@@ -2828,7 +2828,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     Surv(start, stop, status) ~ x,
     data = brier_custom_id_data,
     id = subject,
-    max_iter = 0,
+    iter.max = 0,
     model = TRUE
   )
   reference_brier_custom_id_fit <- survival::coxph(
@@ -2865,7 +2865,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     Surv(start, stop, status) ~ x,
     data = brier_gap_data,
     id = id,
-    max_iter = 0,
+    iter.max = 0,
     model = TRUE
   )
   expect_error(brier(brier_gap_fit, times = c(3, 5, 7)), "survcheck")
@@ -3367,7 +3367,7 @@ test_that("Cox score inference matches native fits at mixed event and censor tie
       data = data,
       cluster = data$id,
       ties = method,
-      max_iter = 50,
+      iter.max = 50,
       eps = 1e-09,
       toler = 1e-10
     )
@@ -3427,7 +3427,7 @@ test_that("model summaries match native Cox and survreg coefficient tables", {
       bridged = coxph(
         Surv(time, status) ~ x + z,
         data = data,
-        max_iter = 150,
+        iter.max = 150,
         eps = 1e-09,
         toler = 1e-10
       ),
@@ -3447,7 +3447,7 @@ test_that("model summaries match native Cox and survreg coefficient tables", {
       bridged = coxph(
         Surv(time, status) ~ x + z + cluster(id),
         data = data,
-        max_iter = 150,
+        iter.max = 150,
         eps = 1e-09,
         toler = 1e-10
       ),
@@ -3765,7 +3765,7 @@ test_that("model term metadata matches native Cox formula outputs", {
     bridged <- coxph(
       bridged_formula,
       data = data,
-      max_iter = 50,
+      iter.max = 50,
       eps = 1e-09,
       toler = 1e-10
     )
@@ -3973,7 +3973,7 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
     bridged <- coxph(
       stats::as.formula(paste("Surv(time, status) ~", case$rhs)),
       data = data,
-      max_iter = 150,
+      iter.max = 150,
       eps = 1e-09,
       toler = 1e-10
     )
@@ -5869,7 +5869,7 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   )
   newdata <- data.frame(x = c(0.3, 0.9), z = c(0, 1))
 
-  bridged <- coxph(Surv(time, status) ~ x + z, data = data, eps = 1e-10, max_iter = 50)
+  bridged <- coxph(Surv(time, status) ~ x + z, data = data, eps = 1e-10, iter.max = 50)
   reference <- survival::coxph(
     survival::Surv(time, status) ~ x + z,
     data = data,
@@ -5980,7 +5980,7 @@ test_that("public helper signatures accept R-style named and positional calls", 
   expect_equal(as.numeric(bridged_diff$statistic), reference_diff$chisq, tolerance = 1e-06)
   expect_equal(as.numeric(bridged_diff$p_value), reference_diff$pvalue, tolerance = 1e-06)
 
-  bridged <- coxph(Surv(time, status) ~ x + z, data = data, eps = 1e-10, max_iter = 50)
+  bridged <- coxph(Surv(time, status) ~ x + z, data = data, eps = 1e-10, iter.max = 50)
   reference <- survival::coxph(
     survival::Surv(time, status) ~ x + z,
     data = data,
@@ -6024,8 +6024,8 @@ test_that("Fitted-model concordance supports joint Cox and survreg comparisons",
     x = c(0.1, 0.3, 0.2, 0.8, 1.0, 0.7, 1.4, 1.1),
     z = c(1, 0, 1, 0, 1, 1, 0, 0)
   )
-  cox_x <- coxph(Surv(time, status) ~ x, data = data, eps = 1e-10, max_iter = 50)
-  cox_z <- coxph(Surv(time, status) ~ z, data = data, eps = 1e-10, max_iter = 50)
+  cox_x <- coxph(Surv(time, status) ~ x, data = data, eps = 1e-10, iter.max = 50)
+  cox_z <- coxph(Surv(time, status) ~ z, data = data, eps = 1e-10, iter.max = 50)
   cox_x_single <- concordance(cox_x, influence = 1)
   cox_z_single <- concordance(cox_z, influence = 1)
   cox_joint <- concordance(cox_x, cox_z, influence = 3, ranks = TRUE)
@@ -6089,7 +6089,7 @@ test_that("Fitted-model concordance supports joint Cox and survreg comparisons",
   expect_equal(dim(survreg_joint$var), c(2L, 2L))
   expect_equal(dim(survreg_joint$dfbeta), c(nrow(data), 2L))
 
-  short_fit <- coxph(Surv(time, status) ~ x, data = data[-1L, ], max_iter = 0)
+  short_fit <- coxph(Surv(time, status) ~ x, data = data[-1L, ], iter.max = 0)
   expect_error(concordance(cox_x, short_fit), "same sample size")
   expect_error(concordance(cox_x, bad = survreg_x), "bad argument is not an appropriate fit object")
 })
@@ -6111,7 +6111,7 @@ test_that("Cox time transforms agree with R survival", {
     data = right,
     tt = log_transform,
     eps = 1e-10,
-    max_iter = 50,
+    iter.max = 50,
     x = TRUE
   )
   reference_right <- survival::coxph(
@@ -6133,7 +6133,7 @@ test_that("Cox time transforms agree with R survival", {
     Surv(time, status) ~ x1 + tt(x2),
     data = right,
     eps = 1e-10,
-    max_iter = 50
+    iter.max = 50
   )
   default_reference <- survival::coxph(
     survival::Surv(time, status) ~ x1 + tt(x2),
@@ -6159,7 +6159,7 @@ test_that("Cox time transforms agree with R survival", {
     data = counting,
     tt = root_transform,
     eps = 1e-10,
-    max_iter = 50
+    iter.max = 50
   )
   reference_counting <- survival::coxph(
     survival::Surv(start, stop, status) ~ x1 + tt(x2),
@@ -6220,7 +6220,7 @@ test_that("Cox detail weighted tied-event moments agree with R survival", {
       Surv(time, status) ~ x,
       data = data,
       weights = data$weight,
-      max_iter = 0,
+      iter.max = 0,
       method = method
     )
     reference <- survival::coxph(
@@ -6278,7 +6278,7 @@ test_that("Cox likelihood metadata counts weighted and recurrent event rows", {
     Surv(time, status) ~ x,
     data = right,
     weights = weight,
-    max_iter = 0
+    iter.max = 0
   )
   reference_weighted <- survival::coxph(
     survival::Surv(time, status) ~ x,
@@ -6325,7 +6325,7 @@ test_that("Cox likelihood metadata counts weighted and recurrent event rows", {
     Surv(start, stop, status) ~ x,
     data = recurrent,
     id = id,
-    max_iter = 0
+    iter.max = 0
   )
   reference_counting <- survival::coxph(
     survival::Surv(start, stop, status) ~ x,
@@ -6357,7 +6357,7 @@ test_that("Cox bridge reports converged aliased coefficients like R survival", {
   bridged <- coxph(
     Surv(time, status) ~ x1 + x2,
     data = data,
-    max_iter = 50,
+    iter.max = 50,
     eps = 1e-09,
     toler = 1e-10
   )
@@ -6425,7 +6425,7 @@ test_that("Cox zph bridge remaps partially aliased terms like R survival", {
   bridged <- coxph(
     Surv(time, status) ~ is_b + factor(group) + x,
     data = data,
-    max_iter = 50,
+    iter.max = 50,
     eps = 1e-09,
     toler = 1e-10
   )
@@ -6467,7 +6467,7 @@ test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
   bridged_fit <- coxph(
     Surv(time, status) ~ x1 + x2 + strata(group),
     data = data,
-    max_iter = 50,
+    iter.max = 50,
     eps = 1e-09
   )
   reference_fit <- survival::coxph(
@@ -6514,7 +6514,7 @@ test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
   clustered_bridged <- cox.zph(coxph(
     Surv(time, status) ~ x1 + x2 + cluster(subject),
     data = data,
-    max_iter = 50,
+    iter.max = 50,
     eps = 1e-09
   ))
   clustered_reference <- survival::cox.zph(survival::coxph(
