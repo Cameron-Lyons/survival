@@ -5,7 +5,8 @@
 //! `coxexact.c` and `agexact.c`), then performs the post-processing of
 //! `R/coxph.fit.R`, `R/agreg.fit.R`, `R/coxexact.fit.R`, `R/agexact.fit.R`
 //! and `R/coxph.R`: centred linear predictors, martingale residuals, the
-//! robust (cluster sandwich) variance, the Wald test.
+//! robust (cluster sandwich) variance, the Wald test and the concordance
+//! of the linear predictors.
 //!
 //! The fitted object keeps the data it was fitted to, so the methods R
 //! reconstructs from the model frame are plain method calls here:
@@ -14,8 +15,11 @@
 //! residual types of `R/residuals.coxph.R` (`coxph_diagnostics`).  The
 //! per-stratum baseline curves are computed once and cached.
 
+use crate::concordance::{ConcordanceFit, ConcordanceOptions, concordancefit};
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
+use crate::core::SurvResponse;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
 use crate::regression::coxph_diagnostics::{
@@ -24,7 +28,7 @@ use crate::regression::coxph_diagnostics::{
 };
 use crate::regression::coxph_wtest::{wald_statistic, wald_tests};
 use crate::surv_analysis::agsurv::{
-    AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, IntegratedCurve, coxsurv_fit,
+    AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, IntegratedCurve, agsurv_rows,
     cum_xbar_at, cumhaz_at, expand_curve, individual_curve, integrate_curve, step_at,
 };
 use ndarray::{Array1, Array2, ArrayView2};
@@ -199,11 +203,6 @@ impl SortedRows {
 /// A fitted Cox model (R's `coxph` object).  As in R, the coefficient of a
 /// redundant (aliased) covariate is `NaN` (R's `NA`) with a zero row and
 /// column in `var`; every computation on the fit treats it as 0.
-///
-/// R's `fit$concordance` (the `concordancefit` counts, concordance and its
-/// standard error) is not part of the object yet: the concordance kernel
-/// does not expose a typed Rust API with the variance, so `concordance()`
-/// stays a separate call.
 #[pyclass(skip_from_py_object)]
 #[derive(Debug, Clone)]
 pub struct CoxPHFit {
@@ -270,6 +269,13 @@ pub struct CoxPHFit {
     pub nocenter: Vec<bool>,
     #[pyo3(get)]
     pub cluster: Option<Vec<i32>>,
+    /// The concordance of the linear predictors with the outcome, as
+    /// `coxph()` computes it: `concordancefit(Y, lp, strata, weights,
+    /// cluster, reverse = TRUE, timefix = FALSE)`.  R's `fit$concordance`
+    /// vector is `(colSums(count), concordance, sqrt(var))` of this object,
+    /// and `summary(fit)$concordance` its last two entries.
+    #[pyo3(get)]
+    pub concordance: ConcordanceFit,
     pub(crate) sorted: SortedRows,
     /// Per-stratum baseline curves at `x - means`, `risk = exp(lp)`, for the
     /// hazard type matching the tie method.
@@ -556,6 +562,17 @@ impl CoxPHFit {
             }
         }
         let sorted = SortedRows::new(results.order, data.strata.as_deref());
+        // As in `coxph()`, the cluster enters the concordance whenever it was
+        // given, even when the variance is not robust.
+        let concordance = linear_predictor_concordance(
+            &data.time,
+            data.entry.as_deref(),
+            &data.status,
+            &linear_predictors,
+            &weights,
+            data.strata.as_deref(),
+            options.cluster.as_deref(),
+        )?;
 
         let mut fit = Self {
             coefficients,
@@ -583,6 +600,7 @@ impl CoxPHFit {
             offset,
             nocenter,
             cluster: options.cluster,
+            concordance,
             sorted,
             curves: OnceLock::new(),
         };
@@ -666,24 +684,14 @@ impl CoxPHFit {
             / total
     }
 
-    /// `x - means` (the centred design matrix).
-    fn centered_x(&self) -> Array2<f64> {
-        let mut centered = self.x.clone();
-        for (col, &mean) in self.means.iter().enumerate() {
-            centered.column_mut(col).mapv_inplace(|value| value - mean);
-        }
-        centered
-    }
-
     /// Per-stratum `agsurv` pieces at `x - means` and `risk =
-    /// exp(linear_predictors - log_risk_shift)`.
+    /// exp(linear_predictors - log_risk_shift)`, in the fit's stratum order.
     fn compute_curves(
         &self,
         survtype: CoxSurvType,
         vartype: CoxSurvType,
         log_risk_shift: f64,
     ) -> SurvivalResult<Vec<AgsurvCurve>> {
-        let centered = self.centered_x();
         let risk: Vec<f64> = self
             .linear_predictors
             .iter()
@@ -693,12 +701,18 @@ impl CoxPHFit {
             start: self.entry.as_deref(),
             stop: &self.time,
             status: &self.status,
-            x: centered.view(),
+            x: self.x.view(),
+            means: Some(&self.means),
             weights: &self.weights,
             risk: &risk,
         };
-        let (_, curves) = coxsurv_fit(&data, self.strata.as_deref(), survtype, vartype)?;
-        Ok(curves)
+        self.sorted
+            .bounds
+            .iter()
+            .map(|&(start, end)| {
+                agsurv_rows(&data, &self.sorted.order[start..end], survtype, vartype)
+            })
+            .collect()
     }
 
     /// The cached baseline curves for the fit's own hazard type.
@@ -1104,10 +1118,10 @@ impl CoxPHFit {
             if !se_fit {
                 return Ok(CoxPrediction { fit, se_fit: None });
             }
-            let centered = self.centered_x();
             let risk: Vec<f64> = self.linear_predictors.iter().map(|lp| lp.exp()).collect();
             let se = self.expected_se(
-                centered.view(),
+                self.x.view(),
+                Some(&self.means),
                 &risk,
                 &self.sorted.stratum_index,
                 self.entry.as_deref(),
@@ -1152,6 +1166,7 @@ impl CoxPHFit {
         let se = if se_fit {
             Some(self.expected_se(
                 x2c.view(),
+                None,
                 &risk2,
                 &stratum_index,
                 newdata.entry.as_deref(),
@@ -1165,10 +1180,13 @@ impl CoxPHFit {
 
     /// Standard error of an expected count (`predict.coxph`, `type =
     /// "expected"`): `sqrt(varh + dt' V dt) * risk`, differenced over
-    /// (entry, time] for counting-process data.
+    /// (entry, time] for counting-process data.  The covariate rows are
+    /// `x - means` when `means` is given, `x` itself otherwise.
+    #[allow(clippy::too_many_arguments)]
     fn expected_se(
         &self,
-        x2c: ArrayView2<'_, f64>,
+        x: ArrayView2<'_, f64>,
+        means: Option<&[f64]>,
         risk: &[f64],
         stratum_index: &[usize],
         entry: Option<&[f64]>,
@@ -1182,7 +1200,7 @@ impl CoxPHFit {
                 let varh = step_at(&curve.time, &integrated.cum_varhaz, t);
                 let xbar = cum_xbar_at(curve, integrated, t);
                 let dt: Vec<f64> = (0..self.nvar())
-                    .map(|k| chaz * x2c[(row, k)] - xbar[k])
+                    .map(|k| chaz * (x[(row, k)] - means.map_or(0.0, |m| m[k])) - xbar[k])
                     .collect();
                 let mut quad = 0.0;
                 for (i, &left) in dt.iter().enumerate() {
@@ -1220,6 +1238,58 @@ impl CoxPHFit {
 
     pub fn hazard_ratios(&self) -> Vec<f64> {
         self.coefficients.iter().map(|b| b.exp()).collect()
+    }
+}
+
+/// `coxph()`'s concordance step: `concordancefit(Y, lp, strata, weights,
+/// cluster, reverse = TRUE, timefix = FALSE)` on the fitted linear
+/// predictors.
+fn linear_predictor_concordance(
+    time: &[f64],
+    entry: Option<&[f64]>,
+    status: &[i32],
+    linear_predictors: &[f64],
+    weights: &[f64],
+    strata: Option<&[i32]>,
+    cluster: Option<&[i32]>,
+) -> SurvivalResult<ConcordanceFit> {
+    let x = ArrayView2::from_shape((linear_predictors.len(), 1), linear_predictors)
+        .map_err(|err| SurvivalError::computation(err.to_string()))?;
+    let options = ConcordanceOptions {
+        reverse: true,
+        timefix: false,
+        ..ConcordanceOptions::default()
+    };
+    match entry {
+        Some(entry) => {
+            let data = CountingProcessData {
+                start: entry.to_vec(),
+                stop: time.to_vec(),
+                event: status.to_vec(),
+            };
+            concordancefit(
+                SurvResponse::Counting(&data),
+                x,
+                Some(weights),
+                strata,
+                cluster,
+                &options,
+            )
+        }
+        None => {
+            let data = SurvivalData {
+                time: time.to_vec(),
+                status: status.to_vec(),
+            };
+            concordancefit(
+                SurvResponse::Right(&data),
+                x,
+                Some(weights),
+                strata,
+                cluster,
+                &options,
+            )
+        }
     }
 }
 

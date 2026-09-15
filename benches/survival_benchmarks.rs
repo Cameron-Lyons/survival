@@ -828,6 +828,135 @@ mod cox_regression {
     }
 }
 
+/// The residual kernels behind `residuals.coxph` on their own: the C ports
+/// (`coxmart`, `agmart3`, `coxscore2`, `agscore3`) and `coxscho` on the
+/// shared backward sweep, with 1000 distinct times so that ties exercise
+/// the Efron branches.
+mod cox_residual_kernels {
+    use super::*;
+    use survival::core::schoenfeld_residuals;
+    use survival::data_types::{AndersenGillInput, CountingProcessData, CoxMartInput, Weights};
+    use survival::regression::TieMethod;
+    use survival::residuals::{agmart, coxmart};
+    use survival::scoring::{agscore3, coxscore2};
+
+    struct KernelInputs {
+        time: Vec<f64>,
+        entry: Vec<f64>,
+        status: Vec<i32>,
+        covariates: ndarray::Array2<f64>,
+        score: Vec<f64>,
+        weights: Vec<f64>,
+        strata: Vec<i32>,
+    }
+
+    fn inputs(n: usize) -> KernelInputs {
+        let p = 4;
+        let time: Vec<f64> = (0..n)
+            .map(|i| ((i.wrapping_mul(7919) % 1000) + 1) as f64)
+            .collect();
+        let entry: Vec<f64> = time
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| (t * ((i.wrapping_mul(31) % 50) as f64) / 100.0).floor())
+            .collect();
+        let status: Vec<i32> = (0..n).map(|i| i32::from(i % 5 != 0)).collect();
+        let covariates = generate_covariates(n, p);
+        let score: Vec<f64> = covariates
+            .iter()
+            .map(|row| (0.3 * row[0] - 0.2 * row[1]).exp())
+            .collect();
+        let covariates =
+            ndarray::Array2::from_shape_vec((n, p), covariates.into_iter().flatten().collect())
+                .expect("rectangular covariates");
+        KernelInputs {
+            time,
+            entry,
+            status,
+            covariates,
+            score,
+            weights: generate_case_weights(n),
+            strata: generate_strata(n, 3),
+        }
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn coxmart_efron(bencher: divan::Bencher, n: usize) {
+        let data = inputs(n);
+        let input = CoxMartInput::try_new(
+            SurvivalData::try_new(data.time, data.status).expect("valid data"),
+            data.score,
+            Some(Weights::try_new(data.weights).expect("valid weights")),
+            Some(data.strata),
+        )
+        .expect("valid input");
+        bencher.bench_local(|| coxmart(black_box(&input), TieMethod::Efron));
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn agmart_efron(bencher: divan::Bencher, n: usize) {
+        let data = inputs(n);
+        let input = AndersenGillInput::try_new(
+            CountingProcessData::try_new(data.entry, data.time, data.status).expect("valid data"),
+            data.score,
+            Some(Weights::try_new(data.weights).expect("valid weights")),
+            Some(data.strata),
+        )
+        .expect("valid input");
+        bencher.bench_local(|| agmart(black_box(&input), TieMethod::Efron));
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn coxscore2_efron(bencher: divan::Bencher, n: usize) {
+        let data = inputs(n);
+        let survival = SurvivalData::try_new(data.time, data.status).expect("valid data");
+        bencher.bench_local(|| {
+            coxscore2(
+                black_box(&survival),
+                data.covariates.view(),
+                &data.score,
+                Some(&data.weights),
+                Some(&data.strata),
+                TieMethod::Efron,
+            )
+        });
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn agscore3_efron(bencher: divan::Bencher, n: usize) {
+        let data = inputs(n);
+        let counting =
+            CountingProcessData::try_new(data.entry, data.time, data.status).expect("valid data");
+        bencher.bench_local(|| {
+            agscore3(
+                black_box(&counting),
+                data.covariates.view(),
+                &data.score,
+                Some(&data.weights),
+                Some(&data.strata),
+                TieMethod::Efron,
+            )
+        });
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn coxscho_counting_efron(bencher: divan::Bencher, n: usize) {
+        let data = inputs(n);
+        let counting =
+            CountingProcessData::try_new(data.entry, data.time, data.status).expect("valid data");
+        bencher.bench_local(|| {
+            schoenfeld_residuals(
+                SurvResponse::Counting(black_box(&counting)),
+                data.covariates.view(),
+                &data.score,
+                Some(&data.weights),
+                Some(&data.strata),
+                TieMethod::Efron,
+            )
+        });
+    }
+}
+
 mod case_cohort_bench {
     use super::*;
 
