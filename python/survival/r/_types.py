@@ -14,16 +14,10 @@ if TYPE_CHECKING:
     from ._surv import Surv
 
 
-# _core class re-exports.  ``SurvObrienResult`` and ``YatesPairwiseResult`` were removed from
-# the Rust core (``survobrien`` returns a ``SurvObrienExpansion``; ``yates`` returns one
-# ``YatesResult`` carrying both the global and the pairwise contrasts).  They are aliased here
-# only so that ``survival.r`` keeps importing until its survobrien/yates wrappers are ported.
+# _core class re-exports.
 FineGrayOutput = _core.FineGrayOutput
 RateTable = _core.RateTable
-SurvObrienResult = _core.SurvObrienExpansion
 TcutResult = _core.TcutResult
-YatesPairwiseResult = _core.YatesResult
-YatesResult = _core.YatesResult
 
 
 class _MissingArgument:
@@ -869,3 +863,145 @@ def _cox_beta(fit: Any) -> list[float]:
     if values and isinstance(values[0], list | tuple):
         return [float(value) for value in values[0]]
     return [float(value) for value in values]
+
+
+# ---------------------------------------------------------------------------
+# Results of the R functions in ``_misc``: survcheck, brier, yates, pspline, statefig.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SurvCheckProblem:
+    """Rows and subjects of one kind of data problem (R's ``overlap``, ``gap``, ``jump``,
+    ``teleport``): 1-based row numbers of the data given to ``survcheck`` (after ``subset``,
+    before ``na.action``) as R reports them, and the distinct subject identifiers involved.
+    """
+
+    row: list[int]
+    id: list[Any]
+
+
+@dataclass(frozen=True)
+class SurvCheckResult:
+    """R's ``survcheck`` object."""
+
+    states: list[str]
+    transitions: _core.SurvCheckTransitions
+    events: _core.SurvCheckEvents | None
+    flag: _core.SurvCheckFlags
+    istate: list[str]
+    n_id: int
+    n_observations: int
+    n_transitions: int
+    overlap: SurvCheckProblem | None
+    gap: SurvCheckProblem | None
+    jump: SurvCheckProblem | None
+    teleport: SurvCheckProblem | None
+    y: Surv
+    id: list[Any]
+    na_action: list[int] | None
+
+    @property
+    def n(self) -> dict[str, int]:
+        """R's ``fit$n``: ``c(id=, observations=, transitions=)``."""
+
+        return {
+            "id": self.n_id,
+            "observations": self.n_observations,
+            "transitions": self.n_transitions,
+        }
+
+
+@dataclass(frozen=True)
+class SurvCheckCodes:
+    """The kernel's answer for a response given as integer codes: the code of the current
+    state of every row, the 0-based rows of each kind of problem and the number of
+    transitions.  This is the form the R bridge uses, which evaluates the model frame and
+    assembles R's ``survcheck`` object itself.
+    """
+
+    current_states: list[int]
+    overlap_rows: list[int]
+    gap_rows: list[int]
+    jump_rows: list[int]
+    teleport_rows: list[int]
+    n_transitions: int
+
+
+@dataclass(frozen=True)
+class BrierResult:
+    """R's ``brier`` list; ``p0``, ``phat`` and ``eff_n`` are filled in with ``detail=True``.
+
+    ``phat[i][j]`` is the model's predicted probability of an event by ``times[i]`` for subject
+    ``j`` (R's ``ntime`` by ``n`` matrix).  Components can also be read by their R names,
+    ``result["eff.n"]``, as R's ``fit[["eff.n"]]`` does.
+    """
+
+    rsquared: list[float]
+    brier: list[float]
+    times: list[float]
+    p0: list[float] | None = None
+    phat: list[list[float]] | None = None
+    eff_n: list[float] | None = None
+
+    def __getitem__(self, name: str) -> Any:
+        attribute = name.replace(".", "_")
+        if attribute not in {"rsquared", "brier", "times", "p0", "phat", "eff_n"}:
+            raise KeyError(name)
+        return getattr(self, attribute)
+
+
+@dataclass(frozen=True)
+class StateFigResult:
+    """R's ``statefig`` value: the box centres it returns invisibly (``positions``, one
+    ``(x, y)`` pair per state, ``states`` being R's row names) and the arrows it draws.
+    """
+
+    states: list[str]
+    positions: list[tuple[float, float]]
+    arrows: list[_core.StateFigArrow]
+
+
+@dataclass(frozen=True)
+class YatesResult:
+    """R's ``yates`` object (population marginal means on the linear predictor scale).
+
+    ``estimate`` is R's data frame: one column per tested variable listing its levels, then
+    ``pmm`` and ``std``.  ``test`` rows carry R's row names (``global``, ``1 vs 2``, ...).
+    ``cmat`` is the population-averaged design over the coefficient columns ``cmat_names``.
+    """
+
+    estimate: dict[str, list[Any]]
+    test: list[_core.YatesContrast]
+    mvar: list[list[float]]
+    cmat: list[list[float]]
+    cmat_names: list[str]
+
+
+@dataclass(frozen=True)
+class PsplineResult:
+    """R's ``pspline`` term: the basis matrix and the attributes ``coxph`` reads from it.
+
+    ``basis`` drops the first column unless ``intercept`` (as R does); ``dmat`` is the
+    second-difference penalty matrix (R's ``pparm``) and ``cbase`` the basis centres used by
+    R's ``printfun``.  ``theta`` is set for ``method="fixed"``, ``combine`` when it was given.
+    """
+
+    basis: list[list[float]]
+    knots: list[float]
+    nterm: int
+    degree: int
+    boundary_knots: tuple[float, float]
+    intercept: bool
+    penalty: bool
+    df: int | float
+    eps: float
+    method: str
+    dmat: list[list[float]]
+    cbase: list[float]
+    theta: float | None = None
+    combine: list[int] | None = None
+
+    @property
+    def n_cols(self) -> int:
+        return len(self.basis[0]) if self.basis else 0

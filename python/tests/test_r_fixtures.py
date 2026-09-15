@@ -6538,22 +6538,25 @@ class SurvobrienHandler(TopicHandler):
         return ["frame", "coxph_coef"]
 
     def check(self, case, aspect):
+        self.check_in_topic(self.topic, case, aspect)
+
+    @staticmethod
+    def check_in_topic(topic: str, case: Mapping[str, Any], aspect: str) -> None:
         expected = case["expected"]
-        data = case_data(self.topic, case)
+        data = case_data(topic, case)
         frame = r.survobrien(case["formula"], data=data)
         r_frame = decode_frame(expected["frame"])
         if aspect == "frame":
-            for name in (".strata.", ".id."):
-                if name not in frame:
-                    raise FixtureMismatchError(f"survobrien frame lacks {name}: {list(frame)}")
+            missing = [name for name in r_frame if name not in frame]
+            if missing:
+                raise FixtureMismatchError(f"survobrien frame lacks {missing}: {list(frame)}")
             for name, values in r_frame.items():
-                if name not in frame:
-                    continue
                 if values and isinstance(values[0], str):
-                    continue
-                assert_close(
-                    as_float_list(frame[name]), values, rtol=RTOL_COEF, path=f"frame.{name}"
-                )
+                    assert_exact([str(v) for v in frame[name]], values, path=f"frame.{name}")
+                else:
+                    assert_close(
+                        as_float_list(frame[name]), values, rtol=RTOL_COEF, path=f"frame.{name}"
+                    )
         else:
             fit = r.coxph(expected["cox_formula"], frame)
             assert_named_values(_coef_names(fit), r.coef(fit), expected["coxph_coef"], path="coef")
@@ -6562,19 +6565,86 @@ class SurvobrienHandler(TopicHandler):
 # --- yates --------------------------------------------------------------------
 
 
+def _r_level_label(value: Any) -> str:
+    """R's ``as.character`` of a factor level built from a number (``factor(trt)`` -> "1")."""
+
+    if isinstance(value, bool):
+        return str(value).upper()
+    if isinstance(value, int | float) and float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
 class YatesHandler(TopicHandler):
     topic = "yates"
 
     def aspects(self, case):
-        return ["estimate", "test"]
+        return ["estimate", "test", "mvar", "cmat", "cmat_names"]
 
     def check(self, case, aspect):
-        raise UnsupportedCaseError(
-            "yates(fit, term, population=...) formula interface is not available"
-        )
+        self.check_in_topic(self.topic, case, aspect)
+
+    @staticmethod
+    def check_in_topic(topic: str, case: Mapping[str, Any], aspect: str) -> None:
+        if case.get("fit", "coxph") != "coxph":
+            raise UnsupportedCaseError(f"yates on a {case['fit']} fit")
+        args = dict(case.get("args", {}))
+        term = args.pop("term")
+        expected = case["expected"]
+        # yates reads the model frame of the fit (R re-evaluates the call; Python keeps it)
+        fit = _coxph_fit(topic, {**case, "args": {"model": True}})
+
+        def build():
+            try:
+                return r.yates(fit, term, **args)
+            except NotImplementedError as exc:
+                raise UnsupportedCaseError(str(exc)) from exc
+
+        result = _cached(_fit_key("yates", {**case, "args": {"term": term, **args}}), build)
+        if aspect == "estimate":
+            columns = expected["estimate"]["columns"]
+            for name, values in columns.items():
+                if name not in result.estimate:
+                    raise FixtureMismatchError(f"estimate lacks column {name!r}")
+                if name in ("pmm", "std"):
+                    rtol = RTOL_COEF if name == "pmm" else RTOL_VAR
+                    assert_close(
+                        as_float_list(result.estimate[name]),
+                        values,
+                        rtol=rtol,
+                        path=f"estimate.{name}",
+                    )
+                else:
+                    actual = [_r_level_label(v) for v in result.estimate[name]]
+                    assert_exact(
+                        actual, [_r_level_label(v) for v in values], path=f"estimate.{name}"
+                    )
+        elif aspect == "test":
+            table = expected["test"]
+            assert_exact([row.name for row in result.test], table["rownames"], path="test.names")
+            actual = [[row.chisq, float(row.df)] for row in result.test]
+            values = [row[:2] for row in table["values"]]
+            assert_matrix_close(actual, values, rtol=RTOL_VAR, path="test")
+        elif aspect == "mvar":
+            assert_matrix_close(result.mvar, expected["mvar"], rtol=RTOL_VAR, path="mvar")
+        elif aspect == "cmat":
+            assert_matrix_close(
+                result.cmat, expected["cmat"]["values"], rtol=RTOL_COEF, path="cmat"
+            )
+        else:
+            assert_exact(result.cmat_names, expected["cmat"]["colnames"], path="cmat.colnames")
 
 
 # --- royston / brier ----------------------------------------------------------
+
+_ROYSTON_FIELDS = {
+    "D": "d",
+    "se(D)": "se_d",
+    "R.D": "r_d",
+    "R.KO": "r_ko",
+    "R.N": "r_n",
+    "C.GH": "c_gh",
+}
 
 
 class RoystonBrierHandler(TopicHandler):
@@ -6588,11 +6658,11 @@ class RoystonBrierHandler(TopicHandler):
         fit = _coxph_fit(self.topic, {**case, "args": {}})
         if aspect.startswith("royston"):
             result = r.royston(fit, adjust=aspect.endswith("adjust"))
-            exp = expected[aspect]
-            for name, value in exp.items():
-                if name not in result:
+            for name, value in expected[aspect].items():
+                actual = getattr(result, _ROYSTON_FIELDS[name])
+                if actual is None:
                     raise FixtureMismatchError(f"royston result lacks {name!r}")
-                assert_close(result[name], value, rtol=RTOL_VAR, path=f"{aspect}.{name}")
+                assert_close(actual, value, rtol=RTOL_VAR, path=f"{aspect}.{name}")
         else:
             exp = expected[aspect]
             kwargs: dict[str, Any] = {}
@@ -6601,12 +6671,12 @@ class RoystonBrierHandler(TopicHandler):
             if aspect == "brier_ties_false":
                 kwargs["ties"] = False
             result = r.brier(fit, **kwargs)
-            assert_close(as_float_list(result["times"]), exp["times"], path=f"{aspect}.times")
+            assert_close(as_float_list(result.times), exp["times"], path=f"{aspect}.times")
             assert_close(
-                as_float_list(result["brier"]), exp["brier"], rtol=RTOL_VAR, path=f"{aspect}.brier"
+                as_float_list(result.brier), exp["brier"], rtol=RTOL_VAR, path=f"{aspect}.brier"
             )
             assert_close(
-                as_float_list(result["rsquared"]),
+                as_float_list(result.rsquared),
                 exp["rsquared"],
                 rtol=RTOL_VAR,
                 path=f"{aspect}.rsquared",
@@ -6693,68 +6763,102 @@ class PseudoHandler(TopicHandler):
 # --- survcheck ----------------------------------------------------------------
 
 
+def _check_named_table(actual_rows, actual_cols, actual_values, table, path: str) -> None:
+    assert_exact(list(actual_rows), table["rownames"], path=f"{path}.rownames")
+    assert_exact([str(c) for c in actual_cols], table["colnames"], path=f"{path}.colnames")
+    assert_matrix_close(actual_values, table["values"], rtol=0.0, path=path)
+
+
 class SurvcheckHandler(TopicHandler):
     topic = "survcheck"
 
     def aspects(self, case):
-        return ["states", "transitions", "events", "flag", "istate", "n"]
+        return ["states", "transitions", "events", "flag", "istate", "n", "problems"]
 
     def check(self, case, aspect):
+        self.check_in_topic(self.topic, case, aspect)
+
+    @staticmethod
+    def check_in_topic(topic: str, case: Mapping[str, Any], aspect: str) -> None:
         expected = case["expected"]
 
         def build():
-            data = case_data(self.topic, case)
+            data = case_data(topic, case)
             kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
             return r.survcheck(_mstate_formula(case["formula"], data), data, **kwargs)
 
         result = _cached(_fit_key("survcheck", case), build)
-        expected = case["expected"]
-        if aspect in ("states", "istate", "events"):
-            value = getattr(result, aspect, None)
-            if value is None:
-                raise UnsupportedCaseError(f"survcheck result has no {aspect}")
-            if aspect == "states":
-                assert_exact(list(value), expected["states"], path="states")
-            elif aspect == "istate":
-                assert_exact([str(v) for v in value], expected["istate"], path="istate")
-            else:
-                assert_matrix_close(value, expected["events"]["values"], rtol=0.0, path="events")
+        if aspect == "states":
+            assert_exact(list(result.states), expected["states"], path="states")
+        elif aspect == "istate":
+            assert_exact(list(result.istate), expected["istate"], path="istate")
         elif aspect == "transitions":
-            # Python codes states by the position in the event factor levels
-            # (0 = the censoring level, doubling as the "(s0)" initial state).
-            table = expected["transitions"]
-            data = case_data(self.topic, case)
-            status_column = case["formula"].split("~")[0].strip()[5:-1].split(",")[-1].strip()
-            levels = list(getattr(data[status_column], "categories", ()))
-
-            def code(name: str) -> int:
-                return levels.index(name) if name in levels else 0
-
-            r_counts: dict[str, float] = {}
-            for row_name, row in zip(table["rownames"], table["values"], strict=True):
-                for col_name, value in zip(table["colnames"], row, strict=True):
-                    if col_name == "(censored)" or value == 0:
-                        continue
-                    r_counts[f"{code(row_name)} -> {code(col_name)}"] = value
-            actual = _attr(result, "transitions")
-            actual_counts = {key: float(value) for key, value in dict(actual).items() if value}
-            if actual_counts != r_counts:
-                raise FixtureMismatchError(f"transitions {actual_counts} != {r_counts}")
+            table = result.transitions
+            _check_named_table(
+                table.from_states,
+                table.to_states,
+                table.counts,
+                expected["transitions"],
+                "transitions",
+            )
+        elif aspect == "events":
+            if result.events is None:
+                if expected["events"] is not None:
+                    raise FixtureMismatchError("no events table")
+                return
+            events = result.events
+            _check_named_table(
+                events.states, events.count, events.subjects, expected["events"], "events"
+            )
         elif aspect == "flag":
             for name, value in expected["flag"].items():
-                rows = getattr(result, f"{name}_rows", None)
-                if rows is None:
-                    if name == "duplicate":
-                        continue
-                    raise UnsupportedCaseError(f"survcheck result has no {name}_rows")
-                assert_exact(len(rows), value, path=f"flag.{name}")
+                assert_exact(getattr(result.flag, name), value, path=f"flag.{name}")
         elif aspect == "n":
-            actual = [
-                _attr(result, "n_subjects"),
-                _attr(result, "n_observations"),
-                _attr(result, "n_transitions"),
-            ]
-            assert_exact(actual, list(expected["n"].values()), path="n")
+            assert_exact(result.n, expected["n"], path="n")
+        else:
+            for name in ("overlap", "gap", "teleport", "jump"):
+                problem = getattr(result, name)
+                if expected[name] is None:
+                    if problem is not None:
+                        raise FixtureMismatchError(f"{name}: unexpected problems {problem}")
+                    continue
+                if problem is None:
+                    raise FixtureMismatchError(f"{name}: expected problems {expected[name]}")
+                assert_exact(problem.row, expected[name]["row"], path=f"{name}.row")
+                assert_exact(
+                    as_float_list(problem.id),
+                    as_float_list(expected[name]["id"]),
+                    path=f"{name}.id",
+                )
+
+
+# --- validation-extra (survobrien, yates and survcheck cases; the anova, survfit and
+#     Turnbull cases belong to the coxph and survfit handlers) -------------------
+
+
+class ValidationExtraHandler(TopicHandler):
+    topic = "validation-extra"
+    delegates = {
+        "survobrien_": SurvobrienHandler,
+        "yates_": YatesHandler,
+        "survcheck_": SurvcheckHandler,
+    }
+
+    def _delegate(self, case):
+        for prefix, handler in self.delegates.items():
+            if case["name"].startswith(prefix):
+                return handler
+        return None
+
+    def aspects(self, case):
+        handler = self._delegate(case)
+        return HANDLERS[handler.topic].aspects(case) if handler else ["(no handler)"]
+
+    def check(self, case, aspect):
+        handler = self._delegate(case)
+        if handler is None:
+            raise UnsupportedCaseError(f"no validation-extra handler for {case['name']}")
+        handler.check_in_topic(self.topic, case, aspect)
 
 
 # --- survSplit / survcondense --------------------------------------------------
@@ -7023,13 +7127,14 @@ class UtilitiesHandler(TopicHandler):
         if name == "cipoisson":
             if aspect.startswith("scalar"):
                 result = r.cipoisson(5) if aspect == "scalar_k5" else r.cipoisson(0, time=2)
-                assert_close(list(result), expected, rtol=RTOL_VAR, path=aspect)
+                assert_close([*result.lower, *result.upper], expected, rtol=RTOL_VAR, path=aspect)
                 return
             method, _, p = aspect.partition("_")
             result = r.cipoisson(
                 args["k"], time=args["time"], p=0.90 if p == "p90" else 0.95, method=method
             )
-            assert_matrix_close([list(row) for row in result], expected, rtol=RTOL_VAR, path=aspect)
+            rows = [list(pair) for pair in zip(result.lower, result.upper, strict=True)]
+            assert_matrix_close(rows, expected, rtol=RTOL_VAR, path=aspect)
         elif name == "bounded_links":
             x = args["x"]
             edge = 0.05
@@ -7092,8 +7197,10 @@ class UtilitiesHandler(TopicHandler):
             connect = args["connect3"] if "1_2_1" not in aspect else args["connect4"]
             layout = [1, 2] if "1_2_1" not in aspect else [1, 2, 1]
             states = ["A", "B", "C"] if "1_2_1" not in aspect else ["A", "B", "C", "D"]
+            if aspect.endswith("_column"):  # R: matrix(layout, ncol = 1)
+                layout = [[count] for count in layout]
             result = r.statefig(layout, connect, states=states)
-            coords = _attr(result, "coordinates", "positions", "xy")
+            coords = [[x, y] for x, y in zip(result.x, result.y, strict=True)]
             assert_matrix_close(coords, expected, rtol=RTOL_VAR, path=aspect)
         else:
             raise UnsupportedCaseError(f"unhandled utilities case {name}")

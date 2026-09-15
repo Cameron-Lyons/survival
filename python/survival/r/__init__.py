@@ -41,8 +41,6 @@ from ._misc import (
     survcheck,
     survobrien,
     yates,
-    yates_contrast,
-    yates_pairwise,
 )
 from ._models import (
     aic,
@@ -118,11 +116,9 @@ from ._types import (
     SurvfitConfidenceIntervalResult,
     SurvfitMultiStateResult,
     SurvfitResult,
-    SurvObrienResult,
     TcutResult,
     TMergeFrame,
     TMergeOperation,
-    YatesPairwiseResult,
     YatesResult,
 )
 from ._types import ConcordanceResult as ConcordanceResult
@@ -147,7 +143,6 @@ __all__ = [
     "RateTable",
     "AaregModelResult",
     "StrataFactor",
-    "SurvObrienResult",
     "SurvExpResult",
     "SurvfitResult",
     "SurvfitMultiStateResult",
@@ -240,9 +235,6 @@ __all__ = [
     "tcut",
     "totimeline",
     "yates",
-    "yates_contrast",
-    "yates_pairwise",
     "vcov",
-    "YatesPairwiseResult",
     "YatesResult",
 ]
