@@ -1,2709 +1,725 @@
-import importlib
+"""R-style ``survreg`` facade: fitting, methods and the d/p/q/rsurvreg helpers.
+
+Reference numbers come from R survival 3.8.11 (``survreg``, ``predict.survreg``,
+``residuals.survreg``, ``anova.survreg``, ``summary.survreg``, ``dsurvreg``) on the bundled
+``lung`` and ``tobin`` data with ``na.action = na.omit``.
+"""
+
 import math
-from statistics import NormalDist
 
 import pytest
 
 from .helpers import setup_survival_import
-from .r_api_support import (
-    _backtick_data,
-    _factor_data,
-    _interaction_contrast_data,
-    _interaction_contrast_rows,
-    _manual_survreg_robust_variance,
-    _numeric_data,
-    _numeric_data_with_id,
-    _survreg_deviance_from_matrix,
-    _toy_data,
-    _weibull_saturated_center_loglik,
-    _with_intercept,
-)
 
 survival = setup_survival_import()
-r_survreg = importlib.import_module("survival.r._survreg")
+r = survival.r_api
+_survreg = survival.r._survreg
+SurvregDistribution = survival._survival.SurvregDistribution
+SurvregFamily = survival._survival.SurvregFamily
+SurvregTransform = survival._survival.SurvregTransform
+
+NEWDATA = {"age": [50, 70], "sex": [1, 2]}
 
 
-def test_model_summary_survreg_scale_rows_and_robust_standard_errors():
-    data = _toy_data()
-    data["group_num"] = [1 if group == "A" else 2 for group in data["group"]]
-    fixed_scale = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        scale=1.0,
-        max_iter=10,
-        eps=1e-5,
-    )
-    stratified_scale = survival.survreg(
-        "Surv(time, status) ~ x1 + x2 + strata(group)",
-        data=data,
-        max_iter=10,
-        eps=1e-5,
-    )
-    numeric_strata = survival.survreg(
-        "Surv(time, status) ~ x1 + x2 + strata(group_num)",
-        data=data,
-        max_iter=10,
-        eps=1e-5,
-    )
-    multi_strata = survival.survreg(
-        "Surv(time, status) ~ x1 + x2 + strata(group_num, group)",
-        data=data,
-        max_iter=10,
-        eps=1e-5,
-    )
-    robust = survival.survreg(
-        "Surv(time, status) ~ x1 + x2 + cluster(group)",
-        data=data,
-        max_iter=10,
-        eps=1e-5,
-    )
+def _approx_matrix(actual, expected, **tolerance):
+    assert len(actual) == len(expected)
+    for actual_row, expected_row in zip(actual, expected, strict=True):
+        assert actual_row == pytest.approx(expected_row, **tolerance)
 
-    fixed_summary = survival.model_summary(fixed_scale)
-    stratified_summary = survival.model_summary(stratified_scale)
-    numeric_summary = survival.model_summary(numeric_strata)
-    multi_summary = survival.model_summary(multi_strata)
-    robust_summary = survival.model_summary(robust)
 
-    assert fixed_summary["coefficient_names"] == ["(Intercept)", "x1", "x2"]
-    assert stratified_summary["coefficient_names"] == [
+def _frame(loader):
+    return {key: list(values) for key, values in loader().items() if not key.startswith("_")}
+
+
+@pytest.fixture(scope="module")
+def lung():
+    return _frame(survival.datasets.load_lung)
+
+
+@pytest.fixture(scope="module")
+def tobin():
+    return _frame(survival.datasets.load_tobin)
+
+
+@pytest.fixture(scope="module")
+def lung_weibull(lung):
+    return r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit")
+
+
+# --- fitting ---------------------------------------------------------------------------------
+
+
+def test_survreg_weibull_matches_r_object(lung_weibull):
+    fit = lung_weibull
+    assert isinstance(fit, _survreg.SurvregModelResult)
+    assert r.coef(fit) == pytest.approx([6.27485305842, -0.0122570255889, 0.382085139659])
+    assert fit.coefficients == r.coef(fit)
+    assert fit.scale == pytest.approx([0.754050947641])
+    assert fit.loglik == pytest.approx([-1153.85118809, -1147.05443143])
+    assert r.loglik(fit) == pytest.approx(-1147.05443143)
+    assert (fit.iter, fit.df, fit.df_residual, fit.n, fit.idf) == (5, 4, 224, 228, 2)
+    assert (r.degrees_freedom(fit), r.df_residual(fit), r.nobs(fit)) == (4, 224, 228)
+    assert fit.var[0][0] == pytest.approx(0.231714143303)
+    assert r.vcov(fit) == fit.var
+    assert len(r.vcov(fit, complete=False)) == 3
+    assert r.coef_names(fit) == ["(Intercept)", "age", "sex"]
+    assert r.coef_names(fit, complete=True) == ["(Intercept)", "age", "sex", "Log(scale)"]
+    assert fit.icoef == pytest.approx([6.0349039102, math.log(0.759393601108)])
+    assert fit.means == pytest.approx([1.0, 62.4473684211, 1.39473684211])
+    assert fit.dist == "weibull"
+    assert fit.parms is None
+    assert not fit.robust
+    assert fit.distribution.name == "Weibull"
+    assert fit.term_labels == ("age", "sex")
+    assert fit.assign == (0, 1, 2)
+    assert fit.formula == "Surv(time, status) ~ age + sex"
+    assert len(fit.linear_predictors) == 228
+    assert len(fit.y) == 228
+    assert r.aic(fit) == pytest.approx(-2 * -1147.05443143 + 8)
+    assert repr(fit).startswith("SurvregModelResult(formula='Surv(time, status) ~ age + sex', ")
+
+
+def test_survreg_fixed_scale(lung):
+    fit = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", scale=1)
+    assert r.coef(fit) == pytest.approx([6.3596715418, -0.0156187110404, 0.48093492396])
+    assert fit.scale == [1.0]
+    assert (fit.df, fit.df_residual, fit.idf) == (3, 225, 1)
+    assert len(r.vcov(fit)) == 3
+    assert r.coef_names(fit, complete=True) == ["(Intercept)", "age", "sex"]
+    assert fit.loglik == pytest.approx([-1162.33817579, -1156.09903714])
+    assert len(r.residuals(fit, type="dfbeta")[0]) == 3
+
+
+def test_survreg_exponential_and_rayleigh_fix_the_scale(lung):
+    exponential = r.survreg(
+        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="exponential"
+    )
+    assert r.coef(exponential) == pytest.approx([6.3596715418, -0.0156187110404, 0.48093492396])
+    assert exponential.scale == [1.0]
+    assert exponential.df == 3
+    assert exponential.loglik[1] == pytest.approx(-1156.09903714)
+
+    with pytest.warns(RuntimeWarning, match="Exponential has a fixed scale"):
+        ignored = r.survreg(
+            "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="exp", scale=2
+        )
+    assert r.coef(ignored) == pytest.approx(r.coef(exponential))
+
+    rayleigh = r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist="ray")
+    assert rayleigh.scale == [0.5]
+    assert rayleigh.distribution.name == "Rayleigh"
+
+
+def test_survreg_strata_scales_and_labels(lung):
+    fit = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit")
+    assert fit.scale == pytest.approx([0.803442799135, 0.642536589059])
+    assert fit.strata_levels == ("sex=1", "sex=2")
+    assert fit.term_labels == ("age", "strata(sex)", "sex")
+    assert fit.strata_term == 2
+    assert fit.assign == (0, 1, 3)
+    assert r.coef_names(fit, complete=True) == [
         "(Intercept)",
-        "x1",
-        "x2",
-        "A",
-        "B",
+        "age",
+        "sex",
+        "Log(scale)",
+        "Log(scale)",
     ]
-    assert [row["coef"] for row in stratified_summary["coefficients"]] == pytest.approx(
-        stratified_scale.coefficients
+    assert fit.df == 5
+    assert fit.df_residual == 223
+
+    summary = r.model_summary(fit)
+    assert summary["coefficient_names"] == ["(Intercept)", "age", "sex", "sex=1", "sex=2"]
+    assert [row["coef"] for row in summary["coefficients"]] == pytest.approx(
+        [6.21020507, -0.01120008, 0.37043715, -0.21884929, -0.44233152]
     )
-    assert survival.coef_names(stratified_scale, complete=True) == [
-        "(Intercept)",
-        "x1",
-        "x2",
-        "Log(scale:A)",
-        "Log(scale:B)",
-    ]
-    assert numeric_summary["coefficient_names"][-2:] == ["group_num=1", "group_num=2"]
-    assert multi_summary["coefficient_names"][-2:] == [
-        "group_num=1, group=A",
-        "group_num=2, group=B",
-    ]
-
-    assert robust_summary["robust"] is True
-    for idx, (row, robust_variance_row, naive_variance_row) in enumerate(
-        zip(
-            robust_summary["coefficients"],
-            robust.variance_matrix,
-            robust.naive_variance,
-            strict=True,
-        )
-    ):
-        assert row["se"] == pytest.approx(math.sqrt(max(robust_variance_row[idx], 0.0)))
-        assert row["robust_se"] == pytest.approx(row["se"])
-        assert row["naive_se"] == pytest.approx(math.sqrt(max(naive_variance_row[idx], 0.0)))
-        assert row["z"] == pytest.approx(row["coef"] / row["robust_se"])
-        assert row["p"] == pytest.approx(2.0 * NormalDist().cdf(-abs(row["z"])))
-
-
-@pytest.mark.parametrize(
-    ("rhs", "intercept_columns", "no_intercept_columns"),
-    [
-        (
-            "g:x",
-            ["(Intercept)", "gA:x", "gB:x", "gC:x"],
-            ["gA:x", "gB:x", "gC:x"],
-        ),
-        (
-            "x + g:x",
-            ["(Intercept)", "x", "x:gB", "x:gC"],
-            ["x", "x:gA", "x:gB", "x:gC"],
-        ),
-        (
-            "g + g:x",
-            ["(Intercept)", "gB", "gC", "gA:x", "gB:x", "gC:x"],
-            ["gA", "gB", "gC", "gA:x", "gB:x", "gC:x"],
-        ),
-        (
-            "g * x",
-            ["(Intercept)", "gB", "gC", "x", "gB:x", "gC:x"],
-            ["gA", "gB", "gC", "x", "gB:x", "gC:x"],
-        ),
-        (
-            "g * h",
-            ["(Intercept)", "gB", "gC", "hH", "gB:hH", "gC:hH"],
-            ["gA", "gB", "gC", "hH", "gB:hH", "gC:hH"],
-        ),
-        (
-            "g:h",
-            [
-                "(Intercept)",
-                "gA:hL",
-                "gB:hL",
-                "gC:hL",
-                "gA:hH",
-                "gB:hH",
-                "gC:hH",
-            ],
-            ["gA:hL", "gB:hL", "gC:hL", "gA:hH", "gB:hH", "gC:hH"],
-        ),
-    ],
-)
-def test_survreg_interaction_contrasts_match_r_intercept_rules(
-    rhs,
-    intercept_columns,
-    no_intercept_columns,
-):
-    data = _interaction_contrast_data()
-
-    for suffix, columns in (
-        ("", intercept_columns),
-        (" + 0", no_intercept_columns),
-        (" - 1", no_intercept_columns),
-    ):
-        fit = survival.survreg(
-            f"Surv(time, status) ~ {rhs}{suffix}",
-            data=data,
-            max_iter=0,
-        )
-        matrix = survival.model_matrix(fit)
-        expected_rows = _interaction_contrast_rows(data, columns)
-
-        assert survival.coef_names(fit) == columns
-        assert matrix["columns"] == columns
-        for actual, expected in zip(matrix["data"], expected_rows, strict=True):
-            assert actual == pytest.approx(expected)
-
-
-def test_survreg_config_defaults_to_weibull():
-    config = survival.SurvregConfig()
-
-    assert config.distribution == survival.DistributionType.weibull
-
-
-def test_low_level_survreg_omitted_distribution_matches_explicit_weibull():
-    data = _toy_data()
-    kwargs = {
-        "time": data["time"],
-        "status": [float(value) for value in data["status"]],
-        "covariates": _with_intercept(
-            [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-        ),
-        "max_iter": 5,
-        "eps": 1e-5,
-    }
-
-    default = survival.regression.survreg(**kwargs)
-    explicit = survival.regression.survreg(**kwargs, distribution="weibull")
-    extreme = survival.regression.survreg(**kwargs, distribution="extreme_value")
-
-    assert default.distribution == "weibull"
-    assert default.coefficients == pytest.approx(explicit.coefficients)
-    assert default.log_likelihood == pytest.approx(explicit.log_likelihood)
-    assert default.iterations == explicit.iterations
-    assert extreme.distribution == "extreme_value"
-    assert extreme.log_likelihood != pytest.approx(default.log_likelihood)
-
-
-def test_survreg_formula_matches_low_level_binding():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
+    assert [row["se"] for row in summary["coefficients"]] == pytest.approx(
+        [0.471152566, 0.006825942, 0.117360605, 0.074958411, 0.109408127]
     )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept(
-            [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-        ),
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
+    assert summary["scales"] == pytest.approx(fit.scale)
 
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
+    data = dict(lung, sexf=["m" if value == 1 else "f" for value in lung["sex"]])
+    character = r.survreg("Surv(time, status) ~ age + strata(sexf)", data=data, na_action="omit")
+    assert character.strata_levels == ("f", "m")
+    mixed = r.survreg("Surv(time, status) ~ age + strata(sexf, sex)", data=data, na_action="omit")
+    assert mixed.strata_levels == ("sexf=f, sex=2", "sexf=m, sex=1")
+
+    with pytest.raises(ValueError, match="not valid with multiple strata"):
+        r.survreg("Surv(time, status) ~ age + strata(sex)", data=lung, na_action="omit", scale=1)
 
 
-def test_survreg_fixed_scale_matches_low_level_binding():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        scale=1.25,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
+def test_survreg_cluster_and_robust_variance(lung, lung_weibull):
+    clustered = r.survreg(
+        "Surv(time, status) ~ age + sex + cluster(inst)", data=lung, na_action="omit"
     )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept(
-            [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-        ),
-        distribution="weibull",
-        fixed_scale=1.25,
-        max_iter=10,
-        eps=1e-5,
-    )
+    assert clustered.n == 227  # one institution is missing
+    assert clustered.robust
+    assert clustered.var[0][0] == pytest.approx(0.172296116856)
+    assert clustered.naive_var[0][0] == pytest.approx(0.233558196788)
+    assert r.vcov(clustered) == clustered.var
+    assert len(clustered.cluster) == 227
 
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.location_coefficients == pytest.approx(low_level.location_coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-    assert fit.scale == pytest.approx(1.25)
-    assert fit.scales == pytest.approx([1.25])
-    assert len(fit.variance_matrix) == len(fit.coefficients)
-    assert all(len(row) == len(fit.coefficients) for row in fit.variance_matrix)
-    assert len(fit.score_vector) == len(fit.coefficients)
+    by_argument = r.survreg(
+        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", cluster=lung["inst"]
+    )
+    _approx_matrix(by_argument.var, clustered.var)
 
+    robust = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", robust=True)
+    assert robust.var[0][0] == pytest.approx(0.240682927222)
+    assert robust.naive_var[0][0] == pytest.approx(0.231714143303)
+    assert robust.cluster is None
+    summary = r.model_summary(robust)
+    assert summary["robust"] is True
+    first = summary["coefficients"][0]
+    assert first["se"] == pytest.approx(0.490594463098)
+    assert first["naive_se"] == pytest.approx(0.481366952857)
+    assert first["robust_se"] == first["se"]
+    assert first["z"] == pytest.approx(12.7903054975)
+    assert first["p"] == pytest.approx(1.85742323572e-37)
 
-def test_survreg_exponential_ignores_user_scale_like_r():
-    data = _toy_data()
-    default = survival.survreg(
-        "Surv(time, status) ~ x1",
-        data=data,
-        dist="exponential",
-        max_iter=50,
-        eps=1e-8,
-    )
-    scale_zero = survival.survreg(
-        "Surv(time, status) ~ x1",
-        data=data,
-        dist="exponential",
-        scale=0,
-        max_iter=50,
-        eps=1e-8,
-    )
-    with pytest.warns(RuntimeWarning, match="fixed scale"):
-        scale_ignored = survival.survreg(
-            "Surv(time, status) ~ x1",
-            data=data,
-            dist="exponential",
-            scale=2,
-            max_iter=50,
-            eps=1e-8,
-        )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept([[value] for value in data["x1"]]),
-        distribution="exponential",
-        max_iter=50,
-        eps=1e-8,
-    )
-
-    assert default.scale == pytest.approx(1.0)
-    assert default.scales == pytest.approx([1.0])
-    assert default.coefficients == pytest.approx(default.location_coefficients)
-    assert default.coefficients == pytest.approx([0.90128018, 1.3997076], abs=5e-4)
-    assert scale_zero.coefficients == pytest.approx(default.coefficients)
-    assert scale_ignored.coefficients == pytest.approx(default.coefficients)
-    assert scale_ignored.scale == pytest.approx(1.0)
-    assert default.coefficients == pytest.approx(low_level.coefficients)
-    assert default.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-    with pytest.raises(ValueError, match="fixed scale and strata"):
-        survival.survreg(
-            "Surv(time, status) ~ x1 + strata(group)",
-            data=data,
-            dist="exponential",
-            max_iter=50,
-            eps=1e-8,
-        )
-
-
-def test_survreg_rayleigh_matches_weibull_fixed_scale_like_r():
-    data = _toy_data()
-    rayleigh = survival.survreg(
-        "Surv(time, status) ~ x1",
-        data=data,
-        dist="rayleigh",
-        max_iter=200,
-        eps=1e-8,
-    )
-    abbreviated = survival.survreg(
-        "Surv(time, status) ~ x1",
-        data=data,
-        dist="ray",
-        max_iter=200,
-        eps=1e-8,
-    )
-    weibull_fixed = survival.survreg(
-        "Surv(time, status) ~ x1",
-        data=data,
-        dist="weibull",
-        scale=0.5,
-        max_iter=200,
-        eps=1e-8,
-    )
-    with pytest.warns(RuntimeWarning, match="fixed scale"):
-        scale_ignored = survival.survreg(
-            "Surv(time, status) ~ x1",
-            data=data,
-            dist="rayleigh",
-            scale=2,
-            max_iter=200,
-            eps=1e-8,
-        )
-    matrix_rayleigh = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=_with_intercept([[value] for value in data["x1"]]),
-        distribution="rayleigh",
-        max_iter=200,
-        eps=1e-8,
-    )
-
-    assert rayleigh.distribution == "rayleigh"
-    assert rayleigh.scale == pytest.approx(0.5)
-    assert rayleigh.scales == pytest.approx([0.5])
-    assert rayleigh.coefficients == pytest.approx([0.95288161, 1.10060316], abs=5e-4)
-    assert rayleigh.coefficients == pytest.approx(weibull_fixed.coefficients)
-    assert rayleigh.log_likelihood == pytest.approx(weibull_fixed.log_likelihood)
-    assert survival.loglik(rayleigh) == pytest.approx(survival.loglik(weibull_fixed))
-    assert abbreviated.distribution == "rayleigh"
-    assert abbreviated.coefficients == pytest.approx(rayleigh.coefficients)
-    assert scale_ignored.distribution == "rayleigh"
-    assert scale_ignored.coefficients == pytest.approx(rayleigh.coefficients)
-    assert scale_ignored.scale == pytest.approx(0.5)
-    assert matrix_rayleigh.distribution == "rayleigh"
-    assert matrix_rayleigh.coefficients == pytest.approx(rayleigh.coefficients)
-    assert survival.model_summary(rayleigh)["distribution"] == "rayleigh"
-    rayleigh_residuals = survival.r_api.residuals(rayleigh, type="matrix")
-    weibull_residuals = survival.r_api.residuals(weibull_fixed, type="matrix")
-    for actual, expected in zip(rayleigh_residuals, weibull_residuals, strict=True):
-        assert actual == pytest.approx(expected)
-
-    with pytest.raises(ValueError, match="fixed scale and strata"):
-        survival.survreg(
-            "Surv(time, status) ~ x1 + strata(group)",
-            data=data,
-            dist="rayleigh",
-            max_iter=200,
-            eps=1e-8,
-        )
-
-
-def test_survreg_score_true_exposes_score_vector_alias():
-    data = _toy_data()
-    formula_fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        score=True,
-        max_iter=10,
-        eps=1e-5,
-    )
-    formula_low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept(
-            [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-        ),
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert formula_fit.score == pytest.approx(formula_low_level.score_vector)
-    assert formula_fit.score_vector == pytest.approx(formula_low_level.score_vector)
-
-    no_score = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        score=False,
-        max_iter=10,
-        eps=1e-5,
-    )
-    assert not hasattr(no_score, "score")
-
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    matrix_fit = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        distribution="weibull",
-        score=True,
-        max_iter=10,
-        eps=1e-5,
-    )
-    matrix_low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=rows,
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert matrix_fit.score == pytest.approx(matrix_low_level.score_vector)
-    assert matrix_fit.score_vector == pytest.approx(matrix_low_level.score_vector)
-
-
-def test_survreg_cluster_computes_robust_variance():
-    data = {**_toy_data(), "subject": ["a", "a", "b", "b", "c", "c", "d", "d"]}
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    plain = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    formula_clustered = survival.survreg(
-        "Surv(time, status) ~ x1 + x2 + cluster(subject)",
-        data=data,
-        dist="weibull",
-        model=True,
-        x=True,
-        max_iter=10,
-        eps=1e-5,
-    )
-    explicit_cluster = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        cluster=data["subject"],
-        max_iter=10,
-        eps=1e-5,
-    )
-    matrix_cluster = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=_with_intercept(rows),
-        distribution="weibull",
-        cluster=data["subject"],
-        max_iter=10,
-        eps=1e-5,
-    )
-    singleton_robust = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        robust=True,
-        max_iter=10,
-        eps=1e-5,
-    )
-    nonrobust_cluster = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        cluster=data["subject"],
+    not_robust = r.survreg(
+        "Surv(time, status) ~ age + sex + cluster(inst)",
+        data=lung,
+        na_action="omit",
         robust=False,
-        max_iter=10,
-        eps=1e-5,
     )
-
-    expected_robust = _manual_survreg_robust_variance(plain, data["subject"])
-    singleton_expected = _manual_survreg_robust_variance(plain, list(range(len(data["time"]))))
-
-    assert formula_clustered.robust is True
-    assert formula_clustered.cluster == data["subject"]
-    assert formula_clustered.coefficients == pytest.approx(plain.coefficients)
-    assert explicit_cluster.coefficients == pytest.approx(plain.coefficients)
-    assert matrix_cluster.coefficients == pytest.approx(plain.coefficients)
-    assert formula_clustered.model["subject"] == data["subject"]
-    assert formula_clustered.model["(cluster)"] == data["subject"]
-    for actual, expected in zip(formula_clustered.x, _with_intercept(rows), strict=True):
-        assert actual == pytest.approx(expected)
-
-    for actual, expected in zip(
-        formula_clustered.naive_variance,
-        plain.variance_matrix,
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(formula_clustered.variance_matrix, expected_robust, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(explicit_cluster.variance_matrix, expected_robust, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(matrix_cluster.variance_matrix, expected_robust, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(singleton_robust.variance_matrix, singleton_expected, strict=True):
-        assert actual == pytest.approx(expected)
-
-    assert nonrobust_cluster.robust is False
-    for actual, expected in zip(
-        nonrobust_cluster.variance_matrix,
-        plain.variance_matrix,
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
+    assert not not_robust.robust
+    assert not_robust.naive_var is None
+    assert not_robust.cluster is None
+    assert not lung_weibull.robust
 
 
-def test_survreg_accepts_r_style_control_mapping():
-    data = _toy_data()
-    explicit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-        tol_chol=1e-8,
+def test_survreg_custom_distributions(lung, lung_weibull):
+    as_list = {"name": "Mine", "dist": "extreme", "trans": "log"}
+    custom = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist=as_list)
+    assert r.coef(custom) == pytest.approx(r.coef(lung_weibull))
+    assert custom.loglik == pytest.approx(lung_weibull.loglik)
+    assert custom.dist.name == "Mine"
+    assert custom.distribution.transform == SurvregTransform.Log
+
+    as_object = SurvregDistribution.custom(
+        "Mine", SurvregFamily.ExtremeValue, SurvregTransform.Log, scale=1.0
     )
-    controlled = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        scale=0,
-        parms=None,
-        control={
-            "maxiter": 10,
-            "rel.tolerance": 1e-5,
-            "toler.chol": 1e-8,
-            "debug": 0,
-            "outer.max": 10,
-        },
-    )
+    fixed = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist=as_object)
+    assert fixed.scale == [1.0]
+    assert fixed.df == 3
 
-    assert controlled.coefficients == pytest.approx(explicit.coefficients)
-    assert controlled.log_likelihood == pytest.approx(explicit.log_likelihood)
-
-    nondefault_ignored = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        scale=0,
-        control={
-            "maxiter": 10,
-            "rel.tolerance": 1e-5,
-            "toler.chol": 1e-8,
-            "debug": 1,
-            "outer.max": 2,
-        },
-    )
-
-    assert nondefault_ignored.coefficients == pytest.approx(explicit.coefficients)
-    assert nondefault_ignored.log_likelihood == pytest.approx(explicit.log_likelihood)
-
-    matrix_controlled = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=[[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))],
-        distribution="weibull",
-        scale=0.0,
-        control={"maxiter": 10, "rel.tolerance": 1e-5, "toler.chol": 1e-8},
-    )
-    matrix_explicit = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=[[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-        tol_chol=1e-8,
-    )
-
-    assert matrix_controlled.coefficients == pytest.approx(matrix_explicit.coefficients)
-    assert matrix_controlled.log_likelihood == pytest.approx(matrix_explicit.log_likelihood)
-
-
-def test_survreg_accepts_r_style_formula_storage_flags():
-    data = _toy_data()
-    default = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    explicit_defaults = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        model=False,
-        x=False,
-        y=True,
-        robust=False,
-        cluster=None,
-        score=False,
-        max_iter=10,
-        eps=1e-5,
-    )
-    with_model = survival.survreg(
-        "Surv(time, status) ~ x1 + x2 + offset(offset)",
-        data=data,
-        dist="weibull",
-        model=True,
-        x=True,
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert explicit_defaults.coefficients == pytest.approx(default.coefficients)
-    assert explicit_defaults.log_likelihood == pytest.approx(default.log_likelihood)
-    assert explicit_defaults.y.time == pytest.approx(data["time"])
-    assert explicit_defaults.y.event == tuple(data["status"])
-    assert not hasattr(explicit_defaults, "x")
-    assert not hasattr(explicit_defaults, "model")
-    assert not hasattr(explicit_defaults, "score")
-
-    model_frame = with_model.model
-    assert model_frame["Surv(time, status)"].time == pytest.approx(data["time"])
-    assert model_frame["Surv(time, status)"].event == tuple(data["status"])
-    assert model_frame["time"] == pytest.approx(data["time"])
-    assert model_frame["status"] == data["status"]
-    assert model_frame["x1"] == pytest.approx(data["x1"])
-    assert model_frame["x2"] == pytest.approx(data["x2"])
-    assert model_frame["offset"] == pytest.approx(data["offset"])
-    assert model_frame["(offset)"] == pytest.approx(data["offset"])
-
-    with_x = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        x=True,
-        y=False,
-        max_iter=10,
-        eps=1e-5,
-    )
-    expected_x = _with_intercept(
-        [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    )
-    for actual, expected in zip(with_x.x, expected_x, strict=True):
-        assert actual == pytest.approx(expected)
-    assert not hasattr(with_x, "y")
-
-
-def test_survreg_model_true_stores_matrix_inputs():
-    data = _toy_data()
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-
-    fit = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        model=True,
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.model["time"] == pytest.approx(data["time"])
-    assert fit.model["status"] == pytest.approx([float(value) for value in data["status"]])
-    for actual, expected in zip(fit.model["x"], rows, strict=True):
-        assert actual == pytest.approx(expected)
-
-
-def test_survreg_accepts_r_style_init_alias():
-    data = _toy_data()
-    initial = [0.15, -0.1, 0.05, 0.0]
-    alias = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        init=initial,
-        max_iter=0,
-    )
-    explicit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        initial_beta=initial,
-        max_iter=0,
-    )
-
-    assert alias.coefficients == pytest.approx(explicit.coefficients)
-    assert alias.log_likelihood == pytest.approx(explicit.log_likelihood)
-
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    matrix_alias = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        distribution="weibull",
-        init=initial[1:],
-        max_iter=0,
-    )
-    matrix_explicit = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        distribution="weibull",
-        initial=initial[1:],
-        max_iter=0,
-    )
-
-    assert matrix_alias.coefficients == pytest.approx(matrix_explicit.coefficients)
-    assert matrix_alias.log_likelihood == pytest.approx(matrix_explicit.log_likelihood)
-
-
-def test_survreg_distribution_accepts_r_style_prefixes_and_aliases():
-    data = _toy_data()
-    full = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    abbreviated = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="wei",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert abbreviated.distribution == "weibull"
-    assert abbreviated.coefficients == pytest.approx(full.coefficients)
-    assert abbreviated.log_likelihood == pytest.approx(full.log_likelihood)
-
-    expected = {
-        "exp": "exponential",
-        "ext": "extreme_value",
-        "extreme": "extreme_value",
-        "extreme value": "extreme_value",
-        "extreme_value": "extreme_value",
-        "gauss": "gaussian",
-        "normal": "gaussian",
-        "logi": "logistic",
-        "logg": "lognormal",
-        "loggaussian": "lognormal",
-        "logn": "lognormal",
-        "logl": "loglogistic",
-        "log-normal": "lognormal",
-        "log-logistic": "loglogistic",
+    assert set(_survreg.survreg_distributions) == {
+        "extreme",
+        "logistic",
+        "gaussian",
+        "weibull",
+        "exponential",
+        "rayleigh",
+        "loggaussian",
+        "lognormal",
+        "loglogistic",
+        "t",
     }
-    for dist, distribution in expected.items():
-        fit = survival.survreg(
-            "Surv(time, status) ~ x1 + x2",
-            data=data,
-            dist=dist,
-            max_iter=10,
-            eps=1e-5,
+    assert _survreg.survregDtest(as_list) is True
+    assert _survreg.survregDtest(_survreg.survreg_distributions["lognormal"]) is True
+    assert _survreg.survregDtest({"name": "x"}) is False
+    assert _survreg.survregDtest({"name": "x"}, verbose=True) == [
+        "custom densities are not supported; give 'dist' (a built-in name)"
+    ]
+    with pytest.raises(ValueError, match="trans must be 'log' or 'identity'"):
+        r.survreg(
+            "Surv(time, status) ~ age", data=lung, na_action="omit", dist={**as_list, "trans": 1}
         )
-        assert fit.distribution == distribution
+    with pytest.raises(TypeError, match="Invalid distribution object"):
+        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist=3)
 
-    with pytest.raises(ValueError, match="ambiguous"):
-        survival.survreg(
-            "Surv(time, status) ~ x1 + x2",
-            data=data,
-            dist="log",
-            max_iter=10,
-            eps=1e-5,
+
+def test_survreg_t_distribution_parms(lung):
+    default = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t")
+    assert default.parms == [4.0]
+    fit = r.survreg(
+        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t", parms=6
+    )
+    assert r.coef(fit) == pytest.approx([335.145836644, -2.70112809541, 125.475192919])
+    assert fit.scale == pytest.approx([207.854020941])
+    assert fit.loglik[1] == pytest.approx(-1178.82739437)
+    assert fit.parms == [6.0]
+    named = r.survreg(
+        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t", parms={"df": 6}
+    )
+    assert r.coef(named) == pytest.approx(r.coef(fit))
+    assert r.model_summary(fit)["parms"] == "Student-t distribution: parmameters= 6.0"
+
+    with pytest.raises(ValueError, match="Degrees of freedom must be >=3"):
+        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist="t", parms=2)
+    with pytest.raises(ValueError, match="has no optional parameters"):
+        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", parms=3)
+
+
+def test_survreg_control_and_init(lung, lung_weibull):
+    control = _survreg.survreg_control(iter_max=0)
+    assert (control.iter_max, control.rel_tolerance, control.toler_chol) == (0, 1e-9, 1e-10)
+    assert _survreg.survreg_control(maxiter=7).iter_max == 7
+    dotted = _survreg.survreg_control(**{"iter.max": 3, "rel.tolerance": 1e-5})
+    assert (dotted.iter_max, dotted.rel_tolerance) == (3, 1e-5)
+    assert _survreg.survreg_control(max_iter=2, eps=1e-6, tol_chol=1e-8).toler_chol == 1e-8
+    with pytest.raises(TypeError, match="unused argument"):
+        _survreg.survreg_control(bogus=1)
+    with pytest.raises(ValueError, match="use only one of"):
+        _survreg.survreg_control(iter_max=1, **{"iter.max": 2})
+
+    start = [6.5, 0.0, -0.5, -0.2]
+    at_start = r.survreg(
+        "Surv(time, status) ~ age + sex",
+        data=lung,
+        na_action="omit",
+        init=start,
+        control={"iter.max": 0},
+    )
+    assert r.coef(at_start) == pytest.approx(start[:3])
+    assert at_start.scale == pytest.approx([math.exp(-0.2)])
+    assert at_start.loglik == pytest.approx([-1153.85118809, -1186.43678027])
+    assert at_start.iter == 0
+
+    location_only = r.survreg(
+        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", init=start[:3], scale=0.9
+    )
+    assert location_only.scale == [0.9]
+    with pytest.raises(ValueError, match="Wrong length for initial parameters"):
+        r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", init=[1.0])
+
+    with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
+        short = r.survreg(
+            "Surv(time, status) ~ age + sex", data=lung, na_action="omit", **{"iter.max": 2}
+        )
+    assert short.iter == 2
+    assert not short.converged
+    via_options = r.survreg(
+        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", maxiter=30, eps=1e-9
+    )
+    assert r.coef(via_options) == pytest.approx(r.coef(lung_weibull))
+    with pytest.raises(TypeError, match="unused argument"):
+        r.survreg(
+            "Surv(time, status) ~ age", data=lung, na_action="omit", control=control, maxiter=3
         )
 
-    with pytest.raises(ValueError, match="ambiguous"):
-        survival.survreg(
-            "Surv(time, status) ~ x1 + x2",
-            data=data,
-            dist="ex",
-            max_iter=10,
-            eps=1e-5,
+
+def test_survreg_weights_offset_and_collapsed_residuals(lung):
+    weights = [1, 2, 0.5, 1.5] * 57
+    weighted = r.survreg(
+        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", weights=weights
+    )
+    assert r.model_weights(weighted) == weights
+    collapsed = r.residuals(weighted, type="dfbeta", weighted=True, collapse=lung["sex"])
+    assert collapsed[0] == pytest.approx(
+        [-0.0722227043513, 0.0007899802488, 0.0154302664141, 0.0394388601417]
+    )
+    assert collapsed[1] == pytest.approx([-value for value in collapsed[0]], abs=1e-9)
+    assert r.residuals(weighted, type="response", collapse=lung["sex"]) == pytest.approx(
+        [-7414.24580574, -16691.5026995]
+    )
+    labelled = r.residuals(
+        weighted, type="response", collapse=["b" if value == 1 else "a" for value in lung["sex"]]
+    )
+    assert labelled == pytest.approx([-16691.5026995, -7414.24580574])  # rowsum orders groups
+    with pytest.raises(ValueError, match="Wrong length for 'collapse'"):
+        r.residuals(weighted, type="response", collapse=[1, 2, 3])
+
+    in_formula = r.survreg("Surv(time, status) ~ age + offset(sex)", data=lung, na_action="omit")
+    as_argument = r.survreg(
+        "Surv(time, status) ~ age", data=lung, na_action="omit", offset=lung["sex"]
+    )
+    assert r.coef(in_formula) == pytest.approx(r.coef(as_argument))
+    assert in_formula.term_labels == ("age",)
+    with pytest.raises(ValueError, match="only one of formula offset"):
+        r.survreg(
+            "Surv(time, status) ~ age + offset(sex)",
+            data=lung,
+            na_action="omit",
+            offset=lung["sex"],
         )
 
 
-def test_survreg_distribution_helpers_match_r_reference_values(monkeypatch):
-    weibull_density = survival.dsurvreg(
-        [1.0, 2.0],
-        mean=0.5,
-        scale=1.2,
-        distribution="weibull",
+# --- predict ---------------------------------------------------------------------------------
+
+
+def test_predict_survreg_types_and_shapes(lung_weibull):
+    fit = lung_weibull
+    assert r.predict(fit)[:2] == pytest.approx([314.164993370, 338.140151189])
+    assert r.predict(fit, type="lp") == pytest.approx(fit.linear_predictors)
+    assert r.predict(fit, type="link") == r.predict(fit, type="linear")
+    assert r.fitted(fit) == r.predict(fit)
+    linear = r.predict(fit, NEWDATA, type="lp")
+    assert linear == pytest.approx([6.04408691863, 6.18103154651])
+    response = r.predict(fit, NEWDATA, se_fit=True)
+    assert response.se_fit == pytest.approx([49.8387551502, 55.9758588568])
+    assert response.fit == pytest.approx([math.exp(value) for value in linear])
+
+    median = r.predict(fit, NEWDATA, type="quantile", p=0.5, se_fit=True)
+    assert median.fit == pytest.approx([319.806940741, 366.743293817])
+    assert median.se_fit == pytest.approx([38.2338658641, 42.5897383801])
+    quantiles = r.predict(fit, NEWDATA, type="quantile", p=[0.1, 0.5, 0.9])
+    assert len(quantiles) == 2
+    assert [row[1] for row in quantiles] == pytest.approx(median.fit)
+    assert r.predict(fit, {"age": [50], "sex": [1]}, type="uquantile", p=[0.1, 0.9]) == (
+        pytest.approx([4.34719530293, 6.67298987433])
     )
-    weibull_cdf = survival.psurvreg(
-        [1.0, 2.0],
-        mean=0.5,
-        scale=1.2,
-        distribution="weibull",
+    training = r.predict(fit, type="quantile")  # p defaults to c(.1, .9)
+    assert len(training) == 228
+    assert len(training[0]) == 2
+
+    terms = r.predict(fit, NEWDATA, type="terms", se_fit=True)
+    _approx_matrix(
+        terms.fit, [[0.152567713252, -0.150823081444], [-0.0925727985271, 0.231262058215]]
     )
-    weibull_quantiles = survival.qsurvreg(
-        [0.25, 0.5, 0.75],
-        mean=0.5,
-        scale=1.2,
-        distribution="weibull",
+    assert len(terms.se_fit) == 2
+    assert len(terms.se_fit[0]) == 2
+    _approx_matrix(
+        r.predict(fit, NEWDATA, type="terms", terms="sex"), [[-0.150823081444], [0.231262058215]]
+    )
+    _approx_matrix(
+        r.predict(fit, NEWDATA, type="terms", terms=1), [[0.152567713252], [-0.0925727985271]]
+    )
+    assert r.model_term_names(fit) == ["age", "sex"]
+
+    with pytest.raises(ValueError, match="'type' should be one of"):
+        r.predict(fit, type="risk")
+    with pytest.raises(ValueError, match="unknown model term"):
+        r.predict(fit, NEWDATA, type="terms", terms="ph.ecog")
+    with pytest.raises(ValueError, match="not an argument of predict.survreg"):
+        r.predict(fit, NEWDATA, reference="strata")
+    with pytest.raises(TypeError, match="newdata must be a data frame"):
+        r.predict(fit, [[1.0, 50.0, 1.0]])
+
+
+def test_predict_survreg_newdata_with_strata(lung):
+    fit = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit")
+    quantiles = r.predict(fit, NEWDATA, type="quantile", p=[0.1, 0.5, 0.9], se_fit=True)
+    _approx_matrix(
+        quantiles.fit,
+        [
+            [67.5316693858938, 306.7907507794, 804.914009209731],
+            [112.29510099832, 376.747658066852, 814.822212857738],
+        ],
+    )
+    _approx_matrix(
+        quantiles.se_fit,
+        [
+            [12.6178741633356, 37.7558457656515, 101.751823333111],
+            [20.7205137157321, 38.955867363891, 96.7801439948295],
+        ],
+    )
+    assert r.predict(fit, NEWDATA, type="lp") == pytest.approx([6.02063808847565, 6.16707358317737])
+    with pytest.raises(ValueError, match="unknown strata level"):
+        r.predict(fit, {"age": [50], "sex": [3]}, type="quantile")
+
+
+# --- residuals -------------------------------------------------------------------------------
+
+
+def test_residuals_survreg_all_types(lung_weibull):
+    fit = lung_weibull
+    response = r.residuals(fit, type="response")
+    assert response[:2] == pytest.approx([-8.16499336963, 116.859848811])
+    assert len(r.residuals(fit, type="deviance")) == 228
+    assert len(r.residuals(fit, type="working")) == 228
+    assert r.residuals(fit, type="ldcase")[:3] == pytest.approx(
+        [0.00375040307336, 0.00582868986098, 0.233591514655]
+    )
+    assert len(r.residuals(fit, type="ldresp")) == 228
+    assert len(r.residuals(fit, type="ldshape")) == 228
+    matrix = r.residuals(fit, type="matrix")
+    assert matrix[0] == pytest.approx(
+        [
+            -0.718307403688,
+            -0.045513589091,
+            -1.69836899321,
+            -0.99880148144,
+            -0.00237623140413,
+            0.090237083782,
+        ]
+    )
+    dfbeta = r.residuals(fit, type="dfbeta")
+    assert len(dfbeta[0]) == 4
+    dfbetas = r.residuals(fit, type="dfbetas")
+    standard_errors = [math.sqrt(fit.var[idx][idx]) for idx in range(4)]
+    assert dfbetas[0] == pytest.approx(
+        [value / se for value, se in zip(dfbeta[0], standard_errors, strict=True)]
+    )
+    assert len(r.residuals(fit, type="dfbeta", rsigma=False)[0]) == 3
+    assert r.residuals(fit, type="dev") == r.residuals(fit, type="deviance")
+    assert r.residuals(fit, type="response", weighted=True) == response  # no weights: no-op
+    with pytest.raises(ValueError, match="'type' should be one of"):
+        r.residuals(fit, type="martingale")
+    with pytest.raises(ValueError, match="terms is only supported for Cox"):
+        r.residuals(fit, type="response", terms="age")
+
+
+# --- anova -----------------------------------------------------------------------------------
+
+
+def test_anova_survreg_sequential_terms(lung, lung_weibull):
+    table = _survreg.anova_survreg(lung_weibull)
+    assert table.terms == ["NULL", "age", "sex"]
+    assert table.loglik == pytest.approx([2307.70237618, 2303.78770423, 2294.10886286])
+    assert table.resid_df == [226, 225, 224]
+    assert math.isnan(table.df[0])
+    assert table.df[1:] == [1.0, 1.0]
+    assert table.deviance[1:] == pytest.approx([3.91467195, 9.67884137])
+    assert table.p[1:] == pytest.approx([0.0478663565064, 0.00186402139024])
+    frame = r.as_data_frame(table)
+    assert list(frame) == ["Df", "Deviance", "Resid. Df", "-2*LL", "Pr(>Chi)"]
+    assert "Scale estimated" in table.heading
+    assert _survreg.anova_survreg(lung_weibull, test="none").p is None
+
+    stratified = r.survreg(
+        "Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit"
+    )
+    table = _survreg.anova_survreg(stratified)
+    assert table.terms == ["NULL", "age", "strata(sex)", "sex"]
+    assert table.deviance[1:] == pytest.approx(
+        [3.9146719483806, 2.15017143626028, 10.2579304565488]
+    )
+    assert table.resid_df == [226, 225, 224, 223]
+    assert table.p[1:] == pytest.approx(
+        [0.0478663565063668, 0.142553971171007, 0.00136098270268315]
     )
 
-    assert weibull_density == pytest.approx([0.2841569, 0.1512009])
-    assert weibull_cdf == pytest.approx([0.4827560, 0.6910677])
-    assert weibull_quantiles == pytest.approx([0.3696942, 1.0620325, 2.4399099])
+    intercept_only = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit")
+    table = _survreg.anova_survreg(intercept_only)
+    assert table.terms == ["NULL"]
+    assert table.resid_df == [226]
 
-    assert survival.dsurvreg(
-        [1.0, 2.0],
-        mean=0.5,
-        scale=1.2,
-        distribution="lognormal",
-    ) == pytest.approx([0.3048103, 0.1640866])
-    assert survival.psurvreg(
-        [1.0, 2.0],
-        mean=0.5,
-        scale=1.2,
-        distribution="lognormal",
-    ) == pytest.approx([0.3384611, 0.5639360])
-    assert survival.qsurvreg(
-        [0.25, 0.5, 0.75],
-        mean=0.5,
-        scale=1.2,
-        distribution="lognormal",
-    ) == pytest.approx([0.7338962, 1.6487213, 3.7039051])
 
-    assert survival.dsurvreg([-1.0, 0.0, 1.0], mean=0.0, distribution="gaussian") == (
-        pytest.approx([0.2419707, 0.3989423, 0.2419707])
-    )
-    assert survival.psurvreg([-1.0, 0.0, 1.0], mean=0.0, distribution="gaussian") == (
-        pytest.approx([0.1586553, 0.5, 0.8413447])
-    )
-    assert survival.qsurvreg([0.25, 0.5, 0.75], mean=0.0, distribution="gaussian") == (
-        pytest.approx([-0.6744898, 0.0, 0.6744898])
-    )
-    assert survival.dsurvreg(
-        [1.0, 2.0],
-        mean=0.0,
-        scale=1.0,
-        distribution="t",
-        parms=5,
-    ) == pytest.approx([0.2196798, 0.06509031])
-    assert survival.psurvreg(
-        [1.0, 2.0],
-        mean=0.0,
-        scale=1.0,
-        distribution="t",
-        parms=5,
-    ) == pytest.approx([0.8183913, 0.9490303])
-    assert survival.qsurvreg(
-        [0.25, 0.5],
-        mean=0.0,
-        scale=1.0,
-        distribution="t",
-        parms=5,
-    ) == pytest.approx([-0.7266868, 0.0])
-    assert survival.dsurvreg(
-        [1.0, math.inf, -math.inf],
-        mean=[math.inf, 0.0, 0.0],
-        distribution="t",
-        parms=5,
-    ) == [0.0, 0.0, 0.0]
-    assert survival.psurvreg(
-        [1.0, math.inf, -math.inf],
-        mean=[math.inf, 0.0, 0.0],
-        distribution="t",
-        parms=5,
-    ) == [0.0, 1.0, 0.0]
+def test_anova_survreg_model_list(lung, lung_weibull):
+    small = r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit")
+    large = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit")
+    table = _survreg.anova_survreg(small, large)
+    assert table.terms == ["age", "age + strata(sex) + sex"]
+    assert table.test_labels == ["", "+strata(sex)+sex"]
+    assert table.resid_df == [225, 223]
+    assert table.loglik == pytest.approx([2303.788, 2291.380], abs=1e-3)
+    assert table.df[1] == 2.0
+    assert table.deviance[1] == pytest.approx(12.4081, abs=1e-4)
+    assert table.p[1] == pytest.approx(0.002021226, rel=1e-6)
+    reversed_table = _survreg.anova_survreg([large, small])
+    assert reversed_table.test_labels == ["", "-strata(sex)-sex"]
+    assert reversed_table.df[1] == -2.0
+    assert reversed_table.p[1] == pytest.approx(0.002021226, rel=1e-6)
+    assert list(r.as_data_frame(table)) == [
+        "Terms",
+        "Resid. Df",
+        "-2*LL",
+        "Test",
+        "Df",
+        "Deviance",
+        "Pr(>Chi)",
+    ]
+    with pytest.raises(TypeError, match="requires survreg model fits"):
+        _survreg.anova_survreg(lung_weibull, object())
+    with pytest.raises(ValueError, match="'test' should be one of"):
+        _survreg.anova_survreg(lung_weibull, test="F")
 
-    assert survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="loggaussian") == (
-        pytest.approx(survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="lognormal"))
-    )
-    assert survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="rayleigh") == (
-        pytest.approx(survival.dsurvreg([1.0], mean=0.5, scale=1.2, distribution="weibull"))
-    )
-    assert survival.dsurvreg([1.0], mean=0.0, distribution="gaussian", parms=5) == pytest.approx(
-        survival.dsurvreg([1.0], mean=0.0, distribution="gaussian")
-    )
 
-    nonpositive_density = survival.dsurvreg([0.0, -1.0], mean=0.0, distribution="weibull")
-    assert all(math.isnan(value) for value in nonpositive_density)
-    assert survival.psurvreg([0.0, -1.0], mean=0.0, distribution="weibull") == [0.0, 0.0]
-    boundary_quantiles = survival.qsurvreg([0.0, 1.0], mean=0.0, distribution="weibull")
-    assert boundary_quantiles[0] == pytest.approx(0.0)
-    assert math.isinf(boundary_quantiles[1])
-    assert boundary_quantiles[1] > 0.0
+# --- censoring types and the model frame -------------------------------------------------------
 
-    draws = iter([0.25, 0.5])
-    monkeypatch.setattr(r_survreg.random, "random", lambda: next(draws))
-    assert survival.rsurvreg(2, mean=0.5, scale=1.2, distribution="weibull") == pytest.approx(
-        [0.3696942, 1.0620325]
+
+def test_survreg_left_censored_gaussian_tobin(tobin):
+    fit = r.survreg(
+        'Surv(durable, durable > 0, type = "left") ~ age + quant', data=tobin, dist="gaussian"
     )
-    draws = iter([0.25, 0.5])
-    monkeypatch.setattr(r_survreg.random, "random", lambda: next(draws))
-    assert survival.rsurvreg(2, mean=0.0, scale=1.0, distribution="t", parms=5) == pytest.approx(
+    assert r.coef(fit) == pytest.approx([15.1448663607, -0.129059284097, -0.0455416629543])
+    assert fit.scale == pytest.approx([5.57253976309])
+    assert fit.loglik[1] == pytest.approx(-28.9401331997)
+    assert fit.y.type == "left"
+    assert r.predict(fit, type="response") == pytest.approx(fit.linear_predictors)
+
+
+def test_survreg_interval2_missing_endpoints_are_censoring():
+    data = {
+        "left": [1, 2, None, 4, 5, 3, 6, None, 2, 7],
+        "right": [3, 4, 2, 6, 5, None, 8, 5, 3, None],
+        "g": ["a", "b", "a", "b", "a", "b", "a", "b", "a", "b"],
+    }
+    fit = r.survreg('Surv(left, right, type = "interval2") ~ g', data=data, na_action="omit")
+    assert fit.n == 10  # a missing endpoint is a censoring code, not a missing response
+    events = list(fit.y.event)
+    assert (events.count(3), events.count(2), events.count(0), events.count(1)) == (5, 2, 2, 1)
+
+    with_missing = {key: [*values, None] for key, values in data.items()}
+    with_missing["g"][-1] = "a"
+    dropped = r.survreg(
+        'Surv(left, right, type = "interval2") ~ g', data=with_missing, na_action="omit"
+    )
+    assert dropped.n == 10
+    assert r.coef(dropped) == pytest.approx(r.coef(fit))
+    with pytest.raises(ValueError, match="missing values"):
+        r.survreg('Surv(left, right, type = "interval2") ~ g', data=with_missing, na_action="fail")
+
+
+def test_survreg_intercept_only_and_model_pieces(lung):
+    fit = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit", model=True, x=True)
+    assert r.coef(fit) == pytest.approx([6.0349039102])
+    assert fit.scale == pytest.approx([0.759393601108])
+    assert fit.loglik == pytest.approx([-1153.85118809, -1153.85118809])
+    assert fit.df_residual == 226
+    assert fit.term_labels == ()
+    assert fit.x[:2] == [[1.0], [1.0]]
+    matrix = r.model_matrix(fit)
+    assert matrix["columns"] == ["(Intercept)"]
+    assert matrix["assign"] == [0]
+    frame = r.model_frame(fit)
+    assert set(frame) >= {"time", "status"}
+    assert r.model_formula(fit) == "Surv(time, status) ~ 1"
+    assert r.extract_aic(fit) == pytest.approx([2.0, r.aic(fit)])
+    assert r.bic(fit) == pytest.approx(-2 * fit.loglik[1] + 2 * math.log(228))
+    intervals = r.confint(fit)
+    assert intervals[0]["lower"] < 6.0349039102 < intervals[0]["upper"]
+    without_y = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit", y=False)
+    assert without_y.y_response is None
+    scored = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit", score=True)
+    assert len(scored.score) == 2
+
+
+def test_survreg_subset_and_na_action(lung):
+    men = [value == 1 for value in lung["sex"]]
+    subset = r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", subset=men)
+    assert subset.n == sum(men)
+    with pytest.raises(ValueError, match="missing values"):
+        r.survreg("Surv(time, status) ~ age + ph.ecog", data=lung)
+    omitted = r.survreg("Surv(time, status) ~ age + ph.ecog", data=lung, **{"na.action": "omit"})
+    assert omitted.n == 227
+    named_weights = r.survreg(
+        "Surv(time, status) ~ age", data=dict(lung, w=[1.0] * 228), na_action="omit", weights="w"
+    )
+    assert r.model_weights(named_weights) == [1.0] * 228
+
+
+def test_survreg_matrix_input_uses_the_design_as_given(lung):
+    response = survival.Surv(lung["time"], [value - 1 for value in lung["status"]])
+    fit = r.survreg(response, x={"age": lung["age"], "sex": lung["sex"]})
+    assert r.coef_names(fit) == ["age", "sex"]  # no intercept unless the caller adds one
+    assert fit.formula is None
+    assert fit.term_labels == ("age", "sex")
+    prediction = r.predict(fit, {"age": [50, 70], "sex": [1, 2]}, type="lp")
+    coefficients = r.coef(fit)
+    assert prediction[0] == pytest.approx(50 * coefficients[0] + coefficients[1])
+    assert len(r.predict(fit, {"age": [50], "sex": [1]}, type="terms", terms="sex")[0]) == 1
+    assert r.predict(fit, [[50.0, 1.0]], type="lp") == pytest.approx(prediction[:1])
+    with_intercept = r.survreg(
+        response, x=[[1.0, age, sex] for age, sex in zip(lung["age"], lung["sex"], strict=True)]
+    )
+    assert r.coef_names(with_intercept) == ["x1", "x2", "x3"]
+    with pytest.raises(ValueError, match="subset and na_action require a formula"):
+        r.survreg(response, x=[[1.0]] * 228, subset=[0, 1])
+
+
+def test_survreg_argument_errors(lung):
+    with pytest.raises(ValueError, match="'dist' should be one of"):
+        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist="xx")
+    with pytest.raises(ValueError, match="Invalid scale value"):
+        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", scale=-1)
+    with pytest.raises(ValueError, match="start-stop type Surv objects are not supported"):
+        r.survreg(
+            "Surv(start, stop, event) ~ x",
+            data={
+                "start": [0] * 5,
+                "stop": [1, 2, 3, 4, 5],
+                "event": [1] * 5,
+                "x": [1, 2, 3, 4, 5],
+            },
+        )
+    with pytest.raises(ValueError, match="multi-state survival is not supported"):
+        r.survreg(
+            'Surv(time, state, type = "mstate") ~ x',
+            data={"time": [1, 2, 3, 4], "state": ["a", "b", "censor", "a"], "x": [1, 2, 3, 4]},
+        )
+    with pytest.raises(TypeError, match="a formula argument is required"):
+        r.survreg(None, data=lung)
+    with pytest.raises(ValueError, match="Invalid survival times for this distribution"):
+        r.survreg(
+            "Surv(time, status) ~ x",
+            data={"time": [0, 1, 2, 3], "status": [1, 1, 0, 1], "x": [1, 2, 3, 4]},
+        )
+    with pytest.raises(ValueError, match="a formula cannot have multiple cluster terms"):
+        r.survreg(
+            "Surv(time, status) ~ age + cluster(inst) + cluster(sex)", data=lung, na_action="omit"
+        )
+    with pytest.warns(RuntimeWarning, match="cluster appears both"):
+        r.survreg(
+            "Surv(time, status) ~ age + cluster(sex)",
+            data=lung,
+            na_action="omit",
+            cluster=lung["sex"],
+        )
+
+
+# --- summary -----------------------------------------------------------------------------------
+
+
+def test_model_summary_survreg_structure(lung_weibull):
+    summary = r.model_summary(lung_weibull)
+    assert summary["model_type"] == "survreg"
+    assert summary["coefficient_names"] == ["(Intercept)", "age", "sex", "Log(scale)"]
+    assert summary["location_coefficient_names"] == ["(Intercept)", "age", "sex"]
+    assert summary["location_coefficients"] == pytest.approx(r.coef(lung_weibull))
+    assert summary["scale"] == pytest.approx(0.754050947641)
+    assert summary["scales"] == pytest.approx([0.754050947641])
+    assert summary["distribution"] == "Weibull"
+    assert summary["parms"] == "Weibull distribution"
+    assert (summary["df"], summary["n"], summary["iter"], summary["idf"]) == (4, 228, 5, 2)
+    assert summary["loglik"] == pytest.approx(-1147.05443143)
+    assert summary["chi"] == pytest.approx(2 * (-1147.05443143 + 1153.85118809))
+    assert summary["robust"] is False
+    rows = summary["coefficients"]
+    assert [row["name"] for row in rows] == summary["coefficient_names"]
+    assert rows[3]["coef"] == pytest.approx(math.log(0.754050947641))
+    assert rows[3]["se"] == pytest.approx(math.sqrt(lung_weibull.var[3][3]))
+    assert rows[1]["p"] == pytest.approx(0.0781188632, rel=1e-6)
+
+
+# --- dsurvreg, psurvreg, qsurvreg, rsurvreg ---------------------------------------------------
+
+
+def test_survreg_distribution_functions_match_r():
+    assert r.dsurvreg([1.0, 2.0], mean=0.5, scale=1.2) == pytest.approx([0.2841569, 0.1512009])
+    assert r.psurvreg([1.0, 2.0], mean=0.5, scale=1.2) == pytest.approx([0.4827560, 0.6910677])
+    assert r.qsurvreg([0.25, 0.5, 0.75], mean=0.5, scale=1.2) == pytest.approx(
+        [0.3696942, 1.0620325, 2.4399099]
+    )
+    assert r.dsurvreg([1.0, 2.0], 0.5, 1.2, "lognormal") == pytest.approx([0.3048103, 0.1640866])
+    assert r.psurvreg([1.0, 2.0], 0.5, 1.2, "lognormal") == pytest.approx([0.3384611, 0.5639360])
+    assert r.qsurvreg([0.25, 0.5, 0.75], 0.5, 1.2, "lognormal") == pytest.approx(
+        [0.7338962, 1.6487213, 3.7039051]
+    )
+    assert r.dsurvreg([-1.0, 0.0, 1.0], mean=0.0, distribution="gaussian") == pytest.approx(
+        [0.2419707, 0.3989423, 0.2419707]
+    )
+    assert r.psurvreg([-1.0, 0.0, 1.0], mean=0.0, distribution="gaussian") == pytest.approx(
+        [0.1586553, 0.5, 0.8413447]
+    )
+    assert r.qsurvreg([0.25, 0.5, 0.75], mean=0.0, distribution="gaussian") == pytest.approx(
+        [-0.6744898, 0.0, 0.6744898]
+    )
+    assert r.dsurvreg([1.0, 2.0], 0.0, 1.0, "t", parms=5) == pytest.approx([0.2196798, 0.06509031])
+    assert r.psurvreg([1.0, 2.0], 0.0, 1.0, "t", parms=5) == pytest.approx([0.8183913, 0.9490303])
+    assert r.qsurvreg([0.25, 0.5], 0.0, 1.0, "t", parms={"df": 5}) == pytest.approx(
         [-0.7266868, 0.0]
     )
-
-    with pytest.raises(ValueError, match="length 1 or 2"):
-        survival.dsurvreg([1.0, 2.0], mean=[0.0, 1.0, 2.0], distribution="weibull")
-    with pytest.raises(TypeError, match="parms"):
-        survival.dsurvreg([1.0], mean=0.0, distribution="t")
-
-
-def test_survreg_loglik_and_response_transform_follow_r_distribution_scale():
-    data = _toy_data()
-
-    weibull = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=80,
-        eps=1e-8,
-    )
-    expected_loglik = weibull.log_likelihood - sum(
-        math.log(time)
-        for time, event in zip(data["time"], data["status"], strict=True)
-        if event == 1
-    )
-    assert survival.loglik(weibull) == pytest.approx(expected_loglik)
-
-    lognormal = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="lognormal",
-        max_iter=80,
-        eps=1e-8,
-    )
-    lognormal_lp = survival.predict(lognormal, type="lp")
-    assert survival.predict(lognormal, type="response") == pytest.approx(
-        [math.exp(value) for value in lognormal_lp]
-    )
-
-    gaussian = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="gaussian",
-        max_iter=80,
-        eps=1e-8,
-    )
-    assert survival.loglik(gaussian) == pytest.approx(gaussian.log_likelihood)
-    assert survival.predict(gaussian, type="response") == pytest.approx(
-        survival.predict(gaussian, type="lp")
-    )
-
-
-def test_low_level_survreg_rejects_invalid_numeric_inputs():
-    kwargs = {
-        "time": [1.0, 2.0, 3.0],
-        "status": [1.0, 0.0, 1.0],
-        "covariates": [[0.2, 1.0], [0.4, 0.9], [0.1, 1.1]],
-        "distribution": "weibull",
-        "max_iter": 1,
-    }
-
-    with pytest.raises(ValueError, match="time contains non-finite"):
-        survival.regression.survreg(**{**kwargs, "time": [1.0, float("nan"), 3.0]})
-
-    with pytest.raises(ValueError, match="must be positive"):
-        survival.regression.survreg(**{**kwargs, "time": [1.0, 0.0, 3.0]})
-
-    with pytest.raises(ValueError, match="status must contain only 0/1/2/3"):
-        survival.regression.survreg(**{**kwargs, "status": [1.0, 4.0, 0.0]})
-
-    with pytest.raises(ValueError, match=r"covariates\[1\]\[0\] contains non-finite"):
-        survival.regression.survreg(
-            **{**kwargs, "covariates": [[0.2, 1.0], [float("inf"), 0.9], [0.1, 1.1]]}
-        )
-
-    with pytest.raises(ValueError, match="weights must be non-negative"):
-        survival.regression.survreg(**{**kwargs, "weights": [1.0, -1.0, 1.0]})
-
-    with pytest.raises(ValueError, match="at least one positive"):
-        survival.regression.survreg(**{**kwargs, "weights": [0.0, 0.0, 0.0]})
-
-    with pytest.raises(ValueError, match="offsets contains non-finite"):
-        survival.regression.survreg(**{**kwargs, "offsets": [0.0, float("nan"), 0.0]})
-
-    with pytest.raises(ValueError, match="initial_beta contains non-finite"):
-        survival.regression.survreg(**{**kwargs, "initial_beta": [0.0, 0.0, float("nan")]})
-
-    with pytest.raises(ValueError, match="fixed_scale must be a finite positive value"):
-        survival.regression.survreg(**{**kwargs, "fixed_scale": 0.0})
-
-    with pytest.raises(ValueError, match="fixed_scale must be a finite positive value"):
-        survival.regression.survreg(**{**kwargs, "fixed_scale": float("nan")})
-
-    with pytest.raises(ValueError, match="cannot have both a fixed scale and strata"):
-        survival.regression.survreg(**{**kwargs, "strata": [0, 1, 1], "fixed_scale": 1.0})
-
-    with pytest.raises(ValueError, match="initial_beta has 3 values but model expects 2"):
-        survival.regression.survreg(
-            **{**kwargs, "initial_beta": [0.0, 0.0, 0.0], "fixed_scale": 1.0}
-        )
-
-    with pytest.raises(ValueError, match="eps must be a finite positive value"):
-        survival.regression.survreg(**{**kwargs, "eps": 0.0})
-
-    with pytest.raises(ValueError, match="tol_chol must be a finite positive value"):
-        survival.regression.survreg(**{**kwargs, "tol_chol": float("nan")})
-
-    with pytest.raises(ValueError, match="distribution must be one of"):
-        survival.regression.survreg(**{**kwargs, "distribution": "mystery"})
-
-    with pytest.raises(ValueError, match="time2 is required"):
-        survival.regression.survreg(**{**kwargs, "status": [1.0, 3.0, 0.0]})
-
-    with pytest.raises(ValueError, match="time2 has 2"):
-        survival.regression.survreg(**{**kwargs, "status": [1.0, 3.0, 0.0], "time2": [1.0, 2.5]})
-
-    with pytest.raises(ValueError, match="non-finite interval endpoint"):
-        survival.regression.survreg(
-            **{
-                **kwargs,
-                "status": [1.0, 3.0, 0.0],
-                "time2": [1.0, float("inf"), 3.0],
-            }
-        )
-
-    with pytest.raises(ValueError, match="greater than time"):
-        survival.regression.survreg(
-            **{**kwargs, "status": [1.0, 3.0, 0.0], "time2": [1.0, 2.0, 3.0]}
-        )
-
-
-def test_low_level_survreg_accepts_left_and_interval_censoring():
-    fit = survival.regression.survreg(
-        time=[1.0, 2.0, 3.0, 4.0, 5.0],
-        time2=[1.0, 2.0, 3.0, 4.5, 5.0],
-        status=[1.0, 2.0, 0.0, 3.0, 1.0],
-        covariates=[[0.2], [0.4], [0.1], [0.8], [1.0]],
-        distribution="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-
-    assert fit.status == [1, 2, 0, 3, 1]
-    assert fit.time2 == pytest.approx([1.0, 2.0, 3.0, 4.5, 5.0])
-    assert math.isfinite(fit.log_likelihood)
-    assert len(fit.coefficients) == 2
-
-
-def test_survreg_left_censored_formula_matches_low_level_binding():
-    data = {
-        "time": [1.0, 2.0, 3.0, 4.0, 5.0],
-        "status": [0, 1, 0, 1, 1],
-        "x1": [0.2, 0.4, 0.1, 0.8, 1.0],
-    }
-    fit = survival.survreg(
-        "Surv(time, status, type='left') ~ x1",
-        data=data,
-        dist="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[2.0, 1.0, 2.0, 1.0, 1.0],
-        covariates=_with_intercept([[value] for value in data["x1"]]),
-        distribution="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-
-    assert fit.status == [2, 1, 2, 1, 1]
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-
-def test_survreg_interval_formula_matches_low_level_binding():
-    data = {
-        "left": [1.0, 2.0, 3.0, 4.0, 5.0],
-        "right": [1.0, 2.0, 3.0, 4.5, 5.0],
-        "status": [1, 2, 0, 3, 1],
-        "x1": [0.2, 0.4, 0.1, 0.8, 1.0],
-    }
-    fit = survival.survreg(
-        "Surv(left, right, status, type='interval') ~ x1",
-        data=data,
-        dist="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["left"],
-        time2=data["right"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept([[value] for value in data["x1"]]),
-        distribution="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-
-    assert fit.time2 == pytest.approx(low_level.time2)
-    assert fit.status == data["status"]
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-
-def test_survreg_interval2_formula_derives_low_level_status_codes():
-    data = {
-        "left": [float("-inf"), 2.0, 3.0, 4.0],
-        "right": [1.0, 5.0, 3.0, float("inf")],
-        "x1": [0.2, 0.4, 0.1, 0.8],
-    }
-    fit = survival.survreg(
-        "Surv(left, right, type='interval2') ~ x1",
-        data=data,
-        dist="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=[1.0, 2.0, 3.0, 4.0],
-        time2=[1.0, 5.0, 3.0, float("inf")],
-        status=[2.0, 3.0, 1.0, 0.0],
-        covariates=_with_intercept([[value] for value in data["x1"]]),
-        distribution="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-
-    assert fit.time == pytest.approx([1.0, 2.0, 3.0, 4.0])
-    assert fit.time2 == pytest.approx(low_level.time2)
-    assert fit.status == [2, 3, 1, 0]
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-
-def test_survreg_interval_residuals_support_scalar_and_influence_types():
-    data = {
-        "left": [1.0, 2.0, 3.0, 4.0, 5.0],
-        "right": [1.0, 2.0, 3.0, 4.5, 5.0],
-        "status": [1, 2, 0, 3, 1],
-        "x1": [0.2, 0.4, 0.1, 0.8, 1.0],
-    }
-    fit = survival.survreg(
-        "Surv(left, right, status, type='interval') ~ x1",
-        data=data,
-        dist="weibull",
-        max_iter=5,
-        eps=1e-5,
-    )
-    low_level = survival.residuals_survreg(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        residual_type="ldcase",
-        time2=fit.time2,
-    )
-    low_response = survival.residuals_survreg(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        residual_type="response",
-        time2=fit.time2,
-    )
-    low_deviance = survival.residuals_survreg(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        residual_type="deviance",
-        time2=fit.time2,
-    )
-    low_working = survival.residuals_survreg(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        residual_type="working",
-        time2=fit.time2,
-    )
-    matrix = survival.survreg_residual_matrix(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        time2=fit.time2,
-    )
-    location_vcov = [row[: fit.n_covariates] for row in fit.variance_matrix[: fit.n_covariates]]
-    full_width = fit.n_covariates + len(fit.scales)
-    full_vcov = [row[:full_width] for row in fit.variance_matrix[:full_width]]
-    expected_ldcase = survival.survreg_influence_residuals(
-        matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        full_vcov,
-        "ldcase",
-        True,
-    )
-    expected_dfbeta = survival.survreg_dfbeta_residuals(
-        matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        full_vcov,
-        True,
-        False,
-    )
-    saturated = _weibull_saturated_center_loglik(fit.time, fit.time2, fit.status, fit.scale)
-    expected_response = [
-        math.exp(center) - math.exp(linear_predictor)
-        for (center, _), linear_predictor in zip(saturated, fit.linear_predictors, strict=True)
-    ]
-    expected_deviance = _survreg_deviance_from_matrix(matrix, saturated)
-    expected_working = [0.0 if abs(row[2]) <= 1e-12 else -row[1] / row[2] for row in matrix]
-    expected_location_dfbeta = survival.survreg_dfbeta_residuals(
-        matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        location_vcov,
-        False,
-        False,
-    )
-    low_location_dfbeta = survival.dfbeta_survreg(
-        fit.time,
-        fit.status,
-        fit.covariates,
-        fit.linear_predictors,
-        fit.scale,
-        location_vcov,
-        fit.distribution,
-        time2=fit.time2,
-    )
-
-    assert survival.r_api.residuals(fit, type="ldcase") == pytest.approx(expected_ldcase)
-    assert survival.r_api.residuals(fit, type="ldc") == pytest.approx(expected_ldcase)
-    assert low_response.residuals == pytest.approx(expected_response)
-    assert fit.residuals("response").residuals == pytest.approx(expected_response)
-    assert survival.r_api.residuals(fit, type="response") == pytest.approx(expected_response)
-    assert low_deviance.residuals == pytest.approx(expected_deviance)
-    assert fit.residuals("deviance").residuals == pytest.approx(expected_deviance)
-    assert survival.r_api.residuals(fit, type="deviance") == pytest.approx(expected_deviance)
-    assert low_working.residuals == pytest.approx(expected_working)
-    assert fit.residuals("working").residuals == pytest.approx(expected_working)
-    assert survival.r_api.residuals(fit, type="working") == pytest.approx(expected_working)
-    for actual, expected in zip(
-        survival.r_api.residuals(fit, type="dfbeta"),
-        expected_dfbeta,
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(fit.dfbeta(), expected_location_dfbeta, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(low_location_dfbeta, expected_location_dfbeta, strict=True):
-        assert actual == pytest.approx(expected)
-    assert all(math.isfinite(value) for value in low_level.residuals)
-    assert all(math.isfinite(value) for value in expected_ldcase)
-
-    with pytest.raises(ValueError, match="ambiguous"):
-        survival.r_api.residuals(fit, type="ld")
-
-
-def test_low_level_survreg_residuals_handle_interval_ldcase_and_working():
-    time = [1.0, 1.0, 1.0, 1.0]
-    time2 = [1.0, 1.0, 2.0, 1.0]
-    status = [1, 2, 3, 0]
-    linear_pred = [0.0, 0.0, 0.0, 0.0]
-
-    ldcase = survival.residuals_survreg(
-        time,
-        status,
-        linear_pred,
+    assert r.dsurvreg([1.0], 0.5, 1.2, "loggaussian") == r.dsurvreg([1.0], 0.5, 1.2, "lognormal")
+    assert r.dsurvreg([1.0], 0.5, 1.2, "rayleigh") == r.dsurvreg([1.0], 0.5, 1.2, "weibull")
+    assert r.qsurvreg([0.5, 0.5], mean=[0.0, 1.0], scale=1.0, distribution="gaussian") == [
+        0.0,
         1.0,
-        "weibull",
-        residual_type="ldcase",
-        time2=time2,
-    )
-
-    assert ldcase.residuals[0] == pytest.approx(-1.0)
-    assert ldcase.residuals[1] == pytest.approx(math.log(1.0 - math.exp(-1.0)))
-    assert ldcase.residuals[2] == pytest.approx(math.log(math.exp(-1.0) - math.exp(-2.0)))
-    assert ldcase.residuals[3] == pytest.approx(-1.0)
-
-    covariates = [[1.0], [1.0], [1.0], [1.0]]
-    matrix = survival.survreg_residual_matrix(
-        time,
-        status,
-        linear_pred,
-        1.0,
-        "weibull",
-        time2=time2,
-    )
-    dfbeta = survival.dfbeta_survreg(
-        time,
-        status,
-        covariates,
-        linear_pred,
-        1.0,
-        [[1.0]],
-        "weibull",
-        time2=time2,
-    )
-    expected_dfbeta = survival.survreg_dfbeta_residuals(
-        matrix,
-        covariates,
-        [1.0],
-        [0, 0, 0, 0],
-        [[1.0]],
-        False,
-        False,
-    )
-    for actual, expected in zip(dfbeta, expected_dfbeta, strict=True):
-        assert actual == pytest.approx(expected)
-
-    saturated = _weibull_saturated_center_loglik(time, time2, status, 1.0)
-    response = survival.residuals_survreg(
-        time,
-        status,
-        linear_pred,
-        1.0,
-        "weibull",
-        residual_type="response",
-        time2=time2,
-    )
-    deviance = survival.residuals_survreg(
-        time,
-        status,
-        linear_pred,
-        1.0,
-        "weibull",
-        residual_type="deviance",
-        time2=time2,
-    )
-    assert response.residuals == pytest.approx(
-        [
-            math.exp(center) - math.exp(lp)
-            for (center, _), lp in zip(saturated, linear_pred, strict=True)
-        ]
-    )
-    assert deviance.residuals == pytest.approx(_survreg_deviance_from_matrix(matrix, saturated))
-
-    working = survival.residuals_survreg(
-        time,
-        status,
-        linear_pred,
-        1.0,
-        "weibull",
-        residual_type="working",
-        time2=time2,
-    )
-    expected_working = [0.0 if abs(row[2]) <= 1e-12 else -row[1] / row[2] for row in matrix]
-    assert working.residuals == pytest.approx(expected_working)
-
-    with pytest.raises(ValueError, match="time2 is required"):
-        survival.residuals_survreg(
-            time,
-            status,
-            linear_pred,
-            1.0,
-            "weibull",
-            residual_type="ldcase",
-        )
-
-
-def test_survreg_fit_exposes_prediction_metadata_and_methods():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    rows = [[0.5, 0.8], [1.1, 0.3]]
-    design_rows = _with_intercept(rows)
-    expected_lp = [
-        sum(
-            value * coefficient
-            for value, coefficient in zip(row, fit.location_coefficients, strict=True)
-        )
-        for row in design_rows
     ]
-    training_rows = _with_intercept(
-        [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    )
-    training_lp = [
-        sum(
-            value * coefficient
-            for value, coefficient in zip(row, fit.location_coefficients, strict=True)
-        )
-        for row in training_rows
-    ]
-
-    assert fit.n_covariates == 3
-    assert fit.n_strata == 1
-    assert fit.distribution == "weibull"
-    assert fit.scale > 0.0
-    assert fit.scales == pytest.approx([fit.scale])
-    assert fit.location_coefficients == pytest.approx(fit.coefficients[:3])
-    assert fit.linear_predictors == pytest.approx(training_lp)
-    for actual, expected in zip(fit.information_matrix, fit.fit.variance_matrix, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(fit.variance_matrix, fit.fit.variance_matrix, strict=True):
-        assert actual == pytest.approx(expected)
-
-    lp = fit.predict(design_rows, "lp")
-    response = fit.predict(design_rows)
-    quantiles = fit.predict_quantile(design_rows, [0.25, 0.5])
-
-    assert lp.predictions == pytest.approx(expected_lp)
-    assert response.predictions == pytest.approx([math.exp(value) for value in expected_lp])
-    assert quantiles.quantiles == pytest.approx([0.25, 0.5])
-    assert len(quantiles.predictions) == 2
-    assert all(len(row) == 2 for row in quantiles.predictions)
-
-
-def test_predict_survreg_r_style_generic_types():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    rows = [[0.5, 0.8], [1.1, 0.3]]
-    design_rows = _with_intercept(rows)
-
-    lp = survival.predict(fit, rows, type="lp")
-    prefix_lp = survival.predict(fit, rows, type="l")
-    response = survival.predict(fit, rows)
-    prefix_response = survival.predict(fit, rows, type="r")
-    response_with_se = survival.predict(fit, rows, se_fit=True)
-    dotted_response_with_se = survival.predict(fit, rows, **{"se.fit": True})
-    terms = survival.predict(fit, rows, type="terms")
-    prefix_terms = survival.predict(fit, rows, type="t")
-    terms_with_se = survival.predict(fit, rows, type="terms", se_fit=True)
-    x2_with_se = survival.predict(fit, rows, type="terms", terms="x2", se_fit=True)
-    training_terms = survival.predict(fit, type="terms")
-    training_terms_with_se = survival.predict(fit, type="terms", se_fit=True)
-    training_x1_with_se = survival.predict(fit, type="terms", terms="x1", se_fit=True)
-    median = survival.predict(fit, rows, type="quantile", p=0.5)
-    prefix_median = survival.predict(fit, rows, type="q", p=0.5)
-    median_with_se = survival.predict(fit, rows, type="quantile", p=0.5, se_fit=True)
-    uquantile_with_se = survival.predict(fit, rows, type="uquantile", p=0.5, se_fit=True)
-    prefix_uquantile_with_se = survival.predict(fit, rows, type="u", p=0.5, se_fit=True)
-    default_bands = survival.predict(fit, rows, type="quantile")
-    bands = survival.predict(fit, rows, type="quantile", quantiles=[0.25, 0.75])
-    location_vcov = [row[: fit.n_covariates] for row in fit.variance_matrix[: fit.n_covariates]]
-    full_vcov = [
-        row[: fit.n_covariates + len(fit.scales)]
-        for row in fit.variance_matrix[: fit.n_covariates + len(fit.scales)]
-    ]
-    training_rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    training_design_rows = _with_intercept(training_rows)
-    means = [
-        sum(row[col_idx] for row in training_design_rows) / len(training_design_rows)
-        for col_idx in range(fit.n_covariates)
-    ]
-
-    assert lp == pytest.approx(fit.predict(design_rows, "lp").predictions)
-    assert prefix_lp == pytest.approx(lp)
-    assert response == pytest.approx(fit.predict(design_rows).predictions)
-    assert prefix_response == pytest.approx(response)
-    expected_linear_se = [
-        math.sqrt(
-            max(
-                sum(
-                    design_row[left] * location_vcov[left][right] * design_row[right]
-                    for left in range(fit.n_covariates)
-                    for right in range(fit.n_covariates)
-                ),
-                0.0,
-            )
-        )
-        for design_row in design_rows
-    ]
-    assert response_with_se.fit == pytest.approx(response)
-    assert response_with_se.se_fit == pytest.approx(
-        [se * prediction for se, prediction in zip(expected_linear_se, response, strict=True)]
-    )
-    assert isinstance(dotted_response_with_se, survival.r_api.PredictResult)
-    assert dotted_response_with_se.fit == pytest.approx(response_with_se.fit)
-    assert dotted_response_with_se.se_fit == pytest.approx(response_with_se.se_fit)
-    expected_terms = [
-        [
-            (row[col_idx] - means[col_idx]) * fit.location_coefficients[col_idx]
-            for col_idx in range(1, fit.n_covariates)
-        ]
-        for row in design_rows
-    ]
-    for actual, expected in zip(
-        terms,
-        expected_terms,
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(prefix_terms, expected_terms, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(terms_with_se.fit, expected_terms, strict=True):
-        assert actual == pytest.approx(expected)
-    expected_terms_se = [
-        [
-            abs(row[col_idx] - means[col_idx])
-            * math.sqrt(max(location_vcov[col_idx][col_idx], 0.0))
-            for col_idx in range(1, fit.n_covariates)
-        ]
-        for row in design_rows
-    ]
-    for actual, expected in zip(terms_with_se.se_fit, expected_terms_se, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(
-        x2_with_se.fit,
-        [[row[1]] for row in expected_terms],
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(
-        x2_with_se.se_fit,
-        [[row[1]] for row in expected_terms_se],
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    expected_training_terms = [
-        [
-            (row[col_idx] - means[col_idx]) * fit.location_coefficients[col_idx]
-            for col_idx in range(1, fit.n_covariates)
-        ]
-        for row in training_design_rows
-    ]
-    expected_training_terms_se = [
-        [
-            abs(row[col_idx] - means[col_idx])
-            * math.sqrt(max(location_vcov[col_idx][col_idx], 0.0))
-            for col_idx in range(1, fit.n_covariates)
-        ]
-        for row in training_design_rows
-    ]
-    for actual, expected in zip(
-        training_terms,
-        expected_training_terms,
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(
-        training_terms_with_se.fit,
-        expected_training_terms,
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(
-        training_terms_with_se.se_fit,
-        expected_training_terms_se,
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(
-        training_x1_with_se.fit,
-        [[row[0]] for row in expected_training_terms],
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(
-        training_x1_with_se.se_fit,
-        [[row[0]] for row in expected_training_terms_se],
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    expected_median = [row[0] for row in fit.predict_quantile(design_rows, [0.5]).predictions]
-    median_score = math.log(-math.log1p(-0.5))
-    expected_uquantile = [lp_value + median_score * fit.scale for lp_value in lp]
-    expected_quantile_se = []
-    expected_uquantile_se = []
-    for row, prediction in zip(design_rows, expected_median, strict=True):
-        design = [*row, median_score * fit.scale]
-        variance = sum(
-            design[left] * full_vcov[left][right] * design[right]
-            for left in range(len(design))
-            for right in range(len(design))
-        )
-        linear_se = math.sqrt(max(variance, 0.0))
-        expected_uquantile_se.append(linear_se)
-        expected_quantile_se.append(linear_se * prediction)
-    assert median == pytest.approx(expected_median)
-    assert prefix_median == pytest.approx(expected_median)
-    assert median_with_se.fit == pytest.approx(expected_median)
-    assert median_with_se.se_fit == pytest.approx(expected_quantile_se)
-    assert uquantile_with_se.fit == pytest.approx(expected_uquantile)
-    assert uquantile_with_se.se_fit == pytest.approx(expected_uquantile_se)
-    assert prefix_uquantile_with_se.fit == pytest.approx(expected_uquantile)
-    assert prefix_uquantile_with_se.se_fit == pytest.approx(expected_uquantile_se)
-    assert len(default_bands) == 2
-    assert all(len(row) == 2 for row in default_bands)
-    assert len(bands) == 2
-    assert all(len(row) == 2 for row in bands)
-    with pytest.raises(ValueError, match="collapse"):
-        survival.predict(fit, rows, collapse=["A", "B"])
-
-
-def test_predict_survreg_quantile_rejects_nonfinite_probability():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    with pytest.raises(ValueError, match="p must be between 0 and 1"):
-        survival.predict(fit, [[0.5, 0.8]], type="quantile", p=math.nan)
-
-
-def test_predict_survreg_formula_accepts_newdata_mapping():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    rows = [[0.5, 0.8], [1.1, 0.3]]
-    design_rows = _with_intercept(rows)
-    newdata = {"x1": [0.5, 1.1], "x2": [0.8, 0.3]}
-
-    assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp").predictions
-    )
-    assert survival.predict(fit, newdata) == pytest.approx(fit.predict(design_rows).predictions)
-    assert survival.predict(fit, newdata, type="quantile", p=0.5) == pytest.approx(
-        [row[0] for row in fit.predict_quantile(design_rows, [0.5]).predictions]
-    )
-
-
-def test_predict_survreg_gaussian_response_uses_identity_transform():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="gaussian",
-        max_iter=10,
-        eps=1e-5,
-    )
-    rows = [[0.5, 0.8], [1.1, 0.3]]
-
-    lp_with_se = survival.predict(fit, rows, type="lp", se_fit=True)
-    response_with_se = survival.predict(fit, rows, se_fit=True)
-    quantile_with_se = survival.predict(fit, rows, type="quantile", p=0.9, se_fit=True)
-    uquantile_with_se = survival.predict(fit, rows, type="uquantile", p=0.9, se_fit=True)
-
-    assert response_with_se.fit == pytest.approx(lp_with_se.fit)
-    assert response_with_se.se_fit == pytest.approx(lp_with_se.se_fit)
-    assert quantile_with_se.fit == pytest.approx(uquantile_with_se.fit)
-    assert quantile_with_se.se_fit == pytest.approx(uquantile_with_se.se_fit)
-
-
-def test_survreg_gaussian_residuals_use_identity_response_scale():
-    normal = NormalDist()
-    low_level_response = survival.residuals_survreg(
-        [1.0, 2.0],
-        [1, 0],
-        [0.5, 1.5],
-        1.0,
-        "gaussian",
-        residual_type="response",
-    )
-    low_level_deviance = survival.residuals_survreg(
-        [1.0, 2.0],
-        [1, 0],
-        [0.5, 1.5],
-        1.0,
-        "gaussian",
-        residual_type="deviance",
-    )
-    low_level_working = survival.residuals_survreg(
-        [1.0, 2.0],
-        [1, 0],
-        [0.5, 1.5],
-        1.0,
-        "gaussian",
-        residual_type="working",
-    )
-    z = 0.5
-    density = math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
-    survivor = 1.0 - normal.cdf(z)
-
-    assert low_level_response.residuals == pytest.approx([0.5, 0.5])
-    assert low_level_deviance.residuals == pytest.approx(
-        [
-            z,
-            math.sqrt(-2.0 * math.log(survivor)),
-        ]
-    )
-    assert low_level_working.residuals == pytest.approx([z, density / survivor])
-
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="gaussian",
-        max_iter=10,
-        eps=1e-5,
-    )
-    residuals = fit.residuals("response")
-    linear_predictors = survival.predict(fit, type="lp")
-
-    assert residuals.residual_type == "response"
-    assert residuals.residuals == pytest.approx(
-        [
-            time - linear_predictor
-            for time, linear_predictor in zip(data["time"], linear_predictors, strict=True)
-        ]
-    )
-
-
-def test_predict_survreg_formula_newdata_mapping_rebuilds_transforms_and_interactions():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ sqrt(x1) + group:x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    newdata = {"x1": [0.25, 1.0], "x2": [0.25, 0.8], "group": ["B", "A"]}
-    rows = [
-        [math.sqrt(0.25), 0.0 * 0.25, 1.0 * 0.25],
-        [math.sqrt(1.0), 1.0 * 0.8, 0.0 * 0.8],
-    ]
-    design_rows = _with_intercept(rows)
-
-    assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp").predictions
-    )
-    assert survival.predict(fit, newdata) == pytest.approx(fit.predict(design_rows).predictions)
-
-
-def test_predict_survreg_uses_training_rows_and_offsets():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + offset(offset)",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    expected_lp = [
-        fit.location_coefficients[0]
-        + data["x1"][idx] * fit.location_coefficients[1]
-        + data["offset"][idx]
-        for idx in range(len(data["time"]))
-    ]
-    expected_se = [
-        math.sqrt(
-            max(
-                fit.variance_matrix[0][0]
-                + 2.0 * data["x1"][idx] * fit.variance_matrix[0][1]
-                + data["x1"][idx] ** 2 * fit.variance_matrix[1][1],
-                0.0,
-            )
-        )
-        for idx in range(len(data["time"]))
-    ]
-    lp_with_se = survival.predict(fit, type="lp", se_fit=True)
-    response_with_se = survival.predict(fit, se_fit=True)
-
-    assert survival.predict(fit, type="lp") == pytest.approx(expected_lp)
-    assert survival.predict(fit) == pytest.approx([math.exp(value) for value in expected_lp])
-    assert lp_with_se.fit == pytest.approx(expected_lp)
-    assert lp_with_se.se_fit == pytest.approx(expected_se)
-    assert response_with_se.fit == pytest.approx([math.exp(value) for value in expected_lp])
-    assert response_with_se.se_fit == pytest.approx(
-        [
-            se * math.exp(linear_predictor)
-            for se, linear_predictor in zip(expected_se, expected_lp, strict=True)
-        ]
-    )
-    assert fit.predict([[1.0, 0.5]], "lp", [0.2]).predictions == pytest.approx(
-        [fit.location_coefficients[0] + 0.5 * fit.location_coefficients[1] + 0.2]
-    )
-
-
-def test_predict_survreg_formula_newdata_mapping_uses_offsets():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + offset(offset)",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    rows = [[0.5], [1.0]]
-    offsets = [0.2, -0.1]
-    newdata = {"x1": [0.5, 1.0], "offset": offsets}
-    design_rows = _with_intercept(rows)
-
-    assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp", offsets).predictions
-    )
-    assert survival.predict(fit, newdata) == pytest.approx(
-        fit.predict(design_rows, "response", offsets).predictions
-    )
-
-
-def test_predict_survreg_formula_rebuilds_transformed_offsets_from_newdata():
-    data = _toy_data()
-    data["exposure"] = [math.exp(value) for value in data["offset"]]
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + offset(log(exposure))",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    rows = [[0.5], [1.0]]
-    offsets = [0.2, -0.1]
-    newdata = {"x1": [0.5, 1.0], "exposure": [math.exp(value) for value in offsets]}
-    design_rows = _with_intercept(rows)
-
-    assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp", offsets).predictions
-    )
-    assert survival.predict(fit, newdata) == pytest.approx(
-        fit.predict(design_rows, "response", offsets).predictions
-    )
-
-
-def test_predict_survreg_formula_rebuilds_identity_arithmetic_offsets_from_newdata():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + offset(I(offset + x2))",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    bare_fit = survival.survreg(
-        "Surv(time, status) ~ x1 + offset(offset + x2)",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept([[value] for value in data["x1"]]),
-        offsets=[offset + x2 for offset, x2 in zip(data["offset"], data["x2"], strict=True)],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    rows = [[0.5], [1.0]]
-    offsets = [0.5, 0.3]
-    newdata = {"x1": [0.5, 1.0], "offset": [0.2, -0.1], "x2": [0.3, 0.4]}
-    design_rows = _with_intercept(rows)
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert bare_fit.coefficients == pytest.approx(low_level.coefficients)
-    assert survival.predict(fit, newdata, type="lp") == pytest.approx(
-        fit.predict(design_rows, "lp", offsets).predictions
-    )
-    assert survival.predict(bare_fit, newdata, type="lp") == pytest.approx(
-        bare_fit.predict(design_rows, "lp", offsets).predictions
-    )
-
-
-def test_survreg_fit_residuals_match_low_level_apis():
-    data = _toy_data()
-    weights = [1.0, 1.5, 0.75, 2.0, 1.25, 0.5, 1.75, 1.0]
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        weights=weights,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    location_vcov = [row[: fit.n_covariates] for row in fit.variance_matrix[: fit.n_covariates]]
-
-    response = fit.residuals("response")
-    deviance = fit.residuals()
-    working = survival.r_api.residuals(fit, type="working")
-    dfbeta = survival.r_api.residuals(fit, type="dfbeta")
-    dfbetas = survival.r_api.residuals(fit, type="dfbetas")
-    dfbeta_without_scale = survival.r_api.residuals(fit, type="dfbeta", rsigma=False)
-    matrix_residuals = survival.r_api.residuals(fit, type="matrix")
-    ldcase = survival.r_api.residuals(fit, type="ldcase")
-    ldresp = survival.r_api.residuals(fit, type="ldresp")
-    ldshape = survival.r_api.residuals(fit, type="ldshape")
-    ldcase_without_scale = survival.r_api.residuals(fit, type="ldcase", rsigma=False)
-    prefix_response = survival.r_api.residuals(fit, type="r")
-    prefix_working = survival.r_api.residuals(fit, type="w")
-    prefix_dfbeta = survival.r_api.residuals(fit, type="dfb")
-    prefix_matrix = survival.r_api.residuals(fit, type="mat")
-    prefix_ldcase = survival.r_api.residuals(fit, type="ldc")
-    low_response = survival.residuals_survreg(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        residual_type="response",
-    )
-    low_working = survival.residuals_survreg(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        residual_type="working",
-    )
-    low_location_dfbeta = survival.dfbeta_survreg(
-        fit.time,
-        fit.status,
-        fit.covariates,
-        fit.linear_predictors,
-        fit.scale,
-        location_vcov,
-        fit.distribution,
-    )
-    low_matrix = survival.survreg_residual_matrix(
-        fit.time,
-        fit.status,
-        fit.linear_predictors,
-        fit.scale,
-        fit.distribution,
-        time2=fit.time2,
-    )
-    full_width = fit.n_covariates + len(fit.scales)
-    full_vcov = [row[:full_width] for row in fit.variance_matrix[:full_width]]
-    low_dfbeta = survival.survreg_dfbeta_residuals(
-        low_matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        full_vcov,
-        True,
-        False,
-    )
-    low_dfbetas = survival.survreg_dfbeta_residuals(
-        low_matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        full_vcov,
-        True,
-        True,
-    )
-    low_dfbeta_without_scale = survival.survreg_dfbeta_residuals(
-        low_matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        location_vcov,
-        False,
-        False,
-    )
-    low_ldcase = survival.survreg_influence_residuals(
-        low_matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        full_vcov,
-        "ldcase",
-        True,
-    )
-    low_ldresp = survival.survreg_influence_residuals(
-        low_matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        full_vcov,
-        "ldresp",
-        True,
-    )
-    low_ldshape = survival.survreg_influence_residuals(
-        low_matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        full_vcov,
-        "ldshape",
-        True,
-    )
-    low_ldcase_without_scale = survival.survreg_influence_residuals(
-        low_matrix,
-        fit.covariates,
-        fit.scales,
-        fit.strata,
-        location_vcov,
-        "ldcase",
-        False,
-    )
-
-    assert fit.time == pytest.approx(data["time"])
-    assert fit.status == data["status"]
-    assert fit.weights == pytest.approx(weights)
-    expected_covariates = _with_intercept(
-        [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    )
-    for actual, expected in zip(fit.covariates, expected_covariates, strict=True):
-        assert actual == pytest.approx(expected)
-    assert response.residual_type == "response"
-    assert response.residuals == pytest.approx(low_response.residuals)
-    assert prefix_response == pytest.approx(low_response.residuals)
-    assert response.residuals == pytest.approx(
-        [
-            time - math.exp(linear_predictor)
-            for time, linear_predictor in zip(fit.time, fit.linear_predictors, strict=True)
-        ]
-    )
-    assert deviance.residual_type == "deviance"
-    assert len(deviance.residuals) == len(data["time"])
-    assert working == pytest.approx(low_working.residuals)
-    assert prefix_working == pytest.approx(low_working.residuals)
-    assert len(dfbeta) == len(data["time"])
-    for actual, expected in zip(fit.dfbeta(), low_location_dfbeta, strict=True):
-        assert actual == pytest.approx(expected)
-    for dfbeta_matrix in (dfbeta, prefix_dfbeta):
-        for actual, expected in zip(dfbeta_matrix, low_dfbeta, strict=True):
-            assert actual == pytest.approx(expected)
-    with pytest.raises(ValueError, match="matrix-valued"):
-        fit.residuals("dfbeta")
-    with pytest.raises(ValueError, match="matrix-valued"):
-        fit.residuals("dfbetas")
-    with pytest.raises(ValueError, match="matrix-valued"):
-        fit.residuals("matrix")
-    assert len(dfbetas) == len(data["time"])
-    for actual, expected in zip(dfbeta_without_scale, low_dfbeta_without_scale, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(dfbetas, low_dfbetas, strict=True):
-        assert actual == pytest.approx(expected)
-    for dfbeta_row, dfbetas_row in zip(dfbeta, dfbetas, strict=True):
-        for col_idx, value in enumerate(dfbeta_row):
-            scale = max(math.sqrt(abs(full_vcov[col_idx][col_idx])), 1e-12)
-            assert dfbetas_row[col_idx] == pytest.approx(value / scale)
-    assert len(matrix_residuals) == len(data["time"])
-    assert all(len(row) == 6 for row in matrix_residuals)
-    for actual, expected in zip(matrix_residuals, low_matrix, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(prefix_matrix, low_matrix, strict=True):
-        assert actual == pytest.approx(expected)
-    assert ldcase == pytest.approx(low_ldcase)
-    assert prefix_ldcase == pytest.approx(low_ldcase)
-    assert ldresp == pytest.approx(low_ldresp)
-    assert ldshape == pytest.approx(low_ldshape)
-    assert ldcase_without_scale == pytest.approx(low_ldcase_without_scale)
-
-    collapse = ["A", "A", "B", "B", "C", "C", "D", "D"]
-    collapsed_response = survival.r_api.residuals(fit, type="response", collapse=collapse)
-    collapsed_matrix = survival.r_api.residuals(fit, type="matrix", collapse=collapse)
-    collapsed_ldcase = survival.r_api.residuals(fit, type="ldcase", collapse=collapse)
-    expected_response = [
-        sum(
-            residual
-            for residual, label in zip(low_response.residuals, collapse, strict=True)
-            if label == group
-        )
-        for group in ("A", "B", "C", "D")
-    ]
-    collapsed_dfbeta = survival.r_api.residuals(fit, type="dfbeta", collapse=collapse)
-    collapsed_dfbetas = survival.r_api.residuals(fit, type="dfbetas", collapse=collapse)
-    collapsed_weighted_response = survival.r_api.residuals(
-        fit,
-        type="response",
-        collapse=collapse,
-        weighted=True,
-    )
-    collapsed_weighted_matrix = survival.r_api.residuals(
-        fit,
-        type="matrix",
-        collapse=collapse,
-        weighted=True,
-    )
-    collapsed_weighted_ldcase = survival.r_api.residuals(
-        fit,
-        type="ldcase",
-        collapse=collapse,
-        weighted=True,
-    )
-    expected_dfbeta = [
-        [
-            sum(
-                row[col_idx]
-                for row, label in zip(low_dfbeta, collapse, strict=True)
-                if label == group
-            )
-            for col_idx in range(len(low_dfbeta[0]))
-        ]
-        for group in ("A", "B", "C", "D")
-    ]
-    expected_weighted_response = [
-        sum(
-            residual * weights[idx]
-            for idx, (residual, label) in enumerate(
-                zip(low_response.residuals, collapse, strict=True)
-            )
-            if label == group
-        )
-        for group in ("A", "B", "C", "D")
-    ]
-    expected_matrix = [
-        [
-            sum(
-                row[col_idx]
-                for row, label in zip(low_matrix, collapse, strict=True)
-                if label == group
-            )
-            for col_idx in range(6)
-        ]
-        for group in ("A", "B", "C", "D")
-    ]
-    expected_weighted_matrix = [
-        [
-            sum(
-                row[col_idx] * weights[idx]
-                for idx, (row, label) in enumerate(zip(low_matrix, collapse, strict=True))
-                if label == group
-            )
-            for col_idx in range(6)
-        ]
-        for group in ("A", "B", "C", "D")
-    ]
-    expected_ldcase = [
-        sum(
-            residual for residual, label in zip(low_ldcase, collapse, strict=True) if label == group
-        )
-        for group in ("A", "B", "C", "D")
-    ]
-    expected_weighted_ldcase = [
-        sum(
-            residual * weights[idx]
-            for idx, (residual, label) in enumerate(zip(low_ldcase, collapse, strict=True))
-            if label == group
-        )
-        for group in ("A", "B", "C", "D")
-    ]
-    expected_dfbetas = [
-        [
-            sum(
-                row[col_idx] for row, label in zip(dfbetas, collapse, strict=True) if label == group
-            )
-            for col_idx in range(len(dfbetas[0]))
-        ]
-        for group in ("A", "B", "C", "D")
-    ]
-
-    assert survival.r_api.residuals(fit, type="working", weighted=False) == pytest.approx(
-        low_working.residuals
-    )
-    assert survival.r_api.residuals(fit, type="working", weighted=True) == pytest.approx(
-        [value * weights[idx] for idx, value in enumerate(low_working.residuals)]
-    )
-    weighted_matrix = survival.r_api.residuals(fit, type="matrix", weighted=True)
-    for row_idx, actual in enumerate(weighted_matrix):
-        assert actual == pytest.approx([value * weights[row_idx] for value in low_matrix[row_idx]])
-    assert survival.r_api.residuals(fit, type="ldcase", weighted=True) == pytest.approx(
-        [value * weights[idx] for idx, value in enumerate(low_ldcase)]
-    )
-    weighted_dfbeta = survival.r_api.residuals(fit, type="dfbeta", weighted=True)
-    weighted_dfbetas = survival.r_api.residuals(fit, type="dfbetas", weighted=True)
-    for row_idx, (actual_dfbeta, actual_dfbetas) in enumerate(
-        zip(weighted_dfbeta, weighted_dfbetas, strict=True)
-    ):
-        assert actual_dfbeta == pytest.approx(
-            [value * weights[row_idx] for value in dfbeta[row_idx]]
-        )
-        assert actual_dfbetas == pytest.approx(
-            [value * weights[row_idx] for value in dfbetas[row_idx]]
-        )
-    assert collapsed_response == pytest.approx(expected_response)
-    assert collapsed_weighted_response == pytest.approx(expected_weighted_response)
-    for actual, expected in zip(collapsed_matrix, expected_matrix, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(collapsed_weighted_matrix, expected_weighted_matrix, strict=True):
-        assert actual == pytest.approx(expected)
-    assert collapsed_ldcase == pytest.approx(expected_ldcase)
-    assert collapsed_weighted_ldcase == pytest.approx(expected_weighted_ldcase)
-    for actual, expected in zip(collapsed_dfbeta, expected_dfbeta, strict=True):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(collapsed_dfbetas, expected_dfbetas, strict=True):
-        assert actual == pytest.approx(expected)
-
-
-def test_survreg_formula_accepts_intercept_only_rhs():
-    data = _toy_data()
-    fit = survival.survreg("Surv(time, status) ~ 1", data=data, max_iter=10, eps=1e-5)
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=[[1.0] for _ in data["time"]],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.n_covariates == 1
-    assert fit.covariates == [[1.0] for _ in data["time"]]
-
-
-def test_survreg_formula_accepts_numeric_interactions():
-    data = _numeric_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 * x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept(
-            [
-                [data["x1"][idx], data["x2"][idx], data["x1"][idx] * data["x2"][idx]]
-                for idx in range(len(data["time"]))
-            ]
-        ),
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-
-def test_survreg_formula_dot_expands_remaining_covariates():
-    data = _numeric_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ .",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    explicit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(explicit.coefficients)
-    assert fit.log_likelihood == pytest.approx(explicit.log_likelihood)
-
-
-def test_survreg_formula_dot_can_exclude_identifier_columns():
-    data = _numeric_data_with_id()
-    fit = survival.survreg(
-        "Surv(time, status) ~ . - id",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    explicit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(explicit.coefficients)
-    assert fit.log_likelihood == pytest.approx(explicit.log_likelihood)
-
-
-def test_survreg_formula_accepts_backtick_column_names():
-    data = _backtick_data()
-    fit = survival.survreg(
-        "Surv(`follow-up`, `event status`) ~ `age-years` + `marker/value`",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["follow-up"],
-        status=[float(value) for value in data["event status"]],
-        covariates=_with_intercept(
-            [
-                [data["age-years"][idx], data["marker/value"][idx]]
-                for idx in range(len(data["follow-up"]))
-            ]
-        ),
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-
-def test_survreg_formula_accepts_backtick_numeric_transforms():
-    data = _backtick_data()
-    fit = survival.survreg(
-        "Surv(`follow-up`, `event status`) ~ sqrt(`marker/value`) + `age-years`",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["follow-up"],
-        status=[float(value) for value in data["event status"]],
-        covariates=_with_intercept(
-            [
-                [math.sqrt(data["marker/value"][idx]), data["age-years"][idx]]
-                for idx in range(len(data["follow-up"]))
-            ]
-        ),
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-
-def test_survreg_formula_accepts_identity_wrappers_for_numeric_terms():
-    data = _toy_data()
-    direct = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    for wrapper in ("I", "identity", "as.numeric"):
-        fit = survival.survreg(
-            f"Surv(time, status) ~ {wrapper}(x1) + x2",
-            data=data,
-            dist="weibull",
-            max_iter=10,
-            eps=1e-5,
-        )
-
-        assert fit.coefficients == pytest.approx(direct.coefficients)
-        assert fit.log_likelihood == pytest.approx(direct.log_likelihood)
-
-
-def test_survreg_formula_filters_external_weights_with_subset_and_na_action():
-    data = _numeric_data()
-    indices = [0, 2, 3, 4, 5]
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        weights=[1.0, None, 1.0, 0.8, 1.2, 1.1, 0.9, 1.0],
-        subset=[0, 1, 2, 3, 4, 5],
-        na_action="omit",
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    dotted = survival.survreg(
-        "Surv(time, status) ~ x1 + x2",
-        data=data,
-        weights=[1.0, None, 1.0, 0.8, 1.2, 1.1, 0.9, 1.0],
-        subset=[0, 1, 2, 3, 4, 5],
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-        **{"na.action": "omit"},
-    )
-    low_level = survival.regression.survreg(
-        time=[data["time"][idx] for idx in indices],
-        status=[float(data["status"][idx]) for idx in indices],
-        covariates=_with_intercept([[data["x1"][idx], data["x2"][idx]] for idx in indices]),
-        weights=[1.0, 1.0, 0.8, 1.2, 1.1],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-    assert dotted.coefficients == pytest.approx(low_level.coefficients)
-    assert dotted.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-
-def test_survreg_formula_as_factor_treatment_codes_numeric_covariates():
-    data = _factor_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ as.factor(dose) + x2",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept(
-            [
-                [
-                    1.0 if data["dose"][idx] == 1 else 0.0,
-                    1.0 if data["dose"][idx] == 2 else 0.0,
-                    data["x2"][idx],
-                ]
-                for idx in range(len(data["time"]))
-            ]
-        ),
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-    assert survival.coef_names(fit) == [
-        "(Intercept)",
-        "as.factor(dose)1",
-        "as.factor(dose)2",
-        "x2",
-    ]
-
-
-def test_survreg_matrix_input_applies_subset_to_row_aligned_arrays():
-    data = _numeric_data()
-    indices = [0, 1, 3, 5, 6]
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    fit = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        subset=indices,
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    direct = survival.survreg(
-        time=[data["time"][idx] for idx in indices],
-        status=[data["status"][idx] for idx in indices],
-        covariates=[rows[idx] for idx in indices],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(direct.coefficients)
-    assert fit.log_likelihood == pytest.approx(direct.log_likelihood)
-
-
-def test_survreg_matrix_input_defaults_to_weibull_distribution():
-    data = _numeric_data()
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    default = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        max_iter=10,
-        eps=1e-5,
-    )
-    explicit = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert default.distribution == "weibull"
-    assert default.coefficients == pytest.approx(explicit.coefficients)
-    assert default.log_likelihood == pytest.approx(explicit.log_likelihood)
-
-
-def test_survreg_matrix_na_action_omit_filters_covariate_rows():
-    data = _numeric_data()
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    rows[2][0] = float("nan")
-    indices = [0, 1, 3, 4, 5, 6, 7]
-    fit = survival.survreg(
-        time=data["time"],
-        status=data["status"],
-        covariates=rows,
-        na_action="omit",
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    direct = survival.survreg(
-        time=[data["time"][idx] for idx in indices],
-        status=[data["status"][idx] for idx in indices],
-        covariates=[rows[idx] for idx in indices],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(direct.coefficients)
-    assert fit.log_likelihood == pytest.approx(direct.log_likelihood)
-
-
-def test_survreg_matrix_input_rejects_fractional_status_codes():
-    data = _numeric_data()
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    status = list(data["status"])
-    status[2] = 1.5
-
-    with pytest.raises(ValueError, match="0/1/2/3 censoring codes"):
-        survival.survreg(
-            time=data["time"],
-            status=status,
-            covariates=rows,
-            distribution="weibull",
-            max_iter=10,
-            eps=1e-5,
-        )
-
-
-def test_survreg_matrix_na_action_omit_filters_status_before_code_validation():
-    data = _numeric_data()
-    rows = [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-    status = list(data["status"])
-    status[2] = float("nan")
-    indices = [0, 1, 3, 4, 5, 6, 7]
-    fit = survival.survreg(
-        time=data["time"],
-        status=status,
-        covariates=rows,
-        na_action="omit",
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    direct = survival.survreg(
-        time=[data["time"][idx] for idx in indices],
-        status=[data["status"][idx] for idx in indices],
-        covariates=[rows[idx] for idx in indices],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(direct.coefficients)
-    assert fit.log_likelihood == pytest.approx(direct.log_likelihood)
-
-
-def test_survreg_formula_treatment_codes_categorical_covariates():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ group + x1",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept(
-            [
-                [1.0 if data["group"][idx] == "B" else 0.0, data["x1"][idx]]
-                for idx in range(len(data["time"]))
-            ]
-        ),
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    newdata = {"group": ["B", "A"], "x1": [0.5, 0.8]}
-    term_se = survival.predict(fit, newdata, type="terms", terms="group", se_fit=True)
-    group_var = fit.variance_matrix[1][1]
-    group_mean = sum(1.0 if value == "B" else 0.0 for value in data["group"]) / len(data["group"])
-    for actual, expected in zip(
-        term_se.fit,
-        [
-            [(1.0 - group_mean) * fit.location_coefficients[1]],
-            [(0.0 - group_mean) * fit.location_coefficients[1]],
-        ],
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    for actual, expected in zip(
-        term_se.se_fit,
-        [
-            [abs(1.0 - group_mean) * math.sqrt(max(group_var, 0.0))],
-            [abs(0.0 - group_mean) * math.sqrt(max(group_var, 0.0))],
-        ],
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-
-
-def test_survreg_formula_passes_strata_to_low_level_binding():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + x2 + strata(group)",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept(
-            [[data["x1"][idx], data["x2"][idx]] for idx in range(len(data["time"]))]
-        ),
-        strata=[0, 0, 0, 0, 1, 1, 1, 1],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-    assert fit.strata == [0, 0, 0, 0, 1, 1, 1, 1]
-
-    score = math.log(-math.log1p(-0.5))
-    quantile_with_se = survival.predict(fit, type="uquantile", p=0.5, se_fit=True)
-    newdata = {"x1": [0.5, 0.8], "x2": [0.4, 0.6], "group": ["B", "A"]}
-    newdata_quantile = survival.predict(fit, newdata, type="uquantile", p=0.5)
-    full_width = fit.n_covariates + len(fit.scales)
-    full_vcov = [row[:full_width] for row in fit.variance_matrix[:full_width]]
-    expected_fit = []
-    expected_se = []
-    for idx, (x1, x2) in enumerate(zip(data["x1"], data["x2"], strict=True)):
-        stratum = fit.strata[idx]
-        expected_fit.append(fit.linear_predictors[idx] + score * fit.scales[stratum])
-        design = [1.0, x1, x2, *([0.0] * len(fit.scales))]
-        design[fit.n_covariates + stratum] = score * fit.scales[stratum]
-        variance = sum(
-            design[left] * full_vcov[left][right] * design[right]
-            for left in range(full_width)
-            for right in range(full_width)
-        )
-        expected_se.append(math.sqrt(max(variance, 0.0)))
-
-    assert quantile_with_se.fit == pytest.approx(expected_fit)
-    assert quantile_with_se.se_fit == pytest.approx(expected_se)
-    assert newdata_quantile == pytest.approx(
-        [
-            (
-                fit.location_coefficients[0]
-                + 0.5 * fit.location_coefficients[1]
-                + 0.4 * fit.location_coefficients[2]
-                + score * fit.scales[1]
-            ),
-            (
-                fit.location_coefficients[0]
-                + 0.8 * fit.location_coefficients[1]
-                + 0.6 * fit.location_coefficients[2]
-                + score * fit.scales[0]
-            ),
-        ]
-    )
-
-
-def test_survreg_formula_offset_matches_low_level_binding():
-    data = _toy_data()
-    fit = survival.survreg(
-        "Surv(time, status) ~ x1 + offset(offset)",
-        data=data,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-    low_level = survival.regression.survreg(
-        time=data["time"],
-        status=[float(value) for value in data["status"]],
-        covariates=_with_intercept([[value] for value in data["x1"]]),
-        offsets=data["offset"],
-        distribution="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert fit.coefficients == pytest.approx(low_level.coefficients)
-    assert fit.log_likelihood == pytest.approx(low_level.log_likelihood)
-
-    transformed = {**data, "exposure": [math.exp(value) for value in data["offset"]]}
-    transformed_fit = survival.survreg(
-        "Surv(time, status) ~ x1 + offset(log(exposure))",
-        data=transformed,
-        dist="weibull",
-        max_iter=10,
-        eps=1e-5,
-    )
-
-    assert transformed_fit.coefficients == pytest.approx(low_level.coefficients)
-    assert transformed_fit.log_likelihood == pytest.approx(low_level.log_likelihood)
+    assert all(math.isnan(value) for value in r.dsurvreg([0.0, -1.0], mean=0.0))
+    assert r.psurvreg([0.0], mean=0.0) == [0.0]
+    assert math.isnan(r.psurvreg([-1.0], mean=0.0)[0])  # R: log(-1) is NaN
+    assert r.qsurvreg([0.0, 1.0], mean=0.0) == [0.0, math.inf]
+
+    draws = r.rsurvreg(5, mean=0.5, scale=1.2, seed=7)
+    assert len(draws) == 5
+    assert all(value > 0.0 for value in draws)
+    assert draws == r.rsurvreg(5, mean=0.5, scale=1.2, seed=7)
+    assert r.rsurvreg(0, mean=0.5) == []
+    with pytest.raises(ValueError, match="n must be non-negative"):
+        r.rsurvreg(-1, mean=0.5)
+    with pytest.raises(ValueError, match="length"):
+        r.dsurvreg([1.0, 2.0, 3.0], mean=[0.0, 1.0])
+    with pytest.raises(ValueError, match="nope"):
+        r.dsurvreg([1.0], mean=0.0, distribution="nope")

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .. import _survival as _core
 from ._coerce import _as_rows, _match_string_arg, _model_residual_weights
 from ._formula import (
     _column,
@@ -124,17 +125,6 @@ def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
     return _fallback_coef_names(width)
 
 
-def _survreg_scale_coef_names(fit: Any, width: int) -> list[str]:
-    if width <= 0:
-        return []
-    if width == 1:
-        return ["Log(scale)"]
-    design = _formula_design_for_fit(fit)
-    if design is not None and len(design.strata_levels) == width:
-        return [f"Log(scale:{level})" for level in design.strata_levels]
-    return [f"Log(scale{idx + 1})" for idx in range(width)]
-
-
 def _is_model_fit(fit: Any) -> bool:
     return _is_coxph_fit(fit) or _is_survreg_fit(fit)
 
@@ -217,15 +207,24 @@ def _cox_detail_strata_table(
     return table
 
 
+# --- survreg (owned by the survreg module) ---------------------------------------------------
+
+
 def _is_survreg_fit(fit: Any) -> bool:
-    return hasattr(fit, "n_covariates") and hasattr(fit, "location_coefficients")
+    return isinstance(_unwrap_formula_fit(fit), _core.SurvregFit)
 
 
 def _location_beta(fit: Any) -> list[float]:
-    values = getattr(fit, "location_coefficients", None)
-    if values is not None:
-        return [float(value) for value in values]
+    """The location coefficients: R's ``fit$coefficients`` for survreg (NaN when singular),
+    the Cox coefficients otherwise."""
+
+    model = _unwrap_formula_fit(fit)
+    if isinstance(model, _core.SurvregFit):
+        return [float(value) for value in model.coefficients[: len(model.means)]]
     return _cox_beta(fit)
+
+
+# --- end survreg -----------------------------------------------------------------------------
 
 
 def _training_linear_predictor_center(fit: Any) -> float:
@@ -431,58 +430,6 @@ def _cox_variance_matrix(fit: Any, nvar: int) -> list[list[float]]:
     return variance
 
 
-def _location_variance_matrix(fit: Any, nvar: int) -> list[list[float]]:
-    raw_variance = getattr(fit, "variance_matrix", None)
-    if raw_variance is None:
-        raise TypeError("model does not expose coefficient variance")
-    variance = [[float(value) for value in row[:nvar]] for row in list(raw_variance)[:nvar]]
-    if len(variance) != nvar or any(len(row) != nvar for row in variance):
-        raise ValueError("fitted survreg variance matrix does not match coefficient width")
-    return variance
-
-
-def _survreg_has_variance_width(fit: Any, width: int) -> bool:
-    raw_variance = getattr(fit, "variance_matrix", None)
-    if raw_variance is None:
-        return False
-    matrix = list(raw_variance)
-    return len(matrix) >= width and all(len(row) >= width for row in matrix[:width])
-
-
-def _survreg_variance_matrix(fit: Any, width: int) -> list[list[float]]:
-    if width == 0:
-        return []
-    raw_variance = getattr(fit, "variance_matrix", None)
-    if raw_variance is None:
-        raise TypeError("model does not expose coefficient variance")
-    variance = [[float(value) for value in row[:width]] for row in list(raw_variance)[:width]]
-    if len(variance) != width or any(len(row) != width for row in variance):
-        raise ValueError("fitted survreg variance matrix does not match residual width")
-    return variance
-
-
-def _survreg_scales(fit: Any) -> list[float]:
-    values = getattr(fit, "scales", None)
-    if values is None:
-        values = [getattr(fit, "scale", 1.0)]
-    scales = [float(value) for value in values]
-    if not scales:
-        raise ValueError("fitted survreg model does not expose scale values")
-    return scales
-
-
-def _survreg_strata(fit: Any, n: int, nstrata: int) -> list[int]:
-    values = getattr(fit, "strata", None)
-    if values is None:
-        return [0] * n
-    strata = [int(value) for value in values]
-    if len(strata) != n:
-        raise ValueError("fitted survreg strata do not match training rows")
-    if any(value < 0 or value >= nstrata for value in strata):
-        raise ValueError("fitted survreg strata reference missing scale values")
-    return strata
-
-
 def _cox_reference_centers(
     fit: Any,
     reference: str,
@@ -578,16 +525,7 @@ def _prediction_inputs(
         return _direct_named_prediction_rows(newdata, coefficient_names), None
     if isinstance(newdata, Mapping):
         raise TypeError("newdata must be a design matrix unless the fit was created from a formula")
-    rows = _as_rows(newdata, "newdata")
-    if (
-        design is not None
-        and design.intercept
-        and _is_survreg_fit(fit)
-        and rows
-        and len(rows[0]) + 1 == len(_location_beta(fit))
-    ):
-        return [[1.0, *row] for row in rows], None
-    return rows, None
+    return _as_rows(newdata, "newdata"), None
 
 
 def _linear_predictors_for_fit(

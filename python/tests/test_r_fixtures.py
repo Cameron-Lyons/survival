@@ -6090,7 +6090,7 @@ class CoxphPenalizedHandler(TopicHandler):
             raise UnsupportedCaseError(f"unhandled penalized aspect {aspect}")
 
 
-# --- survreg ----------------------------------------------------------------
+# --- survreg (handler owned by the survreg module) ----------------------------
 
 
 def _survreg_fit(topic: str, case: Mapping[str, Any]) -> Any:
@@ -6154,10 +6154,12 @@ class SurvregHandler(TopicHandler):
                 path="naive_var",
             )
         elif aspect == "loglik":
-            loglik = _attr(fit, "log_likelihood")
-            if not isinstance(loglik, (list, tuple)):
-                loglik = [math.nan, loglik]
-            assert_close(as_float_list(loglik), expected["loglik"], rtol=RTOL_COEF, path="loglik")
+            assert_close(
+                as_float_list(_attr(fit, "loglik")),
+                expected["loglik"],
+                rtol=RTOL_COEF,
+                path="loglik",
+            )
         elif aspect == "iter":
             assert_exact(_attr(fit, "iterations"), expected["iter"], path="iter")
         elif aspect == "df":
@@ -6166,10 +6168,7 @@ class SurvregHandler(TopicHandler):
             assert_exact(r.df_residual(fit), expected["df_residual"], path="df_residual")
         elif aspect == "parms":
             assert_close(
-                as_float_list(_attr(fit, "distribution_parameters", "parms")),
-                expected["parms"],
-                rtol=RTOL_COEF,
-                path="parms",
+                as_float_list(_attr(fit, "parms")), expected["parms"], rtol=RTOL_COEF, path="parms"
             )
         elif aspect == "linear_predictors":
             assert_close(
@@ -6237,9 +6236,14 @@ class SurvregHandler(TopicHandler):
         elif aspect == "anova":
             exp = _expect(case, "anova")
             result = r.anova(fit)
-            rows = _attr(result, "models", "rows")
-            loglik = [_attr(row, "loglik") for row in rows]
-            assert_close([-2 * v for v in loglik], exp["loglik"], rtol=RTOL_COEF, path="anova.-2LL")
+            assert_exact(list(_attr(result, "terms")), exp["terms"], path="anova.terms")
+            for key in ("loglik", "resid_df", "df", "deviance", "p"):
+                assert_close(
+                    as_float_list(_attr(result, key)),
+                    exp[key],
+                    rtol=RTOL_VAR if key == "p" else RTOL_COEF,
+                    path=f"anova.{key}",
+                )
         elif aspect == "concordance.concordance":
             _check_concordance_result(
                 _concordance_of_fit(fit), _expect(case, "concordance"), aspect
@@ -6274,6 +6278,9 @@ class SurvregExtraHandler(SurvregHandler):
     control options the ``survreg`` topic leaves light; same aspects."""
 
     topic = "survreg-extra"
+
+
+# --- end survreg handlers ------------------------------------------------------
 
 
 # --- concordance ------------------------------------------------------------
