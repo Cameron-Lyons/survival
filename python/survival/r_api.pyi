@@ -375,26 +375,17 @@ def strata(
 
 class ConcordanceResult:
     concordance: float | list[float]
+    count: dict[str, float] | list[dict[str, float]]
     n: int
-    n_event: int
-    reverse: bool
-    concordant: float | list[float]
-    comparable: float | list[float]
-    tied_x: float | list[float]
-    tied_y: float | list[float]
-    tied_xy: float | list[float]
-    ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None
-    dfbeta: list[float] | list[list[float] | None] | None
-    influence: list[list[float]] | list[list[list[float]] | None] | None
-    variance: float | list[float | None] | None
-    conditional_variance: float | list[float] | None
-    score_names: list[str] | None
+    names: list[str] | None
+    var: float | list[list[float]] | None
+    cvar: float | list[float] | None
+    dfbeta: list[float] | list[list[float]] | None
+    influence: list[list[float]] | list[list[list[float]]] | None
+    ranks: list[dict[str, float]] | list[list[dict[str, float]]] | None
+    formula: str | None
     @property
-    def c_index(self) -> float | list[float]: ...
-    @property
-    def var(self) -> float | list[float | None] | None: ...
-    @property
-    def cvar(self) -> float | list[float] | None: ...
+    def std(self) -> float | list[float] | None: ...
 
 class PredictResult:
     fit: Any
@@ -406,79 +397,60 @@ class PredictResult:
     def se(self) -> Any: ...
 
 class CoxZPHResult:
-    variable_names: list[str]
-    chi2_values: list[float]
-    df: list[int]
-    p_values: list[float]
+    table: list[dict[str, float | int | str]]
     x: list[float]
     time: list[float]
     y: list[list[float]]
     var: list[list[float]]
     transform: str
-    global_chi2: float | None
-    global_df: int | None
-    global_p_value: float | None
+    names: tuple[str, ...]
     strata: list[Any] | None
-    def subset(
-        self,
-        indices: Sequence[int],
-        *,
-        include_global: bool = False,
-    ) -> CoxZPHResult: ...
-    @property
-    def table(self) -> list[dict[str, float | int | str]]: ...
+    def subset(self, indices: Sequence[int]) -> CoxZPHResult: ...
 
 class CchModelResult:
     fit: Any
-    design: Any
     formula: str
-    coefficient_names: tuple[str, ...]
-    response: Surv
-    id_values: list[Any]
-    subcohort: list[int]
-    stratum_values: list[Any] | None
-    cohort_sizes: list[int]
-    def __getattr__(self, name: str) -> Any: ...
+    design: Any
+    coef_names: tuple[str, ...]
+    y: Surv
+    id: tuple[Any, ...]
+    subcoh: tuple[int, ...]
+    stratum: tuple[Any, ...] | None
+    cohort_size: tuple[int, ...]
+    subcohort_size: tuple[int, ...]
     @property
-    def coefficients(self) -> list[list[float]]: ...
+    def coefficients(self) -> list[float]: ...
     @property
-    def information_matrix(self) -> list[list[float]]: ...
+    def var(self) -> list[list[float]]: ...
     @property
-    def variance_matrix(self) -> list[list[float]]: ...
+    def naive_var(self) -> list[list[float]]: ...
     @property
-    def naive_information_matrix(self) -> list[list[float]]: ...
+    def phase2var(self) -> list[list[float]]: ...
+    @property
+    def method(self) -> str: ...
+    @property
+    def stratified(self) -> bool: ...
 
 class CoxPHDetailResult:
     time: list[float]
     nevent: list[int]
     nrisk: list[int]
-    means: list[list[float]]
-    score: list[list[float]]
-    imat: list[list[list[float]]]
     hazard: list[float]
     varhaz: list[float]
     wtrisk: list[float]
+    means: list[list[float]]
+    score: list[list[float]]
+    imat: list[list[list[float]]]
     x: list[list[float]]
     y: list[list[float]]
-    strata: dict[int, int] | None
+    strata: dict[str, int] | None
     riskmat: list[list[int]] | None
+    sortorder: list[int] | None
     weights: list[float] | None
     nevent_wt: list[float] | None
     nrisk_wt: list[float] | None
-    sortorder: list[int] | None
     @property
-    def n_event(self) -> list[int]: ...
-    @property
-    def n_risk(self) -> list[int]: ...
-    @property
-    def var_hazard(self) -> list[float]: ...
-    @property
-    def cumulative_hazard(self) -> list[float]: ...
-    def times(self) -> list[float]: ...
-    def hazards(self) -> list[float]: ...
-    def cumulative_hazards(self) -> list[float]: ...
-    def n_risk_at_times(self) -> list[int]: ...
-    def schoenfeld_residuals(self) -> list[list[float]]: ...
+    def cumhaz(self) -> list[float]: ...
 
 class CoxPHWTestResult:
     test: list[float]
@@ -486,42 +458,31 @@ class CoxPHWTestResult:
     solve: list[float] | list[list[float]] | float
 
 class CoxBaseHazardResult:
+    hazard: list[float] | list[list[float]]
     time: list[float]
-    cumhaz: list[float] | list[list[float]]
-    strata: list[int] | None
-    centered: bool
-    curve_strata: list[int] | None
-    strata_labels: list[Any] | None
-    curve_strata_labels: list[Any] | None
-    def __iter__(self): ...
-    @property
-    def hazard(self) -> list[float] | list[list[float]]: ...
-    @property
-    def cumulative_hazard(self) -> list[float] | list[list[float]]: ...
+    strata: list[str] | None
 
 class CoxSurvfitResult:
+    n: list[int]
     time: list[float]
-    surv: list[list[float]]
-    cumhaz: list[list[float]]
-    linear_predictors: list[float]
-    centered: bool
-    strata: list[int] | None
-    strata_labels: list[Any] | None
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+    surv: list[float] | list[list[float]]
+    cumhaz: list[float] | list[list[float]]
+    type: str
+    strata: dict[str, int] | None
+    std_err: list[float] | list[list[float]] | None
+    std_chaz: list[float] | list[list[float]] | None
+    lower: list[float] | list[list[float]] | None
+    upper: list[float] | list[list[float]] | None
+    logse: bool
+    conf_type: str
+    conf_int: float | None
     start_time: float | None
-    std_err: list[list[float]]
-    std_chaz: list[list[float]]
-    conf_lower: list[list[float]]
-    conf_upper: list[list[float]]
-    model: dict[str, Any] | None
-    def __iter__(self): ...
+    newdata: Any | None
     @property
-    def curves(self) -> list[list[float]]: ...
-    @property
-    def estimate(self) -> list[list[float]]: ...
-    @property
-    def cumulative_hazard(self) -> list[list[float]]: ...
-    @property
-    def cumulative_hazard_std_err(self) -> list[list[float]]: ...
+    def ncurve(self) -> int: ...
 
 class SurvfitResult:
     time: list[float]
@@ -613,11 +574,9 @@ class TurnbullSurvfitResult:
     model: dict[str, Any] | None
 
 def concordance(
-    response: Surv | str,
+    object: Any,
+    *more: Any,
     data: Any | None = None,
-    *,
-    scores: Any | None = None,
-    risk_scores: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = "fail",
@@ -626,10 +585,13 @@ def concordance(
     ymax: Any | None = None,
     timewt: Any = "n",
     influence: Any = 0,
-    ranks: bool = False,
-    reverse: bool = False,
-    timefix: bool = True,
+    ranks: Any = False,
+    reverse: Any = False,
+    timefix: Any = True,
     keepstrata: Any = 10,
+    newdata: Any | None = None,
+    scores: Any | None = None,
+    strata: Any | None = None,
     **kwargs: Any,
 ) -> ConcordanceResult: ...
 def survConcordance(
@@ -645,7 +607,6 @@ def survConcordance_fit(
     x: Any,
     strata: Any | None = None,
     weight: Any | None = None,
-    **kwargs: Any,
 ) -> dict[str, float]: ...
 def survfit(
     response: Any,
@@ -795,16 +756,10 @@ def survcheck(
     **kwargs: Any,
 ) -> Any: ...
 def basehaz(
-    fit: Any | None = None,
-    status: Any | None = None,
-    linear_predictors: Any | None = None,
-    centered: bool = True,
-    *,
+    fit: Any,
     newdata: Any | None = None,
-    time: Any | None = None,
-    entry_times: Any | None = None,
-    weights: Any | None = None,
-) -> Any: ...
+    centered: Any = True,
+) -> CoxBaseHazardResult: ...
 def brier(
     fit: Any,
     times: Any | None = None,
@@ -817,10 +772,9 @@ def brier(
 def cox_zph(
     fit: Any,
     transform: Any = "km",
-    *,
-    terms: bool = True,
-    singledf: bool = False,
-    global_test: bool = True,
+    terms: Any = True,
+    singledf: Any = False,
+    global_test: Any = True,
     **kwargs: Any,
 ) -> CoxZPHResult: ...
 def coef(fit: Any) -> list[float]: ...
@@ -834,7 +788,7 @@ def confint(
 def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]: ...
 def loglik(fit: Any) -> float: ...
 def model_formula(fit: Any) -> str: ...
-def model_summary(fit: Any) -> dict[str, Any]: ...
+def model_summary(fit: Any, **kwargs: Any) -> dict[str, Any]: ...
 def model_term_names(fit: Any, terms: Any | None = None) -> list[str]: ...
 def model_weights(fit: Any) -> list[float] | None: ...
 def nobs(fit: Any) -> int: ...
@@ -851,24 +805,11 @@ def royston(
 def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]: ...
 def model_matrix(fit: Any) -> dict[str, Any]: ...
 def model_frame(fit: Any) -> dict[str, list[Any]]: ...
-def fitted(
-    fit: Any,
-    *,
-    type: str | None = None,
-    centered: bool | None = None,
-    terms: Any | None = None,
-    collapse: Any = False,
-    reference: str | None = None,
-    se_fit: bool = False,
-    times: Any | None = None,
-    p: Any | None = None,
-    quantiles: Any | None = None,
-    **kwargs: Any,
-) -> Any: ...
+def fitted(fit: Any, **kwargs: Any) -> Any: ...
 def as_data_frame(result: Any) -> dict[str, list[Any]]: ...
-def anova(*fits: Any, test: str | None = "Chisq") -> Any: ...
+def anova(*fits: Any, test: Any = "Chisq") -> Any: ...
 def aareg(
-    formula: Any,
+    formula: str,
     data: Any | None = None,
     *,
     weights: Any | None = None,
@@ -884,61 +825,55 @@ def aareg(
     x: Any = False,
     y: Any = False,
     **kwargs: Any,
-) -> Any: ...
+) -> AaregModelResult: ...
 def coxph_detail(
-    fit: Any | None = None,
-    riskmat: bool = False,
+    fit: Any,
+    riskmat: Any = False,
     rorder: str = "data",
-    *,
-    time: Any | None = None,
-    status: Any | None = None,
-    covariates: Any | None = None,
-    coefficients: Any | None = None,
-    weights: Any | None = None,
-) -> Any: ...
+) -> CoxPHDetailResult: ...
 def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult: ...
 def cch(
     formula: str,
-    data: Any,
-    *,
-    subcoh: Any,
-    id: Any,
-    cohort_size: Any | None = None,
+    data: Any = None,
+    subcoh: Any = None,
+    id: Any = None,
     stratum: Any | None = None,
+    cohort_size: Any | None = None,
     method: str = "Prentice",
     robust: Any = False,
+    *,
     subset: Any | None = None,
     na_action: str | None = "fail",
     **kwargs: Any,
 ) -> CchModelResult: ...
 def coxph(
-    response: Surv | str,
+    formula: str | None = None,
     data: Any | None = None,
     *,
-    x: Any | None = None,
     weights: Any | None = None,
-    offset: Any | None = None,
-    strata: Any | None = None,
-    cluster: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = "fail",
     init: Any | None = None,
-    initial_beta: Any | None = None,
-    max_iter: int = 20,
-    eps: float | None = None,
-    toler: float | None = None,
-    method: str | None = None,
+    control: Any | None = None,
     ties: str | None = None,
+    method: str | None = None,
+    singular_ok: Any = True,
     robust: Any | None = None,
     model: Any = False,
+    x: Any = False,
     y: Any = True,
     tt: Any | None = None,
     id: Any | None = None,
+    cluster: Any | None = None,
     istate: Any | None = None,
     statedata: Any | None = None,
-    singular_ok: Any = True,
     nocenter: Any = (-1, 0, 1),
-    control: Any | None = None,
+    offset: Any | None = None,
+    strata: Any | None = None,
+    iter_max: Any | None = None,
+    eps: Any | None = None,
+    toler_chol: Any | None = None,
+    timefix: Any | None = None,
     **kwargs: Any,
 ) -> Any: ...
 def clogit(
@@ -951,30 +886,8 @@ def clogit(
     method: str = "exact",
     **kwargs: Any,
 ) -> Any: ...
-def predict(
-    fit: Any,
-    newdata: Any | None = None,
-    *,
-    type: str | None = None,
-    centered: bool | None = None,
-    terms: Any | None = None,
-    collapse: Any = False,
-    reference: str | None = None,
-    se_fit: bool = False,
-    times: Any | None = None,
-    p: Any | None = None,
-    quantiles: Any | None = None,
-    **kwargs: Any,
-) -> Any: ...
-def residuals(
-    fit: Any,
-    *,
-    type: str = "martingale",
-    terms: Any | None = None,
-    collapse: Any = False,
-    weighted: bool | None = None,
-    rsigma: bool | None = None,
-) -> Any: ...
+def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any: ...
+def residuals(fit: Any, *, type: str = "martingale", **kwargs: Any) -> Any: ...
 def survfit_residuals(
     fit: Any,
     times: Any | None = None,

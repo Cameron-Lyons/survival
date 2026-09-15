@@ -1,132 +1,121 @@
+"""``survival.r.aareg`` Aalen additive regression against R survival 3.8.11 (``ovarian``)."""
+
 import pytest
 
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
+r = survival.r
+datasets = survival.datasets
 
 
-def test_aareg_formula_matches_weighted_right_censored_reference_values():
-    data = {
-        "stop": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-        "status": [1, 1, 1, 1, 0, 1],
-        "x": [0.0, 1.0, 2.0, 1.0, 3.0, -1.0],
-        "z": [1.0, 0.0, 1.0, 2.0, -1.0, 0.0],
-        "weight": [1.0, 2.0, 0.5, 1.5, 1.0, 3.0],
-    }
+def approx(values, rel=1e-8):
+    if isinstance(values, list) and values and isinstance(values[0], list):
+        return [pytest.approx(row, rel=rel) for row in values]
+    return pytest.approx(values, rel=rel, abs=1e-12)
 
-    fit = survival.aareg(
-        "Surv(stop, status) ~ x + z",
-        data=data,
-        weights=data["weight"],
-        nmin=1,
-        model=True,
-        x=True,
-        y=True,
+
+@pytest.fixture(scope="module")
+def ovarian():
+    return datasets.load_ovarian()
+
+
+def test_aareg_matches_r(ovarian):
+    fit = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", ovarian)
+    assert isinstance(fit, r.AaregModelResult)
+    assert fit.n == [26, 12, 12]
+    assert fit.times[:3] == [59.0, 115.0, 156.0]
+    assert fit.nrisk[:3] == [26.0, 25.0, 24.0]
+    assert fit.coefficient_names == ["Intercept", "age", "ecog.ps"]
+    assert fit.coefficient[:2] == approx(
+        [
+            [-0.219777759950435, 0.00691897151414902, -0.0891990189962571],
+            [-0.32107206341235, 0.00954758742174273, -0.114188198066149],
+        ]
     )
-
-    assert isinstance(fit, survival.AaregModelResult)
-    assert fit.n == [6, 3, 4]
-    assert fit.times == [1.0, 2.0, 2.0, 3.0]
-    assert fit.nrisk == pytest.approx([9.0, 8.0, 8.0, 5.5])
-    assert fit.coefficient_names == ["Intercept", "x", "z"]
-    expected_coefficients = [
-        [0.0933572710951526, -0.0287253141831239, 0.0825852782764812],
-        [0.246498599439776, 0.0560224089635854, -0.0896358543417367],
-        [0.0177404295051354, 0.0494864612511671, 0.0541549953314659],
-        [0.1, 0.1, 0.4],
-    ]
-    for actual, expected in zip(fit.coefficient, expected_coefficients, strict=True):
-        assert actual == pytest.approx(expected)
-    assert fit.test_statistic == pytest.approx(
-        [2.72165426280414, 2.44529434676382, 2.84852512254203]
+    assert fit.test_statistic == approx(
+        [-1.36815341992796, 93.8700271586746, 0.0110835307233675], rel=1e-6
     )
-    assert fit.model is not None
-    assert fit.x is not None
-    assert fit.y is not None
-
-
-def test_aareg_formula_supports_counting_data_and_clustered_influence():
-    data = {
-        "start": [0.0, 0.0, 1.0, 0.0, 2.0, 1.0],
-        "stop": [1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
-        "status": [1, 1, 0, 1, 0, 1],
-        "x": [0.0, 1.0, 2.0, 1.0, 3.0, -1.0],
-        "z": [1.0, 0.0, 1.0, 2.0, -1.0, 0.0],
-        "weight": [1.0, 2.0, 0.5, 1.5, 1.0, 3.0],
-        "cluster": ["a", "a", "b", "b", "c", "c"],
-    }
-
-    fit = survival.aareg(
-        "Surv(start, stop, status) ~ x + z + cluster(cluster)",
-        data=data,
-        weights=data["weight"],
-        nmin=1,
+    assert fit.test_var == approx(
+        [
+            [0.379856008822724, -21.8643732141607, -0.220993073503703],
+            [-21.8643732141607, 1502.1507065072, -9.8843345227457],
+            [-0.220993073503703, -9.8843345227457, 2.42267809834877],
+        ],
+        rel=1e-6,
     )
-
-    assert fit.n == [6, 3, 4]
-    assert fit.times == [1.0, 2.0, 3.0]
-    assert fit.nrisk == pytest.approx([4.5, 7.0, 5.0])
-    expected_coefficients = [
-        [1.0, -1.0, 0.0],
-        [0.53030303030303, -0.439393939393939, -0.0151515151515152],
-        [1.69411764705882, -0.705882352941176, -0.470588235294118],
-    ]
-    for actual, expected in zip(fit.coefficient, expected_coefficients, strict=True):
-        assert actual == pytest.approx(expected)
-    assert fit.cluster_levels == ["a", "b", "c"]
-    assert fit.dfbeta is not None
-    assert len(fit.dfbeta) == 3
-    assert fit.robust_test_variance is not None
+    assert fit.tweight[:2] == approx(
+        [
+            [0.682864296741566, 2507.80872668345, 6.35355140108748],
+            [0.65609841103356, 2183.57619516609, 5.97967745307236],
+        ]
+    )
+    assert fit.test == "aalen"
+    assert fit.dfbeta is None
+    assert fit.test_var2 is None
+    assert fit.formula == "Surv(futime, fustat) ~ age + ecog.ps"
+    assert fit.weights is None
+    assert r.model_formula(fit) == fit.formula
+    assert r.model_weights(fit) is None
 
 
-def test_aareg_formula_validates_model_specific_options():
-    data = {
-        "time": [1.0, 2.0, 3.0, 4.0],
-        "status": [1, 1, 1, 1],
-        "x": [0.0, 1.0, 0.5, 2.0],
-        "group": ["a", "a", "b", "b"],
-        "cluster": ["w", "x", "y", "z"],
-    }
+def test_summary_aareg_matches_r(ovarian):
+    fit = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", ovarian)
+    summary = r.model_summary(fit)
+    assert summary["columns"] == ["slope", "coef", "se(coef)", "z", "p"]
+    assert [row["name"] for row in summary["table"]] == ["Intercept", "age", "ecog.ps"]
+    assert [row["slope"] for row in summary["table"]] == approx(
+        [-0.00717943180642173, 0.000194242827812841, -0.000520067101518314], rel=1e-6
+    )
+    assert [row["coef"] for row in summary["table"]] == approx(
+        [-0.267333077106693, 0.00603271092747513, 0.000202778734584543], rel=1e-6
+    )
+    assert [row["se"] for row in summary["table"]] == approx(
+        [0.120427978765407, 0.00249081989075946, 0.0284768623309702], rel=1e-6
+    )
+    assert [row["z"] for row in summary["table"]] == approx(
+        [-2.21985853991169, 2.42197797996375, 0.00712082434601687], rel=1e-6
+    )
+    assert [row["p"] for row in summary["table"]] == approx(
+        [0.026428371649148, 0.0154362858752888, 0.994318452209057], rel=1e-6
+    )
+    assert summary["chisq"] == approx(6.03366160741177, rel=1e-6)
+    assert summary["df"] == 2
+    assert summary["n"] == [26, 12, 12]
+    assert r.model_summary(fit, test="nrisk")["chisq"] == approx(6.05609402409755, rel=1e-6)
 
-    with pytest.raises(ValueError, match="strata terms are not allowed"):
-        survival.aareg("Surv(time, status) ~ x + strata(group)", data=data, nmin=1)
-    with pytest.raises(ValueError, match="taper"):
-        survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, taper=0)
-    with pytest.raises(ValueError, match="test must be"):
-        survival.aareg("Surv(time, status) ~ x", data=data, nmin=1, test="bogus")
-    with pytest.raises(ValueError, match="multiple cluster terms"):
-        survival.aareg(
-            "Surv(time, status) ~ x + cluster(group) + cluster(cluster)",
-            data=data,
-            nmin=1,
-        )
-    with pytest.raises(ValueError, match="cluster"):
-        survival.aareg("Surv(time, status) ~ x:cluster(group)", data=data, nmin=1)
 
-
-def test_aareg_explicit_cluster_overrides_formula_cluster_like_r():
-    data = {
-        "time": [1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-        "status": [1, 1, 1, 1, 0, 1],
-        "x": [0.0, 1.0, 2.0, 1.0, 3.0, -1.0],
-        "formula_cluster": ["a", "a", None, "b", "c", "c"],
-        "explicit_cluster": ["left", "right", "left", "right", "left", "right"],
-    }
-
-    with pytest.warns(RuntimeWarning, match="formula term ignored"):
-        fit = survival.aareg(
-            "Surv(time, status) ~ x + cluster(formula_cluster)",
-            data=data,
-            cluster=data["explicit_cluster"],
-            nmin=1,
-            na_action="omit",
-            model=True,
-        )
-
-    assert fit.n[0] == len(data["time"])
-    assert fit.cluster_levels == ["left", "right"]
-    assert fit.dfbeta is not None
-    assert len(fit.dfbeta) == 2
-    assert fit.model is not None
-    assert "formula_cluster" not in fit.model
-    assert fit.model["(cluster)"] == data["explicit_cluster"]
+def test_aareg_options(ovarian):
+    dfbeta = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", ovarian, dfbeta=True)
+    assert len(dfbeta.dfbeta) == 26
+    assert len(dfbeta.dfbeta[0]) == 3
+    assert len(dfbeta.dfbeta[0][0]) == 12
+    assert [dfbeta.dfbeta[0][k][0] for k in range(3)] == approx(
+        [-0.177694097091052, 0.00559410741233639, -0.0721189402673048], rel=1e-6
+    )
+    assert dfbeta.test_var2 == approx(
+        [
+            [0.228924088265589, -12.2418252814399, -0.199697281069864],
+            [-12.2418252814399, 857.029770525028, -8.07096074047556],
+            [-0.199697281069864, -8.07096074047556, 2.07954308537869],
+        ],
+        rel=1e-6,
+    )
+    assert "robust_se" in r.model_summary(dfbeta)["table"][0]
+    nrisk = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", ovarian, test="nrisk")
+    assert nrisk.test == "nrisk"
+    assert nrisk.test_statistic == approx(
+        [-58.7878245043473, 1.30281264978888, 0.247576955514257], rel=1e-6
+    )
+    with_model = r.aareg(
+        "Surv(futime, fustat) ~ age + ecog.ps", ovarian, model=True, x=True, y=True
+    )
+    assert with_model.x[0] == [72.3315, 1.0]
+    assert with_model.y.type == "right"
+    assert "age" in r.model_frame(with_model)
+    with pytest.raises(ValueError, match="Strata terms not allowed"):
+        r.aareg("Surv(futime, fustat) ~ age + strata(rx)", ovarian)
+    with pytest.raises(ValueError, match="test must be one of"):
+        r.aareg("Surv(futime, fustat) ~ age", ovarian, test="wald")
+    with pytest.raises(ValueError, match="qrtol must be positive"):
+        r.aareg("Surv(futime, fustat) ~ age", ovarian, qrtol=0)
