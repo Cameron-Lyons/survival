@@ -1,6 +1,15 @@
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
+from ._survival import (
+    ConfidenceBands,
+    SurvfitAJCounts,
+    SurvfitAJInfluence,
+    SurvfitAJResult,
+    SurvfitCounts,
+    SurvfitInfluence,
+    SurvfitKMResult,
+)
 from ._survival import SplineBasisResult as _SplineBasisResult
 
 class StrataFactor:
@@ -523,94 +532,140 @@ class CoxSurvfitResult:
     @property
     def cumulative_hazard_std_err(self) -> list[list[float]]: ...
 
+class SurvfitCall:
+    terms: tuple[str, ...]
+    stype: int
+    ctype: int
+    timefix: bool
+    start_time: float | None
+    p0: list[float] | None
+    id: str | None
+
 class SurvfitResult:
+    n: list[int]
     time: list[float]
     n_risk: list[float]
     n_event: list[float]
     n_censor: list[float]
-    estimate: list[float]
-    std_err: list[float]
-    conf_lower: list[float]
-    conf_upper: list[float]
+    surv: list[float]
     cumhaz: list[float]
-    std_chaz: list[float]
+    type: str
+    t0: float
     n_enter: list[float] | None
-    n_risk_count: list[float] | None
-    n_event_count: list[float] | None
-    n_censor_count: list[float] | None
-    n_enter_count: list[float] | None
+    counts: SurvfitCounts | None
+    std_err: list[float] | None
+    std_chaz: list[float] | None
+    lower: list[float] | None
+    upper: list[float] | None
+    strata: dict[str, int] | None
+    n_id: list[int] | None
+    logse: bool | None
+    conf_int: float | None
+    conf_type: str | None
+    conf_lower: str | None
+    influence_surv: list[SurvfitInfluence] | None
+    influence_chaz: list[SurvfitInfluence] | None
+    start_time: float | None
+    time0: bool
+    call: SurvfitCall
     model: dict[str, Any] | None
+    engine: SurvfitKMResult | None
     @property
-    def surv(self) -> list[float]: ...
-    @property
-    def cumulative_hazard(self) -> list[float]: ...
-    @property
-    def cumulative_hazard_std_err(self) -> list[float]: ...
+    def strata_names(self) -> list[str]: ...
+
+class NamedMatrix:
+    rownames: list[str] | None
+    colnames: list[str]
+    values: list[list[float]]
 
 class SurvfitMultiStateResult:
+    n: list[int]
     time: list[float]
     n_risk: list[list[float]]
     n_event: list[list[float]]
     n_censor: list[list[float]]
+    n_transition: list[list[float]]
     pstate: list[list[float]]
     cumhaz: list[list[float]]
-    states: tuple[str, ...]
-    transitions: tuple[tuple[int, int], ...]
-    p0: list[float]
+    p0: list[list[float]]
+    states: list[str]
+    hazard_names: list[str]
+    transitions: NamedMatrix
+    n_id: list[int]
+    type: str
     t0: float
-    n: int
-    n_id: int
+    n_enter: list[list[float]] | None
+    counts: SurvfitAJCounts | None
     std_err: list[list[float]] | None
-    std_err0: list[float] | None
     std_chaz: list[list[float]] | None
     std_auc: list[list[float]] | None
-    conf_lower: list[list[float]] | None
-    conf_upper: list[list[float]] | None
-    n_risk_count: list[list[float]] | None
-    n_event_count: list[list[float]] | None
-    n_censor_count: list[list[float]] | None
-    n_enter: list[list[float]] | None
-    n_enter_count: list[list[float]] | None
-    n_transition: list[list[float]]
-    n_transition_count: list[list[float]] | None
+    se0: list[list[float]] | None
+    lower: list[list[float]] | None
+    upper: list[list[float]] | None
+    strata: dict[str, int] | None
+    logse: bool | None
+    conf_int: float | None
+    conf_type: str | None
+    influence_pstate: list[SurvfitAJInfluence] | None
+    start_time: float | None
+    time0: bool
+    call: SurvfitCall
     model: dict[str, Any] | None
-    surv_type: str
-    conf_type: str
-    conf_level: float
-    oldstate: tuple[str, ...] | None
-    p0_fixed: bool
-    timefix: bool
-    influence_state: list[list[float]] | None
-    influence_state0: list[float] | None
-    influence_chaz: list[list[float]] | None
-    influence_auc: list[list[float]] | None
-    def __iter__(self): ...
+    engine: SurvfitAJResult | None
     @property
-    def surv(self) -> list[list[float]]: ...
-    @property
-    def estimate(self) -> list[list[float]]: ...
-    @property
-    def state_probabilities(self) -> list[list[float]]: ...
-    @property
-    def cumulative_hazard(self) -> list[list[float]]: ...
-    @property
-    def cumulative_hazard_std_err(self) -> list[list[float]] | None: ...
-    @property
-    def transition_labels(self) -> tuple[tuple[str, str], ...]: ...
+    def strata_names(self) -> list[str]: ...
 
-class SurvfitConfidenceIntervalResult:
-    lower: list[float]
-    upper: list[float]
-    def __iter__(self): ...
+class SummarySurvfitResult:
+    time: list[float]
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+    surv: list[float]
+    cumhaz: list[float]
+    strata: list[str] | None
+    table: NamedMatrix
+    n: list[int]
+    n_enter: list[float] | None
+    std_err: list[float] | None
+    std_chaz: list[float] | None
+    lower: list[float] | None
+    upper: list[float] | None
+    rmean_endtime: list[float] | None
+    conf_int: float | None
+    conf_type: str | None
 
-class TurnbullSurvfitResult:
-    time_points: list[float]
-    survival: list[float]
-    survival_lower: list[float]
-    survival_upper: list[float]
-    n_iter: int
-    converged: bool
-    model: dict[str, Any] | None
+class SurvfitQuantileResult:
+    probs: list[float]
+    quantile: list[list[float]]
+    strata: list[str] | None
+    lower: list[list[float]] | None
+    upper: list[list[float]] | None
+
+class SurvfitResidualsResult:
+    resid: list[Any]
+    time: list[float]
+    id: list[Any]
+    curve: list[int] | None
+    columns: list[str] | None
+    column_name: str | None
+    id_name: str | None
+
+class SurvDiffResult:
+    n: list[int]
+    obs: list[Any]
+    exp: list[Any]
+    var: list[list[float]]
+    chisq: float
+    pvalue: float
+    df: int
+    groups: list[str]
+    strata: dict[str, int] | None
+
+class SurvfitKMInfluence:
+    influence_surv: list[list[float]]
+    influence_chaz: list[list[float]]
+
+SurvfitConfidenceIntervalResult = ConfidenceBands
 
 def concordance(
     response: Surv | str,
@@ -650,70 +705,77 @@ def survConcordance_fit(
 def survfit(
     response: Any,
     data: Any | None = None,
-    *,
-    group: Any | None = None,
-    newdata: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
-    conf_level: float = 0.95,
-    conf_int: Any | None = None,
-    conf_type: str | None = "log",
-    se_fit: Any = True,
-    start_time: Any | None = None,
-    time0: bool = False,
-    reverse: bool = False,
-    censor: bool = True,
-    type: str | None = None,
-    stype: int | None = None,
-    ctype: int | None = None,
+    na_action: str | None = "na.omit",
+    stype: int = 1,
+    ctype: int = 1,
     id: Any | None = None,
     cluster: Any | None = None,
     robust: Any | None = None,
     istate: Any | None = None,
+    timefix: Any = True,
     etype: Any | None = None,
-    p0: Any | None = None,
     model: Any = False,
     error: Any | None = None,
     entry: Any = False,
-    timefix: bool = True,
+    time0: Any = False,
+    *,
+    group: Any | None = None,
+    newdata: Any | None = None,
+    se_fit: Any = True,
+    conf_int: Any = 0.95,
+    conf_type: str = "log",
+    conf_lower: str = "usual",
+    start_time: Any | None = None,
+    influence: Any = False,
+    p0: Any | None = None,
+    type: str | None = None,
+    reverse: Any = False,
+    censor: Any = True,
     **kwargs: Any,
 ) -> Any: ...
 def survfitkm_influence(
     time: Any,
     status: Any,
-    cluster: Any | None = None,
-    *,
+    cluster: Any,
     weights: Any | None = None,
-    reverse: Any = False,
-    stype: Any = 1,
-    ctype: Any = 1,
-    conf_level: Any = 0.95,
-    conf_type: Any = "log",
-    timefix: Any = True,
-) -> Any: ...
+    stype: int = 1,
+    ctype: int = 1,
+    conf_level: float = 0.95,
+    conf_type: str = "log",
+) -> SurvfitKMInfluence: ...
 def survfitkm_counting_influence(
     start: Any,
     stop: Any,
     status: Any,
-    curve_time: Any,
-    curve_estimate: Any,
-    cluster: Any | None = None,
-    *,
+    cluster: Any,
     weights: Any | None = None,
-    reverse: Any = False,
-    stype: Any = 1,
-    ctype: Any = 1,
-    conf_level: Any = 0.95,
-    conf_type: Any = "log",
-    timefix: Any = True,
-) -> Any: ...
+    stype: int = 1,
+    ctype: int = 1,
+    conf_level: float = 0.95,
+    conf_type: str = "log",
+    **kwargs: Any,
+) -> SurvfitKMInfluence: ...
 def survfit0(x: Any, *args: Any, **kwargs: Any) -> Any: ...
-def aggregate_survfit_result(
-    result: CoxSurvfitResult,
-    groups: Any | None = None,
-    weights: Any | None = None,
-) -> CoxSurvfitResult: ...
+def summary_survfit(
+    object: Any,
+    times: Any | None = None,
+    censored: Any = False,
+    scale: Any = 1,
+    extend: Any = False,
+    rmean: Any | None = None,
+) -> SummarySurvfitResult: ...
+def quantile_survfit(
+    x: Any,
+    probs: Any = (0.25, 0.5, 0.75),
+    conf_int: Any = True,
+    scale: Any = 1,
+    tolerance: Any | None = None,
+    **kwargs: Any,
+) -> SurvfitQuantileResult: ...
+def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any: ...
+def aggregate_survfit_result(result: Any, groups: Any | None = None) -> Any: ...
 def survfit_confint(
     p: Any,
     se: Any,
@@ -723,18 +785,18 @@ def survfit_confint(
     selow: Any | None = None,
     ulimit: Any = True,
     **kwargs: Any,
-) -> SurvfitConfidenceIntervalResult: ...
+) -> ConfidenceBands: ...
 def survdiff(
-    response: Surv | str,
+    response: Any,
     data: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "na.omit",
+    rho: Any = 0,
+    timefix: Any = True,
     *,
     group: Any | None = None,
-    subset: Any | None = None,
-    na_action: str | None = "fail",
-    rho: float = 0.0,
-    timefix: bool = True,
     **kwargs: Any,
-) -> Any: ...
+) -> SurvDiffResult: ...
 def rttright(
     response: Any,
     status: Any | None = None,
@@ -767,16 +829,11 @@ def statefig(
     offset: Any = 0,
 ) -> dict[str, Any]: ...
 def pseudo(
-    fit: Any = ...,
-    status: Any | None = None,
-    eval_times: Any | None = None,
-    type_: Any | None = None,
-    *,
+    fit: Any,
     times: Any | None = None,
-    type: Any | None = None,
-    collapse: bool = True,
-    data_frame: bool = False,
-    time: Any | None = None,
+    type: str | None = None,
+    collapse: Any = True,
+    data_frame: Any = False,
     **kwargs: Any,
 ) -> Any: ...
 def survcheck(
@@ -976,16 +1033,15 @@ def residuals(
     rsigma: bool | None = None,
 ) -> Any: ...
 def survfit_residuals(
-    fit: Any,
+    object: Any,
     times: Any | None = None,
-    *,
     type: str = "pstate",
     collapse: Any = False,
-    weighted: Any = False,
+    weighted: Any | None = None,
     data_frame: Any = False,
     extra: Any = False,
     **kwargs: Any,
-) -> dict[str, Any]: ...
+) -> Any: ...
 def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv: ...
 def survcondense(
     formula: Any,

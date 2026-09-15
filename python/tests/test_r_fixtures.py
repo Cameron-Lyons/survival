@@ -19,6 +19,7 @@ test (kind + message) for building the burndown list.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 from collections.abc import Callable, Mapping, Sequence
@@ -5025,25 +5026,62 @@ def _curve_aspects(fit_expected: Mapping[str, Any]) -> list[str]:
     return out
 
 
-def _python_curves(result: Any, expected_curves: Sequence[Mapping[str, Any]]) -> list[Any]:
-    """Align Python curve objects with the R strata order."""
+class _Curve:
+    """One stratum of a stacked survfit object: every per-row field sliced to the curve."""
 
-    if isinstance(result, Mapping):
-        keys = list(result)
-        if len(keys) != len(expected_curves):
-            raise FixtureMismatchError(f"{len(keys)} python curves, R has {len(expected_curves)}")
-        by_label = {str(key): key for key in keys}
-        aligned = []
-        for curve in expected_curves:
-            label = r_strata_value(curve["name"])
-            if label in by_label:
-                aligned.append(result[by_label[label]])
-            else:
-                aligned.append(result[keys[len(aligned)]])
-        return aligned
-    if len(expected_curves) != 1:
-        raise FixtureMismatchError(f"python returned one curve, R has {len(expected_curves)}")
-    return [result]
+    _ROW_FIELDS = (
+        "time",
+        "n_risk",
+        "n_event",
+        "n_censor",
+        "n_enter",
+        "surv",
+        "std_err",
+        "cumhaz",
+        "std_chaz",
+        "lower",
+        "upper",
+        "pstate",
+        "n_transition",
+    )
+
+    def __init__(self, fit: Any, index: int, start: int, stop: int) -> None:
+        for field in self._ROW_FIELDS:
+            values = getattr(fit, field, None)
+            setattr(self, field, None if values is None else values[start:stop])
+        self.n = fit.n[index]
+        self.n_id = None if fit.n_id is None else fit.n_id[index]
+        for field in ("states", "transitions", "influence_pstate"):
+            setattr(self, field, getattr(fit, field, None))
+        p0 = getattr(fit, "p0", None)
+        self.p0 = None if p0 is None else p0[index]
+
+
+def _split_curves(fit: Any) -> dict[str, _Curve]:
+    """The curves of a survfit object keyed by R's strata names (``"1"`` for a single curve)."""
+
+    strata = fit.strata or {"1": len(fit.time)}
+    curves: dict[str, _Curve] = {}
+    start = 0
+    for index, (name, size) in enumerate(strata.items()):
+        curves[name] = _Curve(fit, index, start, start + size)
+        start += size
+    return curves
+
+
+def _python_curves(result: Any, expected_curves: Sequence[Mapping[str, Any]]) -> list[Any]:
+    """Align the curves of a Python survfit object with the R strata order."""
+
+    curves = _split_curves(result)
+    if len(curves) != len(expected_curves):
+        raise FixtureMismatchError(f"{len(curves)} python curves, R has {len(expected_curves)}")
+    aligned = []
+    for expected in expected_curves:
+        name = expected["name"]
+        if name not in curves:
+            raise FixtureMismatchError(f"curve {name!r} not among {list(curves)}")
+        aligned.append(curves[name])
+    return aligned
 
 
 def _compare_curve_fields(
@@ -5151,9 +5189,8 @@ class DatasetsHandler(TopicHandler):
 def _mstate_formula(formula: str, data: Mapping[str, Any]) -> str:
     """Add ``type = "mstate"`` when the status column is an R factor.
 
-    R infers a multi-state response from a factor status column; the Python
-    formula parser needs the explicit type hint (see the
-    ``mstate_from_factor`` aspect, which checks the inference itself).
+    R infers a multi-state response from a factor status column; the formula parser used by
+    the finegray / rttright / survcheck handlers still needs the explicit type hint.
     """
 
     lhs, _, rhs = formula.partition("~")
@@ -5167,28 +5204,72 @@ def _mstate_formula(formula: str, data: Mapping[str, Any]) -> str:
     return formula
 
 
-def _survfit_call(
-    topic: str,
-    case: Mapping[str, Any],
-    *,
-    drop: Sequence[str] = (),
-    infer_mstate: bool = True,
-    keep_model: bool = False,
-) -> Any:
+def _survfit_call(topic: str, case: Mapping[str, Any], *, drop: Sequence[str] = ()) -> Any:
     def build():
         data = case_data(topic, case)
         kwargs = _kwargs(case.get("args", {}), data, drop=drop)
-        if "conf_lower" in kwargs:
-            raise UnsupportedCaseError("survfit has no conf.lower argument")
-        if keep_model:
-            kwargs["model"] = True
-        formula = _mstate_formula(case["formula"], data) if infer_mstate else case["formula"]
-        return r.survfit(formula, data, **kwargs)
+        return r.survfit(case["formula"], data, **kwargs)
 
-    family = "survfit" if infer_mstate else "survfit-nohint"
-    if keep_model:
-        family += "-model"
-    return _cached(_fit_key(family, case), build)
+    return _cached(_fit_key("survfit", case), build)
+
+
+def _check_summary_table(fit: Any, expected: Mapping[str, Any]) -> None:
+    """``summary(fit)$table``: a matrix with strata row names, or a named vector."""
+
+    table = r.summary_survfit(fit).table
+    if "values" in expected:
+        assert_exact(table.rownames, expected["rownames"], path="table.rownames")
+        assert_exact(table.colnames, expected["colnames"], path="table.colnames")
+        assert_matrix_close(table.values, expected["values"], rtol=RTOL_VAR, path="table")
+        return
+    if table.rownames is not None:
+        raise FixtureMismatchError(f"table has strata rows {table.rownames}, R has none")
+    assert_exact(table.colnames, list(expected), path="table.colnames")
+    assert_close(table.values[0], list(expected.values()), rtol=RTOL_VAR, path="table")
+
+
+def _check_summary_times(fit: Any, expected: Mapping[str, Any]) -> None:
+    summary = r.summary_survfit(fit, times=expected["times"], extend=True)
+    for field in (
+        "time",
+        "n_risk",
+        "n_event",
+        "n_censor",
+        "surv",
+        "std_err",
+        "cumhaz",
+        "std_chaz",
+        "lower",
+        "upper",
+        "pstate",
+    ):
+        if field not in expected:
+            continue
+        actual = getattr(summary, field)
+        if actual is None:
+            raise FixtureMismatchError(f"summary.{field} is None")
+        rtol = _CURVE_FIELDS[field][1]
+        if expected[field] and isinstance(expected[field][0], list):
+            assert_matrix_close(actual, expected[field], rtol=rtol, path=f"summary.{field}")
+        else:
+            assert_close(as_float_list(actual), expected[field], rtol=rtol, path=f"summary.{field}")
+    if "strata" in expected:
+        assert_exact(summary.strata, expected["strata"], path="summary.strata")
+
+
+def _check_quantile(fit: Any, expected: Mapping[str, Any]) -> None:
+    result = r.quantile_survfit(fit, probs=expected["probs"])
+    single = fit.strata is None
+    for field in ("quantile", "lower", "upper"):
+        if field not in expected:
+            continue
+        actual = getattr(result, field)
+        if actual is None:
+            raise FixtureMismatchError(f"quantile.{field} is None")
+        rows = expected[field]
+        if single and rows and not isinstance(rows[0], list):
+            rows = [rows]
+        assert_matrix_close(actual, rows, rtol=RTOL_COEF, path=f"quantile.{field}")
 
 
 class SurvfitKMHandler(TopicHandler):
@@ -5208,28 +5289,25 @@ class SurvfitKMHandler(TopicHandler):
             _check_curves(fit, expected["fit"], aspect)
         elif aspect == "fit.n":
             curves = _python_curves(fit, expected["fit"]["curves"])
-            n_values = []
-            for c in curves:
-                n_value = getattr(c, "n", None)
-                if n_value is None:
-                    raise UnsupportedCaseError("survfit result does not report n")
-                n_values.append(n_value)
-            assert_exact(n_values, expected["fit"]["n"], path="n")
+            assert_exact([curve.n for curve in curves], expected["fit"]["n"], path="n")
+            for field in ("strata", "conf_type", "conf_int", "type", "t0", "logse"):
+                if field in expected["fit"]:
+                    assert_exact(getattr(fit, field), expected["fit"][field], path=field)
         elif aspect == "summary_std_err":
             # summary(fit)$std.err = surv-scale standard error at event times only
-            curves = _python_curves(fit, expected["fit"]["curves"])
-            actual: list[float] = []
-            for c in curves:
-                std_err = as_float_list(_attr(c, "std_err"))
-                n_event = as_float_list(_attr(c, "n_event"))
-                actual.extend(se for se, d in zip(std_err, n_event, strict=True) if d > 0)
-            assert_close(actual, expected["summary_std_err"], rtol=RTOL_VAR, path="summary_std_err")
-        elif aspect in ("summary_table", "quantile"):
-            raise UnsupportedCaseError(
-                f"no summary.survfit/quantile.survfit equivalent for {aspect}"
+            summary = r.summary_survfit(fit)
+            assert_close(
+                as_float_list(summary.std_err),
+                expected["summary_std_err"],
+                rtol=RTOL_VAR,
+                path="summary_std_err",
             )
+        elif aspect == "summary_table":
+            _check_summary_table(fit, expected["summary_table"])
         elif aspect == "summary_times":
-            raise UnsupportedCaseError("no summary(fit, times=) equivalent")
+            _check_summary_times(fit, expected["summary_times"])
+        elif aspect == "quantile":
+            _check_quantile(fit, expected["quantile"])
         else:
             raise UnsupportedCaseError(f"unhandled survfit aspect {aspect}")
 
@@ -5249,71 +5327,49 @@ class SurvfitMultistateHandler(TopicHandler):
 
     def check(self, case, aspect):
         expected = case["expected"]
+        fit = _survfit_call(self.topic, case)
+        first = _python_curves(fit, expected["fit"]["curves"])[0]
         if aspect == "mstate_from_factor":
-            fit = _survfit_call(self.topic, case, infer_mstate=False)
-            first = _python_curves(fit, expected["fit"]["curves"])[0]
-            if not hasattr(first, "pstate"):
+            if not hasattr(fit, "pstate"):
                 raise FixtureMismatchError(
                     "factor status column was not treated as a multi-state response"
                 )
-            return
-        fit = _survfit_call(self.topic, case)
-        if aspect.startswith("curves."):
+        elif aspect.startswith("curves."):
             _check_curves(fit, expected["fit"], aspect)
         elif aspect == "fit.states":
-            first = _python_curves(fit, expected["fit"]["curves"])[0]
-            assert_exact(list(_attr(first, "states")), expected["fit"]["states"], path="states")
+            assert_exact(list(first.states), expected["fit"]["states"], path="states")
+            for field in ("n", "strata", "conf_type", "conf_int", "type", "t0", "logse"):
+                if field in expected["fit"]:
+                    assert_exact(getattr(fit, field), expected["fit"][field], path=field)
         elif aspect == "fit.p0":
-            curves = _python_curves(fit, expected["fit"]["curves"])
             p0 = expected["fit"]["p0"]
             if p0 and isinstance(p0[0], list):
-                assert_matrix_close([list(_attr(c, "p0")) for c in curves], p0, path="p0")
+                assert_matrix_close(fit.p0, p0, path="p0")
             else:
-                assert_close(list(_attr(curves[0], "p0")), p0, path="p0")
+                assert_close(fit.p0[0], p0, path="p0")
         elif aspect == "fit.transitions":
-            first = _python_curves(fit, expected["fit"]["curves"])[0]
-            actual = _attr(first, "transitions")
             table = expected["fit"]["transitions"]
-            states = list(_attr(first, "states"))
-            counts: dict[tuple[str, str], float] = {}
-            for row_name, row in zip(table["rownames"], table["values"], strict=True):
-                for col_name, value in zip(table["colnames"], row, strict=True):
-                    counts[(row_name, col_name)] = value
-            # Python reports transitions as (from, to) state index pairs.
-            actual_pairs = {(states[a], states[b]) for a, b in actual}
-            expected_pairs = {
-                key for key, value in counts.items() if value > 0 and key[1] != "(censored)"
-            }
-            if actual_pairs != expected_pairs:
-                raise FixtureMismatchError(
-                    f"transitions {sorted(actual_pairs)} != {sorted(expected_pairs)}"
-                )
+            assert_exact(fit.transitions.rownames, table["rownames"], path="transitions.rownames")
+            assert_exact(fit.transitions.colnames, table["colnames"], path="transitions.colnames")
+            assert_exact(fit.transitions.values, table["values"], path="transitions")
         elif aspect == "summary_times":
-            raise UnsupportedCaseError("no summary(fit, times=) equivalent")
+            _check_summary_times(fit, expected["summary_times"])
         elif aspect in ("influence_pstate", "influence_chaz"):
-            first = _python_curves(fit, expected["fit"]["curves"])[0]
-            attr = "influence_state" if aspect == "influence_pstate" else "influence_chaz"
-            actual = getattr(first, attr, None)
-            if actual is None:
-                raise UnsupportedCaseError(f"survfit result has no {attr}")
-            # R stores subjects x times x states; Python stores a flat per-subject layout.
+            if aspect == "influence_chaz":
+                raise UnsupportedCaseError("survfitAJ reports the influence on pstate only")
+            data = case_data(self.topic, case)
+            kwargs = _kwargs(case.get("args", {}), data)
+            influence = r.survfit(case["formula"], data, influence=True, **kwargs).influence_pstate
+            if influence is None:
+                raise UnsupportedCaseError("survfit result has no influence_pstate")
+            # R: subjects x times x states; the engine: [cluster][time][state] per curve
             layers = expected[aspect]
-            n_subjects = len(layers[0])
-            n_times = len(layers[0][0])
-            n_states = len(layers)
-            if len(actual) != n_subjects:
-                raise FixtureMismatchError(f"influence rows {len(actual)} != subjects {n_subjects}")
-            for subject in range(n_subjects):
-                row = list(actual[subject])
-                if len(row) != n_times * n_states:
-                    raise FixtureMismatchError(
-                        f"influence row length {len(row)} != times*states {n_times * n_states}"
-                    )
-                for state in range(n_states):
-                    actual_col = row[state * n_times : (state + 1) * n_times]
+            actual = influence[0].values
+            for state, layer in enumerate(layers):
+                for subject, row in enumerate(layer):
                     assert_close(
-                        actual_col,
-                        layers[state][subject],
+                        [actual[subject][t][state] for t in range(len(row))],
+                        row,
                         rtol=RTOL_VAR,
                         path=f"{aspect}[{subject}][state {state}]",
                     )
@@ -5336,41 +5392,36 @@ class SurvfitIntervalHandler(TopicHandler):
     def check(self, case, aspect):
         fit = _survfit_call(self.topic, case)
         expected = case["expected"]
-        if aspect.startswith("curves."):
+        # Turnbull's counts are EM weights, not integers: compare them like estimates
+        if aspect == "curves.time_counts":
+            for curve, exp in zip(
+                _python_curves(fit, expected["fit"]["curves"]),
+                expected["fit"]["curves"],
+                strict=True,
+            ):
+                assert_close(curve.time, exp["time"], path=f"curve[{exp['name']}].time")
+                for field in ("n_risk", "n_event", "n_censor"):
+                    assert_close(
+                        getattr(curve, field),
+                        exp[field],
+                        rtol=RTOL_COEF,
+                        path=f"curve[{exp['name']}].{field}",
+                    )
+        elif aspect.startswith("curves."):
             _check_curves(fit, expected["fit"], aspect)
-            return
-        if aspect == "time_surv":
-            assert_close(
-                as_float_list(_attr(fit, "time_points", "time")), expected["time"], path="time"
-            )
-            assert_close(
-                as_float_list(_attr(fit, "survival", "surv")), expected["surv"], path="surv"
-            )
+        elif aspect == "time_surv":
+            assert_close(fit.time, expected["time"], path="time")
+            assert_close(fit.surv, expected["surv"], path="surv")
         elif aspect == "counts":
-            assert_exact(as_float_list(_attr(fit, "n_risk")), expected["n_risk"], path="n_risk")
-            assert_exact(as_float_list(_attr(fit, "n_event")), expected["n_event"], path="n_event")
+            assert_close(fit.n_risk, expected["n_risk"], rtol=RTOL_COEF, path="n_risk")
+            assert_close(fit.n_event, expected["n_event"], rtol=RTOL_COEF, path="n_event")
         elif aspect == "std_err":
-            assert_close(
-                as_float_list(_attr(fit, "std_err")),
-                expected["std_err"],
-                rtol=RTOL_VAR,
-                path="std_err",
-            )
+            assert_close(fit.std_err, expected["std_err"], rtol=RTOL_VAR, path="std_err")
         elif aspect == "conf":
-            assert_close(
-                as_float_list(_attr(fit, "survival_lower", "conf_lower")),
-                expected["lower"],
-                rtol=RTOL_VAR,
-                path="lower",
-            )
-            assert_close(
-                as_float_list(_attr(fit, "survival_upper", "conf_upper")),
-                expected["upper"],
-                rtol=RTOL_VAR,
-                path="upper",
-            )
+            assert_close(fit.lower, expected["lower"], rtol=RTOL_VAR, path="lower")
+            assert_close(fit.upper, expected["upper"], rtol=RTOL_VAR, path="upper")
         elif aspect == "n":
-            assert_exact(_attr(fit, "n"), expected["n"], path="n")
+            assert_exact(fit.n, expected["n"], path="n")
 
 
 # --- survdiff ---------------------------------------------------------------
@@ -5380,7 +5431,7 @@ class SurvdiffHandler(TopicHandler):
     topic = "survdiff"
 
     def aspects(self, case):
-        return ["counts", "var", "chisq", "pvalue"]
+        return ["counts", "var", "chisq", "pvalue", "df", "strata_names"]
 
     def check(self, case, aspect):
         expected = case["expected"]
@@ -5395,45 +5446,29 @@ class SurvdiffHandler(TopicHandler):
 
         result = _cached(_fit_key("survdiff", case), build)
         if aspect == "counts":
-            n = _attr(result, "n", "n_group", "group_sizes") if hasattr(result, "n") else None
-            if n is not None:
-                assert_exact(as_float_list(n), expected["n"], path="n")
-            # with strata R reports group x stratum matrices; compare the totals
-            totals = lambda value: (  # noqa: E731
-                [sum(row) for row in value] if value and isinstance(value[0], list) else value
-            )
-            assert_close(
-                as_float_list(_attr(result, "observed")),
-                totals(expected["obs"]),
-                rtol=1e-12,
-                path="obs",
-            )
-            assert_close(
-                as_float_list(_attr(result, "expected")),
-                totals(expected["exp"]),
-                rtol=RTOL_COEF,
-                path="exp",
-            )
-        elif aspect == "var":
-            variance = _attr(result, "variance", "var")
-            if hasattr(variance, "tolist"):
-                variance = variance.tolist()
-            if isinstance(expected["var"][0], list):
-                if isinstance(variance, (list, tuple)):
-                    assert_matrix_close(variance, expected["var"], rtol=RTOL_VAR, path="var")
+            assert_exact(result.n, expected["n"], path="n")
+            for field in ("obs", "exp"):
+                actual = getattr(result, field)
+                if isinstance(expected[field][0], list):
+                    assert_matrix_close(actual, expected[field], rtol=RTOL_COEF, path=field)
                 else:
-                    # a scalar variance is the (1, 1) element of R's k x k matrix
-                    assert_close(variance, expected["var"][0][0], rtol=RTOL_VAR, path="var[0][0]")
+                    assert_close(actual, expected[field], rtol=RTOL_COEF, path=field)
+        elif aspect == "var":
+            if isinstance(expected["var"][0], list):
+                assert_matrix_close(result.var, expected["var"], rtol=RTOL_VAR, path="var")
             else:
-                assert_close(variance, expected["var"], rtol=RTOL_VAR, path="var")
+                assert_close(
+                    [row[0] for row in result.var], expected["var"], rtol=RTOL_VAR, path="var"
+                )
         elif aspect == "chisq":
-            assert_close(
-                _attr(result, "statistic", "chisq"), expected["chisq"], rtol=RTOL_VAR, path="chisq"
-            )
+            assert_close(result.chisq, expected["chisq"], rtol=RTOL_VAR, path="chisq")
         elif aspect == "pvalue":
-            assert_close(
-                _attr(result, "p_value", "pvalue"), expected["pvalue"], rtol=RTOL_VAR, path="pvalue"
-            )
+            assert_close(result.pvalue, expected["pvalue"], rtol=RTOL_VAR, path="pvalue")
+        elif aspect == "df":
+            assert_exact(result.df, expected["df"], path="df")
+        elif aspect == "strata_names":
+            # names(fit$n): the group labels
+            assert_exact(result.groups, expected["strata_names"], path="strata_names")
 
 
 # --- coxph ------------------------------------------------------------------
@@ -6731,40 +6766,104 @@ class PseudoHandler(TopicHandler):
 
     def check(self, case, aspect):
         expected = case["expected"]
-        # residuals.survfit re-evaluates the model frame; keep it on the fit
-        fit = _survfit_call(self.topic, case, drop=("times",), keep_model=True)
+        fit = _survfit_call(self.topic, case, drop=("times",))
         times = expected["times"]
         if aspect.startswith("survfit0"):
-            curve_aspect = aspect.split(":", 1)[1]
-            result = r.survfit0(fit)
-            _check_curves(result, expected["survfit0"], curve_aspect)
+            _check_curves(r.survfit0(fit), expected["survfit0"], aspect.split(":", 1)[1])
             return
         kind, type_name = aspect.split("_", 1)
         exp = expected[aspect]
         if kind == "pseudo":
             result = r.pseudo(fit, times=times, type=type_name)
         else:
-            result = r.survfit_residuals(fit, times=times, type=type_name)
-            if isinstance(result, Mapping):
-                result = result["resid"]
-        if hasattr(result, "tolist"):
-            result = result.tolist()
+            result = r.survfit_residuals(fit, times=times, type=type_name).resid
         if exp and isinstance(exp[0], list) and isinstance(exp[0][0], list):
-            # R: subjects x times x states
-            for state, layer in enumerate(exp):
+            # R stores the subjects x states x times array as one matrix per time; the
+            # Python layout is subject, then state, then time
+            for t, layer in enumerate(exp):
                 for subject, row in enumerate(layer):
-                    actual = result[subject]
-                    if isinstance(actual[0], (list, tuple)):
-                        actual_row = [actual[t][state] for t in range(len(times))]
-                    else:
-                        actual_row = actual[state * len(times) : (state + 1) * len(times)]
-                    assert_close(
-                        actual_row, row, rtol=RTOL_VAR, path=f"{aspect}[{subject}][state {state}]"
-                    )
+                    actual = [
+                        result[subject][state][t] if len(times) > 1 else result[subject][state]
+                        for state in range(len(row))
+                    ]
+                    assert_close(actual, row, rtol=RTOL_VAR, path=f"{aspect}[{subject}][t {t}]")
         elif exp and isinstance(exp[0], list):
             assert_matrix_close(result, exp, rtol=RTOL_VAR, path=aspect)
         else:
             assert_close(as_float_list(result), exp, rtol=RTOL_VAR, path=aspect)
+
+
+# --- aggregate.survfit ---------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class _CurveMatrices:
+    """The ``data`` margin of ``survfit(coxfit, newdata)`` as ``aggregate.survfit`` reads it."""
+
+    surv: list[list[float]] | None = None
+    pstate: list[list[list[float]]] | None = None
+    newdata: Any | None = None
+
+
+def _layers_to_array(layers: Sequence[Sequence[Sequence[float]]]) -> list[list[list[float]]]:
+    """R's ``time x data x state`` array (one ``time x data`` matrix per state) as
+    ``[time][data][state]``."""
+
+    n_time = len(layers[0])
+    n_data = len(layers[0][0])
+    return [[[layer[t][j] for layer in layers] for j in range(n_data)] for t in range(n_time)]
+
+
+class AggregateSurvfitHandler(TopicHandler):
+    topic = "km-aggregate_survfit"
+
+    def aspects(self, case):
+        return list(case["expected"])
+
+    def check(self, case, aspect):
+        args = case["args"]
+        expected = case["expected"]
+        curves = _CurveMatrices(
+            surv=decode_vector(args["surv"]) if "surv" in args else None,
+            pstate=_layers_to_array(decode_vector(args["pstate"])) if "pstate" in args else None,
+        )
+        by = args.get("by")
+        if isinstance(by, dict):
+            by = {name: decode_vector(by[name]) for name in args.get("by_names", list(by))}
+        elif by is not None:
+            by = decode_vector(by)
+        result = r.aggregate_survfit(curves, by=by, FUN=args.get("fun", "mean"))
+        if aspect == "surv":
+            exp = expected["surv"]
+            if isinstance(exp[0], list):
+                assert_matrix_close(result.surv, exp, rtol=RTOL_COEF, path="surv")
+            else:
+                # no by: R drops the data margin
+                assert_close([row[0] for row in result.surv], exp, rtol=RTOL_COEF, path="surv")
+        elif aspect == "pstate":
+            exp = expected["pstate"]
+            if isinstance(exp[0][0], list):
+                assert_matrix_close(
+                    [[v for group in row for v in group] for row in result.pstate],
+                    [[v for group in row for v in group] for row in _layers_to_array(exp)],
+                    rtol=RTOL_COEF,
+                    path="pstate",
+                )
+            else:
+                # no by: a time x state matrix
+                assert_matrix_close(
+                    [row[0] for row in result.pstate], exp, rtol=RTOL_COEF, path="pstate"
+                )
+        elif aspect == "newdata":
+            frame = newdata_frame(expected)
+            if frame is None:
+                assert_exact(result.newdata, None, path="newdata")
+            else:
+                assert_exact(
+                    {name: [str(v) for v in values] for name, values in result.newdata.items()},
+                    {name: [str(v) for v in values] for name, values in frame.items()},
+                    path="newdata",
+                )
 
 
 # --- survcheck ----------------------------------------------------------------

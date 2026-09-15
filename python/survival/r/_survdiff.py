@@ -1,269 +1,191 @@
-"""``survdiff`` log-rank family tests."""
+"""``survdiff``: the G-rho family of tests, mirroring R's ``survdiff.R``."""
 
 from __future__ import annotations
 
-import math
-from collections.abc import Sequence
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
-    _encode_groups,
     _finite_float,
-    _normalize_bool_option,
+    _is_bool_like,
     _pop_dotted_keyword,
-    _r_formula_ordered_levels,
+    _r_factor,
     _subset_indices,
     _subset_optional_sequence,
 )
 from ._formula import (
     _apply_formula_na_action,
-    _combined_columns,
-    _combined_formula_groups,
+    _column_source,
+    _covariate_term_name,
     _offset_vector,
     _parse_formula,
-    _reject_formula_clusters,
     _subset_formula_inputs,
+    _term_values,
 )
 from ._surv import Surv, _apply_surv_na_action, _subset_surv
-from ._types import _FormulaTerms
+from ._survfit import _curve_factor, _strata_factor, _strata_term_values
+from ._types import SurvDiffResult, _InteractionTerm, _ModelCovariateTerm, _ModelStrataTerm
 
 
-def _survdiff_weight_type(rho: float) -> str:
-    return "LogRank" if rho == 0.0 else f"FlemingHarrington(p={rho}, q=0)"
+def _response_check(y: Surv) -> None:
+    if y.type in {"mright", "mcounting"}:
+        raise ValueError("survdiff not defined for multi-state data")
+    if y.type == "counting":
+        raise ValueError("survdiff not defined for counting process data")
+    if y.type != "right":
+        raise ValueError("Right censored data only")
 
 
-def _survdiff_r_ordered_levels(values: list[Any]) -> tuple[Any, ...]:
-    return _r_formula_ordered_levels(values, "survdiff formula groups")
+def _strata_values(data: Any, terms: list[_ModelStrataTerm], n: int) -> Any:
+    """``strata.keep``: the ``strata()`` column, or ``strata(m[, vars], shortlabel = TRUE)``."""
+
+    columns = {
+        f"strata({', '.join(term.columns)})": _strata_term_values(data, term.columns, n)
+        for term in terms
+    }
+    if len(columns) == 1:
+        return next(iter(columns.values()))
+    factor = _strata_factor(columns, shortlabel=True)
+    return _r_factor(
+        [None if code is None else factor.levels[code] for code in factor.codes], factor.levels
+    )
 
 
-def _survdiff_formula_groups(
-    data: Any,
-    terms: _FormulaTerms,
-    n: int,
-) -> tuple[list[Any], tuple[Any, ...], list[Any] | None]:
-    if not terms.covariates:
-        if terms.strata:
-            raise ValueError("survdiff formula has no groups to test")
-        raise ValueError("survdiff formula requires at least one grouping term")
-    group = _combined_formula_groups(data, [], terms.covariates, n)
-    group_levels = _survdiff_r_ordered_levels(group)
-    strata = _combined_columns(data, terms.strata, n) if terms.strata else None
-    return group, group_levels, strata
+def _formula_inputs(
+    formula: str, data: Any, subset: Any | None, na_action: str | None
+) -> tuple[Surv, dict[str, Any], list[str] | None, list[float] | None]:
+    """The model frame: the response, the group columns, the strata factor and the offset."""
 
-
-def _survdiff_offset_formula_values(
-    data: Any,
-    terms: _FormulaTerms,
-    n: int,
-) -> list[float] | None:
-    if not terms.offsets:
-        return None
-    if terms.covariates or terms.strata:
+    if subset is not None:
+        data, _aligned = _subset_formula_inputs(formula, data, subset)
+    data, _aligned = _apply_formula_na_action(formula, data, na_action)
+    y, terms = _parse_formula(formula, data)
+    n = len(y)
+    if terms.clusters:
+        raise ValueError("cluster() terms are not valid for this function")
+    columns: dict[str, Any] = {}
+    for model_term in terms.model_terms:
+        if isinstance(model_term, _ModelCovariateTerm):
+            term = model_term.term
+            if isinstance(term, _InteractionTerm):
+                raise ValueError("Interaction terms are not valid for this function")
+            plain = term.transform is None and term.arithmetic is None
+            values = _column_source(data, term.column) if plain else _term_values(data, term, n)
+            columns[_covariate_term_name(term)] = values
+    strata_terms = [term for term in terms.model_terms if isinstance(term, _ModelStrataTerm)]
+    strata = _strata_values(data, strata_terms, n) if strata_terms else None
+    offset = _offset_vector(data, terms.offsets, n) if terms.offsets else None
+    if offset is not None and (columns or strata is not None):
         raise ValueError("Cannot have both an offset and groups")
-    values = _offset_vector(data, terms.offsets, n)
-    if values is None:
-        raise ValueError("offset formula did not produce values")
-    return values
+    return y, columns, strata, offset
 
 
-def _survdiff_result_from_components(components: Any, rho: float) -> Any:
-    statistic = float(components.chi_squared)
-    df = int(components.degrees_of_freedom)
-    p_value = 1.0 if df == 0 else float(_core.lrt_test(statistic / 2.0, 0.0, df).p_value)
-    variance = (
-        float(components.variance[0][0]) if components.variance and components.variance[0] else 0.0
-    )
-    return _core.LogRankResult(
-        statistic,
-        p_value,
-        df,
-        [float(value) for value in components.observed],
-        [float(value) for value in components.expected],
-        variance,
-        _survdiff_weight_type(rho),
-    )
+def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvDiffResult:
+    """``survdiff`` with an ``offset()`` term: the observed against the expected events."""
 
-
-def _survdiff_offset_expected(offsets: Sequence[float]) -> float:
-    total = 0.0
-    for value in offsets:
-        if value == 0.0:
-            return math.inf
-        total += -math.log(value)
-    return total
-
-
-def _survdiff_divide_statistic(numerator: float, variance: float) -> float:
-    squared = numerator * numerator
-    if variance == 0.0:
-        return math.nan if squared == 0.0 else math.inf
-    return squared / variance
-
-
-def _survdiff_chisq_p_value(statistic: float) -> float:
-    return math.erfc(math.sqrt(statistic / 2.0))
-
-
-def _survdiff_offset_result(response: Surv, offsets: Sequence[float], rho: float) -> Any:
-    if response.type != "right":
-        raise NotImplementedError("survdiff offset formulas require right-censored Surv responses")
-    if len(offsets) != len(response):
-        raise ValueError("offset must have the same length as the Surv response")
-    if any(value < 0.0 or value > 1.0 for value in offsets):
+    if any(value < 0.0 or value > 1.0 for value in offset):
         raise ValueError("The offset must be a survival probability")
-
-    observed = float(sum(response.event))
-    expected = _survdiff_offset_expected(offsets)
-    if rho == 0.0:
-        variance = expected
-        numerator = observed - variance
-    else:
-        inverse_rho = 1.0 / rho
-        numerator = sum(
-            inverse_rho - ((inverse_rho + float(event)) * (offset**rho))
-            for offset, event in zip(offsets, response.event, strict=True)
-        )
-        variance = sum((1.0 - (offset ** (2.0 * rho))) / (2.0 * rho) for offset in offsets)
-    statistic = _survdiff_divide_statistic(numerator, variance)
-    return _core.LogRankResult(
-        statistic,
-        _survdiff_chisq_p_value(statistic),
-        1,
-        [observed],
-        [expected],
-        variance,
-        _survdiff_weight_type(rho),
+    fit = _core.survdiff_one_sample([int(value) for value in y.event], offset, rho)
+    return SurvDiffResult(
+        n=[len(y)],
+        obs=[fit.obs[0][0]],
+        exp=[fit.exp[0][0]],
+        var=fit.var,
+        chisq=fit.chisq,
+        pvalue=fit.pvalue,
+        df=1,
+        groups=[],
     )
 
 
-def _stratified_survdiff(
-    response: Surv,
-    group: Any,
-    strata: Any,
+def _k_sample(
+    y: Surv,
+    group_codes: list[int],
+    group_levels: list[str],
+    strata: Any | None,
     rho: float,
     timefix: bool,
-    group_levels: Sequence[Any] | None = None,
-) -> Any:
-    n = len(response)
-    group_codes = _encode_groups(group, n, levels=group_levels)
-    strata_codes = _encode_groups(strata, n)
-    times = list(response.time)
-    if response.start is not None:
-        components = _core.stratified_counting_logrank_components(
-            times,
-            list(response.event),
-            [code + 1 for code in group_codes],
-            list(response.start),
-            strata_codes,
-            rho,
-            timefix,
-        )
-        return _survdiff_result_from_components(components, rho)
-
-    components = _core.stratified_logrank_components(
-        times,
-        list(response.event),
-        [code + 1 for code in group_codes],
-        strata_codes,
-        rho,
-        timefix,
+) -> SurvDiffResult:
+    n = len(y)
+    strata_codes = strata_levels = None
+    if strata is not None:
+        strata_codes, _labels = _curve_factor({"strata": strata}, n)
+        strata_levels = list(_strata_factor({"strata": strata}, shortlabel=True).levels)
+    fit = _core.survdiff(
+        list(y.time),
+        [int(value) for value in y.event],
+        group_codes,
+        strata=strata_codes,
+        rho=rho,
+        timefix=timefix,
     )
-    return _survdiff_result_from_components(components, rho)
+    stratified = fit.strata is not None
+    return SurvDiffResult(
+        n=[int(value) for value in fit.n],
+        obs=fit.obs if stratified else [row[0] for row in fit.obs],
+        exp=fit.exp if stratified else [row[0] for row in fit.exp],
+        var=fit.var,
+        chisq=fit.chisq,
+        pvalue=fit.pvalue,
+        df=int(fit.df),
+        groups=group_levels,
+        strata=(
+            None
+            if not stratified or strata_levels is None
+            else dict(zip(strata_levels, [int(v) for v in fit.strata], strict=True))
+        ),
+    )
 
 
 def survdiff(
-    response: Surv | str,
+    response: Any,
     data: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "na.omit",
+    rho: Any = 0,
+    timefix: Any = True,
     *,
     group: Any | None = None,
-    subset: Any | None = None,
-    na_action: str | None = "fail",
-    rho: float = 0.0,
-    timefix: bool = True,
     **kwargs: Any,
-):
-    """Compare survival curves with R's G-rho family for common survdiff use."""
+) -> SurvDiffResult:
+    """R's ``survdiff``: the log-rank (``rho = 0``) and G-rho family tests.
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
-    timefix = _pop_dotted_keyword(kwargs, "time.fix", "timefix", timefix, True)
+    ``response`` is a formula string (``"Surv(time, status) ~ sex + strata(inst)"``) evaluated
+    in ``data``; an ``offset(expected)`` term of expected survival probabilities gives the
+    one-sample test.  A ``Surv`` object with ``group`` compares its groups.
+    """
+
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.omit")
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"survdiff got unexpected keyword argument(s): {unexpected}")
-
-    formula_strata: Any | None = None
-    formula_group_levels: Sequence[Any] | None = None
-    formula_offsets: list[float] | None = None
+    if not _is_bool_like(timefix):
+        raise ValueError("invalid value for timefix option")
+    rho = _finite_float(rho, "rho")
     if isinstance(response, str):
+        y, columns, strata, offset = _formula_inputs(response, data, subset, na_action)
+        if group is not None:
+            raise ValueError("group is only used with a Surv response")
+        _response_check(y)
+        if offset is not None:
+            return _one_sample(y, offset, rho)
+        if not columns:
+            raise ValueError("No groups to test")
+        codes, levels = _curve_factor(columns, len(y))
+    elif isinstance(response, Surv):
         if subset is not None:
-            data, _aligned = _subset_formula_inputs(response, data, subset)
-            subset = None
-        data, _aligned = _apply_formula_na_action(response, data, na_action)
-        na_action = "pass"
-        response, terms = _parse_formula(response, data)
-        _reject_formula_clusters("survdiff", terms)
-        formula_offsets = _survdiff_offset_formula_values(data, terms, len(response))
-        if formula_offsets is None:
-            group, formula_group_levels, formula_strata = _survdiff_formula_groups(
-                data,
-                terms,
-                len(response),
-            )
-
-    if not isinstance(response, Surv):
-        raise TypeError("survdiff response must be a Surv object or formula")
-    if subset is not None:
-        indices = _subset_indices(subset, len(response))
-        response = _subset_surv(response, indices)
-        group = _subset_optional_sequence(group, indices, "group")
-    response, aligned = _apply_surv_na_action(
-        response,
-        na_action,
-        "survdiff inputs",
-        group=group,
-        strata=formula_strata,
-    )
-    group = aligned["group"]
-    formula_strata = aligned["strata"]
-    if response.type not in {"right", "counting"}:
-        raise NotImplementedError(
-            "survdiff currently supports right-censored and counting Surv responses"
-        )
-    rho_value = _finite_float(rho, "rho")
-    fix_time = _normalize_bool_option(timefix, "timefix")
-    if formula_offsets is not None:
-        return _survdiff_offset_result(response, formula_offsets, rho_value)
-    if group is None:
-        raise ValueError("group is required")
-    if formula_strata is not None:
-        return _stratified_survdiff(
-            response,
-            group,
-            formula_strata,
-            rho_value,
-            fix_time,
-            formula_group_levels,
-        )
-
-    groups = _encode_groups(group, len(response), levels=formula_group_levels)
-    group_codes = [code + 1 for code in groups]
-    if response.start is not None:
-        components = _core.compute_counting_logrank_components(
-            list(response.time),
-            list(response.event),
-            group_codes,
-            list(response.start),
-            None,
-            rho_value,
-            fix_time,
-        )
+            indices = _subset_indices(subset, len(response))
+            response = _subset_surv(response, indices)
+            group = _subset_optional_sequence(group, indices, "group")
+        y, aligned = _apply_surv_na_action(response, na_action, "survdiff inputs", group=group)
+        _response_check(y)
+        if aligned["group"] is None:
+            raise ValueError("No groups to test")
+        columns = {"group": aligned["group"]}
+        codes, _labels = _curve_factor(columns, len(y))
+        # a bare vector has no variable name to label its levels with
+        levels = list(_strata_factor(columns, shortlabel=True).levels)
+        strata = None
     else:
-        components = _core.survdiff2(
-            list(response.time),
-            list(response.event),
-            group_codes,
-            None,
-            rho_value,
-            fix_time,
-        )
-    return _survdiff_result_from_components(components, rho_value)
+        raise TypeError("The 'formula' argument is not a formula")
+    return _k_sample(y, codes, levels, strata, rho, bool(timefix))
