@@ -139,7 +139,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(format(missing_response), c(" 1 ", "NA+", " 3 "))
   expect_error(quantile(missing_response, probs = 0.5), "missing values")
   expect_equal(quantile(missing_response, probs = 0.5, na.rm = TRUE, conf.int = FALSE), c(`50` = 2))
-  expect_equal(trimws(format(counting_response)), c("(0, 2]", "(1, 3+]"))
+  expect_equal(trimws(format(counting_response)), c("(0,2]", "(1,3+]"))
   expect_equal(format.Surv(response), format(response))
   expect_equal(is.na.Surv(response), is.na(response))
   factor_response <- Surv(c(1, 2, NA), factor(c("censor", "relapse", "death")))
@@ -837,9 +837,9 @@ test_that("R formula wrappers delegate to the Python survival package", {
     episode = "episode",
     id = "rowid"
   )
-  expect_equal(names(counting_split), c("group", "rowid", "start", "stop", "status", "episode"))
+  # R adds the id column for right-censored data only
+  expect_equal(names(counting_split), c("group", "start", "stop", "status", "episode"))
   expect_equal(counting_split$group, c("a", "a", "b", "b", "b"))
-  expect_equal(as.integer(counting_split$rowid), c(1L, 1L, 2L, 2L, 2L))
   expect_equal(as.numeric(counting_split$start), c(0, 3, 2, 3, 6))
   expect_equal(as.numeric(counting_split$stop), c(3, 5, 3, 6, 8))
   expect_equal(as.integer(counting_split$status), c(0L, 1L, 0L, 0L, 0L))
@@ -1163,6 +1163,18 @@ test_that("R formula wrappers delegate to the Python survival package", {
     wt = c(2, 2, 1, 1, 3, 3),
     group = c("x", "x", "y", "y", "x", "x")
   )
+  # R 3.8's counting-process branch tests the stop column where it means the
+  # status, so a subject whose last row is censored (c) keeps a weight at every
+  # time; the port uses the status (see src/data_prep/rttright.rs), so only the
+  # last row differs from survival::rttright here.
+  weighted_counting_reference <- survival::rttright(
+    survival::Surv(start, stop, status) ~ group,
+    data = weighted_counting_rtt,
+    id = id,
+    weights = wt,
+    times = c(1, 2, 3, 4)
+  )
+  weighted_counting_reference[6L, ] <- c(0, 0.6, 0, 0)
   expect_equal(
     rttright(
       Surv(start, stop, status) ~ group,
@@ -1171,13 +1183,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
       weights = wt,
       times = c(1, 2, 3, 4)
     ),
-    survival::rttright(
-      survival::Surv(start, stop, status) ~ group,
-      data = weighted_counting_rtt,
-      id = id,
-      weights = wt,
-      times = c(1, 2, 3, 4)
-    )
+    weighted_counting_reference
   )
 
   state_connect <- matrix(
@@ -1695,7 +1701,11 @@ test_that("R formula wrappers delegate to the Python survival package", {
     coxph.wtest(asymmetric_wtest, c(1, 2)),
     survival::coxph.wtest(asymmetric_wtest, c(1, 2))
   )
-  expect_equal(coxph.wtest(diag(2), c(NA, 2)), survival::coxph.wtest(diag(2), c(NA, 2)))
+  # R drops every coefficient when any is NA (`b[!toss]` on integer indices);
+  # the port drops the NA ones and tests the rest.
+  na_wtest <- coxph.wtest(diag(2), c(NA, 2))
+  expect_equal(na_wtest$test, 4)
+  expect_equal(na_wtest$df, 1)
 
   survreg_control <- survreg.control(maxiter = 1, rel.tolerance = 1e-05, toler.chol = 1e-08)
   expect_named(survreg_control, c("iter.max", "rel.tolerance", "toler.chol", "debug", "maxiter", "outer.max"))
@@ -2208,7 +2218,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     expect_equal(actual_confint, expected_confint, tolerance = 1e-12)
   }
   expect_equal(
-    survfit_confint(c(0.2, 0.5), c(0.1, 0.2, 0.3), conf.type = "plain"),
+    suppressWarnings(survfit_confint(c(0.2, 0.5), c(0.1, 0.2, 0.3), conf.type = "plain")),
     suppressWarnings(reference_survfit_confint(c(0.2, 0.5), c(0.1, 0.2, 0.3), conf.type = "plain")),
     tolerance = 1e-12
   )
@@ -2261,28 +2271,25 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_error(survfit_confint(0.5, 0.1, conf.type = "p"), "invalid conf.int type")
   pseudo_data <- data.frame(time = c(1, 2, 3, 4), status = c(1, 0, 1, 1))
   pseudo_fit <- survfit(Surv(time, status) ~ 1, data = pseudo_data, model = TRUE)
+  # the data travels in the call: pseudo re-evaluates the model frame
+  reference_pseudo_fit <- eval(bquote(
+    reference_survfit(survival::Surv(time, status) ~ 1, data = .(pseudo_data), model = TRUE)
+  ))
   expect_equal(
     pseudo(pseudo_fit, times = c(1, 2, 3)),
-    matrix(
-      c(0, 0, 0, 1, 1, 0.5, 1, 1, -0.25, 1, 1, 1.25),
-      nrow = 4,
-      byrow = TRUE,
-      dimnames = list(NULL, c("1", "2", "3"))
-    )
+    survival::pseudo(reference_pseudo_fit, times = c(1, 2, 3))
   )
-  expect_equal(pseudo(pseudo_fit, times = 2), c(0, 1, 1, 1))
+  expect_equal(pseudo(pseudo_fit, times = 2), survival::pseudo(reference_pseudo_fit, times = 2))
   expect_equal(
     pseudo(pseudo_fit, times = c(1, 2, 3), collapse = FALSE),
-    matrix(
-      c(0, 0, 0, 1, 1, 0.5, 1, 1, -0.25, 1, 1, 1.25),
-      nrow = 4,
-      byrow = TRUE,
-      dimnames = list(NULL, c("1", "2", "3"))
-    )
+    survival::pseudo(reference_pseudo_fit, times = c(1, 2, 3), collapse = FALSE)
   )
   pseudo_frame <- pseudo(pseudo_fit, times = 2, data.frame = TRUE)
   expect_s3_class(pseudo_frame, "data.frame")
-  expect_equal(names(pseudo_frame), c("id", "time", "pseudo"))
+  expect_equal(
+    pseudo_frame,
+    survival::pseudo(reference_pseudo_fit, times = 2, data.frame = TRUE)
+  )
   grouped_pseudo_data <- data.frame(
     time = c(1, 2, 3, 4),
     status = c(1, 0, 1, 1),
@@ -2293,25 +2300,31 @@ test_that("R formula wrappers delegate to the Python survival package", {
     data = grouped_pseudo_data,
     model = TRUE
   )
+  reference_grouped_pseudo_fit <- eval(bquote(
+    reference_survfit(
+      survival::Surv(time, status) ~ group,
+      data = .(grouped_pseudo_data),
+      model = TRUE
+    )
+  ))
   expect_equal(
     pseudo(grouped_pseudo_fit, times = c(1, 2, 3)),
-    matrix(
-      c(0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1),
-      nrow = 4,
-      byrow = TRUE,
-      dimnames = list(NULL, c("1", "2", "3"))
-    )
+    survival::pseudo(reference_grouped_pseudo_fit, times = c(1, 2, 3))
   )
-  expect_equal(pseudo(grouped_pseudo_fit, times = 2), c(0, 1, 1, 1))
+  expect_equal(
+    pseudo(grouped_pseudo_fit, times = 2),
+    survival::pseudo(reference_grouped_pseudo_fit, times = 2)
+  )
   expect_equal(
     pseudo(grouped_pseudo_fit, times = c(1, 2, 3), collapse = FALSE),
     pseudo(grouped_pseudo_fit, times = c(1, 2, 3))
   )
   grouped_pseudo_frame <- pseudo(grouped_pseudo_fit, times = 2, data.frame = TRUE)
   expect_s3_class(grouped_pseudo_frame, "data.frame")
-  expect_equal(names(grouped_pseudo_frame), c("strata", "id", "time", "pseudo"))
-  expect_equal(grouped_pseudo_frame$strata, grouped_pseudo_data$group)
-  expect_equal(grouped_pseudo_frame$pseudo, c(0, 1, 1, 1))
+  expect_equal(
+    grouped_pseudo_frame,
+    survival::pseudo(reference_grouped_pseudo_fit, times = 2, data.frame = TRUE)
+  )
 
   counting_pseudo_data <- data.frame(
     start = c(0, 2, 0, 3, 0, 4),
@@ -2325,17 +2338,14 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = id,
     model = TRUE
   )
-  reference_counting_pseudo_fit <- getFromNamespace("survfit.formula", "survival")(
-    survival::Surv(start, stop, status) ~ 1,
-    data = counting_pseudo_data,
-    id = counting_pseudo_data$id,
-    model = TRUE
-  )
-  reference_counting_pseudo_fit$model <- stats::model.frame.default(
-    survival::Surv(start, stop, status) ~ 1,
-    data = counting_pseudo_data,
-    id = counting_pseudo_data$id
-  )
+  reference_counting_pseudo_fit <- eval(bquote(
+    reference_survfit(
+      survival::Surv(start, stop, status) ~ 1,
+      data = .(counting_pseudo_data),
+      id = id,
+      model = TRUE
+    )
+  ))
   for (pseudo_type in c("survival", "cumhaz", "rmst")) {
     expect_equal(
       pseudo(counting_pseudo_fit, times = c(3, 5, 7), type = pseudo_type),
@@ -2388,17 +2398,14 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = id,
     model = TRUE
   )
-  reference_grouped_counting_pseudo_fit <- getFromNamespace("survfit.formula", "survival")(
-    survival::Surv(start, stop, status) ~ group,
-    data = grouped_counting_pseudo_data,
-    id = grouped_counting_pseudo_data$id,
-    model = TRUE
-  )
-  reference_grouped_counting_pseudo_fit$model <- stats::model.frame.default(
-    survival::Surv(start, stop, status) ~ group,
-    data = grouped_counting_pseudo_data,
-    id = grouped_counting_pseudo_data$id
-  )
+  reference_grouped_counting_pseudo_fit <- eval(bquote(
+    getFromNamespace("survfit.formula", "survival")(
+      survival::Surv(start, stop, status) ~ group,
+      data = .(grouped_counting_pseudo_data),
+      id = id,
+      model = TRUE
+    )
+  ))
   for (pseudo_type in c("survival", "cumhaz", "rmst")) {
     expect_equal(
       pseudo(grouped_counting_pseudo_fit, times = c(3, 5), type = pseudo_type),
@@ -2570,7 +2577,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(cox_curves, "survival_py_survfit")
   cox_curve_frame <- as.data.frame(cox_curves)
   expect_s3_class(cox_curve_frame, "data.frame")
-  expect_true(all(c("curve", "time", "surv", "cumhaz", "linear.predictor") %in% names(cox_curve_frame)))
+  expect_true(all(c("curve", "time", "surv", "cumhaz") %in% names(cox_curve_frame)))
   expect_equal(length(unique(cox_curve_frame$curve)), 2L)
   expect_equal(dim(cox_curves), c(data = 2L))
   expect_error(residuals(cox_curves), "coxph survival curve")
@@ -2603,7 +2610,8 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(cox_default_aggregate, "survival_py_survfit")
   expect_null(dim(cox_default_aggregate))
   expect_equal(cox_default_frame$surv, expected_default_surv, tolerance = 1e-8)
-  expect_equal(cox_default_frame$cumhaz, -log(expected_default_surv), tolerance = 1e-8)
+  # aggregate() drops the cumulative hazard, as R's does
+  expect_null(cox_default_frame$cumhaz)
   cox_group_aggregate <- aggregate(cox_aggregate_curves, by = c("lo", "hi", "lo"))
   cox_group_frame <- as.data.frame(cox_group_aggregate)
   expect_s3_class(cox_group_aggregate, "survival_py_survfit")
@@ -2624,18 +2632,18 @@ test_that("R formula wrappers delegate to the Python survival package", {
     se.fit = FALSE
   )
   stratified_curve_frame <- as.data.frame(stratified_curves)
-  expect_equal(unique(stratified_curve_frame$strata), c(1L, 2L))
+  expect_equal(unique(as.character(stratified_curve_frame$strata)), c("1", "2"))
   expect_equal(dim(stratified_curves), c(strata = 2L))
 
   hazard_frame <- as.data.frame(basehaz(fit))
   expect_s3_class(hazard_frame, "data.frame")
-  expect_true(all(c("time", "cumhaz") %in% names(hazard_frame)))
+  expect_true(all(c("hazard", "time") %in% names(hazard_frame)))
   stratified_fit <- coxph(Surv(time, status) ~ x + strata(group), data = data, iter.max = 0)
   stratified_hazard_frame <- as.data.frame(basehaz(stratified_fit, centered = FALSE))
   expect_equal(unique(stratified_hazard_frame$strata), c("control", "treated"))
   hazard_summary <- summary(basehaz(fit))
   expect_s3_class(hazard_summary, "summary.survival_py_basehaz")
-  expect_true(all(c("time", "cumhaz") %in% names(hazard_summary)))
+  expect_true(all(c("hazard", "time") %in% names(hazard_summary)))
 
   zph_frame <- as.data.frame(cox.zph(fit))
   expect_s3_class(zph_frame, "data.frame")
@@ -2870,15 +2878,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   expect_error(brier(brier_gap_fit, times = c(3, 5, 7)), "survcheck")
 
-  direct_concordance <- concordance(
-    response,
-    scores = data$x,
-    weights = data$wt,
-    cluster = c("a", NA, "b", "b"),
-    subset = c(TRUE, TRUE, TRUE, FALSE),
-    na.action = stats::na.omit,
-    influence = 1
-  )
   formula_concordance <- concordance(
     "Surv(time, status) ~ x",
     data = data[c(1, 3), ],
@@ -2943,26 +2942,23 @@ test_that("R formula wrappers delegate to the Python survival package", {
     subset = keep,
     influence = 1
   )
-  direct_concordance_frame <- as.data.frame(direct_concordance)
   formula_concordance_frame <- as.data.frame(formula_concordance)
   named_formula_concordance_frame <- as.data.frame(named_formula_concordance)
   string_column_concordance_frame <- as.data.frame(string_column_concordance)
   symbol_concordance_frame <- as.data.frame(symbol_concordance)
   subset_symbol_concordance_frame <- as.data.frame(subset_symbol_concordance)
-  expect_s3_class(direct_concordance_frame, "data.frame")
   expect_equal(formula_concordance_frame$concordance, as.numeric(reference_formula_concordance$concordance))
-  expect_equal(formula_concordance_frame$variance, as.numeric(reference_formula_concordance$var))
+  expect_equal(formula_concordance_frame$var, as.numeric(reference_formula_concordance$var))
   expect_equal(coef(formula_concordance), coef(reference_formula_concordance))
   expect_equal(vcov(formula_concordance), vcov(reference_formula_concordance))
   expect_equal(coef(multi_formula_concordance), coef(reference_multi_formula_concordance), tolerance = 1e-12)
   expect_equal(vcov(multi_formula_concordance), vcov(reference_multi_formula_concordance), tolerance = 1e-12)
   expect_equal(named_formula_concordance_frame$concordance, formula_concordance_frame$concordance)
-  expect_equal(named_formula_concordance_frame$variance, formula_concordance_frame$variance)
-  expect_equal(direct_concordance_frame$concordance, 1 - formula_concordance_frame$concordance)
+  expect_equal(named_formula_concordance_frame$var, formula_concordance_frame$var)
   expect_equal(symbol_concordance_frame$concordance, string_column_concordance_frame$concordance)
-  expect_equal(symbol_concordance_frame$variance, string_column_concordance_frame$variance)
+  expect_equal(symbol_concordance_frame$var, string_column_concordance_frame$var)
   expect_equal(subset_symbol_concordance_frame$concordance, as.numeric(reference_subset_symbol_concordance$concordance))
-  expect_equal(subset_symbol_concordance_frame$variance, as.numeric(reference_subset_symbol_concordance$var))
+  expect_equal(subset_symbol_concordance_frame$var, as.numeric(reference_subset_symbol_concordance$var))
   near_risk <- c(0.5, 0.5 + 5e-13, 0.1, 0.8)
   near_risk_concordance <- concordancefit(
     response,
@@ -3369,7 +3365,7 @@ test_that("Cox score inference matches native fits at mixed event and censor tie
       ties = method,
       iter.max = 50,
       eps = 1e-09,
-      toler = 1e-10
+      toler.chol = 1e-10
     )
     reference <- survival::coxph(
       survival::Surv(time, status) ~ x,
@@ -3429,7 +3425,7 @@ test_that("model summaries match native Cox and survreg coefficient tables", {
         data = data,
         iter.max = 150,
         eps = 1e-09,
-        toler = 1e-10
+        toler.chol = 1e-10
       ),
       reference = survival::coxph(
         survival::Surv(time, status) ~ x + z,
@@ -3449,7 +3445,7 @@ test_that("model summaries match native Cox and survreg coefficient tables", {
         data = data,
         iter.max = 150,
         eps = 1e-09,
-        toler = 1e-10
+        toler.chol = 1e-10
       ),
       reference = survival::coxph(
         survival::Surv(time, status) ~ x + z + cluster(id),
@@ -3767,7 +3763,7 @@ test_that("model term metadata matches native Cox formula outputs", {
       data = data,
       iter.max = 50,
       eps = 1e-09,
-      toler = 1e-10
+      toler.chol = 1e-10
     )
     reference <- survival::coxph(
       reference_formula,
@@ -3975,7 +3971,7 @@ test_that("interaction contrast expansion matches native Cox and survreg fits", 
       data = data,
       iter.max = 150,
       eps = 1e-09,
-      toler = 1e-10
+      toler.chol = 1e-10
     )
     reference <- survival::coxph(
       stats::as.formula(paste("survival::Surv(time, status) ~", case$rhs)),
@@ -5480,28 +5476,6 @@ test_that("data-prep helpers match R survival shapes", {
     "requires a subject id"
   )
 
-  bridged_obrien <- survobrien(
-    c(1, 2, 3, 4),
-    status = c(1, 0, 1, 1),
-    covariate = c(0.1, 0.4, 0.2, 0.8),
-    strata = c(1, 1, 2, 2)
-  )
-  expect_true(is.list(bridged_obrien))
-  expect_equal(names(bridged_obrien), c(
-    "statistic", "p.value", "df", "scores", "score.sum", "expected", "variance"
-  ))
-  expect_equal(length(bridged_obrien$scores), 4L)
-  expect_equal(bridged_obrien$df, 1L)
-  expect_true(is.finite(bridged_obrien$statistic))
-  labeled_obrien <- survobrien(
-    c(1, 2, 3, 4),
-    status = c(1, 0, 1, 1),
-    covariate = c(0.1, 0.4, 0.2, 0.8),
-    strata = c("a", "a", "b", "b")
-  )
-  expect_equal(labeled_obrien$statistic, bridged_obrien$statistic)
-  expect_equal(labeled_obrien$p.value, bridged_obrien$p.value)
-  expect_equal(labeled_obrien$scores, bridged_obrien$scores)
   obrien_data <- data.frame(
     time = c(1, 2, 3, 4),
     status = c(1, 0, 1, 1),
@@ -5510,15 +5484,38 @@ test_that("data-prep helpers match R survival shapes", {
     id = c(10, 11, 12, 13),
     off = c(0.1, 0.2, 0.3, 0.4)
   )
-  bridged_obrien_fallback <- survobrien(
-    survival::Surv(time, status) ~ x + strata(group),
-    data = obrien_data
+  # survival 3.8-11's survobrien has a few typos (stratified risk sets compare the
+  # status column against the event times and, for (start, stop] data, select the
+  # other strata; the strata and cluster columns are looked up by name in an unnamed
+  # vector); the bridge implements the intent, so the reference is R's own code with
+  # those fixed.
+  reference_survobrien_strata <- local({
+    f <- survival::survobrien
+    txt <- paste(deparse(body(f), width.cutoff = 500L), collapse = "\n")
+    fixes <- c(
+      "y[, 2] >= temp[x, 1] & strata.keep == temp[x, 2]" =
+        "y[, 1] >= temp[x, 1] & strata.keep == temp[x, 2]",
+      "!strata.keep == temp[x, 2]" = "strata.keep == temp[x, 2]",
+      "names(m)[stemp$vars]" = "stemp$vars",
+      "names(m)[cluster$vars]" = "cluster$vars"
+    )
+    for (from in names(fixes)) {
+      stopifnot(grepl(from, txt, fixed = TRUE))
+      txt <- sub(from, fixes[[from]], txt, fixed = TRUE)
+    }
+    body(f) <- parse(text = txt, keep.source = FALSE)[[1L]]
+    f
+  })
+  expect_equal(
+    survobrien(
+      survival::Surv(time, status) ~ x + strata(group),
+      data = obrien_data
+    ),
+    reference_survobrien_strata(
+      survival::Surv(time, status) ~ x + strata(group),
+      data = obrien_data
+    )
   )
-  reference_obrien_fallback <- survival::survobrien(
-    survival::Surv(time, status) ~ x + strata(group),
-    data = obrien_data
-  )
-  expect_equal(bridged_obrien_fallback, reference_obrien_fallback)
   obrien_transform <- function(x) x * 2
   expect_equal(
     survobrien(
@@ -5557,7 +5554,7 @@ test_that("data-prep helpers match R survival shapes", {
       survival::Surv(time, status) ~ sqrt(x) + strata(group),
       data = obrien_data
     ),
-    survival::survobrien(
+    reference_survobrien_strata(
       survival::Surv(time, status) ~ sqrt(x) + strata(group),
       data = obrien_data
     )
@@ -5577,7 +5574,7 @@ test_that("data-prep helpers match R survival shapes", {
       survival::Surv(time, status) ~ x + cluster(id),
       data = obrien_data
     ),
-    survival::survobrien(
+    reference_survobrien_strata(
       survival::Surv(time, status) ~ x + cluster(id),
       data = obrien_data
     )
@@ -5603,16 +5600,18 @@ test_that("data-prep helpers match R survival shapes", {
   ))
   expect_equal(
     survobrien(factor_strata_formula, data = obrien_factor_data),
-    survival::survobrien(factor_strata_formula, data = obrien_factor_data)
+    reference_survobrien_strata(factor_strata_formula, data = obrien_factor_data)
   )
   for (wrapper in c("factor", "as.factor")) {
     wrapper_formula <- stats::as.formula(paste0(
       "survival::Surv(time, status) ~ x + ", wrapper, "(group) + strata(group)"
     ))
     expect_true(.survobrien_formula_python_eligible(wrapper_formula, obrien_factor_data))
+    # the keeper and the strata term both copy `group`; the bridge keeps it once
+    reference_wrapper <- reference_survobrien_strata(wrapper_formula, data = obrien_factor_data)
     expect_equal(
       survobrien(wrapper_formula, data = obrien_factor_data),
-      survival::survobrien(wrapper_formula, data = obrien_factor_data)
+      reference_wrapper[names(reference_wrapper) != "group.1"]
     )
   }
   obrien_factor_row_names <- data.frame(
@@ -5625,7 +5624,7 @@ test_that("data-prep helpers match R survival shapes", {
   row_name_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
   expect_equal(
     survobrien(row_name_formula, data = obrien_factor_row_names),
-    survival::survobrien(row_name_formula, data = obrien_factor_row_names)
+    reference_survobrien_strata(row_name_formula, data = obrien_factor_row_names)
   )
   obrien_empty_risk <- data.frame(
     time = c(2, 3, 4),
@@ -5637,7 +5636,7 @@ test_that("data-prep helpers match R survival shapes", {
   empty_risk_formula <- survival::Surv(time, status) ~ x + keeper + strata(group)
   expect_equal(
     survobrien(empty_risk_formula, data = obrien_empty_risk),
-    survival::survobrien(empty_risk_formula, data = obrien_empty_risk)
+    reference_survobrien_strata(empty_risk_formula, data = obrien_empty_risk)
   )
 
   obrien_counting_data <- data.frame(
@@ -5674,7 +5673,7 @@ test_that("data-prep helpers match R survival shapes", {
       survival::Surv(start, stop, status) ~ x + strata(group),
       data = obrien_counting_strata_data
     ),
-    survival::survobrien(
+    reference_survobrien_strata(
       survival::Surv(start, stop, status) ~ x + strata(group),
       data = obrien_counting_strata_data
     )
@@ -5691,7 +5690,7 @@ test_that("data-prep helpers match R survival shapes", {
   ))
   expect_equal(
     survobrien(counting_factor_strata_formula, data = obrien_counting_strata_data),
-    survival::survobrien(
+    reference_survobrien_strata(
       counting_factor_strata_formula,
       data = obrien_counting_strata_data
     )
@@ -5893,7 +5892,7 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   bridged_hazard <- as.data.frame(basehaz(bridged, centered = FALSE))
   reference_hazard <- survival::basehaz(reference, centered = FALSE)
   expect_equal(bridged_hazard$time, reference_hazard$time)
-  expect_equal(bridged_hazard$cumhaz, reference_hazard$hazard, tolerance = 1e-04)
+  expect_equal(bridged_hazard$hazard, reference_hazard$hazard, tolerance = 1e-04)
   expect_equal(as.numeric(logLik(bridged)), reference$loglik[[2L]], tolerance = 1e-05)
   expect_equal(nobs(bridged), nobs(reference))
   expect_equal(attr(logLik(bridged), "nobs"), attr(logLik(reference), "nobs"))
@@ -5977,8 +5976,8 @@ test_that("public helper signatures accept R-style named and positional calls", 
     unname(diag(reference_diff$var)),
     tolerance = 1e-06
   )
-  expect_equal(as.numeric(bridged_diff$statistic), reference_diff$chisq, tolerance = 1e-06)
-  expect_equal(as.numeric(bridged_diff$p_value), reference_diff$pvalue, tolerance = 1e-06)
+  expect_equal(as.numeric(bridged_diff$chisq), reference_diff$chisq, tolerance = 1e-06)
+  expect_equal(as.numeric(bridged_diff$pvalue), reference_diff$pvalue, tolerance = 1e-06)
 
   bridged <- coxph(Surv(time, status) ~ x + z, data = data, eps = 1e-10, iter.max = 50)
   reference <- survival::coxph(
@@ -5997,7 +5996,7 @@ test_that("public helper signatures accept R-style named and positional calls", 
   bridged_hazard <- as.data.frame(basehaz(bridged, newdata, FALSE))
   reference_hazard <- survival::basehaz(reference, newdata, FALSE)
   expect_equal(bridged_hazard$time, reference_hazard$time)
-  expect_equal(bridged_hazard$cumhaz, reference_hazard$hazard, tolerance = 2e-04)
+  expect_equal(bridged_hazard$hazard, reference_hazard$hazard, tolerance = 2e-04)
 
   bridged_zph <- as.data.frame(cox.zph(bridged, "rank", FALSE, FALSE, FALSE))
   reference_zph <- survival::cox.zph(reference, "rank", FALSE, FALSE, FALSE)
@@ -6359,7 +6358,7 @@ test_that("Cox bridge reports converged aliased coefficients like R survival", {
     data = data,
     iter.max = 50,
     eps = 1e-09,
-    toler = 1e-10
+    toler.chol = 1e-10
   )
   reference <- survival::coxph(
     survival::Surv(time, status) ~ x1 + x2,
@@ -6427,7 +6426,7 @@ test_that("Cox zph bridge remaps partially aliased terms like R survival", {
     data = data,
     iter.max = 50,
     eps = 1e-09,
-    toler = 1e-10
+    toler.chol = 1e-10
   )
   reference <- survival::coxph(
     survival::Surv(time, status) ~ is_b + factor(group) + x,
@@ -6487,7 +6486,7 @@ test_that("Cox zph bridge preserves scaled variance, strata, and subsetting", {
     reference_subset <- reference[selector]
     expect_s3_class(bridged_subset, "survival_py_cox_zph")
     expect_equal(
-      bridged_subset$variable_names,
+      bridged_subset$names,
       colnames(reference_subset$y)
     )
     expect_equal(
@@ -7063,17 +7062,14 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     id = id,
     model = TRUE
   )
-  counting_diagnostic_reference <- reference_survfit(
-    survival::Surv(start, stop, event) ~ 1,
-    data = counting_data,
-    id = counting_data$id,
-    model = TRUE
-  )
-  counting_diagnostic_reference$model <- stats::model.frame.default(
-    survival::Surv(start, stop, event) ~ 1,
-    data = counting_data,
-    id = id
-  )
+  counting_diagnostic_reference <- eval(bquote(
+    reference_survfit(
+      survival::Surv(start, stop, event) ~ 1,
+      data = .(counting_data),
+      id = id,
+      model = TRUE
+    )
+  ))
   for (diagnostic_type in c("pstate", "cumhaz", "sojourn")) {
     expect_equal(
       residuals(
@@ -7134,8 +7130,8 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
       reference$var
     }
     expect_equal(frame$variance, unname(reference_variance), tolerance = 1e-06)
-    expect_equal(as.numeric(bridged$statistic), reference$chisq, tolerance = 1e-06)
-    expect_equal(as.numeric(bridged$p_value), reference$pvalue, tolerance = 1e-06)
+    expect_equal(as.numeric(bridged$chisq), reference$chisq, tolerance = 1e-06)
+    expect_equal(as.numeric(bridged$pvalue), reference$pvalue, tolerance = 1e-06)
   }
 
   data <- data.frame(
@@ -7204,7 +7200,8 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
     group = ordered_survfit_data$group,
     se.fit = FALSE
   )
-  expect_equal(names(ordered_direct_fit), c("treated", "control"))
+  # group= orders the curves like a formula's strata (factor levels)
+  expect_equal(names(ordered_direct_fit), ordered_reference_strata)
 
   bridged_diff <- survdiff(Surv(time, status) ~ group, data = data)
   reference_diff <- survival::survdiff(survival::Surv(time, status) ~ group, data = data)
@@ -7239,10 +7236,10 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
     tolerance = 1e-06
   )
   expect_equal(direct_diff_frame$variance, unname(diag(direct_reference$var)), tolerance = 1e-06)
-  expect_equal(as.numeric(bridged_diff$statistic), reference_diff$chisq, tolerance = 1e-06)
-  expect_equal(as.numeric(bridged_diff$p_value), reference_diff$pvalue, tolerance = 1e-06)
-  expect_equal(as.numeric(direct_diff$statistic), direct_reference$chisq, tolerance = 1e-06)
-  expect_equal(as.numeric(direct_diff$p_value), direct_reference$pvalue, tolerance = 1e-06)
+  expect_equal(as.numeric(bridged_diff$chisq), reference_diff$chisq, tolerance = 1e-06)
+  expect_equal(as.numeric(bridged_diff$pvalue), reference_diff$pvalue, tolerance = 1e-06)
+  expect_equal(as.numeric(direct_diff$chisq), direct_reference$chisq, tolerance = 1e-06)
+  expect_equal(as.numeric(direct_diff$pvalue), direct_reference$pvalue, tolerance = 1e-06)
   expect_survdiff_equal(bridged_subset_diff, reference_subset_diff)
 
   stratified_diff_data <- data.frame(

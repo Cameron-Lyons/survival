@@ -47,6 +47,21 @@ if (getRversion() >= "2.15.1") {
   reticulate::py_get_attr(.survival_core_module(), name)
 }
 
+.survival_population_module <- local({
+  module <- NULL
+
+  function() {
+    if (is.null(module)) {
+      module <<- reticulate::import("survival.population", convert = TRUE)
+    }
+    module
+  }
+})
+
+.population_attr <- function(name) {
+  reticulate::py_get_attr(.survival_population_module(), name)
+}
+
 .survival_pybridge_module <- local({
   module <- NULL
 
@@ -320,7 +335,8 @@ if (getRversion() >= "2.15.1") {
       as.integer(value)
     }
   }, integer(1))
-  factor(code_values, levels = seq_along(result$levels), labels = as.character(result$levels))
+  # the Python codes are 0-based
+  factor(code_values + 1L, levels = seq_along(result$levels), labels = as.character(result$levels))
 }
 
 strata <- function(..., na.group = FALSE, shortlabel, sep = ", ") {
@@ -549,6 +565,16 @@ attrassign <- function(object, tt) {
     !missing(stop) || !missing(status)
 
   if (use_named_response) {
+    # time1/start, stop and status are this package's aliases for R's time, time2, event
+    if ((!missing(time)) + (!missing(time1)) + (!missing(start)) > 1L) {
+      base::stop("multiple time= arguments given (time, time1, start)", call. = FALSE)
+    }
+    if ((!missing(time2)) + (!missing(stop)) > 1L) {
+      base::stop("multiple time2= arguments given (time2, stop)", call. = FALSE)
+    }
+    if ((!missing(event)) + (!missing(status)) > 1L) {
+      base::stop("multiple event= arguments given (event, status)", call. = FALSE)
+    }
     args <- list()
     if (!missing(time)) {
       args$time <- time
@@ -1002,6 +1028,7 @@ attrassign <- function(object, tt) {
   class(frame) <- c("summary.survival_py_survfit", class(frame))
   frame
 }
+
 
 .print_tabular_result <- function(x, ...) {
   print(as.data.frame(x), ...)
@@ -1459,12 +1486,6 @@ attrassign <- function(object, tt) {
   value
 }
 
-.tcut_default_labels <- function(breaks) {
-  left <- format(breaks[-length(breaks)])
-  right <- format(breaks[-1L])
-  paste0(left, "+ thru ", right)
-}
-
 .is_integerish_vector <- function(value) {
   numeric_value <- suppressWarnings(as.numeric(value))
   length(numeric_value) == length(value) &&
@@ -1480,8 +1501,19 @@ attrassign <- function(object, tt) {
   value
 }
 
+# `id = id` names a column of the data: pass the name, so the Python fit records
+# it (R labels the residuals' id dimension after it, "(id)" for a vector).
+.name_id_column <- function(evaluated_dots, dots, data) {
+  id_expr <- dots[["id"]]
+  if (!is.null(id_expr) && is.name(id_expr) && !is.null(data) &&
+    as.character(id_expr) %in% names(data)) {
+    evaluated_dots[["id"]] <- as.character(id_expr)
+  }
+  evaluated_dots
+}
+
 .call_r_api <- function(name, ..., .wrap = character()) {
-  arguments <- .compact_null(list(...))
+  arguments <- lapply(.compact_null(list(...)), .unwrap_grouped_survfit)
   if (name %in% c("coxph", "survreg", "clogit")) {
     captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments)
     result <- captured$result
@@ -1491,10 +1523,29 @@ attrassign <- function(object, tt) {
   } else {
     result <- do.call(.python_attr(name), arguments)
   }
+  if (name %in% c("survfit", "survfit0")) {
+    result <- .split_survfit_strata(result)
+  }
   if (length(.wrap) > 0L) {
     return(.wrap_python(result, .wrap))
   }
   result
+}
+
+# A stratified survfit is a named list of per-stratum curves on this side (keyed by
+# the bare levels); the Python object it came from rides along for the calls that
+# take the whole fit back (pseudo, residuals, summary, ...).
+.split_survfit_strata <- function(result) {
+  curves <- .python_attr("_survfit_strata_curves")(result)
+  if (is.list(curves) && !inherits(curves, "python.builtin.object")) {
+    attr(curves, "python_survfit") <- result
+  }
+  curves
+}
+
+.unwrap_grouped_survfit <- function(value) {
+  python_object <- attr(value, "python_survfit", exact = TRUE)
+  if (!is.null(python_object)) python_object else value
 }
 
 .call_data_prep <- function(name, ...) {
@@ -2295,32 +2346,17 @@ tcut <- function(x, breaks, labels, scale = 1) {
   if (length(breaks) < 1L) {
     stop("breaks must have at least 1 element", call. = FALSE)
   }
-  if (length(breaks) == 1L) {
-    labels_value <- if (missing(labels)) NULL else as.character(labels)
-    result <- .call_data_prep("tcut", x, breaks, labels_value)
-    return(structure(
-      x * scale,
-      cutpoints = as.numeric(result$breaks) * scale,
-      labels = as.character(result$levels),
-      class = "tcut"
-    ))
-  }
-  if (anyNA(breaks) || is.unsorted(breaks, strictly = FALSE)) {
-    stop("breaks must be given in ascending order and contain no NA's", call. = FALSE)
-  }
-  labels <- if (missing(labels)) {
-    .tcut_default_labels(breaks)
-  } else {
-    as.character(labels)
-  }
-  if (length(labels) != length(breaks) - 1L) {
-    stop("labels length must equal length(breaks) - 1", call. = FALSE)
-  }
-  .call_data_prep("tcut", x, breaks, labels)
+  result <- .call_r_api(
+    "tcut",
+    .as_python_vector(x),
+    if (length(breaks) == 1L) breaks else .as_python_vector(breaks),
+    labels = if (missing(labels)) NULL else as.list(as.character(labels)),
+    scale = scale
+  )
   structure(
-    x * scale,
-    cutpoints = breaks * scale,
-    labels = labels,
+    .as_numeric_vector(.result_field(result, "values")),
+    cutpoints = .as_numeric_vector(.result_field(result, "cutpoints")),
+    labels = as.character(.result_field(result, "labels")),
     class = "tcut"
   )
 }
@@ -2354,32 +2390,17 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   if (is.factor(y1) || is.factor(y2)) {
     stop("y1 and y2 must be sortable", call. = FALSE)
   }
-  y1 <- as.numeric(y1)
-  y2 <- as.numeric(y2)
-  python_y1 <- lapply(y1, function(value) if (is.na(value)) NaN else value)
-  python_y2 <- lapply(y2, function(value) if (is.na(value)) NaN else value)
-
-  if (.is_integerish_vector(id1) && .is_integerish_vector(id2)) {
-    result <- .call_data_prep(
-      "neardate",
-      as.list(as.integer(id1)),
-      python_y1,
-      as.list(as.integer(id2)),
-      python_y2,
-      best = best
-    )
-  } else {
-    result <- .call_data_prep(
-      "neardate_str",
-      as.list(as.character(id1)),
-      python_y1,
-      as.list(as.character(id2)),
-      python_y2,
-      best = best
-    )
+  python_na <- function(values) {
+    lapply(as.numeric(values), function(value) if (is.na(value)) NULL else value)
   }
-
-  indices <- result$indices
+  indices <- .call_r_api(
+    "neardate",
+    as.list(id1),
+    as.list(id2),
+    python_na(y1),
+    python_na(y2),
+    best = best
+  )
   matched <- !vapply(indices, is.null, logical(1))
   values <- rep(nomatch, length(indices))
   values[matched] <- as.integer(unlist(indices[matched], use.names = FALSE)) + 1L
@@ -2436,27 +2457,37 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
     !missing(stop) || !missing(status)
 
   if (use_named_response) {
+    # time1/start, stop and status are this package's aliases for R's time, time2, event
+    if ((!missing(time)) + (!missing(time1)) + (!missing(start)) > 1L) {
+      base::stop("multiple time= arguments given (time, time1, start)", call. = FALSE)
+    }
+    if ((!missing(time2)) + (!missing(stop)) > 1L) {
+      base::stop("multiple time2= arguments given (time2, stop)", call. = FALSE)
+    }
+    if ((!missing(event)) + (!missing(status)) > 1L) {
+      base::stop("multiple event= arguments given (event, status)", call. = FALSE)
+    }
     args <- list()
     if (!missing(time)) {
       args$time <- time
     }
     if (!missing(time1)) {
-      args$time1 <- time1
+      args$time <- time1
     }
     if (!missing(start)) {
-      args$start <- start
+      args$time <- start
     }
     if (!missing(time2)) {
       args$time2 <- time2
     }
     if (!missing(stop)) {
-      args$stop <- stop
+      args$time2 <- stop
     }
     if (!missing(event)) {
       args$event <- event
     }
     if (!missing(status)) {
-      args$status <- status
+      args$event <- status
     }
   } else {
     args <- list(time)
@@ -2481,27 +2512,37 @@ Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop
     !missing(stop) || !missing(status)
 
   if (use_named_response) {
+    # time1/start, stop and status are this package's aliases for R's time, time2, event
+    if ((!missing(time)) + (!missing(time1)) + (!missing(start)) > 1L) {
+      base::stop("multiple time= arguments given (time, time1, start)", call. = FALSE)
+    }
+    if ((!missing(time2)) + (!missing(stop)) > 1L) {
+      base::stop("multiple time2= arguments given (time2, stop)", call. = FALSE)
+    }
+    if ((!missing(event)) + (!missing(status)) > 1L) {
+      base::stop("multiple event= arguments given (event, status)", call. = FALSE)
+    }
     args <- list()
     if (!missing(time)) {
       args$time <- time
     }
     if (!missing(time1)) {
-      args$time1 <- time1
+      args$time <- time1
     }
     if (!missing(start)) {
-      args$start <- start
+      args$time <- start
     }
     if (!missing(time2)) {
       args$time2 <- time2
     }
     if (!missing(stop)) {
-      args$stop <- stop
+      args$time2 <- stop
     }
     if (!missing(event)) {
       args$event <- event
     }
     if (!missing(status)) {
-      args$status <- status
+      args$event <- status
     }
   } else {
     args <- list(time)
@@ -3152,27 +3193,45 @@ cipoisson <- function(k, time = 1, p = 0.95, method = c("exact", "anscombe")) {
   out
 }
 
-lvcf <- function(id, x, time) {
-  result <- .call_r_api(
-    "lvcf",
-    id = .as_python_vector(id),
-    x = .as_python_vector(x),
-    time = if (missing(time)) NULL else .as_python_vector(time)
-  )
-  if (is.factor(x)) {
-    return(factor(.as_nullable_character_vector(result), levels = levels(x)))
-  }
-  if (is.integer(x)) {
-    output <- as.integer(.as_nullable_numeric_vector(result))
-  } else if (is.numeric(x)) {
-    output <- .as_nullable_numeric_vector(result)
-  } else if (is.logical(x)) {
-    output <- .as_nullable_logical_vector(result)
+lvcf <- function(id, x, time, first = TRUE) {
+  # R's lvcf as it is: any orderable time, the first value of a subject filled in
+  if (!missing(time)) {
+    indx <- order(id, time)
   } else {
-    output <- .as_nullable_character_vector(result)
+    indx <- order(id)
   }
-  attributes(output) <- attributes(x)
-  output
+  obs1 <- indx[which(!duplicated(id[indx]))]
+  if (first && any(is.na(x[obs1]))) {
+    if (is.logical(x)) {
+      x[obs1] <- ifelse(is.na(x[obs1]), FALSE, x[obs1])
+    } else if (is.numeric(x) && all(is.na(x) | x == 0 | x == 1)) {
+      x[obs1] <- ifelse(is.na(x[obs1]), 0L, x[obs1])
+    }
+  }
+  if (is.factor(x)) {
+    xlev <- levels(x)
+    x <- as.integer(x)
+    for (i in seq(along.with = x)) {
+      j <- indx[i]
+      if (i == 1 || !is.na(x[j]) || id[j] != id[jlag]) {
+        current <- x[j]
+      } else {
+        x[j] <- current
+      }
+      jlag <- j
+    }
+    return(factor(x, seq(along.with = xlev), xlev))
+  }
+  for (i in seq(along.with = x)) {
+    j <- indx[i]
+    if (i == 1 || !is.na(x[j]) || id[j] != id[jlag]) {
+      current <- x[j]
+    } else {
+      x[j] <- current
+    }
+    jlag <- j
+  }
+  x
 }
 
 nostutter <- function(id, x, censor = 0, single = FALSE) {
@@ -3231,83 +3290,64 @@ blog <- function(edge = 0.05) {
   NULL
 }
 
-.survexp_ratetable_fit <- function(group, expected_data, followup, times,
-                                   conditional, ratetable) {
+# The Python RateTable for an R ratetable: dates become ratetable days and the
+# legacy `factor` attribute becomes R's type codes (1 factor, 2 continuous, 4 US year).
+.as_python_ratetable <- function(ratetable) {
   atts <- attributes(ratetable)
-  times <- sort(unique(times))
-  cuts <- lapply(atts$cutpoints, function(value) {
-    if (!is.null(value) && inherits(value, c("Date", "POSIXt", "date", "chron"))) {
-      ratetableDate(value)
+  cutpoints <- lapply(atts$cutpoints, function(value) {
+    if (is.null(value)) {
+      NULL
+    } else if (inherits(value, c("Date", "POSIXt", "date", "chron"))) {
+      as.numeric(ratetableDate(value))
     } else {
-      value
+      as.numeric(value)
     }
   })
-  if (is.null(atts$type)) {
+  types <- if (is.null(atts$type)) {
     factors <- as.integer(atts$factor)
-    us_special <- factors > 1L
+    ifelse(factors > 1L, 4L, ifelse(factors == 1L, 1L, 2L))
   } else {
-    factors <- as.integer(atts$type == 1L)
-    us_special <- atts$type == 4L
+    as.integer(atts$type)
   }
-
-  if (any(us_special)) {
-    dimid <- if (is.null(atts$dimid)) names(atts$dimnames) else atts$dimid
-    age_year <- match(c("age", "year"), dimid)
-    if (any(is.na(age_year))) {
-      stop("ratetable does not have expected shape", call. = FALSE)
-    }
-    birth_date <- as.Date("1970-01-01") +
-      (expected_data[, age_year[[2L]]] - expected_data[, age_year[[1L]]])
-    birth_year <- format(birth_date, "%Y")
-    offset <- as.numeric(birth_date - as.Date(paste0(birth_year, "-01-01")))
-    expected_data[, age_year[[2L]]] <- expected_data[, age_year[[2L]]] - offset
-
-    if (any(factors > 1L)) {
-      special_dimension <- which(us_special)[[1L]]
-      year_count <- length(cuts[[special_dimension]])
-      interpolation <- factors[[special_dimension]]
-      cuts[[special_dimension]] <- round(
-        stats::approx(
-          interpolation * seq_len(year_count),
-          cuts[[special_dimension]],
-          interpolation:(interpolation * year_count)
-        )$y - 1e-4
-      )
-    }
-  }
-
-  py_sequence <- function(value) {
-    value <- unname(value)
-    if (length(value) <= 1L) as.list(value) else value
-  }
-  raw <- .call_pybridge(
-    "perform_survexp_fit",
-    isTRUE(conditional),
-    py_sequence(factors),
-    py_sequence(as.integer(atts$dim)),
-    py_sequence(as.numeric(unlist(cuts, use.names = FALSE))),
-    py_sequence(as.numeric(ratetable)),
-    py_sequence(as.integer(group)),
-    py_sequence(as.numeric(expected_data)),
-    py_sequence(as.numeric(followup)),
-    py_sequence(as.numeric(times)),
-    as.integer(max(group))
+  dimid <- if (is.null(atts$dimid)) names(atts$dimnames) else atts$dimid
+  .population_attr("RateTable")(
+    dims = as.list(as.integer(atts$dim)),
+    dimid = as.list(dimid),
+    dimnames = unname(lapply(atts$dimnames, function(labels) as.list(as.character(labels)))),
+    cutpoints = unname(lapply(cutpoints, function(value) if (is.null(value)) NULL else as.list(value))),
+    types = as.list(types),
+    rates = as.list(as.numeric(ratetable))
   )
-  interval_survival <- .as_numeric_vector(.result_field(raw, "surv"))
-  n_risk <- as.integer(.as_numeric_vector(.result_field(raw, "n")))
+}
+
+# The Python survexp kernel on matched rate-table positions: the individual
+# methods give one value per subject, the cohort methods the fit at each of `times`
+# (which already holds every output time).
+.survexp_ratetable_fit <- function(group, expected_data, followup, times,
+                                   method, ratetable) {
+  times <- sort(unique(times))
   n_times <- length(times)
   n_groups <- max(group)
-
-  if (n_times == 1L) {
-    list(surv = interval_survival, n = n_risk)
-  } else if (n_groups > 1L) {
-    interval_matrix <- matrix(interval_survival, n_times, n_groups)
-    list(
-      surv = apply(interval_matrix, 2L, cumprod),
-      n = matrix(n_risk, n_times, n_groups)
-    )
+  positions <- lapply(seq_len(nrow(expected_data)), function(row) {
+    as.list(as.numeric(expected_data[row, ]))
+  })
+  raw <- .population_attr("survexp")(
+    ratetable = .as_python_ratetable(ratetable),
+    positions = positions,
+    y = as.list(as.numeric(followup)),
+    group = as.list(as.integer(group) - 1L),
+    times = as.list(as.numeric(times)),
+    method = method
+  )
+  if (startsWith(method, "individual")) {
+    return(unlist(raw$surv))
+  }
+  survival <- matrix(unlist(raw$surv), n_times, n_groups, byrow = TRUE)
+  n_risk <- matrix(as.integer(unlist(raw$n_risk)), n_times, n_groups, byrow = TRUE)
+  if (n_groups > 1L) {
+    list(surv = survival, n = n_risk)
   } else {
-    list(surv = cumprod(interval_survival), n = n_risk)
+    list(surv = c(survival), n = c(n_risk))
   }
 }
 
@@ -3452,10 +3492,9 @@ blog <- function(edge = 0.05) {
     if (no_response) {
       stop("for individual survival an observation time must be given", call. = FALSE)
     }
-    fit <- .survexp_ratetable_fit(
-      seq_len(n), expected_data, response, max(response), TRUE, ratetable
+    values <- .survexp_ratetable_fit(
+      seq_len(n), expected_data, response, max(response), method, ratetable
     )
-    values <- if (method == "individual.s") fit$surv else -log(fit$surv)
     names(values) <- row.names(model_frame)
     omitted <- attr(model_frame, "na.action")
     if (length(omitted)) stats::naresid(omitted, values) else values
@@ -3472,7 +3511,7 @@ blog <- function(edge = 0.05) {
     }
     fit <- .survexp_ratetable_fit(
       as.numeric(groups), expected_data, response, new_time,
-      method == "conditional", ratetable
+      if (method == "conditional") "conditional" else "hakulinen", ratetable
     )
     if (times_missing) {
       n_risk <- fit$n
@@ -3578,6 +3617,10 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
       "direct survexp bridge requires a Python RateTable; omit ratetable to use the bundled Python table",
       call. = FALSE
     )
+  }
+  if (!is.null(sex) && is.numeric(sex) && all(sex %in% c(0, 1))) {
+    # this interface's 0/1 codes are survexp.us's male/female
+    sex <- c("male", "female")[sex + 1L]
   }
   result <- .call_r_api(
     "survexp",
@@ -3946,10 +3989,6 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
                            ratetable = NULL, expected_data = NULL,
                            summary = NULL) {
   scale <- .as_finite_scalar(scale, "scale", positive = TRUE)
-  py_sequence <- function(value) {
-    value <- unname(value)
-    if (length(value) <= 1L) as.list(value) else value
-  }
   n <- length(weights)
   if (is.null(term_values) || length(term_values) == 0L) {
     observed_factors <- 1L
@@ -3984,111 +4023,47 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
   }
 
   if (!is.null(response_args$direct)) {
-    time_data <- as.numeric(response_args$direct)
-    ny <- 1L
-    do_event <- 0L
+    followup <- list(stop = as.numeric(response_args$direct))
   } else if (!is.null(response_args$start)) {
-    time_data <- c(response_args$start, response_args$stop, response_args$event)
-    ny <- 3L
-    do_event <- 1L
+    followup <- list(
+      stop = as.numeric(response_args$stop),
+      start = as.numeric(response_args$start),
+      event = as.numeric(response_args$event)
+    )
   } else {
-    time_data <- c(response_args$time, response_args$event)
-    ny <- 2L
-    do_event <- 1L
+    followup <- list(stop = as.numeric(response_args$time), event = as.numeric(response_args$event))
   }
+  do_event <- !is.null(followup$event)
 
-  if (is.null(ratetable)) {
-    expected_dim <- 0L
-    expected_factors <- integer()
-    expected_dims <- integer()
-    expected_cuts <- numeric()
-    expected_rates <- numeric()
-    expected_values <- numeric()
-  } else {
-    atts <- attributes(ratetable)
-    expected_dim <- length(atts$dim)
-    expected_dims <- as.integer(atts$dim)
-    expected_rates <- as.numeric(ratetable)
-    expected_values <- as.numeric(expected_data)
-    expected_cuts <- lapply(atts$cutpoints, function(value) {
-      if (!is.null(value) && inherits(value, c("Date", "POSIXt", "date", "chron"))) {
-        ratetableDate(value)
-      } else {
-        value
-      }
-    })
-    if (is.null(atts$type)) {
-      expected_factors <- as.integer(atts$factor)
-      us_special <- expected_factors > 1L
+  raw <- do.call(.population_attr("pyears"), .compact_null(list(
+    stop = as.list(followup$stop),
+    start = if (is.null(followup$start)) NULL else as.list(followup$start),
+    event = if (do_event) as.list(followup$event) else NULL,
+    weights = as.list(as.numeric(weights)),
+    factors = as.list(as.integer(observed_factors)),
+    dims = as.list(as.integer(observed_dims)),
+    cuts = unname(lapply(observed_cuts, as.list)),
+    categories_data = lapply(seq_len(n), function(row) {
+      lapply(observed_data, function(column) column[[row]])
+    }),
+    ratetable = if (is.null(ratetable)) NULL else .as_python_ratetable(ratetable),
+    ratetable_positions = if (is.null(ratetable)) {
+      NULL
     } else {
-      expected_factors <- as.integer(atts$type == 1L)
-      us_special <- atts$type == 4L
-    }
-    if (any(us_special)) {
-      if (sum(us_special) > 1L) {
-        stop("more than one type=4 in a rate table", call. = FALSE)
-      }
-      dimid <- if (is.null(atts$dimid)) names(atts$dimnames) else atts$dimid
-      age_year <- match(c("age", "year"), dimid)
-      if (any(is.na(age_year))) {
-        stop("ratetable does not have expected shape", call. = FALSE)
-      }
-      birth_date <- as.Date("1970-01-01") +
-        (expected_data[, age_year[[2L]]] - expected_data[, age_year[[1L]]])
-      birth_year <- format(birth_date, "%Y")
-      offset <- as.numeric(birth_date - as.Date(paste0(birth_year, "-01-01")))
-      expected_data[, age_year[[2L]]] <- expected_data[, age_year[[2L]]] - offset
-      expected_values <- as.numeric(expected_data)
-      if (any(expected_factors > 1L)) {
-        special_dimension <- which(us_special)[[1L]]
-        year_count <- length(expected_cuts[[special_dimension]])
-        interpolation <- expected_factors[[special_dimension]]
-        expected_cuts[[special_dimension]] <- round(
-          stats::approx(
-            interpolation * seq_len(year_count),
-            expected_cuts[[special_dimension]],
-            interpolation:(interpolation * year_count)
-          )$y - 1e-4
-        )
-      }
-    }
-    expected_cuts <- as.numeric(unlist(expected_cuts, use.names = FALSE))
-  }
-
-  raw <- .call_pybridge(
-    "perform_pyears_calculation",
-    py_sequence(as.numeric(time_data)),
-    py_sequence(as.numeric(weights)),
-    as.integer(expected_dim),
-    py_sequence(expected_factors),
-    py_sequence(expected_dims),
-    py_sequence(expected_cuts),
-    py_sequence(expected_rates),
-    py_sequence(expected_values),
-    as.integer(length(observed_dims)),
-    py_sequence(observed_factors),
-    py_sequence(observed_dims),
-    py_sequence(as.numeric(unlist(observed_cuts, use.names = FALSE))),
-    as.integer(expect == "event"),
-    py_sequence(as.numeric(unlist(observed_data, use.names = FALSE))),
-    do_event,
-    ny
-  )
+      lapply(seq_len(n), function(row) as.list(as.numeric(expected_data[row, ])))
+    },
+    expect = expect,
+    scale = scale
+  )))
 
   result <- list(
-    pyears = .as_numeric_vector(.result_field(raw, "pyears")) / scale,
-    n = .as_numeric_vector(.result_field(raw, "pn")),
-    offtable = as.numeric(.result_field(raw, "offtable")) / scale,
+    pyears = as.numeric(unlist(raw$pyears)),
+    n = as.numeric(unlist(raw$n)),
+    offtable = as.numeric(raw$offtable),
     group = groups,
     observations = n,
-    event = if (do_event == 1L) .as_numeric_vector(.result_field(raw, "pcount")) else NULL,
-    expected = if (is.null(ratetable)) {
-      NULL
-    } else if (expect == "pyears") {
-      .as_numeric_vector(.result_field(raw, "pexpect")) / scale
-    } else {
-      .as_numeric_vector(.result_field(raw, "pexpect"))
-    },
+    event = if (do_event) as.numeric(unlist(raw$event)) else NULL,
+    expected = if (is.null(ratetable)) NULL else as.numeric(unlist(raw$expected)),
     tcut = !is.null(term_values) && any(vapply(term_values, inherits, logical(1), "tcut"))
   )
   if (!is.null(summary)) result$summary <- summary
@@ -4763,65 +4738,35 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
     c("strata", "cluster", "tt"),
     data = data
   )
+  # data.frame() keeps the (unique) names of the response as character row names
   model_rows <- row.names(eval(model_call, enclos))
-  output_rows <- model_rows[as.integer(frame[[".id."]])]
-  if (!identical(output_rows, as.character(seq_len(nrow(frame))))) {
-    row.names(frame) <- output_rows
-  }
+  row.names(frame) <- model_rows[as.integer(frame[[".id."]])]
   frame
 }
 
-survobrien <- function(formula, data, subset, na.action, transform,
-                       time, status, covariate, strata = NULL) {
+survobrien <- function(formula, data, subset, na.action, transform) {
   call <- match.call()
-  direct_time <- NULL
-  if (!missing(time)) {
-    direct_time <- time
-  } else if (!missing(formula) && !inherits(formula, "formula")) {
-    direct_time <- formula
+  if (.survobrien_formula_python_eligible(formula, data)) {
+    result <- .call_r_api(
+      "survobrien",
+      .as_formula_string(formula),
+      data = .as_python_data(data),
+      subset = if (missing(subset)) NULL else subset,
+      `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
+      transform = if (missing(transform)) NULL else transform
+    )
+    frame <- .survobrien_result_frame(result, data)
+    frame <- .survobrien_restore_row_names(
+      frame,
+      call,
+      formula,
+      data,
+      parent.frame()
+    )
+    return(.restore_r_column_classes(frame, data))
   }
-  if (is.null(direct_time)) {
-    if (.survobrien_formula_python_eligible(formula, data)) {
-      result <- .call_r_api(
-        "survobrien",
-        .as_formula_string(formula),
-        data = .as_python_data(data),
-        subset = if (missing(subset)) NULL else subset,
-        `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
-        transform = if (missing(transform)) NULL else transform
-      )
-      frame <- .survobrien_result_frame(result, data)
-      frame <- .survobrien_restore_row_names(
-        frame,
-        call,
-        formula,
-        data,
-        parent.frame()
-      )
-      return(.restore_r_column_classes(frame, data))
-    }
-    call[[1L]] <- quote(survival::survobrien)
-    return(eval.parent(call))
-  }
-  if (missing(status) || missing(covariate)) {
-    stop("direct survobrien bridge requires time, status, and covariate", call. = FALSE)
-  }
-  result <- .call_r_api(
-    "survobrien",
-    time = .as_python_vector(direct_time),
-    status = .as_python_vector(status),
-    covariate = .as_python_vector(covariate),
-    strata = if (is.null(strata)) NULL else .as_python_vector(strata)
-  )
-  list(
-    statistic = as.numeric(.result_field(result, "statistic")),
-    p.value = as.numeric(.result_field(result, "p_value")),
-    df = as.integer(.result_field(result, "df")),
-    scores = .as_numeric_vector(.result_field(result, "scores")),
-    score.sum = as.numeric(.result_field(result, "score_sum")),
-    expected = as.numeric(.result_field(result, "expected")),
-    variance = as.numeric(.result_field(result, "variance"))
-  )
+  call[[1L]] <- quote(survival::survobrien)
+  eval.parent(call)
 }
 
 .survobrien_formula_supported_term <- function(label, data) {
@@ -5108,19 +5053,19 @@ totimeline <- function(formula, data, id, istate) {
 }
 
 .surv2data_fill_vector <- function(value, id, time) {
-  missing <- is.na(value)
-  if (!any(missing)) {
+  # last value carried forward within each subject, in time order
+  if (!anyNA(value)) {
     return(value)
   }
-  source <- .call_data_prep(
-    "lvcf_indices",
-    as.list(as.integer(id)),
-    as.list(as.logical(missing)),
-    as.list(as.numeric(time))
-  )
-  source <- as.integer(.as_numeric_vector(source)) + 1L
-  update <- missing & source != seq_along(source)
-  value[update] <- value[source[update]]
+  ord <- order(id, time)
+  sorted <- value[ord]
+  sorted_id <- id[ord]
+  source <- seq_along(sorted)
+  source[is.na(sorted)] <- 0L
+  source <- stats::ave(source, sorted_id, FUN = cummax)
+  fill <- source > 0L & source != seq_along(sorted)
+  sorted[fill] <- sorted[source[fill]]
+  value[ord] <- sorted
   value
 }
 
@@ -6024,39 +5969,36 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     )
   }
 
-  coefficients <- .as_numeric_matrix(.result_field(result, "coefficients"))
-  coefficients <- if (nrow(coefficients) == 0L) numeric() else coefficients[1L, ]
+  coefficients <- .as_numeric_vector(.result_field(result, "coefficients"))
   names(coefficients) <- coefficient_names
-  variance <- .as_numeric_matrix(.result_field(result, "information_matrix"))
-  naive_variance <- .as_numeric_matrix(.result_field(result, "naive_information_matrix"))
-  phase2_variance <- .as_numeric_matrix(.result_field(result, "phase2_variance"))
+  variance <- .as_numeric_matrix(.result_field(result, "var"))
+  naive_variance <- .as_numeric_matrix(.result_field(result, "naive_var"))
+  phase2_variance <- .as_numeric_matrix(.result_field(result, "phase2var"))
   dimnames(variance) <- dimnames(naive_variance) <- list(
     coefficient_names,
     coefficient_names
   )
-  fit_x <- .as_numeric_matrix(.result_field(result, "covariates"))
+  # the Cox fit of the pseudo-cohort R's cch builds
+  cox_fit <- .result_field(result, "fit")
+  fit_x <- .as_numeric_matrix(.result_field(cox_fit, "x"))
   colnames(fit_x) <- coefficient_names
-  fit_start <- .as_numeric_vector(.result_field(result, "entry_times"))
-  fit_stop <- .as_numeric_vector(.result_field(result, "event_times"))
-  fit_status <- as.integer(.as_numeric_vector(.result_field(result, "status")))
+  fit_start <- .as_numeric_vector(.result_field(cox_fit, "entry"))
+  fit_stop <- .as_numeric_vector(.result_field(cox_fit, "time"))
+  fit_status <- as.integer(.as_numeric_vector(.result_field(cox_fit, "status")))
   fit_y <- Surv(fit_start, fit_stop, fit_status)
-  linear_predictors <- .as_numeric_vector(.result_field(result, "linear_predictors"))
-  linear_predictors <- linear_predictors - as.numeric(
-    .result_field(result, "linear_predictor_center")
-  )
-
+  linear_predictors <- .as_numeric_vector(.result_field(cox_fit, "linear_predictors"))
   out <- list(
     coefficients = coefficients,
     var = variance,
-    loglik = .as_numeric_vector(.result_field(result, "log_likelihood")),
-    score = as.numeric(.result_field(result, "score_test")),
-    iter = as.integer(.result_field(result, "iterations")),
+    loglik = .as_numeric_vector(.result_field(cox_fit, "loglik")),
+    score = as.numeric(.result_field(cox_fit, "score")),
+    iter = as.integer(.result_field(cox_fit, "iter")),
     linear.predictors = linear_predictors,
-    residuals = .as_numeric_vector(.result_field(result, "residuals")),
-    means = stats::setNames(.as_numeric_vector(.result_field(result, "means")), coefficient_names),
+    residuals = .as_numeric_vector(.result_field(cox_fit, "residuals")),
+    means = stats::setNames(.as_numeric_vector(.result_field(cox_fit, "means")), coefficient_names),
     method = method,
-    n = as.integer(.result_field(result, "n")),
-    nevent = as.integer(.result_field(result, "nevent")),
+    n = as.integer(.result_field(cox_fit, "n")),
+    nevent = as.integer(.result_field(cox_fit, "nevent")),
     terms = Terms,
     assign = attr(design, "assign"),
     naive.var = naive_variance,
@@ -6064,7 +6006,7 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     y = fit_y,
     timefix = FALSE,
     formula = formula,
-    offset = .as_numeric_vector(.result_field(result, "offsets")),
+    offset = .as_numeric_vector(.result_field(cox_fit, "offset")),
     call = Call,
     phase2var = phase2_variance,
     cohort.size = cohort.size,
@@ -6073,9 +6015,9 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
   )
   if (stratified) {
     out$stratum <- stratum
-    out$opt <- .as_numeric_matrix(.result_field(result, "optimization_fraction"))
-    out$delta <- .as_numeric_matrix(.result_field(result, "phase2_score_matrix"))
-    out$sc <- .as_numeric_matrix(.result_field(result, "collapsed_score_rows"))
+    out$opt <- .as_numeric_matrix(.result_field(result, "opt"))
+    out$delta <- .as_numeric_matrix(.result_field(result, "delta"))
+    out$sc <- .as_numeric_matrix(.result_field(result, "sc"))
     internal_score_names <- paste0("X", coefficient_names)
     dimnames(out$opt) <- list(c("opt", rep("", max(0L, nrow(out$opt) - 1L))), NULL)
     if (identical(method, "II.Borgan")) {
@@ -6824,22 +6766,30 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
 .survreg_fit_core <- function(x, y, weights, offset, initial, controlvals,
                               distribution, distribution_parameter,
                               fixed_scale, strata) {
-  .call_regression(
-    "survreg",
-    time = .as_python_vector(y[, 1L]),
-    status = .as_python_vector(y[, ncol(y)]),
-    covariates = .coxph_fit_covariates(x, nrow(x)),
-    weights = .as_python_vector(weights),
-    offsets = .as_python_vector(offset),
-    initial_beta = if (is.null(initial)) NULL else as.list(unname(initial)),
-    strata = .as_python_vector(as.integer(strata) - 1L),
-    distribution = distribution,
-    max_iter = as.integer(controlvals$iter.max),
-    eps = as.numeric(controlvals$rel.tolerance),
-    tol_chol = as.numeric(controlvals$toler.chol),
+  data <- .regression_attr("SurvregData")(
+    .as_python_vector(y[, 1L]),
+    .as_python_vector(as.integer(y[, ncol(y)])),
+    .coxph_fit_covariates(x, nrow(x)),
     time2 = if (ncol(y) == 3L) .as_python_vector(y[, 2L]) else NULL,
-    fixed_scale = fixed_scale,
-    distribution_parameter = distribution_parameter
+    weights = .as_python_vector(weights),
+    offset = .as_python_vector(offset),
+    strata = .as_python_vector(as.integer(strata) - 1L)
+  )
+  dist <- .regression_attr("SurvregDistribution")(
+    distribution,
+    parms = if (is.null(distribution_parameter)) NULL else as.list(distribution_parameter)
+  )
+  control <- .regression_attr("SurvregControl")(
+    iter_max = as.integer(controlvals$iter.max),
+    rel_tolerance = as.numeric(controlvals$rel.tolerance),
+    toler_chol = as.numeric(controlvals$toler.chol)
+  )
+  .regression_attr("survreg_fit")(
+    data,
+    dist,
+    init = if (is.null(initial)) NULL else as.list(unname(initial)),
+    scale = if (is.null(fixed_scale)) 0 else as.numeric(fixed_scale),
+    control = control
   )
 }
 
@@ -6909,35 +6859,13 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
     }
   }
 
-  # The native omitted-start path uses the distribution's variance estimate
-  # and censoring derivatives for the same preliminary fit as R.
-  null_fit <- NULL
-  if (!mean_only) {
-    null_control <- controlvals
-    null_control$iter.max <- 20L
-    null_fit <- .survreg_fit_core(
-      matrix(1, nrow = n, ncol = 1L), y, weights, offset, NULL, null_control,
-      native_distribution$name, native_distribution$parameter,
-      fixed_scale, strata
-    )
-    null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
-    null_loglik <- as.numeric(.result_field(null_fit, "log_likelihood"))
-    null_variance <- .as_numeric_matrix(.result_field(null_fit, "variance_matrix"))
-    if (any(!is.finite(null_coef)) || !is.finite(null_loglik) ||
-        any(!is.finite(null_variance))) {
-      stop("initial iteration failed (use starting estimates?)", call. = FALSE)
-    }
-    if (!is.null(initial) && is.null(fixed_scale) && length(initial) == nvar) {
-      initial <- c(initial, null_coef[-1L])
-    }
-  }
-
+  # the engine runs R's preliminary intercept-only fit for the starting values
   fit <- .survreg_fit_core(
     x, y, weights, offset, initial, controlvals,
     native_distribution$name, native_distribution$parameter,
     fixed_scale, strata
   )
-  if (controlvals$iter.max > 1L && .result_field(fit, "convergence_flag") != 0L) {
+  if (controlvals$iter.max > 1L && !isTRUE(.result_field(fit, "converged"))) {
     warning("Ran out of iterations and did not converge", call. = FALSE)
   }
 
@@ -6957,12 +6885,12 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
     }, logical(1)))
   dimnames(variance) <- if (rescaled) NULL else list(coefficient_names, coefficient_names)
   full_loglik <- as.numeric(.result_field(fit, "log_likelihood"))
+  null_loglik <- as.numeric(.result_field(fit, "intercept_only_log_likelihood"))
   if (mean_only) {
     icoef <- coefficients
-    null_loglik <- full_loglik
   } else {
-    icoef <- if (is.null(fixed_scale)) null_coef else c(null_coef, log(fixed_scale))
-    names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
+    icoef <- .as_numeric_vector(.result_field(fit, "icoef"))
+    names(icoef) <- c("Intercept", rep("Log(scale)", length(icoef) - 1L))
   }
 
   list(
@@ -6973,7 +6901,7 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
     iter = as.integer(.result_field(fit, "iterations")),
     linear.predictors = .as_numeric_vector(.result_field(fit, "linear_predictors")),
     df = length(coefficients),
-    score = .as_numeric_vector(.result_field(fit, "score_vector"))
+    score = .as_numeric_vector(.result_field(fit, "score"))
   )
 }
 
@@ -7469,12 +7397,12 @@ xtfrm.survival_py_surv <- function(x) {
 
 .survfit_curve_quantile <- function(curve, probs, conf.int, scale, tolerance) {
   time <- .as_numeric_vector(.result_field(curve, "time"))
-  surv <- .as_numeric_vector(.result_field(curve, "estimate"))
+  surv <- .as_numeric_vector(.result_field(curve, "surv"))
   if (length(time) == 0L || length(surv) == 0L) {
     stop("quantile requires Kaplan-Meier survfit time and survival estimates", call. = FALSE)
   }
-  lower <- .as_numeric_vector(.result_field(curve, "conf_lower"))
-  upper <- .as_numeric_vector(.result_field(curve, "conf_upper"))
+  lower <- .as_numeric_vector(.result_field(curve, "lower"))
+  upper <- .as_numeric_vector(.result_field(curve, "upper"))
   if (length(lower) == 0L || length(upper) == 0L) {
     conf.int <- FALSE
   } else {
@@ -7492,8 +7420,8 @@ xtfrm.survival_py_surv <- function(x) {
 }
 
 .survfit_curve_has_confint <- function(curve) {
-  length(.as_numeric_vector(.result_field(curve, "conf_lower"))) > 0L &&
-    length(.as_numeric_vector(.result_field(curve, "conf_upper"))) > 0L
+  length(.as_numeric_vector(.result_field(curve, "lower"))) > 0L &&
+    length(.as_numeric_vector(.result_field(curve, "upper"))) > 0L
 }
 
 quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
@@ -7930,10 +7858,11 @@ residuals.survival_py_survfit <- function(object, times, type = "pstate",
     extra = extra,
     ...
   )
-  resid <- .survival_py_survfit_residual_matrix(result)
   if (isTRUE(data.frame)) {
-    return(.survival_py_survfit_residual_frame(result, resid))
+    # the Python side lays the long-format columns out as R does
+    return(as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE))
   }
+  resid <- .survival_py_survfit_residual_matrix(result)
   if (isTRUE(extra)) {
     return(list(resid = resid, curve = result$curve))
   }
@@ -8005,6 +7934,11 @@ model.frame.formula <- function(formula, ...) {
   )
 }
 
+.surv_na_times <- function(values) {
+  values[is.nan(values)] <- NA_real_
+  values
+}
+
 .as_native_surv <- function(x) {
   if (inherits(x, "Surv")) {
     return(x)
@@ -8014,10 +7948,17 @@ model.frame.formula <- function(formula, ...) {
   }
 
   surv_type <- as.character(.result_field(x, "type"))
-  time <- .as_numeric_vector(.result_field(x, "time"))
+  # a missing time is NaN on the Python side and NA in an R Surv
+  time <- .surv_na_times(.as_numeric_vector(.result_field(x, "time")))
   status <- as.integer(.as_nullable_numeric_vector(.result_field(x, "event")))
   start <- .result_field(x, "start")
   time2 <- .result_field(x, "time2")
+  if (!is.null(start)) {
+    start <- .surv_na_times(.as_numeric_vector(start))
+  }
+  if (!is.null(time2)) {
+    time2 <- .surv_na_times(.as_numeric_vector(time2))
+  }
 
   if (!is.null(start)) {
     out <- cbind(
@@ -8229,7 +8170,7 @@ is.na.Surv2 <- function(x) {
     return(adjusted)
   }
 
-  result <- .data_prep_attr("aeq_surv")(finite_values, tolerance)
+  result <- .data_prep_attr("aeq_surv")(finite_values, NULL, tolerance)
   adjusted_values <- as.numeric(result$time)
   for (index in seq_along(finite_positions)) {
     position <- finite_positions[[index]]
@@ -8410,33 +8351,37 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     .compact_null(list(
       time = time,
       status = status,
-      covariates = covariates,
+      x = covariates,
+      entry = entry_times,
       strata = .coxph_fit_strata(strata, n),
       weights = weights,
       offset = offset,
-      initial_beta = if (is.null(init)) NULL else as.list(init),
-      max_iter = if (null_model) 0L else as.integer(control[["iter.max"]]),
-      eps = as.numeric(control[["eps"]]),
-      toler = as.numeric(control[["toler.chol"]]),
       method = method,
-      entry_times = entry_times,
+      init = if (is.null(init)) NULL else as.list(init),
+      iter_max = if (null_model) 0L else as.integer(control[["iter.max"]]),
+      eps = as.numeric(control[["eps"]]),
+      toler_chol = as.numeric(control[["toler.chol"]]),
       nocenter = if (is.null(nocenter)) NULL else as.list(as.numeric(nocenter))
     ))
   )
 
   messages <- .python_attr("_cox_fit_diagnostic_messages")(
     fit,
-    counting = !is.null(entry_times),
-    max_iter = if (null_model) 0L else as.integer(control[["iter.max"]]),
-    eps = as.numeric(control[["eps"]]),
-    toler_inf = as.numeric(control[["toler.inf"]])
+    if (null_model) 0L else as.integer(control[["iter.max"]]),
+    as.numeric(control[["eps"]]),
+    as.numeric(control[["toler.inf"]])
   )
   for (message in messages) {
     warning(message, call. = FALSE)
   }
+  martingale_residuals <- function() {
+    values <- .as_numeric_vector(fit$martingale_residuals())
+    names(values) <- as.character(rownames)
+    values
+  }
 
   if (null_model) {
-    loglik <- .as_numeric_vector(.result_field(fit, "log_likelihood"))
+    loglik <- .as_numeric_vector(.result_field(fit, "loglik"))
     null_loglik <- if (isTRUE(include_agreg_info)) {
       loglik[[length(loglik)]]
     } else {
@@ -8444,10 +8389,7 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     }
     martingale <- NULL
     if (isTRUE(resid)) {
-      martingale <- .as_numeric_vector(
-        do.call(reticulate::py_get_attr(fit, "martingale_residuals"), list())
-      )
-      names(martingale) <- as.character(rownames)
+      martingale <- martingale_residuals()
     }
     out <- list(
       loglik = null_loglik,
@@ -8466,20 +8408,12 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     return(out)
   }
 
-  coefficient_matrix <- .as_numeric_matrix(.result_field(fit, "coefficients"))
-  coefficients <- if (nrow(coefficient_matrix) == 0L) {
-    numeric()
-  } else {
-    as.numeric(coefficient_matrix[1L, ])
-  }
+  coefficients <- .as_numeric_vector(.result_field(fit, "coefficients"))
   names(coefficients) <- x_names
   means <- .as_numeric_vector(.result_field(fit, "means"))
-  variance <- .as_numeric_matrix(.result_field(fit, "information_matrix"))
-  loglik <- .as_numeric_vector(.result_field(fit, "log_likelihood"))
-  linear_predictors <- as.numeric(covariate_matrix %*% coefficients) + offset
-  if (length(means) == length(coefficients)) {
-    linear_predictors <- linear_predictors - sum(means * coefficients)
-  }
+  variance <- .as_numeric_matrix(.result_field(fit, "var"))
+  loglik <- .as_numeric_vector(.result_field(fit, "loglik"))
+  linear_predictors <- .as_numeric_vector(.result_field(fit, "linear_predictors"))
 
   if (isTRUE(linear_predictors_matrix)) {
     linear_predictors <- matrix(linear_predictors, ncol = 1L)
@@ -8489,19 +8423,17 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     coefficients = coefficients,
     var = variance,
     loglik = loglik,
-    score = as.numeric(.result_field(fit, "score_test")),
-    iter = as.integer(.result_field(fit, "iterations")),
+    score = as.numeric(.result_field(fit, "score")),
+    iter = as.integer(.result_field(fit, "iter")),
     linear.predictors = linear_predictors,
     means = means,
-    method = if (is.null(method_label)) as.character(.result_field(fit, "method")) else method_label
+    method = if (is.null(method_label)) method else method_label
   )
   if (isTRUE(include_class)) {
     out$class <- "coxph"
   }
   if (isTRUE(resid)) {
-    martingale <- .as_numeric_vector(do.call(reticulate::py_get_attr(fit, "martingale_residuals"), list()))
-    names(martingale) <- as.character(rownames)
-    out$residuals <- martingale
+    out$residuals <- martingale_residuals()
     out <- out[c(
       "coefficients", "var", "loglik", "score", "iter",
       "linear.predictors", "residuals", "means", "method", "class"
@@ -8512,7 +8444,7 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   }
   if (isTRUE(include_agreg_info)) {
     names(out$means) <- x_names
-    out$first <- .as_numeric_vector(.result_field(fit, "score_vector"))
+    out$first <- .as_numeric_vector(.result_field(fit, "first"))
     out$info <- c(rank = length(coefficients), rescale = 0L, `step halving` = 0L, convergence = 0L)
     out <- out[c(
       "coefficients", "var", "loglik", "score", "iter",
@@ -8575,16 +8507,11 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
   }
 
   has_strata <- !(missing(strata) || is.null(strata) || length(strata) == 0L)
-  if (!has_strata) {
-    sorted <- order(stop_time, -event)
-    newstrat <- integer(n)
-  } else {
+  if (has_strata) {
     if (length(strata) != n) {
       stop("strata and y have different numbers of rows", call. = FALSE)
     }
     strata_codes <- match(strata, unique(strata))
-    sorted <- order(strata_codes, stop_time, -event)
-    newstrat <- as.integer(c(diff(strata_codes[sorted]) != 0, 1))
   }
 
   if (missing(offset) || is.null(offset)) {
@@ -8614,44 +8541,25 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
     stop("rownames and y have different lengths", call. = FALSE)
   }
 
-  zero_one <- if (is.null(nocenter)) {
-    rep(FALSE, nvar)
-  } else {
-    apply(x, 2L, function(column) all(column %in% nocenter))
-  }
-  sstart <- as.double(start[sorted])
-  sstop <- as.double(stop_time[sorted])
-  sstat <- as.integer(event[sorted])
-  python_sequence <- function(values) {
-    if (length(values) == 1L) as.list(values) else values
-  }
   agfit <- do.call(
     .regression_attr("agexact"),
-    list(
-      maxiter = as.integer(control[["iter.max"]]),
-      nused = as.integer(n),
-      nvar = as.integer(nvar),
-      start = python_sequence(sstart),
-      stop = python_sequence(sstop),
-      event = python_sequence(sstat),
-      covar = python_sequence(as.numeric(x[sorted, , drop = FALSE])),
-      offset = python_sequence(as.double(offset[sorted])),
-      strata = python_sequence(newstrat),
-      means = python_sequence(double(nvar)),
-      beta = python_sequence(as.double(init)),
-      u = python_sequence(double(nvar)),
-      imat = python_sequence(double(nvar * nvar)),
-      loglik = python_sequence(double(2L)),
-      work = python_sequence(double(2L * nvar * nvar + 4L * nvar + n)),
-      work2 = python_sequence(integer(2L * n)),
+    .compact_null(list(
+      start = as.double(start),
+      stop = as.double(stop_time),
+      event = as.integer(event),
+      x = .coxph_fit_covariates(x, n),
+      offset = as.double(offset),
+      strata = if (has_strata) as.integer(strata_codes) else NULL,
+      init = as.list(as.double(init)),
+      iter_max = as.integer(control[["iter.max"]]),
       eps = as.double(control[["eps"]]),
-      tol_chol = as.double(control[["toler.chol"]]),
-      nocenter = python_sequence(as.integer(ifelse(zero_one, 0L, 1L)))
-    )
+      toler_chol = as.double(control[["toler.chol"]]),
+      nocenter = if (is.null(nocenter)) NULL else as.list(as.numeric(nocenter))
+    ))
   )
 
-  variance <- matrix(.as_numeric_vector(.result_field(agfit, "imat")), nvar, nvar)
-  coefficients <- .as_numeric_vector(.result_field(agfit, "beta"))
+  variance <- .as_numeric_matrix(.result_field(agfit, "var"))
+  coefficients <- .as_numeric_vector(.result_field(agfit, "coefficients"))
   score_vector <- .as_numeric_vector(.result_field(agfit, "u"))
   means <- .as_numeric_vector(.result_field(agfit, "means"))
   flag <- as.integer(.result_field(agfit, "flag"))
@@ -8678,42 +8586,29 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
 
   names(coefficients) <- colnames(x)
   linear_predictors <- x %*% coefficients + offset - sum(coefficients * means)
-  risk_score <- as.double(exp(linear_predictors[sorted]))
+  risk_score <- as.double(exp(linear_predictors))
   coefficients[which_singular] <- NA_real_
   out <- list(
     coefficients = coefficients,
     var = variance,
     loglik = .as_numeric_vector(.result_field(agfit, "loglik")),
     score = as.numeric(.result_field(agfit, "sctest")),
-    iter = as.integer(.result_field(agfit, "maxiter")),
+    iter = as.integer(.result_field(agfit, "iter")),
     linear.predictors = linear_predictors,
     means = means,
     method = "coxph"
   )
 
   if (isTRUE(resid)) {
-    counting <- do.call(
-      .core_attr("CountingProcessData"),
-      list(
-        start = python_sequence(sstart),
-        stop = python_sequence(sstop),
-        event = python_sequence(sstat)
-      )
+    counting <- .core_attr("CountingProcessData")(
+      as.double(start), as.double(stop_time), as.integer(event)
     )
-    residual_input <- do.call(
-      .core_attr("AndersenGillInput"),
-      list(
-        counting = counting,
-        score = python_sequence(risk_score),
-        strata = python_sequence(newstrat)
-      )
+    residual_input <- .core_attr("AndersenGillInput")(
+      counting,
+      as.list(risk_score),
+      strata = if (has_strata) as.list(as.integer(strata_codes)) else NULL
     )
-    sorted_residuals <- .as_numeric_vector(do.call(
-      .residuals_attr("agmart"),
-      list(input = residual_input, method = 0L)
-    ))
-    martingale <- double(n)
-    martingale[sorted] <- sorted_residuals
+    martingale <- .as_numeric_vector(.residuals_attr("agmart")(residual_input, "breslow"))
     names(martingale) <- rownames
     out$residuals <- martingale
     out <- out[c(
@@ -8760,6 +8655,7 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
     parent.frame(),
     vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
+  evaluated_dots <- .name_id_column(evaluated_dots, dots, data)
   do.call(
     .call_r_api,
     c(
@@ -8784,6 +8680,7 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
     parent.frame(),
     vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
+  evaluated_dots <- .name_id_column(evaluated_dots, dots, data)
   do.call(
     .call_r_api,
     c(
@@ -9003,7 +8900,7 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
 
 .survfitKM_curve_fields <- function(result, se.fit, stype, conf.type,
                                     conf.lower, conf.int, logse) {
-  surv <- .as_numeric_vector(.result_field(result, "estimate"))
+  surv <- .as_numeric_vector(.result_field(result, "surv"))
   fields <- list(
     time = .as_numeric_vector(.result_field(result, "time")),
     n.risk = .as_numeric_vector(.result_field(result, "n_risk")),
@@ -9015,37 +8912,27 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   if (!is.null(n_enter)) {
     fields$n.enter <- .as_numeric_vector(n_enter)
   }
-  n_risk_count <- .result_field(result, "n_risk_count")
-  n_event_count <- .result_field(result, "n_event_count")
-  n_censor_count <- .result_field(result, "n_censor_count")
-  n_enter_count <- .result_field(result, "n_enter_count")
-  if (!is.null(n_risk_count)) {
-    fields$n.risk.count <- .as_numeric_vector(n_risk_count)
-  }
-  if (!is.null(n_event_count)) {
-    fields$n.event.count <- .as_numeric_vector(n_event_count)
-  }
-  if (!is.null(n_censor_count)) {
-    fields$n.censor.count <- .as_numeric_vector(n_censor_count)
-  }
-  if (!is.null(n_enter_count)) {
-    fields$n.enter.count <- .as_numeric_vector(n_enter_count)
+  # R's `counts` (unweighted numbers when there are case weights or an id)
+  counts <- .result_field(result, "counts")
+  if (!is.null(counts)) {
+    fields$n.risk.count <- .as_numeric_vector(.result_field(counts, "n_risk"))
+    fields$n.event.count <- .as_numeric_vector(.result_field(counts, "n_event"))
+    fields$n.censor.count <- .as_numeric_vector(.result_field(counts, "n_censor"))
+    n_enter_count <- .result_field(counts, "n_enter")
+    if (!is.null(n_enter_count)) {
+      fields$n.enter.count <- .as_numeric_vector(n_enter_count)
+    }
   }
   if (isTRUE(se.fit)) {
     std_chaz <- .as_numeric_vector(.result_field(result, "std_chaz"))
-    fields$std.err <- .survfitKM_std_err(
-      surv,
-      .as_numeric_vector(.result_field(result, "std_err")),
-      std_chaz,
-      stype,
-      logse
-    )
+    # the Python object's std.err is R's (of the log survival when logse)
+    fields$std.err <- .as_numeric_vector(.result_field(result, "std_err"))
     fields$cumhaz <- .as_numeric_vector(.result_field(result, "cumhaz"))
     fields$std.chaz <- std_chaz
     if (!identical(conf.type, "none")) {
       if (identical(conf.lower, "usual")) {
-        lower <- .as_numeric_vector(.result_field(result, "conf_lower"))
-        upper <- .as_numeric_vector(.result_field(result, "conf_upper"))
+        lower <- .as_numeric_vector(.result_field(result, "lower"))
+        upper <- .as_numeric_vector(.result_field(result, "upper"))
       } else {
         ci <- survfit_confint(
           surv,
@@ -9101,6 +8988,25 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
     stop("influence argument must be 0, 1, 2, or 3", call. = FALSE)
   }
   as.integer(influence)
+}
+
+# The influence matrices the Python curve carries (clusters x times), with the
+# cluster labels as row names; the codes index the clusters in order of appearance.
+.survfitKM_influence_from_curve <- function(curve, cluster) {
+  labels <- as.character(unique(cluster))
+  matrix_of <- function(name) {
+    influence <- .result_field(curve, name)
+    if (is.null(influence)) {
+      return(NULL)
+    }
+    if (is.list(influence) && !inherits(influence, "python.builtin.object")) {
+      influence <- influence[[1L]]
+    }
+    values <- .as_numeric_matrix(.result_field(influence, "values"))
+    rownames(values) <- labels[as.integer(.as_numeric_vector(.result_field(influence, "cluster"))) + 1L]
+    values
+  }
+  list(influence.surv = matrix_of("influence_surv"), influence.chaz = matrix_of("influence_chaz"))
 }
 
 .survfitKM_influence_matrix <- function(result, name, row.labels) {
@@ -9348,13 +9254,6 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
       stop("cluster and x have different lengths", call. = FALSE)
     }
   }
-  y_influence <- if (influence_value > 0L && identical(curve_type, "right")) {
-    .survfitKM_right_time_status(y, y_frame)
-  } else if (influence_value > 0L && identical(curve_type, "counting")) {
-    .survfitKM_counting_time_status(y, y_frame)
-  } else {
-    NULL
-  }
 
   args <- list(
     .as_python_surv(y),
@@ -9368,6 +9267,7 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
     id = if (missing(id)) NULL else .as_python_vector(id),
     cluster = if (missing(cluster)) NULL else .as_python_vector(cluster),
     robust = if (missing(robust)) NULL else robust,
+    influence = influence_value,
     entry = entry,
     time0 = time0
   )
@@ -9375,9 +9275,12 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
     args$`start.time` <- start.time
   }
   if (!missing(type)) {
+    # the old-style type argument replaces stype/ctype
     args$type <- type
+    args$stype <- NULL
+    args$ctype <- NULL
   }
-  result <- do.call(.python_attr("survfit"), .compact_null(args))
+  result <- .split_survfit_strata(do.call(.python_attr("survfit"), .compact_null(args)))
   t0 <- if (missing(start.time)) 0 else as.numeric(start.time)[[1L]]
   group_n <- as.integer(tabulate(as.integer(x), nbins = nlevels(x)))
   names(group_n) <- levels(x)
@@ -9401,46 +9304,9 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
     )
     if (influence_value > 0L) {
       influence_stype <- if (survfit_type %in% c(1L, 2L)) 1L else 2L
-      influence_ctype <- if (survfit_type %in% c(1L, 3L)) 1L else 2L
-      influence_fields <- if (identical(curve_type, "counting")) {
-        .survfitKM_counting_influence_fields(
-          y_influence$start,
-          y_influence$stop,
-          y_influence$status,
-          fields$time,
-          fields$surv,
-          weights,
-          influence_cluster,
-          influence_stype,
-          influence_ctype,
-          conf.int,
-          conf.type
-        )
-      } else {
-        .survfitKM_influence_fields(
-          y_influence$time,
-          y_influence$status,
-          weights,
-          influence_cluster,
-          influence_stype,
-          influence_ctype,
-          conf.int,
-          conf.type
-        )
-      }
-      fields <- .survfitKM_apply_influence_se(
-        fields,
-        influence_fields,
-        influence_stype,
-        influence_ctype,
-        conf.type,
-        conf.lower,
-        conf.int,
-        logse
-      )
       fields <- .survfitKM_add_influence(
         fields,
-        influence_fields,
+        .survfitKM_influence_from_curve(result, influence_cluster),
         influence_value,
         chaz.first = influence_stype == 2L
       )
@@ -9478,48 +9344,9 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
   influence_stype <- NULL
   if (influence_value > 0L) {
     influence_stype <- if (survfit_type %in% c(1L, 2L)) 1L else 2L
-    influence_ctype <- if (survfit_type %in% c(1L, 3L)) 1L else 2L
     influence_curves <- lapply(nonempty_levels, function(level) {
-      keep <- which(x == level)
-      if (identical(curve_type, "counting")) {
-        .survfitKM_counting_influence_fields(
-          y_influence$start[keep],
-          y_influence$stop[keep],
-          y_influence$status[keep],
-          curves[[level]]$time,
-          curves[[level]]$surv,
-          weights[keep],
-          influence_cluster[keep],
-          influence_stype,
-          influence_ctype,
-          conf.int,
-          conf.type
-        )
-      } else {
-        .survfitKM_influence_fields(
-          y_influence$time[keep],
-          y_influence$status[keep],
-          weights[keep],
-          influence_cluster[keep],
-          influence_stype,
-          influence_ctype,
-          conf.int,
-          conf.type
-        )
-      }
+      .survfitKM_influence_from_curve(result[[level]], influence_cluster)
     })
-    curves <- Map(function(curve, influence_curve) {
-      .survfitKM_apply_influence_se(
-        curve,
-        influence_curve,
-        influence_stype,
-        influence_ctype,
-        conf.type,
-        conf.lower,
-        conf.int,
-        logse
-      )
-    }, curves, influence_curves)
   }
   field_names <- unique(unlist(lapply(curves, names), use.names = FALSE))
   fields <- stats::setNames(lapply(field_names, function(name) {
@@ -9569,86 +9396,64 @@ survfit0 <- function(x, ...) {
 
 survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
                             selow, ulimit = TRUE) {
-  selow_missing <- missing(selow)
-  # Zero-length R recycling has type and shape semantics that the native
-  # result cannot represent, so preserve the reference vector operations.
-  if (
-    length(p) == 0L ||
-      length(se) == 0L ||
-      (!selow_missing && length(selow) == 0L)
-  ) {
-    if (conf.int <= 0 || conf.int >= 1) {
-      stop("confidence intervals must be between 0 and 1")
+  # R's survfit_confint as it is, vector recycling and ifelse shapes included
+  if (!is.numeric(conf.int) || length(conf.int) != 1L || is.na(conf.int)) {
+    stop("invalid value for conf.int", call. = FALSE)
+  }
+  if (conf.int <= 0 || conf.int >= 1) {
+    stop("confidence intervals must be between 0 and 1")
+  }
+  if (missing(conf.type)) {
+    stop("argument \"conf.type\" is missing, with no default", call. = FALSE)
+  }
+  zval <- stats::qnorm(1 - (1 - conf.int) / 2, 0, 1)
+  if (missing(selow)) {
+    scale <- 1
+  } else {
+    scale <- ifelse(selow == 0, 1, selow / se)
+  }
+  if (!logse) {
+    se <- ifelse(se == 0, 0, se / p)
+  }
+  if (conf.type == "plain") {
+    se2 <- se * p * zval
+    if (ulimit) {
+      list(lower = pmax(p - se2 * scale, 0), upper = pmin(p + se2, 1))
+    } else {
+      list(lower = pmax(p - se2 * scale, 0), upper = p + se2)
     }
-    zval <- stats::qnorm(1 - (1 - conf.int) / 2, 0, 1)
-    scale <- if (selow_missing) 1 else ifelse(selow == 0, 1, selow / se)
-    if (!logse) {
-      se <- ifelse(se == 0, 0, se / p)
+  } else if (conf.type == "log") {
+    xx <- ifelse(p == 0, NA, p)
+    se2 <- zval * se
+    temp1 <- ifelse(se == 0, p, exp(log(xx) - se2 * scale))
+    temp2 <- ifelse(se == 0, p, exp(log(xx) + se2))
+    if (ulimit) {
+      list(lower = temp1, upper = pmin(temp2, 1))
+    } else {
+      list(lower = temp1, upper = temp2)
     }
-    if (conf.type == "plain") {
-      se2 <- se * p * zval
-      lower <- pmax(p - se2 * scale, 0)
-      upper <- if (ulimit) pmin(p + se2, 1) else p + se2
-      return(list(lower = lower, upper = upper))
-    }
-    if (conf.type == "log") {
-      xx <- ifelse(p == 0, NA, p)
-      se2 <- zval * se
-      lower <- ifelse(se == 0, p, exp(log(xx) - se2 * scale))
-      upper <- ifelse(se == 0, p, exp(log(xx) + se2))
-      return(list(
-        lower = lower,
-        upper = if (ulimit) pmin(upper, 1) else upper
-      ))
-    }
-    if (conf.type == "log-log") {
-      xx <- ifelse(p == 0 | p == 1, NA, p)
-      se2 <- zval * se / log(xx)
-      lower <- ifelse(
-        se == 0,
-        p,
-        exp(-exp(log(-log(xx)) - se2 * scale))
-      )
-      upper <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) + se2)))
-      return(list(lower = lower, upper = upper))
-    }
-    if (conf.type == "logit") {
-      xx <- ifelse(p == 0, NA, p)
-      se2 <- zval * se * (1 + xx / (1 - xx))
-      lower <- ifelse(
-        se == 0,
-        p,
-        1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale))
-      )
-      upper <- ifelse(
-        se == 0,
-        p,
-        1 - 1 / (1 + exp(log(p / (1 - p)) + se2))
-      )
-      return(list(lower = lower, upper = upper))
-    }
-    if (conf.type == "arcsin") {
-      xx <- ifelse(p == 0, NA, p)
-      se2 <- 0.5 * zval * se * sqrt(xx / (1 - xx))
-      lower <- sin(pmax(0, asin(sqrt(xx)) - se2 * scale))^2
-      upper <- sin(pmin(pi / 2, asin(sqrt(xx)) + se2))^2
-      return(list(lower = lower, upper = upper))
-    }
+  } else if (conf.type == "log-log") {
+    xx <- ifelse(p == 0 | p == 1, NA, p)
+    se2 <- zval * se / log(xx)
+    temp1 <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) - se2 * scale)))
+    temp2 <- ifelse(se == 0, p, exp(-exp(log(-log(xx)) + se2)))
+    list(lower = temp1, upper = temp2)
+  } else if (conf.type == "logit") {
+    xx <- ifelse(p == 0, NA, p)
+    se2 <- zval * se * (1 + xx / (1 - xx))
+    temp1 <- ifelse(se == 0, p, 1 - 1 / (1 + exp(log(p / (1 - p)) - se2 * scale)))
+    temp2 <- ifelse(se == 0, p, 1 - 1 / (1 + exp(log(p / (1 - p)) + se2)))
+    list(lower = temp1, upper = temp2)
+  } else if (conf.type == "arcsin") {
+    xx <- ifelse(p == 0, NA, p)
+    se2 <- 0.5 * zval * se * sqrt(xx / (1 - xx))
+    list(
+      lower = (sin(pmax(0, asin(sqrt(xx)) - se2 * scale)))^2,
+      upper = (sin(pmin(pi / 2, asin(sqrt(xx)) + se2)))^2
+    )
+  } else {
     stop("invalid conf.int type")
   }
-  result <- .call_r_api(
-    "survfit_confint",
-    p = .as_python_vector(p),
-    se = .as_python_vector(se),
-    logse = logse,
-    conf_type = conf.type,
-    conf_int = conf.int,
-    selow = if (selow_missing) NULL else .as_python_vector(selow),
-    ulimit = ulimit
-  )
-  lower <- .as_numeric_vector(.result_field(result, "lower"))
-  upper <- .as_numeric_vector(.result_field(result, "upper"))
-  list(lower = lower, upper = upper)
 }
 
 pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
@@ -9659,30 +9464,85 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
     times = times_value,
     type = if (missing(type)) NULL else type,
     collapse = collapse,
-    `data.frame` = FALSE,
+    `data.frame` = data.frame,
     ...
   )
-  if (!is.null(result$columns) && !is.null(result$pseudo)) {
-    pseudo_values <- .survival_py_survfit_multistate_array(result, "pseudo")
-    if (isTRUE(data.frame)) {
-      return(.survival_py_multistate_pseudo_frame(result, pseudo_values))
-    }
-    return(pseudo_values)
-  }
   if (isTRUE(data.frame)) {
-    return(.as_pseudo_data_frame(
-      result,
-      fit,
-      times = if (missing(times)) NULL else times
-    ))
+    return(as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE))
   }
-  .as_pseudo_matrix(
+  .as_pseudo_result(
     result,
     fit,
-    matrix_result = !missing(times) && length(times) > 1L,
-    drop_single_column = TRUE,
-    col.names = if (missing(times)) NULL else as.character(times)
+    if (missing(times)) NULL else times,
+    columns = .pseudo_columns(fit, if (missing(type)) "pstate" else type)
   )
+}
+
+# The second dimension of a multi-state pseudo array: the states, or the
+# transitions for the cumulative hazard.
+.pseudo_columns <- function(fit, type) {
+  if (!.is_survival_py_multistate_survfit(fit)) {
+    return(NULL)
+  }
+  type <- casefold(as.character(type))
+  if (type %in% c("cumhaz", "chaz")) {
+    curve <- .unwrap_grouped_survfit(fit)
+    if (.is_grouped_survival_py_survfit(fit) && !inherits(curve, "python.builtin.object")) {
+      curve <- unclass(fit)[[1L]]
+    }
+    return(as.character(.result_field(curve, "hazard_names")))
+  }
+  .survival_py_multistate_states(fit)
+}
+
+# The Python pseudo values as R lays them out: a named vector for one time, a
+# subjects x times matrix (named `id` x `times` when the fit has an id), a
+# subjects x states matrix for one time of a multi-state curve and a
+# subjects x states x times array otherwise.
+.as_pseudo_result <- function(value, fit, times, columns = NULL) {
+  n <- length(value)
+  python_fit <- .unwrap_grouped_survfit(fit)
+  rows <- .pseudo_id_row_names(python_fit, n)
+  has_id <- !is.null(rows)
+  if (is.null(rows)) {
+    rows <- as.character(seq_len(n))
+  }
+  # R names the id dimension after the id variable, "(id)" for an id vector
+  id_dim_name <- if (!has_id) {
+    ""
+  } else {
+    call_id <- .result_field(.result_field(python_fit, "call"), "id")
+    if (is.character(call_id) && length(call_id) == 1L) call_id else "(id)"
+  }
+  if (!is.list(value)) {
+    out <- as.numeric(value)
+    names(out) <- rows
+    return(out)
+  }
+  time_labels <- if (is.null(times)) NULL else as.character(times)
+  multistate <- .is_survival_py_multistate_survfit(fit)
+  if (!is.list(value[[1L]])) {
+    out <- do.call(rbind, lapply(value, as.numeric))
+    if (multistate) {
+      dimnames(out) <- stats::setNames(list(rows, columns), c(id_dim_name, ""))
+    } else {
+      dimnames(out) <- stats::setNames(
+        list(rows, if (is.null(time_labels)) NULL else time_labels),
+        c(id_dim_name, "times")
+      )
+    }
+    return(out)
+  }
+  n_times <- length(value[[1L]][[1L]])
+  out <- array(NA_real_, dim = c(n, length(columns), n_times))
+  for (i in seq_len(n)) {
+    out[i, , ] <- do.call(rbind, lapply(value[[i]], as.numeric))
+  }
+  dimnames(out) <- stats::setNames(
+    list(rows, columns, if (is.null(time_labels)) NULL else time_labels),
+    c(id_dim_name, "", "times")
+  )
+  out
 }
 
 survdiff <- function(formula, data = NULL, subset = NULL, na.action = "fail",
@@ -10118,11 +9978,22 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     if (!missing(id)) {
       output[[as.character(id)]] <- NULL
     }
-    output[[event_name]] <- factor(
-      as.integer(output[[event_name]]),
-      levels = 0:length(states),
-      labels = c("censor", states)
-    )
+    clabel <- attr(response, "clabel")
+    if (is.null(clabel)) {
+      clabel <- "censor"
+    }
+    values <- output[[event_name]]
+    if (is.character(values)) {
+      # the Python side labels the states; anything else is the censoring level
+      values[!(values %in% states)] <- clabel
+      output[[event_name]] <- factor(values, levels = c(clabel, states))
+    } else {
+      output[[event_name]] <- factor(
+        as.integer(values),
+        levels = 0:length(states),
+        labels = c(clabel, states)
+      )
+    }
   }
   output
 }
@@ -10618,7 +10489,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
   subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
   .call_r_api(
     "concordance",
-    response = .as_formula_string(formula),
+    .as_formula_string(formula),
     data = .as_python_data(data),
     scores = score_values,
     risk_scores = risk_score_values,
@@ -10633,7 +10504,8 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
 
 .model_concordance_response <- function(object, newdata) {
   if (missing(newdata)) {
-    response <- object$y_response
+    # coxph fits keep R's `y`; survreg fits keep it as y_response
+    response <- if (reticulate::py_has_attr(object, "y_response")) object$y_response else object$y
     if (inherits(response, "python.builtin.object")) {
       response <- .wrap_python(response, c("survival_py_surv", "survival_py_object"))
     }
@@ -10756,36 +10628,22 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
 }
 
 coef.survival_py_concordance <- function(object, ...) {
-  frame <- as.data.frame(object)
-  values <- as.numeric(frame$concordance)
-  if (nrow(frame) > 1L) {
-    names(values) <- as.character(frame$score)
+  values <- .as_numeric_vector(.result_field(object, "concordance"))
+  if (length(values) > 1L) {
+    names(values) <- as.character(.result_field(object, "names"))
   }
   values
 }
 
 vcov.survival_py_concordance <- function(object, ...) {
-  covariance <- .result_field(object, "covariance")
-  if (!is.null(covariance)) {
-    covariance <- .as_numeric_matrix(covariance)
-    return(if (nrow(covariance) == 1L) covariance[[1L]] else covariance)
+  variance <- .result_field(object, "var")
+  if (is.null(variance)) {
+    return(NULL)
   }
-  frame <- as.data.frame(object)
-  if (nrow(frame) == 1L) {
-    return(as.numeric(frame$variance)[[1L]])
+  if (is.list(variance) || is.matrix(variance)) {
+    return(.as_numeric_matrix(variance))
   }
-  dfbeta <- .result_field(object, "dfbeta")
-  if (is.null(dfbeta)) {
-    values <- as.numeric(frame$variance)
-    return(diag(values, nrow = length(values)))
-  }
-  dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
-  n_obs <- length(dfbeta_columns[[1L]])
-  if (any(vapply(dfbeta_columns, length, integer(1)) != n_obs)) {
-    stop("concordance dfbeta values must be rectangular", call. = FALSE)
-  }
-  dfbeta_matrix <- do.call(cbind, dfbeta_columns)
-  crossprod(dfbeta_matrix)
+  as.numeric(variance)
 }
 
 coef.concordance <- function(object, ...) {
@@ -10874,49 +10732,6 @@ survConcordance.fit <- function(y, x, strata, weight) {
   values
 }
 
-.concordancefit_count <- function(result, score_names = NULL, strata = NULL) {
-  stratum_counts <- .result_field(result, "stratum_counts")
-  if (!is.null(stratum_counts)) {
-    count <- .as_numeric_matrix(stratum_counts)
-    labels <- as.character(unlist(.result_field(result, "stratum_labels"), use.names = FALSE))
-    # Python retains encounter order. R uses factor level order, including an
-    # explicitly ordered factor's levels, with unused levels omitted.
-    levels <- if (is.null(strata)) sort(labels) else levels(droplevels(as.factor(strata)))
-    order <- match(levels, labels)
-    count <- count[order, , drop = FALSE]
-    dimnames(count) <- list(levels, c("concordant", "discordant", "tied.x", "tied.y", "tied.xy"))
-    return(count)
-  }
-  concordant <- .as_numeric_vector(.result_field(result, "concordant"))
-  comparable <- .as_numeric_vector(.result_field(result, "comparable"))
-  tied_x <- .as_numeric_vector(.result_field(result, "tied_x"))
-  tied_y <- .as_numeric_vector(.result_field(result, "tied_y"))
-  tied_xy <- .as_numeric_vector(.result_field(result, "tied_xy"))
-  if (length(tied_x) == 0L) tied_x <- rep(0, length(concordant))
-  if (length(tied_y) == 0L) tied_y <- rep(0, length(concordant))
-  if (length(tied_xy) == 0L) tied_xy <- rep(0, length(concordant))
-  strict_concordant <- concordant - 0.5 * tied_x
-  discordant <- pmax(comparable - strict_concordant - tied_x, 0)
-  count <- cbind(
-    concordant = strict_concordant,
-    discordant = discordant,
-    tied.x = tied_x,
-    tied.y = tied_y,
-    tied.xy = tied_xy
-  )
-  if (nrow(count) == 1L) {
-    out <- as.numeric(count[1L, ])
-    names(out) <- colnames(count)
-    return(out)
-  }
-  rownames(count) <- if (is.null(score_names)) {
-    .result_field(result, "score_names")
-  } else {
-    score_names
-  }
-  count
-}
-
 .concordancefit_rows <- function(rows, fit = NULL) {
   if (is.null(rows) || !is.list(rows) || length(rows) == 0L) {
     return(NULL)
@@ -10953,7 +10768,6 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     ranks <- FALSE
     influence <- 0L
   }
-  internal_influence <- if (isTRUE(std.err)) 3L else 0L
   result <- .call_r_api(
     "concordance",
     .as_python_surv(y),
@@ -10964,104 +10778,90 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     ymax = ymax,
     timewt = timewt,
     cluster = if (missing(cluster)) NULL else .as_python_vector(cluster),
-    influence = internal_influence,
+    influence = influence,
     ranks = ranks,
-    reverse = !isTRUE(reverse),
+    reverse = isTRUE(reverse),
     timefix = timefix,
     keepstrata = keepstrata
   )
-
-  concordance <- .as_numeric_vector(.result_field(result, "concordance"))
-  multi_score <- length(concordance) > 1L
-  score_names <- if (!is.null(input_score_names) && length(input_score_names) == length(concordance)) {
-    as.character(input_score_names)
-  } else {
-    as.character(.result_field(result, "score_names"))
+  out <- .as_concordance_list(result, input_score_names)
+  if (!isTRUE(std.err)) {
+    out$var <- out$cvar <- NULL
   }
+  out
+}
+
+# R's concordance object from the Python result: the count table and the
+# influence, dfbeta and ranks in R's shapes.
+.as_concordance_list <- function(result, input_score_names = NULL) {
+  count_names <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+  concordance <- .as_numeric_vector(.result_field(result, "concordance"))
+  result_names <- .result_field(result, "names")
+  row_names <- if (!is.null(input_score_names) &&
+    length(input_score_names) == length(concordance) && length(concordance) > 1L) {
+    as.character(input_score_names)
+  } else if (!is.null(result_names)) {
+    as.character(result_names)
+  } else {
+    NULL
+  }
+  multi_score <- length(concordance) > 1L
   if (multi_score) {
-    names(concordance) <- score_names
+    names(concordance) <- row_names
+  }
+  count <- .result_field(result, "count")
+  count <- if (is.list(count) && !is.null(names(count))) {
+    stats::setNames(.as_numeric_vector(count[count_names]), count_names)
+  } else {
+    values <- do.call(rbind, lapply(count, function(row) .as_numeric_vector(row[count_names])))
+    dimnames(values) <- list(row_names, count_names)
+    values
   }
   out <- list(
-    concordance = if (length(concordance) == 1L) concordance[[1L]] else concordance,
-    count = .concordancefit_count(
-      result,
-      if (multi_score) score_names else NULL,
-      if (missing(strata)) NULL else strata
-    ),
+    concordance = if (multi_score) concordance else concordance[[1L]],
+    count = count,
     n = as.integer(.result_field(result, "n"))
   )
-  variance <- .result_field(result, "variance")
-  conditional_variance <- .as_numeric_vector(.result_field(result, "conditional_variance"))
+  variance <- .result_field(result, "var")
+  if (!is.null(variance)) {
+    out$var <- if (is.list(variance) || length(variance) > 1L) {
+      .as_numeric_matrix(variance)
+    } else {
+      as.numeric(variance)
+    }
+    cvar <- .result_field(result, "cvar")
+    if (!is.null(cvar)) {
+      out$cvar <- if (is.list(cvar) || length(cvar) > 1L) .as_numeric_matrix(cvar) else as.numeric(cvar)
+    }
+  }
   dfbeta <- .result_field(result, "dfbeta")
-  cluster_levels <- if (!missing(cluster) && !is.null(cluster)) unique(cluster) else NULL
-  cluster_order <- if (!is.null(cluster_levels)) order(cluster_levels) else NULL
-  dfbeta_matrix <- NULL
-  if (multi_score && !is.null(dfbeta)) {
-    dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
-    n_obs <- length(dfbeta_columns[[1L]])
-    if (any(vapply(dfbeta_columns, length, integer(1)) != n_obs)) {
-      stop("concordance dfbeta values must be rectangular", call. = FALSE)
-    }
-    dfbeta_matrix <- do.call(cbind, dfbeta_columns)
-    if (!is.null(cluster_order)) {
-      dfbeta_matrix <- dfbeta_matrix[cluster_order, , drop = FALSE]
-      rownames(dfbeta_matrix) <- as.character(cluster_levels[cluster_order])
-    }
-  }
-  if (isTRUE(std.err) && !is.null(variance)) {
-    if (multi_score && !is.null(dfbeta_matrix)) {
-      out$var <- crossprod(dfbeta_matrix)
+  if (!is.null(dfbeta)) {
+    out$dfbeta <- if (multi_score) {
+      values <- .as_numeric_matrix(dfbeta)
+      colnames(values) <- row_names
+      values
     } else {
-      out$var <- .as_numeric_vector(variance)
+      .as_numeric_vector(dfbeta)
     }
-    out$cvar <- if (length(conditional_variance) == 1L) {
-      conditional_variance[[1L]]
+  }
+  influence <- .result_field(result, "influence")
+  if (!is.null(influence)) {
+    if (multi_score) {
+      matrices <- lapply(influence, .as_numeric_matrix)
+      out$influence <- array(
+        unlist(matrices, use.names = FALSE),
+        dim = c(dim(matrices[[1L]]), length(matrices)),
+        dimnames = list(NULL, count_names, row_names)
+      )
     } else {
-      conditional_variance
+      out$influence <- .as_numeric_matrix(influence)
+      colnames(out$influence) <- count_names
     }
   }
-  if (influence %in% c(1L, 3L)) {
-    if (!is.null(dfbeta)) {
-      out$dfbeta <- if (multi_score && !is.null(dfbeta_matrix)) {
-        dfbeta_matrix
-      } else {
-        values <- .as_numeric_vector(dfbeta)
-        if (!is.null(cluster_order)) {
-          values <- values[cluster_order]
-          names(values) <- as.character(cluster_levels[cluster_order])
-        }
-        values
-      }
-    }
-  }
-  if (influence >= 2L) {
-    influence_rows <- .result_field(result, "influence")
-    if (!is.null(influence_rows)) {
-      if (multi_score) {
-        influence_matrices <- lapply(influence_rows, .as_numeric_matrix)
-        matrix_dims <- lapply(influence_matrices, dim)
-        if (!all(vapply(matrix_dims, identical, logical(1), matrix_dims[[1L]]))) {
-          stop("concordance influence values must be rectangular", call. = FALSE)
-        }
-        out$influence <- array(
-          unlist(influence_matrices, use.names = FALSE),
-          dim = c(matrix_dims[[1L]], length(influence_matrices))
-        )
-        dimnames(out$influence) <- list(
-          NULL,
-          c("concordant", "discordant", "tied.x", "tied.y", "tied.xy"),
-          score_names
-        )
-      } else {
-        out$influence <- .as_numeric_matrix(influence_rows)
-        colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
-      }
-    }
-  }
-  if (isTRUE(ranks)) {
-    rank_rows <- .result_field(result, "ranks")
+  rank_rows <- .result_field(result, "ranks")
+  if (!is.null(rank_rows)) {
     out$ranks <- if (multi_score) {
-      do.call(rbind, Map(.concordancefit_rows, rank_rows, score_names))
+      do.call(rbind, Map(.concordancefit_rows, rank_rows, row_names))
     } else {
       .concordancefit_rows(rank_rows)
     }
@@ -11280,6 +11080,18 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
 summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
                                      terms = FALSE, ...) {
   result <- .call_r_api("model_summary", object)
+  if (inherits(result, "python.builtin.object") && !reticulate::py_has_attr(result, "model_type")) {
+    # summary.coxph returns a null model as it is: R's coxph.null object has no
+    # coefficients component, so hand back the fit as an R list
+    fields <- list(
+      loglik = .as_numeric_vector(.result_field(object, "loglik")),
+      n = as.integer(.result_field(object, "n")),
+      nevent = as.integer(.result_field(object, "nevent")),
+      method = as.character(.result_field(object, "method"))
+    )
+    class(fields) <- c("summary.survival_py_model", "list")
+    return(fields)
+  }
   model_type <- as.character(result$model_type)[[1L]]
   robust <- length(result$robust) > 0L && isTRUE(as.logical(result$robust)[[1L]])
   penalized <- isTRUE(result$penalized)
@@ -11577,6 +11389,10 @@ summary.survival_py_anova <- function(object, ...) {
   fields[["conf.type"]] <- as.character(fields[["conf.type"]])[[1L]]
   fields[["conf.int"]] <- as.numeric(fields[["conf.int"]])[[1L]]
   fields[["t0"]] <- as.numeric(fields[["t0"]])[[1L]]
+  fields[["logse"]] <- isTRUE(as.logical(fields[["logse"]]))
+  if (!is.null(fields[["oldstate"]])) {
+    fields[["oldstate"]] <- as.character(fields[["oldstate"]])
+  }
   fields
 }
 
@@ -11724,7 +11540,7 @@ dim.survival_py_survfit <- function(x) {
 
 `[.survival_py_cox_zph` <- function(x, ..., drop = FALSE) {
   i <- ..1
-  variable_names <- as.character(.result_field(x, "variable_names"))
+  variable_names <- as.character(.result_field(x, "names"))
   if (is.logical(i)) {
     i <- which(i)
   } else if (is.character(i)) {
@@ -11733,15 +11549,10 @@ dim.survival_py_survfit <- function(x) {
   if (any(is.na(i) | i > length(variable_names))) {
     stop("invalid variable requested", call. = FALSE)
   }
-
   selected <- seq_along(variable_names)[i]
-  has_global <- !is.null(.result_field(x, "global_chi2"))
-  table_rows <- seq_len(length(variable_names) + as.integer(has_global))[i]
-  include_global <- has_global && (length(variable_names) + 1L) %in% table_rows
-  result <- x$subset(
-    as.list(as.integer(selected - 1L)),
-    include_global = include_global
-  )
+  # R applies the subscript to the table as well, whose last row is GLOBAL
+  table_rows <- seq_len(length(.result_field(x, "table")))[i]
+  result <- x$subset(as.list(as.integer(selected - 1L)), as.list(as.integer(table_rows - 1L)))
   .wrap_python(result, c("survival_py_cox_zph", "survival_py_object"))
 }
 
@@ -11767,11 +11578,13 @@ dim.survival_py_survfit <- function(x) {
       states,
       dimension = "states"
     )
+    grouped <- .is_grouped_survival_py_survfit(x)
     subset_curve <- function(curve) {
       .wrap_python(
         .python_attr("_subset_survfit_multistate")(
           curve,
-          as.list(as.integer(state_indices - 1L))
+          as.list(as.integer(state_indices - 1L)),
+          keep_n_id = grouped
         ),
         c("survival_py_survfit", "survival_py_object")
       )
@@ -11844,7 +11657,13 @@ dim.survival_py_survfit <- function(x) {
 }
 
 as.data.frame.survival_py_survfit <- function(x, row.names = NULL, optional = FALSE, ...) {
-  .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
+  frame <- .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
+  if (.is_grouped_survival_py_survfit(x) && "strata" %in% names(frame)) {
+    # the curves are named by the bare levels on this side
+    full_names <- names(reticulate::py_to_r(.result_field(.unwrap_grouped_survfit(x), "strata")))
+    frame$strata <- names(unclass(x))[match(as.character(frame$strata), full_names)]
+  }
+  frame
 }
 
 as.data.frame.survival_py_surv <- function(x, row.names = NULL, optional = FALSE, ...) {
