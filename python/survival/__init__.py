@@ -15,7 +15,7 @@ The root package exposes three things, all loaded lazily on first access:
 
 from importlib import import_module as _import_module
 
-__version__ = "1.3.0"
+__version__ = "2.0.0"
 
 _PUBLIC_MODULES = {
     "bayesian": ".bayesian",
