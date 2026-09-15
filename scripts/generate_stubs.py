@@ -815,8 +815,14 @@ def _render_class(name, cls, rust_cls, class_names, missing_types) -> str:
 
 
 def load_extension():
-    sys.path.insert(0, str(ROOT / "python"))
-    return importlib.import_module("survival._survival")
+    """The built extension: the installed package (a wheel, or `maturin develop`), else the
+    source tree with the extension built into it."""
+
+    try:
+        return importlib.import_module("survival._survival")
+    except ImportError:
+        sys.path.insert(0, str(ROOT / "python"))
+        return importlib.import_module("survival._survival")
 
 
 def manifest_names() -> list[str]:
