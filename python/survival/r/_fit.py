@@ -474,5 +474,3 @@ def _cox_training_rows(fit: Any, nvar: int) -> list[list[float]]:
     if any(len(row) != nvar for row in rows):
         return []
     return rows
-
-

@@ -65,9 +65,6 @@ from .r import (
     SurvfitMultiStateResult as SurvfitMultiStateResult,
 )
 from .r import (
-    SurvObrienResult as SurvObrienResult,
-)
-from .r import (
     TcutResult as TcutResult,
 )
 from .r import (
@@ -75,9 +72,6 @@ from .r import (
 )
 from .r import (
     TMergeOperation as TMergeOperation,
-)
-from .r import (
-    YatesPairwiseResult as YatesPairwiseResult,
 )
 from .r import (
     YatesResult as YatesResult,
@@ -330,12 +324,6 @@ from .r import (
 )
 from .r import (
     yates as yates,
-)
-from .r import (
-    yates_contrast as yates_contrast,
-)
-from .r import (
-    yates_pairwise as yates_pairwise,
 )
 from .sklearn_compat import (
     AFTEstimator as AFTEstimator,

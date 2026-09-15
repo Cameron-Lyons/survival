@@ -399,11 +399,7 @@ def pspline(
     combine: Any | None = None,
 ) -> dict[str, Any]: ...
 def survobrien(
-    time: Any,
-    status: Any | None = None,
-    covariate: Any | None = None,
-    strata: Any | None = None,
-    *,
+    formula: Any,
     data: Any | None = None,
     subset: Any | None = None,
     na_action: Any | None = "fail",
@@ -850,7 +846,7 @@ def pseudo(
     **kwargs: Any,
 ) -> Any: ...
 def survcheck(
-    response: Any = ...,
+    formula: Any = ...,
     data: Any | None = None,
     subset: Any | None = None,
     na_action: Any | None = "pass",

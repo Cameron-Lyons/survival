@@ -485,8 +485,7 @@ KNOWN_FAILURES: dict[str, str] = {
         "mismatch: cmat.colnames[3]: 'factor(trt)2' != 'factor(trt)2'"
     ),
     "yates/veteran_celltype_predict_risk": (
-        "missing feature: yates predict = 'risk' is not implemented (R simulates the "
-        "coefficients)"
+        "missing feature: yates predict = 'risk' is not implemented (R simulates the coefficients)"
     ),
     "yates/veteran_trt_factor/cmat_names": (
         "mismatch: cmat.colnames[3]: 'factor(trt)2' != 'factor(trt)2'"

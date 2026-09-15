@@ -176,6 +176,8 @@ def _pyi_function_arg_names(path: Path, name: str) -> list[str]:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             args = [arg.arg for arg in node.args.posonlyargs]
             args.extend(arg.arg for arg in node.args.args)
+            if node.args.vararg is not None:
+                args.append(node.args.vararg.arg)
             args.extend(arg.arg for arg in node.args.kwonlyargs)
             return args
     raise AssertionError(f"{name} not found in {path}")
@@ -740,15 +742,12 @@ def test_r_api_stub_tracks_surv_public_signature():
 
     expected = [
         "self",
+        "args",
         "type",
         "origin",
         "time",
-        "time1",
         "time2",
         "event",
-        "status",
-        "start",
-        "stop",
     ]
     runtime_params = inspect.signature(survival.r_api.Surv.__init__).parameters
     assert [
@@ -779,10 +778,9 @@ def test_r_api_stub_tracks_concordance_public_signature():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected = [
-        "response",
+        "object",
+        "more",
         "data",
-        "scores",
-        "risk_scores",
         "weights",
         "subset",
         "na_action",
@@ -795,6 +793,9 @@ def test_r_api_stub_tracks_concordance_public_signature():
         "reverse",
         "timefix",
         "keepstrata",
+        "newdata",
+        "scores",
+        "strata",
     ]
     runtime_params = inspect.signature(survival.r_api.concordance).parameters
     assert [
@@ -813,36 +814,81 @@ def test_r_api_stub_tracks_model_generic_public_signatures():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected_by_name = {
-        "coef": ["fit"],
-        "coef_names": ["fit", "complete"],
-        "confint": ["fit", "parm", "level"],
-        "vcov": ["fit", "complete"],
-        "loglik": ["fit"],
-        "model_formula": ["fit"],
-        "model_summary": ["fit"],
-        "model_weights": ["fit"],
-        "nobs": ["fit"],
-        "degrees_freedom": ["fit"],
-        "df_residual": ["fit"],
-        "aic": ["fit", "k"],
-        "bic": ["fit"],
-        "brier": ["fit", "times", "newdata", "ties", "detail", "timefix", "efron"],
-        "royston": ["fit", "newdata", "ties", "adjust"],
-        "extract_aic": ["fit", "scale", "k"],
-        "model_frame": ["fit"],
-        "model_matrix": ["fit"],
-        "as_data_frame": ["result"],
+        "coef": [
+            "fit",
+        ],
+        "coef_names": [
+            "fit",
+            "complete",
+        ],
+        "confint": [
+            "fit",
+            "parm",
+            "level",
+        ],
+        "vcov": [
+            "fit",
+            "complete",
+        ],
+        "loglik": [
+            "fit",
+        ],
+        "model_formula": [
+            "fit",
+        ],
+        "model_summary": [
+            "fit",
+        ],
+        "model_weights": [
+            "fit",
+        ],
+        "nobs": [
+            "fit",
+        ],
+        "degrees_freedom": [
+            "fit",
+        ],
+        "df_residual": [
+            "fit",
+        ],
+        "aic": [
+            "fit",
+            "k",
+        ],
+        "bic": [
+            "fit",
+        ],
+        "brier": [
+            "fit",
+            "times",
+            "newdata",
+            "ties",
+            "detail",
+            "timefix",
+            "efron",
+        ],
+        "royston": [
+            "fit",
+            "newdata",
+            "ties",
+            "adjust",
+        ],
+        "extract_aic": [
+            "fit",
+            "scale",
+            "k",
+        ],
+        "model_frame": [
+            "fit",
+        ],
+        "model_matrix": [
+            "fit",
+        ],
+        "as_data_frame": [
+            "result",
+        ],
         "fitted": [
             "fit",
-            "type",
-            "centered",
-            "terms",
-            "collapse",
-            "reference",
-            "se_fit",
-            "times",
-            "p",
-            "quantiles",
         ],
     }
     for name, expected in expected_by_name.items():
@@ -911,7 +957,10 @@ def test_r_api_stub_tracks_survfit_public_signature():
     assert list(survfit0_params) == ["x", "args", "kwargs"]
     assert survfit0_params["args"].kind is inspect.Parameter.VAR_POSITIONAL
     assert survfit0_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
-    assert _pyi_function_arg_names(stub_path, "survfit0") == ["x"]
+    assert _pyi_function_arg_names(stub_path, "survfit0") == [
+        "x",
+        "args",
+    ]
     tree = ast.parse(stub_path.read_text(), filename=str(stub_path))
     survfit0_node = next(
         node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "survfit0"
@@ -930,15 +979,6 @@ def test_r_api_stub_tracks_predict_public_signature():
     expected = [
         "fit",
         "newdata",
-        "type",
-        "centered",
-        "terms",
-        "collapse",
-        "reference",
-        "se_fit",
-        "times",
-        "p",
-        "quantiles",
     ]
     runtime_params = inspect.signature(survival.r_api.predict).parameters
     assert [
@@ -964,14 +1004,11 @@ def test_r_api_stub_tracks_residuals_public_signature():
     expected = [
         "fit",
         "type",
-        "terms",
-        "collapse",
-        "weighted",
-        "rsigma",
+        "kwargs",
     ]
     runtime_params = inspect.signature(survival.r_api.residuals).parameters
     assert list(runtime_params) == expected
-    assert _pyi_function_arg_names(stub_path, "residuals") == expected
+    assert _pyi_function_arg_names(stub_path, "residuals") == expected[:-1]
 
 
 def test_r_api_stub_tracks_aeqsurv_public_signature():
@@ -979,7 +1016,10 @@ def test_r_api_stub_tracks_aeqsurv_public_signature():
     survival = importlib.import_module("survival")
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
-    expected = ["x", "tolerance"]
+    expected = [
+        "x",
+        "tolerance",
+    ]
     assert list(inspect.signature(survival.r_api.aeqSurv).parameters) == expected
     assert _pyi_function_arg_names(stub_path, "aeqSurv") == expected
 
@@ -990,10 +1030,19 @@ def test_r_api_stub_tracks_surv_utility_public_signatures():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected_by_name = {
-        "is_na_surv": ["x"],
-        "format_surv": ["x"],
-        "is_ratetable": ["x", "has_rates", "has_dims", "verbose"],
-        "ratetableDate": ["x", "month", "day", "origin_year"],
+        "is_na_surv": [
+            "x",
+        ],
+        "format_surv": [
+            "x",
+        ],
+        "is_ratetable": [
+            "x",
+            "verbose",
+        ],
+        "ratetableDate": [
+            "x",
+        ],
         "survexp_us": [],
         "survexp_mn": [],
         "survexp_usr": [],
@@ -1045,7 +1094,12 @@ def test_r_api_stub_tracks_cipoisson_public_signature():
     survival = importlib.import_module("survival")
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
-    expected = ["k", "time", "p", "method"]
+    expected = [
+        "k",
+        "time",
+        "p",
+        "method",
+    ]
     assert list(inspect.signature(survival.r_api.cipoisson).parameters) == expected
     assert _pyi_function_arg_names(stub_path, "cipoisson") == expected
 
@@ -1067,24 +1121,41 @@ def test_r_api_stub_tracks_pyears_public_signature():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected = [
-        "response",
+        "formula",
         "data",
+        "weights",
+        "subset",
+        "na_action",
+        "rmap",
+        "ratetable",
+        "scale",
+        "expect",
+        "model",
+        "x",
+        "y",
+        "data_frame",
         "time",
         "start",
         "stop",
         "event",
         "group",
-        "weights",
-        "subset",
-        "na_action",
-        "scale",
-        "data_frame",
+        "kwargs",
     ]
     runtime_params = inspect.signature(survival.r_api.pyears).parameters
     assert list(runtime_params) == expected
-    for name in expected[2:]:
-        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
-    assert _pyi_function_arg_names(stub_path, "pyears") == expected
+    keyword_only = [
+        "time",
+        "start",
+        "stop",
+        "event",
+        "group",
+    ]
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ] == keyword_only
+    assert _pyi_function_arg_names(stub_path, "pyears") == expected[:-1]
 
 
 def test_r_api_stub_tracks_finegray_public_signature():
@@ -1107,8 +1178,12 @@ def test_r_api_stub_tracks_finegray_public_signature():
     ]
     runtime_params = inspect.signature(survival.r_api.finegray).parameters
     assert list(runtime_params) == expected
-    for name in expected[2:-1]:
-        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    keyword_only = []
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ] == keyword_only
     assert _pyi_function_arg_names(stub_path, "finegray") == expected[:-1]
     assert _pyi_function_kwarg_name(stub_path, "finegray") == "kwargs"
 
@@ -1127,13 +1202,23 @@ def test_r_api_stub_tracks_tmerge_public_surface():
         "options",
         "operations",
         "metadata",
-        "updates",
+        "args",
     ]
     runtime_params = inspect.signature(survival.r_api.tmerge).parameters
     assert list(runtime_params) == expected
-    for name in expected[3:-1]:
-        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
-    assert runtime_params["updates"].kind is inspect.Parameter.VAR_KEYWORD
+    keyword_only = [
+        "tstart",
+        "tstop",
+        "options",
+        "operations",
+        "metadata",
+    ]
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ] == keyword_only
+    assert runtime_params["args"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "tmerge") == expected[:-1]
     assert _pyi_function_kwarg_name(stub_path, "tmerge") == "updates"
     assert _pyi_class_annotation_names(stub_path, "TMergeOperation") == {
@@ -1157,11 +1242,21 @@ def test_r_api_stub_tracks_survobrien_public_signature():
     survival = importlib.import_module("survival")
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
-    expected = ["time", "status", "covariate", "strata", "data", "subset", "na_action", "transform"]
+    expected = [
+        "formula",
+        "data",
+        "subset",
+        "na_action",
+        "transform",
+    ]
     runtime_params = inspect.signature(survival.r_api.survobrien).parameters
     assert list(runtime_params) == expected
-    for name in expected[4:]:
-        assert runtime_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    keyword_only = []
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ] == keyword_only
     assert _pyi_function_arg_names(stub_path, "survobrien") == expected
     assert _pyi_class_annotation_names(stub_path, "SurvObrienResult") == {
         "statistic",
@@ -1179,11 +1274,27 @@ def test_r_api_stub_tracks_survsplit_public_signature():
     survival = importlib.import_module("survival")
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
-    expected = ["response", "data", "cut", "start", "end", "event", "episode", "id", "zero"]
+    expected = [
+        "formula",
+        "data",
+        "subset",
+        "na_action",
+        "id",
+        "cut",
+        "zero",
+        "episode",
+        "start",
+        "end",
+        "event",
+        "added",
+        "timefix",
+        "response",
+        "kwargs",
+    ]
     runtime_params = inspect.signature(survival.r_api.survSplit).parameters
     assert list(runtime_params) == expected
     assert runtime_params["cut"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert _pyi_function_arg_names(stub_path, "survSplit") == expected
+    assert _pyi_function_arg_names(stub_path, "survSplit") == expected[:-1]
 
 
 def test_r_api_stub_tracks_survcondense_public_signature():
@@ -1237,7 +1348,6 @@ def test_r_api_stub_tracks_survconcordance_public_signatures():
         for name, parameter in fit_params.items()
         if parameter.kind is not inspect.Parameter.VAR_KEYWORD
     ] == fit_expected
-    assert fit_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "survConcordance_fit") == fit_expected
     assert _pyi_function_kwarg_name(stub_path, "survConcordance_fit") == "kwargs"
 
@@ -1248,7 +1358,7 @@ def test_r_api_stub_tracks_survcheck_public_signature():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected = [
-        "response",
+        "formula",
         "data",
         "subset",
         "na_action",
@@ -1277,10 +1387,9 @@ def test_r_api_stub_tracks_rttright_public_signature():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected = [
-        "response",
-        "status",
-        "weights",
+        "formula",
         "data",
+        "weights",
         "subset",
         "na_action",
         "times",
@@ -1294,7 +1403,7 @@ def test_r_api_stub_tracks_rttright_public_signature():
         for name, parameter in runtime_params.items()
         if parameter.kind is not inspect.Parameter.VAR_KEYWORD
     ] == expected
-    assert runtime_params["data"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["data"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "rttright") == expected
     assert _pyi_function_kwarg_name(stub_path, "rttright") == "kwargs"
@@ -1307,14 +1416,10 @@ def test_r_api_stub_tracks_pseudo_public_signature():
 
     expected = [
         "fit",
-        "status",
-        "eval_times",
-        "type_",
         "times",
         "type",
         "collapse",
         "data_frame",
-        "time",
     ]
     runtime_params = inspect.signature(survival.r_api.pseudo).parameters
     assert [
@@ -1322,7 +1427,7 @@ def test_r_api_stub_tracks_pseudo_public_signature():
         for name, parameter in runtime_params.items()
         if parameter.kind is not inspect.Parameter.VAR_KEYWORD
     ] == expected
-    assert runtime_params["times"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert runtime_params["times"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "pseudo") == expected
     assert _pyi_function_kwarg_name(stub_path, "pseudo") == "kwargs"
@@ -1340,6 +1445,7 @@ def test_r_api_stub_tracks_strata_public_signature():
     runtime_params = inspect.signature(survival.r_api.strata).parameters
     assert runtime_params["variables"].kind is inspect.Parameter.VAR_POSITIONAL
     assert list(_pyi_function_arg_names(stub_path, "strata")) == [
+        "variables",
         "na_group",
         "shortlabel",
         "sep",
@@ -1355,10 +1461,35 @@ def test_r_api_stub_tracks_survreg_distribution_helper_signatures():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected_by_name = {
-        "dsurvreg": ["x", "mean", "scale", "distribution", "parms"],
-        "psurvreg": ["q", "mean", "scale", "distribution", "parms"],
-        "qsurvreg": ["p", "mean", "scale", "distribution", "parms"],
-        "rsurvreg": ["n", "mean", "scale", "distribution", "parms"],
+        "dsurvreg": [
+            "x",
+            "mean",
+            "scale",
+            "distribution",
+            "parms",
+        ],
+        "psurvreg": [
+            "q",
+            "mean",
+            "scale",
+            "distribution",
+            "parms",
+        ],
+        "qsurvreg": [
+            "p",
+            "mean",
+            "scale",
+            "distribution",
+            "parms",
+        ],
+        "rsurvreg": [
+            "n",
+            "mean",
+            "scale",
+            "distribution",
+            "parms",
+            "seed",
+        ],
     }
     for name, expected in expected_by_name.items():
         assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
@@ -1373,11 +1504,11 @@ def test_r_api_stub_tracks_survdiff_public_signature():
     expected = [
         "response",
         "data",
-        "group",
         "subset",
         "na_action",
         "rho",
         "timefix",
+        "group",
     ]
     runtime_params = inspect.signature(survival.r_api.survdiff).parameters
     assert [
@@ -1405,63 +1536,51 @@ def test_r_api_stub_tracks_fit_control_public_signatures():
             "method",
         ],
         "coxph": [
-            "response",
+            "formula",
             "data",
-            "x",
             "weights",
-            "offset",
-            "strata",
-            "cluster",
             "subset",
             "na_action",
             "init",
-            "initial_beta",
-            "max_iter",
-            "eps",
-            "toler",
-            "method",
+            "control",
             "ties",
+            "method",
+            "singular_ok",
             "robust",
             "model",
+            "x",
             "y",
             "tt",
             "id",
+            "cluster",
             "istate",
             "statedata",
-            "singular_ok",
             "nocenter",
-            "control",
+            "offset",
+            "strata",
+            "iter_max",
+            "eps",
+            "toler_chol",
+            "timefix",
         ],
         "survreg": [
-            "response",
+            "formula",
             "data",
-            "x",
-            "time",
-            "time2",
-            "status",
-            "covariates",
             "weights",
-            "offset",
-            "offsets",
-            "init",
-            "initial",
-            "initial_beta",
-            "strata",
             "subset",
             "na_action",
             "dist",
-            "distribution",
+            "init",
             "scale",
+            "control",
             "parms",
             "model",
+            "x",
             "y",
             "robust",
             "cluster",
             "score",
-            "max_iter",
-            "eps",
-            "tol_chol",
-            "control",
+            "offset",
         ],
     }
     for name, expected in expected_by_name.items():

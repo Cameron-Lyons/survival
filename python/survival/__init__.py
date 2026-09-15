@@ -73,14 +73,12 @@ _R_EXPORTS = [
     "FineGrayOutput",
     "RateTable",
     "PyearsResult",
-    "SurvObrienResult",
     "SurvExpResult",
     "SurvfitConfidenceIntervalResult",
     "SurvfitMultiStateResult",
     "TMergeFrame",
     "TMergeOperation",
     "TcutResult",
-    "YatesPairwiseResult",
     "YatesResult",
     "aic",
     "aareg",
@@ -165,8 +163,6 @@ _R_EXPORTS = [
     "totimeline",
     "vcov",
     "yates",
-    "yates_contrast",
-    "yates_pairwise",
 ]
 
 __all__ = list(dict.fromkeys([*_PUBLIC_MODULES, *_R_EXPORTS, *_SKLEARN_EXPORTS]))

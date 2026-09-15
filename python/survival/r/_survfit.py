@@ -664,9 +664,7 @@ def _strata_table(
 
     if engine.strata is None:
         return None
-    return {
-        label: int(size) for label, size in zip(labels, engine.strata, strict=True) if size > 0
-    }
+    return {label: int(size) for label, size in zip(labels, engine.strata, strict=True) if size > 0}
 
 
 def _km_result(
