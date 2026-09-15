@@ -2,7 +2,7 @@
 
 The ``__all__`` list is exactly the one ``survival.r_api`` has always exported. The redundant
 ``name as name`` imports keep the few public names ``r_api`` exposed without listing them
-(``ConcordanceResult``, ``TurnbullSurvfitResult``, ``predict_terms_constant``) importable.
+(``ConcordanceResult``, ``predict_terms_constant``) importable.
 """
 
 from __future__ import annotations
@@ -91,7 +91,10 @@ from ._surv import (
 )
 from ._survdiff import survdiff
 from ._survfit import (
+    aggregate_survfit,
     aggregate_survfit_result,
+    quantile_survfit,
+    summary_survfit,
     survfit,
     survfit0,
     survfit_confint,
@@ -110,13 +113,19 @@ from ._types import (
     CoxZPHResult,
     FineGrayFrame,
     FineGrayOutput,
+    NamedMatrix,
     PredictResult,
     PyearsResult,
     RateTable,
     StrataFactor,
+    SummarySurvfitResult,
+    SurvDiffResult,
     SurvExpResult,
+    SurvfitCall,
     SurvfitConfidenceIntervalResult,
     SurvfitMultiStateResult,
+    SurvfitQuantileResult,
+    SurvfitResidualsResult,
     SurvfitResult,
     SurvObrienResult,
     TcutResult,
@@ -126,7 +135,6 @@ from ._types import (
     YatesResult,
 )
 from ._types import ConcordanceResult as ConcordanceResult
-from ._types import TurnbullSurvfitResult as TurnbullSurvfitResult
 
 __all__ = [
     "Surv",
@@ -152,6 +160,12 @@ __all__ = [
     "SurvfitResult",
     "SurvfitMultiStateResult",
     "SurvfitConfidenceIntervalResult",
+    "SurvfitCall",
+    "SurvfitQuantileResult",
+    "SurvfitResidualsResult",
+    "NamedMatrix",
+    "SummarySurvfitResult",
+    "SurvDiffResult",
     "TcutResult",
     "aic",
     "aareg",
@@ -159,6 +173,7 @@ __all__ = [
     "as_data_frame",
     "basehaz",
     "anova",
+    "aggregate_survfit",
     "aggregate_survfit_result",
     "brier",
     "bcloglog",
@@ -209,6 +224,7 @@ __all__ = [
     "pspline",
     "pseudo",
     "predict",
+    "quantile_survfit",
     "psurvreg",
     "qsurvreg",
     "ratetableDate",
@@ -229,6 +245,7 @@ __all__ = [
     "survobrien",
     "survexp_us",
     "survexp_usr",
+    "summary_survfit",
     "survfit",
     "survfit0",
     "survfit_confint",
