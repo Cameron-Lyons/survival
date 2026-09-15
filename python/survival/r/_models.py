@@ -8,11 +8,14 @@ Cox, clogit, cch and aareg fits dispatch here; survreg fits go to the matching
 
 from __future__ import annotations
 
+import dataclasses
 import math
+import re
 from collections.abc import Mapping, Sequence
 from statistics import NormalDist
 from typing import Any
 
+from .. import _survival as _core
 from ._aareg import summary_aareg
 from ._cch import summary_cch
 from ._coerce import (
@@ -26,7 +29,6 @@ from ._coxph import CoxphModel, predict_coxph, residuals_coxph, summary_coxph
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
 from ._pyears import _finegray_frame, _pyears_result_frame
 from ._surv import Surv
-from ._survfit import _optional_float_list
 from ._types import (
     AaregModelResult,
     CchModelResult,
@@ -38,9 +40,9 @@ from ._types import (
     FineGrayFrame,
     FineGrayOutput,
     PyearsResult,
+    SurvDiffResult,
     SurvfitMultiStateResult,
     SurvfitResult,
-    TurnbullSurvfitResult,
 )
 
 # ---------------------------------------------------------------------------
@@ -260,8 +262,11 @@ def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
 
 
 def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
-    """``predict``: see :func:`survival.r._coxph.predict_coxph` and the survreg method."""
+    """``predict``: see :func:`survival.r._coxph.predict_coxph` and the survreg method.
+    R's ``se.fit`` spelling is accepted."""
 
+    if "se.fit" in kwargs:
+        kwargs["se_fit"] = kwargs.pop("se.fit")
     if isinstance(fit, CoxphModel):
         return predict_coxph(fit, newdata, **kwargs)
     return _dispatch("predict", fit, newdata, **kwargs)
@@ -352,103 +357,147 @@ def _add_optional_survfit_column(
 
 
 def _survfit_frame(result: SurvfitResult) -> dict[str, list[Any]]:
-    std_err = list(result.std_err)
-    conf_lower = list(result.conf_lower)
-    conf_upper = list(result.conf_upper)
-    for idx, survival in enumerate(result.estimate):
-        if survival <= 0.0:
-            if idx < len(std_err):
-                std_err[idx] = math.nan
-            if idx < len(conf_lower):
-                conf_lower[idx] = math.nan
-            if idx < len(conf_upper):
-                conf_upper[idx] = math.nan
+    """``survfit`` as R's ``summary(fit, censored = TRUE, data.frame = TRUE)``: one row
+    per time with ``std.err`` on the survival scale, plus a ``strata`` column."""
+
     row_count = len(result.time)
     frame: dict[str, list[Any]] = {
-        "time": result.time,
-        "n.risk": result.n_risk,
-        "n.event": result.n_event,
-        "n.censor": result.n_censor,
-        "surv": result.estimate,
-        "cumhaz": result.cumhaz,
+        "time": [float(value) for value in result.time],
+        "n.risk": [float(value) for value in result.n_risk],
+        "n.event": [float(value) for value in result.n_event],
+        "n.censor": [float(value) for value in result.n_censor],
+        "surv": [float(value) for value in result.surv],
+        "cumhaz": [float(value) for value in result.cumhaz],
     }
-    _add_optional_survfit_column(frame, "std.err", std_err, row_count)
-    _add_optional_survfit_column(frame, "lower", conf_lower, row_count)
-    _add_optional_survfit_column(frame, "upper", conf_upper, row_count)
-    _add_optional_survfit_column(frame, "std.chaz", result.std_chaz, row_count)
+    std_err = result.std_err
+    if std_err is not None and result.logse:
+        std_err = [float(se) * float(surv) for se, surv in zip(std_err, result.surv, strict=True)]
+    # once a curve reaches 0 its standard error and limits are undefined
+    terminal = [value <= 0.0 for value in frame["surv"]]
+    for name, values in (
+        ("std.err", std_err),
+        ("lower", result.lower),
+        ("upper", result.upper),
+    ):
+        if values is not None:
+            column = [
+                math.nan if done else float(value)
+                for value, done in zip(values, terminal, strict=True)
+            ]
+            _add_optional_survfit_column(frame, name, column, row_count)
+    if result.std_chaz is not None:
+        _add_optional_survfit_column(frame, "std.chaz", result.std_chaz, row_count)
     if result.n_enter is not None:
-        frame["n.enter"] = result.n_enter
+        frame["n.enter"] = [float(value) for value in result.n_enter]
+    if result.strata:
+        frame["strata"] = [name for name, count in result.strata.items() for _ in range(count)]
     return frame
 
 
-def _survfit_multistate_column(
-    values: Sequence[Sequence[Any]],
-    state_index: int,
-    row_count: int,
-    state_count: int,
-    name: str,
-) -> list[Any]:
-    if len(values) != row_count:
-        raise ValueError(f"multi-state survfit column {name!r} must match time length")
-    column: list[Any] = []
-    for row in values:
-        if len(row) != state_count:
-            raise ValueError(f"multi-state survfit column {name!r} must have one value per state")
-        column.append(row[state_index])
-    return column
+def _matrix_column(values: Sequence[Sequence[Any]], index: int) -> list[float]:
+    return [float(row[index]) for row in values]
 
 
 def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list[Any]]:
+    """``survfitms`` state by state: the ``time x state`` matrices as long columns."""
+
     row_count = len(result.time)
-    state_count = len(result.states)
-    required = {
+    columns: dict[str, Sequence[Sequence[Any]] | None] = {
         "n.risk": result.n_risk,
         "n.event": result.n_event,
         "n.censor": result.n_censor,
         "pstate": result.pstate,
-    }
-    optional = {
         "std.err": result.std_err,
-        "lower": result.conf_lower,
-        "upper": result.conf_upper,
+        "lower": result.lower,
+        "upper": result.upper,
     }
-    frame: dict[str, list[Any]] = {
-        "time": [],
-        **{name: [] for name in required},
-        **{name: [] for name, values in optional.items() if values is not None},
-        "state": [],
-    }
+    present = [name for name, values in columns.items() if values is not None]
+    frame: dict[str, list[Any]] = {"time": [], **{name: [] for name in present}}
+    if result.strata:
+        frame["strata"] = []
+    frame["state"] = []
     for state_index, state in enumerate(result.states):
         frame["time"].extend(float(value) for value in result.time)
-        for name, values in required.items():
-            frame[name].extend(
-                _survfit_multistate_column(
-                    values,
-                    state_index,
-                    row_count,
-                    state_count,
-                    name,
-                )
+        for name in present:
+            frame[name].extend(_matrix_column(columns[name] or (), state_index))
+        if result.strata:
+            frame["strata"].extend(
+                name for name, count in result.strata.items() for _ in range(count)
             )
-        for name, values in optional.items():
-            if values is not None:
-                frame[name].extend(
-                    _survfit_multistate_column(
-                        values,
-                        state_index,
-                        row_count,
-                        state_count,
-                        name,
-                    )
-                )
         frame["state"].extend([state] * row_count)
     return frame
+
+
+# --- the R bridge's grouped view of a stratified curve set --------------------------------
+
+_PER_STRATUM_FIELDS = frozenset(
+    {"n", "n_id", "p0", "se0", "influence_pstate", "influence_surv", "influence_chaz"}
+)
+
+
+def _bare_strata_label(name: str) -> str:
+    """``rx=1`` -> ``1`` and ``a=1, b=x`` -> ``1, x`` (the labels the bridge names curves by)."""
+
+    return re.sub(r"(^|, )[^=,]+=", r"\1", name)
+
+
+def _survfit_stratum(result: Any, index: int, rows: slice) -> Any:
+    """One stratum of ``result`` as its own unstratified result."""
+
+    changes: dict[str, Any] = {"strata": None}
+    row_count = len(result.time)
+    for field in dataclasses.fields(result):
+        value = getattr(result, field.name)
+        if field.name == "strata" or not isinstance(value, list | tuple):
+            continue
+        if field.name in _PER_STRATUM_FIELDS:
+            if field.name == "p0" and value and not isinstance(value[0], list | tuple):
+                continue
+            changes[field.name] = [value[index]] if field.name in {"n", "n_id"} else value[index]
+        elif len(value) == row_count:
+            changes[field.name] = list(value[rows])
+    counts = getattr(result, "counts", None)
+    if counts is not None:
+        changes["counts"] = _core.SurvfitCounts(
+            list(counts.n_risk[rows]),
+            list(counts.n_event[rows]),
+            list(counts.n_censor[rows]),
+            None if counts.n_enter is None else list(counts.n_enter[rows]),
+        )
+    return dataclasses.replace(result, **changes)
+
+
+def _survfit_strata_curves(result: Any) -> Any:
+    """The bridge's shape for a stratified ``survfit``: ``{bare level label: curve}``.
+
+    ``survfit.formula`` results lay their strata end to end with ``strata`` naming the
+    blocks (R's layout); the R bridge represents them as a named list of per-stratum
+    curves keyed by the bare levels.  Unstratified results are returned as they are.
+    """
+
+    if not isinstance(result, SurvfitResult | SurvfitMultiStateResult) or not result.strata:
+        return result
+    curves: dict[str, Any] = {}
+    start = 0
+    for index, (name, count) in enumerate(result.strata.items()):
+        curves[_bare_strata_label(name)] = _survfit_stratum(
+            result, index, slice(start, start + count)
+        )
+        start += count
+    return curves
 
 
 def _subset_survfit_multistate(
     result: SurvfitMultiStateResult,
     state_indices: Any,
+    keep_n_id: bool | None = None,
 ) -> SurvfitMultiStateResult:
+    """``fit[, states]``: keep the selected state columns (the transition columns go).
+
+    R keeps ``n.id`` for a stratified object and drops it otherwise (``[.survfitms``
+    reads ``x$id`` there); ``keep_n_id`` overrides that for the bridge's split curves.
+    """
+
     if not isinstance(result, SurvfitMultiStateResult):
         raise TypeError("multi-state survfit subsetting requires a multi-state result")
     indices = [
@@ -460,79 +509,64 @@ def _subset_survfit_multistate(
     if any(index < 0 or index >= len(result.states) for index in indices):
         raise IndexError("multi-state survfit state index is out of bounds")
 
-    def select_columns(values: list[list[float]]) -> list[list[float]]:
+    def select_columns(values: Sequence[Sequence[Any]] | None) -> list[list[float]] | None:
+        if values is None:
+            return None
         return [[float(row[index]) for index in indices] for row in values]
 
-    def select_optional(
-        values: list[list[float]] | None,
-    ) -> list[list[float]] | None:
-        return None if values is None else select_columns(values)
+    def select_p0(values: Sequence[Any]) -> list[Any]:
+        if values and isinstance(values[0], list | tuple):
+            return [[float(row[index]) for index in indices] for row in values]
+        return [float(values[index]) for index in indices]
 
-    empty_transitions = [[] for _ in result.time]
-    return SurvfitMultiStateResult(
-        time=[float(value) for value in result.time],
-        n_risk=select_columns(result.n_risk),
-        n_event=select_columns(result.n_event),
-        n_censor=select_columns(result.n_censor),
-        pstate=select_columns(result.pstate),
-        cumhaz=empty_transitions,
-        states=tuple(result.states[index] for index in indices),
-        transitions=(),
-        p0=[float(result.p0[index]) for index in indices],
-        t0=result.t0,
-        n=result.n,
-        n_id=result.n_id,
-        std_err=select_optional(result.std_err),
-        std_err0=(
-            None
-            if result.std_err0 is None
-            else [float(result.std_err0[index]) for index in indices]
-        ),
-        std_chaz=None if result.std_chaz is None else empty_transitions,
-        std_auc=select_optional(result.std_auc),
-        conf_lower=select_optional(result.conf_lower),
-        conf_upper=select_optional(result.conf_upper),
-        n_risk_count=select_optional(result.n_risk_count),
-        n_event_count=select_optional(result.n_event_count),
-        n_censor_count=select_optional(result.n_censor_count),
-        n_enter=select_optional(result.n_enter),
-        n_enter_count=select_optional(result.n_enter_count),
+    empty_transitions: list[list[float]] = [[] for _ in result.time]
+    if keep_n_id is None:
+        keep_n_id = bool(result.strata)
+    return dataclasses.replace(
+        result,
+        n_id=result.n_id if keep_n_id else None,
+        n_risk=select_columns(result.n_risk) or [],
+        n_event=select_columns(result.n_event) or [],
+        n_censor=select_columns(result.n_censor) or [],
         n_transition=empty_transitions,
-        n_transition_count=(None if result.n_transition_count is None else empty_transitions),
-        model=result.model,
-        surv_type=result.surv_type,
-        conf_type=result.conf_type,
-        conf_level=result.conf_level,
-        oldstate=result.states if result.oldstate is None else result.oldstate,
-        p0_fixed=result.p0_fixed,
-        timefix=result.timefix,
+        pstate=select_columns(result.pstate) or [],
+        cumhaz=empty_transitions,
+        p0=select_p0(result.p0),
+        states=tuple(result.states[index] for index in indices),
+        hazard_names=(),
+        transitions=None,
+        std_err=select_columns(result.std_err),
+        std_chaz=None,
+        std_auc=select_columns(result.std_auc),
+        lower=select_columns(result.lower),
+        upper=select_columns(result.upper),
+        influence_pstate=None,
+        oldstate=result.oldstate or tuple(result.states),
     )
 
 
 def _survfit_multistate_structure(
     result: SurvfitMultiStateResult | Mapping[Any, Any],
 ) -> dict[str, Any]:
+    """R's ``survfitms`` list for the bridge: one result, or the bridge's grouped curves."""
+
     if isinstance(result, SurvfitMultiStateResult):
-        curves = [(None, result)]
-        grouped = False
+        curves: list[tuple[Any, SurvfitMultiStateResult]] = [(None, result)]
     elif (
         isinstance(result, Mapping)
         and result
         and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values())
     ):
         curves = list(result.items())
-        grouped = True
     else:
         raise TypeError("survfit structure requires a multi-state result")
-
+    grouped = curves[0][0] is not None
     first = curves[0][1]
     for _label, curve in curves:
         if curve.states != first.states:
             raise ValueError("grouped multi-state results must share state columns")
-        if curve.transitions != first.transitions:
+        if curve.hazard_names != first.hazard_names:
             raise ValueError("grouped multi-state results must share transition columns")
-        if curve.surv_type != first.surv_type:
-            raise ValueError("grouped multi-state results must share a response type")
 
     def combined_matrix(name: str) -> list[list[float]] | None:
         matrices = [getattr(curve, name) for _label, curve in curves]
@@ -542,78 +576,72 @@ def _survfit_multistate_structure(
             raise ValueError(f"grouped multi-state results must share {name} output")
         return [[float(value) for value in row] for matrix in matrices for row in matrix]
 
-    transition_names = [f"{source + 1}:{target + 1}" for source, target in first.transitions]
+    def flat(name: str) -> list[Any]:
+        return [value for _label, curve in curves for value in getattr(curve, name)]
+
+    # R's survfitms component order
     structure: dict[str, Any] = {
-        "n": [curve.n for _label, curve in curves] if grouped else first.n,
-        "time": [float(value) for _label, curve in curves for value in curve.time],
+        "n": flat("n"),
+        "time": [float(value) for value in flat("time")],
         "n.risk": combined_matrix("n_risk"),
         "n.event": combined_matrix("n_event"),
         "n.censor": combined_matrix("n_censor"),
         "pstate": combined_matrix("pstate"),
     }
-    if first.transitions:
+    if first.hazard_names:
         structure["n.transition"] = combined_matrix("n_transition")
-    if grouped or first.oldstate is None:
-        structure["n.id"] = [curve.n_id for _label, curve in curves] if grouped else first.n_id
-    if first.transitions:
+    if first.n_id is not None:
+        structure["n.id"] = flat("n_id")
+    if first.hazard_names:
         structure["cumhaz"] = combined_matrix("cumhaz")
     n_enter = combined_matrix("n_enter")
     if n_enter is not None:
         structure["n.enter"] = n_enter
-    structure["p0"] = (
-        [[float(value) for value in curve.p0] for _label, curve in curves]
-        if grouped
-        else [float(value) for value in first.p0]
-    )
+    p0_rows = [
+        [float(value) for value in (curve.p0[0] if grouped_p0 else curve.p0)]
+        for _label, curve in curves
+        for grouped_p0 in [bool(curve.p0) and isinstance(curve.p0[0], list | tuple)]
+    ]
+    structure["p0"] = p0_rows if grouped else p0_rows[0]
     if grouped:
         structure["strata"] = {str(label): len(curve.time) for label, curve in curves}
+    elif first.strata:
+        structure["strata"] = dict(first.strata)
+        structure["p0"] = [[float(value) for value in row] for row in first.p0]
     for field_name, attribute in (
         ("std.err", "std_err"),
         ("std.chaz", "std_chaz"),
         ("std.auc", "std_auc"),
     ):
         values = combined_matrix(attribute)
-        if values is not None and (field_name != "std.chaz" or first.transitions):
+        if values is not None and (field_name != "std.chaz" or first.hazard_names):
             structure[field_name] = values
-    structure["logse"] = False
-
-    if first.transitions:
-        target_states = list(dict.fromkeys(target for _source, target in first.transitions))
-        target_columns = {state: index for index, state in enumerate(target_states)}
-        transition_table = [[0.0] * (len(target_states) + 1) for _state in first.states]
+    structure["logse"] = bool(first.logse)
+    if first.transitions is not None:
+        totals = [[0.0] * len(first.transitions.colnames) for _row in first.transitions.rownames]
         for _label, curve in curves:
-            transition_values = (
-                curve.n_transition_count
-                if curve.n_transition_count is not None
-                else curve.n_transition
-            )
-            for row in transition_values:
-                for transition_index, (source, target) in enumerate(curve.transitions):
-                    transition_table[source][target_columns[target]] += float(row[transition_index])
-            censor_values = (
-                curve.n_censor_count if curve.n_censor_count is not None else curve.n_censor
-            )
-            for row in censor_values:
-                for state, value in enumerate(row):
-                    transition_table[state][-1] += float(value)
+            if curve.transitions is None:
+                continue
+            for row_index, row in enumerate(curve.transitions.values):
+                for col_index, value in enumerate(row):
+                    totals[row_index][col_index] += float(value)
         structure["transitions"] = {
-            "values": transition_table,
-            "rows": list(first.states),
-            "columns": [first.states[state] for state in target_states] + ["(censored)"],
+            "values": totals,
+            "rows": list(first.transitions.rownames),
+            "columns": list(first.transitions.colnames),
         }
-
-    for field_name, attribute in (("lower", "conf_lower"), ("upper", "conf_upper")):
+    for field_name, attribute in (("lower", "lower"), ("upper", "upper")):
         values = combined_matrix(attribute)
         if values is not None:
             structure[field_name] = values
     structure.update(
         {
             "conf.type": first.conf_type,
-            "conf.int": first.conf_level,
+            "conf.int": first.conf_int,
             "states": list(first.states),
-            "type": first.surv_type,
+            "type": first.type,
             "t0": first.t0,
-            "_transition_names": transition_names,
+            "_transition_names": list(first.hazard_names),
         }
     )
     if first.oldstate is not None:
@@ -621,27 +649,19 @@ def _survfit_multistate_structure(
     return structure
 
 
-def _turnbull_survfit_frame(result: TurnbullSurvfitResult) -> dict[str, list[Any]]:
-    return {
-        "time": result.time_points,
-        "surv": result.survival,
-        "lower": result.survival_lower,
-        "upper": result.survival_upper,
-    }
-
-
 def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
+    """The bridge's grouped curves as one table with a ``strata`` column (state-major
+    for multi-state curves, as R's ``summary(fit, data.frame = TRUE)`` lays them out)."""
+
     if result and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values()):
         curve_frames = {label: _survfit_multistate_frame(curve) for label, curve in result.items()}
         columns = list(next(iter(curve_frames.values())))
-        if "state" not in columns:
-            raise ValueError("multi-state survfit frame is missing its state column")
-        frame = {
-            name: [] for name in [*[name for name in columns if name != "state"], "strata", "state"]
-        }
         states = next(iter(result.values())).states
         if any(curve.states != states for curve in result.values()):
             raise ValueError("grouped multi-state results must share state columns")
+        frame = {
+            name: [] for name in [*[name for name in columns if name != "state"], "strata", "state"]
+        }
         for state in states:
             for label, curve_frame in curve_frames.items():
                 if list(curve_frame) != columns:
@@ -656,7 +676,7 @@ def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
                         frame[name].extend(curve_frame[name][index] for index in indices)
         return frame
 
-    frame: dict[str, list[Any]] = {}
+    frame = {}
     for label, curve in result.items():
         curve_frame = as_data_frame(curve)
         if not curve_frame:
@@ -672,45 +692,6 @@ def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
         for name, values in curve_frame.items():
             frame[name].extend(values)
     return frame
-
-
-def _raw_survfit_frame(result: Any) -> dict[str, list[Any]]:
-    return _survfit_frame(
-        SurvfitResult(
-            time=[float(value) for value in result.time],
-            n_risk=[float(value) for value in result.n_risk],
-            n_event=[float(value) for value in result.n_event],
-            n_censor=[float(value) for value in result.n_censor],
-            estimate=[float(value) for value in result.estimate],
-            std_err=[float(value) for value in result.std_err],
-            conf_lower=[float(value) for value in result.conf_lower],
-            conf_upper=[float(value) for value in result.conf_upper],
-            cumhaz=[float(value) for value in result.cumhaz],
-            std_chaz=[float(value) for value in result.std_chaz],
-            n_enter=(
-                [float(value) for value in result.n_enter]
-                if getattr(result, "n_enter", None) is not None
-                else None
-            ),
-            n_risk_count=_optional_float_list(result, "n_risk_count"),
-            n_event_count=_optional_float_list(result, "n_event_count"),
-            n_censor_count=_optional_float_list(result, "n_censor_count"),
-            n_enter_count=_optional_float_list(result, "n_enter_count"),
-        )
-    )
-
-
-def _raw_turnbull_survfit_frame(result: Any) -> dict[str, list[Any]]:
-    return _turnbull_survfit_frame(
-        TurnbullSurvfitResult(
-            time_points=[float(value) for value in result.time_points],
-            survival=[float(value) for value in result.survival],
-            survival_lower=[float(value) for value in result.survival_lower],
-            survival_upper=[float(value) for value in result.survival_upper],
-            n_iter=int(result.n_iter),
-            converged=bool(result.converged),
-        )
-    )
 
 
 def _cox_basehaz_frame(result: CoxBaseHazardResult) -> dict[str, list[Any]]:
@@ -734,14 +715,19 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     ntime = len(result.time)
 
     def column(values: Any, curve: int) -> list[float]:
-        return [row[curve] for row in values] if ncurve > 1 else list(values)
+        # a one-column matrix (aggregate()'s result) is still a matrix
+        if values and isinstance(values[0], list):
+            return [float(row[curve]) for row in values]
+        return [float(value) for value in values]
 
     frame: dict[str, list[Any]] = {
-        name: [] for name in ("curve", "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz")
+        name: [] for name in ("curve", "time", "n.risk", "n.event", "n.censor", "surv")
     }
     if result.strata is not None:
         frame["strata"] = []
     optional = {
+        # aggregate() leaves the cumulative hazard out, as R does
+        "cumhaz": result.cumhaz or None,
         "std.err": result.std_err,
         "std.chaz": result.std_chaz,
         "lower": result.lower,
@@ -758,7 +744,6 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
         frame["n.event"].extend(result.n_event)
         frame["n.censor"].extend(result.n_censor)
         frame["surv"].extend(column(result.surv, curve))
-        frame["cumhaz"].extend(column(result.cumhaz, curve))
         if result.strata is not None:
             frame["strata"].extend(strata)
         for name, values in optional.items():
@@ -767,18 +752,25 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     return frame
 
 
-def _survdiff_frame(result: Any) -> dict[str, list[Any]]:
-    observed = [float(value) for value in result.observed]
-    expected = [float(value) for value in result.expected]
-    variance = getattr(result, "variance", None)
-    if isinstance(variance, int | float):
-        variance_diag = [float(variance)] * len(observed)
-    elif variance is not None:
+def _survdiff_frame(result: SurvDiffResult) -> dict[str, list[Any]]:
+    """One row per group: the observed and expected counts (summed over strata) and
+    the diagonal of the variance."""
+
+    def totals(values: Sequence[Any]) -> list[float]:
+        return [float(sum(row)) if isinstance(row, list | tuple) else float(row) for row in values]
+
+    observed = totals(result.obs)
+    expected = totals(result.exp)
+    variance = result.var
+    if len(variance) == len(observed):
         variance_diag = [float(row[idx]) for idx, row in enumerate(variance)]
     else:
         variance_diag = [math.nan] * len(observed)
+    groups = (
+        list(result.groups) if result.groups else [str(idx + 1) for idx in range(len(observed))]
+    )
     return {
-        "group": [idx + 1 for idx in range(len(observed))],
+        "group": groups,
         "observed": observed,
         "expected": expected,
         "variance": variance_diag,
@@ -876,18 +868,6 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _survfit_multistate_frame(result)
     if isinstance(result, SurvfitResult):
         return _survfit_frame(result)
-    if isinstance(result, TurnbullSurvfitResult):
-        return _turnbull_survfit_frame(result)
-    if all(
-        hasattr(result, name)
-        for name in ("time", "n_risk", "n_event", "n_censor", "estimate", "cumhaz")
-    ):
-        return _raw_survfit_frame(result)
-    if all(
-        hasattr(result, name)
-        for name in ("time_points", "survival", "survival_lower", "survival_upper")
-    ):
-        return _raw_turnbull_survfit_frame(result)
     if isinstance(result, CoxZPHResult):
         return _cox_zph_frame(result)
     if isinstance(result, CoxPHDetailResult):
@@ -902,7 +882,7 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _finegray_frame(result)
     if isinstance(result, Mapping):
         return _grouped_survfit_frame(result)
-    if hasattr(result, "observed") and hasattr(result, "expected") and hasattr(result, "variance"):
+    if isinstance(result, SurvDiffResult):
         return _survdiff_frame(result)
     if hasattr(result, "rows") and hasattr(result, "test"):
         return _anova_frame(result)

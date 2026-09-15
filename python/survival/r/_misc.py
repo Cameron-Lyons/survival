@@ -795,9 +795,11 @@ def _survobrien_transformed(
     for name, values in continuous:
         column = [0.0] * len(expansion.row)
         for positions in blocks.values():
-            result = _float_vector(
-                transform([values[expansion.row[p]] for p in positions]), "transform"
-            )
+            transformed = transform([values[expansion.row[p]] for p in positions])
+            if isinstance(transformed, int | float):
+                # a length-one R vector comes back from reticulate as a scalar
+                transformed = [transformed]
+            result = _float_vector(transformed, "transform")
             if len(result) != len(positions):
                 raise ValueError("Transform function must be 1 to 1")
             for position, value in zip(positions, result, strict=True):
@@ -1074,6 +1076,7 @@ def brier(
         ties=ties_value,
         efron=use_efron,
         timefix=timefix,
+        start=None if response.start is None else list(response.start),
     )
     if not _normalize_bool_option(detail, "detail"):
         return BrierResult(rsquared=result.rsquared, brier=result.brier, times=result.times)

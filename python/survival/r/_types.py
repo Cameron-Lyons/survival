@@ -586,28 +586,36 @@ class CoxZPHResult:
     y: list[list[float]]
     var: list[list[float]]
     transform: str
-    names: tuple[str, ...]
+    names: list[str]
     strata: list[Any] | None = None
 
-    def subset(self, indices: Sequence[int]) -> CoxZPHResult:
+    def subset(
+        self, indices: Sequence[int], table_indices: Sequence[int] | None = None
+    ) -> CoxZPHResult:
         """``[.cox.zph``: keep the selected terms (0-based), dropping deaths that
-        played no role in them (strata by covariate interactions)."""
+        played no role in them (strata by covariate interactions).  ``table_indices``
+        are the rows of the table the same subscript selects (R applies it to the
+        table too, so a negative subscript keeps the GLOBAL row); the selected terms
+        by default."""
 
         selected = [index(value) for value in indices]
         if any(value < 0 or value >= len(self.names) for value in selected):
+            raise IndexError("invalid variable requested")
+        rows = selected if table_indices is None else [index(value) for value in table_indices]
+        if any(value < 0 or value >= len(self.table) for value in rows):
             raise IndexError("invalid variable requested")
         y = [[row[col] for col in selected] for row in self.y]
         keep = list(range(len(y)))
         if self.strata is not None:
             keep = [idx for idx, row in enumerate(y) if not all(math.isnan(v) for v in row)]
         return CoxZPHResult(
-            table=[self.table[col] for col in selected],
+            table=[self.table[row] for row in rows],
             x=[self.x[idx] for idx in keep],
             time=[self.time[idx] for idx in keep],
             y=[y[idx] for idx in keep],
             var=[[self.var[row][col] for col in selected] for row in selected],
             transform=self.transform,
-            names=tuple(self.names[col] for col in selected),
+            names=[self.names[col] for col in selected],
             strata=None if self.strata is None else [self.strata[idx] for idx in keep],
         )
 
@@ -807,6 +815,8 @@ class SurvfitMultiStateResult:
     call: SurvfitCall = field(default_factory=SurvfitCall)
     model: dict[str, Any] | None = None
     engine: _core.SurvfitAJResult | None = field(default=None, repr=False, compare=False)
+    # the states before `fit[, states]` selected some (R's oldstate)
+    oldstate: tuple[str, ...] | None = None
 
     @property
     def strata_names(self) -> list[str]:

@@ -20,6 +20,7 @@ from .. import _survival as _core
 from ._coerce import (
     _apply_coxph_control,
     _as_matrix_rows,
+    _as_rows,
     _coerce_array_like,
     _cox_tie_method,
     _finite_float,
@@ -29,6 +30,7 @@ from ._coerce import (
     _label_levels,
     _match_string_arg,
     _materialize_labels,
+    _matrix_input_column_names,
     _normalize_bool_option,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
@@ -89,9 +91,14 @@ class CoxphModel:
     # the columns the call's weights= / id= named, for re-evaluation on newdata
     weights_column: str | None = None
     id_column: str | None = None
+    # R's coxph returns a skeleton fit when the data has no events: NA
+    # coefficients, a zero variance, loglik c(0, 0) and no iterations.
+    no_events: bool = False
 
     @property
     def coefficients(self) -> list[float]:
+        if self.no_events:
+            return [math.nan] * len(self.coef_names)
         return [float(value) for value in self.fit.coefficients]
 
     @property
@@ -124,11 +131,15 @@ class CoxphModel:
 
     @property
     def wald_test(self) -> float | None:
-        return float(self.fit.wald_test) if self.coef_names else None
+        if not self.coef_names:
+            return None
+        return 0.0 if self.no_events else float(self.fit.wald_test)
 
     @property
     def iter(self) -> int | None:
-        return int(self.fit.iter) if self.coef_names else None
+        if not self.coef_names:
+            return None
+        return 0 if self.no_events else int(self.fit.iter)
 
     @property
     def linear_predictors(self) -> list[float]:
@@ -400,6 +411,49 @@ def _fit_concordance(
     }
 
 
+def _cox_fit_diagnostic_messages(
+    fit: Any, iter_max: int, eps: float | None, toler_inf: float | None
+) -> list[str]:
+    """R's ``coxph.fit`` convergence warnings for an engine fit (also the R bridge's).
+
+    ``infs = |u %*% var|``: after the iterations ran out the fit may be infinite; a
+    converged fit whose score still moves a coefficient by more than ``toler.inf``
+    of its size converged before that variable did.
+    """
+
+    coef = list(fit.coefficients)
+    nvar = len(coef)
+    if nvar == 0 or iter_max <= 1:
+        return []
+    eps_value = 1e-9 if eps is None else float(eps)
+    toler = math.sqrt(eps_value) if toler_inf is None else float(toler_inf)
+    u = list(fit.first)
+    var = fit.var
+    infs = [
+        abs(sum(u[i] * var[i][j] for i in range(nvar)) if var else math.nan) for j in range(nvar)
+    ]
+    messages: list[str] = []
+    if fit.flag == 1000:
+        messages.append("Ran out of iterations and did not converge")
+        if max(fit.linear_predictors, default=0.0) > 500 or any(
+            not math.isfinite(value) for value in infs
+        ):
+            messages.append("one or more coefficients may be infinite")
+        return messages
+    which = [
+        j + 1
+        for j in range(nvar)
+        if not math.isfinite(u[j]) or (infs[j] > eps_value and infs[j] > toler * abs(coef[j]))
+    ]
+    if which:
+        messages.append(
+            "Loglik converged before variable "
+            + ",".join(str(index) for index in which)
+            + "; coefficient may be infinite. "
+        )
+    return messages
+
+
 def _coxph_fit_frame(
     frame: _ModelFrame,
     *,
@@ -459,10 +513,11 @@ def _coxph_fit_frame(
             cluster = list(range(len(data.y)))
         else:
             raise ValueError("one of cluster or id is needed")
-    if use_robust and method == "exact":
-        raise ValueError("dfbeta residuals are not available for the exact method")
-
     init_values = None if init is None else _check_init(init, data.x, data.offset)
+    no_events = not any(int(value) for value in data.y.event)
+    if no_events:
+        # R returns the fit without iterating (coefficients NA, variance 0)
+        iter_max = 0
     fit = _core.coxph_fit(
         list(data.y.time),
         [int(value) for value in data.y.event],
@@ -484,8 +539,11 @@ def _coxph_fit_frame(
     if aliased and not singular_ok:
         columns = " ".join(str(idx + 1) for idx in aliased)
         raise ValueError(f"X matrix deemed to be singular; variable {columns}")
+    for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, None):
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
     return CoxphModel(
         fit=fit,
+        no_events=no_events,
         formula=frame.formula,
         design=frame.design,
         terms=frame.terms,
@@ -505,8 +563,37 @@ def _coxph_fit_frame(
     )
 
 
+def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, Any]]:
+    """A formula and data for ``coxph(<Surv>, x = <matrix or data frame>)``: the response
+    columns and the design as named columns."""
+
+    if isinstance(design, bool) or design is None:
+        raise TypeError("a design matrix x is required with a Surv response")
+    if response.type not in {"right", "counting"}:
+        raise ValueError("a Surv response with a design must be right censored")
+    rows = _as_rows(design, "x")
+    if len(rows) != len(response):
+        raise ValueError("x must have the same number of rows as the Surv response")
+    names = _matrix_input_column_names(design)
+    if names is None or len(names) != len(rows[0]):
+        names = tuple(f"x{idx + 1}" for idx in range(len(rows[0])))
+    if any(not name.isidentifier() for name in names):
+        raise ValueError("the columns of x must have syntactic names")
+    data: dict[str, Any] = {
+        "survival_time_": list(response.time),
+        "survival_status_": [int(value) for value in response.event],
+    }
+    surv = "Surv(survival_time_, survival_status_)"
+    if response.start is not None:
+        data["survival_start_"] = list(response.start)
+        surv = "Surv(survival_start_, survival_time_, survival_status_)"
+    for col, name in enumerate(names):
+        data[name] = [row[col] for row in rows]
+    return f"{surv} ~ {' + '.join(names)}", data
+
+
 def coxph(
-    formula: str | None = None,
+    formula: str | Surv | None = None,
     data: Any | None = None,
     *,
     weights: Any | None = None,
@@ -559,8 +646,10 @@ def coxph(
         raise ValueError(f"Argument {', '.join(sorted(kwargs))} not matched")
     if formula is None:
         raise TypeError("a formula argument is required")
-    if istate is not None or statedata is not None:
-        raise NotImplementedError("multi-state coxph models are not implemented")
+    if isinstance(formula, Surv):
+        # coxph(<Surv>, x = <design>): the R bridge's matrix interface, as survreg has
+        formula, data = _surv_design_formula(formula, x)
+        x = False
     _ = _normalize_bool_option_with_default(x, "x", False)
     _ = _normalize_bool_option_with_default(y, "y", True)
 
@@ -592,6 +681,10 @@ def coxph(
             weights_column=frame.weights_column or weights_column,
             id_column=frame.id_column or id_column,
         )
+    # istate/statedata only matter for a multi-state response (R keeps istate in the
+    # model frame of an ordinary fit)
+    if frame.y.type in {"mright", "mcounting"}:
+        raise NotImplementedError("multi-state coxph models are not implemented")
     return _coxph_fit_frame(
         frame,
         method=method_name,
@@ -735,13 +828,14 @@ def _coefficient_table(
     return columns, rows
 
 
-def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> dict[str, Any]:
-    """R's ``summary.coxph`` as a dict keyed like the R list."""
+def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> Any:
+    """R's ``summary.coxph`` as a dict keyed like the R list (the fit itself for a null
+    model, as R returns the object unchanged)."""
 
     scale_value = _finite_float(scale, "scale")
     beta = fit.coefficients
     if not beta:
-        raise ValueError("summary is not defined for a null Cox model (use print)")
+        return fit
     df = sum(1 for value in beta if not math.isnan(value))
     loglik = fit.loglik
     score = fit.score if fit.score is not None else math.nan
@@ -1407,7 +1501,7 @@ def cox_zph(
         y=[list(row) for row in result.y],
         var=[list(row) for row in result.var],
         transform=result.transform,
-        names=tuple(names),
+        names=list(names),
         strata=strata,
     )
 

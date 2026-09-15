@@ -93,8 +93,10 @@ def _kernel_residuals(
     *,
     collapse: bool | None,
     weighted: bool | None,
+    pseudo_collapse: bool = True,
 ) -> Any:
-    """``rsurvpart1`` / ``rsurvpart2`` (residuals) or ``pseudo`` (``collapse=None``)."""
+    """``rsurvpart1`` / ``rsurvpart2`` (residuals) or ``pseudo`` (``collapse=None``, with
+    ``pseudo_collapse`` R's ``collapse`` argument of ``pseudo``)."""
 
     y, call = frame.y, fit.call
     common: dict[str, Any] = {
@@ -107,6 +109,8 @@ def _kernel_residuals(
     }
     if collapse is not None:
         common.update(collapse=collapse, weighted=weighted)
+    else:
+        common.update(collapse=pseudo_collapse)
     if isinstance(fit, SurvfitMultiStateResult):
         istate, istate_levels = frame.istate_labels()
         kernel = _core.survfitresid_aj if collapse is not None else _core.pseudo_aj
@@ -146,7 +150,10 @@ def _residuals_result(
         curve=[int(code) + 1 for code in result.curve] if fit.strata is not None else None,
         columns=list(result.columns) if multistate else None,
         column_name=("transition" if type_ == "cumhaz" else "state") if multistate else None,
-        id_name=fit.call.id if frame.id is not None else None,
+        # R names the id dimension after the id variable, "(id)" for an id vector
+        id_name=(fit.call.id if isinstance(fit.call.id, str) else "(id)")
+        if frame.id is not None
+        else None,
     )
 
 
@@ -268,11 +275,6 @@ def pseudo(
     times = _residual_times(times)
 
     frame = _survfit_data_from_fit(fit)
-    if not collapse and frame.id is not None and len(set(frame.id)) < len(frame.id):
-        raise NotImplementedError(
-            "pseudo values per observation (collapse = FALSE) of a subject with several rows "
-            "are not available"
-        )
     n_curves = len(fit.strata) if fit.strata else 1
     sizes = list(fit.strata.values()) if fit.strata else [len(fit.time)]
     ends = [fit.time[sum(sizes[: k + 1]) - 1] for k in range(n_curves) if sizes[k] > 0]
@@ -281,10 +283,12 @@ def pseudo(
             "requested time points are beyond the end of one or more curves", stacklevel=2
         )
     multistate = isinstance(fit, SurvfitMultiStateResult)
-    result = _kernel_residuals(fit, frame, times, type_, collapse=None, weighted=None)
+    result = _kernel_residuals(
+        fit, frame, times, type_, collapse=None, weighted=None, pseudo_collapse=collapse
+    )
     if not data_frame:
         return _drop(result.values, multistate, len(times))
-    residuals = _kernel_residuals(fit, frame, times, type_, collapse=True, weighted=True)
+    residuals = _kernel_residuals(fit, frame, times, type_, collapse=collapse, weighted=collapse)
     frame_columns = _residual_frame(_residuals_result(fit, frame, residuals, type_))
     columns = result.columns if multistate else [None]
     frame_columns["pseudo"] = [

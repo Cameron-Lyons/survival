@@ -438,9 +438,11 @@ class CoxZPHResult:
     y: list[list[float]]
     var: list[list[float]]
     transform: str
-    names: tuple[str, ...]
+    names: list[str]
     strata: list[Any] | None
-    def subset(self, indices: Sequence[int]) -> CoxZPHResult: ...
+    def subset(
+        self, indices: Sequence[int], table_indices: Sequence[int] | None = None
+    ) -> CoxZPHResult: ...
 
 class CchModelResult:
     fit: Any
@@ -599,6 +601,7 @@ class SurvfitMultiStateResult:
     call: SurvfitCall
     model: dict[str, Any] | None
     engine: SurvfitAJResult | None
+    oldstate: tuple[str, ...] | None
     @property
     def strata_names(self) -> list[str]: ...
 
@@ -926,7 +929,7 @@ def cch(
     **kwargs: Any,
 ) -> CchModelResult: ...
 def coxph(
-    formula: str | None = None,
+    formula: str | Surv | None = None,
     data: Any | None = None,
     *,
     weights: Any | None = None,

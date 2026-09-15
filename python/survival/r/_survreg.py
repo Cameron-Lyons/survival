@@ -1024,6 +1024,14 @@ def anova_survreg(*fits: Any, test: str = "Chisq") -> SurvregAnovaResult:
 # --- dsurvreg / psurvreg / qsurvreg / rsurvreg -----------------------------------------------
 
 
+def _dpqr_parms(distribution: Any, parms: Any | None) -> list[float] | None:
+    """R's density functions take ``parms`` and only the t distribution reads it."""
+
+    if parms is None or not isinstance(distribution, str) or distribution != "t":
+        return None
+    return _parms_vector(parms)
+
+
 def dsurvreg(
     x: Any, mean: Any, scale: Any = 1, distribution: str = "weibull", parms: Any | None = None
 ) -> list[float]:
@@ -1034,7 +1042,7 @@ def dsurvreg(
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
         distribution,
-        _parms_vector(parms),
+        _dpqr_parms(distribution, parms),
     )
 
 
@@ -1048,7 +1056,7 @@ def psurvreg(
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
         distribution,
-        _parms_vector(parms),
+        _dpqr_parms(distribution, parms),
     )
 
 
@@ -1062,7 +1070,7 @@ def qsurvreg(
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
         distribution,
-        _parms_vector(parms),
+        _dpqr_parms(distribution, parms),
     )
 
 
@@ -1084,7 +1092,7 @@ def rsurvreg(
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
         distribution,
-        _parms_vector(parms),
+        _dpqr_parms(distribution, parms),
         None if seed is None else _integer_scalar(seed, "seed"),
     )
 
@@ -1209,9 +1217,12 @@ def model_term_names_survreg(fit: Any, terms: Any | None = None) -> list[str]:
     """``attr(terms(fit), 'term.labels')``, optionally the subset ``terms`` selects."""
 
     design = _formula_design_for_fit(fit)
-    if design is None:
+    if design is not None:
+        names = [_design_term_name(term) for term in design.covariates]
+    elif getattr(fit, "term_labels", None):
+        names = list(fit.term_labels)  # a fit on a design matrix: its columns are the terms
+    else:
         raise TypeError("model_term_names requires a formula-based fitted model")
-    names = [_design_term_name(term) for term in design.covariates]
     selection = _term_selection(terms, names)
     return names if selection is None else [names[idx] for idx in selection]
 

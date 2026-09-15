@@ -1611,6 +1611,7 @@ def _formula_model_frame(
     strata: Any | None = None,
     cluster: Any | None = None,
     id: Any | None = None,
+    istate: Any | None = None,
 ) -> dict[str, Any]:
     frame: dict[str, Any] = {_surv_response_model_name(design.response): response}
     columns: list[str] = []
@@ -1626,6 +1627,7 @@ def _formula_model_frame(
         ("(strata)", strata),
         ("(cluster)", cluster),
         ("(id)", id),
+        ("(istate)", istate),
     ):
         if values is not None:
             frame[name] = _materialize_1d(values, name)
@@ -1859,4 +1861,9 @@ def _model_strata(mf: ModelFrame) -> StrataFactor | None:
     ]
     if not variables:
         return None
-    return strata(*[values for _name, values in variables], labels=[n for n, _v in variables])
+    # strata(mf[ovars]) hands R a named list, so the labels are never shortened
+    return strata(
+        *[values for _name, values in variables],
+        labels=[n for n, _v in variables],
+        shortlabel=False,
+    )

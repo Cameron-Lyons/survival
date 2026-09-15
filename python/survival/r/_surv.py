@@ -592,9 +592,10 @@ def strata(
     """R's ``strata(..., na.group, shortlabel, sep)``.
 
     Python cannot recover the argument expressions R uses as labels, so unnamed
-    arguments are called ``v1``, ``v2``, ...; pass ``labels`` (or a mapping) to name
-    them.  As in R, ``shortlabel`` defaults to ``True`` when every argument is
-    character or factor and no argument is named.
+    arguments are called ``v1``, ``v2``, ...; pass ``labels`` to stand in for those
+    expressions, or a mapping to name the arguments (R's ``strata(a = x)``).  As in
+    R, ``shortlabel`` defaults to ``True`` when every argument is character or
+    factor and no argument is named.
     """
 
     if not isinstance(na_group, bool):
@@ -605,12 +606,13 @@ def strata(
         raise TypeError("sep must be a string")
     columns, names = _strata_arguments(variables)
     nterms = len(columns)
+    named = names is not None
     if labels is not None:
         names = [str(label) for label in _materialize_1d(labels, "labels")]
         if len(names) != nterms:
             raise ValueError("labels must have one entry per strata variable")
     if shortlabel is None:
-        shortlabel = names is None and all(
+        shortlabel = not named and all(
             _is_factor_like(column)
             or all(
                 isinstance(value, str) or _is_missing_value(value)

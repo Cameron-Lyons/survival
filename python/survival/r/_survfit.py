@@ -30,6 +30,7 @@ from ._coerce import (
     _mstate_event_label,
     _pop_dotted_keyword,
     _r_factor,
+    _scalar_or_vector,
     _strata_level_sort_key,
     _strata_value_label,
     _subset_indices,
@@ -1248,13 +1249,20 @@ def survfit_confint(
         raise TypeError('argument "conf.type" is missing, with no default')
     if not isinstance(conf_type, str) or conf_type not in _CONF_TYPES or conf_type == "none":
         raise ValueError("invalid conf.int type")
+    p_values = _float_vector(p, "p")
+
+    def recycled(values: Any, name: str) -> list[float]:
+        # R's arithmetic recycles a single standard error over p
+        vector = _float_vector(_scalar_or_vector(values, name), name)
+        return vector * len(p_values) if len(vector) == 1 and len(p_values) != 1 else vector
+
     return _core.survfit_confint(
-        _float_vector(p, "p"),
-        _float_vector(se, "se"),
+        p_values,
+        recycled(se, "se"),
         logse=_logical(logse, "logse must be TRUE/FALSE"),
         conf_type=conf_type,
         conf_int=_finite_float(conf_int, "conf.int"),
-        selow=None if selow is None else _float_vector(selow, "selow"),
+        selow=None if selow is None else recycled(selow, "selow"),
         ulimit=_logical(ulimit, "ulimit must be TRUE/FALSE"),
     )
 
@@ -1345,9 +1353,3 @@ def survfitkm_counting_influence(
             influence=3,
         )
     )
-
-
-def _optional_float_list(result: Any, name: str) -> list[float] | None:
-    # ``_models.as_data_frame`` still imports this for the pre-2.0 raw survfit outputs.
-    values = getattr(result, name, None)
-    return None if values is None else [float(value) for value in values]

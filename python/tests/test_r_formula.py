@@ -146,12 +146,13 @@ def test_model_frame_builds_the_response_and_row_aligned_arguments():
     assert mf.terms.strata == ["group"]
     assert dict(r_formula._model_variables(mf)) == {
         "x1": data["x1"],
-        "strata(group)": ["group=A"] * 4 + ["group=B"] * 4,
+        # a character strata variable gets R's short labels
+        "strata(group)": ["A"] * 4 + ["B"] * 4,
         "offset(x2)": data["x2"],
     }
     groups = r_formula._model_strata(mf)
     assert len(groups.levels) == 8
-    assert groups.levels[0] == "x1=0.1, strata(group)=group=A"
+    assert groups.levels[0] == "x1=0.1, strata(group)=A"
     plain = r_formula.model_frame("time ~ 1", data)
     assert plain.response is None
     assert plain.y == data["time"]

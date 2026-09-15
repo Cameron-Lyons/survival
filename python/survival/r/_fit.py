@@ -113,6 +113,7 @@ class _ModelFrame:
             strata=self.strata_labels(),
             cluster=self.cluster,
             id=self.id,
+            istate=self.istate,
         )
 
     def strata_labels(self) -> list[str] | None:

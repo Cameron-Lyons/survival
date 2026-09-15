@@ -226,8 +226,16 @@ def test_coxph_formula_terms(ovarian):
     assert list(r.model_frame(with_model)) == ["time", "status", "futime", "fustat", "age", "rx"]
     with pytest.raises(TypeError, match="a formula argument is required"):
         r.coxph()
+    # istate is only a multi-state matter; an ordinary fit keeps it in the model frame
+    with_istate = r.coxph("Surv(futime, fustat) ~ age", ovarian, istate="rx", model=True)
+    assert "(istate)" in with_istate.model
+    mstate = {
+        "time": [1.0, 2.0, 3.0, 4.0],
+        "status": r._coerce._RFactorVector(["a", "censor", "b", "a"], ["censor", "a", "b"]),
+        "trt": [0, 1, 0, 1],
+    }
     with pytest.raises(NotImplementedError, match="multi-state"):
-        r.coxph("Surv(futime, fustat) ~ age", ovarian, istate="rx")
+        r.coxph("Surv(time, status) ~ trt", mstate)
 
 
 def test_coxph_time_transform(ovarian):
@@ -342,8 +350,8 @@ def test_summary_coxph_matches_r(fit):
     assert "robscore" not in summary
     scaled = r.model_summary(fit, scale=2.0)
     assert scaled["coefficients"][0]["coef"] == approx(2 * 0.147326595469114)
-    with pytest.raises(ValueError, match="null Cox model"):
-        r.model_summary(r.coxph("Surv(futime, fustat) ~ 1", datasets.load_ovarian()))
+    null_fit = r.coxph("Surv(futime, fustat) ~ 1", datasets.load_ovarian())
+    assert r.model_summary(null_fit) is null_fit  # summary.coxph returns a null model as is
 
 
 def test_coxph_wtest_matches_r():
@@ -636,7 +644,7 @@ def test_cox_zph_matches_r(fit):
         [0.635808758676584, 0.377261396851857, 0.631703611325162], rel=1e-6
     )
     assert zph.transform == "km"
-    assert zph.names == ("age", "rx")
+    assert zph.names == ["age", "rx"]
     assert zph.strata is None
     assert zph.x[:3] == approx([0.0, 0.0384615384615384, 0.076923076923077])
     assert zph.time[:3] == [59.0, 115.0, 156.0]
@@ -660,7 +668,7 @@ def test_cox_zph_matches_r(fit):
     )
     assert r.cox_zph(fit, **{"global": False}).table == r.cox_zph(fit, global_test=False).table
     subset = zph.subset([1])
-    assert subset.names == ("rx",)
+    assert subset.names == ["rx"]
     assert subset.table == [zph.table[1]]
     assert subset.var == [[zph.var[1][1]]]
     assert r.as_data_frame(zph)["name"] == ["age", "rx", "GLOBAL"]

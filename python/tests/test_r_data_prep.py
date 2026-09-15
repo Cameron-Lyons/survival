@@ -79,7 +79,7 @@ def test_survsplit_names_counting_columns_after_the_surv_arguments():
         r.survSplit("Surv(t1, t2, s) ~ x", data, cut=[math.inf])
 
 
-def test_survsplit_multistate_response_labels_states_and_adds_an_id():
+def test_survsplit_multistate_response_labels_states_and_skips_the_id():
     data = {
         "id": [1, 1, 2],
         "t": [1, 4, 2],
@@ -92,8 +92,11 @@ def test_survsplit_multistate_response_labels_states_and_adds_an_id():
     assert frame["t"] == [1.0, 3.0, 4.0, 2.0]
     assert frame["s"] == ["a", "censor", "b", "b"]
     assert frame["e"] == [1, 1, 2, 1]
+    # R invents the id column for right-censored (time, status) data only
     with_id = r.survSplit("Surv(t, s) ~ id", data, cut=[3], id="row")
-    assert with_id["row"] == [1, 2, 2, 3]
+    assert "row" not in with_id
+    right = r.survSplit("Surv(t, e) ~ id", {**data, "e": [1, 1, 0]}, cut=[3], id="row")
+    assert right["row"] == [1, 2, 2, 3]
     with pytest.raises(ValueError, match="'zero' parameter must be less than any observed times"):
         r.survSplit("Surv(t, s) ~ id", data, cut=[3], zero=2)
 

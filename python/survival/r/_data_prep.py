@@ -103,21 +103,28 @@ def neardate(
         raise ValueError("id1 and y1 have different lengths")
     if len(id2_values) != len(y2_values):
         raise ValueError("id2 and y2 have different lengths")
-    present1 = [not _is_missing_value(value) for value in id1_values]
-    keep2 = [not _is_missing_value(value) for value in id2_values]
+    # R's match() pairs a missing id with a missing id, so such rows stay in both sets
+    # (their answer is NA whatever nomatch says); rows of set 2 without a date go.
+    missing1 = [_is_missing_value(value) for value in id1_values]
+    id1_labels = [
+        "\x00NA" if missing else value for value, missing in zip(id1_values, missing1, strict=True)
+    ]
+    id2_labels = ["\x00NA" if _is_missing_value(value) else value for value in id2_values]
+    keep2 = [not math.isnan(value) for value in y2_values]
     matched = _core.neardate(
-        [value for value, keep in zip(id1_values, present1, strict=True) if keep],
-        [value for value, keep in zip(y1_values, present1, strict=True) if keep],
-        [value for value, keep in zip(id2_values, keep2, strict=True) if keep],
+        id1_labels,
+        y1_values,
+        [value for value, keep in zip(id2_labels, keep2, strict=True) if keep],
         [value for value, keep in zip(y2_values, keep2, strict=True) if keep],
         best_value,
     )
     rows2 = [row for row, keep in enumerate(keep2) if keep]
     result: list[int | None] = []
-    cursor = iter(matched)
-    for keep in present1:
-        match = next(cursor) if keep else None
-        result.append(nomatch if match is None else rows2[match])
+    for match, missing in zip(matched, missing1, strict=True):
+        if missing:
+            result.append(None)
+        else:
+            result.append(nomatch if match is None else rows2[match])
     return result
 
 
@@ -354,13 +361,19 @@ def survSplit(
         raise ValueError("a data argument is required")
     idname = id if isinstance(id, str) else None
     names = _data_column_names(data) or []
+    added_id = False
     if idname is not None and idname not in names:
         spec = _response_spec(formula)
         if spec is not None and spec.surv and len(spec.arguments) == 2:
             n = _data_row_count(data, formula)
             data = {str(name): _column_source(data, str(name)) for name in names}
             data[idname] = list(range(1, n + 1))
+            added_id = True
     mf = model_frame(formula, data, subset=subset, na_action=na_action, id=None if idname else id)
+    # R only invents the id column for right-censored (time, status) data
+    if added_id and (mf.response is None or mf.response.type != "right"):
+        data = {name: values for name, values in data.items() if name != idname}
+        added_id = False
     split = _split_kernel(mf.response, cut_values, zero_value, timefix, None)
     rows = list(split.row)
     right_dot = formula.partition("~")[2].strip() == "." and mf.n == len(
@@ -370,7 +383,7 @@ def survSplit(
         newdata = _split_frame(_data_columns(data, "data"), rows)
     else:
         newdata = _split_frame(dict(_model_variables(mf)), rows)
-        if idname is not None and idname in (_data_column_names(mf.data) or []):
+        if idname is not None and (added_id or idname in names):
             newdata[idname] = [_column(mf.data, idname)[row] for row in rows]
     states = () if mf.response is None else mf.response.states
     time_name, time2_name, event_name = _surv_argument_names(mf)
@@ -516,6 +529,23 @@ def survcondense(
 # ---------------------------------------------------------------------------
 
 
+def _rttright_survcheck(response: Surv, id_values: Sequence[Any]) -> None:
+    """R's ``survcheck2`` gate on the ``id`` data: any flagged row is an error."""
+
+    levels = list(dict.fromkeys(id_values))
+    codes = {value: code for code, value in enumerate(levels, start=1)}
+    check = _core.survcheck(
+        [codes[value] for value in id_values],
+        list(response.time),
+        [int(event) for event in response.event],
+        list(response.states) or ["event"],
+        time1=None if response.start is None else list(response.start),
+    )
+    flags = check.flag
+    if flags.overlap or flags.gap or flags.jump or flags.teleport or flags.duplicate:
+        raise ValueError("one or more flags are >0 in survcheck")
+
+
 def rttright(
     formula: Any = None,
     data: Any | None = None,
@@ -578,6 +608,8 @@ def rttright(
         raise ValueError("id is required for start-stop data")
     if any(value is None for value in surv.event):
         raise ValueError("missing values in the response")
+    if mf.id is not None:
+        _rttright_survcheck(surv, mf.id)
     query = None if times is None else _float_vector(_scalar_or_vector(times, "times"), "times")
     result = _core.rttright(
         list(surv.time),
