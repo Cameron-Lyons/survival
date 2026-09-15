@@ -42,7 +42,15 @@ a scratch directory and comparing the two.  (`R_FIXTURES_DIR` overrides the
 output directory.)  The versions used are recorded in every file's
 `metadata` (currently survival 3.8.11; generated on R 4.5.3, which CI pins).  Regenerate everything
 rather than editing a fixture by hand, and commit the fixtures together with
-the generator change that produced them.
+the generator change that produced them.  CI's "R Fixture Stability" job
+regenerates with the pinned versions and compares value by value with
+`test/r/compare_fixtures.py` (`git diff` is useless on single-line JSON);
+when it fails, the regenerated files are attached to the run as the
+`regenerated-r-fixtures` artifact:
+
+```sh
+python test/r/compare_fixtures.py test/r/fixtures regenerated-r-fixtures/
+```
 
 One R quirk is worked around in the generator: `survfitAJ`'s C code
 (`src/survfitaj.c`) zeroes only the first `nstate` slots of its `std.chaz`

@@ -264,17 +264,31 @@ jobs:
           cat("survival", installed, "installed\n")
         shell: Rscript {0}
 
+      - name: Keep the committed fixtures
+        run: cp -r test/r/fixtures "$RUNNER_TEMP/committed-fixtures"
+
       - name: Regenerate fixtures
         run: Rscript test/r/generate_fixtures.R
 
+      # The fixtures are single-line JSON, so `git diff` would print one
+      # unreadable line per file; compare_fixtures.py names the case and
+      # field of every differing value instead.
       - name: Check for differences
         run: |
-          if git diff --exit-code test/r/fixtures; then
+          if python3 test/r/compare_fixtures.py "$RUNNER_TEMP/committed-fixtures" test/r/fixtures; then
             echo "R fixtures are up to date"
           else
             echo "R fixtures changed. Regenerate with survival ${R_SURVIVAL_VERSION} and commit, or bump R_SURVIVAL_VERSION together with the fixture metadata." >&2
             exit 1
           fi
+
+      - name: Upload the regenerated fixtures
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regenerated-r-fixtures
+          path: test/r/fixtures
+          retention-days: 7
 
   r-bridge:
     name: R Bridge Package
