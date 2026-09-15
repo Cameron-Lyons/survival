@@ -470,13 +470,3 @@ def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
     if coefficient_names is not None and len(coefficient_names) == width:
         return list(coefficient_names)
     return _fallback_coef_names(width)
-
-
-def _cox_training_rows(fit: Any, nvar: int) -> list[list[float]]:
-    covariates = getattr(fit, "x", None)
-    if covariates is None:
-        return []
-    rows = [[float(value) for value in row] for row in covariates]
-    if any(len(row) != nvar for row in rows):
-        return []
-    return rows

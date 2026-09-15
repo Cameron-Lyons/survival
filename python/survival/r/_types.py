@@ -899,14 +899,6 @@ SurvfitConfidenceIntervalResult = _core.ConfidenceBands
 TurnbullSurvfitResult = SurvfitResult
 
 
-@dataclass(frozen=True)
-class _SurvfitComputation:
-    # Only ``_coerce._normalize_survfit_type`` still builds this; survfit handles the R
-    # ``type`` / ``stype`` / ``ctype`` arguments itself.
-    stype: int
-    ctype: int
-
-
 def _cox_beta(fit: Any) -> list[float]:
     coefficients = getattr(fit, "coefficients", None)
     if coefficients is None:

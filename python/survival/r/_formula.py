@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import combinations, product
 from typing import Any
 
-from .. import _survival as _core
 from ._coerce import (
-    _coerce_array_like,
-    _encode_groups,
     _finite_float,
     _is_missing_value,
     _keep_rows_after_na_action,
@@ -24,9 +20,6 @@ from ._coerce import (
     _subset_data,
     _subset_indices,
     _subset_optional_sequence,
-    _subset_sequence,
-    _survdiff_timefix_values,
-    _timefix_vectors,
 )
 from ._surv import (
     Surv,
@@ -178,10 +171,6 @@ def _formula_name_items(segment: str) -> list[tuple[str, bool]]:
 
     positions = [(idx, idx + 1) for idx, char in _top_level(segment, quotes=False) if char == ","]
     return [_formula_name(name) for name in _split_at(segment, positions, keep_empty=False)]
-
-
-def _formula_names(segment: str) -> list[str]:
-    return [name for name, _quoted in _formula_name_items(segment)]
 
 
 def _formula_response_parts(segment: str) -> list[str]:
@@ -580,10 +569,6 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
         type=surv_type,
         origin=origin,
     )
-
-
-def _formula_response_args(formula: str) -> list[str]:
-    return list(_formula_response_spec(formula).columns)
 
 
 @lru_cache(maxsize=512)
@@ -1236,155 +1221,6 @@ def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
     return _materialize_formula_terms(_split_terms_cached(rhs, dot_key))
 
 
-@dataclass(frozen=True)
-class _CoxTimeTransformExpansion:
-    response: Surv
-    source_indices: list[int]
-    riskset: list[int]
-    strata: list[int]
-
-
-def _cox_time_transform_terms(terms: _FormulaTerms) -> list[_CovariateTerm]:
-    result: list[_CovariateTerm] = []
-    for spec in terms.covariates:
-        for term in _covariate_factors(spec):
-            if term.transform == "tt" and term not in result:
-                result.append(term)
-    return result
-
-
-def _cox_time_transform_expansion(
-    response: Surv,
-    strata: Any | None,
-    timefix: bool,
-) -> _CoxTimeTransformExpansion:
-    n = len(response)
-    group_codes = _encode_groups(strata, n) if strata is not None else [0] * n
-    stop = list(response.time)
-    start = list(response.start) if response.start is not None else None
-    if timefix:
-        if start is None:
-            stop = _survdiff_timefix_values(stop, True)
-        else:
-            start, stop = _timefix_vectors(start, stop)
-    status = [float(value) for value in response.event]
-
-    if start is None:
-        order = sorted(range(n), key=lambda idx: (group_codes[idx], -stop[idx], status[idx]))
-        boundaries = [
-            int(position == 0 or group_codes[idx] != group_codes[order[position - 1]])
-            for position, idx in enumerate(order)
-        ]
-        counts = _core.coxcount1(
-            [stop[idx] for idx in order],
-            [status[idx] for idx in order],
-            boundaries,
-        )
-        source_indices = [order[int(index) - 1] for index in counts.index]
-    else:
-        sort_end = sorted(
-            range(n),
-            key=lambda idx: (group_codes[idx], -stop[idx], status[idx]),
-        )
-        sort_start = sorted(range(n), key=lambda idx: (group_codes[idx], -start[idx]))
-        boundaries = [
-            int(position == 0 or group_codes[idx] != group_codes[sort_end[position - 1]])
-            for position, idx in enumerate(sort_end)
-        ]
-        counts = _core.coxcount2(start, stop, status, sort_start, sort_end, boundaries)
-        source_indices = [int(index) - 1 for index in counts.index]
-
-    expanded_time = [
-        float(event_time)
-        for event_time, risk_size in zip(counts.time, counts.nrisk, strict=True)
-        for _ in range(int(risk_size))
-    ]
-    riskset = [
-        risk_idx + 1
-        for risk_idx, risk_size in enumerate(counts.nrisk)
-        for _ in range(int(risk_size))
-    ]
-    return _CoxTimeTransformExpansion(
-        response=Surv(expanded_time, [int(value) for value in counts.status]),
-        source_indices=source_indices,
-        riskset=riskset,
-        strata=[value - 1 for value in riskset],
-    )
-
-
-def _cox_default_time_transform(values: Sequence[float], riskset: Sequence[int]) -> list[float]:
-    result = [0.0] * len(values)
-    start = 0
-    while start < len(values):
-        end = start + 1
-        while end < len(values) and riskset[end] == riskset[start]:
-            end += 1
-        order = sorted(range(start, end), key=values.__getitem__)
-        position = 0
-        while position < len(order):
-            tie_end = position + 1
-            while tie_end < len(order) and values[order[tie_end]] == values[order[position]]:
-                tie_end += 1
-            average_rank = (position + 1 + tie_end) / 2.0
-            transformed = (average_rank - 0.5) / (0.5 + len(order) - average_rank)
-            for ordered_idx in order[position:tie_end]:
-                result[ordered_idx] = transformed
-            position = tie_end
-        start = end
-    return result
-
-
-def _cox_time_transform_functions(value: Any, count: int) -> list[Any | None]:
-    if count == 0:
-        return []
-    if value is None:
-        return [None] * count
-    if callable(value):
-        return [value] * count
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
-        functions = list(value)
-        if not functions or any(not callable(function) for function in functions):
-            raise TypeError("tt must be a function or a non-empty sequence of functions")
-        if len(functions) == 1:
-            return functions * count
-        if len(functions) != count:
-            raise ValueError("tt must contain one function per tt() formula term")
-        return functions
-    raise TypeError("tt must be a function or a sequence of functions")
-
-
-def _cox_time_transform_values(
-    data: Any,
-    terms: Sequence[_CovariateTerm],
-    functions: Sequence[Any | None],
-    expansion: _CoxTimeTransformExpansion,
-    weights: Sequence[float] | None,
-) -> dict[_CovariateTerm, list[float]]:
-    transformed: dict[_CovariateTerm, list[float]] = {}
-    for term, function in zip(terms, functions, strict=True):
-        raw = _numeric_term_values(
-            _subset_sequence(_column(data, term.column), expansion.source_indices, term.column),
-            replace(term, transform=None),
-        )
-        if function is None:
-            values = _cox_default_time_transform(raw, expansion.riskset)
-        else:
-            values = _coerce_array_like(
-                function(raw, list(expansion.response.time), expansion.riskset, weights),
-                "tt transform result",
-            )
-            if len(values) != len(raw):
-                raise ValueError("tt transform result must match the expanded risk-set rows")
-            try:
-                values = [float(item) for item in values]
-            except (TypeError, ValueError) as exc:
-                raise ValueError("tt transform result must contain numeric values") from exc
-            if any(not math.isfinite(item) for item in values):
-                raise ValueError("tt transform result must contain only finite values")
-        transformed[term] = values
-    return transformed
-
-
 def _parse_formula(formula: str, data: Any) -> tuple[Surv, _FormulaTerms]:
     _lhs, sep, rhs = formula.partition("~")
     if not sep:
@@ -1394,11 +1230,6 @@ def _parse_formula(formula: str, data: Any) -> tuple[Surv, _FormulaTerms]:
     surv = _surv_from_spec(data, response_spec)
     terms = _split_terms(rhs, _dot_terms(data, response_spec.columns))
     return surv, terms
-
-
-def _reject_formula_clusters(function_name: str, terms: _FormulaTerms) -> None:
-    if terms.clusters:
-        raise ValueError(f"{function_name} formula does not support cluster() terms")
 
 
 def _apply_numeric_transform(values: list[float], transform: str | None, term: str) -> list[float]:
@@ -1801,109 +1632,6 @@ def _formula_model_frame(
     return frame
 
 
-def _matrix_model_frame(
-    response: Surv,
-    rows: list[list[float]],
-    *,
-    weights: Any | None = None,
-    offset: Any | None = None,
-    offsets: Any | None = None,
-    strata: Any | None = None,
-    cluster: Any | None = None,
-    id: Any | None = None,
-) -> dict[str, Any]:
-    frame: dict[str, Any] = {
-        "response": response,
-        "x": [list(row) for row in rows],
-    }
-    for name, values in (
-        ("(weights)", weights),
-        ("(offset)", offsets if offsets is not None else offset),
-        ("(strata)", strata),
-        ("(cluster)", cluster),
-        ("(id)", id),
-    ):
-        if values is not None:
-            frame[name] = _materialize_1d(values, name)
-    return frame
-
-
-def _survreg_matrix_model_frame(
-    time: list[float],
-    status: list[float],
-    time2: list[float] | None,
-    rows: list[list[float]],
-    *,
-    weights: Any | None = None,
-    offset: Any | None = None,
-    offsets: Any | None = None,
-    strata: Any | None = None,
-    cluster: Any | None = None,
-) -> dict[str, Any]:
-    frame: dict[str, Any] = {
-        "time": list(time),
-        "status": list(status),
-        "x": [list(row) for row in rows],
-    }
-    if time2 is not None:
-        frame["time2"] = list(time2)
-    for name, values in (
-        ("(weights)", weights),
-        ("(offset)", offsets if offsets is not None else offset),
-        ("(strata)", strata),
-        ("(cluster)", cluster),
-    ):
-        if values is not None:
-            frame[name] = _materialize_1d(values, name)
-    return frame
-
-
-def _survfit_formula_model_frame(
-    formula: str,
-    data: Any,
-    response: Surv,
-    weights: Any | None,
-    id: Any | None = None,
-    id_column: str | None = None,
-    cluster: Any | None = None,
-    cluster_column: str | None = None,
-) -> dict[str, Any]:
-    response_spec = _formula_response_spec(formula)
-    frame: dict[str, Any] = {_surv_response_model_name(response_spec): response}
-    for column in _formula_columns(formula, data):
-        frame[column] = _column(data, column)
-    if id_column is not None and id_column not in frame:
-        frame[id_column] = _column(data, id_column)
-    if cluster_column is not None and cluster_column not in frame:
-        frame[cluster_column] = _column(data, cluster_column)
-    if weights is not None:
-        frame["(weights)"] = _materialize_1d(weights, "(weights)")
-    if id is not None:
-        frame["(id)"] = _materialize_1d(id, "(id)")
-    if cluster is not None:
-        frame["(cluster)"] = _materialize_1d(cluster, "(cluster)")
-    return frame
-
-
-def _survfit_model_frame(
-    response: Surv,
-    group: Any | None,
-    weights: Any | None,
-    id: Any | None = None,
-    cluster: Any | None = None,
-) -> dict[str, Any]:
-    frame: dict[str, Any] = {"response": response}
-    if group is not None:
-        frame["group"] = _materialize_labels(group, "group")
-    if weights is not None:
-        frame["(weights)"] = _materialize_1d(weights, "(weights)")
-    if id is not None:
-        frame["(id)"] = _materialize_labels(id, "id")
-    if cluster is not None:
-        frame["(cluster)"] = _materialize_labels(cluster, "cluster")
-    return frame
-
-
 def _cox_survfit_model_frame(fit: Any, newdata: Any | None) -> dict[str, Any]:
     frame: dict[str, Any] = {"fit": fit}
     model = getattr(fit, "model", None)
@@ -1924,11 +1652,6 @@ def _formula_design_row_count(data: Any, design: _FormulaDesign) -> int:
     raise ValueError("newdata must include at least one column")
 
 
-def _design_rows(data: Any, terms: list[_CovariateSpec], n: int) -> list[list[float]]:
-    columns = [column for term in terms for column in _term_columns(data, term, n)]
-    return [[column[i] for column in columns] for i in range(n)]
-
-
 def _combine_aligned_columns(columns: list[list[Any]], n: int) -> list[Any]:
     if any(len(column) != n for column in columns):
         raise ValueError("formula columns must have the same length as the Surv response")
@@ -1939,19 +1662,6 @@ def _combine_aligned_columns(columns: list[list[Any]], n: int) -> list[Any]:
 
 def _combined_columns(data: Any, terms: list[str], n: int) -> list[Any]:
     return _combine_aligned_columns([_column(data, term) for term in terms], n)
-
-
-def _combined_formula_groups(
-    data: Any,
-    strata_terms: list[str],
-    covariate_terms: list[_CovariateSpec],
-    n: int,
-) -> list[Any]:
-    columns = [
-        *[_column(data, term) for term in strata_terms],
-        *[_term_values(data, term, n) for term in covariate_terms],
-    ]
-    return _combine_aligned_columns(columns, n)
 
 
 def _offset_vector(data: Any, terms: Sequence[_CovariateTerm], n: int) -> list[float] | None:

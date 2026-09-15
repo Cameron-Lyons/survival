@@ -337,10 +337,6 @@ def model_summary(fit: Any, **kwargs: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _empty_columns(names: tuple[str, ...]) -> dict[str, list[Any]]:
-    return {name: [] for name in names}
-
-
 def _add_optional_survfit_column(
     frame: dict[str, list[Any]],
     name: str,

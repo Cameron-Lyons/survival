@@ -595,16 +595,6 @@ def rttright(
     return [row[0] for row in result.weights]
 
 
-def _rttright_counting_common_start(start: Sequence[float], id_values: Sequence[Any]) -> bool:
-    """R's ``samestart``: every subject enters at the same time (kept for ``brier``)."""
-
-    first: dict[str, float] = {}
-    for value, subject in zip(start, id_values, strict=True):
-        key = _as_character(subject)
-        first[key] = min(first.get(key, float(value)), float(value))
-    return len(set(first.values())) <= 1
-
-
 # ---------------------------------------------------------------------------
 # tmerge
 # ---------------------------------------------------------------------------

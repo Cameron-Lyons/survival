@@ -19,7 +19,6 @@ from .. import _survival as _core
 from ._coerce import (
     _SURV_RESPONSE_TYPES,
     _SURV_TYPES,
-    _as_character,
     _categories,
     _factor,
     _factor_levels,
@@ -526,72 +525,6 @@ def _apply_surv_na_action(
 
 
 # --- helpers other modules build on ------------------------------------------
-
-
-def _survfit_response_with_etype(response: Surv, etype: Any) -> Surv:
-    """``survfit``'s old ``etype`` argument: a right/counting response plus event types."""
-
-    if response.type not in {"right", "counting"}:
-        raise ValueError(
-            "etype can only be used with a right-censored or counting-process Surv response"
-        )
-    raw = _materialize_labels(etype, "etype")
-    if len(raw) != len(response):
-        raise ValueError("etype must have the same length as the Surv response")
-    levels = _factor_levels(etype, "etype")
-    observed = {
-        _as_character(value)
-        for value, status in zip(raw, response.event, strict=True)
-        if status == 1 and not _is_missing_value(value)
-    }
-    states = tuple(_as_character(level) for level in levels if _as_character(level) in observed)
-    index = {state: code + 1 for code, state in enumerate(states)}
-    events: list[int | None] = []
-    for value, status in zip(raw, response.event, strict=True):
-        if status is None or _is_missing_value(value):
-            events.append(None)
-        elif status == 0:
-            events.append(0)
-        else:
-            events.append(index[_as_character(value)])
-    return Surv._from_normalized(
-        time=response.time,
-        event=events,
-        start=response.start,
-        time2=None,
-        surv_type="mright" if response.start is None else "mcounting",
-        states=states,
-    )
-
-
-def _turnbull_intervals(response: Surv) -> tuple[list[float], list[float]]:
-    """The ``(left, right]`` intervals of a left/interval-censored response."""
-
-    left: list[float] = []
-    right: list[float] = []
-    if response.type == "left":
-        for time, event in zip(response.time, response.event, strict=True):
-            left.append(time if event == 1 else 0.0)
-            right.append(time)
-        return left, right
-    if response.type != "interval":
-        raise TypeError("Turnbull intervals require left or interval-censored Surv responses")
-    for time, time2, status in zip(
-        response.time, response.time2 or (), response.event, strict=True
-    ):
-        if status == 0:
-            left.append(time)
-            right.append(math.inf)
-        elif status == 1:
-            left.append(time)
-            right.append(time)
-        elif status == 2:
-            left.append(0.0)
-            right.append(time)
-        else:
-            left.append(time)
-            right.append(time2)
-    return left, right
 
 
 def _survreg_response_arrays(

@@ -102,7 +102,7 @@ def test_format_numbers_uses_a_common_layout_like_r():
     # R's format(c(1.5, 2.25, 10)); format(1/3); format(c(0.001, 1e6)); format(100000)
     assert r_coerce._r_format_numbers([1.5, 2.25, 10]) == [" 1.50", " 2.25", "10.00"]
     assert r_coerce._r_format_numbers([1, 2, 3]) == ["1", "2", "3"]
-    assert r_coerce._surv_format_number(1 / 3) == "0.3333333"
+    assert r_coerce._r_format_number(1 / 3) == "0.3333333"
     assert r_coerce._r_format_numbers([0.001, 1e6]) == ["1e-03", "1e+06"]
     assert r_coerce._r_format_numbers([100000.0]) == ["1e+05"]
     assert r_coerce._r_format_numbers([123456789.0]) == ["123456789"]
@@ -127,8 +127,6 @@ def test_factor_levels_follow_r_sort_order_and_declared_categories():
     assert (codes, labels) == ([1, 2], ["z", "b", "a"])
     codes, labels = r_coerce._factor([2, None, 1, 2])
     assert (codes, labels) == ([1, None, 0, 1], ["1", "2"])
-    assert r_coerce._r_formula_ordered_levels([2, 1, 2], "x") == (1, 2)
-    assert r_coerce._mstate_inferred_levels([2, 0, 1]) == ["0", "1", "2"]
     with pytest.raises(ValueError, match="outside the declared categories"):
         r_coerce._factor(r_coerce._RFactorVector(["q"], ["a"]))
 
