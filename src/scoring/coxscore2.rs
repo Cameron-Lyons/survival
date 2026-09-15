@@ -11,7 +11,7 @@ use crate::core::strata_order::order_within_strata;
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::SurvivalData;
 use crate::internal::validation::validate_binary_i32;
-use crate::residuals::TieMethod;
+use crate::regression::TieMethod;
 use crate::scoring::validate_score_inputs;
 use ndarray::{Array2, ArrayView2};
 
@@ -19,7 +19,7 @@ use ndarray::{Array2, ArrayView2};
 ///
 /// `covariates` is the `n x p` design matrix, `score` is `exp(eta)` and the
 /// residual is unweighted (R multiplies by the case weights afterwards when
-/// `weighted = TRUE`).
+/// `weighted = TRUE`).  As in R, an exact fit has no score residuals.
 pub fn coxscore2(
     survival: &SurvivalData,
     covariates: ArrayView2<'_, f64>,
@@ -31,14 +31,34 @@ pub fn coxscore2(
     let n = survival.len();
     validate_binary_i32(&survival.status, "status")?;
     validate_score_inputs(n, covariates, score, weights, strata)?;
-    let nvar = covariates.ncols();
-    let time = &survival.time;
-    let status = &survival.status;
+    method.reject_exact("score")?;
     let unit = vec![1.0; n];
-    let weights = weights.unwrap_or(&unit);
     let zero = vec![0; n];
-    let strata = strata.unwrap_or(&zero);
+    Ok(coxscore2_rows(
+        &survival.time,
+        &survival.status,
+        covariates,
+        score,
+        weights.unwrap_or(&unit),
+        strata.unwrap_or(&zero),
+        method,
+    ))
+}
 
+/// `residuals.coxph`'s score step on validated, unsorted rows: sort with
+/// `order(strata, time, -status)`, run [`coxscore2_sorted`] and restore the
+/// input order.
+pub(crate) fn coxscore2_rows(
+    time: &[f64],
+    status: &[i32],
+    covariates: ArrayView2<'_, f64>,
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> Array2<f64> {
+    let n = time.len();
+    let nvar = covariates.ncols();
     let order = order_within_strata(strata, |a, b| {
         time[a]
             .total_cmp(&time[b])
@@ -67,7 +87,7 @@ pub fn coxscore2(
     for (row, &i) in order.iter().enumerate() {
         resid.row_mut(i).assign(&sorted.row(row));
     }
-    Ok(resid)
+    resid
 }
 
 /// `coxscore2.c` on data sorted by stratum and ascending time within
@@ -136,7 +156,7 @@ pub(crate) fn coxscore2_sorted(
         let death_rows = || (group_start..group_end).filter(|&k| status[k] == 1);
 
         if deaths > 0.0 {
-            if deaths < 2.0 || method == TieMethod::Breslow {
+            if deaths < 2.0 || !method.is_efron() {
                 let hazard = meanwt / denom;
                 cumhaz += hazard;
                 for j in 0..nvar {

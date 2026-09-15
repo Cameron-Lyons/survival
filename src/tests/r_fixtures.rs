@@ -61,20 +61,20 @@ const RTOL_VAR: f64 = 1e-6;
 /// case) -> reason.  A listed entry that passes fails the run.
 const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
-        "concordance/coxph_survreg_fits",
-        "missing feature: concordance of fitted models",
+        "concordance/coxph_survreg_fits/both.concordance",
+        "missing feature: concordance of several fits at once (the joint variance)",
     ),
     (
-        "coxph/heart_counting_age_surgery_transplant/coef_names",
-        "dataset mismatch: heart$transplant is a factor in R, numeric in the CSV",
-    ),
-    (
-        "coxph/heart_counting_breslow/coef_names",
-        "dataset mismatch: heart$transplant is a factor in R, numeric in the CSV",
+        "concordance/coxph_survreg_fits/survreg.concordance",
+        "missing feature: concordance of a survreg fit",
     ),
     (
         "coxph/lung_interaction",
         "missing feature: harness: formula term age * sex",
+    ),
+    (
+        "coxph/synthetic_delayed_x_exact/concordance",
+        "missing feature: R bug: agexact.fit returns an unclassed fit, so R's concordance() has no method for it",
     ),
     (
         "coxph/synthetic_delayed_x_exact/residuals.deviance",
@@ -95,14 +95,6 @@ const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
         "coxph_penalized/lung_pspline_karno_df3_nterm6/concordance",
         "mismatch: tied linear predictors decided by floating-point noise: concordance[0]: 0.63189 != 0.63181",
-    ),
-    (
-        "coxph_predict/heart_counting_age_surgery_transplant/newdata",
-        "dataset mismatch: heart$transplant is a factor in R, numeric in the CSV",
-    ),
-    (
-        "residual_kernels/heart_counting_age_surgery_transplant",
-        "missing feature: harness: missing coefficient transplant (factor column read as numeric)",
     ),
     (
         "survcondense/lung_split_age_sex_epi",
@@ -647,11 +639,22 @@ impl Frame {
         }
     }
 
+    /// Makes `name` a factor with R's `levels`: a numeric column (R's
+    /// `factor(0:1)` read back from a CSV as numbers) becomes a string
+    /// column labelled as R prints its values.
     fn set_levels(&mut self, name: &str, levels: Vec<String>) {
-        if let Some((_, Column::Str(_, current))) =
-            self.columns.iter_mut().find(|(column, _)| column == name)
-        {
-            *current = levels;
+        let Some((_, column)) = self.columns.iter_mut().find(|(column, _)| column == name) else {
+            return;
+        };
+        match column {
+            Column::Str(_, current) => *current = levels,
+            Column::Num(values) => {
+                let labels = values
+                    .iter()
+                    .map(|&value| (!value.is_nan()).then(|| format_r_number(value)))
+                    .collect();
+                *column = Column::Str(labels, levels);
+            }
         }
     }
 }
@@ -2503,6 +2506,9 @@ struct CoxCase {
     assign: Vec<Vec<usize>>,
     frame: Frame,
     formula: String,
+    /// The fit's cluster came from `id` (R's `coxph(id = , robust = TRUE)`),
+    /// which `concordance(fit)` does not pick up, unlike `fit$concordance`.
+    cluster_from_id: bool,
 }
 
 /// Columns of each `+`-separated model term, matched against the design
@@ -2596,11 +2602,13 @@ fn cox_fit_for_case(doc: &Value, case: &Value) -> Result<CoxCase, String> {
     // fractional weights; `robust = TRUE` without either clusters on rows.
     let mut cluster = cluster_codes(formula, &frame, &rows)?;
     let robust_arg = args["robust"].as_bool();
+    let mut cluster_from_id = false;
     if cluster.is_none()
         && let Some(id) = text(&args["id"])
         && robust_arg == Some(true)
     {
         cluster = Some(column_codes(frame.get(id)?, &rows));
+        cluster_from_id = true;
     }
     let fractional = weights
         .as_ref()
@@ -2633,6 +2641,7 @@ fn cox_fit_for_case(doc: &Value, case: &Value) -> Result<CoxCase, String> {
         names: design.names,
         frame,
         formula: formula.to_string(),
+        cluster_from_id,
     })
 }
 
@@ -2651,8 +2660,12 @@ const COX_CORE_ASPECTS: &[&str] = &[
     "wald_test",
     "residuals.martingale",
     "residuals.deviance",
+    "concordance",
     "wtest",
 ];
+
+/// The aspects of a `concordance` object the harness compares.
+const CONCORDANCE_ASPECTS: &[&str] = &["concordance", "n", "count", "var", "cvar"];
 
 fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(), String> {
     let fit = &cox.fit;
@@ -2745,6 +2758,20 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             let actual = residual_vector(fit, ResidualType::Deviance)?;
             assert_vec(&actual, &nums(expected)?, RTOL_COEF, "deviance")
         }
+        "concordance" => {
+            // `concordance(fit)`: the fit's own concordance object, except
+            // that an id-derived cluster is only seen by `fit$concordance`.
+            let expected = &expected["concordance"];
+            if is_r_error(expected) {
+                return unsupported("R could not compute concordance(fit)");
+            }
+            if cox.cluster_from_id {
+                let unclustered =
+                    linear_predictor_concordance(fit, crate::concordance::TimeWeight::N, None)?;
+                return check_fitted_concordance(&unclustered, expected);
+            }
+            check_fitted_concordance(&fit.concordance, expected)
+        }
         "wtest" => {
             let expected = &expected["wtest"];
             if is_r_error(expected) || expected.is_null() {
@@ -2818,6 +2845,10 @@ fn r_fixtures_coxph() {
                         continue;
                     }
                     if *aspect == "linear_predictors" && expected["linear_predictors"].is_null() {
+                        continue;
+                    }
+                    // The generator records no concordance for a null model.
+                    if *aspect == "concordance" && expected["concordance"].is_null() {
                         continue;
                     }
                     report.record(name, aspect, check_cox_aspect(&cox, expected, aspect));
@@ -3645,6 +3676,7 @@ fn r_fixtures_clogit() {
                 names: design.names,
                 frame,
                 formula: formula.to_string(),
+                cluster_from_id: false,
             })
         })();
         for aspect in [
@@ -3681,12 +3713,11 @@ struct ResidualKernelCase {
     score: Vec<f64>,
     weights: Option<Vec<f64>>,
     strata: Option<Vec<i32>>,
-    ties: crate::residuals::TieMethod,
+    ties: TieMethod,
     exact: bool,
 }
 
 fn residual_kernel_case(doc: &Value, case: &Value) -> Result<ResidualKernelCase, String> {
-    use crate::residuals::TieMethod;
     let frame = case_frame(doc, case)?;
     let formula = text(&case["formula"]).ok_or("no formula")?;
     let args = &case["args"];
@@ -4714,12 +4745,14 @@ fn concordance_fit_for_case(doc: &Value, case: &Value) -> Result<ConcordanceCase
     Ok(ConcordanceCase { fit, x_names })
 }
 
-fn check_concordance_aspect(
-    case: &ConcordanceCase,
+/// Compares one aspect of a `concordance` object; `x_names` are the
+/// predictor names R uses as the row names of a per-predictor `count`.
+fn check_concordance_fit(
+    fit: &crate::concordance::ConcordanceFit,
+    x_names: &[String],
     expected: &Value,
     aspect: &str,
 ) -> Result<(), String> {
-    let fit = &case.fit;
     match aspect {
         "concordance" => assert_vec(
             &fit.concordance,
@@ -4747,7 +4780,7 @@ fn check_concordance_aspect(
                 if fit.count_strata.is_none()
                     && row_names
                         .iter()
-                        .any(|name| !case.x_names.iter().any(|x| x == name))
+                        .any(|name| !x_names.iter().any(|x| x == name))
                 {
                     return Err(format!("count rows {row_names:?} are not the predictors"));
                 }
@@ -4816,12 +4849,25 @@ fn r_fixtures_concordance() {
         let name = text(&case["name"]).expect("case name");
         let expected = &case["expected"];
         if expected["coxph"].is_object() {
-            for (fit, _) in expected.as_object().expect("fit results") {
-                report.record(
-                    name,
-                    &format!("{fit}.concordance"),
-                    unsupported("concordance of fitted models"),
-                );
+            let cox = cox_fit_for_case(&doc, case);
+            for (fit, expected) in expected.as_object().expect("fit results") {
+                let result = match (&cox, fit.as_str()) {
+                    (Err(err), _) => Err(err.clone()),
+                    (Ok(cox), "coxph") => check_fitted_concordance(&cox.fit.concordance, expected),
+                    (Ok(cox), "coxph_timewt_S") => {
+                        // concordance(fit, timewt = "S"): concordancefit on the
+                        // linear predictors with the fit's data.
+                        linear_predictor_concordance(
+                            &cox.fit,
+                            crate::concordance::TimeWeight::S,
+                            cox.fit.cluster.as_deref(),
+                        )
+                        .and_then(|fit| check_fitted_concordance(&fit, expected))
+                    }
+                    (Ok(_), "survreg") => unsupported("concordance of a survreg fit"),
+                    (Ok(_), other) => unsupported(format!("concordance of several fits ({other})")),
+                };
+                report.record(name, &format!("{fit}.concordance"), result);
             }
             continue;
         }
@@ -4831,13 +4877,69 @@ fn r_fixtures_concordance() {
                 continue;
             }
             let result = match &fit {
-                Ok(fit) => check_concordance_aspect(fit, expected, aspect),
+                Ok(case) => check_concordance_fit(&case.fit, &case.x_names, expected, aspect),
                 Err(err) => Err(err.clone()),
             };
             report.record(name, aspect, result);
         }
     }
     report.finish();
+}
+
+/// Every aspect of a fitted model's `concordance()` object.
+fn check_fitted_concordance(
+    fit: &crate::concordance::ConcordanceFit,
+    expected: &Value,
+) -> Result<(), String> {
+    for aspect in CONCORDANCE_ASPECTS {
+        check_concordance_fit(fit, &[], expected, aspect)?;
+    }
+    Ok(())
+}
+
+/// `concordance.coxph`: `concordancefit(y, lp, strata, weights, cluster,
+/// reverse = TRUE, timewt)` on the fit's data.
+fn linear_predictor_concordance(
+    fit: &CoxPHFit,
+    timewt: crate::concordance::TimeWeight,
+    cluster: Option<&[i32]>,
+) -> Result<crate::concordance::ConcordanceFit, String> {
+    use crate::concordance::{ConcordanceOptions, concordancefit};
+    use crate::core::SurvResponse;
+    let x = ndarray::Array2::from_shape_vec((fit.n, 1), fit.linear_predictors.clone())
+        .map_err(|err| err.to_string())?;
+    let options = ConcordanceOptions {
+        timewt,
+        reverse: true,
+        ..ConcordanceOptions::default()
+    };
+    let right;
+    let counting;
+    let response = match &fit.entry {
+        Some(entry) => {
+            counting = crate::data_types::CountingProcessData::try_new(
+                entry.clone(),
+                fit.time.clone(),
+                fit.status.clone(),
+            )
+            .map_err(|err| err.to_string())?;
+            SurvResponse::Counting(&counting)
+        }
+        None => {
+            right = crate::data_types::SurvivalData::try_new(fit.time.clone(), fit.status.clone())
+                .map_err(|err| err.to_string())?;
+            SurvResponse::Right(&right)
+        }
+    };
+    concordancefit(
+        response,
+        x.view(),
+        Some(&fit.weights),
+        fit.strata.as_deref(),
+        cluster,
+        &options,
+    )
+    .map_err(|err| format!("concordancefit: {err}"))
 }
 
 // ---------------------------------------------------------------------------

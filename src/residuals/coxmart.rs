@@ -3,13 +3,15 @@
 //! `coxmart_sorted` is a line-for-line port of `coxmart.c` (survival
 //! 3.8-12), the routine `coxph.fit` calls once after the last iteration.
 //! [`coxmart`] adds the surrounding R work: it sorts with `order(strata,
-//! time)`, runs the kernel and returns the residuals in input order.
+//! time)`, runs the kernel and returns the residuals in input order.  An
+//! exact fit gets the Breslow form, as R's `coxmart2.c` does for
+//! `coxexact.fit`.
 
 use crate::core::strata_order::{last_of_run, order_within_strata};
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::CoxMartInput;
 use crate::internal::validation::validate_binary_i32;
-use crate::residuals::TieMethod;
+use crate::regression::TieMethod;
 
 /// Martingale residuals `status - expected` for a right-censored Cox model.
 ///
@@ -17,16 +19,34 @@ use crate::residuals::TieMethod;
 /// when given, are integer labels (any order); the residuals come back in
 /// the order of `input`.
 pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
-    let time = &input.survival.time;
-    let status = &input.survival.status;
-    validate_binary_i32(status, "status")?;
+    validate_binary_i32(&input.survival.status, "status")?;
     let weights = input.weights_or_unit_cow();
     let strata = input.strata_or_default_cow();
+    Ok(coxmart_rows(
+        &input.survival.time,
+        &input.survival.status,
+        &input.score,
+        &weights,
+        &strata,
+        method,
+    ))
+}
 
-    let order = order_within_strata(&strata, |a, b| time[a].total_cmp(&time[b]));
+/// `coxph.fit`'s residual step on validated, unsorted rows: sort with
+/// `order(strata, time)`, run [`coxmart_sorted`] and restore the input
+/// order.
+pub(crate) fn coxmart_rows(
+    time: &[f64],
+    status: &[i32],
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> Vec<f64> {
+    let order = order_within_strata(strata, |a, b| time[a].total_cmp(&time[b]));
     let sorted_time: Vec<f64> = order.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = order.iter().map(|&i| status[i]).collect();
-    let sorted_score: Vec<f64> = order.iter().map(|&i| input.score[i]).collect();
+    let sorted_score: Vec<f64> = order.iter().map(|&i| score[i]).collect();
     let sorted_weights: Vec<f64> = order.iter().map(|&i| weights[i]).collect();
     let sorted_strata: Vec<i32> = order.iter().map(|&i| strata[i]).collect();
 
@@ -42,7 +62,7 @@ pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f6
     for (sorted_index, &original) in order.iter().enumerate() {
         resid[original] = sorted[sorted_index];
     }
-    Ok(resid)
+    resid
 }
 
 /// `coxmart.c`: martingale residuals for data sorted by stratum and then
@@ -96,7 +116,7 @@ pub(crate) fn coxmart_sorted(
         // `last[n - 1]` is always true, so `time[i + 1]` is never read past
         // the end.
         if last[i] || time[i + 1] != time[i] {
-            if deaths < 2.0 || method == TieMethod::Breslow {
+            if deaths < 2.0 || !method.is_efron() {
                 hazard += wtsum / denom;
                 for j in lastone..=i {
                     expect[j] -= score[j] * hazard;

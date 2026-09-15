@@ -4,7 +4,6 @@ use crate::concordance::{
     concordancefit,
 };
 use crate::core::{CoxschoResiduals, SurvResponse};
-use crate::residuals::TieMethod;
 use ndarray::ArrayView2;
 
 fn covariate_view(covariates: &CovariateMatrix) -> PyResult<ArrayView2<'_, f64>> {
@@ -120,7 +119,7 @@ fn coxscore2_py(
         &score,
         weights.map(|w| w.values.as_slice()),
         strata.as_deref(),
-        TieMethod::parse(ties)?,
+        kernel_ties(ties)?,
     )?;
     Ok(resid.outer_iter().map(|row| row.to_vec()).collect())
 }
@@ -142,7 +141,7 @@ fn agscore3_py(
         &score,
         weights.map(|w| w.values.as_slice()),
         strata.as_deref(),
-        TieMethod::parse(ties)?,
+        kernel_ties(ties)?,
     )?;
     Ok(resid.outer_iter().map(|row| row.to_vec()).collect())
 }
@@ -164,7 +163,7 @@ fn schoenfeld_residuals_py(
         &score,
         weights.map(|w| w.values.as_slice()),
         strata.as_deref(),
-        TieMethod::parse(ties)?,
+        kernel_ties(ties)?,
     )?)
 }
 
@@ -185,7 +184,7 @@ fn schoenfeld_residuals_counting_py(
         &score,
         weights.map(|w| w.values.as_slice()),
         strata.as_deref(),
-        TieMethod::parse(ties)?,
+        kernel_ties(ties)?,
     )?)
 }
 

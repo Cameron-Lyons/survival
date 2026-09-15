@@ -12,7 +12,7 @@ use crate::core::strata_order::{order_within_strata, validate_intervals};
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::CountingProcessData;
 use crate::internal::validation::validate_binary_i32;
-use crate::residuals::TieMethod;
+use crate::regression::TieMethod;
 use crate::scoring::validate_score_inputs;
 use ndarray::{Array2, ArrayView2};
 
@@ -30,15 +30,36 @@ pub fn agscore3(
     validate_binary_i32(&counting.event, "event")?;
     validate_intervals(&counting.start, &counting.stop)?;
     validate_score_inputs(n, covariates, score, weights, strata)?;
-    let nvar = covariates.ncols();
-    let start = &counting.start;
-    let stop = &counting.stop;
-    let event = &counting.event;
+    method.reject_exact("score")?;
     let unit = vec![1.0; n];
-    let weights = weights.unwrap_or(&unit);
     let zero = vec![0; n];
-    let strata = strata.unwrap_or(&zero);
+    Ok(agscore3_rows(
+        &counting.start,
+        &counting.stop,
+        &counting.event,
+        covariates,
+        score,
+        weights.unwrap_or(&unit),
+        strata.unwrap_or(&zero),
+        method,
+    ))
+}
 
+/// `residuals.coxph`'s score step on validated, unsorted (start, stop]
+/// rows: the two sort orders, [`agscore3_sorted`], input order restored.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn agscore3_rows(
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    covariates: ArrayView2<'_, f64>,
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> Array2<f64> {
+    let n = start.len();
+    let nvar = covariates.ncols();
     let order = order_within_strata(strata, |a, b| {
         stop[a]
             .total_cmp(&stop[b])
@@ -73,7 +94,7 @@ pub fn agscore3(
     for (row, &i) in order.iter().enumerate() {
         resid.row_mut(i).assign(&sorted.row(row));
     }
-    Ok(resid)
+    resid
 }
 
 /// `agscore3.c` on data sorted by stratum and ascending stop time within
@@ -185,7 +206,7 @@ pub(crate) fn agscore3_sorted(
         let death_rows = || (group_start..group_end).filter(|&k| event[k] == 1);
 
         if deaths > 0.0 {
-            if deaths < 2.0 || method == TieMethod::Breslow {
+            if deaths < 2.0 || !method.is_efron() {
                 let hazard = meanwt / denom;
                 cumhaz += hazard;
                 for j in 0..nvar {

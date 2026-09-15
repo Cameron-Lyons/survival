@@ -1,3 +1,18 @@
+//! Reverse-cumulative risk-set sums for the penalised Cox solvers
+//! (`regression::elastic_net`, `regression::fast_cox`).
+//!
+//! Those coordinate-descent fitters re-evaluate the partial likelihood and
+//! its gradient many times per iteration, on unstratified right-censored
+//! data; each evaluation re-sorts by time (the buffers in
+//! `CoxRiskSetScratch` keep the allocations across calls) and stores, for
+//! every position of the descending time order, the cumulative `sum w r`,
+//! `sum w r x` and (`CoxRiskSetData` only) `sum w r x^2`, with
+//! `risk_set_pos` pointing each observation at the last member of its tied
+//! time.  Times within `constants::TIME_EPSILON` are treated as tied, a
+//! convention of these solvers only.  The R-faithful Cox engine
+//! (`regression::cox_optimizer`) and the residual / survival-curve kernels
+//! sort once and walk the sorted rows instead.
+
 #[derive(Debug, Clone)]
 pub(crate) struct CoxRiskSetData {
     pub(crate) cumsum_exp_eta: Vec<f64>,

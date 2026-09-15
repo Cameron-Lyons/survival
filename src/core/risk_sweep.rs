@@ -1,15 +1,16 @@
-//! The backward risk-set sweep shared by the Cox residual kernels.
+//! The backward risk-set sweep shared by the Cox kernels that work one
+//! death time at a time.
 //!
-//! Every C routine behind `residuals.coxph`, `coxph.detail` and `cox.zph`
-//! (`coxscho.c`, `coxscore2.c`/`agscore3.c`, `agmart3.c`, `coxdetail.c`,
-//! `zph1.c`/`zph2.c`) walks one stratum from its largest time downwards,
-//! keeping the weighted risk-set sums `sum w r`, `sum w r x` (and, for the
-//! information-type kernels, `sum w r x x'`) plus the same sums over the
-//! deaths tied at the current time.  [`StratumSweep`] does that walk once
-//! per stratum, for right-censored and (start, stop] data alike, and hands
-//! each death time's sums to the kernel, which applies its own Breslow or
-//! Efron arithmetic.  Death times are visited in decreasing order; kernels
-//! needing cumulative quantities reverse afterwards.
+//! `coxscho.c`, `coxdetail.c` and `zph1.c`/`zph2.c` (the C behind
+//! `residuals(type = "schoenfeld")`, `coxph.detail` and `cox.zph`) all
+//! need, at every death time of a stratum, the weighted risk-set sums
+//! `sum w r`, `sum w r x` (and, for the information-type kernels,
+//! `sum w r x x'`) plus the same sums over the deaths tied at that time.
+//! [`StratumSweep`] walks one stratum from its largest time downwards, for
+//! right-censored and (start, stop] data alike, and hands each death time's
+//! sums to the kernel, which applies its own Breslow or Efron arithmetic.
+//! Death times are visited in decreasing order; kernels needing ascending
+//! output reverse afterwards.
 
 use ndarray::{Array2, ArrayView2};
 
@@ -208,13 +209,6 @@ impl StratumSweep<'_> {
     }
 }
 
-/// Value of a right-continuous step function at `t` (0 before the first
-/// step): `c(0, values)[findInterval(t, times) + 1]`.
-pub(crate) fn step_value(times: &[f64], values: &[f64], t: f64) -> f64 {
-    let index = times.partition_point(|&time| time <= t);
-    if index == 0 { 0.0 } else { values[index - 1] }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,7 +283,5 @@ mod tests {
             }
         });
         assert_eq!(seen, 2);
-        assert_eq!(step_value(&[1.0, 2.0], &[0.5, 1.0], 1.5), 0.5);
-        assert_eq!(step_value(&[1.0, 2.0], &[0.5, 1.0], 0.5), 0.0);
     }
 }

@@ -2,13 +2,14 @@
 //! modules build on: risk-set expansion for `tt()` terms (`coxcount1.c`),
 //! Schoenfeld residuals (`coxscho.c`), the `nsk` natural spline and the
 //! `pspline` basis, plus the data conventions the kernels share
-//! (`strata_order`).
+//! (`strata_order`) and the per-death-time risk-set sweep (`risk_sweep`).
 
 pub mod bspline;
 pub mod coxcount1;
 pub mod coxscho;
 pub mod natural_spline;
 pub mod pspline;
+pub(crate) mod risk_sweep;
 pub mod strata_order;
 
 pub use coxcount1::{CoxCountOutput, coxcount1, coxcount2};

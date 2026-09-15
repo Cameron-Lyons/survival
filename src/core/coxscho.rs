@@ -1,21 +1,24 @@
 //! Schoenfeld residuals of a Cox model.
 //!
-//! `coxscho` ports `coxscho.c` (survival 3.8-12): for each death the
-//! residual is `x - xbar(t)`, the covariate minus its risk-weighted mean
-//! over the risk set (Efron: averaged over the tied-death pseudo risk sets).
-//! [`schoenfeld_residuals`] adds the preparation `residuals.coxph` does:
-//! sorting with `order(strata, time, -status)` (deaths first within tied
-//! times, which the kernel requires) and the R convention that the risk
-//! score passed down is `exp(eta) * weight`.
+//! `coxscho` is the port of `coxscho.c` (survival 3.8-12): for each death
+//! the residual is `x - xbar(t)`, the covariate minus its risk-weighted mean
+//! over the risk set, and with Efron ties the mean is averaged over the
+//! tied-death pseudo risk sets, `xbar = mean_j (a - j/d a2) / (denom - j/d
+//! efron_wt)`.  The C code rescans the stratum for every death time
+//! (`O(deaths x n)`); the port accumulates the same sums in one backward
+//! sweep per stratum (`crate::core::risk_sweep`), the walk `zph1.c` and
+//! `agfit4.c` use, which changes nothing but the summation order.
+//! [`schoenfeld_residuals`] adds the argument checks of `residuals.coxph`
+//! and the R convention that the risk score passed down is
+//! `exp(eta) * weight`.
 
-use crate::core::strata_order::{
-    SurvResponse, last_of_run, order_within_strata, validate_intervals,
-};
+use crate::core::risk_sweep::StratumSweep;
+use crate::core::strata_order::{SurvResponse, order_within_strata, validate_intervals};
 use crate::error::SurvivalResult;
 use crate::internal::validation::validate_binary_i32;
-use crate::residuals::TieMethod;
+use crate::regression::TieMethod;
 use crate::scoring::validate_score_inputs;
-use ndarray::{Array2, ArrayView2};
+use ndarray::ArrayView2;
 use pyo3::prelude::*;
 
 /// Schoenfeld residuals, one row per event in order of (stratum, time).
@@ -38,7 +41,8 @@ pub struct CoxschoResiduals {
 
 /// Schoenfeld residuals for right-censored or (start, stop] data.
 /// `covariates` is `n x p`, `score` is `exp(eta)`, and the weights, when
-/// given, enter the risk-set means as `exp(eta) * weight`.
+/// given, enter the risk-set means as `exp(eta) * weight`.  As in R, an
+/// exact fit has no Schoenfeld residuals.
 pub fn schoenfeld_residuals(
     response: SurvResponse<'_>,
     covariates: ArrayView2<'_, f64>,
@@ -56,131 +60,89 @@ pub fn schoenfeld_residuals(
     }
     validate_binary_i32(event, "event")?;
     validate_score_inputs(n, covariates, score, weights, strata)?;
-    let nvar = covariates.ncols();
+    method.reject_exact("schoenfeld")?;
+    let unit = vec![1.0; n];
     let zero = vec![0; n];
-    let strata = strata.unwrap_or(&zero);
-
-    let order = order_within_strata(strata, |a, b| {
-        stop[a]
-            .total_cmp(&stop[b])
-            .then_with(|| event[b].cmp(&event[a]))
-    });
-    // Right-censored data get a start time below every stop time, the
-    // `cbind(-1, y)` / `2 * mintime - 1` trick of `residuals.coxph`.
-    let sorted_start: Vec<f64> = match start {
-        Some(start) => order.iter().map(|&i| start[i]).collect(),
-        None => {
-            let min = stop.iter().copied().fold(f64::INFINITY, f64::min);
-            let before = if min < 0.0 { 2.0 * min - 1.0 } else { -1.0 };
-            vec![before; n]
-        }
-    };
-    let sorted_stop: Vec<f64> = order.iter().map(|&i| stop[i]).collect();
-    let sorted_event: Vec<i32> = order.iter().map(|&i| event[i]).collect();
-    let sorted_strata: Vec<i32> = order.iter().map(|&i| strata[i]).collect();
-    let sorted_score: Vec<f64> = order
-        .iter()
-        .map(|&i| score[i] * weights.map_or(1.0, |w| w[i]))
-        .collect();
-    let mut sorted_covar = Array2::zeros((n, nvar));
-    for (row, &i) in order.iter().enumerate() {
-        sorted_covar.row_mut(row).assign(&covariates.row(i));
-    }
-
-    coxscho(
-        &sorted_start,
-        &sorted_stop,
-        &sorted_event,
-        &mut sorted_covar,
-        &sorted_score,
-        &sorted_strata,
+    Ok(coxscho(
+        start,
+        stop,
+        event,
+        covariates,
+        score,
+        weights.unwrap_or(&unit),
+        strata.unwrap_or(&zero),
         method,
-    );
-    let deaths: Vec<usize> = (0..n).filter(|&row| sorted_event[row] == 1).collect();
-    Ok(CoxschoResiduals {
-        time: deaths.iter().map(|&row| sorted_stop[row]).collect(),
-        index: deaths.iter().map(|&row| order[row]).collect(),
-        strata: deaths.iter().map(|&row| sorted_strata[row]).collect(),
-        residuals: deaths
-            .iter()
-            .map(|&row| sorted_covar.row(row).to_vec())
-            .collect(),
-    })
+    ))
 }
 
-/// `coxscho.c`: replaces the covariate row of every death by its residual.
-/// Data must be sorted by stratum and ascending stop time with deaths first
-/// within tied times; `score` already includes the case weight.
+/// `coxscho.c` on validated, unsorted rows.  Strata are labels; the deaths
+/// come out in `order(strata, stop)` with tied deaths in row order, the
+/// order `residuals.coxph` reports.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn coxscho(
-    start: &[f64],
+    start: Option<&[f64]>,
     stop: &[f64],
     event: &[i32],
-    covar: &mut Array2<f64>,
+    covariates: ArrayView2<'_, f64>,
     score: &[f64],
+    weights: &[f64],
     strata: &[i32],
     method: TieMethod,
-) {
-    let nused = stop.len();
-    let nvar = covar.ncols();
-    let last = last_of_run(strata);
-    let efron = method.efron_flag();
-    let mut a = vec![0.0; nvar];
-    let mut a2 = vec![0.0; nvar];
+) -> CoxschoResiduals {
+    let nvar = covariates.ncols();
+    let steps_of = |ndead: usize| if method.is_efron() { ndead } else { 1 };
+    let order = order_within_strata(strata, |a, b| stop[a].total_cmp(&stop[b]));
+    let mut time = Vec::new();
+    let mut index = Vec::new();
+    let mut strata_out = Vec::new();
+    let mut residuals = Vec::new();
     let mut mean = vec![0.0; nvar];
-
-    let mut person = 0;
-    while person < nused {
-        if event[person] == 0 {
-            person += 1;
-            continue;
-        }
-        // Means over the risk set (a) and over the deaths (a2).
-        let mut denom = 0.0;
-        let mut efron_wt = 0.0;
-        a.fill(0.0);
-        a2.fill(0.0);
-        let time = stop[person];
-        let mut deaths = 0.0;
-        for k in person..nused {
-            if start[k] < time {
-                let weight = score[k];
-                denom += weight;
-                for i in 0..nvar {
-                    a[i] += weight * covar[[k, i]];
-                }
-                if stop[k] == time && event[k] == 1 {
-                    deaths += 1.0;
-                    efron_wt += weight;
-                    for i in 0..nvar {
-                        a2[i] += weight * covar[[k, i]];
-                    }
+    let mut first = 0;
+    while first < order.len() {
+        let label = strata[order[first]];
+        let last = first + order[first..].partition_point(|&row| strata[row] == label);
+        let sweep = StratumSweep {
+            stop,
+            entry: start,
+            status: event,
+            x: covariates,
+            weights,
+            risk: score,
+            rows: &order[first..last],
+            second_moments: false,
+        };
+        // The sweep visits death times from the largest down.
+        let mut per_stratum: Vec<(usize, Vec<f64>)> = Vec::new();
+        sweep.for_each_death_time(|death| {
+            let steps = steps_of(death.ndead());
+            mean.fill(0.0);
+            for j in 0..steps {
+                let denom = death.efron_denom(j) * steps as f64;
+                for (i, value) in mean.iter_mut().enumerate() {
+                    *value += death.efron_a(j, i) / denom;
                 }
             }
-            if last[k] {
-                break;
+            for &row in death.deaths.iter().rev() {
+                per_stratum.push((
+                    row,
+                    (0..nvar).map(|i| covariates[(row, i)] - mean[i]).collect(),
+                ));
             }
+        });
+        per_stratum.reverse();
+        for (row, values) in per_stratum {
+            time.push(stop[row]);
+            index.push(row);
+            strata_out.push(strata[row]);
+            residuals.push(values);
         }
-        mean.fill(0.0);
-        for k in 0..deaths as usize {
-            let temp = efron * k as f64 / deaths;
-            for i in 0..nvar {
-                mean[i] += (a[i] - temp * a2[i]) / (deaths * (denom - temp * efron_wt));
-            }
-        }
-        // The residuals for this time point.
-        let mut k = person;
-        while k < nused && stop[k] == time {
-            if event[k] == 1 {
-                for i in 0..nvar {
-                    covar[[k, i]] -= mean[i];
-                }
-            }
-            person += 1;
-            if last[k] {
-                break;
-            }
-            k += 1;
-        }
+        first = last;
+    }
+    CoxschoResiduals {
+        time,
+        index,
+        strata: strata_out,
+        residuals,
     }
 }
 

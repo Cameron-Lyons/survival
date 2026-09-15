@@ -1,8 +1,11 @@
 //! Regression models.
 //!
 //! The Cox model lives in `coxph` (fit, predictions, survival curves) with
-//! its residuals in `coxph_diagnostics`, `coxph.detail` in `coxph_detail`,
-//! `cox.zph` in `cox_zph` and the case-cohort estimators in `cch`.
+//! its residuals in `coxph_diagnostics` (`residuals.coxph` on top of the
+//! `residuals`, `scoring` and `core::coxscho` kernels), `coxph.detail` in
+//! `coxph_detail`, `cox.zph` in `cox_zph` and the case-cohort estimators in
+//! `cch`.  [`TieMethod`] is the one tie-handling enum of the crate, shared
+//! by the fitters and every kernel.
 //! Penalised Cox models (R's `coxpenal.fit`: `ridge()`, `pspline()` and
 //! `frailty()` terms) live in `coxpenal`.
 
@@ -21,7 +24,6 @@ pub(crate) mod coxpenal;
 pub(crate) mod coxph;
 pub(crate) mod coxph_detail;
 pub(crate) mod coxph_diagnostics;
-pub(crate) mod coxph_support;
 pub(crate) mod coxph_wtest;
 pub(crate) mod cure_models;
 pub(crate) mod elastic_net;

@@ -4,24 +4,45 @@
 //! kernel `agreg.fit` calls; [`agmart`] reproduces the R-side preparation in
 //! `agreg.fit`: observations whose interval contains no event time of their
 //! stratum are set aside (`ignore`, residual 0, never added to a sum), and
-//! the remaining ones are walked from the largest stop time down.
+//! the remaining ones are walked from the largest stop time down.  An exact
+//! fit gets the Breslow form, as `agexact.fit` does with `agmart(method = 0)`.
 
 use crate::core::strata_order::{stratum_groups, validate_intervals};
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::AndersenGillInput;
 use crate::internal::validation::validate_binary_i32;
-use crate::residuals::TieMethod;
+use crate::regression::TieMethod;
 
 /// Martingale residuals `status - score * (H(stop) - H(start))` for
 /// (start, stop] data, in the order of `input`.
 pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
-    let start = &input.counting.start;
-    let stop = &input.counting.stop;
-    let event = &input.counting.event;
-    validate_binary_i32(event, "event")?;
-    validate_intervals(start, stop)?;
+    validate_binary_i32(&input.counting.event, "event")?;
+    validate_intervals(&input.counting.start, &input.counting.stop)?;
     let weights = input.weights_or_unit_cow();
     let strata = input.strata_or_default_cow();
+    Ok(agmart_rows(
+        &input.counting.start,
+        &input.counting.stop,
+        &input.counting.event,
+        &input.score,
+        &weights,
+        &strata,
+        method,
+    ))
+}
+
+/// `agreg.fit`'s residual step on validated, unsorted rows: set aside the
+/// intervals that span no event time, build the two sort orders and run
+/// [`agmart3`].
+pub(crate) fn agmart_rows(
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> Vec<f64> {
     let n = start.len();
 
     // `agreg.fit`: an interval that spans no event time of its stratum never
@@ -29,7 +50,7 @@ pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Ve
     // sweep before them (`nused`) keeps a huge risk score from poisoning
     // the running sums.
     let mut ignore = vec![true; n];
-    for (_, rows) in stratum_groups(&strata) {
+    for (_, rows) in stratum_groups(strata) {
         let mut event_times: Vec<f64> = rows
             .iter()
             .filter(|&&i| event[i] == 1)
@@ -60,18 +81,18 @@ pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Ve
             .then_with(|| start[b].total_cmp(&start[a]))
     });
 
-    Ok(agmart3(
+    agmart3(
         nused,
         start,
         stop,
         event,
-        &input.score,
-        &weights,
-        &strata,
+        score,
+        weights,
+        strata,
         &sort_start,
         &sort_stop,
         method,
-    ))
+    )
 }
 
 /// `agmart3.c`.  `sort1`/`sort2` order the observations by decreasing start
@@ -173,7 +194,7 @@ pub(crate) fn agmart3(
         }
 
         let hazard;
-        if method == TieMethod::Breslow || deaths == 1.0 {
+        if !method.is_efron() || deaths == 1.0 {
             hazard = wtsum / denom;
             person2 = k;
         } else {
