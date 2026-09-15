@@ -80,8 +80,8 @@ pub use hypothesis_tests::{
 };
 pub use landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
-    SurvivalAtTimeResult, conditional_survival, hazard_ratio, landmark_analysis,
-    landmark_analysis_batch, life_table, survival_at_times,
+    SurvivalAtTimeResult, conditional_survival_py, hazard_ratio_py, landmark_analysis_batch_py,
+    landmark_analysis_py, life_table_py, survival_at_times_py,
 };
 pub use logrank::{LogRankResult, logrank_test, logrank_test_py};
 pub use meta_analysis::{
@@ -102,11 +102,10 @@ pub use reporting::{
     calibration_plot_data, forest_plot_data, generate_survival_report, km_plot_data, roc_plot_data,
 };
 pub use rmst::{
-    ChangepointInfo, NNTResult, RMSTOptimalThresholdResult, RmeanOption, RmstComparisonResult,
-    RmstGroupResult, SurvfitCurve, SurvfitCurveQuantiles, SurvfitSummaryRow,
-    number_needed_to_treat, number_needed_to_treat_py, quantile_survfit,
+    ChangepointInfo, NNTResult, RMSTOptimalThresholdResult, RmstComparisonResult, RmstGroupResult,
+    SurvfitCurveQuantiles, SurvfitSummaryRow, number_needed_to_treat, number_needed_to_treat_py,
     quantile_survfit_curves_py, rmst_comparison, rmst_comparison_py, rmst_optimal_threshold,
-    rmst_optimal_threshold_py, survmean, survmean_curves_py,
+    rmst_optimal_threshold_py, survmean_curves_py,
 };
 pub use royston::{RoystonInput, RoystonResult, royston, royston_py};
 pub use survcheck::{

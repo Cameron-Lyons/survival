@@ -6,9 +6,10 @@ use survival::regression::{
     CoxPHFit, aareg_fit, agexact_py, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg,
 };
 use survival::surv_analysis::{
-    self, ResidualType, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
+    self, ResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
+    survmean,
 };
-use survival::validation::{BrierInput, RmeanOption, SurvfitCurve, brier, survmean, uno_c_index};
+use survival::validation::{BrierInput, brier, uno_c_index};
 
 fn generate_survival_data(n: usize) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
     let mut time = Vec::with_capacity(n);
@@ -99,10 +100,22 @@ fn fitted_coxph_model(n: usize, p: usize) -> CoxPHFit {
 mod kaplan_meier {
     use super::*;
 
-    #[divan::bench(args = [100, 1000, 10000])]
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
     fn survfitkm(bencher: divan::Bencher, n: usize) {
         let (time, _, status) = generate_survival_data(n);
         let data = SurvfitKMData::right_censored(time, status)
+            .expect("benchmark survival data should be valid");
+        let options = SurvfitKMOptions::default();
+
+        bencher.bench_local(|| surv_analysis::survfitkm(&data, &options));
+    }
+
+    /// Fifty curves from one call: the rows are bucketed by stratum once.
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn survfitkm_strata(bencher: divan::Bencher, n: usize) {
+        let (time, _, status) = generate_survival_data(n);
+        let strata = generate_strata(n, 50);
+        let data = SurvfitKMData::try_new(None, time, status, None, Some(strata), None, None)
             .expect("benchmark survival data should be valid");
         let options = SurvfitKMOptions::default();
 
@@ -247,6 +260,19 @@ mod logrank {
             survival::validation::logrank_test(&time, &status_i32, &group, None, None, 1.0, true)
         });
     }
+
+    /// `survdiff(Surv(time, status) ~ group + strata(s))` with 49 strata.
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn survdiff_strata(bencher: divan::Bencher, n: usize) {
+        let (time, _, status_i32) = generate_survival_data(n);
+        let group = generate_group_data(n);
+        let strata = generate_strata(n, 49);
+        let data =
+            surv_analysis::SurvdiffData::try_new(None, time, status_i32, group, Some(strata))
+                .expect("benchmark survival data should be valid");
+
+        bencher.bench_local(|| surv_analysis::survdiff(&data, 0.0, true));
+    }
 }
 
 mod brier_score {
@@ -321,14 +347,7 @@ mod rmst_bench {
 
         bencher.bench_local(|| {
             let km = surv_analysis::survfitkm(&data, &options).expect("valid curve");
-            survmean(
-                &[SurvfitCurve::from_km(&km)],
-                &[n as f64],
-                None,
-                0.0,
-                RmeanOption::At(tau),
-                1.0,
-            )
+            survmean(&km, 1.0, RmeanOption::At(tau))
         });
     }
 }

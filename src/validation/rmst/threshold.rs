@@ -1,14 +1,15 @@
 //! Data-driven choice of the truncation time of a restricted mean: a
 //! piecewise-exponential changepoint search on the hazard (no R
-//! counterpart).  The restricted mean at the chosen horizon comes from
-//! [`super::survmean`] on the Kaplan-Meier curve.
+//! counterpart).  Times are binned with `aeqSurv` first, as `survfit`
+//! does, and the restricted mean at the chosen horizon is
+//! `summary(survfit(Surv(time, status) ~ 1), rmean = tau)$table`.
 
-use super::survmean::{RmeanOption, survmean};
-use super::{SurvfitCurve, kaplan_meier};
-use crate::constants::same_time;
+use super::kaplan_meier;
+use crate::data_prep::aeq_times;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
+use crate::surv_analysis::{RmeanOption, survmean};
 use pyo3::prelude::*;
 
 /// A hazard changepoint retained by the search.
@@ -33,20 +34,14 @@ pub struct RMSTOptimalThresholdResult {
     pub se_rmean: f64,
 }
 
-/// Restricted mean up to `tau` from the Kaplan-Meier curve.
+/// Restricted mean up to `tau` and its standard error from the
+/// Kaplan-Meier curve.
 fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> SurvivalResult<(f64, f64)> {
     let km = kaplan_meier(time, status, None, 0.95)?;
-    let rows = survmean(
-        &[SurvfitCurve::from_km(&km)],
-        &[time.len() as f64],
-        None,
-        0.0_f64.min(time.iter().copied().fold(f64::INFINITY, f64::min)),
-        RmeanOption::At(tau),
-        1.0,
-    )?;
+    let table = survmean(&km, 1.0, RmeanOption::At(tau))?;
     Ok((
-        rows[0].rmean.unwrap_or(f64::NAN),
-        rows[0].se_rmean.unwrap_or(f64::NAN),
+        table.rmean.as_ref().map_or(f64::NAN, |v| v[0]),
+        table.se_rmean.as_ref().map_or(f64::NAN, |v| v[0]),
     ))
 }
 
@@ -145,6 +140,8 @@ pub fn rmst_optimal_threshold(
             "min_events_per_interval must be at least 2",
         ));
     }
+    let time = aeq_times(time);
+    let time = time.as_slice();
     let mut event_times: Vec<f64> = Vec::new();
     let mut censor_times: Vec<f64> = Vec::new();
     for i in 0..n {
@@ -167,12 +164,12 @@ pub fn rmst_optimal_threshold(
         });
     }
     let mut unique_event_times: Vec<f64> = event_times.clone();
-    unique_event_times.dedup_by(|left, right| same_time(*left, *right));
+    unique_event_times.dedup();
     let min_events = min_events_per_interval;
     let mut candidate_changepoints: Vec<f64> = Vec::new();
     let mut cumulative_events = 0usize;
     for &t in &unique_event_times {
-        let events_at_t = event_times.iter().filter(|&&et| same_time(et, t)).count();
+        let events_at_t = event_times.iter().filter(|&&et| et == t).count();
         cumulative_events += events_at_t;
         let events_after = event_times.len() - cumulative_events;
         if cumulative_events >= min_events && events_after >= min_events {
@@ -247,7 +244,7 @@ pub fn rmst_optimal_threshold(
             compute_hazard_in_interval(&event_times, &censor_times, t_start_after, t_end_after);
         let (lr_stat, p_val) = significant_changepoints
             .iter()
-            .find(|&&(c, _, _)| same_time(c, cp))
+            .find(|&&(c, _, _)| c == cp)
             .map(|&(_, lr, p)| (lr, p))
             .unwrap_or((0.0, 1.0));
         changepoint_info.push(ChangepointInfo {

@@ -3,18 +3,21 @@
 //! and its C kernel `survfitkm` (`src/survfitkm.c`), survival 3.8-11/12.
 //!
 //! [`survfitkm`] is the only survival/cumulative-hazard engine in the crate:
-//! the Nelson-Aalen facade, the pseudo-value and residual code and the
-//! summary helpers all read its [`SurvfitKMResult`].
+//! the Nelson-Aalen facade, the pseudo-value and residual code, the
+//! summary helpers, the G-rho weights of `survdiff`, the censoring
+//! distribution of the Brier score, the Turnbull EM and the
+//! `validation` summaries all read its [`SurvfitKMResult`].
 
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::sorting::sorted_indices_by;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
     validate_non_negative,
 };
 use ndarray::Array2;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 /// The `stype` argument of `survfit`: how the survival curve is formed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -783,31 +786,88 @@ pub(crate) fn survflag(start: &[f64], stop: &[f64], id: &[usize], group: &[usize
     flag
 }
 
-/// `aeqSurv`: bin the time columns jointly so that near-ties become ties.
+/// `aeqSurv`: bin the time columns jointly so that near-ties become ties
+/// (an interval that collapses to length 0 is an error there).
 fn apply_timefix(
     start: Option<&[f64]>,
     time: &[f64],
 ) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
     let fixed = crate::data_prep::aeq_surv(time, start, None)?;
-    if let Some(fixed_start) = fixed.time2 {
-        if fixed_start.iter().zip(&fixed.time).any(|(s, t)| s == t) {
-            return Err(SurvivalError::invalid_input(
-                "aeqSurv exception, an interval has effective length 0",
-            ));
-        }
-        Ok((Some(fixed_start), fixed.time))
-    } else {
-        Ok((None, fixed.time))
-    }
+    Ok((fixed.time2, fixed.time))
 }
 
 /// `keep[order(values[keep])]`, ties in `keep` order.
-fn ordered_subset(keep: &[usize], values: &[f64]) -> Vec<usize> {
-    let subset: Vec<f64> = keep.iter().map(|&i| values[i]).collect();
-    sorted_indices_by(&subset)
-        .into_iter()
-        .map(|k| keep[k])
-        .collect()
+///
+/// Sorting `(value, row)` pairs rather than an index vector keeps the
+/// keys next to each other in memory, which is several times faster than
+/// an indirect comparison sort at a million rows.  `parallel` splits the
+/// sort itself over threads; a caller sorting several curves at once
+/// parallelises over the curves instead.
+pub(crate) fn ordered_subset(keep: &[usize], values: &[f64], parallel: bool) -> Vec<usize> {
+    let mut pairs: Vec<(f64, usize)> = keep.iter().map(|&i| (values[i], i)).collect();
+    let order =
+        |a: &(f64, usize), b: &(f64, usize)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1));
+    if parallel && pairs.len() > PARALLEL_THRESHOLD_LARGE {
+        pairs.par_sort_unstable_by(order);
+    } else {
+        pairs.sort_unstable_by(order);
+    }
+    pairs.into_iter().map(|(_, i)| i).collect()
+}
+
+/// The rows of each curve in data order: `split(seq_along(x), x)`.
+pub(crate) fn rows_by_curve(x: &[usize], n_curves: usize) -> Vec<Vec<usize>> {
+    let mut rows = vec![Vec::new(); n_curves];
+    for (i, &curve) in x.iter().enumerate() {
+        rows[curve].push(i);
+    }
+    rows
+}
+
+/// The rows of one curve in data order and in the orders the kernel walks
+/// them.
+struct CurveInput {
+    keep: Vec<usize>,
+    rows: CurveRows,
+}
+
+/// [`CurveInput`] of every curve: the sorts run in parallel over the
+/// curves, or within the sort when there is a single curve.
+fn curve_inputs(
+    x: &[usize],
+    n_curves: usize,
+    start: Option<&[f64]>,
+    time: &[f64],
+    status: &[i32],
+    reverse: bool,
+) -> Vec<CurveInput> {
+    let buckets = rows_by_curve(x, n_curves);
+    let single = n_curves == 1;
+    let prepare = |keep: Vec<usize>| {
+        let sort1 = start.map(|start| ordered_subset(&keep, start, single));
+        let sort2 = if reverse {
+            // deaths first among ties so the kernel can drop them from the
+            // risk set before the tied censorings are treated as events
+            let mut sort2 = keep.clone();
+            sort2.sort_by(|&a, &b| {
+                time[a]
+                    .total_cmp(&time[b])
+                    .then_with(|| status[b].cmp(&status[a]))
+            });
+            sort2
+        } else {
+            ordered_subset(&keep, time, single)
+        };
+        CurveInput {
+            keep,
+            rows: CurveRows { sort1, sort2 },
+        }
+    };
+    if single {
+        buckets.into_iter().map(prepare).collect()
+    } else {
+        buckets.into_par_iter().map(prepare).collect()
+    }
 }
 
 fn count_unique(values: impl Iterator<Item = usize>) -> usize {
@@ -975,8 +1035,15 @@ pub fn survfitkm(
     let mut n_id = has_id.then(|| vec![0usize; n_curves]);
     let mut fits: Vec<(usize, CurveFit, Vec<i64>)> = Vec::with_capacity(n_curves);
     let mut ctemp = vec![0usize; n];
-    for curve in 0..n_curves {
-        let keep: Vec<usize> = (0..n).filter(|&i| x[i] == curve).collect();
+    let inputs = curve_inputs(
+        &x,
+        n_curves,
+        start.as_deref(),
+        &time,
+        &status,
+        options.reverse,
+    );
+    for (curve, CurveInput { keep, rows }) in inputs.into_iter().enumerate() {
         n_used[curve] = keep.len();
         if keep.is_empty() {
             continue; // rare case where all are < start.time
@@ -984,24 +1051,6 @@ pub fn survfitkm(
         if let (Some(n_id), Some(id)) = (&mut n_id, &id_codes) {
             n_id[curve] = count_unique(keep.iter().map(|&i| id[i]));
         }
-        let sort2 = if options.reverse {
-            // deaths first among ties so the kernel can drop them from the
-            // risk set before the tied censorings are treated as events
-            let mut sort2 = keep.clone();
-            sort2.sort_by(|&a, &b| {
-                time[a]
-                    .total_cmp(&time[b])
-                    .then_with(|| status[b].cmp(&status[a]))
-                    .then_with(|| a.cmp(&b))
-            });
-            sort2
-        } else {
-            ordered_subset(&keep, &time)
-        };
-        let rows_for_curve = CurveRows {
-            sort1: start.as_deref().map(|start| ordered_subset(&keep, start)),
-            sort2,
-        };
         // clusters are renumbered 0, 1, 2, ... per curve in order of
         // appearance so each curve's influence matrix has only its own rows
         let (kernel_cluster, curve_clusters) = match &cluster {
@@ -1024,7 +1073,7 @@ pub fn survfitkm(
             position: &position,
             cluster: kernel_cluster,
         };
-        let fit = kernel(&kernel_data, &rows_for_curve, kernel_options);
+        let fit = kernel(&kernel_data, &rows, kernel_options);
         fits.push((curve, fit, curve_clusters));
     }
 
@@ -1070,7 +1119,7 @@ pub fn survfitkm(
     let mut strata_codes = Vec::with_capacity(fits.len());
     let mut influence_surv = influence.survival().then(Vec::new);
     let mut influence_chaz = influence.cumhaz().then(Vec::new);
-    for (curve, fit, curve_clusters) in fits {
+    for (curve, fit, mut curve_clusters) in fits {
         strata_rows.push(fit.time.len());
         strata_codes.push(strata_levels[curve]);
         result.time.extend_from_slice(&fit.time);
@@ -1099,14 +1148,6 @@ pub fn survfitkm(
         let to_rows = |matrix: &Array2<f64>| -> Vec<Vec<f64>> {
             matrix.outer_iter().map(|row| row.to_vec()).collect()
         };
-        if let Some(list) = &mut influence_chaz
-            && let Some(matrix) = &fit.influence_chaz
-        {
-            list.push(SurvfitInfluence {
-                cluster: curve_clusters.clone(),
-                values: to_rows(matrix),
-            });
-        }
         if let Some(list) = &mut influence_surv {
             let values = match (&fit.influence_surv, &fit.influence_chaz) {
                 (Some(matrix), _) => to_rows(matrix),
@@ -1124,8 +1165,20 @@ pub fn survfitkm(
                 (None, None) => Vec::new(),
             };
             list.push(SurvfitInfluence {
-                cluster: curve_clusters,
+                cluster: if influence_chaz.is_some() {
+                    curve_clusters.clone()
+                } else {
+                    std::mem::take(&mut curve_clusters)
+                },
                 values,
+            });
+        }
+        if let Some(list) = &mut influence_chaz
+            && let Some(matrix) = &fit.influence_chaz
+        {
+            list.push(SurvfitInfluence {
+                cluster: curve_clusters,
+                values: to_rows(matrix),
             });
         }
     }

@@ -37,10 +37,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rmst_optimal_threshold_py, m)?)?;
     m.add_function(wrap_pyfunction!(number_needed_to_treat_py, m)?)?;
     m.add_function(wrap_pyfunction!(turnbull_py, m)?)?;
-    m.add_function(wrap_pyfunction!(conditional_survival, m)?)?;
-    m.add_function(wrap_pyfunction!(hazard_ratio, m)?)?;
-    m.add_function(wrap_pyfunction!(survival_at_times, m)?)?;
-    m.add_function(wrap_pyfunction!(life_table, m)?)?;
+    m.add_function(wrap_pyfunction!(conditional_survival_py, m)?)?;
+    m.add_function(wrap_pyfunction!(hazard_ratio_py, m)?)?;
+    m.add_function(wrap_pyfunction!(survival_at_times_py, m)?)?;
+    m.add_function(wrap_pyfunction!(life_table_py, m)?)?;
     m.add_function(wrap_pyfunction!(survfitresid_py, m)?)?;
     m.add_function(wrap_pyfunction!(pseudo_py, m)?)?;
     m.add_function(wrap_pyfunction!(survfitresid_aj_py, m)?)?;

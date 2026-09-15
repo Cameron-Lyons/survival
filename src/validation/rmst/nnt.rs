@@ -1,8 +1,10 @@
 //! Number needed to treat at a time horizon from two Kaplan-Meier curves
 //! (no R counterpart): the absolute risk reduction `S_1(t) - S_0(t)`
-//! with Greenwood variances, and its reciprocal.
+//! with Greenwood variances, and its reciprocal.  The horizon is binned
+//! with the times (`aeqSurv`) before the curves are read.
 
 use super::kaplan_meier;
+use crate::data_prep::aeq_times;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
 use crate::internal::validation::validate_length;
@@ -21,24 +23,27 @@ pub struct NNTResult {
     pub time_horizon: f64,
 }
 
-/// Kaplan-Meier survival at `at` and its Greenwood variance.
+/// Kaplan-Meier survival at `at` and its Greenwood variance
+/// (`S(t)^2 * var(log S(t))`; 0 once the curve has reached 0).
 fn survival_at(time: &[f64], status: &[i32], at: f64) -> SurvivalResult<(f64, f64)> {
+    let mut fixed = time.to_vec();
+    fixed.push(at);
+    let fixed = aeq_times(&fixed);
+    let (at, time) = fixed.split_last().expect("the horizon was appended");
     let km = kaplan_meier(time, status, None, 0.95)?;
-    let mut survival = 1.0;
-    let mut greenwood = 0.0;
-    for i in 0..km.time.len() {
-        if km.time[i] > at {
-            break;
-        }
-        let (n, d) = (km.n_risk[i], km.n_event[i]);
-        if d > 0.0 && n > 0.0 {
-            survival *= 1.0 - d / n;
-            if n > d {
-                greenwood += d / (n * (n - d));
-            }
+    let std_err = km.std_err.as_deref().expect("se.fit is on");
+    match km.time.partition_point(|&t| t <= *at) {
+        0 => Ok((1.0, 0.0)),
+        k => {
+            let survival = km.surv[k - 1];
+            let variance = if survival > 0.0 {
+                (survival * std_err[k - 1]).powi(2)
+            } else {
+                0.0
+            };
+            Ok((survival, variance))
         }
     }
-    Ok((survival, survival * survival * greenwood))
 }
 
 /// Number needed to treat comparing the second group (treated) with the

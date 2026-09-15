@@ -1,23 +1,39 @@
 //! Landmark, conditional-survival and life-table summaries of a
 //! Kaplan-Meier curve (no direct R `survival` counterpart).  Every curve
-//! is taken from `surv_analysis::survfitkm`.
+//! is taken from `surv_analysis::survfitkm`, and the observation times are
+//! binned together with the query times (landmark, evaluation and break
+//! points) by `aeqSurv` (`data_prep::aeq_times`), so near ties are ties
+//! exactly as `survfit`'s `timefix` makes them.
+//!
+//! The `compute_*` functions are the kernels; the `*_py` functions are
+//! the Python entry points and validate the raw arguments.
 
 use crate::constants::{
-    PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, same_time, z_score_for_confidence,
+    PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, z_score_for_confidence,
 };
+use crate::data_prep::aeq_times;
+use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pnorm;
-use crate::internal::validation::{
-    validate_binary_i32, validate_confidence_level, validate_finite, validate_no_nan,
-};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_no_nan};
 use crate::surv_analysis::{SurvfitKMData, SurvfitKMOptions, survfitkm};
 use crate::validation::logrank::logrank_test;
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+/// The observation times and the `query` times after one joint `aeqSurv`:
+/// a query within tolerance of an observation time compares equal to it.
+fn bin_times(time: &[f64], query: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let mut all = Vec::with_capacity(time.len() + query.len());
+    all.extend_from_slice(time);
+    all.extend_from_slice(query);
+    let mut binned = aeq_times(&all);
+    let query = binned.split_off(time.len());
+    (binned, query)
+}
+
 /// One event time of a Kaplan-Meier curve: the survival, the Greenwood
-/// sum `sum d / (n (n - d))`, the number at risk and the cumulative
-/// number of events.
+/// sum `sum d / (n (n - d))` (`std.err^2` of `log S`), the number at risk
+/// and the cumulative number of events.
 struct KmStep {
     time: f64,
     survival: f64,
@@ -26,46 +42,50 @@ struct KmStep {
     cumulative_events: usize,
 }
 
-/// The Kaplan-Meier event times of right-censored data.
-fn kaplan_meier_steps(time: &[f64], status: &[i32]) -> Vec<KmStep> {
-    let Ok(data) = SurvfitKMData::right_censored(time.to_vec(), status.to_vec()) else {
-        return Vec::new();
-    };
+/// The Kaplan-Meier event times of right-censored data whose times are
+/// already binned.
+fn kaplan_meier_steps(time: &[f64], status: &[i32]) -> SurvivalResult<Vec<KmStep>> {
+    let data = SurvfitKMData::right_censored(time.to_vec(), status.to_vec())?;
     let options = SurvfitKMOptions {
-        se_fit: false,
+        conf_type: crate::surv_analysis::ConfType::None,
+        timefix: false,
         ..SurvfitKMOptions::default()
     };
-    let Ok(km) = survfitkm(&data, &options) else {
-        return Vec::new();
-    };
-    let mut greenwood = 0.0;
+    let km = survfitkm(&data, &options)?;
+    let std_err = km.std_err.as_deref().expect("se.fit is on");
     let mut cumulative_events = 0usize;
-    let mut steps = Vec::new();
-    for i in 0..km.time.len() {
-        let (n_risk, d) = (km.n_risk[i], km.n_event[i]);
-        if d <= 0.0 {
-            continue;
-        }
-        cumulative_events += d as usize;
-        if n_risk > d {
-            greenwood += d / (n_risk * (n_risk - d));
-        }
-        steps.push(KmStep {
-            time: km.time[i],
-            survival: km.surv[i],
-            greenwood,
-            n_risk: n_risk as usize,
-            cumulative_events,
-        });
-    }
-    steps
+    let steps = (0..km.time.len())
+        .filter(|&i| km.n_event[i] > 0.0)
+        .map(|i| {
+            cumulative_events += km.n_event[i] as usize;
+            KmStep {
+                time: km.time[i],
+                survival: km.surv[i],
+                greenwood: std_err[i] * std_err[i],
+                n_risk: km.n_risk[i] as usize,
+                cumulative_events,
+            }
+        })
+        .collect();
+    Ok(steps)
 }
 
-/// The last step at or before `at` (with the near-tie tolerance).
+/// The last step at or before `at`.
 fn step_at(steps: &[KmStep], at: f64) -> Option<&KmStep> {
-    let idx = steps.partition_point(|step| step.time <= at || same_time(step.time, at));
+    let idx = steps.partition_point(|step| step.time <= at);
     idx.checked_sub(1).map(|i| &steps[i])
 }
+
+/// Greenwood variance of `S(t)` from a step: `S^2 * var(log S)`, 0 once
+/// the curve has reached 0.
+fn survival_variance(step: &KmStep) -> f64 {
+    if step.survival > 0.0 && step.greenwood.is_finite() {
+        step.survival * step.survival * step.greenwood
+    } else {
+        0.0
+    }
+}
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct LandmarkResult {
@@ -104,9 +124,9 @@ impl LandmarkResult {
     }
 }
 
-fn validate_landmark_survival_inputs(time: &[f64], status: &[i32]) -> PyResult<()> {
+fn validate_survival_inputs(time: &[f64], status: &[i32]) -> SurvivalResult<()> {
     if status.len() != time.len() {
-        return Err(PyValueError::new_err(format!(
+        return Err(SurvivalError::invalid_input(format!(
             "time and status must have same length, got {} and {}",
             time.len(),
             status.len()
@@ -118,28 +138,39 @@ fn validate_landmark_survival_inputs(time: &[f64], status: &[i32]) -> PyResult<(
     Ok(())
 }
 
-fn validate_finite_scalar(value: f64, name: &str) -> PyResult<()> {
+fn validate_finite_scalar(value: f64, name: &str) -> SurvivalResult<()> {
     if !value.is_finite() {
-        return Err(PyValueError::new_err(format!("{name} must be finite")));
+        return Err(SurvivalError::invalid_input(format!(
+            "{name} must be finite"
+        )));
     }
     Ok(())
 }
 
-fn validate_confidence_option(confidence_level: Option<f64>) -> PyResult<f64> {
+/// The confidence level, 0.95 by default.
+fn confidence_or_default(confidence_level: Option<f64>) -> SurvivalResult<f64> {
     let confidence = confidence_level.unwrap_or(0.95);
-    validate_confidence_level(confidence)?;
+    if !confidence.is_finite() || confidence <= 0.0 || confidence >= 1.0 {
+        return Err(SurvivalError::invalid_input(
+            "confidence_level must be a finite value between 0 and 1",
+        ));
+    }
     Ok(confidence)
 }
 
+/// The observations still at risk after `landmark_time`, with the clock
+/// reset to it.  A time within `aeqSurv`'s tolerance of the landmark
+/// counts as the landmark itself and is excluded.
 pub(crate) fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> LandmarkResult {
-    let n = time.len();
+    let (time, landmark) = bin_times(time, &[landmark_time]);
+    let landmark = landmark[0];
     let mut new_time = Vec::new();
     let mut new_status = Vec::new();
     let mut original_indices = Vec::new();
     let mut n_excluded = 0usize;
-    for i in 0..n {
-        if time[i] > landmark_time {
-            new_time.push(time[i] - landmark_time);
+    for (i, &t) in time.iter().enumerate() {
+        if t > landmark {
+            new_time.push(t - landmark);
             new_status.push(status[i]);
             original_indices.push(i);
         } else {
@@ -156,16 +187,19 @@ pub(crate) fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64)
         original_indices,
     }
 }
-#[pyfunction]
-pub fn landmark_analysis(
+
+/// Python entry point of `compute_landmark`.
+#[pyfunction(name = "landmark_analysis")]
+pub fn landmark_analysis_py(
     time: Vec<f64>,
     status: Vec<i32>,
     landmark_time: f64,
 ) -> PyResult<LandmarkResult> {
-    validate_landmark_survival_inputs(&time, &status)?;
+    validate_survival_inputs(&time, &status)?;
     validate_finite_scalar(landmark_time, "landmark_time")?;
     Ok(compute_landmark(&time, &status, landmark_time))
 }
+
 pub(crate) fn compute_landmarks_parallel(
     time: &[f64],
     status: &[i32],
@@ -176,17 +210,20 @@ pub(crate) fn compute_landmarks_parallel(
         .map(|&lt| compute_landmark(time, status, lt))
         .collect()
 }
-#[pyfunction]
-pub fn landmark_analysis_batch(
+
+/// Python entry point of `compute_landmarks_parallel`.
+#[pyfunction(name = "landmark_analysis_batch")]
+pub fn landmark_analysis_batch_py(
     time: Vec<f64>,
     status: Vec<i32>,
     landmark_times: Vec<f64>,
 ) -> PyResult<Vec<LandmarkResult>> {
-    validate_landmark_survival_inputs(&time, &status)?;
+    validate_survival_inputs(&time, &status)?;
     validate_no_nan(&landmark_times, "landmark_times")?;
     validate_finite(&landmark_times, "landmark_times")?;
     Ok(compute_landmarks_parallel(&time, &status, &landmark_times))
 }
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct ConditionalSurvivalResult {
@@ -224,77 +261,83 @@ impl ConditionalSurvivalResult {
         }
     }
 }
+
+/// `S(target) / S(given)` from the Kaplan-Meier curve, with a normal
+/// interval on the ratio (its variance from the difference of the
+/// Greenwood sums) clamped to `[0, 1]`.
 pub(crate) fn compute_conditional_survival(
     time: &[f64],
     status: &[i32],
     given_time: f64,
     target_time: f64,
     confidence_level: f64,
-) -> ConditionalSurvivalResult {
+) -> SurvivalResult<ConditionalSurvivalResult> {
     let n = time.len();
     if n == 0 || target_time <= given_time {
-        return ConditionalSurvivalResult {
+        return Ok(ConditionalSurvivalResult {
             given_time,
             target_time,
             conditional_survival: 1.0,
             ci_lower: 1.0,
             ci_upper: 1.0,
             n_at_risk: 0,
-        };
+        });
     }
-    let steps = kaplan_meier_steps(time, status);
+    let (time, query) = bin_times(time, &[given_time, target_time]);
+    let (given, target) = (query[0], query[1]);
+    let steps = kaplan_meier_steps(&time, status)?;
     let (surv_given, var_given) =
-        step_at(&steps, given_time).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
+        step_at(&steps, given).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
     let (surv_target, var_target) =
-        step_at(&steps, target_time).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
+        step_at(&steps, target).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
     // number still at risk just after the given time
-    let n_at_given = time
-        .iter()
-        .filter(|&&t| t > given_time && !same_time(t, given_time))
-        .count();
+    let n_at_given = time.iter().filter(|&&t| t > given).count();
     let conditional = if surv_given > 0.0 {
         surv_target / surv_given
     } else {
         0.0
     };
     let z = z_score_for_confidence(confidence_level);
-    let var_conditional = if surv_given > 0.0 {
+    let var_conditional = if surv_given > 0.0 && conditional > 0.0 {
         conditional * conditional * (var_target - var_given).abs()
     } else {
         0.0
     };
     let se = var_conditional.sqrt();
     let (ci_lower, ci_upper) = clamped_normal_ci(conditional, se, z, 0.0, 1.0);
-    ConditionalSurvivalResult {
+    Ok(ConditionalSurvivalResult {
         given_time,
         target_time,
         conditional_survival: conditional,
         ci_lower,
         ci_upper,
         n_at_risk: n_at_given,
-    }
+    })
 }
-#[pyfunction]
+
+/// Python entry point of `compute_conditional_survival`.
+#[pyfunction(name = "conditional_survival")]
 #[pyo3(signature = (time, status, given_time, target_time, confidence_level=None))]
-pub fn conditional_survival(
+pub fn conditional_survival_py(
     time: Vec<f64>,
     status: Vec<i32>,
     given_time: f64,
     target_time: f64,
     confidence_level: Option<f64>,
 ) -> PyResult<ConditionalSurvivalResult> {
-    validate_landmark_survival_inputs(&time, &status)?;
+    validate_survival_inputs(&time, &status)?;
     validate_finite_scalar(given_time, "given_time")?;
     validate_finite_scalar(target_time, "target_time")?;
-    let conf = validate_confidence_option(confidence_level)?;
+    let conf = confidence_or_default(confidence_level)?;
     Ok(compute_conditional_survival(
         &time,
         &status,
         given_time,
         target_time,
         conf,
-    ))
+    )?)
 }
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct HazardRatioResult {
@@ -332,14 +375,17 @@ impl HazardRatioResult {
         }
     }
 }
+
 /// Log-rank (Peto) estimate of the hazard ratio of the second group
-/// against the first: `exp((O - E) / V)` with the log-rank variance `V`.
+/// against the first: `exp((O - E) / V)` with the log-rank variance `V`
+/// (`survdiff`, which bins the times itself).  Fewer than two groups give
+/// the neutral ratio 1.
 pub(crate) fn compute_hazard_ratio(
     time: &[f64],
     status: &[i32],
     group: &[i32],
     confidence_level: f64,
-) -> HazardRatioResult {
+) -> SurvivalResult<HazardRatioResult> {
     let neutral = HazardRatioResult {
         hazard_ratio: 1.0,
         ci_lower: 1.0,
@@ -352,7 +398,7 @@ pub(crate) fn compute_hazard_ratio(
     unique_groups.sort_unstable();
     unique_groups.dedup();
     if unique_groups.len() < 2 {
-        return neutral;
+        return Ok(neutral);
     }
     // Only the first two groups take part in the comparison.
     let rows: Vec<usize> = (0..time.len())
@@ -361,58 +407,51 @@ pub(crate) fn compute_hazard_ratio(
     let time: Vec<f64> = rows.iter().map(|&i| time[i]).collect();
     let status: Vec<i32> = rows.iter().map(|&i| status[i]).collect();
     let group: Vec<i32> = rows.iter().map(|&i| group[i]).collect();
-    let Ok(test) = logrank_test(&time, &status, &group, None, None, 0.0, true) else {
-        return neutral;
-    };
+    let test = logrank_test(&time, &status, &group, None, None, 0.0, true)?;
     let sum_o_e = test.observed[0] - test.expected[0];
     let sum_var = test.variance[0][0];
-    let log_hr: f64 = if sum_var > 0.0 {
-        sum_o_e / sum_var
-    } else {
-        0.0
-    };
+    if sum_var <= 0.0 {
+        return Ok(neutral); // no events: nothing to compare
+    }
+    let log_hr = sum_o_e / sum_var;
     let hazard_ratio = log_hr.exp();
-    let se_log_hr: f64 = if sum_var > 0.0 {
-        1.0 / sum_var.sqrt()
-    } else {
-        0.0
-    };
+    let se_log_hr = 1.0 / sum_var.sqrt();
     let z = z_score_for_confidence(confidence_level);
     let (ci_lower, ci_upper) = exp_ci(log_hr, se_log_hr, z);
-    let z_statistic: f64 = if se_log_hr > 0.0 {
-        log_hr / se_log_hr
-    } else {
-        0.0
-    };
+    let z_statistic = log_hr / se_log_hr;
     let p_value = 2.0 * pnorm(z_statistic.abs(), false, false);
-    HazardRatioResult {
+    Ok(HazardRatioResult {
         hazard_ratio,
         ci_lower,
         ci_upper,
         se_log_hr,
         z_statistic,
         p_value,
-    }
+    })
 }
-#[pyfunction]
+
+/// Python entry point of `compute_hazard_ratio`.
+#[pyfunction(name = "hazard_ratio")]
 #[pyo3(signature = (time, status, group, confidence_level=None))]
-pub fn hazard_ratio(
+pub fn hazard_ratio_py(
     time: Vec<f64>,
     status: Vec<i32>,
     group: Vec<i32>,
     confidence_level: Option<f64>,
 ) -> PyResult<HazardRatioResult> {
-    validate_landmark_survival_inputs(&time, &status)?;
+    validate_survival_inputs(&time, &status)?;
     if group.len() != time.len() {
-        return Err(PyValueError::new_err(format!(
+        return Err(SurvivalError::invalid_input(format!(
             "group must have same length as time, got {} and {}",
             group.len(),
             time.len()
-        )));
+        ))
+        .into());
     }
-    let conf = validate_confidence_option(confidence_level)?;
-    Ok(compute_hazard_ratio(&time, &status, &group, conf))
+    let conf = confidence_or_default(confidence_level)?;
+    Ok(compute_hazard_ratio(&time, &status, &group, conf)?)
 }
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SurvivalAtTimeResult {
@@ -450,24 +489,29 @@ impl SurvivalAtTimeResult {
         }
     }
 }
+
+/// The Kaplan-Meier curve at `eval_times`: the survival with a plain
+/// Greenwood interval clamped to `[0, 1]`, the number at risk at the last
+/// event time reached and the events so far.
 pub(crate) fn compute_survival_at_times(
     time: &[f64],
     status: &[i32],
     eval_times: &[f64],
     confidence_level: f64,
-) -> Vec<SurvivalAtTimeResult> {
+) -> SurvivalResult<Vec<SurvivalAtTimeResult>> {
     let n = time.len();
+    let (time, query) = bin_times(time, eval_times);
     let steps = if n == 0 {
         Vec::new()
     } else {
-        kaplan_meier_steps(time, status)
+        kaplan_meier_steps(&time, status)?
     };
     let z = z_score_for_confidence(confidence_level);
-    let evaluate = |t: f64| {
-        let (survival, var, n_risk, n_events) = match step_at(&steps, t) {
+    let evaluate = |(&t, &at): (&f64, &f64)| {
+        let (survival, var, n_risk, n_events) = match step_at(&steps, at) {
             Some(step) => (
                 step.survival,
-                step.survival * step.survival * step.greenwood,
+                survival_variance(step),
                 step.n_risk,
                 step.cumulative_events,
             ),
@@ -483,26 +527,35 @@ pub(crate) fn compute_survival_at_times(
             n_events,
         }
     };
-    if eval_times.len() > PARALLEL_THRESHOLD_SMALL {
-        eval_times.par_iter().map(|&t| evaluate(t)).collect()
+    let results = if eval_times.len() > PARALLEL_THRESHOLD_SMALL {
+        eval_times.par_iter().zip(&query).map(evaluate).collect()
     } else {
-        eval_times.iter().map(|&t| evaluate(t)).collect()
-    }
+        eval_times.iter().zip(&query).map(evaluate).collect()
+    };
+    Ok(results)
 }
-#[pyfunction]
+
+/// Python entry point of `compute_survival_at_times`.
+#[pyfunction(name = "survival_at_times")]
 #[pyo3(signature = (time, status, eval_times, confidence_level=None))]
-pub fn survival_at_times(
+pub fn survival_at_times_py(
     time: Vec<f64>,
     status: Vec<i32>,
     eval_times: Vec<f64>,
     confidence_level: Option<f64>,
 ) -> PyResult<Vec<SurvivalAtTimeResult>> {
-    validate_landmark_survival_inputs(&time, &status)?;
+    validate_survival_inputs(&time, &status)?;
     validate_no_nan(&eval_times, "eval_times")?;
     validate_finite(&eval_times, "eval_times")?;
-    let conf = validate_confidence_option(confidence_level)?;
-    Ok(compute_survival_at_times(&time, &status, &eval_times, conf))
+    let conf = confidence_or_default(confidence_level)?;
+    Ok(compute_survival_at_times(
+        &time,
+        &status,
+        &eval_times,
+        conf,
+    )?)
 }
+
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct LifeTableResult {
@@ -553,6 +606,10 @@ impl LifeTableResult {
         }
     }
 }
+
+/// Actuarial life table on the intervals `[breaks[j], breaks[j + 1])`
+/// (the last one closed): censored observations count for half an
+/// interval at risk.  Times are binned with the breaks.
 pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeTableResult {
     let n = time.len();
     let n_intervals = breaks.len().saturating_sub(1);
@@ -569,28 +626,19 @@ pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -
             se_survival: vec![],
         };
     }
-    let mut interval_start = Vec::with_capacity(n_intervals);
-    let mut interval_end = Vec::with_capacity(n_intervals);
+    let (time, binned_breaks) = bin_times(time, breaks);
     let mut n_deaths = vec![0.0; n_intervals];
     let mut n_censored = vec![0.0; n_intervals];
-    for i in 0..n_intervals {
-        interval_start.push(breaks[i]);
-        interval_end.push(breaks[i + 1]);
-    }
-    for i in 0..n {
-        let t = time[i];
-        for j in 0..n_intervals {
-            let is_final_interval = j + 1 == n_intervals;
-            if t >= breaks[j]
-                && (t < breaks[j + 1] || (is_final_interval && same_time(t, breaks[j + 1])))
-            {
-                if status[i] == 1 {
-                    n_deaths[j] += 1.0;
-                } else {
-                    n_censored[j] += 1.0;
-                }
-                break;
-            }
+    for (i, &t) in time.iter().enumerate() {
+        // the last interval also holds its upper break
+        let j = binned_breaks[1..n_intervals].partition_point(|&b| b <= t);
+        if t < binned_breaks[0] || t > binned_breaks[n_intervals] {
+            continue;
+        }
+        if status[i] == 1 {
+            n_deaths[j] += 1.0;
+        } else {
+            n_censored[j] += 1.0;
         }
     }
     let mut n_at_risk = Vec::with_capacity(n_intervals);
@@ -624,8 +672,8 @@ pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -
         se_survival.push(surv * var_sum.sqrt());
     }
     LifeTableResult {
-        interval_start,
-        interval_end,
+        interval_start: breaks[..n_intervals].to_vec(),
+        interval_end: breaks[1..].to_vec(),
         n_at_risk,
         n_deaths,
         n_censored,
@@ -636,55 +684,48 @@ pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -
     }
 }
 
-fn validate_life_table_inputs(time: &[f64], status: &[i32], breaks: &[f64]) -> PyResult<()> {
-    if status.len() != time.len() {
-        return Err(PyValueError::new_err(format!(
-            "time and status must have same length, got {} and {}",
-            time.len(),
-            status.len()
-        )));
-    }
+fn validate_life_table_inputs(time: &[f64], status: &[i32], breaks: &[f64]) -> SurvivalResult<()> {
+    validate_survival_inputs(time, status)?;
     if breaks.len() < 2 {
-        return Err(PyValueError::new_err(
+        return Err(SurvivalError::invalid_input(
             "breaks must define at least one interval",
         ));
     }
-
-    validate_no_nan(time, "time")?;
-    validate_finite(time, "time")?;
     validate_no_nan(breaks, "breaks")?;
     validate_finite(breaks, "breaks")?;
-    validate_binary_i32(status, "status")?;
-
-    for (index, window) in breaks.windows(2).enumerate() {
-        if window[1] <= window[0] || same_time(window[0], window[1]) {
-            return Err(PyValueError::new_err(format!(
+    let (time, binned_breaks) = bin_times(time, breaks);
+    for (index, window) in binned_breaks.windows(2).enumerate() {
+        if window[1] <= window[0] {
+            return Err(SurvivalError::invalid_input(format!(
                 "breaks must be strictly increasing; got {} then {} at positions {} and {}",
-                window[0],
-                window[1],
+                breaks[index],
+                breaks[index + 1],
                 index,
                 index + 1
             )));
         }
     }
-
-    let first = breaks[0];
-    let last = breaks[breaks.len() - 1];
-    for (index, &value) in time.iter().enumerate() {
-        if (value < first && !same_time(value, first)) || (value > last && !same_time(value, last))
-        {
-            return Err(PyValueError::new_err(format!(
-                "time values must fall within the break range; got {} at index {} outside [{}, {}]",
-                value, index, first, last
-            )));
-        }
+    let first = binned_breaks[0];
+    let last = binned_breaks[binned_breaks.len() - 1];
+    if let Some(index) = time.iter().position(|&value| value < first || value > last) {
+        return Err(SurvivalError::invalid_input(format!(
+            "time values must fall within the break range; got {} at index {} outside [{}, {}]",
+            time[index],
+            index,
+            breaks[0],
+            breaks[breaks.len() - 1]
+        )));
     }
-
     Ok(())
 }
 
-#[pyfunction]
-pub fn life_table(time: Vec<f64>, status: Vec<i32>, breaks: Vec<f64>) -> PyResult<LifeTableResult> {
+/// Python entry point of `compute_life_table`.
+#[pyfunction(name = "life_table")]
+pub fn life_table_py(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    breaks: Vec<f64>,
+) -> PyResult<LifeTableResult> {
     validate_life_table_inputs(&time, &status, &breaks)?;
     Ok(compute_life_table(&time, &status, &breaks))
 }
@@ -747,86 +788,101 @@ mod tests {
 
     #[test]
     fn test_landmark_public_wrappers_reject_malformed_inputs() {
-        let err = landmark_analysis(vec![1.0], vec![], 0.5).unwrap_err();
+        let err = landmark_analysis_py(vec![1.0], vec![], 0.5).unwrap_err();
         assert!(
             err.to_string()
                 .contains("time and status must have same length")
         );
 
-        let err = landmark_analysis(vec![f64::NAN], vec![1], 0.5).unwrap_err();
+        let err = landmark_analysis_py(vec![f64::NAN], vec![1], 0.5).unwrap_err();
         assert!(err.to_string().contains("time contains NaN"));
 
-        let err = landmark_analysis(vec![1.0], vec![2], 0.5).unwrap_err();
+        let err = landmark_analysis_py(vec![1.0], vec![2], 0.5).unwrap_err();
         assert!(
             err.to_string()
                 .contains("status must contain only 0/1 values")
         );
 
-        let err = landmark_analysis_batch(vec![1.0], vec![1], vec![f64::INFINITY]).unwrap_err();
+        let err = landmark_analysis_batch_py(vec![1.0], vec![1], vec![f64::INFINITY]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("landmark_times contains non-finite")
         );
 
-        let err = conditional_survival(vec![1.0], vec![1], f64::NAN, 2.0, None).unwrap_err();
+        let err = conditional_survival_py(vec![1.0], vec![1], f64::NAN, 2.0, None).unwrap_err();
         assert!(err.to_string().contains("given_time must be finite"));
 
-        let err = conditional_survival(vec![1.0], vec![1], 0.5, 2.0, Some(1.0)).unwrap_err();
+        let err = conditional_survival_py(vec![1.0], vec![1], 0.5, 2.0, Some(1.0)).unwrap_err();
         assert!(err.to_string().contains("confidence_level"));
 
-        let err = hazard_ratio(vec![1.0], vec![1], vec![], None).unwrap_err();
+        let err = hazard_ratio_py(vec![1.0], vec![1], vec![], None).unwrap_err();
         assert!(err.to_string().contains("group must have same length"));
 
-        let err = survival_at_times(vec![1.0], vec![1], vec![f64::NAN], None).unwrap_err();
+        let err = survival_at_times_py(vec![1.0], vec![1], vec![f64::NAN], None).unwrap_err();
         assert!(err.to_string().contains("eval_times contains NaN"));
     }
 
     #[test]
     fn test_conditional_survival_groups_near_tied_event_times() {
         let exact_time = vec![1.0, 1.0, 2.0, 3.0];
-        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + 5e-10, 2.0, 3.0];
         let status = vec![1, 1, 0, 0];
 
-        let expected = compute_conditional_survival(&exact_time, &status, 1.0, 2.0, 0.95);
-        let actual = compute_conditional_survival(&near_time, &status, 1.0, 2.0, 0.95);
+        let expected = compute_conditional_survival(&exact_time, &status, 1.0, 2.0, 0.95).unwrap();
+        let actual = compute_conditional_survival(&near_time, &status, 1.0, 2.0, 0.95).unwrap();
 
         assert!((actual.conditional_survival - expected.conditional_survival).abs() < 1e-12);
         assert!((actual.ci_lower - expected.ci_lower).abs() < 1e-12);
         assert!((actual.ci_upper - expected.ci_upper).abs() < 1e-12);
         assert_eq!(actual.n_at_risk, expected.n_at_risk);
+        // a query time within tolerance of an event time is that event time
+        let shifted =
+            compute_conditional_survival(&exact_time, &status, 1.0 + 5e-10, 2.0, 0.95).unwrap();
+        assert!((shifted.conditional_survival - expected.conditional_survival).abs() < 1e-12);
+        assert_eq!(shifted.n_at_risk, 2);
+    }
+
+    #[test]
+    fn test_conditional_survival_matches_the_kaplan_meier_ratio() {
+        // survfit(Surv(c(1,2,3,4,5), c(1,1,0,1,1)) ~ 1): S(1) = .8, S(4) = .3
+        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let status = vec![1, 1, 0, 1, 1];
+        let result = compute_conditional_survival(&time, &status, 1.0, 4.0, 0.95).unwrap();
+        assert!((result.conditional_survival - 0.3 / 0.8).abs() < 1e-12);
+        assert_eq!(result.n_at_risk, 4);
+        let trivial = compute_conditional_survival(&time, &status, 4.0, 2.0, 0.95).unwrap();
+        assert_eq!(trivial.conditional_survival, 1.0);
     }
 
     #[test]
     fn test_hazard_ratio_groups_near_tied_event_times() {
         let exact_time = vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
-        let near_time = vec![
-            1.0,
-            1.0 + crate::constants::TIME_EPSILON / 2.0,
-            2.0,
-            2.0 + crate::constants::TIME_EPSILON / 2.0,
-            3.0,
-            3.0,
-        ];
+        let near_time = vec![1.0, 1.0 + 5e-10, 2.0, 2.0 + 5e-10, 3.0, 3.0];
         let status = vec![1, 1, 1, 0, 0, 0];
         let group = vec![0, 1, 0, 1, 0, 1];
 
-        let expected = compute_hazard_ratio(&exact_time, &status, &group, 0.95);
-        let actual = compute_hazard_ratio(&near_time, &status, &group, 0.95);
+        let expected = compute_hazard_ratio(&exact_time, &status, &group, 0.95).unwrap();
+        let actual = compute_hazard_ratio(&near_time, &status, &group, 0.95).unwrap();
 
         assert!((actual.hazard_ratio - expected.hazard_ratio).abs() < 1e-12);
         assert!((actual.se_log_hr - expected.se_log_hr).abs() < 1e-12);
         assert!((actual.z_statistic - expected.z_statistic).abs() < 1e-12);
         assert!((actual.p_value - expected.p_value).abs() < 1e-12);
+        // one group, or no events, gives the neutral ratio
+        let single = compute_hazard_ratio(&exact_time, &status, &[1; 6], 0.95).unwrap();
+        assert_eq!(single.hazard_ratio, 1.0);
+        let censored = compute_hazard_ratio(&exact_time, &[0; 6], &group, 0.95).unwrap();
+        assert_eq!(censored.hazard_ratio, 1.0);
     }
 
     #[test]
     fn test_survival_at_times_groups_near_tied_event_times() {
         let exact_time = vec![1.0, 1.0, 2.0, 3.0];
-        let near_time = vec![1.0, 1.0 + crate::constants::TIME_EPSILON / 2.0, 2.0, 3.0];
+        let near_time = vec![1.0, 1.0 + 5e-10, 2.0, 3.0];
         let status = vec![1, 1, 0, 0];
 
-        let expected = compute_survival_at_times(&exact_time, &status, &[1.0, 2.0], 0.95);
-        let actual = compute_survival_at_times(&near_time, &status, &[1.0, 2.0], 0.95);
+        let expected = compute_survival_at_times(&exact_time, &status, &[1.0, 2.0], 0.95).unwrap();
+        let actual = compute_survival_at_times(&near_time, &status, &[1.0, 2.0], 0.95).unwrap();
 
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(expected.iter()) {
@@ -836,6 +892,31 @@ mod tests {
             assert_eq!(actual.n_at_risk, expected.n_at_risk);
             assert_eq!(actual.n_events, expected.n_events);
         }
+        // the reported time is the one asked for
+        let shifted =
+            compute_survival_at_times(&exact_time, &status, &[1.0 + 5e-10], 0.95).unwrap();
+        assert_eq!(shifted[0].time, 1.0 + 5e-10);
+        assert!((shifted[0].survival - 0.5).abs() < 1e-12);
+        assert_eq!(shifted[0].n_events, 2);
+        let before = compute_survival_at_times(&exact_time, &status, &[0.5], 0.95).unwrap();
+        assert_eq!(before[0].survival, 1.0);
+        assert_eq!(before[0].n_at_risk, 4);
+        assert!(compute_survival_at_times(&[], &[], &[0.5], 0.95).unwrap()[0].n_at_risk == 0);
+    }
+
+    #[test]
+    fn test_survival_at_times_uses_the_greenwood_interval() {
+        // S(2) = .5 with var(log S) = 1/(4*3) + 1/(3*2): se(S) = .5 * sqrt(.25)
+        let time = vec![1.0, 2.0, 3.0, 4.0];
+        let status = vec![1, 1, 0, 1];
+        let at2 = compute_survival_at_times(&time, &status, &[2.0, 4.0], 0.95).unwrap();
+        let se = 0.5 * (1.0_f64 / 12.0 + 1.0 / 6.0).sqrt();
+        let z = z_score_for_confidence(0.95);
+        assert!((at2[0].ci_lower - (0.5 - z * se)).abs() < 1e-12);
+        assert!((at2[0].ci_upper - (0.5 + z * se)).abs() < 1e-12);
+        // once the curve reaches 0 the interval collapses
+        assert_eq!(at2[1].survival, 0.0);
+        assert_eq!((at2[1].ci_lower, at2[1].ci_upper), (0.0, 0.0));
     }
 
     #[test]
@@ -849,6 +930,9 @@ mod tests {
         assert_eq!(result.interval_start.len(), 3);
         assert_eq!(result.survival.len(), 3);
         assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
+        assert_eq!(result.n_deaths, vec![1.0, 1.0, 1.0]);
+        assert_eq!(result.n_censored, vec![0.0, 1.0, 1.0]);
+        assert_eq!(result.n_at_risk, vec![5.0, 4.0, 2.0]);
     }
 
     #[test]
@@ -866,42 +950,52 @@ mod tests {
 
     #[test]
     fn test_life_table_includes_final_break() {
-        let result = life_table(vec![2.0], vec![1], vec![0.0, 1.0, 2.0]).unwrap();
+        let result = life_table_py(vec![2.0], vec![1], vec![0.0, 1.0, 2.0]).unwrap();
 
         assert_eq!(result.n_deaths, vec![0.0, 1.0]);
         assert_eq!(result.n_censored, vec![0.0, 0.0]);
+        // a time within tolerance of a break falls on the break's side
+        let near = life_table_py(vec![1.0 + 5e-10], vec![1], vec![0.0, 1.0, 2.0]).unwrap();
+        assert_eq!(near.n_deaths, vec![0.0, 1.0]);
+        let near_end = life_table_py(vec![2.0 + 5e-10], vec![1], vec![0.0, 1.0, 2.0]).unwrap();
+        assert_eq!(near_end.n_deaths, vec![0.0, 1.0]);
     }
 
     #[test]
     fn test_life_table_rejects_malformed_public_inputs() {
-        let err = life_table(vec![1.0], vec![], vec![0.0, 2.0]).unwrap_err();
+        let err = life_table_py(vec![1.0], vec![], vec![0.0, 2.0]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("time and status must have same length")
         );
 
-        let err = life_table(vec![1.0], vec![1], vec![0.0]).unwrap_err();
+        let err = life_table_py(vec![1.0], vec![1], vec![0.0]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("breaks must define at least one interval")
         );
 
-        let err = life_table(vec![f64::NAN], vec![1], vec![0.0, 2.0]).unwrap_err();
+        let err = life_table_py(vec![f64::NAN], vec![1], vec![0.0, 2.0]).unwrap_err();
         assert!(err.to_string().contains("time contains NaN"));
 
-        let err = life_table(vec![1.0], vec![2], vec![0.0, 2.0]).unwrap_err();
+        let err = life_table_py(vec![1.0], vec![2], vec![0.0, 2.0]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("status must contain only 0/1 values")
         );
 
-        let err = life_table(vec![1.0], vec![1], vec![0.0, 0.0]).unwrap_err();
+        let err = life_table_py(vec![1.0], vec![1], vec![0.0, 0.0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("breaks must be strictly increasing")
+        );
+        let err = life_table_py(vec![1.0], vec![1], vec![0.0, 2.0, 2.0 + 5e-10]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("breaks must be strictly increasing")
         );
 
-        let err = life_table(vec![3.0], vec![1], vec![0.0, 2.0]).unwrap_err();
+        let err = life_table_py(vec![3.0], vec![1], vec![0.0, 2.0]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("time values must fall within the break range")

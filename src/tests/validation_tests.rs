@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod tests {
     use crate::surv_analysis::nelson_aalen;
-    use crate::surv_analysis::{SurvfitKMData, SurvfitKMOptions, survfitkm};
+    use crate::surv_analysis::{
+        RmeanOption, SurvfitKMData, SurvfitKMOptions, SurvfitQuantiles, quantile_survfit,
+        survfitkm, survmean,
+    };
     use crate::tests::common::{LOOSE_TOL, STRICT_TOL, approx_eq};
     use crate::validation::calibration_module::{
         calibration_curve, stratify_risk, time_dependent_auc,
@@ -11,10 +14,7 @@ mod tests {
         compute_survival_at_times,
     };
     use crate::validation::power::{power_logrank, sample_size_freedman, sample_size_logrank};
-    use crate::validation::{
-        RmeanOption, SurvfitCurve, SurvfitCurveQuantiles, logrank_test, quantile_survfit,
-        rmst_comparison, survmean,
-    };
+    use crate::validation::{logrank_test, rmst_comparison};
 
     fn kaplan_meier(time: &[f64], status: &[i32]) -> crate::surv_analysis::SurvfitKMResult {
         survfitkm(
@@ -26,29 +26,13 @@ mod tests {
 
     fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> (f64, f64) {
         let km = kaplan_meier(time, status);
-        let rows = survmean(
-            &[SurvfitCurve::from_km(&km)],
-            &[time.len() as f64],
-            None,
-            0.0,
-            RmeanOption::At(tau),
-            1.0,
-        )
-        .unwrap();
-        (rows[0].rmean.unwrap(), rows[0].se_rmean.unwrap())
+        let table = survmean(&km, 1.0, RmeanOption::At(tau)).unwrap();
+        (table.rmean.unwrap()[0], table.se_rmean.unwrap()[0])
     }
 
-    fn median(time: &[f64], status: &[i32]) -> SurvfitCurveQuantiles {
+    fn median(time: &[f64], status: &[i32]) -> SurvfitQuantiles {
         let km = kaplan_meier(time, status);
-        quantile_survfit(
-            &[SurvfitCurve::from_km(&km)],
-            &[0.5],
-            false,
-            0.0,
-            1.0,
-            f64::EPSILON.sqrt(),
-        )
-        .unwrap()
+        quantile_survfit(&km, &[0.5], false, 1.0, None).unwrap()
     }
     const TOLERANCE: f64 = STRICT_TOL;
     const LOOSE_TOLERANCE: f64 = LOOSE_TOL;
@@ -192,7 +176,7 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(approx_eq(result.hazard_ratio, 1.0, 0.5));
         assert!(result.ci_lower < 1.0 && result.ci_upper > 1.0);
     }
@@ -201,7 +185,7 @@ mod tests {
         let time = vec![1.0, 1.0, 1.0, 5.0, 5.0, 5.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(result.hazard_ratio > 1.0);
     }
     #[test]
@@ -262,14 +246,14 @@ mod tests {
     fn test_conditional_survival() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let status = vec![1, 1, 1, 1, 1, 1];
-        let result = compute_conditional_survival(&time, &status, 2.0, 5.0, 0.95);
+        let result = compute_conditional_survival(&time, &status, 2.0, 5.0, 0.95).unwrap();
         assert!(approx_eq(result.conditional_survival, 0.25, TOLERANCE));
     }
     #[test]
     fn test_survival_at_specific_times() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 1, 1, 1];
-        let results = compute_survival_at_times(&time, &status, &[1.0, 3.0, 5.0], 0.95);
+        let results = compute_survival_at_times(&time, &status, &[1.0, 3.0, 5.0], 0.95).unwrap();
         assert_eq!(results.len(), 3);
         assert!(approx_eq(results[0].survival, 0.8, TOLERANCE));
         assert!(approx_eq(results[1].survival, 0.4, TOLERANCE));
@@ -351,7 +335,7 @@ mod tests {
     fn test_very_small_sample() {
         let time = vec![1.0, 2.0];
         let status = vec![1, 1];
-        let result = compute_hazard_ratio(&time, &status, &[0, 1], 0.95);
+        let result = compute_hazard_ratio(&time, &status, &[0, 1], 0.95).unwrap();
         assert!(result.hazard_ratio > 0.0);
     }
     #[test]
@@ -368,7 +352,7 @@ mod tests {
         let time = vec![0.1, 0.1, 0.1, 100.0, 100.0, 100.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(result.hazard_ratio.is_finite());
         assert!(result.hazard_ratio > 1.0);
     }

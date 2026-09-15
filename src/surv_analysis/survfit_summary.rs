@@ -361,10 +361,13 @@ fn survmean_row(
 }
 
 /// Port of `survmean` (`R/print.survfit.R`), the work behind
-/// `summary(fit)$table` and `print(fit)`.  `scale` divides the times.
+/// `summary(fit)$table` and `print(fit)`.  `scale` divides the times; the
+/// area under the curve starts at `fit.t0` (R's `x$t0`).
 ///
 /// `summary.survfit` calls this on `survfit0(fit)`; `print.survfit` on the
-/// fit itself.
+/// fit itself; the table is the same either way.  Both check a numeric
+/// `rmean` against the smallest time of the fit they were given, so does
+/// this function.
 pub fn survmean(
     fit: &SurvfitKMResult,
     scale: f64,
@@ -471,22 +474,22 @@ pub fn summary_survfit(fit: &SurvfitKMResult, censored: bool) -> SurvfitKMResult
         let keep: Vec<usize> = (0..fit.time.len())
             .filter(|&i| fit.n_event[i] > 0.0)
             .collect();
+        // the kept rows of each curve, as a range into `keep`
+        let kept_ranges: Vec<std::ops::Range<usize>> = ranges
+            .iter()
+            .map(|range| {
+                keep.partition_point(|&i| i < range.start)..keep.partition_point(|&i| i < range.end)
+            })
+            .collect();
         let pick = |values: &[f64]| -> Vec<f64> { keep.iter().map(|&i| values[i]).collect() };
         // sums between the kept rows: diff(c(0, c(0, cumsum(x))[indx + 1]))
         let delta = |values: &[f64]| -> Vec<f64> {
             let mut out = Vec::with_capacity(keep.len());
-            for range in &ranges {
-                let mut acc = 0.0;
-                let mut previous = 0.0;
-                let mut cumulative = vec![0.0; range.len() + 1];
-                for (k, i) in range.clone().enumerate() {
-                    acc += values[i];
-                    cumulative[k + 1] = acc;
-                }
-                for &i in keep.iter().filter(|&&i| range.contains(&i)) {
-                    let value = cumulative[i - range.start + 1];
-                    out.push(value - previous);
-                    previous = value;
+            for (range, kept) in ranges.iter().zip(&kept_ranges) {
+                let mut next = range.start;
+                for &i in &keep[kept.clone()] {
+                    out.push(values[next..=i].iter().sum());
+                    next = i + 1;
                 }
             }
             out
@@ -508,12 +511,10 @@ pub fn summary_survfit(fit: &SurvfitKMResult, censored: bool) -> SurvfitKMResult
             n_censor: delta(&counts.n_censor),
             n_enter: counts.n_enter.as_deref().map(delta),
         });
-        out.strata = fit.strata.as_ref().map(|_| {
-            ranges
-                .iter()
-                .map(|range| keep.iter().filter(|&&i| range.contains(&i)).count())
-                .collect()
-        });
+        out.strata = fit
+            .strata
+            .as_ref()
+            .map(|_| kept_ranges.iter().map(ExactSizeIterator::len).collect());
         out.influence_surv = None;
         out.influence_chaz = None;
     }
@@ -738,10 +739,31 @@ fn findq(x: &[f64], y: &[f64], probs: &[f64], tol: f64) -> Vec<f64> {
 /// confidence bands when the fit has them; `scale` divides the result and
 /// `tolerance` (default `sqrt(.Machine$double.eps)`) decides what counts
 /// as a flat exactly at a probability.
+///
+/// A probability of 0 reports R's `x$start.time` when the object has one
+/// and 0 otherwise.  `survfitKM` records the starting time as `t0` and never
+/// sets `start.time` (`survfit(..., start.time = 10)` still gives
+/// `quantile(fit, probs = 0) == 0` in survival 3.8-11), so the origin of a
+/// [`SurvfitKMResult`] is 0; [`quantile_survfit_from`] takes it as an
+/// argument for curves that do carry one (`survfit.coxph` objects).
 pub fn quantile_survfit(
     fit: &SurvfitKMResult,
     probs: &[f64],
     conf_int: bool,
+    scale: f64,
+    tolerance: Option<f64>,
+) -> SurvivalResult<SurvfitQuantiles> {
+    quantile_survfit_from(fit, probs, conf_int, 0.0, scale, tolerance)
+}
+
+/// [`quantile_survfit`] with an explicit origin: the time reported for a
+/// probability of 0 (R's `x$start.time`, 0 when absent), which also heads
+/// the distribution curve `findq` walks.
+pub fn quantile_survfit_from(
+    fit: &SurvfitKMResult,
+    probs: &[f64],
+    conf_int: bool,
+    origin: f64,
     scale: f64,
     tolerance: Option<f64>,
 ) -> SurvivalResult<SurvfitQuantiles> {
@@ -756,11 +778,12 @@ pub fn quantile_survfit(
             "scale must be a positive number",
         ));
     }
+    if !origin.is_finite() {
+        return Err(SurvivalError::invalid_input("start time must be finite"));
+    }
     let tol = tolerance.unwrap_or_else(r_tolerance);
     let conf_int = conf_int && fit.lower.is_some() && fit.upper.is_some();
-    // p = 0 reports x$start.time if it exists, 0 otherwise; survfitKM keeps
-    // the starting time in t0 rather than start.time, so this is 0
-    let xmin = 0.0;
+    let xmin = origin;
     let doquant = |time: &[f64], surv: &[f64]| -> Vec<f64> {
         let mut x = Vec::with_capacity(time.len() + 1);
         x.push(xmin);

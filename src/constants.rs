@@ -1,4 +1,5 @@
 pub const CHOLESKY_TOL: f64 = 1e-10;
+/// Legacy absolute tolerance of [`same_time`]; not R's `timefix`.
 pub const TIME_EPSILON: f64 = 1e-9;
 pub const CONVERGENCE_EPSILON: f64 = 1e-6;
 pub const STRICT_EPSILON: f64 = 1e-5;
@@ -202,6 +203,12 @@ pub const STEP_DOUBLE_FACTOR: f64 = 2.0;
 pub const ROYSTON_KAPPA_FACTOR: f64 = 8.0;
 pub const ROYSTON_VARIANCE_FACTOR: f64 = 6.0;
 
+/// Legacy near-tie test with a fixed absolute tolerance
+/// ([`TIME_EPSILON`]), kept for the modules without an R counterpart that
+/// still compare times pairwise.  It is not R's `timefix`: routines that
+/// port R bin their times once with `data_prep::aeq_surv` / `aeq_times`
+/// (`aeqSurv`, a relative tolerance applied to the whole time vector) and
+/// then compare exactly.
 #[inline]
 pub fn same_time(left: f64, right: f64) -> bool {
     (left - right).abs() < TIME_EPSILON
