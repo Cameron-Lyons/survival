@@ -40,9 +40,10 @@ use crate::surv_analysis::{
     AggregateFun, AggregateGroups, ConfLower, ConfType, GroupingFactor, HazardType,
     InfluenceRequest, ResidualType as PseudoResidualType, RmeanOption, SurvDiffResult, SurvType,
     SurvdiffData, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, SurvfitKMData,
-    SurvfitKMOptions, SurvfitKMResult, aggregate_survfit, pseudo, pseudo_aj, quantile_survfit,
-    summary_survfit, summary_survfit_times, survdiff, survdiff_one_sample, survfit0, survfit0_aj,
-    survfitaj, survfitkm, survfitresid, survfitresid_aj, survmean,
+    SurvfitKMOptions, SurvfitKMResult, SurvfitQuantiles, SurvmeanTable, aggregate_survfit, pseudo,
+    pseudo_aj, quantile_survfit, summary_survfit, summary_survfit_times, survdiff,
+    survdiff_one_sample, survfit0, survfit0_aj, survfitaj, survfitkm, survfitresid,
+    survfitresid_aj, survmean,
 };
 use ndarray::{Array2, Array3};
 use serde_json::Value;
@@ -103,10 +104,6 @@ const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
         "survexp/lung_coxph_ratetable",
         "missing feature: survexp with a coxph fit as ratetable is Python-side",
-    ),
-    (
-        "survfit_km/lung_sex_ph_ecog",
-        "missing feature: harness: survfit with several grouping terms",
     ),
     (
         "survfit_km/synthetic_timefix_false/time_counts",
@@ -1063,25 +1060,31 @@ fn integer_labels(column: &Column, name: &str) -> Result<Vec<i64>, String> {
 
 /// Strata codes (level index) of the grouping terms of a survfit formula:
 /// `None` for `~ 1`, one column supported.
-fn strata_codes(formula: &str, frame: &Frame) -> Result<(Option<Vec<i32>>, Vec<String>), String> {
+/// The curve of each row of a `survfit(Surv(...) ~ a + b)` call: R's
+/// `strata(mf[terms])` (`R/strata.R`), a factor whose levels are the
+/// combinations present, the first term varying slowest.  `None` for `~ 1`;
+/// a row with a missing term gets the code `-1`.
+fn strata_codes(formula: &str, frame: &Frame) -> Result<Option<Vec<i32>>, String> {
     let terms = rhs_terms(formula);
-    match terms.as_slice() {
-        [term] if term == "1" => Ok((None, vec!["1".to_string()])),
-        [term] => {
-            let column = frame.get(term)?;
-            let levels = column.levels();
-            let codes = (0..column.len())
-                .map(|i| {
-                    column
-                        .label(i)
-                        .and_then(|label| levels.iter().position(|l| *l == label))
-                        .map_or(-1, |p| p as i32)
-                })
-                .collect();
-            Ok((Some(codes), levels))
-        }
-        _ => unsupported("harness: survfit with several grouping terms"),
+    if matches!(terms.as_slice(), [term] if term == "1") {
+        return Ok(None);
     }
+    let mut codes: Vec<i32> = vec![0; frame.nrow()];
+    for term in &terms {
+        let column = frame.get(term)?;
+        let levels = column.levels();
+        for (i, code) in codes.iter_mut().enumerate() {
+            let level = column
+                .label(i)
+                .and_then(|label| levels.iter().position(|l| *l == label));
+            // levs <- wlev + levs * length(wlab)
+            *code = match level {
+                Some(level) if *code >= 0 => *code * levels.len() as i32 + level as i32,
+                _ => -1,
+            };
+        }
+    }
+    Ok(Some(codes))
 }
 
 /// Rows with no missing value in any of the used columns.
@@ -1116,7 +1119,7 @@ fn km_case(doc: &Value, case: &Value) -> Result<KMCase, String> {
         return unsupported("harness: multi-state survfit arguments");
     }
     let response = response(formula, &frame)?;
-    let (strata, _) = strata_codes(formula, &frame)?;
+    let strata = strata_codes(formula, &frame)?;
     let id = match text(&args["id"]) {
         Some(column) => Some(integer_labels(frame.get(column)?, column)?),
         None => None,
@@ -1770,7 +1773,7 @@ fn aj_case(doc: &Value, case: &Value) -> Result<(SurvfitAJData, SurvfitAJOptions
     let formula = text(&case["formula"]).ok_or("no formula")?;
     let args = &case["args"];
     let response = mstate_response(formula, &frame)?;
-    let (strata, _) = strata_codes(formula, &frame)?;
+    let strata = strata_codes(formula, &frame)?;
     let id = match text(&args["id"]) {
         Some(column) => Some(integer_labels(frame.get(column)?, column)?),
         None => None,
@@ -5840,34 +5843,19 @@ fn r_fixtures_cipoisson() {
     report.finish();
 }
 
-/// The Kaplan-Meier fit of a survfit case, split into its curves, and the
-/// number of observations of each (`validation::survmean` takes the
-/// curves of one `survfit` object).
-fn km_curves_for_case(doc: &Value, case: &Value) -> Result<(SurvfitKMResult, Vec<f64>), String> {
+/// The Kaplan-Meier fit of a survfit case.
+fn km_fit_for_case(doc: &Value, case: &Value) -> Result<SurvfitKMResult, String> {
     let KMCase { data, options } = km_case(doc, case)?;
-    let fit = survfitkm(&data, &options).map_err(|err| format!("survfitkm: {err}"))?;
-    let n: Vec<f64> = fit.n.iter().map(|&count| count as f64).collect();
-    Ok((fit, n))
+    survfitkm(&data, &options).map_err(|err| format!("survfitkm: {err}"))
 }
 
-/// Every curve of a fit as a [`crate::validation::SurvfitCurve`].
-fn validation_curves(fit: &SurvfitKMResult) -> Vec<crate::validation::SurvfitCurve<'_>> {
-    fit.curve_ranges()
-        .into_iter()
-        .map(|range| crate::validation::SurvfitCurve::from_km_curve(fit, range))
-        .collect()
-}
-
-/// Compare `survmean` rows with a `summary(fit)$table` (a named matrix for
-/// several curves, a named vector for one).
-fn check_summary_table(
-    rows: &[crate::validation::SurvfitSummaryRow],
-    table: &Value,
-) -> Result<(), String> {
-    let (colnames, values): (Vec<String>, Vec<Vec<f64>>) = if table.get("values").is_some() {
-        (named_matrix_cols(table), matrix(&table["values"])?)
+/// Compare a `survmean` table with a `summary(fit)$table` (a named matrix
+/// for several curves, a named vector for one).
+fn check_summary_table(table: &SurvmeanTable, expected: &Value) -> Result<(), String> {
+    let (colnames, values): (Vec<String>, Vec<Vec<f64>>) = if expected.get("values").is_some() {
+        (named_matrix_cols(expected), matrix(&expected["values"])?)
     } else {
-        let map = table.as_object().ok_or("summary table")?;
+        let map = expected.as_object().ok_or("summary table")?;
         let names: Vec<String> = map.keys().cloned().collect();
         let values = names
             .iter()
@@ -5875,21 +5863,28 @@ fn check_summary_table(
             .collect::<Result<Vec<_>, _>>()?;
         (names, vec![values])
     };
-    if rows.len() != values.len() {
-        return Err(format!("{} rows, expected {}", rows.len(), values.len()));
+    let n_curves = table.records.len();
+    if n_curves != values.len() {
+        return Err(format!("{n_curves} rows, expected {}", values.len()));
     }
-    for (row, expected_row) in rows.iter().zip(&values) {
+    let optional = |column: &Option<Vec<f64>>, curve: usize, name: &str| -> Result<f64, String> {
+        column
+            .as_ref()
+            .map(|values| values[curve])
+            .ok_or_else(|| format!("no {name}"))
+    };
+    for (curve, expected_row) in values.iter().enumerate() {
         for (column, expected_value) in colnames.iter().zip(expected_row) {
             let actual = match column.as_str() {
-                "records" => row.records,
-                "n.max" | "n.id" => row.n_max,
-                "n.start" => row.n_start,
-                "events" => row.events,
-                "rmean" => row.rmean.ok_or("no rmean")?,
-                "se(rmean)" => row.se_rmean.ok_or("no se(rmean)")?,
-                "median" => row.median,
-                c if c.ends_with("LCL") => row.lower.ok_or("no LCL")?,
-                c if c.ends_with("UCL") => row.upper.ok_or("no UCL")?,
+                "records" => table.records[curve],
+                "n.max" | "n.id" => table.n_max[curve],
+                "n.start" => table.n_start[curve],
+                "events" => table.events[curve],
+                "rmean" => optional(&table.rmean, curve, "rmean")?,
+                "se(rmean)" => optional(&table.se_rmean, curve, "se(rmean)")?,
+                "median" => table.median[curve],
+                c if c.ends_with("LCL") => optional(&table.lower, curve, "LCL")?,
+                c if c.ends_with("UCL") => optional(&table.upper, curve, "UCL")?,
                 other => return Err(format!("unknown column {other}")),
             };
             let rtol = if matches!(
@@ -5902,18 +5897,15 @@ fn check_summary_table(
             };
             assert_scalar(actual, *expected_value, rtol, column)?;
         }
-        if colnames.iter().all(|c| c != "rmean") && row.rmean.is_some() {
-            return Err("unexpected rmean column".to_string());
-        }
+    }
+    if colnames.iter().all(|c| c != "rmean") && table.rmean.is_some() {
+        return Err("unexpected rmean column".to_string());
     }
     Ok(())
 }
 
 /// Compare `quantile_survfit` with a `quantile(fit, conf.int = TRUE)` object.
-fn check_quantiles(
-    result: &crate::validation::SurvfitCurveQuantiles,
-    table: &Value,
-) -> Result<(), String> {
+fn check_quantiles(result: &SurvfitQuantiles, table: &Value) -> Result<(), String> {
     let as_matrix = |value: &Value| -> Result<Vec<Vec<f64>>, String> {
         if value
             .as_array()
@@ -5939,7 +5931,7 @@ fn check_quantiles(
 /// The extra validation cases generated under the `validation-extra` topic.
 #[test]
 fn r_fixtures_validation_extra() {
-    use crate::validation::{AnovaKind, RmeanOption, anova_coxph, quantile_survfit, survmean};
+    use crate::validation::{AnovaKind, anova_coxph};
     let doc = load_topic("validation-extra");
     let mut report = Report::new("validation-extra");
     for case in doc["cases"].as_array().expect("cases") {
@@ -5998,40 +5990,24 @@ fn r_fixtures_validation_extra() {
             })();
             report.record(name, "anova", result);
         } else if name.starts_with("survfit_") {
-            let fit = km_curves_for_case(&doc, case);
+            let fit = km_fit_for_case(&doc, case);
             for (aspect, value) in expected.as_object().expect("expected") {
                 let result = (|| -> Result<(), String> {
-                    let (fit, n) = fit.as_ref().map_err(Clone::clone)?;
-                    let curves = validation_curves(fit);
+                    let fit = fit.as_ref().map_err(Clone::clone)?;
+                    // summary.survfit hands survmean the survfit0 curve
+                    let summary_table = |scale: f64, rmean: RmeanOption| {
+                        survmean(&survfit0(fit), scale, rmean)
+                            .map_err(|err| err.to_string())
+                            .and_then(|table| check_summary_table(&table, value))
+                    };
                     match aspect.as_str() {
-                        "summary_table_individual" => {
-                            let rows =
-                                survmean(&curves, n, None, 0.0, RmeanOption::Individual, 1.0)
-                                    .map_err(|err| err.to_string())?;
-                            check_summary_table(&rows, value)
-                        }
-                        "summary_table_none" => {
-                            let rows = survmean(&curves, n, None, 0.0, RmeanOption::None, 1.0)
-                                .map_err(|err| err.to_string())?;
-                            check_summary_table(&rows, value)
-                        }
-                        "summary_table_scale" => {
-                            let rows =
-                                survmean(&curves, n, None, 0.0, RmeanOption::At(365.25), 365.25)
-                                    .map_err(|err| err.to_string())?;
-                            check_summary_table(&rows, value)
-                        }
+                        "summary_table_individual" => summary_table(1.0, RmeanOption::Individual),
+                        "summary_table_none" => summary_table(1.0, RmeanOption::None),
+                        "summary_table_scale" => summary_table(365.25, RmeanOption::At(365.25)),
                         "quantile_scale" | "quantile_probs" => {
                             let probs = nums(&value["probs"])?;
-                            let result = quantile_survfit(
-                                &curves,
-                                &probs,
-                                true,
-                                0.0,
-                                1.0,
-                                f64::EPSILON.sqrt(),
-                            )
-                            .map_err(|err| err.to_string())?;
+                            let result = quantile_survfit(fit, &probs, true, 1.0, None)
+                                .map_err(|err| err.to_string())?;
                             check_quantiles(&result, value)
                         }
                         other => unsupported(format!("aspect {other}")),

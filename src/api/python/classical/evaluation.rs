@@ -225,8 +225,8 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(conformal_survival, m)?)?;
     m.add_function(wrap_pyfunction!(bayesian_bootstrap_survival, m)?)?;
     m.add_function(wrap_pyfunction!(jackknife_plus_survival, m)?)?;
-    m.add_function(wrap_pyfunction!(landmark_analysis, m)?)?;
-    m.add_function(wrap_pyfunction!(landmark_analysis_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(landmark_analysis_py, m)?)?;
+    m.add_function(wrap_pyfunction!(landmark_analysis_batch_py, m)?)?;
     m.add_function(wrap_pyfunction!(decision_curve_analysis, m)?)?;
     m.add_function(wrap_pyfunction!(clinical_utility_at_threshold, m)?)?;
     m.add_function(wrap_pyfunction!(compare_decision_curves, m)?)?;

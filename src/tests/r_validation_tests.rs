@@ -1,16 +1,17 @@
 #[cfg(test)]
 mod tests {
     use crate::surv_analysis::nelson_aalen;
-    use crate::surv_analysis::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+    use crate::surv_analysis::{
+        RmeanOption, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, quantile_survfit, survfitkm,
+        survmean,
+    };
     use crate::tests::common::{
         LOOSE_TOL, STANDARD_TOL, STRICT_TOL, aml_combined, aml_maintained, aml_nonmaintained,
         approx_eq, lung_subset, ovarian_data,
     };
     use crate::validation::landmark::{compute_hazard_ratio, compute_survival_at_times};
     use crate::validation::power::sample_size_logrank;
-    use crate::validation::{
-        RmeanOption, SurvfitCurve, logrank_test, quantile_survfit, rmst_comparison, survmean,
-    };
+    use crate::validation::{logrank_test, rmst_comparison};
 
     fn kaplan_meier(time: &[f64], status: &[i32]) -> SurvfitKMResult {
         survfitkm(
@@ -22,22 +23,15 @@ mod tests {
 
     fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> (f64, f64) {
         let km = kaplan_meier(time, status);
-        let rows = survmean(
-            &[SurvfitCurve::from_km(&km)],
-            &[time.len() as f64],
-            None,
-            0.0,
-            RmeanOption::At(tau),
-            1.0,
-        )
-        .unwrap();
-        (rows[0].rmean.unwrap(), rows[0].se_rmean.unwrap())
+        let table = survmean(&km, 1.0, RmeanOption::At(tau)).unwrap();
+        (table.rmean.unwrap()[0], table.se_rmean.unwrap()[0])
     }
 
     #[test]
     fn test_r_aml_kaplan_meier_maintained() {
         let (time, status) = aml_maintained();
-        let results = compute_survival_at_times(&time, &status, &[9.0, 13.0, 18.0, 23.0], 0.95);
+        let results =
+            compute_survival_at_times(&time, &status, &[9.0, 13.0, 18.0, 23.0], 0.95).unwrap();
 
         assert!(approx_eq(results[0].survival, 0.90909090909, STANDARD_TOL));
         assert!(approx_eq(results[1].survival, 0.81818181818, STANDARD_TOL));
@@ -48,7 +42,8 @@ mod tests {
     #[test]
     fn test_r_aml_kaplan_meier_nonmaintained() {
         let (time, status) = aml_nonmaintained();
-        let results = compute_survival_at_times(&time, &status, &[5.0, 8.0, 12.0, 23.0], 0.95);
+        let results =
+            compute_survival_at_times(&time, &status, &[5.0, 8.0, 12.0, 23.0], 0.95).unwrap();
 
         assert!(approx_eq(results[0].survival, 0.8333333, STANDARD_TOL));
         assert!(approx_eq(results[1].survival, 0.6666667, STANDARD_TOL));
@@ -116,7 +111,7 @@ mod tests {
     #[test]
     fn test_r_lung_hazard_ratio() {
         let (time, status, group) = lung_subset();
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
 
         assert!(result.hazard_ratio > 0.0);
         assert!(result.ci_lower > 0.0);
@@ -128,7 +123,7 @@ mod tests {
     fn test_r_ovarian_survival() {
         let (time, status, _group) = ovarian_data();
         let results =
-            compute_survival_at_times(&time, &status, &[100.0, 300.0, 500.0, 700.0], 0.95);
+            compute_survival_at_times(&time, &status, &[100.0, 300.0, 500.0, 700.0], 0.95).unwrap();
 
         assert!(results[0].survival > results[1].survival);
         assert!(results[1].survival >= results[2].survival);
@@ -192,15 +187,7 @@ mod tests {
     fn test_r_aml_median_survival() {
         let (time, status) = aml_nonmaintained();
         let km = kaplan_meier(&time, &status);
-        let result = quantile_survfit(
-            &[SurvfitCurve::from_km(&km)],
-            &[0.5],
-            false,
-            0.0,
-            1.0,
-            f64::EPSILON.sqrt(),
-        )
-        .unwrap();
+        let result = quantile_survfit(&km, &[0.5], false, 1.0, None).unwrap();
 
         assert!((20.0..=30.0).contains(&result.quantile[0][0]));
     }
@@ -218,7 +205,7 @@ mod tests {
     #[test]
     fn test_r_confidence_intervals_coverage() {
         let (time, status) = aml_maintained();
-        let results = compute_survival_at_times(&time, &status, &[13.0, 23.0, 34.0], 0.95);
+        let results = compute_survival_at_times(&time, &status, &[13.0, 23.0, 34.0], 0.95).unwrap();
 
         for r in &results {
             assert!(r.ci_lower <= r.survival);
@@ -244,7 +231,7 @@ mod tests {
         assert!((0.0..=1.0).contains(&result.p_value));
         assert_eq!(result.df, 1);
 
-        let hr_result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let hr_result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(hr_result.hazard_ratio > 0.0);
         assert!(hr_result.ci_lower > 0.0);
     }
@@ -339,7 +326,8 @@ mod tests {
             &status,
             &[9.0, 13.0, 18.0, 23.0, 31.0, 34.0, 48.0],
             0.95,
-        );
+        )
+        .unwrap();
 
         let expected = [0.9091, 0.8182, 0.7159, 0.6136, 0.4909, 0.3682, 0.1841];
 

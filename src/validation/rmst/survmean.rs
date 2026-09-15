@@ -1,44 +1,15 @@
-//! The `survmean` table of R's `print.survfit` / `summary.survfit`
-//! (`R/print.survfit.R`): per curve the number of records, the maximum and
-//! initial numbers at risk, the number of events, the restricted mean
-//! survival time with its standard error, and the median with its
-//! confidence limits.  A comparison of the restricted means of several
-//! groups is built on top of it.
+//! The `survmean` table (`R/print.survfit.R`) from stacked curve vectors,
+//! and a comparison of the restricted means of several groups built on it.
+//! The port itself is `surv_analysis::survmean`.
 
-use super::{SurvfitCurve, kaplan_meier};
+use super::{StackedCurves, kaplan_meier, stacked_curves};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{pchisq, pnorm, qnorm};
 use crate::internal::matrix::{cholesky2, chsolve2};
 use crate::internal::validation::validate_length;
+use crate::surv_analysis::{RmeanOption, SurvmeanTable, survmean};
 use ndarray::Array2;
 use pyo3::prelude::*;
-
-/// R's `rmean` argument: where to truncate the mean.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RmeanOption {
-    /// No restricted mean (R `"none"`).
-    None,
-    /// Truncate every curve at the largest time of any curve (R `"common"`).
-    Common,
-    /// Truncate each curve at its own largest time (R `"individual"`).
-    Individual,
-    /// Truncate at this time.
-    At(f64),
-}
-
-impl RmeanOption {
-    /// R's `match.arg`-style parsing of the character values.
-    pub fn parse(name: &str) -> SurvivalResult<Self> {
-        match name {
-            "none" => Ok(Self::None),
-            "common" => Ok(Self::Common),
-            "individual" => Ok(Self::Individual),
-            other => Err(SurvivalError::invalid_input(format!(
-                "Invalid value for rmean option: {other:?}"
-            ))),
-        }
-    }
-}
 
 /// One row of the table.  `NaN` stands for R's `NA` (a median the curve
 /// never reaches); the restricted mean is absent when `rmean` is `None`
@@ -59,159 +30,25 @@ pub struct SurvfitSummaryRow {
     pub upper: Option<f64>,
 }
 
-/// R's `minmin`: the first time the curve drops to (or below) 0.5, with
-/// the midpoint rule when it sits exactly at 0.5 for a while.
-fn minmin(y: &[f64], x: &[f64]) -> f64 {
-    let tolerance = f64::EPSILON.sqrt();
-    let kept: Vec<(f64, f64)> = y
-        .iter()
-        .zip(x)
-        .filter(|(y, _)| !y.is_nan() && **y < 0.5 + tolerance)
-        .map(|(&y, &x)| (y, x))
-        .collect();
-    let Some(&(first_y, first_x)) = kept.first() else {
-        return f64::NAN;
-    };
-    if (first_y - 0.5).abs() < tolerance
-        && let Some((_, next_x)) = kept.iter().find(|(y, _)| *y < first_y)
-    {
-        return (first_x + next_x) / 2.0;
+impl SurvfitSummaryRow {
+    /// The rows of a [`SurvmeanTable`], one per curve.
+    fn from_table(table: &SurvmeanTable) -> Vec<Self> {
+        let column = |values: &Option<Vec<f64>>, curve: usize| values.as_ref().map(|v| v[curve]);
+        (0..table.records.len())
+            .map(|curve| Self {
+                records: table.records[curve],
+                n_max: table.n_max[curve],
+                n_start: table.n_start[curve],
+                events: table.events[curve],
+                rmean: column(&table.rmean, curve),
+                se_rmean: column(&table.se_rmean, curve),
+                end_time: Some(table.end_time[curve]).filter(|t| !t.is_nan()),
+                median: table.median[curve],
+                lower: column(&table.lower, curve),
+                upper: column(&table.upper, curve),
+            })
+            .collect()
     }
-    first_x
-}
-
-/// R's `pfun`: one table row for one curve.
-fn summary_row(
-    curve: &SurvfitCurve<'_>,
-    nused: f64,
-    n_id: Option<f64>,
-    start_time: f64,
-    end_time: Option<f64>,
-    scale: f64,
-) -> SurvfitSummaryRow {
-    let time: Vec<f64> = curve.time.iter().map(|t| t / scale).collect();
-    let (rmean, se_rmean) = match end_time {
-        Some(end_time) => {
-            let hh: Vec<f64> = curve
-                .n_risk
-                .iter()
-                .zip(curve.n_event)
-                .map(|(&n, &d)| if n - d == 0.0 { 0.0 } else { d / (n * (n - d)) })
-                .collect();
-            let keep = time.partition_point(|&t| t <= end_time);
-            let (temptime, tempsurv, hh) = if keep == 0 {
-                (vec![end_time], vec![1.0], vec![0.0])
-            } else {
-                let mut temptime = time[..keep].to_vec();
-                temptime.push(end_time);
-                let mut tempsurv = curve.surv[..keep].to_vec();
-                tempsurv.push(curve.surv[keep - 1]);
-                let mut hh = hh[..keep].to_vec();
-                hh.push(0.0);
-                (temptime, tempsurv, hh)
-            };
-            let n = temptime.len();
-            let mut previous = start_time;
-            let mut rectangles = Vec::with_capacity(n);
-            for (i, &t) in temptime.iter().enumerate() {
-                let height = if i == 0 { 1.0 } else { tempsurv[i - 1] };
-                rectangles.push((t - previous) * height);
-                previous = t;
-            }
-            let mean: f64 = rectangles.iter().sum();
-            // sum(cumsum(rev(rectangles[-1]))^2 * rev(hh)[-1])
-            let mut tail_area = 0.0;
-            let mut varmean = 0.0;
-            for i in (0..n - 1).rev() {
-                tail_area += rectangles[i + 1];
-                varmean += tail_area * tail_area * hh[i];
-            }
-            (Some(mean), Some(varmean.sqrt()))
-        }
-        None => (None, None),
-    };
-    let n_max = n_id.unwrap_or_else(|| curve.n_risk.iter().copied().fold(f64::MIN, f64::max));
-    let median = minmin(curve.surv, &time);
-    let (lower, upper) = match (curve.lower, curve.upper) {
-        (Some(lower), Some(upper)) => (Some(minmin(lower, &time)), Some(minmin(upper, &time))),
-        _ => (None, None),
-    };
-    SurvfitSummaryRow {
-        records: nused,
-        n_max,
-        n_start: curve.n_risk.first().copied().unwrap_or(f64::NAN),
-        events: curve.n_event.iter().sum(),
-        rmean,
-        se_rmean,
-        end_time,
-        median,
-        lower,
-        upper,
-    }
-}
-
-/// The `survmean` table for a set of curves (the strata of one `survfit`
-/// object).  `nused[i]` is R's `fit$n[i]` and `n_id` the optional
-/// `fit$n.id`; `start_time` is `fit$t0` (or `min(0, time)`), `scale`
-/// divides the times.
-pub fn survmean(
-    curves: &[SurvfitCurve<'_>],
-    nused: &[f64],
-    n_id: Option<&[f64]>,
-    start_time: f64,
-    rmean: RmeanOption,
-    scale: f64,
-) -> SurvivalResult<Vec<SurvfitSummaryRow>> {
-    if curves.is_empty() {
-        return Err(SurvivalError::invalid_input("no curves to summarise"));
-    }
-    validate_length(curves.len(), nused.len(), "nused")?;
-    if let Some(n_id) = n_id {
-        validate_length(curves.len(), n_id.len(), "n_id")?;
-    }
-    if !(scale.is_finite() && scale > 0.0) {
-        return Err(SurvivalError::invalid_input("scale must be positive"));
-    }
-    for curve in curves {
-        curve.validate()?;
-    }
-    let last_times: Vec<f64> = curves
-        .iter()
-        .map(|curve| curve.time.last().map_or(f64::NAN, |t| t / scale))
-        .collect();
-    if let RmeanOption::At(value) = rmean {
-        // print.survfit: the truncation point must not precede the curve
-        let smallest = curves
-            .iter()
-            .flat_map(|curve| curve.time.iter().copied())
-            .fold(f64::INFINITY, f64::min);
-        if value < smallest {
-            return Err(SurvivalError::invalid_input(
-                "Truncation point for the mean is < smallest survival",
-            ));
-        }
-    }
-    let common = last_times.iter().copied().fold(f64::MIN, f64::max);
-    Ok(curves
-        .iter()
-        .enumerate()
-        .map(|(i, curve)| {
-            let end_time = match rmean {
-                RmeanOption::None => None,
-                RmeanOption::Common => Some(common),
-                RmeanOption::Individual => Some(last_times[i]),
-                RmeanOption::At(value) => Some(value / scale),
-            };
-            summary_row(
-                curve,
-                nused[i],
-                n_id.map(|values| values[i]),
-                start_time,
-                end_time,
-                scale,
-            )
-        })
-        .collect())
 }
 
 /// Restricted mean of one group with a normal confidence interval.
@@ -248,7 +85,9 @@ pub struct RmstComparisonResult {
 
 /// Compare the restricted mean survival times (up to `tau`) of the groups
 /// of right-censored data.  Groups are ordered by their sorted labels;
-/// the first is the reference.
+/// the first is the reference.  Each group's mean and standard error are
+/// `summary(survfit(Surv(time, status) ~ 1, subset = group), rmean =
+/// tau)$table`.
 pub fn rmst_comparison(
     time: &[f64],
     status: &[i32],
@@ -278,21 +117,13 @@ pub fn rmst_comparison(
         let weights: Option<Vec<f64>> =
             weights.map(|weights| rows.iter().map(|&i| weights[i]).collect());
         let km = kaplan_meier(&time, &status, weights.as_deref(), conf_level)?;
-        let rows_summary = survmean(
-            &[SurvfitCurve::from_km(&km)],
-            &[time.len() as f64],
-            None,
-            0.0_f64.min(time.iter().copied().fold(f64::INFINITY, f64::min)),
-            RmeanOption::At(tau),
-            1.0,
-        )?;
-        let row = &rows_summary[0];
-        let rmean = row.rmean.unwrap_or(f64::NAN);
-        let se = row.se_rmean.unwrap_or(f64::NAN);
+        let table = survmean(&km, 1.0, RmeanOption::At(tau))?;
+        let rmean = table.rmean.as_ref().map_or(f64::NAN, |v| v[0]);
+        let se = table.se_rmean.as_ref().map_or(f64::NAN, |v| v[0]);
         groups.push(RmstGroupResult {
             group: label,
             n: time.len(),
-            events: row.events,
+            events: table.events[0],
             rmean,
             se_rmean: se,
             lower: rmean - z * se,
@@ -345,10 +176,12 @@ pub fn rmst_comparison(
     })
 }
 
-/// Python entry point for [`survmean`] on one `survfit` object: the curve
-/// fields are concatenated over the strata and `strata` gives the number
-/// of rows of each (`None` for a single curve).  `rmean` is `"none"`,
-/// `"common"`, `"individual"` or a number.
+/// Python entry point of `survmean` on the stacked vectors of one
+/// `survfit` object: `strata` gives the number of rows of each curve
+/// (`None` for a single curve), `n` is `fit$n`, `n_id` the optional
+/// `fit$n.id` and `start_time` the `t0` the area under the curve starts
+/// from.  `rmean` is `"none"`, `"common"`, `"individual"` or a number;
+/// `rmean_at` gives a numeric truncation time directly.
 #[pyfunction(name = "survmean_curves")]
 #[pyo3(signature = (time, surv, n_risk, n_event, n, lower=None, upper=None, strata=None, n_id=None, start_time=0.0, rmean="common", rmean_at=None, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
@@ -371,58 +204,20 @@ pub fn survmean_curves_py(
         Some(value) => RmeanOption::At(value),
         None => RmeanOption::parse(rmean)?,
     };
-    let sizes = strata.unwrap_or_else(|| vec![time.len()]);
-    let curves = split_curves(
-        &time,
-        &surv,
-        &n_risk,
-        &n_event,
-        lower.as_deref(),
-        upper.as_deref(),
-        &sizes,
-    )?;
-    Ok(survmean(
-        &curves,
-        &n,
-        n_id.as_deref(),
-        start_time,
-        option,
-        scale,
-    )?)
-}
-
-/// Split concatenated curve fields into per-stratum [`SurvfitCurve`]s.
-pub(super) fn split_curves<'a>(
-    time: &'a [f64],
-    surv: &'a [f64],
-    n_risk: &'a [f64],
-    n_event: &'a [f64],
-    lower: Option<&'a [f64]>,
-    upper: Option<&'a [f64]>,
-    sizes: &[usize],
-) -> SurvivalResult<Vec<SurvfitCurve<'a>>> {
-    let total: usize = sizes.iter().sum();
-    validate_length(total, time.len(), "time")?;
-    let mut curves = Vec::with_capacity(sizes.len());
-    let mut offset = 0;
-    for &size in sizes {
-        let range = offset..offset + size;
-        let slice = |values: &'a [f64], name: &str| -> SurvivalResult<&'a [f64]> {
-            values
-                .get(range.clone())
-                .ok_or_else(|| SurvivalError::invalid_input(format!("{name} is too short")))
-        };
-        curves.push(SurvfitCurve {
-            time: slice(time, "time")?,
-            surv: slice(surv, "surv")?,
-            n_risk: slice(n_risk, "n_risk")?,
-            n_event: slice(n_event, "n_event")?,
-            lower: lower.map(|v| slice(v, "lower")).transpose()?,
-            upper: upper.map(|v| slice(v, "upper")).transpose()?,
-        });
-        offset += size;
-    }
-    Ok(curves)
+    let fit = stacked_curves(&StackedCurves {
+        time: &time,
+        surv: &surv,
+        n_risk: &n_risk,
+        n_event: &n_event,
+        lower: lower.as_deref(),
+        upper: upper.as_deref(),
+        strata: strata.as_deref(),
+        n: &n,
+        n_id: n_id.as_deref(),
+        t0: start_time,
+    })?;
+    let table = survmean(&fit, scale, option)?;
+    Ok(SurvfitSummaryRow::from_table(&table))
 }
 
 /// Python entry point: `rmst_comparison(time, status, group, tau,
@@ -451,20 +246,29 @@ pub fn rmst_comparison_py(
 mod tests {
     use super::*;
 
-    fn curve<'a>(
-        time: &'a [f64],
-        surv: &'a [f64],
-        n_risk: &'a [f64],
-        n_event: &'a [f64],
-    ) -> SurvfitCurve<'a> {
-        SurvfitCurve {
+    fn rows(
+        time: &[f64],
+        surv: &[f64],
+        n_risk: &[f64],
+        n_event: &[f64],
+        strata: Option<&[usize]>,
+        n: &[f64],
+        rmean: RmeanOption,
+    ) -> Vec<SurvfitSummaryRow> {
+        let fit = stacked_curves(&StackedCurves {
             time,
             surv,
             n_risk,
             n_event,
             lower: None,
             upper: None,
-        }
+            strata,
+            n,
+            n_id: None,
+            t0: 0.0,
+        })
+        .unwrap();
+        SurvfitSummaryRow::from_table(&survmean(&fit, 1.0, rmean).unwrap())
     }
 
     #[test]
@@ -474,16 +278,16 @@ mod tests {
         let surv = [0.75, 0.5, 0.5, 0.0];
         let n_risk = [4.0, 3.0, 2.0, 1.0];
         let n_event = [1.0, 1.0, 0.0, 1.0];
-        let rows = survmean(
-            &[curve(&time, &surv, &n_risk, &n_event)],
-            &[4.0],
+        let common = rows(
+            &time,
+            &surv,
+            &n_risk,
+            &n_event,
             None,
-            0.0,
+            &[4.0],
             RmeanOption::Common,
-            1.0,
-        )
-        .unwrap();
-        let row = &rows[0];
+        );
+        let row = &common[0];
         // 1*1 + 0.75*1 + 0.5*1 + 0.5*1 = 2.75
         assert!((row.rmean.unwrap() - 2.75).abs() < 1e-12);
         assert_eq!(row.records, 4.0);
@@ -494,82 +298,54 @@ mod tests {
         assert!((row.median - 3.0).abs() < 1e-12);
         assert_eq!(row.lower, None);
         assert_eq!(row.end_time, Some(4.0));
-        let truncated = survmean(
-            &[curve(&time, &surv, &n_risk, &n_event)],
-            &[4.0],
+        let truncated = rows(
+            &time,
+            &surv,
+            &n_risk,
+            &n_event,
             None,
-            0.0,
+            &[4.0],
             RmeanOption::At(2.5),
-            1.0,
-        )
-        .unwrap();
+        );
         assert!((truncated[0].rmean.unwrap() - (1.0 + 0.75 + 0.25)).abs() < 1e-12);
-        let none = survmean(
-            &[curve(&time, &surv, &n_risk, &n_event)],
+        let none = rows(
+            &time,
+            &surv,
+            &n_risk,
+            &n_event,
+            None,
             &[4.0],
-            None,
-            0.0,
             RmeanOption::None,
-            1.0,
-        )
-        .unwrap();
+        );
         assert_eq!(none[0].rmean, None);
-    }
-
-    #[test]
-    fn variance_follows_the_greenwood_style_sum() {
-        // Single event at t=1 among 2 at risk, followed by a censoring at 2.
-        let time = [1.0, 2.0];
-        let surv = [0.5, 0.5];
-        let n_risk = [2.0, 1.0];
-        let n_event = [1.0, 0.0];
-        let rows = survmean(
-            &[curve(&time, &surv, &n_risk, &n_event)],
-            &[2.0],
-            None,
-            0.0,
-            RmeanOption::Common,
-            1.0,
-        )
-        .unwrap();
-        // rectangles: 1, 0.5; hh = 1/(2*1) = 0.5 at t=1; varmean = 0.5^2 * 0.5
-        assert!((rows[0].se_rmean.unwrap() - (0.125_f64).sqrt()).abs() < 1e-12);
-    }
-
-    #[test]
-    fn median_midpoint_rule_matches_r() {
-        let x = [1.0, 2.0, 3.0];
-        assert_eq!(minmin(&[0.8, 0.5, 0.2], &x), 2.5);
-        assert_eq!(minmin(&[0.8, 0.5, 0.5], &x), 2.0);
-        assert_eq!(minmin(&[0.8, 0.4, 0.2], &x), 2.0);
-        assert!(minmin(&[0.9, 0.8, 0.7], &x).is_nan());
+        assert_eq!(none[0].end_time, None);
     }
 
     #[test]
     fn common_and_individual_truncation_differ_across_strata() {
-        let time_a = [1.0, 2.0];
-        let surv_a = [0.5, 0.0];
-        let risk_a = [2.0, 1.0];
-        let event_a = [1.0, 1.0];
-        let time_b = [3.0, 6.0];
-        let surv_b = [0.5, 0.0];
-        let risk_b = [2.0, 1.0];
-        let event_b = [1.0, 1.0];
-        let curves = [
-            curve(&time_a, &surv_a, &risk_a, &event_a),
-            curve(&time_b, &surv_b, &risk_b, &event_b),
-        ];
-        let common = survmean(&curves, &[2.0, 2.0], None, 0.0, RmeanOption::Common, 1.0).unwrap();
-        assert_eq!(common[0].end_time, Some(6.0));
-        let individual = survmean(
-            &curves,
+        let time = [1.0, 2.0, 3.0, 6.0];
+        let surv = [0.5, 0.0, 0.5, 0.0];
+        let n_risk = [2.0, 1.0, 2.0, 1.0];
+        let n_event = [1.0, 1.0, 1.0, 1.0];
+        let common = rows(
+            &time,
+            &surv,
+            &n_risk,
+            &n_event,
+            Some(&[2, 2]),
             &[2.0, 2.0],
-            None,
-            0.0,
+            RmeanOption::Common,
+        );
+        assert_eq!(common[0].end_time, Some(6.0));
+        let individual = rows(
+            &time,
+            &surv,
+            &n_risk,
+            &n_event,
+            Some(&[2, 2]),
+            &[2.0, 2.0],
             RmeanOption::Individual,
-            1.0,
-        )
-        .unwrap();
+        );
         assert_eq!(individual[0].end_time, Some(2.0));
         assert_eq!(individual[1].end_time, Some(6.0));
         assert_eq!(common[0].rmean, individual[0].rmean);
@@ -589,6 +365,9 @@ mod tests {
             (result.difference[0] - (result.groups[1].rmean - result.groups[0].rmean)).abs()
                 < 1e-12
         );
+        // summary(survfit(Surv(time, status) ~ 1, subset = group == 0), rmean = 5)$table
+        assert!((result.groups[0].rmean - 2.75).abs() < 1e-12);
+        assert!((result.groups[0].se_rmean - 0.649519052838329).abs() < 1e-12);
         assert!(rmst_comparison(&time, &status, &[0; 12], None, 5.0, 0.95).is_err());
     }
 }
