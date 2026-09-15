@@ -139,6 +139,28 @@ def _remove_survival_modules() -> None:
             sys.modules.pop(name, None)
 
 
+@pytest.fixture(autouse=True)
+def _restore_survival_modules():
+    """Put back whatever ``survival`` modules were imported before this test.
+
+    Several tests here purge ``survival`` from ``sys.modules`` to watch the package
+    import itself lazily.  Re-importing the extension builds fresh type objects, so a
+    later test holding a fit made against the old ones fails its ``isinstance`` checks
+    (``_is_survreg_fit`` and friends).  Restoring keeps that leakage inside this file.
+    """
+
+    saved = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "survival" or name.startswith("survival.")
+    }
+    try:
+        yield
+    finally:
+        _remove_survival_modules()
+        sys.modules.update(saved)
+
+
 def _pyi_top_level_names(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(), filename=str(path))
     return {
