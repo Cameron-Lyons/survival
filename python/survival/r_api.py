@@ -11,7 +11,6 @@ from . import r as _r
 from .r import *  # noqa: F403
 from .r import (  # noqa: F401
     ConcordanceResult,
-    TurnbullSurvfitResult,
     predict_terms_constant,
 )
 from .r._coerce import _r_factor  # noqa: F401
