@@ -1,20 +1,37 @@
 #[cfg(test)]
 mod tests {
     use crate::surv_analysis::nelson_aalen;
-    use crate::surv_analysis::nelson_aalen_module::stratified_km;
+    use crate::surv_analysis::{
+        RmeanOption, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, quantile_survfit, survfitkm,
+        survmean,
+    };
     use crate::tests::common::{
         LOOSE_TOL, STANDARD_TOL, STRICT_TOL, aml_combined, aml_maintained, aml_nonmaintained,
         approx_eq, lung_subset, ovarian_data,
     };
-    use crate::validation::compute_rmst;
     use crate::validation::landmark::{compute_hazard_ratio, compute_survival_at_times};
-    use crate::validation::logrank::{WeightType, weighted_logrank_test};
     use crate::validation::power::sample_size_logrank;
+    use crate::validation::{logrank_test, rmst_comparison};
+
+    fn kaplan_meier(time: &[f64], status: &[i32]) -> SurvfitKMResult {
+        survfitkm(
+            &SurvfitKMData::right_censored(time.to_vec(), status.to_vec()).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap()
+    }
+
+    fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> (f64, f64) {
+        let km = kaplan_meier(time, status);
+        let table = survmean(&km, 1.0, RmeanOption::At(tau)).unwrap();
+        (table.rmean.unwrap()[0], table.se_rmean.unwrap()[0])
+    }
 
     #[test]
     fn test_r_aml_kaplan_meier_maintained() {
         let (time, status) = aml_maintained();
-        let results = compute_survival_at_times(&time, &status, &[9.0, 13.0, 18.0, 23.0], 0.95);
+        let results =
+            compute_survival_at_times(&time, &status, &[9.0, 13.0, 18.0, 23.0], 0.95).unwrap();
 
         assert!(approx_eq(results[0].survival, 0.90909090909, STANDARD_TOL));
         assert!(approx_eq(results[1].survival, 0.81818181818, STANDARD_TOL));
@@ -25,7 +42,8 @@ mod tests {
     #[test]
     fn test_r_aml_kaplan_meier_nonmaintained() {
         let (time, status) = aml_nonmaintained();
-        let results = compute_survival_at_times(&time, &status, &[5.0, 8.0, 12.0, 23.0], 0.95);
+        let results =
+            compute_survival_at_times(&time, &status, &[5.0, 8.0, 12.0, 23.0], 0.95).unwrap();
 
         assert!(approx_eq(results[0].survival, 0.8333333, STANDARD_TOL));
         assert!(approx_eq(results[1].survival, 0.6666667, STANDARD_TOL));
@@ -36,7 +54,7 @@ mod tests {
     #[test]
     fn test_r_aml_logrank_test() {
         let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
 
         assert_eq!(result.df, 1);
         assert!(approx_eq(result.statistic, 3.4, 0.5));
@@ -44,20 +62,9 @@ mod tests {
     }
 
     #[test]
-    fn test_r_aml_wilcoxon_test() {
-        let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::Wilcoxon);
-
-        assert!(result.statistic > 0.0);
-        assert!(result.p_value > 0.0 && result.p_value < 1.0);
-        assert_eq!(result.weight_type, "Wilcoxon");
-        assert_eq!(result.df, 1);
-    }
-
-    #[test]
     fn test_r_aml_nelson_aalen() {
         let (time, status) = aml_maintained();
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         for i in 1..result.cumulative_hazard.len() {
             assert!(result.cumulative_hazard[i] >= result.cumulative_hazard[i - 1]);
@@ -83,21 +90,18 @@ mod tests {
     #[test]
     fn test_r_aml_rmst() {
         let (time, status) = aml_nonmaintained();
-        let result = compute_rmst(&time, &status, 30.0, 0.95);
+        let (rmean, se) = restricted_mean(&time, &status, 30.0);
 
-        assert!(result.rmst > 15.0 && result.rmst < 25.0);
-        assert!(result.se > 0.0);
-        assert!(result.ci_lower < result.rmst);
-        assert!(result.ci_upper > result.rmst);
-
-        assert!(result.ci_lower > 0.0);
-        assert!(result.ci_upper < 30.0);
+        assert!(rmean > 15.0 && rmean < 25.0);
+        assert!(se > 0.0);
+        assert!(rmean - 1.96 * se > 0.0);
+        assert!(rmean + 1.96 * se < 30.0);
     }
 
     #[test]
     fn test_r_lung_logrank() {
         let (time, status, group) = lung_subset();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
 
         assert!(result.statistic >= 0.0);
         assert!((0.0..=1.0).contains(&result.p_value));
@@ -107,7 +111,7 @@ mod tests {
     #[test]
     fn test_r_lung_hazard_ratio() {
         let (time, status, group) = lung_subset();
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
 
         assert!(result.hazard_ratio > 0.0);
         assert!(result.ci_lower > 0.0);
@@ -119,7 +123,7 @@ mod tests {
     fn test_r_ovarian_survival() {
         let (time, status, _group) = ovarian_data();
         let results =
-            compute_survival_at_times(&time, &status, &[100.0, 300.0, 500.0, 700.0], 0.95);
+            compute_survival_at_times(&time, &status, &[100.0, 300.0, 500.0, 700.0], 0.95).unwrap();
 
         assert!(results[0].survival > results[1].survival);
         assert!(results[1].survival >= results[2].survival);
@@ -137,7 +141,7 @@ mod tests {
     #[test]
     fn test_r_ovarian_logrank() {
         let (time, status, group) = ovarian_data();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
 
         assert!(result.statistic >= 0.0);
         assert!((0.0..=1.0).contains(&result.p_value));
@@ -165,75 +169,33 @@ mod tests {
     #[test]
     fn test_r_stratified_km() {
         let (time, status, strata) = aml_combined();
-        let result = stratified_km(&time, &status, &strata, 0.95);
+        let result = survfitkm(
+            &SurvfitKMData::try_new(None, time, status, None, Some(strata), None, None).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap();
 
-        assert_eq!(result.strata.len(), 2);
-        assert_eq!(result.times.len(), 2);
-        assert_eq!(result.survival.len(), 2);
+        assert_eq!(result.strata.as_ref().map(Vec::len), Some(2));
+        assert_eq!(result.n.len(), 2);
 
-        for s in &result.survival {
-            for &surv in s {
-                assert!((0.0..=1.0).contains(&surv));
-            }
+        for &surv in &result.surv {
+            assert!((0.0..=1.0).contains(&surv));
         }
     }
 
     #[test]
     fn test_r_aml_median_survival() {
         let (time, status) = aml_nonmaintained();
-        let result =
-            crate::validation::rmst_module::compute_survival_quantile(&time, &status, 0.5, 0.95);
+        let km = kaplan_meier(&time, &status);
+        let result = quantile_survfit(&km, &[0.5], false, 1.0, None).unwrap();
 
-        if let Some(median) = result.median {
-            assert!((20.0..=30.0).contains(&median));
-        }
+        assert!((20.0..=30.0).contains(&result.quantile[0][0]));
     }
 
     #[test]
-    fn test_r_proportional_hazards_assumption() {
+    fn test_r_g_rho_weights() {
         let (time, status, group) = aml_combined();
-        let lr_result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
-        let wil_result = weighted_logrank_test(&time, &status, &group, WeightType::Wilcoxon);
-
-        let ratio = if lr_result.statistic > 0.0 {
-            wil_result.statistic / lr_result.statistic
-        } else {
-            1.0
-        };
-        assert!(ratio > 0.5 && ratio < 2.0);
-    }
-
-    #[test]
-    fn test_r_peto_peto_weight() {
-        let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::PetoPeto);
-
-        assert!(result.statistic >= 0.0);
-        assert!((0.0..=1.0).contains(&result.p_value));
-        assert_eq!(result.weight_type, "PetoPeto");
-        assert_eq!(result.df, 1);
-    }
-
-    #[test]
-    fn test_r_tarone_ware_weight() {
-        let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::TaroneWare);
-
-        assert!(result.statistic >= 0.0);
-        assert!((0.0..=1.0).contains(&result.p_value));
-        assert_eq!(result.weight_type, "TaroneWare");
-        assert_eq!(result.df, 1);
-    }
-
-    #[test]
-    fn test_r_fleming_harrington() {
-        let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(
-            &time,
-            &status,
-            &group,
-            WeightType::FlemingHarrington { p: 0.0, q: 1.0 },
-        );
+        let result = logrank_test(&time, &status, &group, None, None, 1.0, true).unwrap();
 
         assert!(result.statistic >= 0.0);
         assert!((0.0..=1.0).contains(&result.p_value));
@@ -243,7 +205,7 @@ mod tests {
     #[test]
     fn test_r_confidence_intervals_coverage() {
         let (time, status) = aml_maintained();
-        let results = compute_survival_at_times(&time, &status, &[13.0, 23.0, 34.0], 0.95);
+        let results = compute_survival_at_times(&time, &status, &[13.0, 23.0, 34.0], 0.95).unwrap();
 
         for r in &results {
             assert!(r.ci_lower <= r.survival);
@@ -264,12 +226,12 @@ mod tests {
         let status = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1];
         let group = vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
 
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
         assert!(result.statistic >= 0.0);
         assert!((0.0..=1.0).contains(&result.p_value));
         assert_eq!(result.df, 1);
 
-        let hr_result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let hr_result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(hr_result.hazard_ratio > 0.0);
         assert!(hr_result.ci_lower > 0.0);
     }
@@ -278,19 +240,18 @@ mod tests {
     fn test_r_rmst_difference() {
         let (time, status, group) = aml_combined();
         let tau = 40.0;
-        let result =
-            crate::validation::rmst_module::compare_rmst(&time, &status, &group, tau, 0.95);
+        let result = rmst_comparison(&time, &status, &group, None, tau, 0.95).unwrap();
 
-        assert!(result.rmst_group1.rmst > 0.0);
-        assert!(result.rmst_group2.rmst > 0.0);
-        assert!(result.diff_se > 0.0);
+        assert!(result.groups[0].rmean > 0.0);
+        assert!(result.groups[1].rmean > 0.0);
+        assert!(result.difference_se[0] > 0.0);
         assert!((0.0..=1.0).contains(&result.p_value));
     }
 
     #[test]
     fn test_r_nelson_aalen_variance() {
         let (time, status) = aml_maintained();
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         for i in 0..result.variance.len() {
             assert!(result.variance[i] >= 0.0);
@@ -302,7 +263,7 @@ mod tests {
     #[test]
     fn test_r_survfit_n_at_risk() {
         let (time, status) = aml_maintained();
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         let initial_n = time.len();
 
         assert!(result.n_risk[0] <= initial_n);
@@ -315,7 +276,7 @@ mod tests {
     fn test_r_tied_events_handling() {
         let time = vec![5.0, 5.0, 5.0, 10.0, 10.0, 15.0];
         let status = vec![1, 1, 0, 1, 1, 1];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert!(result.time.contains(&5.0));
         assert!(result.time.contains(&10.0));
@@ -329,7 +290,7 @@ mod tests {
     fn test_r_all_censored_at_end() {
         let time = vec![10.0, 20.0, 30.0, 40.0, 50.0];
         let status = vec![1, 1, 1, 0, 0];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert_eq!(result.time.len(), 3);
         assert!(!result.time.contains(&40.0));
@@ -340,7 +301,7 @@ mod tests {
     fn test_r_single_event() {
         let time = vec![10.0, 20.0, 30.0];
         let status = vec![0, 1, 0];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         assert_eq!(result.time.len(), 1);
         assert_eq!(result.time[0], 20.0);
@@ -351,10 +312,10 @@ mod tests {
     fn test_r_late_entry_simulation() {
         let time = vec![100.0, 150.0, 200.0, 250.0, 300.0];
         let status = vec![1, 1, 1, 1, 1];
-        let result = compute_rmst(&time, &status, 350.0, 0.95);
+        let (rmean, _) = restricted_mean(&time, &status, 350.0);
 
-        assert!(result.rmst > 0.0);
-        assert!(result.rmst < 350.0);
+        assert!(rmean > 0.0);
+        assert!(rmean < 350.0);
     }
 
     #[test]
@@ -365,7 +326,8 @@ mod tests {
             &status,
             &[9.0, 13.0, 18.0, 23.0, 31.0, 34.0, 48.0],
             0.95,
-        );
+        )
+        .unwrap();
 
         let expected = [0.9091, 0.8182, 0.7159, 0.6136, 0.4909, 0.3682, 0.1841];
 
@@ -385,7 +347,7 @@ mod tests {
     #[test]
     fn test_r_exact_nelson_aalen_values() {
         let (time, status) = aml_maintained();
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
 
         if !result.cumulative_hazard.is_empty() {
             assert!(approx_eq(
@@ -406,7 +368,7 @@ mod tests {
     #[test]
     fn test_r_survdiff_exact_chisq() {
         let (time, status, group) = aml_combined();
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
 
         assert!(
             result.statistic > 2.5 && result.statistic < 4.5,

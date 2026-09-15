@@ -20,6 +20,17 @@ if TYPE_CHECKING:
     class _Predictor(Protocol):
         def predict(self, X: ArrayLike) -> NDArray[np.float64]: ...
 
+    class _FlatModel(Protocol):
+        """The Rust ML models take a flattened row-major design plus its row count."""
+
+        unique_times: list[float]
+
+        def predict_risk(self, x: list[float], n_obs: int) -> list[float]: ...
+        def predict_survival(self, x: list[float], n_obs: int) -> list[list[float]]: ...
+        def predict_median_survival_time(
+            self, x: list[float], n_obs: int
+        ) -> list[float | None]: ...
+
     def check_is_fitted(estimator: Any, attributes: Any = None) -> None: ...
 else:
     try:
@@ -153,18 +164,32 @@ def _compute_concordance_index(
     status: NDArray[np.int32],
     risk_scores: NDArray[np.float64],
 ) -> float:
-    """Compute Harrell's concordance index (C-index) in Rust."""
-    return float(
-        _surv.concordance_index(
-            np.asarray(time, dtype=np.float64).tolist(),
-            np.asarray(status, dtype=np.int32).tolist(),
-            np.asarray(risk_scores, dtype=np.float64).tolist(),
-        )
+    """Harrell's C-index of ``risk_scores`` (higher = higher risk), via R's ``concordancefit``.
+
+    ``reverse=True`` is R's convention for a risk score: a larger score should go with the
+    shorter survival time; ties in the score count one half.
+    """
+    time = np.asarray(time, dtype=np.float64)
+    status = np.asarray(status, dtype=np.int32)
+    risk = np.asarray(risk_scores, dtype=np.float64)
+    fit = _surv.concordancefit(
+        _surv.SurvivalData(time.tolist(), status.tolist()),
+        _surv.CovariateMatrix(risk.tolist(), len(risk), 1),
+        reverse=True,
+        std_err=False,
     )
+    return float(fit.concordance[0])
 
 
 class SurvivalScoreMixin:
-    """Mixin providing concordance index scoring for survival models."""
+    """Mixin providing concordance index scoring for survival models.
+
+    ``predict`` must return a risk score (higher = higher risk); estimators whose ``predict``
+    returns a survival time override :meth:`_risk_scores` to negate it.
+    """
+
+    def _risk_scores(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
+        return np.asarray(cast("_Predictor", self).predict(X), dtype=np.float64)
 
     def score(self, X: ArrayLike, y: ArrayLike) -> float:
         """Return the concordance index on the given test data.
@@ -183,5 +208,85 @@ class SurvivalScoreMixin:
         """
         check_is_fitted(self)
         X, time, status = _validate_survival_data(X, y)
-        risk_scores = cast("_Predictor", self).predict(X)
-        return _compute_concordance_index(time, status, risk_scores)
+        return _compute_concordance_index(time, status, self._risk_scores(X))
+
+
+class FlatModelPredictMixin:
+    """Prediction methods shared by the estimators wrapping a Rust ML model.
+
+    The wrapped ``model_`` (DeepSurv, gradient boosting, survival forest) takes the design
+    matrix flattened row-major together with its row count and exposes ``predict_risk``,
+    ``predict_survival``, ``predict_median_survival_time`` and ``unique_times``.
+    """
+
+    model_: _FlatModel
+    n_features_in_: int
+
+    def _flat_input(self, X: ArrayLike) -> tuple[list[float], int]:
+        X_array = _check_prediction_input(self, X)
+        return X_array.flatten().tolist(), X_array.shape[0]
+
+    def predict(self, X: ArrayLike) -> NDArray[np.float64]:
+        """Predict risk scores for samples.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Samples to predict.
+
+        Returns
+        -------
+        risk_scores : ndarray of shape (n_samples,)
+            Predicted risk scores (higher = higher risk).
+        """
+        x_flat, n_obs = self._flat_input(X)
+        return np.array(self.model_.predict_risk(x_flat, n_obs))
+
+    def predict_survival_function(
+        self, X: ArrayLike
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Predict survival function for samples.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Samples to predict.
+
+        Returns
+        -------
+        times : ndarray of shape (n_times,)
+            Time points.
+        survival : ndarray of shape (n_samples, n_times)
+            Survival probabilities.
+        """
+        x_flat, n_obs = self._flat_input(X)
+        survival = self.model_.predict_survival(x_flat, n_obs)
+        return np.array(self.model_.unique_times), np.array(survival)
+
+    def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]:
+        """Predict median survival time for samples.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Samples to predict.
+
+        Returns
+        -------
+        median_times : ndarray of shape (n_samples,)
+            Predicted median survival times (NaN if survival never drops below 0.5).
+        """
+        x_flat, n_obs = self._flat_input(X)
+        result = self.model_.predict_median_survival_time(x_flat, n_obs)
+        return np.array([t if t is not None else np.nan for t in result], dtype=np.float64)
+
+
+def _check_prediction_input(estimator: Any, X: ArrayLike) -> NDArray[np.float64]:
+    """Validate ``X`` for prediction: fitted estimator, 2-D floats, matching feature count."""
+    check_is_fitted(estimator)
+    X_array = np.asarray(check_array(X, dtype=np.float64, ensure_2d=True), dtype=np.float64)
+    if X_array.shape[1] != estimator.n_features_in_:
+        raise ValueError(
+            f"X has {X_array.shape[1]} features, but model expects {estimator.n_features_in_}"
+        )
+    return X_array

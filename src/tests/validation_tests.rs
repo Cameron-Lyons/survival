@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod tests {
     use crate::surv_analysis::nelson_aalen;
-    use crate::surv_analysis::nelson_aalen_module::stratified_km;
+    use crate::surv_analysis::{
+        RmeanOption, SurvfitKMData, SurvfitKMOptions, SurvfitQuantiles, quantile_survfit,
+        survfitkm, survmean,
+    };
     use crate::tests::common::{LOOSE_TOL, STRICT_TOL, approx_eq};
     use crate::validation::calibration_module::{
         calibration_curve, stratify_risk, time_dependent_auc,
@@ -10,18 +13,34 @@ mod tests {
         compute_conditional_survival, compute_hazard_ratio, compute_landmark, compute_life_table,
         compute_survival_at_times,
     };
-    use crate::validation::logrank::{WeightType, logrank_trend_test, weighted_logrank_test};
     use crate::validation::power::{power_logrank, sample_size_freedman, sample_size_logrank};
-    use crate::validation::rmst_module::{
-        compare_rmst, compute_cumulative_incidence, compute_rmst, compute_survival_quantile,
-    };
+    use crate::validation::{logrank_test, rmst_comparison};
+
+    fn kaplan_meier(time: &[f64], status: &[i32]) -> crate::surv_analysis::SurvfitKMResult {
+        survfitkm(
+            &SurvfitKMData::right_censored(time.to_vec(), status.to_vec()).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap()
+    }
+
+    fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> (f64, f64) {
+        let km = kaplan_meier(time, status);
+        let table = survmean(&km, 1.0, RmeanOption::At(tau)).unwrap();
+        (table.rmean.unwrap()[0], table.se_rmean.unwrap()[0])
+    }
+
+    fn median(time: &[f64], status: &[i32]) -> SurvfitQuantiles {
+        let km = kaplan_meier(time, status);
+        quantile_survfit(&km, &[0.5], false, 1.0, None).unwrap()
+    }
     const TOLERANCE: f64 = STRICT_TOL;
     const LOOSE_TOLERANCE: f64 = LOOSE_TOL;
     #[test]
     fn test_nelson_aalen_simple() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 1, 1, 1];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert_eq!(result.time.len(), 5);
         assert_eq!(result.n_events, vec![1, 1, 1, 1, 1]);
         assert!(approx_eq(result.cumulative_hazard[0], 0.2, TOLERANCE));
@@ -46,7 +65,7 @@ mod tests {
     fn test_nelson_aalen_with_censoring() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let status = vec![1, 0, 1, 0, 1, 0];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert_eq!(result.time, vec![1.0, 3.0, 5.0]);
         assert_eq!(result.n_events, vec![1, 1, 1]);
         assert!(approx_eq(result.cumulative_hazard[0], 1.0 / 6.0, TOLERANCE));
@@ -65,7 +84,7 @@ mod tests {
     fn test_nelson_aalen_empty() {
         let time: Vec<f64> = vec![];
         let status: Vec<i32> = vec![];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert!(result.time.is_empty());
         assert!(result.cumulative_hazard.is_empty());
     }
@@ -73,7 +92,7 @@ mod tests {
     fn test_nelson_aalen_all_censored() {
         let time = vec![1.0, 2.0, 3.0];
         let status = vec![0, 0, 0];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert!(result.time.is_empty());
     }
     #[test]
@@ -81,85 +100,65 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0, 1.0, 3.0, 5.0];
         let status = vec![1, 1, 0, 1, 1, 1];
         let strata = vec![0, 0, 0, 1, 1, 1];
-        let result = stratified_km(&time, &status, &strata, 0.95);
-        assert_eq!(result.strata, vec![0, 1]);
-        assert_eq!(result.times.len(), 2);
-        assert!(approx_eq(result.survival[0][0], 2.0 / 3.0, TOLERANCE));
-        assert!(approx_eq(result.survival[0][1], 1.0 / 3.0, TOLERANCE));
-        assert!(approx_eq(result.survival[1][0], 2.0 / 3.0, TOLERANCE));
-        assert!(approx_eq(result.survival[1][1], 1.0 / 3.0, TOLERANCE));
-        assert!(approx_eq(result.survival[1][2], 0.0, TOLERANCE));
+        let result = survfitkm(
+            &SurvfitKMData::try_new(None, time, status, None, Some(strata), None, None).unwrap(),
+            &SurvfitKMOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(result.strata_codes, Some(vec![0, 1]));
+        assert_eq!(result.strata, Some(vec![3, 3]));
+        assert!(approx_eq(result.surv[0], 2.0 / 3.0, TOLERANCE));
+        assert!(approx_eq(result.surv[1], 1.0 / 3.0, TOLERANCE));
+        assert!(approx_eq(result.surv[3], 2.0 / 3.0, TOLERANCE));
+        assert!(approx_eq(result.surv[4], 1.0 / 3.0, TOLERANCE));
+        assert!(approx_eq(result.surv[5], 0.0, TOLERANCE));
     }
     #[test]
     fn test_rmst_simple() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 1, 1, 1];
-        let result = compute_rmst(&time, &status, 5.0, 0.95);
-        assert!(result.rmst > 0.0);
-        assert!(result.rmst < 5.0);
-        assert!(result.se > 0.0);
-        assert!(result.ci_lower < result.rmst);
-        assert!(result.ci_upper > result.rmst);
+        let (rmean, se) = restricted_mean(&time, &status, 5.0);
+        assert!(rmean > 0.0);
+        assert!(rmean < 5.0);
+        assert!(se > 0.0);
     }
     #[test]
     fn test_rmst_no_events_before_tau() {
         let time = vec![1.0, 2.0, 3.0];
         let status = vec![0, 0, 0];
-        let result = compute_rmst(&time, &status, 10.0, 0.95);
-        assert!(approx_eq(result.rmst, 10.0, TOLERANCE));
+        let (rmean, _) = restricted_mean(&time, &status, 10.0);
+        assert!(approx_eq(rmean, 10.0, TOLERANCE));
     }
     #[test]
     fn test_rmst_comparison() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 2.0, 4.0, 6.0, 8.0];
         let status = vec![1, 1, 1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let result = compare_rmst(&time, &status, &group, 5.0, 0.95);
-        assert!(result.rmst_group2.rmst > result.rmst_group1.rmst);
-        assert!(result.rmst_diff < 0.0);
+        let result = rmst_comparison(&time, &status, &group, None, 5.0, 0.95).unwrap();
+        assert!(result.groups[1].rmean > result.groups[0].rmean);
+        assert!(result.difference[0] > 0.0);
     }
     #[test]
     fn test_survival_quantile_median() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let status = vec![1, 1, 1, 1, 1, 1];
-        let result = compute_survival_quantile(&time, &status, 0.5, 0.95);
-        assert!(result.median.is_some());
-        assert!(approx_eq(result.median.unwrap(), 3.0, TOLERANCE));
+        let result = median(&time, &status);
+        // the curve sits exactly at 0.5 from 3 to 4: midpoint rule
+        assert!(approx_eq(result.quantile[0][0], 3.5, TOLERANCE));
     }
     #[test]
     fn test_survival_quantile_not_reached() {
         let time = vec![1.0, 2.0, 3.0];
         let status = vec![1, 0, 0];
-        let result = compute_survival_quantile(&time, &status, 0.5, 0.95);
-        assert!(result.median.is_none());
-    }
-    #[test]
-    fn test_cumulative_incidence_single_event_type() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1, 1, 1, 1, 1];
-        let result = compute_cumulative_incidence(&time, &status);
-        assert_eq!(result.event_types, vec![1]);
-        assert_eq!(result.cif.len(), 1);
-        let last_cif = result.cif[0].last().unwrap();
-        assert!(approx_eq(*last_cif, 1.0, TOLERANCE));
-    }
-    #[test]
-    fn test_cumulative_incidence_competing_risks() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let status = vec![1, 2, 1, 2, 1, 0];
-        let result = compute_cumulative_incidence(&time, &status);
-        assert_eq!(result.event_types.len(), 2);
-        assert!(result.event_types.contains(&1));
-        assert!(result.event_types.contains(&2));
-        let last_idx = result.time.len() - 1;
-        let sum_cif: f64 = result.cif.iter().map(|c| c[last_idx]).sum();
-        assert!(sum_cif <= 1.0 + TOLERANCE);
+        let result = median(&time, &status);
+        assert!(result.quantile[0][0].is_nan());
     }
     #[test]
     fn test_logrank_identical_groups() {
         let time = vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
         assert!(result.statistic < 1.0);
         assert!(result.p_value > 0.3);
     }
@@ -168,36 +167,16 @@ mod tests {
         let time = vec![1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0];
         let status = vec![1, 1, 1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
         assert!(result.statistic > 3.0);
         assert!(result.p_value < 0.1);
-    }
-    #[test]
-    fn test_logrank_wilcoxon_weight() {
-        let time = vec![1.0, 2.0, 5.0, 6.0, 1.0, 2.0, 9.0, 10.0];
-        let status = vec![1, 1, 1, 1, 1, 1, 1, 1];
-        let group = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let lr_result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
-        let wilcox_result = weighted_logrank_test(&time, &status, &group, WeightType::Wilcoxon);
-        assert!(lr_result.statistic >= 0.0);
-        assert!(wilcox_result.statistic >= 0.0);
-        assert_eq!(wilcox_result.weight_type, "Wilcoxon");
-    }
-    #[test]
-    fn test_logrank_trend() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        let status = vec![1, 1, 1, 1, 1, 1, 1, 1, 1];
-        let group = vec![0, 0, 0, 1, 1, 1, 2, 2, 2];
-        let result = logrank_trend_test(&time, &status, &group, None);
-        assert!(result.trend_direction == "increasing" || result.trend_direction == "decreasing");
-        assert!((0.0..=1.0).contains(&result.p_value));
     }
     #[test]
     fn test_hazard_ratio_equal_groups() {
         let time = vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(approx_eq(result.hazard_ratio, 1.0, 0.5));
         assert!(result.ci_lower < 1.0 && result.ci_upper > 1.0);
     }
@@ -206,7 +185,7 @@ mod tests {
         let time = vec![1.0, 1.0, 1.0, 5.0, 5.0, 5.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(result.hazard_ratio > 1.0);
     }
     #[test]
@@ -267,14 +246,14 @@ mod tests {
     fn test_conditional_survival() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let status = vec![1, 1, 1, 1, 1, 1];
-        let result = compute_conditional_survival(&time, &status, 2.0, 5.0, 0.95);
+        let result = compute_conditional_survival(&time, &status, 2.0, 5.0, 0.95).unwrap();
         assert!(approx_eq(result.conditional_survival, 0.25, TOLERANCE));
     }
     #[test]
     fn test_survival_at_specific_times() {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 1, 1, 1];
-        let results = compute_survival_at_times(&time, &status, &[1.0, 3.0, 5.0], 0.95);
+        let results = compute_survival_at_times(&time, &status, &[1.0, 3.0, 5.0], 0.95).unwrap();
         assert_eq!(results.len(), 3);
         assert!(approx_eq(results[0].survival, 0.8, TOLERANCE));
         assert!(approx_eq(results[1].survival, 0.4, TOLERANCE));
@@ -338,16 +317,16 @@ mod tests {
     fn test_single_observation() {
         let time = vec![5.0];
         let status = vec![1];
-        let na_result = nelson_aalen(&time, &status, None, 0.95);
+        let na_result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert_eq!(na_result.cumulative_hazard, vec![1.0]);
-        let rmst_result = compute_rmst(&time, &status, 10.0, 0.95);
-        assert!(rmst_result.rmst > 0.0);
+        let (rmean, _) = restricted_mean(&time, &status, 10.0);
+        assert!(rmean > 0.0);
     }
     #[test]
     fn test_tied_event_times() {
         let time = vec![1.0, 1.0, 1.0, 2.0, 2.0];
         let status = vec![1, 1, 1, 1, 1];
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert_eq!(result.time, vec![1.0, 2.0]);
         assert_eq!(result.n_events, vec![3, 2]);
         assert!(approx_eq(result.cumulative_hazard[0], 0.6, TOLERANCE));
@@ -356,7 +335,7 @@ mod tests {
     fn test_very_small_sample() {
         let time = vec![1.0, 2.0];
         let status = vec![1, 1];
-        let result = compute_hazard_ratio(&time, &status, &[0, 1], 0.95);
+        let result = compute_hazard_ratio(&time, &status, &[0, 1], 0.95).unwrap();
         assert!(result.hazard_ratio > 0.0);
     }
     #[test]
@@ -364,7 +343,7 @@ mod tests {
         let n = 1000;
         let time: Vec<f64> = (1..=n).map(|i| i as f64).collect();
         let status: Vec<i32> = (0..n).map(|i| if i % 2 == 0 { 1 } else { 0 }).collect();
-        let result = nelson_aalen(&time, &status, None, 0.95);
+        let result = nelson_aalen(&time, &status, None, 0.95).unwrap();
         assert!(!result.cumulative_hazard.is_empty());
         assert!(result.cumulative_hazard.last().unwrap().is_finite());
     }
@@ -373,7 +352,7 @@ mod tests {
         let time = vec![0.1, 0.1, 0.1, 100.0, 100.0, 100.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let group = vec![0, 0, 0, 1, 1, 1];
-        let result = compute_hazard_ratio(&time, &status, &group, 0.95);
+        let result = compute_hazard_ratio(&time, &status, &group, 0.95).unwrap();
         assert!(result.hazard_ratio.is_finite());
         assert!(result.hazard_ratio > 1.0);
     }

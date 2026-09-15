@@ -1,7 +1,17 @@
-use pyo3::exceptions::PyValueError;
+//! R's `lvcf` (`R/xtras.R`): last value carried forward within subject.
+//!
+//! Only the bookkeeping lives here: for every row, the row whose value it
+//! should take.  The caller copies values (of any type) and applies R's
+//! `first = TRUE` rule, which turns a missing first value of a 0/1 or
+//! logical variable into 0.
+
+use super::id_value::{IdValue, SubjectId};
+use crate::error::SurvivalResult;
+use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 use std::cmp::Ordering;
 
+/// R's `order(id, time)` treats missing times as larger than any value.
 fn compare_time(left: f64, right: f64) -> Ordering {
     match (left.is_nan(), right.is_nan()) {
         (false, false) => left.total_cmp(&right),
@@ -11,106 +21,57 @@ fn compare_time(left: f64, right: f64) -> Ordering {
     }
 }
 
-#[pyfunction]
-#[pyo3(signature = (id, missing, time=None))]
-pub fn lvcf_indices(
-    py: Python<'_>,
-    id: Vec<usize>,
-    missing: Vec<bool>,
-    time: Option<Vec<f64>>,
-) -> PyResult<Vec<usize>> {
+/// For each row, the zero-based row whose value is carried into it: the
+/// row itself when its value is present or it is the first row of its
+/// subject, otherwise the most recent row of the subject with a value
+/// (or that subject's first row when none has one yet).
+pub fn lvcf<I: SubjectId>(
+    id: &[I],
+    missing: &[bool],
+    time: Option<&[f64]>,
+) -> SurvivalResult<Vec<usize>> {
     let n = id.len();
-    validate_lvcf_lengths(n, missing.len(), time.as_ref().map(Vec::len))?;
-
-    Ok(py.detach(move || lvcf_source_indices_by(id, missing, time, Ord::cmp)))
-}
-
-#[pyfunction]
-#[pyo3(signature = (id, missing, time=None))]
-pub fn lvcf_numeric_indices(
-    py: Python<'_>,
-    id: &Bound<'_, PyAny>,
-    missing: Vec<bool>,
-    time: Option<Vec<f64>>,
-) -> PyResult<Vec<usize>> {
-    if let Ok(integer_id) = id.extract::<Vec<i64>>() {
-        let n = integer_id.len();
-        validate_lvcf_lengths(n, missing.len(), time.as_ref().map(Vec::len))?;
-        return Ok(py.detach(move || lvcf_source_indices_by(integer_id, missing, time, Ord::cmp)));
+    validate_length(n, missing.len(), "missing")?;
+    if let Some(time) = time {
+        validate_length(n, time.len(), "time")?;
     }
-
-    let id = id.extract::<Vec<f64>>()?;
-    let n = id.len();
-    validate_lvcf_lengths(n, missing.len(), time.as_ref().map(Vec::len))?;
-    if id.iter().any(|value| value.is_nan()) {
-        return Err(PyValueError::new_err("id must not contain missing values"));
-    }
-
-    Ok(py.detach(move || lvcf_source_indices_by(id, missing, time, compare_numeric_id)))
-}
-
-fn validate_lvcf_lengths(
-    id_len: usize,
-    missing_len: usize,
-    time_len: Option<usize>,
-) -> PyResult<()> {
-    if missing_len != id_len {
-        return Err(PyValueError::new_err(
-            "missing must have the same length as id",
-        ));
-    }
-    if time_len.is_some_and(|length| length != id_len) {
-        return Err(PyValueError::new_err(
-            "time must have the same length as id",
-        ));
-    }
-    Ok(())
-}
-
-fn compare_numeric_id(left: &f64, right: &f64) -> Ordering {
-    if left == right {
-        Ordering::Equal
-    } else {
-        left.total_cmp(right)
-    }
-}
-
-fn lvcf_source_indices_by<T, F>(
-    id: Vec<T>,
-    missing: Vec<bool>,
-    time: Option<Vec<f64>>,
-    compare_id: F,
-) -> Vec<usize>
-where
-    F: Fn(&T, &T) -> Ordering,
-{
-    let n = id.len();
+    let keys: Vec<I::Key> = id.iter().map(SubjectId::key).collect();
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&left, &right| {
-        compare_id(&id[left], &id[right])
-            .then_with(|| {
-                time.as_ref().map_or(Ordering::Equal, |values| {
-                    compare_time(values[left], values[right])
-                })
-            })
-            .then_with(|| left.cmp(&right))
+        keys[left]
+            .cmp(&keys[right])
+            .then_with(|| time.map_or(Ordering::Equal, |t| compare_time(t[left], t[right])))
     });
 
     let mut source: Vec<usize> = (0..n).collect();
-    let Some((&first, rest)) = order.split_first() else {
-        return source;
-    };
-    let mut current = first;
-    let mut previous = first;
-    for &row in rest {
-        if !missing[row] || compare_id(&id[row], &id[previous]) != Ordering::Equal {
+    let mut current = 0;
+    let mut previous: Option<usize> = None;
+    for &row in &order {
+        let new_subject = previous.is_none_or(|p| keys[p] != keys[row]);
+        if new_subject || !missing[row] {
             current = row;
         } else {
             source[row] = current;
         }
-        previous = row;
+        previous = Some(row);
     }
-    source
+    Ok(source)
+}
+
+/// Python entry point of [`lvcf`].
+#[pyfunction(name = "lvcf")]
+#[pyo3(signature = (id, missing, time=None))]
+pub fn lvcf_py(
+    id: Vec<IdValue>,
+    missing: Vec<bool>,
+    time: Option<Vec<f64>>,
+) -> PyResult<Vec<usize>> {
+    if id.iter().any(IdValue::is_missing) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "id must not contain missing values",
+        ));
+    }
+    Ok(lvcf(&id, &missing, time.as_deref())?)
 }
 
 #[cfg(test)]
@@ -119,54 +80,33 @@ mod tests {
 
     #[test]
     fn carries_within_sorted_ids() {
-        let result =
-            lvcf_source_indices_by(vec![2, 1, 1], vec![false, false, true], None, Ord::cmp);
-        assert_eq!(result, vec![0, 1, 1]);
+        assert_eq!(
+            lvcf(&[2i64, 1, 1], &[false, false, true], None).unwrap(),
+            vec![0, 1, 1]
+        );
+        assert_eq!(
+            lvcf(&["a", "a", "a", "b"], &[true, true, false, true], None).unwrap(),
+            vec![0, 0, 2, 3]
+        );
     }
 
     #[test]
-    fn sorts_missing_times_last() {
-        let result = lvcf_source_indices_by(
-            vec![0, 0, 0],
-            vec![false, true, false],
-            Some(vec![1.0, f64::NAN, 2.0]),
-            Ord::cmp,
-        );
+    fn time_orders_within_subject_with_missing_times_last() {
+        let result = lvcf(
+            &[0i64, 0, 0],
+            &[false, true, false],
+            Some(&[1.0, f64::NAN, 2.0]),
+        )
+        .unwrap();
         assert_eq!(result, vec![0, 2, 2]);
-    }
-
-    #[test]
-    fn preserves_infinite_time_ordering() {
-        let result = lvcf_source_indices_by(
-            vec![0, 0, 0],
-            vec![false, true, false],
-            Some(vec![1.0, f64::NEG_INFINITY, f64::INFINITY]),
-            Ord::cmp,
-        );
-        assert_eq!(result, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn empty_inputs_are_supported() {
-        assert!(
-            lvcf_source_indices_by::<usize, _>(Vec::new(), Vec::new(), None, Ord::cmp).is_empty()
-        );
-    }
-
-    #[test]
-    fn numeric_ids_preserve_python_equality() {
-        let result = lvcf_source_indices_by(
-            vec![-0.0, 0.0, 2.0],
-            vec![false, true, false],
-            None,
-            compare_numeric_id,
-        );
-        assert_eq!(result, vec![0, 0, 2]);
+        let result = lvcf(&[0i64, 0], &[false, true], Some(&[2.0, 1.0])).unwrap();
+        assert_eq!(result, vec![0, 1]);
     }
 
     #[test]
     fn validates_parallel_inputs() {
-        assert!(validate_lvcf_lengths(1, 0, None).is_err());
-        assert!(validate_lvcf_lengths(1, 1, Some(0)).is_err());
+        assert!(lvcf(&[1i64], &[], None).is_err());
+        assert!(lvcf(&[1i64], &[true], Some(&[])).is_err());
+        assert!(lvcf::<i64>(&[], &[], None).unwrap().is_empty());
     }
 }

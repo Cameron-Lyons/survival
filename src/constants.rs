@@ -1,8 +1,6 @@
 pub const CHOLESKY_TOL: f64 = 1e-10;
-pub const RIDGE_REGULARIZATION: f64 = 1e-6;
-pub const NEAR_ZERO_MATRIX: f64 = 1e-10;
+/// Legacy absolute tolerance of [`same_time`]; not R's `timefix`.
 pub const TIME_EPSILON: f64 = 1e-9;
-pub const PYEARS_TIME_EPSILON: f64 = 1e-8;
 pub const CONVERGENCE_EPSILON: f64 = 1e-6;
 pub const STRICT_EPSILON: f64 = 1e-5;
 pub const CLOGIT_TOLERANCE: f64 = 1e-6;
@@ -13,25 +11,20 @@ pub const DEFAULT_MAX_ITER: usize = 30;
 pub const DEFAULT_CONFIDENCE_LEVEL: f64 = 0.95;
 pub const DEFAULT_BOOTSTRAP_SAMPLES: usize = 1000;
 
-pub const Z_SCORE_80: f64 = 1.28;
-pub const Z_SCORE_90: f64 = 1.645;
-pub const Z_SCORE_95: f64 = 1.96;
-pub const Z_SCORE_99: f64 = 2.576;
+/// `qnorm(0.95)`, `qnorm(0.975)` and `qnorm(0.995)` to full precision, as R
+/// computes them; prefer `z_score_for_confidence` for other levels.
+pub const Z_SCORE_90: f64 = 1.6448536269514715;
+pub const Z_SCORE_95: f64 = 1.9599639845400536;
+pub const Z_SCORE_99: f64 = 2.5758293035489;
 
 pub const TIED_PAIR_WEIGHT: f64 = 0.5;
 pub const DEFAULT_CONCORDANCE: f64 = 0.5;
 
+/// Two-sided normal critical value for a confidence level, exactly as R's
+/// survival package computes it: `qnorm((1 + conf.int) / 2)`.
 #[inline]
 pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
-    if confidence_level >= 0.99 {
-        Z_SCORE_99
-    } else if confidence_level >= 0.95 {
-        Z_SCORE_95
-    } else if confidence_level >= 0.90 {
-        Z_SCORE_90
-    } else {
-        Z_SCORE_80
-    }
+    crate::internal::dist::qnorm((1.0 + confidence_level) / 2.0, true, false)
 }
 
 #[inline]
@@ -166,7 +159,6 @@ pub const PARALLEL_THRESHOLD_XLARGE: usize = 10000;
 pub const COX_MAX_ITER: usize = 20;
 pub const COX_CONVERGENCE_TOLERANCE: f64 = 1e-9;
 pub const COX_RANK_TOLERANCE: f64 = 1.818_989_403_545_856_5e-12;
-pub const ITERATIVE_MAX_ITER: usize = 100;
 pub const LINEAR_PRED_CLAMP_MIN: f64 = -20.0;
 pub const LINEAR_PRED_CLAMP_MAX: f64 = 20.0;
 
@@ -208,17 +200,15 @@ pub const MAX_HALVING_ITERATIONS: usize = 10;
 pub const STEP_HALVE_FACTOR: f64 = 0.5;
 pub const STEP_DOUBLE_FACTOR: f64 = 2.0;
 
-pub const HARTLEY_A1: f64 = 0.2316419;
-pub const HARTLEY_NORM: f64 = 0.3989423;
-pub const HARTLEY_B1: f64 = 0.3193815;
-pub const HARTLEY_B2: f64 = -0.3565638;
-pub const HARTLEY_B3: f64 = 1.781478;
-pub const HARTLEY_B4: f64 = -1.821256;
-pub const HARTLEY_B5: f64 = 1.330274;
-
 pub const ROYSTON_KAPPA_FACTOR: f64 = 8.0;
 pub const ROYSTON_VARIANCE_FACTOR: f64 = 6.0;
 
+/// Legacy near-tie test with a fixed absolute tolerance
+/// ([`TIME_EPSILON`]), kept for the modules without an R counterpart that
+/// still compare times pairwise.  It is not R's `timefix`: routines that
+/// port R bin their times once with `data_prep::aeq_surv` / `aeq_times`
+/// (`aeqSurv`, a relative tolerance applied to the whole time vector) and
+/// then compare exactly.
 #[inline]
 pub fn same_time(left: f64, right: f64) -> bool {
     (left - right).abs() < TIME_EPSILON

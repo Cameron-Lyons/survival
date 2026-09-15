@@ -1,329 +1,234 @@
+"""``concordancefit`` / ``concordancefit_counting`` against R survival 3.8.11 ``concordance()``."""
+
 import pytest
 
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
+core = survival.core
+
+TIME = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]
+STATUS = [1, 1, 0, 1, 1, 1, 0, 1]
+X = [0.5, 0.2, 0.5, 0.9, 0.2, 0.7, 0.1, 0.9]
+W = [1.0, 2.0, 0.5, 1.0, 1.0, 2.0, 0.5, 1.5]
 
 
-def test_concordance():
-    y = [1.0, 2.0, 3.0, 4.0, 5.0]
-    x = [1, 2, 1, 2, 1]
-    wt = [1.0, 1.0, 1.0, 1.0, 1.0]
-    timewt = [1.0, 1.0, 1.0, 1.0, 1.0]
-    sortstart = None
-    sortstop = [0, 1, 2, 3, 4]
-
-    result = survival.core.concordance(y, x, wt, timewt, sortstart, sortstop)
-    assert isinstance(result, dict)
-    assert "count" in result
+def _counts(fit, index=0):
+    count = fit.count[index]
+    return (count.concordant, count.discordant, count.tied_x, count.tied_y, count.tied_xy)
 
 
-def test_legacy_concordance_validates_index_inputs():
-    y = [1.0, 2.0, 3.0]
-    wt = [1.0, 1.0, 1.0]
-    timewt = [1.0, 1.0, 1.0]
-
-    with pytest.raises(ValueError, match="x length mismatch"):
-        survival.core.concordance(y, [0, 1], wt, timewt, None, [0, 1, 2])
-
-    with pytest.raises(ValueError, match="x contains negative value"):
-        survival.core.concordance(y, [0, -1, 2], wt, timewt, None, [0, 1, 2])
-
-    with pytest.raises(ValueError, match="x value 3 .* outside observation count"):
-        survival.core.concordance(y, [0, 1, 3], wt, timewt, None, [0, 1, 2])
-
-    with pytest.raises(ValueError, match="sortstop value 3 .* outside observation count"):
-        survival.core.concordance(y, [0, 1, 2], wt, timewt, None, [0, 1, 3])
-
-    with pytest.raises(ValueError, match="sortstart length mismatch"):
-        survival.core.concordance(y, [0, 1, 2], wt, timewt, [0, 1], [0, 1, 2])
-
-    with pytest.raises(ValueError, match="sortstart value 3 .* outside observation count"):
-        survival.core.concordance(y, [0, 1, 2], wt, timewt, [0, 1, 3], [0, 1, 2])
+@pytest.fixture
+def data():
+    return core.SurvivalData(TIME, STATUS), core.CovariateMatrix(X, 8, 1)
 
 
-def test_concordance_summary_keeps_near_equal_risk_scores_distinct():
-    summary = survival.core.concordance_summary(
-        [1.0, 2.0, 3.0],
-        [1, 1, 1],
-        [0.5, 0.5 + 5e-13, 0.1],
+def test_concordancefit_matches_r_default(data):
+    fit = core.concordancefit(*data)
+
+    # concordance(Surv(time, status) ~ x): (C + Tx/2) / (C + D + Tx)
+    assert fit.concordance == pytest.approx([0.5])
+    assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
+    assert fit.var[0] == pytest.approx([0.029478458049886618])
+    assert fit.cvar == pytest.approx([0.03020327178490444])
+    assert fit.n == 8
+    assert fit.count_strata is None
+    assert fit.dfbeta is None
+    assert fit.influence is None
+    assert fit.ranks is None
+
+
+def test_concordancefit_without_standard_errors_only_counts(data):
+    fit = core.concordancefit(*data, std_err=False)
+
+    assert fit.concordance == pytest.approx([0.5])
+    assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
+    assert fit.var is None
+    assert fit.cvar is None
+
+
+def test_concordancefit_case_weights_match_r(data):
+    fit = core.concordancefit(*data, weights=core.Weights(W))
+
+    # R concordance with case weights w
+    assert fit.concordance == pytest.approx([0.64615384615384619])
+    assert _counts(fit) == pytest.approx((19.0, 9.5, 4.0, 2.0, 0.0))
+    assert fit.var[0] == pytest.approx([0.020554798501453028])
+    assert fit.cvar == pytest.approx([0.024967025115870081])
+
+
+@pytest.mark.parametrize(
+    ("timewt", "concordance", "counts", "var", "cvar"),
+    [
+        (
+            "S",
+            0.48672566371681419,
+            (9.4, 10.0, 3.2, 1.2, 0.0),
+            0.031057472926532059,
+            0.027801008021659596,
+        ),
+        (
+            "S/G",
+            0.4730831973898858,
+            (9.88, 11.2, 3.44, 1.44, 0.0),
+            0.032793061463206923,
+            0.02537403773518913,
+        ),
+        (
+            "n/G2",
+            0.4730831973898858,
+            (9.88, 11.2, 3.44, 1.44, 0.0),
+            0.032793061463206943,
+            0.025374037735189141,
+        ),
+        (
+            "I",
+            0.47573306370070778,
+            (1.4464285714285714, 1.6178571428571429, 0.46785714285714286, 0.25, 0.0),
+            0.036680341889530892,
+            0.17544301778614305,
+        ),
+    ],
+)
+def test_concordancefit_time_weights_match_r(data, timewt, concordance, counts, var, cvar):
+    fit = core.concordancefit(*data, timewt=timewt)
+
+    assert fit.concordance == pytest.approx([concordance])
+    assert _counts(fit) == pytest.approx(counts)
+    assert fit.var[0] == pytest.approx([var])
+    assert fit.cvar == pytest.approx([cvar])
+
+
+def test_concordancefit_ymax_truncates_pairs(data):
+    fit = core.concordancefit(*data, ymax=3.0)
+
+    # R concordance with ymax = 3
+    assert fit.concordance == pytest.approx([0.5])
+    assert _counts(fit) == pytest.approx((7.0, 7.0, 3.0, 0.0, 0.0))
+    assert fit.var[0] == pytest.approx([0.020761245674740487])
+    assert fit.cvar == pytest.approx([0.037438210578348986])
+
+
+def test_concordancefit_strata_keeps_per_stratum_counts(data):
+    fit = core.concordancefit(*data, strata=[1, 1, 1, 1, 2, 2, 2, 2])
+
+    # concordance(Surv(time, status) ~ x + strata(g))
+    assert fit.concordance == pytest.approx([0.61111111111111116])
+    assert fit.count_strata == [1, 2]
+    assert _counts(fit, 0) == pytest.approx((3.0, 1.0, 1.0, 0.0, 0.0))
+    assert _counts(fit, 1) == pytest.approx((2.0, 2.0, 0.0, 1.0, 0.0))
+    assert fit.var[0] == pytest.approx([0.037265660722450848])
+    assert fit.cvar == pytest.approx([0.052983539094650201])
+
+
+def test_concordancefit_cluster_uses_grouped_jackknife_variance(data):
+    fit = core.concordancefit(*data, cluster=[1, 1, 2, 2, 3, 3, 4, 4])
+
+    # concordance(Surv(time, status) ~ x + cluster(id)): counts unchanged, var collapsed by id
+    assert fit.concordance == pytest.approx([0.5])
+    assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
+    assert fit.var[0] == pytest.approx([0.0034013605442176865])
+    assert fit.cvar == pytest.approx([0.03020327178490444])
+
+
+def test_concordancefit_influence_and_ranks_match_r(data):
+    with_dfbeta = core.concordancefit(*data, influence=1)
+    assert [row[0] for row in with_dfbeta.dfbeta] == pytest.approx(
+        [
+            0.0,
+            0.047619047619047616,
+            0.023809523809523808,
+            -0.023809523809523808,
+            -0.047619047619047616,
+            0.023809523809523808,
+            -0.11904761904761904,
+            0.095238095238095233,
+        ]
     )
 
-    assert summary["comparable"] == pytest.approx(3.0)
-    assert summary["concordant"] == pytest.approx(2.0)
-    assert summary["concordance"] == pytest.approx(2.0 / 3.0)
-    assert survival.core.concordance_index(
-        [1.0, 2.0, 3.0],
-        [1, 1, 1],
-        [0.5, 0.5 + 5e-13, 0.1],
-    ) == pytest.approx(2.0 / 3.0)
+    with_influence = core.concordancefit(*data, influence=2)
+    assert with_influence.dfbeta is None
+    influence = with_influence.influence[0]
+    assert len(influence) == 8
+    assert influence[0] == pytest.approx([3.0, 3.0, 1.0, 0.0, 0.0])
+    assert influence[6] == pytest.approx([0.0, 5.0, 0.0, 0.0, 0.0])
+
+    with_ranks = core.concordancefit(*data, ranks=True)
+    ranks = with_ranks.ranks[0]
+    assert ranks.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 4.0, 6.0])
+    assert ranks.rank == pytest.approx([0.0, 0.42857142857142855, -0.6, -0.25, 0.25, 0.0])
+    assert ranks.timewt == pytest.approx([8.0, 7.0, 5.0, 4.0, 4.0, 1.0])
+    assert ranks.casewt == pytest.approx([1.0] * 6)
 
 
-def test_counting_concordance_keeps_near_equal_risk_scores_distinct():
-    summary = survival.core.counting_concordance_summary(
-        [0.0, 0.0, 1.0, 1.0],
-        [1.0, 2.0, 3.0, 4.0],
-        [1, 0, 1, 1],
-        [0.5, 0.5 + 5e-13, 0.1, 0.8],
+def test_concordancefit_timefix_groups_near_tied_event_times():
+    near = core.SurvivalData([1.0, 1.0 + 4e-9, 2.0, 3.0], [1, 1, 1, 0])
+    x = core.CovariateMatrix([0.9, 0.1, 0.5, 0.2], 4, 1)
+
+    fixed = core.concordancefit(near, x)
+    # aeqSurv folds the near-tie; equals concordance(Surv(c(1, 1, 2, 3), status) ~ x)
+    assert fixed.concordance == pytest.approx([0.4])
+    assert _counts(fixed) == pytest.approx((2.0, 3.0, 0.0, 1.0, 0.0))
+    assert fixed.var[0] == pytest.approx([0.0864])
+
+    raw = core.concordancefit(near, x, timefix=False)
+    # without timefix the pair is ordered: one more discordant pair, no tied time
+    assert raw.concordance == pytest.approx([1 / 3])
+    assert _counts(raw) == pytest.approx((2.0, 4.0, 0.0, 0.0, 0.0))
+
+
+def test_concordancefit_several_predictors_share_one_variance_matrix(data):
+    survival_data, _ = data
+    x = core.CovariateMatrix([value for a, b in zip(X, W, strict=True) for value in (a, b)], 8, 2)
+
+    fit = core.concordancefit(survival_data, x)
+
+    # concordance(Surv(time, status) ~ x + w)
+    assert fit.concordance == pytest.approx([0.5, 0.38095238095238093])
+    assert _counts(fit, 0) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
+    assert _counts(fit, 1) == pytest.approx((6.0, 11.0, 4.0, 1.0, 0.0))
+    assert fit.var[0] == pytest.approx([0.029478458049886618, 0.011904761904761904])
+    assert fit.var[1] == pytest.approx([0.011904761904761904, 0.021361983947017958])
+    assert fit.cvar == pytest.approx([0.03020327178490444, 0.029616132167152576])
+
+
+def test_concordancefit_counting_matches_r():
+    counting = core.CountingProcessData(
+        [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 3.0],
+        [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0],
+        [1, 0, 1, 0, 1, 0, 1, 1],
     )
+    x = core.CovariateMatrix([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 0.2, 0.8], 8, 1)
 
-    assert summary["comparable"] == pytest.approx(2.0)
-    assert summary["concordant"] == pytest.approx(0.0)
-    assert summary["concordance"] == pytest.approx(0.0)
+    plain = core.concordancefit_counting(counting, x)
+    # concordance(Surv(start, stop, status) ~ x)
+    assert plain.concordance == pytest.approx([0.44444444444444442])
+    assert _counts(plain) == pytest.approx((4.0, 5.0, 0.0, 0.0, 0.0))
+    assert plain.var[0] == pytest.approx([0.018289894833104711])
+    assert plain.cvar == pytest.approx([0.042181069958847732])
+    assert plain.n == 8
 
-
-def test_concordance_summary_reports_reference_conditional_variance():
-    summary = survival.core.concordance_summary(
-        [1.0, 2.0, 3.0, 4.0],
-        [1, 1, 0, 1],
-        [0.2, 0.4, 0.4, 1.0],
+    weighted = core.concordancefit_counting(
+        counting, x, weights=core.Weights([1.0, 1.0, 2.0, 2.0, 1.0, 1.0, 1.0, 3.0])
     )
+    assert weighted.concordance == pytest.approx([0.52941176470588236])
+    assert _counts(weighted) == pytest.approx((9.0, 8.0, 0.0, 0.0, 0.0))
+    assert weighted.var[0] == pytest.approx([0.017456687539660683])
 
-    assert summary["conditional_variance"] == pytest.approx(0.065)
-
-
-def test_concordance_summary_groups_near_tied_event_times():
-    exact_time = [1.0, 1.0, 2.0, 3.0]
-    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
-    status = [1, 1, 1, 0]
-    risk = [0.9, 0.1, 0.5, 0.2]
-
-    exact = survival.core.concordance_summary(exact_time, status, risk)
-    near = survival.core.concordance_summary(near_time, status, risk)
-    assert near["concordant"] == pytest.approx(exact["concordant"])
-    assert near["comparable"] == pytest.approx(exact["comparable"])
-    assert near["concordance"] == pytest.approx(exact["concordance"])
-
-    exact_weighted = survival.core.concordance_summary(exact_time, status, risk, timewt="S")
-    near_weighted = survival.core.concordance_summary(near_time, status, risk, timewt="S")
-    assert near_weighted["concordant"] == pytest.approx(exact_weighted["concordant"])
-    assert near_weighted["comparable"] == pytest.approx(exact_weighted["comparable"])
-    assert near_weighted["concordance"] == pytest.approx(exact_weighted["concordance"])
+    survival_weighted = core.concordancefit_counting(counting, x, timewt="S")
+    assert survival_weighted.concordance == pytest.approx([0.46987951807228923])
+    assert _counts(survival_weighted) == pytest.approx((6.5, 7.3333333333333321, 0.0, 0.0, 0.0))
+    assert survival_weighted.cvar == pytest.approx([0.026491508201480624])
 
 
-def test_concordance_diagnostic_rows_group_near_tied_event_times():
-    exact_time = [1.0, 1.0, 2.0, 3.0]
-    near_time = [1.0, 1.0 + 5e-10, 2.0, 3.0]
-    status = [1, 1, 1, 0]
-    risk = [0.9, 0.1, 0.5, 0.2]
-    weights = [2.0, 1.0, 3.0, 1.0]
-    core = survival._survival
+def test_concordancefit_validates_inputs(data):
+    survival_data, x = data
 
-    exact_ranks = core.concordance_rank_rows(exact_time, status, risk, weights, timewt="S")
-    near_ranks = core.concordance_rank_rows(near_time, status, risk, weights, timewt="S")
-    assert len(near_ranks) == len(exact_ranks)
-    for near_row, exact_row in zip(near_ranks, exact_ranks, strict=True):
-        assert near_row[1:] == pytest.approx(exact_row[1:])
-
-    exact_influence, exact_dfbeta, exact_variance = core.concordance_influence_rows(
-        exact_time, status, risk, weights, timewt="S"
-    )
-    near_influence, near_dfbeta, near_variance = core.concordance_influence_rows(
-        near_time, status, risk, weights, timewt="S"
-    )
-    assert len(near_influence) == len(exact_influence)
-    for near_row, exact_row in zip(near_influence, exact_influence, strict=True):
-        assert near_row == pytest.approx(exact_row)
-    assert near_dfbeta == pytest.approx(exact_dfbeta)
-    assert near_variance == pytest.approx(exact_variance)
-
-
-def test_counting_concordance_summary_handles_duplicate_event_times():
-    start = [0.0, 0.0, 0.25, 0.5, 0.0, 1.0, 1.0]
-    stop = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]
-    status = [1, 1, 1, 1, 0, 1, 0]
-    risk = [0.9, 0.2, 0.7, 0.4, 0.1, 0.8, 0.3]
-    weights = [1.0, 0.0, 2.0, 1.5, 0.5, 3.0, 1.0]
-
-    # R survival 3.8.11 concordancefit, reverse=TRUE, timefix=FALSE:
-    # same-time censors remain comparators, while simultaneous events tie in y.
-    summary = survival.core.counting_concordance_summary(start, stop, status, risk)
-    assert summary["concordant"] == pytest.approx(8.0)
-    assert summary["comparable"] == pytest.approx(10.0)
-    assert summary["concordance"] == pytest.approx(0.8)
-    assert [summary[key] for key in ("tied_x", "tied_y", "tied_xy")] == pytest.approx(
-        [0.0, 3.0, 0.0]
-    )
-    assert summary["conditional_variance"] == pytest.approx(0.075)
-
-    weighted = survival.core.counting_concordance_summary(
-        start, stop, status, risk, weights=weights
-    )
-    assert weighted["concordant"] == pytest.approx(11.25)
-    assert weighted["comparable"] == pytest.approx(15.75)
-    assert weighted["concordance"] == pytest.approx(5.0 / 7.0)
-    assert [weighted[key] for key in ("tied_x", "tied_y", "tied_xy")] == pytest.approx(
-        [0.0, 2.0, 0.0]
-    )
-    assert weighted["conditional_variance"] == pytest.approx(0.0472411186696901)
-
-
-def test_concordance_public_apis_validate_values():
-    with pytest.raises(ValueError, match="time contains non-finite"):
-        survival.concordance_index([1.0, float("inf")], [1, 0], [0.4, 0.1])
-
-    with pytest.raises(ValueError, match="status must contain only 0/1"):
-        survival.core.concordance_summary([1.0, 2.0], [1, 2], [0.4, 0.1])
-
-    with pytest.raises(ValueError, match="risk_scores contains NaN"):
-        survival.concordance_index([1.0, 2.0], [1, 0], [0.4, float("nan")])
-
-    with pytest.raises(ValueError, match="start must be less than stop"):
-        survival.counting_concordance_index(
-            [0.0, 2.0],
-            [1.0, 2.0],
-            [1, 0],
-            [0.4, 0.1],
-        )
-
-    with pytest.raises(ValueError, match="start contains non-finite"):
-        survival.core.counting_concordance_summary(
-            [float("-inf"), 0.0],
-            [1.0, 2.0],
-            [1, 0],
-            [0.4, 0.1],
-        )
-
-
-def test_perform_concordance3_calculation():
-    time_data = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 0.0, 1.0, 0.0]
-    indices = [0, 1, 2, 3, 4]
-    weights = [1.0, 1.0, 1.0, 1.0, 1.0]
-    time_weights = [1.0, 1.0, 1.0, 1.0, 1.0]
-    sort_stop = [0, 1, 2, 3, 4]
-    do_residuals = False
-    result = survival.perform_concordance3_calculation(
-        time_data, indices, weights, time_weights, sort_stop, do_residuals
-    )
-    assert isinstance(result, dict)
-    assert "concordance_index" in result
-
-
-def test_perform_concordance_calculation():
-    time_data_v5 = [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 1.0, 0.0, 1.0, 0.0]
-    predictor_values = [0, 1, 2, 3, 4]
-    weights_v5 = [1.0, 1.0, 1.0, 1.0, 1.0]
-    time_weights_v5 = [1.0, 1.0, 1.0, 1.0, 1.0]
-    sort_stop_v5 = [0, 1, 2, 3, 4]
-    result = survival.perform_concordance_calculation(
-        time_data=time_data_v5,
-        predictor_values=predictor_values,
-        weights=weights_v5,
-        time_weights=time_weights_v5,
-        sort_stop=sort_stop_v5,
-    )
-    assert isinstance(result, dict)
-    assert "concordance_index" in result
-
-
-def test_concordance1_large_weighted_event_tie_counts_each_pair_once():
-    n = 32
-    weights = [0.5 + (idx % 7) * 0.125 for idx in range(n)]
-    expected = sum(
-        weights[left] * weights[right] for left in range(n) for right in range(left + 1, n)
-    )
-
-    result = survival.perform_concordance1_calculation(
-        [1.0] * n + [1.0] * n,
-        weights,
-        [idx % 16 for idx in range(n)],
-        16,
-    )
-
-    assert result["tied_y"] == pytest.approx(expected)
-
-
-def test_low_level_concordance_wrappers_validate_index_inputs():
-    time_data = [1.0, 2.0, 3.0, 1.0, 1.0, 0.0]
-    weights = [1.0, 1.0, 1.0]
-
-    with pytest.raises(RuntimeError, match="ntree must be positive"):
-        survival.perform_concordance1_calculation(time_data, weights, [0, 1, 2], 0)
-
-    with pytest.raises(RuntimeError, match="indices contains negative value"):
-        survival.perform_concordance1_calculation(time_data, weights, [0, -1, 2], 4)
-
-    with pytest.raises(RuntimeError, match="indices value 4 .* outside ntree"):
-        survival.perform_concordance1_calculation(time_data, weights, [0, 1, 4], 4)
-
-    extended_time_data = [1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 0.0, 1.0]
-    extended_weights = [1.0, 1.0, 1.0, 1.0]
-    time_weights = [1.0, 1.0, 1.0, 1.0]
-
-    with pytest.raises(RuntimeError, match="indices contains negative value"):
-        survival.perform_concordance3_calculation(
-            extended_time_data,
-            [0, -1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 2, 3],
-            False,
-        )
-
-    with pytest.raises(RuntimeError, match="sort_stop value 4 .* outside observation count"):
-        survival.perform_concordance3_calculation(
-            extended_time_data,
-            [0, 1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 2, 4],
-            False,
-        )
-
-    with pytest.raises(RuntimeError, match="sort_stop must be a permutation"):
-        survival.perform_concordance3_calculation(
-            extended_time_data,
-            [0, 1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 1, 3],
-            False,
-        )
-
-    with pytest.raises(RuntimeError, match="predictor_values contains negative value"):
-        survival.perform_concordance_calculation(
-            extended_time_data,
-            [0, -1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 2, 3],
-        )
-
-    with pytest.raises(RuntimeError, match="sort_stop must be a permutation"):
-        survival.perform_concordance_calculation(
-            extended_time_data,
-            [0, 1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 1, 3],
-        )
-
-    with pytest.raises(RuntimeError, match="sort_start length"):
-        survival.perform_concordance_calculation(
-            extended_time_data,
-            [0, 1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 2, 3],
-            [0, 1, 2],
-        )
-
-    with pytest.raises(RuntimeError, match="sort_start value 4 .* outside observation count"):
-        survival.perform_concordance_calculation(
-            extended_time_data,
-            [0, 1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 2, 3],
-            [0, 1, 2, 4],
-        )
-
-    with pytest.raises(RuntimeError, match="sort_start must be a permutation"):
-        survival.perform_concordance_calculation(
-            extended_time_data,
-            [0, 1, 2, 3],
-            extended_weights,
-            time_weights,
-            [0, 1, 2, 3],
-            [0, 1, 1, 3],
-        )
+    with pytest.raises(ValueError, match="timewt must be one of"):
+        core.concordancefit(survival_data, x, timewt="bogus")
+    with pytest.raises(ValueError, match="length mismatch"):
+        core.concordancefit(survival_data, x, weights=core.Weights([1.0, 2.0]))
+    with pytest.raises(ValueError, match="length mismatch"):
+        core.concordancefit(survival_data, x, strata=[0, 1])
+    with pytest.raises(ValueError, match="length mismatch"):
+        core.concordancefit(survival_data, core.CovariateMatrix(X + [0.3], 9, 1))

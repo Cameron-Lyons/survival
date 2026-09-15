@@ -1,1691 +1,1944 @@
-use super::coxph_penalty::{CoxPenaltyDiagnostics, validate_penalty};
-use crate::constants::{
-    COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE, EXP_CLAMP_MAX, EXP_CLAMP_MIN,
-    TIME_EPSILON,
-};
-use crate::internal::validation::validate_binary_i32;
-use crate::regression::cox_optimizer::{CoxFit, Method as CoxMethod};
-pub use crate::regression::coxph_model::{CoxPHModel, Subject};
-use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
-use ndarray::{Array1, Array2};
-use pyo3::prelude::*;
-use std::borrow::Cow;
-use std::collections::BTreeMap;
+//! The Cox proportional hazards model: R survival's `coxph` object.
+//!
+//! [`CoxPHFit::fit`] is the driver behind R's `coxph()`: it dispatches to the
+//! Newton-Raphson engine (`cox_optimizer`, ports of `coxfit6.c`, `agfit4.c`,
+//! `coxexact.c` and `agexact.c`), then performs the post-processing of
+//! `R/coxph.fit.R`, `R/agreg.fit.R`, `R/coxexact.fit.R`, `R/agexact.fit.R`
+//! and `R/coxph.R`: centred linear predictors, martingale residuals, the
+//! robust (cluster sandwich) variance, the Wald test and the concordance
+//! of the linear predictors.
+//!
+//! The fitted object keeps the data it was fitted to, so the methods R
+//! reconstructs from the model frame are plain method calls here:
+//! `basehaz()`, `survfit()` (`R/survfit.coxph.R` on top of
+//! `surv_analysis::agsurv`), `predict()` (`R/predict.coxph.R`) and the
+//! residual types of `R/residuals.coxph.R` (`coxph_diagnostics`).  The
+//! per-stratum baseline curves are computed once and cached.
 
-fn scaled_hazard_increment(events: f64, scaled_risk_sum: f64, risk_scale: f64) -> f64 {
-    if events > 0.0 && scaled_risk_sum > 0.0 {
-        events / scaled_risk_sum * risk_scale
-    } else {
-        0.0
+use crate::concordance::{ConcordanceFit, ConcordanceOptions, concordancefit};
+use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
+use crate::core::SurvResponse;
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
+use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
+use crate::regression::coxph_diagnostics::{
+    ResidualType, Residuals, SchoenfeldResiduals, collapse_rows, martingale_residuals,
+    schoenfeld_residuals, score_residuals,
+};
+use crate::regression::coxph_wtest::{wald_statistic, wald_tests};
+use crate::surv_analysis::agsurv::{
+    AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, IntegratedCurve, agsurv_rows,
+    cum_xbar_at, cumhaz_at, expand_curve, individual_curve, integrate_curve, step_at,
+};
+use ndarray::{Array1, Array2, ArrayView2};
+use pyo3::prelude::*;
+use std::sync::OnceLock;
+
+/// Validated inputs of a Cox fit, in the caller's row order (`Surv(time,
+/// status) ~ x` or `Surv(entry, time, status) ~ x`).
+#[derive(Debug, Clone)]
+pub struct CoxphData {
+    pub time: Vec<f64>,
+    pub entry: Option<Vec<f64>>,
+    pub status: Vec<i32>,
+    /// `n x nvar` design matrix (no intercept column).
+    pub x: Array2<f64>,
+    pub weights: Option<Vec<f64>>,
+    pub strata: Option<Vec<i32>>,
+    pub offset: Option<Vec<f64>>,
+}
+
+impl CoxphData {
+    pub fn try_new(
+        time: Vec<f64>,
+        entry: Option<Vec<f64>>,
+        status: Vec<i32>,
+        x: Array2<f64>,
+        weights: Option<Vec<f64>>,
+        strata: Option<Vec<i32>>,
+        offset: Option<Vec<f64>>,
+    ) -> SurvivalResult<Self> {
+        let n = time.len();
+        if n == 0 {
+            return Err(SurvivalError::invalid_input(
+                "No (non-missing) observations",
+            ));
+        }
+        validate_finite(&time, "time")?;
+        validate_length(n, status.len(), "status")?;
+        validate_binary_i32(&status, "status")?;
+        validate_length(n, x.nrows(), "x")?;
+        if let Some(value) = x.iter().find(|value| !value.is_finite()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "x contains non-finite value {value}"
+            )));
+        }
+        if let Some(entry) = &entry {
+            validate_length(n, entry.len(), "entry")?;
+            validate_finite(entry, "entry")?;
+            if let Some(index) = (0..n).find(|&i| entry[i] >= time[i]) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "Stop time must be > start time (row {index})"
+                )));
+            }
+        }
+        if let Some(weights) = &weights {
+            validate_length(n, weights.len(), "weights")?;
+            validate_finite(weights, "weights")?;
+            if weights.iter().any(|&w| w <= 0.0) {
+                return Err(SurvivalError::invalid_input("Invalid weights, must be >0"));
+            }
+        }
+        if let Some(strata) = &strata {
+            validate_length(n, strata.len(), "strata")?;
+        }
+        if let Some(offset) = &offset {
+            validate_length(n, offset.len(), "offset")?;
+            validate_finite(offset, "offset")?;
+        }
+        Ok(Self {
+            time,
+            entry,
+            status,
+            x,
+            weights,
+            strata,
+            offset,
+        })
+    }
+
+    pub fn n(&self) -> usize {
+        self.time.len()
     }
 }
 
-fn scaled_efron_hazard_increment(
-    events: f64,
-    deaths: usize,
-    scaled_risk_sum: f64,
-    scaled_death_risk_sum: f64,
-    risk_scale: f64,
-) -> f64 {
-    if events <= 0.0 || deaths == 0 || scaled_risk_sum <= 0.0 {
-        return 0.0;
-    }
+/// Fitting options: the `coxph()` arguments beyond the data.
+#[derive(Debug, Clone)]
+pub struct CoxphOptions {
+    pub method: TieMethod,
+    /// Initial coefficients (`init`); zero when absent.
+    pub init: Option<Vec<f64>>,
+    /// `coxph.control(iter.max, eps, toler.chol)`.
+    pub iter_max: usize,
+    pub eps: f64,
+    pub toler_chol: f64,
+    /// R's `nocenter`: a column whose values all belong to this set is
+    /// neither centred nor scaled inside the fitter (its mean is reported
+    /// as 0).  `None` is R's `nocenter = NULL`: centre every column.
+    pub nocenter: Option<Vec<f64>>,
+    /// Cluster codes for the robust sandwich variance (`cluster()`).
+    pub cluster: Option<Vec<i32>>,
+    /// Robust variance; defaults to `cluster.is_some()`.  `Some(true)`
+    /// without a cluster clusters on the observations.
+    pub robust: Option<bool>,
+}
 
-    let step_weight = events / deaths as f64;
-    let mut increment = 0.0;
-    for step in 0..deaths {
-        let fraction = step as f64 / deaths as f64;
-        let denom = scaled_risk_sum - fraction * scaled_death_risk_sum;
-        if denom > 0.0 {
-            increment += step_weight / denom * risk_scale;
+impl Default for CoxphOptions {
+    fn default() -> Self {
+        Self {
+            method: TieMethod::Efron,
+            init: None,
+            iter_max: COX_MAX_ITER,
+            eps: COX_CONVERGENCE_TOLERANCE,
+            toler_chol: COX_RANK_TOLERANCE,
+            nocenter: Some(vec![-1.0, 0.0, 1.0]),
+            cluster: None,
+            robust: None,
         }
     }
-    increment
 }
 
+/// Rows grouped by stratum and sorted by (stratum, time, original index),
+/// the order every C kernel of the package expects.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SortedRows {
+    /// Original row indices in sorted order.
+    pub order: Vec<usize>,
+    /// `[start, end)` positions in `order` of each stratum.
+    pub bounds: Vec<(usize, usize)>,
+    /// Stratum code of each stratum, ascending.
+    pub codes: Vec<i32>,
+    /// Stratum position (index into `codes`) of each original row.
+    pub stratum_index: Vec<usize>,
+}
+
+impl SortedRows {
+    fn new(order: Vec<usize>, strata: Option<&[i32]>) -> Self {
+        let n = order.len();
+        let mut bounds = Vec::new();
+        let mut codes = Vec::new();
+        let mut stratum_index = vec![0; n];
+        let mut start = 0;
+        for position in 0..n {
+            let code = strata.map_or(0, |s| s[order[position]]);
+            let last = position + 1 == n || strata.is_some_and(|s| s[order[position + 1]] != code);
+            if last {
+                bounds.push((start, position + 1));
+                codes.push(code);
+                for &row in &order[start..=position] {
+                    stratum_index[row] = codes.len() - 1;
+                }
+                start = position + 1;
+            }
+        }
+        Self {
+            order,
+            bounds,
+            codes,
+            stratum_index,
+        }
+    }
+
+    pub(crate) fn nstrata(&self) -> usize {
+        self.codes.len()
+    }
+
+    /// Position of a stratum code, if the fit has it.
+    pub(crate) fn position_of(&self, code: i32) -> Option<usize> {
+        self.codes.binary_search(&code).ok()
+    }
+}
+
+/// A fitted Cox model (R's `coxph` object).  As in R, the coefficient of a
+/// redundant (aliased) covariate is `NaN` (R's `NA`) with a zero row and
+/// column in `var`; every computation on the fit treats it as 0.
 #[pyclass(skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CoxPHFit {
+    /// Coefficients; `NaN` marks an aliased covariate.
     #[pyo3(get)]
-    pub coefficients: Vec<Vec<f64>>,
+    pub coefficients: Vec<f64>,
+    /// Variance of the coefficients; the robust sandwich when `naive_var`
+    /// is present.
+    pub var: Array2<f64>,
+    /// Model-based variance, kept when `var` is the robust one.
+    pub naive_var: Option<Array2<f64>>,
+    /// Log partial likelihood at the initial and the final coefficients.
     #[pyo3(get)]
-    pub means: Vec<f64>,
+    pub loglik: [f64; 2],
+    /// Score test at the initial coefficients.
     #[pyo3(get)]
-    pub score_vector: Vec<f64>,
+    pub score: f64,
+    /// Robust score test (present with the robust variance).
     #[pyo3(get)]
-    pub information_matrix: Vec<Vec<f64>>,
+    pub rscore: Option<f64>,
     #[pyo3(get)]
-    pub log_likelihood: Vec<f64>,
+    pub wald_test: f64,
     #[pyo3(get)]
-    pub score_test: f64,
+    pub iter: usize,
+    /// Rank of the information matrix (`< nvar` marks aliased columns),
+    /// `-2` converged while step halving, `1000` did not converge.
     #[pyo3(get)]
-    pub convergence_flag: i32,
-    #[pyo3(get)]
-    pub iterations: usize,
-    #[pyo3(get)]
-    pub risk_scores: Vec<f64>,
-    #[pyo3(get)]
-    pub event_times: Vec<f64>,
-    #[pyo3(get)]
-    pub status: Vec<i32>,
+    pub flag: i32,
+    /// `x %*% coef + offset - sum(coef * means)`.
     #[pyo3(get)]
     pub linear_predictors: Vec<f64>,
+    /// Martingale residuals.
     #[pyo3(get)]
-    pub entry_times: Option<Vec<f64>>,
+    pub residuals: Vec<f64>,
+    /// Column centres (weighted means for right-censored data, plain means
+    /// for counting-process data; 0 for `nocenter` columns).
+    #[pyo3(get)]
+    pub means: Vec<f64>,
+    /// Score vector at the final coefficients (`agreg.fit`'s `first`).
+    #[pyo3(get)]
+    pub first: Vec<f64>,
+    #[pyo3(get)]
+    pub n: usize,
+    #[pyo3(get)]
+    pub nevent: usize,
+    #[pyo3(get)]
+    pub method: TieMethod,
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    #[pyo3(get)]
+    pub entry: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub status: Vec<i32>,
+    /// Design matrix in the caller's row order.
+    pub x: Array2<f64>,
     #[pyo3(get)]
     pub weights: Vec<f64>,
     #[pyo3(get)]
-    pub covariates: Vec<Vec<f64>>,
+    pub strata: Option<Vec<i32>>,
     #[pyo3(get)]
-    pub strata: Vec<i32>,
+    pub offset: Vec<f64>,
+    /// Columns that were neither centred nor scaled (`nocenter`).
     #[pyo3(get)]
-    pub method: String,
+    pub nocenter: Vec<bool>,
     #[pyo3(get)]
-    pub nocenter: Vec<f64>,
+    pub cluster: Option<Vec<i32>>,
+    /// The concordance of the linear predictors with the outcome, as
+    /// `coxph()` computes it: `concordancefit(Y, lp, strata, weights,
+    /// cluster, reverse = TRUE, timefix = FALSE)`.  R's `fit$concordance`
+    /// vector is `(colSums(count), concordance, sqrt(var))` of this object,
+    /// and `summary(fit)$concordance` its last two entries.
+    #[pyo3(get)]
+    pub concordance: ConcordanceFit,
+    pub(crate) sorted: SortedRows,
+    /// Per-stratum baseline curves at `x - means`, `risk = exp(lp)`, for the
+    /// hazard type matching the tie method.
+    curves: OnceLock<Vec<AgsurvCurve>>,
+}
+
+/// `predict.coxph`'s `reference` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredictReference {
+    Strata,
+    Sample,
+    Zero,
+}
+
+impl PredictReference {
+    pub fn parse(name: &str) -> SurvivalResult<Self> {
+        match name {
+            "strata" => Ok(Self::Strata),
+            "sample" => Ok(Self::Sample),
+            "zero" => Ok(Self::Zero),
+            other => Err(SurvivalError::invalid_input(format!(
+                "reference must be 'strata', 'sample' or 'zero', got '{other}'"
+            ))),
+        }
+    }
+}
+
+/// New observations for `predict()` / `survfit()`: covariate rows plus the
+/// optional stratum, offset and (for expected counts) follow-up.
+#[derive(Debug, Clone)]
+pub struct CoxNewData {
+    pub x: Array2<f64>,
+    pub strata: Option<Vec<i32>>,
+    pub offset: Option<Vec<f64>>,
+    pub time: Option<Vec<f64>>,
+    pub entry: Option<Vec<f64>>,
+}
+
+impl CoxNewData {
+    pub fn try_new(
+        x: Array2<f64>,
+        strata: Option<Vec<i32>>,
+        offset: Option<Vec<f64>>,
+        time: Option<Vec<f64>>,
+        entry: Option<Vec<f64>>,
+    ) -> SurvivalResult<Self> {
+        let m = x.nrows();
+        if m == 0 {
+            return Err(SurvivalError::invalid_input(
+                "newdata must have at least one row",
+            ));
+        }
+        if let Some(value) = x.iter().find(|value| !value.is_finite()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "newdata contains non-finite value {value}"
+            )));
+        }
+        if let Some(strata) = &strata {
+            validate_length(m, strata.len(), "newdata strata")?;
+        }
+        if let Some(offset) = &offset {
+            validate_length(m, offset.len(), "newdata offset")?;
+            validate_finite(offset, "newdata offset")?;
+        }
+        if let Some(time) = &time {
+            validate_length(m, time.len(), "newdata time")?;
+            validate_finite(time, "newdata time")?;
+        }
+        if let Some(entry) = &entry {
+            validate_length(m, entry.len(), "newdata entry")?;
+            validate_finite(entry, "newdata entry")?;
+        }
+        Ok(Self {
+            x,
+            strata,
+            offset,
+            time,
+            entry,
+        })
+    }
+
+    fn nrows(&self) -> usize {
+        self.x.nrows()
+    }
+}
+
+/// `predict(type = "lp" | "risk" | "expected" | "survival")` output.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct CoxPrediction {
+    #[pyo3(get)]
+    pub fit: Vec<f64>,
+    #[pyo3(get)]
+    pub se_fit: Option<Vec<f64>>,
+}
+
+/// `predict(type = "terms")` output: one column per term.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct CoxTermsPrediction {
+    #[pyo3(get)]
+    pub fit: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub se_fit: Option<Vec<Vec<f64>>>,
+    /// `sum(coefficients * means)`, R's `attr(pred, "constant")`.
+    #[pyo3(get)]
+    pub constant: f64,
+}
+
+/// `basehaz(fit)`: the cumulative hazard at each event or censoring time
+/// per stratum, rows concatenated in stratum order.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct Basehaz {
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    #[pyo3(get)]
+    pub hazard: Vec<f64>,
+    /// Stratum code of each row (absent for an unstratified fit).
+    #[pyo3(get)]
+    pub strata: Option<Vec<i32>>,
+}
+
+/// One curve of `survfit(fit, newdata)`: `surv`, `cumhaz` and `std_err`
+/// have one row per time and one column per new observation.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct CoxSurvfitCurve {
+    /// Stratum code the curve belongs to.
+    #[pyo3(get)]
+    pub stratum: i32,
+    /// Number of observations in the stratum.
+    #[pyo3(get)]
+    pub n: usize,
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    #[pyo3(get)]
+    pub n_risk: Vec<f64>,
+    #[pyo3(get)]
+    pub n_event: Vec<f64>,
+    #[pyo3(get)]
+    pub n_censor: Vec<f64>,
+    #[pyo3(get)]
+    pub surv: Vec<Vec<f64>>,
+    #[pyo3(get)]
+    pub cumhaz: Vec<Vec<f64>>,
+    /// Standard error of the cumulative hazard (`std.err` with `logse`).
+    #[pyo3(get)]
+    pub std_err: Option<Vec<Vec<f64>>>,
+}
+
+/// `survfit.coxph` arguments.
+#[derive(Debug, Clone, Copy)]
+pub struct SurvfitOptions {
+    /// 1 = product limit (Kalbfleisch-Prentice), 2 = `exp(-cumhaz)`.
+    pub stype: u8,
+    /// 1 = Breslow, 2 = Efron; defaults to the fit's tie method.
+    pub ctype: Option<u8>,
+    pub se_fit: bool,
+    /// `censor = FALSE` drops the rows without an event.
+    pub censor: bool,
+}
+
+impl Default for SurvfitOptions {
+    fn default() -> Self {
+        Self {
+            stype: 2,
+            ctype: None,
+            se_fit: true,
+            censor: true,
+        }
+    }
+}
+
+fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
+    matrix.outer_iter().map(|row| row.to_vec()).collect()
+}
+
+fn matrix_from_rows(rows: &[Vec<f64>], name: &str) -> SurvivalResult<Array2<f64>> {
+    let ncols = rows.first().map_or(0, Vec::len);
+    if rows.iter().any(|row| row.len() != ncols) {
+        return Err(SurvivalError::invalid_input(format!(
+            "{name} must be rectangular"
+        )));
+    }
+    Array2::from_shape_vec(
+        (rows.len(), ncols),
+        rows.iter().flatten().copied().collect(),
+    )
+    .map_err(|err| SurvivalError::invalid_input(err.to_string()))
+}
+
+fn crossprod(rows: &Array2<f64>) -> Array2<f64> {
+    rows.t().dot(rows)
 }
 
 impl CoxPHFit {
-    fn explicit_row_strata(&self) -> Option<&[i32]> {
-        (self.strata.len() == self.event_times.len()).then_some(self.strata.as_slice())
-    }
-
-    fn unique_row_strata(&self) -> Vec<i32> {
-        let Some(strata) = self.explicit_row_strata() else {
-            return vec![0];
-        };
-        let mut unique = strata.to_vec();
-        unique.sort_unstable();
-        unique.dedup();
-        unique
-    }
-
-    pub(crate) fn row_strata_cow(&self) -> Cow<'_, [i32]> {
-        if let Some(strata) = self.explicit_row_strata() {
-            Cow::Borrowed(strata)
-        } else {
-            Cow::Owned(vec![0; self.event_times.len()])
-        }
-    }
-
-    fn survival_curve_for_shared_row(
-        &self,
-        beta: &[f64],
-        row: &[f64],
-        strata: &[i32],
-        centered: bool,
-    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
-        if row.len() != beta.len() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "covariates must have {} columns",
-                beta.len()
-            )));
-        }
-        validate_finite_values("covariates[0]", row)?;
-
-        let center = if centered && !self.linear_predictors.is_empty() {
-            self.linear_predictors.iter().sum::<f64>() / self.linear_predictors.len() as f64
-        } else {
-            0.0
-        };
-        let (base_times, base_hazards, base_strata) =
-            self.basehaz_with_strata_internal(centered)?;
-        let baseline =
-            StratifiedBaselineLookup::from_components(&base_times, &base_hazards, &base_strata);
-        let times = baseline.times_for_strata(strata);
-        let linear_predictor = row
-            .iter()
-            .zip(beta.iter())
-            .map(|(value, coefficient)| value * coefficient)
-            .sum::<f64>();
-        let risk_multiplier = (linear_predictor - center)
-            .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-            .exp();
-        let curves = strata
-            .iter()
-            .map(|&stratum| {
-                times
-                    .iter()
-                    .map(|&time| {
-                        let hazard = baseline.cumulative_hazard_at(stratum, time);
-                        (-(hazard * risk_multiplier)).exp().clamp(0.0, 1.0)
-                    })
-                    .collect()
-            })
-            .collect();
-        Ok((times, curves))
-    }
-
-    pub(crate) fn basehaz_with_strata_internal(
-        &self,
-        centered: bool,
-    ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
-        let n = self.event_times.len();
-        if n == 0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "time must not be empty",
+    /// Fits the model: `coxph.fit` / `agreg.fit` / `coxexact.fit` /
+    /// `agexact.fit` followed by the post-processing of `coxph()`.
+    pub fn fit(data: CoxphData, options: CoxphOptions) -> SurvivalResult<Self> {
+        let n = data.n();
+        let nvar = data.x.ncols();
+        let nevent = data.status.iter().filter(|&&s| s == 1).count();
+        if data.entry.is_some() && nevent == 0 {
+            return Err(SurvivalError::invalid_input(
+                "Can't fit a Cox model with 0 failures",
             ));
         }
-        let row_strata = self.explicit_row_strata();
-        let center = if centered && !self.linear_predictors.is_empty() {
-            self.linear_predictors.iter().sum::<f64>() / n as f64
-        } else {
-            0.0
-        };
-
-        let mut rows_by_stratum: BTreeMap<i32, Vec<CoxSweepRow>> = BTreeMap::new();
-        for idx in 0..n {
-            let stratum = row_strata.map_or(0, |strata| strata[idx]);
-            rows_by_stratum
-                .entry(stratum)
-                .or_default()
-                .push(CoxSweepRow {
-                    original_idx: idx,
-                    stop: self.event_times[idx],
-                    entry: self
-                        .entry_times
-                        .as_ref()
-                        .map_or(f64::NEG_INFINITY, |entry| entry[idx]),
-                    risk: 0.0,
-                    weight: self.weights[idx],
-                    status: self.status[idx],
-                });
+        if let Some(init) = &options.init {
+            if init.len() != nvar {
+                return Err(SurvivalError::invalid_input(
+                    "Wrong length for inital values",
+                ));
+            }
+            validate_finite(init, "init")?;
         }
+        let nocenter: Vec<bool> = (0..nvar)
+            .map(|col| {
+                options.nocenter.as_ref().is_some_and(|values| {
+                    data.x
+                        .column(col)
+                        .iter()
+                        .all(|value| values.contains(value))
+                })
+            })
+            .collect();
+        let doscale = nocenter.iter().map(|&skip| !skip).collect();
 
-        let total_event_count = self.status.iter().filter(|&&status| status == 1).count();
-        let mut out_times = Vec::with_capacity(total_event_count);
-        let mut out_hazards = Vec::with_capacity(total_event_count);
-        let mut out_strata = Vec::with_capacity(total_event_count);
-        let use_entry_times = self.entry_times.is_some();
-        let use_efron = self.method == "efron";
+        let mut engine = CoxFitBuilder::new(
+            Array1::from_vec(data.time.clone()),
+            Array1::from_vec(data.status.clone()),
+            data.x.clone(),
+        )
+        .method(options.method)
+        .max_iter(options.iter_max)
+        .eps(options.eps)
+        .toler(options.toler_chol)
+        .doscale(doscale)
+        .initial_beta(options.init.clone().unwrap_or_else(|| vec![0.0; nvar]));
+        if let Some(entry) = &data.entry {
+            engine = engine.entry_times(Array1::from_vec(entry.clone()));
+        }
+        if let Some(strata) = &data.strata {
+            engine = engine.strata(Array1::from_vec(strata.clone()));
+        }
+        if let Some(offset) = &data.offset {
+            engine = engine.offset(Array1::from_vec(offset.clone()));
+        }
+        if let Some(weights) = &data.weights {
+            engine = engine.weights(Array1::from_vec(weights.clone()));
+        }
+        let mut engine = engine.build()?;
+        engine.fit();
+        let results = engine.results();
 
-        for (stratum, mut rows) in rows_by_stratum {
-            let stratum_event_count = rows.iter().filter(|row| row.status == 1).count();
-            let mut event_times = Vec::with_capacity(stratum_event_count);
-            let mut death_order = Vec::with_capacity(stratum_event_count);
-            for (row_idx, row) in rows.iter().enumerate() {
-                if row.status == 1 {
-                    event_times.push(row.stop);
-                    death_order.push(row_idx);
+        let offset = data.offset.unwrap_or_else(|| vec![0.0; n]);
+        let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
+        // The linear predictor uses the fitted values; only afterwards are
+        // the aliased coefficients marked NA (`coxph.fit`: `coef[which.sing] <- NA`
+        // unless iter.max = 0).
+        let mut coefficients = results.coefficients;
+        let center: f64 = coefficients
+            .iter()
+            .zip(&results.means)
+            .map(|(b, m)| b * m)
+            .sum();
+        let linear_predictors: Vec<f64> = (0..n)
+            .map(|i| {
+                data.x
+                    .row(i)
+                    .iter()
+                    .zip(&coefficients)
+                    .map(|(x, b)| x * b)
+                    .sum::<f64>()
+                    + offset[i]
+                    - center
+            })
+            .collect();
+        if options.iter_max > 0 && results.flag >= 0 && (results.flag as usize) < nvar {
+            for (j, coefficient) in coefficients.iter_mut().enumerate() {
+                if results.var[(j, j)] == 0.0 {
+                    *coefficient = f64::NAN;
                 }
             }
-            event_times.sort_by(|a, b| a.total_cmp(b));
-            event_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
-            if event_times.is_empty() {
-                continue;
-            }
+        }
+        let sorted = SortedRows::new(results.order, data.strata.as_deref());
+        // As in `coxph()`, the cluster enters the concordance whenever it was
+        // given, even when the variance is not robust.
+        let concordance = linear_predictor_concordance(
+            &data.time,
+            data.entry.as_deref(),
+            &data.status,
+            &linear_predictors,
+            &weights,
+            data.strata.as_deref(),
+            options.cluster.as_deref(),
+        )?;
 
-            let max_shifted_lp = rows
-                .iter()
-                .filter_map(|row| {
-                    (row.weight > 0.0).then_some(self.linear_predictors[row.original_idx] - center)
-                })
-                .fold(f64::NEG_INFINITY, f64::max);
-            let risk_scale = if max_shifted_lp.is_finite() {
-                (-max_shifted_lp).exp()
-            } else {
-                1.0
+        let mut fit = Self {
+            coefficients,
+            var: results.var,
+            naive_var: None,
+            loglik: results.loglik,
+            score: results.sctest,
+            rscore: None,
+            wald_test: 0.0,
+            iter: results.iter,
+            flag: results.flag,
+            linear_predictors,
+            residuals: Vec::new(),
+            means: results.means,
+            first: results.score,
+            n,
+            nevent,
+            method: options.method,
+            time: data.time,
+            entry: data.entry,
+            status: data.status,
+            x: data.x,
+            weights,
+            strata: data.strata,
+            offset,
+            nocenter,
+            cluster: options.cluster,
+            concordance,
+            sorted,
+            curves: OnceLock::new(),
+        };
+        fit.residuals = martingale_residuals(&fit, &fit.linear_predictors);
+
+        let robust = options.robust.unwrap_or(fit.cluster.is_some());
+        if !robust {
+            // "cluster specified with robust=FALSE, cluster ignored"
+            fit.cluster = None;
+        }
+        if robust && fit.coefficients.iter().any(|b| !b.is_nan()) {
+            if fit.method == TieMethod::Exact {
+                return Err(SurvivalError::invalid_input(
+                    "dfbeta residuals are not available for the exact method",
+                ));
+            }
+            let cluster = fit
+                .cluster
+                .clone()
+                .unwrap_or_else(|| (0..n as i32).collect());
+            fit.naive_var = Some(fit.var.clone());
+            let dfbeta = fit.dfbeta_matrix(&fit.linear_predictors, true, Some(&cluster))?;
+            fit.var = crossprod(&dfbeta);
+            // Robust score test at the initial coefficients (lp = X init).
+            let lp0: Vec<f64> = match &options.init {
+                Some(init) => (0..n)
+                    .map(|i| fit.x.row(i).iter().zip(init).map(|(x, b)| x * b).sum())
+                    .collect(),
+                None => vec![0.0; n],
             };
-            for row in rows.iter_mut() {
-                row.risk = if row.weight == 0.0 || !max_shifted_lp.is_finite() {
-                    0.0
-                } else {
-                    row.weight
-                        * (self.linear_predictors[row.original_idx] - center - max_shifted_lp).exp()
-                };
+            let scores = score_residuals(&fit, &lp0)?;
+            let scores = collapse_rows(&scores, Some(&fit.weights), Some(&cluster));
+            let u: Vec<f64> = (0..nvar).map(|j| scores.column(j).sum()).collect();
+            let u_matrix = Array2::from_shape_vec((nvar, 1), u)
+                .map_err(|err| SurvivalError::computation(err.to_string()))?;
+            fit.rscore =
+                Some(wald_tests(&crossprod(&scores), &u_matrix, options.toler_chol)?.test[0]);
+        }
+
+        let shift: Vec<f64> = fit
+            .coefficients_or_zero()
+            .iter()
+            .enumerate()
+            .map(|(i, b)| b - options.init.as_ref().map_or(0.0, |init| init[i]))
+            .collect();
+        fit.wald_test = wald_statistic(&fit.var, &shift, options.toler_chol)?;
+        Ok(fit)
+    }
+
+    pub fn nvar(&self) -> usize {
+        self.coefficients.len()
+    }
+
+    /// Coefficients with aliased (`NaN`) entries replaced by 0, R's
+    /// `ifelse(is.na(coef), 0, coef)`.
+    pub fn coefficients_or_zero(&self) -> Vec<f64> {
+        self.coefficients
+            .iter()
+            .map(|b| if b.is_nan() { 0.0 } else { *b })
+            .collect()
+    }
+
+    /// Survival-curve types matching the tie method (`survfit.coxph`:
+    /// `ctype` 2 for Efron, 1 otherwise).
+    fn default_survtype(&self) -> CoxSurvType {
+        if self.method == TieMethod::Efron {
+            CoxSurvType::Efron
+        } else {
+            CoxSurvType::Breslow
+        }
+    }
+
+    /// Weighted mean of the offsets (`survfit.coxph`'s `offset.mean`).
+    fn offset_mean(&self) -> f64 {
+        let total: f64 = self.weights.iter().sum();
+        self.offset
+            .iter()
+            .zip(&self.weights)
+            .map(|(o, w)| o * w)
+            .sum::<f64>()
+            / total
+    }
+
+    /// Per-stratum `agsurv` pieces at `x - means` and `risk =
+    /// exp(linear_predictors - log_risk_shift)`, in the fit's stratum order.
+    fn compute_curves(
+        &self,
+        survtype: CoxSurvType,
+        vartype: CoxSurvType,
+        log_risk_shift: f64,
+    ) -> SurvivalResult<Vec<AgsurvCurve>> {
+        let risk: Vec<f64> = self
+            .linear_predictors
+            .iter()
+            .map(|lp| (lp - log_risk_shift).exp())
+            .collect();
+        let data = AgsurvData {
+            start: self.entry.as_deref(),
+            stop: &self.time,
+            status: &self.status,
+            x: self.x.view(),
+            means: Some(&self.means),
+            weights: &self.weights,
+            risk: &risk,
+        };
+        self.sorted
+            .bounds
+            .iter()
+            .map(|&(start, end)| {
+                agsurv_rows(&data, &self.sorted.order[start..end], survtype, vartype)
+            })
+            .collect()
+    }
+
+    /// The cached baseline curves for the fit's own hazard type.
+    pub(crate) fn baseline_curves(&self) -> SurvivalResult<&[AgsurvCurve]> {
+        if let Some(curves) = self.curves.get() {
+            return Ok(curves);
+        }
+        let survtype = self.default_survtype();
+        let curves = self.compute_curves(survtype, survtype, 0.0)?;
+        Ok(self.curves.get_or_init(|| curves))
+    }
+
+    /// Relative risk of a centred covariate row: `exp(x2c %*% coef + offset2)`.
+    fn relative_risk(&self, x2c: &[f64], offset2: f64) -> f64 {
+        (x2c.iter()
+            .zip(self.coefficients_or_zero())
+            .map(|(x, b)| x * b)
+            .sum::<f64>()
+            + offset2)
+            .exp()
+    }
+
+    fn check_newdata(&self, newdata: &CoxNewData) -> SurvivalResult<()> {
+        if newdata.x.ncols() != self.nvar() {
+            return Err(SurvivalError::invalid_input(format!(
+                "newdata has {} columns but the model has {}",
+                newdata.x.ncols(),
+                self.nvar()
+            )));
+        }
+        if let Some(strata) = &newdata.strata
+            && let Some(code) = strata
+                .iter()
+                .find(|code| self.sorted.position_of(**code).is_none())
+        {
+            return Err(SurvivalError::invalid_input(format!(
+                "New data has a strata not found in the original model: {code}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Centred new covariate rows (`newx - means`) and their relative risks
+    /// on the fit's scale.
+    fn centered_newdata(&self, newdata: &CoxNewData) -> (Array2<f64>, Vec<f64>) {
+        let mut x2c = newdata.x.clone();
+        for (col, &mean) in self.means.iter().enumerate() {
+            x2c.column_mut(col).mapv_inplace(|value| value - mean);
+        }
+        let risk2: Vec<f64> = (0..newdata.nrows())
+            .map(|i| {
+                let offset2 = newdata.offset.as_ref().map_or(0.0, |o| o[i]);
+                self.relative_risk(&x2c.row(i).to_vec(), offset2)
+            })
+            .collect();
+        (x2c, risk2)
+    }
+
+    /// `basehaz(fit, centered)`.
+    pub fn basehaz(&self, centered: bool) -> SurvivalResult<Basehaz> {
+        let curves = self.baseline_curves()?;
+        // survfit(fit) evaluates the curve at x = means and the mean
+        // offset; uncentred divides the offset sum(means * coef) back out.
+        let mut scale = self.offset_mean().exp();
+        if !centered {
+            let center: f64 = self
+                .means
+                .iter()
+                .zip(self.coefficients_or_zero())
+                .map(|(m, b)| m * b)
+                .sum();
+            scale *= (-center).exp();
+        }
+        let mut time = Vec::new();
+        let mut hazard = Vec::new();
+        let mut strata = Vec::new();
+        for (position, curve) in curves.iter().enumerate() {
+            time.extend_from_slice(&curve.time);
+            hazard.extend(curve.cumhaz.iter().map(|h| h * scale));
+            strata.extend(std::iter::repeat_n(
+                self.sorted.codes[position],
+                curve.time.len(),
+            ));
+        }
+        Ok(Basehaz {
+            time,
+            hazard,
+            strata: self.strata.as_ref().map(|_| strata),
+        })
+    }
+
+    /// `survfit(fit, newdata)`: one curve per stratum (all new rows as
+    /// columns), or one curve per new row when `newdata` carries strata.
+    /// Without `newdata` the curve is for a covariate row at the means.
+    pub fn survfit(
+        &self,
+        newdata: Option<&CoxNewData>,
+        options: SurvfitOptions,
+    ) -> SurvivalResult<Vec<CoxSurvfitCurve>> {
+        let ctype = options.ctype.unwrap_or(if self.method == TieMethod::Efron {
+            2
+        } else {
+            1
+        });
+        let survtype = CoxSurvType::from_stype_ctype(options.stype, ctype)?;
+        if let Some(newdata) = newdata {
+            self.check_newdata(newdata)?;
+        }
+        let offset_mean = self.offset_mean();
+        // Kalbfleisch-Prentice needs the risks on survfit's scale
+        // (relative to the mean offset); the other types only depend on
+        // risk2 * baseline, so the cached predict-scale curves serve.
+        let kp = survtype == CoxSurvType::KalbfleischPrentice;
+        let shift = if kp { offset_mean } else { 0.0 };
+        let computed;
+        let curves: &[AgsurvCurve] = if !kp && survtype == self.default_survtype() {
+            self.baseline_curves()?
+        } else {
+            computed = self.compute_curves(survtype, survtype, shift)?;
+            &computed
+        };
+        let (x2c, mut risk2) = match newdata {
+            Some(newdata) => self.centered_newdata(newdata),
+            None => (Array2::zeros((1, self.nvar())), vec![offset_mean.exp()]),
+        };
+        for value in risk2.iter_mut() {
+            *value *= (-shift).exp();
+        }
+        let varmat = options.se_fit.then_some(&self.var);
+        let mut result = Vec::new();
+        let new_strata = newdata.and_then(|newdata| newdata.strata.as_deref());
+        if let Some(new_strata) = new_strata {
+            for (i, &code) in new_strata.iter().enumerate() {
+                let position = self
+                    .sorted
+                    .position_of(code)
+                    .expect("strata were checked against the fit");
+                let expanded = expand_curve(
+                    &curves[position],
+                    survtype,
+                    x2c.row(i).insert_axis(ndarray::Axis(0)),
+                    &risk2[i..=i],
+                    varmat,
+                )?;
+                result.push(finish_curve(code, expanded, options.censor));
             }
+        } else {
+            for (position, curve) in curves.iter().enumerate() {
+                let expanded = expand_curve(curve, survtype, x2c.view(), &risk2, varmat)?;
+                result.push(finish_curve(
+                    self.sorted.codes[position],
+                    expanded,
+                    options.censor,
+                ));
+            }
+        }
+        Ok(result)
+    }
 
-            let mut active = ActiveRiskSet::new(&rows, use_entry_times);
+    /// `survfit(fit, newdata, id)`: one curve per subject whose covariates
+    /// change over the (entry, time] intervals of `newdata`.
+    pub fn survfit_individual(
+        &self,
+        newdata: &CoxNewData,
+        id: &[i32],
+        options: SurvfitOptions,
+    ) -> SurvivalResult<Vec<CoxSurvfitCurve>> {
+        self.check_newdata(newdata)?;
+        let (Some(entry), Some(time)) = (&newdata.entry, &newdata.time) else {
+            return Err(SurvivalError::invalid_input(
+                "Individual=TRUE is only valid for counting process data",
+            ));
+        };
+        if id.len() != newdata.nrows() {
+            return Err(SurvivalError::invalid_input(
+                "id must have one value per newdata row",
+            ));
+        }
+        let ctype = options.ctype.unwrap_or(if self.method == TieMethod::Efron {
+            2
+        } else {
+            1
+        });
+        let survtype = CoxSurvType::from_stype_ctype(options.stype, ctype)?;
+        let kp = survtype == CoxSurvType::KalbfleischPrentice;
+        let shift = if kp { self.offset_mean() } else { 0.0 };
+        let computed;
+        let curves: &[AgsurvCurve] = if !kp && survtype == self.default_survtype() {
+            self.baseline_curves()?
+        } else {
+            computed = self.compute_curves(survtype, survtype, shift)?;
+            &computed
+        };
+        let (x2c, mut risk2) = self.centered_newdata(newdata);
+        for value in risk2.iter_mut() {
+            *value *= (-shift).exp();
+        }
+        let varmat = options.se_fit.then_some(&self.var);
+        let mut ids: Vec<i32> = Vec::new();
+        for &value in id {
+            if !ids.contains(&value) {
+                ids.push(value);
+            }
+        }
+        let mut result = Vec::new();
+        for subject in ids {
+            let intervals: Vec<IndividualInterval<'_>> = (0..newdata.nrows())
+                .filter(|&i| id[i] == subject)
+                .map(|i| IndividualInterval {
+                    start: entry[i],
+                    stop: time[i],
+                    stratum: newdata.strata.as_ref().map_or(0, |s| {
+                        self.sorted
+                            .position_of(s[i])
+                            .expect("strata were checked against the fit")
+                    }),
+                    x2: x2c.row(i).to_slice().expect("row is contiguous"),
+                    risk2: risk2[i],
+                })
+                .collect();
+            let curve = individual_curve(curves, survtype, &intervals, varmat)?;
+            let stratum = intervals
+                .first()
+                .map_or(0, |interval| self.sorted.codes[interval.stratum]);
+            result.push(finish_curve(stratum, curve, options.censor));
+        }
+        Ok(result)
+    }
 
-            death_order.sort_by(|&lhs, &rhs| {
-                rows[lhs]
-                    .stop
-                    .total_cmp(&rows[rhs].stop)
-                    .then_with(|| lhs.cmp(&rhs))
-            });
-            let mut death_weight_prefix = Vec::with_capacity(death_order.len() + 1);
-            let mut death_risk_prefix = Vec::with_capacity(death_order.len() + 1);
-            death_weight_prefix.push(0.0);
-            death_risk_prefix.push(0.0);
-            for &row_idx in &death_order {
-                death_weight_prefix.push(
-                    death_weight_prefix.last().copied().unwrap_or(0.0) + rows[row_idx].weight,
+    /// Weighted per-stratum column means (`predict.coxph`'s `xmeans`).
+    fn stratum_means(&self) -> Vec<Vec<f64>> {
+        let nvar = self.nvar();
+        let mut sums = vec![vec![0.0; nvar]; self.sorted.nstrata()];
+        let mut totals = vec![0.0; self.sorted.nstrata()];
+        for row in 0..self.n {
+            let s = self.sorted.stratum_index[row];
+            totals[s] += self.weights[row];
+            for (col, sum) in sums[s].iter_mut().enumerate().take(nvar) {
+                *sum += self.weights[row] * self.x[(row, col)];
+            }
+        }
+        for (sum, total) in sums.iter_mut().zip(&totals) {
+            for value in sum.iter_mut() {
+                *value /= total;
+            }
+        }
+        sums
+    }
+
+    /// The design rows `predict.coxph` uses for `lp`, `risk` and `terms`:
+    /// centred per the reference, plus the centred offset.
+    fn prediction_rows(
+        &self,
+        newdata: Option<&CoxNewData>,
+        reference: PredictReference,
+    ) -> SurvivalResult<(Array2<f64>, Vec<f64>)> {
+        let offset_mean = self.offset.iter().sum::<f64>() / self.n as f64;
+        let has_strata = self.strata.is_some();
+        let (mut newx, offset, stratum_index): (Array2<f64>, Vec<f64>, Vec<usize>) = match newdata {
+            None => (
+                self.x.clone(),
+                self.offset.iter().map(|o| o - offset_mean).collect(),
+                self.sorted.stratum_index.clone(),
+            ),
+            Some(newdata) => {
+                self.check_newdata(newdata)?;
+                let m = newdata.nrows();
+                let offset = newdata.offset.as_ref().map_or_else(
+                    || vec![-offset_mean; m],
+                    |o| o.iter().map(|v| v - offset_mean).collect(),
                 );
-                death_risk_prefix
-                    .push(death_risk_prefix.last().copied().unwrap_or(0.0) + rows[row_idx].risk);
+                let stratum_index = match &newdata.strata {
+                    Some(strata) => strata
+                        .iter()
+                        .map(|&code| self.sorted.position_of(code).expect("checked"))
+                        .collect(),
+                    None => {
+                        if has_strata && reference == PredictReference::Strata {
+                            return Err(SurvivalError::invalid_input(
+                                "newdata must carry the strata for reference = 'strata'",
+                            ));
+                        }
+                        vec![0; m]
+                    }
+                };
+                (newdata.x.clone(), offset, stratum_index)
             }
+        };
+        if has_strata && reference == PredictReference::Strata {
+            let xmeans = self.stratum_means();
+            for (i, &s) in stratum_index.iter().enumerate() {
+                for col in 0..self.nvar() {
+                    newx[(i, col)] -= xmeans[s][col];
+                }
+            }
+        } else if reference != PredictReference::Zero {
+            for (col, &mean) in self.means.iter().enumerate() {
+                newx.column_mut(col).mapv_inplace(|value| value - mean);
+            }
+        }
+        Ok((newx, offset))
+    }
 
-            let mut cumulative = 0.0;
-            for event_time in event_times {
-                active.advance_to(event_time, |_, _| {});
+    /// `predict(type = "lp")` (and `"risk"` via [`Self::predict_risk`]).
+    pub fn predict_lp(
+        &self,
+        newdata: Option<&CoxNewData>,
+        se_fit: bool,
+        reference: PredictReference,
+    ) -> SurvivalResult<CoxPrediction> {
+        let has_strata = self.strata.is_some();
+        let use_x = newdata.is_some()
+            || se_fit
+            || (has_strata && reference == PredictReference::Strata)
+            || (reference == PredictReference::Zero && self.means.iter().any(|&m| m != 0.0));
+        if !use_x {
+            return Ok(CoxPrediction {
+                fit: self.linear_predictors.clone(),
+                se_fit: None,
+            });
+        }
+        let (newx, offset) = self.prediction_rows(newdata, reference)?;
+        let coef = self.coefficients_or_zero();
+        let fit: Vec<f64> = newx
+            .outer_iter()
+            .zip(&offset)
+            .map(|(row, o)| row.iter().zip(&coef).map(|(x, b)| x * b).sum::<f64>() + o)
+            .collect();
+        let se_fit = se_fit.then(|| {
+            newx.outer_iter()
+                .map(|row| row.dot(&self.var.dot(&row)).sqrt())
+                .collect()
+        });
+        Ok(CoxPrediction { fit, se_fit })
+    }
 
-                let lower = death_order
-                    .partition_point(|&row_idx| rows[row_idx].stop <= event_time - TIME_EPSILON);
-                let upper = death_order
-                    .partition_point(|&row_idx| rows[row_idx].stop < event_time + TIME_EPSILON);
-                let deaths = upper - lower;
-                let events = death_weight_prefix[upper] - death_weight_prefix[lower];
-                if active.risk_sum > 0.0 {
-                    if use_efron && deaths > 1 {
-                        let death_risk_sum = death_risk_prefix[upper] - death_risk_prefix[lower];
-                        cumulative += scaled_efron_hazard_increment(
-                            events,
-                            deaths,
-                            active.risk_sum,
-                            death_risk_sum,
-                            risk_scale,
-                        );
-                    } else {
-                        cumulative += scaled_hazard_increment(events, active.risk_sum, risk_scale);
+    /// `predict(type = "risk")`: `exp(lp)` with R's Taylor-series standard error.
+    pub fn predict_risk(
+        &self,
+        newdata: Option<&CoxNewData>,
+        se_fit: bool,
+        reference: PredictReference,
+    ) -> SurvivalResult<CoxPrediction> {
+        let lp = self.predict_lp(newdata, se_fit, reference)?;
+        let fit: Vec<f64> = lp.fit.iter().map(|v| v.exp()).collect();
+        let se_fit = lp
+            .se_fit
+            .map(|se| se.iter().zip(&fit).map(|(s, p)| s * p.sqrt()).collect());
+        Ok(CoxPrediction { fit, se_fit })
+    }
+
+    /// `predict(type = "terms")`: `assign` lists the columns of each term.
+    pub fn predict_terms(
+        &self,
+        newdata: Option<&CoxNewData>,
+        se_fit: bool,
+        reference: PredictReference,
+        assign: &[Vec<usize>],
+    ) -> SurvivalResult<CoxTermsPrediction> {
+        validate_assign(assign, self.nvar())?;
+        let (newx, _) = self.prediction_rows(newdata, reference)?;
+        let coef = self.coefficients_or_zero();
+        let nterms = assign.len();
+        let mut fit = vec![vec![0.0; nterms]; newx.nrows()];
+        let mut se = se_fit.then(|| vec![vec![0.0; nterms]; newx.nrows()]);
+        for (t, columns) in assign.iter().enumerate() {
+            for (i, row) in newx.outer_iter().enumerate() {
+                fit[i][t] = columns.iter().map(|&c| row[c] * coef[c]).sum();
+                if let Some(se) = se.as_mut() {
+                    let mut total = 0.0;
+                    for &c1 in columns {
+                        for &c2 in columns {
+                            total += row[c1] * self.var[(c1, c2)] * row[c2];
+                        }
+                    }
+                    se[i][t] = total.sqrt();
+                }
+            }
+        }
+        Ok(CoxTermsPrediction {
+            fit,
+            se_fit: se,
+            constant: coef.iter().zip(&self.means).map(|(b, m)| b * m).sum(),
+        })
+    }
+
+    /// `predict(type = "expected")`: the expected number of events over each
+    /// observation's follow-up.  `newdata` needs `time` (and `entry` for a
+    /// counting-process fit).
+    pub fn predict_expected(
+        &self,
+        newdata: Option<&CoxNewData>,
+        se_fit: bool,
+    ) -> SurvivalResult<CoxPrediction> {
+        let counting = self.entry.is_some();
+        let Some(newdata) = newdata else {
+            let fit: Vec<f64> = self
+                .status
+                .iter()
+                .zip(&self.residuals)
+                .map(|(&s, r)| f64::from(s) - r)
+                .collect();
+            if !se_fit {
+                return Ok(CoxPrediction { fit, se_fit: None });
+            }
+            let risk: Vec<f64> = self.linear_predictors.iter().map(|lp| lp.exp()).collect();
+            let se = self.expected_se(
+                self.x.view(),
+                Some(&self.means),
+                &risk,
+                &self.sorted.stratum_index,
+                self.entry.as_deref(),
+                &self.time,
+            )?;
+            return Ok(CoxPrediction {
+                fit,
+                se_fit: Some(se),
+            });
+        };
+        self.check_newdata(newdata)?;
+        let Some(new_time) = newdata.time.as_deref() else {
+            return Err(SurvivalError::invalid_input(
+                "newdata must contain the follow-up time for type = 'expected'",
+            ));
+        };
+        if counting && newdata.entry.is_none() {
+            return Err(SurvivalError::invalid_input(
+                "New data has a different survival type than the model",
+            ));
+        }
+        let (x2c, risk2) = self.centered_newdata(newdata);
+        let curves = self.baseline_curves()?;
+        let stratum_index: Vec<usize> = match &newdata.strata {
+            Some(strata) => strata
+                .iter()
+                .map(|&code| self.sorted.position_of(code).expect("checked"))
+                .collect(),
+            None => vec![0; newdata.nrows()],
+        };
+        let fit: Vec<f64> = (0..newdata.nrows())
+            .map(|i| {
+                let curve = &curves[stratum_index[i]];
+                let stop = cumhaz_at(curve, new_time[i]);
+                let start = newdata
+                    .entry
+                    .as_ref()
+                    .map_or(0.0, |entry| cumhaz_at(curve, entry[i]));
+                (stop - start) * risk2[i]
+            })
+            .collect();
+        let se = if se_fit {
+            Some(self.expected_se(
+                x2c.view(),
+                None,
+                &risk2,
+                &stratum_index,
+                newdata.entry.as_deref(),
+                new_time,
+            )?)
+        } else {
+            None
+        };
+        Ok(CoxPrediction { fit, se_fit: se })
+    }
+
+    /// Standard error of an expected count (`predict.coxph`, `type =
+    /// "expected"`): `sqrt(varh + dt' V dt) * risk`, differenced over
+    /// (entry, time] for counting-process data.  The covariate rows are
+    /// `x - means` when `means` is given, `x` itself otherwise.
+    #[allow(clippy::too_many_arguments)]
+    fn expected_se(
+        &self,
+        x: ArrayView2<'_, f64>,
+        means: Option<&[f64]>,
+        risk: &[f64],
+        stratum_index: &[usize],
+        entry: Option<&[f64]>,
+        time: &[f64],
+    ) -> SurvivalResult<Vec<f64>> {
+        let curves = self.baseline_curves()?;
+        let integrated: Vec<IntegratedCurve> = curves.iter().map(integrate_curve).collect();
+        let variance_at =
+            |curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64, row: usize| {
+                let chaz = cumhaz_at(curve, t);
+                let varh = step_at(&curve.time, &integrated.cum_varhaz, t);
+                let xbar = cum_xbar_at(curve, integrated, t);
+                let dt: Vec<f64> = (0..self.nvar())
+                    .map(|k| chaz * (x[(row, k)] - means.map_or(0.0, |m| m[k])) - xbar[k])
+                    .collect();
+                let mut quad = 0.0;
+                for (i, &left) in dt.iter().enumerate() {
+                    for (j, &right) in dt.iter().enumerate() {
+                        quad += left * self.var[(i, j)] * right;
                     }
                 }
-                out_times.push(event_time);
-                out_hazards.push(cumulative);
-                out_strata.push(stratum);
-            }
-        }
-
-        Ok((out_times, out_hazards, out_strata))
+                varh + quad
+            };
+        Ok((0..time.len())
+            .map(|i| {
+                let s = stratum_index[i];
+                let v2 = variance_at(&curves[s], &integrated[s], time[i], i);
+                let v1 = entry.map_or(0.0, |entry| {
+                    variance_at(&curves[s], &integrated[s], entry[i], i)
+                });
+                (v2 - v1).sqrt() * risk[i]
+            })
+            .collect())
     }
+
+    /// `predict(type = "survival")`: `exp(-expected)`.
+    pub fn predict_survival(
+        &self,
+        newdata: Option<&CoxNewData>,
+        se_fit: bool,
+    ) -> SurvivalResult<CoxPrediction> {
+        let expected = self.predict_expected(newdata, se_fit)?;
+        let fit: Vec<f64> = expected.fit.iter().map(|e| (-e).exp()).collect();
+        let se_fit = expected
+            .se_fit
+            .map(|se| se.iter().zip(&fit).map(|(s, p)| s * p).collect());
+        Ok(CoxPrediction { fit, se_fit })
+    }
+
+    pub fn hazard_ratios(&self) -> Vec<f64> {
+        self.coefficients.iter().map(|b| b.exp()).collect()
+    }
+}
+
+/// `coxph()`'s concordance step: `concordancefit(Y, lp, strata, weights,
+/// cluster, reverse = TRUE, timefix = FALSE)` on the fitted linear
+/// predictors.
+fn linear_predictor_concordance(
+    time: &[f64],
+    entry: Option<&[f64]>,
+    status: &[i32],
+    linear_predictors: &[f64],
+    weights: &[f64],
+    strata: Option<&[i32]>,
+    cluster: Option<&[i32]>,
+) -> SurvivalResult<ConcordanceFit> {
+    let x = ArrayView2::from_shape((linear_predictors.len(), 1), linear_predictors)
+        .map_err(|err| SurvivalError::computation(err.to_string()))?;
+    let options = ConcordanceOptions {
+        reverse: true,
+        timefix: false,
+        ..ConcordanceOptions::default()
+    };
+    match entry {
+        Some(entry) => {
+            let data = CountingProcessData {
+                start: entry.to_vec(),
+                stop: time.to_vec(),
+                event: status.to_vec(),
+            };
+            concordancefit(
+                SurvResponse::Counting(&data),
+                x,
+                Some(weights),
+                strata,
+                cluster,
+                &options,
+            )
+        }
+        None => {
+            let data = SurvivalData {
+                time: time.to_vec(),
+                status: status.to_vec(),
+            };
+            concordancefit(
+                SurvResponse::Right(&data),
+                x,
+                Some(weights),
+                strata,
+                cluster,
+                &options,
+            )
+        }
+    }
+}
+
+/// Checks that `assign` groups existing columns.  A term may have no
+/// columns left (all of them aliased); its prediction is then 0, as in
+/// `predict.coxph`.
+pub(crate) fn validate_assign(assign: &[Vec<usize>], nvar: usize) -> SurvivalResult<()> {
+    for (term, columns) in assign.iter().enumerate() {
+        if let Some(column) = columns.iter().find(|&&c| c >= nvar) {
+            return Err(SurvivalError::invalid_input(format!(
+                "assign[{term}] refers to column {column}, but the model has {nvar}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// One column per coefficient, the default term structure.
+pub(crate) fn default_assign(nvar: usize) -> Vec<Vec<usize>> {
+    (0..nvar).map(|c| vec![c]).collect()
+}
+
+fn finish_curve(
+    stratum: i32,
+    curve: crate::surv_analysis::agsurv::CoxSurvCurve,
+    censor: bool,
+) -> CoxSurvfitCurve {
+    let keep: Vec<usize> = (0..curve.time.len())
+        .filter(|&g| censor || curve.n_event[g] > 0.0)
+        .collect();
+    let pick = |values: &[f64]| keep.iter().map(|&g| values[g]).collect::<Vec<_>>();
+    let pick_rows = |matrix: &Array2<f64>| {
+        keep.iter()
+            .map(|&g| matrix.row(g).to_vec())
+            .collect::<Vec<_>>()
+    };
+    CoxSurvfitCurve {
+        stratum,
+        n: curve.n,
+        time: pick(&curve.time),
+        n_risk: pick(&curve.n_risk),
+        n_event: pick(&curve.n_event),
+        n_censor: pick(&curve.n_censor),
+        surv: pick_rows(&curve.surv),
+        cumhaz: pick_rows(&curve.cumhaz),
+        std_err: curve.std_err.as_ref().map(pick_rows),
+    }
+}
+
+impl CoxPHFit {
+    fn residual_vector(
+        &self,
+        kind: ResidualType,
+        weighted: bool,
+        collapse: Option<&[i32]>,
+    ) -> PyResult<Vec<f64>> {
+        match self.residuals(kind, Some(weighted), collapse, None)? {
+            Residuals::Vector(values) => Ok(values),
+            Residuals::Matrix(_) => unreachable!("vector residual types"),
+        }
+    }
+
+    fn residual_matrix(
+        &self,
+        kind: ResidualType,
+        weighted: bool,
+        collapse: Option<&[i32]>,
+        assign: Option<&[Vec<usize>]>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        match self.residuals(kind, Some(weighted), collapse, assign)? {
+            Residuals::Matrix(values) => Ok(matrix_rows(&values)),
+            Residuals::Vector(_) => unreachable!("matrix residual types"),
+        }
+    }
+}
+
+fn newdata_from_python(
+    fit: &CoxPHFit,
+    x: Option<Vec<Vec<f64>>>,
+    strata: Option<Vec<i32>>,
+    offset: Option<Vec<f64>>,
+    time: Option<Vec<f64>>,
+    entry: Option<Vec<f64>>,
+) -> SurvivalResult<Option<CoxNewData>> {
+    let Some(x) = x else {
+        if strata.is_some() || offset.is_some() || time.is_some() || entry.is_some() {
+            return Err(SurvivalError::invalid_input(
+                "new_strata, new_offset, new_time and new_entry require newdata",
+            ));
+        }
+        return Ok(None);
+    };
+    let x = if x.is_empty() {
+        Array2::zeros((0, fit.nvar()))
+    } else {
+        matrix_from_rows(&x, "newdata")?
+    };
+    Ok(Some(CoxNewData::try_new(x, strata, offset, time, entry)?))
 }
 
 #[pymethods]
 impl CoxPHFit {
-    pub fn predict(&self, covariates: Vec<Vec<f64>>) -> PyResult<Vec<f64>> {
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        covariates
-            .into_iter()
-            .map(|row| {
-                if row.len() != nvar {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "covariate row has {} columns but model expects {}",
-                        row.len(),
-                        nvar
-                    )));
-                }
-                validate_finite_values("covariates row", &row)?;
-                Ok(row
-                    .iter()
-                    .zip(beta.iter())
-                    .map(|(value, coefficient)| value * coefficient)
-                    .sum())
-            })
-            .collect()
+    #[getter]
+    fn var(&self) -> Vec<Vec<f64>> {
+        matrix_rows(&self.var)
     }
 
-    pub fn hazard_ratios(&self) -> Vec<f64> {
-        self.coefficients
-            .first()
-            .map(|beta| {
-                beta.iter()
-                    .map(|value| value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
-                    .collect()
-            })
-            .unwrap_or_default()
+    #[getter]
+    fn naive_var(&self) -> Option<Vec<Vec<f64>>> {
+        self.naive_var.as_ref().map(matrix_rows)
     }
 
-    #[pyo3(signature = (centered = true))]
-    pub fn basehaz(&self, centered: bool) -> PyResult<(Vec<f64>, Vec<f64>)> {
-        let (times, hazards, _) = self.basehaz_with_strata_internal(centered)?;
-        Ok((times, hazards))
+    #[getter]
+    fn x(&self) -> Vec<Vec<f64>> {
+        matrix_rows(&self.x)
     }
 
-    #[pyo3(signature = (centered = true))]
-    pub fn basehaz_with_strata(&self, centered: bool) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i32>)> {
-        self.basehaz_with_strata_internal(centered)
+    #[getter(nvar)]
+    fn nvar_getter(&self) -> usize {
+        self.nvar()
     }
 
-    #[pyo3(signature = (covariates = None, centered = true))]
-    pub fn survival_curve(
+    #[pyo3(name = "hazard_ratios")]
+    fn hazard_ratios_py(&self) -> Vec<f64> {
+        self.hazard_ratios()
+    }
+
+    /// `basehaz(fit, centered)`.
+    #[pyo3(name = "basehaz", signature = (centered = true))]
+    fn basehaz_py(&self, centered: bool) -> PyResult<Basehaz> {
+        Ok(self.basehaz(centered)?)
+    }
+
+    /// `predict(fit, newdata, type, se.fit, reference)` for the vector-valued
+    /// types `lp`, `risk`, `expected` and `survival`.
+    #[pyo3(signature = (r#type = "lp", newdata = None, new_strata = None, new_offset = None, new_time = None, new_entry = None, se_fit = false, reference = "strata"))]
+    #[allow(clippy::too_many_arguments)]
+    fn predict(
         &self,
-        covariates: Option<Vec<Vec<f64>>>,
-        centered: bool,
-    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        let rows = match covariates {
-            Some(rows) => rows,
-            None => {
-                let strata = self.unique_row_strata();
-                return self.survival_curve_for_shared_row(beta, &self.means, &strata, centered);
+        r#type: &str,
+        newdata: Option<Vec<Vec<f64>>>,
+        new_strata: Option<Vec<i32>>,
+        new_offset: Option<Vec<f64>>,
+        new_time: Option<Vec<f64>>,
+        new_entry: Option<Vec<f64>>,
+        se_fit: bool,
+        reference: &str,
+    ) -> PyResult<CoxPrediction> {
+        let newdata =
+            newdata_from_python(self, newdata, new_strata, new_offset, new_time, new_entry)?;
+        let reference = PredictReference::parse(reference)?;
+        Ok(match r#type {
+            "lp" => self.predict_lp(newdata.as_ref(), se_fit, reference)?,
+            "risk" => self.predict_risk(newdata.as_ref(), se_fit, reference)?,
+            "expected" => self.predict_expected(newdata.as_ref(), se_fit)?,
+            "survival" => self.predict_survival(newdata.as_ref(), se_fit)?,
+            other => {
+                return Err(SurvivalError::invalid_input(format!(
+                    "type must be 'lp', 'risk', 'expected' or 'survival', got '{other}'; use predict_terms for 'terms'"
+                ))
+                .into());
             }
-        };
-        if rows.iter().any(|row| row.len() != nvar) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "covariates must have {} columns",
-                nvar
-            )));
-        }
-        for (idx, row) in rows.iter().enumerate() {
-            validate_finite_values(&format!("covariates[{}]", idx), row)?;
-        }
-
-        let center = if centered && !self.linear_predictors.is_empty() {
-            self.linear_predictors.iter().sum::<f64>() / self.linear_predictors.len() as f64
-        } else {
-            0.0
-        };
-        let (times, hazards) = self.basehaz(centered)?;
-        let curves = rows
-            .iter()
-            .map(|row| {
-                let linear_predictor = row
-                    .iter()
-                    .zip(beta.iter())
-                    .map(|(value, coefficient)| value * coefficient)
-                    .sum::<f64>();
-                let risk_multiplier = (linear_predictor - center)
-                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                    .exp();
-                hazards
-                    .iter()
-                    .map(|hazard| (-(hazard * risk_multiplier)).exp().clamp(0.0, 1.0))
-                    .collect()
-            })
-            .collect();
-        Ok((times, curves))
+        })
     }
 
-    #[pyo3(signature = (covariates, strata, centered = true))]
-    pub fn survival_curve_with_strata(
+    /// `predict(fit, type = "terms")`; `assign` lists the columns of each
+    /// term (default: one term per column).
+    #[pyo3(name = "predict_terms", signature = (newdata = None, new_strata = None, new_offset = None, se_fit = false, reference = "sample", assign = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn predict_terms_py(
         &self,
-        covariates: Vec<Vec<f64>>,
-        strata: Vec<i32>,
-        centered: bool,
-    ) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        if covariates.len() != strata.len() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "strata must have one entry per covariate row",
-            ));
-        }
-        if covariates.iter().any(|row| row.len() != nvar) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "covariates must have {} columns",
-                nvar
-            )));
-        }
-        for (idx, row) in covariates.iter().enumerate() {
-            validate_finite_values(&format!("covariates[{}]", idx), row)?;
-        }
-
-        let center = if centered && !self.linear_predictors.is_empty() {
-            self.linear_predictors.iter().sum::<f64>() / self.linear_predictors.len() as f64
-        } else {
-            0.0
-        };
-        let (base_times, base_hazards, base_strata) =
-            self.basehaz_with_strata_internal(centered)?;
-        let baseline =
-            StratifiedBaselineLookup::from_components(&base_times, &base_hazards, &base_strata);
-
-        let times = baseline.times_for_strata(&strata);
-
-        let curves = covariates
-            .iter()
-            .zip(strata.iter())
-            .map(|(row, &stratum)| {
-                let linear_predictor = row
-                    .iter()
-                    .zip(beta.iter())
-                    .map(|(value, coefficient)| value * coefficient)
-                    .sum::<f64>();
-                let risk_multiplier = (linear_predictor - center)
-                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                    .exp();
-                times
-                    .iter()
-                    .map(|&time| {
-                        let hazard = baseline.cumulative_hazard_at(stratum, time);
-                        (-(hazard * risk_multiplier)).exp().clamp(0.0, 1.0)
-                    })
-                    .collect()
-            })
-            .collect();
-        Ok((times, curves))
+        newdata: Option<Vec<Vec<f64>>>,
+        new_strata: Option<Vec<i32>>,
+        new_offset: Option<Vec<f64>>,
+        se_fit: bool,
+        reference: &str,
+        assign: Option<Vec<Vec<usize>>>,
+    ) -> PyResult<CoxTermsPrediction> {
+        let newdata = newdata_from_python(self, newdata, new_strata, new_offset, None, None)?;
+        let reference = PredictReference::parse(reference)?;
+        let assign = assign.unwrap_or_else(|| default_assign(self.nvar()));
+        Ok(self.predict_terms(newdata.as_ref(), se_fit, reference, &assign)?)
     }
 
-    pub fn expected_events(&self) -> PyResult<Vec<f64>> {
-        self.expected_events_internal()
+    /// `survfit(fit, newdata, stype, ctype, se.fit, censor)`.
+    #[pyo3(name = "survfit", signature = (newdata = None, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true))]
+    #[allow(clippy::too_many_arguments)]
+    fn survfit_py(
+        &self,
+        newdata: Option<Vec<Vec<f64>>>,
+        new_strata: Option<Vec<i32>>,
+        new_offset: Option<Vec<f64>>,
+        stype: u8,
+        ctype: Option<u8>,
+        se_fit: bool,
+        censor: bool,
+    ) -> PyResult<Vec<CoxSurvfitCurve>> {
+        let newdata = newdata_from_python(self, newdata, new_strata, new_offset, None, None)?;
+        Ok(self.survfit(
+            newdata.as_ref(),
+            SurvfitOptions {
+                stype,
+                ctype,
+                se_fit,
+                censor,
+            },
+        )?)
     }
 
-    pub fn martingale_residuals(&self) -> PyResult<Vec<f64>> {
-        let expected = self.expected_events_internal()?;
-        Ok(self
-            .status
-            .iter()
-            .zip(expected.iter())
-            .map(|(&status, &expected)| status as f64 - expected)
-            .collect())
+    /// `residuals(fit, type = "martingale", weighted, collapse)`.
+    #[pyo3(name = "martingale_residuals", signature = (weighted = false, collapse = None))]
+    fn martingale_residuals_py(
+        &self,
+        weighted: bool,
+        collapse: Option<Vec<i32>>,
+    ) -> PyResult<Vec<f64>> {
+        self.residual_vector(ResidualType::Martingale, weighted, collapse.as_deref())
     }
 
-    pub fn deviance_residuals(&self) -> PyResult<Vec<f64>> {
-        let expected = self.expected_events_internal()?;
-        Ok(self
-            .status
-            .iter()
-            .zip(expected.iter())
-            .map(|(&status, &expected)| {
-                let status = status as f64;
-                let residual = status - expected;
-                let log_term = if status > 0.0 {
-                    status * expected.max(crate::constants::DIVISION_FLOOR).ln()
-                } else {
-                    0.0
-                };
-                let magnitude = (-2.0 * (residual + log_term)).max(0.0).sqrt();
-                if residual >= 0.0 {
-                    magnitude
-                } else {
-                    -magnitude
-                }
-            })
-            .collect())
+    /// `residuals(fit, type = "deviance", weighted, collapse)`.
+    #[pyo3(name = "deviance_residuals", signature = (weighted = false, collapse = None))]
+    fn deviance_residuals_py(
+        &self,
+        weighted: bool,
+        collapse: Option<Vec<i32>>,
+    ) -> PyResult<Vec<f64>> {
+        self.residual_vector(ResidualType::Deviance, weighted, collapse.as_deref())
     }
 
-    pub fn schoenfeld_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
-        self.schoenfeld_residuals_internal()
+    /// `residuals(fit, type = "score", weighted, collapse)`.
+    #[pyo3(name = "score_residuals", signature = (weighted = false, collapse = None))]
+    fn score_residuals_py(
+        &self,
+        weighted: bool,
+        collapse: Option<Vec<i32>>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        self.residual_matrix(ResidualType::Score, weighted, collapse.as_deref(), None)
     }
 
-    pub fn scaled_schoenfeld_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
-        self.scaled_schoenfeld_residuals_internal()
+    /// `residuals(fit, type = "dfbeta", weighted, collapse)`.
+    #[pyo3(name = "dfbeta", signature = (weighted = true, collapse = None))]
+    fn dfbeta_py(&self, weighted: bool, collapse: Option<Vec<i32>>) -> PyResult<Vec<Vec<f64>>> {
+        self.residual_matrix(ResidualType::Dfbeta, weighted, collapse.as_deref(), None)
     }
 
-    pub fn partial_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
-        self.partial_residuals_internal()
+    /// `residuals(fit, type = "dfbetas", weighted, collapse)`.
+    #[pyo3(name = "dfbetas", signature = (weighted = true, collapse = None))]
+    fn dfbetas_py(&self, weighted: bool, collapse: Option<Vec<i32>>) -> PyResult<Vec<Vec<f64>>> {
+        self.residual_matrix(ResidualType::Dfbetas, weighted, collapse.as_deref(), None)
     }
 
-    pub fn score_residuals(&self) -> PyResult<Vec<Vec<f64>>> {
-        self.score_residuals_internal()
+    /// `residuals(fit, type = "schoenfeld", weighted)`.
+    #[pyo3(name = "schoenfeld_residuals", signature = (weighted = false))]
+    fn schoenfeld_residuals_py(&self, weighted: bool) -> PyResult<SchoenfeldResiduals> {
+        Ok(schoenfeld_residuals(self, weighted)?)
     }
 
-    pub fn dfbeta(&self) -> PyResult<Vec<Vec<f64>>> {
-        self.dfbeta_from_score_residuals(false)
+    /// `residuals(fit, type = "scaledsch", weighted)`.
+    #[pyo3(name = "scaled_schoenfeld_residuals", signature = (weighted = false))]
+    fn scaled_schoenfeld_residuals_py(&self, weighted: bool) -> PyResult<SchoenfeldResiduals> {
+        Ok(self.scaled_schoenfeld_residuals(weighted)?)
     }
 
-    pub fn dfbetas(&self) -> PyResult<Vec<Vec<f64>>> {
-        self.dfbeta_from_score_residuals(true)
+    /// `residuals(fit, type = "partial", weighted, collapse)`; `assign`
+    /// lists the columns of each term (default: one term per column).
+    #[pyo3(name = "partial_residuals", signature = (assign = None, weighted = false, collapse = None))]
+    fn partial_residuals_py(
+        &self,
+        assign: Option<Vec<Vec<usize>>>,
+        weighted: bool,
+        collapse: Option<Vec<i32>>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        self.residual_matrix(
+            ResidualType::Partial,
+            weighted,
+            collapse.as_deref(),
+            assign.as_deref(),
+        )
+    }
+
+    /// `survfit(fit, newdata, id)` for time-dependent new data.
+    #[pyo3(name = "survfit_individual", signature = (newdata, new_entry, new_time, id, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true))]
+    #[allow(clippy::too_many_arguments)]
+    fn survfit_individual_py(
+        &self,
+        newdata: Vec<Vec<f64>>,
+        new_entry: Vec<f64>,
+        new_time: Vec<f64>,
+        id: Vec<i32>,
+        new_strata: Option<Vec<i32>>,
+        new_offset: Option<Vec<f64>>,
+        stype: u8,
+        ctype: Option<u8>,
+        se_fit: bool,
+        censor: bool,
+    ) -> PyResult<Vec<CoxSurvfitCurve>> {
+        let newdata = newdata_from_python(
+            self,
+            Some(newdata),
+            new_strata,
+            new_offset,
+            Some(new_time),
+            Some(new_entry),
+        )?
+        .expect("newdata was supplied");
+        Ok(self.survfit_individual(
+            &newdata,
+            &id,
+            SurvfitOptions {
+                stype,
+                ctype,
+                se_fit,
+                censor,
+            },
+        )?)
     }
 }
 
-fn parse_cox_method(method: Option<&str>) -> PyResult<CoxMethod> {
-    let method_name = method.unwrap_or("efron").to_ascii_lowercase();
-    match method_name.as_str() {
-        "breslow" => Ok(CoxMethod::Breslow),
-        "efron" => Ok(CoxMethod::Efron),
-        "exact" => Ok(CoxMethod::Exact),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            "method must be 'efron', 'breslow', or 'exact'",
-        )),
-    }
-}
-
-fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "{} contains non-finite value at index {}",
-                name, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_case_weights(weights: &[f64]) -> PyResult<()> {
-    validate_finite_values("weights", weights)?;
-    for (idx, &value) in weights.iter().enumerate() {
-        if value < 0.0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "weights must be non-negative; got {} at index {}",
-                value, idx
-            )));
-        }
-    }
-    if weights.iter().all(|&value| value == 0.0) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "weights must include at least one positive value",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_method_weights(method: CoxMethod, weights: Option<&[f64]>) -> PyResult<()> {
-    if matches!(method, CoxMethod::Exact)
-        && weights.is_some_and(|values| values.iter().any(|&value| value != 1.0))
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "Case weights are not supported for the exact method",
-        ));
-    }
-    Ok(())
-}
-
-fn counting_process_means(covariates: &[Vec<f64>], doscale: &[bool]) -> Vec<f64> {
-    let mut means = vec![0.0; doscale.len()];
-    for row in covariates {
-        for ((mean, &value), &center) in means.iter_mut().zip(row).zip(doscale) {
-            if center {
-                *mean += value;
-            }
-        }
-    }
-    let denominator = covariates.len() as f64;
-    for (mean, &center) in means.iter_mut().zip(doscale) {
-        if center {
-            *mean /= denominator;
-        }
-    }
-    means
-}
-
+/// `coxph()` on explicit data: fits `Surv(time, status) ~ x` (or
+/// `Surv(entry, time, status) ~ x` when `entry` is given).
+///
+/// `nocenter` lists the values of a column that exempt it from centring
+/// (R's default `c(-1, 0, 1)` when omitted; an empty list centres every
+/// column, R's `nocenter = NULL`).  `cluster` requests the robust variance.
 #[pyfunction]
-#[pyo3(signature = (time, status, covariates, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None))]
+#[pyo3(signature = (time, status, x, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None, cluster=None, robust=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_fit(
     time: Vec<f64>,
     status: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
+    x: Vec<Vec<f64>>,
+    entry: Option<Vec<f64>>,
     strata: Option<Vec<i32>>,
     weights: Option<Vec<f64>>,
     offset: Option<Vec<f64>>,
-    initial_beta: Option<Vec<f64>>,
-    max_iter: Option<usize>,
+    method: &str,
+    init: Option<Vec<f64>>,
+    iter_max: Option<usize>,
     eps: Option<f64>,
-    toler: Option<f64>,
-    method: Option<&str>,
-    entry_times: Option<Vec<f64>>,
+    toler_chol: Option<f64>,
     nocenter: Option<Vec<f64>>,
+    cluster: Option<Vec<i32>>,
+    robust: Option<bool>,
 ) -> PyResult<CoxPHFit> {
-    coxph_fit_internal(
-        time,
-        status,
-        covariates,
-        strata,
-        weights,
-        offset,
-        initial_beta,
-        max_iter,
-        eps,
-        toler,
-        method,
-        entry_times,
-        nocenter,
-        None,
-    )
-}
-
-/// Jointly maximize partial likelihood minus a fixed diagonal quadratic penalty.
-///
-/// `penalty` is finite non-negative curvature in the original coefficient units;
-/// `term_groups` partitions all coefficient columns for effective degrees of freedom.
-/// The returned fit contains unpenalized partial log likelihood at both initial
-/// and final coefficients, and the unpenalized final score. Its covariance is
-/// inverse penalized information. Additional sampling covariance and effective
-/// degrees of freedom are returned separately in the diagnostics.
-/// Penalized fits report unweighted means; the exact method uses Breslow evaluation.
-#[pyfunction]
-#[pyo3(signature = (time, status, covariates, penalty, term_groups, strata=None, weights=None, offset=None, initial_beta=None, max_iter=None, eps=None, toler=None, method=None, entry_times=None, nocenter=None))]
-#[allow(clippy::too_many_arguments)]
-pub fn coxph_penalized_fit(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
-    penalty: Vec<f64>,
-    term_groups: Vec<Vec<usize>>,
-    strata: Option<Vec<i32>>,
-    weights: Option<Vec<f64>>,
-    offset: Option<Vec<f64>>,
-    initial_beta: Option<Vec<f64>>,
-    max_iter: Option<usize>,
-    eps: Option<f64>,
-    toler: Option<f64>,
-    method: Option<&str>,
-    entry_times: Option<Vec<f64>>,
-    nocenter: Option<Vec<f64>>,
-) -> PyResult<(CoxPHFit, CoxPenaltyDiagnostics)> {
-    validate_penalty(
-        &penalty,
-        &term_groups,
-        covariates.first().map_or(0, Vec::len),
-    )?;
-    let fit = coxph_fit_internal(
-        time,
-        status,
-        covariates,
-        strata,
-        weights,
-        offset,
-        initial_beta,
-        max_iter,
-        eps,
-        toler,
-        method,
-        entry_times,
-        nocenter,
-        Some(&penalty),
-    )?;
-    let diagnostics = CoxPenaltyDiagnostics::from_fit(
-        &fit,
-        penalty,
-        &term_groups,
-        toler.unwrap_or(COX_RANK_TOLERANCE),
-    )?;
-    Ok((fit, diagnostics))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn coxph_fit_internal(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
-    strata: Option<Vec<i32>>,
-    weights: Option<Vec<f64>>,
-    offset: Option<Vec<f64>>,
-    initial_beta: Option<Vec<f64>>,
-    max_iter: Option<usize>,
-    eps: Option<f64>,
-    toler: Option<f64>,
-    method: Option<&str>,
-    entry_times: Option<Vec<f64>>,
-    nocenter: Option<Vec<f64>>,
-    penalty: Option<&[f64]>,
-) -> PyResult<CoxPHFit> {
-    let n = time.len();
-    if n == 0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "time must not be empty",
-        ));
+    if x.len() != time.len() {
+        return Err(SurvivalError::invalid_input(format!(
+            "x has {} rows but time has {}",
+            x.len(),
+            time.len()
+        ))
+        .into());
     }
-    if status.len() != n {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "status has {} rows but time has {}",
-            status.len(),
-            n
-        )));
-    }
-    if covariates.len() != n {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "covariates has {} rows but time has {}",
-            covariates.len(),
-            n
-        )));
-    }
-    let nvar = covariates.first().map_or(0, Vec::len);
-    if covariates.iter().any(|row| row.len() != nvar) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "covariates must be rectangular",
-        ));
-    }
-    validate_finite_values("time", &time)?;
-    validate_binary_i32(&status, "status")?;
-    for (idx, row) in covariates.iter().enumerate() {
-        validate_finite_values(&format!("covariates[{}]", idx), row)?;
-    }
-
-    let check_len = |name: &str, len: usize| -> PyResult<()> {
-        if len != n {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "{} has {} rows but time has {}",
-                name, len, n
-            )));
-        }
-        Ok(())
+    let x = matrix_from_rows(&x, "x")?;
+    let data = CoxphData::try_new(time, entry, status, x, weights, strata, offset)?;
+    let defaults = CoxphOptions::default();
+    let options = CoxphOptions {
+        method: TieMethod::parse(Some(method))?,
+        init,
+        iter_max: iter_max.unwrap_or(defaults.iter_max),
+        eps: eps.unwrap_or(defaults.eps),
+        toler_chol: toler_chol.unwrap_or(defaults.toler_chol),
+        nocenter: nocenter.or(defaults.nocenter),
+        cluster,
+        robust,
     };
-
-    if let Some(values) = strata.as_ref() {
-        check_len("strata", values.len())?;
-    }
-    if let Some(values) = weights.as_ref() {
-        check_len("weights", values.len())?;
-        validate_case_weights(values)?;
-    }
-    if let Some(values) = offset.as_ref() {
-        check_len("offset", values.len())?;
-        validate_finite_values("offset", values)?;
-    }
-    if let Some(values) = entry_times.as_ref() {
-        check_len("entry_times", values.len())?;
-        validate_finite_values("entry_times", values)?;
-        for (idx, (&start, &stop)) in values.iter().zip(time.iter()).enumerate() {
-            if start >= stop {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "entry_times[{}] must be less than time[{}]",
-                    idx, idx
-                )));
-            }
-        }
-    }
-    if let Some(values) = nocenter.as_ref() {
-        validate_finite_values("nocenter", values)?;
-    }
-    if let Some(values) = initial_beta.as_ref()
-        && values.len() != nvar
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "initial_beta has {} values but covariates has {} columns",
-            values.len(),
-            nvar
-        )));
-    }
-    if let Some(values) = initial_beta.as_ref() {
-        validate_finite_values("initial_beta", values)?;
-    }
-    if let Some(value) = eps
-        && (!value.is_finite() || value <= 0.0)
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "eps must be a finite positive value",
-        ));
-    }
-    if let Some(value) = toler
-        && (!value.is_finite() || value <= 0.0)
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "toler must be a finite positive value",
-        ));
-    }
-
-    let mut cox_method = parse_cox_method(method)?;
-    // R's penalized fitter uses Breslow for every method other than Efron.
-    if penalty.is_some() && matches!(cox_method, CoxMethod::Exact) {
-        cox_method = CoxMethod::Breslow;
-    }
-    validate_method_weights(cox_method, weights.as_deref())?;
-    let method_name = match cox_method {
-        CoxMethod::Breslow => "breslow",
-        CoxMethod::Efron => "efron",
-        CoxMethod::Exact => "exact",
-    }
-    .to_string();
-    let offset_vec = offset.unwrap_or_else(|| vec![0.0; n]);
-    let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
-    let strata_values = strata.unwrap_or_else(|| vec![0; n]);
-    let nocenter_values = nocenter.unwrap_or_default();
-    let doscale: Vec<bool> = if nocenter_values.is_empty() {
-        vec![true; nvar]
-    } else {
-        (0..nvar)
-            .map(|col_idx| {
-                !covariates
-                    .iter()
-                    .all(|row| nocenter_values.iter().any(|value| row[col_idx] == *value))
-            })
-            .collect()
-    };
-    let reported_means = (entry_times.is_some() || penalty.is_some())
-        .then(|| counting_process_means(&covariates, &doscale));
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&lhs, &rhs| {
-        strata_values[lhs]
-            .cmp(&strata_values[rhs])
-            .then_with(|| time[lhs].total_cmp(&time[rhs]))
-            .then_with(|| lhs.cmp(&rhs))
-    });
-    let entry_times_ref = entry_times.as_deref();
-    let mut sorted_time = Vec::with_capacity(n);
-    let mut sorted_status = Vec::with_capacity(n);
-    let mut sorted_entry_times = entry_times_ref.map(|_| Vec::with_capacity(n));
-    let mut sorted_offset = Vec::with_capacity(n);
-    let mut sorted_weights = Vec::with_capacity(n);
-    let mut strata_boundaries = vec![0; n];
-    let mut flat = Vec::with_capacity(n * nvar);
-    for (sorted_idx, &idx) in order.iter().enumerate() {
-        sorted_time.push(time[idx]);
-        sorted_status.push(status[idx]);
-        if let (Some(values), Some(sorted_values)) = (entry_times_ref, sorted_entry_times.as_mut())
-        {
-            sorted_values.push(values[idx]);
-        }
-        sorted_offset.push(offset_vec[idx]);
-        sorted_weights.push(weights_vec[idx]);
-        if sorted_idx + 1 == n || strata_values[order[sorted_idx + 1]] != strata_values[idx] {
-            strata_boundaries[sorted_idx] = 1;
-        }
-        flat.extend(covariates[idx].iter().copied());
-    }
-    let covar = Array2::from_shape_vec((n, nvar), flat).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!("invalid covariate shape: {}", e))
-    })?;
-    let mut cox_fit = CoxFit::new_with_entry_times(
-        Array1::from_vec(sorted_time),
-        Array1::from_vec(sorted_status),
-        covar,
-        sorted_entry_times.map(Array1::from_vec),
-        Array1::from_vec(strata_boundaries),
-        Array1::from_vec(sorted_offset),
-        Array1::from_vec(sorted_weights),
-        cox_method,
-        max_iter.unwrap_or(COX_MAX_ITER),
-        eps.unwrap_or(COX_CONVERGENCE_TOLERANCE),
-        toler.unwrap_or(COX_RANK_TOLERANCE),
-        doscale,
-        initial_beta.unwrap_or_else(|| vec![0.0; nvar]),
-    )
-    .map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit initialization failed: {}", e))
-    })?;
-    if let Some(diagonal) = penalty {
-        cox_fit.set_diagonal_penalty(diagonal);
-    }
-    cox_fit
-        .fit()
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Cox fit failed: {}", e)))?;
-    let (
-        beta,
-        optimizer_means,
-        score_vector,
-        information,
-        log_likelihood,
-        score_test,
-        flag,
-        iterations,
-    ) = cox_fit.results();
-    let means = reported_means.unwrap_or(optimizer_means);
-    let mut linear_predictors = Vec::with_capacity(n);
-    let mut risk_scores = Vec::with_capacity(n);
-    for (row, &offset) in covariates.iter().zip(offset_vec.iter()) {
-        let linear_predictor = row
-            .iter()
-            .zip(beta.iter())
-            .map(|(value, coefficient)| value * coefficient)
-            .sum::<f64>()
-            + offset;
-        risk_scores.push(linear_predictor.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp());
-        linear_predictors.push(linear_predictor);
-    }
-    let information_matrix = information
-        .outer_iter()
-        .map(|row| row.iter().copied().collect())
-        .collect();
-
-    Ok(CoxPHFit {
-        coefficients: vec![beta],
-        means,
-        score_vector,
-        information_matrix,
-        log_likelihood: log_likelihood.to_vec(),
-        score_test,
-        convergence_flag: flag,
-        iterations,
-        risk_scores,
-        event_times: time,
-        status,
-        linear_predictors,
-        entry_times,
-        weights: weights_vec,
-        covariates,
-        strata: strata_values,
-        method: method_name,
-        nocenter: nocenter_values,
-    })
+    Ok(CoxPHFit::fit(data, options)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn exact_method_rejects_non_unit_case_weights() {
-        assert!(validate_method_weights(CoxMethod::Exact, None).is_ok());
-        assert!(validate_method_weights(CoxMethod::Exact, Some(&[1.0, 1.0])).is_ok());
-        assert!(validate_method_weights(CoxMethod::Exact, Some(&[1.0, 2.0])).is_err());
-        assert!(validate_method_weights(CoxMethod::Breslow, Some(&[1.0, 2.0])).is_ok());
-        assert!(validate_method_weights(CoxMethod::Efron, Some(&[0.5, 2.0])).is_ok());
-    }
-
-    fn baseline_test_fit(method: &str) -> CoxPHFit {
-        CoxPHFit {
-            coefficients: vec![vec![0.4]],
-            means: vec![0.0],
-            score_vector: vec![],
-            information_matrix: vec![],
-            log_likelihood: vec![],
-            score_test: 0.0,
-            convergence_flag: 0,
-            iterations: 0,
-            risk_scores: vec![],
-            event_times: vec![2.0, 4.0, 4.0, 3.0, 5.0, 6.0],
-            status: vec![1, 1, 1, 1, 1, 0],
-            linear_predictors: vec![0.1, -0.2, 0.4, 0.0, 0.3, -0.1],
-            entry_times: Some(vec![0.0, 1.0, 3.5, 0.5, 4.0, 0.0]),
-            weights: vec![1.0, 2.0, 1.25, 1.5, 0.5, 1.2],
-            covariates: vec![
-                vec![0.2],
-                vec![1.4],
-                vec![-0.3],
-                vec![0.8],
-                vec![1.1],
-                vec![-0.7],
-            ],
-            strata: vec![1, 1, 1, 2, 2, 2],
-            method: method.to_string(),
-            nocenter: vec![-1.0, 0.0, 1.0],
-        }
-    }
-
-    fn near_tied_test_fit(method: &str) -> CoxPHFit {
-        let mut fit = baseline_test_fit(method);
-        fit.event_times[2] += TIME_EPSILON / 2.0;
-        fit
-    }
-
-    fn counting_score_reference_fit(method: &str) -> CoxPHFit {
-        let covariates = vec![
-            vec![-1.2, 0.5],
-            vec![0.4, -1.0],
-            vec![1.1, 0.3],
-            vec![-0.3, 1.2],
-            vec![0.8, -0.7],
-            vec![1.7, 0.9],
-            vec![-0.9, 0.1],
-            vec![0.2, -1.3],
-        ];
-        let linear_predictors = covariates
-            .iter()
-            .map(|row| 0.2 * row[0] - 0.1 * row[1])
-            .collect();
-        CoxPHFit {
-            coefficients: vec![vec![0.2, -0.1]],
-            means: vec![0.0, 0.0],
-            score_vector: vec![],
-            information_matrix: vec![],
-            log_likelihood: vec![],
-            score_test: 0.0,
-            convergence_flag: 0,
-            iterations: 0,
-            risk_scores: vec![],
-            event_times: vec![2.0, 2.0, 3.0, 4.0, 4.0, 3.0, 5.0, 5.0],
-            status: vec![1, 1, 0, 1, 0, 1, 1, 0],
-            linear_predictors,
-            entry_times: Some(vec![0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.0]),
-            weights: vec![1.0, 1.5, 0.8, 1.2, 0.7, 1.1, 0.9, 1.3],
-            covariates,
-            strata: vec![0, 0, 0, 0, 0, 1, 1, 1],
-            method: method.to_string(),
-            nocenter: vec![],
-        }
-    }
-
-    fn brute_force_basehaz(fit: &CoxPHFit, centered: bool) -> (Vec<f64>, Vec<f64>, Vec<i32>) {
-        let n = fit.event_times.len();
-        let row_strata = fit.row_strata_cow().into_owned();
-        let center = if centered && !fit.linear_predictors.is_empty() {
-            fit.linear_predictors.iter().sum::<f64>() / n as f64
-        } else {
-            0.0
-        };
-        let risk_scores: Vec<f64> = fit
-            .linear_predictors
-            .iter()
-            .zip(fit.weights.iter())
-            .map(|(&lp, &weight)| weight * (lp - center).clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
-            .collect();
-
-        let mut strata_values = row_strata.clone();
-        strata_values.sort_unstable();
-        strata_values.dedup();
-
-        let mut out_times = Vec::new();
-        let mut out_hazards = Vec::new();
-        let mut out_strata = Vec::new();
-
-        for stratum in strata_values {
-            let mut event_times: Vec<f64> = fit
-                .event_times
-                .iter()
-                .zip(fit.status.iter())
-                .zip(row_strata.iter())
-                .filter_map(|((&time, &status), &row_stratum)| {
-                    (status == 1 && row_stratum == stratum).then_some(time)
-                })
-                .collect();
-            event_times.sort_by(|a, b| a.total_cmp(b));
-            event_times.dedup_by(|a, b| (*a - *b).abs() < TIME_EPSILON);
-
-            let mut cumulative = 0.0;
-            for event_time in event_times {
-                let death_indices: Vec<usize> = (0..n)
-                    .filter(|&idx| {
-                        row_strata[idx] == stratum
-                            && fit.status[idx] == 1
-                            && (fit.event_times[idx] - event_time).abs() < TIME_EPSILON
-                    })
-                    .collect();
-                let events = death_indices
-                    .iter()
-                    .map(|&idx| fit.weights[idx])
-                    .sum::<f64>();
-                let risk_sum = (0..n)
-                    .filter(|&idx| {
-                        row_strata[idx] == stratum
-                            && fit.event_times[idx] >= event_time
-                            && fit
-                                .entry_times
-                                .as_ref()
-                                .is_none_or(|entry| entry[idx] < event_time)
-                    })
-                    .map(|idx| risk_scores[idx])
-                    .sum::<f64>();
-                if risk_sum > 0.0 {
-                    if fit.method == "efron" && death_indices.len() > 1 {
-                        let death_risk_sum = death_indices
-                            .iter()
-                            .map(|&idx| risk_scores[idx])
-                            .sum::<f64>();
-                        let step_weight = events / death_indices.len() as f64;
-                        for step in 0..death_indices.len() {
-                            let fraction = step as f64 / death_indices.len() as f64;
-                            let denom = risk_sum - fraction * death_risk_sum;
-                            if denom > 0.0 {
-                                cumulative += step_weight / denom;
-                            }
-                        }
-                    } else {
-                        cumulative += events / risk_sum;
-                    }
-                }
-                out_times.push(event_time);
-                out_hazards.push(cumulative);
-                out_strata.push(stratum);
-            }
-        }
-
-        (out_times, out_hazards, out_strata)
-    }
-
-    fn assert_close_vec(actual: &[f64], expected: &[f64]) {
-        assert_eq!(actual.len(), expected.len());
-        for (idx, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate() {
-            assert!(
-                (actual - expected).abs() < 1e-12,
-                "index {}: actual={} expected={}",
-                idx,
-                actual,
-                expected
-            );
-        }
-    }
-
-    fn assert_close_matrix(actual: &[Vec<f64>], expected: &[Vec<f64>]) {
-        assert_eq!(actual.len(), expected.len());
-        for (row_idx, (actual_row, expected_row)) in actual.iter().zip(expected.iter()).enumerate()
-        {
-            assert_eq!(actual_row.len(), expected_row.len());
-            for (col_idx, (&actual, &expected)) in
-                actual_row.iter().zip(expected_row.iter()).enumerate()
-            {
-                assert!(
-                    (actual - expected).abs() < 1e-10,
-                    "row {}, col {}: actual={} expected={}",
-                    row_idx,
-                    col_idx,
-                    actual,
-                    expected
-                );
-            }
-        }
-    }
-
-    fn sorted_fit_order(fit: &CoxPHFit) -> Vec<usize> {
-        let mut order: Vec<usize> = (0..fit.event_times.len()).collect();
-        order.sort_by(|&lhs, &rhs| {
-            fit.strata[lhs]
-                .cmp(&fit.strata[rhs])
-                .then_with(|| fit.event_times[lhs].total_cmp(&fit.event_times[rhs]))
-                .then_with(|| lhs.cmp(&rhs))
-        });
-        order
-    }
-
-    #[test]
-    fn default_controls_match_reference_efron_fit() {
+    fn lung_like_data() -> CoxphData {
         let time = vec![1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0];
         let status = vec![1, 1, 0, 1, 1, 0, 1, 0];
         let x1 = [0.2, 0.8, 0.4, 1.1, 0.7, 0.3, 1.3, 0.5];
         let x2 = [1.0, 0.2, 0.7, 1.3, 0.4, 1.1, 0.5, 0.9];
-        let covariates = x1
-            .into_iter()
-            .zip(x2)
-            .map(|(left, right)| vec![left, right])
-            .collect();
-
-        let fit = coxph_fit(
-            time,
-            status,
-            covariates,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("efron"),
-            None,
-            None,
+        let x = Array2::from_shape_vec(
+            (8, 2),
+            x1.iter().zip(&x2).flat_map(|(&a, &b)| [a, b]).collect(),
         )
-        .expect("default-control Efron fit should succeed");
-
-        assert_close_vec(
-            &fit.coefficients[0],
-            &[0.103_056_235_224_469_12, -1.021_973_929_290_916],
-        );
-        assert_close_vec(
-            &fit.log_likelihood,
-            &[-7.714_231_144_849_085_5, -7.430_873_243_936_032],
-        );
-        assert_eq!(fit.convergence_flag, 2);
-        assert_eq!(fit.iterations, 4);
+        .unwrap();
+        CoxphData::try_new(time, None, status, x, None, None, None).unwrap()
     }
 
     #[test]
-    fn counting_process_fit_reports_unweighted_means() {
-        let time = vec![2.0, 3.0, 4.0, 5.0];
-        let status = vec![1, 0, 1, 1];
-        let covariates = vec![
-            vec![0.0, 0.0],
-            vec![1.0, 1.0],
-            vec![2.0, 0.0],
-            vec![8.0, 1.0],
-        ];
-        let weights = vec![1.0, 1.0, 1.0, 50.0];
-        let fit = coxph_fit(
-            time,
-            status,
-            covariates,
-            None,
-            Some(weights),
-            None,
-            None,
-            Some(0),
-            None,
-            None,
-            Some("breslow"),
-            Some(vec![0.0, 1.0, 0.5, 2.0]),
-            Some(vec![-1.0, 0.0, 1.0]),
-        )
-        .expect("weighted counting-process fit should succeed");
-
-        assert_close_vec(&fit.means, &[2.75, 0.0]);
-    }
-
-    #[test]
-    fn weighted_efron_martingale_residuals_match_tied_death_adjustment() {
-        let fit = coxph_fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 5.0],
-            vec![0, 1, 1, 0, 1, 0],
-            vec![
-                vec![-0.5],
-                vec![0.3],
-                vec![1.1],
-                vec![-0.2],
-                vec![0.7],
-                vec![0.9],
-            ],
-            None,
-            Some(vec![0.5, 4.0, 1.25, 2.5, 0.75, 3.0]),
-            Some(vec![0.1, -0.2, 0.05, 0.0, 0.15, -0.1]),
-            Some(vec![0.35]),
-            Some(0),
-            None,
-            None,
-            Some("efron"),
-            None,
-            Some(vec![-1.0, 0.0, 1.0]),
-        )
-        .expect("weighted Efron fit should succeed");
-
-        let residuals = fit
-            .martingale_residuals()
-            .expect("martingale residuals should compute");
-        assert_close_vec(
-            &residuals,
-            &[
-                0.0,
-                0.6925430252928146,
-                0.4776514121598462,
-                -0.4382541097187386,
-                0.07193586128657424,
-                -0.7751843293463833,
-            ],
-        );
-    }
-
-    #[test]
-    fn counting_process_weighted_efron_martingales_match_tied_death_adjustment() {
-        let start = vec![
-            5.0, 5.0, 5.0, 5.0, 5.0, 1.0, 3.0, 3.0, 5.0, 6.0, 4.0, 3.0, 4.0, 3.0, 6.0, 6.0, 1.0,
-            0.0, 2.0, 3.0,
-        ];
-        let stop = vec![
-            8.0, 7.0, 7.0, 6.0, 8.0, 4.0, 7.0, 7.0, 7.0, 11.0, 5.0, 8.0, 8.0, 4.0, 7.0, 8.0, 4.0,
-            4.0, 3.0, 7.0,
-        ];
-        let status = vec![0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0];
-        let offset = vec![
-            0.158098758825392,
-            0.868808320521389,
-            0.128687445645956,
-            0.41564443885946,
-            -0.12454104381012,
-            0.126492884563826,
-            -0.192555427480349,
-            0.176458708545006,
-            -0.0420644571495396,
-            0.513165053454246,
-            0.000619488582884788,
-            -0.145902198715233,
-            0.0765123968369236,
-            0.0550557322603584,
-            -0.297890251800841,
-            -0.23255179707446,
-            0.813541767289199,
-            -0.00945028539151142,
-            -0.564130394346684,
-            0.40532620729394,
-        ];
-        let weights = vec![
-            0.218218237347901,
-            1.9229300249368,
-            2.12067756047472,
-            2.79250355493277,
-            2.87225205022842,
-            1.86417786926031,
-            2.89293355597183,
-            2.71197452582419,
-            2.91446238793433,
-            0.604030104540288,
-            0.949717807676643,
-            1.68158538099378,
-            0.537106422055513,
-            0.650100536644459,
-            0.750954402890056,
-            2.54093601815402,
-            2.72963905129582,
-            0.303041761834174,
-            1.52571676624939,
-            1.57644615285099,
-        ];
-        let fit = coxph_fit(
-            stop,
-            status,
-            vec![Vec::new(); 20],
-            None,
-            Some(weights),
-            Some(offset),
-            None,
-            Some(0),
-            None,
-            None,
-            Some("efron"),
-            Some(start),
-            None,
-        )
-        .expect("weighted Efron counting-process fit should succeed");
-
-        assert_close_vec(
-            &fit.martingale_residuals()
-                .expect("martingale residuals should compute"),
-            &[
-                -1.2003146365385158,
-                0.5167845702449412,
-                0.7694790601433825,
-                0.0,
-                0.2669511468532308,
-                0.882470087452302,
-                -0.4718869806111421,
-                0.488010676460061,
-                -0.33137161704322854,
-                -1.7119790049329036,
-                0.913367018423027,
-                0.08670915321449985,
-                -1.1997374535688474,
-                0.890573211906577,
-                0.8495299582509096,
-                -0.8121527535656266,
-                -0.3156025728562301,
-                -0.13858608550402313,
-                0.0,
-                -0.858014624169994,
-            ],
-        );
+    fn default_controls_match_reference_efron_fit() {
+        let fit = CoxPHFit::fit(lung_like_data(), CoxphOptions::default()).unwrap();
+        let expected = [0.103_056_235_224_469_12, -1.021_973_929_290_916];
+        for (actual, expected) in fit.coefficients.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert!((fit.loglik[0] - -7.714_231_144_849_085_5).abs() < 1e-12);
+        assert!((fit.loglik[1] - -7.430_873_243_936_032).abs() < 1e-12);
+        assert_eq!(fit.flag, 2);
+        assert_eq!(fit.iter, 4);
+        assert_eq!(fit.n, 8);
+        assert_eq!(fit.nevent, 5);
+        assert_eq!(fit.method, TieMethod::Efron);
+        // Linear predictors are centred at the means.
+        let mean_lp: f64 = fit.linear_predictors.iter().sum::<f64>() / 8.0;
+        assert!(mean_lp.abs() < 1e-12);
+        assert_eq!(fit.residuals.len(), 8);
+        let total: f64 = fit.residuals.iter().sum();
+        assert!(total.abs() < 1e-10, "martingale residuals sum to zero");
     }
 
     #[test]
     fn default_rank_tolerance_preserves_near_collinear_columns() {
         let n = 20;
-        let time = (1..=n).map(|value| value as f64).collect::<Vec<_>>();
-        let status = (0..n)
-            .map(|idx| i32::from(idx % 3 != 0))
-            .collect::<Vec<_>>();
-        let covariates = (0..n)
-            .map(|idx| {
+        let time: Vec<f64> = (1..=n).map(|value| value as f64).collect();
+        let status: Vec<i32> = (0..n).map(|idx| i32::from(idx % 3 != 0)).collect();
+        let rows: Vec<f64> = (0..n)
+            .flat_map(|idx| {
                 let first = (idx % 7) as f64 * 0.3 + (idx / 7) as f64 * 0.11;
                 let direction = if idx % 2 == 0 { 1.0 } else { -1.0 };
                 let perturbation = direction * (0.2 + (idx % 5) as f64 * 0.13);
-                vec![first, first + 1e-5 * perturbation]
+                [first, first + 1e-5 * perturbation]
             })
-            .collect::<Vec<_>>();
-        let fit_with_tolerance = |toler| {
-            coxph_fit(
+            .collect();
+        let x = Array2::from_shape_vec((n, 2), rows).unwrap();
+        let fit_with = |toler: Option<f64>| {
+            let data = CoxphData::try_new(
                 time.clone(),
+                None,
                 status.clone(),
-                covariates.clone(),
+                x.clone(),
                 None,
-                None,
-                None,
-                None,
-                Some(0),
-                None,
-                toler,
-                Some("breslow"),
                 None,
                 None,
             )
-            .expect("near-collinear fit should succeed")
+            .unwrap();
+            let options = CoxphOptions {
+                method: TieMethod::Breslow,
+                iter_max: 0,
+                toler_chol: toler.unwrap_or(COX_RANK_TOLERANCE),
+                ..CoxphOptions::default()
+            };
+            CoxPHFit::fit(data, options).unwrap()
         };
-
-        let default_fit = fit_with_tolerance(None);
-        let loose_fit = fit_with_tolerance(Some(1e-9));
-
-        assert_eq!(default_fit.convergence_flag, 2);
-        assert_eq!(loose_fit.convergence_flag, 1);
+        assert_eq!(fit_with(None).flag, 2);
+        assert_eq!(fit_with(Some(1e-9)).flag, 1);
     }
 
     #[test]
-    fn test_coxph_fit_basehaz_matches_bruteforce_for_strata_entry_and_ties() {
-        for method in ["breslow", "efron"] {
-            let fit = baseline_test_fit(method);
-            for centered in [false, true] {
-                let expected = brute_force_basehaz(&fit, centered);
-                let actual = fit
-                    .basehaz_with_strata_internal(centered)
-                    .expect("baseline hazard should be computed");
-
-                assert_close_vec(&actual.0, &expected.0);
-                assert_close_vec(&actual.1, &expected.1);
-                assert_eq!(actual.2, expected.2);
+    fn robust_variance_is_the_dfbeta_crossproduct() {
+        let data = lung_like_data();
+        let options = CoxphOptions {
+            cluster: Some(vec![0, 0, 1, 1, 2, 2, 3, 3]),
+            ..CoxphOptions::default()
+        };
+        let fit = CoxPHFit::fit(data, options).unwrap();
+        let naive = fit.naive_var.as_ref().expect("naive variance is kept");
+        let dfbeta = fit
+            .dfbeta_matrix(&fit.linear_predictors, true, fit.cluster.as_deref())
+            .unwrap();
+        let expected = crossprod(&dfbeta);
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!((fit.var[(i, j)] - expected[(i, j)]).abs() < 1e-12);
+                assert!(fit.var[(i, j)] != naive[(i, j)] || fit.var[(i, j)] == 0.0);
             }
         }
+        assert!(fit.rscore.is_some());
     }
 
     #[test]
-    fn test_coxph_fit_basehaz_uses_scaled_risk_scores_for_large_linear_predictors() {
-        let fit = CoxPHFit {
-            coefficients: vec![vec![710.0]],
-            means: vec![0.0],
-            score_vector: vec![],
-            information_matrix: vec![],
-            log_likelihood: vec![],
-            score_test: 0.0,
-            convergence_flag: 0,
-            iterations: 0,
-            risk_scores: vec![],
-            event_times: vec![1.0, 2.0, 3.0],
-            status: vec![1, 1, 1],
-            linear_predictors: vec![710.0, 709.0, 708.0],
-            entry_times: None,
-            weights: vec![1.0, 1.0, 1.0],
-            covariates: vec![vec![1.0], vec![709.0 / 710.0], vec![708.0 / 710.0]],
-            strata: vec![0, 0, 0],
-            method: "breslow".to_string(),
-            nocenter: Vec::new(),
-        };
-
-        let (times, hazards, strata) = fit.basehaz_with_strata_internal(false).unwrap();
-        let expected_first = (-710.0_f64).exp() / (1.0 + (-1.0_f64).exp() + (-2.0_f64).exp());
-
-        assert_eq!(times, vec![1.0, 2.0, 3.0]);
-        assert_eq!(strata, vec![0, 0, 0]);
-        assert!(hazards[0].is_finite());
-        assert!(hazards[0] > 0.0);
-        assert!((hazards[0] - expected_first).abs() <= expected_first * 1e-12);
-        assert!(hazards[1] > hazards[0]);
-        assert!(hazards[2] > hazards[1]);
-    }
-
-    #[test]
-    fn test_coxph_missing_strata_matches_explicit_zero_strata() {
-        for method in ["breslow", "efron"] {
-            let mut explicit = baseline_test_fit(method);
-            explicit.strata = vec![0; explicit.event_times.len()];
-            let mut implicit = explicit.clone();
-            implicit.strata.clear();
-
-            for centered in [false, true] {
-                let explicit_basehaz = explicit
-                    .basehaz_with_strata_internal(centered)
-                    .expect("explicit zero-strata baseline hazard should compute");
-                let implicit_basehaz = implicit
-                    .basehaz_with_strata_internal(centered)
-                    .expect("implicit zero-strata baseline hazard should compute");
-                assert_close_vec(&implicit_basehaz.0, &explicit_basehaz.0);
-                assert_close_vec(&implicit_basehaz.1, &explicit_basehaz.1);
-                assert_eq!(implicit_basehaz.2, explicit_basehaz.2);
-
-                let explicit_survival = explicit
-                    .survival_curve(None, centered)
-                    .expect("explicit zero-strata survival curve should compute");
-                let implicit_survival = implicit
-                    .survival_curve(None, centered)
-                    .expect("implicit zero-strata survival curve should compute");
-                assert_close_vec(&implicit_survival.0, &explicit_survival.0);
-                assert_close_matrix(&implicit_survival.1, &explicit_survival.1);
-            }
-        }
-    }
-
-    #[test]
-    fn test_coxph_default_survival_curve_matches_explicit_strata_means() {
-        for method in ["breslow", "efron"] {
-            let fit = baseline_test_fit(method);
-            let default = fit
-                .survival_curve(None, true)
-                .expect("default stratified survival curve should compute");
-            let explicit = fit
-                .survival_curve_with_strata(
-                    vec![fit.means.clone(), fit.means.clone()],
-                    vec![1, 2],
-                    true,
-                )
-                .expect("explicit stratified survival curve should compute");
-
-            assert_close_vec(&default.0, &explicit.0);
-            assert_close_matrix(&default.1, &explicit.1);
-        }
-    }
-
-    #[test]
-    fn test_coxph_default_survival_curve_matches_explicit_single_stratum_mean() {
-        let mut fit = baseline_test_fit("breslow");
-        fit.strata = vec![1; fit.event_times.len()];
-
-        let default = fit
-            .survival_curve(None, true)
-            .expect("default single-stratum survival curve should compute");
-        let explicit = fit
-            .survival_curve(Some(vec![fit.means.clone()]), true)
-            .expect("explicit single-stratum survival curve should compute");
-
-        assert_close_vec(&default.0, &explicit.0);
-        assert_close_matrix(&default.1, &explicit.1);
-    }
-
-    #[test]
-    fn test_coxph_default_survival_curve_validates_means() {
-        let mut fit = baseline_test_fit("breslow");
-        fit.means = vec![f64::NAN];
-
-        assert!(fit.survival_curve(None, true).is_err());
-    }
-
-    #[test]
-    fn test_coxph_deviance_residuals_reuse_expected_events() {
-        let fit = baseline_test_fit("breslow");
-        let expected: Vec<f64> = fit
-            .martingale_residuals()
-            .expect("martingale residuals should compute")
+    fn basehaz_uncentred_removes_the_mean_offset() {
+        let fit = CoxPHFit::fit(lung_like_data(), CoxphOptions::default()).unwrap();
+        let centred = fit.basehaz(true).unwrap();
+        let uncentred = fit.basehaz(false).unwrap();
+        let center: f64 = fit
+            .means
             .iter()
-            .zip(fit.status.iter())
-            .map(|(&residual, &status)| {
-                let status = status as f64;
-                let log_term = if status > 0.0 {
-                    let expected = (status - residual).max(crate::constants::DIVISION_FLOOR);
-                    status * expected.ln()
-                } else {
-                    0.0
-                };
-                let magnitude = (-2.0 * (residual + log_term)).max(0.0).sqrt();
-                if residual >= 0.0 {
-                    magnitude
-                } else {
-                    -magnitude
-                }
-            })
-            .collect();
-
-        let actual = fit
-            .deviance_residuals()
-            .expect("deviance residuals should compute");
-
-        assert_close_vec(&actual, &expected);
+            .zip(&fit.coefficients)
+            .map(|(m, b)| m * b)
+            .sum();
+        assert_eq!(centred.time, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        for (c, u) in centred.hazard.iter().zip(&uncentred.hazard) {
+            assert!((u - c * (-center).exp()).abs() < 1e-12);
+        }
+        assert!(centred.strata.is_none());
     }
 
     #[test]
-    fn test_coxph_schoenfeld_sweep_matches_scan_for_strata_entry_and_ties() {
-        for method in ["breslow", "efron"] {
-            let fit = baseline_test_fit(method);
-            let order = sorted_fit_order(&fit);
-            let entry_times = fit.entry_times.as_ref();
-            let tie_method = fit.tie_method();
-            let expected = fit.schoenfeld_residuals_by_scan(1, &order, entry_times, tie_method);
-            let actual = fit.schoenfeld_residuals_sweep(1, &order, entry_times, tie_method);
-            assert_close_matrix(&actual, &expected);
+    fn survfit_at_the_means_matches_the_baseline_hazard() {
+        let fit = CoxPHFit::fit(lung_like_data(), CoxphOptions::default()).unwrap();
+        let curves = fit.survfit(None, SurvfitOptions::default()).unwrap();
+        assert_eq!(curves.len(), 1);
+        let basehaz = fit.basehaz(true).unwrap();
+        for (g, row) in curves[0].cumhaz.iter().enumerate() {
+            assert!((row[0] - basehaz.hazard[g]).abs() < 1e-12);
+            assert!((curves[0].surv[g][0] - (-row[0]).exp()).abs() < 1e-12);
+        }
+        assert!(curves[0].std_err.is_some());
+        let expected = fit.predict_expected(None, true).unwrap();
+        assert_eq!(expected.fit.len(), 8);
+        for (e, (&s, r)) in expected
+            .fit
+            .iter()
+            .zip(fit.status.iter().zip(&fit.residuals))
+        {
+            assert!((e - (f64::from(s) - r)).abs() < 1e-12);
         }
     }
 
     #[test]
-    fn test_coxph_counting_score_residual_sweep_matches_scan_for_strata_entry_and_ties() {
-        for method in ["breslow", "efron"] {
-            let fit = baseline_test_fit(method);
-            let order = sorted_fit_order(&fit);
-            let entry_times = fit.entry_times.as_ref().expect("test fit has entry times");
-            let risk: Vec<f64> = fit
-                .linear_predictors
-                .iter()
-                .zip(fit.weights.iter())
-                .map(|(&lp, &weight)| lp.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp() * weight)
-                .collect();
-            let method_code = if method == "efron" { 1 } else { 0 };
-
-            let expected = fit.score_residuals_counting_process_by_scan(
-                1,
-                method_code,
-                &risk,
-                &order,
-                entry_times,
-            );
-            let actual = fit.score_residuals_counting_process_sweep(
-                1,
-                method_code,
-                &risk,
-                &order,
-                entry_times,
-            );
-
-            assert_close_matrix(&actual, &expected);
+    fn predictions_follow_the_reference_argument() {
+        let fit = CoxPHFit::fit(lung_like_data(), CoxphOptions::default()).unwrap();
+        let sample = fit
+            .predict_lp(None, false, PredictReference::Sample)
+            .unwrap();
+        assert_eq!(sample.fit, fit.linear_predictors);
+        let zero = fit.predict_lp(None, true, PredictReference::Zero).unwrap();
+        let center: f64 = fit
+            .means
+            .iter()
+            .zip(&fit.coefficients)
+            .map(|(m, b)| m * b)
+            .sum();
+        for (z, lp) in zero.fit.iter().zip(&fit.linear_predictors) {
+            assert!((z - (lp + center)).abs() < 1e-12);
         }
+        assert!(zero.se_fit.is_some());
+        let newdata = CoxNewData::try_new(
+            Array2::from_shape_vec((1, 2), fit.means.clone()).unwrap(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let at_means = fit
+            .predict_risk(Some(&newdata), true, PredictReference::Strata)
+            .unwrap();
+        assert!((at_means.fit[0] - 1.0).abs() < 1e-12);
+        let terms = fit
+            .predict_terms(None, true, PredictReference::Sample, &default_assign(2))
+            .unwrap();
+        assert_eq!(terms.fit.len(), 8);
+        assert!((terms.constant - center).abs() < 1e-12);
     }
 
     #[test]
-    fn test_coxph_counting_score_residuals_match_r_for_weights_strata_and_ties() {
-        let cases = [
-            (
-                "breslow",
-                vec![
-                    vec![-0.778427039030269, 0.283533537794141],
-                    vec![0.091186357321952, -0.342237690541851],
-                    vec![-0.650093055328823, -0.190343304961445],
-                    vec![-0.0420910220554235, -0.132051648232679],
-                    vec![-0.469472843288164, 0.810907638406828],
-                    vec![0.709746822901141, 0.66611561001089],
-                    vec![-0.143052423889649, 0.568213016404157],
-                    vec![-0.0432781142437781, 0.608556079386341],
-                ],
-            ),
-            (
-                "efron",
-                vec![
-                    vec![-0.890022262887945, 0.233804575353994],
-                    vec![0.0973290025651707, -0.50524720360612],
-                    vec![-0.741057387549249, -0.122553172255785],
-                    vec![0.0221464326595451, -0.166914303193565],
-                    vec![-0.469472843288164, 0.810907638406828],
-                    vec![0.709746822901141, 0.66611561001089],
-                    vec![-0.143052423889649, 0.568213016404157],
-                    vec![-0.0432781142437781, 0.608556079386341],
-                ],
-            ),
-        ];
-
-        for (method, expected) in cases {
-            let actual = counting_score_reference_fit(method)
-                .score_residuals_internal()
-                .expect("counting-process score residuals should compute");
-            assert_close_matrix(&actual, &expected);
-        }
+    fn strata_and_counting_process_fits_keep_row_order() {
+        let time = vec![5.0, 1.0, 4.0, 2.0, 3.0, 6.0, 8.0, 7.0];
+        let entry = vec![0.0, 0.0, 1.0, 0.0, 0.5, 2.0, 0.0, 1.0];
+        let status = vec![1, 1, 0, 0, 1, 0, 0, 1];
+        let x =
+            Array2::from_shape_vec((8, 1), vec![0.6, 0.5, 0.8, 1.0, 0.3, 0.4, 0.2, 0.9]).unwrap();
+        let strata = vec![1, 0, 1, 0, 1, 0, 1, 0];
+        let data = CoxphData::try_new(
+            time.clone(),
+            Some(entry.clone()),
+            status.clone(),
+            x.clone(),
+            None,
+            Some(strata.clone()),
+            None,
+        )
+        .unwrap();
+        let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
+        assert_eq!(fit.sorted.codes, vec![0, 1]);
+        assert_eq!(fit.time, time);
+        assert_eq!(fit.strata.as_deref(), Some(strata.as_slice()));
+        let curves = fit.survfit(None, SurvfitOptions::default()).unwrap();
+        assert_eq!(curves.len(), 2);
+        assert_eq!(curves[0].stratum, 0);
+        let basehaz = fit.basehaz(true).unwrap();
+        assert_eq!(basehaz.strata.as_ref().unwrap().len(), basehaz.time.len());
+        let total: f64 = fit.residuals.iter().sum();
+        assert!(total.abs() < 1e-10);
     }
 
     #[test]
-    fn test_coxph_schoenfeld_residuals_treat_near_ties_as_ties() {
-        for method in ["breslow", "efron", "exact"] {
-            let expected = baseline_test_fit(method)
-                .schoenfeld_residuals_internal()
-                .expect("exact-tied Schoenfeld residuals should compute");
-            let actual = near_tied_test_fit(method)
-                .schoenfeld_residuals_internal()
-                .expect("near-tied Schoenfeld residuals should compute");
-
-            assert_close_matrix(&actual, &expected);
-        }
+    fn null_model_reports_the_log_likelihood_and_residuals() {
+        let data = CoxphData::try_new(
+            vec![1.0, 2.0, 3.0],
+            None,
+            vec![1, 1, 0],
+            Array2::zeros((3, 0)),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
+        assert!(fit.coefficients.is_empty());
+        assert_eq!(fit.linear_predictors, vec![0.0; 3]);
+        assert!((fit.residuals[0] - (1.0 - 1.0 / 3.0)).abs() < 1e-12);
+        assert_eq!(fit.wald_test, 0.0);
     }
 
     #[test]
-    fn test_coxph_score_residuals_treat_near_ties_as_ties() {
-        for method in ["breslow", "efron", "exact"] {
-            let expected = baseline_test_fit(method)
-                .score_residuals_internal()
-                .expect("exact-tied score residuals should compute");
-            let actual = near_tied_test_fit(method)
-                .score_residuals_internal()
-                .expect("near-tied score residuals should compute");
-
-            assert_close_matrix(&actual, &expected);
-        }
-    }
-
-    #[test]
-    fn test_coxph_exact_score_residuals_treat_right_censored_near_ties_as_ties() {
-        let mut expected_fit = baseline_test_fit("exact");
-        expected_fit.entry_times = None;
-        let expected = expected_fit
-            .score_residuals_internal()
-            .expect("exact-tied right-censored score residuals should compute");
-
-        let mut actual_fit = near_tied_test_fit("exact");
-        actual_fit.entry_times = None;
-        let actual = actual_fit
-            .score_residuals_internal()
-            .expect("near-tied right-censored score residuals should compute");
-
-        assert_close_matrix(&actual, &expected);
+    fn invalid_inputs_are_rejected() {
+        assert!(
+            CoxphData::try_new(
+                vec![],
+                None,
+                vec![],
+                Array2::zeros((0, 1)),
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            CoxphData::try_new(
+                vec![1.0, 2.0],
+                None,
+                vec![1, 2],
+                Array2::zeros((2, 1)),
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            CoxphData::try_new(
+                vec![1.0, 2.0],
+                Some(vec![0.0, 2.0]),
+                vec![1, 0],
+                Array2::zeros((2, 1)),
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            CoxphData::try_new(
+                vec![1.0, 2.0],
+                None,
+                vec![1, 0],
+                Array2::zeros((2, 1)),
+                Some(vec![1.0, 0.0]),
+                None,
+                None
+            )
+            .is_err()
+        );
+        let data = lung_like_data();
+        let options = CoxphOptions {
+            method: TieMethod::Exact,
+            robust: Some(true),
+            ..CoxphOptions::default()
+        };
+        assert!(CoxPHFit::fit(data, options).is_err());
     }
 }

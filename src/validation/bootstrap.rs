@@ -219,7 +219,7 @@ pub(crate) fn bootstrap_cox(
     weights: Option<&[f64]>,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::cox_optimizer::{CoxFitBuilder, Method as CoxMethod};
+    use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod as CoxMethod};
     use ndarray::Array1;
     let n = time.len();
     let nvar = covariates.nrows();
@@ -246,8 +246,8 @@ pub(crate) fn bootstrap_cox(
         original_builder = original_builder.weights(Array1::from_vec(weights));
     }
     let mut original_fit = original_builder.build()?;
-    original_fit.fit()?;
-    let (original_beta, _, _, _, _, _, _, _) = original_fit.results();
+    original_fit.fit();
+    let original_beta = original_fit.results().coefficients;
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
         .into_par_iter()
@@ -289,12 +289,8 @@ pub(crate) fn bootstrap_cox(
             }
             match builder.build() {
                 Ok(mut fit) => {
-                    if fit.fit().is_ok() {
-                        let (beta, _, _, _, _, _, _, _) = fit.results();
-                        Some(beta)
-                    } else {
-                        None
-                    }
+                    fit.fit();
+                    Some(fit.results().coefficients)
                 }
                 Err(_) => None,
             }

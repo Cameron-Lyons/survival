@@ -1,5 +1,10 @@
-#[path = "aggregate_survfit.rs"]
-pub(crate) mod aggregate_survfit_module;
+//! Non-parametric survival curves and tests: Kaplan-Meier /
+//! Fleming-Harrington (`survfitkm`), Aalen-Johansen (`survfitaj`), the
+//! summaries built on them, the G-rho tests (`survdiff`) and the Cox
+//! baseline curves.
+
+pub(crate) mod aggregate_survfit;
+pub(crate) mod agsurv;
 #[path = "agsurv4.rs"]
 pub(crate) mod agsurv4_module;
 #[path = "agsurv5.rs"]
@@ -9,28 +14,27 @@ pub(crate) mod cox_survfit;
 pub(crate) mod illness_death;
 pub(crate) mod logrank_components;
 pub(crate) mod multi_state;
-#[path = "nelson_aalen.rs"]
-pub(crate) mod nelson_aalen_module;
-#[path = "norisk.rs"]
-pub(crate) mod norisk_module;
-#[path = "pseudo.rs"]
-pub(crate) mod pseudo_module;
+pub(crate) mod nelson_aalen;
+pub(crate) mod norisk;
+pub(crate) mod pseudo;
+pub(crate) mod pseudo_gee;
 pub(crate) mod semi_markov;
-#[path = "statefig.rs"]
-pub(crate) mod statefig_module;
-#[path = "survfit_confint.rs"]
-pub(crate) mod survfit_confint_module;
+pub(crate) mod statefig;
+pub(crate) mod survfit_confint;
 pub(crate) mod survfit_matrix;
-pub(crate) mod survfit_residuals;
+pub(crate) mod survfit_summary;
+pub(crate) mod survfitaj;
 #[path = "survfitaj_extended.rs"]
 pub(crate) mod survfitaj_extended_module;
-#[path = "survfitaj.rs"]
-pub(crate) mod survfitaj_module;
-#[path = "survfitkm.rs"]
-pub(crate) mod survfitkm_module;
+pub(crate) mod survfitkm;
 
-pub use aggregate_survfit_module::{
-    AggregateSurvfitResult, aggregate_shared_survfit, aggregate_survfit, aggregate_survfit_by_group,
+pub use aggregate_survfit::{
+    AggregateFun, AggregateGroups, AggregateSurvfitResult, GroupingFactor, aggregate_survfit,
+    aggregate_survfit_py,
+};
+pub use agsurv::{
+    AgsurvCurve, AgsurvData, CoxSurvCurve, CoxSurvType, IndividualInterval, agsurv, coxsurv_fit,
+    expand_curve, individual_curve,
 };
 pub use agsurv4_module::agsurv4;
 pub use agsurv5_module::agsurv5;
@@ -44,44 +48,47 @@ pub use illness_death::{
     TransitionHazard, fit_illness_death, predict_illness_death,
 };
 pub use logrank_components::{
-    SurvDiffResult, compute_counting_logrank_components, compute_logrank_components,
-    stratified_counting_logrank_components, stratified_logrank_components, survdiff2,
+    SurvDiffResult, SurvdiffData, survdiff, survdiff_one_sample, survdiff_one_sample_py,
+    survdiff_py,
 };
 pub use multi_state::{
     MarkovMSMResult, MultiStateConfig, MultiStateResult, TransitionIntensityResult,
     estimate_transition_intensities, fit_markov_msm, fit_multi_state_model,
 };
-pub use nelson_aalen_module::{
-    NelsonAalenResult, StratifiedKMResult, nelson_aalen, nelson_aalen_estimator,
-    stratified_kaplan_meier,
+pub use nelson_aalen::{NelsonAalenResult, nelson_aalen, nelson_aalen_py};
+pub use norisk::{norisk_flags, norisk_py};
+pub use pseudo::{
+    ResidualType, SurvfitAJResid, SurvfitResid, pseudo, pseudo_aj, pseudo_aj_py, pseudo_py,
+    survfitresid, survfitresid_aj, survfitresid_aj_py, survfitresid_py,
 };
-pub use norisk_module::norisk;
-pub use pseudo_module::{
-    GEEConfig, GEEResult, PseudoResult, pseudo, pseudo_fast, pseudo_gee_regression,
-};
+pub use pseudo_gee::{GEEConfig, GEEResult, pseudo_gee_regression};
 pub use semi_markov::{
     SemiMarkovConfig, SemiMarkovPrediction, SemiMarkovResult, SojournDistribution,
     SojournTimeParams, fit_semi_markov, predict_semi_markov,
 };
-pub use statefig_module::{
-    StateFigData, statefig, statefig_matplotlib_code, statefig_transition_matrix, statefig_validate,
+pub use statefig::{StateFigArrow, StateFigLayout, StateFigResult, statefig, statefig_py};
+pub use survfit_confint::{
+    ConfLower, ConfType, ConfidenceBands, survfit_confint, survfit_confint_py,
 };
-pub use survfit_confint_module::survfit_confint_native;
 pub use survfit_matrix::{
     SurvfitMatrixResult, basehaz, condition_cox_survfit_curves, cox_survfit_from_baseline,
     step_matrix_values_at, step_values_at, survfit_from_cumhaz, survfit_from_hazard,
     survfit_from_matrix, survfit_multistate,
 };
-pub use survfit_residuals::survfit_residuals_at_times;
+pub use survfit_summary::{
+    RmeanOption, SurvfitQuantiles, SurvmeanTable, quantile_survfit, quantile_survfit_from,
+    quantile_survfit_py, summary_survfit, summary_survfit_py, summary_survfit_times, survfit0,
+    survfit0_aj, survfit0_aj_py, survfit0_py, survmean, survmean_py,
+};
+pub use survfitaj::{
+    SurvfitAJCounts, SurvfitAJData, SurvfitAJInfluence, SurvfitAJOptions, SurvfitAJResult,
+    survfitaj, survfitaj_py,
+};
 pub use survfitaj_extended_module::{
     AalenJohansenExtendedConfig, AalenJohansenExtendedResult, TransitionMatrix, TransitionType,
     VarianceEstimator, survfitaj_extended,
 };
-pub use survfitaj_module::{SurvFitAJ, survfitaj};
-pub use survfitkm_module::{
-    CountingSurvfitTables, GroupedSurvFitKMOutput, KaplanMeierConfig, SurvFitKMInfluenceOutput,
-    SurvFitKMOutput, SurvfitCurveResult, SurvfitKMOptions, compute_robust_survfitkm_with_timefix,
-    compute_survfitkm, counting_survfit_tables, robust_counting_survfit_variance,
-    robust_right_survfit_variance, robust_survfitkm, survfit_curve_from_tables, survfitkm,
-    survfitkm_counting_influence, survfitkm_grouped, survfitkm_influence, survfitkm_with_options,
+pub use survfitkm::{
+    HazardType, InfluenceRequest, SurvType, SurvfitCounts, SurvfitInfluence, SurvfitKMData,
+    SurvfitKMOptions, SurvfitKMResult, survfitkm, survfitkm_py,
 };

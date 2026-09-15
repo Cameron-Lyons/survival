@@ -9,12 +9,12 @@ A high-performance survival analysis library written in Rust, with a Python API 
 ## Features
 
 - Core survival analysis routines
-- Cox proportional hazards models with frailty
+- Cox proportional hazards models (Breslow, Efron and exact ties, counting-process data)
 - Kaplan-Meier and Aalen-Johansen (multi-state) survival curves
 - Nelson-Aalen estimator
 - Parametric accelerated failure time models
 - Fine-Gray competing risks model
-- Penalized splines (P-splines) for smooth covariate effects
+- P-spline and natural spline bases (`pspline`, `nsk`)
 - Concordance index calculations
 - Person-years calculations
 - Score calculations for survival models
@@ -85,12 +85,18 @@ maturin develop --release --features extension-module,ml
 Prefer domain modules in new code:
 
 ```python
-from survival import core, datasets, regression, surv_analysis, validation
+from survival import datasets, regression, surv_analysis, validation
 
 lung = datasets.load_lung()
-fit = regression.survreg(...)
-km = surv_analysis.survfitkm(...)
-score = validation.rmst(...)
+time = [float(t) for t in lung["time"]]
+status = [int(s) - 1 for s in lung["status"]]  # R codes status as 1/2
+x = [[float(a), float(s)] for a, s in zip(lung["age"], lung["sex"], strict=True)]
+
+cox = regression.coxph_fit(time, status, x)  # R: coxph(Surv(time, status) ~ age + sex)
+km = surv_analysis.survfitkm(time, status)  # R: survfit(Surv(time, status) ~ 1)
+table = surv_analysis.survmean(km)  # R: summary(fit)$table
+test = validation.logrank_test(time, status, [int(s) for s in lung["sex"]])
+print(cox.coefficients, table.median, test.p_value)
 ```
 
 R-style entry points are intentionally available from the package root for users
@@ -357,34 +363,34 @@ Common result objects can be converted to column-oriented tables with
 `Surv` responses also support table conversion for quick data inspection.
 The `survival.residuals` name remains the residual diagnostics module; the
 R-style residual generic is available as `survival.r_api.residuals(...)` for
-fitted Cox and `survreg` models.
+fitted Cox and `survreg` models (`survival.r_api` re-exports the `survival.r`
+package, which holds the implementation split by concern).
 For AFT models, `type="matrix"` returns six analytic diagnostic columns in R's
 order (`g`, `dg`, `ddg`, `ds`, `dds`, `dsg`), including its interval-censoring
 conventions. Working residuals use the location score divided by negative
 curvature; tail probabilities are evaluated directly to avoid cancellation.
 
-Other historical root-level algorithm names remain available for compatibility,
-but module imports are the preferred style because they match the current repo
-layout and keep the API easier to navigate. Legacy root-level algorithm names
-are resolved lazily instead of being copied into the package namespace at import
-time.
+Algorithm bindings are not re-exported from the package root: import them from
+their domain module (`survival.regression.coxph_fit`, not `survival.coxph_fit`).
+The R-style names and the domain modules are resolved lazily instead of being
+copied into the package namespace at import time.
 
 `survival.__all__` and `dir(survival)` expose the curated package surface:
-domain modules, R-style entry points, and scikit-learn helpers. Legacy
-root-level algorithm exports are still available for compatibility and are listed in
-`survival.__deprecated_root_exports__`. In lean source builds, symbols that
-require the Rust `ml` feature are omitted from their domain module until the
-extension is built with `--features extension-module,ml`.
+domain modules, R-style entry points, and scikit-learn helpers. In lean source
+builds, symbols that require the Rust `ml` feature are omitted from their domain
+module until the extension is built with `--features extension-module,ml`.
 
 Common modules:
 - `survival.datasets`: built-in example and benchmark datasets
 - `survival.data_prep`: time splitting and data transformation helpers
-- `survival.core`: shared concordance, spline, and low-level core routines
+- `survival.core`: typed inputs (`SurvivalData`, `CovariateMatrix`, ...), `concordancefit`,
+  spline bases and the Cox residual kernels
 - `survival.regression`: Cox, AFT, competing-risks, cure, and recurrent-event models
 - `survival.surv_analysis`: Kaplan-Meier, Nelson-Aalen, multistate, and log-rank helpers
 - `survival.validation`: metrics, calibration, conformal, RMST, and statistical tests
-- `survival.residuals`: martingale, Schoenfeld, and related residual diagnostics
-- `survival.population`: expected-survival and rate-table routines
+- `survival.residuals`: the `coxmart`/`agmart` kernels; model residuals live on `CoxPHFit`
+  and `SurvregFit`
+- `survival.population`: rate tables, `match_ratetable`, `pyears` and `survexp`
 - `survival.monitoring`: drift and monitoring utilities
 - `survival.ml`: neural, tree, and modern ML-oriented survival models
 - `survival.reliability_tools`: reliability utilities; the top-level
@@ -440,34 +446,39 @@ case weights, factors and interactions, clustered influence estimates, tapering,
 and retained model, design, and response data. The risk-set sweep and linear
 algebra are implemented in Rust.
 
-### Penalized Splines (P-splines)
+### P-spline and natural spline bases
 
 ```python
 from survival import core
 
 x = [0.1 * i for i in range(100)]
-pspline = core.PSpline(
-    x=x,
-    df=10,
-    theta=1.0,
-    eps=1e-6,
-    method="GCV",
-    boundary_knots=(0.0, 10.0),
-    intercept=True,
-    penalty=True,
-)
-pspline.fit()
+# The B-spline basis of R's pspline(x, nterm = 10, degree = 3); the
+# difference penalty is applied by the penalised Cox fit.
+basis = core.pspline_basis(x, 10, 3, (0.0, 10.0))
+print(len(basis.basis[0]), basis.knots[:4])
+
+# R's nsk(): a natural spline whose coefficients are the values at the knots.
+spline = core.nsk(x, df=4)
+print(spline.n_cols, spline.knots, spline.boundary_knots)
 ```
 
-### Concordance Index
+### Concordance
 
 ```python
 from survival import Surv, concordance
 
-response = Surv([1.0, 1.0, 2.0], [1, 0, 1])
-result = concordance(response, risk_scores=[2.0, 1.0, 3.0], influence=1)
-print(result.concordance)  # 0.5
-print(result.variance)     # 0.125
+time = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]
+status = [1, 1, 0, 1, 1, 1, 0, 1]
+risk = [0.5, 0.2, 0.5, 0.9, 0.2, 0.7, 0.1, 0.9]
+
+# R's concordance(Surv(time, status) ~ risk, reverse = TRUE, influence = 1)
+fit = core.concordancefit(
+    core.SurvivalData(time, status),
+    core.CovariateMatrix(risk, len(risk), 1),
+    reverse=True,
+    influence=1,
+)
+print(fit.concordance[0], fit.count[0].concordant, fit.var[0][0], fit.dfbeta[0])
 ```
 
 An observation censored at an event time remains a risk comparator; simultaneous
@@ -490,26 +501,6 @@ controls optional `stratum_labels` and `stratum_counts` fields; counts contain
 the five exclusive pair categories: concordant, discordant, tied predictors,
 tied outcomes, and ties in both. Concordance and covariance pool across strata.
 
-### Cox Regression with Frailty
-
-```python
-from survival import regression
-
-result = regression.perform_cox_regression_frailty(
-    time=[1.0, 2.0, 3.0, 4.0],
-    event=[1, 1, 0, 1],
-    covariates=[
-        [0.2, 1.0],
-        [0.1, 0.5],
-        [0.4, 1.2],
-        [0.3, 0.7],
-    ],
-    max_iter=20,
-    eps=1e-5,
-)
-print(result["coefficients"])
-```
-
 ### Person-Years Calculation
 
 The high-level API accepts a `tcut` result directly for time-changing groups:
@@ -523,28 +514,30 @@ result = survival.pyears(response, group=attained, scale=1)
 ```
 
 ```python
-from survival import pybridge
+from survival import population
 
-# Low-level API: inputs should match ratetable-style dimensions/cuts.
-result = pybridge.perform_pyears_calculation(
-    time_data=[1.0, 2.0, 3.0, 1.0, 0.0, 1.0],  # [times..., events...], ny=2
-    weights=[1.0, 1.0, 1.0],
-    expected_dim=1,
-    expected_factors=[0],
-    expected_dims=[2],
-    expected_cuts=[0.0, 2.0],
-    expected_rates=[0.01, 0.02],
-    expected_data=[0.5, 1.5, 0.5],
-    observed_dim=1,
-    observed_factors=[0],
-    observed_dims=[2],
-    observed_cuts=[0.0, 1.5, 3.0],
-    method=0,
-    observed_data=[0.5, 1.0, 2.0],
-    do_event=1,
-    ny=2,
+# Low-level API: R's pyears() data side with the survexp.us rate table.
+us = population.survexp_us()
+# match.ratetable: age in days, sex as a 1-based factor code, year as days since 1970-01-01
+positions = population.match_ratetable(
+    us, ["age", "sex", "year"], [[18262.5, 21915.0], [1.0, 2.0], [10957.0, 12949.0]]
+).r
+result = population.pyears(
+    [365.25, 1826.25],  # follow-up per subject
+    event=[1.0, 0.0],
+    factors=[1],  # one factor term (sex) ...
+    dims=[2],  # ... with two levels
+    cuts=[[]],
+    categories_data=[[1.0], [2.0]],
+    ratetable=us,
+    ratetable_positions=positions,
+    scale=365.25,
 )
-print(result.keys())
+print(result.pyears, result.event, result.expected)
+
+# R's survexp(): expected survival of the same two subjects (Ederer method)
+expected = population.survexp(us, positions, times=[365.25, 1826.25])
+print(expected.method, expected.surv)
 ```
 
 ### Kaplan-Meier Survival Curves
@@ -554,23 +547,27 @@ from survival import surv_analysis
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]  # 1 = event, 0 = censored
-weights = [1.0] * len(time)  # Optional: equal weights
+status = [1, 1, 0, 1, 0, 1, 1, 0]  # 1 = event, 0 = censored
 
+# R: survfit(Surv(time, status) ~ 1, conf.type = "log-log")
 result = surv_analysis.survfitkm(
-    time=time,
-    status=status,
-    weights=weights,
-    entry_times=None,  # Optional: entry times for left-truncation
-    position=None,     # Optional: position flags
-    reverse=False,     # Optional: estimate the censoring distribution
-    computation_type=0 # Optional: computation type
+    time,
+    status,
+    weights=None,  # Optional: case weights
+    start=None,  # Optional: entry times for (start, stop] data
+    conf_type="log-log",  # log, log-log, plain, logit, arcsin or none
 )
 
 print(f"Time points: {result.time}")
-print(f"Survival estimates: {result.estimate}")
+print(f"Survival estimates: {result.surv}")
 print(f"Standard errors: {result.std_err}")
 print(f"Number at risk: {result.n_risk}")
+
+# R: summary(fit, times = ...), summary(fit)$table and quantile(fit)
+at_times = surv_analysis.summary_survfit(result, times=[2.5, 5.0])
+table = surv_analysis.survmean(result)
+quantiles = surv_analysis.quantile_survfit(result, probs=[0.25, 0.5, 0.75])
+print(at_times.surv, table.median, quantiles.quantile)
 ```
 
 ### Fine-Gray Competing Risks Model
@@ -633,38 +630,27 @@ from survival import regression
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]  # 1 = event, 0 = censored
-covariates = [
-    [1.0, 2.0],
-    [1.5, 2.5],
-    [2.0, 3.0],
-    [2.5, 3.5],
-    [3.0, 4.0],
-    [3.5, 4.5],
-    [4.0, 5.0],
-    [4.5, 5.5],
-]
+status = [1, 1, 0, 1, 0, 1, 1, 0]  # 0 right, 1 exact, 2 left, 3 interval censored
+covariates = [[1.0, x] for x in [0.5, 0.2, 0.9, 0.1, 0.7, 0.3, 0.8, 0.4]]  # intercept + x
 
-# Fit parametric survival model
-result = regression.survreg(
-    time=time,
-    status=status,
-    covariates=covariates,
-    weights=None,          # Optional: observation weights
-    offsets=None,          # Optional: offset values
-    initial_beta=None,     # Derive starting values from the observations
-    strata=None,           # Optional: stratification variable
-    distribution="weibull",  # "extreme_value", "logistic", "gaussian", "weibull", or "lognormal"
-    max_iter=20,          # Optional: maximum iterations
-    eps=1e-5,             # Optional: convergence tolerance
-    tol_chol=1e-9,        # Optional: Cholesky tolerance
+# R: survreg(Surv(time, status) ~ x, dist = "weibull")
+data = regression.SurvregData(time, status, covariates)  # also time2=, weights=, strata=, cluster=
+fit = regression.survreg_fit(
+    data,
+    regression.SurvregDistribution("weibull"),  # R names: weibull, lognormal, loglogistic, ...
+    control=regression.SurvregControl(iter_max=30, rel_tolerance=1e-9),
 )
 
-print(f"Coefficients: {result.coefficients}")
-print(f"Log-likelihood: {result.log_likelihood}")
-print(f"Iterations: {result.iterations}")
-print(f"Variance matrix: {result.variance_matrix}")
-print(f"Convergence flag: {result.convergence_flag}")
+print(f"Coefficients: {fit.coefficients}")  # location coefficients then Log(scale)
+print(f"Scale: {fit.scale}")
+print(f"Log-likelihood: {fit.log_likelihood}")
+print(f"Variance matrix: {fit.variance_matrix}")
+print(f"Converged: {fit.converged}")
+
+# R: predict(fit, newdata, type = "quantile", p = c(.1, .5)) and residuals(fit, type = "deviance")
+prediction = fit.predict(newdata=[[1.0, 0.25]], predict_type="quantile", p=[0.1, 0.5], se_fit=True)
+print(prediction.fit, prediction.se_fit)
+print(fit.residuals(residual_type="deviance").values)
 ```
 
 Omitted AFT starts use R's distribution-specific weighted variance estimates,
@@ -698,70 +684,57 @@ that rounds to zero. Complete explicit starts remain available for these cases.
 ```python
 from survival import regression
 
-# Create a Cox PH model
-model = regression.CoxPHModel()
+event_times = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+status = [1, 1, 1, 0, 1, 1, 0, 1, 0, 1]  # 1 = event, 0 = censored
+x1 = [0.0, 0.4, 0.8, 0.2, 1.0, 1.4, 0.6, 1.2, 1.6, 1.8]
+x2 = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97]
+covariates = [[a, b] for a, b in zip(x1, x2, strict=True)]
 
-# Or create with data
-covariates = [[1.0, 2.0], [2.0, 3.0], [1.5, 2.5]]
-event_times = [1.0, 2.0, 3.0]
-censoring = [1, 1, 0]  # 1 = event, 0 = censored
+# R: coxph(Surv(time, status) ~ x1 + x2, ties = "efron")
+fit = regression.coxph_fit(event_times, status, covariates, method="efron", iter_max=20)
 
-model = regression.CoxPHModel.new_with_data(covariates, event_times, censoring)
+print(f"Coefficients: {fit.coefficients}")  # NaN marks an aliased column, as R's NA
+print(f"Variance: {fit.var}")
+print(f"Log-likelihood: {fit.loglik}")  # at the initial and the final coefficients
+print(f"Hazard ratios: {fit.hazard_ratios()}")
 
-# Fit the model
-model.fit(n_iters=10)
+# R: predict(fit, newdata, type = "lp" | "risk" | "expected" | "survival")
+new_covariates = [[0.5, 0.3], [1.5, 0.9]]
+risk = fit.predict("risk", newdata=new_covariates, se_fit=True)
+print(f"Risk: {risk.fit}, se: {risk.se_fit}")
 
-# Get results
-print(f"Baseline hazard: {model.baseline_hazard}")
-print(f"Risk scores: {model.risk_scores}")
-print(f"Coefficients: {model.coefficients}")
+# R: basehaz(fit) and survfit(fit, newdata)
+baseline = fit.basehaz()
+(curve,) = fit.survfit(newdata=new_covariates)
+print(f"Baseline hazard: {baseline.hazard}")
+print(f"Survival curves: {curve.surv}")  # one column per newdata row
 
-# Predict on new data
-new_covariates = [[1.0, 2.0], [2.0, 3.0]]
-predictions = model.predict(new_covariates)
-print(f"Predictions: {predictions}")
-
-# Calculate an IPCW Brier score at a common horizon. If omitted, `time`
-# defaults to the middle distinct event time in the training data.
-brier = model.brier_score(time=2.0)
-print(f"Brier score: {brier}")
-
-# Compute survival curves for new covariates
-new_covariates = [[1.0, 2.0], [2.0, 3.0]]
-time_points = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]  # Optional: specific time points
-times, survival_curves = model.survival_curve(new_covariates, time_points)
-print(f"Time points: {times}")
-print(f"Survival curves: {survival_curves}")  # One curve per covariate set
-
-# Create and add subjects
-subject = regression.Subject(
-    id=1,
-    covariates=[1.0, 2.0],
-    is_case=True,
-    is_subcohort=True,
-    stratum=0
-)
-model.add_subject(subject)
+# R: residuals(fit, type = ...) and cox.zph(fit)
+print(fit.martingale_residuals())
+print(fit.dfbeta())
+zph = regression.cox_zph(fit)
+print([(test.chisq, test.p) for test in zph.table], zph.global_test.p)
 ```
 
 ### Cox Martingale Residuals
 
 ```python
-from survival import residuals
+from survival import core, residuals
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 status = [1, 1, 0, 1, 0, 1, 1, 0]  # 1 = event, 0 = censored
-score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]  # Risk scores
+score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]  # exp(linear predictor)
 
-# Calculate martingale residuals
+# R's coxmart.c kernel: martingale residuals for given risk scores
 martingale_residuals = residuals.coxmart(
-    time=time,
-    status=status,
-    score=score,
-    weights=None,      # Optional: observation weights
-    strata=None,       # Optional: stratification variable
-    method=0,          # Optional: method (0 = Breslow, 1 = Efron)
+    core.CoxMartInput(
+        core.SurvivalData(time, status),
+        score,
+        core.Weights.unit(len(time)),  # case weights
+        [0] * len(time),  # strata
+    ),
+    ties="efron",  # or "breslow"
 )
 
 print(f"Martingale residuals: {martingale_residuals}")
@@ -777,20 +750,21 @@ time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
 status = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
 group = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]  # Group 1 and Group 2
 
-# Perform log-rank test (rho=0 for standard log-rank)
-result = surv_analysis.compute_logrank_components(
-    time=time,
-    status=status,
-    group=group,
+# R: survdiff(Surv(time, status) ~ group, rho = 0)
+result = surv_analysis.survdiff(
+    time,
+    status,
+    group,
     strata=None,  # Optional: stratification variable
-    rho=0.0,      # 0.0 = log-rank; nonzero values use G-rho weights
+    rho=0.0,  # 0.0 = log-rank; nonzero values use G-rho weights
 )
 
-print(f"Observed events: {result.observed}")
-print(f"Expected events: {result.expected}")
-print(f"Chi-squared statistic: {result.chi_squared}")
-print(f"Degrees of freedom: {result.degrees_of_freedom}")
-print(f"Variance matrix: {result.variance}")
+print(f"Observed events: {result.obs}")  # groups x strata
+print(f"Expected events: {result.exp}")
+print(f"Chi-squared statistic: {result.chisq}")
+print(f"Degrees of freedom: {result.df}")
+print(f"p-value: {result.pvalue}")
+print(f"Variance matrix: {result.var}")
 ```
 
 ### Publication Bias Tests
@@ -831,40 +805,24 @@ veteran = datasets.load_veteran()
 Datasets are returned as column-oriented dictionaries with `_nrow` and `_ncol`
 metadata.
 
-**Available datasets:**
-- `load_lung()` - NCCTG Lung Cancer Data
-- `load_aml()` - Acute Myelogenous Leukemia Survival Data
-- `load_veteran()` - Veterans' Administration Lung Cancer Study
-- `load_ovarian()` - Ovarian Cancer Survival Data
-- `load_colon()` - Colon Cancer Data
-- `load_pbc()` - Primary Biliary Cholangitis Data
-- `load_cgd()` - Chronic Granulomatous Disease Data
-- `load_bladder()` - Bladder Cancer Recurrences
-- `load_heart()` - Stanford Heart Transplant Data
-- `load_kidney()` - Kidney Catheter Data
-- `load_rats()` - Rat Treatment Data
-- `load_stanford2()` - Stanford Heart Transplant Data (Extended)
-- `load_udca()` - UDCA Clinical Trial Data
-- `load_myeloid()` - Acute Myeloid Leukemia Clinical Trial
-- `load_flchain()` - Free Light Chain Data
-- `load_transplant()` - Liver Transplant Data
-- `load_mgus()` - Monoclonal Gammopathy Data
-- `load_mgus2()` - Monoclonal Gammopathy Data (Updated)
-- `load_diabetic()` - Diabetic Retinopathy Data
-- `load_retinopathy()` - Retinopathy Data
-- `load_gbsg()` - German Breast Cancer Study Group Data
-- `load_rotterdam()` - Rotterdam Tumor Bank Data
-- `load_logan()` - Logan Unemployment Data
-- `load_nwtco()` - National Wilms Tumor Study Data
-- `load_solder()` - Solder Joint Data
-- `load_tobin()` - Tobin's Tobit Data
-- `load_rats2()` - Rat Tumorigenesis Data
-- `load_nafld()` - Non-Alcoholic Fatty Liver Disease Data
-- `load_cgd0()` - CGD Baseline Data
-- `load_pbcseq()` - PBC Sequential Data
-- `load_hoel()` - Hoel's Cancer Survival Data
-- `load_myeloma()` - Myeloma Survival Data
-- `load_rhdnase()` - rhDNase Clinical Trial Data
+**Available datasets** (every data frame shipped by R's `survival` 3.8, with R's
+exact values, column names and storage modes: R `double` -> `float`, `integer`
+-> `int`, factor/character/Date -> `str` (ISO dates), logical -> `bool`, `NA`
+-> `None`):
+
+`aml` (alias `leukemia`), `bladder`, `bladder1`, `bladder2`, `braking`,
+`capacitor`, `cgd`, `cgd0`, `colon`, `cracks`, `diabetic`, `flchain`, `gbsg`,
+`genfan`, `heart`, `hoel`, `ifluid`, `imotor`, `jasa`, `jasa1`, `kidney`,
+`logan`, `lung` (alias `cancer`), `mgus`, `mgus1`, `mgus2`, `myeloid`,
+`myeloma`, `nafld1`, `nafld2`, `nafld3`, `nwtco`, `ovarian`, `pbc`, `pbcseq`,
+`rats`, `rats2`, `retinopathy`, `rhDNase` (`load_rhdnase`), `rotterdam`,
+`solder`, `stanford2`, `tobin`, `transplant`, `turbine`, `udca`, `udca1`,
+`udca2`, `valveSeat` (`load_valveseat`), `veteran` — each as
+`datasets.load_<name>()`.
+
+The US, US-by-race and Minnesota population rate tables (`survexp.us`,
+`survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
+`survival.population`.
 
 ## Scikit-learn estimators
 
@@ -882,15 +840,16 @@ columns; DeepSurv requires at least one feature.
 The public Python surface is broad and evolves quickly. For the most accurate,
 version-matched signatures, use the checked-in type stubs:
 
-`import survival` exposes the curated package API via domain modules. Legacy
-root-level algorithm symbols remain available lazily for compatibility, but new
-code should import from the relevant domain module. For lower-level or
-experimental extension symbols, import from `survival._survival` explicitly.
+`import survival` exposes the domain modules, the R-style entry points and the
+scikit-learn estimators; every Rust binding is reachable through exactly one
+domain module (`survival.regression.coxph_fit`, `survival.surv_analysis.survfitkm`,
+...) and nothing else is re-exported from the package root.
 
 - [`python/survival/__init__.pyi`](python/survival/__init__.pyi): package-level
   typed surface, including the new domain modules.
 - [`python/survival/_survival.pyi`](python/survival/_survival.pyi): core
-  PyO3 bindings exposed by `survival._survival`.
+  PyO3 bindings exposed by `survival._survival`, generated by
+  `python3 scripts/generate_stubs.py` from the built extension (checked in CI).
 - [`python/survival/*.py`](python/survival): curated domain modules layered on
   top of the generated bindings.
 - [`python/survival/sklearn_compat.py`](python/survival/sklearn_compat.py):
@@ -909,7 +868,6 @@ import survival
 
 public_names = [name for name in dir(survival) if not name.startswith("_")]
 print(public_names)
-print(survival.__deprecated_root_export_reason__)
 ```
 
 Or inspect a specific domain module:
@@ -920,35 +878,6 @@ from survival import regression, validation
 print(regression.__all__[:10])
 print(validation.__all__[:10])
 ```
-
-## PSpline Options
-
-The `PSpline` class provides penalized spline smoothing:
-
-**Constructor Parameters:**
-- `x`: Covariate vector (list of floats)
-- `df`: Degrees of freedom (integer)
-- `theta`: Roughness penalty (float)
-- `eps`: Accuracy for degrees of freedom (float)
-- `method`: Penalty method for tuning parameter selection. Supported methods:
-  - `"GCV"` - Generalized Cross-Validation
-  - `"UBRE"` - Unbiased Risk Estimator
-  - `"REML"` - Restricted Maximum Likelihood
-  - `"AIC"` - Akaike Information Criterion
-  - `"BIC"` - Bayesian Information Criterion
-- `boundary_knots`: Tuple of (min, max) for the spline basis
-- `intercept`: Whether to include an intercept in the basis
-- `penalty`: Whether or not to apply the penalty
-
-**Methods:**
-- `fit()`: Fit the spline model, returns coefficients
-- `predict(new_x)`: Predict values at new x points
-
-**Properties:**
-- `coefficients`: Fitted coefficients (None if not fitted)
-- `fitted`: Whether the model has been fitted
-- `df`: Degrees of freedom
-- `eps`: Convergence tolerance
 
 ## Development
 
@@ -1048,7 +977,7 @@ The codebase is organized with:
 - Developer-facing layout notes in `docs/`
 - Rust unit/integration tests in `src/tests/`
 - Python binding tests in `python/tests/`
-- R validation fixtures and archived reference cases in `test/`
+- R reference fixtures in `test/r`
 
 ## Dependencies
 

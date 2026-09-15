@@ -1,2617 +1,1308 @@
-use crate::constants::{
-    DEFAULT_CONFIDENCE_LEVEL, PARALLEL_THRESHOLD_XLARGE, TIME_EPSILON, exp_ci, normal_ci,
-};
-use crate::internal::numpy_utils::{
-    extract_optional_vec_f64, extract_optional_vec_i32, extract_vec_f64, extract_vec_i32,
-};
-use crate::internal::statistical::normal_inverse_cdf;
+//! Kaplan-Meier and Fleming-Harrington survival curves for right-censored
+//! and counting-process data: the port of R's `survfitKM` (`R/survfitKM.R`)
+//! and its C kernel `survfitkm` (`src/survfitkm.c`), survival 3.8-11/12.
+//!
+//! [`survfitkm`] is the only survival/cumulative-hazard engine in the crate:
+//! the Nelson-Aalen facade, the pseudo-value and residual code, the
+//! summary helpers, the G-rho weights of `survdiff`, the censoring
+//! distribution of the Brier score, the Turnbull EM and the
+//! `validation` summaries all read its [`SurvfitKMResult`].
+
+use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{
-    clamp_probability, validate_binary_f64, validate_binary_i32, validate_finite, validate_length,
-    validate_no_nan, validate_non_empty, validate_non_negative,
+    validate_binary_i32, validate_finite, validate_length, validate_non_empty,
+    validate_non_negative,
 };
+use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Default)]
-#[pyclass(from_py_object)]
-pub struct SurvfitKMOptions {
-    #[pyo3(get, set)]
-    pub weights: Option<Vec<f64>>,
-    #[pyo3(get, set)]
-    pub entry_times: Option<Vec<f64>>,
-    #[pyo3(get, set)]
-    pub position: Option<Vec<i32>>,
-    #[pyo3(get, set)]
-    pub reverse: Option<bool>,
-    #[pyo3(get, set)]
-    pub computation_type: Option<i32>,
-    #[pyo3(get, set)]
-    pub conf_level: Option<f64>,
-    #[pyo3(get, set)]
-    pub conf_type: Option<String>,
-    #[pyo3(get, set)]
-    pub timefix: Option<bool>,
+/// The `stype` argument of `survfit`: how the survival curve is formed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SurvType {
+    /// `stype = 1`: the Kaplan-Meier product limit.
+    #[default]
+    KaplanMeier,
+    /// `stype = 2`: `exp(-cumulative hazard)`.
+    ExpCumhaz,
 }
 
-#[pymethods]
-impl SurvfitKMOptions {
-    #[new]
-    #[pyo3(signature = (weights=None, entry_times=None, position=None, reverse=None, computation_type=None, conf_level=None, conf_type=None, timefix=None))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        weights: Option<Vec<f64>>,
-        entry_times: Option<Vec<f64>>,
-        position: Option<Vec<i32>>,
-        reverse: Option<bool>,
-        computation_type: Option<i32>,
-        conf_level: Option<f64>,
-        conf_type: Option<String>,
-        timefix: Option<bool>,
-    ) -> Self {
-        Self {
-            weights,
-            entry_times,
-            position,
-            reverse,
-            computation_type,
-            conf_level,
-            conf_type,
-            timefix,
+impl SurvType {
+    pub fn from_code(code: i32) -> SurvivalResult<Self> {
+        match code {
+            1 => Ok(Self::KaplanMeier),
+            2 => Ok(Self::ExpCumhaz),
+            _ => Err(SurvivalError::invalid_input("stype must be 1 or 2")),
+        }
+    }
+}
+
+/// The `ctype` argument of `survfit`: how tied events enter the hazard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HazardType {
+    /// `ctype = 1`: Nelson-Aalen, one increment `d / n` per time.
+    #[default]
+    NelsonAalen,
+    /// `ctype = 2`: Fleming-Harrington, `d` tied events enter one at a time.
+    FlemingHarrington,
+}
+
+impl HazardType {
+    pub fn from_code(code: i32) -> SurvivalResult<Self> {
+        match code {
+            1 => Ok(Self::NelsonAalen),
+            2 => Ok(Self::FlemingHarrington),
+            _ => Err(SurvivalError::invalid_input("ctype must be 1 or 2")),
+        }
+    }
+}
+
+/// The `influence` argument of `survfit`: which per-cluster influence
+/// matrices to return (`1 * survival + 2 * cumulative hazard`, as R).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InfluenceRequest {
+    #[default]
+    None,
+    Survival,
+    Cumhaz,
+    Both,
+}
+
+impl InfluenceRequest {
+    pub fn from_code(code: i32) -> SurvivalResult<Self> {
+        match code {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Survival),
+            2 => Ok(Self::Cumhaz),
+            3 => Ok(Self::Both),
+            _ => Err(SurvivalError::invalid_input(
+                "influence argument must be 0, 1, 2, or 3",
+            )),
         }
     }
 
-    pub fn with_weights(mut self_: PyRefMut<'_, Self>, weights: Vec<f64>) -> PyRefMut<'_, Self> {
-        self_.weights = Some(weights);
-        self_
+    fn survival(self) -> bool {
+        matches!(self, Self::Survival | Self::Both)
     }
 
-    pub fn with_entry_times(
-        mut self_: PyRefMut<'_, Self>,
-        entry_times: Vec<f64>,
-    ) -> PyRefMut<'_, Self> {
-        self_.entry_times = Some(entry_times);
-        self_
-    }
-
-    pub fn with_position(mut self_: PyRefMut<'_, Self>, position: Vec<i32>) -> PyRefMut<'_, Self> {
-        self_.position = Some(position);
-        self_
-    }
-
-    pub fn with_reverse(mut self_: PyRefMut<'_, Self>, reverse: bool) -> PyRefMut<'_, Self> {
-        self_.reverse = Some(reverse);
-        self_
-    }
-
-    pub fn with_computation_type(
-        mut self_: PyRefMut<'_, Self>,
-        computation_type: i32,
-    ) -> PyRefMut<'_, Self> {
-        self_.computation_type = Some(computation_type);
-        self_
-    }
-
-    pub fn with_conf_level(mut self_: PyRefMut<'_, Self>, conf_level: f64) -> PyRefMut<'_, Self> {
-        self_.conf_level = Some(conf_level);
-        self_
-    }
-
-    pub fn with_conf_type(mut self_: PyRefMut<'_, Self>, conf_type: String) -> PyRefMut<'_, Self> {
-        self_.conf_type = Some(conf_type);
-        self_
-    }
-
-    pub fn with_timefix(mut self_: PyRefMut<'_, Self>, timefix: bool) -> PyRefMut<'_, Self> {
-        self_.timefix = Some(timefix);
-        self_
+    fn cumhaz(self) -> bool {
+        matches!(self, Self::Cumhaz | Self::Both)
     }
 }
 
+/// The arguments of `survfitKM` beyond the data.
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct KaplanMeierConfig {
-    #[pyo3(get, set)]
+pub struct SurvfitKMOptions {
+    pub stype: SurvType,
+    pub ctype: HazardType,
+    /// `se.fit`: compute standard errors (and hence confidence limits).
+    pub se_fit: bool,
+    /// `conf.int`: the confidence level.
+    pub conf_int: f64,
+    pub conf_type: ConfType,
+    pub conf_lower: ConfLower,
+    /// `start.time`: observations ending before it are dropped and the
+    /// curves start there.
+    pub start_time: Option<f64>,
+    /// `robust`: `None` leaves the choice to R's rule (a cluster, non-integer
+    /// weights, or an id with more than one event per subject turn it on).
+    pub robust: Option<bool>,
+    pub influence: InfluenceRequest,
+    /// `entry`: report the number entering the risk set at each time
+    /// (counting-process data with an `id` only).
+    pub entry: bool,
+    /// `timefix`: bin times that differ by less than `sqrt(.Machine$double.eps)`
+    /// (`aeqSurv`) before anything else.
+    pub timefix: bool,
+    /// Estimate the censoring distribution instead (the `reverse` flag of
+    /// `survfitkm.c`): censorings become the events and the deaths tied at
+    /// the same time leave the risk set first.
     pub reverse: bool,
-
-    #[pyo3(get, set)]
-    pub computation_type: i32,
-
-    #[pyo3(get, set)]
-    pub conf_level: f64,
-
-    #[pyo3(get, set)]
-    pub conf_type: String,
 }
 
-#[pymethods]
-impl KaplanMeierConfig {
-    #[new]
-    #[pyo3(signature = (reverse=None, computation_type=None, conf_level=None, conf_type=None))]
-    fn new(
-        reverse: Option<bool>,
-        computation_type: Option<i32>,
-        conf_level: Option<f64>,
-        conf_type: Option<String>,
-    ) -> PyResult<Self> {
-        build_kaplan_meier_config(reverse, computation_type, conf_level, conf_type)
-    }
-}
-
-impl Default for KaplanMeierConfig {
+impl Default for SurvfitKMOptions {
     fn default() -> Self {
         Self {
+            stype: SurvType::KaplanMeier,
+            ctype: HazardType::NelsonAalen,
+            se_fit: true,
+            conf_int: 0.95,
+            conf_type: ConfType::Log,
+            conf_lower: ConfLower::Usual,
+            start_time: None,
+            robust: None,
+            influence: InfluenceRequest::None,
+            entry: false,
+            timefix: true,
             reverse: false,
-            computation_type: 0,
-            conf_level: DEFAULT_CONFIDENCE_LEVEL,
-            conf_type: "log".to_string(),
         }
     }
 }
 
-impl KaplanMeierConfig {
-    pub fn create(
-        reverse: Option<bool>,
-        computation_type: Option<i32>,
-        conf_level: Option<f64>,
-        conf_type: Option<String>,
-    ) -> PyResult<Self> {
-        build_kaplan_meier_config(reverse, computation_type, conf_level, conf_type)
-    }
-}
-
-fn validate_conf_level(conf_level: f64) -> PyResult<()> {
-    if !(0.0..1.0).contains(&conf_level) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "conf_level must be between 0 and 1",
-        ));
-    }
-    Ok(())
-}
-
-fn normalize_conf_type(conf_type: Option<&str>) -> PyResult<String> {
-    let normalized = conf_type
-        .unwrap_or("log")
-        .to_ascii_lowercase()
-        .replace('_', "-");
-    match normalized.as_str() {
-        "plain" | "log" | "logit" | "arcsin" | "none" => Ok(normalized),
-        "log-log" | "loglog" => Ok("log-log".to_string()),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            "conf_type must be 'plain', 'log', 'log-log', 'logit', 'arcsin', or 'none'",
-        )),
-    }
-}
-
-fn build_kaplan_meier_config(
-    reverse: Option<bool>,
-    computation_type: Option<i32>,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-) -> PyResult<KaplanMeierConfig> {
-    let conf_level = conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
-    validate_conf_level(conf_level)?;
-
-    Ok(KaplanMeierConfig {
-        reverse: reverse.unwrap_or(false),
-        computation_type: computation_type.unwrap_or(0),
-        conf_level,
-        conf_type: normalize_conf_type(conf_type.as_deref())?,
-    })
-}
-
-fn compute_confidence_interval(survival: f64, std_err: f64, z: f64, conf_type: &str) -> (f64, f64) {
-    if std_err <= 0.0 || survival <= 0.0 || survival >= 1.0 {
-        let bounded = clamp_probability(survival);
-        return (bounded, bounded);
-    }
-
-    match conf_type {
-        "plain" => {
-            let (lower, upper) = normal_ci(survival, std_err, z);
-            (clamp_probability(lower), clamp_probability(upper))
-        }
-        "log" => {
-            let log_survival = survival.ln();
-            let log_std_err = std_err / survival;
-            let (lower, upper) = exp_ci(log_survival, log_std_err, z);
-            (clamp_probability(lower), clamp_probability(upper))
-        }
-        "log-log" => {
-            let log_survival = survival.ln();
-            let transformed_std_err = z * (std_err / survival) / log_survival;
-            let log_neg_log_survival = (-log_survival).ln();
-            (
-                clamp_probability((-((log_neg_log_survival - transformed_std_err).exp())).exp()),
-                clamp_probability((-((log_neg_log_survival + transformed_std_err).exp())).exp()),
-            )
-        }
-        "logit" => {
-            let logit_survival = (survival / (1.0 - survival)).ln();
-            let transformed_std_err = z * std_err / (survival * (1.0 - survival));
-            (
-                clamp_probability(1.0 - 1.0 / (1.0 + (logit_survival - transformed_std_err).exp())),
-                clamp_probability(1.0 - 1.0 / (1.0 + (logit_survival + transformed_std_err).exp())),
-            )
-        }
-        "arcsin" => {
-            let angle = survival.sqrt().asin();
-            let transformed_std_err = 0.5 * z * std_err / (survival * (1.0 - survival)).sqrt();
-            (
-                clamp_probability((angle - transformed_std_err).max(0.0).sin().powi(2)),
-                clamp_probability(
-                    (angle + transformed_std_err)
-                        .min(std::f64::consts::FRAC_PI_2)
-                        .sin()
-                        .powi(2),
-                ),
-            )
-        }
-        _ => unreachable!("conf_type is validated before confidence intervals are computed"),
-    }
-}
-
-fn validate_entry_times(time: &[f64], entry_times: &[f64], timefix: bool) -> PyResult<()> {
-    validate_length(time.len(), entry_times.len(), "entry_times")?;
-    validate_no_nan(entry_times, "entry_times")?;
-    validate_finite(entry_times, "entry_times")?;
-    validate_non_negative(entry_times, "entry_times")?;
-
-    for (idx, (&entry_time, &exit_time)) in entry_times.iter().zip(time.iter()).enumerate() {
-        let invalid = if timefix {
-            entry_time >= exit_time - TIME_EPSILON
-        } else {
-            entry_time >= exit_time
-        };
-        if invalid {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "entry_times must be less than time for observation {}",
-                idx
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn sorted_indices_by(values: &[f64]) -> Vec<usize> {
-    let mut indices: Vec<usize> = (0..values.len()).collect();
-    if values.len() > PARALLEL_THRESHOLD_XLARGE {
-        indices.par_sort_by(|&a, &b| values[a].total_cmp(&values[b]).then_with(|| a.cmp(&b)));
-    } else {
-        indices.sort_by(|&a, &b| values[a].total_cmp(&values[b]).then_with(|| a.cmp(&b)));
-    }
-    indices
-}
-
-fn entry_before_time(entry_time: f64, time: f64, timefix: bool) -> bool {
-    if timefix {
-        entry_time < time - TIME_EPSILON
-    } else {
-        entry_time < time
-    }
-}
-
-fn same_survfit_time(left: f64, right: f64, timefix: bool) -> bool {
-    if timefix {
-        (left - right).abs() < TIME_EPSILON
-    } else {
-        left == right
-    }
-}
-
-fn survfit_time_before(left: f64, right: f64, timefix: bool) -> bool {
-    if timefix {
-        left < right - TIME_EPSILON
-    } else {
-        left < right
-    }
-}
-
-fn survfit_timefix_values(values: &[f64], timefix: bool) -> Vec<f64> {
-    let mut fixed = values.to_vec();
-    if !timefix || fixed.len() < 2 {
-        return fixed;
-    }
-
-    let order = sorted_indices_by(values);
-    let mut cursor = 0;
-    while cursor < order.len() {
-        let base = fixed[order[cursor]];
-        let mut scan = cursor + 1;
-        while scan < order.len() && fixed[order[scan]] - base < TIME_EPSILON {
-            fixed[order[scan]] = base;
-            scan += 1;
-        }
-        cursor = scan;
-    }
-    fixed
-}
-
-fn compact_i32_labels(values: &[i32]) -> Vec<usize> {
-    let mut labels = BTreeMap::new();
-    let mut next_code = 0usize;
-    values
-        .iter()
-        .map(|&value| {
-            if let Some(&code) = labels.get(&value) {
-                code
-            } else {
-                let code = next_code;
-                labels.insert(value, code);
-                next_code += 1;
-                code
-            }
-        })
-        .collect()
-}
-
-fn validate_counting_survfit_table_inputs(
-    start: &[f64],
-    stop: &[f64],
-    status: &[i32],
-    id: &[i32],
-    weights: &[f64],
-    timefix: bool,
-) -> PyResult<()> {
-    validate_non_empty(start, "start")?;
-    validate_length(start.len(), stop.len(), "stop")?;
-    validate_length(start.len(), status.len(), "status")?;
-    validate_length(start.len(), id.len(), "id")?;
-    validate_length(start.len(), weights.len(), "weights")?;
-    validate_no_nan(start, "start")?;
-    validate_finite(start, "start")?;
-    validate_non_negative(start, "start")?;
-    validate_no_nan(stop, "stop")?;
-    validate_finite(stop, "stop")?;
-    validate_non_negative(stop, "stop")?;
-    validate_binary_i32(status, "status")?;
-    validate_no_nan(weights, "weights")?;
-    validate_finite(weights, "weights")?;
-    validate_non_negative(weights, "weights")?;
-
-    for (idx, (&entry_time, &exit_time)) in start.iter().zip(stop.iter()).enumerate() {
-        let invalid = if timefix {
-            entry_time >= exit_time - TIME_EPSILON
-        } else {
-            entry_time >= exit_time
-        };
-        if invalid {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "start must be less than stop for observation {}",
-                idx
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn counting_survfit_positions(start: &[f64], stop: &[f64], id: &[i32], timefix: bool) -> Vec<i32> {
-    let n = stop.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| {
-        id[a]
-            .cmp(&id[b])
-            .then_with(|| stop[a].total_cmp(&stop[b]))
-            .then_with(|| a.cmp(&b))
-    });
-
-    let mut positions = vec![0; n];
-    for (sorted_idx, &row_idx) in order.iter().enumerate() {
-        let current_id = id[row_idx];
-        let previous_row = sorted_idx
-            .checked_sub(1)
-            .and_then(|previous_idx| order.get(previous_idx))
-            .copied();
-        let next_row = order.get(sorted_idx + 1).copied();
-
-        let mut first = previous_row.is_none_or(|previous| id[previous] != current_id);
-        if let Some(previous) = previous_row
-            && !first
-        {
-            first = entry_before_time(stop[previous], start[row_idx], timefix);
-        }
-
-        let mut last = next_row.is_none_or(|next| id[next] != current_id);
-        if let Some(next) = next_row
-            && !last
-        {
-            last = entry_before_time(stop[row_idx], start[next], timefix);
-        }
-
-        positions[row_idx] = if first { 1 } else { 0 } + if last { 2 } else { 0 };
-    }
-    positions
-}
-
-fn counting_survfit_times(
-    start: &[f64],
-    stop: &[f64],
-    status: &[i32],
-    positions: &[i32],
-    include_entry: bool,
-    timefix: bool,
-) -> Vec<f64> {
-    let n = stop.len();
-    let sort_stop = sorted_indices_by(stop);
-    if !include_entry {
-        let mut times = Vec::new();
-        for &idx in &sort_stop {
-            let should_include = positions[idx] > 1 || status[idx] > 0 || times.is_empty();
-            let is_new_time = times
-                .last()
-                .is_none_or(|&previous| !same_survfit_time(stop[idx], previous, timefix));
-            if should_include && is_new_time {
-                times.push(stop[idx]);
-            }
-        }
-        return times;
-    }
-
-    let sort_start = sorted_indices_by(start);
-    let mut times = vec![start[sort_start[0]]];
-    let mut current = times[0];
-    let mut entry_cursor = 1;
-    for &stop_idx in &sort_stop {
-        while entry_cursor < n
-            && entry_before_time(start[sort_start[entry_cursor]], stop[stop_idx], timefix)
-        {
-            let start_idx = sort_start[entry_cursor];
-            if positions[start_idx] & 1 != 0
-                && !same_survfit_time(start[start_idx], current, timefix)
-            {
-                current = start[start_idx];
-                times.push(current);
-            }
-            entry_cursor += 1;
-        }
-
-        if (positions[stop_idx] > 1 || status[stop_idx] > 0)
-            && !same_survfit_time(stop[stop_idx], current, timefix)
-        {
-            current = stop[stop_idx];
-            times.push(current);
-        }
-    }
-    times
-}
-
+/// The data of a `survfit(Surv(...) ~ strata, weights, id, cluster)` call.
+///
+/// `strata` holds one integer code per observation; curves are produced for
+/// the distinct codes in ascending order (R's factor levels).  `id` links
+/// the rows of one subject in counting-process data and `cluster` groups
+/// observations for the robust variance; both are arbitrary integer labels.
 #[derive(Debug, Clone)]
+pub struct SurvfitKMData {
+    pub start: Option<Vec<f64>>,
+    pub time: Vec<f64>,
+    pub status: Vec<i32>,
+    pub weights: Option<Vec<f64>>,
+    pub strata: Option<Vec<i32>>,
+    pub id: Option<Vec<i64>>,
+    pub cluster: Option<Vec<i64>>,
+}
+
+impl SurvfitKMData {
+    /// Right-censored data without weights or grouping.
+    pub fn right_censored(time: Vec<f64>, status: Vec<i32>) -> SurvivalResult<Self> {
+        Self::try_new(None, time, status, None, None, None, None)
+    }
+
+    pub fn try_new(
+        start: Option<Vec<f64>>,
+        time: Vec<f64>,
+        status: Vec<i32>,
+        weights: Option<Vec<f64>>,
+        strata: Option<Vec<i32>>,
+        id: Option<Vec<i64>>,
+        cluster: Option<Vec<i64>>,
+    ) -> SurvivalResult<Self> {
+        validate_non_empty(&time, "time")?;
+        validate_finite(&time, "time")?;
+        validate_length(time.len(), status.len(), "status")?;
+        validate_binary_i32(&status, "status")?;
+        if let Some(start) = &start {
+            validate_length(time.len(), start.len(), "start")?;
+            validate_finite(start, "start")?;
+            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "Stop time must be > start time (observation {index})"
+                )));
+            }
+        }
+        if let Some(weights) = &weights {
+            validate_length(time.len(), weights.len(), "weights")?;
+            validate_finite(weights, "weights")?;
+            validate_non_negative(weights, "weights")?;
+        }
+        if let Some(strata) = &strata {
+            validate_length(time.len(), strata.len(), "strata")?;
+        }
+        if let Some(id) = &id {
+            validate_length(time.len(), id.len(), "id")?;
+        }
+        if let Some(cluster) = &cluster {
+            validate_length(time.len(), cluster.len(), "cluster")?;
+        }
+        Ok(Self {
+            start,
+            time,
+            status,
+            weights,
+            strata,
+            id,
+            cluster,
+        })
+    }
+
+    fn n(&self) -> usize {
+        self.time.len()
+    }
+}
+
+/// Unweighted counts, reported alongside the weighted ones when case
+/// weights are present (R's `counts` component).
+#[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
-pub struct CountingSurvfitTables {
+pub struct SurvfitCounts {
+    #[pyo3(get)]
+    pub n_risk: Vec<f64>,
+    #[pyo3(get)]
+    pub n_event: Vec<f64>,
+    #[pyo3(get)]
+    pub n_censor: Vec<f64>,
+    #[pyo3(get)]
+    pub n_enter: Option<Vec<f64>>,
+}
+
+#[pymethods]
+impl SurvfitCounts {
+    /// The counts of one stratum, for callers that split a curve set.
+    #[new]
+    #[pyo3(signature = (n_risk, n_event, n_censor, n_enter = None))]
+    fn py_new(
+        n_risk: Vec<f64>,
+        n_event: Vec<f64>,
+        n_censor: Vec<f64>,
+        n_enter: Option<Vec<f64>>,
+    ) -> Self {
+        Self {
+            n_risk,
+            n_event,
+            n_censor,
+            n_enter,
+        }
+    }
+}
+
+/// One curve's influence matrix: `values[k][t]` is the influence of cluster
+/// `cluster[k]` on the estimate at the curve's `t`-th time.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct SurvfitInfluence {
+    #[pyo3(get)]
+    pub cluster: Vec<i64>,
+    #[pyo3(get)]
+    pub values: Vec<Vec<f64>>,
+}
+
+/// A `survfit` object for single-endpoint survival, curves stacked one
+/// after the other as in R.
+///
+/// `std_err` is the standard error of `log(surv)` when `logse` is true (the
+/// Greenwood variance) and of `surv` itself otherwise (robust variance);
+/// `std_chaz` is always the standard error of `cumhaz`.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct SurvfitKMResult {
+    /// Observations used by each curve.
+    #[pyo3(get)]
+    pub n: Vec<usize>,
     #[pyo3(get)]
     pub time: Vec<f64>,
     #[pyo3(get)]
     pub n_risk: Vec<f64>,
     #[pyo3(get)]
-    pub n_risk_count: Vec<f64>,
-    #[pyo3(get)]
     pub n_event: Vec<f64>,
     #[pyo3(get)]
-    pub n_event_count: Vec<f64>,
-    #[pyo3(get)]
     pub n_censor: Vec<f64>,
-    #[pyo3(get)]
-    pub n_censor_count: Vec<f64>,
     #[pyo3(get)]
     pub n_enter: Option<Vec<f64>>,
     #[pyo3(get)]
-    pub n_enter_count: Option<Vec<f64>>,
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct SurvfitCurveResult {
+    pub counts: Option<SurvfitCounts>,
     #[pyo3(get)]
-    pub time: Vec<f64>,
+    pub surv: Vec<f64>,
     #[pyo3(get)]
-    pub n_risk: Vec<f64>,
-    #[pyo3(get)]
-    pub n_event: Vec<f64>,
-    #[pyo3(get)]
-    pub n_censor: Vec<f64>,
-    #[pyo3(get)]
-    pub estimate: Vec<f64>,
-    #[pyo3(get)]
-    pub std_err: Vec<f64>,
-    #[pyo3(get)]
-    pub conf_lower: Vec<f64>,
-    #[pyo3(get)]
-    pub conf_upper: Vec<f64>,
+    pub std_err: Option<Vec<f64>>,
     #[pyo3(get)]
     pub cumhaz: Vec<f64>,
     #[pyo3(get)]
-    pub std_chaz: Vec<f64>,
+    pub std_chaz: Option<Vec<f64>>,
     #[pyo3(get)]
-    pub n_enter: Option<Vec<f64>>,
+    pub lower: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub upper: Option<Vec<f64>>,
+    /// Rows per curve; `None` for a single curve without strata.
+    #[pyo3(get)]
+    pub strata: Option<Vec<usize>>,
+    /// The strata code of each curve, in curve order.
+    #[pyo3(get)]
+    pub strata_codes: Option<Vec<i32>>,
+    /// Subjects per curve when an `id` was given.
+    #[pyo3(get)]
+    pub n_id: Option<Vec<usize>>,
+    #[pyo3(get)]
+    pub logse: bool,
+    #[pyo3(get)]
+    pub conf_int: f64,
+    #[pyo3(get)]
+    pub conf_type: String,
+    #[pyo3(get)]
+    pub conf_lower: String,
+    /// `"right"` or `"counting"`.
+    #[pyo3(get, name = "type")]
+    pub type_: String,
+    /// The starting time of the curves.
+    #[pyo3(get)]
+    pub t0: f64,
+    /// One entry per curve when requested.
+    #[pyo3(get)]
+    pub influence_surv: Option<Vec<SurvfitInfluence>>,
+    #[pyo3(get)]
+    pub influence_chaz: Option<Vec<SurvfitInfluence>>,
 }
 
-pub(crate) fn compute_counting_survfit_tables(
-    start: &[f64],
-    stop: &[f64],
-    status: &[i32],
-    id: &[i32],
-    weights: &[f64],
-    include_entry: bool,
-    timefix: bool,
-) -> CountingSurvfitTables {
-    let positions = counting_survfit_positions(start, stop, id, timefix);
-    let times = counting_survfit_times(start, stop, status, &positions, include_entry, timefix);
-    let sort_start = sorted_indices_by(start);
-    let sort_stop = sorted_indices_by(stop);
+impl SurvfitKMResult {
+    /// Number of curves.
+    pub fn n_curves(&self) -> usize {
+        self.strata.as_ref().map_or(1, Vec::len)
+    }
 
-    let mut n_risk = vec![0.0; times.len()];
-    let mut n_risk_count = vec![0.0; times.len()];
-    let mut n_event = vec![0.0; times.len()];
-    let mut n_event_count = vec![0.0; times.len()];
-    let mut n_censor = vec![0.0; times.len()];
-    let mut n_censor_count = vec![0.0; times.len()];
-    let mut n_enter = include_entry.then(|| vec![0.0; times.len()]);
-    let mut n_enter_count = include_entry.then(|| vec![0.0; times.len()]);
-
-    let mut stop_cursor = stop.len();
-    let mut start_cursor = start.len();
-    let mut weighted_risk = 0.0;
-    let mut risk_count = 0.0;
-    for time_idx in (0..times.len()).rev() {
-        let current_time = times[time_idx];
-        let mut event_weight = 0.0;
-        let mut event_count = 0.0;
-        let mut censor_weight = 0.0;
-        let mut censor_count = 0.0;
-
-        while stop_cursor > 0
-            && !entry_before_time(stop[sort_stop[stop_cursor - 1]], current_time, timefix)
-        {
-            let row_idx = sort_stop[stop_cursor - 1];
-            weighted_risk += weights[row_idx];
-            risk_count += 1.0;
-            if status[row_idx] > 0 {
-                event_count += 1.0;
-                event_weight += weights[row_idx];
-            } else if positions[row_idx] & 2 != 0 {
-                censor_count += 1.0;
-                censor_weight += weights[row_idx];
+    /// Row range of each curve in the stacked vectors.
+    pub fn curve_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        match &self.strata {
+            Some(strata) => {
+                let mut start = 0;
+                strata
+                    .iter()
+                    .map(|&count| {
+                        let range = start..start + count;
+                        start += count;
+                        range
+                    })
+                    .collect()
             }
-            stop_cursor -= 1;
-        }
-
-        let mut enter_weight = 0.0;
-        let mut enter_count = 0.0;
-        while start_cursor > 0
-            && !entry_before_time(start[sort_start[start_cursor - 1]], current_time, timefix)
-        {
-            let row_idx = sort_start[start_cursor - 1];
-            weighted_risk -= weights[row_idx];
-            risk_count -= 1.0;
-            if include_entry
-                && positions[row_idx] & 1 != 0
-                && same_survfit_time(start[row_idx], current_time, timefix)
-            {
-                enter_weight += weights[row_idx];
-                enter_count += 1.0;
+            None => {
+                let whole = 0..self.time.len();
+                vec![whole]
             }
-            start_cursor -= 1;
-        }
-
-        n_risk[time_idx] = weighted_risk.max(0.0);
-        n_risk_count[time_idx] = if risk_count < 0.0 { 0.0 } else { risk_count };
-        n_event[time_idx] = event_weight;
-        n_event_count[time_idx] = event_count;
-        n_censor[time_idx] = censor_weight;
-        n_censor_count[time_idx] = censor_count;
-        if let Some(ref mut entries) = n_enter {
-            entries[time_idx] = enter_weight;
-        }
-        if let Some(ref mut entries) = n_enter_count {
-            entries[time_idx] = enter_count;
         }
     }
 
-    CountingSurvfitTables {
-        time: times,
-        n_risk,
-        n_risk_count,
-        n_event,
-        n_event_count,
-        n_censor,
-        n_censor_count,
-        n_enter,
-        n_enter_count,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_survfit_curve_table_inputs(
-    time: &[f64],
-    n_risk: &[f64],
-    n_event: &[f64],
-    n_event_count: &[f64],
-    n_censor: &[f64],
-    n_censor_count: &[f64],
-    n_enter: Option<&[f64]>,
-    stype: i32,
-    ctype: i32,
-) -> PyResult<()> {
-    validate_non_empty(time, "time")?;
-    validate_length(time.len(), n_risk.len(), "n_risk")?;
-    validate_length(time.len(), n_event.len(), "n_event")?;
-    validate_length(time.len(), n_event_count.len(), "n_event_count")?;
-    validate_length(time.len(), n_censor.len(), "n_censor")?;
-    validate_length(time.len(), n_censor_count.len(), "n_censor_count")?;
-    if let Some(entries) = n_enter {
-        validate_length(time.len(), entries.len(), "n_enter")?;
-        validate_no_nan(entries, "n_enter")?;
-        validate_finite(entries, "n_enter")?;
-        validate_non_negative(entries, "n_enter")?;
-    }
-    for (values, field) in [
-        (time, "time"),
-        (n_risk, "n_risk"),
-        (n_event, "n_event"),
-        (n_event_count, "n_event_count"),
-        (n_censor, "n_censor"),
-        (n_censor_count, "n_censor_count"),
-    ] {
-        validate_no_nan(values, field)?;
-        validate_finite(values, field)?;
-        validate_non_negative(values, field)?;
-    }
-    if stype != 1 && stype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "stype must be 1 or 2",
-        ));
-    }
-    if ctype != 1 && ctype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "ctype must be 1 or 2",
-        ));
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn compute_survfit_curve_from_tables(
-    time: &[f64],
-    n_risk: &[f64],
-    n_event: &[f64],
-    n_event_count: &[f64],
-    n_censor: &[f64],
-    n_censor_count: &[f64],
-    n_enter: Option<&[f64]>,
-    reverse: bool,
-    stype: i32,
-    ctype: i32,
-    conf_level: f64,
-    conf_type: &str,
-) -> SurvfitCurveResult {
-    let mut current_survival = 1.0;
-    let mut greenwood_variance = 0.0;
-    let mut cumulative_hazard = 0.0;
-    let mut cumulative_hazard_variance = 0.0;
-    let alpha = 1.0 - conf_level;
-    let z = -normal_inverse_cdf(alpha / 2.0);
-
-    let mut estimate = Vec::with_capacity(time.len());
-    let mut std_err = Vec::with_capacity(time.len());
-    let mut cumhaz = Vec::with_capacity(time.len());
-    let mut std_chaz = Vec::with_capacity(time.len());
-    let mut conf_lower = if conf_type == "none" {
-        Vec::new()
-    } else {
-        Vec::with_capacity(time.len())
-    };
-    let mut conf_upper = if conf_type == "none" {
-        Vec::new()
-    } else {
-        Vec::with_capacity(time.len())
-    };
-
-    for idx in 0..time.len() {
-        let event_weight = if reverse { n_censor[idx] } else { n_event[idx] };
-        let event_count = if reverse {
-            n_censor_count[idx]
-        } else {
-            n_event_count[idx]
-        };
-        let risk_for_curve = if reverse {
-            n_risk[idx] - n_event[idx]
-        } else {
-            n_risk[idx]
-        };
-
-        if event_weight > 0.0 && event_count > 0.0 && risk_for_curve > 0.0 {
-            if ctype == 1 {
-                cumulative_hazard += event_weight / risk_for_curve;
-                cumulative_hazard_variance += event_weight / (risk_for_curve * risk_for_curve);
+    /// Standard error on the survival scale (`summary.survfit` reports it
+    /// this way whatever `logse` is).
+    pub fn std_err_surv_scale(&self) -> Option<Vec<f64>> {
+        self.std_err.as_ref().map(|se| {
+            if self.logse {
+                se.iter().zip(&self.surv).map(|(s, p)| s * p).collect()
             } else {
-                for step in 0..event_count as usize {
-                    let denominator = risk_for_curve - step as f64 * event_weight / event_count;
-                    if denominator > 0.0 {
-                        cumulative_hazard += event_weight / (event_count * denominator);
-                        cumulative_hazard_variance +=
-                            event_weight / (event_count * denominator * denominator);
-                    }
-                }
+                se.clone()
             }
-        }
-
-        let (survival, survival_se) = if stype == 1 {
-            if event_weight > 0.0 && event_count > 0.0 && risk_for_curve > 0.0 {
-                current_survival *= ((risk_for_curve - event_weight) / risk_for_curve).max(0.0);
-                if risk_for_curve > event_weight {
-                    greenwood_variance +=
-                        event_weight / (risk_for_curve * (risk_for_curve - event_weight));
-                }
-            }
-            (
-                current_survival,
-                current_survival * greenwood_variance.max(0.0_f64).sqrt(),
-            )
-        } else {
-            let survival = (-cumulative_hazard).exp();
-            (
-                survival,
-                survival * cumulative_hazard_variance.max(0.0_f64).sqrt(),
-            )
-        };
-
-        estimate.push(survival);
-        std_err.push(survival_se);
-        cumhaz.push(cumulative_hazard);
-        std_chaz.push(cumulative_hazard_variance.max(0.0_f64).sqrt());
-        if conf_type != "none" {
-            let (lower, upper) = compute_confidence_interval(survival, survival_se, z, conf_type);
-            conf_lower.push(lower);
-            conf_upper.push(upper);
-        }
-    }
-
-    SurvfitCurveResult {
-        time: time.to_vec(),
-        n_risk: n_risk.to_vec(),
-        n_event: n_event.to_vec(),
-        n_censor: n_censor.to_vec(),
-        estimate,
-        std_err,
-        conf_lower,
-        conf_upper,
-        cumhaz,
-        std_chaz,
-        n_enter: n_enter.map(|values| values.to_vec()),
+        })
     }
 }
 
-#[pyfunction]
-#[pyo3(signature = (time, n_risk, n_event, n_event_count, n_censor, n_censor_count, n_enter=None, reverse=false, stype=1, ctype=1, conf_level=None, conf_type=None))]
-#[allow(clippy::too_many_arguments)]
-pub fn survfit_curve_from_tables(
+// ---------------------------------------------------------------------------
+// The C kernel: one curve
+// ---------------------------------------------------------------------------
+
+/// Rows of one curve, in the order `survfitkm.c` walks them.
+struct CurveRows {
+    /// Rows ordered by start time (counting-process data only).
+    sort1: Option<Vec<usize>>,
+    /// Rows ordered by stop time.
+    sort2: Vec<usize>,
+}
+
+/// Everything `survfitkm.c` reads besides the row order.
+struct KernelData<'a> {
+    time1: Option<&'a [f64]>,
+    time2: &'a [f64],
+    status: &'a [i32],
+    wt: &'a [f64],
+    /// `1 * (first obs of a subject) + 2 * (last obs)`.
+    position: &'a [u8],
+    /// Cluster code (`0..nid`) of every row of the curve, with `nid`.
+    cluster: Option<(&'a [usize], usize)>,
+}
+
+#[derive(Clone, Copy)]
+struct KernelOptions {
+    stype: SurvType,
+    ctype: HazardType,
+    influence: InfluenceRequest,
+    reverse: bool,
+    entry: bool,
+}
+
+/// Output of the kernel for one curve.
+struct CurveFit {
     time: Vec<f64>,
     n_risk: Vec<f64>,
     n_event: Vec<f64>,
-    n_event_count: Vec<f64>,
     n_censor: Vec<f64>,
-    n_censor_count: Vec<f64>,
     n_enter: Option<Vec<f64>>,
-    reverse: bool,
-    stype: i32,
-    ctype: i32,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-) -> PyResult<SurvfitCurveResult> {
-    let conf_level = conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
-    validate_conf_level(conf_level)?;
-    let conf_type = normalize_conf_type(conf_type.as_deref())?;
-    validate_survfit_curve_table_inputs(
-        &time,
-        &n_risk,
-        &n_event,
-        &n_event_count,
-        &n_censor,
-        &n_censor_count,
-        n_enter.as_deref(),
-        stype,
-        ctype,
-    )?;
-    Ok(compute_survfit_curve_from_tables(
-        &time,
-        &n_risk,
-        &n_event,
-        &n_event_count,
-        &n_censor,
-        &n_censor_count,
-        n_enter.as_deref(),
-        reverse,
-        stype,
-        ctype,
-        conf_level,
-        &conf_type,
-    ))
+    wt_risk: Vec<f64>,
+    wt_event: Vec<f64>,
+    wt_censor: Vec<f64>,
+    wt_enter: Option<Vec<f64>>,
+    surv: Vec<f64>,
+    cumhaz: Vec<f64>,
+    std_surv: Vec<f64>,
+    std_chaz: Vec<f64>,
+    /// `nid x ntime`, when requested.
+    influence_surv: Option<Array2<f64>>,
+    influence_chaz: Option<Array2<f64>>,
 }
 
-#[pyfunction]
-#[pyo3(signature = (start, stop, status, id, weights=None, include_entry=false, timefix=None))]
-pub fn counting_survfit_tables(
-    start: &Bound<'_, PyAny>,
-    stop: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    id: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    include_entry: bool,
-    timefix: Option<bool>,
-) -> PyResult<CountingSurvfitTables> {
-    let start = extract_vec_f64(start)?;
-    let stop = extract_vec_f64(stop)?;
-    let status = extract_vec_i32(status)?;
-    let id = extract_vec_i32(id)?;
-    let weights = match extract_optional_vec_f64(weights)? {
-        Some(w) => w,
-        None => vec![1.0; start.len()],
-    };
-    let timefix = timefix.unwrap_or(true);
-    validate_counting_survfit_table_inputs(&start, &stop, &status, &id, &weights, timefix)?;
-    Ok(compute_counting_survfit_tables(
-        &start,
-        &stop,
-        &status,
-        &id,
-        &weights,
-        include_entry,
-        timefix,
-    ))
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct SurvFitKMOutput {
-    #[pyo3(get)]
-    pub time: Vec<f64>,
-    #[pyo3(get)]
-    pub n_risk: Vec<f64>,
-    #[pyo3(get)]
-    pub n_risk_count: Vec<f64>,
-    #[pyo3(get)]
-    pub n_event: Vec<f64>,
-    #[pyo3(get)]
-    pub n_event_count: Vec<f64>,
-    #[pyo3(get)]
-    pub n_censor: Vec<f64>,
-    #[pyo3(get)]
-    pub n_censor_count: Vec<f64>,
-    #[pyo3(get)]
-    pub estimate: Vec<f64>,
-    #[pyo3(get)]
-    pub std_err: Vec<f64>,
-    #[pyo3(get)]
-    pub cumhaz: Vec<f64>,
-    #[pyo3(get)]
-    pub std_chaz: Vec<f64>,
-    #[pyo3(get)]
-    pub conf_lower: Vec<f64>,
-    #[pyo3(get)]
-    pub conf_upper: Vec<f64>,
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct GroupedSurvFitKMOutput {
-    #[pyo3(get)]
-    pub groups: Vec<i32>,
-    #[pyo3(get)]
-    pub time: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n_risk: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n_risk_count: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n_event: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n_event_count: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n_censor: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n_censor_count: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub estimate: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub std_err: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub cumhaz: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub std_chaz: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub conf_lower: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub conf_upper: Vec<Vec<f64>>,
-}
-
-impl GroupedSurvFitKMOutput {
-    fn from_curves(curves: Vec<(i32, SurvFitKMOutput)>) -> Self {
-        let curve_count = curves.len();
-        let mut output = Self {
-            groups: Vec::with_capacity(curve_count),
-            time: Vec::with_capacity(curve_count),
-            n_risk: Vec::with_capacity(curve_count),
-            n_risk_count: Vec::with_capacity(curve_count),
-            n_event: Vec::with_capacity(curve_count),
-            n_event_count: Vec::with_capacity(curve_count),
-            n_censor: Vec::with_capacity(curve_count),
-            n_censor_count: Vec::with_capacity(curve_count),
-            estimate: Vec::with_capacity(curve_count),
-            std_err: Vec::with_capacity(curve_count),
-            cumhaz: Vec::with_capacity(curve_count),
-            std_chaz: Vec::with_capacity(curve_count),
-            conf_lower: Vec::with_capacity(curve_count),
-            conf_upper: Vec::with_capacity(curve_count),
-        };
-        for (group, curve) in curves {
-            output.groups.push(group);
-            output.time.push(curve.time);
-            output.n_risk.push(curve.n_risk);
-            output.n_risk_count.push(curve.n_risk_count);
-            output.n_event.push(curve.n_event);
-            output.n_event_count.push(curve.n_event_count);
-            output.n_censor.push(curve.n_censor);
-            output.n_censor_count.push(curve.n_censor_count);
-            output.estimate.push(curve.estimate);
-            output.std_err.push(curve.std_err);
-            output.cumhaz.push(curve.cumhaz);
-            output.std_chaz.push(curve.std_chaz);
-            output.conf_lower.push(curve.conf_lower);
-            output.conf_upper.push(curve.conf_upper);
-        }
-        output
-    }
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct SurvFitKMInfluenceOutput {
-    #[pyo3(get)]
-    pub time: Vec<f64>,
-    #[pyo3(get)]
-    pub influence_surv: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub influence_chaz: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub std_err: Vec<f64>,
-    #[pyo3(get)]
-    pub std_chaz: Vec<f64>,
-}
-
-type RobustSurvfitVarianceOutput = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
-
-#[pymethods]
-impl SurvFitKMOutput {
-    #[getter]
-    pub fn cumulative_hazard(&self) -> Vec<f64> {
-        self.cumhaz.clone()
-    }
-
-    #[getter]
-    pub fn cumulative_hazard_std_err(&self) -> Vec<f64> {
-        self.std_chaz.clone()
-    }
-}
-
-fn validate_survfitkm_data(
-    time: &[f64],
-    status: &[f64],
-    weights: Option<Vec<f64>>,
-) -> PyResult<Vec<f64>> {
-    validate_non_empty(time, "time")?;
-    validate_length(time.len(), status.len(), "status")?;
-    validate_no_nan(time, "time")?;
-    validate_finite(time, "time")?;
-    validate_non_negative(time, "time")?;
-    validate_no_nan(status, "status")?;
-    validate_finite(status, "status")?;
-    validate_binary_f64(status, "status")?;
-    let weights = match weights {
-        Some(values) => {
-            validate_length(time.len(), values.len(), "weights")?;
-            validate_no_nan(&values, "weights")?;
-            validate_finite(&values, "weights")?;
-            validate_non_negative(&values, "weights")?;
-            values
-        }
-        None => vec![1.0; time.len()],
-    };
-    Ok(weights)
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, weights=None, entry_times=None, position=None, reverse=None, computation_type=None, conf_level=None, conf_type=None, timefix=None))]
-#[allow(clippy::too_many_arguments)]
-pub fn survfitkm(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    entry_times: Option<&Bound<'_, PyAny>>,
-    position: Option<&Bound<'_, PyAny>>,
-    reverse: Option<bool>,
-    computation_type: Option<i32>,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-    timefix: Option<bool>,
-) -> PyResult<SurvFitKMOutput> {
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_f64(status)?;
-    let weights_opt = extract_optional_vec_f64(weights)?;
-    let entry_times_opt = extract_optional_vec_f64(entry_times)?;
-    let position_opt = extract_optional_vec_i32(position)?;
-    let config = KaplanMeierConfig {
-        reverse: reverse.unwrap_or(false),
-        computation_type: computation_type.unwrap_or(0),
-        conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-        conf_type: normalize_conf_type(conf_type.as_deref())?,
-    };
-    validate_conf_level(config.conf_level)?;
-    let timefix = timefix.unwrap_or(true);
-    let weights = validate_survfitkm_data(&time, &status, weights_opt)?;
-    let position = match position_opt {
-        Some(p) => {
-            validate_length(time.len(), p.len(), "position")?;
-            p
-        }
-        None => vec![0; time.len()],
-    };
-    if let Some(ref entry) = entry_times_opt {
-        validate_entry_times(&time, entry, timefix)?;
-    }
-    Ok(compute_survfitkm_with_timefix(
-        &time,
-        &status,
-        &weights,
-        entry_times_opt.as_deref(),
-        &position,
-        &config,
-        timefix,
-    ))
-}
-
-fn compute_grouped_survfitkm(
-    time: &[f64],
-    status: &[f64],
-    groups: &[i32],
-    weights: &[f64],
-    entry_times: Option<&[f64]>,
-    config: &KaplanMeierConfig,
-    timefix: bool,
-) -> GroupedSurvFitKMOutput {
-    let mut indices_by_group: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (idx, &group) in groups.iter().enumerate() {
-        indices_by_group.entry(group).or_default().push(idx);
-    }
-    let grouped_indices: Vec<(i32, Vec<usize>)> = indices_by_group.into_iter().collect();
-    let compute = |(group, indices): &(i32, Vec<usize>)| {
-        let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
-        let group_status: Vec<f64> = indices.iter().map(|&idx| status[idx]).collect();
-        let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
-        let group_entry =
-            entry_times.map(|values| indices.iter().map(|&idx| values[idx]).collect::<Vec<f64>>());
-        let position = vec![0; indices.len()];
-        (
-            *group,
-            compute_survfitkm_with_timefix(
-                &group_time,
-                &group_status,
-                &group_weights,
-                group_entry.as_deref(),
-                &position,
-                config,
-                timefix,
-            ),
-        )
-    };
-
-    let curves = if time.len() >= PARALLEL_THRESHOLD_XLARGE && grouped_indices.len() > 1 {
-        grouped_indices.par_iter().map(compute).collect()
-    } else {
-        grouped_indices.iter().map(compute).collect()
-    };
-    GroupedSurvFitKMOutput::from_curves(curves)
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, groups, weights=None, entry_times=None, reverse=None, conf_level=None, conf_type=None, timefix=None))]
-#[allow(clippy::too_many_arguments)]
-pub fn survfitkm_grouped(
-    py: Python<'_>,
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    groups: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    entry_times: Option<&Bound<'_, PyAny>>,
-    reverse: Option<bool>,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-    timefix: Option<bool>,
-) -> PyResult<GroupedSurvFitKMOutput> {
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_f64(status)?;
-    let groups = extract_vec_i32(groups)?;
-    let weights = extract_optional_vec_f64(weights)?;
-    let entry_times = extract_optional_vec_f64(entry_times)?;
-    let config = KaplanMeierConfig {
-        reverse: reverse.unwrap_or(false),
-        computation_type: 0,
-        conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-        conf_type: normalize_conf_type(conf_type.as_deref())?,
-    };
-    validate_conf_level(config.conf_level)?;
-    let timefix = timefix.unwrap_or(true);
-    validate_length(time.len(), groups.len(), "groups")?;
-    let weights = validate_survfitkm_data(&time, &status, weights)?;
-    if let Some(ref entry) = entry_times {
-        validate_entry_times(&time, entry, timefix)?;
-    }
-
-    Ok(py.detach(move || {
-        compute_grouped_survfitkm(
-            &time,
-            &status,
-            &groups,
-            &weights,
-            entry_times.as_deref(),
-            &config,
-            timefix,
-        )
-    }))
-}
-
-pub fn compute_survfitkm(
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    entry_times: Option<&[f64]>,
-    _position: &[i32],
-    config: &KaplanMeierConfig,
-) -> SurvFitKMOutput {
-    compute_survfitkm_with_timefix(time, status, weights, entry_times, _position, config, true)
-}
-
-pub fn compute_survfitkm_with_timefix(
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    entry_times: Option<&[f64]>,
-    _position: &[i32],
-    config: &KaplanMeierConfig,
-    timefix: bool,
-) -> SurvFitKMOutput {
-    let n = time.len();
-    let indices = sorted_indices_by(time);
-    let entry_indices = entry_times.map(sorted_indices_by);
-    let mut entry_cursor = 0;
-    let estimated_events = (n / 10).max(16);
-    let mut event_times = Vec::with_capacity(estimated_events);
-    let mut n_risk_vec = Vec::with_capacity(estimated_events);
-    let mut n_risk_count_vec = Vec::with_capacity(estimated_events);
-    let mut n_event_vec = Vec::with_capacity(estimated_events);
-    let mut n_event_count_vec = Vec::with_capacity(estimated_events);
-    let mut n_censor_vec = Vec::with_capacity(estimated_events);
-    let mut n_censor_count_vec = Vec::with_capacity(estimated_events);
-    let mut estimate_vec = Vec::with_capacity(estimated_events);
-    let mut std_err_vec = Vec::with_capacity(estimated_events);
-    let mut cumhaz_vec = Vec::with_capacity(estimated_events);
-    let mut std_chaz_vec = Vec::with_capacity(estimated_events);
-    let mut current_risk: f64 = if entry_times.is_some() {
-        0.0
-    } else {
-        weights.iter().sum()
-    };
-    let mut current_risk_count: f64 = if entry_times.is_some() { 0.0 } else { n as f64 };
-    let mut current_estimate = 1.0;
-    let mut cumulative_variance = 0.0;
-    let mut cumulative_hazard = 0.0;
-    let mut cumulative_hazard_variance: f64 = 0.0;
-    let mut i = 0;
-
-    while i < n {
-        let current_time = time[indices[i]];
-        if let (Some(entry), Some(sorted_entries)) = (entry_times, entry_indices.as_ref()) {
-            while entry_cursor < n
-                && entry_before_time(entry[sorted_entries[entry_cursor]], current_time, timefix)
-            {
-                current_risk += weights[sorted_entries[entry_cursor]];
-                current_risk_count += 1.0;
-                entry_cursor += 1;
-            }
-        }
-        let mut weighted_events = 0.0;
-        let mut event_count = 0.0;
-        let mut weighted_censor = 0.0;
-        let mut censor_count = 0.0;
-        let mut j = i;
-        while j < n && same_survfit_time(time[indices[j]], current_time, timefix) {
-            let idx = indices[j];
-            let is_event = if config.reverse {
-                status[idx] <= 0.0
-            } else {
-                status[idx] > 0.0
-            };
-            if is_event {
-                weighted_events += weights[idx];
-                event_count += 1.0;
-            } else {
-                weighted_censor += weights[idx];
-                censor_count += 1.0;
-            }
-            j += 1;
-        }
-        if weighted_events > 0.0 || weighted_censor > 0.0 {
-            let risk_at_time = current_risk;
-            let risk_count_at_time = current_risk_count;
-            event_times.push(current_time);
-            n_risk_vec.push(risk_at_time);
-            n_risk_count_vec.push(risk_count_at_time);
-            n_event_vec.push(weighted_events);
-            n_event_count_vec.push(event_count);
-            n_censor_vec.push(weighted_censor);
-            n_censor_count_vec.push(censor_count);
-            if weighted_events > 0.0 && risk_at_time > 0.0 {
-                let hazard = weighted_events / risk_at_time;
-                cumulative_hazard += hazard;
-                cumulative_hazard_variance += weighted_events / (risk_at_time * risk_at_time);
-                current_estimate *= 1.0 - hazard;
-                if risk_at_time > weighted_events {
-                    cumulative_variance +=
-                        weighted_events / (risk_at_time * (risk_at_time - weighted_events));
+/// The reporting times of one curve, as survival 3.8-11's `survfitkm.c`
+/// computes them (the version the reference fixtures were generated with;
+/// 3.8-12 moved the rule to R and dropped the unconditional first stop
+/// time): the smallest stop time, every stop time that is an event or the
+/// last interval of a subject and, with `entry`, every start time that is
+/// the first interval of a subject.
+fn kernel_unique_times(data: &KernelData<'_>, rows: &CurveRows, entry: bool) -> Vec<f64> {
+    let sort2 = &rows.sort2;
+    let mut dtime = Vec::new();
+    match (entry, data.time1, &rows.sort1) {
+        (true, Some(time1), Some(sort1)) => {
+            let mut temp = time1[sort1[0]];
+            dtime.push(temp);
+            let mut j = 1;
+            for &i2 in sort2 {
+                while j < sort1.len() && time1[sort1[j]] < data.time2[i2] {
+                    let i1 = sort1[j];
+                    if time1[i1] != temp && data.position[i1] & 1 == 1 {
+                        temp = time1[i1];
+                        dtime.push(temp);
+                    }
+                    j += 1;
                 }
-            }
-            estimate_vec.push(current_estimate);
-            let se = current_estimate * cumulative_variance.sqrt();
-            std_err_vec.push(se);
-            cumhaz_vec.push(cumulative_hazard);
-            std_chaz_vec.push(cumulative_hazard_variance.sqrt());
-        }
-        current_risk -= weighted_events + weighted_censor;
-        current_risk_count -= event_count + censor_count;
-        i = j;
-    }
-
-    let alpha = 1.0 - config.conf_level;
-    let z = -normal_inverse_cdf(alpha / 2.0);
-
-    let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
-        (vec![], vec![])
-    } else {
-        estimate_vec
-            .iter()
-            .zip(std_err_vec.iter())
-            .map(|(&s, &se)| compute_confidence_interval(s, se, z, &config.conf_type))
-            .unzip()
-    };
-    SurvFitKMOutput {
-        time: event_times,
-        n_risk: n_risk_vec,
-        n_risk_count: n_risk_count_vec,
-        n_event: n_event_vec,
-        n_event_count: n_event_count_vec,
-        n_censor: n_censor_vec,
-        n_censor_count: n_censor_count_vec,
-        estimate: estimate_vec,
-        std_err: std_err_vec,
-        cumhaz: cumhaz_vec,
-        std_chaz: std_chaz_vec,
-        conf_lower,
-        conf_upper,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn consume_robust_exit_time(
-    cursor: &mut usize,
-    total_risk: &mut f64,
-    order: &[usize],
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    cluster_codes: &[usize],
-    risk_by_cluster: &mut [f64],
-    survival_score: &mut [f64],
-    chaz_score: &mut [f64],
-    events_by_cluster: &mut [f64],
-    reverse: bool,
-    timefix: bool,
-    ctype: i32,
-) {
-    if *cursor >= order.len() {
-        return;
-    }
-
-    events_by_cluster.fill(0.0);
-    let exit_time = time[order[*cursor]];
-    let mut scan = *cursor;
-    while scan < order.len() && same_survfit_time(time[order[scan]], exit_time, timefix) {
-        scan += 1;
-    }
-
-    let mut event_weight = 0.0;
-    let mut event_count = 0.0;
-    for &idx in &order[*cursor..scan] {
-        let is_event = if reverse {
-            status[idx] <= 0.0
-        } else {
-            status[idx] > 0.0
-        };
-        if is_event {
-            event_weight += weights[idx];
-            event_count += 1.0;
-            events_by_cluster[cluster_codes[idx]] += weights[idx];
-        }
-    }
-
-    if event_weight > 0.0 && *total_risk > 0.0 {
-        let event_fraction = event_weight / *total_risk;
-        let mut chaz_event_derivative = 1.0 / *total_risk;
-        let mut chaz_risk_derivative = event_weight / (*total_risk * *total_risk);
-        if ctype == 2 && event_count > 0.0 {
-            chaz_event_derivative = 0.0;
-            chaz_risk_derivative = 0.0;
-            for step in 0..event_count as usize {
-                let step_value = step as f64;
-                let denominator = *total_risk - step_value * event_weight / event_count;
-                if denominator > 0.0 {
-                    chaz_event_derivative += 1.0 / (event_count * denominator)
-                        + event_weight * step_value
-                            / (event_count * event_count * denominator * denominator);
-                    chaz_risk_derivative +=
-                        event_weight / (event_count * denominator * denominator);
+                if data.time2[i2] != temp && (data.position[i2] > 1 || data.status[i2] > 0) {
+                    temp = data.time2[i2];
+                    dtime.push(temp);
                 }
             }
         }
-        for code in 0..risk_by_cluster.len() {
-            let centered = events_by_cluster[code] - risk_by_cluster[code] * event_fraction;
-            chaz_score[code] += events_by_cluster[code] * chaz_event_derivative
-                - risk_by_cluster[code] * chaz_risk_derivative;
-            if *total_risk > event_weight {
-                survival_score[code] += centered / (*total_risk - event_weight);
-            }
-        }
-    }
-
-    for &idx in &order[*cursor..scan] {
-        let weight = weights[idx];
-        risk_by_cluster[cluster_codes[idx]] -= weight;
-        *total_risk -= weight;
-    }
-    *cursor = scan;
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add_robust_counting_entries_before(
-    cursor: &mut usize,
-    total_risk: &mut f64,
-    order: &[usize],
-    start: &[f64],
-    weights: &[f64],
-    cluster_codes: &[usize],
-    risk_by_cluster: &mut [f64],
-    time: f64,
-    timefix: bool,
-) {
-    while *cursor < order.len() && entry_before_time(start[order[*cursor]], time, timefix) {
-        let idx = order[*cursor];
-        let weight = weights[idx];
-        risk_by_cluster[cluster_codes[idx]] += weight;
-        *total_risk += weight;
-        *cursor += 1;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn consume_robust_counting_exit_time(
-    cursor: &mut usize,
-    total_risk: &mut f64,
-    order: &[usize],
-    stop: &[f64],
-    status: &[i32],
-    weights: &[f64],
-    cluster_codes: &[usize],
-    risk_by_cluster: &mut [f64],
-    survival_score: &mut [f64],
-    chaz_score: &mut [f64],
-    events_by_cluster: &mut [f64],
-    excluded_by_cluster: &mut [f64],
-    reverse: bool,
-    timefix: bool,
-    ctype: i32,
-) {
-    if *cursor >= order.len() {
-        return;
-    }
-
-    events_by_cluster.fill(0.0);
-    excluded_by_cluster.fill(0.0);
-    let exit_time = stop[order[*cursor]];
-    let mut scan = *cursor;
-    while scan < order.len() && same_survfit_time(stop[order[scan]], exit_time, timefix) {
-        scan += 1;
-    }
-
-    let mut event_weight = 0.0;
-    let mut event_count = 0.0;
-    let mut excluded_weight = 0.0;
-    for &idx in &order[*cursor..scan] {
-        let code = cluster_codes[idx];
-        let weight = weights[idx];
-        if reverse {
-            if status[idx] <= 0 {
-                event_weight += weight;
-                event_count += 1.0;
-                events_by_cluster[code] += weight;
-            } else {
-                excluded_weight += weight;
-                excluded_by_cluster[code] += weight;
-            }
-        } else if status[idx] > 0 {
-            event_weight += weight;
-            event_count += 1.0;
-            events_by_cluster[code] += weight;
-        }
-    }
-
-    let risk_denominator = if reverse {
-        (*total_risk - excluded_weight).max(0.0)
-    } else {
-        *total_risk
-    };
-    if event_weight > 0.0 && risk_denominator > 0.0 {
-        let event_fraction = event_weight / risk_denominator;
-        let mut chaz_event_derivative = 1.0 / risk_denominator;
-        let mut chaz_risk_derivative = event_weight / (risk_denominator * risk_denominator);
-        if ctype == 2 && event_count > 0.0 {
-            chaz_event_derivative = 0.0;
-            chaz_risk_derivative = 0.0;
-            for step in 0..event_count as usize {
-                let step_value = step as f64;
-                let denominator = risk_denominator - step_value * event_weight / event_count;
-                if denominator > 0.0 {
-                    chaz_event_derivative += 1.0 / (event_count * denominator)
-                        + event_weight * step_value
-                            / (event_count * event_count * denominator * denominator);
-                    chaz_risk_derivative +=
-                        event_weight / (event_count * denominator * denominator);
+        _ => {
+            let mut temp = data.time2[sort2[0]];
+            dtime.push(temp);
+            for &i2 in &sort2[1..] {
+                if (data.position[i2] > 1 || data.status[i2] > 0) && data.time2[i2] != temp {
+                    temp = data.time2[i2];
+                    dtime.push(temp);
                 }
             }
         }
-        for code in 0..risk_by_cluster.len() {
-            let risk_weight = if reverse {
-                (risk_by_cluster[code] - excluded_by_cluster[code]).max(0.0)
-            } else {
-                risk_by_cluster[code]
-            };
-            let centered = events_by_cluster[code] - risk_weight * event_fraction;
-            chaz_score[code] += events_by_cluster[code] * chaz_event_derivative
-                - risk_weight * chaz_risk_derivative;
-            if risk_denominator > event_weight {
-                survival_score[code] += centered / (risk_denominator - event_weight);
-            }
-        }
     }
-
-    for &idx in &order[*cursor..scan] {
-        let weight = weights[idx];
-        risk_by_cluster[cluster_codes[idx]] -= weight;
-        *total_risk -= weight;
-    }
-    *cursor = scan;
+    dtime
 }
 
-pub fn compute_robust_survfitkm_with_timefix(
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    cluster: &[i32],
-    config: &KaplanMeierConfig,
-    timefix: bool,
-) -> SurvFitKMOutput {
-    let position = vec![0; time.len()];
-    let mut result =
-        compute_survfitkm_with_timefix(time, status, weights, None, &position, config, timefix);
-    let fixed_time = survfit_timefix_values(time, timefix);
-    let cluster_codes = compact_i32_labels(cluster);
-    let n_clusters = cluster_codes
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |max_code| max_code + 1);
+/// Port of `survfitkm` (`src/survfitkm.c`) for one curve.
+fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> CurveFit {
+    let nused = rows.sort2.len();
+    let sort2 = &rows.sort2;
+    let dtime = kernel_unique_times(data, rows, options.entry);
+    let ntime = dtime.len();
+    let counting = data.time1.is_some();
 
-    let mut risk_by_cluster = vec![0.0; n_clusters];
-    for (&code, &weight) in cluster_codes.iter().zip(weights.iter()) {
-        risk_by_cluster[code] += weight;
-    }
-    let mut total_risk: f64 = weights.iter().sum();
-    let mut survival_score = vec![0.0; n_clusters];
-    let mut chaz_score = vec![0.0; n_clusters];
-    let mut events_by_cluster = vec![0.0; n_clusters];
-    let order = sorted_indices_by(&fixed_time);
-    let mut cursor = 0;
-
-    let mut robust_std_err = Vec::with_capacity(result.time.len());
-    let mut robust_std_chaz = Vec::with_capacity(result.time.len());
-    for (&curve_time, &survival) in result.time.iter().zip(result.estimate.iter()) {
-        while cursor < order.len()
-            && survfit_time_before(fixed_time[order[cursor]], curve_time, timefix)
-        {
-            consume_robust_exit_time(
-                &mut cursor,
-                &mut total_risk,
-                &order,
-                &fixed_time,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                config.reverse,
-                timefix,
-                1,
-            );
-        }
-        if cursor < order.len() && same_survfit_time(fixed_time[order[cursor]], curve_time, timefix)
-        {
-            consume_robust_exit_time(
-                &mut cursor,
-                &mut total_risk,
-                &order,
-                &fixed_time,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                config.reverse,
-                timefix,
-                1,
-            );
-        }
-
-        let survival_variance: f64 = survival_score.iter().map(|value| value * value).sum();
-        let chaz_variance: f64 = chaz_score.iter().map(|value| value * value).sum();
-        robust_std_err.push(survival.abs() * survival_variance.sqrt());
-        robust_std_chaz.push(chaz_variance.sqrt());
-    }
-
-    let alpha = 1.0 - config.conf_level;
-    let z = -normal_inverse_cdf(alpha / 2.0);
-    let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
-        (vec![], vec![])
-    } else {
-        result
-            .estimate
-            .iter()
-            .zip(robust_std_err.iter())
-            .map(|(&survival, &se)| compute_confidence_interval(survival, se, z, &config.conf_type))
-            .unzip()
-    };
-
-    result.std_err = robust_std_err;
-    result.std_chaz = robust_std_chaz;
-    result.conf_lower = conf_lower;
-    result.conf_upper = conf_upper;
-    result
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_right_survfit_influence_curve(
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    reverse: bool,
-    stype: i32,
-    ctype: i32,
-    conf_level: f64,
-    conf_type: &str,
-    timefix: bool,
-) -> (Vec<f64>, Vec<f64>) {
-    let km_config = KaplanMeierConfig {
-        reverse,
-        computation_type: 0,
-        conf_level,
-        conf_type: conf_type.to_string(),
-    };
-    let position = vec![0; time.len()];
-    let km =
-        compute_survfitkm_with_timefix(time, status, weights, None, &position, &km_config, timefix);
-    if stype == 1 {
-        return (km.time, km.estimate);
-    }
-    let curve = compute_survfit_curve_from_tables(
-        &km.time,
-        &km.n_risk,
-        &km.n_event,
-        &km.n_event_count,
-        &km.n_censor,
-        &km.n_censor_count,
-        None,
-        reverse,
-        stype,
-        ctype,
-        conf_level,
-        conf_type,
-    );
-    (curve.time, curve.estimate)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_robust_right_survfit_variance_with_timefix(
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    reported_curve_time: &[f64],
-    reported_curve_estimate: &[f64],
-    cluster: &[i32],
-    config: &KaplanMeierConfig,
-    timefix: bool,
-    stype: i32,
-    ctype: i32,
-) -> PyResult<RobustSurvfitVarianceOutput> {
-    let (curve_time, influence_estimate) = compute_right_survfit_influence_curve(
-        time,
-        status,
-        weights,
-        config.reverse,
-        stype,
-        ctype,
-        config.conf_level,
-        &config.conf_type,
-        timefix,
-    );
-    if curve_time.len() != reported_curve_time.len()
-        || curve_time
-            .iter()
-            .zip(reported_curve_time)
-            .any(|(&actual, &reported)| !same_survfit_time(actual, reported, timefix))
+    // -- the counts, walking backwards in time so risk sets accumulate
+    let mut n_risk = vec![0.0; ntime];
+    let mut n_event = vec![0.0; ntime];
+    let mut n_censor = vec![0.0; ntime];
+    let mut wt_risk = vec![0.0; ntime];
+    let mut wt_event = vec![0.0; ntime];
+    let mut wt_censor = vec![0.0; ntime];
+    let mut n_enter = (options.entry && counting).then(|| vec![0.0; ntime]);
+    let mut wt_enter = (options.entry && counting).then(|| vec![0.0; ntime]);
     {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "curve_time does not match the right-censored survival curve",
-        ));
-    }
-    let fixed_time = survfit_timefix_values(time, timefix);
-    let cluster_codes = compact_i32_labels(cluster);
-    let n_clusters = cluster_codes
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |max_code| max_code + 1);
-    let mut risk_by_cluster = vec![0.0; n_clusters];
-    for (&code, &weight) in cluster_codes.iter().zip(weights.iter()) {
-        risk_by_cluster[code] += weight;
-    }
-    let mut total_risk: f64 = weights.iter().sum();
-    let mut survival_score = vec![0.0; n_clusters];
-    let mut chaz_score = vec![0.0; n_clusters];
-    let mut events_by_cluster = vec![0.0; n_clusters];
-    let order = sorted_indices_by(&fixed_time);
-    let mut cursor = 0;
-    let mut robust_std_err = Vec::with_capacity(curve_time.len());
-    let mut robust_std_chaz = Vec::with_capacity(curve_time.len());
-
-    for (&curve_time, &survival) in curve_time.iter().zip(influence_estimate.iter()) {
-        while cursor < order.len()
-            && survfit_time_before(fixed_time[order[cursor]], curve_time, timefix)
-        {
-            consume_robust_exit_time(
-                &mut cursor,
-                &mut total_risk,
-                &order,
-                &fixed_time,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                config.reverse,
-                timefix,
-                ctype,
-            );
-        }
-        if cursor < order.len() && same_survfit_time(fixed_time[order[cursor]], curve_time, timefix)
-        {
-            consume_robust_exit_time(
-                &mut cursor,
-                &mut total_risk,
-                &order,
-                &fixed_time,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                config.reverse,
-                timefix,
-                ctype,
-            );
-        }
-
-        let survival_variance: f64 = if stype == 1 {
-            survival_score.iter().map(|value| value * value).sum()
-        } else {
-            chaz_score.iter().map(|value| value * value).sum()
-        };
-        let chaz_variance: f64 = chaz_score.iter().map(|value| value * value).sum();
-        robust_std_err.push(survival.abs() * survival_variance.sqrt());
-        robust_std_chaz.push(chaz_variance.sqrt());
-    }
-
-    let alpha = 1.0 - config.conf_level;
-    let z = -normal_inverse_cdf(alpha / 2.0);
-    let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
-        (vec![], vec![])
-    } else {
-        reported_curve_estimate
-            .iter()
-            .zip(robust_std_err.iter())
-            .map(|(&survival, &se)| compute_confidence_interval(survival, se, z, &config.conf_type))
-            .unzip()
-    };
-
-    Ok((robust_std_err, robust_std_chaz, conf_lower, conf_upper))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_robust_counting_survfit_variance_with_timefix(
-    start: &[f64],
-    stop: &[f64],
-    status: &[i32],
-    weights: &[f64],
-    curve_time: &[f64],
-    curve_estimate: &[f64],
-    cluster: &[i32],
-    config: &KaplanMeierConfig,
-    timefix: bool,
-    stype: i32,
-    ctype: i32,
-) -> RobustSurvfitVarianceOutput {
-    let fixed_stop = survfit_timefix_values(stop, timefix);
-    let cluster_codes = compact_i32_labels(cluster);
-    let n_clusters = cluster_codes
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |max_code| max_code + 1);
-    let start_order = sorted_indices_by(start);
-    let stop_order = sorted_indices_by(&fixed_stop);
-
-    let mut risk_by_cluster = vec![0.0; n_clusters];
-    let mut total_risk = 0.0;
-    let mut survival_score = vec![0.0; n_clusters];
-    let mut chaz_score = vec![0.0; n_clusters];
-    let mut events_by_cluster = vec![0.0; n_clusters];
-    let mut excluded_by_cluster = vec![0.0; n_clusters];
-    let mut start_cursor = 0;
-    let mut stop_cursor = 0;
-    let mut robust_std_err = Vec::with_capacity(curve_time.len());
-    let mut robust_std_chaz = Vec::with_capacity(curve_time.len());
-
-    for (&time, &survival) in curve_time.iter().zip(curve_estimate.iter()) {
-        while stop_cursor < stop_order.len()
-            && survfit_time_before(fixed_stop[stop_order[stop_cursor]], time, timefix)
-        {
-            let exit_time = fixed_stop[stop_order[stop_cursor]];
-            add_robust_counting_entries_before(
-                &mut start_cursor,
-                &mut total_risk,
-                &start_order,
-                start,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                exit_time,
-                timefix,
-            );
-            consume_robust_counting_exit_time(
-                &mut stop_cursor,
-                &mut total_risk,
-                &stop_order,
-                &fixed_stop,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                &mut excluded_by_cluster,
-                config.reverse,
-                timefix,
-                ctype,
-            );
-        }
-
-        add_robust_counting_entries_before(
-            &mut start_cursor,
-            &mut total_risk,
-            &start_order,
-            start,
-            weights,
-            &cluster_codes,
-            &mut risk_by_cluster,
-            time,
-            timefix,
-        );
-        if stop_cursor < stop_order.len()
-            && same_survfit_time(fixed_stop[stop_order[stop_cursor]], time, timefix)
-        {
-            consume_robust_counting_exit_time(
-                &mut stop_cursor,
-                &mut total_risk,
-                &stop_order,
-                &fixed_stop,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                &mut excluded_by_cluster,
-                config.reverse,
-                timefix,
-                ctype,
-            );
-        }
-
-        let survival_variance: f64 = if stype == 1 {
-            survival_score.iter().map(|value| value * value).sum()
-        } else {
-            chaz_score.iter().map(|value| value * value).sum()
-        };
-        let chaz_variance: f64 = chaz_score.iter().map(|value| value * value).sum();
-        robust_std_err.push(survival.abs() * survival_variance.sqrt());
-        robust_std_chaz.push(chaz_variance.sqrt());
-    }
-
-    let alpha = 1.0 - config.conf_level;
-    let z = -normal_inverse_cdf(alpha / 2.0);
-    let (conf_lower, conf_upper): (Vec<f64>, Vec<f64>) = if config.conf_type == "none" {
-        (vec![], vec![])
-    } else {
-        curve_estimate
-            .iter()
-            .zip(robust_std_err.iter())
-            .map(|(&survival, &se)| compute_confidence_interval(survival, se, z, &config.conf_type))
-            .unzip()
-    };
-
-    (robust_std_err, robust_std_chaz, conf_lower, conf_upper)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_robust_counting_survfit_inputs(
-    start: &[f64],
-    stop: &[f64],
-    status: &[i32],
-    weights: &[f64],
-    curve_time: &[f64],
-    curve_estimate: &[f64],
-    cluster: &[i32],
-    timefix: bool,
-) -> PyResult<()> {
-    validate_non_empty(start, "start")?;
-    validate_length(start.len(), stop.len(), "stop")?;
-    validate_length(start.len(), status.len(), "status")?;
-    validate_length(start.len(), weights.len(), "weights")?;
-    validate_length(start.len(), cluster.len(), "cluster")?;
-    validate_length(curve_time.len(), curve_estimate.len(), "curve_estimate")?;
-    validate_no_nan(start, "start")?;
-    validate_finite(start, "start")?;
-    validate_non_negative(start, "start")?;
-    validate_no_nan(stop, "stop")?;
-    validate_finite(stop, "stop")?;
-    validate_non_negative(stop, "stop")?;
-    validate_binary_i32(status, "status")?;
-    validate_no_nan(weights, "weights")?;
-    validate_finite(weights, "weights")?;
-    validate_non_negative(weights, "weights")?;
-    validate_no_nan(curve_time, "curve_time")?;
-    validate_finite(curve_time, "curve_time")?;
-    validate_non_negative(curve_time, "curve_time")?;
-    validate_no_nan(curve_estimate, "curve_estimate")?;
-    validate_finite(curve_estimate, "curve_estimate")?;
-    validate_non_negative(curve_estimate, "curve_estimate")?;
-
-    for (idx, (&entry_time, &exit_time)) in start.iter().zip(stop.iter()).enumerate() {
-        let invalid = if timefix {
-            entry_time >= exit_time - TIME_EPSILON
-        } else {
-            entry_time >= exit_time
-        };
-        if invalid {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "start must be less than stop for observation {}",
-                idx
-            )));
-        }
-    }
-
-    for window in curve_time.windows(2) {
-        if survfit_time_before(window[1], window[0], timefix) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "curve_time must be sorted in ascending order",
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_robust_right_survfit_inputs(
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    curve_time: &[f64],
-    curve_estimate: &[f64],
-    cluster: &[i32],
-    timefix: bool,
-) -> PyResult<()> {
-    validate_non_empty(time, "time")?;
-    validate_length(time.len(), status.len(), "status")?;
-    validate_length(time.len(), weights.len(), "weights")?;
-    validate_length(time.len(), cluster.len(), "cluster")?;
-    validate_length(curve_time.len(), curve_estimate.len(), "curve_estimate")?;
-    validate_no_nan(time, "time")?;
-    validate_finite(time, "time")?;
-    validate_non_negative(time, "time")?;
-    validate_no_nan(status, "status")?;
-    validate_finite(status, "status")?;
-    validate_binary_f64(status, "status")?;
-    validate_no_nan(weights, "weights")?;
-    validate_finite(weights, "weights")?;
-    validate_non_negative(weights, "weights")?;
-    validate_no_nan(curve_time, "curve_time")?;
-    validate_finite(curve_time, "curve_time")?;
-    validate_non_negative(curve_time, "curve_time")?;
-    validate_no_nan(curve_estimate, "curve_estimate")?;
-    validate_finite(curve_estimate, "curve_estimate")?;
-
-    for window in curve_time.windows(2) {
-        if survfit_time_before(window[1], window[0], timefix) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "curve_time must be sorted in ascending order",
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, cluster, weights=None, reverse=None, conf_level=None, conf_type=None, timefix=None))]
-#[allow(clippy::too_many_arguments)]
-pub fn robust_survfitkm(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    cluster: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    reverse: Option<bool>,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-    timefix: Option<bool>,
-) -> PyResult<SurvFitKMOutput> {
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_f64(status)?;
-    let cluster = extract_vec_i32(cluster)?;
-    let weights_opt = extract_optional_vec_f64(weights)?;
-    let config = KaplanMeierConfig {
-        reverse: reverse.unwrap_or(false),
-        computation_type: 0,
-        conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-        conf_type: normalize_conf_type(conf_type.as_deref())?,
-    };
-    validate_conf_level(config.conf_level)?;
-    let timefix = timefix.unwrap_or(true);
-    validate_non_empty(&time, "time")?;
-    validate_length(time.len(), status.len(), "status")?;
-    validate_length(time.len(), cluster.len(), "cluster")?;
-    validate_no_nan(&time, "time")?;
-    validate_finite(&time, "time")?;
-    validate_non_negative(&time, "time")?;
-    validate_no_nan(&status, "status")?;
-    validate_finite(&status, "status")?;
-    validate_binary_f64(&status, "status")?;
-    let weights = match weights_opt {
-        Some(w) => {
-            validate_length(time.len(), w.len(), "weights")?;
-            validate_no_nan(&w, "weights")?;
-            validate_finite(&w, "weights")?;
-            validate_non_negative(&w, "weights")?;
-            w
-        }
-        None => vec![1.0; time.len()],
-    };
-    Ok(compute_robust_survfitkm_with_timefix(
-        &time, &status, &weights, &cluster, &config, timefix,
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn compute_survfitkm_influence_with_timefix(
-    time: &[f64],
-    status: &[f64],
-    weights: &[f64],
-    cluster: &[i32],
-    reverse: bool,
-    stype: i32,
-    ctype: i32,
-    conf_level: f64,
-    conf_type: &str,
-    timefix: bool,
-    include_influence: bool,
-) -> PyResult<SurvFitKMInfluenceOutput> {
-    let (curve_time, curve_estimate) = compute_right_survfit_influence_curve(
-        time, status, weights, reverse, stype, ctype, conf_level, conf_type, timefix,
-    );
-
-    let fixed_time = survfit_timefix_values(time, timefix);
-    let cluster_codes = compact_i32_labels(cluster);
-    let n_clusters = cluster_codes
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |max_code| max_code + 1);
-    let mut risk_by_cluster = vec![0.0; n_clusters];
-    for (&code, &weight) in cluster_codes.iter().zip(weights.iter()) {
-        risk_by_cluster[code] += weight;
-    }
-    let mut total_risk: f64 = weights.iter().sum();
-    let mut survival_score = vec![0.0; n_clusters];
-    let mut chaz_score = vec![0.0; n_clusters];
-    let mut events_by_cluster = vec![0.0; n_clusters];
-    let order = sorted_indices_by(&fixed_time);
-    let mut cursor = 0;
-    let mut influence_surv = if include_influence {
-        vec![Vec::with_capacity(curve_time.len()); n_clusters]
-    } else {
-        Vec::new()
-    };
-    let mut influence_chaz = if include_influence {
-        vec![Vec::with_capacity(curve_time.len()); n_clusters]
-    } else {
-        Vec::new()
-    };
-    let mut std_err = Vec::with_capacity(curve_time.len());
-    let mut std_chaz = Vec::with_capacity(curve_time.len());
-
-    for (&curve_time, &survival) in curve_time.iter().zip(curve_estimate.iter()) {
-        while cursor < order.len()
-            && survfit_time_before(fixed_time[order[cursor]], curve_time, timefix)
-        {
-            consume_robust_exit_time(
-                &mut cursor,
-                &mut total_risk,
-                &order,
-                &fixed_time,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                reverse,
-                timefix,
-                ctype,
-            );
-        }
-        if cursor < order.len() && same_survfit_time(fixed_time[order[cursor]], curve_time, timefix)
-        {
-            consume_robust_exit_time(
-                &mut cursor,
-                &mut total_risk,
-                &order,
-                &fixed_time,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                reverse,
-                timefix,
-                ctype,
-            );
-        }
-
-        let mut sum_surv_squares = 0.0;
-        let mut sum_chaz_squares = 0.0;
-        for code in 0..n_clusters {
-            let chaz_influence = chaz_score[code];
-            let score = if stype == 1 {
-                survival_score[code]
-            } else {
-                chaz_score[code]
-            };
-            let surv_influence = -survival * score;
-            if include_influence {
-                influence_chaz[code].push(chaz_influence);
-                influence_surv[code].push(surv_influence);
+        let mut person1 = nused;
+        let mut person2 = nused;
+        let mut n1 = 0.0;
+        let mut wt1 = 0.0;
+        for k in (0..ntime).rev() {
+            let (mut n2, mut n3, mut wt2, mut wt3) = (0.0, 0.0, 0.0, 0.0);
+            while person2 > 0 {
+                let i2 = sort2[person2 - 1];
+                if data.time2[i2] < dtime[k] {
+                    break;
+                }
+                n1 += 1.0;
+                wt1 += data.wt[i2];
+                if data.status[i2] == 1 {
+                    n2 += 1.0;
+                    wt2 += data.wt[i2];
+                } else if data.position[i2] & 2 != 0 {
+                    // the last of a subject's (a,b](b,c]... string: a real censor
+                    n3 += 1.0;
+                    wt3 += data.wt[i2];
+                }
+                person2 -= 1;
             }
-            sum_surv_squares += surv_influence * surv_influence;
-            sum_chaz_squares += chaz_influence * chaz_influence;
+            if let (Some(time1), Some(sort1)) = (data.time1, &rows.sort1) {
+                let (mut n4, mut wt4) = (0.0, 0.0);
+                while person1 > 0 {
+                    let i1 = sort1[person1 - 1];
+                    if time1[i1] < dtime[k] {
+                        break;
+                    }
+                    // entry is >= dtime, remove from the risk set
+                    n1 -= 1.0;
+                    wt1 -= data.wt[i1];
+                    if options.entry && data.position[i1] & 1 != 0 && time1[i1] == dtime[k] {
+                        n4 += 1.0;
+                        wt4 += data.wt[i1];
+                    }
+                    person1 -= 1;
+                }
+                if let (Some(n_enter), Some(wt_enter)) = (&mut n_enter, &mut wt_enter) {
+                    n_enter[k] = n4;
+                    wt_enter[k] = wt4;
+                }
+            }
+            n_risk[k] = n1;
+            n_event[k] = n2;
+            n_censor[k] = n3;
+            wt_risk[k] = wt1;
+            wt_event[k] = wt2;
+            wt_censor[k] = wt3;
         }
-        std_err.push(sum_surv_squares.sqrt());
-        std_chaz.push(sum_chaz_squares.sqrt());
     }
 
-    Ok(SurvFitKMInfluenceOutput {
-        time: curve_time,
-        influence_surv,
-        influence_chaz,
-        std_err,
-        std_chaz,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn compute_counting_survfitkm_influence_with_timefix(
-    start: &[f64],
-    stop: &[f64],
-    status: &[i32],
-    weights: &[f64],
-    curve_time: &[f64],
-    curve_estimate: &[f64],
-    cluster: &[i32],
-    reverse: bool,
-    stype: i32,
-    ctype: i32,
-    timefix: bool,
-) -> PyResult<SurvFitKMInfluenceOutput> {
-    let fixed_stop = survfit_timefix_values(stop, timefix);
-    let cluster_codes = compact_i32_labels(cluster);
-    let n_clusters = cluster_codes
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |max_code| max_code + 1);
-    let start_order = sorted_indices_by(start);
-    let stop_order = sorted_indices_by(&fixed_stop);
-
-    let mut risk_by_cluster = vec![0.0; n_clusters];
-    let mut total_risk = 0.0;
-    let mut survival_score = vec![0.0; n_clusters];
-    let mut chaz_score = vec![0.0; n_clusters];
-    let mut events_by_cluster = vec![0.0; n_clusters];
-    let mut excluded_by_cluster = vec![0.0; n_clusters];
-    let mut start_cursor = 0;
-    let mut stop_cursor = 0;
-    let mut influence_surv = vec![Vec::with_capacity(curve_time.len()); n_clusters];
-    let mut influence_chaz = vec![Vec::with_capacity(curve_time.len()); n_clusters];
-    let mut std_err = Vec::with_capacity(curve_time.len());
-    let mut std_chaz = Vec::with_capacity(curve_time.len());
-
-    for (&time, &survival) in curve_time.iter().zip(curve_estimate.iter()) {
-        while stop_cursor < stop_order.len()
-            && survfit_time_before(fixed_stop[stop_order[stop_cursor]], time, timefix)
-        {
-            let exit_time = fixed_stop[stop_order[stop_cursor]];
-            add_robust_counting_entries_before(
-                &mut start_cursor,
-                &mut total_risk,
-                &start_order,
-                start,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                exit_time,
-                timefix,
-            );
-            consume_robust_counting_exit_time(
-                &mut stop_cursor,
-                &mut total_risk,
-                &stop_order,
-                &fixed_stop,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                &mut excluded_by_cluster,
-                reverse,
-                timefix,
-                ctype,
-            );
+    // (unweighted events, weighted events, weighted at risk) at time i
+    let event_terms = |i: usize| -> (f64, f64, f64) {
+        if options.reverse {
+            (n_censor[i], wt_censor[i], wt_risk[i] - wt_event[i])
+        } else {
+            (n_event[i], wt_event[i], wt_risk[i])
         }
+    };
 
-        add_robust_counting_entries_before(
-            &mut start_cursor,
-            &mut total_risk,
-            &start_order,
-            start,
-            weights,
-            &cluster_codes,
-            &mut risk_by_cluster,
-            time,
-            timefix,
-        );
-        if stop_cursor < stop_order.len()
-            && same_survfit_time(fixed_stop[stop_order[stop_cursor]], time, timefix)
-        {
-            consume_robust_counting_exit_time(
-                &mut stop_cursor,
-                &mut total_risk,
-                &stop_order,
-                &fixed_stop,
-                status,
-                weights,
-                &cluster_codes,
-                &mut risk_by_cluster,
-                &mut survival_score,
-                &mut chaz_score,
-                &mut events_by_cluster,
-                &mut excluded_by_cluster,
-                reverse,
-                timefix,
-                ctype,
-            );
+    // -- survival, cumulative hazard and the simple (Greenwood) variances
+    let mut surv = vec![0.0; ntime];
+    let mut cumhaz = vec![0.0; ntime];
+    let mut std_surv = vec![0.0; ntime];
+    let mut std_chaz = vec![0.0; ntime];
+    {
+        let mut nelson = 0.0;
+        let mut km = 1.0;
+        let mut v1 = 0.0;
+        let mut v2 = 0.0;
+        for i in 0..ntime {
+            let (d0, d1, nrisk) = event_terms(i);
+            match options.ctype {
+                HazardType::NelsonAalen => {
+                    if d0 > 0.0 && d1 > 0.0 {
+                        nelson += d1 / nrisk;
+                        v2 += d1 / (nrisk * nrisk);
+                    }
+                }
+                HazardType::FlemingHarrington => {
+                    let mut j = 0.0;
+                    while j < d0 {
+                        let dtemp = nrisk - j * d1 / d0;
+                        nelson += d1 / (d0 * dtemp);
+                        v2 += d1 / (d0 * dtemp * dtemp);
+                        j += 1.0;
+                    }
+                }
+            }
+            cumhaz[i] = nelson;
+            std_chaz[i] = v2.sqrt();
+            match options.stype {
+                SurvType::KaplanMeier => {
+                    if d0 > 0.0 && d1 > 0.0 {
+                        km *= (nrisk - d1) / nrisk;
+                        v1 += d1 / (nrisk * (nrisk - d1)); // Greenwood
+                    }
+                    surv[i] = km;
+                    std_surv[i] = v1.sqrt();
+                }
+                SurvType::ExpCumhaz => {
+                    surv[i] = (-nelson).exp();
+                    std_surv[i] = std_chaz[i];
+                }
+            }
         }
+    }
 
-        let mut sum_surv_squares = 0.0;
-        let mut sum_chaz_squares = 0.0;
-        for code in 0..n_clusters {
-            let chaz_influence = chaz_score[code];
-            influence_chaz[code].push(chaz_influence);
-            let score = if stype == 1 {
-                survival_score[code]
+    // -- infinitesimal jackknife (robust) variance and influence
+    let mut influence_surv = None;
+    let mut influence_chaz = None;
+    if let Some((cluster, nid)) = data.cluster {
+        let want_surv_matrix =
+            options.influence.survival() && options.stype == SurvType::KaplanMeier;
+        let want_chaz_matrix = options.influence.cumhaz()
+            || (options.influence.survival() && options.stype == SurvType::ExpCumhaz);
+        let mut imat1 = want_surv_matrix.then(|| Array2::zeros((nid, ntime)));
+        let mut imat2 = want_chaz_matrix.then(|| Array2::zeros((nid, ntime)));
+        let mut gcount = vec![0i64; nid];
+        let mut gwt = vec![0.0; nid];
+        let mut inf1 = vec![0.0; nid]; // survival influence
+        let mut inf2 = vec![0.0; nid]; // cumulative hazard influence
+        let mut person1 = 0;
+        let mut person2 = 0;
+        if !counting {
+            // at the start everyone is at risk
+            for &i2 in sort2 {
+                gcount[cluster[i2]] += 1;
+                gwt[cluster[i2]] += data.wt[i2];
+            }
+        }
+        // Whether a row counts as an event for the curve being estimated.
+        let is_event = |i2: usize| -> bool {
+            if options.reverse {
+                data.status[i2] == 0 && data.position[i2] & 2 != 0
             } else {
-                chaz_score[code]
-            };
-            let surv_influence = -survival * score;
-            influence_surv[code].push(surv_influence);
-            sum_surv_squares += surv_influence * surv_influence;
-            sum_chaz_squares += chaz_influence * chaz_influence;
+                data.status[i2] == 1
+            }
+        };
+        let remove = |i2: usize, gcount: &mut [i64], gwt: &mut [f64]| {
+            let g = cluster[i2];
+            gcount[g] -= 1;
+            if gcount[g] == 0 {
+                gwt[g] = 0.0;
+            } else {
+                gwt[g] -= data.wt[i2];
+            }
+        };
+        let mut km = 1.0; // lags one step behind the estimate
+        let mut v1 = 0.0;
+        let mut v2 = 0.0;
+        for i in 0..ntime {
+            // toss the outdated; with reverse the deaths tied at this time
+            // leave before the censorings are treated as events
+            while person2 < nused {
+                let i2 = sort2[person2];
+                let gone = data.time2[i2] < dtime[i]
+                    || (options.reverse && data.time2[i2] == dtime[i] && data.status[i2] == 1);
+                if !gone {
+                    break;
+                }
+                remove(i2, &mut gcount, &mut gwt);
+                person2 += 1;
+            }
+            if let (Some(time1), Some(sort1)) = (data.time1, &rows.sort1) {
+                // add in new subjects
+                while person1 < nused {
+                    let i1 = sort1[person1];
+                    if time1[i1] >= dtime[i] {
+                        break;
+                    }
+                    gcount[cluster[i1]] += 1;
+                    gwt[cluster[i1]] += data.wt[i1];
+                    person1 += 1;
+                }
+            }
+            let (d0, d1, nrisk) = event_terms(i);
+            if d0 > 0.0 && d1 > 0.0 {
+                let haz = d1 / nrisk;
+                // per-event derivative terms of the cumulative hazard
+                let (dn_term, risk_term) = match options.ctype {
+                    HazardType::NelsonAalen => (1.0 / nrisk, haz / nrisk),
+                    HazardType::FlemingHarrington => {
+                        let mut dtemp = 0.0; // the working denominator
+                        let mut dtemp2 = 0.0; // sum of squares
+                        let mut dtemp3 = 0.0; // non-death derivative
+                        let temp = nrisk - d1; // weights of the non-deaths
+                        let mut k = d0.floor();
+                        while k > 0.0 {
+                            let frac = k / d0;
+                            let btemp = 1.0 / (temp + frac * d1); // "b" in the math
+                            dtemp += btemp;
+                            dtemp2 += btemp * btemp * frac;
+                            dtemp3 += btemp * btemp;
+                            k -= 1.0;
+                        }
+                        dtemp /= d0; // average denominator
+                        if d1 != d0 {
+                            // case weights
+                            dtemp2 *= d1 / d0;
+                            dtemp3 *= d1 / d0;
+                        }
+                        (dtemp + dtemp3 - dtemp2, dtemp3)
+                    }
+                };
+                for g in 0..nid {
+                    if options.stype == SurvType::KaplanMeier {
+                        inf1[g] = inf1[g] * (1.0 - haz) + gwt[g] * km * haz / nrisk;
+                    }
+                    if options.ctype == HazardType::NelsonAalen || gcount[g] > 0 {
+                        inf2[g] -= gwt[g] * risk_term;
+                    }
+                }
+                // catch the endpoints up to this event time
+                while person2 < nused {
+                    let i2 = sort2[person2];
+                    if data.time2[i2] > dtime[i] {
+                        break;
+                    }
+                    if is_event(i2) {
+                        let g = cluster[i2];
+                        if options.stype == SurvType::KaplanMeier {
+                            inf1[g] -= km * data.wt[i2] / nrisk;
+                        }
+                        inf2[g] += data.wt[i2] * dn_term;
+                    }
+                    remove(i2, &mut gcount, &mut gwt);
+                    person2 += 1;
+                }
+                km *= 1.0 - haz;
+                v1 = inf1.iter().map(|v| v * v).sum();
+                v2 = inf2.iter().map(|v| v * v).sum();
+            }
+            match options.stype {
+                SurvType::KaplanMeier => {
+                    std_surv[i] = v1.sqrt();
+                    std_chaz[i] = v2.sqrt();
+                }
+                SurvType::ExpCumhaz => {
+                    std_surv[i] = v2.sqrt();
+                    std_chaz[i] = v2.sqrt();
+                }
+            }
+            if let Some(imat1) = &mut imat1 {
+                imat1.column_mut(i).assign(&ndarray::aview1(&inf1));
+            }
+            if let Some(imat2) = &mut imat2 {
+                imat2.column_mut(i).assign(&ndarray::aview1(&inf2));
+            }
         }
-        std_err.push(sum_surv_squares.sqrt());
-        std_chaz.push(sum_chaz_squares.sqrt());
+        influence_surv = imat1;
+        influence_chaz = imat2;
     }
 
-    Ok(SurvFitKMInfluenceOutput {
-        time: curve_time.to_vec(),
+    CurveFit {
+        time: dtime,
+        n_risk,
+        n_event,
+        n_censor,
+        n_enter,
+        wt_risk,
+        wt_event,
+        wt_censor,
+        wt_enter,
+        surv,
+        cumhaz,
+        std_surv,
+        std_chaz,
         influence_surv,
         influence_chaz,
-        std_err,
-        std_chaz,
-    })
+    }
 }
 
-#[pyfunction]
-#[pyo3(signature = (time, status, cluster, weights=None, reverse=None, stype=1, ctype=1, conf_level=None, conf_type=None, timefix=None, include_influence=true))]
-#[allow(clippy::too_many_arguments)]
-pub fn survfitkm_influence(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    cluster: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    reverse: Option<bool>,
-    stype: i32,
-    ctype: i32,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-    timefix: Option<bool>,
-    include_influence: bool,
-) -> PyResult<SurvFitKMInfluenceOutput> {
-    if stype != 1 && stype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "stype must be 1 or 2",
-        ));
+// ---------------------------------------------------------------------------
+// The R-level driver
+// ---------------------------------------------------------------------------
+
+/// `factor(x, unique(x))`: integer codes in order of first appearance, with
+/// the levels.
+fn codes_by_first_appearance(values: &[i64]) -> (Vec<usize>, Vec<i64>) {
+    let mut levels = Vec::new();
+    let mut lookup = std::collections::HashMap::new();
+    let codes = values
+        .iter()
+        .map(|&value| {
+            *lookup.entry(value).or_insert_with(|| {
+                levels.push(value);
+                levels.len() - 1
+            })
+        })
+        .collect();
+    (codes, levels)
+}
+
+/// Port of `survflag` (`R/xtras.R`): `1 * (first interval of a subject) +
+/// 2 * (last interval)`, where a gap between consecutive intervals or a
+/// change of curve also ends a sequence.
+pub(crate) fn survflag(start: &[f64], stop: &[f64], id: &[usize], group: &[usize]) -> Vec<u8> {
+    let n = stop.len();
+    let mut indx: Vec<usize> = (0..n).collect();
+    indx.sort_by(|&a, &b| {
+        group[a]
+            .cmp(&group[b])
+            .then_with(|| id[a].cmp(&id[b]))
+            .then_with(|| stop[a].total_cmp(&stop[b]))
+            .then_with(|| a.cmp(&b))
+    });
+    let mut flag = vec![0u8; n];
+    for (k, &row) in indx.iter().enumerate() {
+        let breaks_before = k == 0 || {
+            let prev = indx[k - 1];
+            id[prev] != id[row] || group[prev] != group[row] || stop[prev] < start[row]
+        };
+        let breaks_after = k + 1 == n || {
+            let next = indx[k + 1];
+            id[next] != id[row] || group[next] != group[row] || stop[row] < start[next]
+        };
+        flag[row] = u8::from(breaks_before) + 2 * u8::from(breaks_after);
     }
-    if ctype != 1 && ctype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "ctype must be 1 or 2",
-        ));
+    flag
+}
+
+/// `aeqSurv`: bin the time columns jointly so that near-ties become ties
+/// (an interval that collapses to length 0 is an error there).
+fn apply_timefix(
+    start: Option<&[f64]>,
+    time: &[f64],
+) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
+    let fixed = crate::data_prep::aeq_surv(time, start, None)?;
+    Ok((fixed.time2, fixed.time))
+}
+
+/// `keep[order(values[keep])]`, ties in `keep` order.
+///
+/// Sorting `(value, row)` pairs rather than an index vector keeps the
+/// keys next to each other in memory, which is several times faster than
+/// an indirect comparison sort at a million rows.  `parallel` splits the
+/// sort itself over threads; a caller sorting several curves at once
+/// parallelises over the curves instead.
+pub(crate) fn ordered_subset(keep: &[usize], values: &[f64], parallel: bool) -> Vec<usize> {
+    let mut pairs: Vec<(f64, usize)> = keep.iter().map(|&i| (values[i], i)).collect();
+    let order =
+        |a: &(f64, usize), b: &(f64, usize)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1));
+    if parallel && pairs.len() > PARALLEL_THRESHOLD_LARGE {
+        pairs.par_sort_unstable_by(order);
+    } else {
+        pairs.sort_unstable_by(order);
     }
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_f64(status)?;
-    let cluster = extract_vec_i32(cluster)?;
-    let weights_opt = extract_optional_vec_f64(weights)?;
-    let conf_level = conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
-    validate_conf_level(conf_level)?;
-    let conf_type = normalize_conf_type(conf_type.as_deref())?;
-    let timefix = timefix.unwrap_or(true);
-    validate_non_empty(&time, "time")?;
-    validate_length(time.len(), status.len(), "status")?;
-    validate_length(time.len(), cluster.len(), "cluster")?;
-    validate_no_nan(&time, "time")?;
-    validate_finite(&time, "time")?;
-    validate_non_negative(&time, "time")?;
-    validate_no_nan(&status, "status")?;
-    validate_finite(&status, "status")?;
-    validate_binary_f64(&status, "status")?;
-    let weights = match weights_opt {
-        Some(w) => {
-            validate_length(time.len(), w.len(), "weights")?;
-            validate_no_nan(&w, "weights")?;
-            validate_finite(&w, "weights")?;
-            validate_non_negative(&w, "weights")?;
-            w
+    pairs.into_iter().map(|(_, i)| i).collect()
+}
+
+/// The rows of each curve in data order: `split(seq_along(x), x)`.
+pub(crate) fn rows_by_curve(x: &[usize], n_curves: usize) -> Vec<Vec<usize>> {
+    let mut rows = vec![Vec::new(); n_curves];
+    for (i, &curve) in x.iter().enumerate() {
+        rows[curve].push(i);
+    }
+    rows
+}
+
+/// The rows of one curve in data order and in the orders the kernel walks
+/// them.
+struct CurveInput {
+    keep: Vec<usize>,
+    rows: CurveRows,
+}
+
+/// [`CurveInput`] of every curve: the sorts run in parallel over the
+/// curves, or within the sort when there is a single curve.
+fn curve_inputs(
+    x: &[usize],
+    n_curves: usize,
+    start: Option<&[f64]>,
+    time: &[f64],
+    status: &[i32],
+    reverse: bool,
+) -> Vec<CurveInput> {
+    let buckets = rows_by_curve(x, n_curves);
+    let single = n_curves == 1;
+    let prepare = |keep: Vec<usize>| {
+        let sort1 = start.map(|start| ordered_subset(&keep, start, single));
+        let sort2 = if reverse {
+            // deaths first among ties so the kernel can drop them from the
+            // risk set before the tied censorings are treated as events
+            let mut sort2 = keep.clone();
+            sort2.sort_by(|&a, &b| {
+                time[a]
+                    .total_cmp(&time[b])
+                    .then_with(|| status[b].cmp(&status[a]))
+            });
+            sort2
+        } else {
+            ordered_subset(&keep, time, single)
+        };
+        CurveInput {
+            keep,
+            rows: CurveRows { sort1, sort2 },
         }
-        None => vec![1.0; time.len()],
     };
-    compute_survfitkm_influence_with_timefix(
+    if single {
+        buckets.into_iter().map(prepare).collect()
+    } else {
+        buckets.into_par_iter().map(prepare).collect()
+    }
+}
+
+fn count_unique(values: impl Iterator<Item = usize>) -> usize {
+    let mut seen: Vec<usize> = values.collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen.len()
+}
+
+/// Port of `survfitKM` (`R/survfitKM.R`).
+///
+/// Every curve (one per distinct `strata` code, in ascending order) goes
+/// through the C kernel once; the curves are then stacked and the
+/// confidence limits added through [`survfit_confint`].  The rules for the
+/// default `robust` choice, the cluster used by the robust variance, the
+/// `conf.lower` adjustments and the derived survival influence for
+/// `stype = 2` are R's.
+pub fn survfitkm(
+    data: &SurvfitKMData,
+    options: &SurvfitKMOptions,
+) -> SurvivalResult<SurvfitKMResult> {
+    validate_conf_int(options.conf_int)?;
+    let n_all = data.n();
+    let counting = data.start.is_some();
+    let (start, time) = if options.timefix {
+        apply_timefix(data.start.as_deref(), &data.time)?
+    } else {
+        (data.start.clone(), data.time.clone())
+    };
+
+    // start.time: drop observations that end before it
+    let t0 = match options.start_time {
+        Some(start_time) => {
+            if !start_time.is_finite() {
+                return Err(SurvivalError::invalid_input(
+                    "start.time must be a single numeric value",
+                ));
+            }
+            start_time
+        }
+        None => start
+            .iter()
+            .flatten()
+            .chain(&time)
+            .fold(0.0_f64, |acc, &t| acc.min(t)),
+    };
+    let rows: Vec<usize> = (0..n_all).filter(|&i| time[i] >= t0).collect();
+    if rows.is_empty() {
+        return Err(SurvivalError::invalid_input(
+            "all observations removed by start.time",
+        ));
+    }
+    let n = rows.len();
+    let pick = |values: &[f64]| -> Vec<f64> { rows.iter().map(|&i| values[i]).collect() };
+    let time = pick(&time);
+    let start = start.as_deref().map(pick);
+    let status: Vec<i32> = rows.iter().map(|&i| data.status[i]).collect();
+    let weights: Vec<f64> = match &data.weights {
+        Some(w) => pick(w),
+        None => vec![1.0; n],
+    };
+    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
+        || vec![0],
+        |strata| {
+            // levels come from the full data, as in R, so a stratum that
+            // start.time empties still gets an n of 0
+            let mut levels = strata.clone();
+            levels.sort_unstable();
+            levels.dedup();
+            levels
+        },
+    );
+    let x: Vec<usize> = rows
+        .iter()
+        .map(|&i| {
+            data.strata.as_ref().map_or(0, |strata| {
+                strata_levels
+                    .binary_search(&strata[i])
+                    .expect("strata code is one of its own levels")
+            })
+        })
+        .collect();
+
+    // cluster / id / robust logic
+    let has_cluster = data.cluster.is_some();
+    let has_id = data.id.is_some();
+    let has_rwt = weights.iter().any(|w| *w != w.floor());
+    let has_robust = options.robust.is_some();
+    let id_codes: Option<Vec<usize>> = data.id.as_ref().map(|id| {
+        let subset: Vec<i64> = rows.iter().map(|&i| id[i]).collect();
+        codes_by_first_appearance(&subset).0
+    });
+    let mut influence = options.influence;
+    let mut entry = options.entry && has_id;
+    let mut cluster_source: Option<Vec<i64>> = data
+        .cluster
+        .as_ref()
+        .map(|cluster| rows.iter().map(|&i| cluster[i]).collect());
+    let robust = match options.robust {
+        Some(robust) => robust,
+        None => {
+            if influence != InfluenceRequest::None {
+                if !(has_cluster || has_id) {
+                    cluster_source = Some((0..n as i64).collect());
+                }
+                true
+            } else {
+                has_cluster
+                    || has_rwt
+                    || (has_id && {
+                        let ids = id_codes.as_ref().expect("id present");
+                        let events: Vec<usize> =
+                            (0..n).filter(|&i| status[i] == 1).map(|i| ids[i]).collect();
+                        count_unique(events.iter().copied()) < events.len()
+                    })
+            }
+        }
+    };
+    // (cluster code per row, cluster labels); None = no robust variance
+    let cluster: Option<(Vec<usize>, Vec<i64>)> = if let Some(source) = &cluster_source {
+        // R warns "cluster specified with robust=FALSE, cluster ignored"
+        robust.then(|| codes_by_first_appearance(source))
+    } else if robust {
+        if let Some(id) = &data.id {
+            let subset: Vec<i64> = rows.iter().map(|&i| id[i]).collect();
+            Some(codes_by_first_appearance(&subset))
+        } else if !counting || !has_robust {
+            Some(((0..n).collect(), (0..n as i64).collect()))
+        } else {
+            return Err(SurvivalError::invalid_input(
+                "id or cluster option required",
+            ));
+        }
+    } else {
+        None
+    };
+    if !robust {
+        // R warns "robust=FALSE implies influence=FALSE"
+        influence = InfluenceRequest::None;
+    }
+    let cluster = if options.se_fit {
+        cluster
+    } else {
+        influence = InfluenceRequest::None;
+        None
+    };
+    if !counting {
+        entry = false;
+    }
+    let position: Vec<u8> = match (&start, &id_codes) {
+        (Some(start), Some(id)) => survflag(start, &time, id, &x),
+        _ => vec![3; n],
+    };
+
+    // one kernel call per curve
+    let kernel_options = KernelOptions {
+        stype: options.stype,
+        ctype: options.ctype,
+        influence,
+        reverse: options.reverse,
+        entry,
+    };
+    let n_curves = strata_levels.len();
+    let mut n_used = vec![0usize; n_curves];
+    let mut n_id = has_id.then(|| vec![0usize; n_curves]);
+    let mut fits: Vec<(usize, CurveFit, Vec<i64>)> = Vec::with_capacity(n_curves);
+    let mut ctemp = vec![0usize; n];
+    let inputs = curve_inputs(
+        &x,
+        n_curves,
+        start.as_deref(),
         &time,
         &status,
-        &weights,
-        &cluster,
-        reverse.unwrap_or(false),
-        stype,
-        ctype,
-        conf_level,
-        &conf_type,
-        timefix,
-        include_influence,
-    )
+        options.reverse,
+    );
+    for (curve, CurveInput { keep, rows }) in inputs.into_iter().enumerate() {
+        n_used[curve] = keep.len();
+        if keep.is_empty() {
+            continue; // rare case where all are < start.time
+        }
+        if let (Some(n_id), Some(id)) = (&mut n_id, &id_codes) {
+            n_id[curve] = count_unique(keep.iter().map(|&i| id[i]));
+        }
+        // clusters are renumbered 0, 1, 2, ... per curve in order of
+        // appearance so each curve's influence matrix has only its own rows
+        let (kernel_cluster, curve_clusters) = match &cluster {
+            Some((codes, labels)) => {
+                let subset: Vec<i64> = keep.iter().map(|&i| codes[i] as i64).collect();
+                let (renumbered, unique) = codes_by_first_appearance(&subset);
+                for (&i, code) in keep.iter().zip(renumbered) {
+                    ctemp[i] = code;
+                }
+                let names = unique.iter().map(|&code| labels[code as usize]).collect();
+                (Some((ctemp.as_slice(), unique.len())), names)
+            }
+            None => (None, Vec::new()),
+        };
+        let kernel_data = KernelData {
+            time1: start.as_deref(),
+            time2: &time,
+            status: &status,
+            wt: &weights,
+            position: &position,
+            cluster: kernel_cluster,
+        };
+        let fit = kernel(&kernel_data, &rows, kernel_options);
+        fits.push((curve, fit, curve_clusters));
+    }
+
+    // stack the curves
+    let total: usize = fits.iter().map(|(_, fit, _)| fit.time.len()).sum();
+    let mut result = SurvfitKMResult {
+        n: n_used,
+        time: Vec::with_capacity(total),
+        n_risk: Vec::with_capacity(total),
+        n_event: Vec::with_capacity(total),
+        n_censor: Vec::with_capacity(total),
+        n_enter: entry.then(|| Vec::with_capacity(total)),
+        counts: None,
+        surv: Vec::with_capacity(total),
+        std_err: options.se_fit.then(|| Vec::with_capacity(total)),
+        cumhaz: Vec::with_capacity(total),
+        std_chaz: options.se_fit.then(|| Vec::with_capacity(total)),
+        lower: None,
+        upper: None,
+        strata: None,
+        strata_codes: None,
+        n_id,
+        // R: se(log S) unless the robust variance was used; the C kernel's
+        // Fleming-Harrington survival influence is nonetheless reported as
+        // se(log S) by survfitKM.R, and this mirrors that source
+        logse: cluster.is_none() || options.ctype == HazardType::FlemingHarrington,
+        conf_int: options.conf_int,
+        conf_type: options.conf_type.as_str().to_string(),
+        conf_lower: options.conf_lower.as_str().to_string(),
+        type_: if counting { "counting" } else { "right" }.to_string(),
+        t0,
+        influence_surv: None,
+        influence_chaz: None,
+    };
+    let addcounts = weights.iter().any(|&w| w != 1.0);
+    let mut counts = addcounts.then(|| SurvfitCounts {
+        n_risk: Vec::with_capacity(total),
+        n_event: Vec::with_capacity(total),
+        n_censor: Vec::with_capacity(total),
+        n_enter: entry.then(|| Vec::with_capacity(total)),
+    });
+    let mut strata_rows = Vec::with_capacity(fits.len());
+    let mut strata_codes = Vec::with_capacity(fits.len());
+    let mut influence_surv = influence.survival().then(Vec::new);
+    let mut influence_chaz = influence.cumhaz().then(Vec::new);
+    for (curve, fit, mut curve_clusters) in fits {
+        strata_rows.push(fit.time.len());
+        strata_codes.push(strata_levels[curve]);
+        result.time.extend_from_slice(&fit.time);
+        result.n_risk.extend_from_slice(&fit.wt_risk);
+        result.n_event.extend_from_slice(&fit.wt_event);
+        result.n_censor.extend_from_slice(&fit.wt_censor);
+        if let (Some(n_enter), Some(wt_enter)) = (&mut result.n_enter, &fit.wt_enter) {
+            n_enter.extend_from_slice(wt_enter);
+        }
+        if let Some(counts) = &mut counts {
+            counts.n_risk.extend_from_slice(&fit.n_risk);
+            counts.n_event.extend_from_slice(&fit.n_event);
+            counts.n_censor.extend_from_slice(&fit.n_censor);
+            if let (Some(n_enter), Some(fit_enter)) = (&mut counts.n_enter, &fit.n_enter) {
+                n_enter.extend_from_slice(fit_enter);
+            }
+        }
+        result.surv.extend_from_slice(&fit.surv);
+        result.cumhaz.extend_from_slice(&fit.cumhaz);
+        if let Some(std_err) = &mut result.std_err {
+            std_err.extend_from_slice(&fit.std_surv);
+        }
+        if let Some(std_chaz) = &mut result.std_chaz {
+            std_chaz.extend_from_slice(&fit.std_chaz);
+        }
+        let to_rows = |matrix: &Array2<f64>| -> Vec<Vec<f64>> {
+            matrix.outer_iter().map(|row| row.to_vec()).collect()
+        };
+        if let Some(list) = &mut influence_surv {
+            let values = match (&fit.influence_surv, &fit.influence_chaz) {
+                (Some(matrix), _) => to_rows(matrix),
+                // stype = 2: an obs that moves the cumulative hazard up
+                // moves S down, influence.surv = -influence.chaz * S(t)
+                (None, Some(matrix)) => matrix
+                    .outer_iter()
+                    .map(|row| {
+                        row.iter()
+                            .zip(&fit.surv)
+                            .map(|(value, surv)| -value * surv)
+                            .collect()
+                    })
+                    .collect(),
+                (None, None) => Vec::new(),
+            };
+            list.push(SurvfitInfluence {
+                cluster: if influence_chaz.is_some() {
+                    curve_clusters.clone()
+                } else {
+                    std::mem::take(&mut curve_clusters)
+                },
+                values,
+            });
+        }
+        if let Some(list) = &mut influence_chaz
+            && let Some(matrix) = &fit.influence_chaz
+        {
+            list.push(SurvfitInfluence {
+                cluster: curve_clusters,
+                values: to_rows(matrix),
+            });
+        }
+    }
+    result.counts = counts;
+    if n_curves > 1 {
+        result.strata = Some(strata_rows);
+        result.strata_codes = Some(strata_codes);
+    }
+    result.influence_surv = influence_surv;
+    result.influence_chaz = influence_chaz;
+
+    // confidence limits
+    if options.se_fit && options.conf_type != ConfType::None {
+        let std_err = result.std_err.as_deref().expect("se.fit keeps std.err");
+        let std_low: Option<Vec<f64>> = match options.conf_lower {
+            ConfLower::Usual => None,
+            ConfLower::Peto => Some(
+                result
+                    .surv
+                    .iter()
+                    .zip(&result.n_risk)
+                    .map(|(s, n)| ((1.0 - s) / n).sqrt())
+                    .collect(),
+            ),
+            ConfLower::Modified => {
+                // n.lag = the number at risk the last time there was an
+                // event (or the first time of a stratum)
+                let mut n_lag = vec![0.0; result.time.len()];
+                for range in result.curve_ranges() {
+                    let mut lag = f64::NAN;
+                    for i in range.clone() {
+                        if i == range.start || result.n_event[i] > 0.0 {
+                            lag = result.n_risk[i];
+                        }
+                        n_lag[i] = lag;
+                    }
+                }
+                Some(
+                    std_err
+                        .iter()
+                        .zip(&n_lag)
+                        .zip(&result.n_risk)
+                        .map(|((se, lag), n)| se * (lag / n).sqrt())
+                        .collect(),
+                )
+            }
+        };
+        let bands = survfit_confint(
+            &result.surv,
+            std_err,
+            result.logse,
+            options.conf_type,
+            options.conf_int,
+            std_low.as_deref(),
+            true,
+        )?;
+        result.lower = Some(bands.lower);
+        result.upper = Some(bands.upper);
+    }
+    Ok(result)
 }
 
-#[pyfunction]
-#[pyo3(signature = (start, stop, status, curve_time, curve_estimate, cluster, weights=None, reverse=None, stype=1, ctype=1, conf_level=None, conf_type=None, timefix=None))]
+/// Python binding of [`survfitkm`]; the keyword arguments mirror
+/// `survfit.formula` and `survfitKM`.
+#[pyfunction(name = "survfitkm")]
+#[pyo3(signature = (time, status, start=None, weights=None, strata=None, id=None, cluster=None, stype=1, ctype=1, se_fit=true, conf_int=0.95, conf_type="log", conf_lower="usual", start_time=None, robust=None, influence=0, entry=false, timefix=true, reverse=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn survfitkm_counting_influence(
-    start: &Bound<'_, PyAny>,
-    stop: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    curve_time: &Bound<'_, PyAny>,
-    curve_estimate: &Bound<'_, PyAny>,
-    cluster: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    reverse: Option<bool>,
-    stype: i32,
-    ctype: i32,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-    timefix: Option<bool>,
-) -> PyResult<SurvFitKMInfluenceOutput> {
-    if stype != 1 && stype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "stype must be 1 or 2",
-        ));
-    }
-    if ctype != 1 && ctype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "ctype must be 1 or 2",
-        ));
-    }
-    let start = extract_vec_f64(start)?;
-    let stop = extract_vec_f64(stop)?;
-    let status = extract_vec_i32(status)?;
-    let curve_time = extract_vec_f64(curve_time)?;
-    let curve_estimate = extract_vec_f64(curve_estimate)?;
-    let cluster = extract_vec_i32(cluster)?;
-    let weights = match extract_optional_vec_f64(weights)? {
-        Some(w) => w,
-        None => vec![1.0; start.len()],
-    };
-    let conf_level = conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
-    validate_conf_level(conf_level)?;
-    let _conf_type = normalize_conf_type(conf_type.as_deref())?;
-    let timefix = timefix.unwrap_or(true);
-    validate_robust_counting_survfit_inputs(
-        &start,
-        &stop,
-        &status,
-        &weights,
-        &curve_time,
-        &curve_estimate,
-        &cluster,
-        timefix,
-    )?;
-    compute_counting_survfitkm_influence_with_timefix(
-        &start,
-        &stop,
-        &status,
-        &weights,
-        &curve_time,
-        &curve_estimate,
-        &cluster,
-        reverse.unwrap_or(false),
-        stype,
-        ctype,
-        timefix,
-    )
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, curve_time, curve_estimate, cluster, weights=None, reverse=None, conf_level=None, conf_type=None, timefix=None, stype=1, ctype=1))]
-#[allow(clippy::too_many_arguments)]
-pub fn robust_right_survfit_variance(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    curve_time: &Bound<'_, PyAny>,
-    curve_estimate: &Bound<'_, PyAny>,
-    cluster: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    reverse: Option<bool>,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-    timefix: Option<bool>,
-    stype: i32,
-    ctype: i32,
-) -> PyResult<RobustSurvfitVarianceOutput> {
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_f64(status)?;
-    let curve_time = extract_vec_f64(curve_time)?;
-    let curve_estimate = extract_vec_f64(curve_estimate)?;
-    let cluster = extract_vec_i32(cluster)?;
-    let weights = match extract_optional_vec_f64(weights)? {
-        Some(w) => w,
-        None => vec![1.0; time.len()],
-    };
-    let timefix = timefix.unwrap_or(true);
-    let config = KaplanMeierConfig {
-        reverse: reverse.unwrap_or(false),
-        computation_type: 0,
-        conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-        conf_type: normalize_conf_type(conf_type.as_deref())?,
-    };
-    validate_conf_level(config.conf_level)?;
-    if stype != 1 && stype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "stype must be 1 or 2",
-        ));
-    }
-    if ctype != 1 && ctype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "ctype must be 1 or 2",
-        ));
-    }
-    validate_robust_right_survfit_inputs(
-        &time,
-        &status,
-        &weights,
-        &curve_time,
-        &curve_estimate,
-        &cluster,
-        timefix,
-    )?;
-    compute_robust_right_survfit_variance_with_timefix(
-        &time,
-        &status,
-        &weights,
-        &curve_time,
-        &curve_estimate,
-        &cluster,
-        &config,
-        timefix,
-        stype,
-        ctype,
-    )
-}
-
-#[pyfunction]
-#[pyo3(signature = (start, stop, status, curve_time, curve_estimate, cluster, weights=None, reverse=None, conf_level=None, conf_type=None, timefix=None, stype=1, ctype=1))]
-#[allow(clippy::too_many_arguments)]
-pub fn robust_counting_survfit_variance(
-    start: &Bound<'_, PyAny>,
-    stop: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    curve_time: &Bound<'_, PyAny>,
-    curve_estimate: &Bound<'_, PyAny>,
-    cluster: &Bound<'_, PyAny>,
-    weights: Option<&Bound<'_, PyAny>>,
-    reverse: Option<bool>,
-    conf_level: Option<f64>,
-    conf_type: Option<String>,
-    timefix: Option<bool>,
-    stype: i32,
-    ctype: i32,
-) -> PyResult<RobustSurvfitVarianceOutput> {
-    let start = extract_vec_f64(start)?;
-    let stop = extract_vec_f64(stop)?;
-    let status = extract_vec_i32(status)?;
-    let curve_time = extract_vec_f64(curve_time)?;
-    let curve_estimate = extract_vec_f64(curve_estimate)?;
-    let cluster = extract_vec_i32(cluster)?;
-    let weights = match extract_optional_vec_f64(weights)? {
-        Some(w) => w,
-        None => vec![1.0; start.len()],
-    };
-    let timefix = timefix.unwrap_or(true);
-    let config = KaplanMeierConfig {
-        reverse: reverse.unwrap_or(false),
-        computation_type: 0,
-        conf_level: conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-        conf_type: normalize_conf_type(conf_type.as_deref())?,
-    };
-    validate_conf_level(config.conf_level)?;
-    if stype != 1 && stype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "stype must be 1 or 2",
-        ));
-    }
-    if ctype != 1 && ctype != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "ctype must be 1 or 2",
-        ));
-    }
-    validate_robust_counting_survfit_inputs(
-        &start,
-        &stop,
-        &status,
-        &weights,
-        &curve_time,
-        &curve_estimate,
-        &cluster,
-        timefix,
-    )?;
-    Ok(compute_robust_counting_survfit_variance_with_timefix(
-        &start,
-        &stop,
-        &status,
-        &weights,
-        &curve_time,
-        &curve_estimate,
-        &cluster,
-        &config,
-        timefix,
-        stype,
-        ctype,
-    ))
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, options=None))]
-pub fn survfitkm_with_options(
+pub fn survfitkm_py(
     time: Vec<f64>,
-    status: Vec<f64>,
-    options: Option<&SurvfitKMOptions>,
-) -> PyResult<SurvFitKMOutput> {
-    let opts = options.cloned().unwrap_or_default();
-    validate_non_empty(&time, "time")?;
-    validate_length(time.len(), status.len(), "status")?;
-    validate_no_nan(&time, "time")?;
-    validate_finite(&time, "time")?;
-    validate_non_negative(&time, "time")?;
-    validate_no_nan(&status, "status")?;
-    validate_finite(&status, "status")?;
-    validate_binary_f64(&status, "status")?;
-    let weights = match opts.weights {
-        Some(w) => {
-            validate_length(time.len(), w.len(), "weights")?;
-            validate_no_nan(&w, "weights")?;
-            validate_finite(&w, "weights")?;
-            validate_non_negative(&w, "weights")?;
-            w
-        }
-        None => vec![1.0; time.len()],
-    };
-    let position = match opts.position {
-        Some(p) => {
-            validate_length(time.len(), p.len(), "position")?;
-            p
-        }
-        None => vec![0; time.len()],
-    };
-    let timefix = opts.timefix.unwrap_or(true);
-    if let Some(ref entry) = opts.entry_times {
-        validate_entry_times(&time, entry, timefix)?;
-    }
-    let config = KaplanMeierConfig {
-        reverse: opts.reverse.unwrap_or(false),
-        computation_type: opts.computation_type.unwrap_or(0),
-        conf_level: opts.conf_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL),
-        conf_type: normalize_conf_type(opts.conf_type.as_deref())?,
-    };
-    validate_conf_level(config.conf_level)?;
-    Ok(compute_survfitkm_with_timefix(
-        &time,
-        &status,
-        &weights,
-        opts.entry_times.as_deref(),
-        &position,
-        &config,
+    status: Vec<i32>,
+    start: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    id: Option<Vec<i64>>,
+    cluster: Option<Vec<i64>>,
+    stype: i32,
+    ctype: i32,
+    se_fit: bool,
+    conf_int: f64,
+    conf_type: &str,
+    conf_lower: &str,
+    start_time: Option<f64>,
+    robust: Option<bool>,
+    influence: i32,
+    entry: bool,
+    timefix: bool,
+    reverse: bool,
+) -> PyResult<SurvfitKMResult> {
+    let data = SurvfitKMData::try_new(start, time, status, weights, strata, id, cluster)?;
+    let options = SurvfitKMOptions {
+        stype: SurvType::from_code(stype)?,
+        ctype: HazardType::from_code(ctype)?,
+        se_fit,
+        conf_int,
+        conf_type: ConfType::parse(conf_type)?,
+        conf_lower: ConfLower::parse(conf_lower)?,
+        start_time,
+        robust,
+        influence: InfluenceRequest::from_code(influence)?,
+        entry,
         timefix,
-    ))
+        reverse,
+    };
+    Ok(survfitkm(&data, &options)?)
 }
 
 #[cfg(test)]
@@ -2628,157 +1319,81 @@ mod tests {
         }
     }
 
-    fn matrix_column_norms(matrix: &[Vec<f64>]) -> Vec<f64> {
-        let width = matrix.first().map_or(0, Vec::len);
-        (0..width)
-            .map(|column| {
-                matrix
-                    .iter()
-                    .map(|row| row[column] * row[column])
-                    .sum::<f64>()
-                    .sqrt()
-            })
-            .collect()
+    fn fit(data: SurvfitKMData, options: SurvfitKMOptions) -> SurvfitKMResult {
+        survfitkm(&data, &options).expect("survfitkm should succeed")
     }
 
     #[test]
-    fn test_kaplan_meier_config_default() {
-        let config = KaplanMeierConfig::default();
-        assert!(!config.reverse);
-        assert_eq!(config.computation_type, 0);
-        assert!((config.conf_level - 0.95).abs() < 1e-10);
-        assert_eq!(config.conf_type, "log");
-    }
-
-    #[test]
-    fn test_kaplan_meier_config_create() {
-        let config =
-            KaplanMeierConfig::create(Some(true), Some(1), Some(0.99), Some("plain".to_string()))
-                .unwrap();
-        assert!(config.reverse);
-        assert_eq!(config.computation_type, 1);
-        assert!((config.conf_level - 0.99).abs() < 1e-10);
-        assert_eq!(config.conf_type, "plain");
-    }
-
-    #[test]
-    fn test_grouped_survfitkm_matches_individual_curves() {
-        let time = vec![1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5];
-        let status = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0];
-        let groups = vec![4, 2, 4, 2, 4, 2, 4, 2];
-        let weights = vec![1.0, 0.5, 1.5, 2.0, 0.75, 1.25, 2.5, 1.0];
-        let entry = vec![0.0, 0.0, 0.5, 0.25, 1.0, 1.25, 2.0, 2.25];
-        let config = KaplanMeierConfig {
-            reverse: false,
-            computation_type: 0,
-            conf_level: 0.9,
-            conf_type: "log-log".to_string(),
-        };
-
-        let grouped = compute_grouped_survfitkm(
-            &time,
-            &status,
-            &groups,
-            &weights,
-            Some(&entry),
-            &config,
-            true,
+    fn matches_r_aml_maintained() {
+        // survfit(Surv(time, status) ~ 1, aml[aml$x == "Maintained", ])
+        let time = vec![
+            9.0, 13.0, 13.0, 18.0, 23.0, 28.0, 31.0, 34.0, 45.0, 48.0, 161.0,
+        ];
+        let status = vec![1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0];
+        let result = fit(
+            SurvfitKMData::right_censored(time, status).unwrap(),
+            SurvfitKMOptions::default(),
         );
-        assert_eq!(grouped.groups, vec![2, 4]);
-
-        for (curve_idx, &group) in grouped.groups.iter().enumerate() {
-            let indices: Vec<usize> = groups
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, &value)| (value == group).then_some(idx))
-                .collect();
-            let group_time: Vec<f64> = indices.iter().map(|&idx| time[idx]).collect();
-            let group_status: Vec<f64> = indices.iter().map(|&idx| status[idx]).collect();
-            let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
-            let group_entry: Vec<f64> = indices.iter().map(|&idx| entry[idx]).collect();
-            let position = vec![0; indices.len()];
-            let expected = compute_survfitkm_with_timefix(
-                &group_time,
-                &group_status,
-                &group_weights,
-                Some(&group_entry),
-                &position,
-                &config,
-                true,
-            );
-            assert_eq!(grouped.time[curve_idx], expected.time);
-            assert_eq!(grouped.n_risk[curve_idx], expected.n_risk);
-            assert_eq!(grouped.n_event[curve_idx], expected.n_event);
-            assert_eq!(grouped.n_censor[curve_idx], expected.n_censor);
-            assert_eq!(grouped.estimate[curve_idx], expected.estimate);
-            assert_eq!(grouped.std_err[curve_idx], expected.std_err);
-            assert_eq!(grouped.conf_lower[curve_idx], expected.conf_lower);
-            assert_eq!(grouped.conf_upper[curve_idx], expected.conf_upper);
-        }
-    }
-
-    #[test]
-    fn test_kaplan_meier_config_validates_confidence_options() {
-        assert!(KaplanMeierConfig::new(None, None, Some(1.0), None).is_err());
-        assert!(KaplanMeierConfig::new(None, None, Some(f64::NAN), None).is_err());
-        assert!(KaplanMeierConfig::new(None, None, None, Some("weird".to_string())).is_err());
-        assert!(KaplanMeierConfig::create(None, None, Some(-0.1), None).is_err());
-
-        let config = KaplanMeierConfig::new(None, None, None, Some("log_log".to_string())).unwrap();
-        assert_eq!(config.conf_type, "log-log");
-    }
-
-    #[test]
-    fn test_normal_quantile() {
-        assert!((normal_inverse_cdf(0.5)).abs() < 0.01);
-        let q_025 = normal_inverse_cdf(0.025);
-        let q_975 = normal_inverse_cdf(0.975);
-        assert!((q_025 + q_975).abs() < 0.01);
-        assert!((q_975 - 1.96).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_compute_survfitkm_basic() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1.0, 0.0, 1.0, 0.0, 1.0];
-        let weights = vec![1.0; 5];
-        let position = vec![0; 5];
-        let config = KaplanMeierConfig::default();
-
-        let result = compute_survfitkm(&time, &status, &weights, None, &position, &config);
-
-        assert!(!result.time.is_empty());
-        assert!(!result.estimate.is_empty());
-        assert_eq!(result.time, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
-        assert_eq!(result.n_event, vec![1.0, 0.0, 1.0, 0.0, 1.0]);
-        assert_eq!(result.n_event_count, vec![1.0, 0.0, 1.0, 0.0, 1.0]);
-        assert_eq!(result.n_censor, vec![0.0, 1.0, 0.0, 1.0, 0.0]);
-        assert_eq!(result.n_censor_count, vec![0.0, 1.0, 0.0, 1.0, 0.0]);
-        assert_eq!(result.cumhaz.len(), result.time.len());
-        assert_eq!(result.std_chaz.len(), result.time.len());
-        assert!((result.estimate[0] - 1.0).abs() < 1e-10 || result.estimate[0] < 1.0);
-    }
-
-    #[test]
-    fn test_compute_robust_survfitkm_cluster_variance_matches_r() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let status = vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0];
-        let weights = vec![1.0; 6];
-        let cluster = vec![1, 1, 2, 2, 3, 3];
-        let config = KaplanMeierConfig::default();
-
-        let result = compute_robust_survfitkm_with_timefix(
-            &time, &status, &weights, &cluster, &config, true,
+        assert_eq!(result.n, vec![11]);
+        assert_eq!(
+            result.time,
+            vec![9.0, 13.0, 18.0, 23.0, 28.0, 31.0, 34.0, 45.0, 48.0, 161.0]
         );
-
-        assert_eq!(result.time, time);
+        assert_eq!(
+            result.n_risk,
+            vec![11.0, 10.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+        );
         assert_vec_approx(
-            &result.std_err,
+            &result.surv[..6],
+            &[
+                0.909090909090909,
+                0.818181818181818,
+                0.715909090909091,
+                0.613636363636364,
+                0.613636363636364,
+                0.490909090909091,
+            ],
+            1e-12,
+        );
+        assert!(result.logse);
+        assert_vec_approx(
+            &result.std_err.as_ref().unwrap()[..3],
+            &[0.0953462589245592, 0.14213381090374, 0.195087577921207],
+            1e-12,
+        );
+        assert_vec_approx(
+            &result.lower.as_ref().unwrap()[..2],
+            &[0.754133845081525, 0.619248987399364],
+            1e-12,
+        );
+        assert_eq!(result.upper.as_ref().unwrap()[0], 1.0);
+        assert!(result.strata.is_none());
+        assert!(result.counts.is_none());
+        assert_eq!(result.type_, "right");
+    }
+
+    #[test]
+    fn robust_cluster_variance_matches_r() {
+        // survfit(Surv(time, status) ~ 1, cluster = id) with id = c(1,1,2,2,3,3)
+        let data = SurvfitKMData::try_new(
+            None,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![1, 1, 0, 1, 0, 1],
+            None,
+            None,
+            None,
+            Some(vec![1, 1, 2, 2, 3, 3]),
+        )
+        .unwrap();
+        let result = fit(data, SurvfitKMOptions::default());
+        assert!(!result.logse);
+        assert_vec_approx(
+            result.std_err.as_ref().unwrap(),
             &[0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0],
             1e-6,
         );
         assert_vec_approx(
-            &result.std_chaz,
+            result.std_chaz.as_ref().unwrap(),
             &[
                 0.1360828, 0.3320419, 0.3320419, 0.4571841, 0.4571841, 0.4571841,
             ],
@@ -2787,761 +1402,334 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_robust_survfitkm_weighted_cluster_variance_matches_r() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let status = vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0];
-        let weights = vec![1.0, 2.0, 1.0, 1.0, 1.0, 1.0];
-        let cluster = vec![1, 1, 2, 2, 3, 3];
-        let config = KaplanMeierConfig::default();
-
-        let result = compute_robust_survfitkm_with_timefix(
-            &time, &status, &weights, &cluster, &config, true,
-        );
-
-        assert_vec_approx(
-            &result.std_err,
-            &[
-                0.09997917, 0.29993752, 0.29993752, 0.26876249, 0.26876249, 0.0,
-            ],
-            1e-6,
-        );
-    }
-
-    #[test]
-    fn test_robust_right_variance_matches_materialized_influence_norms() {
-        let time = vec![1.0, 2.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1.0, 1.0, 1.0, 0.0, 1.0, 0.0];
-        let weights = vec![1.0, 0.5, 1.5, 1.0, 2.0, 0.75];
-        let cluster = vec![1, 1, 2, 2, 3, 3];
-        let config = KaplanMeierConfig::default();
-        let position = vec![0; time.len()];
-        let km = compute_survfitkm_with_timefix(
-            &time, &status, &weights, None, &position, &config, true,
-        );
-
-        for (stype, ctype) in [(1, 1), (2, 1), (2, 2)] {
-            let (curve_time, curve_estimate) = if stype == 1 {
-                (km.time.clone(), km.estimate.clone())
-            } else {
-                let curve = compute_survfit_curve_from_tables(
-                    &km.time,
-                    &km.n_risk,
-                    &km.n_event,
-                    &km.n_event_count,
-                    &km.n_censor,
-                    &km.n_censor_count,
-                    None,
-                    false,
-                    stype,
-                    ctype,
-                    config.conf_level,
-                    &config.conf_type,
-                );
-                (curve.time, curve.estimate)
-            };
-            let influence = compute_survfitkm_influence_with_timefix(
-                &time,
-                &status,
-                &weights,
-                &cluster,
-                false,
-                stype,
-                ctype,
-                config.conf_level,
-                &config.conf_type,
-                true,
-                true,
-            )
-            .expect("influence matrices should compute");
-            let column_norms = |matrix: &[Vec<f64>]| {
-                (0..curve_time.len())
-                    .map(|column| {
-                        matrix
-                            .iter()
-                            .map(|row| row[column] * row[column])
-                            .sum::<f64>()
-                            .sqrt()
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let expected_std_err = column_norms(&influence.influence_surv);
-            let expected_std_chaz = column_norms(&influence.influence_chaz);
-            let (std_err, std_chaz, lower, upper) =
-                compute_robust_right_survfit_variance_with_timefix(
-                    &time,
-                    &status,
-                    &weights,
-                    &curve_time,
-                    &curve_estimate,
-                    &cluster,
-                    &config,
-                    true,
-                    stype,
-                    ctype,
-                )
-                .expect("robust variance should compute");
-
-            assert_vec_approx(&std_err, &expected_std_err, 1e-12);
-            assert_vec_approx(&std_chaz, &expected_std_chaz, 1e-12);
-            assert_eq!(lower.len(), curve_time.len());
-            assert_eq!(upper.len(), curve_time.len());
-        }
-
-        let fh2_curve = compute_survfit_curve_from_tables(
-            &km.time,
-            &km.n_risk,
-            &km.n_event,
-            &km.n_event_count,
-            &km.n_censor,
-            &km.n_censor_count,
+    fn robust_variance_follows_r_default_rule() {
+        let data = SurvfitKMData::try_new(
             None,
-            false,
-            2,
-            2,
-            config.conf_level,
-            &config.conf_type,
-        );
-        let mut reported_estimate = fh2_curve.estimate.clone();
-        *reported_estimate
-            .last_mut()
-            .expect("curve should not be empty") = -f64::EPSILON;
-        let (_std_err, _std_chaz, lower, upper) =
-            compute_robust_right_survfit_variance_with_timefix(
-                &time,
-                &status,
-                &weights,
-                &fh2_curve.time,
-                &reported_estimate,
-                &cluster,
-                &config,
-                true,
-                2,
-                2,
-            )
-            .expect("tiny negative reported tail should remain supported");
-        assert_eq!(lower.last(), Some(&0.0));
-        assert_eq!(upper.last(), Some(&0.0));
-    }
-
-    #[test]
-    fn test_compute_robust_counting_survfit_variance_matches_r_id_path() {
-        let start = vec![0.0, 2.0, 0.0, 3.0, 0.0, 4.0];
-        let stop = vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0];
-        let status = vec![0, 1, 1, 0, 0, 1];
-        let weights = vec![1.0; 6];
-        let cluster = vec![1, 1, 2, 2, 3, 3];
-        let curve_time = vec![2.0, 3.0, 5.0, 6.0, 7.0];
-        let curve_estimate = vec![1.0, 2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0];
-        let config = KaplanMeierConfig::default();
-
-        let (std_err, std_chaz, _lower, _upper) =
-            compute_robust_counting_survfit_variance_with_timefix(
-                &start,
-                &stop,
-                &status,
-                &weights,
-                &curve_time,
-                &curve_estimate,
-                &cluster,
-                &config,
-                true,
-                1,
-                1,
-            );
-
-        assert_vec_approx(&std_err, &[0.0, 0.2721655, 0.1814437, 0.1814437, 0.0], 1e-6);
-        assert_vec_approx(
-            &std_chaz,
-            &[0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655],
-            1e-6,
-        );
-    }
-
-    #[test]
-    fn test_compute_robust_counting_survfit_variance_matches_r_cluster_path() {
-        let start = vec![0.0, 2.0, 0.0, 3.0, 0.0, 4.0];
-        let stop = vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0];
-        let status = vec![0, 1, 1, 0, 0, 1];
-        let weights = vec![1.0; 6];
-        let cluster = vec![1, 1, 2, 2, 3, 3];
-        let curve_time = vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        let curve_estimate = vec![1.0, 2.0 / 3.0, 2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0];
-        let config = KaplanMeierConfig::default();
-
-        let (std_err, std_chaz, _lower, _upper) =
-            compute_robust_counting_survfit_variance_with_timefix(
-                &start,
-                &stop,
-                &status,
-                &weights,
-                &curve_time,
-                &curve_estimate,
-                &cluster,
-                &config,
-                true,
-                1,
-                1,
-            );
-
-        assert_vec_approx(
-            &std_err,
-            &[0.0, 0.2721655, 0.2721655, 0.1814437, 0.1814437, 0.0],
-            1e-6,
-        );
-        assert_vec_approx(
-            &std_chaz,
-            &[0.0, 0.2721655, 0.2721655, 0.2721655, 0.2721655, 0.2721655],
-            1e-6,
-        );
-    }
-
-    #[test]
-    fn test_compute_robust_counting_survfit_variance_handles_fh_tied_events() {
-        let start = vec![0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0, 0.0];
-        let stop = vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0, 3.0, 3.0];
-        let status = vec![0, 1, 1, 0, 0, 1, 1, 1];
-        let weights = vec![1.0; 8];
-        let cluster = vec![1, 1, 2, 2, 3, 3, 4, 5];
-        let curve_time = vec![2.0, 3.0, 5.0, 6.0, 7.0];
-        let config = KaplanMeierConfig::default();
-
-        let (std_err_ctype1, std_chaz_ctype1, _lower, _upper) =
-            compute_robust_counting_survfit_variance_with_timefix(
-                &start,
-                &stop,
-                &status,
-                &weights,
-                &curve_time,
-                &[1.0, 0.5488116361, 0.3932407209, 0.3932407209, 0.1446651766],
-                &cluster,
-                &config,
-                true,
-                2,
-                1,
-            );
-        let (std_err_ctype2, std_chaz_ctype2, _lower, _upper) =
-            compute_robust_counting_survfit_variance_with_timefix(
-                &start,
-                &stop,
-                &status,
-                &weights,
-                &curve_time,
-                &[1.0, 0.4568805351, 0.3273692086, 0.3273692086, 0.1204324015],
-                &cluster,
-                &config,
-                true,
-                2,
-                2,
-            );
-
-        assert_vec_approx(
-            &std_err_ctype1,
-            &[0.0, 0.1202386, 0.1095651, 0.1095651, 0.04030675],
-            1e-6,
-        );
-        assert_vec_approx(
-            &std_chaz_ctype1,
-            &[0.0, 0.2190890, 0.2786209, 0.2786209, 0.2786209],
-            1e-6,
-        );
-        assert_vec_approx(
-            &std_err_ctype2,
-            &[0.0, 0.1781828, 0.1255400, 0.1255400, 0.04618357],
-            1e-6,
-        );
-        assert_vec_approx(
-            &std_chaz_ctype2,
-            &[0.0, 0.3899987, 0.3834813, 0.3834813, 0.3834813],
-            1e-6,
-        );
-    }
-
-    #[test]
-    fn test_compute_survfitkm_groups_near_tied_times() {
-        let time = vec![1.0 + TIME_EPSILON / 2.0, 2.0, 1.0];
-        let status = vec![1.0, 0.0, 1.0];
-        let weights = vec![1.0; 3];
-        let position = vec![0; 3];
-        let config = KaplanMeierConfig::default();
-
-        let result = compute_survfitkm(&time, &status, &weights, None, &position, &config);
-
-        assert_eq!(result.time, vec![1.0, 2.0]);
-        assert_eq!(result.n_risk, vec![3.0, 1.0]);
-        assert_eq!(result.n_risk_count, vec![3.0, 1.0]);
-        assert_eq!(result.n_event, vec![2.0, 0.0]);
-        assert_eq!(result.n_event_count, vec![2.0, 0.0]);
-        assert_eq!(result.n_censor, vec![0.0, 1.0]);
-        assert_eq!(result.n_censor_count, vec![0.0, 1.0]);
-        assert!((result.estimate[0] - 1.0 / 3.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_compute_survfitkm_exact_timefix_false() {
-        let time = vec![1.0, 1.0 + 5e-10, 2.0];
-        let status = vec![1.0, 1.0, 0.0];
-        let weights = vec![1.0; 3];
-        let position = vec![0; 3];
-        let config = KaplanMeierConfig::default();
-
-        let result = compute_survfitkm_with_timefix(
-            &time, &status, &weights, None, &position, &config, false,
-        );
-
-        assert_eq!(result.time, time);
-        assert_eq!(result.n_risk, vec![3.0, 2.0, 1.0]);
-        assert_eq!(result.n_risk_count, vec![3.0, 2.0, 1.0]);
-        assert_eq!(result.n_event, vec![1.0, 1.0, 0.0]);
-        assert_eq!(result.n_event_count, vec![1.0, 1.0, 0.0]);
-        assert_eq!(result.n_censor, vec![0.0, 0.0, 1.0]);
-        assert_eq!(result.n_censor_count, vec![0.0, 0.0, 1.0]);
-        assert!((result.estimate[0] - 2.0 / 3.0).abs() < 1e-10);
-        assert!((result.estimate[1] - 1.0 / 3.0).abs() < 1e-10);
-        assert!((result.estimate[2] - 1.0 / 3.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_compute_survfitkm_reports_unweighted_counts_for_weighted_ties() {
-        let time = vec![1.0, 1.0, 2.0];
-        let status = vec![1.0, 1.0, 1.0];
-        let weights = vec![2.0, 1.0, 1.0];
-        let position = vec![0; 3];
-        let config = KaplanMeierConfig::default();
-
-        let result = compute_survfitkm(&time, &status, &weights, None, &position, &config);
-
-        assert_eq!(result.time, vec![1.0, 2.0]);
-        assert_eq!(result.n_risk, vec![4.0, 1.0]);
-        assert_eq!(result.n_risk_count, vec![3.0, 1.0]);
-        assert_eq!(result.n_event, vec![3.0, 1.0]);
-        assert_eq!(result.n_event_count, vec![2.0, 1.0]);
-        assert_eq!(result.n_censor, vec![0.0, 0.0]);
-        assert_eq!(result.n_censor_count, vec![0.0, 0.0]);
-    }
-
-    #[test]
-    fn test_survfit_curve_from_tables_uses_unweighted_counts_for_fh2() {
-        let result = compute_survfit_curve_from_tables(
-            &[1.0, 2.0],
-            &[4.0, 1.0],
-            &[3.0, 1.0],
-            &[2.0, 1.0],
-            &[0.0, 0.0],
-            &[0.0, 0.0],
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![1, 1, 0, 1, 0, 1],
+            Some(vec![1.0, 2.0, 1.0, 1.0, 1.0, 1.0]),
             None,
-            false,
-            2,
-            2,
-            DEFAULT_CONFIDENCE_LEVEL,
-            "log",
-        );
-
-        let first_hazard = 3.0 / (2.0 * 4.0) + 3.0 / (2.0 * 2.5);
-        assert!((result.cumhaz[0] - first_hazard).abs() < 1e-10);
-        assert!((result.cumhaz[1] - (first_hazard + 1.0)).abs() < 1e-10);
-        assert!((result.estimate[0] - (-first_hazard).exp()).abs() < 1e-10);
-        assert!((result.estimate[1] - (-(first_hazard + 1.0)).exp()).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_survfit_curve_from_tables_handles_reverse_counts() {
-        let result = compute_survfit_curve_from_tables(
-            &[1.0, 2.0],
-            &[3.0, 2.0],
-            &[1.0, 0.0],
-            &[1.0, 0.0],
-            &[0.0, 1.0],
-            &[0.0, 1.0],
-            Some(&[0.0, 0.0]),
-            true,
-            1,
-            1,
-            DEFAULT_CONFIDENCE_LEVEL,
-            "none",
-        );
-
-        assert_eq!(result.n_event, vec![1.0, 0.0]);
-        assert_eq!(result.n_censor, vec![0.0, 1.0]);
-        assert_eq!(result.n_enter, Some(vec![0.0, 0.0]));
-        assert_eq!(result.conf_lower, Vec::<f64>::new());
-        assert_eq!(result.conf_upper, Vec::<f64>::new());
-        assert!((result.estimate[0] - 1.0).abs() < 1e-10);
-        assert!((result.estimate[1] - 0.5).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_counting_survfit_tables_with_id_entry_counts() {
-        let start = vec![0.0, 10.0, 25.0, 0.0, 5.0];
-        let stop = vec![10.0, 20.0, 30.0, 15.0, 25.0];
-        let status = vec![0, 0, 1, 1, 0];
-        let id = vec![0, 0, 0, 1, 2];
-        let weights = vec![1.0; 5];
-
-        let tables =
-            compute_counting_survfit_tables(&start, &stop, &status, &id, &weights, true, true);
-
-        assert_eq!(tables.time, vec![0.0, 5.0, 15.0, 20.0, 25.0, 30.0]);
-        assert_eq!(tables.n_risk, vec![0.0, 2.0, 3.0, 2.0, 1.0, 1.0]);
-        assert_eq!(tables.n_risk_count, vec![0.0, 2.0, 3.0, 2.0, 1.0, 1.0]);
-        assert_eq!(tables.n_event, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
-        assert_eq!(tables.n_event_count, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
-        assert_eq!(tables.n_censor, vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
-        assert_eq!(tables.n_censor_count, vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
-        assert_eq!(tables.n_enter, Some(vec![2.0, 1.0, 0.0, 0.0, 1.0, 0.0]));
-        assert_eq!(
-            tables.n_enter_count,
-            Some(vec![2.0, 1.0, 0.0, 0.0, 1.0, 0.0])
-        );
-    }
-
-    #[test]
-    fn test_counting_survfit_tables_honor_exact_timefix_false() {
-        let start = vec![0.0, 0.0, 1.0, 1.0 + 5e-10];
-        let stop = vec![1.0, 1.0 + 5e-10, 2.0, 2.0];
-        let status = vec![1, 1, 0, 0];
-        let id = vec![0, 1, 2, 3];
-        let weights = vec![1.0; 4];
-
-        let default_tables =
-            compute_counting_survfit_tables(&start, &stop, &status, &id, &weights, false, true);
-        let exact_tables =
-            compute_counting_survfit_tables(&start, &stop, &status, &id, &weights, false, false);
-
-        assert_eq!(default_tables.time, vec![1.0, 2.0]);
-        assert_eq!(default_tables.n_risk, vec![2.0, 2.0]);
-        assert_eq!(default_tables.n_event, vec![2.0, 0.0]);
-        assert_eq!(exact_tables.time, vec![1.0, 1.0 + 5e-10, 2.0]);
-        assert_eq!(exact_tables.n_risk, vec![2.0, 2.0, 2.0]);
-        assert_eq!(exact_tables.n_event, vec![1.0, 1.0, 0.0]);
-        assert_eq!(exact_tables.n_censor, vec![0.0, 0.0, 2.0]);
-    }
-
-    #[test]
-    fn test_survfitkm_influence_matches_r_right_censored_fixture() {
-        let time = vec![1.0, 2.0, 3.0, 4.0];
-        let status = vec![1.0, 0.0, 1.0, 0.0];
-        let weights = vec![1.0; 4];
-        let cluster = vec![1, 2, 3, 4];
-
-        let km = compute_survfitkm_influence_with_timefix(
-            &time,
-            &status,
-            &weights,
-            &cluster,
-            false,
-            1,
-            1,
-            DEFAULT_CONFIDENCE_LEVEL,
-            "log",
-            true,
-            true,
+            None,
+            None,
         )
-        .expect("KM influence should compute");
-        assert_eq!(km.time, vec![1.0, 2.0, 3.0, 4.0]);
+        .unwrap();
+        // integer weights, no id: Greenwood
+        let integer = fit(data.clone(), SurvfitKMOptions::default());
+        assert!(integer.logse);
+        assert!(integer.counts.is_some());
+        // a non-integer weight switches to the infinitesimal jackknife
+        let mut half = data.clone();
+        half.weights = Some(vec![1.0, 2.0, 1.0, 1.0, 1.0, 0.5]);
+        assert!(!fit(half, SurvfitKMOptions::default()).logse);
+        // an id with more than one event per subject does too
+        let mut repeated = data.clone();
+        repeated.id = Some(vec![1, 1, 2, 2, 3, 3]);
+        assert!(!fit(repeated, SurvfitKMOptions::default()).logse);
+        // robust = FALSE overrides
+        let mut forced = data;
+        forced.cluster = Some(vec![1, 1, 2, 2, 3, 3]);
+        let plain = fit(
+            forced,
+            SurvfitKMOptions {
+                robust: Some(false),
+                ..Default::default()
+            },
+        );
+        assert!(plain.logse);
+    }
+
+    #[test]
+    fn counting_data_with_id_matches_r() {
+        // survfit(Surv(start, stop, status) ~ 1, id = id)
+        let data = SurvfitKMData::try_new(
+            Some(vec![0.0, 2.0, 0.0, 3.0, 0.0, 4.0]),
+            vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+            vec![0, 1, 1, 0, 0, 1],
+            None,
+            None,
+            Some(vec![1, 1, 2, 2, 3, 3]),
+            None,
+        )
+        .unwrap();
+        let result = fit(data, SurvfitKMOptions::default());
+        assert_eq!(result.type_, "counting");
+        assert_eq!(result.time, vec![2.0, 3.0, 5.0, 6.0, 7.0]);
+        assert_eq!(result.n_risk, vec![3.0, 3.0, 3.0, 2.0, 1.0]);
+        assert_eq!(result.n_censor, vec![0.0, 0.0, 0.0, 1.0, 0.0]);
+        assert_vec_approx(
+            &result.surv,
+            &[1.0, 2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0],
+            1e-12,
+        );
+        assert_eq!(result.n_id, Some(vec![3]));
+        // id with one event per subject keeps the Greenwood variance
+        assert!(result.logse);
+    }
+
+    #[test]
+    fn entry_counts_match_r() {
+        // survfit(Surv(start, stop, status) ~ 1, id = id, entry = TRUE, influence = TRUE)
+        let data = SurvfitKMData::try_new(
+            Some(vec![0.0, 2.0, 1.0, 3.0, 0.0, 4.0, 2.0]),
+            vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0, 9.0],
+            vec![0, 1, 1, 0, 0, 1, 1],
+            None,
+            None,
+            Some(vec![1, 1, 2, 2, 3, 3, 4]),
+            None,
+        )
+        .unwrap();
+        let result = fit(
+            data,
+            SurvfitKMOptions {
+                entry: true,
+                influence: InfluenceRequest::Survival,
+                ..Default::default()
+            },
+        );
+        assert_eq!(result.time, vec![0.0, 1.0, 2.0, 3.0, 5.0, 6.0, 7.0, 9.0]);
+        assert_eq!(result.n_risk, vec![0.0, 2.0, 3.0, 4.0, 4.0, 3.0, 2.0, 1.0]);
+        assert_eq!(result.n_event, vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
         assert_eq!(
-            km.influence_chaz,
-            vec![
-                vec![0.1875, 0.1875, 0.1875, 0.1875],
-                vec![-0.0625, -0.0625, -0.0625, -0.0625],
-                vec![-0.0625, -0.0625, 0.1875, 0.1875],
-                vec![-0.0625, -0.0625, -0.3125, -0.3125],
-            ]
+            result.n_censor,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
         );
         assert_eq!(
-            km.influence_surv,
-            vec![
-                vec![-0.1875, -0.1875, -0.09375, -0.09375],
-                vec![0.0625, 0.0625, 0.03125, 0.03125],
-                vec![0.0625, 0.0625, -0.15625, -0.15625],
-                vec![0.0625, 0.0625, 0.21875, 0.21875],
-            ]
+            result.n_enter,
+            Some(vec![2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         );
-        assert_eq!(km.std_err, matrix_column_norms(&km.influence_surv));
-        assert_eq!(km.std_chaz, matrix_column_norms(&km.influence_chaz));
-
-        let norms_only = compute_survfitkm_influence_with_timefix(
-            &time,
-            &status,
-            &weights,
-            &cluster,
-            false,
-            1,
-            1,
-            DEFAULT_CONFIDENCE_LEVEL,
-            "log",
-            true,
-            false,
-        )
-        .expect("KM influence norms should compute without matrices");
-        assert!(norms_only.influence_surv.is_empty());
-        assert!(norms_only.influence_chaz.is_empty());
-        assert_eq!(norms_only.std_err, km.std_err);
-        assert_eq!(norms_only.std_chaz, km.std_chaz);
-
-        let fh = compute_survfitkm_influence_with_timefix(
-            &time,
-            &status,
-            &weights,
-            &cluster,
-            false,
-            2,
-            1,
-            DEFAULT_CONFIDENCE_LEVEL,
-            "log",
-            true,
-            true,
-        )
-        .expect("Fleming-Harrington influence should compute");
-        assert_eq!(fh.influence_chaz, km.influence_chaz);
-        let fh_survival_after_first_event = (-0.25_f64).exp();
-        let fh_survival_after_second_event = (-0.75_f64).exp();
-        assert!(
-            (fh.influence_surv[0][0] + fh_survival_after_first_event * 0.1875).abs() < 1e-12,
-            "actual {}",
-            fh.influence_surv[0][0]
+        assert_vec_approx(
+            &result.surv,
+            &[1.0, 1.0, 1.0, 0.75, 0.5625, 0.5625, 0.28125, 0.0],
+            1e-12,
         );
-        assert!(
-            (fh.influence_surv[2][2] + fh_survival_after_second_event * 0.1875).abs() < 1e-12,
-            "actual {}",
-            fh.influence_surv[2][2]
+        assert_eq!(result.n_id, Some(vec![4]));
+        // influence = TRUE forces the robust variance, clustered on the id
+        assert!(!result.logse);
+        let influence = &result.influence_surv.as_ref().unwrap()[0];
+        assert_eq!(influence.cluster, vec![1, 2, 3, 4]);
+        assert_vec_approx(
+            &influence.values[0],
+            &[0.0, 0.0, 0.0, 0.0625, -0.09375, -0.09375, -0.046875, 0.0],
+            1e-12,
         );
-        assert!(
-            (fh.influence_surv[3][3] - fh_survival_after_second_event * 0.3125).abs() < 1e-12,
-            "actual {}",
-            fh.influence_surv[3][3]
+        assert_vec_approx(
+            &influence.values[1],
+            &[0.0, 0.0, 0.0, -0.1875, -0.09375, -0.09375, -0.046875, 0.0],
+            1e-12,
+        );
+        assert_vec_approx(
+            &influence.values[3],
+            &[0.0, 0.0, 0.0, 0.0625, 0.09375, 0.09375, 0.1875, 0.0],
+            1e-12,
         );
     }
 
     #[test]
-    fn test_survfitkm_influence_ctype2_matches_r_tied_events_fixture() {
-        let time = vec![1.0, 1.0, 1.0, 2.0, 2.0, 3.0];
-        let status = vec![1.0, 1.0, 0.0, 1.0, 1.0, 0.0];
-        let weights = vec![1.0; 6];
-        let cluster = vec![1, 2, 3, 4, 5, 6];
-
-        let km_survival_fh_chaz = compute_survfitkm_influence_with_timefix(
-            &time,
-            &status,
-            &weights,
-            &cluster,
-            false,
-            1,
-            2,
-            DEFAULT_CONFIDENCE_LEVEL,
-            "log",
-            true,
-            true,
+    fn strata_are_stacked_in_level_order() {
+        let data = SurvfitKMData::try_new(
+            None,
+            vec![1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5],
+            vec![1, 0, 0, 1, 1, 1, 0, 0],
+            None,
+            Some(vec![4, 2, 4, 2, 4, 2, 4, 2]),
+            None,
+            None,
         )
-        .expect("KM survival with FH2 hazard influence should compute");
-        let fh2 = compute_survfitkm_influence_with_timefix(
-            &time,
-            &status,
-            &weights,
-            &cluster,
-            false,
-            2,
-            2,
-            DEFAULT_CONFIDENCE_LEVEL,
-            "log",
-            true,
-            true,
-        )
-        .expect("FH2 influence should compute");
-
-        assert_eq!(fh2.time, vec![1.0, 2.0, 3.0]);
-        assert_vec_approx(
-            &km_survival_fh_chaz.influence_surv[0],
-            &[-0.1111111111, -0.0370370370, -0.0370370370],
-            1e-8,
-        );
-        assert_vec_approx(
-            &km_survival_fh_chaz.influence_chaz[0],
-            &[0.1355555556, 0.1355555556, 0.1355555556],
-            1e-8,
-        );
-        assert_vec_approx(
-            &km_survival_fh_chaz.influence_chaz[5],
-            &[-0.0677777778, -0.4288888889, -0.4288888889],
-            1e-8,
-        );
-        assert_vec_approx(
-            &fh2.influence_surv[0],
-            &[-0.0939455051, -0.0408285470, -0.0408285470],
-            1e-8,
-        );
-        assert_vec_approx(
-            &fh2.influence_surv[5],
-            &[0.0469727526, 0.1291788505, 0.1291788505],
-            1e-8,
-        );
-        assert_vec_approx(
-            &fh2.influence_chaz[0],
-            &[0.1355555556, 0.1355555556, 0.1355555556],
-            1e-8,
-        );
-        assert_vec_approx(
-            &fh2.influence_chaz[5],
-            &[-0.0677777778, -0.4288888889, -0.4288888889],
-            1e-8,
-        );
+        .unwrap();
+        let result = fit(data.clone(), SurvfitKMOptions::default());
+        assert_eq!(result.strata, Some(vec![4, 4]));
+        assert_eq!(result.strata_codes, Some(vec![2, 4]));
+        assert_eq!(result.n, vec![4, 4]);
+        let ranges = result.curve_ranges();
+        assert_eq!(ranges, vec![0..4, 4..8]);
+        // each curve equals the fit of its own rows
+        let mut own = data;
+        own.strata = None;
+        own.time = vec![1.5, 2.5, 3.5, 4.5];
+        own.status = vec![0, 1, 1, 0];
+        let single = fit(own, SurvfitKMOptions::default());
+        assert_eq!(&result.time[0..4], single.time.as_slice());
+        assert_eq!(&result.surv[0..4], single.surv.as_slice());
     }
 
     #[test]
-    fn test_counting_survfitkm_influence_matches_r_id_fixture() {
-        let start = vec![0.0, 10.0, 25.0, 0.0, 5.0];
-        let stop = vec![10.0, 20.0, 30.0, 15.0, 25.0];
-        let status = vec![0, 0, 1, 1, 0];
-        let weights = vec![1.0; 5];
-        let cluster = vec![1, 1, 1, 2, 3];
-        let curve_time = vec![0.0, 5.0, 15.0, 20.0, 25.0, 30.0];
-        let km_estimate = vec![1.0, 1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.0];
-
-        let km = compute_counting_survfitkm_influence_with_timefix(
-            &start,
-            &stop,
-            &status,
-            &weights,
-            &curve_time,
-            &km_estimate,
-            &cluster,
-            false,
-            1,
-            1,
-            true,
+    fn start_time_drops_early_observations() {
+        let data =
+            SurvfitKMData::right_censored(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![1, 1, 1, 0, 1])
+                .unwrap();
+        let options = SurvfitKMOptions {
+            start_time: Some(2.5),
+            ..Default::default()
+        };
+        let result = fit(data.clone(), options);
+        assert_eq!(result.n, vec![3]);
+        assert_eq!(result.time, vec![3.0, 4.0, 5.0]);
+        assert_eq!(result.t0, 2.5);
+        let err = survfitkm(
+            &data,
+            &SurvfitKMOptions {
+                start_time: Some(10.0),
+                ..Default::default()
+            },
         )
-        .expect("counting KM influence should compute");
-
-        assert_eq!(km.time, curve_time);
-        assert_vec_approx(
-            &km.influence_surv[0],
-            &[0.0, 0.0, 0.1111111, 0.1111111, 0.1111111, 0.0],
-            1e-6,
-        );
-        assert_vec_approx(
-            &km.influence_surv[1],
-            &[0.0, 0.0, -0.2222222, -0.2222222, -0.2222222, 0.0],
-            1e-6,
-        );
-        assert_vec_approx(
-            &km.influence_chaz[0],
-            &[0.0, 0.0, -0.1111111, -0.1111111, -0.1111111, -0.1111111],
-            1e-6,
-        );
-        assert_vec_approx(
-            &km.influence_chaz[1],
-            &[0.0, 0.0, 0.2222222, 0.2222222, 0.2222222, 0.2222222],
-            1e-6,
-        );
-        assert_eq!(km.std_err, matrix_column_norms(&km.influence_surv));
-        assert_eq!(km.std_chaz, matrix_column_norms(&km.influence_chaz));
-
-        let fh_estimate = vec![1.0, 1.0, 0.7165313, 0.7165313, 0.7165313, 0.2635971];
-        let fh = compute_counting_survfitkm_influence_with_timefix(
-            &start,
-            &stop,
-            &status,
-            &weights,
-            &curve_time,
-            &fh_estimate,
-            &cluster,
-            false,
-            2,
-            1,
-            true,
-        )
-        .expect("counting FH influence should compute");
-        assert_vec_approx(
-            &fh.influence_surv[0],
-            &[0.0, 0.0, 0.0796146, 0.0796146, 0.0796146, 0.0292886],
-            1e-6,
-        );
-        assert_vec_approx(
-            &fh.influence_surv[1],
-            &[0.0, 0.0, -0.1592292, -0.1592292, -0.1592292, -0.0585771],
-            1e-6,
-        );
-        assert_vec_approx(&fh.influence_chaz[0], &km.influence_chaz[0], 1e-12);
+        .unwrap_err();
+        assert!(err.to_string().contains("start.time"));
     }
 
     #[test]
-    fn test_validate_binary_f64_rejects_non_binary_values() {
-        pyo3::Python::initialize();
-
-        let err = validate_binary_f64(&[0.0, 0.5, 1.0], "status")
-            .expect_err("non-binary status should be rejected");
-
-        assert!(err.to_string().contains("status must contain only 0/1"));
-    }
-
-    #[test]
-    fn test_compute_survfitkm_delayed_entry() {
-        let entry_times = vec![0.0, 0.0, 1.0, 2.0, 3.0];
-        let time = vec![2.0, 4.0, 3.0, 5.0, 5.0];
-        let status = vec![1.0, 0.0, 1.0, 1.0, 0.0];
-        let weights = vec![1.0; 5];
-        let position = vec![0; 5];
-        let config = KaplanMeierConfig::default();
-
-        let result = compute_survfitkm(
-            &time,
-            &status,
-            &weights,
-            Some(&entry_times),
-            &position,
-            &config,
-        );
-
-        assert_eq!(result.time, vec![2.0, 3.0, 4.0, 5.0]);
-        assert_eq!(result.n_risk, vec![3.0, 3.0, 3.0, 2.0]);
-        assert_eq!(result.n_event, vec![1.0, 1.0, 0.0, 1.0]);
-        assert_eq!(result.n_event_count, vec![1.0, 1.0, 0.0, 1.0]);
-        assert_eq!(result.n_censor, vec![0.0, 0.0, 1.0, 1.0]);
-        assert_eq!(result.n_censor_count, vec![0.0, 0.0, 1.0, 1.0]);
-        assert!((result.estimate[0] - 2.0 / 3.0).abs() < 1e-10);
-        assert!((result.estimate[1] - 4.0 / 9.0).abs() < 1e-10);
-        assert!((result.estimate[2] - 4.0 / 9.0).abs() < 1e-10);
-        assert!((result.estimate[3] - 2.0 / 9.0).abs() < 1e-10);
-        assert!((result.cumhaz[0] - 1.0 / 3.0).abs() < 1e-10);
-        assert!((result.cumhaz[1] - 2.0 / 3.0).abs() < 1e-10);
-        assert!((result.cumhaz[2] - 2.0 / 3.0).abs() < 1e-10);
-        assert!((result.cumhaz[3] - 7.0 / 6.0).abs() < 1e-10);
-        assert!((result.std_chaz[0] - (1.0_f64 / 9.0).sqrt()).abs() < 1e-10);
-        assert!((result.std_chaz[1] - (2.0_f64 / 9.0).sqrt()).abs() < 1e-10);
-        assert!((result.std_chaz[2] - (2.0_f64 / 9.0).sqrt()).abs() < 1e-10);
-        assert!((result.std_chaz[3] - (2.0_f64 / 9.0 + 1.0 / 4.0).sqrt()).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_compute_survfitkm_reverse_censoring_distribution() {
-        let time = vec![1.0, 2.0, 2.0, 3.0, 4.0];
-        let status = vec![1.0, 0.0, 1.0, 0.0, 1.0];
-        let weights = vec![1.0; 5];
-        let position = vec![0; 5];
-        let config = KaplanMeierConfig::create(Some(true), None, None, None).unwrap();
-
-        let result = compute_survfitkm(&time, &status, &weights, None, &position, &config);
-
+    fn reverse_estimates_the_censoring_distribution() {
+        // deaths tied with a censoring leave the risk set first
+        let data =
+            SurvfitKMData::right_censored(vec![1.0, 2.0, 2.0, 3.0, 4.0], vec![1, 1, 0, 0, 1])
+                .unwrap();
+        let options = SurvfitKMOptions {
+            reverse: true,
+            ..Default::default()
+        };
+        let result = fit(data, options);
         assert_eq!(result.time, vec![1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(result.n_risk, vec![5.0, 4.0, 2.0, 1.0]);
-        assert_eq!(result.n_event, vec![0.0, 1.0, 1.0, 0.0]);
-        assert_eq!(result.n_event_count, vec![0.0, 1.0, 1.0, 0.0]);
-        assert_eq!(result.n_censor, vec![1.0, 1.0, 0.0, 1.0]);
-        assert_eq!(result.n_censor_count, vec![1.0, 1.0, 0.0, 1.0]);
-        assert!((result.estimate[0] - 1.0).abs() < 1e-10);
-        assert!((result.estimate[1] - 0.75).abs() < 1e-10);
-        assert!((result.estimate[2] - 0.375).abs() < 1e-10);
-        assert!((result.estimate[3] - 0.375).abs() < 1e-10);
+        // G(2) = 1 - 1/(4 - 1): the death at 2 is not in the risk set
+        assert_vec_approx(&result.surv, &[1.0, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], 1e-12);
     }
 
     #[test]
-    fn test_validate_entry_times_rejects_non_finite_values() {
-        pyo3::Python::initialize();
-        let time = vec![1.0, 2.0];
-        let entry_times = vec![0.0, f64::INFINITY];
+    fn conf_lower_options_widen_only_the_lower_limit() {
+        let data = SurvfitKMData::right_censored(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![1, 0, 1, 0, 1, 0],
+        )
+        .unwrap();
+        let usual = fit(data.clone(), SurvfitKMOptions::default());
+        for conf_lower in [ConfLower::Peto, ConfLower::Modified] {
+            let widened = fit(
+                data.clone(),
+                SurvfitKMOptions {
+                    conf_lower,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(widened.upper, usual.upper);
+            assert_eq!(widened.conf_lower, conf_lower.as_str());
+            assert_ne!(widened.lower, usual.lower);
+        }
+    }
 
-        let err = validate_entry_times(&time, &entry_times, true)
-            .expect_err("non-finite entry times should be rejected");
+    #[test]
+    fn se_fit_false_and_conf_type_none_drop_components() {
+        let data = SurvfitKMData::right_censored(vec![1.0, 2.0, 3.0], vec![1, 1, 0]).unwrap();
+        let no_se = fit(
+            data.clone(),
+            SurvfitKMOptions {
+                se_fit: false,
+                ..Default::default()
+            },
+        );
+        assert!(no_se.std_err.is_none() && no_se.lower.is_none());
+        let no_ci = fit(
+            data,
+            SurvfitKMOptions {
+                conf_type: ConfType::None,
+                ..Default::default()
+            },
+        );
+        assert!(no_ci.std_err.is_some() && no_ci.lower.is_none());
+    }
 
-        assert!(err.to_string().contains("entry_times contains non-finite"));
+    #[test]
+    fn influence_matrices_reproduce_the_robust_variance() {
+        let data = SurvfitKMData::try_new(
+            None,
+            vec![1.0, 2.0, 2.0, 3.0, 4.0, 5.0],
+            vec![1, 1, 1, 0, 1, 0],
+            Some(vec![1.0, 0.5, 1.5, 1.0, 2.0, 0.75]),
+            None,
+            None,
+            Some(vec![1, 1, 2, 2, 3, 3]),
+        )
+        .unwrap();
+        for (stype, ctype) in [
+            (SurvType::KaplanMeier, HazardType::NelsonAalen),
+            (SurvType::KaplanMeier, HazardType::FlemingHarrington),
+            (SurvType::ExpCumhaz, HazardType::NelsonAalen),
+            (SurvType::ExpCumhaz, HazardType::FlemingHarrington),
+        ] {
+            let result = fit(
+                data.clone(),
+                SurvfitKMOptions {
+                    stype,
+                    ctype,
+                    influence: InfluenceRequest::Both,
+                    ..Default::default()
+                },
+            );
+            let surv = &result.influence_surv.as_ref().unwrap()[0];
+            let chaz = &result.influence_chaz.as_ref().unwrap()[0];
+            assert_eq!(surv.cluster, vec![1, 2, 3]);
+            let column_norm = |matrix: &[Vec<f64>], col: usize| -> f64 {
+                matrix
+                    .iter()
+                    .map(|row| row[col] * row[col])
+                    .sum::<f64>()
+                    .sqrt()
+            };
+            let std_chaz = result.std_chaz.as_ref().unwrap();
+            for (col, expected) in std_chaz.iter().enumerate() {
+                assert!((column_norm(&chaz.values, col) - expected).abs() < 1e-12);
+            }
+            if stype == SurvType::KaplanMeier {
+                let std_err = result.std_err.as_ref().unwrap();
+                for (col, expected) in std_err.iter().enumerate() {
+                    assert!((column_norm(&surv.values, col) - expected).abs() < 1e-12);
+                }
+            } else {
+                for (row, chaz_row) in surv.values.iter().zip(&chaz.values) {
+                    for (col, value) in row.iter().enumerate() {
+                        assert!((value + chaz_row[col] * result.surv[col]).abs() < 1e-12);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn timefix_bins_near_ties() {
+        let data =
+            SurvfitKMData::right_censored(vec![1.0, 1.0 + 5e-10, 2.0], vec![1, 1, 0]).unwrap();
+        let fixed = fit(data.clone(), SurvfitKMOptions::default());
+        assert_eq!(fixed.time, vec![1.0, 2.0]);
+        assert_eq!(fixed.n_event, vec![2.0, 0.0]);
+        let exact = fit(
+            data,
+            SurvfitKMOptions {
+                timefix: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(exact.time.len(), 3);
+    }
+
+    #[test]
+    fn rejects_bad_inputs() {
+        assert!(SurvfitKMData::right_censored(vec![], vec![]).is_err());
+        assert!(SurvfitKMData::right_censored(vec![1.0], vec![2]).is_err());
+        assert!(
+            SurvfitKMData::try_new(Some(vec![1.0]), vec![1.0], vec![1], None, None, None, None)
+                .is_err()
+        );
+        assert!(SurvType::from_code(3).is_err());
+        assert!(HazardType::from_code(0).is_err());
+        assert!(InfluenceRequest::from_code(4).is_err());
+        let data = SurvfitKMData::right_censored(vec![1.0], vec![1]).unwrap();
+        assert!(
+            survfitkm(
+                &data,
+                &SurvfitKMOptions {
+                    conf_int: 1.5,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 }

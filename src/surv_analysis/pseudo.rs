@@ -1,1299 +1,1718 @@
-use pyo3::prelude::*;
-use rayon::prelude::*;
+//! Infinitesimal-jackknife residuals of a survival curve and the pseudo
+//! values built from them: R's `residuals.survfit` (`R/residuals.survfit.R`
+//! with `rsurvpart1` for single-endpoint curves, `R/rsurvpart2.R` and the C
+//! kernel `src/survfitresid.c` for multi-state curves) and `pseudo`
+//! (`R/pseudo.R`).
+//!
+//! The residual of observation `i` at time `t` is its influence on the
+//! curve, `dS(t) / dw_i`; the pseudo value is `n * S(t) - (n - 1) *
+//! S_{-i}(t)`, which the IJ approximates as `S(t) + n * dS(t) / dw_i`.
 
-use crate::constants::{DIVISION_FLOOR, TIME_EPSILON, normal_ci_95, same_time};
-use crate::internal::statistical::normal_sf;
-use crate::internal::validation::{
-    validate_binary_i32, validate_finite, validate_no_nan, validate_non_negative,
+use super::survfit_summary::{RmeanOption, summary_survfit_times, survfit0, survmean};
+use super::survfitaj::{
+    AJPrepared, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, aj_prepare, survfitaj,
 };
-use pyo3::exceptions::PyValueError;
+use super::survfitkm::{SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::sorting::sorted_indices_by;
+use crate::internal::validation::{validate_finite, validate_non_empty};
+use ndarray::{Array2, Array3};
+use pyo3::prelude::*;
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct PseudoResult {
-    #[pyo3(get)]
-    pub pseudo: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub time: Vec<f64>,
-    #[pyo3(get)]
-    pub type_: String,
-    #[pyo3(get)]
-    pub n: usize,
+/// The `type` argument of `residuals.survfit` / `pseudo`, after R's
+/// aliases (`survival`, `chaz`, `rmst`, `rmts`, `sojourn`) are folded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResidualType {
+    /// Probability in state: the survival curve.
+    #[default]
+    Pstate,
+    /// The cumulative hazard.
+    Cumhaz,
+    /// Area under the curve: restricted mean survival / sojourn time.
+    Auc,
 }
 
-#[pyfunction]
-#[pyo3(signature = (time, status, eval_times=None, type_=None))]
-pub fn pseudo(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    eval_times: Option<Vec<f64>>,
-    type_: Option<&str>,
-) -> PyResult<PseudoResult> {
-    let n = time.len();
-    let pseudo_type = validate_pseudo_type(type_)?;
-    validate_pseudo_inputs(&time, &status, eval_times.as_deref())?;
-
-    if n == 0 {
-        return Ok(PseudoResult {
-            pseudo: vec![],
-            time: vec![],
-            type_: pseudo_type.to_string(),
-            n: 0,
-        });
+impl ResidualType {
+    pub fn parse(value: &str) -> SurvivalResult<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "pstate" | "survival" => Ok(Self::Pstate),
+            "cumhaz" | "chaz" => Ok(Self::Cumhaz),
+            "sojourn" | "rmst" | "rmts" | "auc" => Ok(Self::Auc),
+            other => Err(SurvivalError::invalid_input(format!(
+                "type must be one of 'pstate', 'cumhaz', 'sojourn', 'survival', 'chaz', 'rmst', 'rmts', 'auc'; got {other:?}"
+            ))),
+        }
     }
+}
 
-    let times = match eval_times {
-        Some(t) => t,
-        None => default_event_times(&time, &status),
+/// Residuals (or pseudo values) of a survival curve: `values[r][j]` belongs
+/// to row `r` at `times[j]`.  A row is an observation of the data, or a
+/// subject when collapsed; `id` labels it (the observation index when no
+/// id was given) and `curve` says which curve it contributed to.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct SurvfitResid {
+    #[pyo3(get)]
+    pub id: Vec<i64>,
+    #[pyo3(get)]
+    pub curve: Vec<usize>,
+    #[pyo3(get)]
+    pub times: Vec<f64>,
+    #[pyo3(get)]
+    pub values: Vec<Vec<f64>>,
+}
+
+/// `findInterval(t, dtime)`: the number of event times `<= t`.
+fn find_interval(dtime: &[f64], t: f64) -> usize {
+    dtime.partition_point(|&x| x <= t)
+}
+
+/// R's `approx(x, y, xout)` (linear, `yleft = 0`); `x` increasing.
+fn approx_linear(x: &[f64], y: &[f64], xout: f64, rule2: bool) -> f64 {
+    let n = x.len();
+    if xout < x[0] {
+        return 0.0;
+    }
+    if xout >= x[n - 1] {
+        return if xout == x[n - 1] || rule2 {
+            y[n - 1]
+        } else {
+            f64::NAN
+        };
+    }
+    let k = x.partition_point(|&v| v <= xout); // x[k-1] <= xout < x[k]
+    let (x0, x1, y0, y1) = (x[k - 1], x[k], y[k - 1], y[k]);
+    y0 + (y1 - y0) * (xout - x0) / (x1 - x0)
+}
+
+/// Port of `rsurvpart1`: residuals of one curve for the rows `rows` of the
+/// data, at the sorted `times`.  `curve` is the curve's row range in
+/// `fit`.
+#[allow(clippy::too_many_arguments)]
+fn rsurvpart1(
+    rows: &[usize],
+    start: Option<&[f64]>,
+    stop: &[f64],
+    status: &[i32],
+    times: &[f64],
+    kind: ResidualType,
+    stype: SurvType,
+    fit: &SurvfitKMResult,
+    curve: std::ops::Range<usize>,
+) -> Vec<Vec<f64>> {
+    let ntime = times.len();
+    // only the event times matter
+    let events: Vec<usize> = curve.filter(|&i| fit.n_event[i] > 0.0).collect();
+    let dtime: Vec<f64> = events.iter().map(|&i| fit.time[i]).collect();
+    let nrisk: Vec<f64> = events.iter().map(|&i| fit.n_risk[i]).collect();
+    let surv: Vec<f64> = events.iter().map(|&i| fit.surv[i]).collect();
+    let mut hazard = Vec::with_capacity(events.len());
+    let mut previous = 0.0;
+    for &i in &events {
+        hazard.push(fit.cumhaz[i] - previous);
+        previous = fit.cumhaz[i];
+    }
+    let nevent = events.len();
+    let n = rows.len();
+    if nevent == 0 {
+        return vec![vec![0.0; ntime]; n];
+    }
+    // tindex = largest event time <= reporting time, yindex the same for
+    // each row's end time, sindex for its entry time
+    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let yindex: Vec<usize> = rows
+        .iter()
+        .map(|&r| find_interval(&dtime, stop[r]))
+        .collect();
+    let sindex: Option<Vec<usize>> = start.map(|start| {
+        rows.iter()
+            .map(|&r| find_interval(&dtime, start[r]))
+            .collect()
+    });
+    // the dN term applies to all reporting times at or after a death
+    let dmin = |row: usize, j: usize| -> usize {
+        if status[rows[row]] == 0 {
+            0
+        } else {
+            let a = yindex[row];
+            if a == 0 || a > tindex[j] { 0 } else { a }
+        }
     };
-
-    if times.is_empty() {
-        return Ok(PseudoResult {
-            pseudo: vec![vec![]; n],
-            time: vec![],
-            type_: pseudo_type.to_string(),
-            n,
-        });
+    let ymin = |row: usize, j: usize| yindex[row].min(tindex[j]);
+    let smin = |row: usize, j: usize| sindex.as_ref().map(|s| s[row].min(tindex[j]));
+    // c(0, cumsum(v)) and c(0, v) lookups, 1 + index as in R
+    let cumsum0 = |v: &[f64]| -> Vec<f64> {
+        let mut out = Vec::with_capacity(v.len() + 1);
+        out.push(0.0);
+        let mut acc = 0.0;
+        for value in v {
+            acc += value;
+            out.push(acc);
+        }
+        out
+    };
+    let with0 = |v: &[f64]| -> Vec<f64> {
+        let mut out = Vec::with_capacity(v.len() + 1);
+        out.push(0.0);
+        out.extend_from_slice(v);
+        out
+    };
+    let mut resid = vec![vec![0.0; ntime]; n];
+    match kind {
+        ResidualType::Cumhaz | ResidualType::Pstate
+            if kind == ResidualType::Cumhaz || stype == SurvType::ExpCumhaz =>
+        {
+            // the hazard is the primary thing; for stype = 2 the survival
+            // is exp(-cumhaz) with derivative -S(t) * d(cumhaz)
+            let hsum = cumsum0(
+                &hazard
+                    .iter()
+                    .zip(&nrisk)
+                    .map(|(h, n)| h / n)
+                    .collect::<Vec<_>>(),
+            );
+            let term1_table = with0(&nrisk.iter().map(|n| 1.0 / n).collect::<Vec<_>>());
+            let surv_table = with0(&surv);
+            for row in 0..n {
+                for j in 0..ntime {
+                    let term1 = term1_table[dmin(row, j)];
+                    let term2 = hsum[ymin(row, j)];
+                    let mut value = match smin(row, j) {
+                        // events happen at the end of an interval, so no
+                        // dN at the start
+                        Some(s) => term1 + hsum[s] - term2,
+                        None => term1 - term2,
+                    };
+                    if kind == ResidualType::Pstate {
+                        value = -value * surv_table[tindex[j]];
+                    }
+                    resid[row][j] = value;
+                }
+            }
+        }
+        ResidualType::Pstate => {
+            // avoid a 0/0 issue when S(t) = 0 and hazard = 1
+            let temp: Vec<f64> = hazard
+                .iter()
+                .map(|&h| if h == 1.0 { 1.0 } else { 1.0 - h })
+                .collect();
+            let hsum = cumsum0(
+                &hazard
+                    .iter()
+                    .zip(&nrisk)
+                    .zip(&temp)
+                    .map(|((h, n), t)| h / (n * t))
+                    .collect::<Vec<_>>(),
+            );
+            let term1_table = with0(
+                &temp
+                    .iter()
+                    .zip(&nrisk)
+                    .map(|(t, n)| 1.0 / (t * n))
+                    .collect::<Vec<_>>(),
+            );
+            let surv_table = with0(&surv);
+            for row in 0..n {
+                for j in 0..ntime {
+                    let term1 = term1_table[dmin(row, j)];
+                    let term2 = hsum[ymin(row, j)];
+                    let stemp = surv_table[tindex[j]];
+                    resid[row][j] = match smin(row, j) {
+                        Some(s) => stemp * (term2 - (hsum[s] + term1)),
+                        None => stemp * (term2 - term1),
+                    };
+                }
+            }
+        }
+        ResidualType::Auc => {
+            // see survfit:AUC in the methods document
+            let t0 = if dtime[0] > 0.0 {
+                0.0
+            } else {
+                2.0 * dtime[0] - 1.0
+            };
+            let mut aucd = Vec::with_capacity(nevent); // AUC from t0 to dtime
+            let mut acc = 0.0;
+            for k in 0..nevent {
+                let previous = if k == 0 { t0 } else { dtime[k - 1] };
+                let height = if k == 0 { 1.0 } else { surv[k - 1] };
+                acc += (dtime[k] - previous) * height;
+                aucd.push(acc);
+            }
+            let tmax = times.iter().copied().fold(f64::NAN, f64::max);
+            let dmax = dtime[nevent - 1];
+            let mut xs = Vec::with_capacity(nevent + 2);
+            xs.push(t0);
+            xs.extend_from_slice(&dtime);
+            let mut ys = Vec::with_capacity(nevent + 2);
+            ys.push(0.0);
+            ys.extend_from_slice(&aucd);
+            let extend = tmax > dmax;
+            if extend {
+                xs.push(tmax);
+                ys.push(aucd[nevent - 1] + surv[nevent - 1] * (tmax - dmax));
+            }
+            let auctau: Vec<f64> = times
+                .iter()
+                .map(|&t| approx_linear(&xs, &ys, t, extend))
+                .collect();
+            let dd: Vec<f64> = nrisk
+                .iter()
+                .zip(&hazard)
+                .map(|(n, h)| {
+                    let value = match stype {
+                        SurvType::ExpCumhaz => 1.0 / n,
+                        SurvType::KaplanMeier => 1.0 / (n * (1.0 - h)),
+                    };
+                    if value.is_finite() { value } else { 0.0 } // past the last death
+                })
+                .collect();
+            // each column of resid has a different weight vector: the AUC
+            // from dtime[k] to tau
+            for j in 0..ntime {
+                let wt: Vec<f64> = aucd.iter().map(|a| auctau[j] - a).collect();
+                let hsum = cumsum0(
+                    &wt.iter()
+                        .zip(&hazard)
+                        .zip(&dd)
+                        .map(|((w, h), d)| w * h * d)
+                        .collect::<Vec<_>>(),
+                );
+                let term1_table =
+                    with0(&wt.iter().zip(&dd).map(|(w, d)| w * d).collect::<Vec<_>>());
+                for row in 0..n {
+                    let term1 = term1_table[dmin(row, j)];
+                    let term2 = hsum[ymin(row, j)];
+                    resid[row][j] = match smin(row, j) {
+                        Some(s) => term2 - (term1 + hsum[s]),
+                        None => term2 - term1,
+                    };
+                }
+            }
+        }
+        ResidualType::Cumhaz => unreachable!("handled by the first arm"),
     }
+    resid
+}
 
-    let pseudo_matrix = if matches!(pseudo_type, "survival" | "cumhaz") {
-        compute_ij_pseudo(&time, &status, &times, pseudo_type)
+/// Sorted unique `times`, binned with `aeqSurv` when the fit was.
+fn prepare_times(times: &[f64], timefix: bool) -> SurvivalResult<Vec<f64>> {
+    validate_non_empty(times, "times")?;
+    validate_finite(times, "times")?;
+    let mut times = times.to_vec();
+    times.sort_by(f64::total_cmp);
+    times.dedup();
+    if timefix {
+        times = crate::data_prep::aeq_surv(&times, None, None)?.time;
+        times.dedup();
+    }
+    Ok(times)
+}
+
+/// Port of `residuals.survfit` for single-endpoint curves (named after its
+/// C kernel `survfitresid`).
+///
+/// The fit is recomputed from `data` and `options` (R re-reads the model
+/// frame of the fit).  `collapse` sums the weighted residuals of the rows
+/// of each `id` (only meaningful with an id that repeats); `weighted`
+/// multiplies the rows by the case weights.
+///
+/// A `start_time` in the options drops observations from the curve but
+/// not from the residuals: R hands the whole model frame to `rsurvpart1`,
+/// where a row that ends before the first event time of the curve has no
+/// event-time index and therefore a residual of 0 at every time.
+pub fn survfitresid(
+    data: &SurvfitKMData,
+    options: &SurvfitKMOptions,
+    times: &[f64],
+    kind: ResidualType,
+    collapse: bool,
+    weighted: bool,
+) -> SurvivalResult<SurvfitResid> {
+    let fit = survfitkm(data, options)?;
+    residuals_from_fit(data, options, &fit, times, kind, collapse, weighted)
+}
+
+fn residuals_from_fit(
+    data: &SurvfitKMData,
+    options: &SurvfitKMOptions,
+    fit: &SurvfitKMResult,
+    times: &[f64],
+    kind: ResidualType,
+    collapse: bool,
+    weighted: bool,
+) -> SurvivalResult<SurvfitResid> {
+    let times = prepare_times(times, options.timefix)?;
+    let n = data.time.len();
+    // the rows of each curve, in data order
+    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
+        || vec![0],
+        |strata| {
+            let mut levels = strata.clone();
+            levels.sort_unstable();
+            levels.dedup();
+            levels
+        },
+    );
+    let curve_of: Vec<usize> = (0..n)
+        .map(|i| match &data.strata {
+            Some(strata) => strata_levels
+                .binary_search(&strata[i])
+                .expect("strata codes come from the data"),
+            None => 0,
+        })
+        .collect();
+    let ranges = fit.curve_ranges();
+    let collapse = collapse
+        && data.id.as_ref().is_some_and(|id| {
+            let mut unique = id.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            unique.len() < id.len()
+        });
+    if collapse && !weighted {
+        return Err(SurvivalError::invalid_input(
+            "invalid combination of options: collapse=TRUE and weighted=FALSE",
+        ));
+    }
+    let (start, stop) = if options.timefix {
+        let fixed = crate::data_prep::aeq_surv(&data.time, data.start.as_deref(), None)?;
+        (fixed.time2, fixed.time)
     } else {
-        compute_rmst_jackknife_pseudo(&time, &status, &times)
+        (data.start.clone(), data.time.clone())
     };
-
-    Ok(PseudoResult {
-        pseudo: pseudo_matrix,
-        time: times,
-        type_: pseudo_type.to_string(),
-        n,
+    let mut resid = vec![vec![0.0; times.len()]; n];
+    for (curve, range) in ranges.iter().enumerate() {
+        let rows: Vec<usize> = (0..n).filter(|&i| curve_of[i] == curve).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let values = rsurvpart1(
+            &rows,
+            start.as_deref(),
+            &stop,
+            &data.status,
+            &times,
+            kind,
+            options.stype,
+            fit,
+            range.clone(),
+        );
+        for (row, value) in rows.into_iter().zip(values) {
+            resid[row] = value;
+        }
+    }
+    let casewt = |i: usize| data.weights.as_ref().map_or(1.0, |w| w[i]);
+    if collapse {
+        let id = data.id.as_ref().expect("collapse requires an id");
+        if let Some(strata) = &data.strata {
+            // the same id in several curves cannot be collapsed
+            let mut seen: std::collections::HashMap<i64, i32> = std::collections::HashMap::new();
+            for i in 0..n {
+                if *seen.entry(id[i]).or_insert(strata[i]) != strata[i] {
+                    return Err(SurvivalError::invalid_input(
+                        "same id appears in multiple curves, cannot collapse",
+                    ));
+                }
+            }
+        }
+        let mut order: Vec<i64> = Vec::new();
+        let mut index: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+        let mut values: Vec<Vec<f64>> = Vec::new();
+        let mut curve: Vec<usize> = Vec::new();
+        for i in 0..n {
+            let slot = *index.entry(id[i]).or_insert_with(|| {
+                order.push(id[i]);
+                values.push(vec![0.0; times.len()]);
+                curve.push(curve_of[i]);
+                values.len() - 1
+            });
+            let weight = casewt(i);
+            for (target, value) in values[slot].iter_mut().zip(&resid[i]) {
+                *target += weight * value;
+            }
+        }
+        return Ok(SurvfitResid {
+            id: order,
+            curve,
+            times,
+            values,
+        });
+    }
+    if weighted {
+        for (i, row) in resid.iter_mut().enumerate() {
+            let weight = casewt(i);
+            for value in row {
+                *value *= weight;
+            }
+        }
+    }
+    Ok(SurvfitResid {
+        id: data.id.clone().unwrap_or_else(|| (0..n as i64).collect()),
+        curve: curve_of,
+        times,
+        values: resid,
     })
 }
 
-#[derive(Debug, Clone)]
-struct EventBlock {
-    time: f64,
-    risk: f64,
-    events: f64,
-    survival: f64,
-    cumhaz: f64,
-}
-
-fn event_blocks(time: &[f64], status: &[i32]) -> Vec<EventBlock> {
-    let n = time.len();
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
-
-    let mut blocks = Vec::new();
-    let mut n_at_risk = n as f64;
-    let mut surv = 1.0;
-    let mut cumhaz = 0.0;
-    let mut start = 0;
-
-    while start < n {
-        let current_time = time[indices[start]];
-        let mut end = start + 1;
-        while end < n && same_time(time[indices[end]], current_time) {
-            end += 1;
-        }
-
-        let n_events = indices[start..end]
-            .iter()
-            .filter(|&&idx| status[idx] == 1)
-            .count() as f64;
-        let n_removed = (end - start) as f64;
-        if n_events > 0.0 && n_at_risk > 0.0 {
-            let hazard = n_events / n_at_risk;
-            surv *= 1.0 - hazard;
-            cumhaz += hazard;
-            blocks.push(EventBlock {
-                time: current_time,
-                risk: n_at_risk,
-                events: n_events,
-                survival: surv,
-                cumhaz,
-            });
-        }
-
-        n_at_risk -= n_removed;
-        start = end;
-    }
-
-    blocks
-}
-
-fn sorted_time_indices(times: &[f64]) -> Vec<usize> {
-    let mut indices: Vec<usize> = (0..times.len()).collect();
-    indices.sort_by(|&left, &right| {
-        times[left]
-            .total_cmp(&times[right])
-            .then_with(|| left.cmp(&right))
-    });
-    indices
-}
-
-fn subject_at_risk(subject_time: f64, event_time: f64) -> bool {
-    subject_time + TIME_EPSILON >= event_time
-}
-
-fn subject_event_at_time(subject_time: f64, subject_status: i32, event_time: f64) -> bool {
-    subject_status == 1 && same_time(subject_time, event_time)
-}
-
-fn compute_ij_pseudo(
-    time: &[f64],
-    status: &[i32],
-    eval_times: &[f64],
-    type_: &str,
-) -> Vec<Vec<f64>> {
-    let n = time.len();
-    let n_f64 = n as f64;
-    let blocks = event_blocks(time, status);
-    let eval_order = sorted_time_indices(eval_times);
-    let is_survival = type_ == "survival";
-
-    (0..n)
-        .into_par_iter()
-        .map(|row| {
-            let mut values = vec![0.0; eval_times.len()];
-            let mut influence = 0.0;
-            let mut block_idx = 0;
-            for &eval_idx in &eval_order {
-                let eval_time = eval_times[eval_idx];
-                while block_idx < blocks.len() && blocks[block_idx].time <= eval_time + TIME_EPSILON
-                {
-                    let block = &blocks[block_idx];
-                    if subject_at_risk(time[row], block.time) {
-                        if is_survival {
-                            if subject_event_at_time(time[row], status[row], block.time) {
-                                influence -= 1.0 / block.risk;
-                            } else if block.risk > block.events + DIVISION_FLOOR {
-                                influence +=
-                                    block.events / (block.risk * (block.risk - block.events));
-                            }
-                        } else if subject_event_at_time(time[row], status[row], block.time) {
-                            influence += (block.risk - block.events) / (block.risk * block.risk);
-                        } else {
-                            influence -= block.events / (block.risk * block.risk);
-                        }
-                    }
-                    block_idx += 1;
-                }
-
-                values[eval_idx] = if block_idx == 0 {
-                    if is_survival { 1.0 } else { 0.0 }
-                } else {
-                    let block = &blocks[block_idx - 1];
-                    if is_survival {
-                        block.survival + n_f64 * block.survival * influence
-                    } else {
-                        block.cumhaz + n_f64 * influence
-                    }
-                };
-            }
-            values
-        })
-        .collect()
-}
-
-fn rmst_leave_one_out_values(
-    blocks: &[EventBlock],
-    subject_time: f64,
-    subject_status: i32,
-    eval_times: &[f64],
-    eval_order: &[usize],
-) -> Vec<f64> {
-    let mut values = vec![0.0; eval_times.len()];
-    let mut block_idx = 0;
-    let mut previous_time = 0.0;
-    let mut survival = 1.0;
-    let mut area = 0.0;
-
-    for &eval_idx in eval_order {
-        let eval_time = eval_times[eval_idx];
-        while block_idx < blocks.len() && blocks[block_idx].time <= eval_time {
-            let block = &blocks[block_idx];
-            area += survival * (block.time - previous_time);
-            let risk = block.risk - usize::from(subject_at_risk(subject_time, block.time)) as f64;
-            let events = block.events
-                - usize::from(subject_event_at_time(
-                    subject_time,
-                    subject_status,
-                    block.time,
-                )) as f64;
-            if events > 0.0 && risk > 0.0 {
-                survival *= 1.0 - events / risk;
-            }
-            previous_time = block.time;
-            block_idx += 1;
-        }
-        values[eval_idx] = area + survival * (eval_time - previous_time);
-    }
-    values
-}
-
-fn compute_rmst_block_jackknife_pseudo(
-    time: &[f64],
-    status: &[i32],
-    eval_times: &[f64],
-) -> Vec<Vec<f64>> {
-    let n_f64 = time.len() as f64;
-    let full_rmst = compute_km(time, status, eval_times, "rmst");
-    let blocks = event_blocks(time, status);
-    let eval_order = sorted_time_indices(eval_times);
-
-    (0..time.len())
-        .into_par_iter()
-        .map(|row| {
-            let leave_one_out =
-                rmst_leave_one_out_values(&blocks, time[row], status[row], eval_times, &eval_order);
-            full_rmst
-                .iter()
-                .zip(leave_one_out)
-                .map(|(&full, leave_one_out)| n_f64 * full - (n_f64 - 1.0) * leave_one_out)
-                .collect()
-        })
-        .collect()
-}
-
-fn compute_rmst_repeated_jackknife_pseudo(
-    time: &[f64],
-    status: &[i32],
-    eval_times: &[f64],
-) -> Vec<Vec<f64>> {
-    let n_f64 = time.len() as f64;
-    let full_rmst = compute_km(time, status, eval_times, "rmst");
-
-    (0..time.len())
-        .into_par_iter()
-        .map(|i| {
-            let loo_time: Vec<f64> = time
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, &t)| t)
-                .collect();
-            let loo_status: Vec<i32> = status
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, &s)| s)
-                .collect();
-
-            let leave_one_out = compute_km(&loo_time, &loo_status, eval_times, "rmst");
-
-            full_rmst
-                .iter()
-                .zip(leave_one_out)
-                .map(|(&full, leave_one_out)| n_f64 * full - (n_f64 - 1.0) * leave_one_out)
-                .collect()
-        })
-        .collect()
-}
-
-fn has_non_exact_near_ties(time: &[f64]) -> bool {
-    let mut sorted = time.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    sorted
-        .windows(2)
-        .any(|pair| pair[0] != pair[1] && same_time(pair[0], pair[1]))
-}
-
-fn compute_rmst_jackknife_pseudo(
-    time: &[f64],
-    status: &[i32],
-    eval_times: &[f64],
-) -> Vec<Vec<f64>> {
-    if has_non_exact_near_ties(time) {
-        compute_rmst_repeated_jackknife_pseudo(time, status, eval_times)
-    } else {
-        compute_rmst_block_jackknife_pseudo(time, status, eval_times)
-    }
-}
-
-fn validate_pseudo_type(type_: Option<&str>) -> PyResult<&'static str> {
-    match type_.unwrap_or("survival") {
-        "survival" => Ok("survival"),
-        "cumhaz" => Ok("cumhaz"),
-        "rmst" => Ok("rmst"),
-        _ => Err(PyValueError::new_err(
-            "type must be 'survival', 'cumhaz', or 'rmst'",
-        )),
-    }
-}
-
-fn validate_pseudo_inputs(
-    time: &[f64],
-    status: &[i32],
-    eval_times: Option<&[f64]>,
-) -> PyResult<()> {
-    if status.len() != time.len() {
-        return Err(PyValueError::new_err(
-            "time and status must have same length",
+/// Port of `pseudo` (`R/pseudo.R`) for single-endpoint curves: the
+/// jackknife pseudo values `S(t) + n * residual` at `times`, with `n` the
+/// number of observations (subjects, with an id) of the curve after any
+/// `start_time`.  With `collapse` the rows are collapsed by id when an id
+/// repeats (and the residuals weighted, R's `weighted = collapse`); rows
+/// that a `start_time` removed from the curve keep the curve's estimate
+/// (their residual is 0, see [`survfitresid`]).
+pub fn pseudo(
+    data: &SurvfitKMData,
+    options: &SurvfitKMOptions,
+    times: &[f64],
+    kind: ResidualType,
+    collapse: bool,
+) -> SurvivalResult<SurvfitResid> {
+    let fit = survfitkm(data, options)?;
+    let mut residuals = residuals_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
+    // summary(fit, rmean = t) refuses a truncation point before the first
+    // time of the fit (survfitKM objects carry no start.time)
+    let smallest = fit.time.iter().copied().fold(f64::INFINITY, f64::min);
+    if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
+        return Err(SurvivalError::invalid_input(
+            "Truncation point for the mean time in state is < smallest survival",
         ));
     }
-
-    validate_no_nan(time, "time")?;
-    validate_finite(time, "time")?;
-    validate_non_negative(time, "time")?;
-    validate_binary_i32(status, "status")?;
-
-    if let Some(eval_times) = eval_times {
-        validate_no_nan(eval_times, "eval_times")?;
-        validate_finite(eval_times, "eval_times")?;
-        validate_non_negative(eval_times, "eval_times")?;
-    }
-
-    Ok(())
-}
-
-fn default_event_times(time: &[f64], status: &[i32]) -> Vec<f64> {
-    let mut event_times: Vec<f64> = time
+    let nn: Vec<f64> = fit
+        .n_id
+        .as_ref()
+        .unwrap_or(&fit.n)
         .iter()
-        .zip(status.iter())
-        .filter(|(_, s)| **s == 1)
-        .map(|(t, _)| *t)
+        .map(|&v| v as f64)
         .collect();
-    event_times.sort_by(|a, b| a.total_cmp(b));
-    event_times.dedup_by(|a, b| same_time(*a, *b));
-    event_times
+    let times = &residuals.times;
+    let n_curves = fit.n_curves();
+    // yhat[time][curve]
+    let yhat: Vec<Vec<f64>> = match kind {
+        ResidualType::Pstate | ResidualType::Cumhaz => {
+            let summary = summary_survfit_times(&fit, times, true)?;
+            let ranges = summary.curve_ranges();
+            (0..times.len())
+                .map(|j| {
+                    ranges
+                        .iter()
+                        .map(|range| match kind {
+                            ResidualType::Pstate => summary.surv[range.start + j],
+                            _ => summary.cumhaz[range.start + j],
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+        ResidualType::Auc => {
+            let fit0 = survfit0(&fit);
+            let mut yhat = Vec::with_capacity(times.len());
+            for &t in times {
+                let table = survmean(&fit0, 1.0, RmeanOption::At(t))?;
+                yhat.push(table.rmean.expect("rmean requested"));
+            }
+            yhat
+        }
+    };
+    debug_assert!(yhat.iter().all(|row| row.len() == n_curves));
+    for (row, &curve) in residuals.values.iter_mut().zip(&residuals.curve) {
+        for (j, value) in row.iter_mut().enumerate() {
+            *value = yhat[j][curve] + nn[curve] * *value;
+        }
+    }
+    Ok(residuals)
 }
 
-fn rmst_values_at(km_times: &[f64], km_surv: &[f64], eval_times: &[f64]) -> Vec<f64> {
-    let mut prefix = Vec::with_capacity(km_times.len());
-    prefix.push(0.0);
-    for idx in 1..km_times.len() {
-        prefix.push(prefix[idx - 1] + km_surv[idx - 1] * (km_times[idx] - km_times[idx - 1]));
-    }
+// ---------------------------------------------------------------------------
+// Multi-state curves
+// ---------------------------------------------------------------------------
 
-    eval_times
+/// Residuals (or pseudo values) of a multi-state curve:
+/// `values[r][k][j]` belongs to row `r`, state (or transition, for the
+/// cumulative hazard) `k`, at `times[j]`.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct SurvfitAJResid {
+    #[pyo3(get)]
+    pub id: Vec<i64>,
+    #[pyo3(get)]
+    pub curve: Vec<usize>,
+    #[pyo3(get)]
+    pub times: Vec<f64>,
+    /// The states, or the `from:to` transitions for the cumulative hazard.
+    #[pyo3(get)]
+    pub columns: Vec<String>,
+    #[pyo3(get)]
+    pub values: Vec<Vec<Vec<f64>>>,
+}
+
+/// Everything `survfitresid.c` reads for one curve.
+struct AJResidData<'a> {
+    entry: Option<&'a [f64]>,
+    etime: &'a [f64],
+    /// 1-based state entered, 0 = censored.
+    status: &'a [usize],
+    sort1: &'a [usize],
+    sort2: &'a [usize],
+    cstate: &'a [usize],
+    wt: &'a [f64],
+    p0: &'a [f64],
+    /// `nobs x nstate` initial influence.
+    i0: &'a Array2<f64>,
+    otime: &'a [f64],
+    starttime: f64,
+    doauc: bool,
+}
+
+/// Port of `survfitresid` (`src/survfitresid.c`): the influence of every
+/// observation on the Aalen-Johansen estimate (`[obs, time, state]`) and,
+/// when asked, on the area under it.
+fn survfitresid_kernel(d: &AJResidData<'_>) -> (Array3<f64>, Option<Array3<f64>>) {
+    let nobs = d.sort2.len();
+    let nstate = d.p0.len();
+    let nout = d.otime.len();
+    let mut infp = Array3::<f64>::zeros((nobs, nout, nstate));
+    let mut infa = d.doauc.then(|| Array3::<f64>::zeros((nobs, nout, nstate)));
+    let mut ws = vec![0.0; nstate]; // weighted count at risk, by state
+    let mut atrisk = vec![false; nobs];
+    let mut pstate: Vec<f64> = d.p0.to_vec();
+    let mut cmat = Array2::<f64>::zeros((nstate, nstate)); // H = I + C
+    let mut tempvec = vec![0.0; nstate];
+    let mut starttime = d.starttime;
+
+    // output times before the start have zero influence
+    let mut itime = 0;
+    while itime < nout && d.otime[itime] < starttime {
+        itime += 1;
+    }
+    if itime < nout {
+        for j in 0..nstate {
+            for i in 0..nobs {
+                infp[[i, itime, j]] = d.i0[[i, j]];
+            }
+        }
+    }
+    // copy the current time's influence forward to the next output time
+    let carry_forward = |infp: &mut Array3<f64>, infa: &mut Option<Array3<f64>>, itime: usize| {
+        if itime + 1 < nout {
+            for i in 0..nobs {
+                for k in 0..nstate {
+                    infp[[i, itime + 1, k]] = infp[[i, itime, k]];
+                }
+            }
+            if let Some(infa) = infa {
+                for i in 0..nobs {
+                    for k in 0..nstate {
+                        infa[[i, itime + 1, k]] = infa[[i, itime, k]];
+                    }
+                }
+            }
+        }
+    };
+    // AUC influence += (pstate influence) * (t - starttime)
+    let add_auc = |infp: &Array3<f64>, infa: &mut Option<Array3<f64>>, itime: usize, width: f64| {
+        if let Some(infa) = infa {
+            for i in 0..nobs {
+                for k in 0..nstate {
+                    infa[[i, itime, k]] += infp[[i, itime, k]] * width;
+                }
+            }
+        }
+    };
+    if d.entry.is_none() {
+        // everyone starts out at risk
+        for i in 0..nobs {
+            atrisk[i] = true;
+            ws[d.cstate[i]] += d.wt[i];
+        }
+    }
+    let mut eptr = 0; // index to sort1, the entry times
+    let mut i = 0;
+    while i < nobs {
+        let p2 = d.sort2[i];
+        let ctime = d.etime[p2];
+        // finish the output times before this event time
+        while itime < nout && d.otime[itime] < ctime {
+            add_auc(&infp, &mut infa, itime, d.otime[itime] - starttime);
+            if d.doauc {
+                starttime = d.otime[itime];
+            }
+            carry_forward(&mut infp, &mut infa, itime);
+            itime += 1;
+        }
+        if itime == nout {
+            break; // no need to go past the last output time
+        }
+        if let Some(entry) = d.entry {
+            // add subjects whose entry time is < ctime into the counts
+            while eptr < nobs {
+                let p1 = d.sort1[eptr];
+                if entry[p1] < ctime {
+                    atrisk[p1] = true;
+                    ws[d.cstate[p1]] += d.wt[p1];
+                    eptr += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        cmat.fill(0.0);
+        // count the transitions at this time point; a "move" to the same
+        // state does not count
+        let mut nevent = 0;
+        let mut oldstate = 0;
+        let mut newstate = 0;
+        let mut psave = p2;
+        for &q in &d.sort2[i..] {
+            if d.etime[q] > ctime {
+                break;
+            }
+            if d.status[q] != 0 && d.cstate[q] != d.status[q] - 1 {
+                newstate = d.status[q] - 1;
+                oldstate = d.cstate[q];
+                psave = q;
+                nevent += 1;
+                cmat[[oldstate, newstate]] += d.wt[q] / ws[oldstate];
+                cmat[[oldstate, oldstate]] -= d.wt[q] / ws[oldstate];
+            }
+        }
+        if nevent > 0 && d.doauc {
+            // the AUC influence uses the prior influence matrix
+            add_auc(&infp, &mut infa, itime, ctime - starttime);
+            starttime = ctime;
+        }
+        // Update the derivative: S(t) = S(t-)(I + C), so dS/dw_i = U(I + C)
+        // + S(t-) dC/dw_i; the second term affects only those at risk.
+        if nevent == 1 {
+            // all but the oldstate row of C are 0
+            let temp = -cmat[[oldstate, oldstate]];
+            for j in 0..nobs {
+                let value = infp[[j, itime, oldstate]];
+                infp[[j, itime, newstate]] += temp * value;
+                infp[[j, itime, oldstate]] -= temp * value;
+            }
+            let temp2 = pstate[oldstate] / ws[oldstate]; // S(t-) / weight
+            infp[[psave, itime, newstate]] += temp2; // the obs which moved
+            infp[[psave, itime, oldstate]] -= temp2;
+            for &q in &d.sort2[i..] {
+                if atrisk[q] && d.cstate[q] == oldstate {
+                    infp[[q, itime, oldstate]] += temp * temp2;
+                    infp[[q, itime, newstate]] -= temp * temp2;
+                }
+            }
+        } else if nevent > 1 {
+            // U = U + U C, a matrix multiplication
+            for j in 0..nobs {
+                for k in 0..nstate {
+                    tempvec[k] = (0..nstate)
+                        .map(|kk| infp[[j, itime, kk]] * cmat[[kk, k]])
+                        .sum();
+                }
+                for k in 0..nstate {
+                    infp[[j, itime, k]] += tempvec[k];
+                }
+            }
+            // the dH term for everyone still at risk
+            for &q in &d.sort2[i..] {
+                if atrisk[q] {
+                    let old = d.cstate[q];
+                    let temp2 = pstate[old] / ws[old];
+                    for k in 0..nstate {
+                        infp[[q, itime, k]] -= cmat[[old, k]] * temp2;
+                    }
+                }
+            }
+            // C's `status > 1` skips a tied transition into the first
+            // state; kept as in survfitresid.c
+            for &q in &d.sort2[i..] {
+                if d.etime[q] > ctime {
+                    break;
+                }
+                let old = d.cstate[q];
+                if d.status[q] > 1 && old != d.status[q] - 1 {
+                    let temp2 = pstate[old] / ws[old];
+                    let new = d.status[q] - 1;
+                    infp[[q, itime, old]] -= temp2;
+                    infp[[q, itime, new]] += temp2;
+                }
+            }
+        }
+        // update p
+        for j in 0..nstate {
+            tempvec[j] = (0..nstate).map(|k| pstate[k] * cmat[[k, j]]).sum();
+        }
+        for j in 0..nstate {
+            pstate[j] += tempvec[j];
+        }
+        // take all the events and censors tied at ctime out of the risk set
+        while i < nobs {
+            let q = d.sort2[i];
+            if d.etime[q] > ctime {
+                break;
+            }
+            ws[d.cstate[q]] -= d.wt[q];
+            atrisk[q] = false;
+            i += 1;
+        }
+    }
+    // reporting times after the last event
+    while itime < nout {
+        add_auc(&infp, &mut infa, itime, d.otime[itime] - starttime);
+        if d.doauc {
+            starttime = d.otime[itime];
+        }
+        carry_forward(&mut infp, &mut infa, itime);
+        itime += 1;
+    }
+    (infp, infa)
+}
+
+/// Port of `rsurvpart2` for `type = "cumhaz"`: `[obs][transition][time]`
+/// residuals of one curve, computed from the fitted hazard increments.
+#[allow(clippy::too_many_arguments)]
+fn rsurvpart2_cumhaz(
+    rows: &[usize],
+    entry: Option<&[f64]>,
+    etime: &[f64],
+    status: &[usize],
+    istate: &[usize],
+    times: &[f64],
+    fit: &SurvfitAJResult,
+    range: std::ops::Range<usize>,
+) -> Vec<Vec<Vec<f64>>> {
+    let n = rows.len();
+    let ntime = times.len();
+    let nhaz = fit.hazard_from.len();
+    let events: Vec<usize> = range
+        .filter(|&i| fit.n_event[i].iter().sum::<f64>() > 0.0)
+        .collect();
+    let dtime: Vec<f64> = events.iter().map(|&i| fit.time[i]).collect();
+    let nevent = events.len();
+    let mut out = vec![vec![vec![0.0; ntime]; nhaz]; n];
+    if nevent == 0 {
+        return out;
+    }
+    // hazard increments per transition and the at-risk counts per state
+    let mut hazard = vec![vec![0.0; nhaz]; nevent];
+    let mut previous = vec![0.0; nhaz];
+    for (e, &i) in events.iter().enumerate() {
+        for k in 0..nhaz {
+            hazard[e][k] = fit.cumhaz[i][k] - previous[k];
+            previous[k] = fit.cumhaz[i][k];
+        }
+    }
+    let safe = |e: usize, state: usize| -> f64 {
+        let value = fit.n_risk[events[e]][state];
+        if value == 0.0 { 1.0 } else { value }
+    };
+    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let yindex: Vec<usize> = rows
         .iter()
-        .map(|&eval_time| {
-            let idx = km_times.partition_point(|&time| time <= eval_time);
-            let idx = idx.saturating_sub(1);
-            prefix[idx] + km_surv[idx] * (eval_time - km_times[idx])
+        .map(|&r| find_interval(&dtime, etime[r]))
+        .collect();
+    let sindex: Option<Vec<usize>> = entry.map(|entry| {
+        rows.iter()
+            .map(|&r| find_interval(&dtime, entry[r]))
+            .collect()
+    });
+    for k in 0..nhaz {
+        let from = fit.hazard_from[k];
+        let to = fit.hazard_to[k];
+        // cumsum(c(0, hazard / nrisk[from])) and c(0, 1 / nrisk[from])
+        let mut hsum = vec![0.0; nevent + 1];
+        let mut term1 = vec![0.0; nevent + 1];
+        for e in 0..nevent {
+            hsum[e + 1] = hsum[e] + hazard[e][k] / safe(e, from);
+            term1[e + 1] = 1.0 / safe(e, from);
+        }
+        for (row, &r) in rows.iter().enumerate() {
+            let at_risk = istate[r] == from;
+            if !at_risk {
+                continue;
+            }
+            let event = status[r] == to + 1;
+            for j in 0..ntime {
+                let ymin = yindex[row].min(tindex[j]);
+                let dmin = if event && yindex[row] != 0 && yindex[row] <= tindex[j] {
+                    yindex[row]
+                } else {
+                    0
+                };
+                let mut value = if event { term1[dmin] } else { 0.0 };
+                value -= hsum[ymin];
+                if let Some(sindex) = &sindex {
+                    // events happen at the end of an interval, so no dN at
+                    // the start
+                    value += hsum[sindex[row].min(tindex[j])];
+                }
+                out[row][k][j] = value;
+            }
+        }
+    }
+    out
+}
+
+/// Port of `residuals.survfit` for multi-state curves (`rsurvpart2`).
+/// `collapse` sums the weighted rows of each cluster (the id by default).
+///
+/// As for single-endpoint curves, a `start_time` does not remove rows
+/// from the residuals: R passes the whole model frame to `survfitresid.c`,
+/// which walks every observation from the smallest event time (the curve's
+/// `t0` only zeroes the influence at reporting times before it and starts
+/// the area under the curve).
+pub fn survfitresid_aj(
+    data: &SurvfitAJData,
+    options: &SurvfitAJOptions,
+    times: &[f64],
+    kind: ResidualType,
+    collapse: bool,
+    weighted: bool,
+) -> SurvivalResult<SurvfitAJResid> {
+    let fit = survfitaj(data, options)?;
+    residuals_aj_from_fit(data, options, &fit, times, kind, collapse, weighted)
+}
+
+fn residuals_aj_from_fit(
+    data: &SurvfitAJData,
+    options: &SurvfitAJOptions,
+    fit: &SurvfitAJResult,
+    times: &[f64],
+    kind: ResidualType,
+    collapse: bool,
+    weighted: bool,
+) -> SurvivalResult<SurvfitAJResid> {
+    let times = prepare_times(times, options.timefix)?;
+    let n = data.time.len();
+    let AJPrepared {
+        start,
+        time,
+        weights,
+        id,
+        check,
+    } = aj_prepare(data, options.timefix)?;
+    let nstate = fit.states.len();
+    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
+        || vec![0],
+        |strata| {
+            let mut levels = strata.clone();
+            levels.sort_unstable();
+            levels.dedup();
+            levels
+        },
+    );
+    let curve_of: Vec<usize> = (0..n)
+        .map(|i| match &data.strata {
+            Some(strata) => strata_levels
+                .binary_search(&strata[i])
+                .expect("strata codes come from the data"),
+            None => 0,
         })
-        .collect()
-}
-
-fn compute_km(time: &[f64], status: &[i32], eval_times: &[f64], type_: &str) -> Vec<f64> {
-    let n = time.len();
-    if n == 0 {
-        return vec![1.0; eval_times.len()];
+        .collect();
+    let cluster: Vec<i64> = match (&data.cluster, &data.id) {
+        (Some(cluster), _) => cluster.clone(),
+        (None, Some(id)) => id.clone(),
+        (None, None) => (0..n as i64).collect(),
+    };
+    let collapse = collapse && {
+        let mut unique = cluster.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        unique.len() < cluster.len()
+    };
+    if collapse && !weighted {
+        return Err(SurvivalError::invalid_input(
+            "invalid combination of options: collapse=TRUE and weighted=FALSE",
+        ));
     }
-
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
-
-    let mut km_times = Vec::new();
-    let mut km_surv = Vec::new();
-    let mut km_cumhaz = Vec::new();
-
-    let mut n_at_risk = n as f64;
-    let mut surv = 1.0;
-    let mut cumhaz = 0.0;
-    let mut prev_time = f64::NEG_INFINITY;
-
-    km_times.push(0.0);
-    km_surv.push(1.0);
-    km_cumhaz.push(0.0);
-
-    let mut start = 0;
-    while start < n {
-        let current_time = time[indices[start]];
-        let mut end = start + 1;
-        while end < n && same_time(time[indices[end]], current_time) {
-            end += 1;
+    let ncol = match kind {
+        ResidualType::Cumhaz => fit.hazard_from.len(),
+        _ => nstate,
+    };
+    let mut resid = vec![vec![vec![0.0; times.len()]; ncol]; n];
+    let ranges = fit.curve_ranges();
+    for (curve, range) in ranges.iter().enumerate() {
+        let rows: Vec<usize> = (0..n).filter(|&i| curve_of[i] == curve).collect();
+        if rows.is_empty() {
+            continue;
         }
-
-        let n_events = indices[start..end]
-            .iter()
-            .filter(|&&idx| status[idx] == 1)
-            .count() as f64;
-        let n_removed = (end - start) as f64;
-
-        if n_events > 0.0 && n_at_risk > 0.0 {
-            let hazard = n_events / n_at_risk;
-            surv *= 1.0 - hazard;
-            cumhaz += hazard;
-        }
-
-        n_at_risk -= n_removed;
-
-        if current_time > prev_time + TIME_EPSILON {
-            if current_time > *km_times.last().unwrap_or(&0.0) + TIME_EPSILON {
-                km_times.push(current_time);
-                km_surv.push(surv);
-                km_cumhaz.push(cumhaz);
-            } else {
-                let last = km_times.len() - 1;
-                km_surv[last] = surv;
-                km_cumhaz[last] = cumhaz;
+        let values: Vec<Vec<Vec<f64>>> = match kind {
+            ResidualType::Cumhaz => rsurvpart2_cumhaz(
+                &rows,
+                start.as_deref(),
+                &time,
+                &check.stat2,
+                &check.istate,
+                &times,
+                fit,
+                range.clone(),
+            ),
+            ResidualType::Pstate | ResidualType::Auc => {
+                let p0 = &fit.p0[curve];
+                // initial leverage when p0 was estimated and the initial
+                // states vary; unweighted, as rsurvpart2 has it
+                let mut inf0 = Array2::<f64>::zeros((rows.len(), nstate));
+                if options.p0.is_none() && p0.iter().any(|&p| p < 1.0) {
+                    let at_zero: Vec<usize> = (0..rows.len())
+                        .filter(|&k| match &start {
+                            None => true,
+                            Some(start) => start[rows[k]] < fit.t0 && time[rows[k]] >= fit.t0,
+                        })
+                        .collect();
+                    let wtsum: f64 = at_zero.iter().map(|&k| weights[rows[k]]).sum();
+                    for &k in &at_zero {
+                        for j in 0..nstate {
+                            let indicator = if check.istate[rows[k]] == j { 1.0 } else { 0.0 };
+                            inf0[[k, j]] = (indicator - p0[j]) / wtsum;
+                        }
+                    }
+                }
+                let etime: Vec<f64> = rows.iter().map(|&r| time[r]).collect();
+                let entry: Option<Vec<f64>> = start
+                    .as_ref()
+                    .map(|start| rows.iter().map(|&r| start[r]).collect());
+                let status: Vec<usize> = rows.iter().map(|&r| check.stat2[r]).collect();
+                let cstate: Vec<usize> = rows.iter().map(|&r| check.istate[r]).collect();
+                let wt: Vec<f64> = rows.iter().map(|&r| weights[r]).collect();
+                let sort1: Vec<usize> = entry.as_deref().map_or_else(Vec::new, sorted_indices_by);
+                let sort2 = sorted_indices_by(&etime);
+                let (infp, infa) = survfitresid_kernel(&AJResidData {
+                    entry: entry.as_deref(),
+                    etime: &etime,
+                    status: &status,
+                    sort1: &sort1,
+                    sort2: &sort2,
+                    cstate: &cstate,
+                    wt: &wt,
+                    p0,
+                    i0: &inf0,
+                    otime: &times,
+                    starttime: fit.t0,
+                    doauc: kind == ResidualType::Auc,
+                });
+                let source = match kind {
+                    ResidualType::Auc => infa.expect("auc requested"),
+                    _ => infp,
+                };
+                (0..rows.len())
+                    .map(|k| {
+                        (0..nstate)
+                            .map(|j| (0..times.len()).map(|t| source[[k, t, j]]).collect())
+                            .collect()
+                    })
+                    .collect()
             }
-            prev_time = current_time;
-        }
-
-        start = end;
-    }
-
-    if type_ == "rmst" {
-        return rmst_values_at(&km_times, &km_surv, eval_times);
-    }
-
-    let mut result = Vec::with_capacity(eval_times.len());
-    for &eval_t in eval_times {
-        let val = match type_ {
-            "survival" => {
-                let idx = km_times.partition_point(|&time| time <= eval_t + TIME_EPSILON);
-                km_surv[idx.saturating_sub(1)]
-            }
-            "cumhaz" => {
-                let idx = km_times.partition_point(|&time| time <= eval_t + TIME_EPSILON);
-                km_cumhaz[idx.saturating_sub(1)]
-            }
-            _ => unreachable!("pseudo type is validated before Kaplan-Meier evaluation"),
         };
-        result.push(val);
+        for (row, value) in rows.into_iter().zip(values) {
+            resid[row] = value;
+        }
     }
-
-    result
+    let columns: Vec<String> = match kind {
+        ResidualType::Cumhaz => fit
+            .hazard_from
+            .iter()
+            .zip(&fit.hazard_to)
+            .map(|(from, to)| format!("{}:{}", from + 1, to + 1))
+            .collect(),
+        _ => fit.states.clone(),
+    };
+    let casewt = |i: usize| weights[i];
+    if collapse {
+        if data.strata.is_some() {
+            let mut seen: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+            for i in 0..n {
+                if *seen.entry(id[i] as i64).or_insert(curve_of[i]) != curve_of[i] {
+                    return Err(SurvivalError::invalid_input(
+                        "same id appears in multiple curves, cannot collapse",
+                    ));
+                }
+            }
+        }
+        let mut order: Vec<i64> = Vec::new();
+        let mut index: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+        let mut values: Vec<Vec<Vec<f64>>> = Vec::new();
+        let mut curve: Vec<usize> = Vec::new();
+        for i in 0..n {
+            let slot = *index.entry(cluster[i]).or_insert_with(|| {
+                order.push(cluster[i]);
+                values.push(vec![vec![0.0; times.len()]; ncol]);
+                curve.push(curve_of[i]);
+                values.len() - 1
+            });
+            let weight = casewt(i);
+            for (target_col, source_col) in values[slot].iter_mut().zip(&resid[i]) {
+                for (target, value) in target_col.iter_mut().zip(source_col) {
+                    *target += weight * value;
+                }
+            }
+        }
+        return Ok(SurvfitAJResid {
+            id: order,
+            curve,
+            times,
+            columns,
+            values,
+        });
+    }
+    if weighted {
+        for (i, by_col) in resid.iter_mut().enumerate() {
+            let weight = casewt(i);
+            for col in by_col {
+                for value in col {
+                    *value *= weight;
+                }
+            }
+        }
+    }
+    Ok(SurvfitAJResid {
+        id: data.id.clone().unwrap_or_else(|| (0..n as i64).collect()),
+        curve: curve_of,
+        times,
+        columns,
+        values: resid,
+    })
 }
 
-#[pyfunction]
-#[pyo3(signature = (time, status, eval_times=None, type_=None))]
-pub fn pseudo_fast(
+/// `summary(fit, times = , extend = TRUE)$pstate` / `$cumhaz` of one curve
+/// at `t`: the row of `survfit0(fit)` at the largest time `<= t`, its first
+/// row (`p0` / 0, or the curve's own first row when it starts at `t0`)
+/// before that.
+fn aj_value_at(
+    fit: &SurvfitAJResult,
+    curve: usize,
+    range: &std::ops::Range<usize>,
+    t: f64,
+    cumhaz: bool,
+) -> Vec<f64> {
+    let count = fit.time[range.clone()].partition_point(|&x| x <= t);
+    if count == 0 {
+        let starts_at_t0 = !range.is_empty() && fit.time[range.start] == fit.t0;
+        match (cumhaz, starts_at_t0) {
+            (true, true) => fit.cumhaz[range.start].clone(),
+            (true, false) => vec![0.0; fit.hazard_from.len()],
+            (false, true) => fit.pstate[range.start].clone(),
+            (false, false) => fit.p0[curve].clone(),
+        }
+    } else if cumhaz {
+        fit.cumhaz[range.start + count - 1].clone()
+    } else {
+        fit.pstate[range.start + count - 1].clone()
+    }
+}
+
+/// `survmean2`'s mean time in state up to `maxtime`: the area under each
+/// state's probability from `t0`.
+fn aj_mean_time_in_state(
+    fit: &SurvfitAJResult,
+    curve: usize,
+    range: &std::ops::Range<usize>,
+    maxtime: f64,
+) -> Vec<f64> {
+    let nstate = fit.states.len();
+    // the survfit0 rows: (t0, p0) unless the curve already starts at t0
+    let mut tt = Vec::with_capacity(range.len() + 1);
+    let mut rows: Vec<&Vec<f64>> = Vec::with_capacity(range.len() + 1);
+    if range.is_empty() || fit.time[range.start] != fit.t0 {
+        tt.push(fit.t0);
+        rows.push(&fit.p0[curve]);
+    }
+    for i in range.clone() {
+        tt.push(fit.time[i]);
+        rows.push(&fit.pstate[i]);
+    }
+    let mut out = vec![0.0; nstate];
+    for (k, &t) in tt.iter().enumerate() {
+        if t >= maxtime {
+            break;
+        }
+        let next = tt
+            .get(k + 1)
+            .copied()
+            .filter(|&next| next < maxtime)
+            .unwrap_or(maxtime);
+        for j in 0..nstate {
+            out[j] += (next - t) * rows[k][j];
+        }
+    }
+    out
+}
+
+/// Port of `pseudo` for multi-state curves: `pstate(t) + n * residual`
+/// with `n` the number of subjects of the curve.
+pub fn pseudo_aj(
+    data: &SurvfitAJData,
+    options: &SurvfitAJOptions,
+    times: &[f64],
+    kind: ResidualType,
+    collapse: bool,
+) -> SurvivalResult<SurvfitAJResid> {
+    let fit = survfitaj(data, options)?;
+    let mut residuals =
+        residuals_aj_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
+    let ranges = fit.curve_ranges();
+    // summary(fit, rmean = t) checks the truncation point against the
+    // start.time when the fit has one (survfitAJ keeps it), the smallest
+    // time otherwise
+    let smallest = options
+        .start_time
+        .unwrap_or_else(|| fit.time.iter().copied().fold(f64::INFINITY, f64::min));
+    if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
+        return Err(SurvivalError::invalid_input(
+            "Truncation point for the mean time in state is < smallest survival",
+        ));
+    }
+    // yhat[curve][time][column]
+    let yhat: Vec<Vec<Vec<f64>>> = ranges
+        .iter()
+        .enumerate()
+        .map(|(curve, range)| {
+            residuals
+                .times
+                .iter()
+                .map(|&t| match kind {
+                    ResidualType::Pstate => aj_value_at(&fit, curve, range, t, false),
+                    ResidualType::Cumhaz => aj_value_at(&fit, curve, range, t, true),
+                    ResidualType::Auc => aj_mean_time_in_state(&fit, curve, range, t),
+                })
+                .collect()
+        })
+        .collect();
+    for (by_col, &curve) in residuals.values.iter_mut().zip(&residuals.curve) {
+        let nn = fit.n_id[curve] as f64;
+        for (k, col) in by_col.iter_mut().enumerate() {
+            for (j, value) in col.iter_mut().enumerate() {
+                *value = yhat[curve][j][k] + nn * *value;
+            }
+        }
+    }
+    Ok(residuals)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aj_inputs(
+    time: Vec<f64>,
+    state: Vec<i32>,
+    states: Vec<String>,
+    start: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    id: Option<Vec<i64>>,
+    istate: Option<Vec<String>>,
+    istate_levels: Option<Vec<String>>,
+    cluster: Option<Vec<i64>>,
+    p0: Option<Vec<f64>>,
+    timefix: bool,
+) -> SurvivalResult<(SurvfitAJData, SurvfitAJOptions)> {
+    let data = SurvfitAJData::try_new(
+        start,
+        time,
+        state,
+        states,
+        weights,
+        strata,
+        id,
+        istate,
+        istate_levels,
+        cluster,
+    )?;
+    let options = SurvfitAJOptions {
+        p0,
+        timefix,
+        ..Default::default()
+    };
+    Ok((data, options))
+}
+
+/// Python binding of [`survfitresid_aj`].
+#[pyfunction(name = "survfitresid_aj")]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true))]
+#[allow(clippy::too_many_arguments)]
+pub fn survfitresid_aj_py(
+    time: Vec<f64>,
+    state: Vec<i32>,
+    states: Vec<String>,
+    times: Vec<f64>,
+    start: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    id: Option<Vec<i64>>,
+    istate: Option<Vec<String>>,
+    istate_levels: Option<Vec<String>>,
+    cluster: Option<Vec<i64>>,
+    p0: Option<Vec<f64>>,
+    type_: &str,
+    collapse: bool,
+    weighted: Option<bool>,
+    timefix: bool,
+) -> PyResult<SurvfitAJResid> {
+    let (data, options) = aj_inputs(
+        time,
+        state,
+        states,
+        start,
+        weights,
+        strata,
+        id,
+        istate,
+        istate_levels,
+        cluster,
+        p0,
+        timefix,
+    )?;
+    Ok(survfitresid_aj(
+        &data,
+        &options,
+        &times,
+        ResidualType::parse(type_)?,
+        collapse,
+        weighted.unwrap_or(collapse),
+    )?)
+}
+
+/// Python binding of [`pseudo_aj`].
+#[pyfunction(name = "pseudo_aj")]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true))]
+#[allow(clippy::too_many_arguments)]
+pub fn pseudo_aj_py(
+    time: Vec<f64>,
+    state: Vec<i32>,
+    states: Vec<String>,
+    times: Vec<f64>,
+    start: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    id: Option<Vec<i64>>,
+    istate: Option<Vec<String>>,
+    istate_levels: Option<Vec<String>>,
+    cluster: Option<Vec<i64>>,
+    p0: Option<Vec<f64>>,
+    type_: &str,
+    timefix: bool,
+    collapse: bool,
+) -> PyResult<SurvfitAJResid> {
+    let (data, options) = aj_inputs(
+        time,
+        state,
+        states,
+        start,
+        weights,
+        strata,
+        id,
+        istate,
+        istate_levels,
+        cluster,
+        p0,
+        timefix,
+    )?;
+    Ok(pseudo_aj(
+        &data,
+        &options,
+        &times,
+        ResidualType::parse(type_)?,
+        collapse,
+    )?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn km_inputs(
     time: Vec<f64>,
     status: Vec<i32>,
-    eval_times: Option<Vec<f64>>,
-    type_: Option<&str>,
-) -> PyResult<PseudoResult> {
-    pseudo(time, status, eval_times, type_)
+    start: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    id: Option<Vec<i64>>,
+    stype: i32,
+    ctype: i32,
+    timefix: bool,
+) -> SurvivalResult<(SurvfitKMData, SurvfitKMOptions)> {
+    let data = SurvfitKMData::try_new(start, time, status, weights, strata, id, None)?;
+    let options = SurvfitKMOptions {
+        stype: SurvType::from_code(stype)?,
+        ctype: super::survfitkm::HazardType::from_code(ctype)?,
+        timefix,
+        ..Default::default()
+    };
+    Ok((data, options))
+}
+
+/// Python binding of [`survfitresid`].
+#[pyfunction(name = "survfitresid")]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true))]
+#[allow(clippy::too_many_arguments)]
+pub fn survfitresid_py(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    times: Vec<f64>,
+    start: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    id: Option<Vec<i64>>,
+    type_: &str,
+    stype: i32,
+    ctype: i32,
+    collapse: bool,
+    weighted: Option<bool>,
+    timefix: bool,
+) -> PyResult<SurvfitResid> {
+    let (data, options) = km_inputs(
+        time, status, start, weights, strata, id, stype, ctype, timefix,
+    )?;
+    Ok(survfitresid(
+        &data,
+        &options,
+        &times,
+        ResidualType::parse(type_)?,
+        collapse,
+        weighted.unwrap_or(collapse),
+    )?)
+}
+
+/// Python binding of [`pseudo`].
+#[pyfunction(name = "pseudo")]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true))]
+#[allow(clippy::too_many_arguments)]
+pub fn pseudo_py(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    times: Vec<f64>,
+    start: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    id: Option<Vec<i64>>,
+    type_: &str,
+    stype: i32,
+    ctype: i32,
+    timefix: bool,
+    collapse: bool,
+) -> PyResult<SurvfitResid> {
+    let (data, options) = km_inputs(
+        time, status, start, weights, strata, id, stype, ctype, timefix,
+    )?;
+    Ok(pseudo(
+        &data,
+        &options,
+        &times,
+        ResidualType::parse(type_)?,
+        collapse,
+    )?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn assert_close(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() < 1e-12,
-            "expected {expected}, got {actual}"
-        );
-    }
-
-    fn reference_compute_ij_pseudo(
-        time: &[f64],
-        status: &[i32],
-        eval_times: &[f64],
-        type_: &str,
-    ) -> Vec<Vec<f64>> {
-        let n_f64 = time.len() as f64;
-        let blocks = event_blocks(time, status);
-        (0..time.len())
-            .map(|row| {
-                eval_times
-                    .iter()
-                    .map(|&eval_time| {
-                        let last_idx = blocks
-                            .iter()
-                            .position(|block| block.time > eval_time + TIME_EPSILON)
-                            .map_or_else(
-                                || blocks.len().checked_sub(1),
-                                |idx| if idx == 0 { None } else { Some(idx - 1) },
-                            );
-                        let Some(last_idx) = last_idx else {
-                            return if type_ == "survival" { 1.0 } else { 0.0 };
-                        };
-                        let mut influence = 0.0;
-                        for block in &blocks[..=last_idx] {
-                            if !subject_at_risk(time[row], block.time) {
-                                continue;
-                            }
-                            if type_ == "survival" {
-                                if subject_event_at_time(time[row], status[row], block.time) {
-                                    influence -= 1.0 / block.risk;
-                                } else if block.risk > block.events + DIVISION_FLOOR {
-                                    influence +=
-                                        block.events / (block.risk * (block.risk - block.events));
-                                }
-                            } else if subject_event_at_time(time[row], status[row], block.time) {
-                                influence +=
-                                    (block.risk - block.events) / (block.risk * block.risk);
-                            } else {
-                                influence -= block.events / (block.risk * block.risk);
-                            }
-                        }
-                        let block = &blocks[last_idx];
-                        if type_ == "survival" {
-                            block.survival + n_f64 * block.survival * influence
-                        } else {
-                            block.cumhaz + n_f64 * influence
-                        }
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn reference_rmst_values(km_times: &[f64], km_surv: &[f64], eval_times: &[f64]) -> Vec<f64> {
-        eval_times
-            .iter()
-            .map(|&eval_time| {
-                let mut rmst = 0.0;
-                let mut previous_time = 0.0;
-                let mut previous_survival = 1.0;
-                for idx in 0..km_times.len() {
-                    if km_times[idx] >= eval_time {
-                        rmst += previous_survival * (eval_time - previous_time);
-                        break;
-                    }
-                    rmst += previous_survival * (km_times[idx] - previous_time);
-                    previous_time = km_times[idx];
-                    previous_survival = km_surv[idx];
-                    if idx == km_times.len() - 1 {
-                        rmst += previous_survival * (eval_time - previous_time);
-                    }
-                }
-                rmst
-            })
-            .collect()
-    }
-
-    fn assert_matrix_close(actual: &[Vec<f64>], expected: &[Vec<f64>]) {
-        assert_eq!(actual.len(), expected.len());
-        for (actual_row, expected_row) in actual.iter().zip(expected) {
-            assert_eq!(actual_row.len(), expected_row.len());
-            for (&actual_value, &expected_value) in actual_row.iter().zip(expected_row) {
-                assert_close(actual_value, expected_value);
-            }
-        }
-    }
-
-    #[test]
-    fn test_pseudo_basic() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1, 0, 1, 0, 1];
-
-        let result = pseudo(time, status, None, Some("survival")).unwrap();
-
-        assert_eq!(result.n, 5);
-        assert!(!result.time.is_empty());
-        assert_eq!(result.pseudo.len(), 5);
-
-        for t_idx in 0..result.time.len() {
-            let avg: f64 = result.pseudo.iter().map(|p| p[t_idx]).sum::<f64>() / 5.0;
-            assert!(avg.is_finite());
-        }
-    }
-
-    #[test]
-    fn ij_pseudo_time_sweep_matches_repeated_block_scans() {
-        for case_idx in 0..200 {
-            let n = 3 + case_idx % 19;
-            let time: Vec<f64> = (0..n)
-                .map(|idx| {
-                    let base = 1 + (idx * 7 + case_idx * 3) % 11;
-                    let jitter = if (idx + case_idx) % 5 == 0 {
-                        TIME_EPSILON / 2.0
-                    } else {
-                        0.0
-                    };
-                    base as f64 + jitter
-                })
-                .collect();
-            let status: Vec<i32> = (0..n)
-                .map(|idx| i32::from((idx * 5 + case_idx) % 4 != 0))
-                .collect();
-            let eval_times: Vec<f64> = (0..17)
-                .map(|idx| {
-                    let base = (idx * 5 + case_idx * 2) % 14;
-                    let jitter = if (idx + case_idx) % 3 == 0 {
-                        TIME_EPSILON / 2.0
-                    } else {
-                        0.0
-                    };
-                    base as f64 + jitter
-                })
-                .collect();
-
-            for type_ in ["survival", "cumhaz"] {
-                assert_matrix_close(
-                    &compute_ij_pseudo(&time, &status, &eval_times, type_),
-                    &reference_compute_ij_pseudo(&time, &status, &eval_times, type_),
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn rmst_jackknife_dispatch_matches_repeated_leave_one_out_fits() {
-        for case_idx in 0..160 {
-            let n = 3 + case_idx % 23;
-            let time: Vec<f64> = (0..n)
-                .map(|idx| {
-                    let base = 1 + (idx * 11 + case_idx * 5) % 17;
-                    let jitter = if (idx + 2 * case_idx) % 7 == 0 {
-                        TIME_EPSILON / 2.0
-                    } else {
-                        0.0
-                    };
-                    base as f64 + jitter
-                })
-                .collect();
-            let status: Vec<i32> = (0..n)
-                .map(|idx| i32::from((idx * 3 + case_idx) % 5 != 0))
-                .collect();
-            let eval_times: Vec<f64> = (0..21)
-                .map(|idx| ((idx * 13 + case_idx * 7) % 23) as f64 * 0.75)
-                .collect();
-
-            assert_matrix_close(
-                &compute_rmst_jackknife_pseudo(&time, &status, &eval_times),
-                &compute_rmst_repeated_jackknife_pseudo(&time, &status, &eval_times),
-            );
-        }
-    }
-
-    #[test]
-    fn rmst_block_jackknife_matches_exact_time_leave_one_out_fits() {
-        for case_idx in 0..160 {
-            let n = 3 + case_idx % 23;
-            let time: Vec<f64> = (0..n)
-                .map(|idx| (1 + (idx * 11 + case_idx * 5) % 17) as f64)
-                .collect();
-            let status: Vec<i32> = (0..n)
-                .map(|idx| i32::from((idx * 3 + case_idx) % 5 != 0))
-                .collect();
-            let eval_times: Vec<f64> = (0..21)
-                .map(|idx| ((idx * 13 + case_idx * 7) % 23) as f64 * 0.75)
-                .collect();
-
-            assert_matrix_close(
-                &compute_rmst_block_jackknife_pseudo(&time, &status, &eval_times),
-                &compute_rmst_repeated_jackknife_pseudo(&time, &status, &eval_times),
-            );
-        }
-    }
-
-    #[test]
-    fn rmst_prefix_areas_match_repeated_step_scans() {
-        for size in 1..80 {
-            let km_times: Vec<f64> = (0..size)
-                .map(|idx| idx as f64 * 0.75 + (idx % 3) as f64 * 0.125)
-                .collect();
-            let km_surv: Vec<f64> = (0..size)
-                .map(|idx| 1.0 - 0.8 * idx as f64 / size as f64)
-                .collect();
-            let eval_times: Vec<f64> = (0..97)
-                .map(|idx| ((idx * 31 + size * 7) % 101) as f64 * 0.625)
-                .collect();
-
-            let actual = rmst_values_at(&km_times, &km_surv, &eval_times);
-            let expected = reference_rmst_values(&km_times, &km_surv, &eval_times);
-            for (actual_value, expected_value) in actual.into_iter().zip(expected) {
-                assert_close(actual_value, expected_value);
-            }
-        }
-    }
-
-    #[test]
-    fn test_compute_km_groups_event_and_censor_ties() {
-        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
-        let status = vec![0, 1, 0];
-        let eval_times = vec![1.0];
-
-        let survival = compute_km(&time, &status, &eval_times, "survival");
-        let cumhaz = compute_km(&time, &status, &eval_times, "cumhaz");
-
-        assert_close(survival[0], 2.0 / 3.0);
-        assert_close(cumhaz[0], 1.0 / 3.0);
-    }
-
-    #[test]
-    fn test_default_event_times_deduplicate_near_ties() {
-        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
-        let status = vec![1, 1, 0];
-
-        let event_times = default_event_times(&time, &status);
-
-        assert_eq!(event_times.len(), 1);
-        assert_close(event_times[0], 1.0);
-    }
-
-    #[test]
-    fn test_pseudo_rejects_malformed_inputs() {
-        let err = pseudo(vec![1.0, 2.0], vec![1, 2], None, Some("survival")).unwrap_err();
-        assert!(err.to_string().contains("status must contain only 0/1"));
-
-        let err = pseudo(vec![1.0, f64::INFINITY], vec![1, 0], None, Some("survival")).unwrap_err();
-        assert!(err.to_string().contains("time contains non-finite"));
-
-        let err = pseudo(
-            vec![1.0, 2.0],
-            vec![1, 0],
-            Some(vec![-1.0]),
-            Some("survival"),
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("eval_times contains negative value")
-        );
-
-        let err = pseudo(vec![], vec![], None, Some("weird")).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("type must be 'survival', 'cumhaz', or 'rmst'")
-        );
-    }
-
-    #[test]
-    fn test_pseudo_empty() {
-        let time: Vec<f64> = vec![];
-        let status: Vec<i32> = vec![];
-
-        let result = pseudo(time, status, None, None).unwrap();
-        assert_eq!(result.n, 0);
-    }
-
-    #[test]
-    fn test_pseudo_rmst() {
-        let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let status = vec![1, 1, 1, 1, 1];
-        let eval_times = vec![3.0];
-
-        let result = pseudo(time, status, Some(eval_times), Some("rmst")).unwrap();
-
-        assert_eq!(result.type_, "rmst");
-        assert_eq!(result.pseudo.len(), 5);
-    }
-
-    #[test]
-    fn test_pseudo_cumhaz() {
-        let time = vec![1.0, 2.0, 3.0];
-        let status = vec![1, 1, 1];
-
-        let result = pseudo(time, status, None, Some("cumhaz")).unwrap();
-
-        assert_eq!(result.type_, "cumhaz");
-        for p in &result.pseudo {
-            for &val in p {
-                assert!(val.is_finite());
-            }
-        }
-    }
-
-    #[test]
-    fn test_pseudo_gee_regression() {
-        let pseudo_values = vec![vec![0.8], vec![0.7], vec![0.6], vec![0.5], vec![0.4]];
-        let covariates = vec![
-            vec![1.0, 0.5],
-            vec![1.0, 1.0],
-            vec![1.0, 1.5],
-            vec![1.0, 2.0],
-            vec![1.0, 2.5],
+    fn aml() -> SurvfitKMData {
+        let time = vec![
+            9.0, 13.0, 13.0, 18.0, 23.0, 28.0, 31.0, 34.0, 45.0, 48.0, 161.0, 5.0, 5.0, 8.0, 8.0,
+            12.0, 16.0, 23.0, 27.0, 30.0, 33.0, 43.0, 45.0,
         ];
+        let status = vec![
+            1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1,
+        ];
+        SurvfitKMData::right_censored(time, status).unwrap()
+    }
 
-        let config = GEEConfig::new(
-            "independence".to_string(),
-            "identity".to_string(),
-            100,
-            1e-6,
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() <= 1e-10 * b.abs().max(1.0)
+    }
+
+    #[test]
+    fn residuals_and_pseudo_values_match_r_for_aml() {
+        // residuals(survfit(Surv(time, status) ~ 1, aml), times = c(12, 24, 48))
+        let times = [12.0, 24.0, 48.0];
+        let options = SurvfitKMOptions::default();
+        let resid =
+            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        assert_eq!(resid.values.len(), 23);
+        assert_eq!(resid.times, times);
+        assert!(close(resid.values[0][0], -0.0321361058601134));
+        assert!(close(resid.values[0][1], -0.023764515257899));
+        assert!(close(resid.values[1][0], 0.0113421550094518));
+        assert!(close(resid.values[2][1], 0.0103969754253308));
+        let cumhaz =
+            survfitresid(&aml(), &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        assert!(close(cumhaz.values[0][0], 0.0415456301161012));
+        assert!(close(cumhaz.values[1][0], -0.0141723685843537));
+        assert!(close(cumhaz.values[2][1], -0.0176325761968104));
+        let auc = survfitresid(&aml(), &options, &times, ResidualType::Auc, false, false).unwrap();
+        assert!(close(auc.values[0][0], -0.0831758034026465));
+        assert!(close(auc.values[0][2], -0.782878746961923));
+        assert!(close(auc.values[2][2], 0.350661625708885));
+        // pseudo(fit, times, type)
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
+        assert!(ps.values[0][0].abs() < 1e-12);
+        assert!(close(ps.values[2][1], 0.785714285714286));
+        assert!(close(ps.values[2][2], 0.119047619047619));
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Cumhaz, true).unwrap();
+        assert!(close(ps.values[0][0], 1.24593124415048));
+        assert!(close(ps.values[2][2], 1.75547476518401));
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
+        for value in &ps.values[0] {
+            assert!(close(*value, 9.0));
+        }
+        assert!(close(ps.values[2][1], 23.4285714285714));
+        assert!(close(ps.values[2][2], 35.0714285714286));
+    }
+
+    #[test]
+    fn stype_two_uses_the_hazard_derivative() {
+        let options = SurvfitKMOptions {
+            stype: SurvType::ExpCumhaz,
+            ..Default::default()
+        };
+        let times = [12.0];
+        let pstate =
+            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let cumhaz =
+            survfitresid(&aml(), &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        let fit = survfitkm(&aml(), &options).unwrap();
+        let surv12 = fit.surv[fit.time.partition_point(|&t| t <= 12.0) - 1];
+        for (p, h) in pstate.values.iter().zip(&cumhaz.values) {
+            assert!(close(p[0], -h[0] * surv12));
+        }
+    }
+
+    #[test]
+    fn collapse_sums_a_subject_rows_and_weights_apply() {
+        let data = SurvfitKMData::try_new(
+            Some(vec![0.0, 2.0, 0.0, 3.0, 0.0, 4.0]),
+            vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
+            vec![0, 1, 1, 0, 0, 1],
+            Some(vec![1.0, 1.0, 2.0, 2.0, 1.0, 1.0]),
+            None,
+            Some(vec![1, 1, 2, 2, 3, 3]),
+            None,
         )
         .unwrap();
-        let result = pseudo_gee_regression(pseudo_values, covariates, None, Some(config)).unwrap();
-
-        assert_eq!(result.coefficients.len(), 2);
-        assert_eq!(result.std_errors.len(), 2);
+        let options = SurvfitKMOptions::default();
+        let plain =
+            survfitresid(&data, &options, &[5.0], ResidualType::Pstate, false, false).unwrap();
+        let collapsed =
+            survfitresid(&data, &options, &[5.0], ResidualType::Pstate, true, true).unwrap();
+        assert_eq!(collapsed.id, vec![1, 2, 3]);
+        assert!(close(
+            collapsed.values[0][0],
+            plain.values[0][0] + plain.values[1][0]
+        ));
+        assert!(close(
+            collapsed.values[1][0],
+            2.0 * (plain.values[2][0] + plain.values[3][0])
+        ));
+        assert!(survfitresid(&data, &options, &[5.0], ResidualType::Pstate, true, false).is_err());
+        // pseudo values are inflated by the number of subjects
+        let ps = pseudo(&data, &options, &[5.0], ResidualType::Pstate, true).unwrap();
+        assert_eq!(ps.values.len(), 3);
+        let fit = survfitkm(&data, &options).unwrap();
+        let s5 = fit.surv[fit.time.partition_point(|&t| t <= 5.0) - 1];
+        assert!(close(ps.values[0][0], s5 + 3.0 * collapsed.values[0][0]));
     }
 
     #[test]
-    fn test_pseudo_gee_rejects_malformed_inputs() {
-        let err = GEEConfig::new("weird".to_string(), "identity".to_string(), 100, 1e-6)
-            .expect_err("invalid correlation structure should fail");
-        assert!(err.to_string().contains("correlation_structure"));
-
-        let err = GEEConfig::new("independence".to_string(), "identity".to_string(), 0, 1e-6)
-            .expect_err("zero max_iter should fail");
-        assert!(err.to_string().contains("max_iter"));
-
-        let err = pseudo_gee_regression(
-            vec![vec![0.8], vec![0.7, 0.6]],
-            vec![vec![1.0], vec![1.0]],
-            None,
-            None,
+    fn strata_are_handled_curve_by_curve() {
+        let mut data = aml();
+        data.strata = Some(vec![1; 11].into_iter().chain(vec![2; 12]).collect());
+        let options = SurvfitKMOptions::default();
+        let both = pseudo(
+            &data,
+            &options,
+            &[12.0, 24.0, 48.0],
+            ResidualType::Pstate,
+            true,
         )
-        .expect_err("ragged pseudo_values should fail");
-        assert!(err.to_string().contains("pseudo_values row 1"));
-
-        let err = pseudo_gee_regression(
-            vec![vec![0.8], vec![0.7]],
-            vec![vec![1.0], vec![1.0]],
-            Some(vec![0]),
-            None,
+        .unwrap();
+        assert_eq!(both.curve[0], 0);
+        assert_eq!(both.curve[11], 1);
+        let mut second = aml();
+        second.time = second.time[11..].to_vec();
+        second.status = second.status[11..].to_vec();
+        let alone = pseudo(
+            &second,
+            &options,
+            &[12.0, 24.0, 48.0],
+            ResidualType::Pstate,
+            true,
         )
-        .expect_err("short cluster_id should fail");
-        assert!(err.to_string().contains("cluster_id length"));
-    }
-}
-
-#[pyclass(from_py_object)]
-#[derive(Clone, Debug)]
-pub struct GEEConfig {
-    #[pyo3(get, set)]
-    pub correlation_structure: String,
-    #[pyo3(get, set)]
-    pub link_function: String,
-    #[pyo3(get, set)]
-    pub max_iter: usize,
-    #[pyo3(get, set)]
-    pub tol: f64,
-}
-
-#[pymethods]
-impl GEEConfig {
-    #[new]
-    #[pyo3(signature = (correlation_structure="independence".to_string(), link_function="identity".to_string(), max_iter=100, tol=1e-6))]
-    pub fn new(
-        correlation_structure: String,
-        link_function: String,
-        max_iter: usize,
-        tol: f64,
-    ) -> PyResult<Self> {
-        let config = Self {
-            correlation_structure,
-            link_function,
-            max_iter,
-            tol,
-        };
-        validate_gee_config(&config)?;
-        Ok(config)
-    }
-}
-
-#[pyclass(from_py_object)]
-#[derive(Clone, Debug)]
-pub struct GEEResult {
-    #[pyo3(get)]
-    pub coefficients: Vec<f64>,
-    #[pyo3(get)]
-    pub std_errors: Vec<f64>,
-    #[pyo3(get)]
-    pub z_values: Vec<f64>,
-    #[pyo3(get)]
-    pub p_values: Vec<f64>,
-    #[pyo3(get)]
-    pub confidence_intervals: Vec<(f64, f64)>,
-    #[pyo3(get)]
-    pub qic: f64,
-    #[pyo3(get)]
-    pub n_iterations: usize,
-    #[pyo3(get)]
-    pub converged: bool,
-}
-
-#[pymethods]
-impl GEEResult {
-    #[new]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        coefficients: Vec<f64>,
-        std_errors: Vec<f64>,
-        z_values: Vec<f64>,
-        p_values: Vec<f64>,
-        confidence_intervals: Vec<(f64, f64)>,
-        qic: f64,
-        n_iterations: usize,
-        converged: bool,
-    ) -> Self {
-        Self {
-            coefficients,
-            std_errors,
-            z_values,
-            p_values,
-            confidence_intervals,
-            qic,
-            n_iterations,
-            converged,
-        }
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (pseudo_values, covariates, cluster_id=None, config=None))]
-pub fn pseudo_gee_regression(
-    pseudo_values: Vec<Vec<f64>>,
-    covariates: Vec<Vec<f64>>,
-    cluster_id: Option<Vec<usize>>,
-    config: Option<GEEConfig>,
-) -> PyResult<GEEResult> {
-    let config = match config {
-        Some(config) => {
-            validate_gee_config(&config)?;
-            config
-        }
-        None => GEEConfig::new(
-            "independence".to_string(),
-            "identity".to_string(),
-            100,
-            1e-6,
-        )?,
-    };
-
-    validate_pseudo_gee_inputs(&pseudo_values, &covariates, cluster_id.as_deref())?;
-
-    let n = pseudo_values.len();
-    let n_times = pseudo_values[0].len();
-    let p = covariates[0].len();
-    let cluster_id = cluster_id.unwrap_or_else(|| (0..n).collect());
-
-    let y: Vec<f64> = pseudo_values
-        .iter()
-        .flat_map(|pv| pv.iter().cloned())
-        .collect();
-    let n_obs = y.len();
-
-    let mut x: Vec<Vec<f64>> = Vec::with_capacity(n_obs);
-    for cov in covariates.iter() {
-        for _ in 0..n_times {
-            x.push(cov.clone());
+        .unwrap();
+        for (row, expected) in both.values[11..].iter().zip(&alone.values) {
+            for (a, b) in row.iter().zip(expected) {
+                assert!(close(*a, *b));
+            }
         }
     }
 
-    let mut beta: Vec<f64> = vec![0.0; p];
-    let mut converged = false;
-    let mut n_iterations = 0;
-
-    for iter in 0..config.max_iter {
-        n_iterations = iter + 1;
-
-        let eta: Vec<f64> = x
+    /// The synthetic_ties_mstate fixture frame.
+    fn ties_mstate() -> SurvfitAJData {
+        let time = vec![
+            1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 6.0, 6.0, 7.0, 8.0, 9.0, 9.0,
+        ];
+        let event = [
+            "a", "b", "censor", "b", "a", "b", "censor", "b", "a", "b", "a", "censor", "a",
+            "censor", "a", "b",
+        ];
+        let state: Vec<i32> = event
             .iter()
-            .map(|xi| xi.iter().zip(beta.iter()).map(|(x, b)| x * b).sum())
-            .collect();
-
-        let mu: Vec<f64> = apply_link_inverse(&eta, &config.link_function);
-
-        let residuals: Vec<f64> = y.iter().zip(mu.iter()).map(|(y, m)| y - m).collect();
-
-        let link_deriv: Vec<f64> = compute_link_derivative(&mu, &config.link_function);
-
-        let mut xtx = vec![vec![0.0; p]; p];
-        let mut xty = vec![0.0; p];
-
-        for i in 0..n_obs {
-            let w = link_deriv[i].powi(2);
-            for j in 0..p {
-                xty[j] += x[i][j] * residuals[i] * w;
-                for k in 0..p {
-                    xtx[j][k] += x[i][j] * x[i][k] * w;
-                }
-            }
-        }
-
-        let xtx_inv = invert_matrix(&xtx);
-        let delta: Vec<f64> = (0..p)
-            .map(|j| xtx_inv[j].iter().zip(xty.iter()).map(|(a, b)| a * b).sum())
-            .collect();
-
-        let delta_norm: f64 = delta.iter().map(|d| d * d).sum::<f64>().sqrt();
-        if delta_norm < config.tol {
-            converged = true;
-            break;
-        }
-
-        for k in 0..p {
-            beta[k] += delta[k];
-        }
-    }
-
-    let eta: Vec<f64> = x
-        .iter()
-        .map(|xi| xi.iter().zip(beta.iter()).map(|(x, b)| x * b).sum())
-        .collect();
-    let mu: Vec<f64> = apply_link_inverse(&eta, &config.link_function);
-    let residuals: Vec<f64> = y.iter().zip(mu.iter()).map(|(y, m)| y - m).collect();
-
-    let sandwich_variance =
-        compute_sandwich_variance(&x, &residuals, &cluster_id, n_times, p, &config);
-
-    let std_errors: Vec<f64> = (0..p).map(|k| sandwich_variance[k][k].sqrt()).collect();
-
-    let z_values: Vec<f64> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(b, se)| if *se > 0.0 { b / se } else { f64::NAN })
-        .collect();
-
-    let p_values: Vec<f64> = z_values
-        .iter()
-        .map(|z| {
-            if z.is_finite() {
-                2.0 * normal_sf(z.abs())
-            } else {
-                f64::NAN
-            }
-        })
-        .collect();
-
-    let confidence_intervals: Vec<(f64, f64)> = beta
-        .iter()
-        .zip(std_errors.iter())
-        .map(|(&beta, &std_error)| normal_ci_95(beta, std_error))
-        .collect();
-
-    let rss: f64 = residuals.iter().map(|r| r * r).sum();
-    let qic = n_obs as f64 * (rss / n_obs as f64).ln() + 2.0 * p as f64;
-
-    Ok(GEEResult {
-        coefficients: beta,
-        std_errors,
-        z_values,
-        p_values,
-        confidence_intervals,
-        qic,
-        n_iterations,
-        converged,
-    })
-}
-
-fn validate_gee_config(config: &GEEConfig) -> PyResult<()> {
-    match config.correlation_structure.as_str() {
-        "independence" | "exchangeable" | "ar1" => {}
-        _ => {
-            return Err(PyValueError::new_err(
-                "correlation_structure must be 'independence', 'exchangeable', or 'ar1'",
-            ));
-        }
-    }
-
-    match config.link_function.as_str() {
-        "identity" | "log" | "logit" | "cloglog" => {}
-        _ => {
-            return Err(PyValueError::new_err(
-                "link_function must be 'identity', 'log', 'logit', or 'cloglog'",
-            ));
-        }
-    }
-
-    if config.max_iter == 0 {
-        return Err(PyValueError::new_err("max_iter must be positive"));
-    }
-    if !config.tol.is_finite() || config.tol <= 0.0 {
-        return Err(PyValueError::new_err(
-            "tol must be finite and strictly positive",
-        ));
-    }
-
-    Ok(())
-}
-
-fn validate_matrix_values(
-    matrix: &[Vec<f64>],
-    name: &'static str,
-    require_non_empty_rows: bool,
-) -> PyResult<usize> {
-    let n_cols = matrix
-        .first()
-        .ok_or_else(|| PyValueError::new_err("Input data must be non-empty"))?
-        .len();
-    if require_non_empty_rows && n_cols == 0 {
-        return Err(PyValueError::new_err(format!(
-            "{name} rows must not be empty"
-        )));
-    }
-
-    for (row_idx, row) in matrix.iter().enumerate() {
-        if row.len() != n_cols {
-            return Err(PyValueError::new_err(format!(
-                "{name} row {row_idx} has {} columns, expected {n_cols}",
-                row.len()
-            )));
-        }
-        for (col_idx, &value) in row.iter().enumerate() {
-            if value.is_nan() {
-                return Err(PyValueError::new_err(format!(
-                    "{name} contains NaN at row {row_idx}, column {col_idx}"
-                )));
-            }
-            if !value.is_finite() {
-                return Err(PyValueError::new_err(format!(
-                    "{name} contains non-finite value {value} at row {row_idx}, column {col_idx}"
-                )));
-            }
-        }
-    }
-
-    Ok(n_cols)
-}
-
-fn validate_pseudo_gee_inputs(
-    pseudo_values: &[Vec<f64>],
-    covariates: &[Vec<f64>],
-    cluster_id: Option<&[usize]>,
-) -> PyResult<()> {
-    if pseudo_values.is_empty() || covariates.is_empty() {
-        return Err(PyValueError::new_err("Input data must be non-empty"));
-    }
-    if covariates.len() != pseudo_values.len() {
-        return Err(PyValueError::new_err(format!(
-            "covariates length must equal pseudo_values length; got {} and {}",
-            covariates.len(),
-            pseudo_values.len()
-        )));
-    }
-
-    validate_matrix_values(pseudo_values, "pseudo_values", true)?;
-    validate_matrix_values(covariates, "covariates", true)?;
-
-    if let Some(cluster_id) = cluster_id
-        && cluster_id.len() != pseudo_values.len()
-    {
-        return Err(PyValueError::new_err(format!(
-            "cluster_id length must equal pseudo_values length; got {} and {}",
-            cluster_id.len(),
-            pseudo_values.len()
-        )));
-    }
-
-    Ok(())
-}
-
-fn apply_link_inverse(eta: &[f64], link: &str) -> Vec<f64> {
-    match link {
-        "identity" => eta.to_vec(),
-        "log" => eta.iter().map(|e| e.exp()).collect(),
-        "logit" => eta.iter().map(|e| 1.0 / (1.0 + (-e).exp())).collect(),
-        "cloglog" => eta.iter().map(|e| 1.0 - (-e.exp()).exp()).collect(),
-        _ => eta.to_vec(),
-    }
-}
-
-fn compute_link_derivative(mu: &[f64], link: &str) -> Vec<f64> {
-    match link {
-        "identity" => vec![1.0; mu.len()],
-        "log" => mu.iter().map(|m| 1.0 / m.max(DIVISION_FLOOR)).collect(),
-        "logit" => mu
-            .iter()
-            .map(|m| 1.0 / (m.max(DIVISION_FLOOR) * (1.0 - m).max(DIVISION_FLOOR)))
-            .collect(),
-        "cloglog" => mu
-            .iter()
-            .map(|m| {
-                let m = m.clamp(DIVISION_FLOOR, 1.0 - DIVISION_FLOOR);
-                1.0 / ((1.0 - m) * (-(1.0 - m).ln()))
+            .map(|e| match *e {
+                "a" => 1,
+                "b" => 2,
+                _ => 0,
             })
-            .collect(),
-        _ => vec![1.0; mu.len()],
+            .collect();
+        SurvfitAJData::try_new(
+            None,
+            time,
+            state,
+            vec!["a".to_string(), "b".to_string()],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
     }
-}
 
-fn compute_sandwich_variance(
-    x: &[Vec<f64>],
-    residuals: &[f64],
-    cluster_id: &[usize],
-    n_times: usize,
-    p: usize,
-    _config: &GEEConfig,
-) -> Vec<Vec<f64>> {
-    let n_obs = x.len();
-
-    let mut xtx = vec![vec![0.0; p]; p];
-    for xi in x.iter() {
-        for j in 0..p {
-            for k in 0..p {
-                xtx[j][k] += xi[j] * xi[k];
-            }
+    #[test]
+    fn multistate_residuals_and_pseudo_values_match_r() {
+        // residuals(survfit(Surv(time, event) ~ 1), times = c(2, 5, 8), type = "pstate")
+        let data = ties_mstate();
+        let options = SurvfitAJOptions::default();
+        let times = [2.0, 5.0, 8.0];
+        let resid =
+            survfitresid_aj(&data, &options, &times, ResidualType::Pstate, false, false).unwrap();
+        assert_eq!(resid.columns, vec!["(s0)", "a", "b"]);
+        assert_eq!(resid.values.len(), 16);
+        let fit = survfitaj(&data, &options).unwrap();
+        // the residuals reproduce the robust variance of pstate at time 2
+        let se = fit.std_err.as_ref().unwrap();
+        let row_at_2 = fit.time.partition_point(|&t| t <= 2.0) - 1;
+        for j in 0..3 {
+            let norm = resid
+                .values
+                .iter()
+                .map(|by_col| by_col[j][0] * by_col[j][0])
+                .sum::<f64>()
+                .sqrt();
+            assert!(
+                close(norm, se[row_at_2][j]),
+                "{norm} != {}",
+                se[row_at_2][j]
+            );
         }
-    }
-    let xtx_inv = invert_matrix(&xtx);
-
-    let mut meat = vec![vec![0.0; p]; p];
-    let max_cluster = *cluster_id.iter().max().unwrap_or(&0);
-
-    for c in 0..=max_cluster {
-        let mut score = vec![0.0; p];
-        for (i, &cluster) in cluster_id.iter().enumerate().take(n_obs / n_times) {
-            if cluster == c {
-                for t in 0..n_times {
-                    let idx = i * n_times + t;
-                    for j in 0..p {
-                        score[j] += x[idx][j] * residuals[idx];
-                    }
+        // pseudo values average to the estimate
+        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
+        for j in 0..3 {
+            let mean = ps.values.iter().map(|by_col| by_col[j][0]).sum::<f64>() / 16.0;
+            assert!(close(mean, fit.pstate[row_at_2][j]));
+        }
+        // cumulative hazard and sojourn residuals sum to zero over subjects
+        for kind in [ResidualType::Cumhaz, ResidualType::Auc] {
+            let resid = survfitresid_aj(&data, &options, &times, kind, false, false).unwrap();
+            let ncol = resid.columns.len();
+            for k in 0..ncol {
+                for t in 0..3 {
+                    let total: f64 = resid.values.iter().map(|by_col| by_col[k][t]).sum();
+                    assert!(total.abs() < 1e-12, "{kind:?} column {k} time {t}: {total}");
                 }
             }
         }
-
-        for j in 0..p {
-            for k in 0..p {
-                meat[j][k] += score[j] * score[k];
-            }
-        }
+        let cumhaz =
+            survfitresid_aj(&data, &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        assert_eq!(cumhaz.columns, vec!["1:2", "1:3"]);
     }
 
-    let mut result = vec![vec![0.0; p]; p];
-    for i in 0..p {
-        for j in 0..p {
-            for k in 0..p {
-                for l in 0..p {
-                    result[i][j] += xtx_inv[i][k] * meat[k][l] * xtx_inv[l][j];
-                }
-            }
-        }
+    #[test]
+    fn start_time_keeps_every_row_as_r_does() {
+        // fit <- survfit(Surv(time, status) ~ 1, aml, start.time = 10)
+        // residuals(fit, times = c(12, 24, 48)); pseudo(fit, times = ...)
+        let options = SurvfitKMOptions {
+            start_time: Some(10.0),
+            ..Default::default()
+        };
+        let times = [12.0, 24.0, 48.0];
+        let resid =
+            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        assert_eq!(resid.values.len(), 23);
+        // the observation at time 9 is not part of the curve: residual 0
+        assert_eq!(resid.values[0], vec![0.0, 0.0, 0.0]);
+        assert!(close(resid.values[1][0], 0.00308641975308642));
+        assert!(close(resid.values[1][1], -0.03880070546737213));
+        assert!(close(resid.values[3][2], -0.006823717141177459));
+        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
+        // ... and its pseudo value is the estimate, inflated by fit$n = 18
+        assert!(close(ps.values[0][0], 0.944444444444444));
+        assert!(close(ps.values[0][2], 0.1058201058201058));
+        assert!(close(ps.values[1][0], 1.0));
+        assert!(ps.values[1][1].abs() < 1e-12);
+        assert!(close(ps.values[3][1], -0.112244897959184));
+        let auc = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
+        assert!(close(auc.values[0][0], 2.0)); // the area from t0 = 10 to 12
+        assert!(close(auc.values[0][1], 12.2142857142857));
+        assert!(close(auc.values[2][2], 25.0714285714286));
+        let resid_auc =
+            survfitresid(&aml(), &options, &times, ResidualType::Auc, false, false).unwrap();
+        assert!(close(resid_auc.values[1][1], -0.511_904_761_904_762));
+        assert!(close(resid_auc.values[2][2], 0.139329805996473));
+        // summary(fit, rmean = 5) refuses a point before the first time
+        assert!(
+            pseudo(&aml(), &options, &[5.0, 24.0], ResidualType::Auc, true)
+                .unwrap_err()
+                .to_string()
+                .contains("smallest survival")
+        );
     }
 
-    result
-}
-
-fn invert_matrix(m: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    let n = m.len();
-    if n == 0 {
-        return vec![];
+    #[test]
+    fn multistate_start_time_keeps_every_row_as_r_does() {
+        // fit <- survfit(Surv(time, event) ~ 1, start.time = 2) on the
+        // synthetic_ties_mstate frame; residuals(fit, times = c(2, 5, 8))
+        let data = ties_mstate();
+        let options = SurvfitAJOptions {
+            start_time: Some(2.0),
+            ..Default::default()
+        };
+        let times = [2.0, 5.0, 8.0];
+        let resid =
+            survfitresid_aj(&data, &options, &times, ResidualType::Pstate, false, false).unwrap();
+        assert_eq!(resid.values.len(), 16);
+        // values[row][state][time]: the rows before the start take part
+        assert!(close(resid.values[0][0][1], -0.03312800480769231));
+        assert!(close(resid.values[0][1][1], 0.04965444711538462));
+        assert!(close(resid.values[1][2][1], 0.045_973_557_692_307_7));
+        assert!(close(resid.values[2][1][1], -0.00262920673076923));
+        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
+        assert!(close(ps.values[0][0][1], 0.175105168269231));
+        assert!(close(ps.values[0][1][1], 0.808_969_350_961_538_4));
+        assert!(close(ps.values[2][2][1], 0.2034254807692308));
+        let auc = pseudo_aj(&data, &options, &times, ResidualType::Auc, true).unwrap();
+        assert!(close(auc.values[0][0][2], 0.350116436298077));
+        assert!(close(auc.values[0][1][2], 5.621_788_611_778_847));
+        assert!(close(auc.values[2][2][2], 1.1062199519230769));
+        // the truncation point is checked against the start.time
+        assert!(
+            pseudo_aj(&data, &options, &[1.5, 5.0], ResidualType::Auc, true)
+                .unwrap_err()
+                .to_string()
+                .contains("smallest survival")
+        );
     }
 
-    let mut aug = vec![vec![0.0; 2 * n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            aug[i][j] = m[i][j];
-        }
-        aug[i][n + i] = 1.0;
+    #[test]
+    fn rejects_bad_arguments() {
+        assert!(ResidualType::parse("weird").is_err());
+        assert_eq!(ResidualType::parse("RMST").unwrap(), ResidualType::Auc);
+        let options = SurvfitKMOptions::default();
+        assert!(survfitresid(&aml(), &options, &[], ResidualType::Pstate, false, false).is_err());
+        assert!(
+            survfitresid(
+                &aml(),
+                &options,
+                &[f64::NAN],
+                ResidualType::Pstate,
+                false,
+                false
+            )
+            .is_err()
+        );
     }
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-
-        let pivot = aug[i][i];
-        if pivot.abs() < DIVISION_FLOOR {
-            continue;
-        }
-
-        for val in aug[i].iter_mut() {
-            *val /= pivot;
-        }
-
-        let row_i = aug[i].clone();
-        for (k, row_k) in aug.iter_mut().enumerate() {
-            if k != i {
-                let factor = row_k[i];
-                for (val, &ri) in row_k.iter_mut().zip(row_i.iter()) {
-                    *val -= factor * ri;
-                }
-            }
-        }
-    }
-
-    let mut result = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            result[i][j] = aug[i][n + j];
-        }
-    }
-
-    result
 }

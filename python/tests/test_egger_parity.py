@@ -18,10 +18,9 @@ def case(request):
     return request.param
 
 
-@pytest.fixture(params=["root", "validation"])
-def publication_bias(request):
-    namespace = survival if request.param == "root" else survival.validation
-    return namespace.publication_bias_tests
+@pytest.fixture
+def publication_bias():
+    return survival.validation.publication_bias_tests
 
 
 def assert_reference(result, case, *, sign=1, response_scale=1.0):

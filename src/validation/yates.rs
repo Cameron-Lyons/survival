@@ -1,331 +1,425 @@
-use crate::constants::{normal_ci, normal_ci_bounds_95};
-use crate::internal::statistical::{normal_inverse_cdf, normal_sf};
-use crate::internal::validation::{
-    validate_finite, validate_no_nan, validate_non_empty, validate_non_negative,
-};
-use pyo3::prelude::*;
-use std::collections::HashMap;
+//! Population marginal means (Yates' weighted means) and their tests.
+//!
+//! Port of the linear-predictor branch of R survival `R/yates.R`
+//! (`yates`, `estfun`, `testfun`, `qform`, `gsolve`, `cmatrix`'s contrast
+//! matrices).  R builds one model matrix per level of the term of interest
+//! over the chosen population (`population = "data"`, `"factorial"`,
+//! `"sas"` or a data frame), averages its rows into a contrast matrix
+//! `Cmat` and evaluates `Cmat %*% beta` with variance `Cmat V Cmat'`.
+//! Building those model matrices needs the formula machinery (`model.matrix`,
+//! factor levels, `xlevels`) and stays with the caller; [`population_means`]
+//! does the averaging and [`yates`] the estimates and tests.
+//!
+//! For a Cox model the caller passes `Cmat` restricted to the coefficient
+//! columns (R drops the intercept and strata columns) and the offset
+//! `-sum(fit$means * beta)` that recentres the predictions.
+//!
+//! `predict = "survival"` (and `"risk"`) are not ported: R evaluates them by
+//! Monte-Carlo simulation of the coefficients (`nsim` draws from
+//! `N(beta, V)`) and, for survival, needs `survfit(fit)`'s baseline
+//! cumulative hazard evaluated on the population's linear predictors; a
+//! port needs the Cox baseline curve (time, cumhaz) from the Cox side and
+//! a seeded normal generator.
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct YatesResult {
-    #[pyo3(get)]
-    pub levels: Vec<String>,
-    #[pyo3(get)]
-    pub means: Vec<f64>,
-    #[pyo3(get)]
-    pub se: Vec<f64>,
-    #[pyo3(get)]
-    pub lower: Vec<f64>,
-    #[pyo3(get)]
-    pub upper: Vec<f64>,
-    #[pyo3(get)]
-    pub n: Vec<usize>,
-    #[pyo3(get)]
-    pub predict_type: String,
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::validation::{validate_finite, validate_length};
+use pyo3::prelude::*;
+
+/// Which contrasts of the population marginal means to test (R `test`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YatesTest {
+    /// All levels equal to the last one (one chi-square on `k - 1` df).
+    Global,
+    /// Every pair of levels, one test each.
+    Pairwise,
+    /// Every level against the mean of all levels, one test each.
+    Mean,
 }
 
-#[pyfunction]
-#[pyo3(signature = (predictions, factor, weights=None, conf_level=None))]
-pub fn yates(
-    predictions: Vec<f64>,
-    factor: Vec<String>,
-    weights: Option<Vec<f64>>,
-    conf_level: Option<f64>,
-) -> PyResult<YatesResult> {
-    let n = predictions.len();
-
-    validate_non_empty(&predictions, "predictions")?;
-    if factor.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "predictions and factor must have same length",
-        ));
-    }
-    validate_no_nan(&predictions, "predictions")?;
-    validate_finite(&predictions, "predictions")?;
-
-    let weights_ref = weights.as_deref();
-    if let Some(wts) = weights_ref {
-        if wts.len() != n {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "weights must have same length as predictions",
-            ));
+impl YatesTest {
+    pub fn parse(name: &str) -> SurvivalResult<Self> {
+        match name {
+            "global" => Ok(Self::Global),
+            "pairwise" => Ok(Self::Pairwise),
+            "mean" => Ok(Self::Mean),
+            "trend" => Err(SurvivalError::invalid_input(
+                "test = \"trend\" is not supported",
+            )),
+            other => Err(SurvivalError::invalid_input(format!(
+                "unknown yates test {other:?}"
+            ))),
         }
-        validate_no_nan(wts, "weights")?;
-        validate_finite(wts, "weights")?;
-        validate_non_negative(wts, "weights")?;
     }
+}
 
-    let conf = conf_level.unwrap_or(0.95);
-    let z = z_score(conf)?;
+/// Inputs of [`yates`].
+#[derive(Debug, Clone)]
+pub struct YatesInput<'a> {
+    /// Population-averaged design rows, one per level of the term, over the
+    /// coefficient columns (R's `Cmat`).
+    pub cmat: &'a [Vec<f64>],
+    pub beta: &'a [f64],
+    /// Variance matrix of `beta`.
+    pub vmat: &'a [Vec<f64>],
+    /// Added to every estimate (`-sum(fit$means * beta)` for `coxph`, 0
+    /// otherwise).
+    pub offset: f64,
+    /// Residual variance of a linear model, which adds R's `ss` column.
+    pub sigma2: Option<f64>,
+    /// Levels whose estimate is estimable; `None` for all.
+    pub estimable: Option<&'a [bool]>,
+    pub test: YatesTest,
+}
 
-    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, level) in factor.iter().enumerate() {
-        groups.entry(level.clone()).or_default().push(i);
+/// One tested contrast: R's `test` matrix row.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct YatesContrast {
+    pub name: String,
+    pub chisq: f64,
+    pub df: usize,
+    /// Sum of squares (`chisq * sigma2`), linear models only.
+    pub ss: Option<f64>,
+}
+
+/// One level's population marginal mean and standard error (R's
+/// `estimate` data frame); `NaN` for a non-estimable level.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct YatesEstimate {
+    pub pmm: f64,
+    pub std: f64,
+}
+
+/// R's `yates` object (linear predictor scale).
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct YatesResult {
+    pub estimate: Vec<YatesEstimate>,
+    pub test: Vec<YatesContrast>,
+    /// Variance matrix of the estimable marginal means (R `mvar`).
+    pub mvar: Vec<Vec<f64>>,
+    pub cmat: Vec<Vec<f64>>,
+}
+
+/// Average the rows of each level's model matrix, optionally with case
+/// weights (R's `meanfun`): `Cmat[i, ] = colMeans(xmatlist[[i]])`.
+pub fn population_means(
+    xmatlist: &[Vec<Vec<f64>>],
+    weights: Option<&[f64]>,
+) -> SurvivalResult<Vec<Vec<f64>>> {
+    let mut cmat = Vec::with_capacity(xmatlist.len());
+    for (level, rows) in xmatlist.iter().enumerate() {
+        if rows.is_empty() {
+            return Err(SurvivalError::invalid_input(format!(
+                "population matrix {level} has no rows"
+            )));
+        }
+        let width = rows[0].len();
+        if let Some(weights) = weights {
+            validate_length(rows.len(), weights.len(), "weights")?;
+        }
+        let mut sums = vec![0.0; width];
+        let mut total = 0.0;
+        for (i, row) in rows.iter().enumerate() {
+            validate_length(width, row.len(), "population matrix row")?;
+            validate_finite(row, "population matrix")?;
+            let weight = weights.map_or(1.0, |w| w[i]);
+            total += weight;
+            for (sum, value) in sums.iter_mut().zip(row) {
+                *sum += weight * value;
+            }
+        }
+        cmat.push(sums.into_iter().map(|s| s / total).collect());
     }
+    Ok(cmat)
+}
 
-    let mut levels: Vec<String> = groups.keys().cloned().collect();
-    levels.sort();
+/// Eigen-decomposition of a symmetric matrix by cyclic Jacobi rotations;
+/// returns the eigenvalues and the eigenvectors as columns of `v`.
+fn symmetric_eigen(matrix: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let n = matrix.len();
+    let mut a: Vec<Vec<f64>> = matrix.to_vec();
+    let mut v: Vec<Vec<f64>> = (0..n)
+        .map(|i| (0..n).map(|j| f64::from(i == j)).collect())
+        .collect();
+    for _sweep in 0..100 {
+        let off: f64 = (0..n)
+            .flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j)))
+            .map(|(i, j)| a[i][j] * a[i][j])
+            .sum();
+        if off < 1e-30 {
+            break;
+        }
+        for p in 0..n {
+            for q in (p + 1)..n {
+                if a[p][q].abs() < 1e-300 {
+                    continue;
+                }
+                let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+                let t = if theta == 0.0 {
+                    1.0
+                } else {
+                    theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt())
+                };
+                let c = 1.0 / (t * t + 1.0).sqrt();
+                let s = t * c;
+                for row in a.iter_mut() {
+                    let akp = row[p];
+                    let akq = row[q];
+                    row[p] = c * akp - s * akq;
+                    row[q] = s * akp + c * akq;
+                }
+                let (row_p, row_q) = {
+                    let (head, tail) = a.split_at_mut(q);
+                    (&mut head[p], &mut tail[0])
+                };
+                for (apk, aqk) in row_p.iter_mut().zip(row_q.iter_mut()) {
+                    let (old_p, old_q) = (*apk, *aqk);
+                    *apk = c * old_p - s * old_q;
+                    *aqk = s * old_p + c * old_q;
+                }
+                for row in v.iter_mut() {
+                    let vkp = row[p];
+                    let vkq = row[q];
+                    row[p] = c * vkp - s * vkq;
+                    row[q] = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+    ((0..n).map(|i| a[i][i]).collect(), v)
+}
 
-    let mut means = Vec::with_capacity(levels.len());
-    let mut ses = Vec::with_capacity(levels.len());
-    let mut lowers = Vec::with_capacity(levels.len());
-    let mut uppers = Vec::with_capacity(levels.len());
-    let mut ns = Vec::with_capacity(levels.len());
-
-    for level in &levels {
-        let Some(indices) = groups.get(level) else {
-            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "internal error: missing group level",
-            ));
-        };
-        let group_n = indices.len();
-
-        if group_n == 0 {
-            means.push(f64::NAN);
-            ses.push(f64::NAN);
-            lowers.push(f64::NAN);
-            uppers.push(f64::NAN);
-            ns.push(0);
+/// R's `qform`: `b' V^- b` with the generalised inverse of `gsolve` (the
+/// singular-value decomposition with values below `sqrt(eps)` times the
+/// largest set to zero), and the rank as degrees of freedom.
+fn quadratic_form(var: &[Vec<f64>], b: &[f64]) -> (f64, usize) {
+    let (values, vectors) = symmetric_eigen(var);
+    let largest = values.iter().copied().fold(f64::MIN, f64::max);
+    let eps = f64::EPSILON.sqrt();
+    let threshold = (largest * eps).max(0.0);
+    let n = b.len();
+    let mut statistic = 0.0;
+    let mut rank = 0;
+    for (k, &value) in values.iter().enumerate() {
+        if value <= threshold {
             continue;
         }
-
-        let mut sum_w = 0.0;
-        let mut sum_wx = 0.0;
-
-        for &i in indices {
-            let w = weights_ref.map_or(1.0, |wts| wts[i]);
-            let x = predictions[i];
-            sum_w += w;
-            sum_wx += w * x;
-        }
-
-        if sum_w <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "weights must have positive total weight within each factor level",
-            ));
-        }
-
-        let mean = sum_wx / sum_w;
-
-        let mut sum_w2_dev2 = 0.0;
-        for &i in indices {
-            let w = weights_ref.map_or(1.0, |wts| wts[i]);
-            let dev = predictions[i] - mean;
-            sum_w2_dev2 += w * w * dev * dev;
-        }
-
-        let variance = sum_w2_dev2 / (sum_w * sum_w);
-        let se = variance.sqrt();
-
-        means.push(mean);
-        ses.push(se);
-        let (lower, upper) = normal_ci(mean, se, z);
-        lowers.push(lower);
-        uppers.push(upper);
-        ns.push(group_n);
+        rank += 1;
+        let projection: f64 = (0..n).map(|i| vectors[i][k] * b[i]).sum();
+        statistic += projection * projection / value;
     }
-
-    Ok(YatesResult {
-        levels,
-        means,
-        se: ses,
-        lower: lowers,
-        upper: uppers,
-        n: ns,
-        predict_type: "linear".to_string(),
-    })
+    (statistic, rank)
 }
 
-#[pyfunction]
-#[pyo3(signature = (x, coef, n_obs, n_vars, factor_col, factor_levels, predict_type=None))]
-pub fn yates_contrast(
-    x: Vec<f64>,
-    coef: Vec<f64>,
-    n_obs: usize,
-    n_vars: usize,
-    factor_col: usize,
-    factor_levels: Vec<f64>,
-    predict_type: Option<&str>,
-) -> PyResult<YatesResult> {
-    if n_obs == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_obs must be greater than 0",
-        ));
+fn matrix_product(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let inner = b.len();
+    let width = b.first().map_or(0, Vec::len);
+    a.iter()
+        .map(|row| {
+            (0..width)
+                .map(|j| (0..inner).map(|k| row[k] * b[k][j]).sum())
+                .collect()
+        })
+        .collect()
+}
+
+fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let width = a.first().map_or(0, Vec::len);
+    (0..width)
+        .map(|j| a.iter().map(|row| row[j]).collect())
+        .collect()
+}
+
+/// R's `estfun`: estimates `C beta` and their variance `C V C'`.
+fn estimates(cmat: &[Vec<f64>], beta: &[f64], vmat: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let estimate = cmat
+        .iter()
+        .map(|row| row.iter().zip(beta).map(|(c, b)| c * b).sum())
+        .collect();
+    let var = matrix_product(&matrix_product(cmat, vmat), &transpose(cmat));
+    (estimate, var)
+}
+
+/// R's `testfun`: the chi-square test of `contrast %*% Cmat %*% beta = 0`.
+fn contrast_test(
+    name: &str,
+    contrast: &[Vec<f64>],
+    cmat: &[Vec<f64>],
+    beta: &[f64],
+    vmat: &[Vec<f64>],
+    sigma2: Option<f64>,
+) -> YatesContrast {
+    let rows = matrix_product(contrast, cmat);
+    let (estimate, var) = estimates(&rows, beta, vmat);
+    let (chisq, df) = quadratic_form(&var, &estimate);
+    YatesContrast {
+        name: name.to_string(),
+        chisq,
+        df,
+        ss: sigma2.map(|s| chisq * s),
     }
-    if n_vars == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_vars must be greater than 0",
-        ));
-    }
-    if x.len() != n_obs * n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "x length must equal n_obs * n_vars",
-        ));
-    }
-    if coef.len() != n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "coef length must equal n_vars",
-        ));
-    }
-    if factor_col >= n_vars {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "factor_col must be < n_vars",
-        ));
-    }
-    validate_non_empty(&factor_levels, "factor_levels")?;
-    validate_no_nan(&x, "x")?;
-    validate_finite(&x, "x")?;
-    validate_no_nan(&coef, "coef")?;
-    validate_finite(&coef, "coef")?;
-    validate_no_nan(&factor_levels, "factor_levels")?;
-    validate_finite(&factor_levels, "factor_levels")?;
+}
 
-    let pred_type = predict_type.unwrap_or("linear");
-    validate_predict_type(pred_type)?;
-
-    let mut levels = Vec::with_capacity(factor_levels.len());
-    let mut means = Vec::with_capacity(factor_levels.len());
-    let mut ses = Vec::with_capacity(factor_levels.len());
-    let ns = vec![n_obs; factor_levels.len()];
-
-    for &level in &factor_levels {
-        levels.push(format!("{}", level));
-
-        let mut sum_pred = 0.0;
-        let mut sum_pred2 = 0.0;
-
-        for i in 0..n_obs {
-            let mut eta = 0.0;
-            for j in 0..n_vars {
-                let x_val = if j == factor_col {
-                    level
-                } else {
-                    x[i * n_vars + j]
-                };
-                eta += x_val * coef[j];
-            }
-
-            let pred = match pred_type {
-                "risk" => eta.exp(),
-                "survival" => (-eta.exp()).exp(),
-                "linear" => eta,
-                _ => unreachable!("predict_type was validated"),
-            };
-            if !pred.is_finite() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "computed predictions are non-finite; check x and coef scale",
+/// The contrast matrices of R's `cmatrix` for `nlev` levels.
+fn contrasts(test: YatesTest, nlev: usize) -> SurvivalResult<Vec<(String, Vec<Vec<f64>>)>> {
+    match test {
+        YatesTest::Global => {
+            let rows = (0..nlev.saturating_sub(1))
+                .map(|i| {
+                    let mut row = vec![0.0; nlev];
+                    row[i] = 1.0;
+                    row[nlev - 1] = -1.0;
+                    row
+                })
+                .collect();
+            Ok(vec![("global".to_string(), rows)])
+        }
+        YatesTest::Pairwise => {
+            if nlev < 2 {
+                return Err(SurvivalError::invalid_input(
+                    "pairwise tests need at least 2 groups",
                 ));
             }
-
-            sum_pred += pred;
-            sum_pred2 += pred * pred;
+            let mut out = Vec::with_capacity(nlev * (nlev - 1) / 2);
+            for i in 0..nlev - 1 {
+                for j in i + 1..nlev {
+                    let mut row = vec![0.0; nlev];
+                    row[i] = 1.0;
+                    row[j] = -1.0;
+                    out.push((format!("{} vs {}", i + 1, j + 1), vec![row]));
+                }
+            }
+            Ok(out)
         }
-
-        let mean = sum_pred / n_obs as f64;
-        let variance = (sum_pred2 / n_obs as f64 - mean * mean).max(0.0);
-        let se = (variance / n_obs as f64).sqrt();
-
-        means.push(mean);
-        ses.push(se);
+        YatesTest::Mean => Ok((0..nlev)
+            .map(|k| {
+                let mut row = vec![-1.0 / nlev as f64; nlev];
+                row[k] = (nlev as f64 - 1.0) / nlev as f64;
+                (format!("{} vs mean", k + 1), vec![row])
+            })
+            .collect()),
     }
+}
 
-    let (lower, upper) = normal_ci_bounds_95(&means, &ses);
+fn validate(input: &YatesInput<'_>) -> SurvivalResult<()> {
+    let p = input.beta.len();
+    if input.cmat.is_empty() {
+        return Err(SurvivalError::invalid_input("cmat must have rows"));
+    }
+    validate_finite(input.beta, "beta")?;
+    for row in input.cmat {
+        validate_length(p, row.len(), "cmat columns")?;
+        validate_finite(row, "cmat")?;
+    }
+    validate_length(p, input.vmat.len(), "vmat rows")?;
+    for row in input.vmat {
+        validate_length(p, row.len(), "vmat columns")?;
+        validate_finite(row, "vmat")?;
+    }
+    if let Some(estimable) = input.estimable {
+        validate_length(input.cmat.len(), estimable.len(), "estimable")?;
+    }
+    if !input.offset.is_finite() {
+        return Err(SurvivalError::invalid_input("offset must be finite"));
+    }
+    Ok(())
+}
 
+/// Population marginal means of the levels of a term, their standard
+/// errors, variance matrix and the requested contrast tests.
+pub fn yates(input: &YatesInput<'_>) -> SurvivalResult<YatesResult> {
+    validate(input)?;
+    let nlev = input.cmat.len();
+    let estimable: Vec<bool> = input
+        .estimable
+        .map_or_else(|| vec![true; nlev], <[bool]>::to_vec);
+    let kept: Vec<usize> = (0..nlev).filter(|&i| estimable[i]).collect();
+    let mut estimate = vec![
+        YatesEstimate {
+            pmm: f64::NAN,
+            std: f64::NAN,
+        };
+        nlev
+    ];
+    let mut mvar = Vec::new();
+    if !kept.is_empty() {
+        let rows: Vec<Vec<f64>> = kept.iter().map(|&i| input.cmat[i].clone()).collect();
+        let (values, var) = estimates(&rows, input.beta, input.vmat);
+        for (k, &i) in kept.iter().enumerate() {
+            estimate[i] = YatesEstimate {
+                pmm: values[k] + input.offset,
+                std: var[k][k].sqrt(),
+            };
+        }
+        mvar = var;
+    }
+    let test = contrasts(input.test, nlev)?
+        .into_iter()
+        .map(|(name, contrast)| {
+            // nafun: a contrast touching a non-estimable level is NA
+            let uses_missing =
+                (0..nlev).any(|j| !estimable[j] && contrast.iter().any(|row| row[j] != 0.0));
+            if uses_missing {
+                return YatesContrast {
+                    name,
+                    chisq: f64::NAN,
+                    df: 0,
+                    ss: input.sigma2.map(|_| f64::NAN),
+                };
+            }
+            contrast_test(
+                &name,
+                &contrast,
+                input.cmat,
+                input.beta,
+                input.vmat,
+                input.sigma2,
+            )
+        })
+        .collect();
     Ok(YatesResult {
-        levels,
-        means,
-        se: ses,
-        lower,
-        upper,
-        n: ns,
-        predict_type: pred_type.to_string(),
+        estimate,
+        test,
+        mvar,
+        cmat: input.cmat.to_vec(),
     })
 }
 
-#[pyfunction]
-pub fn yates_pairwise(yates_result: &YatesResult) -> PyResult<YatesPairwiseResult> {
-    let k = yates_result.levels.len();
-    if k < 2 {
-        return Ok(YatesPairwiseResult {
-            level1: vec![],
-            level2: vec![],
-            difference: vec![],
-            se: vec![],
-            z: vec![],
-            p_value: vec![],
-        });
-    }
-
-    let mut level1 = Vec::new();
-    let mut level2 = Vec::new();
-    let mut difference = Vec::new();
-    let mut se = Vec::new();
-    let mut z_scores = Vec::new();
-    let mut p_values = Vec::new();
-
-    for i in 0..k {
-        for j in (i + 1)..k {
-            level1.push(yates_result.levels[i].clone());
-            level2.push(yates_result.levels[j].clone());
-
-            let diff = yates_result.means[i] - yates_result.means[j];
-            difference.push(diff);
-
-            let se_diff = (yates_result.se[i].powi(2) + yates_result.se[j].powi(2)).sqrt();
-            se.push(se_diff);
-
-            let z = if se_diff > 0.0 { diff / se_diff } else { 0.0 };
-            z_scores.push(z);
-
-            let p = 2.0 * normal_sf(z.abs());
-            p_values.push(p);
-        }
-    }
-
-    Ok(YatesPairwiseResult {
-        level1,
-        level2,
-        difference,
-        se,
-        z: z_scores,
-        p_value: p_values,
-    })
+/// Python entry point: `yates(cmat, beta, vmat, offset=0.0, sigma2=None,
+/// estimable=None, test="global")`.
+#[pyfunction(name = "yates")]
+#[pyo3(signature = (cmat, beta, vmat, offset=0.0, sigma2=None, estimable=None, test="global"))]
+pub fn yates_py(
+    cmat: Vec<Vec<f64>>,
+    beta: Vec<f64>,
+    vmat: Vec<Vec<f64>>,
+    offset: f64,
+    sigma2: Option<f64>,
+    estimable: Option<Vec<bool>>,
+    test: &str,
+) -> PyResult<YatesResult> {
+    Ok(yates(&YatesInput {
+        cmat: &cmat,
+        beta: &beta,
+        vmat: &vmat,
+        offset,
+        sigma2,
+        estimable: estimable.as_deref(),
+        test: YatesTest::parse(test)?,
+    })?)
 }
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct YatesPairwiseResult {
-    #[pyo3(get)]
-    pub level1: Vec<String>,
-    #[pyo3(get)]
-    pub level2: Vec<String>,
-    #[pyo3(get)]
-    pub difference: Vec<f64>,
-    #[pyo3(get)]
-    pub se: Vec<f64>,
-    #[pyo3(get)]
-    pub z: Vec<f64>,
-    #[pyo3(get)]
-    pub p_value: Vec<f64>,
-}
-
-fn z_score(conf_level: f64) -> PyResult<f64> {
-    if !conf_level.is_finite() || conf_level <= 0.0 || conf_level >= 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "conf_level must be a finite value between 0 and 1",
-        ));
-    }
-    Ok(normal_inverse_cdf(0.5 + conf_level / 2.0))
-}
-
-fn validate_predict_type(predict_type: &str) -> PyResult<()> {
-    match predict_type {
-        "linear" | "risk" | "survival" => Ok(()),
-        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "predict_type must be one of 'linear', 'risk', or 'survival'",
-        )),
-    }
+/// Python entry point for [`population_means`]: `xmatlist` is a list of
+/// model matrices (nested rows), one per level.
+#[pyfunction(name = "yates_population_means")]
+#[pyo3(signature = (xmatlist, weights=None))]
+pub fn population_means_py(
+    xmatlist: Vec<Vec<Vec<f64>>>,
+    weights: Option<Vec<f64>>,
+) -> PyResult<Vec<Vec<f64>>> {
+    Ok(population_means(&xmatlist, weights.as_deref())?)
 }
 
 #[cfg(test)]
@@ -333,180 +427,102 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_yates_basic() {
-        let predictions = vec![1.0, 1.5, 2.0, 2.5, 3.0, 3.5];
-        let factor = vec![
-            "A".to_string(),
-            "A".to_string(),
-            "A".to_string(),
-            "B".to_string(),
-            "B".to_string(),
-            "B".to_string(),
-        ];
-
-        let result = yates(predictions, factor, None, None).unwrap();
-
-        assert_eq!(result.levels.len(), 2);
-        assert_eq!(result.means.len(), 2);
-
-        let a_idx = result.levels.iter().position(|l| l == "A").unwrap();
-        let b_idx = result.levels.iter().position(|l| l == "B").unwrap();
-
-        assert!((result.means[a_idx] - 1.5).abs() < 0.01);
-        assert!((result.means[b_idx] - 3.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_yates_weighted() {
-        let predictions = vec![1.0, 2.0, 3.0];
-        let factor = vec!["A".to_string(), "A".to_string(), "A".to_string()];
-        let weights = vec![1.0, 2.0, 1.0];
-
-        let result = yates(predictions, factor, Some(weights), None).unwrap();
-
-        assert!((result.means[0] - 2.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_yates_unweighted_matches_unit_weights() {
-        let predictions = vec![1.0, 2.0, 4.0, 8.0];
-        let factor = vec![
-            "A".to_string(),
-            "A".to_string(),
-            "B".to_string(),
-            "B".to_string(),
-        ];
-        let weights = vec![1.0; predictions.len()];
-
-        let unweighted = yates(predictions.clone(), factor.clone(), None, Some(0.95)).unwrap();
-        let weighted = yates(predictions, factor, Some(weights), Some(0.95)).unwrap();
-
-        assert_eq!(unweighted.levels, weighted.levels);
-        assert_eq!(unweighted.n, weighted.n);
-        for i in 0..unweighted.levels.len() {
-            assert!((unweighted.means[i] - weighted.means[i]).abs() < 1e-12);
-            assert!((unweighted.se[i] - weighted.se[i]).abs() < 1e-12);
-            assert!((unweighted.lower[i] - weighted.lower[i]).abs() < 1e-12);
-            assert!((unweighted.upper[i] - weighted.upper[i]).abs() < 1e-12);
+    fn jacobi_eigen_recovers_a_known_spectrum() {
+        let (values, vectors) = symmetric_eigen(&[vec![2.0, 1.0], vec![1.0, 2.0]]);
+        let mut sorted = values.clone();
+        sorted.sort_by(f64::total_cmp);
+        assert!((sorted[0] - 1.0).abs() < 1e-12);
+        assert!((sorted[1] - 3.0).abs() < 1e-12);
+        for column in 0..2 {
+            let norm: f64 = vectors.iter().map(|row| row[column] * row[column]).sum();
+            assert!((norm - 1.0).abs() < 1e-12);
         }
     }
 
     #[test]
-    fn test_yates_confidence_level_controls_interval_width() {
-        let predictions = vec![1.0, 2.0, 3.0, 4.0];
-        let factor = vec![
-            "A".to_string(),
-            "A".to_string(),
-            "A".to_string(),
-            "A".to_string(),
+    fn quadratic_form_uses_the_generalised_inverse() {
+        let (stat, df) = quadratic_form(&[vec![2.0, 0.0], vec![0.0, 4.0]], &[2.0, 2.0]);
+        assert!((stat - 3.0).abs() < 1e-12);
+        assert_eq!(df, 2);
+        // rank-one matrix: only the projected component counts
+        let (stat, df) = quadratic_form(&[vec![1.0, 1.0], vec![1.0, 1.0]], &[1.0, 1.0]);
+        assert!((stat - 1.0).abs() < 1e-12);
+        assert_eq!(df, 1);
+    }
+
+    #[test]
+    fn marginal_means_and_global_test_follow_r() {
+        // Two-level factor plus a covariate: Cmat rows are the level's
+        // dummy with the covariate at its population mean.
+        let cmat = vec![vec![0.0, 3.0], vec![1.0, 3.0]];
+        let beta = [0.5, 0.2];
+        let vmat = vec![vec![0.04, 0.01], vec![0.01, 0.02]];
+        let result = yates(&YatesInput {
+            cmat: &cmat,
+            beta: &beta,
+            vmat: &vmat,
+            offset: -0.6,
+            sigma2: None,
+            estimable: None,
+            test: YatesTest::Global,
+        })
+        .unwrap();
+        assert!((result.estimate[0].pmm - 0.0).abs() < 1e-12);
+        assert!((result.estimate[1].pmm - 0.5).abs() < 1e-12);
+        // var of row 0 = 9 * 0.02 = 0.18
+        assert!((result.estimate[0].std - 0.18f64.sqrt()).abs() < 1e-12);
+        assert_eq!(result.test.len(), 1);
+        assert_eq!(result.test[0].name, "global");
+        assert_eq!(result.test[0].df, 1);
+        // contrast (1, -1): difference -0.5, variance 0.04
+        assert!((result.test[0].chisq - 0.25 / 0.04).abs() < 1e-9);
+        assert_eq!(result.mvar.len(), 2);
+    }
+
+    #[test]
+    fn pairwise_and_mean_contrasts_and_missing_levels() {
+        let cmat = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let beta = [0.5, 1.0];
+        let vmat = vec![vec![0.1, 0.0], vec![0.0, 0.1]];
+        let pairwise = yates(&YatesInput {
+            cmat: &cmat,
+            beta: &beta,
+            vmat: &vmat,
+            offset: 0.0,
+            sigma2: Some(2.0),
+            estimable: None,
+            test: YatesTest::Pairwise,
+        })
+        .unwrap();
+        assert_eq!(pairwise.test.len(), 3);
+        assert_eq!(pairwise.test[0].name, "1 vs 2");
+        assert!((pairwise.test[0].chisq - 2.5).abs() < 1e-9);
+        assert_eq!(pairwise.test[0].ss, Some(5.0));
+        let mean = yates(&YatesInput {
+            cmat: &cmat,
+            beta: &beta,
+            vmat: &vmat,
+            offset: 0.0,
+            sigma2: None,
+            estimable: Some(&[true, true, false]),
+            test: YatesTest::Mean,
+        })
+        .unwrap();
+        assert!(mean.estimate[2].pmm.is_nan());
+        assert!(mean.test.iter().all(|t| t.chisq.is_nan()));
+        assert_eq!(mean.mvar.len(), 2);
+    }
+
+    #[test]
+    fn population_means_average_rows() {
+        let xmatlist = vec![
+            vec![vec![1.0, 2.0], vec![1.0, 4.0]],
+            vec![vec![0.0, 2.0], vec![0.0, 4.0]],
         ];
-
-        let narrow = yates(predictions.clone(), factor.clone(), None, Some(0.80)).unwrap();
-        let wide = yates(predictions, factor, None, Some(0.99)).unwrap();
-
-        let narrow_width = narrow.upper[0] - narrow.lower[0];
-        let wide_width = wide.upper[0] - wide.lower[0];
-        assert!(wide_width > narrow_width);
-    }
-
-    #[test]
-    fn test_yates_rejects_malformed_inputs() {
-        let err = yates(vec![], vec![], None, None).unwrap_err();
-        assert!(err.to_string().contains("predictions cannot be empty"));
-
-        let err = yates(vec![f64::NAN], vec!["A".to_string()], None, None).unwrap_err();
-        assert!(err.to_string().contains("predictions contains NaN"));
-
-        let err = yates(vec![1.0], vec!["A".to_string()], Some(vec![-1.0]), None).unwrap_err();
-        assert!(err.to_string().contains("weights contains negative value"));
-
-        let err = yates(vec![1.0], vec!["A".to_string()], Some(vec![0.0]), None).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("weights must have positive total weight")
-        );
-
-        let err = yates(vec![1.0], vec!["A".to_string()], None, Some(1.0)).unwrap_err();
-        assert!(err.to_string().contains("conf_level"));
-    }
-
-    #[test]
-    fn test_yates_contrast() {
-        let x = vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        let coef = vec![0.5, 1.0];
-        let factor_levels = vec![0.0, 1.0];
-
-        let result = yates_contrast(x, coef, 3, 2, 0, factor_levels, Some("linear")).unwrap();
-
-        assert_eq!(result.levels.len(), 2);
-    }
-
-    #[test]
-    fn test_yates_contrast_rejects_malformed_inputs() {
-        let err =
-            yates_contrast(vec![], vec![0.5], 0, 1, 0, vec![0.0], Some("linear")).unwrap_err();
-        assert!(err.to_string().contains("n_obs must be greater than 0"));
-
-        let err =
-            yates_contrast(vec![1.0], vec![0.5], 1, 1, 0, vec![], Some("linear")).unwrap_err();
-        assert!(err.to_string().contains("factor_levels cannot be empty"));
-
-        let err = yates_contrast(
-            vec![f64::NAN],
-            vec![0.5],
-            1,
-            1,
-            0,
-            vec![0.0],
-            Some("linear"),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("x contains NaN"));
-
-        let err = yates_contrast(
-            vec![1.0],
-            vec![f64::INFINITY],
-            1,
-            1,
-            0,
-            vec![0.0],
-            Some("linear"),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("coef contains non-finite"));
-
-        let err = yates_contrast(
-            vec![1.0],
-            vec![0.5],
-            1,
-            1,
-            0,
-            vec![f64::NAN],
-            Some("linear"),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("factor_levels contains NaN"));
-
-        let err =
-            yates_contrast(vec![1.0], vec![0.5], 1, 1, 0, vec![0.0], Some("bogus")).unwrap_err();
-        assert!(err.to_string().contains("predict_type must be one of"));
-    }
-
-    #[test]
-    fn test_yates_pairwise() {
-        let result = YatesResult {
-            levels: vec!["A".to_string(), "B".to_string(), "C".to_string()],
-            means: vec![1.0, 2.0, 3.0],
-            se: vec![0.1, 0.1, 0.1],
-            lower: vec![0.8, 1.8, 2.8],
-            upper: vec![1.2, 2.2, 3.2],
-            n: vec![10, 10, 10],
-            predict_type: "linear".to_string(),
-        };
-
-        let pairwise = yates_pairwise(&result).unwrap();
-
-        assert_eq!(pairwise.level1.len(), 3);
-        assert_eq!(pairwise.difference[0], -1.0);
+        let cmat = population_means(&xmatlist, None).unwrap();
+        assert_eq!(cmat, vec![vec![1.0, 3.0], vec![0.0, 3.0]]);
+        let weighted = population_means(&xmatlist, Some(&[3.0, 1.0])).unwrap();
+        assert!((weighted[0][1] - 2.5).abs() < 1e-12);
+        assert!(YatesTest::parse("trend").is_err());
     }
 }

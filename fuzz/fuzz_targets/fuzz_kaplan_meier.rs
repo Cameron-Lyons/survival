@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use survival::{KaplanMeierConfig, compute_survfitkm};
+use survival::surv_analysis::{SurvfitKMData, SurvfitKMOptions, survfitkm};
 
 fuzz_target!(|data: &[u8]| {
     if data.len() < 24 {
@@ -25,11 +25,11 @@ fuzz_target!(|data: &[u8]| {
         }
 
         time.push(t);
-        status.push(if s > 0.0 { 1.0 } else { 0.0 });
+        status.push(i32::from(s > 0.0));
         weights.push(w.max(0.01));
     }
 
-    let position = vec![0i32; n];
-    let config = KaplanMeierConfig::default();
-    let _ = compute_survfitkm(&time, &status, &weights, None, &position, &config);
+    if let Ok(data) = SurvfitKMData::try_new(None, time, status, Some(weights), None, None, None) {
+        let _ = survfitkm(&data, &SurvfitKMOptions::default());
+    }
 });

@@ -1,13 +1,17 @@
-#![cfg_attr(
-    not(feature = "python"),
-    allow(
-        dead_code,
-        unused_attributes,
-        unused_imports,
-        unused_mut,
-        unused_variables
-    )
-)]
+//! Rust port of R's `survival` package with PyO3 bindings.
+//!
+//! The crate root exposes the domain modules (`regression`, `surv_analysis`,
+//! ...), the [`error`] types, the typed boundary inputs in [`data_types`] and a
+//! [`prelude`] that gathers all three. Python bindings live under `api` and are
+//! compiled only with the `python` feature; `docs/repo-layout.md` describes the
+//! layout.
+
+// In Rust-only builds the PyO3 attribute macros are no-ops, so `#[new]`
+// constructors, `#[pymethods]` and `#[pyo3(get)]` fields are never reached
+// (`dead_code`), and a constant that only appears in a stripped
+// `#[pyo3(signature = (.. = CONST))]` default is an unused import
+// (`unused_imports`). Nothing else is allowed crate-wide.
+#![cfg_attr(not(feature = "python"), allow(dead_code, unused_imports))]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 #[cfg(not(feature = "python"))]
@@ -16,15 +20,18 @@ extern crate self as pyo3;
 #[cfg(not(feature = "python"))]
 mod pyo3_shim;
 
+// `pyo3::X` resolves to `crate::X` in Rust-only builds (see `pyo3_shim`), so
+// the shim's stand-ins must sit at the crate root. They are not part of the
+// supported API and are hidden from the docs.
 #[cfg(not(feature = "python"))]
+#[doc(hidden)]
 pub use pyo3_shim::{
-    Bound, Py, PyAny, PyDict, PyErr, PyList, PyModule, PyRefMut, PyResult, Python, exceptions,
-    types,
+    Bound, Py, PyAny, PyDict, PyErr, PyErrKind, PyRefMut, PyResult, Python, exceptions, types,
 };
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
-#[cfg(feature = "python")]
+
 mod api;
 pub mod bayesian;
 pub mod causal;
@@ -50,7 +57,6 @@ pub mod qol;
 pub mod recurrent;
 pub mod regression;
 pub mod relative;
-#[path = "reliability/mod.rs"]
 pub mod reliability;
 pub mod residuals;
 pub mod scoring;
@@ -61,73 +67,44 @@ pub mod surv_analysis;
 mod tests;
 pub mod validation;
 
+pub use error::{SurvivalError, SurvivalResult};
+
+/// Typed inputs accepted at the Rust and Python boundaries.
+///
+/// The `*Input`/`*Data` structs validate shapes once, up front; `FloatVec`,
+/// `IntVec`, `BoolVec` and `FloatMatrix` are the `#[pyfunction]` argument
+/// types that accept NumPy arrays, pandas/polars columns or plain sequences
+/// without a `.tolist()` round trip.
 pub mod data_types {
+    pub use crate::internal::numpy_utils::{BoolVec, FloatMatrix, FloatVec, IntVec};
     pub use crate::internal::typed_inputs::{
         AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
         SurvivalData, Weights,
     };
 }
 
-pub mod preferred {
-    pub use crate::data_types::{
-        AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
-        SurvivalData, Weights,
-    };
+/// The domain modules, the error types and the typed inputs, identical with
+/// and without the `python` feature.
+///
+/// [`core`] is deliberately absent: a glob import of a module named `core`
+/// shadows the `core` crate for the importing file, which breaks derive
+/// macros that spell out `core::fmt::...` paths. Reach it as `survival::core`.
+pub mod prelude {
+    pub use crate::data_types::*;
     pub use crate::error::{SurvivalError, SurvivalResult};
     #[cfg(feature = "ml")]
     pub use crate::ml;
     pub use crate::{
-        bayesian, causal, concordance, core, data_prep, interpretability, interval, joint, missing,
+        bayesian, causal, concordance, data_prep, interpretability, interval, joint, missing,
         monitoring, population, qol, recurrent, regression, relative, reliability, residuals,
         scoring, spatial, surv_analysis, validation,
     };
-}
-
-pub mod prelude {
-    #[cfg(feature = "python")]
-    pub use crate::preferred::*;
+    // `use pyo3::prelude::*` inside the crate resolves here in Rust-only
+    // builds, so the shim's stand-ins ride along (hidden, unsupported).
     #[cfg(not(feature = "python"))]
+    #[doc(hidden)]
     pub use crate::pyo3_shim::prelude::*;
 }
-
-pub const DEPRECATED_ROOT_EXPORTS_NOTE: &str =
-    "Prefer survival::preferred or explicit domain modules such as survival::regression.";
-
-#[doc(hidden)]
-pub mod compatibility {
-    pub use crate::bayesian::*;
-    pub use crate::causal::*;
-    pub use crate::concordance::*;
-    pub use crate::constants::*;
-    pub use crate::core::*;
-    pub use crate::data_prep::*;
-    pub use crate::data_types::*;
-    pub use crate::error::{SurvivalError, SurvivalResult};
-    pub use crate::interpretability::*;
-    pub use crate::interval::*;
-    pub use crate::joint::*;
-    pub use crate::missing::*;
-    #[cfg(feature = "ml")]
-    pub use crate::ml::*;
-    pub use crate::monitoring::*;
-    pub use crate::population::*;
-    pub use crate::qol::*;
-    pub use crate::recurrent::*;
-    pub use crate::regression::*;
-    pub use crate::relative::*;
-    pub use crate::reliability::*;
-    pub use crate::residuals::*;
-    pub use crate::scoring::*;
-    pub use crate::spatial::*;
-    pub use crate::surv_analysis::*;
-    pub use crate::validation::*;
-}
-
-#[deprecated(
-    since = "1.2.17",
-    note = "Prefer survival::preferred or explicit domain modules such as survival::regression"
-)]
-pub use compatibility::*;
 
 #[cfg(feature = "python")]
 #[pymodule]

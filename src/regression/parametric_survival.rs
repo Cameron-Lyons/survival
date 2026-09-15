@@ -1,112 +1,101 @@
-use crate::constants::{CHOLESKY_TOL, DEFAULT_MAX_ITER, MAX_HALVING_ITERATIONS, STEP_HALVE_FACTOR};
-use crate::internal::aft::transformed_interval_width;
+//! Parametric (accelerated failure time) regression: R's `survreg`.
+//!
+//! Ports `R/survreg.R` (response transform, likelihood correction, robust
+//! variance), `R/survreg.fit.R` (rescaling, starting values, the
+//! intercept-only fit) and `src/survreg6.c` (the Newton-Raphson iteration
+//! with step halving and the Fisher-scoring fall back) from the CRAN
+//! `survival` package.  The log-likelihood kernel lives in
+//! [`crate::regression::survregc1`], the distributions in
+//! [`crate::regression::survreg_distributions`], predictions in
+//! [`crate::regression::survreg_predict`] and residuals in
+//! [`crate::residuals::survreg_resid`].
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::matrix::{cholesky2, chsolve2, symmetric_inverse_via_cholesky};
+use crate::internal::validation::{
+    validate_finite, validate_length, validate_non_empty, validate_positive,
+};
+use crate::regression::survreg_distributions::{SurvregDistribution, SurvregTransform};
 use crate::regression::survreg_predict::{
-    SurvregPrediction, SurvregQuantilePrediction, compute_linear_predictor,
-    compute_quantile_prediction_with_options, compute_response_prediction,
-    compute_se_linear_predictor, transform_prediction_se,
+    SurvregNewdata, SurvregPredictType, SurvregPrediction, predict_survreg,
 };
-use crate::regression::survregc1::{SurvivalDist, SurvivalLikelihood, survreg_loglik, survregc1};
+use crate::regression::survregc1::{SurvregKernel, SurvregLikelihood};
 use crate::residuals::survreg_resid::{
-    SurvregResidType, SurvregResiduals, compute_deviance_residuals_survreg_with_parameter,
-    compute_dfbeta_survreg_with_parameter, compute_ldcase_with_parameter,
-    compute_response_residuals, compute_response_residuals_censored_with_parameter,
-    compute_survreg_dfbeta_residuals, compute_survreg_residual_matrix_with_parameter,
-    compute_working_residuals_from_derivative_matrix, compute_working_residuals_with_parameter,
+    SurvregResidType, SurvregResiduals, residuals_survreg, survreg_deriv,
 };
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 
-mod initial;
-use initial::{SurvregRescaling, initialize_survreg, is_mean_only};
-
-type PredictionRows = (Vec<f64>, Option<Vec<Vec<f64>>>);
-
-// Matches survival::survreg.control() without changing other model families.
-const SURVREG_CONVERGENCE_TOLERANCE: f64 = 1e-9;
-
-#[derive(Debug, Clone)]
+/// `survreg.control()`: the iteration settings of a fit.
 #[pyclass(from_py_object)]
-pub struct SurvregConfig {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurvregControl {
+    /// `iter.max` (R default 30).
     #[pyo3(get, set)]
-    pub max_iter: usize,
+    pub iter_max: usize,
+    /// `rel.tolerance`: iteration stops when the relative change in the
+    /// log-likelihood drops below it (R default 1e-9).
+    #[pyo3(get, set)]
+    pub rel_tolerance: f64,
+    /// `toler.chol`: the Cholesky pivot tolerance (R default 1e-10).
+    #[pyo3(get, set)]
+    pub toler_chol: f64,
+}
 
-    #[pyo3(get, set)]
-    pub eps: f64,
+impl Default for SurvregControl {
+    fn default() -> Self {
+        Self {
+            iter_max: 30,
+            rel_tolerance: 1e-9,
+            toler_chol: 1e-10,
+        }
+    }
+}
 
-    #[pyo3(get, set)]
-    pub tol_chol: f64,
-
-    #[pyo3(get, set)]
-    pub distribution: DistributionType,
+impl SurvregControl {
+    fn validate(&self) -> SurvivalResult<()> {
+        if !self.rel_tolerance.is_finite() || self.rel_tolerance <= 0.0 {
+            return Err(SurvivalError::invalid_input(
+                "rel_tolerance must be a finite positive value",
+            ));
+        }
+        if !self.toler_chol.is_finite() || self.toler_chol <= 0.0 {
+            return Err(SurvivalError::invalid_input(
+                "toler_chol must be a finite positive value",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[pymethods]
-impl SurvregConfig {
+impl SurvregControl {
     #[new]
-    #[pyo3(signature = (distribution=None, max_iter=None, eps=None, tol_chol=None))]
-    fn new(
-        distribution: Option<DistributionType>,
-        max_iter: Option<usize>,
-        eps: Option<f64>,
-        tol_chol: Option<f64>,
-    ) -> Self {
-        Self {
-            distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
-            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
-            eps: eps.unwrap_or(SURVREG_CONVERGENCE_TOLERANCE),
-            tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
-        }
+    #[pyo3(signature = (iter_max=30, rel_tolerance=1e-9, toler_chol=1e-10))]
+    fn new(iter_max: usize, rel_tolerance: f64, toler_chol: f64) -> PyResult<Self> {
+        let control = Self {
+            iter_max,
+            rel_tolerance,
+            toler_chol,
+        };
+        control.validate()?;
+        Ok(control)
     }
 }
 
-impl Default for SurvregConfig {
-    fn default() -> Self {
-        Self {
-            max_iter: DEFAULT_MAX_ITER,
-            eps: SURVREG_CONVERGENCE_TOLERANCE,
-            tol_chol: CHOLESKY_TOL,
-            distribution: DEFAULT_SURVREG_DISTRIBUTION,
-        }
-    }
-}
-
-impl SurvregConfig {
-    pub fn create(
-        distribution: Option<DistributionType>,
-        max_iter: Option<usize>,
-        eps: Option<f64>,
-        tol_chol: Option<f64>,
-    ) -> Self {
-        Self {
-            distribution: distribution.unwrap_or(DEFAULT_SURVREG_DISTRIBUTION),
-            max_iter: max_iter.unwrap_or(DEFAULT_MAX_ITER),
-            eps: eps.unwrap_or(SURVREG_CONVERGENCE_TOLERANCE),
-            tol_chol: tol_chol.unwrap_or(CHOLESKY_TOL),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+/// The data of a `survreg` fit: the response with R's `Surv` censoring
+/// codes, the design matrix (which must contain the intercept column when
+/// one is wanted, as `model.matrix` would) and the optional case weights,
+/// offset, strata and cluster.
+///
+/// `status` uses the codes of an `interval`-type `Surv`: 0 right censored,
+/// 1 exact, 2 left censored, 3 interval censored between `time` and
+/// `time2`; `time2` is only read for code-3 rows.  Weights must be positive
+/// (`survreg.fit`: "Invalid weights, must be >0").  Strata and cluster are
+/// zero-based codes.
 #[pyclass(from_py_object)]
-pub struct SurvivalFit {
-    #[pyo3(get)]
-    pub coefficients: Vec<f64>,
-    #[pyo3(get)]
-    pub location_coefficients: Vec<f64>,
-    #[pyo3(get)]
-    pub scale: f64,
-    #[pyo3(get)]
-    pub scales: Vec<f64>,
-    #[pyo3(get)]
-    pub distribution: String,
-    #[pyo3(get)]
-    pub distribution_parameters: Vec<f64>,
-    #[pyo3(get)]
-    pub n_covariates: usize,
-    #[pyo3(get)]
-    pub n_strata: usize,
-    #[pyo3(get)]
-    pub linear_predictors: Vec<f64>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurvregData {
     #[pyo3(get)]
     pub time: Vec<f64>,
     #[pyo3(get)]
@@ -116,894 +105,908 @@ pub struct SurvivalFit {
     #[pyo3(get)]
     pub covariates: Vec<Vec<f64>>,
     #[pyo3(get)]
-    pub strata: Vec<usize>,
+    pub weights: Option<Vec<f64>>,
     #[pyo3(get)]
-    pub weights: Vec<f64>,
+    pub offset: Option<Vec<f64>>,
     #[pyo3(get)]
-    pub iterations: usize,
+    pub strata: Option<Vec<usize>>,
     #[pyo3(get)]
-    pub variance_matrix: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub log_likelihood: f64,
-    #[pyo3(get)]
-    pub convergence_flag: i32,
-    #[pyo3(get)]
-    pub score_vector: Vec<f64>,
+    pub cluster: Option<Vec<usize>>,
 }
 
-impl DistributionType {
-    fn likelihood_distribution(
-        self,
-        distribution_parameter: Option<f64>,
-    ) -> Result<SurvivalDist, Box<dyn std::error::Error>> {
-        Ok(match self {
-            DistributionType::ExtremeValue => SurvivalDist::ExtremeValue,
-            DistributionType::Logistic => SurvivalDist::Logistic,
-            DistributionType::Gaussian => SurvivalDist::Gaussian,
-            DistributionType::Weibull => SurvivalDist::Weibull,
-            DistributionType::LogNormal => SurvivalDist::LogNormal,
-            DistributionType::LogLogistic => SurvivalDist::LogLogistic,
-            DistributionType::StudentT => SurvivalDist::StudentT(
-                distribution_parameter.ok_or("Student-t degrees of freedom are missing")?,
-            ),
-        })
-    }
-
-    fn canonical_name(self) -> &'static str {
-        match self {
-            DistributionType::ExtremeValue => "extreme_value",
-            DistributionType::Logistic => "logistic",
-            DistributionType::Gaussian => "gaussian",
-            DistributionType::Weibull => "weibull",
-            DistributionType::LogNormal => "lognormal",
-            DistributionType::LogLogistic => "loglogistic",
-            DistributionType::StudentT => "t",
-        }
-    }
-
-    fn uses_log_time(self) -> bool {
-        matches!(
-            self,
-            DistributionType::Weibull | DistributionType::LogNormal | DistributionType::LogLogistic
-        )
-    }
-}
-
-fn requested_distribution_name(requested: Option<&str>, distribution: DistributionType) -> String {
-    let Some(name) = requested else {
-        return distribution.canonical_name().to_string();
-    };
-    match name.to_lowercase().replace('-', "_").as_str() {
-        "exponential" => "exponential".to_string(),
-        "rayleigh" => "rayleigh".to_string(),
-        "normal" => "gaussian".to_string(),
-        "log_logistic" => "loglogistic".to_string(),
-        "loggaussian" | "log_gaussian" | "lognormal" | "log_normal" => "lognormal".to_string(),
-        "extreme" | "extremevalue" => "extreme_value".to_string(),
-        "student" | "student_t" | "studentt" => "t".to_string(),
-        _ => distribution.canonical_name().to_string(),
-    }
-}
-
-fn is_student_t_distribution_name(distribution: &str) -> bool {
-    matches!(
-        distribution.to_lowercase().replace('-', "_").as_str(),
-        "t" | "student" | "student_t" | "studentt"
-    )
-}
-
-fn parse_distribution_type(distribution: Option<&str>) -> PyResult<DistributionType> {
-    let Some(name) = distribution else {
-        return Ok(DEFAULT_SURVREG_DISTRIBUTION);
-    };
-    match name.to_lowercase().replace('-', "_").as_str() {
-        "weibull" => Ok(DistributionType::Weibull),
-        "exponential" => Ok(DistributionType::Weibull),
-        "rayleigh" => Ok(DistributionType::Weibull),
-        "extreme" | "extreme_value" | "extremevalue" => Ok(DistributionType::ExtremeValue),
-        "gaussian" | "normal" => Ok(DistributionType::Gaussian),
-        "logistic" => Ok(DistributionType::Logistic),
-        "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => {
-            Ok(DistributionType::LogNormal)
-        }
-        "loglogistic" | "log_logistic" => Ok(DistributionType::LogLogistic),
-        "t" | "student" | "student_t" | "studentt" => Ok(DistributionType::StudentT),
-        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, loglogistic, or t",
-        )),
-    }
-}
-
-fn validate_distribution_parameter(
-    distribution: DistributionType,
-    distribution_parameter: Option<f64>,
-) -> PyResult<Option<f64>> {
-    match distribution {
-        DistributionType::StudentT => {
-            let df = distribution_parameter.unwrap_or(4.0);
-            if !df.is_finite() || df <= 2.0 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Degrees of freedom must be >=3",
-                ));
-            }
-            Ok(Some(df))
-        }
-        _ => {
-            if distribution_parameter.is_some() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "distribution_parameter is only supported for distribution='t'",
-                ));
-            }
-            Ok(None)
-        }
-    }
-}
-
-impl SurvivalFit {
-    fn validate_covariates(&self, covariates: &[Vec<f64>]) -> PyResult<()> {
-        for (idx, row) in covariates.iter().enumerate() {
-            if row.len() != self.n_covariates {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "covariate row {} has {} columns but model expects {}",
-                    idx,
-                    row.len(),
-                    self.n_covariates
-                )));
-            }
-            if let Some((col_idx, _)) = row.iter().enumerate().find(|(_, value)| !value.is_finite())
-            {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "covariates[{}][{}] contains non-finite value",
-                    idx, col_idx
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn distribution_parameter(&self) -> Option<f64> {
-        self.distribution_parameters.first().copied()
-    }
-
-    fn validate_offset(offset: Option<Vec<f64>>, n: usize) -> PyResult<Option<Vec<f64>>> {
-        if let Some(values) = offset {
-            if values.len() != n {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "offset has {} values but covariates has {} rows",
-                    values.len(),
-                    n
-                )));
-            }
-            if let Some((idx, _)) = values
-                .iter()
-                .enumerate()
-                .find(|(_, value)| !value.is_finite())
-            {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "offset contains non-finite value at index {}",
-                    idx
-                )));
-            }
-            Ok(Some(values))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn location_variance_matrix(&self) -> Vec<Vec<f64>> {
-        self.variance_matrix
-            .iter()
-            .take(self.n_covariates)
-            .map(|row| row.iter().take(self.n_covariates).copied().collect())
-            .collect()
-    }
-
-    fn prediction_rows(
-        &self,
-        covariates: Option<Vec<Vec<f64>>>,
-        offset: Option<Vec<f64>>,
-    ) -> PyResult<PredictionRows> {
-        if let Some(rows) = covariates {
-            self.validate_covariates(&rows)?;
-            let offset = Self::validate_offset(offset, rows.len())?;
-            let linear_predictors =
-                compute_linear_predictor(&rows, &self.location_coefficients, offset.as_deref());
-            Ok((linear_predictors, Some(rows)))
-        } else {
-            if offset.is_some() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "offset can only be supplied with new covariates",
-                ));
-            }
-            Ok((self.linear_predictors.clone(), None))
-        }
-    }
-
-    /// Predict response quantiles using stored training strata by default.
-    /// Retains the original Rust API; explicit new-data strata are available
-    /// through `predict_quantile_with_options`.
-    pub fn predict_quantile(
-        &self,
-        covariates: Option<Vec<Vec<f64>>>,
-        quantiles: Option<Vec<f64>>,
-        offset: Option<Vec<f64>>,
-    ) -> PyResult<SurvregQuantilePrediction> {
-        self.predict_quantile_with_options(covariates, quantiles, offset, None, true)
-    }
-
-    /// Predict quantiles with optional zero-based stratum indices per row.
-    /// Training predictions use the stored strata when none are supplied;
-    /// new rows require indices when the fit has multiple scales. Set
-    /// `transform` to false to retain the model's linear response scale.
-    /// Probabilities include 0 and 1, returning the distribution's limits.
-    pub fn predict_quantile_with_options(
-        &self,
-        covariates: Option<Vec<Vec<f64>>>,
-        quantiles: Option<Vec<f64>>,
+impl SurvregData {
+    /// Validates every component once; the fit relies on it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        time: Vec<f64>,
+        status: Vec<i32>,
+        covariates: Vec<Vec<f64>>,
+        time2: Option<Vec<f64>>,
+        weights: Option<Vec<f64>>,
         offset: Option<Vec<f64>>,
         strata: Option<Vec<usize>>,
-        transform: bool,
-    ) -> PyResult<SurvregQuantilePrediction> {
-        let new_data = covariates.is_some();
-        let (linear_predictors, _rows) = self.prediction_rows(covariates, offset)?;
-        let n = linear_predictors.len();
-        if self.scales.is_empty() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "fitted scales must not be empty",
+        cluster: Option<Vec<usize>>,
+    ) -> SurvivalResult<Self> {
+        validate_non_empty(&time, "time")?;
+        validate_finite(&time, "time")?;
+        let n = time.len();
+        validate_length(n, status.len(), "status")?;
+        validate_length(n, covariates.len(), "covariates")?;
+        let nvar = covariates[0].len();
+        if nvar == 0 {
+            return Err(SurvivalError::invalid_input(
+                "covariates must have at least one column (the intercept)",
             ));
         }
-        let prediction_strata = match strata {
-            Some(values) => values,
-            None if !new_data => self.strata.clone(),
-            None if self.scales.len() == 1 => vec![0; n],
-            None => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "strata is required for new covariates when the fit has multiple scales",
+        for (index, row) in covariates.iter().enumerate() {
+            validate_length(nvar, row.len(), &format!("covariates row {index}"))?;
+            validate_finite(row, &format!("covariates row {index}"))?;
+        }
+        for (index, &code) in status.iter().enumerate() {
+            if !(0..=3).contains(&code) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "status must contain the codes 0 (right censored), 1 (exact), 2 (left censored) or 3 (interval censored); got {code} at index {index}"
+                )));
+            }
+        }
+        let interval_rows: Vec<usize> = (0..n).filter(|&i| status[i] == 3).collect();
+        match &time2 {
+            Some(time2) => {
+                validate_length(n, time2.len(), "time2")?;
+                for &i in &interval_rows {
+                    if !time2[i].is_finite() {
+                        return Err(SurvivalError::invalid_input(format!(
+                            "time2 contains non-finite value {} at interval-censored index {i}",
+                            time2[i]
+                        )));
+                    }
+                    if time2[i] < time[i] {
+                        return Err(SurvivalError::invalid_input(format!(
+                            "Invalid interval: start > stop at index {i}"
+                        )));
+                    }
+                }
+            }
+            None if !interval_rows.is_empty() => {
+                return Err(SurvivalError::invalid_input(
+                    "time2 is required for interval-censored (status 3) rows",
                 ));
             }
-        };
-        if prediction_strata.len() != n {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "strata length must match prediction rows",
-            ));
+            None => {}
         }
-        let row_scales = prediction_strata
-            .iter()
-            .enumerate()
-            .map(|(idx, &stratum)| {
-                self.scales.get(stratum).copied().ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "strata contains value {stratum} at row {idx}, expected < {}",
-                        self.scales.len()
-                    ))
-                })
-            })
-            .collect::<PyResult<Vec<f64>>>()?;
-        let quantiles = quantiles.unwrap_or_else(|| vec![0.5]);
-        let predictions = compute_quantile_prediction_with_options(
-            &linear_predictors,
-            &row_scales,
-            &quantiles,
-            &self.distribution,
-            self.distribution_parameter(),
-            transform,
-        )?;
-        Ok(SurvregQuantilePrediction {
-            n,
-            quantiles,
-            predictions,
+        if let Some(weights) = &weights {
+            validate_length(n, weights.len(), "weights")?;
+            validate_finite(weights, "weights")?;
+            validate_positive(weights, "weights")?;
+        }
+        if let Some(offset) = &offset {
+            validate_length(n, offset.len(), "offset")?;
+            validate_finite(offset, "offset")?;
+        }
+        if let Some(strata) = &strata {
+            validate_length(n, strata.len(), "strata")?;
+        }
+        if let Some(cluster) = &cluster {
+            validate_length(n, cluster.len(), "cluster")?;
+        }
+        Ok(Self {
+            time,
+            time2,
+            status,
+            covariates,
+            weights,
+            offset,
+            strata,
+            cluster,
         })
+    }
+
+    pub fn n(&self) -> usize {
+        self.time.len()
+    }
+
+    pub fn nvar(&self) -> usize {
+        self.covariates[0].len()
+    }
+
+    /// `max(strata)`: 1 without strata.
+    pub fn nstrata(&self) -> usize {
+        self.strata
+            .as_ref()
+            .and_then(|s| s.iter().max())
+            .map_or(1, |&max| max + 1)
     }
 }
 
 #[pymethods]
-impl SurvivalFit {
-    #[pyo3(signature = (covariates=None, predict_type="response".to_string(), offset=None, se_fit=false))]
-    pub fn predict(
-        &self,
-        covariates: Option<Vec<Vec<f64>>>,
-        predict_type: String,
-        offset: Option<Vec<f64>>,
-        se_fit: bool,
-    ) -> PyResult<SurvregPrediction> {
-        let (linear_predictors, rows) = self.prediction_rows(covariates, offset)?;
-        let prediction_type =
-            crate::regression::survreg_predict::SurvregPredictType::from_str(&predict_type)
-                .ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "Unknown prediction type: {}. Valid types: response, lp/linear, terms",
-                        predict_type
-                    ))
-                })?;
-
-        let predictions = match prediction_type {
-            crate::regression::survreg_predict::SurvregPredictType::Lp
-            | crate::regression::survreg_predict::SurvregPredictType::Terms => {
-                linear_predictors.clone()
-            }
-            crate::regression::survreg_predict::SurvregPredictType::Response => {
-                compute_response_prediction(&linear_predictors, &self.distribution)
-            }
-        };
-
-        let se = if se_fit {
-            let values = rows.as_deref().unwrap_or(&self.covariates);
-            let mut se = compute_se_linear_predictor(values, &self.location_variance_matrix());
-            transform_prediction_se(&mut se, &predictions, &self.distribution, prediction_type);
-            Some(se)
-        } else {
-            None
-        };
-
-        Ok(SurvregPrediction {
-            n: predictions.len(),
-            predictions,
-            se,
-            prediction_type: predict_type,
-        })
-    }
-
-    #[pyo3(name = "predict_quantile", signature = (covariates=None, quantiles=None, offset=None, strata=None, transform=true))]
-    fn predict_quantile_py(
-        &self,
-        covariates: Option<Vec<Vec<f64>>>,
-        quantiles: Option<Vec<f64>>,
+impl SurvregData {
+    #[new]
+    #[pyo3(signature = (time, status, covariates, time2=None, weights=None, offset=None, strata=None, cluster=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        time: Vec<f64>,
+        status: Vec<i32>,
+        covariates: Vec<Vec<f64>>,
+        time2: Option<Vec<f64>>,
+        weights: Option<Vec<f64>>,
         offset: Option<Vec<f64>>,
         strata: Option<Vec<usize>>,
-        transform: bool,
-    ) -> PyResult<SurvregQuantilePrediction> {
-        self.predict_quantile_with_options(covariates, quantiles, offset, strata, transform)
+        cluster: Option<Vec<usize>>,
+    ) -> PyResult<Self> {
+        Ok(Self::try_new(
+            time, status, covariates, time2, weights, offset, strata, cluster,
+        )?)
     }
 
-    #[pyo3(signature = (residual_type="deviance".to_string()))]
-    pub fn residuals(&self, residual_type: String) -> PyResult<SurvregResiduals> {
-        let resid_type = SurvregResidType::from_str(&residual_type).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Unknown residual type: {}. Valid types: response, deviance, working, ldcase, ldresp, ldshape, dfbeta, dfbetas, matrix",
-                residual_type
-            ))
-        })?;
-        if matches!(
-            resid_type,
-            SurvregResidType::Dfbeta | SurvregResidType::Dfbetas
-        ) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "survreg dfbeta residuals are matrix-valued; use SurvivalFit.dfbeta() or survival.r_api.residuals",
-            ));
-        }
-        if matches!(resid_type, SurvregResidType::Matrix) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "survreg matrix residuals are matrix-valued; use survival.r_api.residuals or survival.survreg_residual_matrix",
-            ));
-        }
-        let has_interval_censoring = self.status.iter().any(|&value| value == 2 || value == 3);
-        if has_interval_censoring
-            && !matches!(
-                resid_type,
-                SurvregResidType::Response
-                    | SurvregResidType::Deviance
-                    | SurvregResidType::Working
-                    | SurvregResidType::Ldcase
-                    | SurvregResidType::Ldresp
-                    | SurvregResidType::Ldshape
-            )
-        {
-            return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
-                format!(
-                    "survreg residual type '{}' is not implemented for left or interval-censored data; use ldcase",
-                    residual_type
-                ),
-            ));
-        }
-
-        let residuals = match resid_type {
-            SurvregResidType::Response => {
-                if has_interval_censoring {
-                    compute_response_residuals_censored_with_parameter(
-                        &self.time,
-                        self.time2.as_deref(),
-                        &self.status,
-                        &self.linear_predictors,
-                        self.scale,
-                        &self.distribution,
-                        self.distribution_parameter(),
-                    )?
-                } else {
-                    compute_response_residuals(
-                        &self.time,
-                        &self.linear_predictors,
-                        &self.distribution,
-                    )
-                }
-            }
-            SurvregResidType::Deviance => compute_deviance_residuals_survreg_with_parameter(
-                &self.time,
-                self.time2.as_deref(),
-                &self.status,
-                &self.linear_predictors,
-                self.scale,
-                &self.distribution,
-                self.distribution_parameter(),
-            )?,
-            SurvregResidType::Working => {
-                if has_interval_censoring || is_student_t_distribution_name(&self.distribution) {
-                    let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
-                        &self.time,
-                        self.time2.as_deref(),
-                        &self.status,
-                        &self.linear_predictors,
-                        self.scale,
-                        &self.distribution,
-                        self.distribution_parameter(),
-                    )?;
-                    compute_working_residuals_from_derivative_matrix(&derivative_matrix)?
-                } else {
-                    compute_working_residuals_with_parameter(
-                        &self.time,
-                        &self.status,
-                        &self.linear_predictors,
-                        self.scale,
-                        &self.distribution,
-                        self.distribution_parameter(),
-                    )
-                }
-            }
-            SurvregResidType::Ldcase | SurvregResidType::Ldresp | SurvregResidType::Ldshape => {
-                compute_ldcase_with_parameter(
-                    &self.time,
-                    self.time2.as_deref(),
-                    &self.status,
-                    &self.linear_predictors,
-                    self.scale,
-                    &self.distribution,
-                    self.distribution_parameter(),
-                )?
-            }
-            SurvregResidType::Dfbeta | SurvregResidType::Dfbetas => unreachable!(),
-            SurvregResidType::Matrix => unreachable!(),
-        };
-
-        Ok(SurvregResiduals {
-            n: residuals.len(),
-            residuals,
-            residual_type,
-        })
-    }
-
-    pub fn dfbeta(&self) -> PyResult<Vec<Vec<f64>>> {
-        if self.status.iter().any(|&value| value == 2 || value == 3) {
-            let derivative_matrix = compute_survreg_residual_matrix_with_parameter(
-                &self.time,
-                self.time2.as_deref(),
-                &self.status,
-                &self.linear_predictors,
-                self.scale,
-                &self.distribution,
-                self.distribution_parameter(),
-            )?;
-            return compute_survreg_dfbeta_residuals(
-                &derivative_matrix,
-                &self.covariates,
-                &self.scales,
-                &self.strata,
-                &self.location_variance_matrix(),
-                false,
-                false,
-            );
-        }
-        Ok(compute_dfbeta_survreg_with_parameter(
-            &self.time,
-            &self.status,
-            &self.covariates,
-            &self.linear_predictors,
-            self.scale,
-            &self.location_variance_matrix(),
-            &self.distribution,
-            self.distribution_parameter(),
-        ))
-    }
-}
-struct LikelihoodInput<'a> {
-    n: usize,
-    nvar: usize,
-    nstrat: usize,
-    beta: &'a [f64],
-    distribution: &'a DistributionType,
-    distribution_parameter: Option<f64>,
-    strata: &'a ArrayView1<'a, i32>,
-    offsets: &'a Array1<f64>,
-    time1: &'a ArrayView1<'a, f64>,
-    interval_widths: Option<&'a ArrayView1<'a, f64>>,
-    status: &'a ArrayView1<'a, i32>,
-    weights: &'a Array1<f64>,
-    covariates: &'a Array2<f64>,
-    frailty: &'a ArrayView1<'a, i32>,
-}
-
-impl LikelihoodInput<'_> {
-    fn evaluate(&self) -> Result<SurvivalLikelihood, Box<dyn std::error::Error>> {
-        survregc1(
-            self.n,
-            self.nvar,
-            self.nstrat,
-            false,
-            &ArrayView1::from(self.beta),
-            self.distribution
-                .likelihood_distribution(self.distribution_parameter)?,
-            self.strata,
-            &self.offsets.view(),
-            self.time1,
-            self.interval_widths,
-            self.status,
-            &self.weights.view(),
-            &self.covariates.view(),
-            0,
-            self.frailty,
-        )
-    }
-
-    fn loglik(&self) -> Result<f64, Box<dyn std::error::Error>> {
-        survreg_loglik(
-            self.n,
-            self.nvar,
-            self.nstrat,
-            &ArrayView1::from(self.beta),
-            self.distribution
-                .likelihood_distribution(self.distribution_parameter)?,
-            self.strata,
-            &self.offsets.view(),
-            self.time1,
-            self.interval_widths,
-            self.status,
-            &self.weights.view(),
-            &self.covariates.view(),
-            0,
-            self.frailty,
-        )
-    }
-}
-fn likelihood_is_finite(likelihood: &SurvivalLikelihood) -> bool {
-    likelihood.loglik.is_finite()
-        && likelihood.u.iter().all(|value| value.is_finite())
-        && likelihood.imat.iter().all(|value| value.is_finite())
-        && likelihood.jj.iter().all(|value| value.is_finite())
-}
-
-fn stationary_within_roundoff(
-    loglik: f64,
-    eps: f64,
-    score: &Array1<f64>,
-    delta: &Array1<f64>,
-) -> bool {
-    let decrement = score.dot(delta);
-    loglik.is_finite()
-        && decrement >= 0.0
-        && decrement <= eps.min(f64::EPSILON * loglik.abs().max(1.0))
-}
-
-fn check_convergence(old: f64, new: f64, eps: f64) -> bool {
-    (1.0 - new / old).abs() <= eps || (old - new).abs() <= eps
-}
-
-/// Ordered LDL factorization used by the AFT information and score-product
-/// systems. Discarded pivots represent aliased parameters, not a request to
-/// add a ridge penalty. The tolerance and signed rank follow survreg's
-/// cholesky3 convention, which differs from the Cox factorization.
-struct SurvregInformation {
-    factors: Vec<f64>,
-    size: usize,
-    signed_rank: i32,
-}
-
-impl SurvregInformation {
-    fn factor(matrix: &Array2<f64>, tolerance: f64) -> Self {
-        let size = matrix.nrows();
-        debug_assert_eq!(size, matrix.ncols());
-        let mut factors: Vec<f64> = matrix.iter().copied().collect();
-        // R's dense cholesky3 uses an absolute threshold when the original
-        // diagonal is nonnegative, and scales by its minimum otherwise.
-        let minimum = matrix.diag().iter().copied().fold(0.0_f64, f64::min);
-        let threshold = if minimum == 0.0 {
-            tolerance
-        } else {
-            minimum * tolerance
-        };
-        let mut rank = 0;
-        let mut sign = 1;
-        for column in 0..size {
-            let pivot = factors[column * size + column];
-            if !pivot.is_finite() || pivot < threshold {
-                for row in column..size {
-                    factors[row * size + column] = 0.0;
-                }
-                if pivot < -8.0 * threshold {
-                    sign = -1;
-                }
-                continue;
-            }
-            rank += 1;
-            for row in column + 1..size {
-                let multiplier = factors[row * size + column] / pivot;
-                factors[row * size + column] = multiplier;
-                factors[row * size + row] -= multiplier * multiplier * pivot;
-                for following in row + 1..size {
-                    factors[following * size + row] -=
-                        multiplier * factors[following * size + column];
-                }
-            }
-        }
-        Self {
-            factors,
-            size,
-            signed_rank: rank * sign,
-        }
-    }
-
-    fn solve(&self, score: &Array1<f64>) -> Option<Array1<f64>> {
-        debug_assert_eq!(score.len(), self.size);
-        let mut step = score.to_vec();
-        for row in 0..self.size {
-            let mut value = step[row];
-            for (column, previous) in step.iter().enumerate().take(row) {
-                value -= previous * self.factors[row * self.size + column];
-            }
-            step[row] = value;
-        }
-        for row in (0..self.size).rev() {
-            let diagonal = self.factors[row * self.size + row];
-            if diagonal == 0.0 {
-                step[row] = 0.0;
-                continue;
-            }
-            let mut value = step[row] / diagonal;
-            for (column, following) in step.iter().enumerate().skip(row + 1) {
-                value -= following * self.factors[column * self.size + row];
-            }
-            step[row] = value;
-        }
-        step.iter()
-            .all(|value| value.is_finite())
-            .then(|| Array1::from_vec(step))
-    }
-
-    fn covariance(mut self) -> Result<Array2<f64>, Box<dyn std::error::Error>> {
-        let n = self.size;
-        // Invert the unit-lower factor and its positive diagonal weights.
-        // As in R's chinv2, an accepted nonpositive pivot is not reciprocated.
-        // This also preserves R's prescribed-parameter indefinite cases.
-        for column in 0..n {
-            if self.factors[column * n + column] > 0.0 {
-                self.factors[column * n + column] = 1.0 / self.factors[column * n + column];
-                for row in column + 1..n {
-                    self.factors[row * n + column] = -self.factors[row * n + column];
-                    for previous in 0..column {
-                        self.factors[row * n + previous] +=
-                            self.factors[row * n + column] * self.factors[column * n + previous];
-                    }
-                }
-            }
-        }
-        // Accumulate the symmetric covariance in the upper triangle. Zero
-        // rows and columns explicitly retain the discarded-pivot mask.
-        for row in 0..n {
-            if self.factors[row * n + row] == 0.0 {
-                for column in 0..row {
-                    self.factors[column * n + row] = 0.0;
-                }
-                for column in row..n {
-                    self.factors[row * n + column] = 0.0;
-                }
-            } else {
-                for following in row + 1..n {
-                    let weighted =
-                        self.factors[following * n + row] * self.factors[following * n + following];
-                    self.factors[row * n + following] = weighted;
-                    for column in row..following {
-                        self.factors[row * n + column] +=
-                            weighted * self.factors[following * n + column];
-                    }
-                }
-            }
-        }
-        for row in 1..n {
-            for column in 0..row {
-                self.factors[row * n + column] = self.factors[column * n + row];
-            }
-        }
-        if self.factors.iter().any(|value| !value.is_finite()) {
-            return Err("AFT covariance contains non-finite values".into());
-        }
-        Ok(Array2::from_shape_vec((n, n), self.factors)?)
+    fn __len__(&self) -> usize {
+        self.n()
     }
 }
 
-fn adjust_strata(newbeta: &mut [f64], beta: &[f64], nvar: usize, nstrat: usize) {
-    newbeta[nvar..nvar + nstrat]
-        .iter_mut()
-        .zip(&beta[nvar..nvar + nstrat])
-        .for_each(|(nb, &b)| {
-            if b - *nb > 1.1 {
-                *nb = b - 1.1;
-            }
-        });
-}
-
-fn validate_time_values(time: &[f64], uses_log_time: bool) -> PyResult<()> {
-    if time.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time must not be empty",
-        ));
-    }
-    for (idx, &value) in time.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "time contains non-finite value at index {}",
-                idx
-            )));
-        }
-        if uses_log_time && value <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "time[{}] must be positive",
-                idx
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_status_values(status: &[f64]) -> PyResult<()> {
-    for (idx, &value) in status.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "status contains non-finite value at index {}",
-                idx
-            )));
-        }
-        if value != 0.0 && value != 1.0 && value != 2.0 && value != 3.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "status must contain only 0/1/2/3 values",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_time2_values(
-    time: &[f64],
-    status: &[f64],
-    time2: Option<Vec<f64>>,
-    uses_log_time: bool,
-) -> PyResult<Option<Vec<f64>>> {
-    let has_interval_rows = status.contains(&3.0);
-    if !has_interval_rows && time2.is_none() {
-        return Ok(None);
-    }
-    let Some(values) = time2 else {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "time2 is required for interval-censored rows",
-        ));
-    };
-    if values.len() != time.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Length mismatch: time has {} elements but time2 has {}. Both must have the same length.",
-            time.len(),
-            values.len()
-        )));
-    }
-
-    let mut sanitized = Vec::with_capacity(values.len());
-    for (idx, ((&start, &end), &event)) in time
-        .iter()
-        .zip(values.iter())
-        .zip(status.iter())
-        .enumerate()
-    {
-        if event == 3.0 {
-            if !end.is_finite() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "time2 contains non-finite interval endpoint at index {}",
-                    idx
-                )));
-            }
-            if uses_log_time && end <= 0.0 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "time2[{}] must be positive",
-                    idx
-                )));
-            }
-            if end <= start {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "time2[{}] must be greater than time[{}] for interval-censored rows",
-                    idx, idx
-                )));
-            }
-            sanitized.push(end);
-        } else {
-            sanitized.push(start);
-        }
-    }
-    Ok(Some(sanitized))
-}
-
-fn validate_case_weights(weights: &[f64]) -> PyResult<()> {
-    let mut has_positive = false;
-    for (idx, &value) in weights.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "weights contains non-finite value at index {}",
-                idx
-            )));
-        }
-        if value < 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "weights must be non-negative",
-            ));
-        }
-        has_positive |= value > 0.0;
-    }
-    if !has_positive {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "weights must contain at least one positive value",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "{} contains non-finite value at index {}",
-                name, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_covariate_values(covariates: &[Vec<f64>], nvar: usize) -> PyResult<()> {
-    for (idx, row) in covariates.iter().enumerate() {
-        if row.len() != nvar {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "covariate row {} has {} columns but expected {}",
-                idx,
-                row.len(),
-                nvar
-            )));
-        }
-        for (col_idx, &value) in row.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "covariates[{}][{}] contains non-finite value",
-                    idx, col_idx
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A fitted `survreg` model: the components of R's `survreg` object.
 #[pyclass(from_py_object)]
-pub enum DistributionType {
-    #[pyo3(name = "extreme_value")]
-    ExtremeValue,
-    #[pyo3(name = "logistic")]
-    Logistic,
-    #[pyo3(name = "gaussian")]
-    Gaussian,
-    #[pyo3(name = "weibull")]
-    Weibull,
-    #[pyo3(name = "lognormal")]
-    LogNormal,
-    #[pyo3(name = "loglogistic")]
-    LogLogistic,
-    #[pyo3(name = "t")]
-    StudentT,
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurvregFit {
+    /// The location coefficients followed by one `Log(scale)` per estimated
+    /// stratum, as `survreg.fit` returns them (R's `survreg` moves the
+    /// `Log(scale)` entries into `scale`).  A location coefficient whose
+    /// column was redundant is `NaN`, as R sets it to `NA`.
+    #[pyo3(get)]
+    pub coefficients: Vec<f64>,
+    /// `icoef`: the coefficients of the intercept-only fit (intercept and
+    /// `Log(scale)` per stratum) used for the starting values.
+    #[pyo3(get)]
+    pub icoef: Vec<f64>,
+    /// `var`: the variance of `coefficients` (the robust variance when
+    /// `robust`).
+    #[pyo3(get)]
+    pub variance_matrix: Vec<Vec<f64>>,
+    /// `naive.var`: the model-based variance of a robust fit.
+    #[pyo3(get)]
+    pub naive_variance_matrix: Option<Vec<Vec<f64>>>,
+    /// `loglik[2]`: the log-likelihood of the fitted model, on the scale of
+    /// the original response (the transform's Jacobian is included).
+    #[pyo3(get)]
+    pub log_likelihood: f64,
+    /// `loglik[1]`: the log-likelihood of the intercept-only model.
+    #[pyo3(get)]
+    pub intercept_only_log_likelihood: f64,
+    /// `iter`: Newton-Raphson iterations used.
+    #[pyo3(get)]
+    pub iterations: usize,
+    /// `false` when the fit "Ran out of iterations and did not converge"
+    /// (R warns instead of failing).
+    #[pyo3(get)]
+    pub converged: bool,
+    #[pyo3(get)]
+    pub linear_predictors: Vec<f64>,
+    /// `scale`: one value per stratum (the fixed value when the scale was
+    /// fixed).
+    #[pyo3(get)]
+    pub scale: Vec<f64>,
+    /// `df`: number of parameters (`length(coefficients)`).
+    #[pyo3(get)]
+    pub df: usize,
+    /// `df.residual`: `n - df`, negative when the design has more
+    /// parameters than observations (R does not guard this either).
+    #[pyo3(get)]
+    pub df_residual: i64,
+    /// `means`: column means of the design matrix.
+    #[pyo3(get)]
+    pub means: Vec<f64>,
+    #[pyo3(get)]
+    pub n: usize,
+    /// `dist`/`parms`: the fitted distribution.
+    #[pyo3(get)]
+    pub distribution: SurvregDistribution,
+    /// `y`: the response as fitted (interval-censored rows with a lower
+    /// bound of zero are recoded as left censored for log-transformed
+    /// distributions, as `survreg` does).
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    #[pyo3(get)]
+    pub time2: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub status: Vec<i32>,
+    /// `x`: the design matrix.
+    #[pyo3(get)]
+    pub covariates: Vec<Vec<f64>>,
+    /// Zero-based stratum of every observation.
+    #[pyo3(get)]
+    pub strata: Vec<usize>,
+    /// `weights`: the case weights when they were supplied.
+    #[pyo3(get)]
+    pub weights: Option<Vec<f64>>,
+    #[pyo3(get)]
+    pub offset: Vec<f64>,
+    /// The cluster used for the robust variance, when one was supplied.
+    #[pyo3(get)]
+    pub cluster: Option<Vec<usize>>,
+    /// `score`: the score vector at the solution.
+    #[pyo3(get)]
+    pub score: Vec<f64>,
 }
 
-const DEFAULT_SURVREG_DISTRIBUTION: DistributionType = DistributionType::Weibull;
+impl SurvregFit {
+    /// Number of location coefficients (columns of the design matrix).
+    pub fn nvar(&self) -> usize {
+        self.covariates[0].len()
+    }
 
+    /// Number of strata (scales).
+    pub fn nstrata(&self) -> usize {
+        self.scale.len()
+    }
+
+    /// Whether the design starts with R's `(Intercept)` column of ones.
+    pub fn has_intercept(&self) -> bool {
+        self.covariates.iter().all(|row| row[0] == 1.0)
+    }
+
+    /// `predict.survreg`; see [`predict_survreg`].
+    pub fn predict(
+        &self,
+        newdata: Option<&SurvregNewdata<'_>>,
+        predict_type: SurvregPredictType,
+        se_fit: bool,
+        p: &[f64],
+        assign: Option<&[usize]>,
+        terms: Option<&[usize]>,
+    ) -> SurvivalResult<SurvregPrediction> {
+        predict_survreg(self, newdata, predict_type, se_fit, p, assign, terms)
+    }
+
+    /// `residuals.survreg`; see [`residuals_survreg`].
+    pub fn residuals(
+        &self,
+        residual_type: SurvregResidType,
+        rsigma: bool,
+        collapse: Option<&[usize]>,
+        weighted: bool,
+    ) -> SurvivalResult<SurvregResiduals> {
+        residuals_survreg(self, residual_type, rsigma, collapse, weighted)
+    }
+}
+
+#[pymethods]
+impl SurvregFit {
+    /// `predict(object, newdata, type, se.fit, p, terms)`.  `offset` and
+    /// `strata` describe the rows of `newdata`; `assign` gives the term
+    /// number of every design column for `type = "terms"`.
+    #[pyo3(name = "predict")]
+    #[pyo3(signature = (newdata=None, predict_type="response", se_fit=false, p=None, offset=None, strata=None, assign=None, terms=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn predict_py(
+        &self,
+        newdata: Option<Vec<Vec<f64>>>,
+        predict_type: &str,
+        se_fit: bool,
+        p: Option<Vec<f64>>,
+        offset: Option<Vec<f64>>,
+        strata: Option<Vec<usize>>,
+        assign: Option<Vec<usize>>,
+        terms: Option<Vec<usize>>,
+    ) -> PyResult<SurvregPrediction> {
+        let predict_type = SurvregPredictType::parse(predict_type)?;
+        let p = p.unwrap_or_else(|| vec![0.1, 0.9]);
+        let newdata = newdata.as_ref().map(|covariates| SurvregNewdata {
+            covariates,
+            offset: offset.as_deref(),
+            strata: strata.as_deref(),
+        });
+        if newdata.is_none() && (offset.is_some() || strata.is_some()) {
+            return Err(SurvivalError::invalid_input(
+                "offset and strata describe newdata; supply newdata as well",
+            )
+            .into());
+        }
+        Ok(self.predict(
+            newdata.as_ref(),
+            predict_type,
+            se_fit,
+            &p,
+            assign.as_deref(),
+            terms.as_deref(),
+        )?)
+    }
+
+    /// `residuals(object, type, rsigma, collapse, weighted)`.
+    #[pyo3(name = "residuals")]
+    #[pyo3(signature = (residual_type="response", rsigma=true, collapse=None, weighted=false))]
+    fn residuals_py(
+        &self,
+        residual_type: &str,
+        rsigma: bool,
+        collapse: Option<Vec<usize>>,
+        weighted: bool,
+    ) -> PyResult<SurvregResiduals> {
+        let residual_type = SurvregResidType::parse(residual_type)?;
+        Ok(self.residuals(residual_type, rsigma, collapse.as_deref(), weighted)?)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SurvregFit(distribution='{}', n={}, coefficients={}, scale={:?}, loglik={:.4}, iterations={})",
+            self.distribution.name,
+            self.n,
+            self.nvar(),
+            self.scale,
+            self.log_likelihood,
+            self.iterations
+        )
+    }
+}
+
+/// The response on the fitting scale plus the likelihood correction for the
+/// transform, as prepared by `survreg()` before calling `survreg.fit`.
+struct FittingResponse {
+    time: Vec<f64>,
+    time2: Option<Vec<f64>>,
+    status: Vec<i32>,
+    y1: Vec<f64>,
+    y2: Vec<f64>,
+    /// `logcorrect`: `sum(weights * log(dtrans(y)))` over exact rows.
+    logcorrect: f64,
+}
+
+fn fitting_response(
+    data: &SurvregData,
+    distribution: &SurvregDistribution,
+    weights: &[f64],
+) -> SurvivalResult<FittingResponse> {
+    let n = data.n();
+    let transform = distribution.transform;
+    let transforms = transform != SurvregTransform::Identity;
+    let mut time = data.time.clone();
+    let mut time2 = data.time2.clone();
+    let mut status = data.status.clone();
+    // Interval censored with a lower bound of zero: convert to left censored
+    // (R does this for the log-transformed distributions; its name list
+    // misspells "Log logistic", which is corrected here).
+    if transforms && let Some(time2) = time2.as_mut() {
+        for i in 0..n {
+            if status[i] == 3 && time[i] == 0.0 {
+                time[i] = time2[i];
+                time2[i] = 1.0;
+                status[i] = 2;
+            }
+        }
+    }
+    let mut logcorrect = 0.0;
+    if transforms {
+        for i in (0..n).filter(|&i| status[i] == 1) {
+            logcorrect += weights[i] * transform.derivative(time[i]).ln();
+        }
+    }
+    let y1: Vec<f64> = time.iter().map(|&t| transform.apply(t)).collect();
+    let y2: Vec<f64> = (0..n)
+        .map(|i| match &time2 {
+            Some(time2) if status[i] == 3 => transform.apply(time2[i]),
+            _ => y1[i],
+        })
+        .collect();
+    if y1.iter().chain(&y2).any(|v| !v.is_finite()) || !logcorrect.is_finite() {
+        return Err(SurvivalError::invalid_input(
+            "Invalid survival times for this distribution",
+        ));
+    }
+    Ok(FittingResponse {
+        time,
+        time2,
+        status,
+        y1,
+        y2,
+        logcorrect,
+    })
+}
+
+/// The `derfun` of `survreg.fit`: `dg` and `ddg` of every observation at
+/// `eta` (per observation) and `sigma` (per observation).
+fn derfun(
+    distribution: &SurvregDistribution,
+    response: &FittingResponse,
+    eta: &[f64],
+    sigma: impl Fn(usize) -> f64,
+) -> (Vec<f64>, Vec<f64>) {
+    (0..response.y1.len())
+        .map(|i| {
+            let d = survreg_deriv(
+                distribution,
+                response.y1[i],
+                response.y2[i],
+                response.status[i],
+                eta[i],
+                sigma(i),
+            );
+            (d[1], d[2])
+        })
+        .unzip()
+}
+
+/// The value of `survreg6`.
+struct Survreg6Fit {
+    /// The parameter vector as passed in, with the first `nvar2` entries
+    /// updated (a trailing fixed `log(scale)` is left untouched).
+    beta: Vec<f64>,
+    iter: usize,
+    var: Array2<f64>,
+    loglik: f64,
+    converged: bool,
+    u: Vec<f64>,
+}
+
+/// `chsolve2` of the score against `imat`, or against `JJ` when `imat` is
+/// not positive definite: the Newton (or Fisher) step.
+fn newton_step(lik: &SurvregLikelihood, tol_chol: f64) -> Vec<f64> {
+    let mut chol = lik.imat.clone();
+    if cholesky2(&mut chol, tol_chol) < 0 {
+        chol = lik.jj.clone();
+        cholesky2(&mut chol, tol_chol);
+    }
+    let mut step = lik.u.clone();
+    chsolve2(&chol, &mut step);
+    step
+}
+
+/// `cholesky2` + `chinv2` of the information matrix, symmetrised, as the C
+/// code does before returning `imat` as the variance.
+fn invert_information(imat: &Array2<f64>, tol_chol: f64) -> SurvivalResult<Array2<f64>> {
+    symmetric_inverse_via_cholesky(imat, tol_chol)
+        .map(|inverse| inverse.inverse)
+        .map_err(|_| {
+            SurvivalError::computation(
+                "the information matrix is not finite; the fit diverged (use starting estimates?)",
+            )
+        })
+}
+
+/// `src/survreg6.c`: Newton-Raphson with step halving.  `beta` holds the
+/// starting values (`nvar` coefficients, the `log(scale)` per estimated
+/// stratum, or the fixed `log(scale)` when none is estimated).
+fn survreg6(
+    kernel: &SurvregKernel<'_>,
+    maxiter: usize,
+    mut beta: Vec<f64>,
+    eps: f64,
+    tol_chol: f64,
+) -> SurvivalResult<Survreg6Fit> {
+    let nvar = kernel.nvar();
+    let nstrat = kernel.nstrat;
+    let nvar2 = kernel.nvar2();
+    let mut newbeta = beta.clone();
+
+    // The initial iteration step.
+    let lik = kernel.evaluate(&beta);
+    let mut loglik = lik.loglik;
+    let mut usave = lik.u.clone();
+    let step = newton_step(&lik, tol_chol);
+    for i in 0..nvar2 {
+        newbeta[i] = beta[i] + step[i];
+    }
+    // Never complain about convergence on the first step: with maxiter == 0
+    // the caller gets the log-likelihood and information at `beta`.
+    if maxiter == 0 {
+        return Ok(Survreg6Fit {
+            var: invert_information(&lik.imat, tol_chol)?,
+            beta,
+            iter: 0,
+            loglik,
+            converged: true,
+            u: usave,
+        });
+    }
+
+    let mut halving = 0;
+    let mut newlik = kernel.evaluate(&newbeta);
+    usave.clone_from(&newlik.u);
+    for iter in 1..=maxiter {
+        // A Newton-Raphson step gone seriously awry leaves an infinite or
+        // NaN log-likelihood, score or information.
+        let newlk = newlik.loglik;
+        let bad = !newlk.is_finite()
+            || (0..nvar2).any(|j| !newlik.imat[[j, j]].is_finite() || !newlik.u[j].is_finite());
+        // Convergence: the relative change in the log-likelihood, or the
+        // absolute change when the log-likelihood settles near zero.
+        if !bad
+            && halving == 0
+            && ((1.0 - loglik / newlk).abs() <= eps || (loglik - newlk).abs() <= eps)
+        {
+            beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
+            return Ok(Survreg6Fit {
+                var: invert_information(&newlik.imat, tol_chol)?,
+                beta,
+                iter,
+                loglik: newlk,
+                converged: true,
+                u: usave,
+            });
+        }
+
+        if bad || newlk < loglik {
+            // Not converging: back off two thirds of the way to the last
+            // good point.
+            halving += 1;
+            for i in 0..nvar2 {
+                newbeta[i] = (newbeta[i] + 2.0 * beta[i]) / 3.0;
+            }
+            // The sigmas are often the trouble: the prior step may have
+            // shrunk one by a factor of more than 10, and halving is not
+            // enough of a back away.  Make sure the new try differs from
+            // the last good one by no more than log(3) ~ 1.1, first time
+            // only.
+            if halving == 1 {
+                for i in 0..nstrat {
+                    if beta[nvar + i] - newbeta[nvar + i] > 1.1 {
+                        newbeta[nvar + i] = beta[nvar + i] - 1.1;
+                    }
+                }
+            }
+        } else {
+            // A standard Newton-Raphson step.
+            halving = 0;
+            loglik = newlk;
+            let step = newton_step(&newlik, tol_chol);
+            beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
+            for (value, delta) in newbeta.iter_mut().zip(&step) {
+                *value += delta;
+            }
+        }
+        newlik = kernel.evaluate(&newbeta);
+        usave.clone_from(&newlik.u);
+    }
+
+    // Ran out of iterations.  The C code accepts the final step when it
+    // improved the fit but reports the log-likelihood of the step before it;
+    // otherwise it reports the information at the last good point.
+    let information = if halving == 0 && newlik.loglik.is_finite() && newlik.loglik >= loglik {
+        beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
+        newlik.imat
+    } else {
+        kernel.evaluate(&beta).imat
+    };
+    Ok(Survreg6Fit {
+        var: invert_information(&information, tol_chol)?,
+        beta,
+        iter: maxiter,
+        loglik,
+        converged: false,
+        u: usave,
+    })
+}
+
+/// Whether every entry of the column is 0 or 1 (`survreg.fit` leaves such
+/// columns out of the rescaling).
+fn is_binary_column(column: ndarray::ArrayView1<'_, f64>) -> bool {
+    column.iter().all(|&v| v == 0.0 || v == 1.0)
+}
+
+/// R's `sd`: the sample standard deviation with an `n - 1` denominator.
+fn sample_sd(column: ndarray::ArrayView1<'_, f64>) -> f64 {
+    let n = column.len() as f64;
+    let mean = column.sum() / n;
+    (column.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt()
+}
+
+/// `coxph.wtest(t(x) %*% (wt * x), c((wt * eta + weights * dg) %*% x))$solve`:
+/// the "glim" starting coefficients of `survreg.fit`.
+fn glim_start(x: ArrayView2<'_, f64>, wt: &[f64], rhs_weight: &[f64], tol_chol: f64) -> Vec<f64> {
+    let nvar = x.ncols();
+    let mut matrix = Array2::<f64>::zeros((nvar, nvar));
+    let mut rhs = vec![0.0; nvar];
+    for (i, row) in x.outer_iter().enumerate() {
+        for j in 0..nvar {
+            rhs[j] += rhs_weight[i] * row[j];
+            for k in 0..=j {
+                matrix[[j, k]] += wt[i] * row[j] * row[k];
+            }
+        }
+    }
+    for j in 0..nvar {
+        for k in 0..j {
+            matrix[[k, j]] = matrix[[j, k]];
+        }
+    }
+    cholesky2(&mut matrix, tol_chol);
+    chsolve2(&matrix, &mut rhs);
+    rhs
+}
+
+fn all_finite<'a>(values: impl IntoIterator<Item = &'a f64>) -> bool {
+    values.into_iter().all(|v| v.is_finite())
+}
+
+/// `survreg(...)` for prepared inputs: fits `distribution` to `data`.
+///
+/// `init` are starting values (`nvar` coefficients, optionally followed by
+/// the `log(scale)` per stratum); `scale > 0` fixes the scale (`0`
+/// estimates it; a distribution with its own fixed scale, such as the
+/// exponential, overrides it); `robust` requests the sandwich variance from
+/// the dfbeta residuals, grouped by `data.cluster` when present.
+pub fn survreg_fit(
+    data: &SurvregData,
+    distribution: &SurvregDistribution,
+    init: Option<&[f64]>,
+    scale: f64,
+    control: &SurvregControl,
+    robust: bool,
+) -> SurvivalResult<SurvregFit> {
+    distribution.validate()?;
+    control.validate()?;
+    let n = data.n();
+    let nvar = data.nvar();
+    let nstrata = data.nstrata();
+    let eps = control.rel_tolerance;
+    let tol_chol = control.toler_chol;
+
+    let scale = distribution.scale.unwrap_or(scale);
+    if !scale.is_finite() || scale < 0.0 {
+        return Err(SurvivalError::invalid_input("Invalid scale value"));
+    }
+    if scale > 0.0 && nstrata > 1 {
+        return Err(SurvivalError::invalid_input(
+            "The scale argument is not valid with multiple strata",
+        ));
+    }
+    let weights: Vec<f64> = data.weights.clone().unwrap_or_else(|| vec![1.0; n]);
+    let offset: Vec<f64> = data.offset.clone().unwrap_or_else(|| vec![0.0; n]);
+    let strata: Vec<usize> = data.strata.clone().unwrap_or_else(|| vec![0; n]);
+    let response = fitting_response(data, distribution, &weights)?;
+    // Number of variances to estimate.
+    let nstrat2 = if scale > 0.0 { 0 } else { nstrata };
+    let nvar2 = nvar + nstrat2;
+
+    let x_original = Array2::from_shape_fn((n, nvar), |(i, j)| data.covariates[i][j]);
+    let means: Vec<f64> = x_original
+        .columns()
+        .into_iter()
+        .map(|column| column.sum() / n as f64)
+        .collect();
+
+    // Rescale the X matrix (more stable), but only if the first column is an
+    // intercept and no starting values were given.
+    let mut x = x_original.clone();
+    let mut rescaled: Option<(Vec<f64>, Vec<f64>)> = None;
+    if init.is_none() && x.column(0).iter().all(|&v| v == 1.0) && nvar > 1 {
+        let okay: Vec<bool> = x.columns().into_iter().map(is_binary_column).collect();
+        if !okay.iter().all(|&ok| ok) {
+            let center: Vec<f64> = (0..nvar)
+                .map(|j| if okay[j] { 0.0 } else { means[j] })
+                .collect();
+            let stdev: Vec<f64> = (0..nvar)
+                .map(|j| if okay[j] { 1.0 } else { sample_sd(x.column(j)) })
+                .collect();
+            for j in 0..nvar {
+                x.column_mut(j)
+                    .iter_mut()
+                    .for_each(|v| *v = (*v - center[j]) / stdev[j]);
+            }
+            rescaled = Some((center, stdev));
+        }
+    }
+
+    // A good initial value of the scale is critical: fit a model with only
+    // the mean and the scale first, unless the main fit is that model.
+    let meanonly = nvar == 1 && x.column(0).iter().all(|&v| v == 1.0);
+    let yy: Vec<f64> = (0..n)
+        .map(|i| {
+            if response.status[i] != 3 {
+                response.y1[i]
+            } else {
+                (response.y1[i] + response.y2[i]) / 2.0
+            }
+        })
+        .collect();
+    let ones = Array2::<f64>::ones((n, 1));
+    let fit0 = if meanonly {
+        None
+    } else {
+        let coef = distribution.init(&yy, &weights)?;
+        // init returns sigma^2; we need log(sigma), doubled for safety.
+        let vars = if scale > 0.0 {
+            scale.ln()
+        } else {
+            (4.0 * coef[1]).ln() / 2.0
+        };
+        let mut coef0 = vec![coef[0]];
+        coef0.extend(std::iter::repeat_n(vars, nstrata));
+        // A better initial value for the mean using the "glim" trick.
+        let (dg, ddg) = derfun(distribution, &response, &yy, |_| vars.exp());
+        let wt: Vec<f64> = ddg.iter().zip(&weights).map(|(d, w)| -d * w).collect();
+        coef0[0] = (0..n)
+            .map(|i| weights[i] * dg[i] + wt[i] * (yy[i] - offset[i]))
+            .sum::<f64>()
+            / wt.iter().sum::<f64>();
+        let kernel0 = SurvregKernel {
+            y1: &response.y1,
+            y2: &response.y2,
+            status: &response.status,
+            covariates: ones.view(),
+            weights: &weights,
+            offset: &offset,
+            strata: &strata,
+            nstrat: nstrat2,
+            distribution,
+        };
+        let fit0 = survreg6(&kernel0, 20, coef0, eps, tol_chol)?;
+        if !all_finite(&fit0.beta) || !fit0.loglik.is_finite() || !all_finite(fit0.var.iter()) {
+            return Err(SurvivalError::computation(
+                "initial iteration failed (use starting estimates?)",
+            ));
+        }
+        Some(fit0)
+    };
+
+    let start: Vec<f64> = match init {
+        Some(init) => {
+            let mut start = init.to_vec();
+            validate_finite(&start, "init")?;
+            if start.len() == nvar && nvar2 > nvar {
+                let fit0 = fit0.as_ref().ok_or_else(|| {
+                    SurvivalError::invalid_input("Wrong length for initial parameters")
+                })?;
+                start.extend_from_slice(&fit0.beta[1..]);
+            }
+            if start.len() != nvar2 {
+                return Err(SurvivalError::invalid_input(
+                    "Wrong length for initial parameters",
+                ));
+            }
+            if scale > 0.0 {
+                start.push(scale.ln());
+            }
+            start
+        }
+        None => {
+            let vars: Vec<f64> = match &fit0 {
+                Some(fit0) => fit0.beta[1..].to_vec(),
+                None => {
+                    let coef = distribution.init(&yy, &weights)?;
+                    let value = if scale > 0.0 {
+                        scale.ln()
+                    } else {
+                        (4.0 * coef[1]).ln() / 2.0
+                    };
+                    vec![value; nstrata]
+                }
+            };
+            let eta: Vec<f64> = yy.iter().zip(&offset).map(|(y, o)| y - o).collect();
+            let (dg, ddg) = derfun(distribution, &response, &yy, |i| vars[strata[i]].exp());
+            let wt: Vec<f64> = ddg.iter().zip(&weights).map(|(d, w)| -d * w).collect();
+            let rhs_weight: Vec<f64> = (0..n)
+                .map(|i| wt[i] * eta[i] + weights[i] * dg[i])
+                .collect();
+            let mut start = glim_start(x.view(), &wt, &rhs_weight, tol_chol);
+            start.extend(vars);
+            start
+        }
+    };
+
+    // The fit in earnest.
+    let kernel = SurvregKernel {
+        y1: &response.y1,
+        y2: &response.y2,
+        status: &response.status,
+        covariates: x.view(),
+        weights: &weights,
+        offset: &offset,
+        strata: &strata,
+        nstrat: nstrat2,
+        distribution,
+    };
+    let fit = survreg6(&kernel, control.iter_max, start, eps, tol_chol)?;
+    let mut coefficients = fit.beta;
+    coefficients.truncate(nvar2);
+    let (icoef, loglik0) = match &fit0 {
+        Some(fit0) => (fit0.beta.clone(), fit0.loglik),
+        None => (coefficients.clone(), fit.loglik),
+    };
+    let linear_predictors: Vec<f64> = x
+        .outer_iter()
+        .zip(&offset)
+        .map(|(row, o)| {
+            row.iter()
+                .zip(&coefficients[..nvar])
+                .map(|(x, b)| x * b)
+                .sum::<f64>()
+                + o
+        })
+        .collect();
+
+    let mut var = fit.var;
+    if let Some((center, stdev)) = rescaled {
+        // Undo the rescaling: coef <- vtemp %*% coef, var <- vtemp var vtemp'.
+        let mut vtemp = Array2::<f64>::eye(nvar2);
+        for j in 0..nvar {
+            vtemp[[j, j]] = 1.0 / stdev[j];
+        }
+        for j in 1..nvar {
+            vtemp[[0, j]] = -center[j] / stdev[j];
+        }
+        let coef =
+            Array2::from_shape_vec((nvar2, 1), coefficients.clone()).expect("nvar2 coefficients");
+        coefficients = vtemp.dot(&coef).column(0).to_vec();
+        var = vtemp.dot(&var).dot(&vtemp.t());
+    }
+    let variance_matrix: Vec<Vec<f64>> = var.outer_iter().map(|row| row.to_vec()).collect();
+
+    let scales: Vec<f64> = if scale > 0.0 {
+        vec![scale]
+    } else {
+        coefficients[nvar..].iter().map(|v| v.exp()).collect()
+    };
+    let robust = robust || data.cluster.is_some();
+    let mut fit = SurvregFit {
+        coefficients,
+        icoef,
+        variance_matrix,
+        naive_variance_matrix: None,
+        log_likelihood: fit.loglik + response.logcorrect,
+        intercept_only_log_likelihood: loglik0 + response.logcorrect,
+        iterations: fit.iter,
+        converged: fit.converged,
+        linear_predictors,
+        scale: scales,
+        df: nvar2,
+        df_residual: n as i64 - nvar2 as i64,
+        means,
+        n,
+        distribution: distribution.clone(),
+        time: response.time,
+        time2: response.time2,
+        status: response.status,
+        covariates: data.covariates.clone(),
+        strata,
+        weights: data.weights.clone(),
+        offset,
+        cluster: data.cluster.clone(),
+        score: fit.u,
+    };
+
+    if robust {
+        // var <- crossprod(residuals(fit, "dfbeta", weighted = TRUE, collapse = cluster))
+        let dfbeta = fit.residuals(
+            SurvregResidType::Dfbeta,
+            true,
+            data.cluster.as_deref(),
+            true,
+        )?;
+        let width = nvar2;
+        let mut sandwich = vec![vec![0.0; width]; width];
+        for row in &dfbeta.values {
+            for j in 0..width {
+                for k in 0..width {
+                    sandwich[j][k] += row[j] * row[k];
+                }
+            }
+        }
+        fit.naive_variance_matrix = Some(std::mem::replace(&mut fit.variance_matrix, sandwich));
+    }
+
+    // Set singular coefficients to NA; purposely not done until the
+    // residuals have been computed.
+    let singular_variance = fit
+        .naive_variance_matrix
+        .as_deref()
+        .unwrap_or(&fit.variance_matrix);
+    let singular: Vec<bool> = (0..nvar).map(|j| singular_variance[j][j] == 0.0).collect();
+    for (coefficient, &is_singular) in fit.coefficients.iter_mut().zip(&singular) {
+        if is_singular {
+            *coefficient = f64::NAN;
+        }
+    }
+    Ok(fit)
+}
+
+/// `survreg(Surv(time, time2, status) ~ x, weights, offset, strata, dist,
+/// init, scale, parms, control)` on prepared inputs.
+///
+/// `covariates` is the full design matrix (include a column of ones for the
+/// intercept).  `distribution` is an R distribution name (`weibull`,
+/// `exponential`, `rayleigh`, `extreme`, `gaussian`, `logistic`,
+/// `lognormal`/`loggaussian`, `loglogistic`, `t`), `distribution_parameter`
+/// the degrees of freedom of the `t` family, `fixed_scale` R's `scale`
+/// argument (`None` estimates it).  A user-defined [`SurvregDistribution`]
+/// goes through [`survreg_fit`] instead.
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None, distribution_parameter=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1022,1457 +1025,561 @@ pub fn survreg(
     time2: Option<Vec<f64>>,
     fixed_scale: Option<f64>,
     distribution_parameter: Option<f64>,
-) -> PyResult<SurvivalFit> {
-    let requested_distribution_key = distribution.map(|name| name.to_lowercase().replace('-', "_"));
-    let dist_type = parse_distribution_type(distribution)?;
-    let fixed_scale = match (requested_distribution_key.as_deref(), fixed_scale) {
-        (Some("exponential"), None) => Some(1.0),
-        (Some("rayleigh"), None) => Some(0.5),
-        (_, value) => value,
-    };
-    let config = SurvregConfig::create(Some(dist_type), max_iter, eps, tol_chol);
-    let distribution_parameter =
-        validate_distribution_parameter(config.distribution, distribution_parameter)?;
-    let n = time.len();
-    if status.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Length mismatch: time has {} elements but status has {}. Both must have the same length.",
-            n,
-            status.len()
-        )));
-    }
-    let uses_log_time = config.distribution.uses_log_time();
-    validate_time_values(&time, uses_log_time)?;
-    validate_status_values(&status)?;
-    let time2_values = validate_time2_values(&time, &status, time2, uses_log_time)?;
-    if !config.eps.is_finite() || config.eps <= 0.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "eps must be a finite positive value",
-        ));
-    }
-    if !config.tol_chol.is_finite() || config.tol_chol <= 0.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "tol_chol must be a finite positive value",
-        ));
-    }
-    let covariate_rows = covariates;
-    let nvar = if !covariate_rows.is_empty() {
-        covariate_rows[0].len()
-    } else {
-        0
-    };
-    if !covariate_rows.is_empty() && covariate_rows.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Length mismatch: time has {} observations but covariates has {} rows. \
-             Covariates should be a list of {} rows, each with {} covariate values.",
-            n,
-            covariate_rows.len(),
-            n,
-            nvar
-        )));
-    }
-    validate_covariate_values(&covariate_rows, nvar)?;
-    let weights_vec = weights.unwrap_or_else(|| vec![1.0; n]);
-    let offsets_vec = offsets.unwrap_or_else(|| vec![0.0; n]);
-    let has_strata = strata.is_some();
-    let strata_vec = strata.unwrap_or_else(|| vec![0; n]);
-    if weights_vec.len() != n || offsets_vec.len() != n || strata_vec.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "weights, offsets, and strata must have the same length as time",
-        ));
-    }
-    validate_case_weights(&weights_vec)?;
-    validate_finite_values("offsets", &offsets_vec)?;
-    let nstrat = if has_strata {
-        strata_vec.iter().max().copied().unwrap_or(0) + 1
-    } else {
-        1
-    };
-    if let Some(scale) = fixed_scale {
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "fixed_scale must be a finite positive value",
-            ));
-        }
-        if nstrat > 1 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "cannot have both a fixed scale and strata",
-            ));
-        }
-    }
-    let estimated_scale_count = if fixed_scale.is_some() { 0 } else { nstrat };
-    let expected_initial_len = nvar + estimated_scale_count;
-    let initialize_scales = estimated_scale_count > 0
-        && initial_beta
-            .as_ref()
-            .is_some_and(|values| values.len() == nvar);
-    if let Some(values) = initial_beta.as_ref()
-        && values.len() != expected_initial_len
-        && !initialize_scales
-    {
-        let expected = if estimated_scale_count > 0 {
-            format!("{nvar} location coefficients or {expected_initial_len} full parameters")
-        } else {
-            expected_initial_len.to_string()
-        };
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "initial_beta has {} values but model expects {expected}",
-            values.len()
-        )));
-    }
-    if let Some(values) = initial_beta.as_ref() {
-        validate_finite_values("initial_beta", values)?;
-    }
-    let initialize = initial_beta.is_none();
-    let initial_beta = initial_beta.unwrap_or_default();
-    let y = {
-        if let Some(time2) = time2_values.as_ref() {
-            let mut y_data = Vec::with_capacity(n * 3);
-            for i in 0..n {
-                y_data.push(time[i]);
-                y_data.push(time2[i]);
-                y_data.push(status[i]);
-            }
-            Array2::from_shape_vec((n, 3), y_data)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
-        } else {
-            let mut y_data = Vec::with_capacity(n * 2);
-            for i in 0..n {
-                y_data.push(time[i]);
-                y_data.push(status[i]);
-            }
-            Array2::from_shape_vec((n, 2), y_data)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
-        }
-    };
-    let mut cov_array = if nvar > 0 {
-        let mut flat = Vec::with_capacity(n * nvar);
-        for col_idx in 0..nvar {
-            flat.extend(covariate_rows.iter().map(|row| row[col_idx]));
-        }
-        Array2::from_shape_vec((nvar, n), flat)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))?
-    } else {
-        Array2::zeros((0, n))
-    };
-    let weights_arr = Array1::from_vec(weights_vec);
-    let offsets_arr = Array1::from_vec(offsets_vec.clone());
-    if initialize_scales && is_mean_only(&cov_array, &weights_arr) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "an intercept-only model requires a full initial vector including log-scale parameters",
-        ));
-    }
-    let distribution_type = config.distribution;
-    let distribution_name = requested_distribution_name(distribution, distribution_type);
-    let rescaling = if initialize {
-        SurvregRescaling::apply(&mut cov_array, &weights_arr)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
-    } else {
-        None
-    };
-    let mut input = ComputeSurvregInput {
-        max_iter: config.max_iter,
-        nvar,
-        y: &y,
-        covariates: &cov_array,
-        weights: &weights_arr,
-        offsets: &offsets_arr,
-        beta: initial_beta,
-        nstrat,
-        strata: &strata_vec,
-        eps: config.eps,
-        tol_chol: config.tol_chol,
-        distribution: distribution_type,
-        distribution_parameter,
-        fixed_scale,
-    };
-    if initialize || initialize_scales {
-        let initial_location = (!initialize).then_some(input.beta.as_slice());
-        input.beta = initialize_survreg(&input, initial_location)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    }
-    let mut result = compute_survreg(input)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    let rescaled_predictors = rescaling.as_ref().map(|_| {
-        (0..n)
-            .map(|person| {
-                (0..nvar)
-                    .map(|column| cov_array[[column, person]] * result.coefficients[column])
-                    .sum::<f64>()
-                    + offsets_vec[person]
-            })
-            .collect()
-    });
-    if let Some(rescaling) = rescaling {
-        rescaling.restore(&mut result);
-    }
-    let variance_matrix = result
-        .variance_matrix
-        .outer_iter()
-        .map(|row| row.iter().copied().collect())
-        .collect();
-    let location_coefficients = result.coefficients[..nvar].to_vec();
-    let scales: Vec<f64> = if let Some(scale) = fixed_scale {
-        vec![scale]
-    } else {
-        result.coefficients[nvar..nvar + nstrat]
-            .iter()
-            .map(|value| value.exp())
-            .collect()
-    };
-    let linear_predictors = rescaled_predictors.unwrap_or_else(|| {
-        compute_linear_predictor(&covariate_rows, &location_coefficients, Some(&offsets_vec))
-    });
-    let status_values: Vec<i32> = status.iter().map(|&value| value as i32).collect();
-    let fitted_covariates = if nvar == 0 {
-        vec![vec![]; n]
-    } else {
-        covariate_rows
-    };
-    Ok(SurvivalFit {
-        coefficients: if fixed_scale.is_some() {
-            location_coefficients.clone()
-        } else {
-            result.coefficients
-        },
-        location_coefficients,
-        scale: scales.first().copied().unwrap_or(1.0),
-        scales,
-        distribution: distribution_name,
-        distribution_parameters: distribution_parameter.into_iter().collect(),
-        n_covariates: nvar,
-        n_strata: nstrat,
-        linear_predictors,
-        time,
-        time2: time2_values,
-        status: status_values,
-        covariates: fitted_covariates,
-        strata: strata_vec.clone(),
-        weights: weights_arr.to_vec(),
-        iterations: result.iterations,
-        variance_matrix,
-        log_likelihood: result.log_likelihood,
-        convergence_flag: result.convergence_flag,
-        score_vector: result.score_vector,
-    })
-}
-fn compute_survreg(
-    input: ComputeSurvregInput<'_>,
-) -> Result<SurvivalFitComputed, Box<dyn std::error::Error>> {
-    let ComputeSurvregInput {
-        max_iter,
-        nvar,
-        y,
-        covariates,
-        weights,
-        offsets,
-        beta,
-        nstrat,
-        strata,
-        eps,
-        tol_chol,
-        distribution,
-        distribution_parameter,
-        fixed_scale,
-    } = input;
-    let n = y.nrows();
-    let ny = y.ncols();
-    let estimated_scale_count = if fixed_scale.is_some() { 0 } else { nstrat };
-    let nvar2 = nvar + estimated_scale_count;
-    let mut beta = if let Some(scale) = fixed_scale {
-        let mut values = beta;
-        values.push(scale.ln());
-        values
-    } else {
-        beta
-    };
-    let mut usave = Array1::zeros(nvar2);
-    let uses_log_time = distribution.uses_log_time();
-    let transform_time = |t: f64| if uses_log_time { t.ln() } else { t };
-    let time1_vec: Vec<f64> = y.column(0).iter().map(|&t| transform_time(t)).collect();
-    let status_vec: Vec<i32> = if ny == 2 {
-        y.column(1).iter().map(|&status| status as i32).collect()
-    } else {
-        y.column(2).iter().map(|&status| status as i32).collect()
-    };
-    let interval_widths_vec: Option<Vec<f64>> = if ny == 3 {
-        Some(
-            y.column(0)
-                .iter()
-                .zip(y.column(1).iter())
-                .zip(&status_vec)
-                .map(|((&lower, &upper), &event)| {
-                    if event == 3 {
-                        transformed_interval_width(lower, upper, uses_log_time)
-                    } else {
-                        0.0
-                    }
-                })
-                .collect(),
-        )
-    } else {
-        None
-    };
-    let time1_arr = Array1::from_vec(time1_vec);
-    let status_arr = Array1::from_vec(status_vec);
-    let interval_widths_arr = interval_widths_vec.map(Array1::from_vec);
-    let strata_arr = Array1::from_iter(strata.iter().map(|&value| (value + 1) as i32));
-    let frailty_arr = Array1::<i32>::zeros(n);
-    let time1 = time1_arr.view();
-    let status = status_arr.view();
-    let strata = strata_arr.view();
-    let frailty = frailty_arr.view();
-    let interval_widths_view: Option<ArrayView1<f64>> =
-        interval_widths_arr.as_ref().map(|v| v.view());
-    let input = LikelihoodInput {
-        n,
-        nvar,
-        nstrat: estimated_scale_count,
-        beta: &beta,
-        distribution: &distribution,
-        distribution_parameter,
-        strata: &strata,
-        offsets,
-        time1: &time1,
-        interval_widths: interval_widths_view.as_ref(),
-        status: &status,
-        weights,
-        covariates,
-        frailty: &frailty,
-    };
-    let initial_likelihood = input.evaluate()?;
-    if !likelihood_is_finite(&initial_likelihood) {
-        return Err("Initial parameters yield a non-finite likelihood or derivatives".into());
-    }
-    let mut loglik = initial_likelihood.loglik;
-    let mut information = SurvregInformation::factor(&initial_likelihood.imat, tol_chol);
-    let mut jj = initial_likelihood.jj;
-    let mut u = initial_likelihood.u;
-    usave.assign(&u);
-    let mut iter = 0;
-    let mut converged = false;
-    while iter < max_iter {
-        let old_loglik = loglik;
-        let mut accepted = None;
-        for uses_observed_information in [true, false] {
-            let delta = if uses_observed_information {
-                (information.signed_rank >= 0)
-                    .then(|| information.solve(&u))
-                    .flatten()
+) -> PyResult<SurvregFit> {
+    let parms: Option<Vec<f64>> = distribution_parameter.map(|df| vec![df]);
+    let distribution =
+        SurvregDistribution::from_name(distribution.unwrap_or("weibull"), parms.as_deref())?;
+    let status: Vec<i32> = status
+        .iter()
+        .enumerate()
+        .map(|(index, &code)| {
+            if code.fract() == 0.0 && (0.0..=3.0).contains(&code) {
+                Ok(code as i32)
             } else {
-                // Compute the score-product fallback only if an observed
-                // information step could not be accepted.
-                SurvregInformation::factor(&jj, tol_chol).solve(&u)
-            };
-            let Some(delta) = delta else { continue };
-            let mut step_factor = 1.0;
-            let mut retry = false;
-            for _ in 0..=MAX_HALVING_ITERATIONS {
-                let mut candidate_beta = beta.clone();
-                candidate_beta
-                    .iter_mut()
-                    .zip(beta.iter().zip(delta.iter()))
-                    .for_each(|(nb, (b, d))| *nb = b + d * step_factor);
-                adjust_strata(&mut candidate_beta, &beta, nvar, estimated_scale_count);
-
-                let candidate_input = LikelihoodInput {
-                    n,
-                    nvar,
-                    nstrat: estimated_scale_count,
-                    beta: &candidate_beta,
-                    distribution: &distribution,
-                    distribution_parameter,
-                    strata: &strata,
-                    offsets,
-                    time1: &time1,
-                    interval_widths: interval_widths_view.as_ref(),
-                    status: &status,
-                    weights,
-                    covariates,
-                    frailty: &frailty,
-                };
-                // The first trial usually succeeds. Once it fails, screen
-                // shorter steps without allocating or accumulating derivative
-                // matrices, then fully evaluate any improving candidate.
-                if retry {
-                    let trial_loglik = candidate_input.loglik()?;
-                    if !trial_loglik.is_finite() || trial_loglik < old_loglik {
-                        step_factor *= STEP_HALVE_FACTOR;
-                        continue;
-                    }
-                }
-                let candidate = candidate_input.evaluate()?;
-                if likelihood_is_finite(&candidate)
-                    && candidate.loglik >= old_loglik
-                    && candidate.u.iter().all(|value| value.is_finite())
-                    && candidate.imat.diag().iter().all(|value| value.is_finite())
-                {
-                    let candidate_information =
-                        SurvregInformation::factor(&candidate.imat, tol_chol);
-                    accepted = Some((
-                        candidate_beta,
-                        candidate.loglik,
-                        candidate_information,
-                        candidate.jj,
-                        candidate.u,
-                    ));
-                    break;
-                }
-                retry = true;
-                step_factor *= STEP_HALVE_FACTOR;
+                Err(SurvivalError::invalid_input(format!(
+                    "status must contain the codes 0, 1, 2 or 3; got {code} at index {index}"
+                )))
             }
-            if accepted.is_some() {
-                break;
-            }
-        }
-
-        if let Some((
-            candidate_beta,
-            candidate_loglik,
-            candidate_information,
-            candidate_jj,
-            candidate_u,
-        )) = accepted
-        {
-            beta = candidate_beta;
-            loglik = candidate_loglik;
-            information = candidate_information;
-            jj = candidate_jj;
-            u = candidate_u;
-            usave.assign(&u);
-            iter += 1;
-
-            if check_convergence(old_loglik, loglik, eps) {
-                converged = true;
-                break;
-            }
-        } else {
-            // At an optimum, summation roundoff can make every trial appear
-            // worse. Require nonnegative observed-information rank and a
-            // Newton decrement below both tolerance and numerical resolution.
-            if information.signed_rank >= 0 {
-                converged = information
-                    .solve(&u)
-                    .is_some_and(|delta| stationary_within_roundoff(loglik, eps, &u, &delta));
-            }
-            break;
-        }
-    }
-    let convergence_flag = if converged { 0 } else { -1 };
-    let variance = information.covariance()?;
-    Ok(SurvivalFitComputed {
-        coefficients: beta,
-        iterations: iter,
-        variance_matrix: variance,
-        log_likelihood: loglik,
-        convergence_flag,
-        score_vector: usave.to_vec(),
-    })
-}
-pub(crate) struct SurvivalFitComputed {
-    coefficients: Vec<f64>,
-    iterations: usize,
-    variance_matrix: Array2<f64>,
-    log_likelihood: f64,
-    convergence_flag: i32,
-    score_vector: Vec<f64>,
+        })
+        .collect::<SurvivalResult<_>>()?;
+    let data = SurvregData::try_new(
+        time, status, covariates, time2, weights, offsets, strata, None,
+    )?;
+    let defaults = SurvregControl::default();
+    let control = SurvregControl {
+        iter_max: max_iter.unwrap_or(defaults.iter_max),
+        rel_tolerance: eps.unwrap_or(defaults.rel_tolerance),
+        toler_chol: tol_chol.unwrap_or(defaults.toler_chol),
+    };
+    Ok(survreg_fit(
+        &data,
+        &distribution,
+        initial_beta.as_deref(),
+        fixed_scale.unwrap_or(0.0),
+        &control,
+        false,
+    )?)
 }
 
-struct ComputeSurvregInput<'a> {
-    max_iter: usize,
-    nvar: usize,
-    y: &'a Array2<f64>,
-    covariates: &'a Array2<f64>,
-    weights: &'a Array1<f64>,
-    offsets: &'a Array1<f64>,
-    beta: Vec<f64>,
-    nstrat: usize,
-    strata: &'a [usize],
-    eps: f64,
-    tol_chol: f64,
-    distribution: DistributionType,
-    distribution_parameter: Option<f64>,
-    fixed_scale: Option<f64>,
+/// `survreg.fit` with typed inputs: [`survreg_fit`] for Python, accepting a
+/// user-defined [`SurvregDistribution`].
+#[pyfunction(name = "survreg_fit")]
+#[pyo3(signature = (data, distribution, init=None, scale=0.0, control=None, robust=None))]
+pub fn survreg_fit_py(
+    data: &SurvregData,
+    distribution: &SurvregDistribution,
+    init: Option<Vec<f64>>,
+    scale: f64,
+    control: Option<SurvregControl>,
+    robust: Option<bool>,
+) -> PyResult<SurvregFit> {
+    Ok(survreg_fit(
+        data,
+        distribution,
+        init.as_deref(),
+        scale,
+        &control.unwrap_or_default(),
+        robust.unwrap_or(false),
+    )?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::regression::survreg_distributions::{SurvregFamily, SurvregTransform};
 
-    fn prediction_test_fit(distribution: &str) -> SurvivalFit {
-        SurvivalFit {
-            coefficients: vec![1.0, 0.5, 0.5_f64.ln(), 2.0_f64.ln()],
-            location_coefficients: vec![1.0, 0.5],
-            scale: 0.5,
-            scales: vec![0.5, 2.0],
-            distribution: distribution.into(),
-            distribution_parameters: vec![],
-            n_covariates: 2,
-            n_strata: 2,
-            // The second training row includes an offset of 0.25.
-            linear_predictors: vec![1.0, 2.25],
-            time: vec![1.0, 2.0],
-            time2: None,
-            status: vec![1, 1],
-            covariates: vec![vec![1.0, 0.0], vec![1.0, 2.0]],
-            strata: vec![1, 0],
-            weights: vec![1.0; 2],
-            iterations: 0,
-            variance_matrix: vec![
-                vec![0.04, 0.0, 0.0, 0.0],
-                vec![0.0, 0.09, 0.0, 0.0],
-                vec![0.0, 0.0, 0.16, 0.0],
-                vec![0.0, 0.0, 0.0, 0.25],
-            ],
-            log_likelihood: 0.0,
-            convergence_flag: 0,
-            score_vector: vec![0.0; 4],
-        }
+    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance * expected.abs().max(1.0),
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    /// The first 12 rows of the `ovarian` data: futime, fustat, age.
+    fn ovarian() -> SurvregData {
+        let time = vec![
+            59.0, 115.0, 156.0, 421.0, 431.0, 448.0, 464.0, 475.0, 477.0, 563.0, 638.0, 744.0,
+        ];
+        let status = vec![1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0];
+        let age = [
+            72.3315, 74.4932, 66.4658, 53.3644, 50.3397, 56.4301, 56.9370, 59.8548, 64.1753,
+            55.1781, 56.7562, 50.1096,
+        ];
+        let covariates = age.iter().map(|&a| vec![1.0, a]).collect();
+        SurvregData::try_new(time, status, covariates, None, None, None, None, None).unwrap()
     }
 
     #[test]
-    fn test_prediction_quantiles_use_training_strata_and_transform_option() {
-        let fit = prediction_test_fit("loglogistic");
-        let response = fit
-            .predict_quantile(None, Some(vec![0.0, 0.75, 1.0]), None)
-            .unwrap();
-        let linear = fit
-            .predict_quantile_with_options(None, Some(vec![0.0, 0.75, 1.0]), None, None, false)
-            .unwrap();
-        for (idx, expected) in [1.0 + 2.0 * 3.0_f64.ln(), 2.25 + 0.5 * 3.0_f64.ln()]
-            .into_iter()
-            .enumerate()
-        {
-            assert!((linear.predictions[idx][1] - expected).abs() < 1e-12);
-            assert!((response.predictions[idx][1] - expected.exp()).abs() < 1e-12);
-            assert_eq!(linear.predictions[idx][0], f64::NEG_INFINITY);
-            assert_eq!(response.predictions[idx][0], 0.0);
-            assert_eq!(response.predictions[idx][2], f64::INFINITY);
-        }
+    fn control_defaults_are_r_defaults() {
+        let control = SurvregControl::default();
+        assert_eq!(control.iter_max, 30);
+        assert_eq!(control.rel_tolerance, 1e-9);
+        assert_eq!(control.toler_chol, 1e-10);
+        assert!(SurvregControl::new(30, 0.0, 1e-10).is_err());
     }
 
     #[test]
-    fn test_prediction_quantiles_require_valid_new_data_strata() {
-        let fit = prediction_test_fit("logistic");
-        let covariates = vec![vec![1.0, 0.0], vec![1.0, 2.0]];
-        for strata in [None, Some(vec![0]), Some(vec![0, 2])] {
-            assert!(
-                fit.predict_quantile_with_options(
-                    Some(covariates.clone()),
-                    Some(vec![0.75]),
-                    None,
-                    strata,
-                    true
-                )
-                .is_err()
-            );
+    fn data_validation_rejects_bad_inputs() {
+        let base = ovarian();
+        let n = base.n();
+        assert!(
+            SurvregData::try_new(
+                base.time.clone(),
+                vec![4; n],
+                base.covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            SurvregData::try_new(
+                base.time.clone(),
+                vec![3; n],
+                base.covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+            .is_err(),
+            "interval rows need time2"
+        );
+        assert!(
+            SurvregData::try_new(
+                base.time.clone(),
+                base.status.clone(),
+                base.covariates.clone(),
+                None,
+                Some(vec![0.0; n]),
+                None,
+                None,
+                None
+            )
+            .is_err(),
+            "weights must be positive"
+        );
+        assert!(
+            SurvregData::try_new(
+                base.time.clone(),
+                base.status.clone(),
+                vec![vec![]; n],
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(base.nstrata(), 1);
+    }
+
+    #[test]
+    fn weibull_fit_matches_r() {
+        // survreg(Surv(futime, fustat) ~ age, ovarian[1:12, ])
+        let fit = survreg_fit(
+            &ovarian(),
+            &SurvregDistribution::from_name("weibull", None).unwrap(),
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        assert!(fit.converged);
+        assert_eq!(fit.coefficients.len(), 3);
+        assert_eq!(fit.df, 3);
+        assert_eq!(fit.df_residual, 9);
+        assert_eq!(fit.scale.len(), 1);
+        assert_eq!(fit.icoef.len(), 2);
+        assert_eq!(fit.variance_matrix.len(), 3);
+        assert!(fit.log_likelihood > fit.intercept_only_log_likelihood);
+        // Score is zero at the solution.
+        assert!(fit.score.iter().all(|s| s.abs() < 1e-6));
+        // The linear predictor reproduces x %*% coef on the original scale.
+        for (i, lp) in fit.linear_predictors.iter().enumerate() {
+            let expected = fit.coefficients[0] + fit.coefficients[1] * fit.covariates[i][1];
+            assert_close(*lp, expected, 1e-10);
         }
-        let result = fit
-            .predict_quantile_with_options(
-                Some(covariates),
-                Some(vec![0.75]),
-                Some(vec![0.25, -0.25]),
-                Some(vec![0, 1]),
+        let mean_age = fit.covariates.iter().map(|row| row[1]).sum::<f64>() / 12.0;
+        assert_close(fit.means[1], mean_age, 1e-12);
+    }
+
+    #[test]
+    fn exponential_fixes_the_scale_at_one() {
+        let fit = survreg_fit(
+            &ovarian(),
+            &SurvregDistribution::from_name("exponential", None).unwrap(),
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(fit.scale, vec![1.0]);
+        assert_eq!(fit.coefficients.len(), 2);
+        assert_eq!(fit.variance_matrix.len(), 2);
+        assert_eq!(fit.icoef, vec![fit.icoef[0], 0.0]);
+        assert_eq!(fit.df, 2);
+    }
+
+    #[test]
+    fn fixed_scale_agrees_with_the_fixed_distribution() {
+        let data = ovarian();
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let fixed = survreg_fit(
+            &data,
+            &weibull,
+            None,
+            1.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        let exponential = survreg_fit(
+            &data,
+            &SurvregDistribution::from_name("exponential", None).unwrap(),
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        for (a, b) in fixed.coefficients.iter().zip(&exponential.coefficients) {
+            assert_close(*a, *b, 1e-12);
+        }
+        assert_close(fixed.log_likelihood, exponential.log_likelihood, 1e-12);
+    }
+
+    #[test]
+    fn user_starting_values_are_honoured() {
+        let data = ovarian();
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let reference = survreg_fit(
+            &data,
+            &weibull,
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        let from_init = survreg_fit(
+            &data,
+            &weibull,
+            Some(&[7.0, 0.0]),
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        for (a, b) in reference.coefficients.iter().zip(&from_init.coefficients) {
+            assert_close(*a, *b, 1e-6);
+        }
+        // nvar2 starting values are taken as they are; other lengths are
+        // "Wrong length for initial parameters".
+        assert!(
+            survreg_fit(
+                &data,
+                &weibull,
+                Some(&[7.0, 0.0, -0.3]),
+                0.0,
+                &SurvregControl::default(),
+                false
+            )
+            .is_ok()
+        );
+        assert!(
+            survreg_fit(
+                &data,
+                &weibull,
+                Some(&[7.0]),
+                0.0,
+                &SurvregControl::default(),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            survreg_fit(
+                &data,
+                &weibull,
+                Some(&[7.0, 0.0, 1.0, 2.0]),
+                0.0,
+                &SurvregControl::default(),
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn zero_iterations_return_the_starting_point() {
+        let data = ovarian();
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let control = SurvregControl {
+            iter_max: 0,
+            ..SurvregControl::default()
+        };
+        let fit = survreg_fit(
+            &data,
+            &weibull,
+            Some(&[6.0, 0.1, -0.2]),
+            0.0,
+            &control,
+            false,
+        )
+        .unwrap();
+        assert_eq!(fit.iterations, 0);
+        assert_eq!(fit.coefficients, vec![6.0, 0.1, -0.2]);
+    }
+
+    #[test]
+    fn non_positive_times_are_accepted_by_untransformed_distributions() {
+        let time = vec![0.0, 0.7, 1.4, 0.0, 2.0, 0.0, 3.3, 1.0];
+        let status = vec![2, 1, 1, 2, 1, 2, 1, 1];
+        let covariates: Vec<Vec<f64>> = (0..8).map(|i| vec![1.0, i as f64]).collect();
+        let data =
+            SurvregData::try_new(time, status, covariates, None, None, None, None, None).unwrap();
+        let gaussian = SurvregDistribution::from_name("gaussian", None).unwrap();
+        let fit = survreg_fit(
+            &data,
+            &gaussian,
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        assert!(fit.converged);
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let err = survreg_fit(
+            &data,
+            &weibull,
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid survival times"));
+    }
+
+    #[test]
+    fn interval_lower_bound_of_zero_becomes_left_censored() {
+        let time = vec![0.0, 1.0, 2.0, 1.5, 3.0, 2.5];
+        let time2 = vec![2.0, 3.0, 2.0, 1.5, 4.0, 2.5];
+        let status = vec![3, 3, 1, 1, 3, 0];
+        let covariates = vec![vec![1.0]; 6];
+        let data = SurvregData::try_new(
+            time,
+            status,
+            covariates,
+            Some(time2),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let fit = survreg_fit(
+            &data,
+            &weibull,
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(fit.status[0], 2);
+        assert_eq!(fit.time[0], 2.0);
+        assert_eq!(fit.time2.as_ref().unwrap()[0], 1.0);
+        assert!(fit.converged);
+    }
+
+    #[test]
+    fn strata_estimate_one_scale_per_stratum() {
+        let mut data = ovarian();
+        data.strata = Some((0..data.n()).map(|i| i % 2).collect());
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let fit = survreg_fit(
+            &data,
+            &weibull,
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(fit.scale.len(), 2);
+        assert_eq!(fit.coefficients.len(), 4);
+        assert_eq!(fit.icoef.len(), 3);
+        assert!(
+            survreg_fit(
+                &data,
+                &weibull,
+                None,
+                1.0,
+                &SurvregControl::default(),
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn robust_variance_is_the_dfbeta_crossproduct() {
+        let mut data = ovarian();
+        data.cluster = Some((0..data.n()).map(|i| i / 3).collect());
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let fit =
+            survreg_fit(&data, &weibull, None, 0.0, &SurvregControl::default(), true).unwrap();
+        let naive = fit.naive_variance_matrix.as_ref().unwrap();
+        assert_eq!(naive.len(), 3);
+        let dfbeta = fit
+            .residuals(
+                SurvregResidType::Dfbeta,
+                true,
+                data.cluster.as_deref(),
                 true,
             )
             .unwrap();
-        assert!((result.predictions[0][0] - (1.25 + 0.5 * 3.0_f64.ln())).abs() < 1e-12);
-        assert!((result.predictions[1][0] - (1.75 + 2.0 * 3.0_f64.ln())).abs() < 1e-12);
-    }
-
-    #[test]
-    fn test_prediction_student_t_quantiles_use_fitted_degrees_of_freedom() {
-        let mut fit = prediction_test_fit("t");
-        fit.distribution_parameters = vec![7.0];
-        let result = fit.predict_quantile(None, Some(vec![0.75]), None).unwrap();
-        // R 3.8.11 qt(.75, df=7).
-        let score = 0.711_141_778_081_786_6;
-        assert!((result.predictions[0][0] - (1.0 + 2.0 * score)).abs() < 1e-10);
-        assert!((result.predictions[1][0] - (2.25 + 0.5 * score)).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_prediction_training_standard_errors_use_stored_covariates() {
-        for distribution in ["lognormal", "gaussian"] {
-            let fit = prediction_test_fit(distribution);
-            let lp = fit.predict(None, "lp".into(), None, true).unwrap();
-            let response = fit.predict(None, "response".into(), None, true).unwrap();
-            assert_eq!(lp.predictions, vec![1.0, 2.25]);
-            for (idx, expected_lp_se) in [0.2, 0.4_f64.sqrt()].into_iter().enumerate() {
-                assert!((lp.se.as_ref().unwrap()[idx] - expected_lp_se).abs() < 1e-12);
-                let factor = if distribution == "lognormal" {
-                    lp.predictions[idx].exp()
-                } else {
-                    1.0
-                };
-                assert!(
-                    (response.se.as_ref().unwrap()[idx] - expected_lp_se * factor).abs() < 1e-12
-                );
+        assert_eq!(dfbeta.values.len(), 4);
+        for (j, actual_row) in fit.variance_matrix.iter().enumerate() {
+            for (k, actual) in actual_row.iter().enumerate() {
+                let expected: f64 = dfbeta.values.iter().map(|row| row[j] * row[k]).sum();
+                assert_close(*actual, expected, 1e-12);
             }
         }
     }
 
     #[test]
-    fn partial_initial_values_use_fitted_null_scales_without_solving_locations() {
-        // For these exact Gaussian observations, the intercept-only MLE has
-        // mean 13/4 and variance 59/16. A zero location column would make the
-        // unused scalar GLIM update undefined (0/0).
-        let fit = |initial| {
-            survreg(
-                vec![1.0, 2.0, 4.0, 6.0],
-                vec![1.0; 4],
-                vec![vec![0.0]; 4],
-                None,
-                None,
-                Some(initial),
-                None,
-                Some("gaussian"),
-                Some(0),
-                Some(1e-12),
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap()
-        };
-        let partial = fit(vec![0.0]);
-        assert_eq!(partial.coefficients[0], 0.0);
-        assert!((partial.coefficients[1] - 0.5 * (59.0_f64 / 16.0).ln()).abs() < 1e-10);
-        let completed = fit(partial.coefficients.clone());
-        assert_eq!(partial.coefficients, completed.coefficients);
-        assert_eq!(partial.variance_matrix, completed.variance_matrix);
-        assert_eq!(partial.log_likelihood, completed.log_likelihood);
-        assert_eq!(partial.score_vector, completed.score_vector);
-    }
-
-    #[test]
-    fn partial_initial_values_require_full_vector_for_mean_only_estimated_scales() {
-        let fit = |initial, scale| {
-            survreg(
-                vec![1.0, 2.0, 4.0, 6.0],
-                vec![1.0; 4],
-                vec![vec![1.0]; 4],
-                None,
-                None,
-                Some(initial),
-                None,
-                Some("gaussian"),
-                Some(0),
-                None,
-                None,
-                None,
-                scale,
-                None,
-            )
-        };
-        let error = fit(vec![1.2], None).unwrap_err();
-        assert!(error.to_string().contains("full initial vector"));
-        assert_eq!(
-            fit(vec![1.2, 0.0], None).unwrap().coefficients,
-            vec![1.2, 0.0]
-        );
-        assert_eq!(fit(vec![1.2], Some(1.0)).unwrap().coefficients, vec![1.2]);
-    }
-
-    #[test]
-    fn empty_initial_locations_are_valid_only_for_a_zero_column_design() {
-        let fit = |row: Vec<f64>| {
-            survreg(
-                vec![1.0, 2.0, 4.0, 6.0],
-                vec![1.0; 4],
-                vec![row; 4],
-                None,
-                None,
-                Some(vec![]),
-                None,
-                Some("gaussian"),
-                Some(0),
-                Some(1e-12),
-                None,
-                None,
-                None,
-                None,
-            )
-        };
-        let empty = fit(vec![]).unwrap();
-        assert_eq!(empty.n_covariates, 0);
-        assert_eq!(empty.coefficients.len(), 1);
-        assert!((empty.scales[0] - (59.0_f64 / 16.0).sqrt()).abs() < 1e-10);
-        assert_eq!(empty.linear_predictors, vec![0.0; 4]);
-        assert!(fit(vec![0.0]).is_err());
-    }
-
-    #[test]
-    fn test_survreg_config_default() {
-        for config in [
-            SurvregConfig::default(),
-            SurvregConfig::new(None, None, None, None),
-            SurvregConfig::create(None, None, None, None),
-        ] {
-            assert_eq!(config.max_iter, 30);
-            assert_eq!(config.eps, 1e-9);
-            assert_eq!(config.tol_chol, 1e-10);
-            assert_eq!(config.distribution, DistributionType::Weibull);
+    fn redundant_columns_get_nan_coefficients() {
+        let mut data = ovarian();
+        for row in data.covariates.iter_mut() {
+            let age = row[1];
+            row.push(2.0 * age);
         }
-    }
-
-    #[test]
-    fn default_survreg_tolerance_matches_r_control_on_censored_data() {
-        let fit_with_tolerance = |eps| {
-            survreg(
-                vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0],
-                vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
-                vec![
-                    vec![1.0, 0.0],
-                    vec![1.0, 1.0],
-                    vec![1.0, 0.0],
-                    vec![1.0, 1.0],
-                    vec![1.0, 0.0],
-                    vec![1.0, 1.0],
-                ],
-                None,
-                None,
-                // Isolate the tolerance comparison from automatic initialization.
-                Some(vec![0.0; 3]),
-                None,
-                Some("weibull"),
-                None,
-                eps,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap()
-        };
-        let default = fit_with_tolerance(None);
-        let explicit = fit_with_tolerance(Some(1e-9));
-        assert_eq!(default.coefficients, explicit.coefficients);
-        assert_eq!(default.iterations, explicit.iterations);
-        assert!(default.score_vector.iter().all(|score| score.abs() < 1e-10));
-        // R survival 3.8.11 default Weibull fit: intercept, x and log(scale).
-        let reference = [
-            2.201_004_230_665_683,
-            -0.412_866_281_489_401_24,
-            -0.280_610_838_292_473_6,
-        ];
-        for (actual, expected) in default.coefficients.iter().zip(reference) {
-            assert!((actual - expected).abs() < 2e-9);
-        }
-        let loose = fit_with_tolerance(Some(1e-6));
-        assert!(loose.iterations < default.iterations);
-        assert!(loose.score_vector.iter().any(|score| score.abs() > 1e-8));
-    }
-
-    #[test]
-    fn automatic_initialization_ignores_zero_weight_unresolved_intervals() {
-        let fit = |time: Vec<f64>, status, weights, time2| {
-            let n = time.len();
-            survreg(
-                time,
-                status,
-                vec![vec![1.0]; n],
-                Some(weights),
-                None,
-                None,
-                None,
-                Some("logistic"),
-                Some(0),
-                None,
-                None,
-                time2,
-                Some(1.0),
-                None,
-            )
-            .unwrap()
-        };
-        let reference = fit(vec![1.0, 3.0], vec![1.0; 2], vec![1.0; 2], None);
-        let with_ignored = fit(
-            vec![1.0, 3.0, 1e-100],
-            vec![1.0, 1.0, 3.0],
-            vec![1.0, 1.0, 0.0],
-            Some(vec![1.0, 3.0, 2e-100]),
-        );
-        assert_eq!(with_ignored.coefficients, reference.coefficients);
-        assert_eq!(with_ignored.variance_matrix, reference.variance_matrix);
-        assert_eq!(with_ignored.score_vector, reference.score_vector);
-        assert_eq!(with_ignored.log_likelihood, reference.log_likelihood);
-    }
-
-    #[test]
-    fn automatic_rescaling_ignores_zero_weight_extreme_covariates() {
-        for fixed_scale in [None, Some(1.0)] {
-            let fit = |ignored| {
-                let mut time = vec![1.0, 2.0, 3.0, 4.0];
-                let mut covariates: Vec<Vec<f64>> = time.iter().map(|&x| vec![1.0, x]).collect();
-                let mut weights = vec![1.0; 4];
-                if ignored {
-                    time.push(2.0);
-                    covariates.push(vec![1.0, 1e20]);
-                    weights.push(0.0);
-                }
-                let status = vec![1.0; time.len()];
-                survreg(
-                    time,
-                    status,
-                    covariates,
-                    Some(weights),
-                    None,
-                    None,
-                    None,
-                    Some("gaussian"),
-                    Some(0),
-                    None,
-                    None,
-                    None,
-                    fixed_scale,
-                    None,
-                )
-                .unwrap()
-            };
-            let reference = fit(false);
-            let with_ignored = fit(true);
-            assert_eq!(with_ignored.coefficients, reference.coefficients);
-            assert_eq!(with_ignored.variance_matrix, reference.variance_matrix);
-            assert_eq!(with_ignored.score_vector, reference.score_vector);
-            assert_eq!(with_ignored.log_likelihood, reference.log_likelihood);
-            assert_eq!(
-                &with_ignored.linear_predictors[..4],
-                reference.linear_predictors
-            );
-        }
-    }
-
-    #[test]
-    fn automatic_gaussian_starts_match_r_without_optimizer_iterations() {
-        let time = vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0];
-        let all_event = survreg(
-            time.clone(),
-            vec![1.0; 6],
-            (0..6).map(|i| vec![1.0, f64::from(i)]).collect(),
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let fit = survreg_fit(
+            &data,
+            &weibull,
             None,
-            None,
-            None,
-            None,
-            Some("gaussian"),
-            Some(0),
-            None,
-            None,
-            None,
-            Some(1.0),
-            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
         )
         .unwrap();
-        for (actual, expected) in all_event
-            .location_coefficients
-            .iter()
-            .zip([0.23809523809523903, 1.771_428_571_428_571_4])
-        {
-            assert!((actual - expected).abs() < 2e-14, "{actual} != {expected}");
-        }
-        assert_eq!(all_event.iterations, 0);
-        assert_eq!(all_event.scale, 1.0);
-        let censored = survreg(
-            time,
-            vec![1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
-            vec![vec![1.0]; 6],
-            None,
-            None,
-            None,
-            None,
-            Some("gaussian"),
-            Some(0),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert!((censored.location_coefficients[0] - 6.491_626_281_538_652).abs() < 2e-8);
-        assert!((censored.scale - 6.182412330330469).abs() < 2e-14);
-        assert_eq!(censored.iterations, 0);
+        assert!(fit.coefficients[2].is_nan());
+        assert!(fit.coefficients[1].is_finite());
+        assert_eq!(fit.variance_matrix[2][2], 0.0);
     }
 
     #[test]
-    fn test_survreg_distribution_fallbacks_are_weibull() {
-        assert_eq!(
-            SurvregConfig::new(None, None, None, None).distribution,
-            DistributionType::Weibull
-        );
-        assert_eq!(
-            SurvregConfig::create(None, None, None, None).distribution,
-            DistributionType::Weibull
-        );
-        assert_eq!(
-            parse_distribution_type(None).unwrap(),
-            DistributionType::Weibull
-        );
-        assert_eq!(
-            parse_distribution_type(Some("extreme_value")).unwrap(),
-            DistributionType::ExtremeValue
-        );
-    }
-
-    #[test]
-    fn test_survreg_config_create() {
-        let config = SurvregConfig::create(
-            Some(DistributionType::Gaussian),
-            Some(50),
-            Some(1e-8),
-            Some(1e-12),
-        );
-        assert_eq!(config.max_iter, 50);
-        assert!((config.eps - 1e-8).abs() < 1e-15);
-        assert_eq!(config.distribution, DistributionType::Gaussian);
-    }
-
-    #[test]
-    fn test_distribution_type_variants() {
-        let variants = [
-            DistributionType::ExtremeValue,
-            DistributionType::Weibull,
-            DistributionType::Gaussian,
-            DistributionType::Logistic,
-            DistributionType::LogNormal,
-            DistributionType::LogLogistic,
-            DistributionType::StudentT,
-        ];
-        assert_eq!(variants.len(), 7);
-    }
-
-    #[test]
-    fn test_requested_distribution_name_preserves_response_transform() {
-        assert_eq!(
-            requested_distribution_name(Some("exponential"), DistributionType::ExtremeValue),
-            "exponential"
-        );
-        assert_eq!(
-            parse_distribution_type(Some("rayleigh")).unwrap(),
-            DistributionType::Weibull
-        );
-        assert_eq!(
-            requested_distribution_name(Some("rayleigh"), DistributionType::Weibull),
-            "rayleigh"
-        );
-        assert_eq!(
-            requested_distribution_name(Some("normal"), DistributionType::Gaussian),
-            "gaussian"
-        );
-        assert_eq!(
-            requested_distribution_name(Some("loggaussian"), DistributionType::LogNormal),
-            "lognormal"
-        );
-        assert_eq!(
-            requested_distribution_name(Some("log-logistic"), DistributionType::LogLogistic),
-            "loglogistic"
-        );
-        assert_eq!(
-            requested_distribution_name(Some("extreme"), DistributionType::ExtremeValue),
-            "extreme_value"
-        );
-        assert_eq!(
-            requested_distribution_name(Some("student-t"), DistributionType::StudentT),
-            "t"
-        );
-    }
-
-    #[test]
-    fn stationary_fit_requires_a_small_nonnegative_newton_decrement() {
-        let score = Array1::from_vec(vec![1e-9, -2e-9]);
-        let delta = Array1::from_vec(vec![1e-10, -2e-10]);
-        assert!(stationary_within_roundoff(-100.0, 1e-13, &score, &delta));
-        assert!(!stationary_within_roundoff(-100.0, 1e-20, &score, &delta));
-        assert!(!stationary_within_roundoff(
-            -100.0,
-            1e-13,
-            &score,
-            &(-&delta)
-        ));
-        let large = Array1::from_vec(vec![1.0, 1.0]);
-        assert!(!stationary_within_roundoff(-100.0, 1e-13, &large, &large));
-        assert!(!stationary_within_roundoff(f64::NAN, 1e-13, &score, &delta));
-    }
-
-    #[test]
-    fn test_check_convergence() {
-        assert!(check_convergence(-100.0, -100.0, 1e-6));
-        assert!(check_convergence(-100.0, -100.00001, 1e-4));
-        assert!(!check_convergence(-100.0, -99.0, 1e-6));
-        assert!(check_convergence(-1e-10, -1e-10, 1e-6));
-        assert!(check_convergence(-100.0, -100.0 + 1e-7, 1e-6));
-    }
-
-    #[test]
-    fn information_rank_distinguishes_singular_and_indefinite_systems() {
-        let positive = Array2::from_shape_vec((2, 2), vec![2.0, 0.5, 0.5, 1.0]).unwrap();
-        let indefinite = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 2.0, 1.0]).unwrap();
-        let singular = Array2::from_shape_vec((2, 2), vec![1.0; 4]).unwrap();
-
-        assert_eq!(SurvregInformation::factor(&positive, 1e-10).signed_rank, 2);
-        assert_eq!(
-            SurvregInformation::factor(&indefinite, 1e-10).signed_rank,
-            -1
-        );
-        assert_eq!(SurvregInformation::factor(&singular, 1e-10).signed_rank, 1);
-    }
-
-    #[test]
-    fn test_adjust_strata() {
-        let mut newbeta = vec![1.0, 2.0, 5.0];
-        let beta = vec![1.0, 2.0, 3.0];
-        adjust_strata(&mut newbeta, &beta, 2, 1);
-        assert!(newbeta[2] <= beta[2] - 1.1 + 0.01 || (newbeta[2] - 5.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_compute_survreg_simple() {
-        let n = 10;
-        let nvar = 1;
-        let y = Array2::from_shape_vec(
-            (n, 2),
+    fn saturated_designs_report_a_negative_df_residual() {
+        // survreg(Surv(t, s) ~ x1 + x2, data.frame(t = 1:3, s = 1, x1 = ..., x2 = ...))
+        // has 4 parameters for 3 observations; R returns df.residual = -1
+        // rather than failing.
+        let data = SurvregData::try_new(
+            vec![1.0, 2.0, 3.0],
+            vec![1, 1, 1],
             vec![
-                1.0, 1.0, 2.0, 1.0, 3.0, 1.0, 4.0, 1.0, 5.0, 1.0, 6.0, 1.0, 7.0, 1.0, 8.0, 1.0,
-                9.0, 1.0, 10.0, 1.0,
+                vec![1.0, 0.5, 2.0],
+                vec![1.0, 1.5, 1.0],
+                vec![1.0, 2.5, 4.0],
             ],
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
-        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
-        let weights = Array1::from_vec(vec![1.0; n]);
-        let offsets = Array1::from_vec(vec![0.0; n]);
-        let beta = vec![0.0, 0.0];
-        let strata = vec![0; n];
-
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 100,
-            nvar,
-            y: &y,
-            covariates: &covariates,
-            weights: &weights,
-            offsets: &offsets,
-            beta,
-            nstrat: 1,
-            strata: &strata,
-            eps: 1e-6,
-            tol_chol: 1e-10,
-            distribution: DistributionType::Weibull,
-            distribution_parameter: None,
-            fixed_scale: None,
-        });
-
-        assert!(result.is_ok());
-        let fit = result.unwrap();
-        assert_eq!(fit.coefficients.len(), 2);
-        assert!(fit.log_likelihood.is_finite());
-    }
-
-    #[test]
-    fn test_compute_survreg_convergence() {
-        let n = 20;
-        let nvar = 1;
-        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
-        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
-        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
-        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
-        let weights = Array1::from_vec(vec![1.0; n]);
-        let offsets = Array1::from_vec(vec![0.0; n]);
-        let beta = vec![0.0, 0.0];
-        let strata = vec![0; n];
-
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 100,
-            nvar,
-            y: &y,
-            covariates: &covariates,
-            weights: &weights,
-            offsets: &offsets,
-            beta,
-            nstrat: 1,
-            strata: &strata,
-            eps: 1e-6,
-            tol_chol: 1e-10,
-            distribution: DistributionType::Weibull,
-            distribution_parameter: None,
-            fixed_scale: None,
-        });
-
-        assert!(result.is_ok());
-        let fit = result.unwrap();
-        assert!(fit.log_likelihood.is_finite());
-        assert!(fit.iterations <= 100);
-    }
-
-    #[test]
-    fn test_compute_survreg_lognormal() {
-        let n = 20;
-        let nvar = 1;
-        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
-        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
-        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
-        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
-        let weights = Array1::from_vec(vec![1.0; n]);
-        let offsets = Array1::from_vec(vec![0.0; n]);
-        let beta = vec![0.0, 0.0];
-        let strata = vec![0; n];
-
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 100,
-            nvar,
-            y: &y,
-            covariates: &covariates,
-            weights: &weights,
-            offsets: &offsets,
-            beta,
-            nstrat: 1,
-            strata: &strata,
-            eps: 1e-6,
-            tol_chol: 1e-10,
-            distribution: DistributionType::LogNormal,
-            distribution_parameter: None,
-            fixed_scale: None,
-        });
-
-        assert!(result.is_ok());
-        let fit = result.unwrap();
-        assert_eq!(fit.coefficients.len(), 2);
-    }
-
-    #[test]
-    fn test_compute_survreg_loglogistic() {
-        let n = 20;
-        let nvar = 1;
-        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
-        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
-        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
-        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
-        let weights = Array1::from_vec(vec![1.0; n]);
-        let offsets = Array1::from_vec(vec![0.0; n]);
-        let beta = vec![0.0, 0.0];
-        let strata = vec![0; n];
-
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 100,
-            nvar,
-            y: &y,
-            covariates: &covariates,
-            weights: &weights,
-            offsets: &offsets,
-            beta,
-            nstrat: 1,
-            strata: &strata,
-            eps: 1e-6,
-            tol_chol: 1e-10,
-            distribution: DistributionType::LogLogistic,
-            distribution_parameter: None,
-            fixed_scale: None,
-        });
-
-        assert!(result.is_ok());
-        let fit = result.unwrap();
-        assert_eq!(fit.coefficients.len(), 2);
-    }
-
-    #[test]
-    fn test_compute_survreg_with_censoring() {
-        let n = 20;
-        let nvar = 1;
-        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.5).collect();
-        let statuses: Vec<f64> = (0..n).map(|i| if i % 3 == 0 { 0.0 } else { 1.0 }).collect();
-        let y_data: Vec<f64> = times
-            .iter()
-            .zip(statuses.iter())
-            .flat_map(|(&t, &s)| vec![t, s])
-            .collect();
-        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
-        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
-        let weights = Array1::from_vec(vec![1.0; n]);
-        let offsets = Array1::from_vec(vec![0.0; n]);
-        let beta = vec![0.0, 0.0];
-        let strata = vec![0; n];
-
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 100,
-            nvar,
-            y: &y,
-            covariates: &covariates,
-            weights: &weights,
-            offsets: &offsets,
-            beta,
-            nstrat: 1,
-            strata: &strata,
-            eps: 1e-6,
-            tol_chol: 1e-10,
-            distribution: DistributionType::Weibull,
-            distribution_parameter: None,
-            fixed_scale: None,
-        });
-
-        assert!(result.is_ok());
-        let fit = result.unwrap();
-        assert_eq!(fit.coefficients.len(), 2);
-        assert!(fit.log_likelihood.is_finite());
-    }
-
-    #[test]
-    fn observed_information_accelerates_well_conditioned_fit() {
-        let y = Array2::from_shape_vec(
-            (6, 2),
-            vec![1.2, 1.0, 2.1, 1.0, 3.0, 0.0, 4.5, 1.0, 6.2, 1.0, 8.1, 0.0],
+        let fit = survreg_fit(
+            &data,
+            &SurvregDistribution::from_name("weibull", None).unwrap(),
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
         )
         .unwrap();
-        let covariates = Array2::from_shape_vec(
-            (2, 6),
-            vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0],
-        )
-        .unwrap();
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 100,
-            nvar: 2,
-            y: &y,
-            covariates: &covariates,
-            weights: &Array1::from_vec(vec![1.0; 6]),
-            offsets: &Array1::from_vec(vec![0.0; 6]),
-            beta: vec![2.113333, 1.38, 1.103973],
-            nstrat: 1,
-            strata: &[0; 6],
-            eps: 1e-10,
-            tol_chol: 1e-10,
-            distribution: DistributionType::Gaussian,
-            distribution_parameter: None,
-            fixed_scale: None,
-        })
-        .unwrap();
-
-        assert!(result.iterations <= 10);
-        assert!((result.coefficients[0] - 2.244776).abs() < 1e-5);
-        assert!((result.coefficients[1] - 1.392510).abs() < 1e-5);
-        assert!(result.score_vector.iter().all(|score| score.abs() < 1e-5));
+        assert_eq!(fit.n, 3);
+        assert_eq!(fit.df, 4);
+        assert_eq!(fit.df_residual, -1);
     }
 
     #[test]
-    fn test_compute_survreg_multiple_covariates() {
-        let n = 30;
-        let nvar = 3;
-        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.3).collect();
-        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
-        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
-        let cov_data: Vec<f64> = (0..nvar * n)
-            .map(|i| ((i % 7) as f64 - 3.0) / 3.0)
-            .collect();
-        let covariates = Array2::from_shape_vec((nvar, n), cov_data).unwrap();
-        let weights = Array1::from_vec(vec![1.0; n]);
-        let offsets = Array1::from_vec(vec![0.0; n]);
-        let beta = vec![0.0; nvar + 1];
-        let strata = vec![0; n];
-
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 100,
-            nvar,
-            y: &y,
-            covariates: &covariates,
-            weights: &weights,
-            offsets: &offsets,
-            beta,
-            nstrat: 1,
-            strata: &strata,
-            eps: 1e-6,
-            tol_chol: 1e-10,
-            distribution: DistributionType::Weibull,
-            distribution_parameter: None,
-            fixed_scale: None,
-        });
-
-        assert!(result.is_ok());
-        let fit = result.unwrap();
-        assert_eq!(fit.coefficients.len(), nvar + 1);
-    }
-
-    #[test]
-    fn test_compute_survreg_fixed_scale_uses_location_variance() {
-        let n = 20;
-        let nvar = 1;
-        let times: Vec<f64> = (1..=n).map(|i| (i as f64) * 0.4 + 0.5).collect();
-        let y_data: Vec<f64> = times.iter().flat_map(|&t| vec![t, 1.0]).collect();
-        let y = Array2::from_shape_vec((n, 2), y_data).unwrap();
-        let covariates = Array2::from_shape_vec((nvar, n), vec![1.0; n]).unwrap();
-        let weights = Array1::from_vec(vec![1.0; n]);
-        let offsets = Array1::from_vec(vec![0.0; n]);
-        let beta = vec![0.0; nvar];
-        let strata = vec![0; n];
-
-        let result = compute_survreg(ComputeSurvregInput {
-            max_iter: 20,
-            nvar,
-            y: &y,
-            covariates: &covariates,
-            weights: &weights,
-            offsets: &offsets,
-            beta,
-            nstrat: 1,
-            strata: &strata,
-            eps: 1e-6,
-            tol_chol: 1e-10,
-            distribution: DistributionType::Weibull,
-            distribution_parameter: None,
-            fixed_scale: Some(1.25),
-        });
-
-        assert!(result.is_ok());
-        let fit = result.unwrap();
-        assert_eq!(fit.coefficients.len(), nvar + 1);
-        assert_eq!(fit.score_vector.len(), nvar);
-        assert_eq!(fit.variance_matrix.shape(), &[nvar, nvar]);
-        assert_eq!(fit.coefficients[nvar], 1.25f64.ln());
-        assert!(fit.log_likelihood.is_finite());
-    }
-
-    #[test]
-    fn test_survival_fit_fields() {
-        let fit = SurvivalFitComputed {
-            coefficients: vec![1.0, 0.5],
-            iterations: 10,
-            variance_matrix: Array2::zeros((2, 2)),
-            log_likelihood: -50.0,
-            convergence_flag: 0,
-            score_vector: vec![0.001, 0.002],
-        };
-
-        assert_eq!(fit.coefficients.len(), 2);
-        assert_eq!(fit.iterations, 10);
-        assert_eq!(fit.convergence_flag, 0);
-        assert!((fit.log_likelihood - (-50.0)).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_calculate_variance_matrix_empty() {
-        let imat = Array2::zeros((0, 0));
-        let result = SurvregInformation::factor(&imat, 1e-10).covariance();
-        assert!(result.is_ok());
-        let var = result.unwrap();
-        assert_eq!(var.nrows(), 0);
-        assert_eq!(var.ncols(), 0);
-    }
-
-    #[test]
-    fn test_calculate_variance_matrix_small() {
-        let mut imat = Array2::zeros((2, 2));
-        imat[[0, 0]] = 2.0;
-        imat[[1, 1]] = 2.0;
-        imat[[0, 1]] = 0.5;
-        imat[[1, 0]] = 0.5;
-        let result = SurvregInformation::factor(&imat, 1e-10).covariance();
-        assert!(result.is_ok());
-        let var = result.unwrap();
-        assert_eq!(var.nrows(), 2);
-        assert_eq!(var.ncols(), 2);
-        let identity = imat.dot(&var);
-        for row in 0..2 {
-            for column in 0..2 {
-                let expected = if row == column { 1.0 } else { 0.0 };
-                assert!((identity[[row, column]] - expected).abs() < 1e-14);
-            }
-        }
-    }
-
-    #[test]
-    fn singular_information_returns_a_generalized_covariance_and_step() {
-        let imat = Array2::from_shape_vec(
-            (3, 3),
-            vec![6.0, 3.0, 3.0, 3.0, 19.0, 19.0, 3.0, 19.0, 19.0],
-        )
-        .unwrap();
-        let information = SurvregInformation::factor(&imat, 1e-10);
-        let step = information
-            .solve(&Array1::from_vec(vec![21.0, 28.0, 28.0]))
-            .unwrap();
-        assert!((step[0] - 3.0).abs() < 1e-14);
-        assert!((step[1] - 1.0).abs() < 1e-14);
-        assert_eq!(step[2], 0.0);
-        let variance = information.covariance().unwrap();
-        for index in 0..3 {
-            assert_eq!(variance[[2, index]], 0.0);
-            assert_eq!(variance[[index, 2]], 0.0);
-        }
-        // A V A = A characterizes the generalized inverse on the estimable
-        // column space; the selected coefficients preserve original order.
-        let reconstructed = imat.dot(&variance).dot(&imat);
-        for (actual, expected) in reconstructed.iter().zip(imat.iter()) {
-            assert!((actual - expected).abs() < 1e-13);
-        }
-        assert!((variance[[0, 0]] - 19.0 / 105.0).abs() < 1e-15);
-        assert!((variance[[1, 1]] - 6.0 / 105.0).abs() < 1e-15);
-    }
-
-    #[test]
-    fn information_uses_absolute_tolerance_for_positive_diagonals() {
-        // R Gaussian intercept fit, fixed scale 1e6 and three observations.
-        let information = Array2::from_shape_vec((1, 1), vec![3e-12]).unwrap();
-        let discarded = SurvregInformation::factor(&information, 1e-10)
-            .covariance()
-            .unwrap();
-        assert_eq!(discarded[[0, 0]], 0.0);
-        let retained = SurvregInformation::factor(&information, 1e-14)
-            .covariance()
-            .unwrap();
-        assert!((retained[[0, 0]] * 3e-12 - 1.0).abs() < 1e-15);
-        // cholesky3 discards pivots strictly below the threshold.
-        assert_eq!(
-            SurvregInformation::factor(&information, 3e-12).signed_rank,
-            1
+    fn custom_distribution_matches_its_builtin_twin() {
+        let data = ovarian();
+        let builtin = SurvregDistribution::from_name("lognormal", None).unwrap();
+        let custom = SurvregDistribution::custom(
+            "mine",
+            SurvregFamily::Gaussian,
+            SurvregTransform::Log,
+            None,
+            None,
         );
+        let a = survreg_fit(
+            &data,
+            &builtin,
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        let b = survreg_fit(&data, &custom, None, 0.0, &SurvregControl::default(), false).unwrap();
+        assert_eq!(a.coefficients, b.coefficients);
+        assert_eq!(a.log_likelihood, b.log_likelihood);
+        assert_eq!(b.distribution.name, "mine");
     }
 
     #[test]
-    fn indefinite_prescribed_information_matches_r_generalized_covariance() {
-        // R survreg6 at Gaussian location/log(scale)=0 for y=1:4.
-        let information = Array2::from_shape_vec((2, 2), vec![4.0, 20.0, 20.0, 60.0]).unwrap();
-        let factor = SurvregInformation::factor(&information, 1e-10);
-        assert_eq!(factor.signed_rank, -1);
-        assert_eq!(
-            factor.covariance().unwrap().into_raw_vec_and_offset().0,
-            vec![0.25, 0.0, 0.0, 0.0]
+    fn python_entry_point_parses_names_and_codes() {
+        let data = ovarian();
+        let fit = survreg(
+            data.time.clone(),
+            data.status.iter().map(|&s| f64::from(s)).collect(),
+            data.covariates.clone(),
+            None,
+            None,
+            None,
+            None,
+            Some("t"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(6.0),
+        )
+        .unwrap();
+        assert_eq!(fit.distribution.parms, vec![6.0]);
+        assert!(
+            survreg(
+                data.time.clone(),
+                vec![0.5; data.n()],
+                data.covariates.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_err()
         );
-    }
-
-    #[test]
-    fn information_retains_r_negative_cutoff_and_roundoff_rank_rules() {
-        // R cholesky3/chinv2 can retain a tiny negative diagonal when a
-        // larger original negative diagonal sets a negative cutoff.
-        let diagonal = Array2::from_diag(&Array1::from_vec(vec![-1.0, -1e-12, 2.0]));
-        let factor = SurvregInformation::factor(&diagonal, 1e-10);
-        assert_eq!(factor.signed_rank, -2);
-        assert_eq!(
-            factor.covariance().unwrap().diag().to_vec(),
-            vec![0.0, -1e-12, 0.5]
-        );
-        for (difference, rank) in [(1e-12, 1), (1e-8, -1)] {
-            let information =
-                Array2::from_shape_vec((2, 2), vec![1.0, 1.0, 1.0, 1.0 - difference]).unwrap();
-            assert_eq!(
-                SurvregInformation::factor(&information, 1e-10).signed_rank,
-                rank
-            );
-        }
-    }
-
-    #[test]
-    fn covariance_keeps_independent_columns_after_an_alias() {
-        let information =
-            Array2::from_shape_vec((3, 3), vec![2.0, 2.0, 1.0, 2.0, 2.0, 1.0, 1.0, 1.0, 3.0])
-                .unwrap();
-        let factor = SurvregInformation::factor(&information, 1e-10);
-        assert_eq!(factor.signed_rank, 2);
-        let variance = factor.covariance().unwrap();
-        assert_eq!(variance.row(1).to_vec(), vec![0.0; 3]);
-        assert_eq!(variance.column(1).to_vec(), vec![0.0; 3]);
-        for (actual, expected) in information
-            .dot(&variance)
-            .dot(&information)
-            .iter()
-            .zip(information.iter())
-        {
-            assert!((actual - expected).abs() < 1e-14);
-        }
     }
 }

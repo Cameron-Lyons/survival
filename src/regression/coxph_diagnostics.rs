@@ -1,1980 +1,576 @@
-use crate::constants::{EXP_CLAMP_MAX, EXP_CLAMP_MIN, same_time};
-use crate::internal::statistical::chi2_sf;
-use crate::regression::cox_optimizer::Method as CoxMethod;
-use crate::regression::coxph::CoxPHFit;
-use crate::regression::coxph_support::{ActiveRiskSet, CoxSweepRow, StratifiedBaselineLookup};
-use crate::regression::exact_ties::{exact_inclusion_probabilities, exact_tied_moments};
-use crate::residuals::agmart_module::{AgmartData, compute_agmart_by_stratum};
-use crate::residuals::coxmart_module::{CoxMartSurvivalData, CoxMartWeights, compute_coxmart};
-use crate::scoring::coxscore2::{CoxScoreData, CoxScoreParams, compute_cox_score_residuals};
-use crate::validation::ProportionalityTest;
-use crate::validation::hypothesis_tests::proportional_hazards_chi2;
+//! Residuals of a fitted Cox model: R survival's `residuals.coxph()`
+//! (`R/residuals.coxph.R`) on top of the package's residual kernels.
+//!
+//! * martingale — `residuals::coxmart` / `residuals::agmart`
+//!   (`coxmart.c`, `agmart3.c`);
+//! * score — `scoring::coxscore2` / `scoring::agscore3`
+//!   (`coxscore2.c`, `agscore3.c`);
+//! * schoenfeld — `core::coxscho` (`coxscho.c`);
+//! * deviance, dfbeta, dfbetas, scaledsch and partial are the algebra of
+//!   `residuals.coxph` on top of those, including the `weighted` and
+//!   `collapse` arguments.
+//!
+//! The kernels take the fit's rows in the caller's order and sort as
+//! `residuals.coxph` does (`order(strata, time, -status)`).
+
+use crate::core::coxscho::coxscho;
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
+use crate::residuals::agmart::agmart_rows;
+use crate::residuals::coxmart::coxmart_rows;
+use crate::scoring::agscore3::agscore3_rows;
+use crate::scoring::coxscore2::coxscore2_rows;
 use ndarray::Array2;
 use pyo3::prelude::*;
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(message.into())
+/// The residual types of `residuals.coxph`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidualType {
+    Martingale,
+    Deviance,
+    Score,
+    Schoenfeld,
+    Dfbeta,
+    Dfbetas,
+    ScaledSchoenfeld,
+    Partial,
 }
 
-fn stabilized_exp(values: impl IntoIterator<Item = f64>) -> Vec<f64> {
-    let values: Vec<f64> = values.into_iter().collect();
-    let max_value = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let overflow_threshold = f64::MAX.ln();
-    let shift = if max_value > overflow_threshold {
-        overflow_threshold - (1.0 + max_value)
+impl ResidualType {
+    pub fn parse(name: &str) -> SurvivalResult<Self> {
+        match name {
+            "martingale" => Ok(Self::Martingale),
+            "deviance" => Ok(Self::Deviance),
+            "score" => Ok(Self::Score),
+            "schoenfeld" => Ok(Self::Schoenfeld),
+            "dfbeta" => Ok(Self::Dfbeta),
+            "dfbetas" => Ok(Self::Dfbetas),
+            "scaledsch" => Ok(Self::ScaledSchoenfeld),
+            "partial" => Ok(Self::Partial),
+            other => Err(SurvivalError::invalid_input(format!(
+                "unknown residual type '{other}'"
+            ))),
+        }
+    }
+
+    /// R's default for `weighted`: `TRUE` for dfbeta and dfbetas only.
+    pub fn default_weighted(self) -> bool {
+        matches!(self, Self::Dfbeta | Self::Dfbetas)
+    }
+}
+
+/// Schoenfeld (or scaled Schoenfeld) residuals: one row per death, in
+/// (stratum, time) order.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object)]
+pub struct SchoenfeldResiduals {
+    /// Death times (the row names of R's matrix).
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    /// Stratum code of each death (absent for an unstratified fit).
+    #[pyo3(get)]
+    pub strata: Option<Vec<i32>>,
+    /// Original row index of each death.
+    #[pyo3(get)]
+    pub rows: Vec<usize>,
+    #[pyo3(get)]
+    pub residuals: Vec<Vec<f64>>,
+}
+
+/// A residual vector or matrix, R's `residuals(fit, type)` value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Residuals {
+    Vector(Vec<f64>),
+    Matrix(Array2<f64>),
+}
+
+/// `exp(lp)` with `coxph.fit`'s overflow guard: near-infinite coefficients
+/// are shifted so the largest score is representable.
+fn risk_scores(lp: &[f64]) -> Vec<f64> {
+    let log_max = f64::MAX.ln();
+    let max_lp = lp.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let shift = if max_lp > log_max {
+        log_max - (1.0 + max_lp)
     } else {
         0.0
     };
-    values
-        .into_iter()
-        .map(|value| (value + shift).exp())
-        .collect()
-}
-
-fn validate_finite_slice(values: &[f64], name: &str) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{name} contains non-finite value at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_matrix_width(matrix: &[Vec<f64>], width: usize, name: &str) -> PyResult<()> {
-    for (row_idx, row) in matrix.iter().enumerate() {
-        if row.len() != width {
-            return Err(value_error(format!(
-                "{name} row {row_idx} has length {}, expected {width}",
-                row.len()
-            )));
-        }
-        validate_finite_slice(row, name)?;
-    }
-    Ok(())
-}
-
-fn validate_square_matrix(matrix: &[Vec<f64>], width: usize, name: &str) -> PyResult<()> {
-    if matrix.len() != width {
-        return Err(value_error(format!("{name} length must be {width}")));
-    }
-    validate_matrix_width(matrix, width, name)
-}
-
-fn validate_column_groups(groups: &[Vec<usize>], width: usize) -> PyResult<()> {
-    for (group_idx, columns) in groups.iter().enumerate() {
-        if columns.is_empty() {
-            return Err(value_error(format!("groups[{group_idx}] cannot be empty")));
-        }
-        for &col_idx in columns {
-            if col_idx >= width {
-                return Err(value_error(format!(
-                    "groups[{group_idx}] contains column {col_idx}, expected < {width}"
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_cluster_codes(codes: &[usize], nrows: usize, name: &str) -> PyResult<usize> {
-    if codes.len() != nrows {
-        return Err(value_error(format!("{name} length must match row count")));
-    }
-    Ok(codes
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |max_code| max_code + 1))
-}
-
-fn collapse_weighted_rows_by_cluster(
-    rows: &[Vec<f64>],
-    weights: &[f64],
-    cluster: &[usize],
-    width: usize,
-    name: &str,
-) -> PyResult<Vec<Vec<f64>>> {
-    validate_matrix_width(rows, width, name)?;
-    if weights.len() != rows.len() {
-        return Err(value_error("weights length must match row count"));
-    }
-    validate_finite_slice(weights, "weights")?;
-    let cluster_count = validate_cluster_codes(cluster, rows.len(), "cluster")?;
-    let mut collapsed = vec![vec![0.0; width]; cluster_count];
-    for ((row, &weight), &cluster_idx) in rows.iter().zip(weights).zip(cluster) {
-        let target = &mut collapsed[cluster_idx];
-        for (col_idx, value) in row.iter().enumerate() {
-            target[col_idx] += weight * value;
-        }
-    }
-    Ok(collapsed)
-}
-
-fn row_crossprod(rows: &[Vec<f64>], width: usize, name: &str) -> PyResult<Vec<Vec<f64>>> {
-    validate_matrix_width(rows, width, name)?;
-    let mut result = vec![vec![0.0; width]; width];
-    for row in rows {
-        for (left_idx, &left) in row.iter().enumerate() {
-            for (right_idx, &right) in row.iter().enumerate() {
-                result[left_idx][right_idx] += left * right;
-            }
-        }
-    }
-    Ok(result)
-}
-
-fn sandwich_from_meat(variance: &[Vec<f64>], meat: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    let width = variance.len();
-    let mut left = vec![vec![0.0; width]; width];
-    for (row_idx, variance_row) in variance.iter().enumerate() {
-        for col_idx in 0..width {
-            left[row_idx][col_idx] = variance_row
-                .iter()
-                .enumerate()
-                .map(|(inner_idx, &value)| value * meat[inner_idx][col_idx])
-                .sum();
-        }
-    }
-
-    let mut result = vec![vec![0.0; width]; width];
-    for (row_idx, left_row) in left.iter().enumerate() {
-        for col_idx in 0..width {
-            result[row_idx][col_idx] = left_row
-                .iter()
-                .enumerate()
-                .map(|(inner_idx, &value)| value * variance[inner_idx][col_idx])
-                .sum();
-        }
-    }
-    result
-}
-
-fn quadratic_form(row: &[f64], variance: &[Vec<f64>]) -> f64 {
-    row.iter()
-        .enumerate()
-        .map(|(left_idx, &left)| {
-            row.iter()
-                .enumerate()
-                .map(|(right_idx, &right)| left * variance[left_idx][right_idx] * right)
-                .sum::<f64>()
-        })
-        .sum()
-}
-
-fn grouped_quadratic_form(row: &[f64], variance: &[Vec<f64>], columns: &[usize]) -> f64 {
-    columns
-        .iter()
-        .map(|&left_idx| {
-            columns
-                .iter()
-                .map(|&right_idx| row[left_idx] * variance[left_idx][right_idx] * row[right_idx])
-                .sum::<f64>()
-        })
-        .sum()
-}
-
-fn diagnostic_order(strata: &[i32], event_times: &[f64]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..event_times.len()).collect();
-    order.sort_by(|&lhs, &rhs| {
-        strata[lhs]
-            .cmp(&strata[rhs])
-            .then_with(|| event_times[lhs].total_cmp(&event_times[rhs]))
-            .then_with(|| lhs.cmp(&rhs))
-    });
-    order
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, strata=None))]
-pub fn cox_event_indices(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    strata: Option<Vec<i32>>,
-) -> PyResult<Vec<usize>> {
-    let n = time.len();
-    if status.len() != n {
-        return Err(value_error("status length must match time length"));
-    }
-    validate_finite_slice(&time, "time")?;
-    let strata = strata.as_deref();
-    if strata.is_some_and(|values| values.len() != n) {
-        return Err(value_error("strata length must match time length"));
-    }
-    for (idx, &value) in status.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(value_error(format!(
-                "status must contain only 0/1 values; got {value} at index {idx}"
-            )));
-        }
-    }
-
-    let mut order: Vec<usize> = (0..n).collect();
-    if let Some(values) = strata {
-        order.sort_by(|&left, &right| {
-            values[left]
-                .cmp(&values[right])
-                .then_with(|| time[left].total_cmp(&time[right]))
-                .then_with(|| left.cmp(&right))
-        });
-    } else {
-        order.sort_by(|&left, &right| {
-            time[left]
-                .total_cmp(&time[right])
-                .then_with(|| left.cmp(&right))
-        });
-    }
-    Ok(order.into_iter().filter(|&idx| status[idx] == 1).collect())
-}
-
-#[pyfunction]
-pub fn scale_schoenfeld_residuals(
-    raw: Vec<Vec<f64>>,
-    beta: Vec<f64>,
-    information_matrix: Vec<Vec<f64>>,
-) -> PyResult<Vec<Vec<f64>>> {
-    let nvar = beta.len();
-    if nvar == 0 || raw.is_empty() {
-        return Ok(raw);
-    }
-    validate_finite_slice(&beta, "beta")?;
-    validate_matrix_width(&raw, nvar, "raw")?;
-    validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
-    let event_count = raw.len() as f64;
-    Ok(raw
-        .iter()
-        .map(|row| {
-            (0..nvar)
-                .map(|col_idx| {
-                    beta[col_idx]
-                        + event_count
-                            * (0..nvar)
-                                .map(|inner_idx| {
-                                    row[inner_idx] * information_matrix[inner_idx][col_idx]
-                                })
-                                .sum::<f64>()
-                })
-                .collect()
-        })
-        .collect())
-}
-
-#[pyfunction]
-#[pyo3(signature = (score, information_matrix, scaled=false))]
-pub fn cox_dfbeta_from_score_residuals(
-    score: Vec<Vec<f64>>,
-    information_matrix: Vec<Vec<f64>>,
-    scaled: bool,
-) -> PyResult<Vec<Vec<f64>>> {
-    let nvar = information_matrix.len();
-    if nvar == 0 {
-        return Ok(score);
-    }
-    validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
-    validate_matrix_width(&score, nvar, "score")?;
-    let scales: Vec<f64> = if scaled {
-        (0..nvar)
-            .map(|idx| {
-                information_matrix[idx][idx]
-                    .abs()
-                    .sqrt()
-                    .max(crate::constants::DIVISION_FLOOR)
-            })
-            .collect()
-    } else {
-        vec![1.0; nvar]
-    };
-
-    Ok(score
-        .iter()
-        .map(|row| {
-            (0..nvar)
-                .map(|col_idx| {
-                    (0..nvar)
-                        .map(|inner_idx| information_matrix[col_idx][inner_idx] * row[inner_idx])
-                        .sum::<f64>()
-                        / scales[col_idx]
-                })
-                .collect()
-        })
-        .collect())
-}
-
-#[pyfunction]
-pub fn cox_zph_term_matrix(
-    scaled: Vec<Vec<f64>>,
-    groups: Vec<Vec<usize>>,
-    beta: Vec<f64>,
-) -> PyResult<Vec<Vec<f64>>> {
-    let nvar = beta.len();
-    validate_finite_slice(&beta, "beta")?;
-    validate_matrix_width(&scaled, nvar, "scaled")?;
-    validate_column_groups(&groups, nvar)?;
-    Ok(scaled
-        .iter()
-        .map(|row| {
-            groups
-                .iter()
-                .map(|columns| {
-                    if columns.len() == 1 {
-                        row[columns[0]]
-                    } else {
-                        columns
-                            .iter()
-                            .map(|&col_idx| row[col_idx] * beta[col_idx])
-                            .sum()
-                    }
-                })
-                .collect()
-        })
-        .collect())
-}
-
-#[pyfunction]
-pub fn cox_zph_tests(
-    scaled: Vec<Vec<f64>>,
-    transformed_time: Vec<f64>,
-    groups: Vec<Vec<usize>>,
-    beta: Vec<f64>,
-    single_df: bool,
-) -> PyResult<ProportionalityTest> {
-    let nvar = beta.len();
-    if transformed_time.len() != scaled.len() {
-        return Err(value_error(
-            "transformed_time must have the same length as scaled",
-        ));
-    }
-    if transformed_time.len() < 2 {
-        return Err(value_error(
-            "at least two transformed_time values are required",
-        ));
-    }
-    validate_finite_slice(&transformed_time, "transformed_time")?;
-    validate_finite_slice(&beta, "beta")?;
-    validate_matrix_width(&scaled, nvar, "scaled")?;
-    validate_column_groups(&groups, nvar)?;
-
-    let full_chi2 = proportional_hazards_chi2(&scaled, &transformed_time);
-    let (chi2_values, df_values) = if single_df {
-        let collapsed = cox_zph_term_matrix(scaled, groups.clone(), beta)?;
-        (
-            proportional_hazards_chi2(&collapsed, &transformed_time),
-            vec![1; groups.len()],
-        )
-    } else {
-        (
-            groups
-                .iter()
-                .map(|columns| columns.iter().map(|&idx| full_chi2[idx]).sum())
-                .collect(),
-            groups.iter().map(Vec::len).collect(),
-        )
-    };
-    let p_values = chi2_values
-        .iter()
-        .zip(&df_values)
-        .map(|(&chi2, &df)| chi2_sf(chi2, df))
-        .collect();
-    let global_chi2 = full_chi2.iter().sum();
-
-    Ok(ProportionalityTest {
-        variable_names: (0..groups.len()).map(|idx| format!("var{idx}")).collect(),
-        chi2_values,
-        p_values,
-        global_chi2,
-        global_df: nvar,
-        global_p_value: chi2_sf(global_chi2, nvar),
-    })
-}
-
-#[pyfunction]
-pub fn cox_zph_group_variance(
-    information_matrix: Vec<Vec<f64>>,
-    groups: Vec<Vec<usize>>,
-    beta: Vec<f64>,
-) -> PyResult<Vec<Vec<f64>>> {
-    let nvar = beta.len();
-    validate_finite_slice(&beta, "beta")?;
-    validate_square_matrix(&information_matrix, nvar, "information_matrix")?;
-    validate_column_groups(&groups, nvar)?;
-    let mut result = vec![vec![0.0; groups.len()]; groups.len()];
-    for (left_idx, left) in groups.iter().enumerate() {
-        for (right_idx, right) in groups.iter().enumerate() {
-            let mut value = 0.0;
-            for &row in left {
-                let left_loading = if left.len() > 1 { beta[row] } else { 1.0 };
-                for &col in right {
-                    let right_loading = if right.len() > 1 { beta[col] } else { 1.0 };
-                    value += left_loading * information_matrix[row][col] * right_loading;
-                }
-            }
-            result[left_idx][right_idx] = value;
-        }
-    }
-    Ok(result)
-}
-
-#[pyfunction]
-pub fn clustered_sandwich_variance(
-    rows: Vec<Vec<f64>>,
-    weights: Vec<f64>,
-    cluster: Vec<usize>,
-    variance: Vec<Vec<f64>>,
-) -> PyResult<Vec<Vec<f64>>> {
-    let width = variance.len();
-    validate_square_matrix(&variance, width, "variance")?;
-    let collapsed = collapse_weighted_rows_by_cluster(&rows, &weights, &cluster, width, "rows")?;
-    let meat = row_crossprod(&collapsed, width, "clustered rows")?;
-    Ok(sandwich_from_meat(&variance, &meat))
-}
-
-#[pyfunction]
-#[pyo3(signature = (rows, weights, cluster, width=None))]
-pub fn clustered_crossprod(
-    rows: Vec<Vec<f64>>,
-    weights: Vec<f64>,
-    cluster: Vec<usize>,
-    width: Option<usize>,
-) -> PyResult<Vec<Vec<f64>>> {
-    let width = width.unwrap_or_else(|| rows.first().map_or(0, Vec::len));
-    let collapsed = collapse_weighted_rows_by_cluster(&rows, &weights, &cluster, width, "rows")?;
-    row_crossprod(&collapsed, width, "clustered rows")
-}
-
-#[pyfunction]
-pub fn prediction_se_from_variance(
-    rows: Vec<Vec<f64>>,
-    variance: Vec<Vec<f64>>,
-) -> PyResult<Vec<f64>> {
-    let width = variance.len();
-    validate_square_matrix(&variance, width, "variance")?;
-    validate_matrix_width(&rows, width, "rows")?;
-    Ok(rows
-        .iter()
-        .map(|row| quadratic_form(row, &variance).max(0.0).sqrt())
-        .collect())
-}
-
-#[pyfunction]
-pub fn term_prediction_se_from_variance(
-    rows: Vec<Vec<f64>>,
-    variance: Vec<Vec<f64>>,
-    groups: Vec<Vec<usize>>,
-) -> PyResult<Vec<Vec<f64>>> {
-    let width = variance.len();
-    validate_square_matrix(&variance, width, "variance")?;
-    validate_matrix_width(&rows, width, "rows")?;
-    validate_column_groups(&groups, width)?;
-    Ok(rows
-        .iter()
-        .map(|row| {
-            groups
-                .iter()
-                .map(|columns| {
-                    grouped_quadratic_form(row, &variance, columns)
-                        .max(0.0)
-                        .sqrt()
-                })
-                .collect()
-        })
-        .collect())
-}
-
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-pub fn cox_interval_cumulative_hazard_se(
-    centered_rows: Vec<Vec<f64>>,
-    start_hazard: Vec<f64>,
-    start_varhaz: Vec<f64>,
-    start_xbar: Vec<Vec<f64>>,
-    stop_hazard: Vec<f64>,
-    stop_varhaz: Vec<f64>,
-    stop_xbar: Vec<Vec<f64>>,
-    risk: Vec<f64>,
-    variance: Vec<Vec<f64>>,
-) -> PyResult<Vec<f64>> {
-    let width = variance.len();
-    let n = centered_rows.len();
-    validate_square_matrix(&variance, width, "variance")?;
-    validate_matrix_width(&centered_rows, width, "centered_rows")?;
-    validate_matrix_width(&start_xbar, width, "start_xbar")?;
-    validate_matrix_width(&stop_xbar, width, "stop_xbar")?;
-
-    let lengths = [
-        ("start_hazard", start_hazard.len()),
-        ("start_varhaz", start_varhaz.len()),
-        ("start_xbar", start_xbar.len()),
-        ("stop_hazard", stop_hazard.len()),
-        ("stop_varhaz", stop_varhaz.len()),
-        ("stop_xbar", stop_xbar.len()),
-        ("risk", risk.len()),
-    ];
-    for (name, len) in lengths {
-        if len != n {
-            return Err(value_error(format!(
-                "{name} length must match centered_rows length"
-            )));
-        }
-    }
-    validate_finite_slice(&start_hazard, "start_hazard")?;
-    validate_finite_slice(&start_varhaz, "start_varhaz")?;
-    validate_finite_slice(&stop_hazard, "stop_hazard")?;
-    validate_finite_slice(&stop_varhaz, "stop_varhaz")?;
-    validate_finite_slice(&risk, "risk")?;
-
-    Ok((0..n)
-        .map(|row_idx| {
-            let hazard_delta = stop_hazard[row_idx] - start_hazard[row_idx];
-            let interval_delta: Vec<f64> = (0..width)
-                .map(|col_idx| {
-                    hazard_delta * centered_rows[row_idx][col_idx]
-                        - (stop_xbar[row_idx][col_idx] - start_xbar[row_idx][col_idx])
-                })
-                .collect();
-            let variance_value = stop_varhaz[row_idx] - start_varhaz[row_idx]
-                + quadratic_form(&interval_delta, &variance);
-            variance_value.max(0.0).sqrt() * risk[row_idx]
-        })
-        .collect())
+    lp.iter().map(|value| (value + shift).exp()).collect()
 }
 
 impl CoxPHFit {
-    fn diagnostic_linear_predictor_center(&self) -> f64 {
-        self.coefficients
-            .first()
-            .map(|coefficients| {
-                coefficients
-                    .iter()
-                    .zip(&self.means)
-                    .map(|(&coefficient, &mean)| coefficient * mean)
-                    .sum()
-            })
-            .unwrap_or(0.0)
+    /// Stratum labels for the kernels: the fit's codes, or one stratum.
+    fn kernel_strata(&self) -> std::borrow::Cow<'_, [i32]> {
+        match &self.strata {
+            Some(strata) => std::borrow::Cow::Borrowed(strata),
+            None => std::borrow::Cow::Owned(vec![0; self.n]),
+        }
     }
+}
 
-    fn right_censored_expected_events(&self) -> Vec<f64> {
-        let n = self.event_times.len();
-        let row_strata = self.row_strata_cow();
-        let order = diagnostic_order(row_strata.as_ref(), &self.event_times);
-        let center = self.diagnostic_linear_predictor_center();
-        let score = stabilized_exp(
-            order
-                .iter()
-                .map(|&idx| self.linear_predictors[idx] - center),
-        );
-        let time: Vec<f64> = order.iter().map(|&idx| self.event_times[idx]).collect();
-        let status: Vec<i32> = order.iter().map(|&idx| self.status[idx]).collect();
-        let weights: Vec<f64> = order.iter().map(|&idx| self.weights[idx]).collect();
-        let mut stratum_ends = vec![0; n];
-        for sorted_idx in 0..n {
-            if sorted_idx + 1 == n
-                || row_strata[order[sorted_idx]] != row_strata[order[sorted_idx + 1]]
-            {
-                stratum_ends[sorted_idx] = 1;
+/// Martingale residuals at the linear predictors `lp` (`coxmart.c`,
+/// `agmart3.c`; the Breslow form for the exact method, as `coxmart2.c`).
+pub(crate) fn martingale_residuals(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
+    let risk = risk_scores(lp);
+    let strata = fit.kernel_strata();
+    match &fit.entry {
+        Some(entry) => agmart_rows(
+            entry,
+            &fit.time,
+            &fit.status,
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
+        None => coxmart_rows(
+            &fit.time,
+            &fit.status,
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
+    }
+}
+
+/// Score residuals (`n x nvar`) at the linear predictors `lp`
+/// (`coxscore2.c`, `agscore3.c`).
+pub(crate) fn score_residuals(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<Array2<f64>> {
+    fit.method.reject_exact("score")?;
+    let risk = risk_scores(lp);
+    let strata = fit.kernel_strata();
+    Ok(match &fit.entry {
+        Some(entry) => agscore3_rows(
+            entry,
+            &fit.time,
+            &fit.status,
+            fit.x.view(),
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
+        None => coxscore2_rows(
+            &fit.time,
+            &fit.status,
+            fit.x.view(),
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
+    })
+}
+
+/// Schoenfeld residuals of the deaths (`coxscho.c`), in (stratum, time)
+/// order; `weighted` multiplies each row by its case weight.
+pub(crate) fn schoenfeld_residuals(
+    fit: &CoxPHFit,
+    weighted: bool,
+) -> SurvivalResult<SchoenfeldResiduals> {
+    fit.method.reject_exact("schoenfeld")?;
+    let risk = risk_scores(&fit.linear_predictors);
+    let strata = fit.kernel_strata();
+    let mut kernel = coxscho(
+        fit.entry.as_deref(),
+        &fit.time,
+        &fit.status,
+        fit.x.view(),
+        &risk,
+        &fit.weights,
+        &strata,
+        fit.method,
+    );
+    if weighted {
+        for (row, &index) in kernel.residuals.iter_mut().zip(&kernel.index) {
+            for value in row.iter_mut() {
+                *value *= fit.weights[index];
             }
         }
-
-        let mut sorted_residuals = vec![0.0; n];
-        compute_coxmart(
-            n,
-            i32::from(self.method == "efron"),
-            CoxMartSurvivalData {
-                time: &time,
-                status: &status,
-                strata: &stratum_ends,
-            },
-            CoxMartWeights {
-                score: &score,
-                wt: &weights,
-            },
-            &mut sorted_residuals,
-        );
-
-        let mut expected = vec![0.0; n];
-        for (sorted_idx, &original_idx) in order.iter().enumerate() {
-            expected[original_idx] =
-                self.status[original_idx] as f64 - sorted_residuals[sorted_idx];
-        }
-        expected
     }
+    Ok(SchoenfeldResiduals {
+        time: kernel.time,
+        strata: fit.strata.as_ref().map(|_| kernel.strata),
+        rows: kernel.index,
+        residuals: kernel.residuals,
+    })
+}
 
-    fn counting_process_expected_events(&self, entry_times: &[f64]) -> Vec<f64> {
-        let center = self.diagnostic_linear_predictor_center();
-        let score = stabilized_exp(self.linear_predictors.iter().map(|&value| value - center));
-        let row_strata = self.row_strata_cow();
-        let residuals = compute_agmart_by_stratum(
-            i32::from(self.method == "efron"),
-            AgmartData {
-                start: entry_times,
-                stop: &self.event_times,
-                event: &self.status,
-                score: &score,
-                wt: &self.weights,
-                strata: row_strata.as_ref(),
-            },
-        );
+/// Sorted unique cluster codes and each row's position among them.
+fn cluster_groups(collapse: &[i32]) -> (usize, Vec<usize>) {
+    let mut codes = collapse.to_vec();
+    codes.sort_unstable();
+    codes.dedup();
+    let positions = collapse
+        .iter()
+        .map(|code| codes.binary_search(code).expect("code is present"))
+        .collect();
+    (codes.len(), positions)
+}
 
-        self.status
-            .iter()
-            .zip(residuals)
-            .map(|(&status, residual)| status as f64 - residual)
-            .collect()
-    }
-
-    pub(crate) fn expected_events_internal(&self) -> PyResult<Vec<f64>> {
-        if matches!(self.method.as_str(), "breslow" | "efron") {
-            return Ok(match self.entry_times.as_deref() {
-                Some(entry_times) => self.counting_process_expected_events(entry_times),
-                None => self.right_censored_expected_events(),
-            });
-        }
-        let (times, hazards, hazard_strata) = self.basehaz_with_strata_internal(false)?;
-        let baseline = StratifiedBaselineLookup::from_components(&times, &hazards, &hazard_strata);
-        let entry_times = self.entry_times.as_deref();
-        let row_strata = self.row_strata_cow();
-
-        Ok(self
-            .event_times
-            .iter()
-            .enumerate()
-            .map(|(idx, &stop)| {
-                let start_hazard = entry_times
-                    .map(|starts| baseline.cumulative_hazard_at(row_strata[idx], starts[idx]))
-                    .unwrap_or(0.0);
-                let stop_hazard = baseline.cumulative_hazard_at(row_strata[idx], stop);
-                let interval_hazard = (stop_hazard - start_hazard).max(0.0);
-                let risk_multiplier = self.linear_predictors[idx]
-                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                    .exp();
-                interval_hazard * risk_multiplier
-            })
-            .collect())
-    }
-
-    pub(crate) fn tie_method(&self) -> CoxMethod {
-        match self.method.as_str() {
-            "exact" => CoxMethod::Exact,
-            "efron" => CoxMethod::Efron,
-            _ => CoxMethod::Breslow,
+/// `residuals.coxph`'s finishing steps for a matrix: multiply the rows by
+/// the case weights (`weighted`) and sum them by cluster (`collapse`,
+/// `rowsum` in ascending code order).
+pub(crate) fn collapse_rows(
+    rows: &Array2<f64>,
+    weights: Option<&[f64]>,
+    collapse: Option<&[i32]>,
+) -> Array2<f64> {
+    let mut weighted = rows.clone();
+    if let Some(weights) = weights {
+        for (i, mut row) in weighted.outer_iter_mut().enumerate() {
+            row.mapv_inplace(|value| value * weights[i]);
         }
     }
-
-    pub(crate) fn score_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        let n = self.event_times.len();
-        if nvar == 0 {
-            return Ok(vec![Vec::new(); n]);
+    let Some(collapse) = collapse else {
+        return weighted;
+    };
+    let (ngroups, positions) = cluster_groups(collapse);
+    let mut collapsed = Array2::zeros((ngroups, rows.ncols()));
+    for (i, row) in weighted.outer_iter().enumerate() {
+        for (j, &value) in row.iter().enumerate() {
+            collapsed[(positions[i], j)] += value;
         }
-        let tie_method = self.tie_method();
-        let method = match tie_method {
-            CoxMethod::Breslow => 0,
-            CoxMethod::Efron => 1,
-            CoxMethod::Exact => 2,
-        };
-        if self.covariates.len() != n
-            || self.status.len() != n
-            || self.linear_predictors.len() != n
-            || self.weights.len() != n
-            || self.strata.len() != n
+    }
+    collapsed
+}
+
+fn collapse_vector(values: &[f64], weights: Option<&[f64]>, collapse: Option<&[i32]>) -> Vec<f64> {
+    let column = Array2::from_shape_vec((values.len(), 1), values.to_vec())
+        .expect("a column vector always has a valid shape");
+    collapse_rows(&column, weights, collapse).column(0).to_vec()
+}
+
+impl CoxPHFit {
+    fn check_collapse(&self, collapse: Option<&[i32]>) -> SurvivalResult<()> {
+        if let Some(collapse) = collapse
+            && collapse.len() != self.n
         {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model diagnostic arrays have inconsistent lengths",
-            ));
+            return Err(SurvivalError::invalid_input("Wrong length for 'collapse'"));
         }
-        if self.covariates.iter().any(|row| row.len() != nvar) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model covariates do not match coefficient width",
-            ));
-        }
-        if self.entry_times.is_some() {
-            return self.score_residuals_counting_process(nvar, method);
-        }
-
-        let order = diagnostic_order(&self.strata, &self.event_times);
-
-        let mut y = Vec::with_capacity(2 * n);
-        y.extend(order.iter().map(|&idx| self.event_times[idx]));
-        y.extend(order.iter().map(|&idx| self.status[idx] as f64));
-        let strata: Vec<i32> = order.iter().map(|&idx| self.strata[idx]).collect();
-        let weights: Vec<f64> = order.iter().map(|&idx| self.weights[idx]).collect();
-        if matches!(tie_method, CoxMethod::Exact) {
-            let log_risk: Vec<f64> = order
-                .iter()
-                .map(|&idx| self.linear_predictors[idx] + self.weights[idx].ln())
-                .collect();
-            return Ok(self.score_residuals_exact_right_censored(nvar, &order, &log_risk));
-        }
-        let score: Vec<f64> = order
-            .iter()
-            .map(|&idx| {
-                self.linear_predictors[idx]
-                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                    .exp()
-            })
-            .collect();
-        let mut covar = Vec::with_capacity(n * nvar);
-        for &idx in &order {
-            covar.extend(self.covariates[idx].iter().copied());
-        }
-        let flat = compute_cox_score_residuals(
-            CoxScoreData {
-                y: &y,
-                strata: &strata,
-                covar: &covar,
-                score: &score,
-                weights: &weights,
-            },
-            CoxScoreParams { method, n, nvar },
-        );
-        let mut residuals = vec![vec![0.0; nvar]; n];
-        for (sorted_idx, &original_idx) in order.iter().enumerate() {
-            for col_idx in 0..nvar {
-                residuals[original_idx][col_idx] = flat[sorted_idx * nvar + col_idx];
-            }
-        }
-        Ok(residuals)
+        Ok(())
     }
 
-    fn score_residuals_exact_right_censored(
+    /// Score residuals at `lp` times the model variance, weighted and
+    /// collapsed as requested (`residuals(type = "dfbeta")`).
+    pub(crate) fn dfbeta_matrix(
         &self,
-        nvar: usize,
-        order: &[usize],
-        log_risk: &[f64],
-    ) -> Vec<Vec<f64>> {
-        let n = self.event_times.len();
-        let mut residuals = vec![vec![0.0; nvar]; n];
-        let mut stratum_start = 0usize;
-        while stratum_start < order.len() {
-            let stratum = self.strata[order[stratum_start]];
-            let mut stratum_end = stratum_start;
-            while stratum_end + 1 < order.len() && self.strata[order[stratum_end + 1]] == stratum {
-                stratum_end += 1;
-            }
-            let mut risk_indices: Vec<usize> = Vec::new();
-            let mut deaths: Vec<usize> = Vec::new();
-            let mut time_pos = stratum_end;
-            loop {
-                let event_time = self.event_times[order[time_pos]];
-                let mut time_start = time_pos;
-                while time_start > stratum_start
-                    && same_time(self.event_times[order[time_start - 1]], event_time)
-                {
-                    time_start -= 1;
-                }
-                for sorted_idx in time_start..=time_pos {
-                    risk_indices.push(sorted_idx);
-                }
-                deaths.clear();
-                deaths.extend((time_start..=time_pos).filter(|&idx| self.status[order[idx]] == 1));
-                if !deaths.is_empty() {
-                    for &sorted_idx in &deaths {
-                        let original_idx = order[sorted_idx];
-                        let weight = self.weights[original_idx];
-                        for (col_idx, residual) in
-                            residuals[original_idx].iter_mut().enumerate().take(nvar)
-                        {
-                            *residual += weight * self.covariates[original_idx][col_idx];
-                        }
-                    }
-                    if let Some(inclusion_weights) =
-                        exact_inclusion_probabilities(&risk_indices, deaths.len(), log_risk)
-                    {
-                        for (sorted_idx, inclusion_weight) in inclusion_weights {
-                            let original_idx = order[sorted_idx];
-                            for (col_idx, residual) in
-                                residuals[original_idx].iter_mut().enumerate().take(nvar)
-                            {
-                                *residual -=
-                                    inclusion_weight * self.covariates[original_idx][col_idx];
-                            }
-                        }
-                    }
-                }
-                if time_start == stratum_start {
-                    break;
-                }
-                time_pos = time_start - 1;
-            }
-            stratum_start = stratum_end + 1;
-        }
-        residuals
+        lp: &[f64],
+        weighted: bool,
+        collapse: Option<&[i32]>,
+    ) -> SurvivalResult<Array2<f64>> {
+        let vv = self.naive_var.as_ref().unwrap_or(&self.var);
+        let dfbeta = score_residuals(self, lp)?.dot(vv);
+        Ok(collapse_rows(
+            &dfbeta,
+            weighted.then_some(self.weights.as_slice()),
+            collapse,
+        ))
     }
 
-    fn score_residuals_counting_process(
+    /// `residuals(fit, type, weighted, collapse)`.  `assign` (the columns
+    /// of each term) only matters for `partial`; `weighted` defaults per
+    /// type as in R.
+    pub fn residuals(
         &self,
-        nvar: usize,
-        method: i32,
-    ) -> PyResult<Vec<Vec<f64>>> {
-        let n = self.event_times.len();
-        let Some(entry_times) = self.entry_times.as_ref() else {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "counting-process score residuals require entry times",
-            ));
-        };
-        if entry_times.len() != n {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model entry times have inconsistent length",
-            ));
+        kind: ResidualType,
+        weighted: Option<bool>,
+        collapse: Option<&[i32]>,
+        assign: Option<&[Vec<usize>]>,
+    ) -> SurvivalResult<Residuals> {
+        self.check_collapse(collapse)?;
+        let weighted = weighted.unwrap_or(kind.default_weighted());
+        let weights = weighted.then_some(self.weights.as_slice());
+        match kind {
+            ResidualType::Martingale => Ok(Residuals::Vector(collapse_vector(
+                &self.residuals,
+                weights,
+                collapse,
+            ))),
+            ResidualType::Deviance => {
+                let rr = collapse_vector(&self.residuals, weights, collapse);
+                let status: Vec<f64> = self.status.iter().map(|&s| f64::from(s)).collect();
+                let status = collapse_vector(&status, None, collapse);
+                Ok(Residuals::Vector(
+                    rr.iter()
+                        .zip(&status)
+                        .map(|(&r, &s)| {
+                            let inner = r + if s == 0.0 { 0.0 } else { s * (s - r).ln() };
+                            r.signum() * (-2.0 * inner).sqrt()
+                        })
+                        .collect(),
+                ))
+            }
+            ResidualType::Score => Ok(Residuals::Matrix(collapse_rows(
+                &score_residuals(self, &self.linear_predictors)?,
+                weights,
+                collapse,
+            ))),
+            ResidualType::Dfbeta => Ok(Residuals::Matrix(self.dfbeta_matrix(
+                &self.linear_predictors,
+                weighted,
+                collapse,
+            )?)),
+            ResidualType::Dfbetas => {
+                let vv = self.naive_var.as_ref().unwrap_or(&self.var);
+                let mut dfbetas =
+                    self.dfbeta_matrix(&self.linear_predictors, weighted, collapse)?;
+                for j in 0..self.nvar() {
+                    let scale = 1.0 / vv[(j, j)].sqrt();
+                    dfbetas.column_mut(j).mapv_inplace(|value| value * scale);
+                }
+                Ok(Residuals::Matrix(dfbetas))
+            }
+            ResidualType::Schoenfeld => {
+                let schoenfeld = schoenfeld_residuals(self, weighted)?;
+                Ok(Residuals::Matrix(rows_matrix(
+                    &schoenfeld.residuals,
+                    self.nvar(),
+                )))
+            }
+            ResidualType::ScaledSchoenfeld => {
+                let scaled = self.scaled_schoenfeld_residuals(weighted)?;
+                Ok(Residuals::Matrix(rows_matrix(
+                    &scaled.residuals,
+                    self.nvar(),
+                )))
+            }
+            ResidualType::Partial => {
+                let default = default_assign(self.nvar());
+                let assign = assign.unwrap_or(&default);
+                validate_assign(assign, self.nvar())?;
+                let terms = self.predict_terms(None, false, PredictReference::Sample, assign)?;
+                let mut partial = Array2::zeros((self.n, assign.len()));
+                for i in 0..self.n {
+                    let scale = if weighted { self.weights[i] } else { 1.0 };
+                    for t in 0..assign.len() {
+                        partial[(i, t)] = self.residuals[i] * scale + terms.fit[i][t];
+                    }
+                }
+                Ok(Residuals::Matrix(collapse_rows(&partial, None, collapse)))
+            }
         }
-
-        let order = diagnostic_order(&self.strata, &self.event_times);
-
-        if method == 2 {
-            let log_risk: Vec<f64> = (0..n)
-                .map(|idx| self.linear_predictors[idx] + self.weights[idx].ln())
-                .collect();
-            return Ok(self.score_residuals_counting_process_by_scan(
-                nvar,
-                method,
-                &log_risk,
-                &order,
-                entry_times,
-            ));
-        }
-
-        let risk: Vec<f64> = (0..n)
-            .map(|idx| {
-                self.linear_predictors[idx]
-                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                    .exp()
-                    * self.weights[idx]
-            })
-            .collect();
-        Ok(self.score_residuals_counting_process_sweep(nvar, method, &risk, &order, entry_times))
     }
 
-    pub(crate) fn score_residuals_counting_process_by_scan(
+    /// `residuals(type = "scaledsch")`: `rr %*% vv * ndead + coef`.
+    pub fn scaled_schoenfeld_residuals(
         &self,
-        nvar: usize,
-        method: i32,
-        risk: &[f64],
-        order: &[usize],
-        entry_times: &[f64],
-    ) -> Vec<Vec<f64>> {
-        let n = self.event_times.len();
-        let mut residuals = vec![vec![0.0; nvar]; n];
-        let scores = (method != 2).then(|| {
-            self.linear_predictors
-                .iter()
-                .map(|&value| value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
-                .collect::<Vec<_>>()
-        });
-        let mut stratum_start = 0usize;
-        while stratum_start < order.len() {
-            let stratum = self.strata[order[stratum_start]];
-            let mut stratum_end = stratum_start;
-            while stratum_end + 1 < order.len() && self.strata[order[stratum_end + 1]] == stratum {
-                stratum_end += 1;
-            }
-            let stratum_indices = &order[stratum_start..=stratum_end];
-            let mut deaths: Vec<usize> = Vec::new();
-            let mut risk_indices: Vec<usize> = Vec::new();
-            let mut is_death = vec![false; n];
-            let mut time_start = stratum_start;
-            while time_start <= stratum_end {
-                let event_time = self.event_times[order[time_start]];
-                let mut time_end = time_start;
-                while time_end < stratum_end
-                    && same_time(self.event_times[order[time_end + 1]], event_time)
-                {
-                    time_end += 1;
-                }
-
-                deaths.clear();
-                deaths.extend(
-                    (time_start..=time_end)
-                        .map(|idx| order[idx])
-                        .filter(|&idx| self.status[idx] == 1),
-                );
-                if !deaths.is_empty() {
-                    for &idx in &deaths {
-                        is_death[idx] = true;
-                    }
-                    risk_indices.clear();
-                    risk_indices.extend(stratum_indices.iter().copied().filter(|&idx| {
-                        entry_times[idx] < event_time && self.event_times[idx] >= event_time
-                    }));
-                    if method == 2 {
-                        for &idx in &deaths {
-                            for (col_idx, residual) in
-                                residuals[idx].iter_mut().enumerate().take(nvar)
-                            {
-                                *residual += self.weights[idx] * self.covariates[idx][col_idx];
-                            }
-                        }
-                        if let Some(inclusion_weights) =
-                            exact_inclusion_probabilities(&risk_indices, deaths.len(), risk)
-                        {
-                            for (idx, inclusion_weight) in inclusion_weights {
-                                for (col_idx, residual) in
-                                    residuals[idx].iter_mut().enumerate().take(nvar)
-                                {
-                                    *residual -= inclusion_weight * self.covariates[idx][col_idx];
-                                }
-                            }
-                        }
-                    } else {
-                        let denom: f64 = risk_indices.iter().map(|&idx| risk[idx]).sum();
-                        if denom > 0.0 {
-                            let scores = scores
-                                .as_ref()
-                                .expect("non-exact score residuals have risk scores");
-                            if method == 0 || deaths.len() == 1 {
-                                let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
-                                let hazard = deadwt / denom;
-                                let mut mean = vec![0.0; nvar];
-                                for &idx in &risk_indices {
-                                    for (col_idx, value) in mean.iter_mut().enumerate() {
-                                        *value += risk[idx] * self.covariates[idx][col_idx];
-                                    }
-                                }
-                                for value in &mut mean {
-                                    *value /= denom;
-                                }
-                                for &idx in &risk_indices {
-                                    let score = scores[idx];
-                                    for (col_idx, residual) in residuals[idx].iter_mut().enumerate()
-                                    {
-                                        *residual += score
-                                            * hazard
-                                            * (mean[col_idx] - self.covariates[idx][col_idx]);
-                                    }
-                                }
-                                for &idx in &deaths {
-                                    for (col_idx, residual) in residuals[idx].iter_mut().enumerate()
-                                    {
-                                        *residual += self.covariates[idx][col_idx] - mean[col_idx];
-                                    }
-                                }
-                            } else {
-                                let death_count = deaths.len();
-                                let deaths_f = death_count as f64;
-                                let deadwt: f64 = deaths.iter().map(|&idx| self.weights[idx]).sum();
-                                let weight_average = deadwt / deaths_f;
-                                let death_risk: f64 = deaths.iter().map(|&idx| risk[idx]).sum();
-                                let mut risk_sum = vec![0.0; nvar];
-                                let mut death_risk_sum = vec![0.0; nvar];
-                                for &idx in &risk_indices {
-                                    for (col_idx, value) in risk_sum.iter_mut().enumerate() {
-                                        *value += risk[idx] * self.covariates[idx][col_idx];
-                                    }
-                                }
-                                for &idx in &deaths {
-                                    for (col_idx, value) in death_risk_sum.iter_mut().enumerate() {
-                                        *value += risk[idx] * self.covariates[idx][col_idx];
-                                    }
-                                }
-                                for step in 0..death_count {
-                                    let fraction = step as f64 / deaths_f;
-                                    let step_denom = denom - fraction * death_risk;
-                                    if step_denom <= 0.0 {
-                                        continue;
-                                    }
-                                    let hazard = weight_average / step_denom;
-                                    let mean: Vec<f64> = risk_sum
-                                        .iter()
-                                        .zip(&death_risk_sum)
-                                        .map(|(&total, &death_total)| {
-                                            (total - fraction * death_total) / step_denom
-                                        })
-                                        .collect();
-                                    for &idx in &risk_indices {
-                                        let score = scores[idx];
-                                        let multiplier =
-                                            if is_death[idx] { 1.0 - fraction } else { 1.0 };
-                                        for (col_idx, residual) in
-                                            residuals[idx].iter_mut().enumerate()
-                                        {
-                                            *residual += score
-                                                * hazard
-                                                * multiplier
-                                                * (mean[col_idx] - self.covariates[idx][col_idx]);
-                                        }
-                                    }
-                                    for &idx in &deaths {
-                                        for (col_idx, residual) in
-                                            residuals[idx].iter_mut().enumerate()
-                                        {
-                                            *residual += (self.covariates[idx][col_idx]
-                                                - mean[col_idx])
-                                                / deaths_f;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    for &idx in &deaths {
-                        is_death[idx] = false;
-                    }
-                }
-
-                if time_end == stratum_end {
-                    break;
-                }
-                time_start = time_end + 1;
-            }
-            stratum_start = stratum_end + 1;
-        }
-
-        residuals
-    }
-
-    pub(crate) fn score_residuals_counting_process_sweep(
-        &self,
-        nvar: usize,
-        method: i32,
-        risk: &[f64],
-        order: &[usize],
-        entry_times: &[f64],
-    ) -> Vec<Vec<f64>> {
-        let n = self.event_times.len();
-        let mut residuals = vec![vec![0.0; nvar]; n];
-        let scores: Vec<f64> = self
-            .linear_predictors
-            .iter()
-            .map(|&value| value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp())
-            .collect();
-        let mut stratum_start = 0usize;
-        while stratum_start < order.len() {
-            let stratum = self.strata[order[stratum_start]];
-            let mut stratum_end = stratum_start;
-            while stratum_end + 1 < order.len() && self.strata[order[stratum_end + 1]] == stratum {
-                stratum_end += 1;
-            }
-            let stratum_order = &order[stratum_start..=stratum_end];
-            let rows: Vec<CoxSweepRow> = stratum_order
-                .iter()
-                .map(|&idx| CoxSweepRow {
-                    original_idx: idx,
-                    stop: self.event_times[idx],
-                    entry: entry_times[idx],
-                    risk: risk[idx],
-                    weight: self.weights[idx],
-                    status: self.status[idx],
-                })
-                .collect();
-            let mut active = ActiveRiskSet::new(&rows, true);
-            let event_count = rows.iter().filter(|row| row.status == 1).count();
-            let mut event_times = Vec::with_capacity(event_count);
-            let mut cumulative_scalars = Vec::with_capacity(event_count);
-            let mut cumulative_xhazards = Vec::with_capacity(event_count);
-            let mut deaths: Vec<usize> = Vec::with_capacity(event_count);
-            let mut cumulative_scalar = 0.0;
-            let mut cumulative_xhazard = vec![0.0; nvar];
-            let mut active_risk_covariates = vec![0.0; nvar];
-            let mut time_start = 0usize;
-            while time_start < rows.len() {
-                let event_time = rows[time_start].stop;
-                let mut time_end = time_start;
-                while time_end + 1 < rows.len() && same_time(rows[time_end + 1].stop, event_time) {
-                    time_end += 1;
-                }
-
-                active.advance_to(event_time, |row_idx, added| {
-                    let direction = if added { 1.0 } else { -1.0 };
-                    let original_idx = rows[row_idx].original_idx;
-                    for (col_idx, value) in active_risk_covariates.iter_mut().enumerate() {
-                        *value +=
-                            direction * rows[row_idx].risk * self.covariates[original_idx][col_idx];
-                    }
-                });
-
-                deaths.clear();
-                deaths.extend((time_start..=time_end).filter(|&idx| rows[idx].status == 1));
-                if !deaths.is_empty() && active.risk_sum > 0.0 {
-                    let deadwt: f64 = deaths.iter().map(|&idx| rows[idx].weight).sum();
-                    if method == 1 && deaths.len() > 1 {
-                        let death_count = deaths.len();
-                        let deaths_f = death_count as f64;
-                        let weight_average = deadwt / deaths_f;
-                        let death_risk: f64 = deaths.iter().map(|&idx| rows[idx].risk).sum();
-                        let mut death_covariates = vec![0.0; nvar];
-                        for &row_idx in &deaths {
-                            let original_idx = rows[row_idx].original_idx;
-                            for (col_idx, value) in death_covariates.iter_mut().enumerate() {
-                                *value +=
-                                    rows[row_idx].risk * self.covariates[original_idx][col_idx];
-                            }
-                        }
-                        let mut mean = vec![0.0; nvar];
-                        for step in 0..death_count {
-                            let fraction = step as f64 / deaths_f;
-                            let step_denom = active.risk_sum - fraction * death_risk;
-                            if step_denom <= 0.0 {
-                                continue;
-                            }
-                            let hazard = weight_average / step_denom;
-                            for ((value, &active_total), &death_total) in mean
-                                .iter_mut()
-                                .zip(&active_risk_covariates)
-                                .zip(&death_covariates)
-                            {
-                                *value = (active_total - fraction * death_total) / step_denom;
-                            }
-                            cumulative_scalar += hazard;
-                            for (col_idx, value) in cumulative_xhazard.iter_mut().enumerate() {
-                                *value += mean[col_idx] * hazard;
-                            }
-                            for &row_idx in &deaths {
-                                let original_idx = rows[row_idx].original_idx;
-                                let score = scores[original_idx];
-                                for (col_idx, residual) in
-                                    residuals[original_idx].iter_mut().enumerate()
-                                {
-                                    let centered =
-                                        self.covariates[original_idx][col_idx] - mean[col_idx];
-                                    *residual +=
-                                        centered / deaths_f + score * hazard * fraction * centered;
-                                }
-                            }
-                        }
-                    } else {
-                        let hazard = deadwt / active.risk_sum;
-                        let mean: Vec<f64> = active_risk_covariates
-                            .iter()
-                            .map(|&value| value / active.risk_sum)
-                            .collect();
-                        cumulative_scalar += hazard;
-                        for (col_idx, value) in cumulative_xhazard.iter_mut().enumerate() {
-                            *value += mean[col_idx] * hazard;
-                        }
-                        for &row_idx in &deaths {
-                            let original_idx = rows[row_idx].original_idx;
-                            for (col_idx, residual) in
-                                residuals[original_idx].iter_mut().enumerate()
-                            {
-                                *residual += self.covariates[original_idx][col_idx] - mean[col_idx];
-                            }
-                        }
-                    }
-                    event_times.push(event_time);
-                    cumulative_scalars.push(cumulative_scalar);
-                    cumulative_xhazards.push(cumulative_xhazard.clone());
-                }
-
-                time_start = time_end + 1;
-            }
-
-            for row in &rows {
-                let step_index = |time: f64| match event_times
-                    .binary_search_by(|probe| probe.total_cmp(&time))
-                {
-                    Ok(idx) => Some(idx),
-                    Err(0) => None,
-                    Err(idx) => Some(idx - 1),
-                };
-                let start_index = step_index(row.entry);
-                let stop_index = step_index(row.stop);
-                let start_scalar = start_index.map_or(0.0, |idx| cumulative_scalars[idx]);
-                let stop_scalar = stop_index.map_or(0.0, |idx| cumulative_scalars[idx]);
-                let active_scalar = stop_scalar - start_scalar;
-                let score = scores[row.original_idx];
-                for (col_idx, residual) in residuals[row.original_idx].iter_mut().enumerate() {
-                    let start_xhazard =
-                        start_index.map_or(0.0, |idx| cumulative_xhazards[idx][col_idx]);
-                    let stop_xhazard =
-                        stop_index.map_or(0.0, |idx| cumulative_xhazards[idx][col_idx]);
-                    *residual += score
-                        * (stop_xhazard
-                            - start_xhazard
-                            - active_scalar * self.covariates[row.original_idx][col_idx]);
-                }
-            }
-
-            stratum_start = stratum_end + 1;
-        }
-
-        residuals
-    }
-
-    pub(crate) fn dfbeta_from_score_residuals(&self, scaled: bool) -> PyResult<Vec<Vec<f64>>> {
-        let score_residuals = self.score_residuals_internal()?;
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        if nvar == 0 {
-            return Ok(score_residuals);
-        }
-        if self.information_matrix.len() != nvar
-            || self.information_matrix.iter().any(|row| row.len() != nvar)
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model information matrix does not match coefficient width",
-            ));
-        }
-        let scale: Vec<f64> = if scaled {
-            (0..nvar)
-                .map(|idx| {
-                    self.information_matrix[idx][idx]
-                        .abs()
-                        .sqrt()
-                        .max(crate::constants::DIVISION_FLOOR)
-                })
-                .collect()
-        } else {
-            vec![1.0; nvar]
-        };
-        Ok(score_residuals
-            .iter()
-            .map(|row| {
-                (0..nvar)
-                    .map(|col_idx| {
-                        let value = (0..nvar)
-                            .map(|inner_idx| {
-                                self.information_matrix[col_idx][inner_idx] * row[inner_idx]
-                            })
-                            .sum::<f64>();
-                        value / scale[col_idx]
-                    })
-                    .collect()
-            })
-            .collect())
-    }
-
-    pub(crate) fn scaled_schoenfeld_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
-        let schoenfeld = self.schoenfeld_residuals_internal()?;
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        if nvar == 0 || schoenfeld.is_empty() {
-            return Ok(schoenfeld);
-        }
-        if self.information_matrix.len() != nvar
-            || self.information_matrix.iter().any(|row| row.len() != nvar)
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model information matrix does not match coefficient width",
-            ));
-        }
-        if schoenfeld.iter().any(|row| row.len() != nvar) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model Schoenfeld residuals do not match coefficient width",
-            ));
-        }
-
-        let event_count = schoenfeld.len() as f64;
-        Ok(schoenfeld
-            .iter()
-            .map(|row| {
-                (0..nvar)
-                    .map(|col_idx| {
-                        beta[col_idx]
-                            + event_count
-                                * (0..nvar)
-                                    .map(|inner_idx| {
-                                        row[inner_idx] * self.information_matrix[inner_idx][col_idx]
-                                    })
-                                    .sum::<f64>()
-                    })
-                    .collect()
-            })
-            .collect())
-    }
-
-    pub(crate) fn schoenfeld_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        let n = self.event_times.len();
-        if nvar == 0 {
-            return Ok(Vec::new());
-        }
-        if self.covariates.len() != n
-            || self.status.len() != n
-            || self.linear_predictors.len() != n
-            || self.weights.len() != n
-            || self.strata.len() != n
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model diagnostic arrays have inconsistent lengths",
-            ));
-        }
-        if self.covariates.iter().any(|row| row.len() != nvar) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model covariates do not match coefficient width",
-            ));
-        }
-        let entry_times = self.entry_times.as_ref();
-        if let Some(values) = entry_times
-            && values.len() != n
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model entry times have inconsistent length",
-            ));
-        }
-
-        let order = diagnostic_order(&self.strata, &self.event_times);
-
-        let method = self.tie_method();
-        if matches!(method, CoxMethod::Exact) {
-            Ok(self.schoenfeld_residuals_by_scan(nvar, &order, entry_times, method))
-        } else {
-            Ok(self.schoenfeld_residuals_sweep(nvar, &order, entry_times, method))
-        }
-    }
-
-    pub(crate) fn schoenfeld_residuals_by_scan(
-        &self,
-        nvar: usize,
-        order: &[usize],
-        entry_times: Option<&Vec<f64>>,
-        method: CoxMethod,
-    ) -> Vec<Vec<f64>> {
-        let n = order.len();
-        let sorted_time: Vec<f64> = order.iter().map(|&idx| self.event_times[idx]).collect();
-        let sorted_start: Vec<f64> = order
-            .iter()
-            .map(|&idx| entry_times.map(|values| values[idx]).unwrap_or(0.0))
-            .collect();
-        let sorted_status: Vec<i32> = order.iter().map(|&idx| self.status[idx]).collect();
-        let sorted_strata: Vec<i32> = order.iter().map(|&idx| self.strata[idx]).collect();
-        let sorted_risk: Vec<f64> = order
-            .iter()
-            .map(|&idx| {
-                self.linear_predictors[idx]
-                    .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                    .exp()
-                    * self.weights[idx]
-            })
-            .collect();
-        let sorted_log_risk: Vec<f64> = order
-            .iter()
-            .map(|&idx| self.linear_predictors[idx] + self.weights[idx].ln())
-            .collect();
-        let mut covar = Array2::<f64>::zeros((n, nvar));
-        for (row_idx, &source_idx) in order.iter().enumerate() {
-            for col_idx in 0..nvar {
-                covar[(row_idx, col_idx)] = self.covariates[source_idx][col_idx];
-            }
-        }
-
-        let event_count = sorted_status.iter().filter(|&&status| status == 1).count();
-        let mut residuals = Vec::with_capacity(event_count);
-        let mut stratum_start = 0usize;
-        while stratum_start < n {
-            let stratum = sorted_strata[stratum_start];
-            let mut stratum_end = stratum_start;
-            while stratum_end + 1 < n && sorted_strata[stratum_end + 1] == stratum {
-                stratum_end += 1;
-            }
-
-            let mut death_indices: Vec<usize> = Vec::new();
-            let mut risk_indices: Vec<usize> = Vec::new();
-            let mut mean = vec![0.0; nvar];
-            let mut risk_weighted_covariates = vec![0.0; nvar];
-            let mut death_weighted_covariates = vec![0.0; nvar];
-            let mut time_start = stratum_start;
-            while time_start <= stratum_end {
-                let event_time = sorted_time[time_start];
-                let mut time_end = time_start;
-                while time_end < stratum_end && same_time(sorted_time[time_end + 1], event_time) {
-                    time_end += 1;
-                }
-
-                death_indices.clear();
-                death_indices
-                    .extend((time_start..=time_end).filter(|&idx| sorted_status[idx] == 1));
-                if !death_indices.is_empty() {
-                    risk_indices.clear();
-                    risk_indices.extend((stratum_start..=stratum_end).filter(|&idx| {
-                        sorted_start[idx] < event_time && sorted_time[idx] >= event_time
-                    }));
-                    mean.fill(0.0);
-                    if matches!(method, CoxMethod::Exact) {
-                        let moments = exact_tied_moments(
-                            &risk_indices,
-                            death_indices.len(),
-                            &sorted_log_risk,
-                            &covar,
-                        );
-                        for (value, &expected_sum) in mean.iter_mut().zip(&moments.mean) {
-                            *value = expected_sum / death_indices.len() as f64;
-                        }
-                    } else {
-                        let mut denom = 0.0;
-                        let mut death_denom = 0.0;
-                        risk_weighted_covariates.fill(0.0);
-                        death_weighted_covariates.fill(0.0);
-                        for &idx in &risk_indices {
-                            let risk = sorted_risk[idx];
-                            denom += risk;
-                            for col_idx in 0..nvar {
-                                let value = covar[(idx, col_idx)];
-                                risk_weighted_covariates[col_idx] += risk * value;
-                                if same_time(sorted_time[idx], event_time)
-                                    && sorted_status[idx] == 1
-                                {
-                                    death_weighted_covariates[col_idx] += risk * value;
-                                }
-                            }
-                            if same_time(sorted_time[idx], event_time) && sorted_status[idx] == 1 {
-                                death_denom += risk;
-                            }
-                        }
-                        if matches!(method, CoxMethod::Efron) && death_indices.len() > 1 {
-                            let deaths = death_indices.len() as f64;
-                            for step in 0..death_indices.len() {
-                                let fraction = step as f64 / deaths;
-                                let step_denom = denom - fraction * death_denom;
-                                if step_denom > 0.0 {
-                                    for col_idx in 0..nvar {
-                                        mean[col_idx] += (risk_weighted_covariates[col_idx]
-                                            - fraction * death_weighted_covariates[col_idx])
-                                            / step_denom
-                                            / deaths;
-                                    }
-                                }
-                            }
-                        } else if denom > 0.0 {
-                            for col_idx in 0..nvar {
-                                mean[col_idx] = risk_weighted_covariates[col_idx] / denom;
-                            }
-                        }
-                    }
-
-                    for &idx in &death_indices {
-                        residuals.push(
-                            (0..nvar)
-                                .map(|col_idx| covar[(idx, col_idx)] - mean[col_idx])
-                                .collect(),
-                        );
-                    }
-                }
-
-                if time_end == stratum_end {
-                    break;
-                }
-                time_start = time_end + 1;
-            }
-
-            stratum_start = stratum_end + 1;
-        }
-
-        residuals
-    }
-
-    pub(crate) fn schoenfeld_residuals_sweep(
-        &self,
-        nvar: usize,
-        order: &[usize],
-        entry_times: Option<&Vec<f64>>,
-        method: CoxMethod,
-    ) -> Vec<Vec<f64>> {
-        let event_count = order.iter().filter(|&&idx| self.status[idx] == 1).count();
-        let mut residuals = Vec::with_capacity(event_count);
-        let use_entry_times = entry_times.is_some();
-        let mut stratum_start = 0usize;
-        while stratum_start < order.len() {
-            let stratum = self.strata[order[stratum_start]];
-            let mut stratum_end = stratum_start;
-            while stratum_end + 1 < order.len() && self.strata[order[stratum_end + 1]] == stratum {
-                stratum_end += 1;
-            }
-
-            let rows: Vec<CoxSweepRow> = order[stratum_start..=stratum_end]
-                .iter()
-                .map(|&idx| CoxSweepRow {
-                    original_idx: idx,
-                    stop: self.event_times[idx],
-                    entry: entry_times.map_or(f64::NEG_INFINITY, |values| values[idx]),
-                    risk: self.linear_predictors[idx]
-                        .clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX)
-                        .exp()
-                        * self.weights[idx],
-                    weight: self.weights[idx],
-                    status: self.status[idx],
-                })
-                .collect();
-
-            let mut active_cov = vec![0.0; nvar];
-            if !use_entry_times {
-                for row in &rows {
-                    for (col_idx, value) in self.covariates[row.original_idx]
-                        .iter()
-                        .copied()
+        weighted: bool,
+    ) -> SurvivalResult<SchoenfeldResiduals> {
+        let mut schoenfeld = schoenfeld_residuals(self, weighted)?;
+        let vv = self.naive_var.as_ref().unwrap_or(&self.var);
+        let coef = self.coefficients_or_zero();
+        let ndead = schoenfeld.residuals.len() as f64;
+        for row in schoenfeld.residuals.iter_mut() {
+            let scaled: Vec<f64> = (0..self.nvar())
+                .map(|j| {
+                    row.iter()
                         .enumerate()
-                        .take(nvar)
-                    {
-                        active_cov[col_idx] += row.risk * value;
-                    }
-                }
-            }
-            let mut active = ActiveRiskSet::new(&rows, use_entry_times);
-
-            let mut deaths: Vec<usize> = Vec::new();
-            let mut mean = vec![0.0; nvar];
-            let mut death_cov = vec![0.0; nvar];
-            let mut time_start = 0usize;
-            while time_start < rows.len() {
-                let event_time = rows[time_start].stop;
-                let mut time_end = time_start;
-                while time_end + 1 < rows.len() && same_time(rows[time_end + 1].stop, event_time) {
-                    time_end += 1;
-                }
-
-                active.advance_to(event_time, |row_idx, entered| {
-                    let sign = if entered { 1.0 } else { -1.0 };
-                    for (col_idx, value) in self.covariates[rows[row_idx].original_idx]
-                        .iter()
-                        .copied()
-                        .enumerate()
-                        .take(nvar)
-                    {
-                        active_cov[col_idx] += sign * rows[row_idx].risk * value;
-                    }
-                });
-
-                deaths.clear();
-                deaths.extend((time_start..=time_end).filter(|&idx| rows[idx].status == 1));
-                if !deaths.is_empty() && active.risk_sum > 0.0 {
-                    mean.fill(0.0);
-                    if matches!(method, CoxMethod::Efron) && deaths.len() > 1 {
-                        let mut death_risk = 0.0;
-                        death_cov.fill(0.0);
-                        for &row_idx in &deaths {
-                            death_risk += rows[row_idx].risk;
-                            for (col_idx, value) in self.covariates[rows[row_idx].original_idx]
-                                .iter()
-                                .copied()
-                                .enumerate()
-                                .take(nvar)
-                            {
-                                death_cov[col_idx] += rows[row_idx].risk * value;
-                            }
-                        }
-                        let death_count = deaths.len() as f64;
-                        for step in 0..deaths.len() {
-                            let fraction = step as f64 / death_count;
-                            let step_denom = active.risk_sum - fraction * death_risk;
-                            if step_denom > 0.0 {
-                                for col_idx in 0..nvar {
-                                    mean[col_idx] += (active_cov[col_idx]
-                                        - fraction * death_cov[col_idx])
-                                        / step_denom
-                                        / death_count;
-                                }
-                            }
-                        }
-                    } else {
-                        for col_idx in 0..nvar {
-                            mean[col_idx] = active_cov[col_idx] / active.risk_sum;
-                        }
-                    }
-
-                    for &row_idx in &deaths {
-                        residuals.push(
-                            self.covariates[rows[row_idx].original_idx]
-                                .iter()
-                                .zip(mean.iter())
-                                .map(|(&value, &mean)| value - mean)
-                                .collect(),
-                        );
-                    }
-                }
-
-                time_start = time_end + 1;
-            }
-
-            stratum_start = stratum_end + 1;
+                        .map(|(i, &value)| value * vv[(i, j)])
+                        .sum::<f64>()
+                        * ndead
+                        + coef[j]
+                })
+                .collect();
+            *row = scaled;
         }
-
-        residuals
+        Ok(schoenfeld)
     }
+}
 
-    pub(crate) fn partial_residuals_internal(&self) -> PyResult<Vec<Vec<f64>>> {
-        let beta = self.coefficients.first().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("model has no fitted coefficients")
-        })?;
-        let nvar = beta.len();
-        let expected = self.expected_events_internal()?;
-        let n = expected.len();
-        if nvar == 0 {
-            return Ok(vec![Vec::new(); n]);
-        }
-        if self.covariates.len() != n {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model covariates do not match residual length",
-            ));
-        }
-        if self.covariates.iter().any(|row| row.len() != nvar) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "fitted Cox model covariates do not match coefficient width",
-            ));
-        }
-
-        Ok(self
-            .covariates
-            .iter()
-            .zip(self.status.iter().zip(expected.iter()))
-            .map(|(row, (&status, &expected))| {
-                let residual = status as f64 - expected;
-                row.iter()
-                    .zip(beta.iter())
-                    .map(|(&value, &coefficient)| residual + value * coefficient)
-                    .collect()
-            })
-            .collect())
-    }
+fn rows_matrix(rows: &[Vec<f64>], ncols: usize) -> Array2<f64> {
+    Array2::from_shape_vec(
+        (rows.len(), ncols),
+        rows.iter().flatten().copied().collect(),
+    )
+    .expect("rows have the coefficient width")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validation::hypothesis_tests::proportional_hazards_test;
+    use crate::regression::cox_optimizer::TieMethod;
+    use crate::regression::coxph::{CoxphData, CoxphOptions};
 
-    #[test]
-    fn cox_diagnostic_helpers_match_python_formulas() {
-        let indices = cox_event_indices(
-            vec![2.0, 1.0, 2.0, 3.0],
-            vec![1, 0, 1, 1],
-            Some(vec![1, 0, 0, 1]),
-        )
-        .expect("event indices should compute");
-        assert_eq!(indices, vec![2, 0, 3]);
-        assert_eq!(
-            diagnostic_order(&[1, 0, 0, 1], &[2.0, 1.0, 2.0, 1.0]),
-            vec![1, 2, 3, 0]
-        );
-        let implicit_strata = cox_event_indices(vec![2.0, 1.0, 2.0, 3.0], vec![1, 0, 1, 1], None)
-            .expect("event indices should compute without strata");
-        let explicit_zero_strata = cox_event_indices(
-            vec![2.0, 1.0, 2.0, 3.0],
-            vec![1, 0, 1, 1],
-            Some(vec![0, 0, 0, 0]),
-        )
-        .expect("event indices should compute with explicit zero strata");
-        assert_eq!(implicit_strata, explicit_zero_strata);
-        assert!(cox_event_indices(vec![1.0, 2.0], vec![1, 0], Some(vec![0])).is_err());
-
-        let scaled = scale_schoenfeld_residuals(
-            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
-            vec![0.5, -0.5],
-            vec![vec![0.1, 0.2], vec![0.3, 0.4]],
-        )
-        .expect("scaled Schoenfeld residuals should compute");
-        assert!((scaled[0][0] - 1.9).abs() < 1e-12);
-        assert!((scaled[0][1] - 1.5).abs() < 1e-12);
-        assert!((scaled[1][0] - 3.5).abs() < 1e-12);
-        assert!((scaled[1][1] - 3.9).abs() < 1e-12);
-
-        let dfbeta = cox_dfbeta_from_score_residuals(
-            vec![vec![1.0, 2.0]],
-            vec![vec![0.1, 0.2], vec![0.3, 0.4]],
-            false,
-        )
-        .expect("dfbeta should compute");
-        assert!((dfbeta[0][0] - 0.5).abs() < 1e-12);
-        assert!((dfbeta[0][1] - 1.1).abs() < 1e-12);
-
-        let grouped = cox_zph_term_matrix(
-            vec![vec![1.0, 2.0, 3.0]],
-            vec![vec![0, 1], vec![2]],
-            vec![0.5, 2.0, 7.0],
-        )
-        .expect("term matrix should compute");
-        assert_eq!(grouped, vec![vec![4.5, 3.0]]);
-
-        let variance = cox_zph_group_variance(
+    fn fit(method: TieMethod, entry: Option<Vec<f64>>) -> CoxPHFit {
+        let weighted = method != TieMethod::Exact;
+        let time = vec![2.0, 2.0, 3.0, 4.0, 4.0, 3.0, 5.0, 5.0];
+        let status = vec![1, 1, 0, 1, 0, 1, 1, 0];
+        let x = Array2::from_shape_vec(
+            (8, 2),
             vec![
-                vec![1.0, 0.0, 0.0],
-                vec![0.0, 1.0, 0.0],
-                vec![0.0, 0.0, 1.0],
+                -1.2, 0.5, 0.4, -1.0, 1.1, 0.3, -0.3, 1.2, 0.8, -0.7, 1.7, 0.9, -0.9, 0.1, 0.2,
+                -1.3,
             ],
-            vec![vec![0, 1], vec![2]],
-            vec![0.5, 2.0, 7.0],
         )
-        .expect("group variance should compute");
-        assert_eq!(variance, vec![vec![4.25, 0.0], vec![0.0, 1.0]]);
-
-        let residuals = vec![
-            vec![0.1, 1.2, -0.3],
-            vec![0.4, 0.8, 0.2],
-            vec![-0.2, 1.5, 0.7],
-            vec![0.9, -0.1, 0.4],
-        ];
-        let transformed_time = vec![4.0, 1.0, 3.0, 2.0];
-        let groups = vec![vec![0, 1], vec![2]];
-        let beta = vec![0.5, -0.25, 1.5];
-        let grouped_test = cox_zph_tests(
-            residuals.clone(),
-            transformed_time.clone(),
-            groups.clone(),
-            beta.clone(),
-            false,
-        )
-        .expect("grouped proportional-hazards tests should compute");
-        let first = proportional_hazards_test(
-            &residuals
-                .iter()
-                .map(|row| vec![row[0], row[1]])
-                .collect::<Vec<_>>(),
-            &transformed_time,
+        .unwrap();
+        let weights = vec![1.0, 1.5, 0.8, 1.2, 0.7, 1.1, 0.9, 1.3];
+        let strata = vec![0, 0, 0, 0, 0, 1, 1, 1];
+        let data = CoxphData::try_new(
+            time,
+            entry,
+            status,
+            x,
+            weighted.then_some(weights),
+            Some(strata),
             None,
-        );
-        let second = proportional_hazards_test(
-            &residuals.iter().map(|row| vec![row[2]]).collect::<Vec<_>>(),
-            &transformed_time,
-            None,
-        );
-        let global = proportional_hazards_test(&residuals, &transformed_time, None);
-        assert!((grouped_test.chi2_values[0] - first.global_chi2).abs() < 1e-12);
-        assert!((grouped_test.chi2_values[1] - second.global_chi2).abs() < 1e-12);
-        assert!((grouped_test.global_chi2 - global.global_chi2).abs() < 1e-12);
-        assert_eq!(grouped_test.global_df, 3);
-
-        let single_df_test = cox_zph_tests(
-            residuals.clone(),
-            transformed_time.clone(),
-            groups.clone(),
-            beta.clone(),
-            true,
         )
-        .expect("single-df proportional-hazards tests should compute");
-        let collapsed =
-            cox_zph_term_matrix(residuals, groups, beta).expect("term residuals should collapse");
-        let expected_single = proportional_hazards_test(&collapsed, &transformed_time, None);
-        assert_eq!(single_df_test.global_df, 3);
-        for (actual, expected) in single_df_test
-            .chi2_values
-            .iter()
-            .zip(expected_single.chi2_values.iter())
-        {
-            assert!((actual - expected).abs() < 1e-12);
-        }
-
-        let dense_information = vec![
-            vec![2.0, 0.5, -0.2],
-            vec![0.4, 3.0, 0.7],
-            vec![-0.1, 0.6, 4.0],
-        ];
-        let sparse_variance = cox_zph_group_variance(
-            dense_information.clone(),
-            vec![vec![0, 2], vec![1]],
-            vec![0.5, 2.0, -1.5],
-        )
-        .expect("sparse grouped variance should compute");
-        let loadings = [vec![0.5, 0.0, -1.5], vec![0.0, 1.0, 0.0]];
-        let expected_variance: Vec<Vec<f64>> = loadings
-            .iter()
-            .map(|left| {
-                loadings
-                    .iter()
-                    .map(|right| {
-                        left.iter()
-                            .enumerate()
-                            .map(|(row, &left_value)| {
-                                right
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(col, &right_value)| {
-                                        left_value * dense_information[row][col] * right_value
-                                    })
-                                    .sum::<f64>()
-                            })
-                            .sum()
-                    })
-                    .collect()
-            })
-            .collect();
-        assert_eq!(sparse_variance, expected_variance);
-        assert!(
-            cox_zph_tests(
-                vec![vec![1.0], vec![2.0]],
-                vec![1.0],
-                vec![vec![0]],
-                vec![0.5],
-                false,
-            )
-            .is_err()
-        );
-
-        let crossprod = clustered_crossprod(
-            vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]],
-            vec![1.0, 0.5, 2.0],
-            vec![0, 0, 1],
-            Some(2),
-        )
-        .expect("clustered cross-product should compute");
-        assert_eq!(crossprod, vec![vec![106.25, 130.0], vec![130.0, 160.0]]);
-
-        let sandwich = clustered_sandwich_variance(
-            vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]],
-            vec![1.0, 0.5, 2.0],
-            vec![0, 0, 1],
-            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
-        )
-        .expect("clustered sandwich variance should compute");
-        assert_eq!(sandwich, vec![vec![725.0, 478.75], vec![478.75, 316.5625]]);
-
-        let prediction_se = prediction_se_from_variance(
-            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
-            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
-        )
-        .expect("prediction SEs should compute");
-        assert!((prediction_se[0] - 8.0_f64.sqrt()).abs() < 1e-12);
-        assert!((prediction_se[1] - 46.0_f64.sqrt()).abs() < 1e-12);
-
-        let term_prediction_se = term_prediction_se_from_variance(
-            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
-            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
-            vec![vec![0], vec![1], vec![0, 1]],
-        )
-        .expect("term prediction SEs should compute");
-        assert!((term_prediction_se[0][0] - 2.0_f64.sqrt()).abs() < 1e-12);
-        assert!((term_prediction_se[0][1] - 2.0).abs() < 1e-12);
-        assert!((term_prediction_se[0][2] - 8.0_f64.sqrt()).abs() < 1e-12);
-        assert!((term_prediction_se[1][0] - 18.0_f64.sqrt()).abs() < 1e-12);
-        assert!((term_prediction_se[1][1] - 4.0).abs() < 1e-12);
-        assert!((term_prediction_se[1][2] - 46.0_f64.sqrt()).abs() < 1e-12);
-
-        let interval_se = cox_interval_cumulative_hazard_se(
-            vec![vec![1.0, 2.0], vec![0.0, 0.0]],
-            vec![0.25, 0.0],
-            vec![0.04, 0.50],
-            vec![vec![0.1, 0.2], vec![0.0, 0.0]],
-            vec![1.0, 0.0],
-            vec![0.25, 0.25],
-            vec![vec![0.4, 0.8], vec![0.0, 0.0]],
-            vec![3.0, 2.0],
-            vec![vec![2.0, 0.5], vec![0.5, 1.0]],
-        )
-        .expect("interval SEs should compute");
-        assert!((interval_se[0] - 3.0 * 1.83_f64.sqrt()).abs() < 1e-12);
-        assert_eq!(interval_se[1], 0.0);
+        .unwrap();
+        let options = CoxphOptions {
+            method,
+            init: Some(vec![0.2, -0.1]),
+            iter_max: 0,
+            ..CoxphOptions::default()
+        };
+        CoxPHFit::fit(data, options).unwrap()
     }
 
-    #[test]
-    fn partial_residuals_reuse_expected_events() {
-        let fit = CoxPHFit {
-            coefficients: vec![vec![0.5, -0.25]],
-            means: vec![0.0, 0.0],
-            score_vector: vec![],
-            information_matrix: vec![],
-            log_likelihood: vec![],
-            score_test: 0.0,
-            convergence_flag: 0,
-            iterations: 0,
-            risk_scores: vec![],
-            event_times: vec![1.0, 2.0, 3.0],
-            status: vec![1, 0, 1],
-            linear_predictors: vec![0.2, -0.1, 0.3],
-            entry_times: None,
-            weights: vec![1.0, 1.0, 1.0],
-            covariates: vec![vec![1.0, 0.5], vec![0.0, 1.5], vec![2.0, -1.0]],
-            strata: vec![0, 0, 0],
-            method: "breslow".to_string(),
-            nocenter: Vec::new(),
-        };
-        let beta = fit.coefficients.first().expect("test coefficients exist");
-        let martingale = fit
-            .martingale_residuals()
-            .expect("martingale residuals should compute");
-        let expected: Vec<Vec<f64>> = fit
-            .covariates
-            .iter()
-            .zip(martingale.iter())
-            .map(|(row, &residual)| {
-                row.iter()
-                    .zip(beta.iter())
-                    .map(|(&value, &coefficient)| residual + value * coefficient)
-                    .collect()
-            })
-            .collect();
-
-        let actual = fit
-            .partial_residuals_internal()
-            .expect("partial residuals should compute");
-
-        assert_eq!(actual.len(), expected.len());
-        for (actual_row, expected_row) in actual.iter().zip(expected.iter()) {
-            assert_eq!(actual_row.len(), expected_row.len());
-            for (&actual, &expected) in actual_row.iter().zip(expected_row.iter()) {
-                assert!((actual - expected).abs() < 1e-12);
+    fn assert_close_rows(actual: &Array2<f64>, expected: &[Vec<f64>]) {
+        assert_eq!(actual.nrows(), expected.len());
+        for (row, expected) in actual.outer_iter().zip(expected) {
+            for (a, e) in row.iter().zip(expected) {
+                assert!((a - e).abs() < 1e-10, "{a} != {e}");
             }
         }
     }
 
     #[test]
-    fn exact_inclusion_weights_match_pairwise_tie_probabilities() {
-        let log_risk = [2.0_f64.ln(), 3.0_f64.ln(), 5.0_f64.ln()];
-        let inclusion = exact_inclusion_probabilities(&[0, 1, 2], 2, &log_risk)
-            .expect("two deaths among three risk scores should compute");
-
-        assert_eq!(inclusion.len(), 3);
-        assert!((inclusion[0].1 - 16.0 / 31.0).abs() < 1e-12);
-        assert!((inclusion[1].1 - 21.0 / 31.0).abs() < 1e-12);
-        assert!((inclusion[2].1 - 25.0 / 31.0).abs() < 1e-12);
-        assert!((inclusion.iter().map(|(_, value)| value).sum::<f64>() - 2.0).abs() < 1e-12);
+    fn counting_score_residuals_match_r_for_weights_strata_and_ties() {
+        // R: coxph(Surv(start, stop, status) ~ x1 + x2 + strata(g), weights,
+        //    init = c(0.2, -0.1), iter.max = 0); residuals(type = "score")
+        let entry = Some(vec![0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.0]);
+        let cases = [
+            (
+                TieMethod::Breslow,
+                vec![
+                    vec![-0.778427039030269, 0.283533537794141],
+                    vec![0.091186357321952, -0.342237690541851],
+                    vec![-0.650093055328823, -0.190343304961445],
+                    vec![-0.0420910220554235, -0.132051648232679],
+                    vec![-0.469472843288164, 0.810907638406828],
+                    vec![0.709746822901141, 0.66611561001089],
+                    vec![-0.143052423889649, 0.568213016404157],
+                    vec![-0.0432781142437781, 0.608556079386341],
+                ],
+            ),
+            (
+                TieMethod::Efron,
+                vec![
+                    vec![-0.890022262887945, 0.233804575353994],
+                    vec![0.0973290025651707, -0.50524720360612],
+                    vec![-0.741057387549249, -0.122553172255785],
+                    vec![0.0221464326595451, -0.166914303193565],
+                    vec![-0.469472843288164, 0.810907638406828],
+                    vec![0.709746822901141, 0.66611561001089],
+                    vec![-0.143052423889649, 0.568213016404157],
+                    vec![-0.0432781142437781, 0.608556079386341],
+                ],
+            ),
+        ];
+        for (method, expected) in cases {
+            let model = fit(method, entry.clone());
+            let actual = score_residuals(&model, &model.linear_predictors).unwrap();
+            assert_close_rows(&actual, &expected);
+        }
     }
 
     #[test]
-    fn exact_diagnostics_are_invariant_to_common_large_log_risk_shifts() {
-        let fit = CoxPHFit {
-            coefficients: vec![vec![0.0]],
-            means: vec![0.0],
-            score_vector: vec![0.0],
-            information_matrix: vec![vec![0.0]],
-            log_likelihood: vec![0.0, 0.0],
-            score_test: 0.0,
-            convergence_flag: 0,
-            iterations: 0,
-            risk_scores: vec![0.0; 3],
-            event_times: vec![1.0, 1.0, 1.0],
-            status: vec![1, 1, 0],
-            linear_predictors: vec![1_000.0, 900.0, 800.0],
-            entry_times: None,
-            weights: vec![1.0; 3],
-            covariates: vec![vec![0.0], vec![1.0], vec![2.0]],
-            strata: vec![0; 3],
-            method: "exact".to_string(),
-            nocenter: Vec::new(),
+    fn martingale_residuals_sum_to_zero_and_match_expected_counts() {
+        for method in [TieMethod::Breslow, TieMethod::Efron, TieMethod::Exact] {
+            let model = fit(method, None);
+            let total: f64 = model
+                .residuals
+                .iter()
+                .zip(&model.weights)
+                .map(|(r, w)| r * w)
+                .sum();
+            assert!(total.abs() < 1e-10, "{method:?}: weighted sum {total}");
+            let expected = model.predict_expected(None, false).unwrap();
+            for (i, e) in expected.fit.iter().enumerate() {
+                assert!((f64::from(model.status[i]) - model.residuals[i] - e).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn deviance_residuals_follow_r_formula_and_collapse() {
+        let model = fit(TieMethod::Efron, None);
+        let Residuals::Vector(deviance) = model
+            .residuals(ResidualType::Deviance, None, None, None)
+            .unwrap()
+        else {
+            panic!("vector residuals")
         };
-        let mut shifted = fit.clone();
-        for value in &mut shifted.linear_predictors {
-            *value -= 1_000.0;
+        for (i, d) in deviance.iter().enumerate() {
+            let r = model.residuals[i];
+            let s = f64::from(model.status[i]);
+            let expected =
+                r.signum() * (-2.0 * (r + if s == 0.0 { 0.0 } else { s * (s - r).ln() })).sqrt();
+            assert!((d - expected).abs() < 1e-12);
         }
+        let collapse = vec![0, 0, 1, 1, 2, 2, 3, 3];
+        let Residuals::Vector(collapsed) = model
+            .residuals(ResidualType::Martingale, None, Some(&collapse), None)
+            .unwrap()
+        else {
+            panic!("vector residuals")
+        };
+        assert_eq!(collapsed.len(), 4);
+        assert!((collapsed[0] - (model.residuals[0] + model.residuals[1])).abs() < 1e-12);
+    }
 
-        let schoenfeld = fit
-            .schoenfeld_residuals_internal()
-            .expect("large exact Schoenfeld residuals should compute");
-        let shifted_schoenfeld = shifted
-            .schoenfeld_residuals_internal()
-            .expect("shifted exact Schoenfeld residuals should compute");
-        let score = fit
-            .score_residuals_internal()
-            .expect("large exact score residuals should compute");
-        let shifted_score = shifted
-            .score_residuals_internal()
-            .expect("shifted exact score residuals should compute");
-        let mut counting = fit.clone();
-        counting.entry_times = Some(vec![0.0; 3]);
-        let mut shifted_counting = shifted.clone();
-        shifted_counting.entry_times = Some(vec![0.0; 3]);
-        let counting_score = counting
-            .score_residuals_internal()
-            .expect("large counting-process exact score residuals should compute");
-        let shifted_counting_score = shifted_counting
-            .score_residuals_internal()
-            .expect("shifted counting-process exact score residuals should compute");
+    #[test]
+    fn schoenfeld_rows_are_deaths_in_stratum_time_order() {
+        let model = fit(TieMethod::Efron, None);
+        let schoenfeld = schoenfeld_residuals(&model, false).unwrap();
+        assert_eq!(schoenfeld.time, vec![2.0, 2.0, 4.0, 3.0, 5.0]);
+        assert_eq!(schoenfeld.rows, vec![0, 1, 3, 5, 6]);
+        assert_eq!(schoenfeld.strata, Some(vec![0, 0, 0, 1, 1]));
+        // Within a stratum the Schoenfeld residuals sum to the score.
+        let scaled = model.scaled_schoenfeld_residuals(false).unwrap();
+        assert_eq!(scaled.residuals.len(), 5);
+        let weighted = schoenfeld_residuals(&model, true).unwrap();
+        assert!((weighted.residuals[1][0] - schoenfeld.residuals[1][0] * 1.5).abs() < 1e-12);
+    }
 
-        assert!((schoenfeld[0][0] + 0.5).abs() < 1e-12);
-        assert!((schoenfeld[1][0] - 0.5).abs() < 1e-12);
-        for (actual, expected) in schoenfeld.iter().zip(&shifted_schoenfeld) {
-            assert!((actual[0] - expected[0]).abs() < 1e-12);
+    #[test]
+    fn dfbeta_variants_share_the_score_residuals() {
+        let model = fit(TieMethod::Breslow, None);
+        let Residuals::Matrix(dfbeta) = model
+            .residuals(ResidualType::Dfbeta, None, None, None)
+            .unwrap()
+        else {
+            panic!("matrix residuals")
+        };
+        let Residuals::Matrix(dfbetas) = model
+            .residuals(ResidualType::Dfbetas, None, None, None)
+            .unwrap()
+        else {
+            panic!("matrix residuals")
+        };
+        for i in 0..8 {
+            for j in 0..2 {
+                assert!(
+                    (dfbetas[(i, j)] - dfbeta[(i, j)] / model.var[(j, j)].sqrt()).abs() < 1e-12
+                );
+            }
         }
-        for (actual, expected) in score.iter().zip(&shifted_score) {
-            assert!((actual[0] - expected[0]).abs() < 1e-12);
-        }
-        for (actual, expected) in counting_score.iter().zip(&shifted_counting_score) {
-            assert!((actual[0] - expected[0]).abs() < 1e-12);
-        }
+        let Residuals::Matrix(partial) = model
+            .residuals(ResidualType::Partial, None, None, None)
+            .unwrap()
+        else {
+            panic!("matrix residuals")
+        };
+        assert_eq!(partial.dim(), (8, 2));
+        assert!(matches!(
+            model.residuals(ResidualType::Score, None, Some(&[0, 1]), None),
+            Err(SurvivalError::InvalidInput(_))
+        ));
+        let exact = fit(TieMethod::Exact, None);
+        assert!(
+            exact
+                .residuals(ResidualType::Score, None, None, None)
+                .is_err()
+        );
     }
 }

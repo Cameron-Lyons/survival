@@ -478,7 +478,7 @@ blog(edge = 0.05)
 
 aeqSurv(x, tolerance = sqrt(.Machine$double.eps))
 
-lvcf(id, x, time)
+lvcf(id, x, time, first = TRUE)
 
 nostutter(id, x, censor = 0, single = FALSE)
 
@@ -674,8 +674,7 @@ finegray(formula, data, weights, subset, na.action = na.pass, etype,
   prefix = "fg", count = "", id, timefix = TRUE, tstart, tstop,
   ctime, cprob, extend, keep)
 
-survobrien(formula, data, subset, na.action, transform,
-  time, status, covariate, strata = NULL)
+survobrien(formula, data, subset, na.action, transform)
 
 cch(formula, data, subcoh, id, stratum = NULL, cohort.size,
   method = c("Prentice", "SelfPrentice", "LinYing", "I.Borgan",
@@ -1016,6 +1015,8 @@ input.}
 \item{censor, single}{Event-censor code and singleton handling for
 \code{nostutter}. \code{censor} also controls whether
 \code{points.survival_py_survfit} marks censoring rows instead of event rows.}
+\item{first}{For \code{lvcf}, whether a subject's missing first value of a
+logical or 0/1 variable is taken as \code{FALSE}/0.}
 \item{episode, end, added}{Output column controls for
 \code{survSplit} and \code{survcondense}; \code{added} is accepted for R API
 compatibility.}
@@ -1070,8 +1071,6 @@ single-degree-of-freedom tests, and the global test in \code{cox.zph}.
 For penalized Cox model summaries, \code{terms = TRUE} combines each
 multi-column term into one Wald statistic and reports its effective degrees
 of freedom; confidence intervals remain available for each coefficient.}
-\item{covariate}{Direct numeric covariate vector for Python-backed
-\code{survobrien}.}
 \item{scores, risk.scores}{Optional direct concordance score vectors or
 matrices. Use at most one of these.}
 \item{weight, weights}{Optional case weights.}

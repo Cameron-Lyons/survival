@@ -4,21 +4,30 @@ from typing import Any, Self
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from survival._survival import CoxPHFit
+from survival._survival import CoxPHFit, SurvregFit
 
 class SurvivalScoreMixin:
     def predict(self, X: ArrayLike) -> NDArray[np.float64]: ...
     def score(self, X: ArrayLike, y: ArrayLike) -> float: ...
 
+class FlatModelPredictMixin:
+    n_features_in_: int
+    def predict(self, X: ArrayLike) -> NDArray[np.float64]: ...
+    def predict_survival_function(
+        self, X: ArrayLike
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+    def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]: ...
+
 class CoxPHEstimator(SurvivalScoreMixin):
     n_iters: int
+    ties: str
     model_: CoxPHFit
     n_features_in_: int
     coef_: NDArray[np.float64]
     event_times_: NDArray[np.float64]
     is_fitted_: bool
 
-    def __init__(self, n_iters: int = 20) -> None: ...
+    def __init__(self, n_iters: int = 20, ties: str = "efron") -> None: ...
     def fit(self, X: ArrayLike, y: ArrayLike) -> Self: ...
     def predict(self, X: ArrayLike) -> NDArray[np.float64]: ...
     def predict_survival_function(
@@ -26,7 +35,7 @@ class CoxPHEstimator(SurvivalScoreMixin):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
     def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]: ...
 
-class GradientBoostSurvivalEstimator(SurvivalScoreMixin):
+class GradientBoostSurvivalEstimator(FlatModelPredictMixin, SurvivalScoreMixin):
     n_estimators: int
     learning_rate: float
     max_depth: int
@@ -57,7 +66,7 @@ class GradientBoostSurvivalEstimator(SurvivalScoreMixin):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
     def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]: ...
 
-class SurvivalForestEstimator(SurvivalScoreMixin):
+class SurvivalForestEstimator(FlatModelPredictMixin, SurvivalScoreMixin):
     n_trees: int
     max_depth: int | None
     min_node_size: int
@@ -87,10 +96,11 @@ class SurvivalForestEstimator(SurvivalScoreMixin):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
     def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]: ...
 
-class AFTEstimator:
+class AFTEstimator(SurvivalScoreMixin):
     distribution: str
     max_iter: int
     tol: float
+    model_: SurvregFit
     n_features_in_: int
     intercept_: float
     coef_: NDArray[np.float64]
@@ -101,7 +111,7 @@ class AFTEstimator:
     def __init__(
         self,
         distribution: str = "weibull",
-        max_iter: int = 200,
+        max_iter: int = 30,
         tol: float = 1e-9,
     ) -> None: ...
     def fit(self, X: ArrayLike, y: ArrayLike) -> Self: ...
@@ -139,7 +149,7 @@ class StreamingGradientBoostSurvivalEstimator(GradientBoostSurvivalEstimator, St
 class StreamingSurvivalForestEstimator(SurvivalForestEstimator, StreamingMixin): ...
 class StreamingAFTEstimator(AFTEstimator, StreamingMixin): ...
 
-class DeepSurvEstimator:
+class DeepSurvEstimator(FlatModelPredictMixin, SurvivalScoreMixin):
     hidden_layers: list[int]
     activation: str
     dropout_rate: float

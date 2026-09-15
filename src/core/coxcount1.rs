@@ -1,401 +1,285 @@
+//! Risk-set expansion for `coxph` models with `tt()` terms.
+//!
+//! [`coxcount1`] and [`coxcount2`] port `coxcount1.c` (survival 3.8-12):
+//! each unique event time becomes one stratum of the expanded data set
+//! holding every observation at risk at that time, and the routines return
+//! the row indices (`index`) and event indicators (`status`) of those
+//! strata back to back.  R sorts the data first (`order(strata, -time,
+//! status)`, censored before deaths within tied times); the functions here
+//! sort internally and return zero-based indices into the input.
+
+use crate::core::strata_order::{first_of_run, order_within_strata, validate_intervals};
+use crate::error::SurvivalResult;
+use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
+use crate::internal::validation::{validate_binary_i32, validate_length};
 use pyo3::prelude::*;
 
-use crate::internal::validation::{
-    PermutationIndexError, validate_binary_f64, validate_zero_based_usize_permutation,
-};
-
-fn value_error(message: impl Into<String>) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(message.into())
-}
-
-fn validate_same_length(n: usize, actual: usize, name: &str) -> PyResult<()> {
-    if actual != n {
-        return Err(value_error(format!(
-            "{name} length must match time length ({actual} != {n})"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_finite(values: &[f64], name: &str) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(value_error(format!(
-                "{name} must contain only finite values; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_strata_markers(values: &[i32], n: usize) -> PyResult<()> {
-    if n > i32::MAX as usize {
-        return Err(value_error(
-            "input length exceeds i32 output index capacity",
-        ));
-    }
-    for (idx, &value) in values.iter().enumerate() {
-        if value != 0 && value != 1 {
-            return Err(value_error(format!(
-                "strata values must be 0 or 1; got {value} at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_sort_indices(values: &[usize], n: usize, name: &str) -> PyResult<()> {
-    match validate_zero_based_usize_permutation(values, n) {
-        Ok(()) => Ok(()),
-        Err(PermutationIndexError::OutOfBounds { position, value }) => Err(value_error(format!(
-            "{name} index out of bounds at position {position}: {value} >= {n}"
-        ))),
-        Err(PermutationIndexError::Duplicate { position, value }) => Err(value_error(format!(
-            "{name} must be a permutation of 0..{n}; duplicate index {value} at position {position}"
-        ))),
-        Err(PermutationIndexError::Negative { .. }) => {
-            unreachable!("usize indices are never negative")
-        }
-    }
-}
-
-fn validate_coxcount1_inputs(time: &[f64], status: &[f64], strata: &[i32]) -> PyResult<()> {
-    let n = time.len();
-    validate_same_length(n, status.len(), "status")?;
-    validate_same_length(n, strata.len(), "strata")?;
-    validate_finite(time, "time")?;
-    validate_binary_f64(status, "status")?;
-    validate_strata_markers(strata, n)
-}
-
-fn validate_coxcount2_inputs(
-    time1: &[f64],
-    time2: &[f64],
-    status: &[f64],
-    sort1: &[usize],
-    sort2: &[usize],
-    strata: &[i32],
-) -> PyResult<()> {
-    let n = time1.len();
-    validate_same_length(n, time2.len(), "time2")?;
-    validate_same_length(n, status.len(), "status")?;
-    validate_same_length(n, sort1.len(), "sort1")?;
-    validate_same_length(n, sort2.len(), "sort2")?;
-    validate_same_length(n, strata.len(), "strata")?;
-    validate_finite(time1, "time1")?;
-    validate_finite(time2, "time2")?;
-    validate_binary_f64(status, "status")?;
-    validate_strata_markers(strata, n)?;
-    validate_sort_indices(sort1, n, "sort1")?;
-    validate_sort_indices(sort2, n, "sort2")
-}
-
-#[pyclass]
+/// The expanded risk sets: `time[k]` and `nrisk[k]` describe the `k`-th
+/// unique event time; the next `nrisk[k]` entries of `index`/`status` are
+/// its members (zero-based rows of the input) and their event indicators.
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
 pub struct CoxCountOutput {
     #[pyo3(get)]
     pub time: Vec<f64>,
     #[pyo3(get)]
-    pub nrisk: Vec<i32>,
+    pub nrisk: Vec<usize>,
     #[pyo3(get)]
-    pub index: Vec<i32>,
+    pub index: Vec<usize>,
     #[pyo3(get)]
     pub status: Vec<i32>,
 }
-fn coxcount1_impl(time: &[f64], status: &[f64], strata: &[i32]) -> PyResult<CoxCountOutput> {
-    validate_coxcount1_inputs(time, status, strata)?;
-    let n = time.len();
-    let mut ntime = 0;
-    let mut nrow = 0;
-    let mut nrisk = 0;
-    let mut i = 0;
-    while i < n {
-        if strata[i] == 1 {
-            nrisk = 0;
-        }
-        nrisk += 1;
-        if status[i] == 1.0 {
-            let dtime = time[i];
-            let mut j = i + 1;
-            while j < n && time[j] == dtime && status[j] == 1.0 && strata[j] == 0 {
-                nrisk += 1;
-                j += 1;
-            }
-            ntime += 1;
-            nrow += nrisk;
-            i = j - 1;
-        }
-        i += 1;
-    }
-    let mut time_vec = Vec::with_capacity(ntime);
-    let mut nrisk_vec = Vec::with_capacity(ntime);
-    let mut index_vec = Vec::with_capacity(nrow);
-    let mut status_vec = Vec::with_capacity(nrow);
-    let mut stratum_start = 0;
-    let mut i = 0;
-    while i < n {
-        if strata[i] == 1 {
-            stratum_start = i;
-        }
-        if status[i] == 1.0 {
-            let dtime = time[i];
-            let mut j = i + 1;
-            while j < n && time[j] == dtime && status[j] == 1.0 && strata[j] == 0 {
-                j += 1;
-            }
-            for k in stratum_start..i {
-                status_vec.push(0);
-                index_vec.push((k + 1) as i32);
-            }
-            for k in i..j {
-                status_vec.push(1);
-                index_vec.push((k + 1) as i32);
-            }
-            time_vec.push(dtime);
-            nrisk_vec.push((j - stratum_start) as i32);
-            i = j - 1;
-        }
-        i += 1;
-    }
-    Ok(CoxCountOutput {
-        time: time_vec,
-        nrisk: nrisk_vec,
-        index: index_vec,
-        status: status_vec,
-    })
-}
 
-#[pyfunction]
+/// Risk sets of right-censored data (`coxcount1`).
 pub fn coxcount1(
-    time: Vec<f64>,
-    status: Vec<f64>,
-    strata: Vec<i32>,
-) -> PyResult<Py<CoxCountOutput>> {
-    let output = coxcount1_impl(&time, &status, &strata)?;
-    Python::attach(|py| Py::new(py, output))
-}
+    survival: &SurvivalData,
+    strata: Option<&[i32]>,
+) -> SurvivalResult<CoxCountOutput> {
+    let n = survival.len();
+    let time = &survival.time;
+    let status = &survival.status;
+    validate_binary_i32(status, "status")?;
+    let zero = vec![0; n];
+    let strata = strata.map_or(Ok(&zero[..]), |s| {
+        validate_length(n, s.len(), "strata").map(|()| s)
+    })?;
+    let order = order_within_strata(strata, |a, b| {
+        time[b]
+            .total_cmp(&time[a])
+            .then_with(|| status[a].cmp(&status[b]))
+    });
+    let sorted_time: Vec<f64> = order.iter().map(|&i| time[i]).collect();
+    let sorted_status: Vec<i32> = order.iter().map(|&i| status[i]).collect();
+    let sorted_strata: Vec<i32> = order.iter().map(|&i| strata[i]).collect();
+    let first = first_of_run(&sorted_strata);
 
-fn coxcount2_impl(
-    time1: &[f64],
-    time2: &[f64],
-    status: &[f64],
-    sort1: &[usize],
-    sort2: &[usize],
-    strata: &[i32],
-) -> PyResult<CoxCountOutput> {
-    validate_coxcount2_inputs(time1, time2, status, sort1, sort2, strata)?;
-    let n = time1.len();
-    let mut ntime = 0;
-    let mut nrow = 0;
-    let mut j = 0;
+    let mut out = CoxCountOutput {
+        time: Vec::new(),
+        nrisk: Vec::new(),
+        index: Vec::new(),
+        status: Vec::new(),
+    };
+    let mut stratastart = 0;
     let mut i = 0;
-    let mut nrisk = 0;
     while i < n {
-        let iptr = sort2[i];
-        if strata[i] == 1 {
-            nrisk = 0;
-            j = i;
+        if first[i] {
+            stratastart = i;
         }
-        if status[iptr] == 1.0 {
-            let dtime = time2[iptr];
-            while j < i && time1[sort1[j]] >= dtime {
-                if nrisk == 0 {
-                    return Err(value_error(
-                        "coxcount2 sort order is inconsistent with the risk set",
-                    ));
-                }
-                nrisk -= 1;
+        if sorted_status[i] == 1 {
+            let dtime = sorted_time[i];
+            // Non-deaths at risk, this death, then any tied deaths.
+            let mut j = i + 1;
+            while j < n && sorted_status[j] == 1 && sorted_time[j] == dtime && !first[j] {
                 j += 1;
             }
-            nrisk += 1;
-            i += 1;
-            // The native routine indexes boundary markers through the original
-            // row number while extending a tied counting-process event set.
-            while i < n && strata[sort2[i]] == 0 && time2[sort2[i]] == dtime {
-                nrisk += 1;
-                i += 1;
-            }
-            nrow += nrisk;
-            ntime += 1;
-        } else {
-            nrisk += 1;
-            i += 1;
+            let last = j - 1;
+            out.status.extend(std::iter::repeat_n(0, i - stratastart));
+            out.status.extend(std::iter::repeat_n(1, last + 1 - i));
+            out.index.extend(order[stratastart..=last].iter().copied());
+            out.time.push(dtime);
+            out.nrisk.push(last + 1 - stratastart);
+            i = last;
         }
+        i += 1;
     }
-    let mut time_vec = Vec::with_capacity(ntime);
-    let mut nrisk_vec = Vec::with_capacity(ntime);
-    let mut index_vec = Vec::with_capacity(nrow);
-    let mut status_vec = Vec::with_capacity(nrow);
-    let mut atrisk = vec![0; n];
-    let mut who = Vec::with_capacity(n);
+    Ok(out)
+}
+
+/// Risk sets of (start, stop] data (`coxcount2`).  The members of a risk
+/// set are emitted in the order of the C routine's `who` list: entries are
+/// appended as subjects enter and a departing subject's slot is filled by
+/// the last entry.
+pub fn coxcount2(
+    counting: &CountingProcessData,
+    strata: Option<&[i32]>,
+) -> SurvivalResult<CoxCountOutput> {
+    let n = counting.len();
+    let time1 = &counting.start;
+    let time2 = &counting.stop;
+    let status = &counting.event;
+    validate_binary_i32(status, "event")?;
+    validate_intervals(time1, time2)?;
+    let zero = vec![0; n];
+    let strata = strata.map_or(Ok(&zero[..]), |s| {
+        validate_length(n, s.len(), "strata").map(|()| s)
+    })?;
+    // sort2: stratum, decreasing stop, censored first; sort1: stratum,
+    // decreasing start.  `first` marks the first sort2 position of a stratum.
+    let sort2 = order_within_strata(strata, |a, b| {
+        time2[b]
+            .total_cmp(&time2[a])
+            .then_with(|| status[a].cmp(&status[b]))
+    });
+    let sort1 = order_within_strata(strata, |a, b| time1[b].total_cmp(&time1[a]));
+    let sorted_strata: Vec<i32> = sort2.iter().map(|&i| strata[i]).collect();
+    let first = first_of_run(&sorted_strata);
+
+    let mut out = CoxCountOutput {
+        time: Vec::new(),
+        nrisk: Vec::new(),
+        index: Vec::new(),
+        status: Vec::new(),
+    };
+    // `who` lists those at risk; `atrisk[k]` is the slot of subject k in it.
+    let mut who: Vec<usize> = Vec::with_capacity(n);
+    let mut atrisk = vec![0usize; n];
     let mut j = 0;
     let mut i = 0;
     while i < n {
         let iptr = sort2[i];
-        if strata[i] == 1 {
+        if first[i] {
             who.clear();
             j = i;
         }
-        if status[iptr] == 0.0 {
+        if status[iptr] == 0 {
             atrisk[iptr] = who.len();
             who.push(iptr);
             i += 1;
-        } else {
-            let dtime = time2[iptr];
-            while j < i {
-                let jptr = sort1[j];
-                if time1[jptr] >= dtime {
-                    let pos = atrisk[jptr];
-                    if pos >= who.len() || who[pos] != jptr {
-                        return Err(value_error(
-                            "coxcount2 sort order is inconsistent with the risk set",
-                        ));
-                    }
-                    who.swap_remove(pos);
-                    if pos < who.len() {
-                        atrisk[who[pos]] = pos;
-                    }
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            for &k in &who {
-                status_vec.push(0);
-                index_vec.push((k + 1) as i32);
-            }
-            status_vec.push(1);
-            index_vec.push((iptr + 1) as i32);
-            atrisk[iptr] = who.len();
-            who.push(iptr);
-            i += 1;
-            // Preserve the same original-row boundary lookup used above.
-            while i < n && strata[sort2[i]] == 0 && time2[sort2[i]] == dtime {
-                let k = sort2[i];
-                status_vec.push(1);
-                index_vec.push((k + 1) as i32);
-                atrisk[k] = who.len();
-                who.push(k);
-                i += 1;
-            }
-            time_vec.push(dtime);
-            nrisk_vec.push(who.len() as i32);
+            continue;
         }
+        let dtime = time2[iptr];
+        // Unmark those who are no longer at risk.
+        while j < i && time1[sort1[j]] >= dtime {
+            let jptr = sort1[j];
+            let k = atrisk[jptr];
+            let last = who.pop().expect("a departing subject is in the risk set");
+            if k < who.len() {
+                who[k] = last;
+                atrisk[last] = k;
+            }
+            j += 1;
+        }
+        out.status.extend(std::iter::repeat_n(0, who.len()));
+        out.index.extend(who.iter().copied());
+        // This death, then any tied deaths within the stratum.
+        let mut deaths = 1;
+        atrisk[iptr] = who.len();
+        who.push(iptr);
+        out.index.push(iptr);
+        i += 1;
+        while i < n && !first[i] && time2[sort2[i]] == dtime {
+            let tied = sort2[i];
+            out.index.push(tied);
+            atrisk[tied] = who.len();
+            who.push(tied);
+            deaths += 1;
+            i += 1;
+        }
+        out.status.extend(std::iter::repeat_n(1, deaths));
+        out.time.push(dtime);
+        out.nrisk.push(who.len());
     }
-    Ok(CoxCountOutput {
-        time: time_vec,
-        nrisk: nrisk_vec,
-        index: index_vec,
-        status: status_vec,
-    })
-}
-
-#[pyfunction]
-pub fn coxcount2(
-    time1: Vec<f64>,
-    time2: Vec<f64>,
-    status: Vec<f64>,
-    sort1: Vec<usize>,
-    sort2: Vec<usize>,
-    strata: Vec<i32>,
-) -> PyResult<Py<CoxCountOutput>> {
-    let output = coxcount2_impl(&time1, &time2, &status, &sort1, &sort2, &strata)?;
-    Python::attach(|py| Py::new(py, output))
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::common::initialize_python;
 
     #[test]
-    fn coxcount1_rejects_mismatched_lengths() {
-        initialize_python();
-
-        let err = match coxcount1(vec![1.0], vec![1.0, 0.0], vec![1]) {
-            Ok(_) => panic!("mismatched status length should fail"),
-            Err(err) => err,
-        };
-
-        assert!(err.to_string().contains("status length"));
-    }
-
-    #[test]
-    fn coxcount1_rejects_non_binary_status() {
-        initialize_python();
-
-        let err = match coxcount1(vec![1.0], vec![2.0], vec![1]) {
-            Ok(_) => panic!("non-binary status should fail"),
-            Err(err) => err,
-        };
-
-        assert!(err.to_string().contains("status must contain only 0/1"));
-    }
-
-    #[test]
-    fn coxcount2_rejects_out_of_bounds_sort_index() {
-        initialize_python();
-
-        let err = match coxcount2(vec![0.0], vec![1.0], vec![1.0], vec![1], vec![0], vec![1]) {
-            Ok(_) => panic!("out-of-bounds sort1 index should fail"),
-            Err(err) => err,
-        };
-
-        assert!(err.to_string().contains("sort1 index out of bounds"));
-    }
-
-    #[test]
-    fn coxcount2_rejects_duplicate_sort_index() {
-        initialize_python();
-
-        let err = match coxcount2(
-            vec![0.0, 1.0],
-            vec![1.0, 2.0],
-            vec![1.0, 0.0],
-            vec![0, 0],
-            vec![0, 1],
-            vec![1, 0],
-        ) {
-            Ok(_) => panic!("duplicate sort1 index should fail"),
-            Err(err) => err,
-        };
-
-        assert!(err.to_string().contains("sort1 must be a permutation"));
-    }
-
-    #[test]
-    fn coxcount1_keeps_adjacent_floating_point_times_separate() {
-        initialize_python();
-        let previous = f64::from_bits(1.0f64.to_bits() - 1);
-        let output = coxcount1_impl(&[1.0, previous], &[1.0, 1.0], &[1, 0]).unwrap();
-
-        assert_eq!(output.time, vec![1.0, previous]);
-        assert_eq!(output.nrisk, vec![1, 2]);
-        assert_eq!(output.index, vec![1, 1, 2]);
-        assert_eq!(output.status, vec![1, 0, 1]);
-    }
-
-    #[test]
-    fn coxcount2_matches_stratified_tied_event_reference() {
-        initialize_python();
-        let output = coxcount2_impl(
-            &[
-                0.0, 4.0, 5.0, 1.0, 6.0, 1.0, 3.0, 5.0, 1.0, 2.0, 2.0, 5.0, 5.0,
-            ],
-            &[
-                5.0, 5.0, 6.0, 4.0, 9.0, 4.0, 4.0, 6.0, 4.0, 5.0, 3.0, 9.0, 8.0,
-            ],
-            &[
-                1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-            ],
-            &[4, 12, 6, 10, 0, 7, 11, 1, 9, 3, 5, 2, 8],
-            &[4, 12, 0, 6, 10, 11, 7, 1, 9, 3, 5, 2, 8],
-            &[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
+    fn right_censored_risk_sets_follow_r() {
+        // R: coxcount1 on time (3, 1, 2, 2), status (1, 1, 0, 1) sorted as
+        // order(-time, status) -> rows 1, 3, 4, 2 (1-based).
+        let out = coxcount1(
+            &SurvivalData::try_new(vec![3.0, 1.0, 2.0, 2.0], vec![1, 1, 0, 1]).unwrap(),
+            None,
         )
         .unwrap();
+        assert_eq!(out.time, vec![3.0, 2.0, 1.0]);
+        assert_eq!(out.nrisk, vec![1, 3, 4]);
+        assert_eq!(out.index, vec![0, 0, 2, 3, 0, 2, 3, 1]);
+        assert_eq!(out.status, vec![1, 0, 0, 1, 0, 0, 0, 1]);
+    }
 
-        assert_eq!(output.time, vec![9.0, 5.0, 9.0, 4.0, 4.0, 6.0]);
-        assert_eq!(output.nrisk, vec![1, 1, 1, 2, 3, 1]);
-        assert_eq!(output.index, vec![5, 1, 12, 10, 4, 10, 4, 6, 3]);
-        assert_eq!(output.status, vec![1, 1, 1, 0, 1, 0, 0, 1, 1]);
+    #[test]
+    fn tied_deaths_share_a_risk_set_and_strata_reset() {
+        let out = coxcount1(
+            &SurvivalData::try_new(vec![1.0, 1.0, 2.0, 5.0, 5.0], vec![1, 1, 0, 1, 1]).unwrap(),
+            Some(&[1, 1, 1, 2, 2]),
+        )
+        .unwrap();
+        assert_eq!(out.time, vec![1.0, 5.0]);
+        assert_eq!(out.nrisk, vec![3, 2]);
+        assert_eq!(out.index, vec![2, 0, 1, 3, 4]);
+        assert_eq!(out.status, vec![0, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn counting_process_risk_sets_drop_late_entries_and_early_exits() {
+        // (0,4] event, (0,6] censored, (1,5] event, (2,7] event, (4,9] censored
+        let out = coxcount2(
+            &CountingProcessData::try_new(
+                vec![0.0, 0.0, 1.0, 2.0, 4.0],
+                vec![4.0, 6.0, 5.0, 7.0, 9.0],
+                vec![1, 0, 1, 1, 0],
+            )
+            .unwrap(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(out.time, vec![7.0, 5.0, 4.0]);
+        // Risk set at 7: subjects 4 (censored, added first) and 3.
+        // At 5: 4, 3, 1 remain (all entered before 5); 2 dies.
+        // At 4: subject 4 leaves (start 4 >= 4) and the last entry, 2, takes
+        // its slot in `who`; 0 dies.
+        assert_eq!(out.nrisk, vec![2, 4, 4]);
+        assert_eq!(out.index, vec![4, 3, 4, 3, 1, 2, 2, 3, 1, 0]);
+        assert_eq!(out.status, vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn stratified_outputs_match_r() {
+        // R: .Call(Ccoxcount1, Y[sorted, ], newstrat) with
+        // sorted = order(strata, -time, status); indices mapped back to the
+        // (0-based) input rows.
+        let out = coxcount1(
+            &SurvivalData::try_new(
+                vec![5.0, 3.0, 3.0, 8.0, 1.0, 3.0, 8.0, 2.0, 6.0, 6.0],
+                vec![1, 1, 0, 1, 0, 1, 0, 1, 1, 1],
+            )
+            .unwrap(),
+            Some(&[1, 1, 1, 1, 2, 2, 2, 2, 2, 2]),
+        )
+        .unwrap();
+        assert_eq!(out.time, vec![8.0, 5.0, 3.0, 6.0, 3.0, 2.0]);
+        assert_eq!(out.nrisk, vec![1, 2, 4, 3, 4, 5]);
+        assert_eq!(
+            out.index,
+            vec![3, 3, 0, 3, 0, 2, 1, 6, 8, 9, 6, 8, 9, 5, 6, 8, 9, 5, 7]
+        );
+        assert_eq!(
+            out.status,
+            vec![1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+        );
+
+        // R: .Call(Ccoxcount2, Y, sort.start - 1, sort.end - 1, newstrat)
+        let out = coxcount2(
+            &CountingProcessData::try_new(
+                vec![0.0, 1.0, 0.0, 2.0, 4.0, 0.0, 3.0, 1.0, 0.0, 5.0],
+                vec![4.0, 6.0, 5.0, 7.0, 9.0, 3.0, 8.0, 6.0, 2.0, 9.0],
+                vec![1, 0, 1, 1, 0, 1, 1, 1, 0, 1],
+            )
+            .unwrap(),
+            Some(&[1, 1, 1, 1, 1, 2, 2, 2, 2, 2]),
+        )
+        .unwrap();
+        assert_eq!(out.time, vec![7.0, 5.0, 4.0, 9.0, 8.0, 6.0, 3.0]);
+        assert_eq!(out.nrisk, vec![2, 4, 4, 1, 2, 3, 2]);
+        assert_eq!(
+            out.index,
+            vec![4, 3, 4, 3, 1, 2, 2, 3, 1, 0, 9, 9, 6, 9, 6, 7, 7, 5]
+        );
+        assert_eq!(
+            out.status,
+            vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1]
+        );
+    }
+
+    #[test]
+    fn rejects_bad_inputs() {
+        let survival = SurvivalData::try_new(vec![1.0, 2.0], vec![1, 2]).unwrap();
+        assert!(coxcount1(&survival, None).is_err());
+        let survival = SurvivalData::try_new(vec![1.0, 2.0], vec![1, 0]).unwrap();
+        assert!(coxcount1(&survival, Some(&[1])).is_err());
     }
 }

@@ -1,489 +1,85 @@
-use crate::constants::{TIME_EPSILON, same_time};
-use crate::internal::logrank::logrank_statistic_from_flat_covariance;
-use crate::internal::numpy_utils::{extract_optional_vec_f64, extract_vec_f64, extract_vec_i32};
-use crate::internal::statistical::chi2_sf;
-use crate::internal::validation::{
-    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_negative,
-};
+//! `logrank_test`: a typed convenience entry over the `survdiff` kernel in
+//! `surv_analysis::logrank_components` for callers holding raw group
+//! labels.  It returns the G-rho family test of R's `survdiff`
+//! (`R/survdiff.R`, `src/survdiff2.c`) for right-censored or (start, stop]
+//! data (the latter an extension: R's `survdiff` refuses counting-process
+//! data), with observed and expected counts summed over strata.
+
+use crate::data_types::{FloatVec, IntVec};
+use crate::error::SurvivalResult;
+use crate::surv_analysis::{SurvdiffData, survdiff};
 use pyo3::prelude::*;
-use std::collections::HashMap;
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+
+/// Result of [`logrank_test`]: R's `survdiff` components.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
 pub struct LogRankResult {
-    #[pyo3(get)]
-    pub statistic: f64,
-    #[pyo3(get)]
-    pub p_value: f64,
-    #[pyo3(get)]
-    pub df: usize,
-    #[pyo3(get)]
+    /// The distinct group labels, sorted; observed/expected follow this order.
+    pub groups: Vec<i32>,
     pub observed: Vec<f64>,
-    #[pyo3(get)]
     pub expected: Vec<f64>,
-    #[pyo3(get)]
-    pub variance: f64,
-    #[pyo3(get)]
-    pub weight_type: String,
-}
-#[pymethods]
-impl LogRankResult {
-    #[new]
-    fn new(
-        statistic: f64,
-        p_value: f64,
-        df: usize,
-        observed: Vec<f64>,
-        expected: Vec<f64>,
-        variance: f64,
-        weight_type: String,
-    ) -> Self {
-        Self {
-            statistic,
-            p_value,
-            df,
-            observed,
-            expected,
-            variance,
-            weight_type,
-        }
-    }
-}
-#[derive(Debug, Clone, Copy)]
-pub enum WeightType {
-    LogRank,
-    Wilcoxon,
-    TaroneWare,
-    PetoPeto,
-    FlemingHarrington { p: f64, q: f64 },
-}
-
-fn encode_group_indices(group: &[i32], unique_groups: &[i32]) -> Vec<usize> {
-    let group_to_index: HashMap<i32, usize> = unique_groups
-        .iter()
-        .enumerate()
-        .map(|(idx, &group)| (group, idx))
-        .collect();
-
-    group
-        .iter()
-        .map(|group| {
-            group_to_index
-                .get(group)
-                .copied()
-                .expect("unique_groups contains every group")
-        })
-        .collect()
-}
-
-pub fn weighted_logrank_test(
-    time: &[f64],
-    status: &[i32],
-    group: &[i32],
-    weight_type: WeightType,
-) -> LogRankResult {
-    weighted_logrank_test_with_entry_times(time, status, group, None, weight_type)
-}
-
-pub fn weighted_logrank_test_with_entry_times(
-    time: &[f64],
-    status: &[i32],
-    group: &[i32],
-    entry_times: Option<&[f64]>,
-    weight_type: WeightType,
-) -> LogRankResult {
-    let n = time.len();
-    if n == 0 {
-        return LogRankResult {
-            statistic: 0.0,
-            p_value: 1.0,
-            df: 0,
-            observed: vec![],
-            expected: vec![],
-            variance: 0.0,
-            weight_type: weight_name(&weight_type),
-        };
-    }
-    let mut unique_groups: Vec<i32> = group.to_vec();
-    unique_groups.sort();
-    unique_groups.dedup();
-    let n_groups = unique_groups.len();
-    if n_groups < 2 {
-        return LogRankResult {
-            statistic: 0.0,
-            p_value: 1.0,
-            df: 0,
-            observed: vec![0.0; n_groups],
-            expected: vec![0.0; n_groups],
-            variance: 0.0,
-            weight_type: weight_name(&weight_type),
-        };
-    }
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let group_indices = encode_group_indices(group, &unique_groups);
-    let mut at_risk: Vec<f64> = vec![0.0; n_groups];
-    let mut total_at_risk: f64 = 0.0;
-    let entry_indices = entry_times.map(|entry| {
-        let mut indices: Vec<usize> = (0..n).collect();
-        indices.sort_by(|&a, &b| entry[a].total_cmp(&entry[b]));
-        indices
-    });
-    let mut entry_cursor = 0;
-    if entry_times.is_none() {
-        for &group_index in &group_indices {
-            at_risk[group_index] += 1.0;
-            total_at_risk += 1.0;
-        }
-    }
-    let mut observed = vec![0.0; n_groups];
-    let mut expected = vec![0.0; n_groups];
-    let mut variance = vec![0.0; n_groups * n_groups];
-    let mut km_survival: f64 = 1.0;
-    let mut events_by_group = vec![0.0; n_groups];
-    let mut removed = vec![0.0; n_groups];
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        if let (Some(entry), Some(sorted_entries)) = (entry_times, entry_indices.as_ref()) {
-            while entry_cursor < n
-                && entry[sorted_entries[entry_cursor]] < current_time - TIME_EPSILON
-            {
-                let idx = sorted_entries[entry_cursor];
-                let group_index = group_indices[idx];
-                at_risk[group_index] += 1.0;
-                total_at_risk += 1.0;
-                entry_cursor += 1;
-            }
-        }
-        events_by_group.fill(0.0);
-        removed.fill(0.0);
-        let mut total_events = 0.0;
-        let mut total_removed = 0.0;
-        while i < n && same_time(time[indices[i]], current_time) {
-            let idx = indices[i];
-            let g = group_indices[idx];
-            removed[g] += 1.0;
-            total_removed += 1.0;
-            if status[idx] == 1 {
-                events_by_group[g] += 1.0;
-                total_events += 1.0;
-            }
-            i += 1;
-        }
-        if total_events > 0.0 && total_at_risk > 0.0 {
-            let weight = match weight_type {
-                WeightType::LogRank => 1.0,
-                WeightType::Wilcoxon => total_at_risk,
-                WeightType::TaroneWare => total_at_risk.sqrt(),
-                WeightType::PetoPeto => km_survival,
-                WeightType::FlemingHarrington { p, q } => {
-                    km_survival.powf(p) * (1.0 - km_survival).powf(q)
-                }
-            };
-            for g in 0..n_groups {
-                observed[g] += weight * events_by_group[g];
-                let exp_g = total_events * at_risk[g] / total_at_risk;
-                expected[g] += weight * exp_g;
-            }
-            if total_at_risk > 1.0 {
-                let var_factor = weight * weight * total_events * (total_at_risk - total_events)
-                    / (total_at_risk * (total_at_risk - 1.0));
-                for g in 0..n_groups {
-                    let row_start = g * n_groups;
-                    for h in 0..n_groups {
-                        let diagonal = if g == h { 1.0 } else { 0.0 };
-                        variance[row_start + h] +=
-                            var_factor * at_risk[g] * (diagonal - at_risk[h] / total_at_risk);
-                    }
-                }
-            }
-            km_survival *= 1.0 - total_events / total_at_risk;
-        }
-        for g in 0..n_groups {
-            at_risk[g] -= removed[g];
-        }
-        total_at_risk -= total_removed;
-    }
-    let (statistic, df) =
-        logrank_statistic_from_flat_covariance(&observed, &expected, &variance, n_groups);
-    let p_value = chi2_sf(statistic, df);
-    LogRankResult {
-        statistic,
-        p_value,
-        df,
-        observed,
-        expected,
-        variance: variance.first().copied().unwrap_or(0.0),
-        weight_type: weight_name(&weight_type),
-    }
-}
-
-fn validate_logrank_inputs(
-    time: &[f64],
-    status: &[i32],
-    group: &[i32],
-    entry_times: Option<&[f64]>,
-) -> PyResult<()> {
-    validate_length(time.len(), status.len(), "status")?;
-    validate_length(time.len(), group.len(), "group")?;
-    validate_binary_i32(status, "status")?;
-    validate_no_nan(time, "time")?;
-    validate_finite(time, "time")?;
-    validate_non_negative(time, "time")?;
-    if let Some(entry) = entry_times {
-        validate_length(time.len(), entry.len(), "entry_times")?;
-        validate_no_nan(entry, "entry_times")?;
-        validate_finite(entry, "entry_times")?;
-        validate_non_negative(entry, "entry_times")?;
-        for (idx, (&entry_time, &exit_time)) in entry.iter().zip(time.iter()).enumerate() {
-            if entry_time >= exit_time - TIME_EPSILON {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "entry_times must be less than time for observation {}",
-                    idx
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_fleming_harrington_parameters(rho: f64, gamma: f64) -> PyResult<()> {
-    if !rho.is_finite() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "rho must be finite",
-        ));
-    }
-    if !gamma.is_finite() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "gamma must be finite",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_logrank_trend_inputs(
-    time: &[f64],
-    status: &[i32],
-    group: &[i32],
-    scores: Option<&[f64]>,
-) -> PyResult<()> {
-    validate_length(time.len(), status.len(), "status")?;
-    validate_length(time.len(), group.len(), "group")?;
-    validate_binary_i32(status, "status")?;
-    validate_no_nan(time, "time")?;
-    validate_finite(time, "time")?;
-    validate_non_negative(time, "time")?;
-    if let Some(values) = scores {
-        let mut unique_groups: Vec<i32> = group.to_vec();
-        unique_groups.sort();
-        unique_groups.dedup();
-        validate_length(unique_groups.len(), values.len(), "scores")?;
-        validate_no_nan(values, "scores")?;
-        validate_finite(values, "scores")?;
-    }
-    Ok(())
-}
-
-fn weight_name(weight_type: &WeightType) -> String {
-    match weight_type {
-        WeightType::LogRank => "LogRank".to_string(),
-        WeightType::Wilcoxon => "Wilcoxon".to_string(),
-        WeightType::TaroneWare => "TaroneWare".to_string(),
-        WeightType::PetoPeto => "PetoPeto".to_string(),
-        WeightType::FlemingHarrington { p, q } => format!("FlemingHarrington(p={}, q={})", p, q),
-    }
-}
-
-fn parse_logrank_weight_type(weight_type: Option<&str>) -> PyResult<WeightType> {
-    let Some(weight_type) = weight_type else {
-        return Ok(WeightType::LogRank);
-    };
-
-    let normalized = weight_type.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "" | "logrank" | "log-rank" => Ok(WeightType::LogRank),
-        "wilcoxon" => Ok(WeightType::Wilcoxon),
-        "tarone-ware" | "taroneware" => Ok(WeightType::TaroneWare),
-        "peto-peto" | "petopeto" | "peto" => Ok(WeightType::PetoPeto),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            "weight_type must be one of 'logrank', 'wilcoxon', 'tarone-ware', or 'peto-peto'",
-        )),
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (time, status, group, weight_type=None, entry_times=None))]
-pub fn logrank_test(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    group: &Bound<'_, PyAny>,
-    weight_type: Option<&str>,
-    entry_times: Option<&Bound<'_, PyAny>>,
-) -> PyResult<LogRankResult> {
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_i32(status)?;
-    let group = extract_vec_i32(group)?;
-    let entry_times = extract_optional_vec_f64(entry_times)?;
-    validate_logrank_inputs(&time, &status, &group, entry_times.as_deref())?;
-    let wt = parse_logrank_weight_type(weight_type)?;
-    Ok(weighted_logrank_test_with_entry_times(
-        &time,
-        &status,
-        &group,
-        entry_times.as_deref(),
-        wt,
-    ))
-}
-#[pyfunction]
-#[pyo3(signature = (time, status, group, rho=0.0, gamma=0.0, entry_times=None))]
-pub fn fleming_harrington_test(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    group: &Bound<'_, PyAny>,
-    rho: f64,
-    gamma: f64,
-    entry_times: Option<&Bound<'_, PyAny>>,
-) -> PyResult<LogRankResult> {
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_i32(status)?;
-    let group = extract_vec_i32(group)?;
-    let entry_times = extract_optional_vec_f64(entry_times)?;
-    validate_logrank_inputs(&time, &status, &group, entry_times.as_deref())?;
-    validate_fleming_harrington_parameters(rho, gamma)?;
-    Ok(weighted_logrank_test_with_entry_times(
-        &time,
-        &status,
-        &group,
-        entry_times.as_deref(),
-        WeightType::FlemingHarrington { p: rho, q: gamma },
-    ))
-}
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct TrendTestResult {
-    #[pyo3(get)]
+    /// Full variance-covariance matrix of `observed - expected`.
+    pub variance: Vec<Vec<f64>>,
     pub statistic: f64,
-    #[pyo3(get)]
+    pub df: usize,
     pub p_value: f64,
-    #[pyo3(get)]
-    pub trend_direction: String,
+    pub rho: f64,
 }
-#[pymethods]
-impl TrendTestResult {
-    #[new]
-    fn new(statistic: f64, p_value: f64, trend_direction: String) -> Self {
-        Self {
-            statistic,
-            p_value,
-            trend_direction,
-        }
-    }
-}
-pub(crate) fn logrank_trend_test(
+
+/// G-rho log-rank test of `group` on right-censored (`entry_times = None`)
+/// or (start, stop] data, optionally stratified.  `timefix` applies R's
+/// near-tie rounding before comparing times.
+pub fn logrank_test(
     time: &[f64],
     status: &[i32],
     group: &[i32],
-    scores: Option<&[f64]>,
-) -> TrendTestResult {
-    let n = time.len();
-    if n == 0 {
-        return TrendTestResult {
-            statistic: 0.0,
-            p_value: 1.0,
-            trend_direction: "none".to_string(),
-        };
-    }
-    let mut unique_groups: Vec<i32> = group.to_vec();
-    unique_groups.sort();
-    unique_groups.dedup();
-    let n_groups = unique_groups.len();
-    let default_scores: Vec<f64> = (0..n_groups).map(|i| i as f64).collect();
-    let scores = scores.unwrap_or(&default_scores);
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let group_indices = encode_group_indices(group, &unique_groups);
-    let mut at_risk: Vec<f64> = vec![0.0; n_groups];
-    for &group_index in &group_indices {
-        at_risk[group_index] += 1.0;
-    }
-    let mut total_at_risk = n as f64;
-    let mut u_stat = 0.0;
-    let mut var_stat = 0.0;
-    let mut events_by_group = vec![0.0; n_groups];
-    let mut removed = vec![0.0; n_groups];
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        events_by_group.fill(0.0);
-        removed.fill(0.0);
-        let mut total_events = 0.0;
-        let mut total_removed = 0.0;
-        while i < n && same_time(time[indices[i]], current_time) {
-            let idx = indices[i];
-            let g = group_indices[idx];
-            removed[g] += 1.0;
-            total_removed += 1.0;
-            if status[idx] == 1 {
-                events_by_group[g] += 1.0;
-                total_events += 1.0;
-            }
-            i += 1;
-        }
-        if total_events > 0.0 && total_at_risk > 1.0 {
-            let mut score_mean = 0.0;
-            let mut score_var = 0.0;
-            for g in 0..n_groups {
-                score_mean += scores[g] * at_risk[g] / total_at_risk;
-            }
-            for g in 0..n_groups {
-                score_var += at_risk[g] * (scores[g] - score_mean).powi(2) / total_at_risk;
-            }
-            for g in 0..n_groups {
-                let exp_g = total_events * at_risk[g] / total_at_risk;
-                u_stat += scores[g] * (events_by_group[g] - exp_g);
-            }
-            let var_factor = total_events * (total_at_risk - total_events)
-                / (total_at_risk * (total_at_risk - 1.0));
-            var_stat += var_factor * score_var * total_at_risk;
-        }
-        for g in 0..n_groups {
-            at_risk[g] -= removed[g];
-        }
-        total_at_risk -= total_removed;
-    }
-    let statistic = if var_stat > 0.0 {
-        u_stat * u_stat / var_stat
-    } else {
-        0.0
-    };
-    let p_value = chi2_sf(statistic, 1);
-    let trend_direction = if u_stat > 0.0 {
-        "increasing".to_string()
-    } else if u_stat < 0.0 {
-        "decreasing".to_string()
-    } else {
-        "none".to_string()
-    };
-    TrendTestResult {
-        statistic,
-        p_value,
-        trend_direction,
-    }
+    entry_times: Option<&[f64]>,
+    strata: Option<&[i32]>,
+    rho: f64,
+    timefix: bool,
+) -> SurvivalResult<LogRankResult> {
+    let data = SurvdiffData::try_new(
+        entry_times.map(<[f64]>::to_vec),
+        time.to_vec(),
+        status.to_vec(),
+        group.to_vec(),
+        strata.map(<[i32]>::to_vec),
+    )?;
+    let result = survdiff(&data, rho, timefix)?;
+    Ok(LogRankResult {
+        groups: result.group_codes.clone(),
+        observed: result.obs_totals(),
+        expected: result.exp_totals(),
+        variance: result.var,
+        statistic: result.chisq,
+        df: result.df,
+        p_value: result.pvalue,
+        rho,
+    })
 }
-#[pyfunction]
-#[pyo3(signature = (time, status, group, scores=None))]
-pub fn logrank_trend(
-    time: &Bound<'_, PyAny>,
-    status: &Bound<'_, PyAny>,
-    group: &Bound<'_, PyAny>,
-    scores: Option<Vec<f64>>,
-) -> PyResult<TrendTestResult> {
-    let time = extract_vec_f64(time)?;
-    let status = extract_vec_i32(status)?;
-    let group = extract_vec_i32(group)?;
-    let scores_ref = scores.as_deref();
-    validate_logrank_trend_inputs(&time, &status, &group, scores_ref)?;
-    Ok(logrank_trend_test(&time, &status, &group, scores_ref))
+
+/// Python entry point: `logrank_test(time, status, group, rho=0.0,
+/// strata=None, entry_times=None, timefix=True)`.
+#[pyfunction(name = "logrank_test")]
+#[pyo3(signature = (time, status, group, rho=0.0, strata=None, entry_times=None, timefix=true))]
+pub fn logrank_test_py(
+    time: FloatVec,
+    status: IntVec,
+    group: IntVec,
+    rho: f64,
+    strata: Option<IntVec>,
+    entry_times: Option<FloatVec>,
+    timefix: bool,
+) -> PyResult<LogRankResult> {
+    Ok(logrank_test(
+        &time,
+        &status,
+        &group,
+        entry_times.as_deref(),
+        strata.as_deref(),
+        rho,
+        timefix,
+    )?)
 }
 
 #[cfg(test)]
@@ -491,85 +87,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_logrank_weight_type_accepts_aliases_and_rejects_unknown() {
-        assert!(matches!(
-            parse_logrank_weight_type(None).unwrap(),
-            WeightType::LogRank
-        ));
-        assert!(matches!(
-            parse_logrank_weight_type(Some(" log-rank ")).unwrap(),
-            WeightType::LogRank
-        ));
-        assert!(matches!(
-            parse_logrank_weight_type(Some("Wilcoxon")).unwrap(),
-            WeightType::Wilcoxon
-        ));
-        assert!(matches!(
-            parse_logrank_weight_type(Some("tarone_ware")).unwrap(),
-            WeightType::TaroneWare
-        ));
-        assert!(matches!(
-            parse_logrank_weight_type(Some("PetoPeto")).unwrap(),
-            WeightType::PetoPeto
-        ));
-
-        let err = parse_logrank_weight_type(Some("bogus")).unwrap_err();
-        assert!(err.to_string().contains("weight_type must be one of"));
-    }
-
-    #[test]
-    fn delayed_entry_logrank_updates_risk_sets() {
-        let entry_times = vec![0.0, 0.0, 1.0, 2.0];
-        let time = vec![2.0, 4.0, 3.0, 5.0];
-        let status = vec![1, 0, 1, 1];
-        let group = vec![1, 0, 1, 0];
-
-        let result = weighted_logrank_test_with_entry_times(
-            &time,
-            &status,
-            &group,
-            Some(&entry_times),
-            WeightType::LogRank,
-        );
-
-        assert_eq!(result.observed, vec![1.0, 2.0]);
-        assert_eq!(result.expected, vec![2.0, 1.0]);
-        assert!((result.variance - 4.0 / 9.0).abs() < 1e-10);
-        assert!((result.statistic - 2.25).abs() < 1e-10);
-    }
-
-    #[test]
-    fn logrank_groups_near_tied_event_times() {
-        let exact_time = vec![1.0, 1.0, 2.0, 3.0];
-        let near_time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0, 3.0];
-        let status = vec![1, 1, 0, 1];
-        let group = vec![0, 1, 0, 1];
-
-        let exact = weighted_logrank_test(&exact_time, &status, &group, WeightType::LogRank);
-        let near = weighted_logrank_test(&near_time, &status, &group, WeightType::LogRank);
-
-        assert_eq!(near.observed, exact.observed);
-        assert_eq!(near.expected, exact.expected);
-        assert!((near.variance - exact.variance).abs() < 1e-12);
-        assert!((near.statistic - exact.statistic).abs() < 1e-12);
-        assert!((near.p_value - exact.p_value).abs() < 1e-12);
-    }
-
-    #[test]
-    fn multigroup_logrank_uses_full_covariance_statistic() {
-        let time = vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 5.0, 7.0];
-        let status = vec![1, 1, 0, 1, 0, 1, 1, 1, 0];
-        let group = vec![0, 0, 0, 1, 1, 1, 2, 2, 2];
-
-        let result = weighted_logrank_test(&time, &status, &group, WeightType::LogRank);
-
+    fn matches_survdiff_on_a_small_example() {
+        // Same data as the survdiff2 unit tests: two groups, no strata.
+        let time = [1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 5.0, 7.0];
+        let status = [1, 1, 0, 1, 0, 1, 1, 1, 0];
+        let group = [10, 10, 10, 20, 20, 20, 30, 30, 30];
+        let result = logrank_test(&time, &status, &group, None, None, 0.0, true).unwrap();
+        assert_eq!(result.groups, vec![10, 20, 30]);
         assert_eq!(result.df, 2);
         assert_eq!(result.observed, vec![2.0, 2.0, 2.0]);
         assert!((result.expected[0] - 1.0).abs() < 1e-12);
         assert!((result.expected[1] - 2.25).abs() < 1e-12);
         assert!((result.expected[2] - 2.75).abs() < 1e-12);
-        assert!((result.variance - 0.6825396825396826).abs() < 1e-12);
+        assert!((result.variance[0][0] - 0.6825396825396826).abs() < 1e-12);
         assert!((result.statistic - 1.5105257668985863).abs() < 1e-12);
         assert!((result.p_value - 0.4698870729581883).abs() < 1e-9);
+    }
+
+    #[test]
+    fn strata_and_delayed_entry_are_routed_to_the_kernel() {
+        let time = [2.0, 4.0, 3.0, 5.0];
+        let status = [1, 0, 1, 1];
+        let group = [1, 0, 1, 0];
+        let entry = [0.0, 0.0, 1.0, 2.0];
+        let result = logrank_test(&time, &status, &group, Some(&entry), None, 0.0, true).unwrap();
+        assert_eq!(result.observed, vec![1.0, 2.0]);
+        assert!((result.expected[0] - 2.0).abs() < 1e-12);
+        assert!((result.expected[1] - 1.0).abs() < 1e-12);
+        assert!((result.statistic - 2.25).abs() < 1e-10);
+
+        let strata = [7, 7, 3, 3];
+        let stratified =
+            logrank_test(&time, &status, &group, None, Some(&strata), 0.0, true).unwrap();
+        assert_eq!(stratified.observed, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn a_single_group_is_rejected() {
+        assert!(logrank_test(&[1.0, 2.0], &[1, 1], &[1, 1], None, None, 0.0, true).is_err());
     }
 }

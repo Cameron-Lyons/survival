@@ -1,9 +1,23 @@
+//! Legacy Cox baseline bindings kept for the Python facade, all thin views
+//! of `agsurv` (`R/agsurv.R`, `src/agsurv4.c`, `src/agsurv5.c`):
+//!
+//! * `cox_expected_baseline_by_stratum` — the cumulative hazard, its
+//!   variance and the cumulative `xbar` per stratum at the event times, the
+//!   pieces `predict.coxph(type = "expected")` integrates;
+//! * `compute_baseline_survival_steps` / `agsurv4` — the Kalbfleisch-
+//!   Prentice increments;
+//! * `compute_tied_baseline_summaries` / `agsurv5` — the Efron sums.
+//!
+//! The argument checks are those of the original bindings; the arithmetic
+//! is the one implementation in `crate::surv_analysis::agsurv`.
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use std::collections::BTreeMap;
 
-use crate::constants::TIME_EPSILON;
+use crate::core::strata_order::stratum_groups;
+use crate::surv_analysis::agsurv::{AgsurvData, CoxSurvType, agsurv_rows, agsurv4, agsurv5};
+use ndarray::{Array2, ShapeBuilder};
 
 const PY_EXP_CLAMP_MIN: f64 = -745.0;
 const PY_EXP_CLAMP_MAX: f64 = 709.0;
@@ -233,208 +247,29 @@ fn safe_exp(value: f64) -> f64 {
     value.clamp(PY_EXP_CLAMP_MIN, PY_EXP_CLAMP_MAX).exp()
 }
 
-fn sorted_unique_event_times(indices: &[usize], time: &[f64], status: &[i32]) -> Vec<f64> {
-    let mut event_times: Vec<f64> = indices
-        .iter()
-        .filter_map(|&idx| (status[idx] == 1).then_some(time[idx]))
-        .collect();
-    event_times.sort_by(f64::total_cmp);
-    event_times.dedup_by(|left, right| (*left - *right).abs() < TIME_EPSILON);
-    event_times
+/// A risk set of zero total weight (`0/0` in R's `agsurv`, which never sees
+/// zero weights because `coxph` rejects them) contributes no hazard.
+pub(crate) fn zero_if_nan(value: f64) -> f64 {
+    if value.is_nan() { 0.0 } else { value }
 }
 
-fn add_risk_row(
-    idx: usize,
-    centered_rows: &[Vec<f64>],
-    risk_weights: &[f64],
-    risk_xsum: &mut [f64],
-) {
-    for (col_idx, value) in risk_xsum.iter_mut().enumerate() {
-        *value += risk_weights[idx] * centered_rows[idx][col_idx];
-    }
+/// Row-major `Vec<Vec<f64>>` (validated rectangular) as an `n x nvar` array.
+pub(crate) fn rows_to_array(rows: &[Vec<f64>], nvar: usize) -> Array2<f64> {
+    Array2::from_shape_vec((rows.len(), nvar), rows.iter().flatten().copied().collect())
+        .expect("rows were validated to be rectangular")
 }
 
-fn remove_risk_row(
-    idx: usize,
-    centered_rows: &[Vec<f64>],
-    risk_weights: &[f64],
-    risk_xsum: &mut [f64],
-) {
-    for (col_idx, value) in risk_xsum.iter_mut().enumerate() {
-        *value -= risk_weights[idx] * centered_rows[idx][col_idx];
-    }
-}
-
-fn is_before_event_time(time: f64, event_time: f64) -> bool {
-    time < event_time && (event_time - time).abs() >= TIME_EPSILON
-}
-
-#[allow(clippy::too_many_arguments)]
-fn accumulate_expected_baseline_stratum(
-    indices: &[usize],
-    event_times: &[f64],
-    time: &[f64],
-    status: &[i32],
-    centered_rows: &[Vec<f64>],
-    risk_weights: &[f64],
-    weights: &[f64],
-    entry_times: Option<&[f64]>,
-    method: &str,
-    nvar: usize,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
-    if event_times.is_empty() {
-        return Default::default();
-    }
-
-    let mut out_times = Vec::with_capacity(event_times.len());
-    let mut out_hazard = Vec::with_capacity(event_times.len());
-    let mut out_varhaz = Vec::with_capacity(event_times.len());
-    let mut out_xbar = Vec::with_capacity(event_times.len());
-    let mut cumulative_hazard = 0.0;
-    let mut cumulative_varhaz = 0.0;
-    let mut cumulative_xbar = vec![0.0; nvar];
-
-    let mut stop_order = indices.to_vec();
-    stop_order.sort_by(|&left, &right| {
-        time[left]
-            .total_cmp(&time[right])
-            .then_with(|| left.cmp(&right))
-    });
-    let entry_order = entry_times.map(|entry| {
-        let mut order = indices.to_vec();
-        order.sort_by(|&left, &right| {
-            entry[left]
-                .total_cmp(&entry[right])
-                .then_with(|| left.cmp(&right))
-        });
-        order
-    });
-    let mut event_order: Vec<usize> = indices
-        .iter()
-        .copied()
-        .filter(|&idx| status[idx] == 1)
-        .collect();
-    event_order.sort_by(|&left, &right| {
-        time[left]
-            .total_cmp(&time[right])
-            .then_with(|| left.cmp(&right))
-    });
-
-    let mut risk_sum = 0.0;
-    let mut risk_xsum = vec![0.0; nvar];
-    if entry_times.is_none() {
-        for &idx in indices {
-            risk_sum += risk_weights[idx];
-            add_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
-        }
-    }
-
-    let mut entry_pos = 0;
-    let mut stop_pos = 0;
-    let mut event_pos = 0;
-    let mut deaths = Vec::new();
-
-    for &event_time in event_times {
-        if let (Some(entry), Some(order)) = (entry_times, entry_order.as_ref()) {
-            while entry_pos < order.len() && entry[order[entry_pos]] < event_time {
-                let idx = order[entry_pos];
-                risk_sum += risk_weights[idx];
-                add_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
-                entry_pos += 1;
-            }
-        }
-        while stop_pos < stop_order.len()
-            && is_before_event_time(time[stop_order[stop_pos]], event_time)
-        {
-            // Validated entry times precede stop times, so a delayed-entry row
-            // reaching this cursor has already been added to the risk set.
-            let idx = stop_order[stop_pos];
-            risk_sum -= risk_weights[idx];
-            remove_risk_row(idx, centered_rows, risk_weights, &mut risk_xsum);
-            stop_pos += 1;
-        }
-
-        while event_pos < event_order.len()
-            && is_before_event_time(time[event_order[event_pos]], event_time)
-        {
-            event_pos += 1;
-        }
-        deaths.clear();
-        while event_pos < event_order.len()
-            && (time[event_order[event_pos]] - event_time).abs() < TIME_EPSILON
-        {
-            deaths.push(event_order[event_pos]);
-            event_pos += 1;
-        }
-        if deaths.is_empty() {
-            continue;
-        }
-
-        let event_weight: f64 = deaths.iter().map(|&idx| weights[idx]).sum();
-        let denom = risk_sum;
-        let (hazard, varhaz, xbar_increment) = if denom <= 0.0 {
-            (0.0, 0.0, vec![0.0; nvar])
-        } else {
-            if method == "efron" && deaths.len() > 1 {
-                let death_risk: f64 = deaths.iter().map(|&idx| risk_weights[idx]).sum();
-                let mut death_xsum = vec![0.0; nvar];
-                for &idx in &deaths {
-                    for (col_idx, value) in death_xsum.iter_mut().enumerate() {
-                        *value += risk_weights[idx] * centered_rows[idx][col_idx];
-                    }
-                }
-
-                let step_weight = event_weight / deaths.len() as f64;
-                let mut hazard = 0.0;
-                let mut varhaz = 0.0;
-                let mut xbar_increment = vec![0.0; nvar];
-                for step in 0..deaths.len() {
-                    let fraction = step as f64 / deaths.len() as f64;
-                    let step_denom = denom - fraction * death_risk;
-                    if step_denom <= 0.0 {
-                        continue;
-                    }
-                    hazard += step_weight / step_denom;
-                    varhaz += step_weight / (step_denom * step_denom);
-                    for col_idx in 0..nvar {
-                        let step_xsum = risk_xsum[col_idx] - fraction * death_xsum[col_idx];
-                        xbar_increment[col_idx] +=
-                            step_weight * step_xsum / (step_denom * step_denom);
-                    }
-                }
-                (hazard, varhaz, xbar_increment)
-            } else {
-                let hazard = event_weight / denom;
-                let varhaz = event_weight / (denom * denom);
-                let xbar_increment = risk_xsum
-                    .iter()
-                    .map(|&value| hazard * value / denom)
-                    .collect();
-                (hazard, varhaz, xbar_increment)
-            }
-        };
-
-        cumulative_hazard += hazard;
-        cumulative_varhaz += varhaz;
-        for col_idx in 0..nvar {
-            cumulative_xbar[col_idx] += xbar_increment[col_idx];
-        }
-        out_times.push(event_time);
-        out_hazard.push(cumulative_hazard);
-        out_varhaz.push(cumulative_varhaz);
-        out_xbar.push(cumulative_xbar.clone());
-    }
-
-    (out_times, out_hazard, out_varhaz, out_xbar)
-}
-
+/// Per stratum (ascending code), the event times with the cumulative hazard,
+/// its variance and the cumulative `xbar` at each: the Breslow (`method =
+/// "breslow"` / `"exact"`) or Efron pieces of `agsurv` at the covariate
+/// means, with risk `weights * exp(offset + x beta)`.
 #[pyfunction]
 #[pyo3(signature = (time, status, covariates, beta, weights, strata, offset, means, entry_times=None, method=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn cox_expected_baseline_by_stratum(
     time: Vec<f64>,
     status: Vec<i32>,
-    mut covariates: Vec<Vec<f64>>,
+    covariates: Vec<Vec<f64>>,
     beta: Vec<f64>,
     weights: Vec<f64>,
     strata: Vec<i32>,
@@ -454,72 +289,56 @@ pub fn cox_expected_baseline_by_stratum(
         &means,
         entry_times.as_deref(),
     )?;
-    let method = method.unwrap_or_else(|| "breslow".to_string());
-    if method != "breslow" && method != "efron" && method != "exact" {
-        return Err(value_error("method must be 'breslow', 'efron', or 'exact'"));
-    }
+    let survtype = match method.as_deref().unwrap_or("breslow") {
+        "efron" => CoxSurvType::Efron,
+        "breslow" | "exact" => CoxSurvType::Breslow,
+        _ => return Err(value_error("method must be 'breslow', 'efron', or 'exact'")),
+    };
 
-    if status.iter().all(|&value| value == 0) {
-        let mut out_strata = strata;
-        out_strata.sort_unstable();
-        out_strata.dedup();
-        let nstrata = out_strata.len();
-        return Ok((
-            out_strata,
-            vec![Vec::new(); nstrata],
-            vec![Vec::new(); nstrata],
-            vec![Vec::new(); nstrata],
-            vec![Vec::new(); nstrata],
-        ));
-    }
-
-    let mut indices_by_stratum: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (idx, &stratum) in strata.iter().enumerate() {
-        indices_by_stratum.entry(stratum).or_default().push(idx);
-    }
-
-    let risk_weights: Vec<f64> = covariates
-        .iter()
-        .enumerate()
-        .map(|(idx, row)| {
-            let linear_predictor = offset[idx]
-                + row
-                    .iter()
-                    .zip(beta.iter())
-                    .map(|(&value, &coefficient)| value * coefficient)
-                    .sum::<f64>();
-            weights[idx] * safe_exp(linear_predictor)
-        })
+    let x = rows_to_array(&covariates, nvar);
+    let risk: Vec<f64> = (0..time.len())
+        .map(|i| safe_exp(offset[i] + x.row(i).iter().zip(&beta).map(|(x, b)| x * b).sum::<f64>()))
         .collect();
-    for row in &mut covariates {
-        for (value, &mean) in row.iter_mut().zip(&means) {
-            *value -= mean;
+    let data = AgsurvData {
+        start: entry_times.as_deref(),
+        stop: &time,
+        status: &status,
+        x: x.view(),
+        means: Some(&means),
+        weights: &weights,
+        risk: &risk,
+    };
+
+    let mut out_strata = Vec::new();
+    let mut out_times = Vec::new();
+    let mut out_hazard = Vec::new();
+    let mut out_varhaz = Vec::new();
+    let mut out_xbar = Vec::new();
+    for (stratum, rows) in stratum_groups(&strata) {
+        let curve = agsurv_rows(&data, &rows, survtype, survtype)?;
+        let mut cumhaz = 0.0;
+        let mut cumvar = 0.0;
+        let mut cumxbar = vec![0.0; nvar];
+        let mut times = Vec::new();
+        let mut hazard = Vec::new();
+        let mut varhaz = Vec::new();
+        let mut xbar = Vec::new();
+        for g in 0..curve.time.len() {
+            cumhaz += zero_if_nan(curve.hazard[g]);
+            cumvar += zero_if_nan(curve.varhaz[g]);
+            for (k, value) in cumxbar.iter_mut().enumerate() {
+                *value += zero_if_nan(curve.xbar[(g, k)]);
+            }
+            if curve.ndeath[g] > 0 {
+                times.push(curve.time[g]);
+                hazard.push(cumhaz);
+                varhaz.push(cumvar);
+                xbar.push(cumxbar.clone());
+            }
         }
-    }
-
-    let mut out_strata = Vec::with_capacity(indices_by_stratum.len());
-    let mut out_times = Vec::with_capacity(indices_by_stratum.len());
-    let mut out_hazard = Vec::with_capacity(indices_by_stratum.len());
-    let mut out_varhaz = Vec::with_capacity(indices_by_stratum.len());
-    let mut out_xbar = Vec::with_capacity(indices_by_stratum.len());
-
-    for (stratum, indices) in indices_by_stratum {
-        let event_times = sorted_unique_event_times(&indices, &time, &status);
-        let (times, cumhaz, varhaz, xbar) = accumulate_expected_baseline_stratum(
-            &indices,
-            &event_times,
-            &time,
-            &status,
-            &covariates,
-            &risk_weights,
-            &weights,
-            entry_times.as_deref(),
-            &method,
-            nvar,
-        );
         out_strata.push(stratum);
         out_times.push(times);
-        out_hazard.push(cumhaz);
+        out_hazard.push(hazard);
         out_varhaz.push(varhaz);
         out_xbar.push(xbar);
     }
@@ -527,6 +346,8 @@ pub fn cox_expected_baseline_by_stratum(
     Ok((out_strata, out_times, out_hazard, out_varhaz, out_xbar))
 }
 
+/// `agsurv4.c`: the Kalbfleisch-Prentice survival increment at each of the
+/// `sn` times; `risk` and `wt` are those of the deaths in time order.
 #[pyfunction]
 pub fn compute_baseline_survival_steps(
     ndeath: Vec<i32>,
@@ -536,48 +357,39 @@ pub fn compute_baseline_survival_steps(
     denom: Vec<f64>,
 ) -> PyResult<Vec<f64>> {
     validate_baseline_survival_steps_inputs(&ndeath, &risk, &wt, sn, &denom)?;
-    let ndeath_slice = &ndeath;
-    let risk_slice = &risk;
-    let wt_slice = &wt;
-    let denom_slice = &denom;
-    let mut km = vec![0.0; sn];
-    let n = sn;
-    let mut j = 0;
-    for i in 0..n {
-        match ndeath_slice[i] {
-            0 => km[i] = 1.0,
-            1 => {
-                let numerator = wt_slice[j] * risk_slice[j];
-                km[i] = (1.0 - numerator / denom_slice[i])
-                    .max(0.0)
-                    .powf(1.0 / risk_slice[j]);
-                j += 1;
-            }
-            _ => {
-                let mut guess: f64 = 0.5;
-                let mut inc = 0.25;
-                let death_count = ndeath_slice[i] as usize;
-                for _ in 0..35 {
-                    let mut sumt = 0.0;
-                    for k in j..(j + death_count) {
-                        let term = wt_slice[k] * risk_slice[k] / (1.0 - guess.powf(risk_slice[k]));
-                        sumt += term;
-                    }
-                    if sumt < denom_slice[i] {
-                        guess += inc;
-                    } else {
-                        guess -= inc;
-                    }
-                    inc /= 2.0;
-                }
-                km[i] = guess;
-                j += death_count;
-            }
-        }
-    }
-    Ok(km)
+    let ndeath: Vec<usize> = ndeath.iter().map(|&d| d as usize).collect();
+    Ok(agsurv4(&ndeath, &risk, &wt, &denom))
 }
 
+/// `agsurv5.c` on R's column-major layout: `(sum1, sum2, xbar)` with `xbar`
+/// flattened as `xbar[i + n * k]`.
+fn tied_baseline_summaries(
+    n: usize,
+    nvar: usize,
+    dd: &[i32],
+    x1: &[f64],
+    x2: &[f64],
+    xsum: Vec<f64>,
+    xsum2: Vec<f64>,
+) -> PyResult<(Vec<f64>, Vec<f64>, Vec<f64>)> {
+    validate_tied_baseline_summaries_inputs(n, nvar, dd, x1, x2, &xsum, &xsum2)?;
+    let ndeath: Vec<usize> = dd.iter().map(|&d| d as usize).collect();
+    let column_major = |values: Vec<f64>| {
+        Array2::from_shape_vec((n, nvar).f(), values).expect("length was validated")
+    };
+    let sums = agsurv5(&ndeath, x1, x2, &column_major(xsum), &column_major(xsum2));
+    let mut xbar = vec![0.0; n * nvar];
+    for k in 0..nvar {
+        for i in 0..n {
+            xbar[i + n * k] = sums.xbar[(i, k)];
+        }
+    }
+    Ok((sums.sum1, sums.sum2, xbar))
+}
+
+/// `agsurv5.c`: the Efron sums `sum1`, `sum2` and `xbar` for `n` death
+/// times with `dd` tied deaths each; `xsum` / `xsum2` and the returned
+/// `xbar` are `n x nvar` matrices stored column-major, as R passes them.
 #[pyfunction]
 pub fn compute_tied_baseline_summaries(
     n: usize,
@@ -588,41 +400,7 @@ pub fn compute_tied_baseline_summaries(
     xsum: Vec<f64>,
     xsum2: Vec<f64>,
 ) -> PyResult<Py<PyDict>> {
-    validate_tied_baseline_summaries_inputs(n, nvar, &dd, &x1, &x2, &xsum, &xsum2)?;
-    let dd_slice = &dd;
-    let x1_slice = &x1;
-    let x2_slice = &x2;
-    let xsum_slice = &xsum;
-    let xsum2_slice = &xsum2;
-    let mut sum1 = vec![0.0; n];
-    let mut sum2 = vec![0.0; n];
-    let mut xbar = vec![0.0; n * nvar];
-    for i in 0..n {
-        let d = dd_slice[i] as f64;
-        if d == 1.0 {
-            let temp = 1.0 / x1_slice[i];
-            sum1[i] = temp;
-            sum2[i] = temp.powi(2);
-            for k in 0..nvar {
-                let idx = i + n * k;
-                xbar[idx] = xsum_slice[idx] * temp.powi(2);
-            }
-        } else {
-            let d_int = dd_slice[i];
-            let mut temp;
-            for j in 0..d_int {
-                let j_f64 = j as f64;
-                temp = 1.0 / (x1_slice[i] - x2_slice[i] * j_f64 / d);
-                sum1[i] += temp / d;
-                sum2[i] += temp.powi(2) / d;
-                for k in 0..nvar {
-                    let idx = i + n * k;
-                    let weighted_x = xsum_slice[idx] - xsum2_slice[idx] * j_f64 / d;
-                    xbar[idx] += (weighted_x * temp.powi(2)) / d;
-                }
-            }
-        }
-    }
+    let (sum1, sum2, xbar) = tied_baseline_summaries(n, nvar, &dd, &x1, &x2, xsum, xsum2)?;
     Python::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("sum1", sum1)?;
@@ -702,8 +480,10 @@ mod tests {
     }
 
     #[test]
-    fn expected_baseline_groups_near_tied_event_times() {
-        let time = vec![1.0, 1.0 + TIME_EPSILON / 2.0, 2.0];
+    fn expected_baseline_keeps_distinct_times_distinct() {
+        // Times are compared exactly, as R's agsurv does (aeqSurv is the
+        // caller's job): 1 and 1 + 5e-10 are two event times.
+        let time = vec![1.0, 1.0 + 5e-10, 2.0];
         let status = vec![1, 1, 0];
         let covariates = vec![vec![0.0], vec![1.0], vec![2.0]];
         let result = cox_expected_baseline_by_stratum(
@@ -718,11 +498,12 @@ mod tests {
             None,
             Some("breslow".to_string()),
         )
-        .expect("near-tied expected baseline should compute");
+        .expect("expected baseline should compute");
 
-        assert_eq!(result.1[0], vec![1.0]);
-        assert!((result.2[0][0] - 2.0 / 3.0).abs() < 1e-12);
-        assert!((result.3[0][0] - 2.0 / 9.0).abs() < 1e-12);
+        assert_eq!(result.1[0], vec![1.0, 1.0 + 5e-10]);
+        assert!((result.2[0][0] - 1.0 / 3.0).abs() < 1e-12);
+        assert!((result.2[0][1] - (1.0 / 3.0 + 1.0 / 2.0)).abs() < 1e-12);
+        assert!((result.3[0][1] - (1.0 / 9.0 + 1.0 / 4.0)).abs() < 1e-12);
     }
 
     #[test]
@@ -749,70 +530,30 @@ mod tests {
     }
 
     #[test]
-    fn expected_baseline_delayed_entry_cursors_remove_expired_rows() {
-        let result = cox_expected_baseline_by_stratum(
-            vec![2.0, 4.0, 5.0],
-            vec![0, 1, 0],
-            vec![vec![], vec![], vec![]],
-            vec![],
-            vec![1.0; 3],
-            vec![0; 3],
-            vec![0.0; 3],
-            vec![],
-            Some(vec![0.0, 1.0, 3.0]),
-            Some("breslow".to_string()),
+    fn tied_summaries_are_returned_column_major() {
+        let (sum1, sum2, xbar) = tied_baseline_summaries(
+            2,
+            2,
+            &[1, 2],
+            &[10.0, 9.0],
+            &[0.0, 1.0],
+            vec![10.0, 9.0, 4.0, 3.0],
+            vec![0.0, 0.5, 0.0, 0.25],
         )
-        .expect("valid delayed-entry baseline should compute");
-
-        assert_eq!(result.1, vec![vec![4.0]]);
-        assert_eq!(result.2, vec![vec![0.5]]);
-        assert_eq!(result.3, vec![vec![0.25]]);
-        assert_eq!(result.4, vec![vec![Vec::<f64>::new()]]);
-    }
-
-    #[test]
-    fn expected_baseline_skips_event_free_strata() {
-        let result = cox_expected_baseline_by_stratum(
-            vec![2.0, 3.0, 4.0],
-            vec![0, 0, 0],
-            vec![vec![1.0], vec![2.0], vec![3.0]],
-            vec![0.5],
-            vec![1.0; 3],
-            vec![2, 1, 2],
-            vec![0.0; 3],
-            vec![2.0],
-            Some(vec![0.0, 1.0, 2.0]),
-            Some("efron".to_string()),
-        )
-        .expect("event-free strata should return empty baselines");
-
-        assert_eq!(result.0, vec![1, 2]);
-        assert_eq!(result.1, vec![Vec::<f64>::new(); 2]);
-        assert_eq!(result.2, vec![Vec::<f64>::new(); 2]);
-        assert_eq!(result.3, vec![Vec::<f64>::new(); 2]);
-        assert_eq!(result.4, vec![Vec::<Vec<f64>>::new(); 2]);
-    }
-
-    #[test]
-    fn expected_baseline_skips_event_free_stratum_in_mixed_input() {
-        let result = cox_expected_baseline_by_stratum(
-            vec![1.0, 2.0, 1.0, 2.0],
-            vec![1, 0, 0, 0],
-            vec![vec![], vec![], vec![], vec![]],
-            vec![],
-            vec![1.0; 4],
-            vec![1, 1, 2, 2],
-            vec![0.0; 4],
-            vec![],
-            None,
-            Some("breslow".to_string()),
-        )
-        .expect("mixed event and event-free strata should compute");
-
-        assert_eq!(result.0, vec![1, 2]);
-        assert_eq!(result.1, vec![vec![1.0], vec![]]);
-        assert_eq!(result.2, vec![vec![0.5], vec![]]);
-        assert_eq!(result.3, vec![vec![0.25], vec![]]);
-        assert_eq!(result.4, vec![vec![Vec::<f64>::new()], vec![]]);
+        .unwrap();
+        assert!((sum1[0] - 0.1).abs() < 1e-12);
+        assert!((sum2[0] - 0.01).abs() < 1e-12);
+        assert!((sum1[1] - (1.0 / 9.0 + 1.0 / 8.5) / 2.0).abs() < 1e-12);
+        assert_eq!(xbar.len(), 4);
+        assert!((xbar[0] - 10.0 / 100.0).abs() < 1e-12);
+        assert!((xbar[2] - 4.0 / 100.0).abs() < 1e-12);
+        let expected = (9.0 / 81.0 + (9.0 - 0.25) / (8.5 * 8.5)) / 2.0;
+        assert!((xbar[1] - expected).abs() < 1e-12);
+        assert!(
+            tied_baseline_summaries(1, 1, &[0], &[1.0], &[0.0], vec![1.0], vec![0.0])
+                .unwrap_err()
+                .to_string()
+                .contains("positive event counts")
+        );
     }
 }

@@ -1,384 +1,249 @@
+//! Schoenfeld residuals of a Cox model.
+//!
+//! `coxscho` is the port of `coxscho.c` (survival 3.8-12): for each death
+//! the residual is `x - xbar(t)`, the covariate minus its risk-weighted mean
+//! over the risk set, and with Efron ties the mean is averaged over the
+//! tied-death pseudo risk sets, `xbar = mean_j (a - j/d a2) / (denom - j/d
+//! efron_wt)`.  The C code rescans the stratum for every death time
+//! (`O(deaths x n)`); the port accumulates the same sums in one backward
+//! sweep per stratum (`crate::core::risk_sweep`), the walk `zph1.c` and
+//! `agfit4.c` use, which changes nothing but the summation order.
+//! [`schoenfeld_residuals`] adds the argument checks of `residuals.coxph`
+//! and the R convention that the risk score passed down is
+//! `exp(eta) * weight`.
+
+use crate::core::risk_sweep::StratumSweep;
+use crate::core::strata_order::{SurvResponse, order_within_strata, validate_intervals};
+use crate::error::SurvivalResult;
+use crate::internal::validation::validate_binary_i32;
+use crate::regression::TieMethod;
+use crate::scoring::validate_score_inputs;
+use ndarray::ArrayView2;
 use pyo3::prelude::*;
 
-use crate::internal::validation::{
-    ValidationError, validate_binary_f64, validate_binary_i32, validate_finite,
-    validate_non_negative,
-};
-
-pub(crate) struct CoxSchoInput<'a> {
-    pub y: &'a [f64],
-    pub score: &'a [f64],
-    pub strata: &'a [i32],
-}
-pub(crate) struct CoxSchoParams {
-    pub nused: usize,
-    pub nvar: usize,
-    pub method: i32,
-}
-
-fn validation_err_to_py(err: ValidationError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(err.to_string())
+/// Schoenfeld residuals, one row per event in order of (stratum, time).
+#[derive(Debug, Clone)]
+#[pyclass(from_py_object)]
+pub struct CoxschoResiduals {
+    /// Event time of each row.
+    #[pyo3(get)]
+    pub time: Vec<f64>,
+    /// Row index into the input data of each event.
+    #[pyo3(get)]
+    pub index: Vec<usize>,
+    /// Stratum label of each event.
+    #[pyo3(get)]
+    pub strata: Vec<i32>,
+    /// `n_events x p` residual matrix `x - xbar(t)` (unweighted).
+    #[pyo3(get)]
+    pub residuals: Vec<Vec<f64>>,
 }
 
-fn validate_schoenfeld_inputs(
-    y: &[f64],
-    score: &[f64],
-    strata: &[i32],
-    covar: &[f64],
-    nvar: usize,
-    method: i32,
-) -> PyResult<()> {
-    let nused = score.len();
-    let expected_y_len = 3usize.checked_mul(nused).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err("3 * n exceeds supported array size")
-    })?;
-    let expected_covar_len = nvar.checked_mul(nused).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err("nvar * n exceeds supported array size")
-    })?;
-    if y.len() < expected_y_len {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "y array must have length >= 3 * n (start, stop, event)",
-        ));
-    }
-    if strata.len() < nused {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "strata array length must match score length",
-        ));
-    }
-    if covar.len() < expected_covar_len {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "covar array must have length >= nvar * n",
-        ));
-    }
-    if method != 0 && method != 1 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "method must be 0 (Breslow) or 1 (Efron)",
-        ));
-    }
-
-    validate_finite(&y[..expected_y_len], "y").map_err(validation_err_to_py)?;
-    validate_finite(score, "score").map_err(validation_err_to_py)?;
-    validate_non_negative(score, "score").map_err(validation_err_to_py)?;
-    validate_binary_i32(&strata[..nused], "strata").map_err(validation_err_to_py)?;
-    validate_finite(&covar[..expected_covar_len], "covar").map_err(validation_err_to_py)?;
-    validate_binary_f64(&y[2 * nused..expected_y_len], "event").map_err(validation_err_to_py)?;
-
-    Ok(())
-}
-
-pub(crate) fn coxscho(
-    params: CoxSchoParams,
-    input: CoxSchoInput,
-    covar: &mut [f64],
-    work: &mut [f64],
-) {
-    assert!(input.y.len() >= 3 * params.nused, "y array too short");
-    assert!(
-        covar.len() >= params.nvar * params.nused,
-        "covar array too short for nvar and nused"
-    );
-    assert!(input.score.len() >= params.nused, "score array too short");
-    assert!(input.strata.len() >= params.nused, "strata array too short");
-    assert!(
-        work.len() >= 3 * params.nvar,
-        "work array must be at least 3 * nvar in length"
-    );
-    let start = &input.y[0..params.nused];
-    let stop = &input.y[params.nused..2 * params.nused];
-    let event = &input.y[2 * params.nused..3 * params.nused];
-    let (a, rest) = work.split_at_mut(params.nvar);
-    let (a2, mean) = rest.split_at_mut(params.nvar);
-    let mut entry_order = Vec::new();
-    let mut active = vec![false; params.nused];
-    let mut event_ranges = Vec::new();
-    let mut event_means = Vec::new();
-    let mut stratum_start = 0;
-
-    while stratum_start < params.nused {
-        let mut stratum_end = stratum_start;
-        while stratum_end + 1 < params.nused && input.strata[stratum_end] != 1 {
-            stratum_end += 1;
-        }
-
-        entry_order.clear();
-        entry_order.extend(stratum_start..=stratum_end);
-        entry_order.sort_by(|&left, &right| {
-            start[left]
-                .total_cmp(&start[right])
-                .then_with(|| left.cmp(&right))
-        });
-        active[stratum_start..=stratum_end].fill(false);
-        event_ranges.clear();
-        event_means.clear();
-
-        let mut denom = 0.0;
-        a.fill(0.0);
-        let mut entry_pos = 0;
-        let mut stop_pos = stratum_start;
-        let mut time_start = stratum_start;
-
-        while time_start <= stratum_end {
-            let time = stop[time_start];
-            let mut time_end = time_start;
-            while time_end < stratum_end && stop[time_end + 1] == time {
-                time_end += 1;
-            }
-
-            let death_count = (time_start..=time_end)
-                .filter(|&row| event[row] == 1.0)
-                .count();
-            if death_count > 0 {
-                while entry_pos < entry_order.len() && start[entry_order[entry_pos]] < time {
-                    let row = entry_order[entry_pos];
-                    entry_pos += 1;
-                    if active[row] {
-                        continue;
-                    }
-                    active[row] = true;
-                    let risk = input.score[row];
-                    denom += risk;
-                    for var in 0..params.nvar {
-                        a[var] += risk * covar[var * params.nused + row];
-                    }
-                }
-
-                while stop_pos <= stratum_end && stop[stop_pos] < time {
-                    let row = stop_pos;
-                    stop_pos += 1;
-                    if !active[row] {
-                        continue;
-                    }
-                    active[row] = false;
-                    let risk = input.score[row];
-                    denom -= risk;
-                    for var in 0..params.nvar {
-                        a[var] -= risk * covar[var * params.nused + row];
-                    }
-                }
-
-                let deaths = death_count as f64;
-                let mut efron_wt = 0.0;
-                a2.fill(0.0);
-                for row in (time_start..=time_end).filter(|&row| event[row] == 1.0) {
-                    let risk = input.score[row];
-                    efron_wt += risk;
-                    for var in 0..params.nvar {
-                        a2[var] += risk * covar[var * params.nused + row];
-                    }
-                }
-
-                mean.fill(0.0);
-                for step in 0..death_count {
-                    let fraction = if params.method == 1 {
-                        step as f64 / deaths
-                    } else {
-                        0.0
-                    };
-                    let step_denom = deaths * (denom - fraction * efron_wt);
-                    if step_denom == 0.0 {
-                        continue;
-                    }
-                    for var in 0..params.nvar {
-                        mean[var] += (a[var] - fraction * a2[var]) / step_denom;
-                    }
-                }
-
-                let mean_offset = event_means.len();
-                event_means.extend_from_slice(mean);
-                event_ranges.push((time_start, time_end, mean_offset));
-            }
-
-            if time_end == stratum_end {
-                break;
-            }
-            time_start = time_end + 1;
-        }
-
-        for &(time_start, time_end, mean_offset) in &event_ranges {
-            let event_mean = &event_means[mean_offset..mean_offset + params.nvar];
-            for row in (time_start..=time_end).filter(|&row| event[row] == 1.0) {
-                for (var, &mean_value) in event_mean.iter().enumerate() {
-                    covar[var * params.nused + row] -= mean_value;
-                }
-            }
-        }
-
-        stratum_start = stratum_end + 1;
-    }
-}
-#[pyfunction]
-#[pyo3(signature = (y, score, strata, covar, nvar, method=0))]
+/// Schoenfeld residuals for right-censored or (start, stop] data.
+/// `covariates` is `n x p`, `score` is `exp(eta)`, and the weights, when
+/// given, enter the risk-set means as `exp(eta) * weight`.  As in R, an
+/// exact fit has no Schoenfeld residuals.
 pub fn schoenfeld_residuals(
-    y: Vec<f64>,
-    score: Vec<f64>,
-    strata: Vec<i32>,
-    covar: Vec<f64>,
-    nvar: usize,
-    method: i32,
-) -> PyResult<Vec<f64>> {
-    let nused = score.len();
-    validate_schoenfeld_inputs(&y, &score, &strata, &covar, nvar, method)?;
-    let work_len = 3usize.checked_mul(nvar).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err("3 * nvar exceeds supported array size")
-    })?;
-    let mut covar_copy = covar.clone();
-    let mut work = vec![0.0; work_len];
-    let params = CoxSchoParams {
-        nused,
-        nvar,
+    response: SurvResponse<'_>,
+    covariates: ArrayView2<'_, f64>,
+    score: &[f64],
+    weights: Option<&[f64]>,
+    strata: Option<&[i32]>,
+    method: TieMethod,
+) -> SurvivalResult<CoxschoResiduals> {
+    let start = response.start();
+    let stop = response.stop();
+    let event = response.status();
+    let n = stop.len();
+    if let Some(start) = start {
+        validate_intervals(start, stop)?;
+    }
+    validate_binary_i32(event, "event")?;
+    validate_score_inputs(n, covariates, score, weights, strata)?;
+    method.reject_exact("schoenfeld")?;
+    let unit = vec![1.0; n];
+    let zero = vec![0; n];
+    Ok(coxscho(
+        start,
+        stop,
+        event,
+        covariates,
+        score,
+        weights.unwrap_or(&unit),
+        strata.unwrap_or(&zero),
         method,
-    };
-    let input = CoxSchoInput {
-        y: &y,
-        score: &score,
-        strata: &strata,
-    };
-    coxscho(params, input, &mut covar_copy, &mut work);
-    Ok(covar_copy)
+    ))
+}
+
+/// `coxscho.c` on validated, unsorted rows.  Strata are labels; the deaths
+/// come out in `order(strata, stop)` with tied deaths in row order, the
+/// order `residuals.coxph` reports.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn coxscho(
+    start: Option<&[f64]>,
+    stop: &[f64],
+    event: &[i32],
+    covariates: ArrayView2<'_, f64>,
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> CoxschoResiduals {
+    let nvar = covariates.ncols();
+    let steps_of = |ndead: usize| if method.is_efron() { ndead } else { 1 };
+    let order = order_within_strata(strata, |a, b| stop[a].total_cmp(&stop[b]));
+    let mut time = Vec::new();
+    let mut index = Vec::new();
+    let mut strata_out = Vec::new();
+    let mut residuals = Vec::new();
+    let mut mean = vec![0.0; nvar];
+    let mut first = 0;
+    while first < order.len() {
+        let label = strata[order[first]];
+        let last = first + order[first..].partition_point(|&row| strata[row] == label);
+        let sweep = StratumSweep {
+            stop,
+            entry: start,
+            status: event,
+            x: covariates,
+            weights,
+            risk: score,
+            rows: &order[first..last],
+            second_moments: false,
+        };
+        // The sweep visits death times from the largest down.
+        let mut per_stratum: Vec<(usize, Vec<f64>)> = Vec::new();
+        sweep.for_each_death_time(|death| {
+            let steps = steps_of(death.ndead());
+            mean.fill(0.0);
+            for j in 0..steps {
+                let denom = death.efron_denom(j) * steps as f64;
+                for (i, value) in mean.iter_mut().enumerate() {
+                    *value += death.efron_a(j, i) / denom;
+                }
+            }
+            for &row in death.deaths.iter().rev() {
+                per_stratum.push((
+                    row,
+                    (0..nvar).map(|i| covariates[(row, i)] - mean[i]).collect(),
+                ));
+            }
+        });
+        per_stratum.reverse();
+        for (row, values) in per_stratum {
+            time.push(stop[row]);
+            index.push(row);
+            strata_out.push(strata[row]);
+            residuals.push(values);
+        }
+        first = last;
+    }
+    CoxschoResiduals {
+        time,
+        index,
+        strata: strata_out,
+        residuals,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
+    use ndarray::array;
 
-    fn assert_close(actual: &[f64], expected: &[f64]) {
-        assert_eq!(actual.len(), expected.len());
-        for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
-            assert!(
-                (actual - expected).abs() < 1e-12,
-                "value {idx} differed: {actual} != {expected}"
-            );
-        }
-    }
-
-    fn valid_inputs() -> (Vec<f64>, Vec<f64>, Vec<i32>, Vec<f64>) {
-        (
-            vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 0.0, 1.0],
-            vec![1.0, 1.0, 1.0, 1.0],
-            vec![0, 0, 0, 0],
-            vec![1.0, 2.0, 3.0, 4.0],
+    #[test]
+    fn residual_is_covariate_minus_risk_weighted_mean() {
+        let stop = [3.0, 1.0, 2.0, 2.0];
+        let event = [1, 1, 0, 1];
+        let covar = array![[1.0], [2.0], [3.0], [4.0]];
+        let score = [1.0, 2.0, 0.5, 1.5];
+        let data = SurvivalData::try_new(stop.to_vec(), event.to_vec()).unwrap();
+        let out = schoenfeld_residuals(
+            SurvResponse::Right(&data),
+            covar.view(),
+            &score,
+            None,
+            None,
+            TieMethod::Breslow,
         )
-    }
-
-    #[test]
-    fn schoenfeld_wrapper_rejects_invalid_method() {
-        let (y, score, strata, covar) = valid_inputs();
-
-        let err = schoenfeld_residuals(y, score, strata, covar, 1, 2)
-            .expect_err("unsupported method should fail");
-
-        assert!(
-            err.to_string()
-                .contains("method must be 0 (Breslow) or 1 (Efron)")
-        );
-    }
-
-    #[test]
-    fn schoenfeld_wrapper_rejects_non_finite_inputs() {
-        let (mut y, score, strata, covar) = valid_inputs();
-        y[1] = f64::NAN;
-
-        let err = schoenfeld_residuals(y, score, strata, covar, 1, 0)
-            .expect_err("NaN y value should fail");
-
-        assert!(err.to_string().contains("y contains non-finite"));
-    }
-
-    #[test]
-    fn schoenfeld_wrapper_rejects_negative_score() {
-        let (y, mut score, strata, covar) = valid_inputs();
-        score[2] = -1.0;
-
-        let err = schoenfeld_residuals(y, score, strata, covar, 1, 0)
-            .expect_err("negative score should fail");
-
-        assert!(err.to_string().contains("score contains negative value"));
-    }
-
-    #[test]
-    fn schoenfeld_wrapper_rejects_non_binary_event() {
-        let (mut y, score, strata, covar) = valid_inputs();
-        y[9] = 0.5;
-
-        let err = schoenfeld_residuals(y, score, strata, covar, 1, 0)
-            .expect_err("non-binary event should fail");
-
-        assert!(err.to_string().contains("event values must be 0 or 1"));
-    }
-
-    #[test]
-    fn weighted_risk_scores_match_stratified_tied_event_reference() {
-        let y = vec![
-            0.0, 0.0, 0.0, 1.0, 1.5, 0.0, 0.0, 1.0, 0.0, // start
-            1.0, 2.0, 2.0, 2.0, 3.0, 1.0, 2.0, 2.0, 3.0, // stop
-            1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, // event
-        ];
-        let covar = vec![
-            -1.0, 0.2, 1.1, 0.5, -0.4, 0.8, -0.7, 0.3, 1.4, // x1
-            0.5, -1.0, 0.7, 1.2, -0.2, -0.6, 0.9, -1.3, 0.1, // x2
-        ];
-        let strata = vec![0, 0, 0, 0, 1, 0, 0, 0, 1];
-        let score = vec![1.0, 1.2, 0.8, 1.5, 0.7, 1.1, 0.9, 1.4, 0.6];
-        let cases = [
-            (
-                0,
-                vec![
-                    -1.04,
-                    -0.178571428571429,
-                    0.721428571428572,
-                    0.5,
-                    -0.4,
-                    0.8,
-                    -0.917241379310345,
-                    0.0827586206896552,
-                    1.4,
-                    0.546666666666667,
-                    -1.24285714285714,
-                    0.457142857142857,
-                    1.2,
-                    -0.2,
-                    -0.6,
-                    1.22758620689655,
-                    -0.972413793103448,
-                    0.1,
-                ],
-            ),
-            (
-                1,
-                vec![
-                    -1.04,
-                    -0.150223214285714,
-                    0.749776785714286,
-                    0.5,
-                    -0.4,
-                    0.8,
-                    -1.01862068965517,
-                    -0.0186206896551724,
-                    1.4,
-                    0.546666666666667,
-                    -1.33080357142857,
-                    0.369196428571429,
-                    1.2,
-                    -0.2,
-                    -0.6,
-                    1.19093596059113,
-                    -1.00906403940887,
-                    0.1,
-                ],
-            ),
-        ];
-
-        for (method, expected) in cases {
-            let actual = schoenfeld_residuals(
-                y.clone(),
-                score.clone(),
-                strata.clone(),
-                covar.clone(),
-                2,
-                method,
-            )
-            .unwrap();
-            assert_close(&actual, &expected);
+        .unwrap();
+        assert_eq!(out.time, vec![1.0, 2.0, 3.0]);
+        assert_eq!(out.index, vec![1, 3, 0]);
+        // t = 1: everyone at risk.
+        let xbar1 = (1.0 + 4.0 + 1.5 + 6.0) / 5.0;
+        // t = 2: rows with stop >= 2.
+        let xbar2 = (1.0 + 1.5 + 6.0) / 3.0;
+        let expected = [2.0 - xbar1, 4.0 - xbar2, 1.0 - 1.0];
+        for (row, expected) in expected.iter().enumerate() {
+            assert!((out.residuals[row][0] - expected).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn efron_averages_the_tied_pseudo_risk_sets() {
+        let stop = [1.0, 1.0, 2.0];
+        let event = [1, 1, 0];
+        let covar = array![[0.0], [1.0], [2.0]];
+        let score = [1.0, 1.0, 1.0];
+        let data = SurvivalData::try_new(stop.to_vec(), event.to_vec()).unwrap();
+        let out = schoenfeld_residuals(
+            SurvResponse::Right(&data),
+            covar.view(),
+            &score,
+            None,
+            None,
+            TieMethod::Efron,
+        )
+        .unwrap();
+        // First pseudo set: all three (mean 1); second: deaths down-weighted
+        // by 1/2 -> (0.5*0 + 0.5*1 + 2) / 2 = 1.25; average 1.125.
+        let mean = (1.0 + 1.25) / 2.0;
+        assert!((out.residuals[0][0] - (0.0 - mean)).abs() < 1e-12);
+        assert!((out.residuals[1][0] - (1.0 - mean)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn strata_and_weights_enter_the_means() {
+        let stop = [1.0, 2.0, 1.0, 2.0];
+        let event = [1, 0, 1, 0];
+        let covar = array![[1.0], [3.0], [10.0], [20.0]];
+        let score = [1.0; 4];
+        let weights = [1.0, 3.0, 1.0, 1.0];
+        let data = SurvivalData::try_new(stop.to_vec(), event.to_vec()).unwrap();
+        let out = schoenfeld_residuals(
+            SurvResponse::Right(&data),
+            covar.view(),
+            &score,
+            Some(&weights),
+            Some(&[1, 1, 2, 2]),
+            TieMethod::Breslow,
+        )
+        .unwrap();
+        assert_eq!(out.strata, vec![1, 2]);
+        assert!((out.residuals[0][0] - (1.0 - (1.0 + 9.0) / 4.0)).abs() < 1e-12);
+        assert!((out.residuals[1][0] - (10.0 - 15.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn counting_process_start_times_limit_the_risk_set() {
+        let start = [0.0, 1.5, 0.0];
+        let stop = [1.0, 3.0, 3.0];
+        let event = [1, 1, 0];
+        let covar = array![[0.0], [2.0], [4.0]];
+        let data =
+            CountingProcessData::try_new(start.to_vec(), stop.to_vec(), event.to_vec()).unwrap();
+        let out = schoenfeld_residuals(
+            SurvResponse::Counting(&data),
+            covar.view(),
+            &[1.0; 3],
+            None,
+            None,
+            TieMethod::Breslow,
+        )
+        .unwrap();
+        // Subject 1 enters at 1.5, so the risk set at time 1 is {0, 2}.
+        assert!((out.residuals[0][0] - (0.0 - 2.0)).abs() < 1e-12);
+        assert!((out.residuals[1][0] - (2.0 - 3.0)).abs() < 1e-12);
     }
 }

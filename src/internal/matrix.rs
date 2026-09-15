@@ -1,4 +1,20 @@
+//! Dense linear algebra shared across the crate.
+//!
+//! Two families live here:
+//!
+//! * Faithful ports of R survival's generalised Cholesky routines
+//!   (`src/cholesky2.c`, `src/chsolve2.c`, `src/chinv2.c`), which are what
+//!   `coxph`, `survreg` and `coxph.wtest` use on information matrices.
+//!   They never fail: redundant columns are reported through a zero diagonal
+//!   and a reduced rank, exactly as in R.
+//! * A partial-pivot LU factorisation for general square systems, with
+//!   explicit singularity detection (`Err(SurvivalError::Singular)` or `None`).
+//!
+//! Matrices are `ndarray::Array2<f64>` indexed `m[[row, col]]`; the C sources
+//! index `matrix[i][j]`, which maps to `m[[i, j]]` below.
+
 use crate::constants::GAUSSIAN_ELIMINATION_TOL;
+use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::{Array1, Array2};
 use std::borrow::Cow;
 
@@ -49,43 +65,253 @@ pub(crate) fn standardize_or_borrow_row_major_matrix(
     }
 }
 
-struct PartialPivotLu {
+fn require_square(matrix: &Array2<f64>, context: &str) -> SurvivalResult<usize> {
+    let (rows, cols) = matrix.dim();
+    if rows != cols {
+        return Err(SurvivalError::invalid_input(format!(
+            "{context}: matrix must be square, got {rows} x {cols}"
+        )));
+    }
+    Ok(rows)
+}
+
+fn require_finite(matrix: &Array2<f64>, context: &str) -> SurvivalResult<()> {
+    if let Some(((row, col), value)) = matrix.indexed_iter().find(|(_, v)| !v.is_finite()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "{context}: matrix contains non-finite value {value} at [{row}, {col}]"
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Generalised Cholesky (R survival: cholesky2.c / chsolve2.c / chinv2.c)
+// ---------------------------------------------------------------------------
+
+/// Port of R survival's `cholesky2` (`src/cholesky2.c`): the generalised
+/// Cholesky decomposition `C = F D F'` of a symmetric matrix, where `F` is
+/// lower triangular with unit diagonal and `D` is diagonal.
+///
+/// Reads the diagonal and the upper triangle (`m[[i, j]]`, `i < j`); on return
+/// `D` occupies the diagonal, `F` (without its unit diagonal) the lower
+/// triangle `m[[j, i]]`, `j > i`, and the upper triangle is left undisturbed.
+///
+/// `toler` is R's `toler.chol` (`coxph.control` default `eps^0.75`,
+/// `coxph.wtest` default `1e-9`): a pivot below `toler * max(diag)` marks the
+/// column redundant and zeroes its diagonal. A non-finite diagonal counts as
+/// zero. Returns the rank when the matrix is non-negative definite, or minus
+/// the rank when a pivot was more negative than `-8 * eps`.
+///
+/// Panics if `matrix` is not square.
+pub(crate) fn cholesky2(matrix: &mut Array2<f64>, toler: f64) -> i32 {
+    let n = matrix.nrows();
+    assert_eq!(n, matrix.ncols(), "cholesky2 requires a square matrix");
+
+    let mut eps = 0.0_f64;
+    for i in 0..n {
+        if matrix[[i, i]] > eps {
+            eps = matrix[[i, i]];
+        }
+        for j in (i + 1)..n {
+            matrix[[j, i]] = matrix[[i, j]];
+        }
+    }
+    eps = if eps == 0.0 { toler } else { eps * toler };
+
+    let mut rank = 0_i32;
+    let mut nonneg = 1_i32;
+    for i in 0..n {
+        let pivot = matrix[[i, i]];
+        if !pivot.is_finite() || pivot < eps {
+            matrix[[i, i]] = 0.0;
+            if pivot < -8.0 * eps {
+                nonneg = -1;
+            }
+        } else {
+            rank += 1;
+            for j in (i + 1)..n {
+                let temp = matrix[[j, i]] / pivot;
+                matrix[[j, i]] = temp;
+                matrix[[j, j]] -= temp * temp * pivot;
+                for k in (j + 1)..n {
+                    matrix[[k, j]] -= temp * matrix[[k, i]];
+                }
+            }
+        }
+    }
+    rank * nonneg
+}
+
+/// Port of R survival's `chsolve2` (`src/chsolve2.c`): solves `A b = y`
+/// given the [`cholesky2`] factorisation of `A` in `chol`, overwriting `y`
+/// with `b`. Components belonging to redundant columns (zero diagonal) are
+/// set to zero, which is how `coxph` keeps iterating past a singular
+/// information matrix.
+///
+/// Panics if `y.len()` differs from the matrix order.
+// Canonical helper; `regression/cox_optimizer.rs` and `regression/coxph_wtest.rs`
+// still carry private copies and are expected to migrate to this one.
+#[allow(dead_code)]
+pub(crate) fn chsolve2(chol: &Array2<f64>, y: &mut [f64]) {
+    let n = chol.nrows();
+    assert_eq!(n, chol.ncols(), "chsolve2 requires a square matrix");
+    assert_eq!(y.len(), n, "chsolve2 right-hand side length must match");
+
+    for i in 0..n {
+        let mut temp = y[i];
+        for (j, &known) in y.iter().enumerate().take(i) {
+            temp -= known * chol[[i, j]];
+        }
+        y[i] = temp;
+    }
+
+    for i in (0..n).rev() {
+        if chol[[i, i]] == 0.0 {
+            y[i] = 0.0;
+        } else {
+            let mut temp = y[i] / chol[[i, i]];
+            for (j, &known) in y.iter().enumerate().skip(i + 1) {
+                temp -= known * chol[[j, i]];
+            }
+            y[i] = temp;
+        }
+    }
+}
+
+/// Port of R survival's `chinv2` (`src/chinv2.c`): inverts a matrix given its
+/// [`cholesky2`] factorisation. On return the upper triangle and diagonal
+/// (`m[[i, j]]`, `i <= j`) hold `(F D F')^{-1}`; below the diagonal is
+/// `F^{-1}`. Rows and columns of redundant variables are zeroed (R's `coxph`
+/// reports those coefficients as `NA`). Callers wanting the full symmetric
+/// inverse copy the upper triangle into the lower one, as `coxfit6.c` does;
+/// [`symmetric_inverse_via_cholesky`] performs that step.
+///
+/// Panics if `matrix` is not square.
+pub(crate) fn chinv2(matrix: &mut Array2<f64>) {
+    let n = matrix.nrows();
+    assert_eq!(n, matrix.ncols(), "chinv2 requires a square matrix");
+
+    for i in 0..n {
+        if matrix[[i, i]] > 0.0 {
+            matrix[[i, i]] = 1.0 / matrix[[i, i]];
+            for j in (i + 1)..n {
+                matrix[[j, i]] = -matrix[[j, i]];
+                for k in 0..i {
+                    let update = matrix[[j, i]] * matrix[[i, k]];
+                    matrix[[j, k]] += update;
+                }
+            }
+        }
+    }
+
+    for i in 0..n {
+        if matrix[[i, i]] == 0.0 {
+            for j in 0..i {
+                matrix[[j, i]] = 0.0;
+            }
+            for j in i..n {
+                matrix[[i, j]] = 0.0;
+            }
+        } else {
+            for j in (i + 1)..n {
+                let temp = matrix[[j, i]] * matrix[[j, j]];
+                matrix[[i, j]] = temp;
+                for k in i..j {
+                    let update = temp * matrix[[j, k]];
+                    matrix[[i, k]] += update;
+                }
+            }
+        }
+    }
+}
+
+/// Result of [`symmetric_inverse_via_cholesky`].
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SymmetricInverse {
+    /// Full symmetric (generalised) inverse; rows and columns listed in
+    /// `singular_columns` are zero.
+    pub inverse: Array2<f64>,
+    /// Number of non-redundant columns (absolute value of the `cholesky2`
+    /// return).
+    pub rank: usize,
+    /// `false` when `cholesky2` found a pivot more negative than `-8 * eps`,
+    /// i.e. the matrix is not non-negative definite.
+    pub non_negative_definite: bool,
+    /// Zero-based columns whose diagonal of the inverse is zero — R's
+    /// `which.sing <- diag(var) == 0` in `coxph.fit`.
+    pub singular_columns: Vec<usize>,
+}
+
+/// Inverts a symmetric matrix the way `coxfit6.c` inverts the information
+/// matrix: `cholesky2`, `chinv2`, then copy the upper triangle into the lower
+/// one. Redundant columns are zeroed and reported rather than turned into an
+/// error, matching R. Fails only for malformed input (non-square or
+/// non-finite), mirroring `coxph.wtest`'s `"infinite argument"` check.
+pub(crate) fn symmetric_inverse_via_cholesky(
+    matrix: &Array2<f64>,
+    toler: f64,
+) -> SurvivalResult<SymmetricInverse> {
+    const CONTEXT: &str = "symmetric inverse";
+    let n = require_square(matrix, CONTEXT)?;
+    require_finite(matrix, CONTEXT)?;
+
+    let mut work = matrix.clone();
+    let flag = cholesky2(&mut work, toler);
+    chinv2(&mut work);
+    for i in 0..n {
+        for j in 0..i {
+            work[[i, j]] = work[[j, i]];
+        }
+    }
+    let singular_columns = (0..n).filter(|&i| work[[i, i]] == 0.0).collect();
+
+    Ok(SymmetricInverse {
+        inverse: work,
+        rank: flag.unsigned_abs() as usize,
+        non_negative_definite: flag >= 0,
+        singular_columns,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Partial-pivot LU for general square systems
+// ---------------------------------------------------------------------------
+
+/// `P A = L U` with partial (row) pivoting, stored row-major. Unlike the
+/// Cholesky routines above this applies to any square matrix, and singular
+/// systems are reported rather than patched: a pivot with absolute value at
+/// most `max|a_ij| * GAUSSIAN_ELIMINATION_TOL` is an error naming the column
+/// (this is the analogue of R's `solve()` "system is computationally
+/// singular").
+#[derive(Debug, Clone)]
+pub(crate) struct LuDecomposition {
     factors: Vec<f64>,
     swaps: Vec<usize>,
     n: usize,
 }
 
-impl PartialPivotLu {
-    fn decompose(matrix: &Array2<f64>) -> Option<Self> {
-        let (rows, cols) = matrix.dim();
-        if rows != cols {
-            return None;
-        }
-        if rows == 0 {
-            return Some(Self {
+impl LuDecomposition {
+    const CONTEXT: &'static str = "LU factorisation";
+
+    pub(crate) fn decompose(matrix: &Array2<f64>) -> SurvivalResult<Self> {
+        let n = require_square(matrix, Self::CONTEXT)?;
+        require_finite(matrix, Self::CONTEXT)?;
+        if n == 0 {
+            return Ok(Self {
                 factors: Vec::new(),
                 swaps: Vec::new(),
                 n: 0,
             });
         }
 
-        let n = rows;
-        let mut factors = Vec::with_capacity(n * n);
-        let mut scale = 0.0_f64;
-        for row in 0..n {
-            for col in 0..n {
-                let value = matrix[[row, col]];
-                if !value.is_finite() {
-                    return None;
-                }
-                scale = scale.max(value.abs());
-                factors.push(value);
-            }
-        }
+        let mut factors: Vec<f64> = matrix.iter().copied().collect();
+        let scale = factors.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
         if scale == 0.0 {
-            return None;
+            return Err(SurvivalError::singular_columns(
+                Self::CONTEXT,
+                (0..n).collect(),
+            ));
         }
-
         let pivot_tolerance = scale * GAUSSIAN_ELIMINATION_TOL;
         let mut swaps = Vec::with_capacity(n);
 
@@ -100,7 +326,10 @@ impl PartialPivotLu {
                 }
             }
             if !pivot_abs.is_finite() || pivot_abs <= pivot_tolerance {
-                return None;
+                return Err(SurvivalError::singular_columns(
+                    Self::CONTEXT,
+                    vec![pivot_col],
+                ));
             }
 
             swaps.push(pivot_row);
@@ -125,15 +354,27 @@ impl PartialPivotLu {
             }
         }
 
-        Some(Self { factors, swaps, n })
+        Ok(Self { factors, swaps, n })
     }
 
-    fn solve_slice(&self, rhs: &[f64]) -> Option<Vec<f64>> {
-        if rhs.len() != self.n || rhs.iter().any(|value| !value.is_finite()) {
-            return None;
+    /// Solves `A x = rhs`.
+    pub(crate) fn solve(&self, rhs: &[f64]) -> SurvivalResult<Vec<f64>> {
+        if rhs.len() != self.n {
+            return Err(SurvivalError::invalid_input(format!(
+                "{}: right-hand side has length {}, expected {}",
+                Self::CONTEXT,
+                rhs.len(),
+                self.n
+            )));
+        }
+        if let Some((index, value)) = rhs.iter().enumerate().find(|(_, v)| !v.is_finite()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "{}: right-hand side contains non-finite value {value} at index {index}",
+                Self::CONTEXT
+            )));
         }
         if self.n == 0 {
-            return Some(Vec::new());
+            return Ok(Vec::new());
         }
 
         let mut solution = rhs.to_vec();
@@ -158,200 +399,459 @@ impl PartialPivotLu {
             for (col, &known_value) in solution.iter().enumerate().skip(row + 1) {
                 value = (-self.factors[row_start + col]).mul_add(known_value, value);
             }
-            let diagonal = self.factors[row_start + row];
-            if diagonal == 0.0 || !diagonal.is_finite() {
-                return None;
-            }
-            solution[row] = value / diagonal;
+            solution[row] = value / self.factors[row_start + row];
         }
 
-        solution
-            .iter()
-            .all(|value| value.is_finite())
-            .then_some(solution)
+        if solution.iter().any(|value| !value.is_finite()) {
+            return Err(SurvivalError::computation(format!(
+                "{}: solution overflowed to a non-finite value",
+                Self::CONTEXT
+            )));
+        }
+        Ok(solution)
     }
 
-    fn inverse(&self) -> Option<Array2<f64>> {
-        let mut inverse = vec![0.0; self.n * self.n];
+    /// Dense inverse, one solve per unit vector.
+    pub(crate) fn inverse(&self) -> SurvivalResult<Array2<f64>> {
+        let mut inverse = Array2::zeros((self.n, self.n));
         let mut rhs = vec![0.0; self.n];
-
         for col in 0..self.n {
             rhs[col] = 1.0;
-            let solution = self.solve_slice(&rhs)?;
+            let solution = self.solve(&rhs)?;
             rhs[col] = 0.0;
-            for row in 0..self.n {
-                inverse[row * self.n + col] = solution[row];
+            for (row, value) in solution.into_iter().enumerate() {
+                inverse[[row, col]] = value;
             }
         }
-
-        Array2::from_shape_vec((self.n, self.n), inverse).ok()
+        Ok(inverse)
     }
 }
 
-fn lu_solve_internal(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
-    if matrix.nrows() == 0 || matrix.ncols() == 0 {
-        return vector.is_empty().then(|| Array1::zeros(0));
-    }
-
-    let factorization = PartialPivotLu::decompose(matrix)?;
+/// Solves `A x = b` by partial-pivot LU. `None` when `A` is not square,
+/// contains non-finite values, is singular, or `b` has the wrong length —
+/// callers map that to their own error; use [`LuDecomposition`] directly for
+/// the structured [`SurvivalError`].
+pub(crate) fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
+    let factorization = LuDecomposition::decompose(matrix).ok()?;
     factorization
-        .solve_slice(vector.as_slice()?)
+        .solve(vector.as_slice()?)
+        .ok()
         .map(Array1::from_vec)
 }
 
-pub(crate) fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
-    lu_solve_internal(matrix, vector)
+/// Dense inverse by partial-pivot LU; `Err(SurvivalError::Singular)` names the
+/// first column at which elimination broke down.
+pub(crate) fn lu_inverse(matrix: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
+    LuDecomposition::decompose(matrix)?.inverse()
 }
 
+/// `Option` form of [`lu_inverse`] for callers that only need success/failure.
 pub(crate) fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
-    if matrix.nrows() == 0 || matrix.ncols() == 0 {
-        return Some(matrix.clone());
-    }
-
-    PartialPivotLu::decompose(matrix)?.inverse()
+    lu_inverse(matrix).ok()
 }
 
-pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Vec<f64> {
-    if n == 0 {
-        return vec![];
-    }
-    if a.len() != n * n {
-        return vec![0.0; n * n];
-    }
-    if n == 1 {
-        return vec![if a[0].abs() > GAUSSIAN_ELIMINATION_TOL {
-            1.0 / a[0]
-        } else {
-            0.0
-        }];
-    }
-
-    if let Ok(arr) = Array2::from_shape_vec((n, n), a.to_vec())
-        && let Some(inv) = matrix_inverse(&arr)
-    {
-        return inv.iter().copied().collect();
-    }
-
-    let mut aug = vec![0.0; n * 2 * n];
-    let width = 2 * n;
-
-    for i in 0..n {
-        let row_offset = i * width;
-        for j in 0..n {
-            aug[row_offset + j] = a[i * n + j];
-        }
-        aug[row_offset + n + i] = 1.0;
-    }
-
-    for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k * width + i].abs() > aug[max_row * width + i].abs() {
-                max_row = k;
-            }
-        }
-
-        if max_row != i {
-            for j in 0..width {
-                aug.swap(i * width + j, max_row * width + j);
-            }
-        }
-
-        let pivot = aug[i * width + i];
-        if pivot.abs() < GAUSSIAN_ELIMINATION_TOL {
-            continue;
-        }
-
-        for j in 0..width {
-            aug[i * width + j] /= pivot;
-        }
-
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k * width + i];
-                for j in 0..width {
-                    let pivot_val = aug[i * width + j];
-                    aug[k * width + j] -= factor * pivot_val;
-                }
-            }
-        }
-    }
-
-    let mut inv = vec![0.0; n * n];
-    for i in 0..n {
-        for j in 0..n {
-            inv[i * n + j] = aug[i * width + n + j];
-        }
-    }
-
-    inv
-}
-
+/// `Vec<Vec<f64>>` adapter over [`lu_inverse`]. `None` for an empty, ragged,
+/// non-square or singular matrix.
 pub(crate) fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = mat.len();
-    if n == 0 {
+    if n == 0 || mat.iter().any(|row| row.len() != n) {
         return None;
     }
-    for row in mat {
-        if row.len() != n {
-            return None;
-        }
+    let flat: Vec<f64> = mat.iter().flatten().copied().collect();
+    let matrix = Array2::from_shape_vec((n, n), flat).ok()?;
+    let inverse = matrix_inverse(&matrix)?;
+    Some(inverse.outer_iter().map(|row| row.to_vec()).collect())
+}
+
+/// Always-successful inverse of a flattened row-major `n x n` information or
+/// covariance matrix, kept for residual and frailty code that reports rather
+/// than fails on a singular fit.
+///
+/// A non-singular matrix gets its exact LU inverse. A singular one gets R's
+/// `chinv2` generalised inverse of the symmetrised matrix (see
+/// [`symmetric_inverse_via_cholesky`]): the redundant rows and columns are
+/// zero, so downstream quantities for those coefficients are zero rather than
+/// garbage, exactly as `residuals.coxph` behaves for an `NA` coefficient.
+///
+/// Panics if `a.len() != n * n`.
+pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Vec<f64> {
+    assert_eq!(a.len(), n * n, "flattened matrix must hold n * n entries");
+    if n == 0 {
+        return Vec::new();
+    }
+    let matrix =
+        Array2::from_shape_vec((n, n), a.to_vec()).expect("length was checked against n * n above");
+    if let Ok(inverse) = lu_inverse(&matrix) {
+        return inverse.into_raw_vec_and_offset().0;
     }
 
-    let mut aug: Vec<Vec<f64>> = mat
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let mut new_row = row.clone();
-            new_row.extend(vec![0.0; n]);
-            new_row[n + i] = 1.0;
-            new_row
-        })
-        .collect();
-
+    let mut symmetric = matrix.clone();
     for i in 0..n {
-        let mut max_row = i;
-        for k in (i + 1)..n {
-            if aug[k][i].abs() > aug[max_row][i].abs() {
-                max_row = k;
-            }
-        }
-        aug.swap(i, max_row);
-
-        if aug[i][i].abs() < GAUSSIAN_ELIMINATION_TOL {
-            return None;
-        }
-
-        let pivot = aug[i][i];
-        for val in aug[i].iter_mut().take(2 * n) {
-            *val /= pivot;
-        }
-
-        for k in 0..n {
-            if k != i {
-                let factor = aug[k][i];
-                let (pivot_row, target_row) = if k < i {
-                    let (left, right) = aug.split_at_mut(i);
-                    (&right[0], &mut left[k])
-                } else {
-                    let (left, right) = aug.split_at_mut(k);
-                    (&left[i], &mut right[0])
-                };
-
-                for j in 0..(2 * n) {
-                    target_row[j] -= factor * pivot_row[j];
-                }
-            }
+        for j in (i + 1)..n {
+            let average = 0.5 * (matrix[[i, j]] + matrix[[j, i]]);
+            symmetric[[i, j]] = average;
+            symmetric[[j, i]] = average;
         }
     }
-
-    Some(aug.into_iter().map(|row| row[n..].to_vec()).collect())
+    match symmetric_inverse_via_cholesky(&symmetric, GAUSSIAN_ELIMINATION_TOL) {
+        Ok(result) => result.inverse.into_raw_vec_and_offset().0,
+        // Only non-finite entries reach here; every column is then redundant.
+        Err(_) => vec![0.0; n * n],
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ndarray::arr2;
+
+    fn assert_close(actual: f64, expected: f64, tol: f64) {
+        assert!(
+            (actual - expected).abs() <= tol,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    fn assert_matrix_close(actual: &Array2<f64>, expected: &Array2<f64>, tol: f64) {
+        assert_eq!(actual.dim(), expected.dim());
+        for ((row, col), value) in actual.indexed_iter() {
+            assert!(
+                (value - expected[[row, col]]).abs() <= tol,
+                "mismatch at [{row}, {col}]: expected {}, got {value}",
+                expected[[row, col]]
+            );
+        }
+    }
+
+    // Reference values from R survival 3.8-11:
+    //   A <- matrix(c(4,2,2, 2,5,3, 2,3,6), 3, 3); b <- 1:3
+    //   coxph.wtest(A, b)$solve  -> -0.046875  0.15625  0.4375
+    //   coxph.wtest(A, b)$test   -> 1.578125, df = 3
+    //   solve(A) -> [0.328125 -0.09375 -0.0625; -0.09375 0.3125 -0.125; -0.0625 -0.125 0.25]
+    fn spd() -> Array2<f64> {
+        arr2(&[[4.0, 2.0, 2.0], [2.0, 5.0, 3.0], [2.0, 3.0, 6.0]])
+    }
+
+    fn spd_inverse() -> Array2<f64> {
+        arr2(&[
+            [0.328125, -0.09375, -0.0625],
+            [-0.09375, 0.3125, -0.125],
+            [-0.0625, -0.125, 0.25],
+        ])
+    }
+
+    //   B <- matrix(c(4,2,6, 2,5,7, 6,7,13), 3, 3)   # column 3 = column 1 + column 2
+    //   coxph.wtest(B, 1:3)$df -> 2 ; $solve -> 0.0625 0.375 0 ; $test -> 0.8125
+    //   solve(B[1:2, 1:2]) -> [0.3125 -0.125; -0.125 0.25]
+    fn rank_deficient() -> Array2<f64> {
+        arr2(&[[4.0, 2.0, 6.0], [2.0, 5.0, 7.0], [6.0, 7.0, 13.0]])
+    }
+
+    #[test]
+    fn cholesky2_factors_spd_matrix_as_fdft() {
+        let mut work = spd();
+        assert_eq!(cholesky2(&mut work, 1e-9), 3);
+
+        // D = diag(4, 4, 4); F below the diagonal.
+        for i in 0..3 {
+            assert_close(work[[i, i]], 4.0, 1e-12);
+        }
+        assert_close(work[[1, 0]], 0.5, 1e-12);
+        assert_close(work[[2, 0]], 0.5, 1e-12);
+        assert_close(work[[2, 1]], 0.5, 1e-12);
+        // Upper triangle is untouched.
+        assert_eq!(work[[0, 1]], 2.0);
+        assert_eq!(work[[0, 2]], 2.0);
+        assert_eq!(work[[1, 2]], 3.0);
+
+        // Reassemble F D F' and compare with the input.
+        let mut f = Array2::eye(3);
+        let mut d = Array2::zeros((3, 3));
+        for i in 0..3 {
+            d[[i, i]] = work[[i, i]];
+            for j in 0..i {
+                f[[i, j]] = work[[i, j]];
+            }
+        }
+        let reassembled = f.dot(&d).dot(&f.t());
+        assert_matrix_close(&reassembled, &spd(), 1e-12);
+    }
+
+    #[test]
+    fn cholesky2_reads_only_the_upper_triangle() {
+        let mut work = spd();
+        work[[1, 0]] = 99.0;
+        work[[2, 0]] = -99.0;
+        work[[2, 1]] = 42.0;
+        let mut reference = spd();
+        assert_eq!(cholesky2(&mut work, 1e-9), cholesky2(&mut reference, 1e-9));
+        assert_matrix_close(&work, &reference, 0.0);
+    }
+
+    #[test]
+    fn cholesky2_reports_rank_and_zeroes_redundant_column() {
+        let mut work = rank_deficient();
+        assert_eq!(cholesky2(&mut work, 1e-9), 2);
+        assert_eq!(work[[2, 2]], 0.0);
+        assert_close(work[[0, 0]], 4.0, 1e-12);
+        assert_close(work[[1, 1]], 4.0, 1e-12);
+        assert_close(work[[2, 1]], 1.0, 1e-12);
+        assert_close(work[[2, 0]], 1.5, 1e-12);
+    }
+
+    #[test]
+    fn cholesky2_flags_indefinite_matrix_with_negative_rank() {
+        // C <- matrix(c(1,2, 2,1), 2, 2): coxph.wtest(C, c(1,1))$df == 1, test == 1
+        let mut work = arr2(&[[1.0, 2.0], [2.0, 1.0]]);
+        assert_eq!(cholesky2(&mut work, 1e-9), -1);
+        assert_eq!(work[[1, 1]], 0.0);
+
+        let mut y = vec![1.0, 1.0];
+        chsolve2(&work, &mut y);
+        assert_eq!(y, vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn cholesky2_treats_non_finite_and_zero_diagonals_like_r() {
+        let mut work = arr2(&[[f64::NAN, 0.0], [0.0, 2.0]]);
+        assert_eq!(cholesky2(&mut work, 1e-9), 1);
+        assert_eq!(work[[0, 0]], 0.0);
+        assert_close(work[[1, 1]], 2.0, 0.0);
+
+        // No positive diagonals: eps falls back to toler itself.
+        let mut zeros = Array2::zeros((2, 2));
+        assert_eq!(cholesky2(&mut zeros, 1e-9), 0);
+
+        let mut empty = Array2::zeros((0, 0));
+        assert_eq!(cholesky2(&mut empty, 1e-9), 0);
+    }
+
+    #[test]
+    fn chsolve2_matches_coxph_wtest_solve() {
+        let mut work = spd();
+        cholesky2(&mut work, 1e-9);
+        let mut y = vec![1.0, 2.0, 3.0];
+        chsolve2(&work, &mut y);
+        assert_close(y[0], -0.046875, 1e-12);
+        assert_close(y[1], 0.15625, 1e-12);
+        assert_close(y[2], 0.4375, 1e-12);
+        let wald: f64 = y.iter().zip([1.0, 2.0, 3.0]).map(|(s, b)| s * b).sum();
+        assert_close(wald, 1.578125, 1e-12);
+
+        let mut work = rank_deficient();
+        cholesky2(&mut work, 1e-9);
+        let mut y = vec![1.0, 2.0, 3.0];
+        chsolve2(&work, &mut y);
+        assert_close(y[0], 0.0625, 1e-12);
+        assert_close(y[1], 0.375, 1e-12);
+        assert_eq!(y[2], 0.0);
+        let wald: f64 = y.iter().zip([1.0, 2.0, 3.0]).map(|(s, b)| s * b).sum();
+        assert_close(wald, 0.8125, 1e-12);
+    }
+
+    #[test]
+    fn chinv2_upper_triangle_holds_inverse() {
+        let mut work = spd();
+        cholesky2(&mut work, 1e-9);
+        chinv2(&mut work);
+        let expected = spd_inverse();
+        for i in 0..3 {
+            for j in i..3 {
+                assert_close(work[[i, j]], expected[[i, j]], 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn chinv2_zeroes_redundant_rows_and_columns() {
+        let mut work = rank_deficient();
+        cholesky2(&mut work, 1e-9);
+        chinv2(&mut work);
+        assert_close(work[[0, 0]], 0.3125, 1e-12);
+        assert_close(work[[0, 1]], -0.125, 1e-12);
+        assert_close(work[[1, 1]], 0.25, 1e-12);
+        assert_eq!(work[[0, 2]], 0.0);
+        assert_eq!(work[[1, 2]], 0.0);
+        assert_eq!(work[[2, 2]], 0.0);
+    }
+
+    #[test]
+    fn symmetric_inverse_via_cholesky_returns_full_inverse_and_singular_report() {
+        let result = symmetric_inverse_via_cholesky(&spd(), 1e-9).unwrap();
+        assert_eq!(result.rank, 3);
+        assert!(result.non_negative_definite);
+        assert!(result.singular_columns.is_empty());
+        assert_matrix_close(&result.inverse, &spd_inverse(), 1e-12);
+        assert_matrix_close(&result.inverse, &result.inverse.t().to_owned(), 0.0);
+
+        let result = symmetric_inverse_via_cholesky(&rank_deficient(), 1e-9).unwrap();
+        assert_eq!(result.rank, 2);
+        assert!(result.non_negative_definite);
+        assert_eq!(result.singular_columns, vec![2]);
+        let expected = arr2(&[[0.3125, -0.125, 0.0], [-0.125, 0.25, 0.0], [0.0, 0.0, 0.0]]);
+        assert_matrix_close(&result.inverse, &expected, 1e-12);
+
+        let result =
+            symmetric_inverse_via_cholesky(&arr2(&[[1.0, 2.0], [2.0, 1.0]]), 1e-9).unwrap();
+        assert!(!result.non_negative_definite);
+        assert_eq!(result.rank, 1);
+        assert_eq!(result.singular_columns, vec![1]);
+    }
+
+    #[test]
+    fn symmetric_inverse_via_cholesky_rejects_malformed_input() {
+        let nonsquare = Array2::from_shape_vec((2, 3), vec![1.0; 6]).unwrap();
+        assert!(matches!(
+            symmetric_inverse_via_cholesky(&nonsquare, 1e-9),
+            Err(SurvivalError::InvalidInput(_))
+        ));
+        let err = symmetric_inverse_via_cholesky(&arr2(&[[1.0, f64::NAN], [0.0, 1.0]]), 1e-9)
+            .unwrap_err();
+        assert!(err.to_string().contains("non-finite value"));
+    }
+
+    #[test]
+    fn lu_decomposition_solves_and_inverts() {
+        let matrix = arr2(&[[2.0, 1.0], [1.0, 3.0]]);
+        let lu = LuDecomposition::decompose(&matrix).unwrap();
+        let solution = lu.solve(&[3.0, 4.0]).unwrap();
+        assert_close(2.0 * solution[0] + solution[1], 3.0, 1e-12);
+        assert_close(solution[0] + 3.0 * solution[1], 4.0, 1e-12);
+
+        let inverse = lu.inverse().unwrap();
+        assert_matrix_close(&matrix.dot(&inverse), &Array2::eye(2), 1e-12);
+
+        let empty = LuDecomposition::decompose(&Array2::zeros((0, 0))).unwrap();
+        assert!(empty.solve(&[]).unwrap().is_empty());
+        assert_eq!(empty.inverse().unwrap().dim(), (0, 0));
+    }
+
+    #[test]
+    fn lu_decomposition_reports_singular_column() {
+        let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
+        match LuDecomposition::decompose(&singular) {
+            Err(SurvivalError::Singular { columns, .. }) => assert_eq!(columns, vec![1]),
+            other => panic!("expected singular error, got {other:?}"),
+        }
+        match LuDecomposition::decompose(&Array2::zeros((2, 2))) {
+            Err(SurvivalError::Singular { columns, .. }) => assert_eq!(columns, vec![0, 1]),
+            other => panic!("expected singular error, got {other:?}"),
+        }
+        assert!(matches!(
+            lu_inverse(&singular),
+            Err(SurvivalError::Singular { .. })
+        ));
+        assert!(matrix_inverse(&singular).is_none());
+    }
+
+    #[test]
+    fn lu_decomposition_rejects_malformed_input() {
+        let nonsquare = Array2::from_shape_vec((2, 3), vec![1.0; 6]).unwrap();
+        assert!(matches!(
+            LuDecomposition::decompose(&nonsquare),
+            Err(SurvivalError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            LuDecomposition::decompose(&arr2(&[[1.0, f64::INFINITY], [0.0, 1.0]])),
+            Err(SurvivalError::InvalidInput(_))
+        ));
+        let lu = LuDecomposition::decompose(&Array2::eye(2)).unwrap();
+        assert!(matches!(
+            lu.solve(&[1.0]),
+            Err(SurvivalError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            lu.solve(&[1.0, f64::NAN]),
+            Err(SurvivalError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn test_lu_solve() {
+        let matrix = arr2(&[[2.0, 1.0], [1.0, 3.0]]);
+        let vector = Array1::from_vec(vec![3.0, 4.0]);
+        let result = lu_solve(&matrix, &vector).unwrap();
+        assert_close(2.0 * result[0] + result[1], 3.0, 1e-10);
+        assert_close(result[0] + 3.0 * result[1], 4.0, 1e-10);
+    }
+
+    #[test]
+    fn test_lu_solve_uses_partial_pivoting() {
+        let matrix = arr2(&[[0.0, 2.0], [1.0, 3.0]]);
+        let vector = Array1::from_vec(vec![4.0, 5.0]);
+        let result = lu_solve(&matrix, &vector).unwrap();
+        assert_close(result[0], -1.0, 1e-12);
+        assert_close(result[1], 2.0, 1e-12);
+    }
+
+    #[test]
+    fn test_lu_solve_rejects_singular_and_malformed_systems() {
+        let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
+        let rhs = Array1::from_vec(vec![1.0, 2.0]);
+        assert!(lu_solve(&singular, &rhs).is_none());
+
+        let nonsquare = Array2::from_shape_vec((2, 3), vec![1.0; 6]).unwrap();
+        assert!(lu_solve(&nonsquare, &rhs).is_none());
+        assert!(lu_solve(&arr2(&[[1.0, 0.0], [0.0, 1.0]]), &Array1::zeros(1)).is_none());
+    }
+
+    #[test]
+    fn test_matrix_inverse_nontrivial_product_is_identity() {
+        let matrix = arr2(&[[4.0, 7.0, 2.0], [3.0, 6.0, 1.0], [2.0, 5.0, 3.0]]);
+        let inverse = matrix_inverse(&matrix).unwrap();
+        assert_matrix_close(&matrix.dot(&inverse), &Array2::eye(3), 1e-10);
+        assert_eq!(
+            matrix_inverse(&Array2::zeros((0, 0))).unwrap().dim(),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn invert_matrix_vec_adapter_matches_lu_inverse() {
+        let rows = vec![
+            vec![4.0, 2.0, 2.0],
+            vec![2.0, 5.0, 3.0],
+            vec![2.0, 3.0, 6.0],
+        ];
+        let inverse = invert_matrix(&rows).unwrap();
+        let expected = spd_inverse();
+        for (i, row) in inverse.iter().enumerate() {
+            for (j, value) in row.iter().enumerate() {
+                assert_close(*value, expected[[i, j]], 1e-12);
+            }
+        }
+
+        assert!(invert_matrix(&[]).is_none());
+        assert!(invert_matrix(&[vec![1.0, 2.0], vec![3.0]]).is_none());
+        assert!(invert_matrix(&[vec![1.0, 2.0], vec![2.0, 4.0]]).is_none());
+    }
+
+    #[test]
+    fn flat_inverse_uses_lu_then_chinv2_generalised_inverse() {
+        let flat: Vec<f64> = spd().iter().copied().collect();
+        let inverse = invert_flat_square_matrix_with_fallback(&flat, 3);
+        let expected: Vec<f64> = spd_inverse().iter().copied().collect();
+        for (actual, expected) in inverse.iter().zip(expected) {
+            assert_close(*actual, expected, 1e-12);
+        }
+
+        let flat: Vec<f64> = rank_deficient().iter().copied().collect();
+        let inverse = invert_flat_square_matrix_with_fallback(&flat, 3);
+        let expected = [0.3125, -0.125, 0.0, -0.125, 0.25, 0.0, 0.0, 0.0, 0.0];
+        for (actual, expected) in inverse.iter().zip(expected) {
+            assert_close(*actual, expected, 1e-12);
+        }
+
+        assert!(invert_flat_square_matrix_with_fallback(&[], 0).is_empty());
+        assert_eq!(
+            invert_flat_square_matrix_with_fallback(&[4.0], 1),
+            vec![0.25]
+        );
+        assert_eq!(
+            invert_flat_square_matrix_with_fallback(&[0.0], 1),
+            vec![0.0]
+        );
+    }
 
     #[test]
     fn standardize_row_major_matrix_centers_and_scales_columns() {
@@ -388,59 +888,5 @@ mod tests {
         assert!(matches!(matrix, Cow::Owned(_)));
         assert_eq!(means, vec![2.0, 3.0]);
         assert_eq!(scales, vec![1.0, 1.0]);
-    }
-
-    #[test]
-    fn test_lu_solve() {
-        let matrix = arr2(&[[2.0, 1.0], [1.0, 3.0]]);
-        let vector = Array1::from_vec(vec![3.0, 4.0]);
-        let result = lu_solve(&matrix, &vector).unwrap();
-        let ax0 = 2.0 * result[0] + 1.0 * result[1];
-        let ax1 = 1.0 * result[0] + 3.0 * result[1];
-        assert!((ax0 - 3.0).abs() < 1e-10);
-        assert!((ax1 - 4.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_lu_solve_uses_partial_pivoting() {
-        let matrix = arr2(&[[0.0, 2.0], [1.0, 3.0]]);
-        let vector = Array1::from_vec(vec![4.0, 5.0]);
-        let result = lu_solve(&matrix, &vector).unwrap();
-        assert!((result[0] + 1.0).abs() < 1e-12);
-        assert!((result[1] - 2.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn test_lu_solve_rejects_singular_and_malformed_systems() {
-        let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
-        let rhs = Array1::from_vec(vec![1.0, 2.0]);
-        assert!(lu_solve(&singular, &rhs).is_none());
-
-        let nonsquare = Array2::from_shape_vec((2, 3), vec![1.0; 6]).unwrap();
-        assert!(lu_solve(&nonsquare, &rhs).is_none());
-        assert!(lu_solve(&arr2(&[[1.0, 0.0], [0.0, 1.0]]), &Array1::zeros(1)).is_none());
-    }
-
-    #[test]
-    fn test_matrix_inverse() {
-        let matrix = arr2(&[[1.0, 0.0], [0.0, 1.0]]);
-        let inv = matrix_inverse(&matrix).unwrap();
-        assert!((inv[[0, 0]] - 1.0).abs() < 1e-10);
-        assert!((inv[[1, 1]] - 1.0).abs() < 1e-10);
-        assert!(inv[[0, 1]].abs() < 1e-10);
-        assert!(inv[[1, 0]].abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_matrix_inverse_nontrivial_product_is_identity() {
-        let matrix = arr2(&[[4.0, 7.0, 2.0], [3.0, 6.0, 1.0], [2.0, 5.0, 3.0]]);
-        let inverse = matrix_inverse(&matrix).unwrap();
-        let product = matrix.dot(&inverse);
-        for row in 0..3 {
-            for col in 0..3 {
-                let expected = if row == col { 1.0 } else { 0.0 };
-                assert!((product[[row, col]] - expected).abs() < 1e-10);
-            }
-        }
     }
 }

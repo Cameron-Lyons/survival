@@ -1,9 +1,8 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::internal::statistical::{
-    normal_cdf, normal_inverse_cdf, normal_quantile_lower, two_sided_normal_quantile,
-};
+use crate::internal::dist::qnorm;
+use crate::internal::statistical::{normal_cdf, normal_inverse_cdf, two_sided_normal_quantile};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
@@ -545,9 +544,10 @@ fn obf_boundary(alpha: f64, info_fraction: f64) -> f64 {
 
 fn pocock_boundary(alpha: f64, _info_fraction: f64, n_looks: usize) -> f64 {
     let n_looks = n_looks as f64;
-    let probability = alpha / (2.0 * n_looks.sqrt());
+    // Staying in log space keeps a subnormal alpha representable:
+    // R's qnorm(log(alpha) - log(2) - log(n_looks)/2, lower.tail = FALSE, log.p = TRUE).
     let log_probability = alpha.ln() - std::f64::consts::LN_2 - 0.5 * n_looks.ln();
-    -normal_quantile_lower(probability, log_probability)
+    qnorm(log_probability, false, true)
 }
 
 #[pyfunction]

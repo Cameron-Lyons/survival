@@ -1,911 +1,379 @@
-use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
-use crate::internal::student_t::StudentT;
+//! Predictions from a parametric survival fit: a port of
+//! `R/predict.survreg.R` from the CRAN `survival` package.
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::validation::{
+    ProbabilityBounds, validate_finite, validate_length, validate_probability,
+};
+use crate::regression::parametric_survival::SurvregFit;
 use pyo3::prelude::*;
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum SurvregPredictType {
+/// The `type` argument of `predict.survreg` (`link`/`linear` are `lp`).
+#[pyclass(eq, eq_int, from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurvregPredictType {
+    /// `itrans(eta)`: the prediction on the original response scale.
     Response,
+    /// The linear predictor `eta`.
     Lp,
+    /// Per-term contributions to `eta`, centred at the training means.
     Terms,
+    /// Quantiles of the response distribution, one column per `p`.
+    Quantile,
+    /// Quantiles on the transformed (linear predictor) scale.
+    Uquantile,
 }
 
 impl SurvregPredictType {
-    pub(crate) fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "response" => Some(SurvregPredictType::Response),
-            "link" | "lp" | "linear" => Some(SurvregPredictType::Lp),
-            "terms" => Some(SurvregPredictType::Terms),
-            _ => None,
+    const CHOICES: [(&'static str, Self); 7] = [
+        ("response", Self::Response),
+        ("link", Self::Lp),
+        ("lp", Self::Lp),
+        ("linear", Self::Lp),
+        ("terms", Self::Terms),
+        ("quantile", Self::Quantile),
+        ("uquantile", Self::Uquantile),
+    ];
+
+    /// `match.arg(type)`: an exact name or a unique prefix.
+    pub fn parse(name: &str) -> SurvivalResult<Self> {
+        let key = name.trim().to_lowercase();
+        if let Some((_, kind)) = Self::CHOICES.iter().find(|(choice, _)| *choice == key) {
+            return Ok(*kind);
+        }
+        let mut matches: Vec<Self> = Self::CHOICES
+            .iter()
+            .filter(|(choice, _)| !key.is_empty() && choice.starts_with(key.as_str()))
+            .map(|(_, kind)| *kind)
+            .collect();
+        matches.dedup();
+        match matches.as_slice() {
+            [kind] => Ok(*kind),
+            _ => Err(SurvivalError::invalid_input(format!(
+                "prediction type '{name}' should be one of {}",
+                Self::CHOICES
+                    .iter()
+                    .map(|(choice, _)| format!("\"{choice}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+/// The value of `predict.survreg`.
 #[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SurvregPrediction {
     #[pyo3(get)]
-    pub predictions: Vec<f64>,
+    pub predict_type: SurvregPredictType,
+    /// One row per observation.  `Response`/`Lp` have a single column,
+    /// `Quantile`/`Uquantile` one column per requested probability, `Terms`
+    /// one column per term.
     #[pyo3(get)]
-    pub se: Option<Vec<f64>>,
+    pub fit: Vec<Vec<f64>>,
+    /// Standard errors laid out like `fit`, when requested.
     #[pyo3(get)]
-    pub prediction_type: String,
-    #[pyo3(get)]
-    pub n: usize,
+    pub se_fit: Option<Vec<Vec<f64>>>,
 }
 
 #[pymethods]
 impl SurvregPrediction {
     fn __repr__(&self) -> String {
         format!(
-            "SurvregPrediction(type='{}', n={}, has_se={})",
-            self.prediction_type,
-            self.n,
-            self.se.is_some()
+            "SurvregPrediction(type={:?}, n={}, columns={}, has_se={})",
+            self.predict_type,
+            self.fit.len(),
+            self.fit.first().map_or(0, Vec::len),
+            self.se_fit.is_some()
         )
     }
 }
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct SurvregQuantilePrediction {
-    #[pyo3(get)]
-    pub quantiles: Vec<f64>,
-    #[pyo3(get)]
-    pub predictions: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n: usize,
+/// The `newdata` of `predict.survreg`: a design matrix with the columns of
+/// the training design, an optional offset and, for a fit with strata, the
+/// stratum of every row.
+///
+/// The offset enters every prediction type the way the training offset
+/// enters `linear.predictors`.  (R's `predict.survreg` drops the offset of
+/// `newdata` altogether, so its new-data predictions of a model with an
+/// offset disagree with its training predictions; that is not reproduced.)
+#[derive(Debug, Clone, Copy)]
+pub struct SurvregNewdata<'a> {
+    pub covariates: &'a [Vec<f64>],
+    pub offset: Option<&'a [f64]>,
+    pub strata: Option<&'a [usize]>,
 }
 
-#[pymethods]
-impl SurvregQuantilePrediction {
-    fn __repr__(&self) -> String {
-        format!(
-            "SurvregQuantilePrediction(n={}, n_quantiles={})",
-            self.n,
-            self.quantiles.len()
-        )
+/// The rows a prediction is evaluated on: the training design or `newdata`.
+struct PredictionRows<'a> {
+    x: &'a [Vec<f64>],
+    /// `x %*% coef + offset`, what `predict.survreg` calls `pred` before any
+    /// transform.
+    eta: Vec<f64>,
+    strata: Vec<usize>,
+}
+
+fn prediction_rows<'a>(
+    fit: &'a SurvregFit,
+    newdata: Option<&SurvregNewdata<'a>>,
+) -> SurvivalResult<PredictionRows<'a>> {
+    let nvar = fit.nvar();
+    let coef = &fit.coefficients[..nvar];
+    let Some(newdata) = newdata else {
+        return Ok(PredictionRows {
+            x: &fit.covariates,
+            eta: fit.linear_predictors.clone(),
+            strata: fit.strata.clone(),
+        });
+    };
+    let n = newdata.covariates.len();
+    for (index, row) in newdata.covariates.iter().enumerate() {
+        validate_length(nvar, row.len(), &format!("newdata row {index}"))?;
+        validate_finite(row, &format!("newdata row {index}"))?;
     }
-}
-
-fn extreme_value_quantile(p: f64) -> f64 {
-    (-(-p).ln_1p()).ln()
-}
-
-fn extreme_value_cdf(z: f64) -> f64 {
-    if z == f64::INFINITY {
-        return 1.0;
+    if let Some(offset) = newdata.offset {
+        validate_length(n, offset.len(), "offset")?;
+        validate_finite(offset, "offset")?;
     }
-    if z == f64::NEG_INFINITY {
-        return 0.0;
-    }
-    -(-z.exp()).exp_m1()
-}
-
-fn extreme_value_pdf(z: f64) -> f64 {
-    if !z.is_finite() {
-        return if z.is_nan() { f64::NAN } else { 0.0 };
-    }
-    if !(-745.0..=709.0).contains(&z) {
-        return 0.0;
-    }
-    let ez = z.exp();
-    ez * (-ez).exp()
-}
-
-fn logistic_quantile(p: f64) -> f64 {
-    p.ln() - (-p).ln_1p()
-}
-
-fn logistic_cdf(z: f64) -> f64 {
-    if z >= 0.0 {
-        1.0 / (1.0 + (-z).exp())
-    } else {
-        let ez = z.exp();
-        ez / (1.0 + ez)
-    }
-}
-
-fn logistic_pdf(z: f64) -> f64 {
-    if !z.is_finite() {
-        return if z.is_nan() { f64::NAN } else { 0.0 };
-    }
-    let cdf = logistic_cdf(z);
-    cdf * (1.0 - cdf)
-}
-
-fn gaussian_pdf(z: f64) -> f64 {
-    if !z.is_finite() {
-        return if z.is_nan() { f64::NAN } else { 0.0 };
-    }
-    (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
-}
-
-fn distribution_key(distribution: &str) -> String {
-    distribution.to_lowercase().replace('-', "_")
-}
-
-fn validate_distribution(distribution: &str) -> PyResult<()> {
-    let key = distribution_key(distribution);
-    if matches!(
-        key.as_str(),
-        "weibull"
-            | "exponential"
-            | "rayleigh"
-            | "extreme"
-            | "extreme_value"
-            | "extremevalue"
-            | "logistic"
-            | "gaussian"
-            | "normal"
-            | "lognormal"
-            | "log_normal"
-            | "loggaussian"
-            | "log_gaussian"
-            | "loglogistic"
-            | "log_logistic"
-            | "t"
-            | "student"
-            | "student_t"
-            | "studentt"
-    ) {
-        return Ok(());
-    }
-    Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, loglogistic, or t",
-    ))
-}
-
-fn validated_distribution_key(distribution: &str) -> String {
-    debug_assert!(
-        validate_distribution(distribution).is_ok(),
-        "distribution was validated"
-    );
-    distribution_key(distribution)
-}
-
-fn is_student_t_distribution(key: &str) -> bool {
-    matches!(key, "t" | "student" | "student_t" | "studentt")
-}
-
-fn validate_prediction_distribution(distribution: &str) -> PyResult<()> {
-    let key = distribution_key(distribution);
-    if matches!(
-        key.as_str(),
-        "t" | "student" | "student_t" | "studentt" | "student-t"
-    ) {
-        return Ok(());
-    }
-    validate_distribution(distribution)
-}
-
-fn validated_prediction_distribution_key(distribution: &str) -> String {
-    debug_assert!(
-        validate_prediction_distribution(distribution).is_ok(),
-        "prediction distribution was validated"
-    );
-    distribution_key(distribution)
-}
-
-fn response_uses_log_transform(key: &str) -> bool {
-    match key {
-        "weibull" | "exponential" | "rayleigh" | "lognormal" | "log_normal" | "loggaussian"
-        | "log_gaussian" | "loglogistic" | "log_logistic" => true,
-        "extreme" | "extreme_value" | "extremevalue" | "gaussian" | "normal" | "logistic" | "t"
-        | "student" | "student_t" | "studentt" => false,
-        _ => unreachable!("distribution was validated"),
-    }
-}
-
-fn quantile_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
-    match key {
-        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
-            extreme_value_quantile
-        }
-        "logistic" | "loglogistic" | "log_logistic" => logistic_quantile,
-        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            normal_inverse_cdf
-        }
-        _ => unreachable!("distribution was validated"),
-    }
-}
-
-fn cdf_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
-    match key {
-        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
-            extreme_value_cdf
-        }
-        "logistic" | "loglogistic" | "log_logistic" => logistic_cdf,
-        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            normal_cdf
-        }
-        _ => unreachable!("distribution was validated"),
-    }
-}
-
-fn pdf_fn_for_distribution(key: &str) -> fn(f64) -> f64 {
-    match key {
-        "weibull" | "exponential" | "rayleigh" | "extreme" | "extreme_value" | "extremevalue" => {
-            extreme_value_pdf
-        }
-        "logistic" | "loglogistic" | "log_logistic" => logistic_pdf,
-        "gaussian" | "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" | "normal" => {
-            gaussian_pdf
-        }
-        _ => unreachable!("distribution was validated"),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SurvregDistributionKind {
-    Density,
-    Distribution,
-    Quantile,
-}
-
-impl SurvregDistributionKind {
-    fn from_str(value: &str) -> Option<Self> {
-        match value.to_lowercase().replace('-', "_").as_str() {
-            "density" | "d" | "pdf" => Some(Self::Density),
-            "distribution" | "cdf" | "p" => Some(Self::Distribution),
-            "quantile" | "q" => Some(Self::Quantile),
-            _ => None,
-        }
-    }
-}
-
-fn validate_equal_lengths(
-    values: &[f64],
-    mean: &[f64],
-    scale: &[f64],
-    require_finite_mean: bool,
-) -> PyResult<()> {
-    let n = values.len();
-    if mean.len() != n {
-        return Err(value_error(format!(
-            "mean has {} values but values has {}",
-            mean.len(),
-            n
-        )));
-    }
-    if scale.len() != n {
-        return Err(value_error(format!(
-            "scale has {} values but values has {}",
-            scale.len(),
-            n
-        )));
-    }
-    if require_finite_mean {
-        for (idx, &value) in mean.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(value_error(format!(
-                    "mean contains non-finite value at index {idx}"
+    let strata = match newdata.strata {
+        Some(strata) => {
+            validate_length(n, strata.len(), "strata")?;
+            if let Some(&bad) = strata.iter().find(|&&s| s >= fit.nstrata()) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "newdata stratum {bad} is not one of the {} fitted strata",
+                    fit.nstrata()
                 )));
             }
+            strata.to_vec()
         }
-    }
-    for (idx, &value) in scale.iter().enumerate() {
-        if !value.is_finite() || value <= 0.0 {
-            return Err(value_error(format!(
-                "scale contains non-positive or non-finite value at index {idx}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn survreg_density_value(
-    value: f64,
-    mean: f64,
-    scale: f64,
-    pdf: fn(f64) -> f64,
-    log_transform: bool,
-) -> f64 {
-    if log_transform {
-        if value <= 0.0 {
-            return f64::NAN;
-        }
-        let z = (value.ln() - mean) / scale;
-        return pdf(z) / (scale * value);
-    }
-    let z = (value - mean) / scale;
-    pdf(z) / scale
-}
-
-fn survreg_distribution_value(
-    value: f64,
-    mean: f64,
-    scale: f64,
-    cdf: fn(f64) -> f64,
-    log_transform: bool,
-) -> f64 {
-    if log_transform {
-        if value <= 0.0 {
-            return 0.0;
-        }
-        let z = (value.ln() - mean) / scale;
-        return cdf(z);
-    }
-    let z = (value - mean) / scale;
-    cdf(z)
-}
-
-fn survreg_quantile_value(
-    probability: f64,
-    mean: f64,
-    scale: f64,
-    quantile: fn(f64) -> f64,
-    log_transform: bool,
-) -> PyResult<f64> {
-    if !probability.is_finite() || !(0.0..=1.0).contains(&probability) {
-        return Err(value_error("p must be between 0 and 1"));
-    }
-    let value = mean + scale * quantile(probability);
-    Ok(if log_transform { value.exp() } else { value })
-}
-
-fn student_t_standardize(value: f64, mean: f64, scale: f64) -> f64 {
-    let centered = value - mean;
-    if centered.is_infinite() && value.is_finite() && mean.is_finite() {
-        // Opposite-sign finite inputs can overflow before a large scale brings
-        // their difference back into range.
-        value / scale - mean / scale
-    } else {
-        centered / scale
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (values, mean, scale, distribution, kind, parms=None))]
-pub fn survreg_distribution(
-    values: Vec<f64>,
-    mean: Vec<f64>,
-    scale: Vec<f64>,
-    distribution: String,
-    kind: String,
-    parms: Option<f64>,
-) -> PyResult<Vec<f64>> {
-    validate_distribution(&distribution)?;
-    let key = validated_distribution_key(&distribution);
-    validate_equal_lengths(&values, &mean, &scale, !is_student_t_distribution(&key))?;
-    let log_transform = response_uses_log_transform(&key);
-    let kind = SurvregDistributionKind::from_str(&kind)
-        .ok_or_else(|| value_error("kind must be one of density, distribution, or quantile"))?;
-
-    if is_student_t_distribution(&key) {
-        let df = parms.ok_or_else(|| value_error("parms is required for distribution='t'"))?;
-        if !df.is_finite() || df <= 0.0 {
-            return Err(value_error(
-                "parms for distribution='t' must be a positive finite value",
+        None if fit.nstrata() > 1 => {
+            return Err(SurvivalError::invalid_input(
+                "the fit has several strata; newdata must give the stratum of every row",
             ));
         }
-        let student = StudentT::new(df);
-        return values
-            .iter()
-            .zip(mean.iter())
-            .zip(scale.iter())
-            .map(|((&value, &mean_value), &scale_value)| match kind {
-                SurvregDistributionKind::Density => {
-                    let z = student_t_standardize(value, mean_value, scale_value);
-                    Ok((student.log_pdf(z) - scale_value.ln()).exp())
-                }
-                SurvregDistributionKind::Distribution => {
-                    Ok(student.cdf(student_t_standardize(value, mean_value, scale_value)))
-                }
-                SurvregDistributionKind::Quantile => {
-                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                        return Err(value_error("p must be between 0 and 1"));
-                    }
-                    Ok(scale_value.mul_add(student.inverse_cdf(value), mean_value))
-                }
-            })
-            .collect();
-    }
-
-    let mut result = Vec::with_capacity(values.len());
-    match kind {
-        SurvregDistributionKind::Density => {
-            let pdf = pdf_fn_for_distribution(&key);
-            for ((&value, &mean_value), &scale_value) in
-                values.iter().zip(mean.iter()).zip(scale.iter())
-            {
-                result.push(survreg_density_value(
-                    value,
-                    mean_value,
-                    scale_value,
-                    pdf,
-                    log_transform,
-                ));
-            }
-        }
-        SurvregDistributionKind::Distribution => {
-            let cdf = cdf_fn_for_distribution(&key);
-            for ((&value, &mean_value), &scale_value) in
-                values.iter().zip(mean.iter()).zip(scale.iter())
-            {
-                result.push(survreg_distribution_value(
-                    value,
-                    mean_value,
-                    scale_value,
-                    cdf,
-                    log_transform,
-                ));
-            }
-        }
-        SurvregDistributionKind::Quantile => {
-            let quantile = quantile_fn_for_distribution(&key);
-            for ((&value, &mean_value), &scale_value) in
-                values.iter().zip(mean.iter()).zip(scale.iter())
-            {
-                result.push(survreg_quantile_value(
-                    value,
-                    mean_value,
-                    scale_value,
-                    quantile,
-                    log_transform,
-                )?);
-            }
-        }
-    }
-    Ok(result)
-}
-
-pub(crate) fn compute_linear_predictor(
-    covariates: &[Vec<f64>],
-    coefficients: &[f64],
-    offset: Option<&[f64]>,
-) -> Vec<f64> {
-    let n = covariates.len();
-    let nvar = coefficients.len();
-
-    let mut lp = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut val = 0.0;
-        for j in 0..nvar.min(covariates[i].len()) {
-            val += covariates[i][j] * coefficients[j];
-        }
-        if let Some(off) = offset
-            && i < off.len()
-        {
-            val += off[i];
-        }
-        lp.push(val);
-    }
-    lp
-}
-
-pub(crate) fn compute_response_prediction(linear_pred: &[f64], distribution: &str) -> Vec<f64> {
-    let key = validated_prediction_distribution_key(distribution);
-    if response_uses_log_transform(&key) {
-        linear_pred.iter().map(|&lp| lp.exp()).collect()
-    } else {
-        linear_pred.to_vec()
-    }
-}
-
-pub(crate) fn compute_quantile_prediction(
-    linear_pred: &[f64],
-    scale: f64,
-    quantiles: &[f64],
-    distribution: &str,
-) -> Vec<Vec<f64>> {
-    compute_quantile_prediction_with_options(
-        linear_pred,
-        &[scale],
-        quantiles,
-        distribution,
-        None,
-        true,
-    )
-    .expect("distribution was validated and prediction inputs are valid")
-}
-
-pub(crate) fn compute_quantile_prediction_with_options(
-    linear_pred: &[f64],
-    scales: &[f64],
-    quantiles: &[f64],
-    distribution: &str,
-    distribution_parameter: Option<f64>,
-    transform: bool,
-) -> PyResult<Vec<Vec<f64>>> {
-    validate_distribution(distribution)?;
-    validate_quantiles(quantiles)?;
-    if scales.len() != 1 && scales.len() != linear_pred.len() {
-        return Err(value_error(
-            "scales must have one value or match prediction rows",
-        ));
-    }
-    for &scale in scales {
-        validate_scale(scale)?;
-    }
-    let key = validated_distribution_key(distribution);
-    // Inverting the distribution can be expensive (especially Student-t).
-    // Each probability is inverted once and then reused for every row.
-    let standardized_quantiles: Vec<f64> = if is_student_t_distribution(&key) {
-        let df = distribution_parameter.unwrap_or(4.0);
-        if !df.is_finite() || df <= 0.0 {
-            return Err(value_error(
-                "Student-t degrees of freedom must be positive and finite",
-            ));
-        }
-        let student = StudentT::new(df);
-        quantiles.iter().map(|&q| student.inverse_cdf(q)).collect()
-    } else {
-        let quantile = quantile_fn_for_distribution(&key);
-        quantiles.iter().map(|&q| quantile(q)).collect()
+        None => vec![0; n],
     };
-    let uses_log_transform = transform && response_uses_log_transform(&key);
-    Ok(linear_pred
+    let eta = newdata
+        .covariates
         .iter()
         .enumerate()
-        .map(|(idx, &lp)| {
-            let scale = if scales.len() == 1 {
-                scales[0]
-            } else {
-                scales[idx]
-            };
-            standardized_quantiles
+        .map(|(i, row)| {
+            let lp: f64 = row.iter().zip(coef).map(|(x, b)| x * b).sum();
+            lp + newdata.offset.map_or(0.0, |offset| offset[i])
+        })
+        .collect();
+    Ok(PredictionRows {
+        x: newdata.covariates,
+        eta,
+        strata,
+    })
+}
+
+/// `x_i' V x_i` for the leading block of the variance matrix.
+fn quadratic(x: &[f64], variance: &[Vec<f64>]) -> f64 {
+    x.iter()
+        .enumerate()
+        .map(|(j, xj)| {
+            xj * x
                 .iter()
-                .map(|&score| {
-                    let value = lp + scale * score;
-                    if uses_log_transform {
-                        value.exp()
-                    } else {
-                        value
-                    }
-                })
-                .collect()
+                .enumerate()
+                .map(|(k, xk)| variance[j][k] * xk)
+                .sum::<f64>()
         })
-        .collect())
+        .sum()
 }
 
-pub(crate) fn compute_se_linear_predictor(
-    covariates: &[Vec<f64>],
-    var_matrix: &[Vec<f64>],
-) -> Vec<f64> {
-    let nvar = var_matrix.len();
-
-    let mut se = Vec::with_capacity(covariates.len());
-    for cov in covariates {
-        let mut var = 0.0;
-        for j in 0..nvar.min(cov.len()) {
-            for k in 0..nvar.min(cov.len()) {
-                if j < var_matrix.len() && k < var_matrix[j].len() {
-                    var += cov[j] * var_matrix[j][k] * cov[k];
-                }
-            }
-        }
-        se.push(var.sqrt());
-    }
-    se
-}
-
-pub(crate) fn transform_prediction_se(
-    se: &mut [f64],
-    predictions: &[f64],
-    distribution: &str,
-    prediction_type: SurvregPredictType,
-) {
-    if prediction_type == SurvregPredictType::Response
-        && response_uses_log_transform(&validated_prediction_distribution_key(distribution))
-    {
-        for (value, prediction) in se.iter_mut().zip(predictions) {
-            *value *= prediction.abs();
-        }
-    }
-}
-
-fn validate_finite_values(name: &str, values: &[f64]) -> PyResult<()> {
-    for (idx, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "{} contains non-finite value at index {}",
-                name, idx
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_non_nan_values(name: &str, values: &[f64]) -> PyResult<()> {
-    if let Some(idx) = values.iter().position(|value| value.is_nan()) {
-        return Err(value_error(format!("{name} contains NaN at index {idx}")));
-    }
-    Ok(())
-}
-
-fn validate_rectangular_matrix(name: &str, matrix: &[Vec<f64>]) -> PyResult<usize> {
-    let width = matrix.first().map_or(0, Vec::len);
-    for (row_idx, row) in matrix.iter().enumerate() {
-        if row.len() != width {
-            return Err(value_error(format!(
-                "{name} row {row_idx} has length {}, expected {width}",
-                row.len()
-            )));
-        }
-        validate_finite_values(name, row)?;
-    }
-    Ok(width)
-}
-
-fn validate_square_matrix(name: &str, matrix: &[Vec<f64>]) -> PyResult<usize> {
-    let width = matrix.len();
-    for (row_idx, row) in matrix.iter().enumerate() {
-        if row.len() != width {
-            return Err(value_error(format!(
-                "{name} row {row_idx} has length {}, expected {width}",
-                row.len()
-            )));
-        }
-        validate_finite_values(name, row)?;
-    }
-    Ok(width)
-}
-
-fn validate_scale(scale: f64) -> PyResult<()> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "scale must be a finite positive value",
-        ));
-    }
-    Ok(())
-}
-
-#[pyfunction]
-pub fn survreg_quantile_prediction_se_matrix(
-    rows: Vec<Vec<f64>>,
-    scales: Vec<f64>,
-    strata: Vec<usize>,
-    variance: Vec<Vec<f64>>,
-    quantile_scores: Vec<f64>,
-    predictions: Vec<Vec<f64>>,
-    transform_se: bool,
-) -> PyResult<Vec<Vec<f64>>> {
-    let nvar = validate_rectangular_matrix("rows", &rows)?;
-    let n = rows.len();
-    if strata.len() != n {
-        return Err(value_error("strata length must match rows length"));
-    }
-    if predictions.len() != n {
-        return Err(value_error("predictions length must match rows length"));
-    }
-    if scales.is_empty() {
-        return Err(value_error("scales must not be empty"));
-    }
-    for &scale in &scales {
-        validate_scale(scale)?;
-    }
-    validate_non_nan_values("quantile_scores", &quantile_scores)?;
-    for (row_idx, row) in predictions.iter().enumerate() {
-        if row.len() != quantile_scores.len() {
-            return Err(value_error(format!(
-                "predictions row {row_idx} has length {}, expected {}",
-                row.len(),
-                quantile_scores.len()
-            )));
-        }
-        validate_non_nan_values("predictions", row)?;
-    }
-
-    let width = validate_square_matrix("variance", &variance)?;
-    // An empty batch has no row from which to infer the design width.
-    if n == 0 {
-        return Ok(Vec::new());
-    }
-    let full_width = nvar + scales.len();
-    if width != nvar && width != full_width {
-        return Err(value_error(
-            "variance width must match row width or row width plus scale count",
-        ));
-    }
-    for (row_idx, &stratum) in strata.iter().enumerate() {
-        if stratum >= scales.len() {
-            return Err(value_error(format!(
-                "strata contains value {stratum} at row {row_idx}, expected < {}",
-                scales.len()
-            )));
-        }
-    }
-
-    let has_scale_variance = width == full_width;
-    let mut result = Vec::with_capacity(n);
-    for (row_idx, row) in rows.iter().enumerate() {
-        let mut location_variance = 0.0;
-        for left in 0..nvar {
-            for right in 0..nvar {
-                location_variance += row[left] * variance[left][right] * row[right];
-            }
-        }
-        let mut result_row = Vec::with_capacity(quantile_scores.len());
-        for (score_idx, &score) in quantile_scores.iter().enumerate() {
-            let mut variance_value = location_variance;
-            if has_scale_variance {
-                let stratum = strata[row_idx];
-                let scale_col = nvar + stratum;
-                let scale_value = score * scales[stratum];
-                for col in 0..nvar {
-                    variance_value += row[col] * variance[col][scale_col] * scale_value;
-                    variance_value += scale_value * variance[scale_col][col] * row[col];
-                }
-                variance_value += scale_value * variance[scale_col][scale_col] * scale_value;
-            }
-            let mut se = if variance_value.is_finite() {
-                variance_value.max(0.0).sqrt()
-            } else {
-                variance_value.sqrt()
-            };
-            if transform_se {
-                se *= predictions[row_idx][score_idx].abs();
-            }
-            result_row.push(se);
-        }
-        result.push(result_row);
-    }
-    Ok(result)
-}
-
-fn validate_covariates(covariates: &[Vec<f64>], nvar: usize) -> PyResult<()> {
-    for (row_idx, row) in covariates.iter().enumerate() {
-        if row.len() != nvar {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "covariates row {} has {} columns but coefficients has {}",
-                row_idx,
-                row.len(),
-                nvar
-            )));
-        }
-        for (col_idx, &value) in row.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "covariates[{}][{}] contains non-finite value",
-                    row_idx, col_idx
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_offset(offset: Option<&[f64]>, n: usize) -> PyResult<()> {
-    if let Some(values) = offset {
-        if values.len() != n {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "offset has {} values but covariates has {} rows",
-                values.len(),
-                n
-            )));
-        }
-        validate_finite_values("offset", values)?;
-    }
-    Ok(())
-}
-
-fn validate_var_matrix(var_matrix: &[Vec<f64>], nvar: usize) -> PyResult<()> {
-    if var_matrix.len() < nvar {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "var_matrix must have at least {} rows",
-            nvar
-        )));
-    }
-    for (row_idx, row) in var_matrix.iter().enumerate() {
-        if row_idx < nvar && row.len() < nvar {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "var_matrix row {} has {} columns but expected at least {}",
-                row_idx,
-                row.len(),
-                nvar
-            )));
-        }
-        for (col_idx, &value) in row.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "var_matrix[{}][{}] contains non-finite value",
-                    row_idx, col_idx
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_quantiles(quantiles: &[f64]) -> PyResult<()> {
-    for &q in quantiles {
-        if !q.is_finite() || !(0.0..=1.0).contains(&q) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Quantiles must be between 0 and 1 (inclusive)",
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[pyfunction]
-#[pyo3(signature = (covariates, coefficients, scale, distribution, predict_type="response".to_string(), offset=None, var_matrix=None, se_fit=false))]
-#[allow(clippy::too_many_arguments)]
+/// `predict.survreg(object, newdata, type, se.fit, terms, p)`.
+///
+/// `p` is only used by the quantile types.  `assign` gives, for each design
+/// column, its term number in R's `attr(x, "assign")` convention (0 for the
+/// intercept); without it every non-intercept column is its own term, with
+/// an intercept recognised as a leading column of ones.  `terms` selects a
+/// subset of the terms (zero-based, in term order).
 pub fn predict_survreg(
-    covariates: Vec<Vec<f64>>,
-    coefficients: Vec<f64>,
-    scale: f64,
-    distribution: String,
-    predict_type: String,
-    offset: Option<Vec<f64>>,
-    var_matrix: Option<Vec<Vec<f64>>>,
+    fit: &SurvregFit,
+    newdata: Option<&SurvregNewdata<'_>>,
+    predict_type: SurvregPredictType,
     se_fit: bool,
-) -> PyResult<SurvregPrediction> {
-    let n = covariates.len();
-    let nvar = coefficients.len();
-    validate_scale(scale)?;
-    validate_distribution(&distribution)?;
-    validate_finite_values("coefficients", &coefficients)?;
-    validate_covariates(&covariates, nvar)?;
-    validate_offset(offset.as_deref(), n)?;
-    if let Some(values) = var_matrix.as_ref() {
-        validate_var_matrix(values, nvar)?;
+    p: &[f64],
+    assign: Option<&[usize]>,
+    terms: Option<&[usize]>,
+) -> SurvivalResult<SurvregPrediction> {
+    let nvar = fit.nvar();
+    let coef = &fit.coefficients[..nvar];
+    let variance = &fit.variance_matrix;
+    let fixed_scale = variance.len() == nvar;
+    let transform = fit.distribution.transform;
+
+    match predict_type {
+        SurvregPredictType::Lp | SurvregPredictType::Response => {
+            let rows = prediction_rows(fit, newdata)?;
+            let mut pred = rows.eta;
+            let mut se = se_fit.then(|| {
+                rows.x
+                    .iter()
+                    .map(|x| quadratic(x, variance).sqrt())
+                    .collect::<Vec<f64>>()
+            });
+            if predict_type == SurvregPredictType::Response {
+                pred.iter_mut().for_each(|v| *v = transform.inverse(*v));
+                if let Some(se) = se.as_mut() {
+                    for (s, &value) in se.iter_mut().zip(&pred) {
+                        *s /= transform.derivative(value);
+                    }
+                }
+            }
+            Ok(SurvregPrediction {
+                predict_type,
+                fit: pred.into_iter().map(|v| vec![v]).collect(),
+                se_fit: se.map(|se| se.into_iter().map(|v| vec![v]).collect()),
+            })
+        }
+        SurvregPredictType::Quantile | SurvregPredictType::Uquantile => {
+            validate_probability(p, "p", ProbabilityBounds::Closed)?;
+            let rows = prediction_rows(fit, newdata)?;
+            let qq: Vec<f64> = p.iter().map(|&p| fit.distribution.quantile(p)).collect();
+            let nstrata = fit.nstrata();
+            let mut pred: Vec<Vec<f64>> = rows
+                .eta
+                .iter()
+                .zip(&rows.strata)
+                .map(|(&eta, &stratum)| {
+                    let scale = fit.scale[stratum];
+                    qq.iter().map(|q| eta + q * scale).collect()
+                })
+                .collect();
+            let mut se = se_fit.then(|| {
+                rows.x
+                    .iter()
+                    .zip(&rows.strata)
+                    .map(|(x, &stratum)| {
+                        if fixed_scale {
+                            let se = quadratic(x, variance).sqrt();
+                            vec![se; qq.len()]
+                        } else {
+                            // temp <- cbind(x, (qq[i]*scale) * x.strata)
+                            let scale = fit.scale[stratum];
+                            qq.iter()
+                                .map(|q| {
+                                    let mut temp = x.to_vec();
+                                    temp.resize(nvar + nstrata, 0.0);
+                                    temp[nvar + stratum] = q * scale;
+                                    quadratic(&temp, variance).sqrt()
+                                })
+                                .collect()
+                        }
+                    })
+                    .collect::<Vec<Vec<f64>>>()
+            });
+            if predict_type == SurvregPredictType::Quantile {
+                for row in pred.iter_mut() {
+                    row.iter_mut().for_each(|v| *v = transform.inverse(*v));
+                }
+                if let Some(se) = se.as_mut() {
+                    for (se_row, pred_row) in se.iter_mut().zip(&pred) {
+                        for (s, &value) in se_row.iter_mut().zip(pred_row) {
+                            *s /= transform.derivative(value);
+                        }
+                    }
+                }
+            }
+            Ok(SurvregPrediction {
+                predict_type,
+                fit: pred,
+                se_fit: se,
+            })
+        }
+        SurvregPredictType::Terms => {
+            let rows = prediction_rows(fit, newdata)?;
+            let assign: Vec<usize> = match assign {
+                Some(assign) => {
+                    validate_length(nvar, assign.len(), "assign")?;
+                    assign.to_vec()
+                }
+                None => {
+                    let intercept = fit.has_intercept();
+                    (0..nvar)
+                        .map(|j| if intercept { j } else { j + 1 })
+                        .collect()
+                }
+            };
+            let intercept = assign.contains(&0);
+            let mut term_ids: Vec<usize> = assign.iter().copied().filter(|&t| t != 0).collect();
+            term_ids.sort_unstable();
+            term_ids.dedup();
+            let selected: Vec<usize> = match terms {
+                Some(terms) => terms
+                    .iter()
+                    .map(|&t| {
+                        term_ids.get(t).copied().ok_or_else(|| {
+                            SurvivalError::invalid_input(format!(
+                                "term {t} is out of range for a model with {} terms",
+                                term_ids.len()
+                            ))
+                        })
+                    })
+                    .collect::<SurvivalResult<_>>()?,
+                None => term_ids,
+            };
+            let columns: Vec<Vec<usize>> = selected
+                .iter()
+                .map(|&term| (0..nvar).filter(|&j| assign[j] == term).collect())
+                .collect();
+            // Centre x at the training means when the model has an intercept.
+            let centered: Vec<Vec<f64>> = rows
+                .x
+                .iter()
+                .map(|x| {
+                    x.iter()
+                        .zip(&fit.means)
+                        .map(|(v, m)| if intercept { v - m } else { *v })
+                        .collect()
+                })
+                .collect();
+            let pred: Vec<Vec<f64>> = centered
+                .iter()
+                .map(|x| {
+                    columns
+                        .iter()
+                        .map(|cols| cols.iter().map(|&j| x[j] * coef[j]).sum())
+                        .collect()
+                })
+                .collect();
+            let se = se_fit.then(|| {
+                centered
+                    .iter()
+                    .map(|x| {
+                        columns
+                            .iter()
+                            .map(|cols| {
+                                // xi <- x[j, ii] * coef[ii];  sqrt(xi %*% R[ii, ii] %*% t(xi))
+                                let xi: Vec<f64> = cols.iter().map(|&j| x[j] * coef[j]).collect();
+                                cols.iter()
+                                    .enumerate()
+                                    .map(|(a, &ja)| {
+                                        xi[a]
+                                            * cols
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(b, &jb)| variance[ja][jb] * xi[b])
+                                                .sum::<f64>()
+                                    })
+                                    .sum::<f64>()
+                                    .sqrt()
+                            })
+                            .collect()
+                    })
+                    .collect()
+            });
+            Ok(SurvregPrediction {
+                predict_type,
+                fit: pred,
+                se_fit: se,
+            })
+        }
     }
-
-    let pred_type = SurvregPredictType::from_str(&predict_type).ok_or_else(|| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Unknown prediction type: {}. Valid types: response, lp/linear, quantile",
-            predict_type
-        ))
-    })?;
-
-    let linear_pred = compute_linear_predictor(&covariates, &coefficients, offset.as_deref());
-
-    let predictions = match pred_type {
-        SurvregPredictType::Lp | SurvregPredictType::Terms => linear_pred.clone(),
-        SurvregPredictType::Response => compute_response_prediction(&linear_pred, &distribution),
-    };
-
-    let se = if se_fit {
-        var_matrix.as_ref().map(|vm| {
-            let mut se = compute_se_linear_predictor(&covariates, vm);
-            transform_prediction_se(&mut se, &predictions, &distribution, pred_type);
-            se
-        })
-    } else {
-        None
-    };
-
-    Ok(SurvregPrediction {
-        predictions,
-        se,
-        prediction_type: predict_type,
-        n,
-    })
-}
-
-#[pyfunction]
-#[pyo3(signature = (covariates, coefficients, scale, distribution, quantiles, offset=None))]
-pub fn predict_survreg_quantile(
-    covariates: Vec<Vec<f64>>,
-    coefficients: Vec<f64>,
-    scale: f64,
-    distribution: String,
-    quantiles: Vec<f64>,
-    offset: Option<Vec<f64>>,
-) -> PyResult<SurvregQuantilePrediction> {
-    let n = covariates.len();
-    let nvar = coefficients.len();
-    validate_scale(scale)?;
-    validate_distribution(&distribution)?;
-    validate_finite_values("coefficients", &coefficients)?;
-    validate_covariates(&covariates, nvar)?;
-    validate_offset(offset.as_deref(), n)?;
-    validate_quantiles(&quantiles)?;
-
-    let linear_pred = compute_linear_predictor(&covariates, &coefficients, offset.as_deref());
-
-    let predictions = compute_quantile_prediction(&linear_pred, scale, &quantiles, &distribution);
-
-    Ok(SurvregQuantilePrediction {
-        quantiles,
-        predictions,
-        n,
-    })
 }
 
 #[cfg(test)]
@@ -913,446 +381,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_standalone_student_t_quantiles_use_default_df_and_accept_endpoints() {
-        let result = predict_survreg_quantile(
-            vec![vec![1.0], vec![2.0]],
-            vec![1.0],
-            2.0,
-            "student-t".into(),
-            vec![0.0, 0.5, 0.75, 1.0],
-            None,
-        )
-        .unwrap();
-        for (idx, row) in result.predictions.iter().enumerate() {
-            let location = (idx + 1) as f64;
-            assert_eq!(row[0], f64::NEG_INFINITY);
-            assert_eq!(row[1], location);
-            // R 3.8.11 qt(.75, df=4).
-            assert!((row[2] - (location + 2.0 * 0.740_697_084_112_682_6)).abs() < 1e-10);
-            assert_eq!(row[3], f64::INFINITY);
-        }
-    }
-
-    #[test]
-    fn test_prediction_quantiles_reject_invalid_probabilities() {
-        for probability in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.01, 1.01] {
-            assert!(
-                predict_survreg_quantile(
-                    vec![vec![1.0]],
-                    vec![0.0],
-                    1.0,
-                    "weibull".into(),
-                    vec![probability],
-                    None,
-                )
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn test_extreme_and_logistic_predictions_preserve_small_probabilities() {
-        for probability in [1e-300, 1e-100, 1e-20, 0.25] {
-            let extreme = extreme_value_quantile(probability);
-            assert!(extreme.is_finite());
-            assert!((extreme_value_cdf(extreme) / probability - 1.0).abs() < 1e-12);
-            let logistic = logistic_quantile(probability);
-            assert!(logistic.is_finite());
-            assert!((logistic_cdf(logistic) / probability - 1.0).abs() < 1e-12);
-        }
-        assert_eq!(extreme_value_quantile(0.0), f64::NEG_INFINITY);
-        assert_eq!(extreme_value_quantile(1.0), f64::INFINITY);
-        assert_eq!(logistic_quantile(0.0), f64::NEG_INFINITY);
-        assert_eq!(logistic_quantile(1.0), f64::INFINITY);
-    }
-
-    #[test]
-    fn test_response_prediction_standard_errors_use_delta_transform() {
-        for (distribution, factor) in [("lognormal", 2.0_f64.exp()), ("gaussian", 1.0)] {
-            for prediction_type in ["response", "lp"] {
-                let result = predict_survreg(
-                    vec![vec![1.0, 2.0]],
-                    vec![0.5, 0.5],
-                    1.0,
-                    distribution.into(),
-                    prediction_type.into(),
-                    Some(vec![0.5]),
-                    Some(vec![vec![0.25, 0.0], vec![0.0, 1.0]]),
-                    true,
-                )
-                .unwrap();
-                let expected = 4.25_f64.sqrt()
-                    * if prediction_type == "response" {
-                        factor
-                    } else {
-                        1.0
-                    };
-                assert!((result.se.unwrap()[0] - expected).abs() < 1e-12);
-            }
-        }
-    }
-
-    #[test]
-    fn test_quantile_standard_errors_accept_infinite_endpoints() {
-        let scores = vec![f64::NEG_INFINITY, f64::INFINITY];
-        let fixed = survreg_quantile_prediction_se_matrix(
-            vec![vec![1.0]],
-            vec![1.0],
-            vec![0],
-            vec![vec![4.0]],
-            scores.clone(),
-            vec![vec![f64::NEG_INFINITY, f64::INFINITY]],
-            false,
-        )
-        .unwrap();
-        assert_eq!(fixed, vec![vec![2.0, 2.0]]);
-        let transformed = survreg_quantile_prediction_se_matrix(
-            vec![vec![1.0]],
-            vec![1.0],
-            vec![0],
-            vec![vec![4.0]],
-            scores.clone(),
-            vec![vec![0.0, f64::INFINITY]],
-            true,
-        )
-        .unwrap();
-        assert_eq!(transformed, vec![vec![0.0, f64::INFINITY]]);
-        let estimated = survreg_quantile_prediction_se_matrix(
-            vec![vec![1.0]],
-            vec![1.0],
-            vec![0],
-            vec![vec![4.0, 0.0], vec![0.0, 1.0]],
-            scores,
-            vec![vec![f64::NEG_INFINITY, f64::INFINITY]],
-            false,
-        )
-        .unwrap();
-        assert!(estimated[0].iter().all(|value| !value.is_finite()));
-        for (score, prediction) in [(f64::NAN, 1.0), (0.0, f64::NAN)] {
-            assert!(
-                survreg_quantile_prediction_se_matrix(
-                    vec![vec![1.0]],
-                    vec![1.0],
-                    vec![0],
-                    vec![vec![4.0]],
-                    vec![score],
-                    vec![vec![prediction]],
-                    false,
-                )
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn test_quantile_standard_errors_accept_empty_prediction_batches() {
-        let result = survreg_quantile_prediction_se_matrix(
-            vec![],
-            vec![1.0],
-            vec![],
-            vec![vec![4.0, 0.0], vec![0.0, 1.0]],
-            vec![f64::NEG_INFINITY, f64::INFINITY],
-            vec![],
-            true,
-        )
-        .unwrap();
-        assert!(result.is_empty());
-        assert!(
-            survreg_quantile_prediction_se_matrix(
-                vec![],
-                vec![1.0],
-                vec![0],
-                vec![vec![4.0]],
-                vec![0.0],
-                vec![],
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            survreg_quantile_prediction_se_matrix(
-                vec![],
-                vec![1.0],
-                vec![],
-                vec![vec![f64::NAN]],
-                vec![0.0],
-                vec![],
-                false,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn test_linear_predictor() {
-        let covariates = vec![vec![1.0, 2.0], vec![2.0, 3.0], vec![3.0, 4.0]];
-        let coefficients = vec![0.5, 0.3];
-
-        let lp = compute_linear_predictor(&covariates, &coefficients, None);
-
-        assert_eq!(lp.len(), 3);
-        assert!((lp[0] - 1.1).abs() < 1e-10);
-        assert!((lp[1] - 1.9).abs() < 1e-10);
-        assert!((lp[2] - 2.7).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_quantile_prediction() {
-        let linear_pred = vec![1.0, 2.0, 3.0];
-        let scale = 1.0;
-        let quantiles = vec![0.5];
-
-        let pred = compute_quantile_prediction(&linear_pred, scale, &quantiles, "weibull");
-
-        assert_eq!(pred.len(), 3);
-        assert_eq!(pred[0].len(), 1);
-    }
-
-    #[test]
-    fn test_quantile_prediction_respects_distribution_transform() {
-        let linear_pred = vec![1.0];
-        let scale = 0.5;
-        let quantiles = vec![0.5];
-
-        let gaussian = compute_quantile_prediction(&linear_pred, scale, &quantiles, "gaussian");
-        let lognormal = compute_quantile_prediction(&linear_pred, scale, &quantiles, "lognormal");
-        let rayleigh = compute_quantile_prediction(&linear_pred, scale, &quantiles, "rayleigh");
-        let weibull = compute_quantile_prediction(&linear_pred, scale, &quantiles, "weibull");
-
-        assert!((gaussian[0][0] - (1.0 + scale * normal_inverse_cdf(0.5))).abs() < 1e-10);
-        assert!((lognormal[0][0] - gaussian[0][0].exp()).abs() < 1e-10);
-        assert!((rayleigh[0][0] - weibull[0][0]).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_student_t_quantile_predictions_use_fitted_degrees_of_freedom() {
-        // R survival 3.8.11: qt(c(.1, .5, .9), df=7).
-        let predictions = compute_quantile_prediction_with_options(
-            &[-2.0, 0.0],
-            &[2.0],
-            &[0.1, 0.5, 0.9],
-            "student-t",
-            Some(7.0),
-            true,
-        )
-        .unwrap();
-        let scores = [-1.4149239276505083, 0.0, 1.4149239276505086];
-        for (row, location) in predictions.iter().zip([-2.0, 0.0]) {
-            for (&actual, score) in row.iter().zip(scores) {
-                assert!((actual - (location + 2.0 * score)).abs() < 1e-10);
-            }
-        }
+    fn prediction_types_parse_like_match_arg() {
         assert_eq!(
-            compute_quantile_prediction(&[-2.0, 0.0], 1.0, &[0.5], "t"),
-            vec![vec![-2.0], vec![0.0]]
-        );
-    }
-
-    #[test]
-    fn test_survreg_distribution_matches_r_reference_values() {
-        let density = survreg_distribution(
-            vec![1.0, 2.0],
-            vec![0.5, 0.5],
-            vec![1.2, 1.2],
-            "weibull".to_string(),
-            "density".to_string(),
-            None,
-        )
-        .expect("density should compute");
-        let cdf = survreg_distribution(
-            vec![1.0, 2.0],
-            vec![0.5, 0.5],
-            vec![1.2, 1.2],
-            "weibull".to_string(),
-            "distribution".to_string(),
-            None,
-        )
-        .expect("cdf should compute");
-        let quantiles = survreg_distribution(
-            vec![0.25, 0.5, 0.75],
-            vec![0.5, 0.5, 0.5],
-            vec![1.2, 1.2, 1.2],
-            "weibull".to_string(),
-            "quantile".to_string(),
-            None,
-        )
-        .expect("quantile should compute");
-
-        assert!((density[0] - 0.2841569).abs() < 1e-7);
-        assert!((density[1] - 0.1512009).abs() < 1e-7);
-        assert!((cdf[0] - 0.4827560).abs() < 1e-7);
-        assert!((cdf[1] - 0.6910677).abs() < 1e-7);
-        assert!((quantiles[0] - 0.3696942).abs() < 1e-7);
-        assert!((quantiles[1] - 1.0620325).abs() < 1e-7);
-        assert!((quantiles[2] - 2.4399099).abs() < 1e-7);
-    }
-
-    #[test]
-    fn test_survreg_student_t_distribution_matches_r_reference_values() {
-        let density = survreg_distribution(
-            vec![1.0, 2.0],
-            vec![0.0, 0.0],
-            vec![1.0, 1.0],
-            "t".to_string(),
-            "density".to_string(),
-            Some(5.0),
-        )
-        .expect("density should compute");
-        let cdf = survreg_distribution(
-            vec![1.0, 2.0],
-            vec![0.0, 0.0],
-            vec![1.0, 1.0],
-            "student-t".to_string(),
-            "distribution".to_string(),
-            Some(5.0),
-        )
-        .expect("cdf should compute");
-        let quantiles = survreg_distribution(
-            vec![0.0, 0.25, 0.5, 1.0],
-            vec![0.0; 4],
-            vec![1.0; 4],
-            "student_t".to_string(),
-            "quantile".to_string(),
-            Some(5.0),
-        )
-        .expect("quantiles should compute");
-
-        assert!((density[0] - 0.2196798).abs() < 1e-7);
-        assert!((density[1] - 0.06509031).abs() < 1e-8);
-        assert!((cdf[0] - 0.8183913).abs() < 1e-7);
-        assert!((cdf[1] - 0.9490303).abs() < 1e-7);
-        assert_eq!(quantiles[0], f64::NEG_INFINITY);
-        assert!((quantiles[1] + 0.7266868).abs() < 1e-7);
-        assert_eq!(quantiles[2], 0.0);
-        assert_eq!(quantiles[3], f64::INFINITY);
-
-        let infinite_locations = survreg_distribution(
-            vec![1.0, f64::INFINITY, f64::NEG_INFINITY],
-            vec![f64::INFINITY, 0.0, 0.0],
-            vec![1.0; 3],
-            "t".to_string(),
-            "distribution".to_string(),
-            Some(5.0),
-        )
-        .expect("infinite locations should follow R semantics");
-        assert_eq!(infinite_locations, vec![0.0, 1.0, 0.0]);
-    }
-
-    #[test]
-    fn test_survreg_student_t_distribution_requires_valid_df() {
-        for parms in [None, Some(0.0), Some(f64::INFINITY)] {
-            assert!(
-                survreg_distribution(
-                    vec![0.5],
-                    vec![0.0],
-                    vec![1.0],
-                    "t".to_string(),
-                    "quantile".to_string(),
-                    parms,
-                )
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn test_survreg_quantile_prediction_se_matrix_uses_scale_columns() {
-        let se = survreg_quantile_prediction_se_matrix(
-            vec![vec![1.0, 2.0], vec![3.0, 4.0]],
-            vec![2.0, 3.0],
-            vec![0, 1],
-            vec![
-                vec![1.0, 0.0, 0.0, 0.0],
-                vec![0.0, 1.0, 0.0, 0.0],
-                vec![0.0, 0.0, 1.0, 0.0],
-                vec![0.0, 0.0, 0.0, 1.0],
-            ],
-            vec![0.5, 1.0],
-            vec![vec![10.0, 20.0], vec![30.0, 40.0]],
-            false,
-        )
-        .expect("quantile SE matrix should compute");
-
-        assert!((se[0][0] - 6.0_f64.sqrt()).abs() < 1e-12);
-        assert!((se[0][1] - 3.0).abs() < 1e-12);
-        assert!((se[1][0] - 27.25_f64.sqrt()).abs() < 1e-12);
-        assert!((se[1][1] - 34.0_f64.sqrt()).abs() < 1e-12);
-
-        let transformed = survreg_quantile_prediction_se_matrix(
-            vec![vec![1.0, 2.0]],
-            vec![2.0],
-            vec![0],
-            vec![
-                vec![1.0, 0.0, 0.0],
-                vec![0.0, 1.0, 0.0],
-                vec![0.0, 0.0, 1.0],
-            ],
-            vec![0.5],
-            vec![vec![10.0]],
-            true,
-        )
-        .expect("transformed quantile SE matrix should compute");
-        assert!((transformed[0][0] - 10.0 * 6.0_f64.sqrt()).abs() < 1e-12);
-    }
-
-    #[test]
-    fn test_response_prediction_respects_distribution_transform() {
-        let linear_pred = vec![0.0, 1.0];
-
-        let weibull = compute_response_prediction(&linear_pred, "weibull");
-        assert!((weibull[0] - 1.0).abs() < 1e-10);
-        assert!((weibull[1] - std::f64::consts::E).abs() < 1e-10);
-
-        let exponential = compute_response_prediction(&linear_pred, "exponential");
-        assert!((exponential[1] - std::f64::consts::E).abs() < 1e-10);
-
-        let rayleigh = compute_response_prediction(&linear_pred, "rayleigh");
-        assert!((rayleigh[1] - std::f64::consts::E).abs() < 1e-10);
-
-        assert_eq!(
-            compute_response_prediction(&linear_pred, "gaussian"),
-            linear_pred
+            SurvregPredictType::parse("link").unwrap(),
+            SurvregPredictType::Lp
         );
         assert_eq!(
-            compute_response_prediction(&linear_pred, "logistic"),
-            linear_pred
+            SurvregPredictType::parse("linear").unwrap(),
+            SurvregPredictType::Lp
         );
         assert_eq!(
-            compute_response_prediction(&linear_pred, "extreme_value"),
-            linear_pred
-        );
-    }
-
-    #[test]
-    fn test_prediction_distribution_aliases_are_canonicalized() {
-        let linear_pred = vec![1.0];
-
-        assert!(
-            (compute_response_prediction(&linear_pred, "log-normal")[0] - std::f64::consts::E)
-                .abs()
-                < 1e-10
-        );
-        assert!(
-            (compute_response_prediction(&linear_pred, "loggaussian")[0] - std::f64::consts::E)
-                .abs()
-                < 1e-10
+            SurvregPredictType::parse("uq").unwrap(),
+            SurvregPredictType::Uquantile
         );
         assert_eq!(
-            compute_response_prediction(&linear_pred, "extreme-value"),
-            linear_pred
+            SurvregPredictType::parse("Response").unwrap(),
+            SurvregPredictType::Response
         );
+        assert_eq!(
+            SurvregPredictType::parse("l").unwrap(),
+            SurvregPredictType::Lp
+        );
+        assert!(SurvregPredictType::parse("").is_err());
+        assert!(SurvregPredictType::parse("mystery").is_err());
     }
 
     #[test]
-    #[should_panic(expected = "distribution was validated")]
-    fn test_prediction_helpers_do_not_default_unknown_distribution() {
-        crate::tests::common::initialize_python();
-        let _ = compute_quantile_prediction(&[0.0], 1.0, &[0.5], "mystery");
-    }
-
-    #[test]
-    fn test_extreme_value_quantile() {
-        let q = extreme_value_quantile(0.5);
-        assert!((q - (-0.3665129)).abs() < 1e-5);
+    fn quadratic_form_matches_manual_expansion() {
+        let variance = vec![vec![2.0, 0.5], vec![0.5, 1.0]];
+        let x = [1.0, 3.0];
+        // 1*2*1 + 2*(1*0.5*3) + 3*1*3
+        assert!((quadratic(&x, &variance) - 14.0).abs() < 1e-12);
     }
 }

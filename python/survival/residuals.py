@@ -1,34 +1,17 @@
+"""Martingale residual kernels and the parametric residual container.
+
+Model-based residuals live on the fits: ``CoxPHFit.martingale_residuals()`` and friends
+(``survival.regression``) and ``SurvregFit.residuals()``; R's ``residuals.survfit`` is
+``survival.surv_analysis.survfitresid``.
+"""
+
 from ._binding_utils import bind_names
 
 __all__ = bind_names(
     globals(),
     [
-        "agmart",
         "coxmart",
-        "SurvivalData",
-        "Weights",
-        "CountingProcessData",
-        "CoxMartInput",
-        "AndersenGillInput",
-        "DfbetaResult",
-        "GofTestResult",
-        "LeverageResult",
-        "ModelInfluenceResult",
-        "OutlierDetectionResult",
-        "SchoenfeldSmoothResult",
-        "dfbeta_cox",
-        "goodness_of_fit_cox",
-        "leverage_cox",
-        "model_influence_cox",
-        "outlier_detection_cox",
-        "smooth_schoenfeld",
-        "SurvfitResiduals",
-        "residuals_survfit",
+        "agmart",
         "SurvregResiduals",
-        "dfbeta_survreg",
-        "residuals_survreg",
-        "survreg_dfbeta_residuals",
-        "survreg_influence_residuals",
-        "survreg_residual_matrix",
     ],
 )

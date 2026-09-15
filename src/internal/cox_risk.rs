@@ -1,3 +1,18 @@
+//! Reverse-cumulative risk-set sums for the penalised Cox solvers
+//! (`regression::elastic_net`, `regression::fast_cox`).
+//!
+//! Those coordinate-descent fitters re-evaluate the partial likelihood and
+//! its gradient many times per iteration, on unstratified right-censored
+//! data; each evaluation re-sorts by time (the buffers in
+//! `CoxRiskSetScratch` keep the allocations across calls) and stores, for
+//! every position of the descending time order, the cumulative `sum w r`,
+//! `sum w r x` and (`CoxRiskSetData` only) `sum w r x^2`, with
+//! `risk_set_pos` pointing each observation at the last member of its tied
+//! time.  Times within `constants::TIME_EPSILON` are treated as tied, a
+//! convention of these solvers only.  The R-faithful Cox engine
+//! (`regression::cox_optimizer`) and the residual / survival-curve kernels
+//! sort once and walk the sorted rows instead.
+
 #[derive(Debug, Clone)]
 pub(crate) struct CoxRiskSetData {
     pub(crate) cumsum_exp_eta: Vec<f64>,
@@ -122,23 +137,6 @@ pub(crate) fn shifted_exp_eta_with_shift(eta: &[f64], weights: &[f64], shift: f6
         .map(|(&eta_i, &weight)| {
             if weight > 0.0 {
                 (eta_i - shift).exp()
-            } else {
-                0.0
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn shifted_weighted_exp_eta_with_shift(
-    eta: &[f64],
-    weights: &[f64],
-    shift: f64,
-) -> Vec<f64> {
-    eta.iter()
-        .zip(weights.iter())
-        .map(|(&eta_i, &weight)| {
-            if weight > 0.0 {
-                weight * (eta_i - shift).exp()
             } else {
                 0.0
             }
@@ -304,16 +302,6 @@ mod tests {
         let exp_eta = shifted_exp_eta(&eta, &weights);
 
         assert_eq!(exp_eta, vec![1.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn shifted_weighted_exp_eta_applies_weights_after_shift() {
-        let eta = [2.0, f64::INFINITY, 4.0];
-        let weights = [2.0, 0.0, 3.0];
-
-        let exp_eta = shifted_weighted_exp_eta_with_shift(&eta, &weights, 2.0);
-
-        assert_eq!(exp_eta, vec![2.0, 0.0, 3.0 * (2.0_f64).exp()]);
     }
 
     #[test]

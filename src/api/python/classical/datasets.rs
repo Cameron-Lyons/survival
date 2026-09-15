@@ -1,40 +1,68 @@
 use super::*;
 use crate::datasets::*;
 
+macro_rules! register_functions {
+    ($m:expr, $( $function:ident ),+ $(,)?) => {
+        $( $m.add_function(wrap_pyfunction!($function, $m)?)?; )+
+    };
+}
+
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(load_lung, m)?)?;
-    m.add_function(wrap_pyfunction!(load_aml, m)?)?;
-    m.add_function(wrap_pyfunction!(load_veteran, m)?)?;
-    m.add_function(wrap_pyfunction!(load_ovarian, m)?)?;
-    m.add_function(wrap_pyfunction!(load_colon, m)?)?;
-    m.add_function(wrap_pyfunction!(load_pbc, m)?)?;
-    m.add_function(wrap_pyfunction!(load_cgd, m)?)?;
-    m.add_function(wrap_pyfunction!(load_bladder, m)?)?;
-    m.add_function(wrap_pyfunction!(load_heart, m)?)?;
-    m.add_function(wrap_pyfunction!(load_kidney, m)?)?;
-    m.add_function(wrap_pyfunction!(load_rats, m)?)?;
-    m.add_function(wrap_pyfunction!(load_stanford2, m)?)?;
-    m.add_function(wrap_pyfunction!(load_udca, m)?)?;
-    m.add_function(wrap_pyfunction!(load_myeloid, m)?)?;
-    m.add_function(wrap_pyfunction!(load_flchain, m)?)?;
-    m.add_function(wrap_pyfunction!(load_transplant, m)?)?;
-    m.add_function(wrap_pyfunction!(load_mgus, m)?)?;
-    m.add_function(wrap_pyfunction!(load_mgus2, m)?)?;
-    m.add_function(wrap_pyfunction!(load_diabetic, m)?)?;
-    m.add_function(wrap_pyfunction!(load_retinopathy, m)?)?;
-    m.add_function(wrap_pyfunction!(load_gbsg, m)?)?;
-    m.add_function(wrap_pyfunction!(load_rotterdam, m)?)?;
-    m.add_function(wrap_pyfunction!(load_logan, m)?)?;
-    m.add_function(wrap_pyfunction!(load_nwtco, m)?)?;
-    m.add_function(wrap_pyfunction!(load_solder, m)?)?;
-    m.add_function(wrap_pyfunction!(load_tobin, m)?)?;
-    m.add_function(wrap_pyfunction!(load_rats2, m)?)?;
-    m.add_function(wrap_pyfunction!(load_nafld, m)?)?;
-    m.add_function(wrap_pyfunction!(load_cgd0, m)?)?;
-    m.add_function(wrap_pyfunction!(load_pbcseq, m)?)?;
-    m.add_function(wrap_pyfunction!(load_hoel, m)?)?;
-    m.add_function(wrap_pyfunction!(load_myeloma, m)?)?;
-    m.add_function(wrap_pyfunction!(load_rhdnase, m)?)?;
+    register_functions!(
+        m,
+        load_aml,
+        load_bladder,
+        load_bladder1,
+        load_bladder2,
+        load_braking,
+        load_capacitor,
+        load_cgd,
+        load_cgd0,
+        load_colon,
+        load_cracks,
+        load_diabetic,
+        load_flchain,
+        load_gbsg,
+        load_genfan,
+        load_heart,
+        load_hoel,
+        load_ifluid,
+        load_imotor,
+        load_jasa,
+        load_jasa1,
+        load_kidney,
+        load_logan,
+        load_lung,
+        load_mgus,
+        load_mgus1,
+        load_mgus2,
+        load_myeloid,
+        load_myeloma,
+        load_nafld1,
+        load_nafld2,
+        load_nafld3,
+        load_nwtco,
+        load_ovarian,
+        load_pbc,
+        load_pbcseq,
+        load_rats,
+        load_rats2,
+        load_retinopathy,
+        load_rhdnase,
+        load_rotterdam,
+        load_solder,
+        load_stanford2,
+        load_tobin,
+        load_transplant,
+        load_turbine,
+        load_udca,
+        load_udca1,
+        load_udca2,
+        load_valveseat,
+        load_veteran,
+        load_cancer,
+        load_leukemia,
+    );
 
     Ok(())
 }

@@ -1,12 +1,15 @@
-use crate::constants::{PARALLEL_THRESHOLD_XLARGE, clamped_normal_ci_bounds_95};
-use crate::internal::statistical::{normal_cdf, normal_sf};
+//! Interval-censored data: a parametric regression and Turnbull's
+//! nonparametric survival estimate (R survival `R/survfitTurnbull.R`).
+
+use crate::data_prep::aeq_surv;
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::statistical::erf;
+use crate::internal::validation::{validate_finite, validate_length};
+use crate::surv_analysis::{ConfType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
 use pyo3::prelude::*;
-use rayon::prelude::*;
-use std::collections::BTreeMap;
 
 type DistributionFn = fn(f64, f64, f64) -> f64;
 type DistributionFns = (DistributionFn, DistributionFn);
-type TimeSurvivalCurve = (Vec<f64>, Vec<f64>);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -83,19 +86,12 @@ fn weibull_pdf(t: f64, scale: f64, shape: f64) -> f64 {
     (shape / scale) * (t / scale).powf(shape - 1.0) * (-(t / scale).powf(shape)).exp()
 }
 
-fn lognormal_survival(t: f64, mu: f64, sigma: f64) -> f64 {
-    if t <= 0.0 || sigma <= 0.0 {
-        return 1.0;
-    }
-    normal_sf((t.ln() - mu) / sigma)
-}
-
 fn lognormal_cdf(t: f64, mu: f64, sigma: f64) -> f64 {
     if t <= 0.0 || sigma <= 0.0 {
         return 0.0;
     }
     let z = (t.ln() - mu) / sigma;
-    normal_cdf(z)
+    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
 }
 
 fn lognormal_pdf(t: f64, mu: f64, sigma: f64) -> f64 {
@@ -147,10 +143,7 @@ fn compute_interval_likelihood(
             f.max(1e-300).ln()
         }
         CensorType::RightCensored => {
-            let s = match distribution {
-                IntervalDistribution::LogNormal => lognormal_survival(left, scale, shape),
-                _ => 1.0 - cdf_fn(left, scale, shape),
-            };
+            let s = 1.0 - cdf_fn(left, scale, shape);
             s.max(1e-300).ln()
         }
         CensorType::LeftCensored => {
@@ -158,15 +151,10 @@ fn compute_interval_likelihood(
             f.max(1e-300).ln()
         }
         CensorType::IntervalCensored => {
-            let probability = if *distribution == IntervalDistribution::LogNormal
-                && left > 0.0
-                && left.ln() >= scale
-            {
-                lognormal_survival(left, scale, shape) - lognormal_survival(right, scale, shape)
-            } else {
-                cdf_fn(right, scale, shape) - cdf_fn(left, scale, shape)
-            };
-            probability.max(1e-300).ln()
+            let f_right = cdf_fn(right, scale, shape);
+            let f_left = cdf_fn(left, scale, shape);
+            let diff = (f_right - f_left).max(1e-300);
+            diff.ln()
         }
     }
 }
@@ -337,7 +325,7 @@ pub fn interval_censored_regression(
             let t = (left[i] + right[i].min(left[i] * 10.0)) / 2.0;
             match distribution {
                 IntervalDistribution::Weibull => 1.0 - weibull_cdf(t, scale_i, shape),
-                IntervalDistribution::LogNormal => lognormal_survival(t, scale_i, shape),
+                IntervalDistribution::LogNormal => 1.0 - lognormal_cdf(t, scale_i, shape),
                 IntervalDistribution::LogLogistic => 1.0 - loglogistic_cdf(t, scale_i, shape),
                 _ => 1.0 - weibull_cdf(t, scale_i, shape),
             }
@@ -362,337 +350,549 @@ pub fn interval_censored_regression(
     })
 }
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct TurnbullResult {
-    #[pyo3(get)]
-    pub time_points: Vec<f64>,
-    #[pyo3(get)]
-    pub survival: Vec<f64>,
-    #[pyo3(get)]
-    pub survival_lower: Vec<f64>,
-    #[pyo3(get)]
-    pub survival_upper: Vec<f64>,
-    #[pyo3(get)]
-    pub n_iter: usize,
-    #[pyo3(get)]
-    pub converged: bool,
+/// Interval-censoring codes of R's `Surv(..., type = "interval")` status
+/// column: 0 right-censored at `time1`, 1 exact at `time1`, 2 left-censored
+/// at `time1`, 3 censored in `(time1, time2]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntervalStatus {
+    Right,
+    Exact,
+    Left,
+    Interval,
 }
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct GroupedTurnbullResult {
-    #[pyo3(get)]
-    pub groups: Vec<i32>,
-    #[pyo3(get)]
-    pub time_points: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub survival: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub survival_lower: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub survival_upper: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub n_iter: Vec<usize>,
-    #[pyo3(get)]
-    pub converged: Vec<bool>,
-}
-
-impl GroupedTurnbullResult {
-    fn from_curves(curves: Vec<(i32, TurnbullResult)>) -> Self {
-        let curve_count = curves.len();
-        let mut output = Self {
-            groups: Vec::with_capacity(curve_count),
-            time_points: Vec::with_capacity(curve_count),
-            survival: Vec::with_capacity(curve_count),
-            survival_lower: Vec::with_capacity(curve_count),
-            survival_upper: Vec::with_capacity(curve_count),
-            n_iter: Vec::with_capacity(curve_count),
-            converged: Vec::with_capacity(curve_count),
-        };
-        for (group, curve) in curves {
-            output.groups.push(group);
-            output.time_points.push(curve.time_points);
-            output.survival.push(curve.survival);
-            output.survival_lower.push(curve.survival_lower);
-            output.survival_upper.push(curve.survival_upper);
-            output.n_iter.push(curve.n_iter);
-            output.converged.push(curve.converged);
+impl IntervalStatus {
+    fn from_code(code: i32) -> SurvivalResult<Self> {
+        match code {
+            0 => Ok(Self::Right),
+            1 => Ok(Self::Exact),
+            2 => Ok(Self::Left),
+            3 => Ok(Self::Interval),
+            other => Err(SurvivalError::invalid_input(format!(
+                "interval status must be 0, 1, 2 or 3; got {other}"
+            ))),
         }
-        output
     }
 }
 
-#[inline]
-fn turnbull_case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
-    weights.map_or(1.0, |values| values[index])
+/// Inputs of [`turnbull`]: an interval-censored response (`time1`,
+/// `time2`, `status` in R's `interval` coding; `time2` is ignored unless
+/// `status == 3`), optional case weights and grouping.
+#[derive(Debug, Clone)]
+pub struct TurnbullInput<'a> {
+    pub time1: &'a [f64],
+    pub time2: &'a [f64],
+    pub status: &'a [i32],
+    pub weights: Option<&'a [f64]>,
+    /// One curve per distinct label, in sorted label order.
+    pub group: Option<&'a [i32]>,
+    pub conf_level: f64,
+    /// `"log"`, `"log-log"`, `"plain"`, `"logit"`, `"arcsin"` or `"none"`.
+    pub conf_type: &'a str,
+    /// Apply R's `aeqSurv` near-tie rounding to the times first.
+    pub timefix: bool,
 }
 
-#[inline]
-fn turnbull_support_range(all_points: &[f64], left: f64, right: f64) -> (usize, usize) {
-    if left.is_nan() || right.is_nan() {
-        return (0, 0);
+/// One curve of [`TurnbullResult`]: the fields of the `survfit` object.
+/// The standard error is the robust (infinitesimal jackknife) one of
+/// `surv`, like R's `std.err` for a `survfitKM` fit with `robust = TRUE`.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct TurnbullCurve {
+    pub group: i32,
+    pub n: usize,
+    pub time: Vec<f64>,
+    pub n_risk: Vec<f64>,
+    pub n_event: Vec<f64>,
+    pub n_censor: Vec<f64>,
+    pub surv: Vec<f64>,
+    pub std_err: Vec<f64>,
+    pub lower: Vec<f64>,
+    pub upper: Vec<f64>,
+    pub iterations: usize,
+}
+
+/// R's `survfit` object for interval-censored data (`type = "interval"`).
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct TurnbullResult {
+    pub curves: Vec<TurnbullCurve>,
+    pub conf_type: String,
+    pub conf_int: f64,
+}
+
+/// Convergence criterion of R's EM loop (`while (eps > .00005)`).
+const TURNBULL_EPS: f64 = 0.00005;
+/// R iterates without bound; this cap turns a stalled EM into an error.
+const TURNBULL_MAX_ITER: usize = 100_000;
+
+/// The jump points of the Turnbull estimate: every exact time plus the
+/// midpoint of every `( `-or-`[` bracket immediately followed by a `]`
+/// (R's `jtimes`), the left-censored observations below the smallest jump
+/// being promoted to exact times.  Returns `(jtimes, mintime, status)`.
+fn turnbull_jump_points(
+    time1: &[f64],
+    time2: &[f64],
+    status: &mut [IntervalStatus],
+) -> (Vec<f64>, f64) {
+    // stat2: 0 = "[" (exact), 1 = "]" (left / interval end), 2 = "(" (right /
+    // interval start); ties order as [, ], (.
+    let mut brackets: Vec<(f64, u8)> = Vec::with_capacity(time1.len() * 2);
+    for (i, &code) in status.iter().enumerate() {
+        match code {
+            IntervalStatus::Right => brackets.push((time1[i], 2)),
+            IntervalStatus::Exact => brackets.push((time1[i], 0)),
+            IntervalStatus::Left => brackets.push((time1[i], 1)),
+            IntervalStatus::Interval => {
+                brackets.push((time1[i], 2));
+                brackets.push((time2[i], 1));
+            }
+        }
     }
-    let start = all_points.partition_point(|&time| time < left);
-    let end = if right == f64::INFINITY {
-        all_points.len()
-    } else {
-        all_points.partition_point(|&time| time <= right)
-    };
-    (start, end.max(start))
+    brackets.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut jtimes: Vec<f64> = brackets
+        .iter()
+        .filter(|(_, kind)| *kind == 0)
+        .map(|(t, _)| *t)
+        .collect();
+    jtimes.extend(
+        brackets
+            .windows(2)
+            .filter(|pair| pair[0].1 != 1 && pair[1].1 == 1)
+            .map(|pair| 0.5 * (pair[0].0 + pair[1].0)),
+    );
+    let mintime = jtimes.iter().copied().fold(f64::INFINITY, f64::min);
+    for i in 0..status.len() {
+        if status[i] == IntervalStatus::Left && time1[i] < mintime {
+            status[i] = IntervalStatus::Exact;
+            jtimes.push(time1[i]);
+        }
+    }
+    jtimes.sort_by(f64::total_cmp);
+    jtimes.dedup();
+    (jtimes, mintime)
 }
 
-fn validate_turnbull_inputs(left: &[f64], right: &[f64], weights: Option<&[f64]>) -> PyResult<()> {
-    let n = left.len();
-    if right.len() != n {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "left and right must have same length",
+/// The EM of R's `survfitTurnbull` `doit` function for one curve.
+fn turnbull_curve(
+    time1: &[f64],
+    time2: &[f64],
+    status: &[IntervalStatus],
+    weights: &[f64],
+    group: i32,
+    conf_level: f64,
+    conf_type: ConfType,
+) -> SurvivalResult<TurnbullCurve> {
+    let n = time1.len();
+    let mut status = status.to_vec();
+    let (jtimes, mintime) = turnbull_jump_points(time1, time2, &mut status);
+    let njump = jtimes.len();
+    if njump == 0 {
+        return Err(SurvivalError::invalid_input(
+            "no exact or interval-censored observations: the curve has no jump points",
         ));
     }
-    let weights_ref = weights;
-    if let Some(values) = weights_ref {
-        if values.len() != n {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "weights must have same length as left and right",
-            ));
-        }
-        let mut has_positive = false;
-        for (idx, &value) in values.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "weights contains non-finite value at index {}",
-                    idx
-                )));
-            }
-            if value < 0.0 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "weights must be non-negative; got {} at index {}",
-                    value, idx
-                )));
-            }
-            has_positive |= value > 0.0;
-        }
-        if !has_positive {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "weights must include at least one positive value",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn compute_turnbull_estimator(
-    left: &[f64],
-    right: &[f64],
-    max_iter: usize,
-    tol: f64,
-    weights: Option<&[f64]>,
-) -> TurnbullResult {
-    let n = left.len();
-    let total_weight = weights.map_or(n as f64, |values| values.iter().sum());
-
-    let mut all_points: Vec<f64> = Vec::new();
-    for i in 0..n {
-        if left[i] > 0.0 {
-            all_points.push(left[i]);
-        }
-        if right[i] < f64::INFINITY && right[i] > left[i] {
-            all_points.push(right[i]);
-        }
-    }
-    all_points.sort_by(f64::total_cmp);
-    all_points.dedup();
-
-    if all_points.is_empty() {
-        return TurnbullResult {
-            time_points: vec![],
-            survival: vec![],
-            survival_lower: vec![],
-            survival_upper: vec![],
-            n_iter: 0,
-            converged: true,
-        };
-    }
-
-    let m = all_points.len();
-    let support_ranges: Vec<(usize, usize)> = left
-        .iter()
-        .zip(right)
-        .map(|(&left, &right)| turnbull_support_range(&all_points, left, right))
+    // The real observations (exact and right-censored) precede the fake
+    // observations standing in for the jump points.
+    let real: Vec<usize> = (0..n)
+        .filter(|&i| matches!(status[i], IntervalStatus::Right | IntervalStatus::Exact))
         .collect();
-    let mut p = vec![1.0 / m as f64; m];
-
-    let mut converged = false;
-    let mut n_iter = 0;
-
-    for iter in 0..max_iter {
-        n_iter = iter + 1;
-        let p_old = p.clone();
-
-        let mut p_new = vec![0.0; m];
-
-        for (i, &(start, end)) in support_ranges.iter().enumerate() {
-            let case_weight = turnbull_case_weight(weights, i);
-            if case_weight == 0.0 {
-                continue;
-            }
-            let mut sum_p = 0.0;
-            for &probability in &p[start..end] {
-                sum_p += probability;
-            }
-
-            if sum_p > 0.0 {
-                for j in start..end {
-                    let w = p[j] / sum_p;
-                    p_new[j] += case_weight * w;
-                }
-            }
-        }
-
-        let total: f64 = p_new.iter().sum();
-        if total > 0.0 {
-            for j in 0..m {
-                p[j] = p_new[j] / total;
-            }
-        }
-
-        let max_diff: f64 = p
-            .iter()
-            .zip(p_old.iter())
-            .map(|(&a, &b)| (a - b).abs())
-            .fold(0.0, f64::max);
-
-        if max_diff < tol {
-            converged = true;
-            break;
-        }
-    }
-
-    let mut survival = Vec::with_capacity(m);
-    let mut cum_prob = 0.0;
-    for &prob in &p {
-        cum_prob += prob;
-        survival.push((1.0 - cum_prob).clamp(0.0, 1.0));
-    }
-
-    let se: Vec<f64> = p
-        .iter()
-        .map(|&prob| (prob * (1.0 - prob) / total_weight).sqrt())
+    let censored: Vec<usize> = (0..n)
+        .filter(|&i| matches!(status[i], IntervalStatus::Left | IntervalStatus::Interval))
         .collect();
-
-    let (survival_lower, survival_upper) = clamped_normal_ci_bounds_95(&survival, &se, 0.0, 1.0);
-
-    TurnbullResult {
-        time_points: all_points,
-        survival,
-        survival_lower,
-        survival_upper,
-        n_iter,
-        converged,
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (left, right, max_iter=1000, tol=1e-6, weights=None))]
-pub fn turnbull_estimator(
-    left: Vec<f64>,
-    right: Vec<f64>,
-    max_iter: usize,
-    tol: f64,
-    weights: Option<Vec<f64>>,
-) -> PyResult<TurnbullResult> {
-    validate_turnbull_inputs(&left, &right, weights.as_deref())?;
-    Ok(compute_turnbull_estimator(
-        &left,
-        &right,
-        max_iter,
-        tol,
-        weights.as_deref(),
-    ))
-}
-
-fn compute_grouped_turnbull(
-    left: &[f64],
-    right: &[f64],
-    groups: &[i32],
-    weights: &[f64],
-    max_iter: usize,
-    tol: f64,
-) -> GroupedTurnbullResult {
-    let mut indices_by_group: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
-    for (idx, &group) in groups.iter().enumerate() {
-        indices_by_group.entry(group).or_default().push(idx);
-    }
-    let grouped_indices: Vec<(i32, Vec<usize>)> = indices_by_group.into_iter().collect();
-    let compute = |(group, indices): &(i32, Vec<usize>)| {
-        let group_left: Vec<f64> = indices.iter().map(|&idx| left[idx]).collect();
-        let group_right: Vec<f64> = indices.iter().map(|&idx| right[idx]).collect();
-        let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
-        (
-            *group,
-            compute_turnbull_estimator(
-                &group_left,
-                &group_right,
-                max_iter,
-                tol,
-                Some(&group_weights),
-            ),
+    let mut fit_time: Vec<f64> = real.iter().map(|&i| time1[i]).collect();
+    fit_time.extend_from_slice(&jtimes);
+    let mut fit_status: Vec<i32> = real
+        .iter()
+        .map(|&i| i32::from(status[i] == IntervalStatus::Exact))
+        .collect();
+    fit_status.extend(std::iter::repeat_n(1, njump));
+    // survfitKM(..., robust = TRUE) without a cluster: every observation
+    // is its own cluster for the infinitesimal-jackknife variance.
+    let cluster: Vec<i64> = (0..fit_time.len() as i64).collect();
+    let fit_data = |fit_weights: Vec<f64>, cluster: Option<Vec<i64>>| {
+        SurvfitKMData::try_new(
+            None,
+            fit_time.clone(),
+            fit_status.clone(),
+            Some(fit_weights),
+            None,
+            None,
+            cluster,
         )
     };
-    let curves = if left.len() >= PARALLEL_THRESHOLD_XLARGE && grouped_indices.len() > 1 {
-        grouped_indices.par_iter().map(compute).collect()
+
+    // wtmat: which jump points each left/interval observation covers.
+    let (wtmat, lwt): (Vec<Vec<f64>>, Vec<f64>) = if censored.is_empty() {
+        (vec![vec![1.0; njump]], vec![1.0])
     } else {
-        grouped_indices.iter().map(compute).collect()
+        (
+            censored
+                .iter()
+                .map(|&i| {
+                    jtimes
+                        .iter()
+                        .map(|&t| {
+                            let covered = match status[i] {
+                                IntervalStatus::Left => t <= time1[i],
+                                _ => t > time1[i] && t <= time2[i],
+                            };
+                            f64::from(covered)
+                        })
+                        .collect()
+                })
+                .collect(),
+            censored.iter().map(|&i| weights[i]).collect(),
+        )
     };
-    GroupedTurnbullResult::from_curves(curves)
+
+    // Starter curve: proportional to the number of intervals covering
+    // each jump point.
+    let column_sums: Vec<f64> = (0..njump)
+        .map(|j| wtmat.iter().map(|row| row[j]).sum())
+        .collect();
+    let total: f64 = column_sums.iter().sum();
+    let mut cumulative = 0.0;
+    let mut current_surv: Vec<f64> = column_sums
+        .iter()
+        .map(|c| {
+            cumulative += c;
+            1.0 - cumulative / total
+        })
+        .collect();
+    let mut old = current_surv.clone();
+    let mut last_weights: Option<Vec<f64>> = None;
+    let mut iter = 0usize;
+    let mut eps = 1.0;
+    let mut aitken1 = vec![0.0; njump];
+    let mut jump1 = vec![0.0; njump];
+    let mut jump2 = vec![0.0; njump];
+    let loglik = |jumps: &[f64]| -> f64 {
+        wtmat
+            .iter()
+            .map(|row| row.iter().zip(jumps).map(|(w, j)| w * j).sum::<f64>().ln())
+            .sum()
+    };
+    while eps > TURNBULL_EPS {
+        iter += 1;
+        if iter > TURNBULL_MAX_ITER {
+            return Err(SurvivalError::not_converged(TURNBULL_MAX_ITER));
+        }
+        // KM jumps at the jump points
+        let mut previous = 1.0;
+        let mut jumps: Vec<f64> = current_surv
+            .iter()
+            .map(|&s| {
+                let jump = previous - s;
+                previous = s;
+                jump
+            })
+            .collect();
+        // Aitken acceleration every fifth iteration
+        let aitken2 = aitken1.clone();
+        aitken1 = jumps.iter().zip(&jump1).map(|(j, p)| j - p).collect();
+        let jsave = jumps.clone();
+        if iter.is_multiple_of(5) {
+            let oldlik = loglik(&jumps);
+            for j in 0..njump {
+                let accelerated = jump2[j] - aitken2[j].powi(2) / (aitken1[j] - aitken2[j]);
+                jumps[j] = if accelerated.is_nan() || accelerated <= 0.0 || accelerated >= 1.0 {
+                    jsave[j]
+                } else {
+                    accelerated
+                };
+            }
+            if loglik(&jumps) < oldlik {
+                jumps = jsave.clone();
+            }
+        }
+        jump2 = jump1;
+        jump1 = jsave;
+
+        // Partition each left/interval observation over the jumps.
+        let mut wt2 = vec![0.0; njump];
+        for (row, &weight) in wtmat.iter().zip(&lwt) {
+            let denominator: f64 = row.iter().zip(&jumps).map(|(w, j)| w * j).sum();
+            for j in 0..njump {
+                wt2[j] += weight / denominator * row[j] * jumps[j];
+            }
+        }
+        let mut fit_weights: Vec<f64> = real.iter().map(|&i| weights[i]).collect();
+        fit_weights.extend_from_slice(&wt2);
+        // R's doit builds tempy without aeqSurv, so times compare exactly.
+        let km = survfitkm(
+            &fit_data(fit_weights.clone(), None)?,
+            &SurvfitKMOptions {
+                se_fit: false,
+                timefix: false,
+                ..SurvfitKMOptions::default()
+            },
+        )?;
+        let stemp: Vec<f64> = jtimes
+            .iter()
+            .map(|&t| step_survival(&km.time, &km.surv, t))
+            .collect();
+        eps = if iter % 5 < 2 {
+            1.0
+        } else {
+            old.iter()
+                .zip(&stemp)
+                .map(|(o, s)| (o - s).abs())
+                .fold(0.0, f64::max)
+        };
+        old = stemp.clone();
+        current_surv = stemp;
+        last_weights = Some(fit_weights);
+    }
+    let Some(fit_weights) = last_weights else {
+        unreachable!("the EM runs at least once");
+    };
+    // Final curve with R's robust (infinitesimal jackknife) standard
+    // errors: survfitTurnbull calls survfitKM with robust = TRUE.
+    let km = survfitkm(
+        &fit_data(fit_weights.clone(), Some(cluster))?,
+        &SurvfitKMOptions {
+            conf_int: conf_level,
+            conf_type,
+            robust: Some(true),
+            timefix: false,
+            ..SurvfitKMOptions::default()
+        },
+    )?;
+    let mut curve = with_zero_weight_times(&km, &fit_time, &fit_weights);
+    for (i, &t) in curve.time.iter().enumerate() {
+        if t < mintime && curve.n_event[i] > 0.0 {
+            curve.n_event[i] = 0.0;
+        }
+    }
+    Ok(TurnbullCurve {
+        group,
+        n,
+        iterations: iter,
+        ..curve
+    })
 }
 
-#[pyfunction]
-#[pyo3(signature = (left, right, groups, max_iter=1000, tol=1e-6, weights=None))]
-pub fn turnbull_estimator_grouped(
+/// The Kaplan-Meier curve as a right-continuous step function: the
+/// estimate at the last reported time `<= t`, or 1 before the first one.
+/// R's `survfitKM` reports every unique time, so `doit` can use
+/// `match(jtimes, tfit$time)`; the crate's engine reports no row for a
+/// time whose observations all carry zero weight, which happens as soon
+/// as the EM mass at a jump point rounds to 0.
+fn step_survival(km_time: &[f64], km_surv: &[f64], t: f64) -> f64 {
+    match km_time.partition_point(|&u| u <= t) {
+        0 => 1.0,
+        k => km_surv[k - 1],
+    }
+}
+
+/// The fitted curve over every unique observation time, as R's
+/// `survfitKM` reports it: a time the engine left out (all of its
+/// observations have zero weight) becomes a row with `n.event = n.censor
+/// = 0` that carries the survival, standard error and limits of the row
+/// before it and the weight still at risk.  `group`, `n` and `iterations`
+/// are left for the caller.
+fn with_zero_weight_times(
+    km: &SurvfitKMResult,
+    fit_time: &[f64],
+    fit_weights: &[f64],
+) -> TurnbullCurve {
+    let mut unique_times = fit_time.to_vec();
+    unique_times.sort_by(f64::total_cmp);
+    unique_times.dedup();
+    let std_err = km.std_err_surv_scale().unwrap_or_default();
+    let has_limits = km.lower.is_some() && km.upper.is_some();
+    let (lower, upper) = (
+        km.lower.clone().unwrap_or_default(),
+        km.upper.clone().unwrap_or_default(),
+    );
+    let n_times = unique_times.len();
+    let mut curve = TurnbullCurve {
+        group: 0,
+        n: 0,
+        time: unique_times,
+        n_risk: Vec::with_capacity(n_times),
+        n_event: Vec::with_capacity(n_times),
+        n_censor: Vec::with_capacity(n_times),
+        surv: Vec::with_capacity(n_times),
+        std_err: Vec::with_capacity(n_times),
+        lower: Vec::with_capacity(if has_limits { n_times } else { 0 }),
+        upper: Vec::with_capacity(if has_limits { n_times } else { 0 }),
+        iterations: 0,
+    };
+    let mut at_risk: f64 = fit_weights.iter().sum();
+    let mut next = 0;
+    for &t in &curve.time {
+        if next < km.time.len() && km.time[next] == t {
+            curve.n_risk.push(km.n_risk[next]);
+            curve.n_event.push(km.n_event[next]);
+            curve.n_censor.push(km.n_censor[next]);
+            curve.surv.push(km.surv[next]);
+            curve.std_err.push(std_err[next]);
+            if has_limits {
+                curve.lower.push(lower[next]);
+                curve.upper.push(upper[next]);
+            }
+            at_risk = km.n_risk[next] - km.n_event[next] - km.n_censor[next];
+            next += 1;
+        } else {
+            // Nothing leaves the risk set here; before the first reported
+            // time the curve is still at its origin.
+            curve.n_risk.push(at_risk);
+            curve.n_event.push(0.0);
+            curve.n_censor.push(0.0);
+            curve.surv.push(curve.surv.last().copied().unwrap_or(1.0));
+            curve
+                .std_err
+                .push(curve.std_err.last().copied().unwrap_or(0.0));
+            if has_limits {
+                curve.lower.push(curve.lower.last().copied().unwrap_or(1.0));
+                curve.upper.push(curve.upper.last().copied().unwrap_or(1.0));
+            }
+        }
+    }
+    curve
+}
+
+fn validate_turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<Vec<IntervalStatus>> {
+    let n = input.time1.len();
+    if n == 0 {
+        return Err(SurvivalError::invalid_input(
+            "No (non-missing) observations",
+        ));
+    }
+    validate_length(n, input.time2.len(), "time2")?;
+    validate_length(n, input.status.len(), "status")?;
+    let status: Vec<IntervalStatus> = input
+        .status
+        .iter()
+        .map(|&code| IntervalStatus::from_code(code))
+        .collect::<SurvivalResult<_>>()?;
+    for (i, code) in status.iter().enumerate() {
+        if !input.time1[i].is_finite() {
+            return Err(SurvivalError::invalid_input(format!(
+                "time1[{i}] must be finite"
+            )));
+        }
+        if *code == IntervalStatus::Interval {
+            if !input.time2[i].is_finite() {
+                return Err(SurvivalError::invalid_input(format!(
+                    "time2[{i}] must be finite for an interval-censored observation"
+                )));
+            }
+            if input.time2[i] < input.time1[i] {
+                return Err(SurvivalError::invalid_input(format!(
+                    "time2[{i}] must not be less than time1[{i}]"
+                )));
+            }
+        }
+    }
+    if let Some(weights) = input.weights {
+        validate_length(n, weights.len(), "weights")?;
+        validate_finite(weights, "weights")?;
+        if weights.iter().any(|&w| w < 0.0) {
+            return Err(SurvivalError::invalid_input("weights must be non-negative"));
+        }
+    }
+    if let Some(group) = input.group {
+        validate_length(n, group.len(), "group")?;
+    }
+    if !(0.0..1.0).contains(&input.conf_level) {
+        return Err(SurvivalError::invalid_input(
+            "conf_level must be between 0 and 1",
+        ));
+    }
+    Ok(status)
+}
+
+/// Turnbull's nonparametric estimate for interval-censored data, one curve
+/// per group, as R's `survfit` computes it (`R/survfitTurnbull.R`): an EM
+/// with Aitken acceleration over a Kaplan-Meier fit to the exact and
+/// right-censored observations plus weighted pseudo-observations at the
+/// jump points.
+pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
+    let mut status = validate_turnbull(input)?;
+    let n = input.time1.len();
+    let conf_type = ConfType::parse(input.conf_type)?;
+    let (time1, time2) = if input.timefix {
+        // aeqSurv over both time columns; a missing time2 stays missing.
+        let mut all: Vec<f64> = input.time1.to_vec();
+        let interval_rows: Vec<usize> = (0..n)
+            .filter(|&i| status[i] == IntervalStatus::Interval)
+            .collect();
+        all.extend(interval_rows.iter().map(|&i| input.time2[i]));
+        let fixed = aeq_surv(&all, None, None)?.time;
+        let mut time2 = input.time2.to_vec();
+        for (k, &i) in interval_rows.iter().enumerate() {
+            time2[i] = fixed[n + k];
+        }
+        (fixed[..n].to_vec(), time2)
+    } else {
+        (input.time1.to_vec(), input.time2.to_vec())
+    };
+    // An interval (x, x] is an exact observation.
+    for (i, code) in status.iter_mut().enumerate() {
+        if *code == IntervalStatus::Interval && time1[i] == time2[i] {
+            *code = IntervalStatus::Exact;
+        }
+    }
+    let weights: Vec<f64> = input.weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
+    let mut labels: Vec<i32> = input.group.map_or_else(|| vec![1], <[i32]>::to_vec);
+    labels.sort_unstable();
+    labels.dedup();
+    let curves = labels
+        .iter()
+        .map(|&label| {
+            let rows: Vec<usize> = (0..n)
+                .filter(|&i| input.group.is_none_or(|g| g[i] == label))
+                .collect();
+            turnbull_curve(
+                &rows.iter().map(|&i| time1[i]).collect::<Vec<_>>(),
+                &rows.iter().map(|&i| time2[i]).collect::<Vec<_>>(),
+                &rows.iter().map(|&i| status[i]).collect::<Vec<_>>(),
+                &rows.iter().map(|&i| weights[i]).collect::<Vec<_>>(),
+                label,
+                input.conf_level,
+                conf_type,
+            )
+        })
+        .collect::<SurvivalResult<Vec<_>>>()?;
+    Ok(TurnbullResult {
+        curves,
+        conf_type: conf_type.as_str().to_string(),
+        conf_int: input.conf_level,
+    })
+}
+
+/// Python entry point: `turnbull(time1, time2, status, weights=None,
+/// group=None, conf_level=0.95, conf_type="log", timefix=True)`; `status`
+/// uses R's `interval` coding (0 right, 1 exact, 2 left, 3 interval).
+#[pyfunction(name = "turnbull")]
+#[pyo3(signature = (time1, time2, status, weights=None, group=None, conf_level=0.95, conf_type="log", timefix=true))]
+#[allow(clippy::too_many_arguments)]
+pub fn turnbull_py(
     py: Python<'_>,
-    left: Vec<f64>,
-    right: Vec<f64>,
-    groups: Vec<i32>,
-    max_iter: usize,
-    tol: f64,
+    time1: Vec<f64>,
+    time2: Vec<f64>,
+    status: Vec<i32>,
     weights: Option<Vec<f64>>,
-) -> PyResult<GroupedTurnbullResult> {
-    validate_turnbull_inputs(&left, &right, weights.as_deref())?;
-    if groups.len() != left.len() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "groups must have same length as left and right",
-        ));
-    }
-    let weights = weights.unwrap_or_else(|| vec![1.0; left.len()]);
-    let mut group_has_positive_weight = BTreeMap::new();
-    for (&group, &weight) in groups.iter().zip(&weights) {
-        group_has_positive_weight
-            .entry(group)
-            .and_modify(|has_positive| *has_positive |= weight > 0.0)
-            .or_insert(weight > 0.0);
-    }
-    if group_has_positive_weight.values().any(|value| !value) {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "weights must include at least one positive value per group",
-        ));
-    }
-
-    Ok(
-        py.detach(move || {
-            compute_grouped_turnbull(&left, &right, &groups, &weights, max_iter, tol)
-        }),
-    )
-}
-
-#[pyfunction]
-pub fn npmle_interval(
-    left: Vec<f64>,
-    right: Vec<f64>,
-    weights: Option<Vec<f64>>,
-) -> PyResult<TimeSurvivalCurve> {
-    turnbull_estimator(left, right, 1000, 1e-6, weights)
-        .map(|result| (result.time_points, result.survival))
+    group: Option<Vec<i32>>,
+    conf_level: f64,
+    conf_type: &str,
+    timefix: bool,
+) -> PyResult<TurnbullResult> {
+    Ok(py.detach(|| {
+        turnbull(&TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &status,
+            weights: weights.as_deref(),
+            group: group.as_deref(),
+            conf_level,
+            conf_type,
+            timefix,
+        })
+    })?)
 }
 
 #[cfg(test)]
@@ -700,145 +900,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lognormal_censoring_retains_tail_likelihood() {
-        // R pnorm(9, lower.tail = FALSE, log.p = TRUE), and the log
-        // probability of an interval with standardized endpoints 9 and 10.
-        let right = compute_interval_likelihood(
-            9.0_f64.exp(),
-            f64::INFINITY,
-            CensorType::RightCensored,
-            0.0,
-            1.0,
-            &IntervalDistribution::LogNormal,
-        );
-        assert!((right - (-43.628_149_113_332_12)).abs() < 1e-12);
-        let interval = compute_interval_likelihood(
-            9.0_f64.exp(),
-            10.0_f64.exp(),
-            CensorType::IntervalCensored,
-            0.0,
-            1.0,
-            &IntervalDistribution::LogNormal,
-        );
-        assert!((interval - (-43.628_216_632_280_825)).abs() < 1e-12);
-    }
-
-    #[test]
     fn test_weibull_cdf() {
         assert!((weibull_cdf(0.0, 1.0, 1.0) - 0.0).abs() < 1e-10);
         let cdf_5 = weibull_cdf(5.0, 3.0, 2.0);
         assert!(cdf_5 > 0.0 && cdf_5 < 1.0);
-    }
-
-    #[test]
-    fn test_turnbull_basic() {
-        let left = vec![1.0, 2.0, 3.0, 1.0, 2.0];
-        let right = vec![2.0, 3.0, 5.0, 4.0, f64::INFINITY];
-
-        let result = turnbull_estimator(left, right, 100, 1e-4, None).unwrap();
-        assert!(!result.time_points.is_empty());
-        assert!(result.survival.iter().all(|&s| (0.0..=1.0).contains(&s)));
-    }
-
-    #[test]
-    fn test_turnbull_support_range_matches_interval_membership() {
-        let points = vec![-1.0, 1.0, 2.0, 3.0, 5.0, f64::INFINITY];
-        let cases = [
-            (0.0, 1.0),
-            (2.0, 3.0),
-            (3.0, f64::INFINITY),
-            (4.0, 2.0),
-            (f64::NEG_INFINITY, f64::INFINITY),
-            (f64::INFINITY, f64::INFINITY),
-            (f64::NEG_INFINITY, f64::NEG_INFINITY),
-            (f64::NAN, f64::INFINITY),
-            (0.0, f64::NAN),
-        ];
-
-        for (left, right) in cases {
-            let (start, end) = turnbull_support_range(&points, left, right);
-            let actual: Vec<usize> = (start..end).collect();
-            let expected: Vec<usize> = points
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, &time)| {
-                    (time >= left && (right == f64::INFINITY || time <= right)).then_some(idx)
-                })
-                .collect();
-            assert_eq!(actual, expected);
-        }
-    }
-
-    #[test]
-    fn test_turnbull_unweighted_matches_unit_weights() {
-        let left = vec![1.0, 2.0, 3.0, 1.0, 2.0];
-        let right = vec![2.0, 3.0, 5.0, 4.0, f64::INFINITY];
-
-        let unweighted = turnbull_estimator(left.clone(), right.clone(), 100, 1e-8, None).unwrap();
-        let unit_weighted = turnbull_estimator(left, right, 100, 1e-8, Some(vec![1.0; 5])).unwrap();
-
-        assert_eq!(unweighted.time_points, unit_weighted.time_points);
-        assert_eq!(unweighted.survival, unit_weighted.survival);
-        assert_eq!(unweighted.survival_lower, unit_weighted.survival_lower);
-        assert_eq!(unweighted.survival_upper, unit_weighted.survival_upper);
-        assert_eq!(unweighted.n_iter, unit_weighted.n_iter);
-        assert_eq!(unweighted.converged, unit_weighted.converged);
-    }
-
-    #[test]
-    fn test_turnbull_weights_match_replicated_rows() {
-        let left = vec![0.0, 1.0, 2.0];
-        let right = vec![1.0, 3.0, f64::INFINITY];
-        let weights = vec![2.0, 1.0, 3.0];
-
-        let weighted =
-            turnbull_estimator(left.clone(), right.clone(), 100, 1e-8, Some(weights)).unwrap();
-
-        let replicated_left = vec![0.0, 0.0, 1.0, 2.0, 2.0, 2.0];
-        let replicated_right = vec![1.0, 1.0, 3.0, f64::INFINITY, f64::INFINITY, f64::INFINITY];
-        let replicated =
-            turnbull_estimator(replicated_left, replicated_right, 100, 1e-8, None).unwrap();
-
-        assert_eq!(weighted.time_points, replicated.time_points);
-        for (actual, expected) in weighted.survival.iter().zip(replicated.survival.iter()) {
-            assert!((actual - expected).abs() < 1e-10);
-        }
-    }
-
-    #[test]
-    fn test_grouped_turnbull_matches_individual_weighted_curves() {
-        let left = vec![0.0, 1.0, 2.0, 0.0, 2.0, 3.0, 4.0, 3.0];
-        let right = vec![1.0, 3.0, f64::INFINITY, 2.0, 2.0, 5.0, 4.0, f64::INFINITY];
-        let groups = vec![7, 3, 7, 3, 7, 3, 7, 3];
-        let weights = vec![1.0, 0.5, 1.5, 2.0, 0.75, 1.25, 2.5, 1.0];
-
-        let grouped = compute_grouped_turnbull(&left, &right, &groups, &weights, 1000, 1e-6);
-        assert_eq!(grouped.groups, vec![3, 7]);
-
-        for (curve_idx, &group) in grouped.groups.iter().enumerate() {
-            let indices: Vec<usize> = groups
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, &value)| (value == group).then_some(idx))
-                .collect();
-            let group_left: Vec<f64> = indices.iter().map(|&idx| left[idx]).collect();
-            let group_right: Vec<f64> = indices.iter().map(|&idx| right[idx]).collect();
-            let group_weights: Vec<f64> = indices.iter().map(|&idx| weights[idx]).collect();
-            let expected = compute_turnbull_estimator(
-                &group_left,
-                &group_right,
-                1000,
-                1e-6,
-                Some(&group_weights),
-            );
-
-            assert_eq!(grouped.time_points[curve_idx], expected.time_points);
-            assert_eq!(grouped.survival[curve_idx], expected.survival);
-            assert_eq!(grouped.survival_lower[curve_idx], expected.survival_lower);
-            assert_eq!(grouped.survival_upper[curve_idx], expected.survival_upper);
-            assert_eq!(grouped.n_iter[curve_idx], expected.n_iter);
-            assert_eq!(grouped.converged[curve_idx], expected.converged);
-        }
     }
 
     #[test]
@@ -864,5 +929,306 @@ mod tests {
         assert_eq!(result.coefficients.len(), 1);
         assert!(result.scale > 0.0);
         assert!(result.shape > 0.0);
+    }
+
+    fn synthetic_interval() -> (Vec<f64>, Vec<f64>, Vec<i32>) {
+        // Surv(left, right, type = "interval2") on the fixture data:
+        // left = 1 2 NA 4 5 3 6 NA 2 7, right = 3 4 2 6 5 NA 8 5 3 NA
+        (
+            vec![1.0, 2.0, 2.0, 4.0, 5.0, 3.0, 6.0, 5.0, 2.0, 7.0],
+            vec![
+                3.0,
+                4.0,
+                f64::NAN,
+                6.0,
+                f64::NAN,
+                f64::NAN,
+                8.0,
+                f64::NAN,
+                3.0,
+                f64::NAN,
+            ],
+            vec![3, 3, 2, 3, 1, 0, 3, 2, 3, 0],
+        )
+    }
+
+    #[test]
+    fn jump_points_follow_the_bracket_rule() {
+        let (time1, time2, codes) = synthetic_interval();
+        let mut status: Vec<IntervalStatus> = codes
+            .iter()
+            .map(|&c| IntervalStatus::from_code(c).unwrap())
+            .collect();
+        let (jtimes, mintime) = turnbull_jump_points(&time1, &time2, &mut status);
+        assert_eq!(jtimes, vec![1.5, 2.5, 3.5, 5.0, 7.5]);
+        assert_eq!(mintime, 1.5);
+    }
+
+    #[test]
+    fn turnbull_matches_r_survfit_on_the_fixture_data() {
+        let (time1, time2, status) = synthetic_interval();
+        let result = turnbull(&TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &status,
+            weights: None,
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+        })
+        .unwrap();
+        let curve = &result.curves[0];
+        assert_eq!(curve.n, 10);
+        assert_eq!(curve.time, vec![1.5, 2.5, 3.0, 3.5, 5.0, 7.0, 7.5]);
+        let expected_surv = [
+            0.846299203204601,
+            0.538905789955341,
+            0.538905789955341,
+            0.538869070577718,
+            0.245567865491214,
+            0.245567865491214,
+            0.0,
+        ];
+        for (actual, expected) in curve.surv.iter().zip(expected_surv) {
+            assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+        }
+        assert_eq!(curve.n_censor, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
+        assert!((curve.n_risk[0] - 10.0).abs() < 1e-12);
+        assert!((curve.n_event[0] - 1.53700796795399).abs() < 1e-6);
+    }
+
+    #[test]
+    fn grouped_curves_are_fitted_separately() {
+        let (time1, time2, status) = synthetic_interval();
+        let group = vec![1, 2, 1, 2, 1, 2, 1, 2, 1, 2];
+        let result = turnbull(&TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &status,
+            weights: None,
+            group: Some(&group),
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+        })
+        .unwrap();
+        assert_eq!(result.curves.len(), 2);
+        assert_eq!(result.curves[0].time, vec![1.5, 2.5, 5.0, 7.0]);
+        assert_eq!(result.curves[0].n, 5);
+        let expected = [0.7, 0.4, 0.2, 0.0];
+        for (actual, expected) in result.curves[0].surv.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+        }
+    }
+
+    fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64, what: &str) {
+        assert_eq!(actual.len(), expected.len(), "{what}: length");
+        for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (a - e).abs() < tolerance,
+                "{what}[{i}]: {a} != {e} (tolerance {tolerance})"
+            );
+        }
+    }
+
+    /// R 4.5.3 / survival 3.8.11: `survfit(Surv(t1, t2, status,
+    /// type = "interval") ~ 1)`.  The jump at 15 (midpoint of the
+    /// right-censored 12 and the left-censored 18) loses all of its mass
+    /// during the EM; R's `survfitKM` keeps the zero-weight row, the
+    /// crate's engine drops it.
+    #[test]
+    fn a_jump_point_with_zero_mass_stays_on_the_curve() {
+        let nan = f64::NAN;
+        let time1 = [7.0, 12.0, 12.0, 12.0, 18.0, 24.0, 30.0];
+        let time2 = [nan, nan, nan, nan, nan, 27.0, 33.0];
+        let status = [1, 0, 2, 2, 2, 3, 3];
+        let result = turnbull(&TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &status,
+            weights: None,
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+        })
+        .unwrap();
+        let curve = &result.curves[0];
+        assert_eq!(curve.time, vec![7.0, 9.5, 12.0, 15.0, 25.5, 31.5]);
+        assert_eq!(curve.n_censor, vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_close(
+            &curve.n_risk,
+            &[7.0, 3.0, 3.0, 2.0, 2.0, 1.0],
+            1e-12,
+            "n_risk",
+        );
+        assert_close(
+            &curve.n_event,
+            &[4.0, 2.914335439641035e-15, 0.0, 0.0, 1.0, 1.0],
+            1e-12,
+            "n_event",
+        );
+        let three_sevenths = 3.0 / 7.0;
+        assert_close(
+            &curve.surv,
+            &[
+                three_sevenths,
+                three_sevenths,
+                three_sevenths,
+                three_sevenths,
+                three_sevenths / 2.0,
+                0.0,
+            ],
+            1e-12,
+            "surv",
+        );
+        assert_close(
+            &curve.std_err,
+            &[
+                0.2397416351932802,
+                0.23974163519328,
+                0.23974163519328,
+                0.23974163519328,
+                0.1932050635587907,
+                0.0,
+            ],
+            1e-12,
+            "std_err",
+        );
+        assert_close(
+            &curve.lower,
+            &[
+                0.1431737823939145,
+                0.1431737823939143,
+                0.1431737823939143,
+                0.1431737823939143,
+                0.03660410511538853,
+                0.0,
+            ],
+            1e-12,
+            "lower",
+        );
+        assert_close(
+            &curve.upper,
+            &[1.0, 1.0, 1.0, 1.0, 1.0, 0.0],
+            1e-12,
+            "upper",
+        );
+    }
+
+    /// The same data plus three exact times after the dead jump, so the
+    /// dropped row is not the last one.  R (4.5.3 / survival 3.8.11) and
+    /// the port reach the same maximum through different rounding of the
+    /// Aitken steps on the flat likelihood, so the estimates only agree
+    /// to the EM's stopping tolerance; the curve's shape is exact.
+    #[test]
+    fn a_dead_jump_before_later_events_keeps_the_lookup_aligned() {
+        let nan = f64::NAN;
+        let time1 = [7.0, 12.0, 12.0, 12.0, 18.0, 24.0, 30.0, 40.0, 40.0, 40.0];
+        let time2 = [nan, nan, nan, nan, nan, 27.0, 33.0, nan, nan, nan];
+        let status = [1, 0, 2, 2, 2, 3, 3, 1, 1, 1];
+        let result = turnbull(&TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &status,
+            weights: None,
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+        })
+        .unwrap();
+        let curve = &result.curves[0];
+        assert_eq!(curve.time, vec![7.0, 9.5, 12.0, 15.0, 25.5, 31.5, 40.0]);
+        assert_eq!(curve.n_censor, vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(curve.n_event[2], 0.0);
+        assert_eq!(curve.n_event[3], 0.0);
+        assert_close(
+            &curve.n_risk,
+            &[10.0, 6.000702202088914, 6.0, 5.0, 5.0, 4.0, 3.0],
+            1e-3,
+            "n_risk",
+        );
+        assert_close(
+            &curve.n_event,
+            &[
+                3.999297797911086,
+                0.0007022020889141,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                3.0,
+            ],
+            1e-3,
+            "n_event",
+        );
+        assert_close(
+            &curve.surv,
+            &[0.6000702202088914, 0.6, 0.6, 0.6, 0.48, 0.36, 0.0],
+            1e-3,
+            "surv",
+        );
+        assert_close(
+            &curve.std_err,
+            &[
+                0.2135178870554299,
+                0.2135060560853284,
+                0.2135060560853284,
+                0.2135060560853284,
+                0.2017282702807698,
+                0.1835498323470771,
+                0.0,
+            ],
+            1e-3,
+            "std_err",
+        );
+        assert_close(
+            &curve.lower,
+            &[
+                0.2987626224465689,
+                0.2987148246437666,
+                0.2987148246437666,
+                0.2987148246437666,
+                0.2106246142616751,
+                0.1325282101178965,
+                0.0,
+            ],
+            1e-3,
+            "lower",
+        );
+        assert_close(
+            &curve.upper,
+            &[1.0, 1.0, 1.0, 1.0, 1.0, 0.9779050051661341, 0.0],
+            1e-3,
+            "upper",
+        );
+    }
+
+    #[test]
+    fn turnbull_validates_codes_and_intervals() {
+        let bad_code = turnbull(&TurnbullInput {
+            time1: &[1.0],
+            time2: &[2.0],
+            status: &[4],
+            weights: None,
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+        });
+        assert!(bad_code.is_err());
+        let reversed = turnbull(&TurnbullInput {
+            time1: &[3.0],
+            time2: &[2.0],
+            status: &[3],
+            weights: None,
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+        });
+        assert!(reversed.is_err());
     }
 }

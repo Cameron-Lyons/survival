@@ -1,123 +1,685 @@
+"""``survival.regression``: Cox (``coxph_fit`` / ``CoxPHFit``) and parametric (``survreg_fit`` /
+``SurvregFit``) models against R survival 3.8.11 references."""
+
 import math
 
+import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
+regression = survival.regression
+core = survival.core
+
+# R: d <- data.frame(t = c(1,2,2,3,4,4,5,6,7,8), s = c(1,1,1,0,1,1,0,1,0,1), x1, x2)
+_TIED_TIME = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+_TIED_STATUS = [1, 1, 1, 0, 1, 1, 0, 1, 0, 1]
+_TIED_X1 = [0.0, 0.4, 0.8, 0.2, 1.0, 1.4, 0.6, 1.2, 1.6, 1.8]
+_TIED_X2 = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97]
+_TIED_X = [[a, b] for a, b in zip(_TIED_X1, _TIED_X2, strict=True)]
+_NEWDATA = [[0.5, 0.3], [1.5, 0.9]]
+
+# R: d <- data.frame(t = 1:8, s = c(1,1,0,1,1,1,0,1), x = c(.5,.2,.9,.1,.7,.3,.8,.4))
+_AFT_TIME = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+_AFT_STATUS = [1, 1, 0, 1, 1, 1, 0, 1]
+_AFT_X = [0.5, 0.2, 0.9, 0.1, 0.7, 0.3, 0.8, 0.4]
+_AFT_DESIGN = [[1.0, value] for value in _AFT_X]
 
 
-def test_survreg():
-    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-    status = [1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
-    covariates = [
-        [1.0, 2.0],
-        [1.5, 2.5],
-        [2.0, 3.0],
-        [2.5, 3.5],
-        [3.0, 4.0],
-        [3.5, 4.5],
-        [4.0, 5.0],
-        [4.5, 5.5],
-    ]
+def _tied_fit(**kwargs):
+    return regression.coxph_fit(_TIED_TIME, _TIED_STATUS, _TIED_X, **kwargs)
 
-    result = survival.survreg(
-        time=time,
-        status=status,
-        covariates=covariates,
-        weights=None,
-        offsets=None,
-        initial_beta=None,
-        strata=None,
-        distribution="extreme_value",
-        max_iter=20,
-        eps=1e-5,
-        tol_chol=1e-9,
+
+def test_coxph_fit_efron_matches_r():
+    fit = _tied_fit()
+
+    # coxph(Surv(t, s) ~ x1 + x2, d): ties = "efron"
+    assert isinstance(fit, regression.CoxPHFit)
+    assert fit.method == regression.TieMethod.Efron
+    assert fit.coefficients == pytest.approx([-2.34686780701378028, 0.57759281933864315])
+    np.testing.assert_allclose(
+        fit.var,
+        [[3.9806704210981687, -4.1165383592668485], [-4.1165383592668485, 6.0567373235724258]],
     )
-    assert hasattr(result, "coefficients")
-    assert hasattr(result, "log_likelihood")
-    assert hasattr(result, "iterations")
-    assert isinstance(result.coefficients, list)
+    assert fit.naive_var is None
+    assert fit.rscore is None
+    assert fit.loglik == pytest.approx([-11.079060882340368, -9.002136268091796])
+    assert fit.score == pytest.approx(3.9327366994909028)
+    assert fit.wald_test == pytest.approx(3.284067646975064)
+    assert fit.iter == 4
+    assert fit.flag == 2
+    assert fit.means == pytest.approx([0.9, 0.585])
+    assert (fit.n, fit.nevent, fit.nvar) == (10, 7, 2)
+    assert fit.linear_predictors[:3] == pytest.approx(
+        [1.889807790867024995, 0.927956955287966956, 0.254902529378230547]
+    )
+    assert fit.hazard_ratios() == pytest.approx([0.095668345141275812, 1.781744284046125726])
+    assert fit.first == pytest.approx([0.0, 0.0], abs=1e-7)
+    assert fit.strata is None
+    assert fit.cluster is None
+    assert fit.entry is None
+    assert fit.nocenter == [False, False]
+    assert fit.x[0] == pytest.approx([0.0, 0.2])
 
 
-def test_survival_fit_predict_quantile_rejects_nonfinite_quantiles():
-    fit = survival.survreg(
-        time=[1.0, 2.0, 3.0, 4.0],
-        status=[1.0, 1.0, 0.0, 1.0],
-        covariates=[[1.0], [2.0], [3.0], [4.0]],
+def test_coxph_fit_breslow_matches_r():
+    fit = _tied_fit(method="breslow")
+
+    assert fit.method == regression.TieMethod.Breslow
+    assert fit.coefficients == pytest.approx([-2.31840202040787569, 0.49851177402429914])
+    np.testing.assert_allclose(
+        fit.var,
+        [[3.9261720323257716, -3.9888855557265210], [-3.9888855557265210, 5.9305727482653090]],
+    )
+    assert fit.loglik == pytest.approx([-11.3791654747907067, -9.3511047589307736])
+    assert fit.score == pytest.approx(3.796050528232672)
+    assert fit.wald_test == pytest.approx(3.2051239607042534)
+    assert fit.hazard_ratios() == pytest.approx([0.098430750328168962, 1.646269425780562790])
+    assert fit.martingale_residuals()[:3] == pytest.approx(
+        [0.636525000172903588, 0.416174237936349778, 0.709513473868391364]
+    )
+
+
+def test_coxph_fit_exact_ties_match_r():
+    fit = _tied_fit(method="exact")
+
+    assert fit.method == regression.TieMethod.Exact
+    assert fit.coefficients == pytest.approx([-2.71433867809912455, 0.48496541470257887])
+    np.testing.assert_allclose(
+        fit.var,
+        [[4.4111228049234628, -4.1915089564114147], [-4.1915089564114147, 6.5231955014425296]],
+    )
+    assert fit.loglik == pytest.approx([-9.6927665212204754, -7.3450470379782935])
+
+
+def test_coxph_fit_iter_max_zero_evaluates_at_init():
+    fit = _tied_fit(iter_max=0)
+    assert fit.coefficients == pytest.approx([0.0, 0.0])
+    assert fit.loglik == pytest.approx([-11.079060882340368, -11.079060882340368])
+    assert fit.iter == 0
+
+    started = _tied_fit(init=[-2.34686780701378028, 0.57759281933864315], iter_max=0)
+    assert started.loglik[1] == pytest.approx(-9.002136268091796)
+
+
+def test_coxph_fit_residual_methods_match_r():
+    fit = _tied_fit()
+
+    assert fit.residuals == pytest.approx(fit.martingale_residuals())
+    assert fit.martingale_residuals() == pytest.approx(
+        [
+            0.635149405512543730,
+            0.509438247825749979,
+            0.749740909915125431,
+            -0.871048977506360678,
+            0.386232255905764044,
+            0.802746854126972886,
+            -1.475373020118189826,
+            0.050719555006668249,
+            -0.513068378290874816,
+            -0.274536852377399221,
+        ]
+    )
+    assert fit.deviance_residuals()[:3] == pytest.approx(
+        [0.863849447365589551, 0.636813730529640520, 1.127401993537265223]
+    )
+    np.testing.assert_allclose(
+        fit.score_residuals()[:2],
+        [
+            [-0.233452232810407168, -0.054675243151784514],
+            [-0.123661810977466757, -0.097791564978628287],
+        ],
+    )
+    np.testing.assert_allclose(
+        fit.dfbeta()[:2],
+        [
+            [-0.704223662151148178, 0.629861485547724920],
+            [-0.089694184730174861, -0.083239233071467883],
+        ],
+    )
+    np.testing.assert_allclose(fit.dfbetas()[:1], [[-0.352965698671396322, 0.255932644177769064]])
+
+    schoenfeld = fit.schoenfeld_residuals()
+    assert isinstance(schoenfeld, regression.SchoenfeldResiduals)
+    assert schoenfeld.time == pytest.approx([1.0, 2.0, 2.0, 4.0, 4.0, 6.0, 8.0])
+    assert schoenfeld.rows == [0, 1, 2, 4, 5, 7, 9]
+    assert schoenfeld.strata is None
+    np.testing.assert_allclose(
+        schoenfeld.residuals[:2],
+        [
+            [-0.367554831641573987, -0.086082491264657890],
+            [-0.183018714657403714, -0.177531782621244111],
+        ],
+    )
+    scaled = fit.scaled_schoenfeld_residuals()
+    np.testing.assert_allclose(
+        scaled.residuals[:2],
+        [
+            [-10.10813719067957273, 7.51931450020224279],
+            [-2.33091334257708471, -1.67542588266199388],
+        ],
+    )
+
+    # collapse sums residuals within the given groups
+    collapsed = fit.martingale_residuals(collapse=[0, 0, 1, 1, 2, 2, 3, 3, 4, 4])
+    full = fit.martingale_residuals()
+    assert collapsed == pytest.approx([full[i] + full[i + 1] for i in range(0, 10, 2)])
+
+
+def test_coxph_fit_predictions_match_r():
+    fit = _tied_fit()
+
+    lp = fit.predict("lp", newdata=_NEWDATA, se_fit=True)
+    assert isinstance(lp, regression.CoxPrediction)
+    assert lp.fit == pytest.approx([0.77413316929399911, -1.22617894611659528])
+    assert lp.se_fit == pytest.approx([0.43622816343060195, 0.69135346438992074])
+
+    risk = fit.predict("risk", newdata=_NEWDATA)
+    assert risk.fit == pytest.approx([2.1687114065283661, 0.2934115798922754])
+    assert risk.se_fit is None
+
+    expected = fit.predict("expected")
+    assert expected.fit[:3] == pytest.approx(
+        [0.36485059448745627, 0.49056175217425002, 0.25025909008487457]
+    )
+
+    terms = fit.predict_terms(newdata=_NEWDATA, se_fit=True)
+    assert isinstance(terms, regression.CoxTermsPrediction)
+    np.testing.assert_allclose(
+        terms.fit,
+        [[0.93874712280551242, -0.16461395351151328], [-1.40812068420826786, 0.18194173809167263]],
+    )
+    np.testing.assert_allclose(
+        terms.se_fit,
+        [[0.79806470124652640, 0.70139752573499303], [1.19709705186978876, 0.77522884423341354]],
+    )
+
+    with pytest.raises(ValueError, match="type must be"):
+        fit.predict("bogus")
+    with pytest.raises(ValueError, match="follow-up time"):
+        fit.predict("expected", newdata=_NEWDATA)
+
+
+def test_coxph_fit_basehaz_and_survfit_match_r():
+    fit = _tied_fit()
+
+    basehaz = fit.basehaz()
+    assert isinstance(basehaz, regression.Basehaz)
+    assert basehaz.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    assert basehaz.hazard[:3] == pytest.approx(
+        [0.055129234588335407, 0.245971097299985619, 0.245971097299985619]
+    )
+    assert basehaz.hazard[-1] == pytest.approx(8.435007882087591113)
+    assert basehaz.strata is None
+    assert fit.basehaz(centered=False).hazard[:2] == pytest.approx(
+        [0.3250468662387635, 1.4502674481097746]
+    )
+
+    (curve,) = fit.survfit(newdata=_NEWDATA)
+    assert isinstance(curve, regression.CoxSurvfitCurve)
+    assert (curve.stratum, curve.n) == (0, 10)
+    assert curve.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    assert curve.n_risk == pytest.approx([10, 9, 7, 6, 4, 3, 2, 1])
+    assert curve.n_event == pytest.approx([1, 2, 0, 2, 0, 1, 0, 1])
+    assert curve.n_censor == pytest.approx([0, 0, 1, 0, 1, 0, 1, 0])
+    # survfit(fit, newdata)$surv, one column per newdata row
+    assert [row[0] for row in curve.surv][:2] == pytest.approx(
+        [0.88731130006455339, 0.58658345696823611]
+    )
+    assert [row[1] for row in curve.surv][:2] == pytest.approx(
+        [0.98395456594223285, 0.93037200423029276]
+    )
+    assert [row[0] for row in curve.std_err][:2] == pytest.approx(
+        [0.122851277492371569, 0.317907389155939857]
+    )
+    assert [row[1] for row in curve.cumhaz][:2] == pytest.approx(
+        [0.016175555818815357, 0.072170768266625329]
+    )
+
+
+def test_coxph_fit_counting_process_strata_weights_offset_match_r():
+    start = [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 3.0, 0.0, 1.0]
+    stop = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0, 4.0, 5.0]
+    status = [1, 0, 1, 0, 1, 0, 1, 1, 0, 1]
+    x = [[value] for value in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 0.2, 0.8, 1.1, 0.4]]
+    strata = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
+    weights = [1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0, 1.0, 2.0, 1.0]
+    offset = [0.1, 0.0, 0.2, 0.0, 0.0, 0.1, 0.0, 0.3, 0.0, 0.0]
+
+    fit = regression.coxph_fit(
+        stop, status, x, entry=start, strata=strata, weights=weights, offset=offset
+    )
+    # coxph(Surv(start, stop, status) ~ x + strata(g) + offset(off), weights = w)
+    assert fit.coefficients == pytest.approx([-0.78302485927205856])
+    assert fit.var[0] == pytest.approx([2.2334762314262075])
+    assert fit.loglik == pytest.approx([-6.5337342596707160, -6.3940130870789798])
+    assert fit.means == pytest.approx([1.3])
+    assert fit.nevent == 6
+    assert fit.strata == strata
+    assert fit.entry == pytest.approx(start)
+    assert fit.linear_predictors[:3] == pytest.approx(
+        [0.726419887417647070, 0.234907457781617646, 0.043395028145588543]
+    )
+    assert fit.martingale_residuals()[:3] == pytest.approx(
+        [0.55023859220750193, -0.57974372141854302, 0.74846876019198305]
+    )
+
+    clustered = regression.coxph_fit(stop, status, x, entry=start, cluster=strata)
+    # coxph(Surv(start, stop, status) ~ x + cluster(g)): robust sandwich variance
+    assert clustered.coefficients == pytest.approx([0.48868151624787642])
+    assert clustered.var[0] == pytest.approx([0.018306739858682395])
+    assert clustered.naive_var[0] == pytest.approx([0.6478055354496437])
+    assert clustered.rscore == pytest.approx(1.2162778262460221)
+
+    exact = regression.coxph_fit(stop, status, x, entry=start, method="exact")
+    # coxph(..., ties = "exact") on counting-process data (agexact)
+    assert exact.coefficients == pytest.approx([0.56988220267373335])
+    assert exact.var[0] == pytest.approx([0.70878875738958225])
+    assert exact.loglik == pytest.approx([-6.0684255882441098, -5.8190977265322319])
+
+    agexact = regression.agexact(start, stop, status, x)
+    assert isinstance(agexact, regression.AgexactFit)
+    assert agexact.coefficients == pytest.approx([0.56988220267373335])
+    assert agexact.loglik == pytest.approx([-6.0684255882441098, -5.8190977265322319])
+    assert agexact.var[0] == pytest.approx([0.70878875738958225])
+
+
+def test_coxph_fit_validates_inputs():
+    with pytest.raises(ValueError, match="status length mismatch"):
+        regression.coxph_fit(_TIED_TIME, _TIED_STATUS[:-1], _TIED_X)
+    with pytest.raises(ValueError, match="ties must be"):
+        _tied_fit(method="bogus")
+    with pytest.raises(ValueError, match="x has 9 rows"):
+        regression.coxph_fit(_TIED_TIME, _TIED_STATUS, _TIED_X[:-1])
+
+
+def test_coxph_detail_matches_r():
+    fit = _tied_fit()
+    detail = regression.coxph_detail(fit)
+
+    # R: coxph.detail(fit) fields
+    assert isinstance(detail, regression.CoxphDetail)
+    assert detail.time == pytest.approx([1.0, 2.0, 4.0, 6.0, 8.0])
+    assert detail.nevent == [1, 2, 2, 1, 1]
+    assert detail.nrisk == [10, 9, 6, 3, 1]
+    assert detail.hazard == pytest.approx(
+        [
+            0.055129234588335407,
+            0.190841862711650212,
+            0.524866033793095821,
+            1.046074250800156813,
+            6.618096500194352139,
+        ]
+    )
+    assert detail.varhaz[:2] == pytest.approx([0.0030392325062957165, 0.0183590433439632765])
+    assert detail.means[0] == pytest.approx([0.36755483164157399, 0.28608249126465790])
+    assert detail.score[1] == pytest.approx([0.033962570685192539, 0.104936434757511715])
+    np.testing.assert_allclose(
+        detail.imat[0],
+        [
+            [0.174591449272772953, 0.102190627784997268],
+            [0.102190627784997268, 0.090067315124623792],
+        ],
+    )
+    assert detail.wtrisk[:2] == pytest.approx([18.13919615367898430, 11.52109965348462595])
+    assert detail.nevent_wt == pytest.approx([1.0, 2.0, 2.0, 1.0, 1.0])
+    assert detail.strata is None
+    assert detail.riskmat is None
+
+    with_riskmat = regression.coxph_detail(fit, riskmat=True)
+    assert len(with_riskmat.riskmat) == 10
+    assert sum(with_riskmat.riskmat[0]) == 1  # the first subject is only at risk at time 1
+
+
+def test_cox_zph_matches_r():
+    fit = _tied_fit()
+    zph = regression.cox_zph(fit)
+
+    # cox.zph(fit)$table and the scaled Schoenfeld residuals
+    assert isinstance(zph, regression.CoxZph)
+    assert zph.transform == "km"
+    assert [row.chisq for row in zph.table] == pytest.approx(
+        [0.15195475713205253, 0.14087118516631569]
+    )
+    assert [row.df for row in zph.table] == [1, 1]
+    assert [row.p for row in zph.table] == pytest.approx([0.69667427791706926, 0.70741646786387680])
+    assert isinstance(zph.global_test, regression.CoxZphTest)
+    assert (zph.global_test.chisq, zph.global_test.df, zph.global_test.p) == pytest.approx(
+        (1.54291722545947430, 2, 0.46233820385834629)
+    )
+    assert zph.time == pytest.approx([1.0, 2.0, 2.0, 4.0, 4.0, 6.0, 8.0])
+    assert zph.x == pytest.approx(
+        [0.0, 0.1, 0.1, 0.3, 0.3, 0.533333333333333326, 0.688888888888888884]
+    )
+    assert zph.y[0] == pytest.approx([-10.10813719067957273, 7.51931450020224101])
+    assert zph.strata is None
+
+    identity = regression.cox_zph(fit, transform="identity", terms=False, global_test=False)
+    assert identity.transform == "identity"
+    assert [row.chisq for row in identity.table] == pytest.approx(
+        [0.20965874456275058, 0.11082021786863967]
+    )
+    assert [row.p for row in identity.table] == pytest.approx(
+        [0.64703500805248726, 0.73921225486361186]
+    )
+    assert identity.global_test is None
+
+
+def test_coxph_wtest_matches_r():
+    fit = _tied_fit()
+    result = regression.coxph_wtest(fit.var, [fit.coefficients])
+
+    # coxph.wtest(fit$var, coef(fit))
+    assert isinstance(result, regression.CoxphWtest)
+    assert result.test == pytest.approx([3.284067646975064])
+    assert result.df == 2
+    assert [row[0] for row in result.solve] == pytest.approx(
+        [-1.6522473815825811, -1.0276072039183648]
+    )
+
+    breslow = _tied_fit(method="breslow")
+    assert regression.coxph_wtest(breslow.var, [breslow.coefficients]).test == pytest.approx(
+        [3.2051239607042534]
+    )
+
+
+def _aft_fit(distribution="weibull", **data_kwargs):
+    return regression.survreg_fit(
+        regression.SurvregData(_AFT_TIME, _AFT_STATUS, _AFT_DESIGN, **data_kwargs),
+        regression.SurvregDistribution(distribution),
+    )
+
+
+def test_survreg_fit_matches_r():
+    fit = _aft_fit()
+
+    # survreg(Surv(t, s) ~ x, d)
+    assert isinstance(fit, regression.SurvregFit)
+    assert fit.coefficients == pytest.approx(
+        [1.1636656987433951, 1.3788867351883287, math.log(0.497638477465639)]
+    )
+    assert fit.scale == pytest.approx([0.497638477465639])
+    assert fit.log_likelihood == pytest.approx(-14.307025676163946)
+    assert fit.intercept_only_log_likelihood == pytest.approx(-15.423608565500084)
+    np.testing.assert_allclose(
+        fit.variance_matrix,
+        [
+            [0.184525152366485423, -0.380847439814775035, -0.040806686884472650],
+            [-0.380847439814775035, 1.018571428722077066, 0.083390468128268641],
+            [-0.040806686884472650, 0.083390468128268641, 0.115733388634409073],
+        ],
+    )
+    assert fit.naive_variance_matrix is None
+    assert fit.icoef == pytest.approx([1.76106531439882441, -0.63333639546646736])
+    assert (fit.iterations, fit.df, fit.df_residual, fit.n) == (7, 3, 5, 8)
+    assert fit.converged
+    assert fit.means == pytest.approx([1.0, 0.4875])
+    assert fit.linear_predictors[:2] == pytest.approx([1.8531090663375596, 1.4394430457810610])
+    assert fit.distribution.name == "Weibull"
+    assert fit.distribution.family == regression.SurvregFamily.ExtremeValue
+    assert fit.distribution.transform == regression.SurvregTransform.Log
+    assert max(abs(value) for value in fit.score) < 1e-8
+
+
+def test_survreg_fit_low_level_wrapper_matches_survreg_fit():
+    legacy = regression.survreg(
+        time=_AFT_TIME,
+        status=[float(value) for value in _AFT_STATUS],
+        covariates=_AFT_DESIGN,
         distribution="weibull",
-        max_iter=5,
-        eps=1e-5,
-        tol_chol=1e-9,
+    )
+    fit = _aft_fit()
+    assert legacy.coefficients == pytest.approx(fit.coefficients)
+    assert legacy.log_likelihood == pytest.approx(fit.log_likelihood)
+
+
+def test_survreg_fit_predictions_match_r():
+    fit = _aft_fit()
+    newdata = [[1.0, 0.25], [1.0, 0.75]]
+
+    lp = fit.predict(newdata=newdata, predict_type="lp", se_fit=True)
+    assert isinstance(lp, regression.SurvregPrediction)
+    assert lp.predict_type == regression.SurvregPredictType.Lp
+    assert [row[0] for row in lp.fit] == pytest.approx([1.5083873825404772, 2.1978307501346417])
+    assert [row[0] for row in lp.se_fit] == pytest.approx(
+        [0.24033756833717804, 0.43150946837872656]
     )
 
-    with pytest.raises(ValueError, match="Quantiles must be between 0 and 1"):
-        fit.predict_quantile(quantiles=[float("nan")])
+    quantile = fit.predict(newdata=newdata, predict_type="quantile", p=[0.1, 0.5], se_fit=True)
+    np.testing.assert_allclose(
+        quantile.fit,
+        [[1.4747935472633338, 3.7659360558805890], [2.9386825822052023, 7.5040270644327540]],
+    )
+    np.testing.assert_allclose(
+        quantile.se_fit,
+        [[0.73385962335949151, 0.98846239504509181], [1.56237123886765339, 3.20239577005181753]],
+    )
+
+    uquantile = fit.predict(newdata=newdata, predict_type="uquantile", p=[0.5])
+    assert [row[0] for row in uquantile.fit] == pytest.approx(
+        [1.3259964507707331, 2.0154398183648974]
+    )
+
+    response = fit.predict(predict_type="response", se_fit=True)
+    assert [row[0] for row in response.fit][:2] == pytest.approx(
+        [6.3796233932137438, 4.2183457371586082]
+    )
+    assert [row[0] for row in response.se_fit][:2] == pytest.approx(
+        [1.5406568557700573, 1.1391801296374089]
+    )
+
+    with pytest.raises(ValueError, match="prediction type 'bogus'"):
+        fit.predict(predict_type="bogus")
+    with pytest.raises(ValueError, match="probabilities between 0 and 1"):
+        fit.predict(newdata=newdata, predict_type="quantile", p=[1.5])
+    with pytest.raises(ValueError, match="newdata row 0 length mismatch"):
+        fit.predict(newdata=[[1.0]], predict_type="lp")
+
+
+def test_survreg_fit_residuals_match_r():
+    fit = _aft_fit()
+
+    def column(residual_type):
+        result = fit.residuals(residual_type=residual_type)
+        assert isinstance(result, survival.residuals.SurvregResiduals)
+        assert result.residual_type == getattr(
+            regression.SurvregResidType, residual_type.capitalize()
+        )
+        return [row[0] for row in result.values]
+
+    assert column("response")[:3] == pytest.approx(
+        [-5.37962339321374383, -2.21834573715860817, -8.07470590153972267]
+    )
+    assert column("deviance")[:3] == pytest.approx(
+        [-2.34433263343717346, -1.20239552918718373, 0.38072585863811953]
+    )
+    assert column("working")[:3] == pytest.approx(
+        [-20.115412566486959633, -1.731897200161101047, 0.497638477465638940]
+    )
+    assert column("ldcase")[:2] == pytest.approx([1.0179850595745871811, 0.1932737001492679518])
+    assert column("ldresp")[:2] == pytest.approx([0.1314999730545083345, 0.1817180514737036234])
+    assert column("ldshape")[:2] == pytest.approx([2.075233179897426172, 0.865101372213592956])
+
+    np.testing.assert_allclose(
+        fit.residuals(residual_type="dfbeta").values[:2],
+        [
+            [-0.095914018114840099, -0.032221968157953827, 0.303088449952158834],
+            [-0.175870407208253726, 0.290253708135824240, 0.056753379002578902],
+        ],
+    )
+    np.testing.assert_allclose(
+        fit.residuals(residual_type="dfbetas").values[:1],
+        [[-0.223282300929045940, -0.031926868183771190, 0.890922756312198971]],
+    )
+    matrix = fit.residuals(residual_type="matrix").values
+    assert len(matrix) == 8
+    np.testing.assert_allclose(
+        matrix[0],
+        [
+            -3.050066333649101846,
+            -1.960977962021287935,
+            -0.097486340662400917,
+            2.633906040309799579,
+            -3.968675422108914219,
+            2.141630783746856004,
+        ],
+    )
+
+    with pytest.raises(ValueError, match="residual type 'bogus'"):
+        fit.residuals(residual_type="bogus")
+
+
+def test_survreg_fit_interval_strata_weights_and_cluster_match_r():
+    # survreg(Surv(t1, t2, type = "interval2") ~ x + strata(g), weights = w, dist = "lognormal")
+    # with R's interval status coding 0 right / 1 exact / 2 left / 3 interval
+    fit = regression.survreg_fit(
+        regression.SurvregData(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 3.0, 7.0, 2.0],
+            [3, 1, 2, 3, 1, 0, 1, 3],
+            _AFT_DESIGN,
+            time2=[2.0, 1.0, 1.0, 6.0, 1.0, 1.0, 1.0, 4.0],
+            weights=[1.0, 2.0, 1.0, 1.0, 1.0, 2.0, 1.0, 1.0],
+            strata=[0, 0, 0, 0, 1, 1, 1, 1],
+        ),
+        regression.SurvregDistribution("lognormal"),
+    )
+    assert fit.coefficients[:2] == pytest.approx([0.79486508969647773, 1.30538829240094301])
+    assert fit.scale == pytest.approx([0.86326971587297341, 0.08607663656883309])
+    assert fit.log_likelihood == pytest.approx(-11.362428108182179)
+    assert fit.variance_matrix[0] == pytest.approx(
+        [
+            0.0240311839313740692,
+            -0.0364926896367259446,
+            -0.0015813742715430944,
+            0.0234594693742770921,
+        ]
+    )
+
+    clustered = _aft_fit(cluster=[1, 1, 2, 2, 3, 3, 4, 4])
+    # survreg(Surv(t, s) ~ x + cluster(g)): robust variance keeps the naive one alongside
+    assert clustered.coefficients[:2] == pytest.approx([1.1636656987433951, 1.3788867351883287])
+    assert clustered.variance_matrix[0] == pytest.approx(
+        [0.13301265160388523, -0.23361217142580540, -0.14495353454168899]
+    )
+    assert clustered.naive_variance_matrix[0] == pytest.approx(
+        [0.184525152366485423, -0.380847439814775035, -0.040806686884472650]
+    )
+
+
+def test_survreg_distribution_helpers_match_r():
+    weibull = regression.SurvregDistribution("weibull")
+    assert (weibull.name, weibull.scale, weibull.parms) == ("Weibull", None, [])
+    assert weibull.dtest() == []
+    assert regression.survreg_dtest(weibull) == []
+    assert weibull.variance() == pytest.approx(math.pi**2 / 6)
+
+    exponential = regression.SurvregDistribution("exp")  # R's match.arg partial matching
+    assert exponential.name == "Exponential"
+    assert exponential.scale == pytest.approx(1.0)
+
+    with pytest.raises(ValueError, match="'normal' should be one of"):
+        regression.SurvregDistribution("normal")
+
+    # dsurvreg / psurvreg / qsurvreg with R's recycling of mean and scale
+    assert regression.dsurvreg([1.0, 2.0, 5.0], [1.5], [0.5]) == pytest.approx(
+        [0.094738019355815842, 0.163187748073130218, 0.143403690391142008]
+    )
+    assert regression.psurvreg([1.0, 2.0, 5.0], [1.5], [0.5]) == pytest.approx(
+        [0.048568007099546562, 0.180571615166323918, 0.711965988172734487]
+    )
+    assert regression.qsurvreg([0.1, 0.5, 0.9], [1.5], [0.5]) == pytest.approx(
+        [1.4547242101138491, 3.7312509012850112, 6.8006365807998757]
+    )
+    assert regression.qsurvreg([0.1, 0.5, 0.9], [1.5], [0.5], distribution="lognormal") == (
+        pytest.approx([2.3613281052886124, 4.4816890703380645, 8.5060339044805140])
+    )
+    assert regression.dsurvreg([1.0, 2.0], [1.5], [0.5], distribution="t", parms=[4]) == (
+        pytest.approx([0.42932505167995955, 0.42932505167995955])
+    )
+    draws = regression.rsurvreg(5, [1.5], [0.5], seed=7)
+    assert len(draws) == 5
+    assert draws == regression.rsurvreg(5, [1.5], [0.5], seed=7)
+
+
+def test_survreg_fit_validates_inputs():
+    with pytest.raises(ValueError, match="weights must contain positive values"):
+        _aft_fit(weights=[0.0] + [1.0] * 7)
+    with pytest.raises(ValueError, match="status length mismatch"):
+        regression.SurvregData(_AFT_TIME, _AFT_STATUS[:-1], _AFT_DESIGN)
+    control = regression.SurvregControl(iter_max=1)
+    limited = regression.survreg_fit(
+        regression.SurvregData(_AFT_TIME, _AFT_STATUS, _AFT_DESIGN),
+        regression.SurvregDistribution("weibull"),
+        control=control,
+    )
+    assert limited.iterations == 1
+    assert not limited.converged
 
 
 def test_spline_config_validates_public_inputs():
-    config = survival.SplineConfig(3, 3, " Uniform ", (1.0, 10.0))
+    config = survival.regression.SplineConfig(3, 3, " Uniform ", (1.0, 10.0))
     assert config.knot_placement == "equal"
 
     with pytest.raises(ValueError, match="n_knots"):
-        survival.SplineConfig(0, 3, "quantile", None)
+        survival.regression.SplineConfig(0, 3, "quantile", None)
     with pytest.raises(ValueError, match="degree"):
-        survival.SplineConfig(3, 0, "quantile", None)
+        survival.regression.SplineConfig(3, 0, "quantile", None)
     with pytest.raises(ValueError, match="knot_placement"):
-        survival.SplineConfig(3, 3, "unknown", None)
+        survival.regression.SplineConfig(3, 3, "unknown", None)
     with pytest.raises(ValueError, match="boundary_knots"):
-        survival.SplineConfig(3, 3, "quantile", (0.0, 10.0))
+        survival.regression.SplineConfig(3, 3, "quantile", (0.0, 10.0))
     with pytest.raises(ValueError, match="boundary_knots"):
-        survival.SplineConfig(3, 3, "quantile", (10.0, 10.0))
+        survival.regression.SplineConfig(3, 3, "quantile", (10.0, 10.0))
 
 
 def test_flexible_parametric_model_revalidates_mutated_spline_config():
-    config = survival.SplineConfig(3, 3, "quantile", None)
+    config = survival.regression.SplineConfig(3, 3, "quantile", None)
     config.knot_placement = "unknown"
     time = [float(value) for value in range(1, 21)]
     event = [1 if idx % 3 == 0 else 0 for idx in range(20)]
     covariates = [[idx * 0.1] for idx in range(20)]
 
     with pytest.raises(ValueError, match="knot_placement"):
-        survival.flexible_parametric_model(time, event, covariates, config)
+        survival.regression.flexible_parametric_model(time, event, covariates, config)
 
 
 def test_restricted_cubic_spline_validates_public_inputs():
     x = [float(value) for value in range(1, 6)]
 
     with pytest.raises(ValueError, match="x must contain only finite"):
-        survival.restricted_cubic_spline([1.0, 2.0, float("nan"), 4.0, 5.0], 4, None)
+        survival.regression.restricted_cubic_spline([1.0, 2.0, float("nan"), 4.0, 5.0], 4, None)
     with pytest.raises(ValueError, match="n_knots"):
-        survival.restricted_cubic_spline(x, 2, None)
+        survival.regression.restricted_cubic_spline(x, 2, None)
     with pytest.raises(ValueError, match="knots must contain only finite"):
-        survival.restricted_cubic_spline(x, None, [1.0, 2.0, float("inf")])
+        survival.regression.restricted_cubic_spline(x, None, [1.0, 2.0, float("inf")])
     with pytest.raises(ValueError, match="strictly increasing"):
-        survival.restricted_cubic_spline(x, None, [1.0, 2.0, 2.0])
+        survival.regression.restricted_cubic_spline(x, None, [1.0, 2.0, 2.0])
     with pytest.raises(ValueError, match="strictly increasing"):
-        survival.restricted_cubic_spline([1.0] * 5, 4, None)
+        survival.regression.restricted_cubic_spline([1.0] * 5, 4, None)
 
 
 def test_predict_hazard_spline_validates_public_inputs():
     time = [float(value) for value in range(1, 21)]
     event = [1 if idx % 3 == 0 else 0 for idx in range(20)]
     covariates = [[idx * 0.1] for idx in range(20)]
-    config = survival.SplineConfig(3, 3, "quantile", None)
-    model = survival.flexible_parametric_model(time, event, covariates, config)
+    config = survival.regression.SplineConfig(3, 3, "quantile", None)
+    model = survival.regression.flexible_parametric_model(time, event, covariates, config)
 
     with pytest.raises(ValueError, match="eval_times"):
-        survival.predict_hazard_spline(model, [], [0.5])
+        survival.regression.predict_hazard_spline(model, [], [0.5])
     with pytest.raises(ValueError, match="eval_times must contain only finite"):
-        survival.predict_hazard_spline(model, [1.0, float("nan")], [0.5])
+        survival.regression.predict_hazard_spline(model, [1.0, float("nan")], [0.5])
     with pytest.raises(ValueError, match="non-negative"):
-        survival.predict_hazard_spline(model, [-1.0, 2.0], [0.5])
+        survival.regression.predict_hazard_spline(model, [-1.0, 2.0], [0.5])
     with pytest.raises(ValueError, match="strictly increasing"):
-        survival.predict_hazard_spline(model, [1.0, 1.0], [0.5])
+        survival.regression.predict_hazard_spline(model, [1.0, 1.0], [0.5])
     with pytest.raises(ValueError, match="covariate_values length"):
-        survival.predict_hazard_spline(model, [1.0, 2.0], [0.5, 1.0])
+        survival.regression.predict_hazard_spline(model, [1.0, 2.0], [0.5, 1.0])
     with pytest.raises(ValueError, match="covariate_values must contain only finite"):
-        survival.predict_hazard_spline(model, [1.0, 2.0], [float("nan")])
+        survival.regression.predict_hazard_spline(model, [1.0, 2.0], [float("nan")])
 
-    bad_coefficients = survival.FlexibleParametricResult(
+    bad_coefficients = survival.regression.FlexibleParametricResult(
         [float("nan")],
         model.spline_coefficients,
         model.std_errors,
@@ -129,9 +691,9 @@ def test_predict_hazard_spline_validates_public_inputs():
         model.converged,
     )
     with pytest.raises(ValueError, match="coefficients must contain only finite"):
-        survival.predict_hazard_spline(bad_coefficients, [1.0, 2.0], [0.5])
+        survival.regression.predict_hazard_spline(bad_coefficients, [1.0, 2.0], [0.5])
 
-    bad_spline_coefficients = survival.FlexibleParametricResult(
+    bad_spline_coefficients = survival.regression.FlexibleParametricResult(
         model.coefficients,
         model.spline_coefficients[:-1],
         model.std_errors,
@@ -143,219 +705,11 @@ def test_predict_hazard_spline_validates_public_inputs():
         model.converged,
     )
     with pytest.raises(ValueError, match="spline_coefficients length"):
-        survival.predict_hazard_spline(bad_spline_coefficients, [1.0, 2.0], [0.5])
-
-
-def test_coxmart():
-    time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-    status = [1, 1, 0, 1, 0, 1, 1, 0]
-    score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
-
-    survival_data = survival.SurvivalData(time, status)
-    input_data = survival.CoxMartInput(survival_data, score)
-
-    result = survival.coxmart(input_data, method=0)
-    assert isinstance(result, list)
-    assert len(result) == len(time)
-
-
-def test_coxph_model():
-    covariates = [
-        [0.5, 1.2],
-        [1.8, 0.3],
-        [0.2, 2.1],
-        [2.5, 0.8],
-        [0.8, 1.5],
-        [1.5, 0.5],
-        [0.3, 1.8],
-        [2.2, 1.1],
-        [1.0, 0.9],
-        [0.7, 1.7],
-        [2.0, 0.4],
-        [1.2, 1.3],
-        [0.9, 2.0],
-        [1.6, 0.7],
-        [0.4, 1.4],
-        [2.1, 1.0],
-    ]
-    event_times = [
-        1.0,
-        2.0,
-        3.0,
-        4.0,
-        5.0,
-        6.0,
-        7.0,
-        8.0,
-        9.0,
-        10.0,
-        11.0,
-        12.0,
-        13.0,
-        14.0,
-        15.0,
-        16.0,
-    ]
-    censoring = [1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0]
-
-    model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
-    model.fit(n_iters=20)
-
-    assert hasattr(model, "baseline_hazard")
-    assert hasattr(model, "risk_scores")
-
-    coefficients = model.coefficients
-    assert coefficients is not None
-
-    new_covariates = [[1.0, 2.0], [2.0, 3.0]]
-    predictions = model.predict(new_covariates)
-    assert isinstance(predictions, list)
-
-    brier = model.brier_score()
-    assert isinstance(brier, float)
-    assert isinstance(model.brier_score(time=8.0), float)
-
-
-def test_coxph_model_brier_matches_r_survival_reference():
-    model = survival.CoxPHModel.new_with_data(
-        [[value] for value in [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]],
-        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-        [1, 0, 1, 1, 0, 1, 0, 1],
-    )
-    model.fit(n_iters=50)
-
-    expected = {
-        2.0: 0.10590443678594358,
-        3.0: 0.18450534607635558,
-        4.0: 0.23916349962515318,
-        6.0: 0.24491865014681730,
-    }
-    for horizon, r_score in expected.items():
-        assert model.brier_score(horizon) == pytest.approx(r_score, abs=2e-4)
-
-    assert model.brier_score() == pytest.approx(model.brier_score(4.0))
-    with pytest.raises(ValueError, match="time must be finite"):
-        model.brier_score(float("nan"))
-    with pytest.raises(ValueError, match="time must be finite"):
-        model.brier_score(float("inf"))
-
-
-def _correlated_tied_cox_data():
-    event_times = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-    censoring = [1, 1, 1, 0, 1, 1, 0, 1, 0, 1]
-    x1 = [0.0, 0.4, 0.8, 0.2, 1.0, 1.4, 0.6, 1.2, 1.6, 1.8]
-    x2 = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97]
-    return [[left, right] for left, right in zip(x1, x2, strict=True)], event_times, censoring
-
-
-def test_coxph_model_inference_matches_r_breslow_reference():
-    covariates, event_times, censoring = _correlated_tied_cox_data()
-    model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
-    model.fit(n_iters=50)
-
-    assert model.coefficients[0] == pytest.approx([-2.31840202040788, 0.498511774024299], abs=3e-4)
-    variance = model.vcov()
-    assert variance[0] == pytest.approx([3.92617203232577, -3.98888555572652], abs=1e-5)
-    assert variance[1] == pytest.approx([-3.98888555572652, 5.93057274826530], abs=1e-5)
-    standard_errors = model.std_errors()
-    assert standard_errors == pytest.approx([1.98145704781248, 2.43527672929901], abs=2e-6)
-    assert standard_errors == pytest.approx(
-        [math.sqrt(variance[0][0]), math.sqrt(variance[1][1])], abs=1e-12
-    )
-    assert model.log_likelihood() == pytest.approx(-9.35110475893077, abs=1e-10)
-    assert model.bic() == pytest.approx(-2.0 * -9.35110475893077 + 2.0 * math.log(7.0), abs=1e-10)
-
-    hazard_ratios, lower, upper = model.hazard_ratios_with_ci()
-    assert hazard_ratios == pytest.approx([0.098430750328169, 1.64626942578056], rel=3e-4)
-    assert lower == pytest.approx([0.00202540323260718, 0.01391840926159500], rel=3e-4)
-    assert upper == pytest.approx([4.78354751991521, 194.720745116909], rel=3e-4)
-
-
-def test_coxph_model_outcome_setters_invalidate_fit_and_validate_values():
-    covariates, event_times, censoring = _correlated_tied_cox_data()
-    model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
-    model.fit(n_iters=50)
-
-    model.event_times = event_times
-    assert model.risk_scores == []
-    assert model.baseline_hazard == []
-    assert model.log_likelihood() == 0.0
-    assert model.vcov() == [[0.0, 0.0], [0.0, 0.0]]
-
-    with pytest.raises(ValueError, match="event_times contains NaN"):
-        model.event_times = [float("nan")]
-    with pytest.raises(ValueError, match="censoring must contain only 0/1"):
-        model.censoring = [2]
-
-
-def _survival_quantile_cox_model(censoring=None):
-    event_times = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-    if censoring is None:
-        censoring = [1, 0, 1, 1, 0, 1, 0, 1]
-    covariates = [[0.0], [1.0], [0.0], [1.0], [0.0], [1.0], [0.0], [1.0]]
-    model = survival.CoxPHModel.new_with_data(covariates, event_times, censoring)
-    model.fit(n_iters=50)
-    return model
-
-
-def test_coxph_model_survival_time_quantiles_match_step_reference():
-    model = _survival_quantile_cox_model()
-    rows = [[0.0], [1.0]]
-
-    assert model.predicted_survival_time(rows, 0.0) == [0.0, 0.0]
-    assert model.predicted_survival_time(rows, 0.25) == [3.0, 4.0]
-    assert model.predicted_survival_time(rows) == [6.0, 6.0]
-    assert model.predicted_survival_time(rows, 0.75) == [8.0, 8.0]
-    assert model.predicted_survival_time(rows, 1.0) == [None, None]
-
-    _, curves = model.survival_curve([[0.0]], None)
-    plateau_probability = 1.0 - curves[0][3]
-    tolerance = math.sqrt(math.ulp(1.0))
-    assert model.predicted_survival_time([[0.0]], plateau_probability) == [5.0]
-    assert model.predicted_survival_time([[0.0]], plateau_probability + tolerance / 2.0) == [5.0]
-    assert model.predicted_survival_time([[0.0]], plateau_probability + 2.0 * tolerance) == [6.0]
-
-    terminal_model = _survival_quantile_cox_model([1, 0, 1, 1, 0, 1, 0, 0])
-    _, terminal_curves = terminal_model.survival_curve([[0.0]], None)
-    terminal_probability = 1.0 - terminal_curves[0][5]
-    assert terminal_model.predicted_survival_time([[0.0]], terminal_probability) == [7.0]
-
-
-def test_coxph_model_survival_time_quantiles_validate_inputs():
-    model = _survival_quantile_cox_model()
-
-    for percentile in [-0.01, 1.01, math.nan, -math.inf, math.inf]:
-        with pytest.raises(ValueError, match="percentile must be a finite value"):
-            model.predicted_survival_time([[0.0]], percentile)
-
-    with pytest.raises(ValueError, match="has 2 columns but expected 1"):
-        model.predicted_survival_time([[0.0, 1.0]])
-    with pytest.raises(ValueError, match="contains NaN"):
-        model.predicted_survival_time([[math.nan]])
-    with pytest.raises(ValueError, match="contains non-finite"):
-        model.predicted_survival_time([[math.inf]])
-
-    unfitted = survival.CoxPHModel.new_with_data([[0.0]], [1.0], [1])
-    with pytest.raises(ValueError, match="model must be fit before prediction"):
-        unfitted.predicted_survival_time([[0.0]])
-
-    assert model.predicted_survival_time([]) == []
-
-
-def test_subject():
-    subject = survival.Subject(
-        id=1,
-        covariates=[1.0, 2.0],
-        is_case=True,
-        is_subcohort=True,
-        stratum=0,
-    )
-    assert subject.id == 1
-    assert subject.is_case is True
+        survival.regression.predict_hazard_spline(bad_spline_coefficients, [1.0, 2.0], [0.5])
 
 
 def test_aareg_public_api():
-    options = survival.AaregOptions(
+    options = survival.regression.AaregOptions(
         formula="time ~ x1",
         data=[[1.0, 2.0], [2.0, 3.0], [3.0, 4.0], [4.0, 5.0]],
         variable_names=["time", "x1"],
@@ -374,7 +728,7 @@ def test_aareg_public_api():
     assert len(result.residuals) == 4
     assert math.isfinite(result.goodness_of_fit)
 
-    weighted_subset = survival.AaregOptions(
+    weighted_subset = survival.regression.AaregOptions(
         formula="time ~ x1",
         data=[[1.0, 2.0], [2.0, 3.0], [3.0, 4.0], [4.0, 5.0]],
         variable_names=["time", "x1"],
@@ -388,7 +742,7 @@ def test_aareg_public_api():
 
 
 def test_aareg_rejects_invalid_formula():
-    options = survival.AaregOptions(
+    options = survival.regression.AaregOptions(
         formula="time",
         data=[[1.0, 2.0], [2.0, 3.0]],
         variable_names=["time", "x1"],
@@ -402,7 +756,7 @@ def test_aareg_rejects_invalid_formula():
 def test_aareg_validates_public_inputs():
     with pytest.raises(ValueError, match="data cannot be empty"):
         survival.aareg(
-            survival.AaregOptions(
+            survival.regression.AaregOptions(
                 formula="time ~ x1",
                 data=[],
                 variable_names=["time", "x1"],
@@ -411,7 +765,7 @@ def test_aareg_validates_public_inputs():
 
     with pytest.raises(ValueError, match="data row 1 has 1 columns"):
         survival.aareg(
-            survival.AaregOptions(
+            survival.regression.AaregOptions(
                 formula="time ~ x1",
                 data=[[1.0, 2.0], [2.0]],
                 variable_names=["time", "x1"],
@@ -420,7 +774,7 @@ def test_aareg_validates_public_inputs():
 
     with pytest.raises(ValueError, match="variable_names length"):
         survival.aareg(
-            survival.AaregOptions(
+            survival.regression.AaregOptions(
                 formula="time ~ x1",
                 data=[[1.0, 2.0], [2.0, 3.0]],
                 variable_names=["time"],
@@ -429,14 +783,14 @@ def test_aareg_validates_public_inputs():
 
     with pytest.raises(ValueError, match="data contains non-finite"):
         survival.aareg(
-            survival.AaregOptions(
+            survival.regression.AaregOptions(
                 formula="time ~ x1",
                 data=[[1.0, float("inf")], [2.0, 3.0]],
                 variable_names=["time", "x1"],
             )
         )
 
-    missing = survival.AaregOptions(
+    missing = survival.regression.AaregOptions(
         formula="time ~ x1",
         data=[[1.0, float("nan")], [2.0, 3.0], [3.0, 4.0]],
         variable_names=["time", "x1"],
@@ -448,7 +802,7 @@ def test_aareg_validates_public_inputs():
     excluded = survival.aareg(missing)
     assert len(excluded.residuals) == 2
 
-    bad_weights = survival.AaregOptions(
+    bad_weights = survival.regression.AaregOptions(
         formula="time ~ x1",
         data=[[1.0, 2.0], [2.0, 3.0]],
         variable_names=["time", "x1"],
@@ -457,7 +811,7 @@ def test_aareg_validates_public_inputs():
     with pytest.raises(ValueError, match="weights contains non-finite"):
         survival.aareg(bad_weights)
 
-    bad_iter = survival.AaregOptions(
+    bad_iter = survival.regression.AaregOptions(
         formula="time ~ x1",
         data=[[1.0, 2.0], [2.0, 3.0]],
         variable_names=["time", "x1"],
@@ -467,552 +821,19 @@ def test_aareg_validates_public_inputs():
         survival.aareg(bad_iter)
 
 
-def test_coxph_detail_public_api():
-    detail = survival.coxph_detail(
-        time=[1.0, 2.0, 3.0],
-        status=[1, 0, 1],
-        covariates=[[1.0], [2.0], [3.0]],
-        coefficients=[0.5],
-    )
-    expected_risk = math.exp(0.5) + math.exp(1.0) + math.exp(1.5)
-    expected_mean = (math.exp(0.5) + 2.0 * math.exp(1.0) + 3.0 * math.exp(1.5)) / expected_risk
-
-    assert detail.n_events == 2
-    assert detail.n_observations == 3
-    assert detail.n_covariates == 1
-    assert detail.times() == [1.0, 3.0]
-    assert len(detail.hazards()) == 2
-    assert detail.cumulative_hazards()[0] <= detail.cumulative_hazards()[1]
-    assert detail.n_risk_at_times() == [3, 1]
-    assert len(detail.schoenfeld_residuals()) == 2
-    assert detail.rows[0].wtrisk == pytest.approx(expected_risk)
-    assert detail.rows[0].means == pytest.approx([expected_mean])
-    assert detail.rows[0].score == pytest.approx([1.0 - expected_mean])
-    assert detail.rows[0].imat[0][0] > 0.0
-    assert detail.rows[0].varhaz > 0.0
-    assert detail.scores()[0] == pytest.approx(detail.rows[0].score)
-    assert detail.information_matrices()[0][0][0] == pytest.approx(detail.rows[0].imat[0][0])
-
-
-def test_coxph_detail_uses_shifted_risk_scores_for_large_linear_predictors():
-    detail = survival.coxph_detail(
-        time=[1.0, 2.0, 3.0],
-        status=[1, 1, 1],
-        covariates=[[1.0], [709.0 / 710.0], [708.0 / 710.0]],
-        coefficients=[710.0],
-    )
-    expected_first = math.exp(-710.0) / (1.0 + math.exp(-1.0) + math.exp(-2.0))
-
-    assert detail.times() == pytest.approx([1.0, 2.0, 3.0])
-    assert detail.hazards()[0] == pytest.approx(expected_first, rel=1e-12, abs=0.0)
-    assert (
-        0.0 < detail.hazards()[0] < detail.cumulative_hazards()[1] < detail.cumulative_hazards()[2]
-    )
-
-
-def test_coxph_detail_low_level_supports_entry_strata_and_efron():
-    breslow = survival.regression.coxph_detail(
-        time=[2.0, 2.0, 4.0, 5.0, 5.0, 6.0],
-        status=[1, 1, 1, 0, 1, 0],
-        covariates=[[0.2], [0.8], [0.4], [1.1], [0.7], [0.3]],
-        coefficients=[0.0],
-        entry_times=[0.0, 0.0, 1.5, 2.5, 0.0, 3.0],
-        strata=[0, 0, 0, 0, 1, 1],
-    )
-    efron = survival.regression.coxph_detail(
-        time=[2.0, 2.0, 4.0, 5.0, 5.0, 6.0],
-        status=[1, 1, 1, 0, 1, 0],
-        covariates=[[0.2], [0.8], [0.4], [1.1], [0.7], [0.3]],
-        coefficients=[0.0],
-        entry_times=[0.0, 0.0, 1.5, 2.5, 0.0, 3.0],
-        strata=[0, 0, 0, 0, 1, 1],
-        method="efron",
-    )
-
-    assert [row.stratum for row in breslow.rows] == [0, 0, 1]
-    assert breslow.times() == pytest.approx([2.0, 4.0, 5.0])
-    assert breslow.n_risk_at_times() == [3, 2, 2]
-    assert breslow.hazards()[0] == pytest.approx(2.0 / 3.0)
-    assert efron.hazards()[0] == pytest.approx((1.0 / 3.0) + (1.0 / 2.0))
-    assert efron.hazards()[0] > breslow.hazards()[0]
-
-
-def test_coxph_detail_validates_input_lengths():
-    with pytest.raises(ValueError, match="must have the same length"):
-        survival.coxph_detail(
-            time=[1.0, 2.0],
-            status=[1],
-            covariates=[[1.0], [2.0]],
-            coefficients=[0.5],
-        )
-
-
-def test_predict_survreg_linear_predictor_and_standard_errors():
-    prediction = survival.predict_survreg(
-        covariates=[[1.0, 2.0], [2.0, 3.0]],
-        coefficients=[0.1, 0.2],
-        scale=1.0,
-        distribution="weibull",
-        predict_type="lp",
-        var_matrix=[[1.0, 0.0], [0.0, 1.0]],
-        se_fit=True,
-    )
-
-    assert prediction.predictions == pytest.approx([0.5, 0.8])
-    assert prediction.se == pytest.approx([5**0.5, 13**0.5])
-    assert prediction.prediction_type == "lp"
-    assert prediction.n == 2
-
-
-def test_predict_survreg_quantiles_and_validation():
-    quantiles = survival.predict_survreg_quantile(
-        covariates=[[1.0, 2.0], [2.0, 3.0]],
-        coefficients=[0.1, 0.2],
-        scale=1.0,
-        distribution="weibull",
-        quantiles=[0.25, 0.5],
-    )
-
-    assert quantiles.quantiles == [0.25, 0.5]
-    assert len(quantiles.predictions) == 2
-    assert all(len(row) == 2 for row in quantiles.predictions)
-
-    with pytest.raises(ValueError, match="Quantiles must be between 0 and 1"):
-        survival.predict_survreg_quantile(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-            quantiles=[-0.01],
-        )
-
-
-def test_predict_survreg_rejects_invalid_scale():
-    with pytest.raises(ValueError, match="scale must be a finite positive value"):
-        survival.predict_survreg(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=0.0,
-            distribution="weibull",
-        )
-
-
-def test_predict_survreg_validates_numeric_inputs():
-    with pytest.raises(ValueError, match="coefficients contains non-finite"):
-        survival.predict_survreg(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, float("nan")],
-            scale=1.0,
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match=r"covariates\[0\]\[1\] contains non-finite"):
-        survival.predict_survreg(
-            covariates=[[1.0, float("inf")]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match="covariates row 0 has 1 columns"):
-        survival.predict_survreg(
-            covariates=[[1.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match="offset has 1 values"):
-        survival.predict_survreg(
-            covariates=[[1.0, 2.0], [2.0, 3.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-            offset=[0.0],
-        )
-
-    with pytest.raises(ValueError, match="offset contains non-finite"):
-        survival.predict_survreg_quantile(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-            quantiles=[0.5],
-            offset=[float("nan")],
-        )
-
-    with pytest.raises(ValueError, match="var_matrix must have at least 2 rows"):
-        survival.predict_survreg(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-            var_matrix=[[1.0, 0.0]],
-            se_fit=True,
-        )
-
-    with pytest.raises(ValueError, match=r"var_matrix\[1\]\[1\] contains non-finite"):
-        survival.predict_survreg(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-            var_matrix=[[1.0, 0.0], [0.0, float("nan")]],
-            se_fit=True,
-        )
-
-    with pytest.raises(ValueError, match="Quantiles must be between 0 and 1"):
-        survival.predict_survreg_quantile(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="weibull",
-            quantiles=[float("nan")],
-        )
-
-    with pytest.raises(ValueError, match="scale must be a finite positive value"):
-        survival.predict_survreg_quantile(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=float("inf"),
-            distribution="weibull",
-            quantiles=[0.5],
-        )
-
-    with pytest.raises(ValueError, match="distribution must be one of"):
-        survival.predict_survreg(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="mystery",
-        )
-
-    with pytest.raises(ValueError, match="distribution must be one of"):
-        survival.predict_survreg_quantile(
-            covariates=[[1.0, 2.0]],
-            coefficients=[0.1, 0.2],
-            scale=1.0,
-            distribution="mystery",
-            quantiles=[0.5],
-        )
-
-
-def test_survfit_and_survreg_residual_public_apis():
-    survfit_residuals = survival.residuals_survfit(
-        time=[1.0, 2.0, 3.0],
-        status=[1, 0, 1],
-        surv_time=[1.0, 2.0, 3.0],
-        surv=[0.9, 0.8, 0.7],
-        residual_type="deviance",
-    )
-    survreg_residuals = survival.residuals_survreg(
-        time=[1.0, 2.0, 3.0],
-        status=[1, 0, 1],
-        linear_pred=[0.0, 0.5, 1.0],
-        scale=1.0,
-        distribution="weibull",
-        residual_type="working",
-    )
-
-    assert len(survfit_residuals.residuals) == 3
-    assert survfit_residuals.time == [1.0, 2.0, 3.0]
-    assert survfit_residuals.residual_type == "deviance"
-    assert len(survreg_residuals.residuals) == 3
-    assert survreg_residuals.residual_type == "working"
-    assert survreg_residuals.n == 3
-
-
-def test_survfit_residuals_use_last_duplicate_survival_time():
-    result = survival.residuals_survfit(
-        time=[2.0],
-        status=[1],
-        surv_time=[1.0, 2.0, 2.0, 3.0],
-        surv=[0.9, 0.8, 0.7, 0.6],
-    )
-
-    assert result.residuals == pytest.approx([1.0 + math.log(0.7)])
-
-
-def test_survreg_residual_matrix_public_api_returns_derivative_columns():
-    matrix = survival.survreg_residual_matrix(
-        time=[1.5],
-        status=[1],
-        linear_pred=[1.0],
-        scale=1.0,
-        distribution="gaussian",
-    )
-    z = 0.5
-    expected_loglik = -0.5 * z * z - 0.5 * math.log(2.0 * math.pi)
-
-    assert len(matrix) == 1
-    assert matrix[0] == pytest.approx(
-        [
-            expected_loglik,
-            z,
-            -1.0,
-            z * z - 1.0,
-            -2.0 * z * z,
-            -2.0 * z,
-        ],
-        abs=1e-5,
-    )
-
-
-def test_survreg_influence_residual_public_api_matches_quadratic_forms():
-    derivative_matrix = [[0.0, 2.0, 3.0, 5.0, 7.0, 11.0]]
-    covariates = [[1.0, 4.0]]
-    scales = [1.5]
-    strata = [0]
-    var_matrix = [[1.0, 0.1, 0.2], [0.1, 2.0, 0.3], [0.2, 0.3, 3.0]]
-
-    assert survival.survreg_influence_residuals(
-        derivative_matrix,
-        covariates,
-        scales,
-        strata,
-        var_matrix,
-        "ldcase",
-        True,
-    ) == pytest.approx([238.2])
-    assert survival.survreg_influence_residuals(
-        derivative_matrix,
-        covariates,
-        scales,
-        strata,
-        var_matrix,
-        "ldresp",
-        True,
-    ) == pytest.approx([1709.1])
-    assert survival.survreg_influence_residuals(
-        derivative_matrix,
-        covariates,
-        scales,
-        strata,
-        var_matrix,
-        "ldshape",
-        True,
-    ) == pytest.approx([4452.4])
-
-
-def test_survreg_dfbeta_residual_public_api_matches_score_times_variance():
-    derivative_matrix = [[0.0, 2.0, 3.0, 5.0, 7.0, 11.0]]
-    covariates = [[1.0, 4.0]]
-    scales = [1.5]
-    strata = [0]
-    var_matrix = [[1.0, 0.1, 0.2], [0.1, 2.0, 0.3], [0.2, 0.3, 3.0]]
-
-    dfbeta = survival.survreg_dfbeta_residuals(
-        derivative_matrix,
-        covariates,
-        scales,
-        strata,
-        var_matrix,
-        True,
-        False,
-    )
-    dfbetas = survival.survreg_dfbeta_residuals(
-        derivative_matrix,
-        covariates,
-        scales,
-        strata,
-        var_matrix,
-        True,
-        True,
-    )
-
-    assert len(dfbeta) == 1
-    assert len(dfbetas) == 1
-    assert dfbeta[0] == pytest.approx([3.8, 17.7, 17.8])
-    assert dfbetas[0] == pytest.approx([3.8, 17.7 / math.sqrt(2.0), 17.8 / math.sqrt(3.0)])
-
-
-def test_residual_apis_validate_type_and_lengths():
-    with pytest.raises(ValueError, match="Unknown residual type"):
-        survival.residuals_survfit(
-            time=[1.0],
-            status=[1],
-            surv_time=[1.0],
-            surv=[0.9],
-            residual_type="unknown",
-        )
-
-    with pytest.raises(ValueError, match="All inputs must have the same length"):
-        survival.dfbeta_survreg(
-            time=[1.0, 2.0],
-            status=[1, 0],
-            covariates=[[1.0]],
-            linear_pred=[0.0, 0.5],
-            scale=1.0,
-            var_matrix=[[1.0]],
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match="matrix residuals are matrix-valued"):
-        survival.residuals_survreg(
-            time=[1.0],
-            status=[1],
-            linear_pred=[0.0],
-            scale=1.0,
-            distribution="weibull",
-            residual_type="matrix",
-        )
-
-
-def test_survfit_residual_api_validates_numeric_inputs():
-    with pytest.raises(ValueError, match="status must contain only 0/1"):
-        survival.residuals_survfit(
-            time=[1.0],
-            status=[2],
-            surv_time=[1.0],
-            surv=[0.9],
-        )
-
-    with pytest.raises(ValueError, match="time contains non-finite"):
-        survival.residuals_survfit(
-            time=[math.inf],
-            status=[1],
-            surv_time=[1.0],
-            surv=[0.9],
-        )
-
-    with pytest.raises(ValueError, match="surv_time contains non-finite"):
-        survival.residuals_survfit(
-            time=[1.0],
-            status=[1],
-            surv_time=[math.nan],
-            surv=[0.9],
-        )
-
-    with pytest.raises(ValueError, match="probabilities between 0 and 1"):
-        survival.residuals_survfit(
-            time=[1.0],
-            status=[1],
-            surv_time=[1.0],
-            surv=[1.2],
-        )
-
-    with pytest.raises(ValueError, match="surv_time must be sorted"):
-        survival.residuals_survfit(
-            time=[1.0],
-            status=[1],
-            surv_time=[2.0, 1.0],
-            surv=[0.9, 0.8],
-        )
-
-
-def test_survreg_residual_apis_validate_numeric_inputs():
-    with pytest.raises(ValueError, match="status must contain only 0/1/2/3"):
-        survival.residuals_survreg(
-            time=[1.0],
-            status=[4],
-            linear_pred=[0.0],
-            scale=1.0,
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match="linear_pred contains non-finite"):
-        survival.residuals_survreg(
-            time=[1.0],
-            status=[1],
-            linear_pred=[float("inf")],
-            scale=1.0,
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match="scale must be a finite positive value"):
-        survival.residuals_survreg(
-            time=[1.0],
-            status=[1],
-            linear_pred=[0.0],
-            scale=0.0,
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match="distribution must be one of"):
-        survival.residuals_survreg(
-            time=[1.0],
-            status=[1],
-            linear_pred=[0.0],
-            scale=1.0,
-            distribution="mystery",
-        )
-
-    with pytest.raises(ValueError, match="use dfbeta_survreg"):
-        survival.residuals_survreg(
-            time=[1.0, 2.0],
-            status=[1, 0],
-            linear_pred=[0.0, 0.5],
-            scale=1.0,
-            distribution="weibull",
-            residual_type="dfbeta",
-        )
-
-    with pytest.raises(ValueError, match="use dfbeta_survreg"):
-        survival.residuals_survreg(
-            time=[1.0, 2.0],
-            status=[1, 0],
-            linear_pred=[0.0, 0.5],
-            scale=1.0,
-            distribution="weibull",
-            residual_type="dfbetas",
-        )
-
-    with pytest.raises(ValueError, match="greater than time"):
-        survival.residuals_survreg(
-            time=[2.0],
-            status=[3],
-            linear_pred=[0.0],
-            scale=1.0,
-            distribution="weibull",
-            residual_type="ldcase",
-            time2=[1.5],
-        )
-
-    with pytest.raises(ValueError, match="covariates row 1"):
-        survival.dfbeta_survreg(
-            time=[1.0, 2.0],
-            status=[1, 0],
-            covariates=[[1.0, 0.5], [1.0]],
-            linear_pred=[0.0, 0.5],
-            scale=1.0,
-            var_matrix=[[1.0, 0.0], [0.0, 1.0]],
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match=r"var_matrix\[1\]\[1\] contains non-finite"):
-        survival.dfbeta_survreg(
-            time=[1.0, 2.0],
-            status=[1, 0],
-            covariates=[[1.0, 0.5], [1.0, 0.2]],
-            linear_pred=[0.0, 0.5],
-            scale=1.0,
-            var_matrix=[[1.0, 0.0], [0.0, float("nan")]],
-            distribution="weibull",
-        )
-
-    with pytest.raises(ValueError, match="distribution must be one of"):
-        survival.dfbeta_survreg(
-            time=[1.0, 2.0],
-            status=[1, 0],
-            covariates=[[1.0, 0.5], [1.0, 0.2]],
-            linear_pred=[0.0, 0.5],
-            scale=1.0,
-            var_matrix=[[1.0, 0.0], [0.0, 1.0]],
-            distribution="mystery",
-        )
-
-
 def test_recurrent_event_regression_validates_public_inputs():
     with pytest.raises(ValueError, match="x length"):
-        survival.gap_time_model([0, 1], [0.0, 0.0], [1.0, 1.0], [1, 0], [0.5], 2, 1, 10, 1e-6)
+        survival.recurrent.gap_time_model(
+            [0, 1], [0.0, 0.0], [1.0, 1.0], [1, 0], [0.5], 2, 1, 10, 1e-6
+        )
     with pytest.raises(ValueError, match="stop_time"):
-        survival.gap_time_model([0], [1.0], [1.0], [1], [0.5], 1, 1, 10, 1e-6)
+        survival.recurrent.gap_time_model([0], [1.0], [1.0], [1], [0.5], 1, 1, 10, 1e-6)
     with pytest.raises(ValueError, match="event_status"):
-        survival.pwp_gap_time([0], [1.0], [2], [0.5], 1, 1, False)
+        survival.recurrent.pwp_gap_time([0], [1.0], [2], [0.5], 1, 1, False)
     with pytest.raises(ValueError, match="max_iter"):
-        survival.gap_time_model([0], [0.0], [1.0], [1], [0.5], 1, 1, 0, 1e-6)
+        survival.recurrent.gap_time_model([0], [0.0], [1.0], [1], [0.5], 1, 1, 0, 1e-6)
 
-    gap = survival.gap_time_model(
+    gap = survival.recurrent.gap_time_model(
         [10, 10, 42],
         [0.0, 2.0, 0.0],
         [2.0, 5.0, 3.0],
@@ -1025,9 +846,9 @@ def test_recurrent_event_regression_validates_public_inputs():
     )
     assert gap.n_subjects == 2
 
-    method = survival.MarginalMethod("andersen_gill")
+    method = survival.recurrent.MarginalMethod("andersen_gill")
     with pytest.raises(ValueError, match="x length"):
-        survival.marginal_recurrent_model(
+        survival.recurrent.marginal_recurrent_model(
             [0, 1],
             [0.0, 0.0],
             [1.0, 1.0],
@@ -1040,9 +861,9 @@ def test_recurrent_event_regression_validates_public_inputs():
             1e-6,
         )
     with pytest.raises(ValueError, match="event_status"):
-        survival.wei_lin_weissfeld([0], [1.0], [2], [0.5], 1, 1)
+        survival.recurrent.wei_lin_weissfeld([0], [1.0], [2], [0.5], 1, 1)
 
-    marginal = survival.marginal_recurrent_model(
+    marginal = survival.recurrent.marginal_recurrent_model(
         [10, 10, 42],
         [0.0, 2.0, 0.0],
         [2.0, 5.0, 3.0],
@@ -1057,7 +878,7 @@ def test_recurrent_event_regression_validates_public_inputs():
     assert marginal.n_subjects == 2
 
     with pytest.raises(ValueError, match="covariates length"):
-        survival.anderson_gill_model(
+        survival.regression.anderson_gill_model(
             [1, 2],
             [0.0, 0.0],
             [1.0, 1.0],
@@ -1067,32 +888,36 @@ def test_recurrent_event_regression_validates_public_inputs():
             1e-6,
         )
 
-    pwp_config = survival.PWPConfig(survival.PWPTimescale("gap"), 10, 1e-6, True, True)
+    pwp_config = survival.regression.PWPConfig(
+        survival.regression.PWPTimescale("gap"), 10, 1e-6, True, True
+    )
     with pytest.raises(ValueError, match="stop must be greater than start"):
-        survival.pwp_model([1], [0.0], [0.0], [1], [1], [], pwp_config)
+        survival.regression.pwp_model([1], [0.0], [0.0], [1], [1], [], pwp_config)
     with pytest.raises(ValueError, match="event_number"):
-        survival.pwp_model([1], [0.0], [1.0], [1], [0], [], pwp_config)
+        survival.regression.pwp_model([1], [0.0], [1.0], [1], [0], [], pwp_config)
 
-    wlw_config = survival.WLWConfig(10, 1e-6, True, False)
+    wlw_config = survival.regression.WLWConfig(10, 1e-6, True, False)
     with pytest.raises(ValueError, match="event must contain only 0/1"):
-        survival.wlw_model([1], [1.0], [2], [1], [], wlw_config)
+        survival.regression.wlw_model([1], [1.0], [2], [1], [], wlw_config)
 
-    bad_wlw_config = survival.WLWConfig(0, 1e-6, True, False)
+    bad_wlw_config = survival.regression.WLWConfig(0, 1e-6, True, False)
     with pytest.raises(ValueError, match="max_iter"):
-        survival.wlw_model([1], [1.0], [1], [1], [], bad_wlw_config)
+        survival.regression.wlw_model([1], [1.0], [1], [1], [], bad_wlw_config)
 
-    nb_config = survival.NegativeBinomialFrailtyConfig(10, 1e-6, 10)
+    nb_config = survival.regression.NegativeBinomialFrailtyConfig(10, 1e-6, 10)
     with pytest.raises(ValueError, match="same length"):
-        survival.negative_binomial_frailty([1, 2], [1.0, 1.0], [1, 0], [], [0.0], nb_config)
+        survival.regression.negative_binomial_frailty(
+            [1, 2], [1.0, 1.0], [1, 0], [], [0.0], nb_config
+        )
     with pytest.raises(ValueError, match="event counts"):
-        survival.negative_binomial_frailty([1], [1.0], [-1], [], None, nb_config)
+        survival.regression.negative_binomial_frailty([1], [1.0], [-1], [], None, nb_config)
 
-    bad_nb_config = survival.NegativeBinomialFrailtyConfig(10, 1e-6, 0)
+    bad_nb_config = survival.regression.NegativeBinomialFrailtyConfig(10, 1e-6, 0)
     with pytest.raises(ValueError, match="em_max_iter"):
-        survival.negative_binomial_frailty([1], [1.0], [1], [], None, bad_nb_config)
+        survival.regression.negative_binomial_frailty([1], [1.0], [1], [], None, bad_nb_config)
 
     with pytest.raises(ValueError, match="x length"):
-        survival.joint_frailty_model(
+        survival.recurrent.joint_frailty_model(
             [0, 1],
             [0.0, 0.0],
             [1.0, 1.0],
@@ -1107,7 +932,7 @@ def test_recurrent_event_regression_validates_public_inputs():
             1,
         )
     with pytest.raises(ValueError, match="subject_id values"):
-        survival.joint_frailty_model(
+        survival.recurrent.joint_frailty_model(
             [2],
             [0.0],
             [1.0],
@@ -1122,7 +947,7 @@ def test_recurrent_event_regression_validates_public_inputs():
             1,
         )
     with pytest.raises(ValueError, match="term_status"):
-        survival.joint_frailty_model(
+        survival.recurrent.joint_frailty_model(
             [0],
             [0.0],
             [1.0],
@@ -1137,7 +962,7 @@ def test_recurrent_event_regression_validates_public_inputs():
             1,
         )
     with pytest.raises(ValueError, match="max_iter"):
-        survival.joint_frailty_model(
+        survival.recurrent.joint_frailty_model(
             [0],
             [0.0],
             [1.0],
@@ -1150,7 +975,7 @@ def test_recurrent_event_regression_validates_public_inputs():
             [0.5],
             1,
             1,
-            survival.FrailtyDistribution("gamma"),
+            survival.recurrent.FrailtyDistribution("gamma"),
             0,
             1e-4,
         )

@@ -1,402 +1,98 @@
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct MedianSurvivalResult {
-    #[pyo3(get)]
-    pub median: Option<f64>,
-    #[pyo3(get)]
-    pub ci_lower: Option<f64>,
-    #[pyo3(get)]
-    pub ci_upper: Option<f64>,
-    #[pyo3(get)]
-    pub quantile: f64,
+//! `quantile.survfit` (`R/quantile.survfit.R`) from stacked curve vectors.
+//! The port itself is `surv_analysis::quantile_survfit`.
+
+use super::{StackedCurves, stacked_curves};
+use crate::surv_analysis::{SurvfitQuantiles, quantile_survfit_from};
+use pyo3::prelude::*;
+
+/// `quantile(fit, probs, conf.int)`: one row per curve, `NaN` for a
+/// quantile the curve does not reach (R's `NA`).
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
+pub struct SurvfitCurveQuantiles {
+    pub probs: Vec<f64>,
+    pub quantile: Vec<Vec<f64>>,
+    pub lower: Option<Vec<Vec<f64>>>,
+    pub upper: Option<Vec<Vec<f64>>>,
 }
-#[pymethods]
-impl MedianSurvivalResult {
-    #[new]
-    fn new(
-        median: Option<f64>,
-        ci_lower: Option<f64>,
-        ci_upper: Option<f64>,
-        quantile: f64,
-    ) -> Self {
+
+impl From<SurvfitQuantiles> for SurvfitCurveQuantiles {
+    fn from(quantiles: SurvfitQuantiles) -> Self {
         Self {
-            median,
-            ci_lower,
-            ci_upper,
-            quantile,
+            probs: quantiles.probs,
+            quantile: quantiles.quantile,
+            lower: quantiles.lower,
+            upper: quantiles.upper,
         }
     }
 }
-pub(crate) fn compute_survival_quantile(
-    time: &[f64],
-    status: &[i32],
-    quantile: f64,
-    confidence_level: f64,
-) -> MedianSurvivalResult {
-    let n = time.len();
-    if n == 0 {
-        return MedianSurvivalResult {
-            median: None,
-            ci_lower: None,
-            ci_upper: None,
-            quantile,
-        };
-    }
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let mut unique_times: Vec<f64> = Vec::new();
-    let mut survival: Vec<f64> = Vec::new();
-    let mut ci_lower_vec: Vec<f64> = Vec::new();
-    let mut ci_upper_vec: Vec<f64> = Vec::new();
-    let mut total_at_risk = n as f64;
-    let mut surv = 1.0;
-    let mut var_sum = 0.0;
-    let z = z_score_for_confidence(confidence_level);
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut events = 0.0;
-        let mut removed = 0.0;
-        while i < n && same_time(time[indices[i]], current_time) {
-            removed += 1.0;
-            if status[indices[i]] == 1 {
-                events += 1.0;
-            }
-            i += 1;
-        }
-        if events > 0.0 && total_at_risk > 0.0 {
-            surv *= 1.0 - events / total_at_risk;
-            if total_at_risk > events {
-                var_sum += events / (total_at_risk * (total_at_risk - events));
-            }
-            let se = surv * var_sum.sqrt();
-            let (lower, upper) = clamped_normal_ci(surv, se, z, 0.0, 1.0);
-            unique_times.push(current_time);
-            survival.push(surv);
-            ci_lower_vec.push(lower);
-            ci_upper_vec.push(upper);
-        }
-        total_at_risk -= removed;
-    }
-    let target = 1.0 - quantile;
-    let median = survival
-        .iter()
-        .position(|&s| s <= target)
-        .map(|idx| unique_times[idx]);
-    let ci_lower = ci_upper_vec
-        .iter()
-        .position(|&s| s <= target)
-        .map(|idx| unique_times[idx]);
-    let ci_upper = ci_lower_vec
-        .iter()
-        .position(|&s| s <= target)
-        .map(|idx| unique_times[idx]);
-    MedianSurvivalResult {
-        median,
-        ci_lower,
-        ci_upper,
-        quantile,
-    }
-}
-#[pyfunction]
-#[pyo3(signature = (time, status, quantile=None, confidence_level=None))]
-pub fn survival_quantile(
+
+/// Python entry point of `quantile.survfit` on the stacked vectors of one
+/// `survfit` object (`strata` gives the rows of each curve, `None` for a
+/// single curve).  `start_time` is R's `x$start.time` (0 when absent), the
+/// time reported for a probability of 0; `probs` defaults to the
+/// quartiles and `tolerance` to `sqrt(.Machine$double.eps)`.
+#[pyfunction(name = "quantile_survfit_curves")]
+#[pyo3(signature = (time, surv, lower=None, upper=None, strata=None, probs=None, conf_int=true, start_time=0.0, scale=1.0, tolerance=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn quantile_survfit_curves_py(
     time: Vec<f64>,
-    status: Vec<i32>,
-    quantile: Option<f64>,
-    confidence_level: Option<f64>,
-) -> PyResult<MedianSurvivalResult> {
-    let q = quantile.unwrap_or(0.5);
-    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
-    if time.len() != status.len() {
-        return Err(PyValueError::new_err(
-            "time and status must have the same length",
-        ));
-    }
-    validate_time_status(&time, &status)?;
-    validate_probability_open(q, "quantile")?;
-    validate_probability_open(conf, "confidence_level")?;
-    Ok(compute_survival_quantile(&time, &status, q, conf))
+    surv: Vec<f64>,
+    lower: Option<Vec<f64>>,
+    upper: Option<Vec<f64>>,
+    strata: Option<Vec<usize>>,
+    probs: Option<Vec<f64>>,
+    conf_int: bool,
+    start_time: f64,
+    scale: f64,
+    tolerance: Option<f64>,
+) -> PyResult<SurvfitCurveQuantiles> {
+    let probs = probs.unwrap_or_else(|| vec![0.25, 0.5, 0.75]);
+    let zeros = vec![0.0; time.len()];
+    let n_curves = strata.as_ref().map_or(1, Vec::len);
+    let fit = stacked_curves(&StackedCurves {
+        time: &time,
+        surv: &surv,
+        n_risk: &zeros,
+        n_event: &zeros,
+        lower: lower.as_deref(),
+        upper: upper.as_deref(),
+        strata: strata.as_deref(),
+        n: &vec![0.0; n_curves],
+        n_id: None,
+        t0: start_time,
+    })?;
+    Ok(quantile_survfit_from(&fit, &probs, conf_int, start_time, scale, tolerance)?.into())
 }
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct CumulativeIncidenceResult {
-    #[pyo3(get)]
-    pub time: Vec<f64>,
-    #[pyo3(get)]
-    pub cif: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub variance: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub event_types: Vec<i32>,
-    #[pyo3(get)]
-    pub n_risk: Vec<usize>,
-}
-#[pymethods]
-impl CumulativeIncidenceResult {
-    #[new]
-    fn new(
-        time: Vec<f64>,
-        cif: Vec<Vec<f64>>,
-        variance: Vec<Vec<f64>>,
-        event_types: Vec<i32>,
-        n_risk: Vec<usize>,
-    ) -> Self {
-        Self {
-            time,
-            cif,
-            variance,
-            event_types,
-            n_risk,
-        }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stacked_curves_report_the_origin_for_a_zero_probability() {
+        let time = [1.0, 2.0, 3.0];
+        let surv = [0.6, 0.4, 0.2];
+        let fit = stacked_curves(&StackedCurves {
+            time: &time,
+            surv: &surv,
+            n_risk: &[0.0; 3],
+            n_event: &[0.0; 3],
+            lower: Some(&[0.3, 0.1, 0.05]),
+            upper: Some(&[0.9, 0.7, 0.5]),
+            strata: None,
+            n: &[0.0],
+            n_id: None,
+            t0: 0.5,
+        })
+        .unwrap();
+        let result: SurvfitCurveQuantiles =
+            quantile_survfit_from(&fit, &[0.0, 0.5], true, 0.5, 1.0, None)
+                .unwrap()
+                .into();
+        assert_eq!(result.quantile, vec![vec![0.5, 2.0]]);
+        // the lower bound crosses 0.5 at t=1, the upper bound at t=3
+        assert_eq!(result.lower.unwrap()[0][1], 1.0);
+        assert_eq!(result.upper.unwrap()[0][1], 3.0);
     }
-}
-pub(crate) fn compute_cumulative_incidence(time: &[f64], status: &[i32]) -> CumulativeIncidenceResult {
-    let n = time.len();
-    if n == 0 {
-        return CumulativeIncidenceResult {
-            time: vec![],
-            cif: vec![],
-            variance: vec![],
-            event_types: vec![],
-            n_risk: vec![],
-        };
-    }
-    let mut event_types: Vec<i32> = status.iter().filter(|&&s| s > 0).copied().collect();
-    event_types.sort();
-    event_types.dedup();
-    if event_types.is_empty() {
-        return CumulativeIncidenceResult {
-            time: vec![],
-            cif: vec![],
-            variance: vec![],
-            event_types: vec![],
-            n_risk: vec![],
-        };
-    }
-    let n_event_types = event_types.len();
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-    let mut unique_times: Vec<f64> = Vec::new();
-    let mut n_risk_vec: Vec<usize> = Vec::new();
-    let mut events_by_type: Vec<Vec<f64>> = vec![Vec::new(); n_event_types];
-    let mut total_at_risk = n;
-    let mut i = 0;
-    while i < n {
-        let current_time = time[indices[i]];
-        let mut event_counts = vec![0.0; n_event_types];
-        let mut removed = 0usize;
-        while i < n && same_time(time[indices[i]], current_time) {
-            let s = status[indices[i]];
-            removed += 1;
-            if let Some(idx) = event_types.iter().position(|&e| e == s) {
-                event_counts[idx] += 1.0;
-            }
-            i += 1;
-        }
-        let has_events = event_counts.iter().any(|&c| c > 0.0);
-        if has_events {
-            unique_times.push(current_time);
-            n_risk_vec.push(total_at_risk);
-            for (k, count) in event_counts.into_iter().enumerate() {
-                events_by_type[k].push(count);
-            }
-        }
-        total_at_risk -= removed;
-    }
-    let m = unique_times.len();
-    let mut cif: Vec<Vec<f64>> = vec![Vec::with_capacity(m); n_event_types];
-    let mut variance: Vec<Vec<f64>> = vec![Vec::with_capacity(m); n_event_types];
-    let mut km_survival = 1.0;
-    let mut cum_cif = vec![0.0; n_event_types];
-    for j in 0..m {
-        let y = n_risk_vec[j] as f64;
-        let total_events: f64 = events_by_type.iter().map(|ev| ev[j]).sum();
-        for k in 0..n_event_types {
-            let d_k = events_by_type[k][j];
-            if y > 0.0 {
-                cum_cif[k] += km_survival * d_k / y;
-            }
-            cif[k].push(cum_cif[k]);
-            variance[k].push(0.0);
-        }
-        if y > 0.0 {
-            km_survival *= 1.0 - total_events / y;
-        }
-    }
-    CumulativeIncidenceResult {
-        time: unique_times,
-        cif,
-        variance,
-        event_types,
-        n_risk: n_risk_vec,
-    }
-}
-#[pyfunction]
-pub fn cumulative_incidence(
-    time: Vec<f64>,
-    status: Vec<i32>,
-) -> PyResult<CumulativeIncidenceResult> {
-    if time.len() != status.len() {
-        return Err(PyValueError::new_err(
-            "time and status must have the same length",
-        ));
-    }
-    validate_time_and_nonnegative_status(&time, &status)?;
-    Ok(compute_cumulative_incidence(&time, &status))
-}
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
-pub struct NNTResult {
-    #[pyo3(get)]
-    pub nnt: f64,
-    #[pyo3(get)]
-    pub nnt_ci_lower: f64,
-    #[pyo3(get)]
-    pub nnt_ci_upper: f64,
-    #[pyo3(get)]
-    pub absolute_risk_reduction: f64,
-    #[pyo3(get)]
-    pub arr_ci_lower: f64,
-    #[pyo3(get)]
-    pub arr_ci_upper: f64,
-    #[pyo3(get)]
-    pub time_horizon: f64,
-}
-#[pymethods]
-impl NNTResult {
-    #[new]
-    fn new(
-        nnt: f64,
-        nnt_ci_lower: f64,
-        nnt_ci_upper: f64,
-        absolute_risk_reduction: f64,
-        arr_ci_lower: f64,
-        arr_ci_upper: f64,
-        time_horizon: f64,
-    ) -> Self {
-        Self {
-            nnt,
-            nnt_ci_lower,
-            nnt_ci_upper,
-            absolute_risk_reduction,
-            arr_ci_lower,
-            arr_ci_upper,
-            time_horizon,
-        }
-    }
-}
-pub(crate) fn compute_nnt(
-    time: &[f64],
-    status: &[i32],
-    group: &[i32],
-    time_horizon: f64,
-    confidence_level: f64,
-) -> NNTResult {
-    let surv1 = compute_survival_at_time(time, status, group, 0, time_horizon);
-    let surv2 = compute_survival_at_time(time, status, group, 1, time_horizon);
-    let risk1 = 1.0 - surv1.0;
-    let risk2 = 1.0 - surv2.0;
-    let arr = risk2 - risk1;
-    let z = z_score_for_confidence(confidence_level);
-    let arr_se = (surv1.1 + surv2.1).sqrt();
-    let (arr_ci_lower, arr_ci_upper) = normal_ci(arr, arr_se, z);
-    let nnt = if arr.abs() > 1e-10 {
-        1.0 / arr
-    } else {
-        f64::INFINITY
-    };
-    let (nnt_ci_lower, nnt_ci_upper) = if arr_ci_lower > 0.0 && arr_ci_upper > 0.0 {
-        (1.0 / arr_ci_upper, 1.0 / arr_ci_lower)
-    } else if arr_ci_lower < 0.0 && arr_ci_upper < 0.0 {
-        (1.0 / arr_ci_lower, 1.0 / arr_ci_upper)
-    } else {
-        (f64::NEG_INFINITY, f64::INFINITY)
-    };
-    NNTResult {
-        nnt,
-        nnt_ci_lower,
-        nnt_ci_upper,
-        absolute_risk_reduction: arr,
-        arr_ci_lower,
-        arr_ci_upper,
-        time_horizon,
-    }
-}
-fn compute_survival_at_time(
-    time: &[f64],
-    status: &[i32],
-    group: &[i32],
-    target_group: i32,
-    t: f64,
-) -> (f64, f64) {
-    let mut unique_groups: Vec<i32> = group.to_vec();
-    unique_groups.sort();
-    unique_groups.dedup();
-    if unique_groups.len() <= target_group as usize {
-        return (1.0, 0.0);
-    }
-    let g = unique_groups[target_group as usize];
-    let mut filtered_time = Vec::new();
-    let mut filtered_status = Vec::new();
-    for i in 0..time.len() {
-        if group[i] == g {
-            filtered_time.push(time[i]);
-            filtered_status.push(status[i]);
-        }
-    }
-    if filtered_time.is_empty() {
-        return (1.0, 0.0);
-    }
-    let n = filtered_time.len();
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| filtered_time[a].total_cmp(&filtered_time[b]));
-    let mut surv = 1.0;
-    let mut var_sum = 0.0;
-    let mut total_at_risk = n as f64;
-    let mut i = 0;
-    while i < n {
-        let current_time = filtered_time[indices[i]];
-        if current_time > t && !same_time(current_time, t) {
-            break;
-        }
-        let mut events = 0.0;
-        let mut removed = 0.0;
-        while i < n && same_time(filtered_time[indices[i]], current_time) {
-            removed += 1.0;
-            if filtered_status[indices[i]] == 1 {
-                events += 1.0;
-            }
-            i += 1;
-        }
-        if events > 0.0 && total_at_risk > 0.0 {
-            surv *= 1.0 - events / total_at_risk;
-            if total_at_risk > events {
-                var_sum += events / (total_at_risk * (total_at_risk - events));
-            }
-        }
-        total_at_risk -= removed;
-    }
-    let variance = surv * surv * var_sum;
-    (surv, variance)
-}
-#[pyfunction]
-#[pyo3(signature = (time, status, group, time_horizon, confidence_level=None))]
-pub fn number_needed_to_treat(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    time_horizon: f64,
-    confidence_level: Option<f64>,
-) -> PyResult<NNTResult> {
-    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
-    if time.len() != status.len() || time.len() != group.len() {
-        return Err(PyValueError::new_err(
-            "time, status, and group must have the same length",
-        ));
-    }
-    validate_time_status(&time, &status)?;
-    validate_nonnegative_time_horizon(time_horizon, "time_horizon")?;
-    validate_probability_open(conf, "confidence_level")?;
-    Ok(compute_nnt(&time, &status, &group, time_horizon, conf))
 }

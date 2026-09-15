@@ -1,72 +1,48 @@
+//! Data-driven choice of the truncation time of a restricted mean: a
+//! piecewise-exponential changepoint search on the hazard (no R
+//! counterpart).  Times are binned with `aeqSurv` first, as `survfit`
+//! does, and the restricted mean at the chosen horizon is
+//! `summary(survfit(Surv(time, status) ~ 1), rmean = tau)$table`.
 
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+use super::kaplan_meier;
+use crate::data_prep::aeq_times;
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::dist::pchisq;
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
+use crate::surv_analysis::{RmeanOption, survmean};
+use pyo3::prelude::*;
+
+/// A hazard changepoint retained by the search.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
 pub struct ChangepointInfo {
-    #[pyo3(get)]
     pub time: f64,
-    #[pyo3(get)]
     pub hazard_before: f64,
-    #[pyo3(get)]
     pub hazard_after: f64,
-    #[pyo3(get)]
     pub likelihood_ratio: f64,
-    #[pyo3(get)]
     pub p_value: f64,
 }
 
-#[pymethods]
-impl ChangepointInfo {
-    #[new]
-    fn new(
-        time: f64,
-        hazard_before: f64,
-        hazard_after: f64,
-        likelihood_ratio: f64,
-        p_value: f64,
-    ) -> Self {
-        Self {
-            time,
-            hazard_before,
-            hazard_after,
-            likelihood_ratio,
-            p_value,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+/// The chosen horizon and the restricted mean survival time up to it.
+#[derive(Debug, Clone, PartialEq)]
+#[pyclass(from_py_object, get_all)]
 pub struct RMSTOptimalThresholdResult {
-    #[pyo3(get)]
     pub optimal_tau: f64,
-    #[pyo3(get)]
     pub max_followup: f64,
-    #[pyo3(get)]
     pub changepoints: Vec<ChangepointInfo>,
-    #[pyo3(get)]
-    pub n_changepoints: usize,
-    #[pyo3(get)]
-    pub rmst_at_optimal: RMSTResult,
+    pub rmean: f64,
+    pub se_rmean: f64,
 }
 
-#[pymethods]
-impl RMSTOptimalThresholdResult {
-    #[new]
-    fn new(
-        optimal_tau: f64,
-        max_followup: f64,
-        changepoints: Vec<ChangepointInfo>,
-        n_changepoints: usize,
-        rmst_at_optimal: RMSTResult,
-    ) -> Self {
-        Self {
-            optimal_tau,
-            max_followup,
-            changepoints,
-            n_changepoints,
-            rmst_at_optimal,
-        }
-    }
+/// Restricted mean up to `tau` and its standard error from the
+/// Kaplan-Meier curve.
+fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> SurvivalResult<(f64, f64)> {
+    let km = kaplan_meier(time, status, None, 0.95)?;
+    let table = survmean(&km, 1.0, RmeanOption::At(tau))?;
+    Ok((
+        table.rmean.as_ref().map_or(f64::NAN, |v| v[0]),
+        table.se_rmean.as_ref().map_or(f64::NAN, |v| v[0]),
+    ))
 }
 
 fn compute_piecewise_exp_likelihood(
@@ -137,31 +113,35 @@ fn compute_hazard_in_interval(
     }
 }
 
-pub(crate) fn compute_rmst_optimal_threshold(
+/// Search for hazard changepoints and report the restricted mean up to
+/// the last one retained (or the maximum follow-up when none is).
+pub fn rmst_optimal_threshold(
     time: &[f64],
     status: &[i32],
     alpha: f64,
     min_events_per_interval: usize,
-    confidence_level: f64,
-) -> RMSTOptimalThresholdResult {
+) -> SurvivalResult<RMSTOptimalThresholdResult> {
     let n = time.len();
     if n == 0 {
-        let empty_rmst = RMSTResult {
-            rmst: 0.0,
-            variance: 0.0,
-            se: 0.0,
-            ci_lower: 0.0,
-            ci_upper: 0.0,
-            tau: 0.0,
-        };
-        return RMSTOptimalThresholdResult {
-            optimal_tau: 0.0,
-            max_followup: 0.0,
-            changepoints: vec![],
-            n_changepoints: 0,
-            rmst_at_optimal: empty_rmst,
-        };
+        return Err(SurvivalError::invalid_input(
+            "No (non-missing) observations",
+        ));
     }
+    validate_length(n, status.len(), "status")?;
+    validate_finite(time, "time")?;
+    validate_binary_i32(status, "status")?;
+    if !(alpha > 0.0 && alpha < 1.0) {
+        return Err(SurvivalError::invalid_input(
+            "alpha must be greater than 0 and less than 1",
+        ));
+    }
+    if min_events_per_interval < 2 {
+        return Err(SurvivalError::invalid_input(
+            "min_events_per_interval must be at least 2",
+        ));
+    }
+    let time = aeq_times(time);
+    let time = time.as_slice();
     let mut event_times: Vec<f64> = Vec::new();
     let mut censor_times: Vec<f64> = Vec::new();
     for i in 0..n {
@@ -174,22 +154,22 @@ pub(crate) fn compute_rmst_optimal_threshold(
     event_times.sort_by(f64::total_cmp);
     let max_followup = time.iter().fold(0.0_f64, |a, &b| a.max(b));
     if event_times.is_empty() {
-        let rmst_result = compute_rmst(time, status, max_followup, confidence_level);
-        return RMSTOptimalThresholdResult {
+        let (rmean, se_rmean) = restricted_mean(time, status, max_followup)?;
+        return Ok(RMSTOptimalThresholdResult {
             optimal_tau: max_followup,
             max_followup,
             changepoints: vec![],
-            n_changepoints: 0,
-            rmst_at_optimal: rmst_result,
-        };
+            rmean,
+            se_rmean,
+        });
     }
     let mut unique_event_times: Vec<f64> = event_times.clone();
-    unique_event_times.dedup_by(|left, right| same_time(*left, *right));
-    let min_events = min_events_per_interval.max(2);
+    unique_event_times.dedup();
+    let min_events = min_events_per_interval;
     let mut candidate_changepoints: Vec<f64> = Vec::new();
     let mut cumulative_events = 0usize;
     for &t in &unique_event_times {
-        let events_at_t = event_times.iter().filter(|&&et| same_time(et, t)).count();
+        let events_at_t = event_times.iter().filter(|&&et| et == t).count();
         cumulative_events += events_at_t;
         let events_after = event_times.len() - cumulative_events;
         if cumulative_events >= min_events && events_after >= min_events {
@@ -197,14 +177,14 @@ pub(crate) fn compute_rmst_optimal_threshold(
         }
     }
     if candidate_changepoints.is_empty() {
-        let rmst_result = compute_rmst(time, status, max_followup, confidence_level);
-        return RMSTOptimalThresholdResult {
+        let (rmean, se_rmean) = restricted_mean(time, status, max_followup)?;
+        return Ok(RMSTOptimalThresholdResult {
             optimal_tau: max_followup,
             max_followup,
             changepoints: vec![],
-            n_changepoints: 0,
-            rmst_at_optimal: rmst_result,
-        };
+            rmean,
+            se_rmean,
+        });
     }
     let null_likelihood = compute_piecewise_exp_likelihood(&event_times, &censor_times, &[]);
     let mut significant_changepoints: Vec<(f64, f64, f64)> = Vec::new();
@@ -212,7 +192,7 @@ pub(crate) fn compute_rmst_optimal_threshold(
         let alt_likelihood = compute_piecewise_exp_likelihood(&event_times, &censor_times, &[cp]);
         let lr_stat = 2.0 * (alt_likelihood - null_likelihood);
         if lr_stat > 0.0 {
-            let p_value = 1.0 - chi2_cdf(lr_stat, 1.0);
+            let p_value = pchisq(lr_stat, 1.0, false, false);
             if p_value < alpha {
                 significant_changepoints.push((cp, lr_stat, p_value));
             }
@@ -242,7 +222,7 @@ pub(crate) fn compute_rmst_optimal_threshold(
                 worst_idx = i;
             }
         }
-        let p_value_drop = 1.0 - chi2_cdf(min_lr_drop, 1.0);
+        let p_value_drop = pchisq(min_lr_drop, 1.0, false, false);
         if p_value_drop >= alpha {
             selected_changepoints.remove(worst_idx);
         } else {
@@ -264,7 +244,7 @@ pub(crate) fn compute_rmst_optimal_threshold(
             compute_hazard_in_interval(&event_times, &censor_times, t_start_after, t_end_after);
         let (lr_stat, p_val) = significant_changepoints
             .iter()
-            .find(|&&(c, _, _)| same_time(c, cp))
+            .find(|&&(c, _, _)| c == cp)
             .map(|&(_, lr, p)| (lr, p))
             .unwrap_or((0.0, 1.0));
         changepoint_info.push(ChangepointInfo {
@@ -280,42 +260,65 @@ pub(crate) fn compute_rmst_optimal_threshold(
     } else {
         selected_changepoints[selected_changepoints.len() - 1]
     };
-    let rmst_at_optimal = compute_rmst(time, status, optimal_tau, confidence_level);
-    RMSTOptimalThresholdResult {
+    let (rmean, se_rmean) = restricted_mean(time, status, optimal_tau)?;
+    Ok(RMSTOptimalThresholdResult {
         optimal_tau,
         max_followup,
         changepoints: changepoint_info,
-        n_changepoints: selected_changepoints.len(),
-        rmst_at_optimal,
-    }
+        rmean,
+        se_rmean,
+    })
 }
 
-#[pyfunction]
-#[pyo3(signature = (time, status, alpha=None, min_events_per_interval=None, confidence_level=None))]
-pub fn rmst_optimal_threshold(
+#[pyfunction(name = "rmst_optimal_threshold")]
+#[pyo3(signature = (time, status, alpha=0.05, min_events_per_interval=5))]
+pub fn rmst_optimal_threshold_py(
     time: Vec<f64>,
     status: Vec<i32>,
-    alpha: Option<f64>,
-    min_events_per_interval: Option<usize>,
-    confidence_level: Option<f64>,
+    alpha: f64,
+    min_events_per_interval: usize,
 ) -> PyResult<RMSTOptimalThresholdResult> {
-    let alpha = alpha.unwrap_or(0.05);
-    let min_events = min_events_per_interval.unwrap_or(5);
-    let conf = confidence_level.unwrap_or(DEFAULT_CONFIDENCE_LEVEL);
-    if time.len() != status.len() {
-        return Err(PyValueError::new_err(
-            "time and status must have the same length",
-        ));
+    Ok(rmst_optimal_threshold(
+        &time,
+        &status,
+        alpha,
+        min_events_per_interval,
+    )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn piecewise_exponential_likelihood_prefers_a_real_changepoint() {
+        let event_times = [1.0, 1.5, 2.0, 2.5, 3.0, 10.0, 12.0, 14.0, 16.0, 18.0];
+        let censor_times = [20.0, 21.0];
+        let null = compute_piecewise_exp_likelihood(&event_times, &censor_times, &[]);
+        let split = compute_piecewise_exp_likelihood(&event_times, &censor_times, &[3.0]);
+        assert!(split > null);
+        let hazard = compute_hazard_in_interval(&event_times, &censor_times, 0.0, 3.0);
+        assert!(hazard > 0.0);
     }
-    validate_time_status(&time, &status)?;
-    validate_probability_open(alpha, "alpha")?;
-    if min_events < 2 {
-        return Err(PyValueError::new_err(
-            "min_events_per_interval must be at least 2",
-        ));
+
+    #[test]
+    fn threshold_search_returns_a_restricted_mean() {
+        let time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let status = [1, 1, 1, 1, 0, 1, 1, 0, 1, 1];
+        let result = rmst_optimal_threshold(&time, &status, 0.05, 2).unwrap();
+        assert_eq!(result.max_followup, 10.0);
+        assert!(result.optimal_tau > 0.0 && result.optimal_tau <= 10.0);
+        assert!(result.rmean > 0.0 && result.rmean <= result.optimal_tau);
+        assert!(result.se_rmean >= 0.0);
+        assert!(rmst_optimal_threshold(&[], &[], 0.05, 2).is_err());
+        assert!(rmst_optimal_threshold(&time, &status, 0.05, 1).is_err());
     }
-    validate_probability_open(conf, "confidence_level")?;
-    Ok(compute_rmst_optimal_threshold(
-        &time, &status, alpha, min_events, conf,
-    ))
+
+    #[test]
+    fn no_events_use_the_maximum_follow_up() {
+        let result = rmst_optimal_threshold(&[1.0, 2.0, 3.0], &[0, 0, 0], 0.05, 2).unwrap();
+        assert_eq!(result.optimal_tau, 3.0);
+        assert!((result.rmean - 3.0).abs() < 1e-12);
+        assert!(result.changepoints.is_empty());
+    }
 }
