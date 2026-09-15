@@ -164,18 +164,32 @@ def _compute_concordance_index(
     status: NDArray[np.int32],
     risk_scores: NDArray[np.float64],
 ) -> float:
-    """Compute Harrell's concordance index (C-index) in Rust."""
-    return float(
-        _surv.concordance_index(
-            np.asarray(time, dtype=np.float64).tolist(),
-            np.asarray(status, dtype=np.int32).tolist(),
-            np.asarray(risk_scores, dtype=np.float64).tolist(),
-        )
+    """Harrell's C-index of ``risk_scores`` (higher = higher risk), via R's ``concordancefit``.
+
+    ``reverse=True`` is R's convention for a risk score: a larger score should go with the
+    shorter survival time; ties in the score count one half.
+    """
+    time = np.asarray(time, dtype=np.float64)
+    status = np.asarray(status, dtype=np.int32)
+    risk = np.asarray(risk_scores, dtype=np.float64)
+    fit = _surv.concordancefit(
+        _surv.SurvivalData(time.tolist(), status.tolist()),
+        _surv.CovariateMatrix(risk.tolist(), len(risk), 1),
+        reverse=True,
+        std_err=False,
     )
+    return float(fit.concordance[0])
 
 
 class SurvivalScoreMixin:
-    """Mixin providing concordance index scoring for survival models."""
+    """Mixin providing concordance index scoring for survival models.
+
+    ``predict`` must return a risk score (higher = higher risk); estimators whose ``predict``
+    returns a survival time override :meth:`_risk_scores` to negate it.
+    """
+
+    def _risk_scores(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
+        return np.asarray(cast("_Predictor", self).predict(X), dtype=np.float64)
 
     def score(self, X: ArrayLike, y: ArrayLike) -> float:
         """Return the concordance index on the given test data.
@@ -194,8 +208,7 @@ class SurvivalScoreMixin:
         """
         check_is_fitted(self)
         X, time, status = _validate_survival_data(X, y)
-        risk_scores = cast("_Predictor", self).predict(X)
-        return _compute_concordance_index(time, status, risk_scores)
+        return _compute_concordance_index(time, status, self._risk_scores(X))
 
 
 class FlatModelPredictMixin:
