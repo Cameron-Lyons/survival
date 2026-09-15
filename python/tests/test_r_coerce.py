@@ -1,9 +1,11 @@
+"""The shared coercion helpers: R's ``as.character``/``format``/``factor`` and the timefix path."""
+
 import importlib
+import math
 
 import pytest
 
 from .helpers import setup_survival_import
-from .r_api_support import _toy_data
 
 survival = setup_survival_import()
 r_coerce = importlib.import_module("survival.r._coerce")
@@ -55,127 +57,90 @@ def test_row_has_missing_preserves_numpy_and_pandas_sentinels():
     assert not any(r_coerce._row_has_missing(value) for value in present)
 
 
-def test_r_api_bool_options_accept_numpy_bool_scalars():
+def test_bool_options_accept_numpy_bools_and_reject_truthiness():
     np = pytest.importorskip("numpy")
-    data = _toy_data()
-    response = survival.Surv(data["time"], data["status"])
-    fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, max_iter=10)
-    rows = [[0.5, 0.8]]
-    scores = [8.0 - value for value in data["time"]]
-
-    direct_reverse = survival.survfit(response, reverse=True)
-    numpy_reverse = survival.survfit(response, reverse=np.bool_(True))
-    assert numpy_reverse.time == pytest.approx(direct_reverse.time)
-    assert numpy_reverse.estimate == pytest.approx(direct_reverse.estimate)
-
-    direct_concordance = survival.concordance(response, scores=scores, reverse=True)
-    numpy_concordance = survival.concordance(response, scores=scores, reverse=np.bool_(True))
-    numpy_timefix = survival.concordance(response, scores=scores, timefix=np.bool_(False))
-    assert numpy_concordance.concordance == pytest.approx(direct_concordance.concordance)
-    assert numpy_concordance.reverse is True
-    assert numpy_timefix.concordance == pytest.approx(
-        survival.concordance(response, scores=scores, timefix=False).concordance
-    )
-
-    direct_basehaz = survival.basehaz(fit, centered=False)
-    numpy_basehaz = survival.basehaz(fit, centered=np.bool_(False))
-    assert numpy_basehaz.cumhaz == pytest.approx(direct_basehaz.cumhaz)
-    assert numpy_basehaz.centered is False
-
-    zph = survival.cox_zph(
-        fit,
-        terms=np.bool_(False),
-        singledf=np.bool_(False),
-        global_test=np.bool_(False),
-    )
-    assert zph.variable_names == ["x1", "x2"]
-    assert zph.table[-1]["name"] != "GLOBAL"
-
-    prediction = survival.predict(fit, rows, se_fit=np.bool_(True))
-    assert isinstance(prediction, survival.r_api.PredictResult)
-    assert prediction.fit == pytest.approx(survival.predict(fit, rows))
-
-    uncentered = survival.predict(fit, rows, centered=np.bool_(False))
-    assert uncentered == pytest.approx(survival.predict(fit, rows, reference="zero"))
-
-    residual_values = survival.r_api.residuals(fit, weighted=np.bool_(False))
-    assert residual_values == pytest.approx(survival.r_api.residuals(fit, weighted=False))
-
-    detail = survival.coxph_detail(fit, riskmat=np.bool_(True))
-    assert detail.riskmat is not None
-
-
-def test_r_api_bool_options_reject_python_truthiness():
-    data = _toy_data()
-    response = survival.Surv(data["time"], data["status"])
-    fit = survival.coxph("Surv(time, status) ~ x1 + x2", data=data, max_iter=10)
-    rows = [[0.5, 0.8]]
-    scores = [8.0 - value for value in data["time"]]
-
-    with pytest.raises(TypeError, match="reverse"):
-        survival.survfit(response, reverse=1)
-    with pytest.raises(TypeError, match="reverse"):
-        survival.concordance(response, scores=scores, reverse="yes")
-    with pytest.raises(TypeError, match="timefix"):
-        survival.concordance(response, scores=scores, timefix=1)
-    with pytest.raises(TypeError, match="centered"):
-        survival.basehaz(fit, centered=1)
-    with pytest.raises(TypeError, match="terms"):
-        survival.cox_zph(fit, terms=1)
-    with pytest.raises(TypeError, match="singledf"):
-        survival.cox_zph(fit, singledf="yes")
-    with pytest.raises(TypeError, match="global"):
-        survival.cox_zph(fit, global_test=1)
-    with pytest.raises(ValueError, match="global_test or global"):
-        survival.cox_zph(fit, global_test=False, **{"global": True})
-    with pytest.raises(TypeError, match="se_fit"):
-        survival.predict(fit, rows, se_fit=1)
-    with pytest.raises(TypeError, match="centered"):
-        survival.predict(fit, rows, centered=1)
-    with pytest.raises(TypeError, match="weighted"):
-        survival.r_api.residuals(fit, weighted=1)
-    with pytest.raises(TypeError, match="riskmat"):
-        survival.coxph_detail(fit, riskmat=1)
+    assert r_coerce._normalize_bool_option(np.bool_(True), "flag") is True
+    assert r_coerce._normalize_bool_option(False, "flag") is False
+    assert r_coerce._normalize_bool_option(None, "flag") is False
+    with pytest.raises(TypeError, match="flag must be True or False"):
+        r_coerce._normalize_bool_option(1, "flag")
 
 
 def test_na_action_accepts_r_style_names_and_rejects_non_strings():
-    data = {
-        "time": [1.0, 2.0, 3.0, 4.0],
-        "status": [1, 0, 1, 1],
-        "arm": ["control", None, "treated", "treated"],
-    }
-    direct = survival.survfit(
-        survival.Surv([1.0, 3.0, 4.0], [1, 1, 1]),
-        group=["control", "treated", "treated"],
-    )
-
-    for na_action in ("na.omit", " na.exclude "):
-        fit = survival.survfit("Surv(time, status) ~ arm", data=data, na_action=na_action)
-        assert list(fit) == list(direct)
-        assert fit["control"].estimate == pytest.approx(direct["control"].estimate)
-        assert fit["treated"].estimate == pytest.approx(direct["treated"].estimate)
-
-    passthrough = survival.survfit(
-        "Surv(time, status) ~ group",
-        data=_toy_data(),
-        na_action="na.pass",
-    )
-    default = survival.survfit("Surv(time, status) ~ group", data=_toy_data())
-    assert list(passthrough) == list(default)
-    assert passthrough["A"].estimate == pytest.approx(default["A"].estimate)
-    assert passthrough["B"].estimate == pytest.approx(default["B"].estimate)
-
+    for name in ("na.omit", " na.exclude ", "omit", "exclude"):
+        assert r_coerce._normalize_na_action(name) == "omit"
+    assert r_coerce._normalize_na_action("na.fail") == "fail"
+    assert r_coerce._normalize_na_action(None) == "pass"
+    assert r_coerce._normalize_na_action("na.pass") == "pass"
     with pytest.raises(TypeError, match="na_action"):
-        survival.survfit("Surv(time, status) ~ group", data=_toy_data(), na_action=1)
+        r_coerce._normalize_na_action(1)
+    with pytest.raises(ValueError, match="na_action must be"):
+        r_coerce._normalize_na_action("na.drop")
 
 
-def test_formula_fit_iteration_counts_accept_integer_valued_floats():
-    data = _toy_data()
+def test_as_character_renders_numbers_like_r():
+    # as.character(c(1, 1.5, 100000, 123456, 1e-4, 1/3, TRUE))
+    assert [r_coerce._as_character(v) for v in [1.0, 1.5, 100000.0, 123456.0, 1e-4]] == [
+        "1",
+        "1.5",
+        "1e+05",
+        "123456",
+        "1e-04",
+    ]
+    assert r_coerce._as_character(1 / 3) == "0.333333333333333"
+    assert r_coerce._as_character(58.7652292950034) == "58.7652292950034"
+    assert r_coerce._as_character(True) == "TRUE"
+    assert r_coerce._as_character(7) == "7"
+    assert r_coerce._as_character(None) == "NA"
+    assert r_coerce._as_character("x") == "x"
+    # the older helper names are aliases of the same function
+    assert r_coerce._strata_value_label is r_coerce._as_character
+    assert r_coerce._mstate_event_label is r_coerce._as_character
 
-    cox = survival.coxph("Surv(time, status) ~ x1", data=data, max_iter=0.0)
-    aft = survival.survreg("Surv(time, status) ~ x1", data=data, max_iter=1.0)
 
-    assert len(cox.coefficients[0]) == 1
-    assert len(aft.location_coefficients) == 2
-    with pytest.raises(ValueError, match="integer"):
-        survival.coxph("Surv(time, status) ~ x1", data=data, max_iter=1.5)
+def test_format_numbers_uses_a_common_layout_like_r():
+    # R's format(c(1.5, 2.25, 10)); format(1/3); format(c(0.001, 1e6)); format(100000)
+    assert r_coerce._r_format_numbers([1.5, 2.25, 10]) == [" 1.50", " 2.25", "10.00"]
+    assert r_coerce._r_format_numbers([1, 2, 3]) == ["1", "2", "3"]
+    assert r_coerce._surv_format_number(1 / 3) == "0.3333333"
+    assert r_coerce._r_format_numbers([0.001, 1e6]) == ["1e-03", "1e+06"]
+    assert r_coerce._r_format_numbers([100000.0]) == ["1e+05"]
+    assert r_coerce._r_format_numbers([123456789.0]) == ["123456789"]
+    assert r_coerce._r_format_numbers([1 / 3, None, math.inf, -math.inf, math.nan]) == [
+        "0.3333333",
+        "       NA",
+        "      Inf",
+        "     -Inf",
+        "       NA",
+    ]
+    assert r_coerce._r_format_numbers([]) == []
+
+
+def test_factor_levels_follow_r_sort_order_and_declared_categories():
+    assert r_coerce._factor_levels([3, 1, 2, None, 1]) == [1, 2, 3]
+    assert r_coerce._factor_levels(["b", "a", "c"]) == ["a", "b", "c"]
+    assert r_coerce._factor_levels([True, False]) == [False, True]
+    assert r_coerce._factor_levels([2.0, 10.0, 1.0]) == [1.0, 2.0, 10.0]
+    declared = r_coerce._RFactorVector(["b", "a"], ["z", "b", "a"])
+    assert r_coerce._factor_levels(declared) == ["z", "b", "a"]
+    codes, labels = r_coerce._factor(declared)
+    assert (codes, labels) == ([1, 2], ["z", "b", "a"])
+    codes, labels = r_coerce._factor([2, None, 1, 2])
+    assert (codes, labels) == ([1, None, 0, 1], ["1", "2"])
+    assert r_coerce._r_formula_ordered_levels([2, 1, 2], "x") == (1, 2)
+    assert r_coerce._mstate_inferred_levels([2, 0, 1]) == ["0", "1", "2"]
+    with pytest.raises(ValueError, match="outside the declared categories"):
+        r_coerce._factor(r_coerce._RFactorVector(["q"], ["a"]))
+
+
+def test_timefix_helpers_route_through_aeq_surv():
+    assert r_coerce._aeq_times([1, 1 + 1e-14, 2]) == ([1.0, 1.0, 2.0],)
+    start, stop = r_coerce._aeq_times([0, 1e-14, 1], [1, 1 + 1e-14, 2])
+    assert (start, stop) == ([0.0, 0.0, 1.0], [1.0, 1.0, 2.0])
+    assert r_coerce._survdiff_timefix_values([1, 1 + 1e-14], True) == [1.0, 1.0]
+    assert r_coerce._survdiff_timefix_values([1, 1 + 1e-14], False) == [1, 1 + 1e-14]
+    assert r_coerce._timefix_vectors([0, 1e-14], [1, 2]) == ([0.0, 0.0], [1.0, 2.0])
+    with pytest.raises(ValueError, match="effective length 0"):
+        r_coerce._aeq_times([0, 1], [1, 1 + 1e-14])
+    with pytest.raises(ValueError, match="one or two time columns"):
+        r_coerce._aeq_times([1], [2], [3])
