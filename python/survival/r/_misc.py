@@ -1,146 +1,181 @@
-"""statefig, brier, royston, yates, cipoisson, bounded links, survobrien, survcheck, splines."""
+"""The remaining R functions of survival: ``survcheck``, ``survobrien``, ``royston``, ``brier``,
+``yates``, ``cipoisson``, the bounded links, ``nsk``, ``pspline`` and ``statefig``.
+
+Each function does what the R code of its namesake does (argument checking, the model frame,
+labelling of the result) and calls the Rust kernel of the same name for the numbers.  The
+Cox-model functions (``royston``, ``brier``, ``yates``) read R's ``coxph`` components from the
+Rust fit behind the result (``coefficients``, ``var``, ``means``, ``loglik``, ``nevent``,
+``linear_predictors``, ``time``/``status``/``entry`` = ``fit$y``, ``weights``, ``x``,
+``strata``, ``offset``, ``method``) and use the R generics of ``_models`` (``coef``, ``vcov``,
+``model_frame``, ``model_formula``, ``predict``) plus the formula design of the fit for
+``model.matrix`` on new or population data.
+"""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
-from statistics import NormalDist
+import re
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from .. import _survival as _core
+from . import _models
 from ._coerce import (
-    _as_rows,
     _coerce_array_like,
-    _encode_groups,
     _finite_float,
     _float_vector,
-    _hashable_group_value,
     _int_vector,
-    _integer_code_vector,
     _integer_scalar,
-    _is_bool_like,
     _is_missing_value,
+    _match_string_arg,
     _materialize_1d,
     _materialize_labels,
-    _model_residual_weights,
+    _missing_row_indices,
+    _mstate_categories,
     _normalize_bool_option,
-    _normalize_conf_level,
     _normalize_na_action,
-    _normalize_numeric_sequence_or_none,
-    _pop_dotted_keyword,
-    _recycle_r_vector,
     _scalar_or_vector,
-    _scalar_or_vector_with_flag,
     _subset_indices,
-    _subset_optional_sequence,
-    _survcheck_integer_labels,
-    _survdiff_timefix_values,
-    _timefix_vectors,
+    _subset_sequence,
 )
-from ._coxph import _cox_survival_curve, _cox_training_response, _step_curve_at, coxph
-from ._data_prep import _rttright_counting_common_start
-from ._fit import (
-    _cox_loglik_values,
-    _cox_training_rows,
-    _cox_variance_matrix,
-    _formula_design_for_fit,
-    _is_coxph_fit,
-    _surv_from_formula_design,
-    _unwrap_formula_fit,
-)
+from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
     _column,
     _column_or_values,
+    _column_source,
     _combined_columns,
     _covariate_term_name,
+    _design_rows_from_spec,
+    _design_term_output_names,
+    _formula_columns,
+    _offset_vector,
     _parse_formula,
     _subset_formula_inputs,
     _term_values,
 )
-from ._models import predict
-from ._surv import Surv, _apply_surv_na_action, _subset_surv
-from ._survfit import survfit, survfit0
+from ._models import coef, model_formula, model_frame, vcov
+from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
-    CoxSurvfitResult,
-    SurvfitResult,
-    SurvObrienResult,
-    YatesPairwiseResult,
+    BrierResult,
+    PsplineResult,
+    StateFigResult,
+    SurvCheckCodes,
+    SurvCheckProblem,
+    SurvCheckResult,
     YatesResult,
-    _CovariateTerm,
-    _cox_beta,
-    _FormulaFit,
-    _FormulaTerms,
+    _CategoricalDesignTerm,
+    _FormulaDesign,
+    _InteractionDesignTerm,
     _InteractionTerm,
 )
 
+# ---------------------------------------------------------------------------
+# Access to a fitted coxph object
+# ---------------------------------------------------------------------------
 
-def _statefig_layout_matrix(layout: Any) -> tuple[list[list[float]], bool]:
+
+def _coxph_engine(fit: Any, message: str) -> Any:
+    """The Rust ``CoxPHFit`` behind an R-style coxph result (R's ``inherits(fit, "coxph")``)."""
+
+    engine = fit if isinstance(fit, _core.CoxPHFit) else getattr(fit, "fit", None)
+    if not isinstance(engine, _core.CoxPHFit):
+        raise TypeError(message)
+    return engine
+
+
+def _fit_response(engine: Any) -> Surv:
+    """``fit$y``: the (timefixed) response the Cox model was fitted to."""
+
+    if engine.entry is None:
+        return Surv(list(engine.time), list(engine.status))
+    return Surv(list(engine.entry), list(engine.time), list(engine.status))
+
+
+def _newdata_response(fit: Any, newdata: Any) -> Surv:
+    """``model.response(model.frame(formula(fit), data = newdata))``."""
+
+    response, _terms = _parse_formula(model_formula(fit), newdata)
+    return response
+
+
+def _call_column(fit: Any, name: str, newdata: Any, n: int) -> list[Any] | None:
+    """A ``weights=``/``id=`` argument of the original call, re-evaluated on ``newdata``.
+
+    The fit records the column name the argument referred to (``case_weight_column``,
+    ``id_column``); an argument given as a vector cannot be re-evaluated, as in R.
+    """
+
+    column = getattr(fit, f"{name}_column", None)
+    if column is None:
+        return None
+    try:
+        values = _materialize_labels(_column(newdata, column), name)
+    except KeyError as exc:
+        raise ValueError(f"newdata is missing the {name} column {column!r}") from exc
+    if len(values) != n:
+        raise ValueError(f"wrong length for {name}")
+    return values
+
+
+def _r_factor_levels(values: Sequence[Any]) -> list[Any]:
+    """The levels ``as.factor`` gives ``values``: R factor levels when present, else sorted."""
+
+    categories = _mstate_categories(values)
+    present = {value for value in values if not _is_missing_value(value)}
+    if categories is not None:
+        return [level for level in _materialize_1d(categories, "levels") if level in present]
+    try:
+        return sorted(present)
+    except TypeError:
+        return sorted(present, key=str)
+
+
+def _unique_in_order(values: Sequence[Any]) -> list[Any]:
+    return list(dict.fromkeys(values))
+
+
+# ---------------------------------------------------------------------------
+# statefig
+# ---------------------------------------------------------------------------
+
+
+def _statefig_state_names(connect: Any, states: Any | None) -> list[str]:
+    if states is not None:
+        return [str(value) for value in _materialize_1d(states, "states")]
+    if isinstance(connect, Mapping):
+        return [str(value) for value in connect]
+    if hasattr(connect, "columns"):  # a data frame: its row labels
+        return [str(value) for value in connect.index]
+    raise ValueError("connect must have the state names as dimnames")
+
+
+def _statefig_layout(layout: Any) -> dict[str, Any]:
+    """Interpret R's ``layout``: a vector of box counts, a one-column matrix (top to bottom), a
+    two-column matrix of coordinates, or any other matrix read column-wise as a vector."""
+
     rows = _coerce_array_like(layout, "layout")
     if not rows:
-        raise ValueError("layout must not be empty")
-    if isinstance(rows[0], list | tuple):
-        width = len(rows[0])
-        matrix = [[_finite_float(value, "layout") for value in row] for row in rows]
-        if any(len(row) != width for row in matrix):
-            raise ValueError("layout must be rectangular")
-        return matrix, True
-    return [[_finite_float(value, "layout") for value in rows]], False
-
-
-def _statefig_space(n: int) -> list[float]:
-    return [(idx + 0.5) / n for idx in range(n)]
-
-
-def _statefig_positions_from_layout(
-    layout: Any,
-    n_states: int,
-) -> tuple[list[list[float]], list[int]]:
-    matrix, is_matrix = _statefig_layout_matrix(layout)
-    n_row = len(matrix)
-    n_col = len(matrix[0]) if matrix else 0
-
-    if is_matrix and n_col == 2 and n_row > 1:
-        if n_row != n_states:
-            raise ValueError("layout matrix should have one row per state")
-        positions = []
-        for row in matrix:
-            x, y = row
-            if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0:
-                raise ValueError("layout coordinates must be between 0 and 1")
-            positions.append([x, y])
-        return positions, [n_states]
-
-    values = [value for row in matrix for value in row]
-    layout_counts = []
-    for value in values:
-        if value <= 0.0 or not float(value).is_integer():
-            raise ValueError("non-integer number of states in layout argument")
-        layout_counts.append(int(value))
-    if sum(layout_counts) != n_states:
-        raise ValueError("number of boxes != number of states")
-
-    positions = [[0.0, 0.0] for _ in range(n_states)]
-    group_space = _statefig_space(len(layout_counts))
-    state_idx = 0
-    column_layout = (not is_matrix) or n_col > 1
-    for group_idx, count in enumerate(layout_counts):
-        within = _statefig_space(count)
-        for offset in range(count):
-            if column_layout:
-                positions[state_idx] = [group_space[group_idx], 1.0 - within[offset]]
-            else:
-                positions[state_idx] = [within[offset], 1.0 - group_space[group_idx]]
-            state_idx += 1
-    return positions, layout_counts
+        raise ValueError("layout must be a numeric vector or matrix")
+    is_matrix = isinstance(rows[0], list | tuple)
+    matrix = [[float(v) for v in row] for row in rows] if is_matrix else [[float(v) for v in rows]]
+    width = len(matrix[0])
+    if any(len(row) != width for row in matrix):
+        raise ValueError("layout must be a numeric vector or matrix")
+    if is_matrix and width == 2 and len(matrix) > 1:
+        return {"coordinates": matrix}
+    counts = [row[column] for column in range(width) for row in matrix]
+    if any(value <= 0.0 or value != math.floor(value) for value in counts):
+        raise ValueError("non-integer number of states in layout argument")
+    return {"layout": [int(value) for value in counts], "column": is_matrix and width == 1}
 
 
 def statefig(
     layout: Any,
     connect: Any,
     states: Any | None = None,
-    *,
     margin: Any = 0.03,
     box: Any = True,
     cex: Any = 1,
@@ -152,505 +187,290 @@ def statefig(
     alwd: Any | None = None,
     alty: Any | None = None,
     offset: Any = 0,
-) -> dict[str, Any]:
-    """Return R ``survival::statefig`` state coordinates from layout/connect inputs."""
+) -> StateFigResult:
+    """Box coordinates and arrows of R's ``statefig`` state-space figure.
 
-    del cex, col, lwd, lty, bcol, acol, alwd, alty
+    R draws the figure and returns the box centres invisibly; this returns them as
+    ``positions`` together with the arrows.  The graphical parameters are accepted for
+    compatibility with R's signature.  ``states`` names the states when ``connect`` is not a
+    mapping keyed by state name (R's ``dimnames``).
+    """
+
+    del box, cex, col, lwd, lty, bcol, acol, alwd, alty
     _finite_float(margin, "margin")
     _finite_float(offset, "offset")
-    _normalize_bool_option(box, "box")
-
-    connect_rows = _as_rows(connect, "connect")
-    n_states = len(connect_rows)
-    if n_states == 0 or any(len(row) != n_states for row in connect_rows):
-        raise ValueError("connect must be a square matrix")
-    state_names = (
-        [str(value) for value in _materialize_1d(states, "states")]
-        if states is not None
-        else [str(idx + 1) for idx in range(n_states)]
-    )
-    if len(state_names) != n_states:
-        raise ValueError("states must have one entry per connect row")
-
-    positions, layout_counts = _statefig_positions_from_layout(layout, n_states)
-    edges = [
-        [row_idx, col_idx, int(value)]
-        for row_idx, row in enumerate(connect_rows)
-        for col_idx, value in enumerate(row)
-        if row_idx != col_idx and value != 0.0
-    ]
-    return {
-        "states": state_names,
-        "positions": positions,
-        "layout": layout_counts,
-        "edges": edges,
-    }
-
-
-def _brier_response_from_model_frame(frame: Mapping[str, Any]) -> Surv | None:
-    for value in frame.values():
-        if isinstance(value, Surv):
-            return value
-    return None
-
-
-def _brier_fit_response_and_data(fit: Any, newdata: Any | None) -> tuple[Surv, Any | None]:
-    if newdata is not None:
-        if not isinstance(fit, _FormulaFit) or fit.formula is None:
-            raise ValueError("newdata brier calculations require a formula Cox model")
-        response, _terms = _parse_formula(fit.formula, newdata)
-        return response, newdata
-
-    if isinstance(fit, _FormulaFit):
-        if fit.y_response is not None:
-            return fit.y_response, fit.model_frame
-        if fit.model_frame is not None:
-            response = _brier_response_from_model_frame(fit.model_frame)
-            if response is not None:
-                return response, fit.model_frame
-        raise ValueError("fitted Cox model does not retain its response; refit with y/model data")
-
-    model = _unwrap_formula_fit(fit)
-    if not hasattr(model, "event_times") or not hasattr(model, "status"):
-        raise ValueError("fitted Cox model does not expose response data")
-    return Surv(list(model.event_times), list(model.status)), None
-
-
-def _brier_case_weights(
-    fit: Any,
-    model_data: Any | None,
-    n: int,
-    *,
-    use_newdata: bool,
-) -> list[float]:
-    weight_column = getattr(fit, "case_weight_column", None)
-    if use_newdata and weight_column is not None:
-        if model_data is None:
-            raise ValueError("newdata is required to evaluate case weights")
-        try:
-            source = _column(model_data, weight_column)
-        except KeyError as exc:
-            raise ValueError(f"newdata is missing weights column {weight_column!r}") from exc
-        weights = _float_vector(source, "weights")
-        if len(weights) != n:
-            raise ValueError("weights must have the same length as the Surv response")
+    if isinstance(connect, Mapping):
+        rows = [[float(v) for v in _materialize_1d(row, "connect")] for row in connect.values()]
     else:
-        weights = _model_residual_weights(fit, n)
-    if any(not math.isfinite(weight) for weight in weights):
-        raise ValueError("weights must be finite")
-    if any(weight < 0.0 for weight in weights):
-        raise ValueError("weights must be non-negative")
-    total = sum(weights)
-    if total <= 0.0:
-        raise ValueError("weights must have positive sum")
-    return weights
+        rows = [[float(v) for v in row] for row in _coerce_array_like(connect, "connect")]
+    figure = _core.statefig(
+        rows, _statefig_state_names(connect, states), **_statefig_layout(layout)
+    )
+    return StateFigResult(
+        states=list(figure.states),
+        positions=list(zip(figure.x, figure.y, strict=True)),
+        arrows=list(figure.arrows),
+    )
 
 
-def _brier_id_column(data: Any | None, name: str) -> list[Any] | None:
-    if data is None:
-        return None
-    if isinstance(data, Mapping) and name not in data:
-        return None
+# ---------------------------------------------------------------------------
+# cipoisson and the bounded links
+# ---------------------------------------------------------------------------
+
+
+def _numeric_or_nan(values: Any, name: str) -> list[float]:
+    return [math.nan if _is_missing_value(v) else float(v) for v in _scalar_or_vector(values, name)]
+
+
+def cipoisson(
+    k: Any, time: Any = 1, p: Any = 0.95, method: Any = "exact"
+) -> tuple[float, float] | list[tuple[float, float]]:
+    """Confidence limits for Poisson rates, like R's ``cipoisson``.
+
+    ``k``, ``time`` and ``p`` recycle like R vectors.  As in R the result is one
+    ``(lower, upper)`` pair when every argument has length one and otherwise one pair per
+    element (R's two-column matrix).
+    """
+
+    method_value = _match_string_arg(method, "method", ["exact", "anscombe"], "Invalid method")
+    limits = _core.cipoisson(
+        _numeric_or_nan(k, "k"),
+        _numeric_or_nan(time, "time"),
+        _numeric_or_nan(p, "p"),
+        method_value,
+    )
+    pairs = list(zip(limits.lower, limits.upper, strict=True))
+    return pairs[0] if len(pairs) == 1 else pairs
+
+
+def _bounded_link(x: Any, edge: Any, name: str) -> float | list[float]:
+    link = _core.LinkFunctionParams(_finite_float(edge, "edge"))
+    transform = getattr(link, f"{name}_many")
     try:
-        return _materialize_labels(_column(data, name), name)
-    except KeyError:
-        return None
-
-
-def _brier_id_values(
-    fit: Any,
-    model_data: Any | None,
-    n: int,
-    *,
-    use_newdata: bool,
-) -> list[Any] | None:
-    id_column = getattr(fit, "id_column", None)
-    if use_newdata and id_column is not None:
-        if model_data is None:
-            raise ValueError("newdata is required to evaluate id")
-        try:
-            values = _materialize_labels(_column(model_data, id_column), "id")
-        except KeyError as exc:
-            raise ValueError(f"newdata is missing id column {id_column!r}") from exc
-        if len(values) != n:
-            raise ValueError("id must have the same length as the Surv response")
-        return values
-
-    for name in ("(id)", "id"):
-        values = _brier_id_column(model_data, name)
-        if values is not None:
-            if len(values) != n:
-                raise ValueError("id must have the same length as the Surv response")
-            return values
-
-    if isinstance(fit, _FormulaFit) and fit.id_values is not None:
-        values = _materialize_labels(fit.id_values, "id")
-        if len(values) == n:
-            return values
-    return None
-
-
-def _brier_counting_has_gaps_or_overlaps(
-    starts: Sequence[float],
-    stops: Sequence[float],
-    id_values: Sequence[Any],
-) -> bool:
-    intervals_by_id: dict[Any, list[tuple[float, float]]] = {}
-    for start, stop, id_value in zip(starts, stops, id_values, strict=True):
-        intervals_by_id.setdefault(_hashable_group_value(id_value), []).append(
-            (float(stop), float(start))
-        )
-
-    for intervals in intervals_by_id.values():
-        previous_stop: float | None = None
-        for stop, start in sorted(intervals):
-            if start > stop:
-                return True
-            if previous_stop is not None and start != previous_stop:
-                return True
-            previous_stop = stop
-    return False
-
-
-def _brier_validate_counting_response(
-    starts: Sequence[float],
-    stops: Sequence[float],
-    status: Sequence[int],
-    id_values: Sequence[Any] | None,
-) -> None:
-    if id_values is None:
-        raise ValueError("id is required for start-stop data")
-    if len(id_values) != len(stops):
-        raise ValueError("id must have the same length as the Surv response")
-    if any(value not in (0, 1) for value in status):
-        raise ValueError("response must be right censored")
-    if _brier_counting_has_gaps_or_overlaps(starts, stops, id_values):
-        raise ValueError("one or more flags are >0 in survcheck")
-    if not _rttright_counting_common_start(starts, id_values):
-        raise NotImplementedError("delayed entry is not yet implemented")
-
-
-def _brier_event_times(
-    response: Surv,
-    timefix: bool,
-    id_values: Sequence[Any] | None = None,
-) -> tuple[list[float], list[int]]:
-    if response.type not in {"right", "counting"}:
-        raise ValueError("response must be right censored")
-    times = [float(value) for value in response.time]
-    status = [int(value) for value in response.event]
-    if response.start is not None:
-        starts = [float(value) for value in response.start]
-        if any(not math.isfinite(value) for value in starts):
-            raise ValueError("start times must be finite")
-        if timefix:
-            starts, times = _timefix_vectors(starts, times)
-        _brier_validate_counting_response(starts, times, status, id_values)
-    elif timefix:
-        times = [float(value) for value in _core.aeq_surv(times, None).time]
-    return times, status
-
-
-def _brier_prediction_curves(
-    fit: Any,
-    prediction_data: Any | None,
-) -> tuple[list[float], list[list[float]]]:
-    if prediction_data is not None:
-        cox_survfit = survfit(fit, newdata=prediction_data, se_fit=False)
-        if not isinstance(cox_survfit, CoxSurvfitResult):
-            raise TypeError("brier requires Cox survival curves")
-        return cox_survfit.time, cox_survfit.surv
-
-    model = _unwrap_formula_fit(fit)
-    beta = _cox_beta(model)
-    rows = _cox_training_rows(model, len(beta))
-    return _cox_survival_curve(model, rows, None, True, None)
-
-
-def _brier_default_times(response: Surv, weights: list[float], efron: bool) -> list[float]:
-    baseline = survfit(
-        response,
-        weights=weights,
-        se_fit=False,
-        stype=2 if efron else 1,
-        ctype=2 if efron else 1,
-    )
-    if not isinstance(baseline, SurvfitResult):
-        raise TypeError("brier baseline curve must be a Kaplan-Meier survfit result")
+        values = _materialize_1d(x, "x")
+    except TypeError:
+        return float(transform([None if _is_missing_value(x) else float(x)])[0])
     return [
-        float(time)
-        for time, event_count in zip(baseline.time, baseline.n_event, strict=True)
-        if float(event_count) > 0.0
+        float(v) for v in transform([None if _is_missing_value(v) else float(v) for v in values])
     ]
 
 
-def _brier_censoring_survival(
-    dtime: list[float],
-    dstat: list[int],
-    weights: list[float],
-) -> SurvfitResult:
-    censor_response = Surv(dtime, [1 - int(value) for value in dstat])
-    censor_fit = survfit(censor_response, weights=weights, se_fit=False)
-    censor_fit0 = survfit0(censor_fit)
-    if not isinstance(censor_fit0, SurvfitResult):
-        raise TypeError("brier censoring curve must be a Kaplan-Meier survfit result")
-    return censor_fit0
+def blogit(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """R's ``blogit(edge)$linkfun``: the logit of ``x`` bounded away from 0 and 1."""
+
+    return _bounded_link(x, edge, "blogit")
 
 
-def _brier_apply_ties(dtime: list[float], dstat: list[int], ties: bool) -> list[float]:
-    if not ties:
-        return list(dtime)
-    unique_times = sorted(set(dtime))
-    if len(unique_times) < 2:
-        return list(dtime)
-    mindiff = min(b - a for a, b in zip(unique_times[:-1], unique_times[1:], strict=True))
-    return [
-        time + mindiff / 2.0 if status == 0 else time
-        for time, status in zip(dtime, dstat, strict=True)
-    ]
+def bprobit(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """R's ``bprobit(edge)$linkfun``: the probit of ``x`` bounded away from 0 and 1."""
+
+    return _bounded_link(x, edge, "bprobit")
 
 
-def brier(
-    fit: Any,
-    times: Any | None = None,
-    newdata: Any | None = None,
-    ties: Any = True,
-    detail: Any = False,
-    timefix: Any = True,
-    efron: Any = False,
-) -> dict[str, Any]:
-    """Compute R ``survival::brier`` IPCW Brier scores for Cox model fits."""
+def bcloglog(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """R's ``bcloglog(edge)$linkfun``: the complementary log-log of bounded ``x``."""
 
-    if not _is_coxph_fit(fit):
-        raise TypeError("fit must be a coxph object")
-    ties_value = _normalize_bool_option(ties, "ties")
-    detail_value = _normalize_bool_option(detail, "detail")
-    timefix_value = _normalize_bool_option(timefix, "timefix")
-    efron_value = _normalize_bool_option(efron, "efron")
-    response, prediction_data = _brier_fit_response_and_data(fit, newdata)
-    using_newdata = newdata is not None
-    id_values = _brier_id_values(
-        fit,
-        prediction_data,
-        len(response),
-        use_newdata=using_newdata,
-    )
-    dtime, dstat = _brier_event_times(response, timefix_value, id_values)
-    n = len(dtime)
-    weights = _brier_case_weights(
-        fit,
-        prediction_data,
-        n,
-        use_newdata=using_newdata,
-    )
-    eval_times = (
-        _float_vector(times, "times")
-        if times is not None
-        else _brier_default_times(
-            response,
-            weights,
-            efron_value and getattr(_unwrap_formula_fit(fit), "method", None) == "efron",
-        )
-    )
+    return _bounded_link(x, edge, "bcloglog")
 
-    baseline = survfit(response, weights=weights, se_fit=False, stype=1)
-    if not isinstance(baseline, SurvfitResult):
-        raise TypeError("brier baseline curve must be a Kaplan-Meier survfit result")
-    p0 = [1.0 - value for value in _step_curve_at(baseline.time, baseline.estimate, eval_times)]
 
-    curve_times, curves = _brier_prediction_curves(fit, prediction_data)
-    if len(curves) != n:
-        raise ValueError("Cox survival predictions do not match response length")
-    phat = [[0.0] * n for _ in eval_times]
-    for row_idx, curve in enumerate(curves):
-        survival = _step_curve_at(curve_times, [float(value) for value in curve], eval_times)
-        for time_idx, value in enumerate(survival):
-            phat[time_idx][row_idx] = 1.0 - value
+def blog(x: Any, edge: Any = 0.05) -> float | list[float]:
+    """R's ``blog(edge)$linkfun``: the log of ``x`` bounded below by ``edge``."""
 
-    adjusted_time = _brier_apply_ties(dtime, dstat, ties_value)
-    censor_fit = _brier_censoring_survival(adjusted_time, dstat, weights)
-    components = _core.perform_brier_calculation(
-        adjusted_time,
-        dstat,
-        weights,
-        eval_times,
-        p0,
-        phat,
-        censor_fit.time,
-        censor_fit.estimate,
-    )
+    return _bounded_link(x, edge, "blog")
 
-    result: dict[str, Any] = {
-        "rsquared": [float(value) for value in components["rsquared"]],
-        "brier": [float(value) for value in components["brier"]],
-        "times": eval_times,
-    }
-    if detail_value:
-        result["p0"] = p0
-        result["phat"] = phat
-        result["eff.n"] = [float(value) for value in components["eff_n"]]
-    return result
+
+# ---------------------------------------------------------------------------
+# nsk and pspline
+# ---------------------------------------------------------------------------
 
 
 def _quantile_type7(sorted_values: list[float], probability: float) -> float:
-    if not sorted_values:
-        raise ValueError("x must contain at least one value")
-    if len(sorted_values) == 1:
-        return sorted_values[0]
-    p = min(max(probability, 0.0), 1.0)
-    position = p * (len(sorted_values) - 1)
-    lower_idx = int(math.floor(position))
-    upper_idx = int(math.ceil(position))
-    weight = position - lower_idx
-    return sorted_values[lower_idx] * (1.0 - weight) + sorted_values[upper_idx] * weight
+    """R's default ``quantile(x, p)`` (type 7)."""
+
+    position = probability * (len(sorted_values) - 1)
+    lower = math.floor(position)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    return sorted_values[lower] + (position - lower) * (sorted_values[upper] - sorted_values[lower])
 
 
-def _unique_sorted_floats(values: Sequence[float]) -> list[float]:
-    return sorted(set(values))
+def _nsk_boundary(x: list[float], knots: list[float], b: Any, boundary: Any) -> tuple[float, float]:
+    """R's ``Boundary.knots`` handling in ``nsk``: the default quantiles, ``TRUE`` for the
+    range, ``FALSE``/``NULL`` for the outer knots, or an explicit pair.  The Rust basis widens
+    the pair to enclose the knots as ``nsk.R`` does."""
+
+    if boundary is _MISSING:
+        b_value = _finite_float(b, "b")
+        ordered = sorted(x)
+        return (_quantile_type7(ordered, b_value), _quantile_type7(ordered, 1.0 - b_value))
+    if isinstance(boundary, bool):
+        boundary = (min(x), max(x)) if boundary else None
+    if boundary is None:
+        if len(knots) < 2:
+            raise ValueError("wrong length for Boundary.knots")
+        return (knots[0], knots[-1])
+    values = _float_vector(boundary, "Boundary.knots")
+    if len(values) != 2:
+        raise ValueError("wrong length for Boundary.knots")
+    return (values[0], values[1])
 
 
-def _validate_nsk_boundary_pair(boundary_knots: tuple[float, float]) -> tuple[float, float]:
-    low, high = boundary_knots
-    if not math.isfinite(low) or not math.isfinite(high) or low >= high:
+def nsk(
+    x: Any,
+    df: Any | None = None,
+    knots: Any | None = None,
+    intercept: Any = False,
+    b: Any = 0.05,
+    Boundary_knots: Any = _MISSING,
+) -> Any:
+    """Natural spline basis whose coefficients are the values at the knots (R's ``nsk``).
+
+    ``Boundary_knots`` is R's ``Boundary.knots``: the ``b``/``1 - b`` quantiles of ``x`` by
+    default, ``True`` for the range of ``x``, ``False``/``None`` for the outer ``knots``.  Missing
+    ``x`` values give rows of ``NaN``.  Returns the Rust ``SplineBasisResult``.
+    """
+
+    x_values = _numeric_or_nan(x, "x")
+    observed = [value for value in x_values if not math.isnan(value)]
+    if not observed:
+        raise ValueError("x must contain at least one non-missing value")
+    if any(not math.isfinite(value) for value in observed):
+        raise ValueError("x must contain only finite values")
+    knot_values = sorted(set(_float_vector(knots, "knots"))) if knots is not None else []
+    boundary = _nsk_boundary(observed, knot_values, b, Boundary_knots)
+    if not boundary[0] < boundary[1]:
         raise ValueError("Boundary.knots must be finite and strictly increasing")
-    return boundary_knots
-
-
-def _normalize_nsk_knots(knots: Any | None) -> list[float] | None:
-    if knots is None:
-        return None
-    knot_values = _normalize_numeric_sequence_or_none(knots, "knots") or []
-    return _unique_sorted_floats(knot_values)
-
-
-def _default_nsk_boundary_knots(x: list[float], b: Any) -> tuple[float, float]:
-    b_value = _finite_float(b, "b")
-    if b_value < 0.0 or b_value > 1.0:
-        raise ValueError("b must be between 0 and 1")
-    sorted_x = sorted(x)
-    return _validate_nsk_boundary_pair(
-        tuple(
-            sorted(
-                (
-                    _quantile_type7(sorted_x, b_value),
-                    _quantile_type7(sorted_x, 1.0 - b_value),
-                )
-            )
-        )
+    spline = _core.NaturalSplineKnot(
+        knot_values or None,
+        boundary,
+        None if df is None else _integer_scalar(df, "df"),
+        _normalize_bool_option(intercept, "intercept"),
     )
+    return spline.basis(x_values)
 
 
-def _nsk_boundary_from_knots(knots: list[float] | None) -> tuple[tuple[float, float], list[float]]:
-    if knots is None or len(knots) < 2:
-        raise ValueError("wrong length for Boundary.knots")
-    return _validate_nsk_boundary_pair((knots[0], knots[-1])), knots[1:-1]
+def _pspline_method(
+    df: Any, theta: Any | None, nterm: Any | None, eps: Any | None, method: Any | None
+) -> tuple[int | float, float | None, int, float, str]:
+    """The ``fixed``/``aic``/``df`` selection at the top of R's ``pspline``."""
+
+    df_value = _finite_float(df, "df")
+    df_value = int(df_value) if df_value.is_integer() else df_value
+    nterm_value = None if nterm is None else int(round(_finite_float(nterm, "nterm")))
+    eps_value = None if eps is None else _finite_float(eps, "eps")
+    if theta is not None:
+        theta_value = _finite_float(theta, "theta")
+        if theta_value <= 0.0 or theta_value >= 1.0:
+            raise ValueError("Invalid value for theta")
+        nterm_value = int(round(2.5 * df_value)) if nterm_value is None else nterm_value
+        return df_value, theta_value, nterm_value, 0.1 if eps_value is None else eps_value, "fixed"
+    if df_value == 0 or (method is not None and str(method) == "aic"):
+        return df_value, None, 15, 1e-5 if eps_value is None else eps_value, "aic"
+    if df_value <= 1:
+        raise ValueError("Too few degrees of freedom")
+    nterm_value = int(round(2.5 * df_value)) if nterm_value is None else nterm_value
+    if df_value > nterm_value:
+        raise ValueError(f"`nterm' too small for df={df_value:g}")
+    return df_value, None, nterm_value, 0.1 if eps_value is None else eps_value, "df"
 
 
-def _adjust_nsk_boundary_for_knots(
-    boundary_knots: tuple[float, float],
-    knots: list[float] | None,
-) -> tuple[tuple[float, float], list[float] | None]:
-    if not knots:
-        return boundary_knots, None
+def _pspline_combine(matrix: list[list[float]], combine: Any, intercept: bool) -> list[int]:
+    """R's ``combine`` argument: add up the basis columns with equal ``combine`` codes."""
 
-    kept_boundary = [boundary_knots[0], boundary_knots[1]]
-    if kept_boundary[1] <= max(knots):
-        kept_boundary = kept_boundary[:1]
-    if kept_boundary and kept_boundary[0] >= min(knots):
-        kept_boundary = kept_boundary[1:]
-
-    all_knots = _unique_sorted_floats([*knots, *kept_boundary])
-    if len(all_knots) < 2:
-        raise ValueError("at least two distinct finite knots are required")
-    return _validate_nsk_boundary_pair((all_knots[0], all_knots[-1])), all_knots[1:-1]
-
-
-def _pop_nsk_boundary_alias(kwargs: dict[str, Any], current: Any, alias: str) -> Any:
-    if alias not in kwargs:
-        return current
-    value = kwargs.pop(alias)
-    if current is not _MISSING:
-        raise ValueError(f"use only one of Boundary_knots or {alias}")
-    return value
+    codes = _float_vector(combine, "combine")
+    if any(c != math.floor(c) or c < 0 for c in codes) or any(
+        b < a for a, b in zip(codes, codes[1:], strict=False)
+    ):
+        raise ValueError("combine must be an increasing vector of positive integers")
+    ctemp = [int(c) for c in codes] if intercept else [0, *(int(c) for c in codes)]
+    if len(ctemp) != len(matrix[0]):
+        raise ValueError("wrong length for combine")
+    groups = sorted(set(ctemp))
+    for row_idx, row in enumerate(matrix):
+        matrix[row_idx] = [
+            sum(v for v, c in zip(row, ctemp, strict=True) if c == g) for g in groups
+        ]
+    return [int(c) for c in codes]
 
 
-def _normalize_nsk_boundary_knots(
-    x: list[float],
-    knots: list[float] | None,
-    b: Any,
-    boundary_arg: Any,
-) -> tuple[tuple[float, float], list[float] | None]:
-    if boundary_arg is _MISSING:
-        boundary_knots = _default_nsk_boundary_knots(x, b)
-        return _adjust_nsk_boundary_for_knots(boundary_knots, knots)
+def _second_difference_penalty(nvar: int) -> list[list[float]]:
+    """R's ``t(D) %*% D`` for the second-difference matrix ``D`` of ``nvar`` coefficients."""
 
-    if _is_bool_like(boundary_arg):
-        if bool(boundary_arg):
-            boundary_knots = _validate_nsk_boundary_pair((min(x), max(x)))
-            return _adjust_nsk_boundary_for_knots(boundary_knots, knots)
-        return _nsk_boundary_from_knots(knots)
+    diff = [
+        [1.0 if j == i else -2.0 if j == i + 1 else 1.0 if j == i + 2 else 0.0 for j in range(nvar)]
+        for i in range(max(nvar - 2, 0))
+    ]
+    return [[sum(row[i] * row[j] for row in diff) for j in range(nvar)] for i in range(nvar)]
 
+
+def pspline(
+    x: Any,
+    df: Any = 4,
+    theta: Any | None = None,
+    nterm: Any | None = None,
+    degree: Any = 3,
+    eps: Any | None = None,
+    method: Any | None = None,
+    Boundary_knots: Any | None = None,
+    intercept: Any = False,
+    penalty: Any = True,
+    combine: Any | None = None,
+    *,
+    boundary_knots: Any | None = None,
+) -> PsplineResult:
+    """The P-spline basis of R's ``pspline`` term with its penalty attributes.
+
+    ``Boundary_knots`` is R's ``Boundary.knots`` (the range of ``x`` by default); the
+    keyword ``boundary_knots`` is the same argument under the name the R bridge uses.  The
+    smoothing-parameter control functions live in the Cox fitter; ``method`` records which one
+    R would use (``fixed`` for a given ``theta``, ``aic`` for ``df = 0``, else ``df``).
+    """
+
+    if Boundary_knots is not None and boundary_knots is not None:
+        raise ValueError("use only one of Boundary_knots or boundary_knots")
+    boundary_arg = Boundary_knots if boundary_knots is None else boundary_knots
+    df_value, theta_value, nterm_value, eps_value, method_value = _pspline_method(
+        df, theta, nterm, eps, method
+    )
+    x_values = _numeric_or_nan(x, "x")
+    observed = [value for value in x_values if not math.isnan(value)]
+    if not observed:
+        raise ValueError("x must contain at least one non-missing value")
+    if nterm_value < 3:
+        raise ValueError("Too few basis functions")
     if boundary_arg is None:
-        return _nsk_boundary_from_knots(knots)
+        boundary = (min(observed), max(observed))
+    else:
+        values = _float_vector(boundary_arg, "Boundary.knots")
+        if len(values) != 2 or not values[0] < values[1]:
+            raise ValueError("Invalid values for Boundary.knots")
+        boundary = (values[0], values[1])
+    intercept_value = _normalize_bool_option(intercept, "intercept")
+    basis = _core.pspline_basis(x_values, nterm_value, _integer_scalar(degree, "degree"), boundary)
 
-    boundary_values = _normalize_numeric_sequence_or_none(boundary_arg, "Boundary.knots") or []
-    if len(boundary_values) == 0:
-        return _nsk_boundary_from_knots(knots)
-    if len(boundary_values) != 2:
-        raise ValueError("wrong length for Boundary.knots")
-
-    boundary_knots = _validate_nsk_boundary_pair(tuple(sorted(boundary_values)))
-    return _adjust_nsk_boundary_for_knots(boundary_knots, knots)
-
-
-def _computed_nsk_knots(
-    x: list[float],
-    boundary_knots: tuple[float, float],
-    df: int | None,
-    intercept: bool,
-) -> list[float] | None:
-    minimum_df = 2 if intercept else 1
-    effective_df = minimum_df if df is None else df
-    if effective_df < minimum_df:
-        return None
-
-    n_interior = effective_df - minimum_df
-    if n_interior == 0:
-        return None
-
-    low, high = boundary_knots
-    inside = sorted(value for value in x if low <= value <= high)
-    if not inside:
-        raise ValueError(
-            f"not enough x values inside Boundary.knots to compute {n_interior} interior knots"
-        )
-    return [_quantile_type7(inside, idx / (n_interior + 1)) for idx in range(1, n_interior + 1)]
-
-
-def _pspline_difference_penalty(n_cols: int) -> list[list[float]]:
-    if n_cols == 0:
-        return []
-    diff_rows = []
-    for row_idx in range(n_cols - 2):
-        row = [0.0] * n_cols
-        row[row_idx] = 1.0
-        row[row_idx + 1] = -2.0
-        row[row_idx + 2] = 1.0
-        diff_rows.append(row)
-
-    penalty = [[0.0] * n_cols for _ in range(n_cols)]
-    for row in diff_rows:
-        for i, left in enumerate(row):
-            if left == 0.0:
-                continue
-            for j, right in enumerate(row):
-                if right != 0.0:
-                    penalty[i][j] += left * right
-    return penalty
-
-
-def _frailty_missing(value: Any) -> bool:
-    return value is None or (isinstance(value, float) and math.isnan(value))
+    matrix = [list(row) for row in basis.basis]
+    combine_codes = None if combine is None else _pspline_combine(matrix, combine, intercept_value)
+    nvar = len(matrix[0])
+    dmat = _second_difference_penalty(nvar)
+    if not intercept_value:
+        matrix = [row[1:] for row in matrix]
+        dmat = [row[1:] for row in dmat[1:]]
+    knots = list(basis.knots)
+    return PsplineResult(
+        basis=matrix,
+        knots=knots,
+        nterm=basis.nterm,
+        degree=basis.degree,
+        boundary_knots=basis.boundary_knots,
+        intercept=intercept_value,
+        penalty=_normalize_bool_option(penalty, "penalty"),
+        df=df_value,
+        eps=eps_value,
+        method=method_value,
+        dmat=dmat,
+        cbase=[knots[idx] + (boundary[0] - knots[0]) for idx in range(1, nvar)],
+        theta=theta_value,
+        combine=combine_codes,
+    )
 
 
 def _frailty_encoding(
@@ -659,23 +479,24 @@ def _frailty_encoding(
     levels: Any | None = None,
     sparse: Any | None = None,
 ) -> dict[str, Any]:
-    values = _materialize_labels(x, "x")
-    if levels is None:
-        level_values = sorted({str(value) for value in values if not _frailty_missing(value)})
-    else:
-        level_values = [str(value) for value in _materialize_1d(levels, "levels")]
-    level_index = {level: idx + 1 for idx, level in enumerate(level_values)}
+    """The ``as.factor`` step of R's ``frailty`` terms: 1-based codes, levels and the sparse
+    default ``nclass > 5`` (used by the R bridge)."""
 
+    values = _materialize_labels(x, "x")
+    level_values = (
+        [str(v) for v in _materialize_1d(levels, "levels")]
+        if levels is not None
+        else sorted({str(v) for v in values if not _is_missing_value(v)})
+    )
+    level_index = {level: idx + 1 for idx, level in enumerate(level_values)}
     codes: list[int | None] = []
     for value in values:
-        if _frailty_missing(value):
+        if _is_missing_value(value):
             codes.append(None)
+        elif str(value) not in level_index:
+            raise ValueError(f"x contains value {str(value)!r} outside supplied levels")
         else:
-            key = str(value)
-            if key not in level_index:
-                raise ValueError(f"x contains value {key!r} outside supplied levels")
-            codes.append(level_index[key])
-
+            codes.append(level_index[str(value)])
     sparse_value = (
         len(level_values) > 5 if sparse is None else _normalize_bool_option(sparse, "sparse")
     )
@@ -687,960 +508,776 @@ def _frailty_encoding(
     }
 
 
-def _normalize_pspline_method(
-    df: Any,
-    theta: Any | None,
-    nterm: Any | None,
-    method: Any | None,
-    eps: Any,
-) -> tuple[int | float, float | None, int, float, str]:
-    df_value = float(df)
-    if not math.isfinite(df_value):
-        raise ValueError("df must be finite")
-    if df_value.is_integer():
-        df_value = int(df_value)
-
-    eps_value = 0.1 if eps is None else _finite_float(eps, "eps")
-    nterm_value = None if nterm is None else int(round(_finite_float(nterm, "nterm")))
-    if theta is not None:
-        theta_value = _finite_float(theta, "theta")
-        if theta_value <= 0.0 or theta_value >= 1.0:
-            raise ValueError("Invalid value for theta")
-        if nterm_value is None:
-            nterm_value = int(round(2.5 * float(df_value)))
-        return df_value, theta_value, nterm_value, eps_value, "fixed"
-
-    method_value = None if method is None else str(method).lower()
-    if float(df_value) == 0.0 or method_value == "aic":
-        return df_value, None, 15, 1e-5, "aic"
-
-    if float(df_value) <= 1.0:
-        raise ValueError("Too few degrees of freedom")
-    if nterm_value is None:
-        nterm_value = int(round(2.5 * float(df_value)))
-    if float(df_value) > nterm_value:
-        raise ValueError(f"`nterm' too small for df={df_value:g}")
-    return df_value, None, nterm_value, eps_value, "df"
+# ---------------------------------------------------------------------------
+# The model frame of survcheck
+# ---------------------------------------------------------------------------
 
 
-def _pspline_combine_matrix(
-    matrix: list[list[float]],
-    combine: Any | None,
-    intercept: bool,
-) -> tuple[list[list[float]], list[int] | None]:
-    if combine is None:
-        return matrix, None
-
-    raw_values = [float(value) for value in _materialize_1d(combine, "combine")]
-    combine_values = [int(value) for value in raw_values]
-    if any(value != math.floor(value) or value < 0.0 for value in raw_values):
-        raise ValueError("combine must be an increasing vector of positive integers")
-    if any(
-        later < earlier for earlier, later in zip(combine_values, combine_values[1:], strict=False)
-    ):
-        raise ValueError("combine must be an increasing vector of positive integers")
-
-    n_cols = len(matrix[0]) if matrix else 0
-    column_groups = combine_values if intercept else [0, *combine_values]
-    if len(column_groups) != n_cols:
-        raise ValueError("wrong length for combine")
-
-    unique_groups = sorted(set(column_groups))
-    group_index = {group: idx for idx, group in enumerate(unique_groups)}
-    combined = [[0.0] * len(unique_groups) for _ in matrix]
-    for row_idx, row in enumerate(matrix):
-        for col_idx, value in enumerate(row):
-            combined[row_idx][group_index[column_groups[col_idx]]] += value
-    return combined, combine_values
+@dataclass(frozen=True)
+class _ModelFrame:
+    response: Surv
+    extras: dict[str, list[Any] | None]
+    omitted: list[int]
 
 
-def pspline(
-    x: Any,
-    df: Any = 4,
-    theta: Any | None = None,
-    nterm: Any | None = None,
-    degree: Any = 3,
-    eps: Any = 0.1,
-    method: Any | None = None,
-    Boundary_knots: Any | None = None,
-    *,
-    boundary_knots: Any | None = None,
-    intercept: Any = False,
-    penalty: Any = True,
-    combine: Any | None = None,
-) -> dict[str, Any]:
-    """Create R-compatible ``survival::pspline`` basis data."""
+def _missing_rows(frame: Mapping[str, Any], n: int) -> set[int]:
+    """Rows with a missing value in any column; a ``Surv`` column is missing where R's ``Surv``
+    made it ``NA`` (missing time or status)."""
 
-    if Boundary_knots is not None and boundary_knots is not None:
-        raise ValueError("use only one of Boundary_knots or boundary_knots")
-    boundary_arg = boundary_knots if boundary_knots is not None else Boundary_knots
+    rows: set[int] = set()
+    for name, values in frame.items():
+        if isinstance(values, Surv):
+            rows.update(idx for idx, event in enumerate(values.event) if event is None)
+            rows.update(idx for idx, time in enumerate(values.time) if math.isnan(time))
+            if values.start is not None:
+                rows.update(idx for idx, time in enumerate(values.start) if math.isnan(time))
+        else:
+            rows.update(_missing_row_indices([(name, values)], n))
+    return rows
 
-    x_values = _float_vector(x, "x")
-    finite_x = [value for value in x_values if not math.isnan(value)]
-    if not finite_x:
-        raise ValueError("x must contain at least one non-missing value")
-    if any(math.isinf(value) for value in finite_x):
-        raise ValueError("x must contain only finite values")
 
-    degree_value = _integer_scalar(degree, "degree")
-    if degree_value < 1:
-        raise ValueError("degree must be positive")
-    intercept_value = _normalize_bool_option(intercept, "intercept")
-    penalty_value = _normalize_bool_option(penalty, "penalty")
-
-    df_value, theta_value, nterm_value, eps_value, method_value = _normalize_pspline_method(
-        df,
-        theta,
-        nterm,
-        method,
-        eps,
-    )
-    if nterm_value < 3:
-        raise ValueError("Too few basis functions")
-
-    if boundary_arg is None:
-        boundary = (min(finite_x), max(finite_x))
-    else:
-        boundary_values = _float_vector(boundary_arg, "Boundary.knots")
-        if len(boundary_values) != 2:
-            raise ValueError("Invalid values for Boundary.knots")
-        boundary = (boundary_values[0], boundary_values[1])
-    if not math.isfinite(boundary[0]) or not math.isfinite(boundary[1]):
-        raise ValueError("Invalid values for Boundary.knots")
-    if boundary[0] > boundary[1] or (boundary_arg is not None and boundary[0] == boundary[1]):
-        raise ValueError("Invalid values for Boundary.knots")
-
-    full_matrix, knots = _core.pspline_basis(
-        x_values,
-        nterm_value,
-        degree_value,
-        boundary,
-    )
-
-    full_matrix, combine_values = _pspline_combine_matrix(
-        full_matrix,
-        combine,
-        intercept_value,
-    )
-    dmat = _pspline_difference_penalty(len(full_matrix[0]) if full_matrix else 0)
-    if not intercept_value:
-        full_matrix = [row[1:] for row in full_matrix]
-        dmat = [row[1:] for row in dmat[1:]]
-
-    n_cols = len(full_matrix[0]) if full_matrix else 0
-    cbase_length = max(0, n_cols - 1) if intercept_value else n_cols
+def _take_rows(frame: Mapping[str, Any], rows: list[int]) -> dict[str, Any]:
     return {
-        "basis": full_matrix,
-        "n_cols": n_cols,
-        "nterm": nterm_value,
-        "degree": degree_value,
-        "df": df_value,
-        "theta": theta_value,
-        "eps": eps_value,
-        "method": method_value,
-        "boundary_knots": [boundary[0], boundary[1]],
-        "dmat": dmat,
-        "combine": combine_values,
-        "penalty": penalty_value,
-        "intercept": intercept_value,
-        "cbase": [knots[idx] + (boundary[0] - knots[0]) for idx in range(1, cbase_length + 1)],
+        name: _subset_surv(values, rows)
+        if isinstance(values, Surv)
+        else _subset_sequence(values, rows, name)
+        for name, values in frame.items()
     }
 
 
-def nsk(
-    x: Any,
-    df: Any | None = None,
-    knots: Any | None = None,
-    intercept: Any = False,
-    b: Any = 0.05,
-    Boundary_knots: Any = _MISSING,
-    **kwargs: Any,
-) -> Any:
-    """Create a Rust-backed natural spline basis with R ``survival::nsk`` arguments."""
+def _model_frame(
+    formula: Any, data: Any, subset: Any, na_action: Any, **extras: Any
+) -> _ModelFrame:
+    """R's ``model.frame`` for a formula with a ``Surv`` response (or a ``Surv`` object) plus
+    row-aligned arguments such as ``id`` and ``istate``, given as vectors or column names.
 
-    boundary_arg = _pop_nsk_boundary_alias(kwargs, Boundary_knots, "Boundary.knots")
-    boundary_arg = _pop_nsk_boundary_alias(kwargs, boundary_arg, "boundary_knots")
-    if kwargs:
-        unexpected = next(iter(kwargs))
-        raise TypeError(f"nsk got an unexpected keyword argument {unexpected!r}")
+    ``subset`` is applied first, then ``na.action`` to the formula variables, the response and
+    the extras; ``omitted`` records the 0-based rows of the subset that ``na.omit`` dropped.
+    """
 
-    x_values = _float_vector(x, "x")
-    if not x_values:
-        raise ValueError("x must contain at least one value")
-    observed_x = [value for value in x_values if not math.isnan(value)]
-    if not observed_x:
-        raise ValueError("x must contain at least one non-missing value")
-    if any(not math.isfinite(value) for value in observed_x):
-        raise ValueError("x must contain only finite values")
-
-    intercept_value = _normalize_bool_option(intercept, "intercept")
-    df_value: int | None = None
-    if df is not None:
-        df_value = _integer_scalar(df, "df")
-        if df_value <= 0:
-            raise ValueError("df must be positive")
-
-    normalized_knots = _normalize_nsk_knots(knots)
-    boundary_knots, core_knots = _normalize_nsk_boundary_knots(
-        observed_x,
-        normalized_knots,
-        b,
-        boundary_arg,
-    )
-    if not normalized_knots and core_knots is None:
-        core_knots = _computed_nsk_knots(observed_x, boundary_knots, df_value, intercept_value)
-    spline = _core.NaturalSplineKnot(core_knots, boundary_knots, df_value, intercept_value)
-    return spline.basis(x_values)
-
-
-def _survobrien_default_transform(values: Sequence[float]) -> list[float]:
-    n = len(values)
-    if n == 0:
-        return []
-    order = sorted(range(n), key=lambda idx: (values[idx], idx))
-    ranks = [0.0] * n
-    start = 0
-    while start < n:
-        end = start + 1
-        while end < n and values[order[end]] == values[order[start]]:
-            end += 1
-        rank_sum = sum(range(start + 1, end + 1))
-        rank = rank_sum / (end - start)
-        for pos in range(start, end):
-            ranks[order[pos]] = float(rank)
-        start = end
-    transformed = []
-    for rank in ranks:
-        probability = (rank - 0.5) / n
-        transformed.append(math.log(probability / (1.0 - probability)))
-    return transformed
-
-
-def _survobrien_transform_values(
-    values: Sequence[float],
-    transform: Any | None,
-) -> list[float]:
-    if transform is None:
-        return _survobrien_default_transform(values)
-    if not callable(transform):
-        raise TypeError("transform must be callable")
-    raw_result = transform(list(values))
-    try:
-        result = _materialize_1d(raw_result, "transform")
-    except TypeError:
-        if len(values) != 1:
-            raise
-        result = [raw_result]
-    if len(result) != len(values):
-        raise ValueError("Transform function must be 1 to 1")
-    try:
-        transformed = [float(value) for value in result]
-    except (TypeError, ValueError) as exc:
-        raise ValueError("transform must return numeric values") from exc
-    if any(not math.isfinite(value) for value in transformed):
-        raise ValueError("transform must return finite values")
-    return transformed
-
-
-def _survobrien_term_name(term: _CovariateTerm) -> str:
-    return _covariate_term_name(term)
-
-
-def _survobrien_formula_terms(
-    data: Any,
-    terms: _FormulaTerms,
-    n: int,
-) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
-    keepers: list[tuple[str, list[Any]]] = []
-    continuous: list[tuple[str, list[float]]] = []
-    for term in terms.covariates:
-        if isinstance(term, _InteractionTerm):
-            raise ValueError("This function cannot deal with interaction terms")
-        values = _term_values(data, term, n)
-        if term.categorical:
-            keepers.append((term.column, values))
-            continue
-        try:
-            numeric = [float(value) for value in values]
-        except (TypeError, ValueError):
-            keepers.append((_survobrien_term_name(term), values))
-            continue
-        if any(not math.isfinite(value) for value in numeric):
-            raise ValueError(f"formula term {term.column!r} must be finite")
-        continuous.append((_survobrien_term_name(term), numeric))
-    if not continuous:
-        raise ValueError("No continuous variables to modify")
-    return keepers, continuous
-
-
-def _survobrien_event_sets(
-    response: Surv,
-    strata_values: list[Any] | None,
-) -> list[tuple[float, list[int]]]:
-    if response.type == "right":
-        if strata_values is None:
-            event_times = sorted(
-                {
-                    float(time)
-                    for time, event in zip(response.time, response.event, strict=True)
-                    if event == 1
-                }
-            )
-            return [
-                (
-                    event_time,
-                    [idx for idx, time in enumerate(response.time) if float(time) >= event_time],
-                )
-                for event_time in event_times
-            ]
-
-        seen: set[tuple[float, Any]] = set()
-        result: list[tuple[float, list[int]]] = []
-        for event_time, event, stratum in zip(
-            response.time,
-            response.event,
-            strata_values,
-            strict=True,
-        ):
-            if event != 1:
-                continue
-            key = (float(event_time), _hashable_group_value(stratum))
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(
-                (
-                    float(event_time),
-                    [
-                        idx
-                        for idx, (row_event, row_stratum) in enumerate(
-                            zip(response.event, strata_values, strict=True)
-                        )
-                        if float(row_event) >= float(event_time) and row_stratum == stratum
-                    ],
-                )
-            )
-        return result
-
-    if response.type == "counting":
-        if response.start is None:
-            raise ValueError("counting Surv response is missing start times")
-        if strata_values is None:
-            event_times = sorted(
-                {
-                    float(stop)
-                    for stop, event in zip(response.time, response.event, strict=True)
-                    if event == 1
-                }
-            )
-            return [
-                (
-                    event_time,
-                    [
-                        idx
-                        for idx, (start, stop) in enumerate(
-                            zip(response.start, response.time, strict=True)
-                        )
-                        if float(start) < event_time <= float(stop)
-                    ],
-                )
-                for event_time in event_times
-            ]
-
-        seen: set[tuple[float, Any]] = set()
-        result: list[tuple[float, list[int]]] = []
-        for event_time, event, stratum in zip(
-            response.time,
-            response.event,
-            strata_values,
-            strict=True,
-        ):
-            if event != 1:
-                continue
-            event_time_float = float(event_time)
-            stratum_key = _hashable_group_value(stratum)
-            key = (event_time_float, stratum_key)
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(
-                (
-                    event_time_float,
-                    [
-                        idx
-                        for idx, (start, stop, row_stratum) in enumerate(
-                            zip(
-                                response.start,
-                                response.time,
-                                strata_values,
-                                strict=True,
-                            )
-                        )
-                        if float(start) < event_time_float <= float(stop)
-                        and _hashable_group_value(row_stratum) != stratum_key
-                    ],
-                )
-            )
-        return result
-
-    raise ValueError("Response must be right censored or (start, stop] data")
-
-
-def _survobrien_formula_frame(
-    formula: str,
-    data: Any,
-    *,
-    subset: Any | None,
-    na_action: Any | None,
-    transform: Any | None,
-) -> dict[str, list[Any]]:
-    if data is None:
-        raise ValueError("survobrien formula requires data")
+    action = _normalize_na_action(na_action)
+    if isinstance(formula, Surv):
+        frame: dict[str, Any] = {"(response)": formula}
+        n = len(formula)
+    else:
+        if data is None:
+            raise ValueError("a data argument is required to evaluate the formula")
+        frame = {name: _column_source(data, name) for name in _formula_columns(formula, data)}
+        n = len(_column(data, next(iter(frame))))
+    for name in [name for name, values in extras.items() if values is not None]:
+        frame[name] = _column_or_values(data, extras[name], name)
+        if len(_materialize_labels(frame[name], name)) != n:
+            raise ValueError(f"wrong length for {name}")
     if subset is not None:
-        data, _aligned = _subset_formula_inputs(formula, data, subset)
-    data, _aligned = _apply_formula_na_action(formula, data, na_action)
-    response, terms = _parse_formula(formula, data)
-    if len(terms.clusters) > 1:
-        raise ValueError("Can have only 1 cluster term")
-    n = len(response)
-    keepers, continuous = _survobrien_formula_terms(data, terms, n)
-    strata_values = _combined_columns(data, terms.strata, n) if terms.strata else None
-    event_sets = _survobrien_event_sets(response, strata_values)
-
-    row_indices: list[int] = []
-    set_numbers: list[int] = []
-    event_times: list[float] = []
-    for set_idx, (event_time, indices) in enumerate(event_sets, start=1):
-        row_indices.extend(indices)
-        set_numbers.extend([set_idx] * len(indices))
-        event_times.extend([event_time] * len(indices))
-
-    frame: dict[str, list[Any]] = {}
-    if response.type == "counting":
-        if response.start is None:
-            raise ValueError("counting Surv response is missing start times")
-        frame["start"] = [float(response.start[idx]) for idx in row_indices]
-        frame["stop"] = [float(response.time[idx]) for idx in row_indices]
-    else:
-        frame["time"] = [float(response.time[idx]) for idx in row_indices]
-    frame["status"] = [
-        1 if response.event[idx] == 1 and float(response.time[idx]) == event_time else 0
-        for idx, event_time in zip(row_indices, event_times, strict=True)
-    ]
-    for name, values in keepers:
-        frame[name] = [values[idx] for idx in row_indices]
-    if not terms.clusters:
-        frame[".id."] = [idx + 1 for idx in row_indices]
-
-    group_sizes = [len(indices) for _event_time, indices in event_sets]
-    if transform is None:
-        transformed_columns = _core.survobrien_transform_groups(
-            [values for _name, values in continuous],
-            row_indices,
-            group_sizes,
-        )
-        for (name, _values), output in zip(
-            continuous,
-            transformed_columns,
-            strict=True,
-        ):
-            frame[name] = output
-    else:
-        for name, values in continuous:
-            output = [0.0] * len(row_indices)
-            offset = 0
-            for group_size in group_sizes:
-                positions = range(offset, offset + group_size)
-                transformed = _survobrien_transform_values(
-                    [values[row_indices[pos]] for pos in positions],
-                    transform,
-                )
-                output[offset : offset + group_size] = transformed
-                offset += group_size
-            frame[name] = output
-    frame[".strata."] = set_numbers
-    return frame
-
-
-def survobrien(
-    time: Any,
-    status: Any | None = None,
-    covariate: Any | None = None,
-    strata: Any | None = None,
-    *,
-    data: Any | None = None,
-    subset: Any | None = None,
-    na_action: Any | None = "fail",
-    transform: Any | None = None,
-) -> SurvObrienResult | dict[str, list[Any]]:
-    """Run O'Brien's direct statistic or build R-style formula transformed rows."""
-
-    if isinstance(time, str) and "~" in time:
-        formula_data = data if data is not None else status
-        return _survobrien_formula_frame(
-            time,
-            formula_data,
-            subset=subset,
-            na_action=na_action,
-            transform=transform,
-        )
-    if status is None or covariate is None:
-        raise TypeError("direct survobrien calls require time, status, and covariate")
-
-    time_values = _float_vector(time, "time")
-    strata_groups = None
-    if strata is not None:
-        strata_values = _materialize_labels(strata, "strata")
-        if len(strata_values) != len(time_values):
-            raise ValueError("strata length mismatch")
-        strata_groups = _encode_groups(strata_values, len(time_values))
-    return _core.survobrien(
-        time_values,
-        _integer_code_vector(status, "status", "0/1 event coding"),
-        _float_vector(covariate, "covariate"),
-        strata_groups,
+        frame = _take_rows(frame, _subset_indices(subset, n))
+        n = len(next(iter(frame.values())))
+    omitted: list[int] = []
+    kept = list(range(n))
+    # na.omit before building the response (a missing variable), then on the response itself
+    for build_response in (True, False):
+        missing = _missing_rows(frame, len(kept))
+        if missing and action == "fail":
+            raise ValueError("missing values in object")
+        if missing and action == "omit":
+            rows = [idx for idx in range(len(kept)) if idx not in missing]
+            omitted.extend(kept[idx] for idx in missing)
+            kept = [kept[idx] for idx in rows]
+            frame = _take_rows(frame, rows)
+        if build_response and not isinstance(formula, Surv):
+            frame["(response)"] = _parse_formula(formula, frame)[0]
+    return _ModelFrame(
+        response=frame["(response)"],
+        extras={
+            name: None if name not in frame else _materialize_labels(frame[name], name)
+            for name in extras
+        },
+        omitted=sorted(omitted),
     )
 
 
-def yates(
-    predictions: Any,
-    factor: Any,
-    weights: Any | None = None,
-    conf_level: Any | None = None,
-) -> YatesResult:
-    """Compute direct Yates-style adjusted means from predictions and a factor."""
-
-    prediction_values = _float_vector(predictions, "predictions")
-    factor_values = [str(value) for value in _materialize_labels(factor, "factor")]
-    weight_values = None if weights is None else _float_vector(weights, "weights")
-    confidence = None if conf_level is None else _normalize_conf_level(conf_level)
-    return _core.yates(prediction_values, factor_values, weight_values, confidence)
+# ---------------------------------------------------------------------------
+# survcheck
+# ---------------------------------------------------------------------------
 
 
-def yates_contrast(
-    x: Any,
-    coef: Any,
-    n_obs: Any,
-    n_vars: Any,
-    factor_col: Any,
-    factor_levels: Any,
-    predict_type: str | None = None,
-) -> YatesResult:
-    """Compute model-based direct Yates contrasts from a flattened design matrix."""
+def _survcheck_states(response: Surv) -> list[str]:
+    """The state names R forces onto the response (``event`` for 0/1 data)."""
 
-    return _core.yates_contrast(
-        _float_vector(x, "x"),
-        _float_vector(coef, "coef"),
-        _integer_scalar(n_obs, "n_obs"),
-        _integer_scalar(n_vars, "n_vars"),
-        _integer_scalar(factor_col, "factor_col"),
-        _float_vector(factor_levels, "factor_levels"),
-        predict_type,
+    if response.type in {"right", "counting"}:
+        return ["event"]
+    if response.type not in {"mright", "mcounting"}:
+        raise ValueError("response must be right censored")
+    return list(response.states)
+
+
+def _survcheck_problem(
+    problem: Any, row_numbers: list[int], id_levels: list[Any]
+) -> SurvCheckProblem | None:
+    if problem is None:
+        return None
+    return SurvCheckProblem(
+        row=[row_numbers[row] for row in problem.row],
+        id=[id_levels[code - 1] for code in problem.id],
     )
 
 
-def yates_pairwise(result: YatesResult) -> YatesPairwiseResult:
-    """Compute pairwise differences from a direct Yates result."""
+def _survcheck_codes(
+    id: Any, time1: Any, time2: Any, status: Any, istate: Any | None
+) -> SurvCheckCodes:
+    """The response given as integer codes, the way the R bridge calls ``survcheck`` after
+    evaluating the model frame in R: ``id`` as ``match(id, unique(id))``, ``status`` as ``0``
+    (censored) or the code of the target state and ``istate`` as codes of the same states.
+    The states are only known by their codes, so they are named after them.
+    """
 
-    return _core.yates_pairwise(result)
-
-
-def _cipoisson_count(value: Any) -> float | None:
-    if _is_missing_value(value):
-        return None
-    count = float(value)
-    if count < 0:
-        raise ValueError("k must be non-negative")
-    return count
-
-
-def _cipoisson_float(value: Any, name: str) -> float | None:
-    if _is_missing_value(value):
-        return None
-    return float(value)
-
-
-def cipoisson(
-    k: Any,
-    time: Any = 1.0,
-    p: Any = 0.95,
-    method: Any = "exact",
-) -> tuple[float, float] | list[tuple[float, float]]:
-    """Return Poisson rate confidence intervals, like R's ``cipoisson``."""
-
-    if not isinstance(method, str):
-        raise TypeError("method must be a string")
-    method_value = method.strip().lower()
-    k_values = _scalar_or_vector(k, "k")
-    time_values = _scalar_or_vector(time, "time")
-    p_values = _scalar_or_vector(p, "p")
-    n = max(len(k_values), len(time_values), len(p_values))
-    if n == 0:
-        return []
-
-    k_values = _recycle_r_vector(k_values, n, "k")
-    time_values = _recycle_r_vector(time_values, n, "time")
-    p_values = _recycle_r_vector(p_values, n, "p")
-    if not k_values or not time_values or not p_values:
-        return []
-
-    intervals: list[tuple[float, float]] = []
-    for raw_k, raw_time, raw_p in zip(k_values, time_values, p_values, strict=True):
-        count = _cipoisson_count(raw_k)
-        exposure = _cipoisson_float(raw_time, "time")
-        confidence = _cipoisson_float(raw_p, "p")
-        if count is None or exposure is None or exposure <= 0.0:
-            intervals.append((math.nan, math.nan))
-            continue
-        if confidence is None:
-            intervals.append(
-                (0.0, math.nan) if method_value == "exact" and count == 0 else (math.nan, math.nan)
-            )
-            continue
-        lower, upper = _core.cipoisson(count, exposure, confidence, method_value)
-        intervals.append((float(lower), float(upper)))
-
-    return intervals[0] if n == 1 else intervals
-
-
-def _bounded_link_transform(x: Any, edge: Any, method_name: str) -> float | list[float]:
-    edge_value = _finite_float(edge, "edge")
-    values, is_scalar = _scalar_or_vector_with_flag(x, "x")
-    link = _core.LinkFunctionParams(edge_value)
-    transform = getattr(link, f"{method_name}_many")
-    prepared = [None if _is_missing_value(value) else float(value) for value in values]
-    result = [float(value) for value in transform(prepared)]
-    return result[0] if is_scalar else result
-
-
-def blogit(x: Any, edge: Any = 0.05) -> float | list[float]:
-    """Return R survival's bounded logit link transform."""
-
-    return _bounded_link_transform(x, edge, "blogit")
-
-
-def bprobit(x: Any, edge: Any = 0.05) -> float | list[float]:
-    """Return R survival's bounded probit link transform."""
-
-    return _bounded_link_transform(x, edge, "bprobit")
-
-
-def bcloglog(x: Any, edge: Any = 0.05) -> float | list[float]:
-    """Return R survival's bounded complementary log-log link transform."""
-
-    return _bounded_link_transform(x, edge, "bcloglog")
-
-
-def blog(x: Any, edge: Any = 0.05) -> float | list[float]:
-    """Return R survival's bounded log link transform."""
-
-    return _bounded_link_transform(x, edge, "blog")
-
-
-def _survcheck_old_style_call(
-    id_values: Any,
-    time1: Any,
-    time2: Any,
-    status: Any,
-    istate: Any | None,
-):
-    return _core.survcheck(
-        _survcheck_integer_labels(id_values, "id"),
-        _float_vector(time1, "time1"),
+    status_codes = _int_vector(status, "status")
+    istate_codes = None if istate is None else _int_vector(istate, "istate")
+    n_states = max([0, *status_codes, *(istate_codes or [])])
+    states = [str(code) for code in range(1, n_states + 1)]
+    raw = _core.survcheck(
+        _int_vector(id, "id"),
         _float_vector(time2, "time2"),
-        _int_vector(status, "status"),
-        None if istate is None else _survcheck_integer_labels(istate, "istate"),
+        status_codes,
+        states,
+        time1=None if time1 is None else _float_vector(time1, "time1"),
+        istate=istate_codes,
+        istate_levels=None if istate_codes is None else states,
+        timefix=False,
     )
 
+    def rows(problem: Any) -> list[int]:
+        return [] if problem is None else list(problem.row)
 
-def _survcheck_response_from_formula(
-    formula: str,
-    data: Any,
-    subset: Any | None,
-    na_action: str | None,
-    id_values: Any | None,
-    istate: Any | None,
-) -> tuple[Surv, Any | None, Any | None]:
-    if data is None:
-        raise ValueError("survcheck formula requires data")
-    id_values = _column_or_values(data, id_values, "id") if id_values is not None else None
-    istate = _column_or_values(data, istate, "istate") if istate is not None else None
-    if subset is not None:
-        data, aligned = _subset_formula_inputs(
-            formula,
-            data,
-            subset,
-            id=id_values,
-            istate=istate,
-        )
-        id_values = aligned["id"]
-        istate = aligned["istate"]
-    data, aligned = _apply_formula_na_action(
-        formula,
-        data,
-        na_action,
-        id=id_values,
-        istate=istate,
+    return SurvCheckCodes(
+        current_states=[0 if state == "(s0)" else int(state) for state in raw.istate],
+        overlap_rows=rows(raw.overlap),
+        gap_rows=rows(raw.gap),
+        jump_rows=rows(raw.jump),
+        teleport_rows=rows(raw.teleport),
+        n_transitions=raw.n_transitions,
     )
-    response, _terms = _parse_formula(formula, data)
-    return response, aligned["id"], aligned["istate"]
 
 
 def survcheck(
-    response: Any = _MISSING,
+    formula: Any = _MISSING,
     data: Any | None = None,
     subset: Any | None = None,
-    na_action: Any | None = "pass",
+    na_action: Any | None = "na.omit",
     id: Any | None = None,
     istate: Any | None = None,
     istate0: str = "(s0)",
     timefix: bool = True,
     *,
-    time1: Any = _MISSING,
-    time2: Any = _MISSING,
-    status: Any = _MISSING,
-    **kwargs: Any,
-):
-    """Check survival response consistency, like R's ``survcheck`` for common inputs."""
+    time1: Any | None = None,
+    time2: Any | None = None,
+    status: Any | None = None,
+) -> SurvCheckResult | SurvCheckCodes:
+    """Consistency checks of (multi-state) survival data, like R's ``survcheck``.
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "pass")
-    if kwargs:
-        unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"survcheck got unexpected keyword argument(s): {unexpected}")
+    ``formula`` is ``Surv(...) ~ ...`` evaluated in ``data`` (or a ``Surv`` object); ``id`` and
+    ``istate`` are column names of ``data`` or vectors.  Problem rows are reported as 1-based
+    row numbers of ``data`` after ``subset``, as R does.
 
-    if response is _MISSING:
-        if time1 is _MISSING or time2 is _MISSING or status is _MISSING or id is None:
-            raise TypeError(
-                "survcheck requires a Surv response/formula or low-level "
-                "id=, time1=, time2=, and status= vectors"
-            )
-        return _survcheck_old_style_call(id, time1, time2, status, istate)
-    if time1 is not _MISSING or time2 is not _MISSING or status is not _MISSING:
-        raise TypeError("time1, time2, and status are only valid for low-level survcheck calls")
+    The R bridge evaluates the model frame itself and passes the response as integer codes
+    (``id``, ``time1``, ``time2``, ``status`` and optionally ``istate``) without a formula; that
+    form returns the row-level ``SurvCheckCodes``.
+    """
 
-    if not isinstance(response, Surv | str):
-        if data is None or subset is None or na_action is None:
-            raise TypeError(
-                "survcheck requires a Surv response/formula or low-level "
-                "(id, time1, time2, status) vectors"
-            )
-        return _survcheck_old_style_call(response, data, subset, na_action, id)
-
+    if formula is _MISSING:
+        if time2 is None or status is None or id is None:
+            raise ValueError("a formula argument is required")
+        return _survcheck_codes(id, time1, time2, status, istate)
+    if time1 is not None or time2 is not None or status is not None:
+        raise ValueError("time1, time2 and status are only used when no formula is given")
     if not isinstance(timefix, bool):
-        raise TypeError("timefix must be True or False")
-    if not isinstance(istate0, str):
-        raise TypeError("istate0 must be a string")
-
-    id_values = id
-    if isinstance(response, str):
-        response, id_values, istate = _survcheck_response_from_formula(
-            response,
-            data,
-            subset,
-            _normalize_na_action(na_action),
-            id_values,
-            istate,
-        )
-        subset = None
-        na_action = "pass"
-    elif subset is not None:
-        indices = _subset_indices(subset, len(response))
-        response = _subset_surv(response, indices)
-        id_values = _subset_optional_sequence(id_values, indices, "id")
-        istate = _subset_optional_sequence(istate, indices, "istate")
-        subset = None
-
-    response, aligned = _apply_surv_na_action(
-        response,
-        _normalize_na_action(na_action),
-        "survcheck inputs",
-        id=id_values,
-        istate=istate,
-    )
-    id_values = aligned["id"]
-    istate = aligned["istate"]
-
-    if response.type == "right":
-        times = list(response.time)
-        if timefix:
-            times = _survdiff_timefix_values(times, True)
-        return _core.survcheck_simple(times, list(response.event))
-    if response.type not in {"counting", "mright", "mcounting"}:
-        raise ValueError(f"survcheck is not valid for {response.type} censored survival data")
-    if response.type in {"counting", "mcounting"} and response.start is None:
-        raise ValueError("counting Surv response is missing start times")
+        raise ValueError("invalid value for timefix option")
+    frame = _model_frame(formula, data, subset, na_action, id=id, istate=istate)
+    response = frame.response
+    n = len(response)
+    if n == 0:
+        raise ValueError("No (non-missing) observations")
+    states = _survcheck_states(response)
+    id_values = frame.extras["id"]
     if id_values is None:
         raise ValueError("an id argument is required")
-    if len(_materialize_labels(id_values, "id")) != len(response):
-        raise ValueError("id must have the same length as the Surv response")
-    if istate is not None and len(_materialize_labels(istate, "istate")) != len(response):
-        raise ValueError("istate must have the same length as the Surv response")
+    if len(id_values) != n:
+        raise ValueError("wrong length for id")
+    istate_values = frame.extras["istate"]
+    if istate_values is not None and len(istate_values) != n:
+        raise ValueError("wrong length for istate")
 
-    start = [0.0] * len(response) if response.start is None else list(response.start)
-    stop = list(response.time)
-    if timefix:
-        start, stop = _timefix_vectors(start, stop)
-    status_values = list(response.event)
-    initial_codes: list[int] | None
-    if response.type in {"mright", "mcounting"} and istate is not None:
-        initial_labels = _materialize_labels(istate, "istate")
-        state_names = list(dict.fromkeys([*map(str, initial_labels), *response.states]))
-        state_index = {name: index + 1 for index, name in enumerate(state_names)}
-        initial_codes = [state_index[str(value)] for value in initial_labels]
-        status_values = [
-            0 if value == 0 else state_index[response.states[int(value) - 1]]
-            for value in response.event
-        ]
-    else:
-        initial_codes = None if istate is None else _survcheck_integer_labels(istate, "istate")
-    return _core.survcheck(
-        _survcheck_integer_labels(id_values, "id"),
-        start,
-        stop,
-        status_values,
-        initial_codes,
+    id_levels = _unique_in_order(id_values)
+    id_codes = {value: code for code, value in enumerate(id_levels, start=1)}
+    istate_levels = None if istate_values is None else _r_factor_levels(istate_values)
+    raw = _core.survcheck(
+        [id_codes[value] for value in id_values],
+        list(response.time),
+        [int(event) for event in response.event],
+        states,
+        time1=None if response.start is None else list(response.start),
+        istate=None
+        if istate_levels is None
+        else [istate_levels.index(value) + 1 for value in istate_values],
+        istate_levels=None if istate_levels is None else [str(v) for v in istate_levels],
+        istate0=istate0,
+        timefix=timefix,
+    )
+    # R reports rows of the data before missing values were removed.
+    row_numbers = [idx + 1 for idx in range(n + len(frame.omitted)) if idx not in frame.omitted]
+    return SurvCheckResult(
+        states=raw.states,
+        transitions=raw.transitions,
+        events=raw.events,
+        flag=raw.flag,
+        istate=raw.istate,
+        n_id=raw.n_id,
+        n_observations=raw.n_observations,
+        n_transitions=raw.n_transitions,
+        overlap=_survcheck_problem(raw.overlap, row_numbers, id_levels),
+        gap=_survcheck_problem(raw.gap, row_numbers, id_levels),
+        jump=_survcheck_problem(raw.jump, row_numbers, id_levels),
+        teleport=_survcheck_problem(raw.teleport, row_numbers, id_levels),
+        y=response,
+        id=list(id_values),
+        na_action=[idx + 1 for idx in frame.omitted] or None,
     )
 
 
-def _sample_variance(values: Sequence[float]) -> float:
-    n = len(values)
-    if n < 2:
-        return 0.0
-    mean = math.fsum(values) / n
-    return math.fsum((value - mean) ** 2 for value in values) / (n - 1)
+# ---------------------------------------------------------------------------
+# survobrien
+# ---------------------------------------------------------------------------
 
 
-def _rank_average(values: Sequence[float]) -> list[float]:
-    indexed = sorted(enumerate(values), key=lambda item: (item[1], item[0]))
-    ranks = [0.0] * len(values)
-    idx = 0
-    while idx < len(indexed):
-        end = idx + 1
-        while end < len(indexed) and indexed[end][1] == indexed[idx][1]:
-            end += 1
-        rank = (idx + 1 + end) / 2.0
-        for pos in range(idx, end):
-            ranks[indexed[pos][0]] = rank
-        idx = end
-    return ranks
+def _survobrien_columns(
+    data: Any, covariates: Sequence[Any], n: int
+) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
+    """Split the model terms into the factor ones R leaves alone and the continuous ones it
+    transforms."""
+
+    keepers: list[tuple[str, list[Any]]] = []
+    continuous: list[tuple[str, list[float]]] = []
+    for term in covariates:
+        if isinstance(term, _InteractionTerm):
+            raise ValueError("This function cannot deal with iteraction terms")
+        values = _term_values(data, term, n)
+        numeric = None
+        if not term.categorical:
+            try:
+                numeric = [float(value) for value in values]
+            except (TypeError, ValueError):
+                numeric = None
+        if numeric is None:
+            keepers.append((term.column, values))
+        else:
+            continuous.append((_covariate_term_name(term), numeric))
+    if not continuous:
+        raise ValueError("No continuous variables to modify")
+    return keepers, continuous
 
 
-def _rank_first(values: Sequence[float]) -> list[int]:
-    indexed = sorted(enumerate(values), key=lambda item: (item[1], item[0]))
-    ranks = [0] * len(values)
-    for rank, (original_idx, _value) in enumerate(indexed, start=1):
-        ranks[original_idx] = rank
-    return ranks
+def _survobrien_transformed(
+    transform: Callable[..., Any] | None,
+    continuous: list[tuple[str, list[float]]],
+    expansion: Any,
+) -> dict[str, list[float]]:
+    """The transformed columns: the Rust logit-rank default, or ``transform`` applied to the
+    values of every risk set (R's ``lapply(indx, function(x) transform(z[x]))``)."""
+
+    if transform is None:
+        return {
+            name: list(column)
+            for (name, _values), column in zip(continuous, expansion.transformed, strict=True)
+        }
+    blocks: dict[int, list[int]] = {}
+    for position, block in enumerate(expansion.strata):
+        blocks.setdefault(block, []).append(position)
+    out: dict[str, list[float]] = {}
+    for name, values in continuous:
+        column = [0.0] * len(expansion.row)
+        for positions in blocks.values():
+            result = _float_vector(
+                transform([values[expansion.row[p]] for p in positions]), "transform"
+            )
+            if len(result) != len(positions):
+                raise ValueError("Transform function must be 1 to 1")
+            for position, value in zip(positions, result, strict=True):
+                column[position] = value
+        out[name] = column
+    return out
 
 
-def _royston_normal_scores(eta: Sequence[float], ties: bool) -> list[float]:
-    n = len(eta)
-    normal = NormalDist()
-    if ties and len(set(eta)) != n:
-        z = [normal.inv_cdf((rank - 0.375) / (n + 0.25)) for rank in range(1, n + 1)]
-        rank_first = _rank_first(eta)
-        grouped: dict[float, list[float]] = {value: [] for value in sorted(set(eta))}
-        for value, rank in zip(eta, rank_first, strict=True):
-            grouped[value].append(z[rank - 1])
-        means = {value: math.fsum(scores) / len(scores) for value, scores in grouped.items()}
-        return [means[value] for value in eta]
+def survobrien(
+    formula: str,
+    data: Any | None = None,
+    subset: Any | None = None,
+    na_action: Any | None = "na.omit",
+    transform: Callable[..., Any] | None = None,
+) -> dict[str, list[Any]]:
+    """O'Brien's logit-rank expansion of a data set, like R's ``survobrien``.
 
-    return [normal.inv_cdf((rank - 0.375) / (n + 0.25)) for rank in _rank_average(eta)]
+    Returns the expanded data frame (a mapping of columns): the response, the untransformed
+    factor columns, the ``strata`` and ``cluster`` columns (or ``.id.``, the source row), the
+    transformed continuous variables and the risk-set number ``.strata.``.
+    """
+
+    if (
+        transform is not None
+        and len(_materialize_1d(transform(list(range(1, 11))), "transform")) != 10
+    ):
+        raise ValueError("Transform function must be 1 to 1")
+    if data is None:
+        raise ValueError("a data argument is required to evaluate the formula")
+    if subset is not None:
+        data, _aligned = _subset_formula_inputs(formula, data, subset)
+    data, _aligned = _apply_formula_na_action(formula, data, na_action)
+    response, terms = _parse_formula(formula, data)
+    n = len(response)
+    if response.type not in {"right", "counting"}:
+        raise ValueError("Response must be right censored or (start, stop] data")
+    if len(terms.clusters) > 1:
+        raise ValueError("Can have only 1 cluster term")
+    keepers, continuous = _survobrien_columns(data, terms.covariates, n)
+    strata_codes = None
+    if terms.strata:
+        strata_values = _combined_columns(data, terms.strata, n)
+        levels = _unique_in_order(strata_values)
+        strata_codes = [levels.index(value) for value in strata_values]
+    expansion = _core.survobrien(
+        list(response.time),
+        [int(event) for event in response.event],
+        [values for _name, values in continuous],
+        start=None if response.start is None else list(response.start),
+        strata=strata_codes,
+    )
+    rows = list(expansion.row)
+    frame: dict[str, list[Any]] = {}
+    if expansion.start is not None:
+        frame["start"] = list(expansion.start)
+        frame["stop"] = list(expansion.time)
+    else:
+        frame["time"] = list(expansion.time)
+    frame["status"] = list(expansion.status)
+    for name, values in keepers:
+        frame[name] = [values[row] for row in rows]
+    for name in [*terms.strata, *terms.clusters]:
+        frame[name] = list(_subset_sequence(_column(data, name), rows, name))
+    if not terms.clusters:
+        frame[".id."] = [row + 1 for row in rows]
+    frame.update(_survobrien_transformed(transform, continuous, expansion))
+    frame[".strata."] = list(expansion.strata)
+    return frame
 
 
-def _royston_gonen_heller(eta: Sequence[float]) -> float:
-    if len(eta) < 2:
-        return math.nan
-    ordered = sorted(eta)
-    total = 0.0
-    for idx, value in enumerate(ordered[:-1]):
-        total += math.fsum(1.0 / (1.0 + math.exp(value - later)) for later in ordered[idx + 1 :])
-    return total * 2.0 / (len(ordered) * (len(ordered) - 1))
-
-
-def _royston_response_for_fit(fit: Any, newdata: Any | None) -> Surv:
-    if newdata is None:
-        response = getattr(fit, "y", None)
-        return response if isinstance(response, Surv) else _cox_training_response(fit)
-    design = _formula_design_for_fit(fit)
-    if design is None:
-        raise ValueError("newdata royston predictions require a formula Cox model")
-    return _surv_from_formula_design(newdata, design)
+# ---------------------------------------------------------------------------
+# royston
+# ---------------------------------------------------------------------------
 
 
 def royston(
-    fit: Any,
-    newdata: Any | None = None,
-    ties: Any = True,
-    adjust: Any = False,
+    fit: Any, newdata: Any | None = None, ties: Any = True, adjust: Any = False
 ) -> dict[str, float]:
-    """R-compatible ``survival::royston`` statistics for fitted Cox models."""
+    """Royston and Sauerbrei's D and the related R-squared measures of a Cox model.
 
-    if not _is_coxph_fit(fit):
-        raise TypeError("function defined only for coxph models")
+    Returns R's named vector as a dict: ``D``, ``se(D)``, ``R.D``, ``R.KO``, ``R.N`` and
+    ``C.GH``; ``R.N`` (Nagelkerke's R-squared) is not defined for ``newdata`` and is omitted
+    then, as in R.
+    """
+
+    engine = _coxph_engine(fit, "function defined only for coxph models")
     ties_value = _normalize_bool_option(ties, "ties")
     adjust_value = _normalize_bool_option(adjust, "adjust")
-    response = _royston_response_for_fit(fit, newdata)
-    if response.type not in {"right", "counting"}:
-        raise ValueError("royston requires a right-censored or counting-process response")
-
-    eta = [float(value) for value in predict(fit, newdata, type="lp")]
-    if newdata is not None:
-        preliminary = coxph(response, x=[[value] for value in eta])
-        eta = [float(value) for value in predict(preliminary, type="lp")]
-
-    n = len(eta)
-    if n != len(response):
-        raise ValueError("linear predictor length must match response length")
-    if n < 2:
-        raise ValueError("at least two observations are required")
-
-    qhat = _royston_normal_scores(eta, ties_value)
-    rfit = coxph(response, x=[[value] for value in qhat])
-    beta_values = _cox_beta(rfit)
-    if len(beta_values) != 1:
-        raise ValueError("internal royston Cox fit did not return one coefficient")
-    beta = beta_values[0]
-    variance = _cox_variance_matrix(_unwrap_formula_fit(rfit), 1)[0][0]
-
-    pi = math.pi
-    d_value = beta * math.sqrt(8.0 / pi)
-    se_d = math.sqrt(max(variance, 0.0) * 8.0 / pi)
-    r_d = beta * beta / (pi * pi / 6.0 + beta * beta)
-    r_i = beta * beta / (1.0 + beta * beta)
-
-    if adjust_value:
-        n_events = sum(1 for value in response.event if value == 1)
-        n_coef = len(_cox_beta(fit))
-        if n_events <= n_coef:
-            raise ValueError("adjusted royston statistic requires events > model coefficients")
-        ratio = n_events / (n_events - n_coef)
-        temp = (1.0 + beta * beta - ratio) / ratio
-        d_value = math.copysign(math.sqrt(abs(temp) * 8.0 / pi), beta * temp)
-        se_d = se_d * abs(beta) / (ratio * math.sqrt(abs(temp))) if temp != 0.0 else math.inf
-        r_d = 1.0 - ratio * (1.0 - r_i)
-
-    eta_variance = _sample_variance(eta)
-    result = {
-        "D": d_value,
-        "se(D)": se_d,
-        "R.D": r_d,
-        "R.KO": eta_variance / (pi * pi / 6.0 + eta_variance),
-        "C.GH": _royston_gonen_heller(eta),
-    }
     if newdata is None:
-        loglik_values = _cox_loglik_values(_unwrap_formula_fit(fit))
-        logtest = -2.0 * (loglik_values[0] - loglik_values[1])
-        denominator = 1.0 - math.exp(2.0 * loglik_values[0] / n)
-        result["R.N"] = (
-            (1.0 - math.exp(-logtest / n)) / denominator if denominator != 0.0 else math.nan
+        eta = list(engine.linear_predictors)
+        response = _fit_response(engine)
+    else:
+        if engine.strata is not None:
+            raise ValueError("cannot use newdata for a stratified model")
+        response = _newdata_response(fit, newdata)
+        eta = _float_vector(_models.predict(fit, newdata, type="lp"), "eta")
+        # rescale: eta <- coxph(y2 ~ eta)$linear.predictor
+        eta = list(
+            _core.coxph_fit(
+                list(response.time),
+                [int(event) for event in response.event],
+                [[value] for value in eta],
+                entry=None if response.start is None else list(response.start),
+            ).linear_predictors
         )
-        return {
-            "D": result["D"],
-            "se(D)": result["se(D)"],
-            "R.D": result["R.D"],
-            "R.KO": result["R.KO"],
-            "R.N": result["R.N"],
-            "C.GH": result["C.GH"],
-        }
-    return result
+    result = _core.royston(
+        eta,
+        list(response.time),
+        [int(event) for event in response.event],
+        list(engine.loglik),
+        engine.nevent,
+        len(engine.coefficients),
+        entry_times=None if response.start is None else list(response.start),
+        ties=ties_value,
+        adjust=adjust_value,
+    )
+    values = {"D": result.d, "se(D)": result.se_d, "R.D": result.r_d, "R.KO": result.r_ko}
+    if newdata is None:
+        values["R.N"] = result.r_n
+    values["C.GH"] = result.c_gh
+    return values
+
+
+# ---------------------------------------------------------------------------
+# brier
+# ---------------------------------------------------------------------------
+
+
+def _brier_weights(weights: Sequence[Any] | None, n: int) -> list[float]:
+    if weights is None:
+        return [1.0] * n
+    try:
+        values = [float(value) for value in weights]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("weights must be numeric") from exc
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("weights must be finite")
+    if any(value < 0.0 for value in values):
+        raise ValueError("weights must be non-negative")
+    return values
+
+
+def _brier_is_simple(response: Surv, id_values: Sequence[Any] | None) -> bool:
+    """R's ``survcheck2`` gate: no data problems, one starting state and a common entry time."""
+
+    if id_values is None:
+        return True
+    levels = _unique_in_order(id_values)
+    codes = {value: code for code, value in enumerate(levels, start=1)}
+    check = _core.survcheck(
+        [codes[value] for value in id_values],
+        list(response.time),
+        [int(event) for event in response.event],
+        list(response.states) or ["event"],
+        time1=None if response.start is None else list(response.start),
+    )
+    flags = check.flag
+    if flags.overlap or flags.gap or flags.jump or flags.teleport or flags.duplicate:
+        raise ValueError("one or more flags are >0 in survcheck")
+    n_startstate = sum(1 for row in check.transitions.counts if row and row[0] > 1)
+    if response.start is None:
+        return n_startstate == 1
+    first_entry: dict[Any, float] = {}
+    for value, start in zip(id_values, response.start, strict=True):
+        first_entry[value] = min(first_entry.get(value, math.inf), start)
+    entries = list(first_entry.values())
+    return n_startstate == 1 and all(entry == entries[0] for entry in entries)
+
+
+def _newdata_design(
+    fit: Any, newdata: Any, n: int
+) -> tuple[list[list[float]], list[int] | None, list[float]]:
+    """``model.matrix`` of the fit's terms on ``newdata`` with its strata codes and offsets."""
+
+    design = _formula_design_for_fit(fit)
+    if design is None:
+        raise TypeError("newdata requires a model fitted from a formula")
+    rows = _design_rows_from_spec(newdata, design, n)
+    if design.intercept:
+        rows = [row[1:] for row in rows]
+    strata = None
+    if design.strata:
+        values = _combined_columns(newdata, list(design.strata), n)
+        levels = list(design.strata_levels)
+        try:
+            strata = [levels.index(value) for value in values]
+        except ValueError as exc:
+            raise ValueError("newdata contains a stratum not seen in the fit") from exc
+    offsets = _offset_vector(newdata, design.offsets, n)
+    return rows, strata, offsets if offsets is not None else [0.0] * n
+
+
+def _brier_model_predictions(
+    fit: Any, engine: Any, newdata: Any | None, n: int, times: list[float]
+) -> list[list[float]]:
+    """``1 - summary(survfit(fit, newdata), times, extend = TRUE)$surv``: one row per time.
+
+    ``survfit.coxph`` on the fit's own data (R: ``newdata = fit$call$data``) or on ``newdata``:
+    the design rows go through the Cox engine's ``survfit``."""
+
+    if newdata is None:
+        rows, strata, offsets = [list(row) for row in engine.x], engine.strata, list(engine.offset)
+    else:
+        rows, strata, offsets = _newdata_design(fit, newdata, n)
+    curves = engine.survfit(newdata=rows, new_strata=strata, new_offset=offsets, se_fit=False)
+    # one curve per stratum with the rows as columns, or one per row for stratified fits
+    per_subject: list[list[float]] = []
+    for curve in curves:
+        width = len(curve.surv[0]) if curve.surv else 0
+        per_subject.extend(
+            _core.step_values_at(list(curve.time), [row[j] for row in curve.surv], times, 1.0)
+            for j in range(width)
+        )
+    return [[1.0 - subject[i] for subject in per_subject] for i in range(len(times))]
+
+
+def brier(
+    fit: Any,
+    times: Any | None = None,
+    newdata: Any | None = None,
+    ties: Any = True,
+    detail: Any = False,
+    timefix: Any = True,
+    efron: Any = False,
+) -> BrierResult:
+    """Brier score of a Cox model with inverse-probability-of-censoring weights (R's ``brier``)."""
+
+    engine = _coxph_engine(fit, "fit must be a coxph object")
+    if not isinstance(timefix, bool):
+        raise ValueError("invalid value for timefix option")
+    ties_value = _normalize_bool_option(ties, "ties")
+    if newdata is None:
+        response = _fit_response(engine)
+        weights = _brier_weights(engine.weights, len(response))
+        id_values = getattr(fit, "id", None)
+    else:
+        response = _newdata_response(fit, newdata)
+        n = len(response)
+        weights = _brier_weights(_call_column(fit, "case_weight", newdata, n), n)
+        id_values = _call_column(fit, "id", newdata, n)
+    if response.type not in {"right", "mright", "counting", "mcounting"}:
+        raise ValueError("response must be right censored")
+    if response.start is not None and id_values is None:
+        raise ValueError("id is required for start-stop data")
+    if id_values is not None:
+        id_values = _materialize_labels(id_values, "id")
+    if not _brier_is_simple(response, id_values):
+        raise ValueError("delayed entry is not yet implemented")
+
+    use_efron = _normalize_bool_option(efron, "efron") and engine.method == _core.TieMethod.Efron
+    dtime = list(response.time)
+    dstat = [int(event) for event in response.event]
+    if times is None:
+        null_curve = _core.survfitkm(
+            dtime,
+            dstat,
+            start=None if response.start is None else list(response.start),
+            weights=weights,
+            stype=2 if use_efron else 1,
+            ctype=2 if use_efron else 1,
+            se_fit=False,
+            timefix=timefix,
+        )
+        eval_times = [t for t, d in zip(null_curve.time, null_curve.n_event, strict=True) if d > 0]
+    else:
+        eval_times = _float_vector(times, "times")
+    phat = _brier_model_predictions(fit, engine, newdata, len(response), eval_times)
+    result = _core.brier(
+        dtime,
+        dstat,
+        eval_times,
+        phat,
+        weights=weights,
+        ties=ties_value,
+        efron=use_efron,
+        timefix=timefix,
+    )
+    if not _normalize_bool_option(detail, "detail"):
+        return BrierResult(rsquared=result.rsquared, brier=result.brier, times=result.times)
+    return BrierResult(
+        rsquared=result.rsquared,
+        brier=result.brier,
+        times=result.times,
+        p0=result.p0,
+        phat=result.phat,
+        eff_n=result.eff_n,
+    )
+
+
+# ---------------------------------------------------------------------------
+# yates
+# ---------------------------------------------------------------------------
+
+_FACTOR_WRAPPER = re.compile(r"\s*(?:factor|as\.factor)\(\s*([^()]+?)\s*\)\s*")
+
+
+@dataclass(frozen=True)
+class _YatesTerm:
+    """The tested variable: its model-frame column, R's label for it and its levels."""
+
+    column: str
+    name: str
+    levels: list[Any]
+
+
+def _design_factors(design: _FormulaDesign) -> list[Any]:
+    """Every single (non-interaction) design term, interaction factors included."""
+
+    factors: list[Any] = []
+    for spec in design.covariates:
+        factors.extend(spec.factors if isinstance(spec, _InteractionDesignTerm) else [spec])
+    return factors
+
+
+def _yates_term(design: _FormulaDesign, term: Any, levels: Any | None) -> _YatesTerm:
+    """R's ``cmatrix``: the variable named by ``term`` and the levels to compare."""
+
+    if not isinstance(term, str):
+        raise TypeError("the term must be a character string")
+    match = _FACTOR_WRAPPER.fullmatch(term)
+    column = match.group(1) if match else term.strip()
+    specs = [spec for spec in _design_factors(design) if spec.term.column == column]
+    if not specs:
+        raise ValueError(f"variable {column} not found in the formula")
+    spec = specs[0]
+    categorical = isinstance(spec, _CategoricalDesignTerm)
+    if levels is None:
+        if not categorical:
+            raise ValueError("continuous variables require the levels argument")
+        level_values = list(spec.levels)
+    else:
+        level_values = _unique_in_order(_materialize_1d(levels, "levels"))
+        if categorical and any(value not in spec.levels for value in level_values):
+            raise ValueError(f"invalid level for term {column}")
+    return _YatesTerm(column, _covariate_term_name(spec.term), level_values)
+
+
+def _factorial_population(
+    template: Mapping[str, list[Any]], categorical: dict[str, list[Any]]
+) -> dict[str, list[Any]]:
+    """R's ``yates_factorial_pop``: every combination of the adjusters' levels, the first
+    adjuster varying fastest, with the other columns copied from the first data row."""
+
+    n = math.prod(len(levels) for levels in categorical.values())
+    pdata = {name: [values[0]] * n for name, values in template.items()}
+    n1 = 1
+    for name, levels in categorical.items():
+        pdata[name] = [levels[(idx // n1) % len(levels)] for idx in range(n)]
+        n1 *= len(levels)
+    return pdata
+
+
+def _yates_population(
+    mframe: dict[str, list[Any]],
+    design: _FormulaDesign,
+    term: _YatesTerm,
+    population: Any,
+) -> dict[str, list[Any]]:
+    """R's ``yates_xmat`` population rows over the adjusting variables."""
+
+    if isinstance(population, Mapping):
+        return {str(name): list(values) for name, values in population.items()}
+    adjusters = [spec for spec in _design_factors(design) if spec.term.column != term.column]
+    categorical = {
+        spec.term.column: list(spec.levels)
+        for spec in adjusters
+        if isinstance(spec, _CategoricalDesignTerm)
+    }
+    continuous = [spec.term.column for spec in adjusters if spec.term.column not in categorical]
+    if population == "data" or (population == "sas" and not categorical):
+        return mframe
+    if population == "factorial" and continuous:
+        raise ValueError(
+            "population=factorial only applies if all the adjusting terms are categorical"
+        )
+    pdata = _factorial_population(mframe, categorical)
+    if not continuous:
+        return pdata
+    # sas with a mixed population: each factorial row crossed with every data row
+    n_data = len(next(iter(mframe.values())))
+    n_pop = len(next(iter(pdata.values())))
+    out = {
+        name: [values[idx // n_data] for idx in range(n_pop * n_data)]
+        for name, values in pdata.items()
+    }
+    for name in continuous:
+        out[name] = [mframe[name][idx % n_data] for idx in range(n_pop * n_data)]
+    return out
+
+
+def _yates_weights(mframe: Mapping[str, list[Any]], population: Any) -> list[float] | None:
+    """Case weights of the ``data`` population: the model weights, else equal weight per id."""
+
+    if population != "data":
+        return None
+    if "(weights)" in mframe:
+        return [float(value) for value in mframe["(weights)"]]
+    if "(id)" in mframe:
+        counts: dict[Any, int] = {}
+        for value in mframe["(id)"]:
+            counts[value] = counts.get(value, 0) + 1
+        return [1.0 / counts[value] for value in mframe["(id)"]]
+    return None
+
+
+def _yates_design_names(design: _FormulaDesign) -> list[str]:
+    names = ["(Intercept)"] if design.intercept else []
+    for spec in design.covariates:
+        names.extend(_design_term_output_names(spec))
+    return names
+
+
+def yates(
+    fit: Any,
+    term: Any,
+    population: Any = "data",
+    levels: Any | None = None,
+    test: Any = "global",
+    predict: Any = "linear",
+    options: Any | None = None,
+    nsim: Any = 200,
+    method: Any = "direct",
+) -> YatesResult:
+    """Population marginal means of a term of a Cox model and their tests (R's ``yates``).
+
+    Only the linear-predictor scale is available: ``predict="risk"``/``"survival"`` (which R
+    evaluates by Monte-Carlo simulation of the coefficients) and ``method="sgtt"`` are not
+    implemented.  ``population`` is ``"data"``, ``"factorial"``, ``"sas"`` or a data frame.
+    """
+
+    del options, nsim
+    engine = _coxph_engine(fit, "the fit does not have a terms structure")
+    design = _formula_design_for_fit(fit)
+    if design is None:
+        raise TypeError("the fit does not have a terms structure")
+    if _match_string_arg(method, "method", ["direct", "sgtt"], "invalid method") != "direct":
+        raise NotImplementedError('yates method = "sgtt" is not implemented')
+    if predict not in {"linear", "lp"}:
+        raise NotImplementedError(
+            f"yates predict = {predict!r} is not implemented (R simulates the coefficients)"
+        )
+    if isinstance(population, str):
+        population = _match_string_arg(
+            population.lower(),
+            "population",
+            ["data", "factorial", "sas", "empirical", "yates"],
+            "unknown population",
+        )
+        population = {"empirical": "data", "yates": "factorial"}.get(population, population)
+    elif not isinstance(population, Mapping):
+        raise TypeError("the population argument must be a data frame or character")
+    test_value = _match_string_arg(test, "test", ["global", "trend", "pairwise"], "invalid test")
+
+    beta = coef(fit)
+    if any(math.isnan(value) for value in beta):
+        raise NotImplementedError("yates with aliased (NA) coefficients is not implemented")
+    vmat = vcov(fit, complete=False)
+    mframe = model_frame(fit)
+    yates_term = _yates_term(design, term, levels)
+    pdata = _yates_population(mframe, design, yates_term, population)
+    n_pop = len(next(iter(pdata.values())))
+    xmatlist = [
+        _design_rows_from_spec({**pdata, yates_term.column: [level] * n_pop}, design, n_pop)
+        for level in yates_term.levels
+    ]
+    cmat = _core.yates_population_means(xmatlist, _yates_weights(mframe, population))
+    names = _yates_design_names(design)
+    if design.intercept:  # coxph: the baseline hazard plays the intercept's role
+        cmat = [row[1:] for row in cmat]
+        names = names[1:]
+    offset = -sum(mean * value for mean, value in zip(engine.means, beta, strict=True))
+    result = _core.yates(cmat, beta, vmat, offset=offset, test=test_value)
+    return YatesResult(
+        estimate={
+            yates_term.name: list(yates_term.levels),
+            "pmm": [row.pmm for row in result.estimate],
+            "std": [row.std for row in result.estimate],
+        },
+        test=result.test,
+        mvar=result.mvar,
+        cmat=result.cmat,
+        cmat_names=names,
+    )
