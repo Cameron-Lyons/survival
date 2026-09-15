@@ -4,37 +4,17 @@
 //! `coxpenal.fit` (R `coxfit5.c`/`agfit5.c`) calls `cox_callback` once per
 //! Newton iteration for the sparse frailty term (`which == 1`, R's `coxlist1`)
 //! and once for the remaining penalised terms (`which == 2`, `coxlist2`). The
-//! Rust `coxpenal.fit` port calls [`evaluate_penalty`] with the current
-//! coefficients and adds the returned derivatives to the score and information
-//! matrix; the `#[pyfunction]` wrapper exists so the Python side can exercise
-//! the same contract directly.
+//! Rust port (`regression::coxpenal`) evaluates its built-in penalties in
+//! Rust and reaches [`evaluate_penalty`] for a user-defined penalty
+//! (`PenaltyTerm::Callback`), adding the returned derivatives to the score
+//! and information matrix; the `#[pyfunction]` wrapper exists so the Python
+//! side can exercise the same contract directly.
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::internal::numpy_utils::{BoolVec, FloatVec};
-
-/// What a penalty function hands back for one call, R's `coxlist1`/`coxlist2`.
-///
-/// Lengths are the penalty function's responsibility, exactly as in R, where
-/// `coxpenal.fit` checks them before the C code reads the buffers: `coef` and
-/// `first` have one entry per penalised coefficient, `second` holds either the
-/// diagonal (`p` entries) or the full matrix (`p * p` entries, column-major),
-/// and `flag` has one entry (`which == 1`) or one per coefficient.
-#[pyclass(frozen, get_all, skip_from_py_object)]
-#[derive(Debug, Clone, PartialEq)]
-pub struct CoxPenaltyTerms {
-    /// Coefficients after any recentring the penalty function applied.
-    pub coef: Vec<f64>,
-    /// First derivative of the penalty.
-    pub first: Vec<f64>,
-    /// Second derivative of the penalty, diagonal or full.
-    pub second: Vec<f64>,
-    /// The penalty's contribution to the log-likelihood.
-    pub penalty: f64,
-    /// "Force this term to zero" flags.
-    pub flag: Vec<bool>,
-}
+pub use crate::regression::coxpenal::CoxPenaltyTerms;
 
 fn item<'py>(coxlist: &Bound<'py, PyAny>, key: &str) -> PyResult<Bound<'py, PyAny>> {
     coxlist.get_item(key).map_err(|err| {
