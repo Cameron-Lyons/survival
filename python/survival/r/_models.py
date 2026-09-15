@@ -1,88 +1,35 @@
-"""Model generics: predict, residuals, coef, vcov, confint, summaries, as_data_frame."""
+"""Model generics (``coef``, ``vcov``, ``predict``, ``residuals``, ``model_summary``,
+``as_data_frame``, ...): R-style S3 dispatch on the fitted object.
+
+Cox, clogit, cch and aareg fits dispatch here; survreg fits go to the matching
+``*_survreg`` function of :mod:`survival.r._survreg` (``predict_survreg``,
+``residuals_survreg``, ``summary_survreg``, ...).
+"""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from operator import index
 from statistics import NormalDist
 from typing import Any
 
+from ._aareg import summary_aareg
+from ._cch import summary_cch
 from ._coerce import (
-    _clamp_probability,
-    _collapse_is_false,
-    _collapse_prediction_result,
-    _collapse_prediction_se,
-    _collapse_residual_result,
-    _float_vector,
     _integer_scalar,
     _materialize_1d,
     _materialize_labels,
-    _model_residual_weights,
-    _normalize_bool_option,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
-    _normalize_optional_bool_option,
-    _normalize_predict_type,
-    _normalize_residual_type,
-    _pop_dotted_keyword,
-    _safe_exp,
-    _weight_residual_result,
 )
-from ._coxph import (
-    _cox_deviance_from_martingale,
-    _cox_event_indices,
-    _cox_expected_events_for_newdata,
-    _cox_expected_events_with_se,
-    _cox_linear_prediction_se,
-    _cox_partial_residuals,
-    _cox_predict_term_groups,
-    _cox_predict_terms,
-    _cox_survival_curve,
-    _cox_survival_curve_with_se,
-    _cox_term_prediction_se,
-    _predict_terms_selection,
-    _step_curve_at,
-)
-from ._fit import (
-    _cox_alias_mask,
-    _cox_degrees_of_freedom,
-    _cox_event_count,
-    _cox_full_loglik,
-    _cox_loglik_values,
-    _cox_reference_centers,
-    _cox_reference_means,
-    _cox_variance_matrix,
-    _fallback_coef_names,
-    _fit_location_coef_names,
-    _formula_design_for_fit,
-    _formula_design_output_names,
-    _is_clogit_fit,
-    _is_coxph_fit,
-    _is_model_fit,
-    _is_survreg_fit,
-    _linear_predictors_for_fit,
-    _location_beta,
-    _newdata_has_formula_response,
-    _normalize_predict_reference,
-    _prediction_inputs,
-    _require_model_fit,
-    _unwrap_formula_fit,
-)
-from ._formula import _design_term_output_names
+from ._coxph import CoxphModel, predict_coxph, residuals_coxph, summary_coxph
+from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
 from ._pyears import _finegray_frame, _pyears_result_frame
 from ._surv import Surv
 from ._survfit import _optional_float_list
-from ._survreg import (  # survreg methods (owned by the survreg module)
-    SurvregAnovaResult,
-    predict_survreg,
-    residuals_survreg,
-    survreg_scale_names,
-    survreg_summary,
-    survreg_summary_names,
-    survreg_vcov,
-)
 from ._types import (
+    AaregModelResult,
+    CchModelResult,
     ConcordanceResult,
     CoxBaseHazardResult,
     CoxPHDetailResult,
@@ -90,236 +37,185 @@ from ._types import (
     CoxZPHResult,
     FineGrayFrame,
     FineGrayOutput,
-    PredictResult,
     PyearsResult,
     SurvfitMultiStateResult,
     SurvfitResult,
     TurnbullSurvfitResult,
-    _cox_beta,
-    _cox_scaled_schoenfeld_from_raw,
-    _FormulaFit,
 )
+
+# ---------------------------------------------------------------------------
+# dispatch
+# ---------------------------------------------------------------------------
+
+
+def _survreg_method(generic: str) -> Any:
+    """``<generic>.survreg``: the survreg method of a generic, from ``_survreg``."""
+
+    from . import _survreg
+
+    method = getattr(_survreg, f"{generic}_survreg", None)
+    if method is None:
+        raise TypeError(f"{generic} requires a fitted coxph or survreg model")
+    return method
+
+
+def _dispatch(generic: str, fit: Any, *args: Any, **kwargs: Any) -> Any:
+    return _survreg_method(generic)(fit, *args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# coefficients and likelihoods
+# ---------------------------------------------------------------------------
 
 
 def coef(fit: Any) -> list[float]:
-    """Return fitted model coefficients, like R's coef generic."""
+    """``fit$coefficients`` (``NaN`` marks an aliased Cox coefficient, like R's ``NA``)."""
 
-    _require_model_fit(fit, "coef")
-    if _is_survreg_fit(fit):
-        return _location_beta(fit)
-    beta = _cox_beta(fit)
-    return [
-        math.nan if aliased else value
-        for value, aliased in zip(beta, _cox_alias_mask(fit), strict=True)
-    ]
+    if isinstance(fit, CoxphModel | CchModelResult):
+        return fit.coefficients
+    return _dispatch("coef", fit)
 
 
 def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
-    """Return fitted coefficient names for R-style model helpers."""
+    """``names(coef(fit))``; ``complete=False`` drops aliased Cox coefficients."""
 
-    _require_model_fit(fit, "coef_names")
-    include_complete = (
-        _is_coxph_fit(fit) if complete is None else _normalize_bool_option(complete, "complete")
-    )
-    if _is_survreg_fit(fit):  # survreg: location names, plus Log(scale) when complete
-        names = _fit_location_coef_names(fit, len(_location_beta(fit)))
-        if include_complete:
-            names.extend(survreg_scale_names(fit))
-        return names
-
-    beta = _cox_beta(fit)
-    names = _fit_location_coef_names(fit, len(beta))
-    if include_complete:
-        return names
-    return [name for name, aliased in zip(names, _cox_alias_mask(fit), strict=True) if not aliased]
+    if isinstance(fit, CoxphModel | CchModelResult):
+        include = _normalize_bool_option_with_default(complete, "complete", True)
+        names = list(fit.coef_names)
+        if include:
+            return names
+        return [name for name, b in zip(names, fit.coefficients, strict=True) if not math.isnan(b)]
+    return _dispatch("coef_names", fit, complete=complete)
 
 
 def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
-    """Return a fitted model variance-covariance matrix, like R's vcov generic."""
+    """``vcov``: the robust variance when the fit used one, else the model-based one."""
 
-    _require_model_fit(fit, "vcov")
-    include_complete = _normalize_bool_option_with_default(complete, "complete", True)
-    if _is_survreg_fit(fit):  # survreg: fit$var, or its location block
-        return survreg_vcov(fit, include_complete)
-    variance = _cox_variance_matrix(fit, len(_cox_beta(fit)))
-    if include_complete:
-        return variance
-    active = [idx for idx, aliased in enumerate(_cox_alias_mask(fit)) if not aliased]
-    return [[variance[row_idx][col_idx] for col_idx in active] for row_idx in active]
+    if isinstance(fit, CoxphModel | CchModelResult):
+        include = _normalize_bool_option_with_default(complete, "complete", True)
+        var = fit.var
+        if include:
+            return var
+        keep = [i for i, b in enumerate(fit.coefficients) if not math.isnan(b)]
+        return [[var[i][j] for j in keep] for i in keep]
+    return _dispatch("vcov", fit, complete=complete)
 
 
 def loglik(fit: Any) -> float:
-    """Return a fitted model log likelihood."""
+    """``logLik``: the fitted partial log-likelihood ``fit$loglik[2]``."""
 
-    _require_model_fit(fit, "loglik")
-    if _is_survreg_fit(fit):  # survreg: loglik[2], on the original response scale
-        return float(_unwrap_formula_fit(fit).log_likelihood)
-    return _cox_full_loglik(_unwrap_formula_fit(fit))
-
-
-def _model_row_count(fit: Any) -> int:
-    if isinstance(fit, _FormulaFit) and fit.n_observations is not None:
-        return fit.n_observations
-    values = getattr(fit, "status", None)
-    if values is None:
-        values = getattr(fit, "event_times", None)
-    if values is None:
-        raise TypeError("model does not expose stored observations")
-    return len(list(values))
+    if isinstance(fit, CoxphModel):
+        return fit.loglik[1]
+    return _dispatch("loglik", fit)
 
 
 def nobs(fit: Any) -> int:
-    """Return the model-specific observation count used by likelihood metadata."""
+    """``nobs``: the number of events for a Cox model (the ``nobs`` attribute of its logLik)."""
 
-    _require_model_fit(fit, "nobs")
-    if _is_coxph_fit(fit):
-        return _cox_event_count(fit)
-    return _model_row_count(fit)
+    if isinstance(fit, CoxphModel):
+        return fit.nevent
+    return _dispatch("nobs", fit)
 
 
 def degrees_freedom(fit: Any) -> int:
-    """Return the number of fitted parameters counted by model log likelihoods."""
+    """The ``df`` attribute of ``logLik``: the number of estimated coefficients."""
 
-    _require_model_fit(fit, "degrees_freedom")
-    if _is_survreg_fit(fit):  # survreg: sum(fit$df) (coefficients plus estimated scales)
-        return int(_unwrap_formula_fit(fit).df)
-    return _cox_degrees_of_freedom(_unwrap_formula_fit(fit))
+    if isinstance(fit, CoxphModel):
+        return sum(1 for value in fit.coefficients if not math.isnan(value))
+    return _dispatch("degrees_freedom", fit)
 
 
 def df_residual(fit: Any) -> int:
-    """Return residual degrees of freedom for fitted ``survreg`` models."""
+    """``df.residual`` (survreg only)."""
 
-    _require_model_fit(fit, "df_residual")
-    if not _is_survreg_fit(fit):
+    if isinstance(fit, CoxphModel):
         raise TypeError("df_residual is only defined for fitted survreg models")
-    return int(_unwrap_formula_fit(fit).df_residual)
-
-
-def _finite_numeric_option(value: Any, name: str) -> float:
-    try:
-        result = float(value)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{name} must be numeric") from exc
-    if not math.isfinite(result):
-        raise ValueError(f"{name} must be finite")
-    return result
+    return _dispatch("df_residual", fit)
 
 
 def aic(fit: Any, *, k: Any = 2.0) -> float:
-    """Return Akaike-style information criterion for a fitted model."""
+    """``AIC``: ``-2 logLik + k df``."""
 
-    penalty = _finite_numeric_option(k, "k")
-    return -2.0 * loglik(fit) + penalty * degrees_freedom(fit)
+    return -2.0 * loglik(fit) + float(k) * degrees_freedom(fit)
 
 
 def bic(fit: Any) -> float:
-    """Return Bayesian information criterion for a fitted model."""
+    """``BIC``: ``AIC`` with ``k = log(nobs)``."""
 
-    observation_count = nobs(fit)
-    if observation_count == 0:
-        return math.nan
-    return aic(fit, k=math.log(observation_count))
+    count = nobs(fit)
+    return math.nan if count == 0 else aic(fit, k=math.log(count))
 
 
 def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
-    """Return ``[df, AIC]`` like R's ``extractAIC`` generic."""
+    """``extractAIC``: ``c(df, AIC)``."""
 
-    _finite_numeric_option(scale, "scale")
+    del scale
     return [float(degrees_freedom(fit)), aic(fit, k=k)]
 
 
 def model_formula(fit: Any) -> str:
-    """Return the formula string used to create a formula-based model fit."""
+    """``formula(fit)``."""
 
-    _require_model_fit(fit, "model_formula")
-    if isinstance(fit, _FormulaFit) and fit.formula is not None:
-        return fit.formula
-    raise TypeError("model_formula requires a formula-based fitted model")
+    if isinstance(fit, CoxphModel | CchModelResult | AaregModelResult):
+        formula = fit.formula
+        if formula is None:
+            raise TypeError("model_formula requires a formula-based fitted model")
+        return formula
+    return _dispatch("model_formula", fit)
 
 
 def model_term_names(fit: Any, terms: Any | None = None) -> list[str]:
-    """Return one label for each fitted model term, excluding the intercept."""
+    """``attr(terms(fit), 'term.labels')``, optionally the subset ``terms`` selects."""
 
-    _require_model_fit(fit, "model_term_names")
-    groups = _cox_predict_term_groups(fit, len(_location_beta(fit)))
-    names = [name for name, _columns in groups]
-    return [names[idx] for idx in _predict_terms_selection(terms, names)]
+    if isinstance(fit, CoxphModel):
+        from ._coxph import _terms_selection
 
-
-def predict_terms_constant(fit: Any) -> float:
-    """Return the sample-reference constant used by Cox term predictions."""
-
-    if not _is_coxph_fit(fit):
-        raise TypeError("predict_terms_constant requires a fitted coxph model")
-    beta = _cox_beta(fit)
-    means = _cox_reference_means(fit, "sample")
-    return sum(value * coefficient for value, coefficient in zip(means, beta, strict=True))
+        names = list(fit.assign)
+        return [names[idx] for idx in _terms_selection(terms, names)]
+    return _dispatch("model_term_names", fit, terms)
 
 
 def model_weights(fit: Any) -> list[float] | None:
-    """Return explicit case weights for a fitted model, or ``None`` when absent."""
+    """``weights(fit)``: the case weights, ``None`` when none were given."""
 
-    _require_model_fit(fit, "model_weights")
-    if isinstance(fit, _FormulaFit) and fit.case_weights is not None:
-        return list(fit.case_weights)
-    values = getattr(_unwrap_formula_fit(fit), "weights", None)
-    if values is None:
-        return None
-    weights = [float(value) for value in _materialize_1d(values, "weights")]
-    if all(abs(value - 1.0) <= 1e-12 for value in weights):
-        return None
-    return weights
-
-
-def _model_matrix_column_names(fit: Any, width: int) -> list[str]:
-    design = _formula_design_for_fit(fit)
-    if design is not None:
-        names = _formula_design_output_names(design)
-        if len(names) == width:
-            return names
-    if _is_model_fit(fit):
-        names = coef_names(fit)
-        if len(names) == width:
-            return names
-    return _fallback_coef_names(width)
-
-
-def _model_matrix_assignments(fit: Any, width: int) -> list[int]:
-    design = _formula_design_for_fit(fit)
-    if design is not None and len(design.term_assignments) == len(design.covariates):
-        assignments = [0] if design.intercept else []
-        for term, assignment in zip(
-            design.covariates,
-            design.term_assignments,
-            strict=True,
-        ):
-            assignments.extend([assignment] * len(_design_term_output_names(term)))
-        if len(assignments) == width:
-            return assignments
-    return list(range(1, width + 1))
+    if isinstance(fit, CoxphModel):
+        return fit.weights
+    if isinstance(fit, AaregModelResult):
+        return None if fit.weights is None else list(fit.weights)
+    return _dispatch("model_weights", fit)
 
 
 def model_matrix(fit: Any) -> dict[str, Any]:
-    """Return the training design matrix and column names for a fitted model."""
+    """``model.matrix(fit)``: the design matrix, its column names and ``assign``."""
 
-    _require_model_fit(fit, "model_matrix")
-    rows = getattr(fit, "covariates", None)
-    if rows is None:
-        rows = getattr(fit, "x", None)
-    if rows is None:
-        raise TypeError("model_matrix requires a fitted model with stored covariates")
-    matrix = [[float(value) for value in row] for row in rows]
-    width = len(matrix[0]) if matrix else 0
-    if any(len(row) != width for row in matrix):
-        raise ValueError("stored model matrix must be rectangular")
-    return {
-        "data": matrix,
-        "columns": _model_matrix_column_names(fit, width),
-        "assign": _model_matrix_assignments(fit, width),
-    }
+    if isinstance(fit, CoxphModel):
+        assign = [0] * len(fit.coef_names)
+        for term_idx, columns in enumerate(fit.assign.values(), start=1):
+            for col in columns:
+                assign[col] = term_idx
+        return {"data": fit.x, "columns": list(fit.coef_names), "assign": assign}
+    return _dispatch("model_matrix", fit)
 
 
-def _model_frame_surv_columns(response: Surv, existing: set[str]) -> dict[str, list[Any]]:
+def model_frame(fit: Any) -> dict[str, list[Any]]:
+    """``model.frame(fit)`` for a fit made with ``model=TRUE``."""
+
+    if isinstance(fit, Mapping):
+        if not fit:
+            raise TypeError("model_frame requires a non-empty grouped survfit result")
+        return model_frame(next(iter(fit.values())))
+    if isinstance(fit, CoxphModel | AaregModelResult):
+        frame = fit.model
+        if frame is None:
+            raise TypeError("model_frame requires a fit made with model=TRUE")
+        return _plain_model_frame(frame)
+    frame = getattr(fit, "model", None)
+    if isinstance(frame, Mapping):
+        return _plain_model_frame(frame)
+    return _dispatch("model_frame", fit)
+
+
+def _surv_columns(response: Surv, existing: set[str]) -> dict[str, list[Any]]:
     columns: dict[str, list[Any]] = {}
     if response.start is not None:
         if "start" not in existing:
@@ -335,24 +231,11 @@ def _model_frame_surv_columns(response: Surv, existing: set[str]) -> dict[str, l
     return columns
 
 
-def model_frame(fit: Any) -> dict[str, list[Any]]:
-    """Return a plain stored model frame for compatible fitted objects."""
-
-    if isinstance(fit, Mapping):
-        if not fit:
-            raise TypeError("model_frame requires a non-empty grouped survfit result")
-        return model_frame(next(iter(fit.values())))
-
-    frame = getattr(fit, "model", None)
-    if frame is None:
-        raise TypeError("model_frame requires a stored model frame")
-    if not isinstance(frame, Mapping):
-        raise TypeError("stored model frame must be mapping-like")
-
+def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
     columns: dict[str, list[Any]] = {}
     for name, values in frame.items():
         if isinstance(values, Surv):
-            columns.update(_model_frame_surv_columns(values, set(columns)))
+            columns.update(_surv_columns(values, set(columns)))
             continue
         if isinstance(values, Mapping):
             continue
@@ -367,242 +250,87 @@ def model_frame(fit: Any) -> dict[str, list[Any]]:
     return columns
 
 
-def fitted(
-    fit: Any,
-    *,
-    type: str | None = None,
-    centered: bool | None = None,
-    terms: Any | None = None,
-    collapse: Any = False,
-    reference: str | None = None,
-    se_fit: bool = False,
-    times: Any | None = None,
-    p: Any | None = None,
-    quantiles: Any | None = None,
-    **kwargs: Any,
-) -> Any:
-    """Return fitted values for the training observations of a model."""
-
-    _require_model_fit(fit, "fitted")
-    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
-    if kwargs:
-        unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"fitted got unexpected keyword argument(s): {unexpected}")
-
-    return predict(
-        fit,
-        type=type,
-        centered=centered,
-        terms=terms,
-        collapse=collapse,
-        reference=reference,
-        se_fit=se_fit,
-        times=times,
-        p=p,
-        quantiles=quantiles,
-    )
+# ---------------------------------------------------------------------------
+# predict / residuals / summaries
+# ---------------------------------------------------------------------------
 
 
-def _normal_two_sided_p_value(statistic: float) -> float:
-    if math.isnan(statistic):
-        return math.nan
-    if math.isinf(statistic):
-        return 0.0
-    return 2.0 * NormalDist().cdf(-abs(statistic))
+def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
+    """``predict``: see :func:`survival.r._coxph.predict_coxph` and the survreg method."""
+
+    if isinstance(fit, CoxphModel):
+        return predict_coxph(fit, newdata, **kwargs)
+    return _dispatch("predict", fit, newdata, **kwargs)
 
 
-def _coefficient_exp(value: float) -> float:
-    try:
-        return math.exp(value)
-    except OverflowError:
-        return math.inf
+def fitted(fit: Any, **kwargs: Any) -> Any:
+    """``fitted``: ``predict`` on the training data."""
+
+    return predict(fit, None, **kwargs)
 
 
-def _coefficient_summary_rows(
-    names: list[str],
-    coefficients: list[float],
-    variance: list[list[float]],
-    *,
-    naive_variance: list[list[float]] | None = None,
-    robust: bool = False,
-    coxph: bool = False,
-    survreg: bool = False,
-) -> list[dict[str, float | str]]:
-    if len(names) != len(coefficients):
-        raise ValueError("coefficient names do not match coefficient width")
-    if len(variance) != len(coefficients) or any(len(row) != len(coefficients) for row in variance):
-        raise ValueError("variance matrix does not match coefficient width")
-    if naive_variance is None:
-        naive_variance = variance
-    if len(naive_variance) != len(coefficients) or any(
-        len(row) != len(coefficients) for row in naive_variance
-    ):
-        raise ValueError("naive variance matrix does not match coefficient width")
+def residuals(fit: Any, *, type: str = "martingale", **kwargs: Any) -> Any:
+    """``residuals``: see :func:`survival.r._coxph.residuals_coxph` and the survreg method."""
 
-    rows = []
-    for idx, value in enumerate(coefficients):
-        standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
-        naive_standard_error = math.sqrt(max(float(naive_variance[idx][idx]), 0.0))
-        if math.isnan(value):
-            statistic = math.nan
-        elif standard_error > 0.0:
-            statistic = value / standard_error
-        elif value == 0.0:
-            statistic = math.nan
-        else:
-            statistic = math.copysign(math.inf, value)
-        row: dict[str, float | str] = {
-            "name": names[idx],
-            "coef": value,
-            "se": standard_error,
-            "naive_se": naive_standard_error,
-            "statistic": statistic,
-            "z": statistic,
-            "p": _normal_two_sided_p_value(statistic),
-        }
-        if coxph:
-            row["exp_coef"] = _coefficient_exp(value)
-        if survreg:
-            row["value"] = value
-        if robust:
-            row["robust_se"] = standard_error
-        rows.append(row)
-    return rows
+    if isinstance(fit, CoxphModel):
+        return residuals_coxph(fit, type=type, **kwargs)
+    return _dispatch("residuals", fit, type=type, **kwargs)
 
 
-def _summary_naive_variance(
-    fit: Any,
-    width: int,
-    active_variance: list[list[float]],
-) -> list[list[float]]:
-    raw_variance = fit.naive_variance if isinstance(fit, _FormulaFit) else None
-    if raw_variance is None:
-        return active_variance
-    variance = [[float(value) for value in row[:width]] for row in raw_variance[:width]]
-    if len(variance) != width or any(len(row) != width for row in variance):
-        raise ValueError("stored naive variance matrix does not match coefficient width")
-    return variance
-
-
-def _coefficient_selection_indices(parm: Any, names: list[str]) -> list[int]:
+def _coefficient_selection(parm: Any, names: list[str]) -> list[int]:
     if parm is None:
         return list(range(len(names)))
-
-    if isinstance(parm, str):
-        values: list[Any] = [parm]
-    elif isinstance(parm, bool):
-        raise TypeError("parm must be coefficient names or 1-based indices")
-    else:
-        if isinstance(parm, Sequence) and not isinstance(parm, bytes):
-            values = list(_materialize_1d(parm, "parm"))
-        else:
-            values = [parm]
-
+    values = [parm] if isinstance(parm, str | int) else list(_materialize_1d(parm, "parm"))
     indices: list[int] = []
     for value in values:
         if isinstance(value, str):
-            try:
-                idx = names.index(value)
-            except ValueError as exc:
-                raise ValueError(f"unknown coefficient name {value!r}") from exc
+            if value not in names:
+                raise ValueError(f"unknown coefficient name {value!r}")
+            indices.append(names.index(value))
         else:
-            if isinstance(value, bool):
-                raise TypeError("parm must be coefficient names or 1-based indices")
-            try:
-                raw_idx = index(value)
-            except TypeError:
-                try:
-                    numeric = float(value)
-                except (TypeError, ValueError) as exc:
-                    raise TypeError("parm must be coefficient names or 1-based indices") from exc
-                if not numeric.is_integer():
-                    raise TypeError("parm must be coefficient names or 1-based indices") from None
-                raw_idx = int(numeric)
-            except ValueError as exc:
-                raise TypeError("parm must be coefficient names or 1-based indices") from exc
-            idx = raw_idx - 1
+            idx = _integer_scalar(value, "parm") - 1
             if idx < 0 or idx >= len(names):
                 raise IndexError("parm index out of range")
-        indices.append(idx)
+            indices.append(idx)
     return indices
 
 
 def confint(
-    fit: Any,
-    parm: Any | None = None,
-    *,
-    level: Any = 0.95,
+    fit: Any, parm: Any | None = None, *, level: Any = 0.95
 ) -> list[dict[str, float | str]]:
-    """Return normal-approximation confidence intervals for model coefficients."""
+    """``confint``: normal-approximation intervals for the coefficients."""
 
-    _require_model_fit(fit, "confint")
-    confidence_level = _normalize_conf_level(level, "level")
-    alpha = 1.0 - confidence_level
-    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    if not isinstance(fit, CoxphModel | CchModelResult):
+        return _dispatch("confint", fit, parm, level=level)
+    z = NormalDist().inv_cdf(1.0 - (1.0 - _normalize_conf_level(level, "level")) / 2.0)
     names = coef_names(fit)
     coefficients = coef(fit)
-    variance = vcov(fit, complete=not _is_survreg_fit(fit))
-    indices = _coefficient_selection_indices(parm, names)
-
-    intervals = []
-    for idx in indices:
-        standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
-        margin = z * standard_error
-        intervals.append(
-            {
-                "name": names[idx],
-                "lower": coefficients[idx] - margin,
-                "upper": coefficients[idx] + margin,
-            }
-        )
-    return intervals
+    variance = vcov(fit)
+    return [
+        {
+            "name": names[idx],
+            "lower": coefficients[idx] - z * math.sqrt(variance[idx][idx]),
+            "upper": coefficients[idx] + z * math.sqrt(variance[idx][idx]),
+        }
+        for idx in _coefficient_selection(parm, names)
+    ]
 
 
-def model_summary(fit: Any) -> dict[str, Any]:
-    """Return a compact R-style model summary as plain Python data."""
+def model_summary(fit: Any, **kwargs: Any) -> dict[str, Any]:
+    """``summary``: R's summary list of a coxph, clogit, cch, aareg or survreg fit."""
 
-    _require_model_fit(fit, "model_summary")
-    is_survreg = _is_survreg_fit(fit)
-    if is_survreg:  # survreg: summary.survreg's table rows are coefficients + scales
-        model = _unwrap_formula_fit(fit)
-        coefficients = [float(value) for value in model.coefficients]
-        names = survreg_summary_names(fit)
-        variance = survreg_vcov(fit, True)
-        naive_variance = model.naive_variance_matrix
-        robust = naive_variance is not None
-    else:
-        robust = bool(getattr(fit, "robust", False))
-        names = coef_names(fit)
-        coefficients = coef(fit)
-        variance = vcov(fit, complete=True)
-        naive_variance = _summary_naive_variance(fit, len(coefficients), variance)
-    result: dict[str, Any] = {
-        "model_type": "survreg" if is_survreg else "coxph",
-        "coefficients": _coefficient_summary_rows(
-            names,
-            coefficients,
-            variance,
-            naive_variance=naive_variance,
-            robust=robust,
-            coxph=not is_survreg,
-            survreg=is_survreg,
-        ),
-        "coefficient_names": names,
-        "loglik": loglik(fit),
-        "df": degrees_freedom(fit),
-        "n": _model_row_count(fit),
-        "robust": robust,
-    }
-    if is_survreg:
-        result.update(survreg_summary(fit))
-    else:
-        model = _unwrap_formula_fit(fit)
-        logliks = _cox_loglik_values(model)
-        result["null_loglik"] = logliks[0]
-        result["score_test"] = float(model.score_test)
-        result["n_event"] = sum(1 for event in model.status if int(event) == 1)
-        result["method"] = str(getattr(model, "method", "breslow"))
-    return result
+    if isinstance(fit, CoxphModel):
+        return summary_coxph(fit, **kwargs)
+    if isinstance(fit, CchModelResult):
+        return summary_cch(fit)
+    if isinstance(fit, AaregModelResult):
+        return summary_aareg(fit, **kwargs)
+    return _dispatch("model_summary", fit, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# as_data_frame
+# ---------------------------------------------------------------------------
 
 
 def _empty_columns(names: tuple[str, ...]) -> dict[str, list[Any]]:
@@ -986,101 +714,62 @@ def _raw_turnbull_survfit_frame(result: Any) -> dict[str, list[Any]]:
 
 
 def _cox_basehaz_frame(result: CoxBaseHazardResult) -> dict[str, list[Any]]:
-    if result.cumhaz and isinstance(result.cumhaz[0], Sequence):
-        frame: dict[str, list[Any]] = {
-            "curve": [],
-            "time": [],
-            "cumhaz": [],
-        }
-        curve_strata = result.curve_strata_labels or result.curve_strata
-        if curve_strata is not None:
-            frame["strata"] = []
-        for curve_idx, curve in enumerate(result.cumhaz):
-            if isinstance(curve, (str, bytes)):
-                raise TypeError("basehaz cumulative hazards must be numeric")
-            if len(curve) != len(result.time):
-                raise ValueError("basehaz curve length must match time length")
-            frame["curve"].extend([curve_idx + 1] * len(result.time))
-            frame["time"].extend(result.time)
-            frame["cumhaz"].extend([float(value) for value in curve])
-            if curve_strata is not None:
-                frame["strata"].extend([curve_strata[curve_idx]] * len(result.time))
-        return frame
-
-    frame = {
-        "time": result.time,
-        "cumhaz": [float(value) for value in result.cumhaz],
-    }
-    strata = result.strata_labels or result.strata
-    if strata is not None:
-        frame["strata"] = strata
+    hazard = result.hazard
+    frame: dict[str, list[Any]] = {}
+    if hazard and isinstance(hazard[0], list):
+        for col in range(len(hazard[0])):
+            frame[f"hazard.{col + 1}"] = [row[col] for row in hazard]
+    else:
+        frame["hazard"] = list(hazard)
+    frame["time"] = list(result.time)
+    if result.strata is not None:
+        frame["strata"] = list(result.strata)
     return frame
 
 
-def _cox_survfit_optional_curve_column(
-    values: list[list[float]],
-    curve_idx: int,
-    time_count: int,
-) -> list[float] | None:
-    if len(values) <= curve_idx:
-        return None
-    column = values[curve_idx]
-    if len(column) != time_count:
-        raise ValueError("Cox survfit curve columns must match time length")
-    return column
-
-
 def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
-    frame: dict[str, list[Any]] = {
-        "curve": [],
-        "time": [],
-        "surv": [],
-        "cumhaz": [],
-        "linear.predictor": [],
-    }
-    strata = result.strata_labels or result.strata
-    if strata is not None:
-        frame["strata"] = []
-    if result.start_time is not None:
-        frame["start.time"] = []
+    """``summary(survfit)``-style columns: one row per (curve, time)."""
 
-    optional_columns = {
+    ncurve = result.ncurve
+    ntime = len(result.time)
+
+    def column(values: Any, curve: int) -> list[float]:
+        return [row[curve] for row in values] if ncurve > 1 else list(values)
+
+    frame: dict[str, list[Any]] = {
+        name: [] for name in ("curve", "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz")
+    }
+    if result.strata is not None:
+        frame["strata"] = []
+    optional = {
         "std.err": result.std_err,
         "std.chaz": result.std_chaz,
-        "lower": result.conf_lower,
-        "upper": result.conf_upper,
+        "lower": result.lower,
+        "upper": result.upper,
     }
-    active_optional = {name: values for name, values in optional_columns.items() if values}
-    for name in active_optional:
-        frame[name] = []
-
-    for curve_idx, (surv_curve, cumhaz_curve, linear_predictor) in enumerate(
-        zip(result.surv, result.cumhaz, result.linear_predictors, strict=True)
-    ):
-        if len(surv_curve) != len(result.time) or len(cumhaz_curve) != len(result.time):
-            raise ValueError("Cox survfit curves must match time length")
-        n_times = len(result.time)
-        frame["curve"].extend([curve_idx + 1] * n_times)
+    for name, values in optional.items():
+        if values is not None:
+            frame[name] = []
+    strata = [name for name, count in (result.strata or {}).items() for _ in range(count)]
+    for curve in range(ncurve):
+        frame["curve"].extend([curve + 1] * ntime)
         frame["time"].extend(result.time)
-        frame["surv"].extend(surv_curve)
-        frame["cumhaz"].extend(cumhaz_curve)
-        frame["linear.predictor"].extend([linear_predictor] * n_times)
-        if strata is not None:
-            frame["strata"].extend([strata[curve_idx]] * n_times)
-        if result.start_time is not None:
-            frame["start.time"].extend([result.start_time] * n_times)
-        for name, values in active_optional.items():
-            optional_curve = _cox_survfit_optional_curve_column(values, curve_idx, n_times)
-            if optional_curve is not None:
-                frame[name].extend(optional_curve)
+        frame["n.risk"].extend(result.n_risk)
+        frame["n.event"].extend(result.n_event)
+        frame["n.censor"].extend(result.n_censor)
+        frame["surv"].extend(column(result.surv, curve))
+        frame["cumhaz"].extend(column(result.cumhaz, curve))
+        if result.strata is not None:
+            frame["strata"].extend(strata)
+        for name, values in optional.items():
+            if values is not None:
+                frame[name].extend(column(values, curve))
     return frame
 
 
 def _survdiff_frame(result: Any) -> dict[str, list[Any]]:
     observed = [float(value) for value in result.observed]
     expected = [float(value) for value in result.expected]
-    if len(observed) != len(expected):
-        raise ValueError("survdiff observed and expected lengths differ")
     variance = getattr(result, "variance", None)
     if isinstance(variance, int | float):
         variance_diag = [float(variance)] * len(observed)
@@ -1097,83 +786,66 @@ def _survdiff_frame(result: Any) -> dict[str, list[Any]]:
 
 
 def _cox_zph_frame(result: CoxZPHResult) -> dict[str, list[Any]]:
-    rows = result.table
     return {
-        "name": [str(row["name"]) for row in rows],
-        "chisq": [float(row["chisq"]) for row in rows],
-        "df": [int(row["df"]) for row in rows],
-        "p": [float(row["p"]) for row in rows],
+        "name": [str(row["name"]) for row in result.table],
+        "chisq": [float(row["chisq"]) for row in result.table],
+        "df": [int(row["df"]) for row in result.table],
+        "p": [float(row["p"]) for row in result.table],
     }
 
 
 def _coxph_detail_frame(result: CoxPHDetailResult) -> dict[str, list[Any]]:
     frame: dict[str, list[Any]] = {
         "time": result.time,
-        "n.event": result.nevent,
-        "n.risk": result.nrisk,
+        "nevent": result.nevent,
+        "nrisk": result.nrisk,
         "hazard": result.hazard,
         "varhaz": result.varhaz,
-        "cumhaz": result.cumulative_hazard,
+        "cumhaz": result.cumhaz,
         "wtrisk": result.wtrisk,
     }
     if result.nevent_wt is not None:
-        frame["n.event.weight"] = result.nevent_wt
+        frame["nevent.wt"] = result.nevent_wt
     if result.nrisk_wt is not None:
-        frame["n.risk.weight"] = result.nrisk_wt
+        frame["nrisk.wt"] = result.nrisk_wt
     if result.strata is not None:
-        frame["strata"] = []
-        for stratum, count in result.strata.items():
-            frame["strata"].extend([stratum] * int(count))
+        frame["strata"] = [name for name, count in result.strata.items() for _ in range(count)]
     return frame
 
 
 def _anova_frame(result: Any) -> dict[str, list[Any]]:
     rows = list(result.rows)
     return {
-        "model": [str(row.model_name) for row in rows],
+        "model": [str(row.name) for row in rows],
         "loglik": [float(row.loglik) for row in rows],
-        "df": [int(row.df) for row in rows],
-        "chisq": [math.nan if row.chisq is None else float(row.chisq) for row in rows],
-        "p": [math.nan if row.p_value is None else float(row.p_value) for row in rows],
+        "Chisq": [math.nan if row.chisq is None else float(row.chisq) for row in rows],
+        "Df": [math.nan if row.df is None else int(row.df) for row in rows],
+        "Pr(>|Chi|)": [math.nan if row.p_value is None else float(row.p_value) for row in rows],
     }
 
 
 def _concordance_frame(result: ConcordanceResult) -> dict[str, list[Any]]:
+    rows = result.count if isinstance(result.count, list) else [result.count]
+    names = result.names or [f"X{idx + 1}" for idx in range(len(rows))]
     if isinstance(result.concordance, list):
-        n_scores = len(result.concordance)
-        score_names = result.score_names or [f"score{idx + 1}" for idx in range(n_scores)]
-        variance = result.variance if isinstance(result.variance, list) else [math.nan] * n_scores
-        tied_x = result.tied_x if isinstance(result.tied_x, list) else [result.tied_x] * n_scores
-        tied_y = result.tied_y if isinstance(result.tied_y, list) else [result.tied_y] * n_scores
-        tied_xy = (
-            result.tied_xy if isinstance(result.tied_xy, list) else [result.tied_xy] * n_scores
+        concordance = list(result.concordance)
+        var = (
+            [result.var[idx][idx] for idx in range(len(result.var))]
+            if isinstance(result.var, list)
+            else [math.nan] * len(rows)
         )
-        return {
-            "score": score_names,
-            "concordance": [float(value) for value in result.concordance],
-            "concordant": [float(value) for value in result.concordant],
-            "comparable": [float(value) for value in result.comparable],
-            "tied.x": [float(value) for value in tied_x],
-            "tied.y": [float(value) for value in tied_y],
-            "tied.xy": [float(value) for value in tied_xy],
-            "n": [result.n] * n_scores,
-            "n.event": [result.n_event] * n_scores,
-            "variance": [math.nan if value is None else float(value) for value in variance],
-        }
-
-    variance_value = result.variance if isinstance(result.variance, int | float) else math.nan
-    return {
-        "score": [result.score_names[0] if result.score_names else "score"],
-        "concordance": [float(result.concordance)],
-        "concordant": [float(result.concordant)],
-        "comparable": [float(result.comparable)],
-        "tied.x": [float(result.tied_x)],
-        "tied.y": [float(result.tied_y)],
-        "tied.xy": [float(result.tied_xy)],
-        "n": [result.n],
-        "n.event": [result.n_event],
-        "variance": [float(variance_value)],
+    else:
+        concordance = [result.concordance] * len(rows)
+        var = [math.nan if result.var is None else float(result.var)] * len(rows)
+    frame: dict[str, list[Any]] = {
+        "score": list(names[: len(rows)]),
+        "concordance": concordance[: len(rows)],
     }
+    for name in ("concordant", "discordant", "tied.x", "tied.y", "tied.xy"):
+        frame[name] = [row[name] for row in rows]
+    frame["n"] = [result.n] * len(rows)
+    frame["var"] = var[: len(rows)]
+    return frame
 
 
 def _surv_response_frame(response: Surv) -> dict[str, list[Any]]:
@@ -1184,10 +856,7 @@ def _surv_response_frame(response: Surv) -> dict[str, list[Any]]:
             "status": list(response.event),
         }
     else:
-        frame = {
-            "time": list(response.time),
-            "status": list(response.event),
-        }
+        frame = {"time": list(response.time), "status": list(response.event)}
         if response.time2 is not None:
             frame["time2"] = list(response.time2)
     frame["type"] = [response.type] * len(response)
@@ -1235,267 +904,6 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _grouped_survfit_frame(result)
     if hasattr(result, "observed") and hasattr(result, "expected") and hasattr(result, "variance"):
         return _survdiff_frame(result)
-    if hasattr(result, "rows") and hasattr(result, "test_type"):
+    if hasattr(result, "rows") and hasattr(result, "test"):
         return _anova_frame(result)
-    if isinstance(result, SurvregAnovaResult):  # survreg: anova.survreg's data frame
-        return result.frame()
     raise TypeError("as_data_frame requires a survival result object")
-
-
-def predict(
-    fit: Any,
-    newdata: Any | None = None,
-    *,
-    type: str | None = None,
-    centered: bool | None = None,
-    terms: Any | None = None,
-    collapse: Any = False,
-    reference: str | None = None,
-    se_fit: bool = False,
-    times: Any | None = None,
-    p: Any | None = None,
-    quantiles: Any | None = None,
-    **kwargs: Any,
-) -> Any:
-    """R-style prediction generic for fitted survival models."""
-
-    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
-    if kwargs:
-        unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"predict got unexpected keyword argument(s): {unexpected}")
-
-    if _is_survreg_fit(fit):  # survreg: predict.survreg(object, newdata, type, se.fit, terms, p)
-        for name, value in (
-            ("centered", centered),
-            ("collapse", None if _collapse_is_false(collapse) else collapse),
-            ("reference", reference),
-            ("times", times),
-            ("quantiles", quantiles),
-        ):
-            if value is not None:
-                raise ValueError(f"{name} is not an argument of predict.survreg")
-        return predict_survreg(
-            fit,
-            newdata,
-            type="response" if type is None else type,
-            se_fit=se_fit,
-            terms=terms,
-            p=(0.1, 0.9) if p is None else p,
-        )
-
-    predict_type = _normalize_predict_type(type if type is not None else "lp", survreg=False)
-    centered_value = _normalize_optional_bool_option(centered, "centered")
-    include_se = _normalize_bool_option(se_fit, "se_fit")
-    rows, offsets = _prediction_inputs(fit, newdata)
-
-    reference_name = _normalize_predict_reference(reference, centered_value, predict_type)
-
-    if predict_type == "survival":
-        if not hasattr(fit, "survival_curve"):
-            raise TypeError("model does not support survival curve prediction")
-        has_response = (
-            rows is not None and times is None and _newdata_has_formula_response(fit, newdata)
-        )
-        if include_se:
-            if times is not None or (rows is not None and not has_response):
-                return _cox_survival_curve_with_se(
-                    fit,
-                    rows,
-                    offsets,
-                    True if centered_value is None else centered_value,
-                    newdata,
-                    times,
-                    collapse,
-                )
-            expected = _cox_expected_events_with_se(fit, rows, offsets, newdata)
-            probabilities = [_clamp_probability(_safe_exp(-value)) for value in expected.fit]
-            probability_se = [
-                float(se) * probability
-                for se, probability in zip(expected.se_fit, probabilities, strict=True)
-            ]
-            return PredictResult(
-                _collapse_prediction_result(probabilities, collapse),
-                _collapse_prediction_se(probability_se, collapse),
-            )
-        if has_response:
-            if rows is None:
-                raise AssertionError("has_response implies prediction rows are available")
-            probabilities = [
-                _clamp_probability(_safe_exp(-expected))
-                for expected in _cox_expected_events_for_newdata(fit, rows, offsets, newdata)
-            ]
-            return _collapse_prediction_result(probabilities, collapse)
-        curve_times, curves = _cox_survival_curve(
-            fit,
-            rows,
-            offsets,
-            True if centered_value is None else centered_value,
-            newdata,
-        )
-        if times is None:
-            return curve_times, _collapse_prediction_result(curves, collapse)
-        requested_times = _float_vector(times, "times")
-        stepped_curves = [
-            _step_curve_at(curve_times, [float(value) for value in curve], requested_times)
-            for curve in curves
-        ]
-        return requested_times, _collapse_prediction_result(stepped_curves, collapse)
-
-    if predict_type == "expected":
-        if include_se:
-            expected = _cox_expected_events_with_se(fit, rows, offsets, newdata)
-            return PredictResult(
-                _collapse_prediction_result(expected.fit, collapse),
-                _collapse_prediction_se(expected.se_fit, collapse),
-            )
-        if rows is not None:
-            expected_values = _cox_expected_events_for_newdata(fit, rows, offsets, newdata)
-            return _collapse_prediction_result(expected_values, collapse)
-        if not hasattr(fit, "expected_events"):
-            raise TypeError("model does not support expected event prediction")
-        return _collapse_prediction_result(fit.expected_events(), collapse)
-
-    if predict_type == "terms":
-        term_predictions = _cox_predict_terms(fit, rows, terms, reference_name, newdata)
-        if include_se:
-            term_se = _cox_term_prediction_se(fit, rows, terms, reference_name, newdata)
-            return PredictResult(
-                _collapse_prediction_result(term_predictions, collapse),
-                _collapse_prediction_se(term_se, collapse),
-            )
-        return _collapse_prediction_result(term_predictions, collapse)
-
-    linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
-    linear_se = (
-        _cox_linear_prediction_se(fit, rows, reference_name, newdata)
-        if include_se and predict_type in {"lp", "risk"}
-        else None
-    )
-    if reference_name != "zero":
-        centers = _cox_reference_centers(fit, reference_name, len(linear_predictors), newdata)
-        linear_predictors = [
-            value - center for value, center in zip(linear_predictors, centers, strict=True)
-        ]
-    if predict_type == "lp":
-        if include_se:
-            return PredictResult(
-                _collapse_prediction_result(linear_predictors, collapse),
-                _collapse_prediction_se(linear_se, collapse),
-            )
-        return _collapse_prediction_result(linear_predictors, collapse)
-    if predict_type == "risk":
-        risks = [_safe_exp(value) for value in linear_predictors]
-        if include_se:
-            if linear_se is None:
-                raise AssertionError("se_fit risk predictions require linear SEs")
-            risk_se = [float(se) * risk for se, risk in zip(linear_se, risks, strict=True)]
-            return PredictResult(
-                _collapse_prediction_result(risks, collapse),
-                _collapse_prediction_se(risk_se, collapse),
-            )
-        return _collapse_prediction_result(risks, collapse)
-    if predict_type == "response":
-        raise ValueError("predict type='response' is only supported for survreg fits")
-    if predict_type == "quantile":
-        raise ValueError("predict type='quantile' is only supported for survreg fits")
-    raise AssertionError(f"unhandled predict type {predict_type!r}")
-
-
-def residuals(
-    fit: Any,
-    *,
-    type: str = "martingale",
-    terms: Any | None = None,
-    collapse: Any = False,
-    weighted: bool | None = None,
-    rsigma: bool | None = None,
-) -> Any:
-    """R-style residual generic for fitted survival models."""
-
-    weighted_value = _normalize_optional_bool_option(weighted, "weighted")
-    if _is_survreg_fit(fit):  # survreg: residuals.survreg(object, type, rsigma, collapse, weighted)
-        if terms is not None:
-            raise ValueError("terms is only supported for Cox partial residuals")
-        return residuals_survreg(
-            fit,
-            type="response" if type is None else type,
-            rsigma=True if rsigma is None else rsigma,
-            collapse=None if _collapse_is_false(collapse) else collapse,
-            weighted=bool(weighted_value),
-        )
-
-    residual_type = _normalize_residual_type(type)
-    if (
-        _is_clogit_fit(fit)
-        and getattr(_unwrap_formula_fit(fit), "method", None) == "exact"
-        and residual_type in {"score", "schoenfeld", "dfbeta", "dfbetas", "scaledsch"}
-    ):
-        raise ValueError(f"{residual_type} residuals are not available for the exact method")
-    if terms is not None and residual_type != "partial":
-        raise ValueError("terms is only supported for Cox partial residuals")
-    method_names = {
-        "martingale": "martingale_residuals",
-        "deviance": "deviance_residuals",
-        "score": "score_residuals",
-        "dfbeta": "dfbeta",
-        "dfbetas": "dfbetas",
-        "schoenfeld": "schoenfeld_residuals",
-        "scaledsch": "scaled_schoenfeld_residuals",
-        "partial": "partial_residuals",
-    }
-    use_weights = (
-        residual_type in {"dfbeta", "dfbetas"} if weighted_value is None else weighted_value
-    )
-
-    if residual_type in {"schoenfeld", "scaledsch"}:
-        method = getattr(fit, "schoenfeld_residuals", None)
-        if method is None:
-            raise TypeError(f"model does not support {residual_type} residuals")
-        raw = method()
-        if use_weights:
-            weights = _model_residual_weights(fit, len(fit.status))
-            event_weights = [weights[idx] for idx in _cox_event_indices(fit)]
-            raw = _weight_residual_result(raw, event_weights)
-        return raw if residual_type == "schoenfeld" else _cox_scaled_schoenfeld_from_raw(fit, raw)
-
-    if residual_type == "deviance" and (use_weights or not _collapse_is_false(collapse)):
-        martingale_method = getattr(fit, "martingale_residuals", None)
-        if martingale_method is None:
-            raise TypeError("model does not support deviance residuals")
-        martingale = [float(value) for value in martingale_method()]
-        status = [float(value) for value in fit.status]
-        if use_weights:
-            martingale = _weight_residual_result(
-                martingale,
-                _model_residual_weights(fit, len(martingale)),
-            )
-        if not _collapse_is_false(collapse):
-            martingale = _collapse_residual_result(martingale, collapse, len(martingale))
-            status = _collapse_residual_result(status, collapse, len(status))
-        return _cox_deviance_from_martingale(martingale, status)
-
-    if residual_type == "partial" and (
-        _formula_design_for_fit(fit) is not None
-        or terms is not None
-        or use_weights
-        or not _collapse_is_false(collapse)
-    ):
-        result = _cox_partial_residuals(
-            fit,
-            terms,
-            _model_residual_weights(fit, len(fit.status)) if use_weights else None,
-        )
-        if not _collapse_is_false(collapse):
-            result = _collapse_residual_result(result, collapse, len(result))
-        return result
-
-    method_name = method_names[residual_type]
-    method = getattr(fit, method_name, None)
-    if method is None:
-        raise TypeError(f"model does not support {residual_type} residuals")
-    result = method()
-    if use_weights:
-        result = _weight_residual_result(result, _model_residual_weights(fit, len(result)))
-    if not _collapse_is_false(collapse):
-        result = _collapse_residual_result(result, collapse, len(result))
-    return result

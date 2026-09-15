@@ -1,114 +1,45 @@
-"""``coxph``/``clogit`` fitting plus Cox tests, baseline hazards, curves, and expected events."""
+"""``coxph``/``clogit`` and the Cox model methods (R/coxph.R, predict.coxph.R,
+residuals.coxph.R, survfit.coxph.R, basehaz.R, cox.zph.R, coxph.detail.R,
+anova.coxph.R, anova.coxphlist.R, summary.coxph.R, coxph.wtest.R).
+
+Every number comes from the Rust ``CoxPHFit``; this module does what R's R code
+does: the model frame, argument checking, dispatch and result labelling.
+"""
 
 from __future__ import annotations
 
 import math
+import sys
 import warnings
-from bisect import bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from operator import index
 from statistics import NormalDist
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
-    _SURVFIT_TIME_EPSILON,
     _apply_coxph_control,
     _as_matrix_rows,
-    _clamp_probability,
     _coerce_array_like,
-    _collapse_prediction_result,
-    _collapse_prediction_se,
     _cox_tie_method,
-    _encode_groups,
-    _encode_labels,
-    _event_vector,
     _finite_float,
     _float_vector,
-    _hashable_group_value,
     _integer_scalar,
-    _is_bool_like,
     _is_missing_value,
+    _label_levels,
     _match_string_arg,
-    _materialize_1d,
     _materialize_labels,
-    _matrix_input_column_names,
-    _model_residual_weights,
     _normalize_bool_option,
     _normalize_bool_option_with_default,
+    _normalize_conf_level,
     _normalize_numeric_sequence_or_none,
     _normalize_optional_bool_option,
-    _optional_float_vector,
     _pop_dotted_keyword,
-    _quadratic_form,
-    _safe_exp,
     _subset_data,
-    _subset_indices,
-    _subset_optional_sequence,
-    _survdiff_timefix_values,
-    _survfit_confidence_interval,
-    _timefix_vectors,
-    _validated_matrix_column_names,
 )
-from ._fit import (
-    _cox_alias_mask,
-    _cox_degrees_of_freedom,
-    _cox_detail_method,
-    _cox_detail_rorder,
-    _cox_detail_row_order,
-    _cox_detail_strata_table,
-    _cox_detail_y,
-    _cox_fit_offset,
-    _cox_full_loglik,
-    _cox_loglik_values,
-    _cox_prediction_design_rows,
-    _cox_prediction_offset_vector,
-    _cox_prediction_strata,
-    _cox_reference_center,
-    _cox_reference_means,
-    _cox_reference_means_for_rows,
-    _cox_strata_labels_for_fit,
-    _cox_training_rows,
-    _cox_training_strata,
-    _cox_variance_matrix,
-    _fallback_coef_names,
-    _formula_design_for_fit,
-    _is_clogit_fit,
-    _is_coxph_fit,
-    _is_survreg_fit,
-    _linear_predictors_for_fit,
-    _location_beta,
-    _prediction_inputs,
-    _require_coxph_fit,
-    _surv_from_formula_design,
-    _training_linear_predictor_center,
-    _unwrap_formula_fit,
-)
-from ._formula import (
-    _apply_formula_na_action,
-    _column,
-    _column_or_values,
-    _combined_columns,
-    _cox_time_transform_expansion,
-    _cox_time_transform_functions,
-    _cox_time_transform_terms,
-    _cox_time_transform_values,
-    _design_rows_from_spec,
-    _design_term_name,
-    _design_term_output_names,
-    _dot_terms,
-    _fit_formula_design,
-    _formula_model_frame,
-    _formula_response_spec,
-    _matrix_model_frame,
-    _offset_vector,
-    _parse_formula,
-    _response_arg_columns,
-    _split_terms,
-    _subset_formula_inputs,
-)
-from ._surv import Surv, _apply_surv_na_action, _subset_surv
+from ._fit import _model_frame, _ModelFrame, _NewData, _newdata_frame, _tt_terms
+from ._formula import _column, _column_or_values, _design_rows_from_spec, _response_arg_columns
+from ._surv import Surv
 from ._types import (
     CoxBaseHazardResult,
     CoxPHDetailResult,
@@ -117,1973 +48,553 @@ from ._types import (
     CoxZPHResult,
     PredictResult,
     _CovariateTerm,
-    _cox_beta,
-    _cox_scaled_schoenfeld_from_raw,
     _FormulaDesign,
-    _FormulaFit,
+    _FormulaTerms,
 )
 
+_TIE_METHOD_NAMES = ("breslow", "efron", "exact")
+_LOG_DOUBLE_MAX = math.log(sys.float_info.max)
 
-def _cox_flat_basehaz_with_training_times(
-    fit: Any,
-    centered: bool,
-) -> CoxBaseHazardResult:
-    with_strata = getattr(fit, "basehaz_with_strata", None)
-    if with_strata is None:
-        base_times, base_hazards = fit.basehaz(centered)
-        event_times = getattr(fit, "event_times", None)
-        training_times = (
-            sorted({float(value) for value in event_times})
-            if event_times is not None
-            else [float(value) for value in base_times]
-        )
-        hazards = [float(value) for value in base_hazards]
-        times = [float(value) for value in base_times]
-        return CoxBaseHazardResult(
-            time=training_times,
-            cumhaz=_core.step_values_at(times, hazards, training_times, 0.0),
-            centered=centered,
-        )
 
-    base_times, base_hazards, base_strata = with_strata(centered)
-    event_times = getattr(fit, "event_times", None)
-    if event_times is None:
-        strata_values = [int(value) for value in base_strata]
-        strata = strata_values if len(set(strata_values)) > 1 else None
-        return CoxBaseHazardResult(
-            time=[float(value) for value in base_times],
-            cumhaz=[float(value) for value in base_hazards],
-            strata=strata,
-            centered=centered,
-            strata_labels=_cox_strata_labels_for_fit(fit, strata),
-        )
-
-    stop_times = [float(value) for value in event_times]
-    row_strata = _cox_training_strata(fit, len(stop_times))
-    expanded_times: list[float] = []
-    expanded_hazards: list[float] = []
-    expanded_strata: list[int] = []
-    baselines = _cox_baselines_by_stratum(base_times, base_hazards, base_strata)
-    stop_times_by_stratum: dict[int, set[float]] = {}
-    for stop, row_stratum in zip(stop_times, row_strata, strict=True):
-        stop_times_by_stratum.setdefault(row_stratum, set()).add(stop)
-
-    for stratum, stratum_stop_times in sorted(stop_times_by_stratum.items()):
-        stratum_times, stratum_hazards = baselines.get(stratum, ([], []))
-        requested_times = sorted(stratum_stop_times)
-        requested_hazards = _core.step_values_at(
-            stratum_times,
-            stratum_hazards,
-            requested_times,
-            0.0,
-        )
-        for time, hazard in zip(requested_times, requested_hazards, strict=True):
-            expanded_times.append(time)
-            expanded_hazards.append(hazard)
-            expanded_strata.append(stratum)
-
-    strata = expanded_strata if len(set(row_strata)) > 1 else None
-    return CoxBaseHazardResult(
-        time=expanded_times,
-        cumhaz=expanded_hazards,
-        strata=strata,
-        centered=centered,
-        strata_labels=_cox_strata_labels_for_fit(fit, strata),
-    )
-
-
-def _coxph_wtest_b_matrix(b: Any) -> tuple[list[list[float | None]], bool]:
-    raw = _coerce_array_like(b, "b")
-    if raw and isinstance(raw[0], list | tuple):
-        rows: list[list[float | None]] = []
-        width = len(raw[0])
-        for row in raw:
-            if not isinstance(row, list | tuple) or len(row) != width:
-                raise ValueError("b matrix rows must be rectangular")
-            rows.append([None if _is_missing_value(value) else float(value) for value in row])
-        return rows, True
-    return [[None if _is_missing_value(value) else float(value)] for value in raw], False
-
-
-def _coxph_wtest_var_matrix(var: Any) -> tuple[list[list[float]], int]:
-    raw = _coerce_array_like(var, "var")
-    if raw and isinstance(raw[0], list | tuple):
-        rows = _as_matrix_rows(raw, "var", allow_empty_columns=False)
-        return rows, len(raw) * (len(raw[0]) if raw else 0)
-    values = [float(value) for value in raw]
-    if len(values) == 1:
-        return [[values[0]]], 1
-    return [], len(values)
-
-
-def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
-    """Compute the Wald test helper exported as R's ``coxph.wtest``."""
-
-    toler_value = _finite_float(toler_chol, "toler_chol")
-    if toler_value < 0.0:
-        raise ValueError("toler_chol must be non-negative")
-    b_rows, b_is_matrix = _coxph_wtest_b_matrix(b)
-    if any(value is None for row in b_rows for value in row):
-        return CoxPHWTestResult(test=[], df=0, solve=0.0)
-    b_numeric = [[float(value) for value in row] for row in b_rows]
-    if any(not math.isfinite(value) for row in b_numeric for value in row):
-        raise ValueError("infinite argument in coxph.wtest")
-
-    nvar = len(b_rows)
-    ntest = len(b_rows[0]) if b_rows and b_is_matrix else 1
-    matrix, raw_var_length = _coxph_wtest_var_matrix(var)
-    if raw_var_length == 0:
-        if nvar == 0:
-            return CoxPHWTestResult(test=[], df=0, solve=0.0)
-        raise ValueError("Argument lengths do not match")
-    if raw_var_length == 1:
-        if nvar != 1:
-            raise ValueError("Argument lengths do not match")
-        if b_is_matrix and ntest != 1:
-            raise ValueError("non-conformable arrays")
-        variance = matrix[0][0]
-        if not math.isfinite(variance):
-            raise ValueError("infinite argument in coxph.wtest")
-        if variance == 0.0:
-            raise ZeroDivisionError("division by zero")
-        values = [row[0] for row in b_numeric]
-        return CoxPHWTestResult(
-            test=[value * value / variance for value in values],
-            df=1,
-            solve=[value / variance for value in values],
-        )
-
-    if not matrix or any(len(row) != len(matrix) for row in matrix):
-        raise ValueError("First argument must be a square matrix")
-    if len(matrix) != nvar:
-        raise ValueError("Argument lengths do not match")
-    if any(not math.isfinite(value) for row in matrix for value in row):
-        raise ValueError("infinite argument in coxph.wtest")
-
-    b_columns = [
-        [b_numeric[row_idx][col_idx] for row_idx in range(nvar)] for col_idx in range(ntest)
-    ]
-    tests, df, solve_rows = _core.coxph_wtest(matrix, b_columns, toler_value)
-    solve: list[float] | list[list[float]] = (
-        solve_rows if b_is_matrix and ntest > 1 else [row[0] for row in solve_rows]
-    )
-    return CoxPHWTestResult(test=tests, df=df, solve=solve)
-
-
-def basehaz(
-    fit: Any | None = None,
-    status: Any | None = None,
-    linear_predictors: Any | None = None,
-    centered: bool = True,
-    *,
-    newdata: Any | None = None,
-    time: Any | None = None,
-    entry_times: Any | None = None,
-    weights: Any | None = None,
-):
-    """Return Cox baseline cumulative hazard, like R's basehaz."""
-
-    if _is_clogit_fit(fit):
-        raise ValueError("predicted survival curves are not defined for a clogit model")
-
-    centered_value = _normalize_bool_option(centered, "centered")
-    if time is not None:
-        if newdata is not None:
-            raise ValueError("newdata is only supported with fitted Cox models")
-        if fit is not None:
-            raise ValueError("use either a fitted Cox model or time=, not both")
-        if status is None or linear_predictors is None:
-            raise ValueError("status and linear_predictors are required with time=")
-        time_values = _float_vector(time, "time")
-        return _core.basehaz(
-            time_values,
-            _event_vector(status, "status"),
-            _float_vector(linear_predictors, "linear_predictors"),
-            centered_value,
-            _optional_float_vector(entry_times, "entry_times", len(time_values)),
-            _optional_float_vector(weights, "weights", len(time_values)),
-        )
-
-    if fit is None:
-        raise TypeError("basehaz requires a fitted Cox model or time/status inputs")
-    if hasattr(fit, "basehaz") and status is not None and linear_predictors is None:
-        if newdata is not None:
-            raise ValueError("use either positional newdata or newdata=, not both")
-        newdata = status
-        status = None
-    if hasattr(fit, "basehaz") and status is None and linear_predictors is None:
-        if entry_times is not None:
-            raise ValueError("entry_times is already stored on fitted Cox models")
-        if weights is not None:
-            raise ValueError("weights are already stored on fitted Cox models")
-        if newdata is not None:
-            rows, offsets = _prediction_inputs(fit, newdata)
-            result = _cox_survfit_result(
-                fit,
-                rows,
-                offsets,
-                True,
-                newdata,
-                compute_confidence=False,
-            )
-            if len(result.cumhaz) == 1:
-                curve_strata = result.strata
-                strata = [curve_strata[0]] * len(result.time) if curve_strata is not None else None
-                curve_strata_labels = _cox_strata_labels_for_fit(fit, curve_strata)
-                return CoxBaseHazardResult(
-                    time=result.time,
-                    cumhaz=result.cumhaz[0],
-                    strata=strata,
-                    centered=True,
-                    curve_strata=curve_strata,
-                    strata_labels=_cox_strata_labels_for_fit(fit, strata),
-                    curve_strata_labels=curve_strata_labels,
-                )
-            curve_strata_labels = _cox_strata_labels_for_fit(fit, result.strata)
-            return CoxBaseHazardResult(
-                time=result.time,
-                cumhaz=result.cumhaz,
-                centered=True,
-                curve_strata=result.strata,
-                curve_strata_labels=curve_strata_labels,
-            )
-        return _cox_flat_basehaz_with_training_times(fit, centered_value)
-    if newdata is not None:
-        raise ValueError("newdata is only supported with fitted Cox models")
-    if status is None or linear_predictors is None:
-        raise ValueError("status and linear_predictors are required with raw time input")
-    time_values = _float_vector(fit, "time")
-    return _core.basehaz(
-        time_values,
-        _event_vector(status, "status"),
-        _float_vector(linear_predictors, "linear_predictors"),
-        centered_value,
-        _optional_float_vector(entry_times, "entry_times", len(time_values)),
-        _optional_float_vector(weights, "weights", len(time_values)),
-    )
-
-
-def cox_zph(
-    fit: Any,
-    transform: Any = "km",
-    *,
-    terms: bool = True,
-    singledf: bool = False,
-    global_test: bool = True,
-    **kwargs: Any,
-) -> CoxZPHResult:
-    """R-style proportional hazards diagnostic for fitted Cox models."""
-
-    global_test = _pop_dotted_keyword(kwargs, "global", "global_test", global_test, True)
-    if kwargs:
-        unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"unexpected cox_zph argument(s): {unexpected}")
-    if _is_clogit_fit(fit) and getattr(_unwrap_formula_fit(fit), "method", None) == "exact":
-        raise ValueError("schoenfeld residuals are not available for the exact method")
-    if _is_survreg_fit(fit) or not hasattr(fit, "schoenfeld_residuals"):
-        raise TypeError("cox_zph requires a fitted Cox model")
-    group_terms = _normalize_bool_option(terms, "terms")
-    single_df = _normalize_bool_option(singledf, "singledf")
-    include_global = _normalize_bool_option(global_test, "global")
-
-    raw = [[float(value) for value in row] for row in fit.schoenfeld_residuals()]
-    scaled = _cox_scaled_schoenfeld_from_raw(fit, raw)
-    if len(raw) != len(scaled):
-        raise ValueError("Schoenfeld residual arrays have inconsistent lengths")
-    beta = _cox_beta(fit)
-    aliases = _cox_alias_mask(fit)
-    if len(aliases) != len(beta):
-        raise ValueError("fitted Cox model alias metadata does not match coefficient width")
-    active_columns = [idx for idx, aliased in enumerate(aliases) if not aliased]
-    if not active_columns:
-        raise ValueError("cox_zph requires at least one estimable coefficient")
-    if not raw:
-        raise ValueError("cox_zph requires at least one event")
-
-    full_nvar = len(raw[0])
-    if any(len(row) != full_nvar for row in raw) or any(len(row) != full_nvar for row in scaled):
-        raise ValueError("Schoenfeld residual arrays must be rectangular")
-    if len(beta) != full_nvar:
-        raise ValueError("fitted Cox model coefficients do not match residual width")
-    groups = _cox_zph_active_groups(
-        _cox_zph_column_groups(fit, full_nvar, group_terms),
-        active_columns,
-    )
-    scaled = _matrix_columns(scaled, active_columns)
-    beta = [beta[idx] for idx in active_columns]
-
-    event_indices = _cox_event_indices(fit)
-    if len(event_indices) != len(raw):
-        raise ValueError("fitted Cox model event times do not match Schoenfeld residuals")
-    event_times = [float(fit.event_times[idx]) for idx in event_indices]
-    row_strata = _cox_training_strata(fit, len(fit.status))
-    event_strata_codes = [row_strata[idx] for idx in event_indices]
-    design = _formula_design_for_fit(fit)
-    event_strata = None
-    if (design is not None and design.strata) or len(set(row_strata)) > 1:
-        event_strata = _cox_strata_labels_for_fit(fit, event_strata_codes)
-        if event_strata is None:
-            event_strata = event_strata_codes
-    transform_name, transformed_time = _cox_zph_transform(fit, event_times, transform)
-    test_residuals = scaled
-
-    test = _core.cox_zph_tests(
-        test_residuals,
-        transformed_time,
-        [columns for _name, columns in groups],
-        beta,
-        single_df,
-    )
-    grouped_y = (
-        _cox_zph_term_matrix(scaled, groups, beta)
-        if group_terms and groups
-        else _matrix_columns(scaled, [idx for _name, columns in groups for idx in columns])
-    )
-    return CoxZPHResult(
-        variable_names=[name for name, _columns in groups],
-        chi2_values=[float(value) for value in test.chi2_values],
-        df=[1 if single_df else len(columns) for _name, columns in groups],
-        p_values=[float(value) for value in test.p_values],
-        x=transformed_time,
-        time=event_times,
-        y=grouped_y,
-        var=_cox_zph_group_variance(fit, groups, beta, active_columns, len(raw)),
-        transform=transform_name,
-        global_chi2=float(test.global_chi2) if include_global else None,
-        global_df=int(test.global_df) if include_global else None,
-        global_p_value=float(test.global_p_value) if include_global else None,
-        strata=event_strata,
-    )
-
-
-def _cox_deviance_from_martingale(martingale: list[float], status: list[float]) -> list[float]:
-    if len(martingale) != len(status):
-        raise ValueError("status must have the same length as martingale residuals")
-    residuals: list[float] = []
-    for residual, event_count in zip(martingale, status, strict=True):
-        log_term = 0.0
-        if event_count > 0.0:
-            expected = max(event_count - residual, 1e-12)
-            log_term = event_count * math.log(expected)
-        magnitude = math.sqrt(max(-2.0 * (residual + log_term), 0.0))
-        residuals.append(magnitude if residual >= 0.0 else -magnitude)
-    return residuals
-
-
-def _cox_predict_term_groups(fit: Any, nvar: int) -> list[tuple[str, list[int]]]:
-    design = _formula_design_for_fit(fit)
-    if design is None:
-        coefficient_names = fit.coefficient_names if isinstance(fit, _FormulaFit) else None
-        names = (
-            list(coefficient_names)
-            if coefficient_names is not None and len(coefficient_names) == nvar
-            else _fallback_coef_names(nvar)
-        )
-        return [(name, [idx]) for idx, name in enumerate(names)]
-
-    groups: list[tuple[str, list[int]]] = []
-    cursor = 1 if design.intercept else 0
-    for term in design.covariates:
-        output_names = _design_term_output_names(term)
-        indices = list(range(cursor, cursor + len(output_names)))
-        groups.append((_design_term_name(term), indices))
-        cursor += len(output_names)
-
-    if cursor != nvar:
-        return [(f"x{idx + 1}", [idx]) for idx in range(nvar)]
-    return groups
-
-
-def _predict_terms_selection(terms: Any | None, names: list[str]) -> list[int]:
-    if terms is None:
-        return list(range(len(names)))
-    requested = [terms] if isinstance(terms, str) else _coerce_array_like(terms, "terms")
-
-    selected: list[int] = []
-    for value in requested:
-        if isinstance(value, str):
-            try:
-                term_idx = names.index(value)
-            except ValueError as exc:
-                raise ValueError(f"terms contains unknown model term {value!r}") from exc
-        else:
-            try:
-                term_idx = index(value) - 1
-            except TypeError as exc:
-                raise TypeError("terms must contain term names or 1-based term indices") from exc
-            if term_idx < 0 or term_idx >= len(names):
-                raise ValueError("terms indices must be between 1 and the number of model terms")
-        if term_idx not in selected:
-            selected.append(term_idx)
-    return selected
-
-
-def _cox_predict_terms(
-    fit: Any,
-    rows: list[list[float]] | None,
-    terms: Any | None,
-    reference: str,
-    newdata: Any | None,
-) -> list[list[float]]:
-    beta = _location_beta(fit)
-    if rows is None:
-        covariates = getattr(fit, "covariates", None)
-        if covariates is None:
-            raise ValueError("newdata is required for predict type='terms'")
-        rows = [[float(value) for value in row] for row in covariates]
-    if any(len(row) != len(beta) for row in rows):
-        raise ValueError(f"newdata must have {len(beta)} columns")
-
-    groups = _cox_predict_term_groups(fit, len(beta))
-    selected = _predict_terms_selection(terms, [name for name, _columns in groups])
-    means_by_row = _cox_reference_means_for_rows(fit, reference, rows, newdata)
-    return [
-        [
-            sum(
-                (float(row[col_idx]) - means_by_row[row_idx][col_idx]) * beta[col_idx]
-                for col_idx in groups[group_idx][1]
-            )
-            for group_idx in selected
-        ]
-        for row_idx, row in enumerate(rows)
-    ]
-
-
-def _cox_partial_residuals(
-    fit: Any,
-    terms: Any | None,
-    martingale_weights: list[float] | None = None,
-) -> list[list[float]]:
-    martingale_method = getattr(fit, "martingale_residuals", None)
-    if martingale_method is None:
-        raise TypeError("model does not support partial residuals")
-    martingale = [float(value) for value in martingale_method()]
-    if martingale_weights is not None:
-        if len(martingale_weights) != len(martingale):
-            raise ValueError("weights must have the same length as martingale residuals")
-        martingale = [
-            residual * float(weight)
-            for residual, weight in zip(martingale, martingale_weights, strict=True)
-        ]
-    contributions = _cox_predict_terms(fit, None, terms, "sample", None)
-    if len(contributions) != len(martingale):
-        raise ValueError("Cox term predictions do not match martingale residual length")
-    return [
-        [martingale[row_idx] + contribution for contribution in row]
-        for row_idx, row in enumerate(contributions)
-    ]
-
-
-def _cox_event_indices(fit: Any) -> list[int]:
-    status = [int(value) for value in fit.status]
-    times = [float(value) for value in fit.event_times]
-    strata_values = fit.strata if hasattr(fit, "strata") else [0] * len(status)
-    strata = [int(value) for value in strata_values]
-    return [int(idx) for idx in _core.cox_event_indices(times, status, strata)]
-
-
-def _average_ranks(values: list[float]) -> list[float]:
-    order = sorted(range(len(values)), key=lambda idx: (values[idx], idx))
-    ranks = [0.0] * len(values)
-    start = 0
-    while start < len(order):
-        end = start
-        while end + 1 < len(order) and values[order[end + 1]] == values[order[start]]:
-            end += 1
-        average = (start + 1 + end + 1) / 2.0
-        for pos in range(start, end + 1):
-            ranks[order[pos]] = average
-        start = end + 1
-    return ranks
-
-
-def _cox_zph_km_transform(fit: Any, event_times: list[float]) -> list[float]:
-    all_times = [float(value) for value in fit.event_times]
-    status = [int(value) for value in fit.status]
-    entry_times = getattr(fit, "entry_times", None)
-    km = _core.survfitkm(
-        all_times,
-        status,
-        entry_times=[float(value) for value in entry_times] if entry_times is not None else None,
-        conf_type="none",
-    )
-    curve_times = [float(value) for value in km.time]
-    estimates = [float(value) for value in km.estimate]
-    transformed: list[float] = []
-    cursor = 0
-    for event_time in event_times:
-        while (
-            cursor < len(curve_times) and curve_times[cursor] < event_time - _SURVFIT_TIME_EPSILON
-        ):
-            cursor += 1
-        previous_survival = estimates[cursor - 1] if cursor > 0 else 1.0
-        transformed.append(1.0 - previous_survival)
-    return transformed
-
-
-def _cox_zph_transform(
-    fit: Any,
-    event_times: list[float],
-    transform: Any,
-) -> tuple[str, list[float]]:
-    if callable(transform):
-        transformed = _float_vector(transform(event_times), "transform result")
-        if len(transformed) != len(event_times):
-            raise ValueError("transform result must have the same length as event times")
-        return getattr(transform, "__name__", "user"), transformed
-
-    message = "transform must be 'km', 'rank', 'identity', 'log', or a callable"
-    transform_name = "km" if transform is None else str(transform).strip().lower()
-    transform_name = transform_name.replace("_", "-")
-    normalized = (
-        "km"
-        if transform_name in {"kaplan", "kaplan-meier"}
-        else _match_string_arg(
-            transform_name,
-            "transform",
-            ("km", "rank", "identity", "log"),
-            message,
-        )
-    )
-
-    if normalized == "km":
-        return "km", _cox_zph_km_transform(fit, event_times)
-    if normalized == "rank":
-        return "rank", _average_ranks(event_times)
-    if normalized == "log":
-        if any(value <= 0.0 for value in event_times):
-            raise ValueError("log transform requires positive event times")
-        return "log", [math.log(value) for value in event_times]
-    return "identity", event_times
-
-
-def _matrix_columns(rows: list[list[float]], columns: list[int]) -> list[list[float]]:
-    return [[float(row[col_idx]) for col_idx in columns] for row in rows]
-
-
-def _cox_zph_column_groups(
-    fit: Any,
-    nvar: int,
-    terms: bool,
-) -> list[tuple[str, list[int]]]:
-    design = _formula_design_for_fit(fit)
-    if design is None:
-        return [(f"var{idx}", [idx]) for idx in range(nvar)]
-
-    groups: list[tuple[str, list[int]]] = []
-    cursor = 0
-    for term in design.covariates:
-        output_names = _design_term_output_names(term)
-        indices = list(range(cursor, cursor + len(output_names)))
-        if terms:
-            groups.append((_design_term_name(term), indices))
-        else:
-            groups.extend((name, [idx]) for name, idx in zip(output_names, indices, strict=True))
-        cursor += len(output_names)
-
-    if cursor != nvar:
-        return [(f"var{idx}", [idx]) for idx in range(nvar)]
-    return groups
-
-
-def _cox_zph_active_groups(
-    groups: list[tuple[str, list[int]]],
-    active_columns: list[int],
-) -> list[tuple[str, list[int]]]:
-    active_index = {
-        original_index: dense_index for dense_index, original_index in enumerate(active_columns)
-    }
-    active_groups: list[tuple[str, list[int]]] = []
-    for name, columns in groups:
-        remapped = [active_index[column] for column in columns if column in active_index]
-        if remapped:
-            active_groups.append((name, remapped))
-    return active_groups
-
-
-def _cox_zph_term_matrix(
-    scaled: list[list[float]],
-    groups: list[tuple[str, list[int]]],
-    beta: list[float],
-) -> list[list[float]]:
-    return _core.cox_zph_term_matrix(scaled, [columns for _name, columns in groups], beta)
-
-
-def _cox_zph_group_variance(
-    fit: Any,
-    groups: list[tuple[str, list[int]]],
-    beta: list[float],
-    active_columns: list[int],
-    event_count: int,
-) -> list[list[float]]:
-    raw_variance = getattr(fit, "naive_information_matrix", None)
-    if raw_variance is None:
-        raw_variance = getattr(fit, "information_matrix", None)
-    if raw_variance is None:
-        return []
-    full_variance = [[float(value) for value in row] for row in raw_variance]
-    full_nvar = len(full_variance)
-    if any(len(row) != full_nvar for row in full_variance):
-        return []
-    if any(column < 0 or column >= full_nvar for column in active_columns):
-        return []
-    variance = [[full_variance[row][column] for column in active_columns] for row in active_columns]
-    nvar = len(beta)
-    if len(variance) != nvar or any(len(row) != nvar for row in variance):
-        return []
-    grouped = _core.cox_zph_group_variance(
-        variance,
-        [columns for _name, columns in groups],
-        beta,
-    )
-    return [[event_count * value for value in row] for row in grouped]
-
-
-def _cox_anova_test(test: str | None) -> tuple[str, bool]:
-    if test is None:
-        return "none", False
-    if not isinstance(test, str):
-        raise TypeError("anova test must be a string or None")
-    value = test.strip().lower().replace("_", "-")
-    if not value:
-        return "none", False
-    aliases = {
-        "chisquare": "chisq",
-        "chi-square": "chisq",
-        "chi-squared": "chisq",
-        "likelihood": "lrt",
-        "likelihood-ratio": "lrt",
-        "likelihood-ratio-test": "lrt",
-    }
-    normalized = aliases.get(value) or _match_string_arg(
-        value,
-        "anova test",
-        ("chisq", "lrt", "none"),
-        "anova test must be 'Chisq', 'LRT', or 'none'",
-    )
-    if normalized == "none":
-        return "none", False
-    return ("Chisq" if normalized == "chisq" else "LRT"), True
-
-
-def _anova_result(
-    logliks: list[float],
-    dfs: list[int],
-    names: list[str],
-    test_name: str,
-    with_tests: bool,
-) -> Any:
-    if with_tests and len(logliks) >= 2:
-        return _core.anova_coxph(logliks, dfs, names, test_name)
-
-    rows = []
-    for name, loglik, df in zip(names, logliks, dfs, strict=True):
-        rows.append(_core.AnovaRow(name, loglik, df, None, None))
-    return _core.AnovaCoxphResult(rows, test_name)
-
-
-def _cox_design_groups(fit: Any, n_columns: int) -> list[tuple[str, int]]:
-    design = _formula_design_for_fit(fit)
-    if design is None:
-        return [(f"x{idx + 1}", 1) for idx in range(n_columns)]
-
-    groups = [
-        (_design_term_name(term), len(_design_term_output_names(term)))
-        for term in design.covariates
-    ]
-    if sum(width for _, width in groups) != n_columns:
-        return [(f"x{idx + 1}", 1) for idx in range(n_columns)]
-    return groups
-
-
-def _cox_refit_loglik_and_df(
-    fit: Any,
-    width: int,
-    offset: list[float] | None,
-) -> tuple[float, int]:
-    rows = [[float(value) for value in row[:width]] for row in fit.covariates]
-    nocenter = getattr(fit, "nocenter", None)
-    refit = _core.coxph_fit(
-        [float(value) for value in fit.event_times],
-        [int(value) for value in fit.status],
-        rows,
-        strata=[int(value) for value in fit.strata] if hasattr(fit, "strata") else None,
-        weights=[float(value) for value in fit.weights] if hasattr(fit, "weights") else None,
-        offset=offset,
-        initial_beta=None,
-        max_iter=None,
-        eps=None,
-        toler=None,
-        method=getattr(fit, "method", None),
-        entry_times=(
-            [float(value) for value in fit.entry_times]
-            if getattr(fit, "entry_times", None) is not None
-            else None
-        ),
-        nocenter=[float(value) for value in nocenter] if nocenter is not None else None,
-    )
-    return _cox_full_loglik(refit), _cox_degrees_of_freedom(refit)
-
-
-def _anova_single_coxph(fit: Any, test_name: str, with_tests: bool) -> Any:
-    model = _require_coxph_fit(fit)
-    beta = _cox_beta(model)
-    n_columns = len(beta)
-    names = ["NULL"]
-    dfs = [0]
-    logliks = [_cox_loglik_values(model)[0]]
-    if n_columns == 0:
-        return _anova_result(logliks, dfs, names, test_name, with_tests)
-
-    groups = _cox_design_groups(fit, n_columns)
-    offset = _cox_fit_offset(model, beta)
-    width = 0
-    for idx, (name, group_width) in enumerate(groups):
-        width += group_width
-        names.append(name)
-        if idx == len(groups) - 1:
-            logliks.append(_cox_full_loglik(model))
-            dfs.append(_cox_degrees_of_freedom(model))
-        else:
-            refit_loglik, refit_df = _cox_refit_loglik_and_df(model, width, offset)
-            logliks.append(refit_loglik)
-            dfs.append(refit_df)
-    return _anova_result(logliks, dfs, names, test_name, with_tests)
-
-
-def _anova_multiple_coxph(fits: tuple[Any, ...], test_name: str, with_tests: bool) -> Any:
-    models = [_require_coxph_fit(fit) for fit in fits]
-    logliks = [_cox_full_loglik(model) for model in models]
-    dfs = [_cox_degrees_of_freedom(model) for model in models]
-    names = [f"Model {idx + 1}" for idx in range(len(models))]
-    return _anova_result(logliks, dfs, names, test_name, with_tests)
-
-
-def _cox_robust_variance_matrix(
-    fit: Any,
-    cluster: Any,
-) -> tuple[list[list[float]], list[list[float]], list[Any]]:
-    beta = _cox_beta(fit)
-    nvar = len(beta)
-    naive = _cox_variance_matrix(fit, nvar)
-    cluster_values = _materialize_labels(cluster, "cluster")
-    score = fit.score_residuals()
-    n = len(score)
-    if len(cluster_values) != n:
-        raise ValueError("cluster must have the same length as the Surv response")
-    if any(len(row) != nvar for row in score):
-        raise ValueError("fitted Cox model score residuals do not match coefficient width")
-
-    weights = [float(value) for value in getattr(fit, "weights", [1.0] * n)]
-    if len(weights) != n:
-        raise ValueError("fitted Cox model weights do not match residual length")
-
-    cluster_codes = _encode_labels(cluster_values, "cluster")
-    robust = _core.clustered_sandwich_variance(score, weights, cluster_codes, naive)
-    return robust, naive, cluster_values
-
-
-def _cox_has_repeated_event_id(response: Surv, id_values: Sequence[Any]) -> bool:
-    seen: set[Any] = set()
-    for event, id_value in zip(response.event, id_values, strict=True):
-        if int(event) != 1:
-            continue
-        key = _hashable_group_value(id_value)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
-
-
-def _cox_linear_prediction_se(
-    fit: Any,
-    rows: list[list[float]] | None,
-    reference: str,
-    newdata: Any | None,
-) -> list[float]:
-    design_rows = _cox_prediction_design_rows(fit, rows, reference, newdata)
-    variance = _cox_variance_matrix(fit, len(_cox_beta(fit)))
-    return _core.prediction_se_from_variance(design_rows, variance)
-
-
-def _cox_term_prediction_se(
-    fit: Any,
-    rows: list[list[float]] | None,
-    terms: Any | None,
-    reference: str,
-    newdata: Any | None,
-) -> list[list[float]]:
-    beta = _cox_beta(fit)
-    design_rows = _cox_prediction_design_rows(fit, rows, reference, newdata)
-    variance = _cox_variance_matrix(fit, len(beta))
-    groups = _cox_predict_term_groups(fit, len(beta))
-    selected = _predict_terms_selection(terms, [name for name, _columns in groups])
-    return _core.term_prediction_se_from_variance(
-        design_rows,
-        variance,
-        [groups[group_idx][1] for group_idx in selected],
-    )
+# ---------------------------------------------------------------------------
+# the coxph object
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class _CoxExpectedBaseline:
-    times: list[float]
-    cumhaz: list[float]
-    varhaz: list[float]
-    xbar: list[list[float]]
+class CoxphModel:
+    """R's ``coxph`` object: the engine fit plus what the R list keeps around it.
+
+    The numeric components (``coefficients``, ``var``, ``loglik``, ``residuals``,
+    ...) are read through from :class:`survival._survival.CoxPHFit`; ``formula``,
+    ``design``, ``assign``, ``coef_names``, ``y``, ``strata_levels`` and ``id`` are
+    what ``predict``/``survfit``/``residuals`` need to rebuild the model frame.
+    """
+
+    fit: _core.CoxPHFit
+    formula: str
+    design: _FormulaDesign
+    terms: _FormulaTerms
+    coef_names: tuple[str, ...]
+    assign: dict[str, tuple[int, ...]]
+    y: Surv
+    strata_levels: tuple[str, ...]
+    concordance: dict[str, float]
+    n: int
+    timefix: bool
+    tt: bool
+    id: tuple[Any, ...] | None = None
+    cluster: tuple[Any, ...] | None = None
+    model: dict[str, Any] | None = None
+
+    @property
+    def coefficients(self) -> list[float]:
+        return [float(value) for value in self.fit.coefficients]
+
+    @property
+    def var(self) -> list[list[float]]:
+        return [list(row) for row in self.fit.var]
+
+    @property
+    def naive_var(self) -> list[list[float]] | None:
+        naive = self.fit.naive_var
+        return None if naive is None else [list(row) for row in naive]
+
+    @property
+    def robust(self) -> bool:
+        return self.fit.naive_var is not None
+
+    @property
+    def loglik(self) -> list[float]:
+        """``fit$loglik``: null and fitted values (one value for a null model, as R)."""
+
+        values = list(self.fit.loglik)
+        return values if self.coef_names else values[:1]
+
+    @property
+    def score(self) -> float | None:
+        return float(self.fit.score) if self.coef_names else None
+
+    @property
+    def rscore(self) -> float | None:
+        return self.fit.rscore
+
+    @property
+    def wald_test(self) -> float | None:
+        return float(self.fit.wald_test) if self.coef_names else None
+
+    @property
+    def iter(self) -> int | None:
+        return int(self.fit.iter) if self.coef_names else None
+
+    @property
+    def linear_predictors(self) -> list[float]:
+        return list(self.fit.linear_predictors)
+
+    @property
+    def residuals(self) -> list[float]:
+        return list(self.fit.residuals)
+
+    @property
+    def means(self) -> list[float]:
+        return list(self.fit.means)
+
+    @property
+    def method(self) -> str:
+        return _TIE_METHOD_NAMES[int(self.fit.method)]
+
+    @property
+    def nevent(self) -> int:
+        return int(self.fit.nevent)
+
+    @property
+    def nvar(self) -> int:
+        return len(self.coef_names)
+
+    @property
+    def x(self) -> list[list[float]]:
+        return [list(row) for row in self.fit.x]
+
+    @property
+    def weights(self) -> list[float] | None:
+        """``fit$weights``: the case weights, present only when some differ from 1."""
+
+        values = list(self.fit.weights)
+        return values if any(value != 1.0 for value in values) else None
+
+    @property
+    def offset(self) -> list[float] | None:
+        values = list(self.fit.offset)
+        return values if any(value != 0.0 for value in values) else None
+
+    @property
+    def strata(self) -> list[str] | None:
+        """``fit$strata``: the stratum label of every row, ``None`` when unstratified."""
+
+        codes = self.fit.strata
+        if codes is None or not self.strata_levels:
+            return None
+        return [self.strata_levels[int(code)] for code in codes]
+
+    def predict(self, newdata: Any | None = None, **kwargs: Any) -> Any:
+        return predict_coxph(self, newdata, **kwargs)
+
+    def survfit(self, newdata: Any | None = None, **kwargs: Any) -> CoxSurvfitResult:
+        return survfit_coxph(self, newdata, **kwargs)
+
+    def summary(self, conf_int: float = 0.95, scale: float = 1.0) -> dict[str, Any]:
+        return summary_coxph(self, conf_int=conf_int, scale=scale)
 
 
-def _cox_expected_baseline_by_stratum(fit: Any) -> dict[int, _CoxExpectedBaseline]:
-    model = _unwrap_formula_fit(fit)
-    beta = _cox_beta(model)
-    nvar = len(beta)
-    rows = _cox_training_rows(model, nvar)
-    times = [float(value) for value in model.event_times]
-    status = [int(value) for value in model.status]
-    n = len(times)
-    if len(rows) != n or len(status) != n:
-        raise ValueError("fitted Cox model event arrays have inconsistent lengths")
+@dataclass(frozen=True)
+class ClogitModel(CoxphModel):
+    """R's ``clogit`` object (class ``c("clogit", "coxph")``)."""
 
-    entry_values = getattr(model, "entry_times", None)
-    entry = [float(value) for value in entry_values] if entry_values is not None else None
-    if entry is not None and len(entry) != n:
-        raise ValueError("fitted Cox model entry times do not match event rows")
-    weights = _model_residual_weights(model, n)
-    strata = _cox_training_strata(model, n)
-    offsets = _cox_prediction_offset_vector(model, n)
-    means = _cox_reference_means(model, "sample")
-    method = _cox_detail_method(model)
-    strata_values, baseline_times, cumhaz, varhaz, xbar = _core.cox_expected_baseline_by_stratum(
-        times,
-        status,
-        rows,
-        beta,
-        weights,
-        strata,
-        offsets,
-        means,
-        entry,
-        method,
+
+def _has_strata(fit: CoxphModel) -> bool:
+    return bool(fit.strata_levels)
+
+
+def _aliased(fit: CoxphModel) -> list[bool]:
+    return [math.isnan(value) for value in fit.coefficients]
+
+
+def _active_assign(fit: CoxphModel) -> list[list[int]]:
+    """``fit$assign`` restricted to the estimable columns, one entry per term."""
+
+    aliased = _aliased(fit)
+    return [[col for col in cols if not aliased[col]] for cols in fit.assign.values()]
+
+
+# ---------------------------------------------------------------------------
+# coxph
+# ---------------------------------------------------------------------------
+
+
+def _aeq_surv(y: Surv) -> Surv:
+    """``aeqSurv``: snap times that are equal up to floating-point noise together."""
+
+    if y.start is None:
+        fixed = _core.aeq_surv(list(y.time))
+        return Surv(list(fixed.time), list(y.event), type=y.type)
+    fixed = _core.aeq_surv(list(y.start), list(y.time))
+    time2 = fixed.time2 if fixed.time2 is not None else list(y.time)
+    return Surv(list(fixed.time), list(time2), list(y.event), type=y.type)
+
+
+def _obrien_time_transform(
+    x: Sequence[float],
+    time: Sequence[float],
+    riskset: Sequence[int],
+    weights: Sequence[float] | None,
+) -> list[float]:
+    """R's default ``tt``: O'Brien's logit rank within each risk set."""
+
+    del time, weights
+    out = [0.0] * len(x)
+    groups: dict[int, list[int]] = {}
+    for idx, group in enumerate(riskset):
+        groups.setdefault(group, []).append(idx)
+    for members in groups.values():
+        order = sorted(members, key=lambda idx: x[idx])
+        size = len(order)
+        pos = 0
+        while pos < size:  # average ranks over ties, as R's rank()
+            end = pos
+            while end + 1 < size and x[order[end + 1]] == x[order[pos]]:
+                end += 1
+            rank = (pos + end) / 2.0 + 1.0
+            for k in range(pos, end + 1):
+                out[order[k]] = (rank - 0.5) / (0.5 + size - rank)
+            pos = end + 1
+    return out
+
+
+def _tt_functions(tt: Any, count: int) -> list[Callable[..., Any]]:
+    if tt is None:
+        return [_obrien_time_transform] * count
+    functions = list(tt) if isinstance(tt, list | tuple) else [tt]
+    if any(not callable(function) for function in functions):
+        raise TypeError("The tt argument must contain a function or list of functions")
+    if len(functions) != count:
+        if len(functions) == 1:
+            return functions * count
+        raise ValueError("Wrong length for tt argument")
+    return functions
+
+
+@dataclass(frozen=True)
+class _CoxData:
+    """The rows handed to the engine (after the tt() expansion, when there is one)."""
+
+    y: Surv
+    x: list[list[float]]
+    strata: list[int] | None
+    weights: list[float] | None
+    offset: list[float] | None
+    cluster: list[Any] | None
+    id: list[Any] | None
+
+
+def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _CoxData:
+    """coxph.R's tt() section: one row per (risk set, subject at risk)."""
+
+    y = frame.y
+    if y.start is None:
+        counts = _core.coxcount1(_core.SurvivalData(list(y.time), list(y.event)), frame.strata)
+    else:
+        counts = _core.coxcount2(
+            _core.CountingProcessData(list(y.start), list(y.time), list(y.event)),
+            frame.strata,
+        )
+    tindex = [int(idx) for idx in counts.index]
+    nrisk = [int(value) for value in counts.nrisk]
+    new_time = [time for time, size in zip(counts.time, nrisk, strict=True) for _ in range(size)]
+    new_y = Surv(new_time, [int(value) for value in counts.status])
+    riskset = [group for group, size in enumerate(nrisk) for _ in range(size)]
+    data = _subset_data(frame.data, tindex)
+    weights = None if frame.weights is None else [frame.weights[idx] for idx in tindex]
+    transformed: dict[_CovariateTerm, list[float]] = {}
+    for term, function in zip(tt_terms, _tt_functions(tt, len(tt_terms)), strict=True):
+        values = [float(value) for value in _column(data, term.column)]
+        transformed[term] = [
+            float(value) for value in function(values, list(new_y.time), riskset, weights)
+        ]
+        if len(transformed[term]) != len(tindex):
+            raise ValueError("the tt function must return one value per expanded row")
+    return _CoxData(
+        y=new_y,
+        x=_design_rows_from_spec(
+            data, frame.design, len(tindex), time_transform_values=transformed
+        ),
+        strata=riskset,
+        weights=weights,
+        offset=None if frame.offset is None else [frame.offset[idx] for idx in tindex],
+        cluster=None if frame.cluster is None else [frame.cluster[idx] for idx in tindex],
+        id=None if frame.id is None else [frame.id[idx] for idx in tindex],
     )
+
+
+def _check_init(init: Any, x: list[list[float]], offset: list[float] | None) -> list[float]:
+    values = _float_vector(init, "init")
+    nvar = len(x[0]) if x else 0
+    if len(values) != nvar:
+        raise ValueError("wrong length for init argument")
+    n = len(x)
+    means = [sum(row[col] for row in x) / n for col in range(nvar)] if n else []
+    center = sum(mean * value for mean, value in zip(means, values, strict=True))
+    risks = []
+    for idx, row in enumerate(x):
+        eta = sum(a * b for a, b in zip(row, values, strict=True)) - center
+        if offset is not None:
+            eta += offset[idx]
+        try:
+            risks.append(math.exp(eta))
+        except OverflowError:
+            risks.append(math.inf)
+    if any(math.isinf(risk) for risk in risks) or (risks and all(risk == 0.0 for risk in risks)):
+        raise ValueError("initial values lead to overflow or underflow of the exp function")
+    return values
+
+
+def _robust_default(
+    data: _CoxData,
+    has_cluster: bool,
+) -> bool:
+    """coxph.R: robust when a cluster, non-integer weights, or an id with >1 event."""
+
+    has_rwt = data.weights is not None and any(w != math.floor(w) for w in data.weights)
+    has_id_events = False
+    if data.id is not None:
+        seen: set[Any] = set()
+        for id_value, event in zip(data.id, data.y.event, strict=True):
+            if event == 1:
+                if id_value in seen:
+                    has_id_events = True
+                    break
+                seen.add(id_value)
+    return has_cluster or has_rwt or has_id_events
+
+
+def _cluster_codes(values: Sequence[Any]) -> list[int]:
+    """``match(cluster, unique(cluster))`` as 0-based codes."""
+
+    codes = {value: idx for idx, value in enumerate(_label_levels(list(values), "cluster"))}
+    return [codes[value] for value in values]
+
+
+def _fit_concordance(
+    fit: _core.CoxPHFit, data: _CoxData, cluster: list[int] | None
+) -> dict[str, float]:
+    """``fit$concordance``: counts, C and its se from ``concordancefit(reverse=TRUE)``."""
+
+    y = data.y
+    x = _core.CovariateMatrix(list(fit.linear_predictors), len(y), 1)
+    weights = None if data.weights is None else _core.Weights(list(data.weights))
+    kwargs: dict[str, Any] = {
+        "weights": weights,
+        "strata": data.strata,
+        "cluster": cluster,
+        "reverse": True,
+        "timefix": False,
+    }
+    if y.start is None:
+        cfit = _core.concordancefit(_core.SurvivalData(list(y.time), list(y.event)), x, **kwargs)
+    else:
+        cfit = _core.concordancefit_counting(
+            _core.CountingProcessData(list(y.start), list(y.time), list(y.event)), x, **kwargs
+        )
+    counts = cfit.count
+    variance = cfit.var[0][0] if cfit.var is not None else math.nan
     return {
-        int(stratum): _CoxExpectedBaseline(
-            times=[float(value) for value in stratum_times],
-            cumhaz=[float(value) for value in stratum_cumhaz],
-            varhaz=[float(value) for value in stratum_varhaz],
-            xbar=[[float(value) for value in row] for row in stratum_xbar],
-        )
-        for stratum, stratum_times, stratum_cumhaz, stratum_varhaz, stratum_xbar in zip(
-            strata_values,
-            baseline_times,
-            cumhaz,
-            varhaz,
-            xbar,
-            strict=True,
-        )
+        "concordant": sum(row.concordant for row in counts),
+        "discordant": sum(row.discordant for row in counts),
+        "tied.x": sum(row.tied_x for row in counts),
+        "tied.y": sum(row.tied_y for row in counts),
+        "tied.xy": sum(row.tied_xy for row in counts),
+        "concordance": cfit.concordance[0],
+        "std": math.sqrt(variance),
     }
 
 
-def _cox_expected_baseline_at(
-    baseline: _CoxExpectedBaseline,
-    time: float,
-    nvar: int,
-) -> tuple[float, float, list[float]]:
-    pos = bisect_right(baseline.times, time)
-    if pos == 0:
-        return 0.0, 0.0, [0.0] * nvar
-    idx = pos - 1
-    return baseline.cumhaz[idx], baseline.varhaz[idx], list(baseline.xbar[idx])
-
-
-def _cox_training_response(fit: Any) -> Surv:
-    model = _unwrap_formula_fit(fit)
-    entry_values = getattr(model, "entry_times", None)
-    if entry_values is None:
-        return Surv(model.event_times, model.status)
-    return Surv(entry_values, model.event_times, model.status)
-
-
-def _cox_expected_events_with_se(
-    fit: Any,
-    rows: list[list[float]] | None,
-    offsets: list[float] | None,
-    newdata: Any | None,
-) -> PredictResult:
-    model = _unwrap_formula_fit(fit)
-    beta = _cox_beta(model)
-    nvar = len(beta)
-    if rows is None:
-        rows = _cox_training_rows(model, nvar)
-        if len(rows) != len(model.event_times):
-            raise ValueError("stored training covariates are required for expected prediction SEs")
-        response = _cox_training_response(model)
-        prediction_strata = _cox_training_strata(model, len(rows))
-        linear_predictors = _linear_predictors_for_fit(model, None)
-    else:
-        design = _formula_design_for_fit(fit)
-        if design is None or not (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
-            raise ValueError(
-                "predict type='expected' with newdata requires formula response columns"
-            )
-        response = _surv_from_formula_design(newdata, design)
-        if len(response) != len(rows):
-            raise ValueError("newdata response and covariates must have the same row count")
-        model_is_counting = getattr(model, "entry_times", None) is not None
-        if model_is_counting != (response.start is not None):
-            raise ValueError("newdata survival type differs from the fitted Cox model")
-        prediction_strata = _cox_prediction_strata(fit, newdata, len(rows))
-        linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
-
-    if any(len(row) != nvar for row in rows):
-        raise ValueError(f"newdata must have {nvar} columns")
-    means = _cox_reference_means(model, "sample")
-    variance = _cox_variance_matrix(model, nvar)
-    baselines = _cox_expected_baseline_by_stratum(model)
-
-    predictions: list[float] = []
-    centered_rows: list[list[float]] = []
-    start_hazards: list[float] = []
-    start_varhazes: list[float] = []
-    start_xbars: list[list[float]] = []
-    stop_hazards: list[float] = []
-    stop_varhazes: list[float] = []
-    stop_xbars: list[list[float]] = []
-    risks: list[float] = []
-    for row_idx, (row, stop, stratum, linear_predictor) in enumerate(
-        zip(rows, response.time, prediction_strata, linear_predictors, strict=True)
-    ):
-        baseline = baselines.get(stratum)
-        if baseline is None:
-            raise ValueError(f"newdata contains unknown strata level {stratum!r}")
-        start = response.start[row_idx] if response.start is not None else None
-        start_hazard, start_varhaz, start_xbar = (
-            _cox_expected_baseline_at(baseline, float(start), nvar)
-            if start is not None
-            else (0.0, 0.0, [0.0] * nvar)
-        )
-        stop_hazard, stop_varhaz, stop_xbar = _cox_expected_baseline_at(
-            baseline,
-            float(stop),
-            nvar,
-        )
-        centered_row = [float(value) - means[col_idx] for col_idx, value in enumerate(row)]
-        risk = _safe_exp(float(linear_predictor))
-        predictions.append(max(stop_hazard - start_hazard, 0.0) * risk)
-        centered_rows.append(centered_row)
-        start_hazards.append(start_hazard)
-        start_varhazes.append(start_varhaz)
-        start_xbars.append(start_xbar)
-        stop_hazards.append(stop_hazard)
-        stop_varhazes.append(stop_varhaz)
-        stop_xbars.append(stop_xbar)
-        risks.append(risk)
-    se = _core.cox_interval_cumulative_hazard_se(
-        centered_rows,
-        start_hazards,
-        start_varhazes,
-        start_xbars,
-        stop_hazards,
-        stop_varhazes,
-        stop_xbars,
-        risks,
-        variance,
-    )
-    return PredictResult(predictions, se)
-
-
-def _cox_expected_events_for_newdata(
-    fit: Any,
-    rows: list[list[float]],
-    offsets: list[float] | None,
-    newdata: Any,
-) -> list[float]:
-    design = _formula_design_for_fit(fit)
-    if design is None or not (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
-        raise ValueError("predict type='expected' with newdata requires formula response columns")
-
-    response = _surv_from_formula_design(newdata, design)
-    if len(response) != len(rows):
-        raise ValueError("newdata response and covariates must have the same row count")
-
-    model = _unwrap_formula_fit(fit)
-    model_is_counting = getattr(model, "entry_times", None) is not None
-    if model_is_counting != (response.start is not None):
-        raise ValueError("newdata survival type differs from the fitted Cox model")
-
-    basehaz_with_strata = getattr(model, "basehaz_with_strata", None)
-    if basehaz_with_strata is None:
-        base_times, base_hazards = model.basehaz(False)
-        base_strata = [0] * len(base_times)
-    else:
-        base_times, base_hazards, base_strata = basehaz_with_strata(False)
-
-    prediction_strata = _cox_prediction_strata(fit, newdata, len(rows))
-    linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
-    baselines = _cox_baselines_by_stratum(base_times, base_hazards, base_strata)
-    expected: list[float] = []
-    for idx, (stop, stratum, linear_predictor) in enumerate(
-        zip(response.time, prediction_strata, linear_predictors, strict=True)
-    ):
-        stratum_times, stratum_hazards = baselines.get(stratum, ([], []))
-        start_hazard = (
-            _step_hazard_at(stratum_times, stratum_hazards, float(response.start[idx]))
-            if response.start is not None
-            else 0.0
-        )
-        stop_hazard = _step_hazard_at(stratum_times, stratum_hazards, float(stop))
-        expected.append(max(stop_hazard - start_hazard, 0.0) * _safe_exp(linear_predictor))
-    return expected
-
-
-def _step_curve_at(
-    times: list[float],
-    curve: list[float],
-    requested_times: list[float],
-) -> list[float]:
-    return _core.step_values_at(times, curve, requested_times, 1.0)
-
-
-def _step_std_err_at(
-    times: list[float],
-    curve: list[float],
-    requested_times: list[float],
-) -> list[float]:
-    return _core.step_values_at(times, curve, requested_times, 0.0)
-
-
-def _step_hazard_at(times: list[float], hazards: list[float], time: float) -> float:
-    pos = bisect_right(times, time)
-    return 0.0 if pos == 0 else hazards[pos - 1]
-
-
-def _cox_baselines_by_stratum(
-    base_times: list[float],
-    base_hazards: list[float],
-    base_strata: list[int],
-) -> dict[int, tuple[list[float], list[float]]]:
-    baselines: dict[int, tuple[list[float], list[float]]] = {}
-    for time, hazard, stratum_value in zip(base_times, base_hazards, base_strata, strict=True):
-        times, hazards = baselines.setdefault(int(stratum_value), ([], []))
-        times.append(float(time))
-        hazards.append(float(hazard))
-    return baselines
-
-
-def _cox_baseline_survival_curves(
-    base_times: list[float],
-    base_hazards: list[float],
-    linear_predictors: list[float],
-    center: float,
-    base_strata: list[int] | None = None,
-    curve_strata: list[int] | None = None,
-    requested_times: list[float] | None = None,
-) -> tuple[list[float], list[list[float]], list[list[float]]]:
-    times, curves, cumhaz = _core.cox_survfit_from_baseline(
-        [float(value) for value in base_times],
-        [float(value) for value in base_hazards],
-        [float(value) for value in linear_predictors],
-        float(center),
-        None if base_strata is None else [int(value) for value in base_strata],
-        None if curve_strata is None else [int(value) for value in curve_strata],
-        None if requested_times is None else [float(value) for value in requested_times],
-    )
-    return (
-        [float(value) for value in times],
-        [[float(value) for value in curve] for curve in curves],
-        [[float(value) for value in curve] for curve in cumhaz],
-    )
-
-
-def _cox_survival_curve(
-    fit: Any,
-    rows: list[list[float]] | None,
-    offsets: list[float] | None,
-    centered: bool,
-    newdata: Any | None,
-) -> tuple[list[float], list[list[float]]]:
-    with_strata = getattr(fit, "survival_curve_with_strata", None)
-    if rows is not None and with_strata is not None:
-        prediction_strata = _cox_prediction_strata(fit, newdata, len(rows))
-        if offsets is None:
-            times, curves = with_strata(rows, prediction_strata, centered)
-            return [float(value) for value in times], curves
-
-        basehaz_with_strata = getattr(fit, "basehaz_with_strata", None)
-        if basehaz_with_strata is None:
-            raise TypeError("model does not support stratified baseline hazard prediction")
-        base_times, base_hazards, base_strata = basehaz_with_strata(centered)
-        linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
-        center = _training_linear_predictor_center(fit) if centered else 0.0
-        curve_times, curves, _ = _cox_baseline_survival_curves(
-            [float(value) for value in base_times],
-            [float(value) for value in base_hazards],
-            linear_predictors,
-            center,
-            [int(value) for value in base_strata],
-            prediction_strata,
-        )
-        return curve_times, curves
-
-    if offsets is None:
-        try:
-            times, curves = fit.survival_curve(rows, centered)
-        except TypeError:
-            if rows is None:
-                raise ValueError("newdata is required for survival prediction") from None
-            times, curves = fit.survival_curve(rows, None)
-        return [float(value) for value in times], curves
-
-    if rows is None:
-        raise ValueError("newdata is required for survival prediction")
-    if not hasattr(fit, "basehaz"):
-        raise TypeError("model does not support baseline hazard prediction")
-
-    curve_times, hazards = fit.basehaz(centered)
-    linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
-    center = _training_linear_predictor_center(fit) if centered else 0.0
-    curve_times, curves, _ = _cox_baseline_survival_curves(
-        [float(value) for value in curve_times],
-        [float(value) for value in hazards],
-        linear_predictors,
-        center,
-    )
-    return curve_times, curves
-
-
-def _cox_default_survfit_linear_predictor(fit: Any) -> float:
-    means = getattr(fit, "means", None)
-    if means is None:
-        return 0.0
-    beta = _cox_beta(fit)
-    mean_values = [float(value) for value in means]
-    if len(mean_values) != len(beta):
-        return 0.0
-    return sum(value * coefficient for value, coefficient in zip(mean_values, beta, strict=True))
-
-
-def _cox_survfit_curve_strata(
-    fit: Any,
-    rows: list[list[float]] | None,
-    newdata: Any | None,
-    n_curves: int,
-) -> list[int] | None:
-    if getattr(fit, "basehaz_with_strata", None) is None:
-        return None
-    beta = _cox_beta(fit)
-    training_rows = _cox_training_rows(fit, len(beta))
-    training_strata = _cox_training_strata(fit, len(training_rows)) if training_rows else [0]
-    unique_strata = sorted(set(training_strata))
-    if len(unique_strata) <= 1:
-        return None
-    if rows is None:
-        if n_curves == len(unique_strata):
-            return unique_strata
-        return None
-    prediction_strata = _cox_prediction_strata(fit, newdata, len(rows))
-    return prediction_strata if len(prediction_strata) == n_curves else None
-
-
-def _cox_survfit_default_time0(fit: Any) -> float:
-    values = [0.0]
-    event_times = getattr(fit, "event_times", None)
-    if event_times is not None:
-        values.extend(float(value) for value in event_times)
-    entry_times = getattr(fit, "entry_times", None)
-    if entry_times is not None:
-        values.extend(float(value) for value in entry_times)
-    return min(values)
-
-
-def _cox_survfit_training_times(
-    fit: Any,
-    curve_strata: list[int] | None,
-) -> list[float]:
-    event_times = getattr(fit, "event_times", None)
-    if event_times is None:
-        return []
-    times = [float(value) for value in event_times]
-    if not times:
-        return []
-    strata = _cox_training_strata(fit, len(times))
-    selected_strata = set(curve_strata) if curve_strata is not None else set(strata)
-    return sorted(
-        {time for time, stratum in zip(times, strata, strict=True) if stratum in selected_strata}
-    )
-
-
-def _cox_survfit_with_censor_times(
-    fit: Any,
-    result: CoxSurvfitResult,
-) -> CoxSurvfitResult:
-    times = _cox_survfit_training_times(fit, result.strata)
-    if not times or times == result.time:
-        return result
-
-    expanded_cumhaz: list[list[float]] = []
-    expanded_surv: list[list[float]] = []
-    for hazards in result.cumhaz:
-        hazard_values = [float(value) for value in hazards]
-        curve_hazards = _core.step_values_at(result.time, hazard_values, times, 0.0)
-        expanded_cumhaz.append(curve_hazards)
-        expanded_surv.append([_clamp_probability(_safe_exp(-hazard)) for hazard in curve_hazards])
-
-    return CoxSurvfitResult(
-        time=times,
-        surv=expanded_surv,
-        cumhaz=expanded_cumhaz,
-        linear_predictors=result.linear_predictors,
-        centered=result.centered,
-        strata=result.strata,
-        strata_labels=result.strata_labels,
-        start_time=result.start_time,
-        std_err=result.std_err,
-        std_chaz=result.std_chaz,
-        conf_lower=result.conf_lower,
-        conf_upper=result.conf_upper,
-    )
-
-
-def _cox_survfit_conditioned(
-    fit: Any,
-    result: CoxSurvfitResult,
-    start_time: float | None,
-    include_time0: bool,
-) -> CoxSurvfitResult:
-    if start_time is None and not include_time0:
-        return result
-
-    t0 = start_time if start_time is not None else _cox_survfit_default_time0(fit)
-    times = [float(value) for value in result.time]
-    kept_times, conditioned_surv, conditioned_cumhaz = _core.condition_cox_survfit_curves(
-        times,
-        [[float(value) for value in curve] for curve in result.cumhaz],
-        float(t0),
-        include_time0,
-        start_time is not None,
-        _SURVFIT_TIME_EPSILON,
-    )
-
-    return CoxSurvfitResult(
-        time=kept_times,
-        surv=conditioned_surv,
-        cumhaz=conditioned_cumhaz,
-        linear_predictors=result.linear_predictors,
-        centered=result.centered,
-        strata=result.strata,
-        strata_labels=result.strata_labels,
-        start_time=t0 if start_time is not None else None,
-        std_err=result.std_err,
-        std_chaz=result.std_chaz,
-        conf_lower=result.conf_lower,
-        conf_upper=result.conf_upper,
-    )
-
-
-def _cox_survfit_curve_rows(
-    fit: Any,
-    rows: list[list[float]] | None,
-    n_curves: int,
-) -> list[list[float]]:
-    beta = _cox_beta(fit)
-    nvar = len(beta)
-    if rows is not None:
-        curve_rows = [[float(value) for value in row] for row in rows]
-        if len(curve_rows) != n_curves:
-            raise ValueError("newdata rows do not match fitted Cox survival curves")
-        if any(len(row) != nvar for row in curve_rows):
-            raise ValueError(f"newdata must have {nvar} columns")
-        return curve_rows
-
-    means = getattr(_unwrap_formula_fit(fit), "means", None)
-    if means is None:
-        row = [0.0] * nvar
-    else:
-        row = [float(value) for value in means]
-        if len(row) != nvar:
-            row = _cox_reference_means(fit, "sample")
-    return [list(row) for _ in range(n_curves)]
-
-
-def _cox_survfit_with_confidence(
-    fit: Any,
-    result: CoxSurvfitResult,
-    rows: list[list[float]],
-    conf_level: float,
-    conf_type: str,
-) -> CoxSurvfitResult:
-    model = _unwrap_formula_fit(fit)
-    beta = _cox_beta(model)
-    nvar = len(beta)
-    variance = _cox_variance_matrix(model, nvar)
-    baselines = _cox_expected_baseline_by_stratum(model)
-    means = _cox_reference_means(model, "sample")
-    z = NormalDist().inv_cdf(1.0 - (1.0 - conf_level) / 2.0)
-
-    std_err: list[list[float]] = []
-    std_chaz: list[list[float]] = []
-    conf_lower: list[list[float]] = []
-    conf_upper: list[list[float]] = []
-
-    for curve_idx, (survival_curve, row, linear_predictor) in enumerate(
-        zip(result.surv, rows, result.linear_predictors, strict=True)
-    ):
-        stratum = result.strata[curve_idx] if result.strata is not None else 0
-        baseline = baselines.get(
-            stratum,
-            _CoxExpectedBaseline([], [], [], []),
-        )
-        centered_row = [float(value) - means[col_idx] for col_idx, value in enumerate(row)]
-        start_hazard, start_varhaz, start_xbar = (
-            _cox_expected_baseline_at(baseline, result.start_time, nvar)
-            if result.start_time is not None
-            else (0.0, 0.0, [0.0] * nvar)
-        )
-        curve_std_err: list[float] = []
-        curve_std_chaz: list[float] = []
-        curve_lower: list[float] = []
-        curve_upper: list[float] = []
-        risk = _safe_exp(float(linear_predictor))
-
-        for time, survival in zip(result.time, survival_curve, strict=True):
-            stop_hazard, stop_varhaz, stop_xbar = _cox_expected_baseline_at(
-                baseline,
-                float(time),
-                nvar,
-            )
-            start_delta = [
-                start_hazard * centered_row[col_idx] - start_xbar[col_idx]
-                for col_idx in range(nvar)
-            ]
-            stop_delta = [
-                stop_hazard * centered_row[col_idx] - stop_xbar[col_idx] for col_idx in range(nvar)
-            ]
-            interval_delta = [stop_delta[col_idx] - start_delta[col_idx] for col_idx in range(nvar)]
-            variance_value = stop_varhaz - start_varhaz + _quadratic_form(interval_delta, variance)
-            chaz_se = math.sqrt(max(variance_value, 0.0)) * risk
-            surv_se = float(survival) * chaz_se
-            curve_std_chaz.append(chaz_se)
-            curve_std_err.append(surv_se)
-            if conf_type != "none":
-                lower, upper = _survfit_confidence_interval(
-                    float(survival),
-                    surv_se,
-                    z,
-                    conf_type,
-                )
-                curve_lower.append(lower)
-                curve_upper.append(upper)
-
-        std_chaz.append(curve_std_chaz)
-        std_err.append(curve_std_err)
-        if conf_type != "none":
-            conf_lower.append(curve_lower)
-            conf_upper.append(curve_upper)
-
-    return CoxSurvfitResult(
-        time=result.time,
-        surv=result.surv,
-        cumhaz=result.cumhaz,
-        linear_predictors=result.linear_predictors,
-        centered=result.centered,
-        strata=result.strata,
-        strata_labels=result.strata_labels,
-        start_time=result.start_time,
-        std_err=std_err,
-        std_chaz=std_chaz,
-        conf_lower=conf_lower,
-        conf_upper=conf_upper,
-    )
-
-
-def _cox_survfit_result(
-    fit: Any,
-    rows: list[list[float]] | None,
-    offsets: list[float] | None,
-    centered: bool,
-    newdata: Any | None,
-    start_time: float | None = None,
-    include_time0: bool = False,
-    include_censor: bool = True,
-    conf_level: float = 0.95,
-    conf_type: str = "log",
-    compute_confidence: bool = True,
-) -> CoxSurvfitResult:
-    times, curves = _cox_survival_curve(fit, rows, offsets, centered, newdata)
-    center = _training_linear_predictor_center(fit) if centered else 0.0
-    if rows is None:
-        linear_predictors = [_cox_default_survfit_linear_predictor(fit)] * len(curves)
-    else:
-        linear_predictors = _linear_predictors_for_fit(fit, rows, offsets)
-    curve_strata = _cox_survfit_curve_strata(fit, rows, newdata, len(curves))
-    curve_strata_labels = None
-    if curve_strata is not None:
-        curve_strata_labels = (
-            _cox_strata_labels_for_fit(fit, curve_strata)
-            if rows is None
-            else list(range(1, len(curve_strata) + 1))
-        )
-    basehaz_with_strata = getattr(fit, "basehaz_with_strata", None)
-    if curve_strata is not None and basehaz_with_strata is not None:
-        base_times, base_hazards, base_strata = basehaz_with_strata(centered)
-        _, _, cumhaz = _cox_baseline_survival_curves(
-            [float(value) for value in base_times],
-            [float(value) for value in base_hazards],
-            linear_predictors,
-            center,
-            [int(value) for value in base_strata],
-            curve_strata,
-            times,
-        )
-    else:
-        baseline_times, baseline_hazards = fit.basehaz(centered)
-        _, _, cumhaz = _cox_baseline_survival_curves(
-            [float(value) for value in baseline_times],
-            [float(value) for value in baseline_hazards],
-            linear_predictors,
-            center,
-            requested_times=times,
-        )
-    result = CoxSurvfitResult(
-        time=times,
-        surv=[[float(value) for value in curve] for curve in curves],
-        cumhaz=cumhaz,
-        linear_predictors=linear_predictors,
-        centered=centered,
-        strata=curve_strata,
-        strata_labels=curve_strata_labels,
-    )
-    if include_censor:
-        result = _cox_survfit_with_censor_times(fit, result)
-    result = _cox_survfit_conditioned(fit, result, start_time, include_time0)
-    if not compute_confidence:
-        return result
-    curve_rows = _cox_survfit_curve_rows(fit, rows, len(result.surv))
-    return _cox_survfit_with_confidence(fit, result, curve_rows, conf_level, conf_type)
-
-
-def _cox_survival_curve_with_se(
-    fit: Any,
-    rows: list[list[float]] | None,
-    offsets: list[float] | None,
-    centered: bool,
-    newdata: Any | None,
-    times: Any | None,
-    collapse: Any,
-) -> PredictResult:
-    result = _cox_survfit_result(
-        fit,
-        rows,
-        offsets,
-        centered,
-        newdata,
-        include_censor=False,
-        conf_type="none",
-    )
-    curve_times = [float(value) for value in result.time]
-    curves = [[float(value) for value in curve] for curve in result.surv]
-    std_err = [[float(value) for value in curve] for curve in result.std_err]
-
-    if times is not None:
-        requested_times = _float_vector(times, "times")
-        curves = [_step_curve_at(curve_times, curve, requested_times) for curve in curves]
-        std_err = [_step_std_err_at(curve_times, curve, requested_times) for curve in std_err]
-        curve_times = requested_times
-
-    return PredictResult(
-        (curve_times, _collapse_prediction_result(curves, collapse)),
-        (curve_times, _collapse_prediction_se(std_err, collapse)),
-    )
-
-
-def anova(*fits: Any, test: str | None = "Chisq") -> Any:
-    """Analysis of deviance for one or more fitted Cox models."""
-
-    if not fits:
-        raise TypeError("anova requires at least one fitted model")
-    if len(fits) == 1 and isinstance(fits[0], list | tuple):
-        fits = tuple(fits[0])
-        if not fits:
-            raise TypeError("anova requires at least one fitted model")
-
-    test_name, with_tests = _cox_anova_test(test)
-    if len(fits) == 1:
-        return _anova_single_coxph(fits[0], test_name, with_tests)
-    return _anova_multiple_coxph(fits, test_name, with_tests)
-
-
-def coxph_detail(
-    fit: Any | None = None,
-    riskmat: bool = False,
-    rorder: str = "data",
+def _coxph_fit_frame(
+    frame: _ModelFrame,
     *,
-    time: Any | None = None,
-    status: Any | None = None,
-    covariates: Any | None = None,
-    coefficients: Any | None = None,
-    weights: Any | None = None,
-) -> Any:
-    """Return event-time Cox model details, like R's coxph.detail."""
+    method: str,
+    init: Any | None,
+    iter_max: int,
+    eps: float | None,
+    toler_chol: float | None,
+    timefix: bool,
+    robust: bool | None,
+    singular_ok: bool,
+    nocenter: list[float] | None,
+    tt: Any,
+    keep_model: bool,
+) -> CoxphModel:
+    """coxph.R after the model frame: timefix, tt(), robust/cluster, the fit, the
+    Wald test and concordance."""
 
-    include_riskmat = _normalize_bool_option(riskmat, "riskmat")
-    raw_args = (time, status, covariates, coefficients)
-    if any(value is not None for value in raw_args):
-        if fit is not None:
-            raise ValueError("use either a fitted Cox model or raw Cox detail arrays")
-        if not all(value is not None for value in raw_args):
-            raise ValueError("time, status, covariates, and coefficients are required")
-        rows = _as_matrix_rows(covariates, "covariates", allow_empty_columns=True)
-        return _core.coxph_detail(
-            _float_vector(time, "time"),
-            _event_vector(status, "status"),
-            rows,
-            _float_vector(coefficients, "coefficients"),
-            _optional_float_vector(weights, "weights", len(rows)) if weights is not None else None,
-            riskmat=include_riskmat,
+    if frame.y.type not in {"right", "counting"}:
+        raise ValueError(f'Cox model doesn\'t support "{frame.y.type}" survival data')
+    y = _aeq_surv(frame.y) if timefix else frame.y
+    tt_terms = _tt_terms(frame.design)
+    if tt_terms:
+        if keep_model:
+            raise ValueError("'model=TRUE' not supported for models with tt terms")
+        data = _tt_expand(replace(frame, y=y), tt, tt_terms)
+    else:
+        data = _CoxData(
+            y=y,
+            x=frame.x,
+            strata=frame.strata,
+            weights=frame.weights,
+            offset=frame.offset,
+            cluster=frame.cluster,
+            id=frame.id,
         )
+    if any(not math.isfinite(value) for row in data.x for value in row):
+        raise ValueError("data contains an infinite predictor")
+    if data.offset is not None and any(
+        not math.isfinite(value) or value > _LOG_DOUBLE_MAX for value in data.offset
+    ):
+        raise ValueError("offsets must lead to a finite risk score")
 
-    if fit is None:
-        raise TypeError("coxph_detail requires a fitted Cox model")
-    if not _is_coxph_fit(fit):
-        raise TypeError("coxph_detail requires a fitted Cox model")
-    rorder_name = _cox_detail_rorder(rorder)
-    model = _unwrap_formula_fit(fit)
-    method = _cox_detail_method(model)
-    beta = _cox_beta(model)
-    nvar = len(beta)
-    rows = _cox_training_rows(model, nvar)
-    time = [float(value) for value in model.event_times]
-    status = [int(value) for value in model.status]
-    n = len(time)
-    if len(status) != n or len(rows) != n:
-        raise ValueError("fitted Cox model detail arrays have inconsistent lengths")
+    has_cluster = data.cluster is not None
+    use_robust = _robust_default(data, has_cluster) if robust is None else robust
+    cluster: list[int] | None = None
+    if has_cluster and not use_robust:
+        warnings.warn(
+            "cluster specified with robust=FALSE, cluster ignored", RuntimeWarning, stacklevel=3
+        )
+    elif has_cluster:
+        cluster = _cluster_codes(data.cluster or [])
+    elif use_robust and data.id is not None:
+        cluster = _cluster_codes(data.id)
+    if use_robust and cluster is None:
+        if data.y.start is None or robust is None:
+            cluster = list(range(len(data.y)))
+        else:
+            raise ValueError("one of cluster or id is needed")
+    if use_robust and method == "exact":
+        raise ValueError("dfbeta residuals are not available for the exact method")
 
-    entry_values = getattr(model, "entry_times", None)
-    entry = [float(value) for value in entry_values] if entry_values is not None else None
-    if entry is not None and len(entry) != n:
-        raise ValueError("fitted Cox model entry times do not match event rows")
-    weights = _model_residual_weights(model, n)
-    strata = _cox_training_strata(model, n)
-    linear_predictors = [float(value) for value in model.linear_predictors]
-    if len(linear_predictors) != n:
-        raise ValueError("fitted Cox model linear predictors do not match event rows")
-
-    center = _cox_reference_center(model, "sample")
-    offset = _cox_fit_offset(model, beta)
-    detail = _core.coxph_detail(
-        time,
-        status,
-        rows,
-        beta,
-        weights,
-        entry_times=entry,
-        strata=strata,
-        offset=offset,
+    init_values = None if init is None else _check_init(init, data.x, data.offset)
+    fit = _core.coxph_fit(
+        list(data.y.time),
+        [int(value) for value in data.y.event],
+        data.x,
+        entry=None if data.y.start is None else list(data.y.start),
+        strata=data.strata,
+        weights=data.weights,
+        offset=data.offset,
         method=method,
-        center=center,
-        riskmat=include_riskmat,
+        init=init_values,
+        iter_max=iter_max,
+        eps=eps,
+        toler_chol=toler_chol,
+        nocenter=nocenter,
+        cluster=cluster,
+        robust=use_robust,
     )
-    detail_rows = list(detail.rows)
-
-    row_order = _cox_detail_row_order(time, status, strata, rorder_name)
-    x_rows = [rows[idx] for idx in row_order]
-    y_rows = _cox_detail_y(time, status, entry)
-    y_rows = [y_rows[idx] for idx in row_order]
-    ordered_weights = [weights[idx] for idx in row_order]
-    risk_matrix = None
-    sortorder = row_order if rorder_name == "time" else None
-    if include_riskmat:
-        native_risk_matrix = detail.riskmat
-        if native_risk_matrix is None:
-            raise RuntimeError("native Cox detail omitted the requested risk matrix")
-        risk_matrix = [list(native_risk_matrix[idx]) for idx in row_order]
-
-    has_case_weights = any(abs(weight - 1.0) > 1e-12 for weight in weights)
-    return CoxPHDetailResult(
-        time=[float(row.time) for row in detail_rows],
-        nevent=[int(row.n_event) for row in detail_rows],
-        nrisk=[int(row.n_risk) for row in detail_rows],
-        means=[[float(value) for value in row.means] for row in detail_rows],
-        score=[[float(value) for value in row.score] for row in detail_rows],
-        imat=[
-            [[float(value) for value in matrix_row] for matrix_row in row.imat]
-            for row in detail_rows
-        ],
-        hazard=[float(row.hazard) for row in detail_rows],
-        varhaz=[float(row.varhaz) for row in detail_rows],
-        wtrisk=[float(row.wtrisk) for row in detail_rows],
-        x=x_rows,
-        y=y_rows,
-        strata=_cox_detail_strata_table(strata, detail_rows),
-        riskmat=risk_matrix,
-        weights=ordered_weights if has_case_weights else None,
-        nevent_wt=[float(row.n_event_weight) for row in detail_rows] if has_case_weights else None,
-        nrisk_wt=[float(row.wtrisk) for row in detail_rows] if has_case_weights else None,
-        sortorder=sortorder,
+    aliased = [idx for idx, value in enumerate(fit.coefficients) if math.isnan(value)]
+    if aliased and not singular_ok:
+        columns = " ".join(str(idx + 1) for idx in aliased)
+        raise ValueError(f"X matrix deemed to be singular; variable {columns}")
+    return CoxphModel(
+        fit=fit,
+        formula=frame.formula,
+        design=frame.design,
+        terms=frame.terms,
+        coef_names=tuple(frame.names),
+        assign=dict(frame.assign),
+        y=y,
+        strata_levels=frame.strata_levels,
+        concordance=_fit_concordance(fit, data, cluster),
+        n=frame.n,
+        timefix=timefix,
+        tt=bool(tt_terms),
+        id=None if frame.id is None else tuple(frame.id),
+        cluster=None if frame.cluster is None else tuple(frame.cluster),
+        model=frame.model_frame() if keep_model else None,
     )
 
 
 def coxph(
-    response: Surv | str,
+    formula: str | None = None,
     data: Any | None = None,
     *,
-    x: Any | None = None,
     weights: Any | None = None,
-    offset: Any | None = None,
-    strata: Any | None = None,
-    cluster: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = "fail",
     init: Any | None = None,
-    initial_beta: Any | None = None,
-    max_iter: int = 20,
-    eps: float | None = None,
-    toler: float | None = None,
-    method: str | None = None,
+    control: Any | None = None,
     ties: str | None = None,
+    method: str | None = None,
+    singular_ok: Any = True,
     robust: Any | None = None,
     model: Any = False,
+    x: Any = False,
     y: Any = True,
     tt: Any | None = None,
     id: Any | None = None,
+    cluster: Any | None = None,
     istate: Any | None = None,
     statedata: Any | None = None,
-    singular_ok: Any = True,
     nocenter: Any = (-1, 0, 1),
-    control: Any | None = None,
+    offset: Any | None = None,
+    strata: Any | None = None,
+    iter_max: Any | None = None,
+    eps: Any | None = None,
+    toler_chol: Any | None = None,
+    timefix: Any | None = None,
     **kwargs: Any,
-):
-    """Fit a Cox proportional hazards model from Surv plus covariates."""
+) -> CoxphModel:
+    """Fit a Cox proportional hazards model (R's ``coxph``).
 
-    case_weight_column = kwargs.pop("_weights_column", None)
-    id_column = kwargs.pop("_id_column", None)
+    ``formula`` is an R formula string with a ``Surv`` response; ``strata()``,
+    ``cluster()``, ``offset()`` and ``tt()`` terms are honoured, as are the
+    ``weights``/``offset``/``strata``/``cluster``/``id`` arguments given as vectors
+    or as column names of ``data``.  ``eps``/``toler_chol``/``iter_max``/``timefix``
+    are ``coxph.control`` options and may also be given through ``control``.
+    """
+
+    formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
-    singular_ok = _pop_dotted_keyword(
-        kwargs,
-        "singular.ok",
-        "singular_ok",
-        singular_ok,
-        True,
-    )
+    singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
+    iter_max = _pop_dotted_keyword(kwargs, "iter.max", "iter_max", iter_max, None)
+    toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, None)
+    for ignored in ("_weights_column", "_id_column", "survcheckallow"):
+        kwargs.pop(ignored, None)
+    if isinstance(control, Mapping):
+        control = {key: value for key, value in control.items() if key != "survcheckallow"}
     if kwargs:
-        unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"coxph got unexpected keyword argument(s): {unexpected}")
+        raise ValueError(f"Argument {', '.join(sorted(kwargs))} not matched")
+    if formula is None:
+        raise TypeError("a formula argument is required")
+    if istate is not None or statedata is not None:
+        raise NotImplementedError("multi-state coxph models are not implemented")
+    _ = _normalize_bool_option_with_default(x, "x", False)
+    _ = _normalize_bool_option_with_default(y, "y", True)
 
     method_name = _cox_tie_method(method, ties)
-    robust_value = _normalize_optional_bool_option(robust, "robust")
-    explicit_weights = weights is not None
-    if case_weight_column is None and isinstance(weights, str):
-        case_weight_column = weights
-    if id_column is None and isinstance(id, str):
-        id_column = id
-    for column, name in (
-        (case_weight_column, "_weights_column"),
-        (id_column, "_id_column"),
-    ):
-        if column is not None and (not isinstance(column, str) or not column):
-            raise TypeError(f"{name} must be a non-empty string")
-    keep_model = _normalize_bool_option_with_default(model, "model", False)
-    keep_y = _normalize_bool_option_with_default(y, "y", True)
-    singular_ok_value = _normalize_bool_option_with_default(singular_ok, "singular_ok", True)
-    nocenter_values = _normalize_numeric_sequence_or_none(nocenter, "nocenter")
-    id_arg = id
-    if init is not None and initial_beta is not None:
-        raise ValueError("use only one of init or initial_beta")
-    max_iter = _integer_scalar(max_iter, "max_iter")
-    max_iter, eps, toler, fix_time = _apply_coxph_control(control, max_iter, eps, toler)
+    max_iter = 20 if iter_max is None else _integer_scalar(iter_max, "iter_max")
+    eps_value = None if eps is None else _finite_float(eps, "eps")
+    toler_value = None if toler_chol is None else _finite_float(toler_chol, "toler_chol")
+    max_iter, eps_value, toler_value, fix_time = _apply_coxph_control(
+        control, max_iter, eps_value, toler_value
+    )
+    if timefix is not None:
+        fix_time = _normalize_bool_option(timefix, "timefix")
 
-    formula_design: _FormulaDesign | None = None
-    formula_string: str | None = None
-    formula_x_matrix: list[list[float]] | None = None
-    formula_model_data: Any | None = None
-    formula_cluster_columns: tuple[str, ...] = ()
-    direct_coefficient_names: tuple[str, ...] | None = None
-    time_transform_terms: list[_CovariateTerm] = []
-    time_transform_functions: list[Any | None] = []
-    time_transform_expanded = False
-    time_transform_observed_n: int | None = None
-    formula_x = False
-    istate_column: str | None = None
-    if isinstance(response, str):
-        formula_string = response
-        response_spec = _formula_response_spec(response)
-        weights = _column_or_values(data, weights, "weights") if weights is not None else None
-        id_arg = _column_or_values(data, id_arg, "id") if id_arg is not None else None
-        istate_column = istate if isinstance(istate, str) else None
-        if istate_column is not None:
-            istate = _column(data, istate_column)
-        if subset is not None:
-            data, aligned = _subset_formula_inputs(
-                response,
-                data,
-                subset,
-                weights=weights,
-                offset=offset,
-                strata=strata,
-                cluster=cluster,
-                id=id_arg,
-                istate=istate,
-            )
-            weights = aligned["weights"]
-            offset = aligned["offset"]
-            strata = aligned["strata"]
-            cluster = aligned["cluster"]
-            id_arg = aligned["id"]
-            istate = aligned["istate"]
-            subset = None
-        data, aligned = _apply_formula_na_action(
-            response,
-            data,
-            na_action,
-            weights=weights,
-            offset=offset,
-            strata=strata,
-            cluster=cluster,
-            id=id_arg,
-            istate=istate,
-        )
-        weights = aligned["weights"]
-        offset = aligned["offset"]
-        strata = aligned["strata"]
-        cluster = aligned["cluster"]
-        id_arg = aligned["id"]
-        istate = aligned["istate"]
-        na_action = "pass"
-        if x is not None:
-            if not _is_bool_like(x):
-                raise TypeError("x must be True or False for coxph formula input")
-            formula_x = _normalize_bool_option(x, "x")
-        response, terms = _parse_formula(response, data)
-        time_transform_terms = _cox_time_transform_terms(terms)
-        time_transform_functions = _cox_time_transform_functions(tt, len(time_transform_terms))
-        if time_transform_terms and keep_model:
-            raise ValueError("model=True is not supported for coxph fits with tt terms")
-        if terms.strata:
-            if strata is not None:
-                raise ValueError("use only one of formula strata(...) or strata")
-            strata = _combined_columns(data, terms.strata, len(response))
-        if terms.offsets:
-            if offset is not None:
-                raise ValueError("use only one of formula offset(...) or offset")
-            offset = _offset_vector(data, terms.offsets, len(response))
-        if terms.clusters:
-            if cluster is not None:
-                raise ValueError("use only one of formula cluster(...) or cluster")
-            cluster = _combined_columns(data, terms.clusters, len(response))
-            formula_cluster_columns = tuple(terms.clusters)
-        formula_design = _fit_formula_design(data, response_spec, terms, len(response))
-        x = _design_rows_from_spec(data, formula_design, len(response))
-        formula_x_matrix = [list(row) for row in x] if formula_x else None
-        formula_model_data = data
-
-    if not isinstance(response, Surv):
-        raise TypeError("coxph response must be a Surv object or formula")
-    if formula_design is None:
-        direct_coefficient_names = _matrix_input_column_names(x)
-    if subset is not None:
-        indices = _subset_indices(subset, len(response))
-        response = _subset_surv(response, indices)
-        x = _subset_optional_sequence(x, indices, "x")
-        weights = _subset_optional_sequence(weights, indices, "weights")
-        offset = _subset_optional_sequence(offset, indices, "offset")
-        strata = _subset_optional_sequence(strata, indices, "strata")
-        cluster = _subset_optional_sequence(cluster, indices, "cluster")
-        id_arg = _subset_optional_sequence(id_arg, indices, "id")
-        istate = _subset_optional_sequence(istate, indices, "istate")
-    response, aligned = _apply_surv_na_action(
-        response,
-        na_action,
-        "coxph inputs",
-        x=x,
+    frame = _model_frame(
+        formula,
+        data,
+        subset=subset,
+        na_action=na_action,
         weights=weights,
         offset=offset,
-        strata=strata,
+        strata_arg=strata,
         cluster=cluster,
-        id=id_arg,
+        id=id,
         istate=istate,
     )
-    x = aligned["x"]
-    weights = aligned["weights"]
-    offset = aligned["offset"]
-    strata = aligned["strata"]
-    cluster = aligned["cluster"]
-    id_arg = aligned["id"]
-    istate = aligned["istate"]
-    if response.type not in {"right", "counting"}:
-        raise NotImplementedError(
-            "coxph currently supports right-censored and counting Surv responses"
-        )
-
-    if time_transform_terms:
-        if formula_design is None or formula_model_data is None:
-            raise AssertionError("tt terms require formula design metadata")
-        time_transform_observed_n = len(response)
-        expansion = _cox_time_transform_expansion(response, strata, fix_time)
-        source_indices = expansion.source_indices
-        expanded_n = len(source_indices)
-        expanded_data = _subset_data(formula_model_data, source_indices)
-        weights = _subset_optional_sequence(weights, source_indices, "weights")
-        offset = _subset_optional_sequence(offset, source_indices, "offset")
-        cluster = _subset_optional_sequence(cluster, source_indices, "cluster")
-        id_arg = _subset_optional_sequence(id_arg, source_indices, "id")
-        istate = _subset_optional_sequence(istate, source_indices, "istate")
-        transform_weights = _optional_float_vector(weights, "weights", expanded_n)
-        transformed = _cox_time_transform_values(
-            formula_model_data,
-            time_transform_terms,
-            time_transform_functions,
-            expansion,
-            transform_weights,
-        )
-        x = _design_rows_from_spec(
-            expanded_data,
-            formula_design,
-            expanded_n,
-            time_transform_values=transformed,
-        )
-        formula_x_matrix = [list(row) for row in x] if formula_x else None
-        response = expansion.response
-        strata = expansion.strata
-        time_transform_expanded = True
-
-    rows = _as_matrix_rows(x, "x", allow_empty_columns=True)
-    direct_coefficient_names = _validated_matrix_column_names(direct_coefficient_names, rows)
-    if len(rows) != len(response):
-        raise ValueError("x must have the same number of rows as the Surv response")
-
-    n = len(response)
-    id_values = _materialize_labels(id_arg, "id") if id_arg is not None else None
-    if id_values is not None and len(id_values) != n:
-        raise ValueError("id must have the same length as the Surv response")
-    istate_values = _materialize_1d(istate, "istate") if istate is not None else None
-    if istate_values is not None and len(istate_values) != n:
-        raise ValueError("istate must have the same length as the Surv response")
-    fit_strata = _encode_groups(strata, n) if strata is not None else None
-    fit_weights = _optional_float_vector(weights, "weights", n)
-    case_weights = fit_weights if explicit_weights else None
-    fit_offset = _optional_float_vector(offset, "offset", n)
-    model_frame = None
-    if keep_model:
-        model_frame = (
-            _formula_model_frame(
-                formula_model_data,
-                response,
-                formula_design,
-                extra_columns=formula_cluster_columns,
-                weights=weights,
-                offset=offset,
-                strata=strata,
-                cluster=cluster,
-                id=id_values,
-            )
-            if formula_design is not None
-            else _matrix_model_frame(
-                response,
-                rows,
-                weights=weights,
-                offset=offset,
-                strata=strata,
-                cluster=cluster,
-                id=id_values,
-            )
-        )
-        if istate_values is not None:
-            model_frame["(istate)"] = istate_values
-            if (
-                istate_column is not None
-                and formula_model_data is not None
-                and istate_column not in model_frame
-            ):
-                model_frame[istate_column] = _column(formula_model_data, istate_column)
-
-    fit_times = list(response.time)
-    entry_times = list(response.start) if response.start is not None else None
-    if fix_time and not time_transform_expanded:
-        if entry_times is None:
-            fit_times = _survdiff_timefix_values(fit_times, True)
-        else:
-            entry_times, fit_times = _timefix_vectors(entry_times, fit_times)
-    fit = _core.coxph_fit(
-        fit_times,
-        list(response.event),
-        rows,
-        strata=fit_strata,
-        weights=fit_weights,
-        offset=fit_offset,
-        initial_beta=(
-            _float_vector(initial_beta if initial_beta is not None else init, "init")
-            if init is not None or initial_beta is not None
-            else None
-        ),
-        max_iter=max_iter,
-        eps=eps,
-        toler=toler,
+    return _coxph_fit_frame(
+        frame,
         method=method_name,
-        entry_times=entry_times,
-        nocenter=nocenter_values,
+        init=init,
+        iter_max=max_iter,
+        eps=eps_value,
+        toler_chol=toler_value,
+        timefix=fix_time,
+        robust=_normalize_optional_bool_option(robust, "robust"),
+        singular_ok=_normalize_bool_option_with_default(singular_ok, "singular_ok", True),
+        nocenter=[]
+        if nocenter is None
+        else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
+        tt=tt,
+        keep_model=_normalize_bool_option_with_default(model, "model", False),
     )
-    if not singular_ok_value and any(_cox_alias_mask(fit)):
-        raise ValueError(
-            "coxph design matrix is singular; use singular_ok=True to allow dependent covariates"
-        )
-    has_fractional_weights = fit_weights is not None and any(
-        not float(weight).is_integer() for weight in fit_weights
-    )
-    has_repeated_event_id = id_values is not None and _cox_has_repeated_event_id(
-        response,
-        id_values,
-    )
-    automatically_robust = cluster is not None or has_fractional_weights or has_repeated_event_id
-    use_robust_variance = automatically_robust if robust_value is None else robust_value
-    if cluster is not None and not use_robust_variance:
-        warnings.warn(
-            "cluster specified with robust=FALSE, cluster ignored",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        cluster = None
-
-    robust_cluster = None
-    if use_robust_variance:
-        robust_cluster = cluster if cluster is not None else id_values
-        if robust_cluster is None:
-            if response.start is not None and robust_value is True:
-                raise ValueError("one of cluster or id is needed for robust variance")
-            robust_cluster = list(range(n))
-        if method_name == "exact":
-            raise ValueError("dfbeta residuals are not available for the exact method")
-    robust_variance = None
-    naive_variance = None
-    cluster_values = None
-    if robust_cluster is not None:
-        robust_variance, naive_variance, cluster_values = _cox_robust_variance_matrix(
-            fit,
-            robust_cluster,
-        )
-    if (
-        formula_design is not None
-        or direct_coefficient_names is not None
-        or case_weights is not None
-        or robust_variance is not None
-        or model_frame is not None
-    ):
-        return _FormulaFit(
-            fit,
-            formula_design,
-            formula=formula_string,
-            coefficient_names=direct_coefficient_names,
-            case_weights=case_weights,
-            case_weight_column=case_weight_column,
-            robust_variance=robust_variance,
-            naive_variance=naive_variance,
-            cluster=cluster_values,
-            id_values=id_values,
-            id_column=id_column,
-            x_matrix=formula_x_matrix,
-            y_response=response if formula_design is not None and keep_y else None,
-            model_frame=model_frame,
-            n_observations=time_transform_observed_n,
-        )
-    return fit
 
 
 def clogit(
@@ -2095,44 +606,37 @@ def clogit(
     na_action: str | None = "fail",
     method: str = "exact",
     **kwargs: Any,
-) -> Any:
-    """Fit a conditional logistic model through stratified Cox regression."""
+) -> ClogitModel:
+    """Conditional logistic regression as a stratified Cox model (R's ``clogit``)."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     if not isinstance(formula, str):
-        raise TypeError("clogit formula must be a string")
+        raise TypeError("A formula argument is required")
     response, separator, rhs = formula.partition("~")
     response = response.strip()
-    rhs = rhs.strip()
-    if not separator or not response or not rhs:
+    if not separator or not response or not rhs.strip():
         raise ValueError("clogit formula must contain a response and '~'")
-
     method_name = _match_string_arg(
         method,
         "method",
         ("exact", "approximate", "efron", "breslow"),
-        "clogit method must be 'exact', 'approximate', 'efron', or 'breslow'",
+        "method must be one of exact, approximate, efron, breslow",
     )
     cox_method = "breslow" if method_name == "approximate" else method_name
-    cox_formula = f"Surv(rep(1, n), {response}) ~ {rhs}"
-    response_columns = _response_arg_columns(response)
-    terms = _split_terms(rhs, _dot_terms(data, response_columns))
-
     if cox_method == "exact":
-        if terms.clusters:
+        if "cluster(" in rhs:
             raise ValueError("robust variance plus the exact method is not supported")
         if weights is not None:
             warnings.warn(
-                "weights ignored: not possible for the exact method",
-                RuntimeWarning,
-                stacklevel=2,
+                "weights ignored: not possible for the exact method", RuntimeWarning, stacklevel=2
             )
             weights = None
-
-    if kwargs.get("eps") is None and kwargs.get("control") is None:
-        kwargs["eps"] = 1e-9
+    columns = _response_arg_columns(response)
+    if not columns:
+        raise ValueError("clogit response must name a column of data")
+    n = len(_column(data, columns[0]))
     fit = coxph(
-        cox_formula,
+        f"Surv(rep(1, {n}), {response}) ~ {rhs.strip()}",
         data=data,
         weights=weights,
         subset=subset,
@@ -2140,6 +644,934 @@ def clogit(
         method=cox_method,
         **kwargs,
     )
-    if not isinstance(fit, _FormulaFit):
-        raise AssertionError("clogit formula fit did not preserve formula metadata")
-    return replace(fit, conditional_logistic=True)
+    return ClogitModel(**fit.__dict__)
+
+
+# ---------------------------------------------------------------------------
+# summary.coxph / coxph.wtest
+# ---------------------------------------------------------------------------
+
+
+def _pchisq_upper(statistic: float, df: int) -> float:
+    """``pchisq(x, df, lower.tail=FALSE)``: the regularised upper incomplete gamma
+    function Q(df/2, x/2) (series / Lentz continued fraction; no Python binding of
+    R's pchisq exists yet)."""
+
+    if math.isnan(statistic) or df <= 0:
+        return math.nan
+    if statistic <= 0.0:
+        return 1.0
+    if math.isinf(statistic):
+        return 0.0
+    a, x = df / 2.0, statistic / 2.0
+    log_prefactor = -x + a * math.log(x) - math.lgamma(a)
+    if x < a + 1.0:
+        term = 1.0 / a
+        total = term
+        for k in range(1, 1000):
+            term *= x / (a + k)
+            total += term
+            if abs(term) < abs(total) * 1e-16:
+                break
+        return max(0.0, 1.0 - math.exp(log_prefactor) * total)
+    tiny = 1e-300
+    b = x + 1.0 - a
+    c = 1.0 / tiny
+    d = 1.0 / b
+    h = d
+    for k in range(1, 1000):
+        an = -k * (k - a)
+        b += 2.0
+        d = an * d + b
+        d = tiny if abs(d) < tiny else d
+        c = b + an / c
+        c = tiny if abs(c) < tiny else c
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 1e-16:
+            break
+    return math.exp(log_prefactor) * h
+
+
+def _coefficient_table(
+    fit: CoxphModel, scale: float
+) -> tuple[list[str], list[dict[str, float | str]]]:
+    beta = [value * scale for value in fit.coefficients]
+    var = fit.var
+    naive = fit.naive_var
+    se = [math.sqrt(var[idx][idx]) * scale for idx in range(len(beta))]
+    rows: list[dict[str, float | str]] = []
+    for idx, (name, value) in enumerate(zip(fit.coef_names, beta, strict=True)):
+        z = value / se[idx] if se[idx] > 0.0 else math.nan
+        row: dict[str, float | str] = {
+            "name": name,
+            "coef": value,
+            "exp_coef": math.exp(value) if not math.isnan(value) else math.nan,
+            "se": se[idx],
+            "z": z,
+            "p": _pchisq_upper(z * z, 1) if not math.isnan(z) else math.nan,
+        }
+        if naive is not None:
+            row["naive_se"] = math.sqrt(naive[idx][idx])
+            row["robust_se"] = se[idx]
+        rows.append(row)
+    columns = ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
+    if naive is not None:
+        columns.insert(3, "robust se")
+    return columns, rows
+
+
+def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> dict[str, Any]:
+    """R's ``summary.coxph`` as a dict keyed like the R list."""
+
+    scale_value = _finite_float(scale, "scale")
+    beta = fit.coefficients
+    if not beta:
+        raise ValueError("summary is not defined for a null Cox model (use print)")
+    df = sum(1 for value in beta if not math.isnan(value))
+    loglik = fit.loglik
+    score = fit.score if fit.score is not None else math.nan
+    logtest = -2.0 * (loglik[0] - loglik[1])
+    columns, rows = _coefficient_table(fit, scale_value)
+    result: dict[str, Any] = {
+        "model_type": "coxph",
+        "n": fit.n,
+        "nevent": fit.nevent,
+        "n_event": fit.nevent,
+        "loglik": loglik[1],
+        "null_loglik": loglik[0],
+        "df": df,
+        "coefficient_names": list(fit.coef_names),
+        "coefficient_columns": columns,
+        "coefficients": rows,
+        "logtest": {"test": logtest, "df": df, "pvalue": _pchisq_upper(logtest, df)},
+        "sctest": {"test": score, "df": df, "pvalue": _pchisq_upper(score, df)},
+        "score_test": score,
+        "rsq": {
+            "rsq": 1.0 - math.exp(-logtest / fit.n),
+            "maxrsq": 1.0 - math.exp(2.0 * loglik[0] / fit.n),
+        },
+        "used_robust": fit.robust,
+        "robust": fit.robust,
+        "method": fit.method,
+        "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
+    }
+    if conf_int:
+        level = _normalize_conf_level(conf_int, "conf_int")
+        z = NormalDist().inv_cdf((1.0 + level) / 2.0)
+        result["conf_int"] = [
+            {
+                "name": name,
+                "exp(coef)": math.exp(b),
+                "exp(-coef)": math.exp(-b),
+                "lower": math.exp(b - z * float(row["se"])),
+                "upper": math.exp(b + z * float(row["se"])),
+            }
+            for name, b, row in zip(
+                fit.coef_names, [v * scale_value for v in beta], rows, strict=True
+            )
+        ]
+    wald = fit.wald_test
+    if wald is not None:
+        result["waldtest"] = {"test": round(wald, 2), "df": df, "pvalue": _pchisq_upper(wald, df)}
+    if fit.rscore is not None:
+        result["robscore"] = {
+            "test": fit.rscore,
+            "df": df,
+            "pvalue": _pchisq_upper(fit.rscore, df),
+        }
+    return result
+
+
+def _wtest_b(b: Any) -> tuple[list[list[float | None]], bool]:
+    raw = _coerce_array_like(b, "b")
+    if raw and isinstance(raw[0], list | tuple):
+        width = len(raw[0])
+        rows: list[list[float | None]] = []
+        for row in raw:
+            if not isinstance(row, list | tuple) or len(row) != width:
+                raise ValueError("b matrix rows must be rectangular")
+            rows.append([None if _is_missing_value(value) else float(value) for value in row])
+        return rows, True
+    return [[None if _is_missing_value(value) else float(value)] for value in raw], False
+
+
+def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
+    """R's ``coxph.wtest``: the Wald statistic ``b' var^-1 b`` for each column of ``b``."""
+
+    toler = _finite_float(toler_chol, "toler_chol")
+    b_rows, b_is_matrix = _wtest_b(b)
+    keep = [idx for idx, row in enumerate(b_rows) if all(value is not None for value in row)]
+    raw_var = _coerce_array_like(var, "var")
+    if raw_var and isinstance(raw_var[0], list | tuple):
+        matrix = _as_matrix_rows(raw_var, "var", allow_empty_columns=False)
+        var_length = len(matrix) * len(matrix[0])
+    else:
+        matrix = [[float(value)] for value in raw_var]
+        var_length = len(raw_var)
+    if len(keep) < len(b_rows):
+        b_rows = [b_rows[idx] for idx in keep]
+        matrix = [[matrix[row][col] for col in keep] for row in keep] if var_length > 1 else matrix
+        var_length = len(matrix) * (len(matrix[0]) if matrix else 0)
+    nvar = len(b_rows)
+    ntest = len(b_rows[0]) if b_rows else 1
+    b_values = [[float(value) for value in row] for row in b_rows]
+    if var_length == 0:
+        if nvar == 0:
+            return CoxPHWTestResult(test=[], df=0, solve=0.0)
+        raise ValueError("Argument lengths do not match")
+    if var_length == 1:
+        if nvar != 1:
+            raise ValueError("Argument lengths do not match")
+        variance = matrix[0][0]
+        if not math.isfinite(variance):
+            raise ValueError("infinite argument in coxph.wtest")
+        values = b_values[0]
+        return CoxPHWTestResult(
+            test=[value * value / variance for value in values],
+            df=1,
+            solve=[value / variance for value in values],
+        )
+    if any(len(row) != len(matrix) for row in matrix):
+        raise ValueError("First argument must be a square matrix")
+    if len(matrix) != nvar:
+        raise ValueError("Argument lengths do not match")
+    if any(not math.isfinite(value) for row in b_values for value in row) or any(
+        not math.isfinite(value) for row in matrix for value in row
+    ):
+        raise ValueError("infinite argument in coxph.wtest")
+    tests = [[b_values[row][col] for row in range(nvar)] for col in range(ntest)]
+    result = _core.coxph_wtest(matrix, tests, toler)
+    solve_rows = [list(row) for row in result.solve]
+    solve: list[float] | list[list[float]] = (
+        solve_rows if b_is_matrix and ntest > 1 else [row[0] for row in solve_rows]
+    )
+    return CoxPHWTestResult(test=list(result.test), df=int(result.df), solve=solve)
+
+
+# ---------------------------------------------------------------------------
+# predict.coxph
+# ---------------------------------------------------------------------------
+
+
+def _prediction_newdata(
+    fit: CoxphModel, newdata: Any, *, need_strata: bool, need_response: bool
+) -> _NewData:
+    return _newdata_frame(
+        fit.design,
+        fit.terms.strata,
+        fit.strata_levels,
+        newdata,
+        need_strata=need_strata,
+        need_response=need_response,
+    )
+
+
+def _terms_selection(terms: Any | None, names: Sequence[str]) -> list[int]:
+    """R's ``terms=`` argument of ``predict``: names or 1-based indices of ``assign``."""
+
+    if terms is None:
+        return list(range(len(names)))
+    values = [terms] if isinstance(terms, str | int) else list(terms)
+    selected: list[int] = []
+    for value in values:
+        if isinstance(value, str):
+            if value not in names:
+                raise ValueError("a name given in the terms argument not found in the model")
+            selected.append(list(names).index(value))
+        else:
+            idx = _integer_scalar(value, "terms")
+            if idx < 1 or idx > len(names):
+                raise ValueError("Invalid terms argument")
+            selected.append(idx - 1)
+    return selected
+
+
+def _rowsum(values: list[Any], groups: Sequence[Any], *, squares: bool = False) -> list[Any]:
+    """R's ``rowsum``: sums per group, groups in sorted order."""
+
+    labels = _materialize_labels(groups, "collapse")
+    if len(labels) != len(values):
+        raise ValueError("Collapse vector is the wrong length")
+    order = sorted(_label_levels(labels, "collapse"), key=lambda v: (isinstance(v, str), v))
+    index = {label: idx for idx, label in enumerate(order)}
+    matrix = bool(values) and isinstance(values[0], list)
+    width = len(values[0]) if matrix else 1
+    sums = [[0.0] * width for _ in order]
+    for value, label in zip(values, labels, strict=True):
+        row = value if matrix else [value]
+        for col, item in enumerate(row):
+            sums[index[label]][col] += item * item if squares else item
+    if squares:
+        sums = [[math.sqrt(item) for item in row] for row in sums]
+    return sums if matrix else [row[0] for row in sums]
+
+
+def predict_coxph(
+    fit: CoxphModel,
+    newdata: Any | None = None,
+    *,
+    type: str = "lp",
+    se_fit: Any = False,
+    terms: Any | None = None,
+    collapse: Any | None = None,
+    reference: str | None = None,
+    **kwargs: Any,
+) -> Any:
+    """R's ``predict.coxph``: ``lp``, ``risk``, ``expected``, ``terms`` or ``survival``.
+
+    Returns the predictions (a list, or one row per observation for ``terms``), or a
+    :class:`PredictResult` of predictions and standard errors when ``se_fit``.
+    """
+
+    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
+    if kwargs:
+        raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    if fit.tt:
+        raise ValueError("function not defined for models with tt() terms")
+    predict_type = _match_string_arg(
+        type,
+        "type",
+        ("lp", "risk", "expected", "terms", "survival"),
+        "type must be one of lp, risk, expected, terms, survival",
+    )
+    include_se = _normalize_bool_option(se_fit, "se_fit")
+    if reference is None:
+        reference_name = "sample" if predict_type == "terms" else "strata"
+    else:
+        reference_name = _match_string_arg(
+            reference,
+            "reference",
+            ("strata", "sample", "zero"),
+            "reference must be one of strata, sample, zero",
+        )
+    if predict_type in {"expected", "survival"}:
+        reference_name = "sample"
+
+    new: _NewData | None = None
+    if newdata is not None:
+        need_response = predict_type in {"expected", "survival"}
+        new = _prediction_newdata(
+            fit, newdata, need_strata=_has_strata(fit), need_response=need_response
+        )
+        if (
+            _has_strata(fit)
+            and new.strata is None
+            and (reference_name == "strata" or need_response or include_se)
+        ):
+            raise ValueError("New data must contain the strata variable(s) of the model")
+        if need_response and new.y is None:
+            raise ValueError("newdata must contain the response variables for type = 'expected'")
+        if need_response and new.y is not None and new.y.type != fit.y.type:
+            raise ValueError("New data has a different survival type than the model")
+
+    if predict_type == "terms":
+        selected = _terms_selection(terms, list(fit.assign))
+        result = fit.fit.predict_terms(
+            newdata=None if new is None else new.x,
+            new_strata=None if new is None else new.strata,
+            new_offset=None if new is None else new.offset,
+            se_fit=include_se,
+            reference=reference_name,
+            assign=_active_assign(fit),
+        )
+        pred: Any = [[row[idx] for idx in selected] for row in result.fit]
+        se: Any = (
+            None
+            if result.se_fit is None
+            else [[row[idx] for idx in selected] for row in result.se_fit]
+        )
+    else:
+        result = fit.fit.predict(
+            predict_type,
+            newdata=None if new is None else new.x,
+            new_strata=None if new is None else new.strata,
+            new_offset=None if new is None else new.offset,
+            new_time=None if new is None or new.y is None else list(new.y.time),
+            new_entry=None
+            if new is None or new.y is None or new.y.start is None
+            else list(new.y.start),
+            se_fit=include_se,
+            reference=reference_name,
+        )
+        pred, se = list(result.fit), (None if result.se_fit is None else list(result.se_fit))
+
+    if collapse is not None and collapse is not False:
+        pred = _rowsum(pred, collapse)
+        if se is not None:
+            se = _rowsum(se, collapse, squares=True)
+    return PredictResult(pred, se) if include_se else pred
+
+
+def predict_terms_constant(fit: CoxphModel) -> float:
+    """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``."""
+
+    return sum(
+        coefficient * mean
+        for coefficient, mean in zip(fit.coefficients, fit.means, strict=True)
+        if not math.isnan(coefficient)
+    )
+
+
+# ---------------------------------------------------------------------------
+# residuals.coxph
+# ---------------------------------------------------------------------------
+
+_RESIDUAL_TYPES = (
+    "martingale",
+    "deviance",
+    "score",
+    "schoenfeld",
+    "dfbeta",
+    "dfbetas",
+    "scaledsch",
+    "partial",
+)
+
+
+def _collapse_codes(fit: CoxphModel, collapse: Any) -> list[int] | None:
+    """The engine's ``collapse`` groups: ``TRUE`` means the cluster (or id)."""
+
+    if collapse is None or collapse is False:
+        return None
+    if collapse is True:
+        labels = fit.cluster if fit.cluster is not None else fit.id
+        if labels is None:
+            return None
+        labels = list(labels)
+    else:
+        labels = _materialize_labels(collapse, "collapse")
+        if len(labels) != len(fit.residuals):
+            raise ValueError("Wrong length for 'collapse'")
+    order = sorted(_label_levels(labels, "collapse"), key=lambda v: (isinstance(v, str), v))
+    index = {label: idx for idx, label in enumerate(order)}
+    return [index[label] for label in labels]
+
+
+def _drop_single_column(rows: list[list[float]], nvar: int) -> Any:
+    return [row[0] for row in rows] if nvar == 1 else rows
+
+
+def residuals_coxph(
+    fit: CoxphModel,
+    *,
+    type: str = "martingale",
+    collapse: Any | None = None,
+    weighted: Any | None = None,
+    **kwargs: Any,
+) -> Any:
+    """R's ``residuals.coxph``.
+
+    Score, Schoenfeld and dfbeta residuals are matrices (one row per observation
+    or event) that drop to a vector for a one-variable model, as in R.
+    """
+
+    if kwargs:
+        raise TypeError(
+            f"residuals got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+        )
+    otype = _match_string_arg(
+        type, "type", _RESIDUAL_TYPES, f"type must be one of {', '.join(_RESIDUAL_TYPES)}"
+    )
+    weighted_value = _normalize_optional_bool_option(weighted, "weighted")
+    if weighted_value is None:
+        weighted_value = otype in {"dfbeta", "dfbetas"}
+    if fit.method == "exact" and otype in {"score", "schoenfeld", "scaledsch", "dfbeta", "dfbetas"}:
+        raise ValueError(f"{otype} residuals are not available for the exact method")
+    codes = _collapse_codes(fit, collapse)
+    engine = fit.fit
+    nvar = fit.nvar
+    if otype == "martingale":
+        return list(engine.martingale_residuals(weighted=weighted_value, collapse=codes))
+    if otype == "deviance":
+        return list(engine.deviance_residuals(weighted=weighted_value, collapse=codes))
+    if otype == "score":
+        return _drop_single_column(
+            engine.score_residuals(weighted=weighted_value, collapse=codes), nvar
+        )
+    if otype == "dfbeta":
+        return _drop_single_column(engine.dfbeta(weighted=weighted_value, collapse=codes), nvar)
+    if otype == "dfbetas":
+        return _drop_single_column(engine.dfbetas(weighted=weighted_value, collapse=codes), nvar)
+    if otype == "partial":
+        rows = engine.partial_residuals(
+            assign=_active_assign(fit), weighted=weighted_value, collapse=codes
+        )
+        return [list(row) for row in rows]
+    if codes is not None:
+        raise ValueError("collapse is not defined for Schoenfeld residuals")
+    residuals = (
+        engine.schoenfeld_residuals(weighted=weighted_value)
+        if otype == "schoenfeld"
+        else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
+    )
+    return _drop_single_column([list(row) for row in residuals.residuals], nvar)
+
+
+# ---------------------------------------------------------------------------
+# survfit.coxph / basehaz
+# ---------------------------------------------------------------------------
+
+
+def _curve_columns(values: list[list[float]]) -> Any:
+    """A curve block as R stores it: a vector for one curve, ``ntime x ncurve`` rows otherwise."""
+
+    if values and len(values[0]) == 1:
+        return [row[0] for row in values]
+    return [list(row) for row in values]
+
+
+def _confidence_limits(surv: Any, std_err: Any, conf_type: str, conf_int: float) -> tuple[Any, Any]:
+    if surv and isinstance(surv[0], list):
+        columns = list(zip(*surv, strict=True))
+        se_columns = list(zip(*std_err, strict=True))
+        bands = [
+            _core.survfit_confint(list(p), list(se), True, conf_type, conf_int)
+            for p, se in zip(columns, se_columns, strict=True)
+        ]
+        lower = [list(row) for row in zip(*(band.lower for band in bands), strict=True)]
+        upper = [list(row) for row in zip(*(band.upper for band in bands), strict=True)]
+        return lower, upper
+    band = _core.survfit_confint(list(surv), list(std_err), True, conf_type, conf_int)
+    return list(band.lower), list(band.upper)
+
+
+def _survfit_id_codes(newdata: Any, id: Any, n: int) -> list[int]:
+    labels = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
+    if len(labels) != n:
+        raise ValueError("id must have one value per newdata row")
+    index = {label: idx for idx, label in enumerate(_label_levels(labels, "id"))}
+    return [index[label] for label in labels]
+
+
+def _survfit_curves(
+    fit: CoxphModel,
+    newdata: Any | None,
+    *,
+    individual: bool,
+    id: Any | None,
+    stype: int,
+    ctype: int,
+    se_fit: bool,
+    censor: bool,
+) -> tuple[list[Any], list[str]]:
+    """The engine curves for ``survfit.coxph`` and the name of each block (R's
+    ``names(fit$strata)``: the strata levels, or the newdata row numbers)."""
+
+    engine = fit.fit
+    if newdata is None:
+        if any(":" in name for name in fit.assign):
+            warnings.warn(
+                "the model contains interactions; the default curve based on columm means "
+                "of the X matrix is almost certainly not useful. Consider adding a newdata "
+                "argument.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        curves = engine.survfit(stype=stype, ctype=ctype, se_fit=se_fit, censor=censor)
+        return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+    new = _prediction_newdata(fit, newdata, need_strata=_has_strata(fit), need_response=individual)
+    if individual:
+        if new.y is None:
+            raise ValueError("newdata must contain the response variables when id is given")
+        if new.y.type != fit.y.type:
+            raise ValueError("Survival type of newdata does not match the fitted model")
+        if new.y.start is None:
+            raise ValueError("Individual=TRUE is only valid for counting process data")
+        curves = engine.survfit_individual(
+            new.x,
+            list(new.y.start),
+            list(new.y.time),
+            _survfit_id_codes(newdata, id, new.n) if id is not None else [0] * new.n,
+            new_strata=new.strata,
+            new_offset=new.offset,
+            stype=stype,
+            ctype=ctype,
+            se_fit=se_fit,
+            censor=censor,
+        )
+        return curves, [str(idx + 1) for idx in range(len(curves))] if len(curves) > 1 else []
+    curves = engine.survfit(
+        newdata=new.x,
+        new_strata=new.strata,
+        new_offset=new.offset,
+        stype=stype,
+        ctype=ctype,
+        se_fit=se_fit,
+        censor=censor,
+    )
+    if new.strata is not None:
+        return curves, [str(idx + 1) for idx in range(len(curves))]
+    return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+
+
+def survfit_coxph(
+    fit: CoxphModel,
+    newdata: Any | None = None,
+    *,
+    se_fit: Any = True,
+    conf_int: Any = 0.95,
+    individual: Any = False,
+    stype: Any = 2,
+    ctype: Any | None = None,
+    conf_type: str = "log",
+    censor: Any = True,
+    start_time: Any | None = None,
+    id: Any | None = None,
+    **kwargs: Any,
+) -> CoxSurvfitResult:
+    """R's ``survfit.coxph``: predicted survival curves from a Cox model.
+
+    Without ``newdata`` the curve is for the average covariate (``fit$means``); with
+    ``newdata`` there is one curve per row (per row in its own stratum when the
+    strata variables are present, otherwise every stratum for every row).  ``id``
+    (with counting-process ``newdata``) gives one time-dependent curve per subject.
+    """
+
+    conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
+    conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
+    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, True)
+    start_time = _pop_dotted_keyword(kwargs, "start.time", "start_time", start_time, None)
+    if kwargs:
+        raise TypeError(f"survfit got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    if isinstance(fit, ClogitModel):
+        raise ValueError("predicted survival curves are not defined for a clogit model")
+    if fit.tt:
+        raise ValueError("The survfit function can not process coxph models with a tt term")
+    if start_time is not None:
+        raise NotImplementedError("survfit(start.time=) is not available for Cox models")
+    include_se = _normalize_bool_option(se_fit, "se_fit")
+    stype_value = _integer_scalar(stype, "stype")
+    if stype_value not in (1, 2):
+        raise ValueError("stype must be 1 or 2")
+    if ctype is None:
+        ctype_value = 2 if fit.method == "efron" else 1
+    else:
+        ctype_value = _integer_scalar(ctype, "ctype")
+        if ctype_value not in (1, 2):
+            raise ValueError("ctype must be 1 or 2")
+    conf_type_name = "none"
+    if include_se:
+        conf_type_name = _match_string_arg(
+            conf_type,
+            "conf_type",
+            ("log", "log-log", "plain", "none", "logit", "arcsin"),
+            "conf.type must be one of log, log-log, plain, none, logit, arcsin",
+        )
+    level = _normalize_conf_level(conf_int, "conf_int")
+    censor_value = _normalize_bool_option(censor, "censor")
+    individual_value = _normalize_bool_option(individual, "individual") or id is not None
+    if individual_value and newdata is None:
+        raise ValueError("the id option only makes sense with new data")
+
+    curves, strata_names = _survfit_curves(
+        fit,
+        newdata,
+        individual=individual_value,
+        id=id,
+        stype=stype_value,
+        ctype=ctype_value,
+        se_fit=include_se,
+        censor=censor_value,
+    )
+    surv_rows = [row for curve in curves for row in curve.surv]
+    cumhaz_rows = [row for curve in curves for row in curve.cumhaz]
+    std_rows = [row for curve in curves for row in (curve.std_err or [])] if include_se else []
+    surv = _curve_columns(surv_rows)
+    cumhaz = _curve_columns(cumhaz_rows)
+    std_err = _curve_columns(std_rows) if include_se else None
+    lower = upper = None
+    if include_se and conf_type_name != "none":
+        lower, upper = _confidence_limits(surv, std_err, conf_type_name, level)
+    return CoxSurvfitResult(
+        n=[int(curve.n) for curve in curves],
+        time=[float(t) for curve in curves for t in curve.time],
+        n_risk=[float(v) for curve in curves for v in curve.n_risk],
+        n_event=[float(v) for curve in curves for v in curve.n_event],
+        n_censor=[float(v) for curve in curves for v in curve.n_censor],
+        surv=surv,
+        cumhaz=cumhaz,
+        type=fit.y.type,
+        strata={name: len(curve.time) for name, curve in zip(strata_names, curves, strict=True)}
+        if strata_names
+        else None,
+        std_err=std_err,
+        std_chaz=std_err if stype_value == 2 else None,
+        lower=lower,
+        upper=upper,
+        logse=True,
+        conf_type=conf_type_name,
+        conf_int=level if conf_type_name != "none" else None,
+        newdata=newdata,
+    )
+
+
+def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBaseHazardResult:
+    """R's ``basehaz``: the cumulative hazard of ``survfit(fit)`` as a data frame."""
+
+    if not isinstance(fit, CoxphModel):
+        raise TypeError("must be a coxph object")
+    if isinstance(fit, ClogitModel):
+        raise ValueError("predicted survival curves are not defined for a clogit model")
+    sfit = survfit_coxph(fit, newdata, se_fit=False)
+    hazard: Any = sfit.cumhaz
+    if newdata is None and not _normalize_bool_option(centered, "centered"):
+        offset = math.exp(-predict_terms_constant(fit))
+        hazard = [value * offset for value in hazard]
+    strata = None
+    if sfit.strata is not None:
+        strata = [name for name, count in sfit.strata.items() for _ in range(count)]
+    return CoxBaseHazardResult(hazard=hazard, time=list(sfit.time), strata=strata)
+
+
+# ---------------------------------------------------------------------------
+# cox.zph / coxph.detail
+# ---------------------------------------------------------------------------
+
+
+def cox_zph(
+    fit: Any,
+    transform: Any = "km",
+    terms: Any = True,
+    singledf: Any = False,
+    global_test: Any = True,
+    **kwargs: Any,
+) -> CoxZPHResult:
+    """R's ``cox.zph``: test the proportional hazards assumption of a Cox model."""
+
+    global_test = _pop_dotted_keyword(kwargs, "global", "global_test", global_test, True)
+    if kwargs:
+        raise TypeError(f"cox_zph got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    if not isinstance(fit, CoxphModel):
+        raise TypeError("argument must be the result of a coxph fit")
+    if not fit.coef_names:
+        raise ValueError("there are no score residuals for a Null model")
+    if fit.tt:
+        raise ValueError("function not defined for models with tt() terms")
+    if not isinstance(transform, str):
+        raise TypeError("transform must be one of km, rank, identity, log")
+    transform_name = _match_string_arg(
+        transform, "transform", ("km", "rank", "identity", "log"), "Unrecognized transform"
+    )
+    use_terms = _normalize_bool_option(terms, "terms")
+    aliased = _aliased(fit)
+    if use_terms:
+        assign = [[col for col in cols if not aliased[col]] for cols in fit.assign.values()]
+        names = [name for name, cols in zip(fit.assign, assign, strict=True) if cols]
+        assign = [cols for cols in assign if cols]
+    else:
+        names = [name for name, alias in zip(fit.coef_names, aliased, strict=True) if not alias]
+        assign = [[col] for col, alias in enumerate(aliased) if not alias]
+    result = _core.cox_zph(
+        fit.fit,
+        transform=transform_name,
+        terms=use_terms,
+        singledf=_normalize_bool_option(singledf, "singledf"),
+        global_test=_normalize_bool_option(global_test, "global"),
+        assign=assign,
+    )
+    table: list[dict[str, float | int | str]] = [
+        {"name": name, "chisq": float(row.chisq), "df": int(row.df), "p": float(row.p)}
+        for name, row in zip(names, result.table, strict=True)
+    ]
+    if result.global_test is not None:
+        table.append(
+            {
+                "name": "GLOBAL",
+                "chisq": float(result.global_test.chisq),
+                "df": int(result.global_test.df),
+                "p": float(result.global_test.p),
+            }
+        )
+    strata = None
+    if result.strata is not None and fit.strata_levels:
+        strata = [fit.strata_levels[int(code)] for code in result.strata]
+    return CoxZPHResult(
+        table=table,
+        x=list(result.x),
+        time=list(result.time),
+        y=[list(row) for row in result.y],
+        var=[list(row) for row in result.var],
+        transform=result.transform,
+        names=tuple(names),
+        strata=strata,
+    )
+
+
+def _detail_response(fit: CoxphModel) -> list[list[float]]:
+    """``coxph.detail``'s ``y``: always in (start, stop, status) form."""
+
+    y = fit.y
+    if y.start is not None:
+        return [[s, t, float(e)] for s, t, e in zip(y.start, y.time, y.event, strict=True)]
+    mintime = min(y.time) if y.time else 0.0
+    start = 2 * mintime - 1 if mintime < 0 else -1.0
+    return [[start, t, float(e)] for t, e in zip(y.time, y.event, strict=True)]
+
+
+def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHDetailResult:
+    """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood."""
+
+    if not isinstance(fit, CoxphModel):
+        raise TypeError("coxph_detail requires a fitted coxph model")
+    if fit.method not in {"breslow", "efron"}:
+        raise ValueError(f"Detailed output is not available for the {fit.method} method")
+    order_name = _match_string_arg(
+        rorder, "rorder", ("data", "time"), "rorder must be 'data' or 'time'"
+    )
+    include_riskmat = _normalize_bool_option(riskmat, "riskmat")
+    detail = _core.coxph_detail(fit.fit, riskmat=include_riskmat)
+    y = _detail_response(fit)
+    x = fit.x
+    n = len(y)
+    strata_codes = fit.fit.strata or [0] * n
+    order = sorted(range(n), key=lambda idx: (strata_codes[idx], y[idx][1], -y[idx][2]))
+    weights = list(fit.fit.weights)
+    weighted = any(value != 1.0 for value in weights)
+    strata_table: dict[str, int] | None = None
+    if detail.strata is not None and fit.strata_levels:
+        strata_table = {}
+        for code in detail.strata:
+            label = fit.strata_levels[int(code)]
+            strata_table[label] = strata_table.get(label, 0) + 1
+    risk_rows = None if detail.riskmat is None else [list(row) for row in detail.riskmat]
+    if order_name == "time":
+        x = [x[idx] for idx in order]
+        y = [y[idx] for idx in order]
+        if risk_rows is not None:
+            risk_rows = [risk_rows[idx] for idx in order]
+    return CoxPHDetailResult(
+        time=list(detail.time),
+        nevent=[int(value) for value in detail.nevent],
+        nrisk=[int(value) for value in detail.nrisk],
+        hazard=list(detail.hazard),
+        varhaz=list(detail.varhaz),
+        wtrisk=list(detail.wtrisk),
+        means=[list(row) for row in detail.means],
+        score=[list(row) for row in detail.score],
+        imat=[[list(row) for row in layer] for layer in detail.imat],
+        x=x,
+        y=y,
+        strata=strata_table,
+        riskmat=risk_rows,
+        sortorder=order if order_name == "time" and include_riskmat else None,
+        weights=[weights[idx] for idx in order] if weighted else None,
+        nevent_wt=list(detail.nevent_wt) if weighted else None,
+        nrisk_wt=list(detail.wtrisk) if weighted else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# anova.coxph / anova.coxphlist
+# ---------------------------------------------------------------------------
+
+
+def _anova_test_name(test: Any) -> str | None:
+    if test is None or test is False:
+        return None
+    if isinstance(test, str) and test.strip().lower() in {"chisq", "chi"}:
+        return "Chisq"
+    raise ValueError("test must be 'Chisq' or None")
+
+
+def _nested_frame(fit: CoxphModel, columns: Sequence[int]) -> _ModelFrame:
+    """The reduced model frame anova.coxph refits: ``Y ~ X[, columns] + strata + offset``."""
+
+    names = [fit.coef_names[col] for col in columns]
+    return _ModelFrame(
+        formula=fit.formula,
+        data=None,
+        y=fit.y,
+        x=[[row[col] for col in columns] for row in fit.x],
+        design=fit.design,
+        terms=fit.terms,
+        names=names,
+        assign={name: (idx,) for idx, name in enumerate(names)},
+        strata=fit.fit.strata,
+        strata_levels=fit.strata_levels,
+        offset=fit.offset,
+        weights=None,
+        cluster=None,
+        id=None,
+        istate=None,
+    )
+
+
+def _anova_single(fit: CoxphModel, test: str | None) -> Any:
+    if fit.rscore is not None:
+        raise ValueError("Can't do anova tables with robust variances")
+    aliased = _aliased(fit)
+    term_names = list(fit.assign)
+    logliks = [fit.loglik[0]]
+    dfs = [0]
+    for term_idx in range(len(term_names) - 1):
+        columns = [col for name in term_names[: term_idx + 1] for col in fit.assign[name]]
+        nested = _coxph_fit_frame(
+            _nested_frame(fit, columns),
+            method=fit.method,
+            init=None,
+            iter_max=20,
+            eps=None,
+            toler_chol=None,
+            timefix=False,
+            robust=False,
+            singular_ok=True,
+            nocenter=[-1.0, 0.0, 1.0],
+            tt=None,
+            keep_model=False,
+        )
+        logliks.append(nested.loglik[1])
+        dfs.append(sum(1 for value in nested.coefficients if not math.isnan(value)))
+    if term_names:
+        logliks.append(fit.loglik[1])
+        dfs.append(sum(1 for value in aliased if not value))
+    return _core.anova_coxph(logliks, dfs, ["NULL", *term_names], sequential=True, test=test)
+
+
+def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
+    if any(fit.rscore is not None for fit in fits):
+        raise ValueError("Can't do anova tables with robust variances")
+    if any(fit.method != fits[0].method for fit in fits):
+        raise ValueError("all models must have the same ties option")
+    if any(len(fit.residuals) != len(fits[0].residuals) for fit in fits):
+        raise ValueError("models were not all fit to the same size of dataset")
+    if any(fit.terms.strata != fits[0].terms.strata for fit in fits):
+        raise ValueError("models do not have the same strata")
+    responses = [fit.formula.split("~", 1)[0].strip() for fit in fits]
+    keep = [idx for idx, response in enumerate(responses) if response == responses[0]]
+    if len(keep) < len(fits):
+        warnings.warn(
+            "Models with a different response were removed because response differs from model 1",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        fits = [fits[idx] for idx in keep]
+    if len(fits) == 1:
+        return _anova_single(fits[0], test)
+    logliks = [fit.loglik[-1] for fit in fits]
+    dfs = [sum(1 for value in fit.coefficients if not math.isnan(value)) for fit in fits]
+    return _core.anova_coxph(logliks, dfs, None, sequential=False, test=test)
+
+
+def anova(*fits: Any, test: Any = "Chisq") -> Any:
+    """R's ``anova.coxph``: sequential terms of one model, or a list of nested
+    models (survreg fits go to ``anova_survreg``)."""
+
+    if len(fits) == 1 and isinstance(fits[0], list | tuple):
+        fits = tuple(fits[0])
+    if not fits:
+        raise TypeError("anova requires at least one fitted model")
+    if not isinstance(fits[0], CoxphModel):
+        from . import _survreg
+
+        method = getattr(_survreg, "anova_survreg", None)
+        if method is None:
+            raise TypeError("anova requires fitted coxph or survreg models")
+        return method(*fits, test=test)
+    if any(not isinstance(fit, CoxphModel) for fit in fits):
+        raise TypeError("All arguments must be Cox models")
+    test_name = _anova_test_name(test)
+    if len(fits) == 1:
+        return _anova_single(fits[0], test_name)
+    return _anova_list(list(fits), test_name)

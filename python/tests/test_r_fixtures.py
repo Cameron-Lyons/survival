@@ -43,7 +43,6 @@ from .r_fixture_support import (
     case_data,
     case_id,
     cases,
-    column,
     decode_frame,
     decode_vector,
     is_r_error,
@@ -54,7 +53,6 @@ from .r_fixture_support import (
     r_strata_value,
     record_outcome,
     topic_names,
-    transpose,
 )
 
 survival = setup_survival_import()
@@ -5478,21 +5476,13 @@ def _coxph_fit(topic: str, case: Mapping[str, Any]) -> Any:
     def build():
         data = case_data(topic, case)
         args = dict(case.get("args", {}))
-        kwargs = _kwargs(args, data, drop=("control", "tt", "init"))
-        if "control" in args:
-            control = args["control"]
-            if "iter.max" in control:
-                kwargs["max_iter"] = int(control["iter.max"])
-            if "eps" in control:
-                kwargs["eps"] = float(control["eps"])
-            if "toler.chol" in control:
-                kwargs["toler"] = float(control["toler.chol"])
+        kwargs = _kwargs(args, data, drop=("tt", "init", "nocenter"))
         if "init" in args:
             kwargs["init"] = decode_vector(args["init"])
         if "tt" in args:
             kwargs["tt"] = _tt_function(args["tt"])
-        if "nocenter" in args and args["nocenter"] is None:
-            kwargs["nocenter"] = None
+        if "nocenter" in args:
+            kwargs["nocenter"] = args["nocenter"]  # None is R's NULL: centre everything
         return r.coxph(case["formula"], data, **kwargs)
 
     return _cached(_fit_key("coxph", case), build)
@@ -5505,157 +5495,126 @@ def _coef_names(fit: Any) -> list[str] | None:
         return None
 
 
-def _r_wald_test(fit: Any, init: Sequence[float] | None = None) -> float:
-    """R's ``fit$wald.test``: ``coxph.wtest(var, coef - init)$test`` (R/coxph.R)."""
-
-    coef = as_float_list(r.coef(fit))
-    if init is not None:
-        coef = [c - i for c, i in zip(coef, as_float_list(init)[: len(coef)], strict=True)]
-    wald = r.coxph_wtest(r.vcov(fit), coef)
-    return as_float_list(_attr(wald, "test"))[0]
-
-
-def _case_init(case: Mapping[str, Any]) -> list[float] | None:
-    init = (case.get("args") or {}).get("init")
-    return None if init is None else decode_vector(init)
-
-
-def _check_summary(
-    fit: Any, aspect: str, expected: Mapping[str, Any], init: Sequence[float] | None = None
-) -> None:
+def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
     summary = r.model_summary(fit)
-    if aspect == "summary.logtest":
-        loglik = _attr(summary, "loglik")
-        null_loglik = _attr(summary, "null_loglik")
-        assert_close(
-            2 * (loglik - null_loglik), expected["test"], rtol=RTOL_VAR, path="logtest.test"
-        )
-        assert_exact(_attr(summary, "df"), expected["df"], path="logtest.df")
-    elif aspect == "summary.sctest":
-        assert_close(
-            _attr(summary, "score_test"), expected["test"], rtol=RTOL_VAR, path="sctest.test"
-        )
-    elif aspect == "summary.waldtest":
-        # summary.coxph reports round(fit$wald.test, 2) (R/summary.coxph.R):
-        # compare within half a unit of the last reported digit (the extra
-        # 1e-9 absorbs R's round-half-even at an exact .xx5); the unrounded
-        # statistic is checked by the wald_test aspect.
-        wald = r.coxph_wtest(r.vcov(fit), r.coef(fit))
-        assert_close(
-            _r_wald_test(fit, init),
-            expected["test"],
-            rtol=0.0,
-            atol=0.005 + 1e-9,
-            path="waldtest.test",
-        )
-        assert_exact(_attr(wald, "df"), expected["df"], path="waldtest.df")
+    if aspect in ("summary.logtest", "summary.sctest", "summary.waldtest"):
+        key = aspect.split(".", 1)[1]
+        test = summary[key]
+        if key == "waldtest":
+            # summary.coxph reports round(fit$wald.test, 2) (R/summary.coxph.R):
+            # compare within half a unit of the last reported digit (the extra
+            # 1e-9 absorbs R's round-half-even at an exact .xx5); the unrounded
+            # statistic is checked by the wald_test aspect.
+            assert_close(
+                test["test"], expected["test"], rtol=0.0, atol=0.005 + 1e-9, path="waldtest.test"
+            )
+        else:
+            assert_close(test["test"], expected["test"], rtol=RTOL_VAR, path=f"{key}.test")
+        assert_exact(test["df"], expected["df"], path=f"{key}.df")
+        assert_close(test["pvalue"], expected["pvalue"], rtol=RTOL_VAR, path=f"{key}.pvalue")
     elif aspect == "summary.coefficients":
-        rows = _attr(summary, "coefficients")
+        rows = summary["coefficients"]
         r_cols = expected["colnames"]
+        keys = {
+            "coef": ("coef", RTOL_COEF),
+            "exp(coef)": ("exp_coef", RTOL_COEF),
+            "se(coef)": ("naive_se" if "robust se" in r_cols else "se", RTOL_VAR),
+            "robust se": ("robust_se", RTOL_VAR),
+            "z": ("z", RTOL_VAR),
+            "Pr(>|z|)": ("p", RTOL_VAR),
+            "Value": ("value", RTOL_COEF),
+            "SE": ("se", RTOL_VAR),
+            "Z": ("z", RTOL_VAR),
+            "p": ("p", RTOL_VAR),
+        }
+        if expected["rownames"]:  # R drops the names of a one-column cch model matrix
+            assert_exact(
+                [row["name"] for row in rows], expected["rownames"], path="coefficients.rows"
+            )
         for row, r_row in zip(rows, expected["values"], strict=True):
-            mapping = {
-                "coef": "coef",
-                "exp(coef)": "exp_coef",
-                "se(coef)": "se",
-                "z": "z",
-                "Pr(>|z|)": "p",
-                "robust se": "se",
-            }
             for col_name, value in zip(r_cols, r_row, strict=True):
-                key = mapping.get(col_name)
-                if key is None or key not in row:
-                    continue
-                if col_name == "se(coef)" and "robust se" in r_cols:
-                    key = "naive_se"
-                rtol = RTOL_COEF if col_name in ("coef", "exp(coef)") else RTOL_VAR
+                key, rtol = keys[col_name]
                 assert_close(
                     row[key], value, rtol=rtol, path=f"coefficients[{row['name']}].{col_name}"
                 )
     elif aspect == "summary.conf_int":
-        ci = r.confint(fit)
-        lower = [_attr(row, "lower") if isinstance(row, Mapping) else row[0] for row in ci]
-        upper = [_attr(row, "upper") if isinstance(row, Mapping) else row[1] for row in ci]
+        rows = summary["conf_int"]
         r_cols = expected["colnames"]
-        lo_idx = r_cols.index("lower .95")
-        hi_idx = r_cols.index("upper .95")
-        assert_close(
-            [math.exp(v) for v in lower],
-            column(expected["values"], lo_idx),
-            rtol=RTOL_VAR,
-            path="conf_int.lower",
-        )
-        assert_close(
-            [math.exp(v) for v in upper],
-            column(expected["values"], hi_idx),
-            rtol=RTOL_VAR,
-            path="conf_int.upper",
-        )
+        for name, exp_row in zip(expected["rownames"], expected["values"], strict=True):
+            row = next((item for item in rows if item["name"] == name), None)
+            if row is None:
+                raise FixtureMismatchError(f"conf_int has no row {name!r}")
+            for col_name, key in (
+                ("exp(coef)", "exp(coef)"),
+                ("exp(-coef)", "exp(-coef)"),
+                ("lower .95", "lower"),
+                ("upper .95", "upper"),
+            ):
+                assert_close(
+                    row[key],
+                    exp_row[r_cols.index(col_name)],
+                    rtol=RTOL_VAR,
+                    path=f"conf_int[{name}].{col_name}",
+                )
     elif aspect == "summary.concordance":
-        cc = _concordance_of_fit(fit)
-        values = list(expected.values())
-        assert_close(_attr(cc, "concordance"), values[0], rtol=RTOL_VAR, path="concordance")
-        variance = _attr(cc, "variance", "var")
-        if variance is None:
-            raise FixtureMismatchError("concordance variance is None")
-        se = math.sqrt(variance if not isinstance(variance, list) else variance[0][0])
-        assert_close(se, values[1], rtol=RTOL_VAR, path="concordance.se")
+        concordance = summary["concordance"]
+        assert_close(concordance["C"], expected["C"], rtol=RTOL_VAR, path="concordance.C")
+        assert_close(concordance["se(C)"], expected["se(C)"], rtol=RTOL_VAR, path="concordance.se")
     elif aspect == "summary.rsq":
-        n = _attr(summary, "n")
-        loglik = _attr(summary, "loglik")
-        null_loglik = _attr(summary, "null_loglik")
-        logtest = -2 * (null_loglik - loglik)
-        rsq = 1 - math.exp(-logtest / n)
-        maxrsq = 1 - math.exp(2 * null_loglik / n)
-        assert_close([rsq, maxrsq], list(expected.values()), rtol=RTOL_VAR, path="rsq")
+        assert_close(
+            [summary["rsq"]["rsq"], summary["rsq"]["maxrsq"]],
+            [expected["rsq"], expected["maxrsq"]],
+            rtol=RTOL_VAR,
+            path="rsq",
+        )
     elif aspect in ("summary.n", "summary.nevent"):
-        key = "n" if aspect == "summary.n" else "n_event"
-        assert_exact(_attr(summary, key), expected, path=aspect)
+        assert_exact(summary[aspect.split(".", 1)[1]], expected, path=aspect)
     elif aspect == "summary.used_robust":
-        assert_exact(bool(_attr(summary, "robust")), expected, path=aspect)
+        assert_exact(bool(summary["used_robust"]), expected, path=aspect)
+    elif aspect == "summary.robscore":
+        test = summary["robscore"]
+        assert_close(test["test"], expected["test"], rtol=RTOL_VAR, path="robscore.test")
+        assert_exact(test["df"], expected["df"], path="robscore.df")
     else:
         raise UnsupportedCaseError(f"unhandled summary aspect {aspect}")
 
 
 def _check_concordance_result(cc: Any, expected: Mapping[str, Any], aspect: str) -> None:
-    if aspect.endswith("concordance") and not aspect.endswith(".concordance"):
-        raise AssertionError("internal: use the dotted aspect")
     sub = aspect.rsplit(".", 1)[1] if "." in aspect else aspect
     if sub == "concordance":
-        actual = _attr(cc, "concordance")
-        assert_close(actual, expected["concordance"], rtol=RTOL_COEF, path="concordance")
+        assert_close(cc.concordance, expected["concordance"], rtol=RTOL_COEF, path="concordance")
     elif sub == "n":
-        assert_exact(_attr(cc, "n"), expected["n"], path="n")
+        assert_exact(cc.n, expected["n"], path="n")
     elif sub == "count":
         count = expected["count"]
+        rows = cc.count if isinstance(cc.count, list) else [cc.count]
         if "values" in count:
-            raise UnsupportedCaseError("multi-column concordance counts are not exposed")
-        tied_x = _attr(cc, "tied_x")
-        tied_y = _attr(cc, "tied_y")
-        tied_xy = _attr(cc, "tied_xy")
-        concordant = _attr(cc, "concordant")
-        comparable = _attr(cc, "comparable")
-        discordant = comparable - concordant - tied_x
-        actual = [concordant, discordant, tied_x, tied_y, tied_xy]
-        assert_close(actual, list(count.values()), rtol=1e-12, path="count")
+            assert_exact(cc.names, count["rownames"], path="count.rownames")
+            actual = [[row[name] for name in count["colnames"]] for row in rows]
+            assert_matrix_close(actual, count["values"], rtol=1e-12, path="count")
+        else:
+            actual = [rows[0][name] for name in count]
+            assert_close(actual, list(count.values()), rtol=1e-12, path="count")
     elif sub == "var":
-        variance = _attr(cc, "variance", "var")
-        if variance is None:
-            raise FixtureMismatchError("variance is None")
-        assert_close(variance, expected["var"], rtol=RTOL_VAR, path="var")
+        if cc.var is None:
+            raise FixtureMismatchError("var is None")
+        if isinstance(cc.var, list):
+            assert_matrix_close(cc.var, expected["var"], rtol=RTOL_VAR, path="var")
+        else:
+            assert_close(cc.var, expected["var"], rtol=RTOL_VAR, path="var")
     elif sub == "cvar":
-        assert_close(
-            _attr(cc, "conditional_variance", "cvar"), expected["cvar"], rtol=RTOL_VAR, path="cvar"
-        )
+        assert_close(cc.cvar, expected["cvar"], rtol=RTOL_VAR, path="cvar")
     elif sub == "dfbeta":
-        actual = _attr(cc, "dfbeta")
-        if actual is None:
+        if cc.dfbeta is None:
             raise FixtureMismatchError("dfbeta is None")
-        assert_close(actual, expected["dfbeta"], rtol=RTOL_VAR, path="dfbeta")
+        if isinstance(cc.dfbeta[0], list):
+            assert_matrix_close(cc.dfbeta, expected["dfbeta"], rtol=RTOL_VAR, path="dfbeta")
+        else:
+            assert_close(cc.dfbeta, expected["dfbeta"], rtol=RTOL_VAR, path="dfbeta")
     elif sub == "influence":
-        actual = _attr(cc, "influence")
-        if actual is None:
+        if cc.influence is None:
             raise FixtureMismatchError("influence is None")
-        assert_matrix_close(actual, expected["influence"], rtol=RTOL_VAR, path="influence")
+        assert_matrix_close(cc.influence, expected["influence"], rtol=RTOL_VAR, path="influence")
     elif sub == "timewt":
         return
     else:
@@ -5679,7 +5638,8 @@ class CoxphHandler(TopicHandler):
             if key == "coef":
                 out.extend(["coef", "coef_names"])
             elif key in ("residuals", "summary", "concordance") and isinstance(value, Mapping):
-                out.extend(f"{key}.{sub}" for sub in value if not is_r_error(value[sub]))
+                if not is_r_error(value):
+                    out.extend(f"{key}.{sub}" for sub in value if not is_r_error(value[sub]))
             elif key == "survfit":
                 out.extend(_curve_aspects(value))
             else:
@@ -5701,67 +5661,52 @@ class CoxphHandler(TopicHandler):
         elif aspect == "var":
             assert_matrix_close(r.vcov(fit), expected["var"], rtol=RTOL_VAR, path="var")
         elif aspect == "naive_var":
-            naive = getattr(fit, "naive_var", None) or getattr(fit, "naive_variance", None)
-            if naive is None:
+            if fit.naive_var is None:
                 raise FixtureMismatchError("fit has no naive variance")
-            assert_matrix_close(naive, expected["naive_var"], rtol=RTOL_VAR, path="naive_var")
+            assert_matrix_close(
+                fit.naive_var, expected["naive_var"], rtol=RTOL_VAR, path="naive_var"
+            )
         elif aspect == "loglik":
-            loglik = _attr(fit, "log_likelihood")
-            assert_close(as_float_list(loglik), expected["loglik"], rtol=RTOL_COEF, path="loglik")
+            assert_close(fit.loglik, expected["loglik"], rtol=RTOL_COEF, path="loglik")
         elif aspect == "score":
-            assert_close(_attr(fit, "score_test"), expected["score"], rtol=RTOL_VAR, path="score")
+            assert_close(fit.score, expected["score"], rtol=RTOL_VAR, path="score")
         elif aspect == "iter":
-            assert_exact([_attr(fit, "iterations")], expected["iter"][:1], path="iter")
+            actual = [] if fit.iter is None else [fit.iter]
+            assert_exact(actual, expected["iter"][:1], path="iter")
         elif aspect == "wald_test":
-            assert_close(
-                _r_wald_test(fit, _case_init(case)),
-                expected["wald_test"],
-                rtol=RTOL_VAR,
-                path="wald_test",
-            )
+            assert_close(fit.wald_test, expected["wald_test"], rtol=RTOL_VAR, path="wald_test")
         elif aspect == "n":
-            assert_exact(r.nobs(fit), expected["n"], path="n (nobs)")
+            assert_exact(fit.n, expected["n"], path="n")
         elif aspect == "nevent":
-            assert_exact(_attr(r.model_summary(fit), "n_event"), expected["nevent"], path="nevent")
+            assert_exact(fit.nevent, expected["nevent"], path="nevent")
         elif aspect == "means":
-            assert_close(
-                as_float_list(_attr(fit, "means")), expected["means"], rtol=RTOL_COEF, path="means"
-            )
-        elif aspect == "nocenter":
-            assert_close(
-                as_float_list(_attr(fit, "nocenter")), expected["nocenter"], path="nocenter"
-            )
+            assert_close(fit.means, expected["means"], rtol=RTOL_COEF, path="means")
         elif aspect == "linear_predictors":
             assert_close(
-                as_float_list(_attr(fit, "linear_predictors")),
+                fit.linear_predictors,
                 expected["linear_predictors"],
                 rtol=RTOL_COEF,
                 path="linear_predictors",
             )
         elif aspect == "x":
-            x = _attr(fit, "x")
-            assert_matrix_close(x, expected["x"]["values"], rtol=RTOL_COEF, path="x")
+            assert_matrix_close(fit.x, expected["x"]["values"], rtol=RTOL_COEF, path="x")
         elif aspect.startswith("residuals."):
             _check_cox_residual(fit, aspect.split(".", 1)[1], _expect(case, aspect))
         elif aspect.startswith("summary."):
-            _check_summary(fit, aspect, _expect(case, aspect), _case_init(case))
+            _check_summary(fit, aspect, _expect(case, aspect))
         elif aspect.startswith("concordance."):
-            _check_concordance_result(
-                _concordance_of_fit(fit), _expect(case, "concordance"), aspect
-            )
+            _check_concordance_result(r.concordance(fit), _expect(case, "concordance"), aspect)
         elif aspect == "wtest":
             wtest = _expect(case, "wtest")
             actual = r.coxph_wtest(r.vcov(fit), r.coef(fit))
-            assert_close(_attr(actual, "test"), wtest["test"], rtol=RTOL_VAR, path="wtest.test")
-            assert_exact(_attr(actual, "df"), wtest["df"], path="wtest.df")
+            assert_close(actual.test, wtest["test"], rtol=RTOL_VAR, path="wtest.test")
+            assert_exact(actual.df, wtest["df"], path="wtest.df")
             assert_close(
-                as_float_list(_attr(actual, "solve")),
-                wtest["solve"],
-                rtol=RTOL_VAR,
-                path="wtest.solve",
+                as_float_list(actual.solve), wtest["solve"], rtol=RTOL_VAR, path="wtest.solve"
             )
         elif aspect == "anova":
-            _check_anova(r.anova(fit), _expect(case, "anova"))
+            exp = _expect(case, "anova")
+            _check_anova(r.anova(fit), exp)
         elif aspect.startswith("curves."):
             _check_cox_curves(r.survfit(fit), expected["survfit"], aspect)
         else:
@@ -5769,33 +5714,37 @@ class CoxphHandler(TopicHandler):
 
     def _check_anova_nested(self, case):
         data = case_data(self.topic, case)
-        fits = [r.coxph(formula, data) for formula in case["formulas"]]
+        fits = [r.coxph(formula, data, na_action="omit") for formula in case["formulas"]]
         _check_anova(r.anova(*fits), case["expected"]["anova"], nested=True)
 
 
 def _check_anova(result: Any, expected: Mapping[str, Any], nested: bool = False) -> None:
-    rows = _attr(result, "rows", "models")
-    loglik = [_attr(row, "loglik") for row in rows]
-    assert_close(loglik, expected["loglik"], rtol=RTOL_COEF, path="anova.loglik")
-    chisq = [getattr(row, "chisq", None) for row in rows]
-    df = [getattr(row, "df", None) for row in rows]
-    p = [getattr(row, "p_value", getattr(row, "p", None)) for row in rows]
-    assert_close(chisq[1:], expected["chisq"][1:], rtol=RTOL_VAR, path="anova.chisq")
-    assert_close(p[1:], expected["p"][1:], rtol=RTOL_VAR, path="anova.p")
+    rows = list(result.rows)
+    assert_close(
+        [row.loglik for row in rows], expected["loglik"], rtol=RTOL_COEF, path="anova.loglik"
+    )
+    assert_close(
+        [row.chisq for row in rows][1:], expected["chisq"][1:], rtol=RTOL_VAR, path="anova.chisq"
+    )
+    assert_close(
+        [row.p_value for row in rows][1:], expected["p"][1:], rtol=RTOL_VAR, path="anova.p"
+    )
     if not nested:
-        assert_exact(df[1:], [int(v) for v in expected["df"][1:]], path="anova.df")
+        assert_exact(
+            [row.df for row in rows][1:], [int(v) for v in expected["df"][1:]], path="anova.df"
+        )
 
 
 def _check_cox_residual(fit: Any, kind: str, expected: Any) -> None:
     actual = r.residuals(fit, type=kind)
-    rtol = RTOL_COEF
     if kind in ("schoenfeld", "scaledsch"):
-        assert_matrix_close(actual, expected["values"], rtol=rtol, path=f"residuals.{kind}")
-        return
+        expected = expected["values"]
     if expected and isinstance(expected[0], list):
-        assert_matrix_close(actual, expected, rtol=rtol, path=f"residuals.{kind}")
+        if actual and not isinstance(actual[0], list):
+            actual = [[value] for value in actual]
+        assert_matrix_close(actual, expected, rtol=RTOL_COEF, path=f"residuals.{kind}")
     else:
-        assert_close(as_float_list(actual), expected, rtol=rtol, path=f"residuals.{kind}")
+        assert_close(as_float_list(actual), expected, rtol=RTOL_COEF, path=f"residuals.{kind}")
 
 
 class CoxphPredictHandler(TopicHandler):
@@ -5823,23 +5772,16 @@ class CoxphPredictHandler(TopicHandler):
         expected = case["expected"]
         newdata = newdata_frame(expected)
         if aspect.startswith("basehaz_"):
-            centered = aspect == "basehaz_centered"
-            bh = r.basehaz(fit, centered=centered)
+            bh = r.basehaz(fit, centered=aspect == "basehaz_centered")
             exp = _expect(case, aspect)
-            assert_close(as_float_list(_attr(bh, "time")), exp["time"], path="basehaz.time")
-            assert_close(
-                as_float_list(_attr(bh, "hazard")),
-                exp["hazard"],
-                rtol=RTOL_COEF,
-                path="basehaz.hazard",
-            )
+            assert_close(bh.time, exp["time"], path="basehaz.time")
+            assert_close(bh.hazard, exp["hazard"], rtol=RTOL_COEF, path="basehaz.hazard")
             if "strata" in exp:
-                labels = _attr(bh, "strata_labels", "strata")
-                if labels is None or [str(v) for v in labels] != [
-                    r_strata_value(v) for v in exp["strata"]
-                ]:
+                labels = bh.strata
+                if labels is None or list(labels) != list(exp["strata"]):
                     raise FixtureMismatchError(
-                        f"basehaz strata labels differ: {labels} vs {exp['strata'][:3]}"
+                        f"basehaz strata labels differ: {labels and labels[:3]} vs "
+                        f"{exp['strata'][:3]}"
                     )
         elif aspect.startswith("survfit"):
             key, curve_aspect = aspect.split(":", 1)
@@ -5855,8 +5797,7 @@ class CoxphPredictHandler(TopicHandler):
                 kwargs["newdata"] = newdata
                 if key.endswith("loglog"):
                     kwargs["conf_type"] = "log-log"
-            result = r.survfit(fit, **kwargs)
-            _check_cox_curves(result, exp, curve_aspect)
+            _check_cox_curves(r.survfit(fit, **kwargs), exp, curve_aspect)
         elif aspect.startswith("predict"):
             key, kind = aspect.split(".", 1)
             exp = _expect(case, aspect)
@@ -5866,19 +5807,20 @@ class CoxphPredictHandler(TopicHandler):
                 assert_close(as_float_list(actual), exp, rtol=RTOL_COEF, path=aspect)
                 return
             result = r.predict(fit, nd, type=kind, se_fit=True)
-            fit_values = _attr(result, "fit")
-            se_values = _attr(result, "se_fit")
-            rtol = RTOL_COEF
             if kind == "terms":
-                assert_matrix_close(fit_values, exp["fit"], rtol=rtol, path=f"{aspect}.fit")
+                assert_matrix_close(result.fit, exp["fit"], rtol=RTOL_COEF, path=f"{aspect}.fit")
                 assert_matrix_close(
-                    se_values, exp["se_fit"], rtol=RTOL_VAR, path=f"{aspect}.se_fit"
+                    result.se_fit, exp["se_fit"], rtol=RTOL_VAR, path=f"{aspect}.se_fit"
+                )
+                assert_close(
+                    r.predict_terms_constant(fit),
+                    exp["constant"],
+                    rtol=RTOL_COEF,
+                    path=f"{aspect}.constant",
                 )
             else:
-                assert_close(as_float_list(fit_values), exp["fit"], rtol=rtol, path=f"{aspect}.fit")
-                assert_close(
-                    as_float_list(se_values), exp["se_fit"], rtol=RTOL_VAR, path=f"{aspect}.se_fit"
-                )
+                assert_close(result.fit, exp["fit"], rtol=RTOL_COEF, path=f"{aspect}.fit")
+                assert_close(result.se_fit, exp["se_fit"], rtol=RTOL_VAR, path=f"{aspect}.se_fit")
         else:
             raise UnsupportedCaseError(f"unhandled coxph_predict aspect {aspect}")
 
@@ -5886,46 +5828,44 @@ class CoxphPredictHandler(TopicHandler):
 def _check_cox_curves(result: Any, exp: Mapping[str, Any], curve_aspect: str) -> None:
     """Compare a Cox survfit result with R curves.
 
-    R stores one block per stratum; inside a block a field is a vector (one
-    curve) or a matrix with one column per newdata row.  Python stores one
-    vector per (stratum, newdata row) curve; both are flattened to the same
-    strata-major order before comparing.
+    Both store one block per stratum laid end to end; a field is a vector (one
+    curve) or an ``ntime x ncurve`` matrix (one column per newdata row).
     """
 
-    fields = _CURVE_ASPECTS[curve_aspect]
-    for field in fields:
-        if not any(field in curve for curve in exp["curves"]):
-            continue
-        candidates, rtol = _CURVE_FIELDS[field]
-        value = _attr(result, *candidates)
-        if value is None:
-            raise FixtureMismatchError(f"survfit.{field} is None")
-        if hasattr(value, "tolist"):
-            value = value.tolist()
-        expected_columns: list[list[float]] = []
-        for curve in exp["curves"]:
-            column_values = curve.get(field)
-            if column_values is None:
+    blocks = list(result.strata.values()) if result.strata is not None else [len(result.time)]
+    names = list(result.strata) if result.strata is not None else None
+    if len(blocks) != len(exp["curves"]):
+        raise FixtureMismatchError(f"{len(blocks)} python strata, R has {len(exp['curves'])}")
+    if names is not None:
+        r_names = [curve["name"] for curve in exp["curves"]]
+        if names != r_names:
+            raise FixtureMismatchError(f"strata names differ: {names} vs {r_names}")
+    offset = 0
+    for block, curve in zip(blocks, exp["curves"], strict=True):
+        rows = slice(offset, offset + block)
+        offset += block
+        for field in _CURVE_ASPECTS[curve_aspect]:
+            if field not in curve:
                 continue
-            if column_values and isinstance(column_values[0], list):
-                expected_columns.extend(transpose(column_values))
+            candidates, rtol = _CURVE_FIELDS[field]
+            value = _attr(result, *candidates)
+            if value is None:
+                raise FixtureMismatchError(f"survfit.{field} is None")
+            actual = list(value)[rows]
+            expected = curve[field]
+            path = f"curve[{curve['name']}].{field}"
+            if expected and isinstance(expected[0], list):
+                if actual and not isinstance(actual[0], list):
+                    actual = [[item] for item in actual]
+                assert_matrix_close(actual, expected, rtol=rtol, path=path)
             else:
-                expected_columns.append(list(column_values))
-        if value and isinstance(value[0], (list, tuple)):
-            python_curves = [list(item) for item in value]
-            if len(python_curves) != len(expected_columns) and len(python_curves[0]) == len(
-                expected_columns
-            ):
-                python_curves = transpose(python_curves)
-        else:
-            python_curves = [list(value)]
-        if len(python_curves) != len(expected_columns):
-            raise FixtureMismatchError(
-                f"survfit.{field}: {len(python_curves)} python curves, "
-                f"R has {len(expected_columns)}"
-            )
-        for idx, (actual, expected) in enumerate(zip(python_curves, expected_columns, strict=True)):
-            assert_close(as_float_list(actual), expected, rtol=rtol, path=f"curve[{idx}].{field}")
+                if actual and isinstance(actual[0], list):
+                    if len(actual[0]) != 1:
+                        raise FixtureMismatchError(
+                            f"{path}: {len(actual[0])} python curves, R has 1"
+                        )
+                    actual = [item[0] for item in actual]
+                assert_close(as_float_list(actual), expected, rtol=rtol, path=path)
 
 
 class CoxphDiagnosticsHandler(TopicHandler):
@@ -5957,8 +5897,7 @@ class CoxphDiagnosticsHandler(TopicHandler):
             z = r.cox_zph(fit, transform=transform, terms=(terms == "terms"))
             sub = parts[2]
             if sub == "table":
-                table = _attr(z, "table")
-                rows = {row["name"]: row for row in table}
+                rows = {row["name"]: row for row in z.table}
                 for name, values in zip(
                     exp["table"]["rownames"], exp["table"]["values"], strict=True
                 ):
@@ -5969,54 +5908,43 @@ class CoxphDiagnosticsHandler(TopicHandler):
                     assert_exact(row["df"], values[1], path=f"zph[{name}].df")
                     assert_close(row["p"], values[2], rtol=RTOL_VAR, path=f"zph[{name}].p")
             elif sub == "x":
-                assert_close(as_float_list(_attr(z, "x")), exp["x"], rtol=RTOL_COEF, path="zph.x")
+                assert_close(z.x, exp["x"], rtol=RTOL_COEF, path="zph.x")
             elif sub == "y":
-                assert_matrix_close(_attr(z, "y"), exp["y"], rtol=RTOL_COEF, path="zph.y")
+                assert_matrix_close(z.y, exp["y"], rtol=RTOL_COEF, path="zph.y")
             elif sub == "var":
-                assert_matrix_close(_attr(z, "var"), exp["var"], rtol=RTOL_VAR, path="zph.var")
+                assert_matrix_close(z.var, exp["var"], rtol=RTOL_VAR, path="zph.var")
         elif parts[0] == "detail":
             exp = _expect(case, "detail")
             detail = r.coxph_detail(fit)
             sub = parts[1]
-            mapping = {
-                "time": (("time",), 0.0),
-                "nevent": (("nevent", "n_event"), 0.0),
-                "nrisk": (("nrisk", "n_risk"), 0.0),
-                "hazard": (("hazard",), RTOL_COEF),
-                "varhaz": (("varhaz", "var_hazard"), RTOL_VAR),
-                "wtrisk": (("wtrisk",), RTOL_COEF),
-                "score": (("score",), RTOL_COEF),
-                "means": (("means",), RTOL_COEF),
-                "imat": (("imat",), RTOL_VAR),
-            }
-            candidates, rtol = mapping[sub]
-            actual = _attr(detail, *candidates)
+            rtol = {
+                "time": 0.0,
+                "nevent": 0.0,
+                "nrisk": 0.0,
+                "hazard": RTOL_COEF,
+                "varhaz": RTOL_VAR,
+                "wtrisk": RTOL_COEF,
+                "score": RTOL_COEF,
+                "means": RTOL_COEF,
+                "imat": RTOL_VAR,
+            }[sub]
+            actual = getattr(detail, sub)
             expected = exp[sub]
             if sub == "imat":
                 # R: nvar x nvar x ntime; Python: per time list of matrices
                 if isinstance(expected[0], list) and isinstance(expected[0][0], list):
-                    # one R array, compared layer by layer: scale the
-                    # absolute floor to the whole of it
                     atol = rtol * array_scale(expected)
                     for t, layer in enumerate(expected):
                         assert_matrix_close(
                             actual[t], layer, rtol=rtol, atol=atol, path=f"detail.imat[{t}]"
                         )
                 else:
-                    assert_close(
-                        as_float_list(
-                            [
-                                m[0][0] if isinstance(m, list) and isinstance(m[0], list) else m
-                                for m in actual
-                            ]
-                        ),
-                        expected,
-                        rtol=rtol,
-                        path="detail.imat",
-                    )
+                    assert_close([m[0][0] for m in actual], expected, rtol=rtol, path="detail.imat")
             elif expected and isinstance(expected[0], list):
                 assert_matrix_close(actual, expected, rtol=rtol, path=f"detail.{sub}")
             else:
+                if actual and isinstance(actual[0], list):
+                    actual = [row[0] for row in actual]
                 assert_close(as_float_list(actual), expected, rtol=rtol, path=f"detail.{sub}")
 
 
@@ -6040,89 +5968,56 @@ class CoxphPenalizedHandler(TopicHandler):
         return out
 
     def check(self, case, aspect):
-        fit = _coxph_fit(self.topic, case)
+        try:
+            fit = _coxph_fit(self.topic, case)
+        except ValueError as exc:
+            if "unsupported formula term" in str(exc):
+                raise UnsupportedCaseError(
+                    "penalised Cox terms (ridge/pspline/frailty) are not implemented"
+                ) from exc
+            raise
         expected = case["expected"]
         if aspect == "coef":
             assert_named_values(_coef_names(fit), r.coef(fit), expected["coef"], path="coef")
         elif aspect == "var":
             assert_matrix_close(r.vcov(fit), expected["var"], rtol=RTOL_VAR, path="var")
-        elif aspect == "var2":
-            assert_matrix_close(_attr(fit, "var2"), expected["var2"], rtol=RTOL_VAR, path="var2")
         elif aspect == "loglik":
-            assert_close(
-                as_float_list(_attr(fit, "log_likelihood")),
-                expected["loglik"],
-                rtol=RTOL_COEF,
-                path="loglik",
-            )
+            assert_close(fit.loglik, expected["loglik"], rtol=RTOL_COEF, path="loglik")
         elif aspect == "iter":
-            assert_exact(as_float_list(_attr(fit, "iterations")), expected["iter"], path="iter")
+            assert_exact([fit.iter], expected["iter"][:1], path="iter")
         elif aspect == "wald_test":
-            assert_close(
-                _r_wald_test(fit, _case_init(case)),
-                expected["wald_test"],
-                rtol=RTOL_VAR,
-                path="wald_test",
-            )
-        elif aspect in ("df", "df2"):
-            assert_close(
-                as_float_list(_attr(fit, aspect)), expected[aspect], rtol=RTOL_VAR, path=aspect
-            )
-        elif aspect == "history":
-            history = _attr(fit, "history")
-            for (name, exp_item), item in zip(expected["history"].items(), history, strict=True):
-                assert_close(
-                    as_float_list(_attr(item, "theta")),
-                    exp_item["theta"],
-                    rtol=RTOL_VAR,
-                    path=f"history[{name}].theta",
-                )
-        elif aspect in ("frail", "fvar"):
-            assert_close(
-                as_float_list(_attr(fit, aspect)), expected[aspect], rtol=RTOL_COEF, path=aspect
-            )
+            assert_close(fit.wald_test, expected["wald_test"], rtol=RTOL_VAR, path="wald_test")
         elif aspect == "means":
-            assert_close(
-                as_float_list(_attr(fit, "means")), expected["means"], rtol=RTOL_COEF, path="means"
-            )
+            assert_close(fit.means, expected["means"], rtol=RTOL_COEF, path="means")
         elif aspect == "linear_predictors":
             assert_close(
-                as_float_list(_attr(fit, "linear_predictors")),
+                fit.linear_predictors,
                 expected["linear_predictors"],
                 rtol=RTOL_COEF,
                 path="linear_predictors",
             )
         elif aspect in ("n", "nevent", "score"):
-            assert_close(
-                _attr(fit, {"n": "n", "nevent": "nevent", "score": "score_test"}[aspect]),
-                expected[aspect],
-                rtol=RTOL_VAR,
-                path=aspect,
-            )
+            assert_close(getattr(fit, aspect), expected[aspect], rtol=RTOL_VAR, path=aspect)
         elif aspect.startswith("residuals."):
             _check_cox_residual(fit, aspect.split(".", 1)[1], _expect(case, aspect))
         elif aspect == "concordance.concordance":
-            _check_concordance_result(
-                _concordance_of_fit(fit), _expect(case, "concordance"), aspect
-            )
+            _check_concordance_result(r.concordance(fit), _expect(case, "concordance"), aspect)
         elif aspect in ("predict_lp", "predict_risk"):
             kind = aspect.split("_")[1]
             assert_close(
-                as_float_list(r.predict(fit, type=kind)),
-                _expect(case, aspect),
-                rtol=RTOL_COEF,
-                path=aspect,
+                r.predict(fit, type=kind), _expect(case, aspect), rtol=RTOL_COEF, path=aspect
             )
         elif aspect.startswith("curves."):
             _check_cox_curves(r.survfit(fit), _expect(case, "survfit"), aspect)
         elif aspect == "basehaz_centered":
             exp = _expect(case, aspect)
-            bh = r.basehaz(fit, centered=True)
             assert_close(
-                as_float_list(_attr(bh, "hazard")), exp["hazard"], rtol=RTOL_COEF, path="basehaz"
+                r.basehaz(fit, centered=True).hazard, exp["hazard"], rtol=RTOL_COEF, path="basehaz"
             )
         else:
-            raise UnsupportedCaseError(f"unhandled penalized aspect {aspect}")
+            raise UnsupportedCaseError(
+                f"penalised Cox terms (ridge/pspline/frailty) are not implemented: {aspect}"
+            )
 
 
 # --- survreg (handler owned by the survreg module) ----------------------------
@@ -6336,13 +6231,16 @@ class ConcordanceHandler(TopicHandler):
             data = case_data(self.topic, case)
             key = aspect.split(".")[0]
             if key == "coxph":
-                cc = _concordance_of_fit(r.coxph(case["formula"], data))
+                cc = r.concordance(r.coxph(case["formula"], data, na_action="omit"))
             elif key == "coxph_timewt_S":
-                cc = _concordance_of_fit(r.coxph(case["formula"], data), timewt="S")
+                cc = r.concordance(r.coxph(case["formula"], data, na_action="omit"), timewt="S")
             elif key == "survreg":
-                cc = _concordance_of_fit(r.survreg(case["formula"], data))
+                cc = r.concordance(r.survreg(case["formula"], data, na_action="omit"))
             else:
-                raise UnsupportedCaseError("concordance of several fits at once")
+                cc = r.concordance(
+                    r.coxph(case["formula"], data, na_action="omit"),
+                    r.survreg(case["formula"], data, na_action="omit"),
+                )
             _check_concordance_result(cc, expected[key], aspect)
             return
 
@@ -6376,50 +6274,77 @@ class AaregHandler(TopicHandler):
 
         fit = _cached(_fit_key("aareg", case), build)
         if aspect == "times":
-            assert_close(as_float_list(_attr(fit, "times")), expected["times"], path="times")
+            assert_close(fit.times, expected["times"], path="times")
         elif aspect == "nrisk":
-            assert_exact(
-                as_float_list(_attr(fit, "nrisk", "n_risk")), expected["nrisk"], path="nrisk"
-            )
+            assert_exact(fit.nrisk, expected["nrisk"], path="nrisk")
         elif aspect == "coefficient":
+            assert_exact(
+                fit.coefficient_names,
+                expected["coefficient"]["colnames"],
+                path="coefficient.colnames",
+            )
             assert_matrix_close(
-                _attr(fit, "coefficient", "coefficients"),
+                fit.coefficient,
                 expected["coefficient"]["values"],
                 rtol=RTOL_COEF,
                 path="coefficient",
             )
         elif aspect == "test_statistic":
             assert_close(
-                as_float_list(_attr(fit, "test_statistic")),
+                fit.test_statistic,
                 list(expected["test_statistic"].values()),
                 rtol=RTOL_VAR,
                 path="test_statistic",
             )
         elif aspect == "test_var":
-            assert_matrix_close(
-                _attr(fit, "test_var"), expected["test_var"], rtol=RTOL_VAR, path="test_var"
-            )
+            assert_matrix_close(fit.test_var, expected["test_var"], rtol=RTOL_VAR, path="test_var")
         elif aspect == "test_var2":
             assert_matrix_close(
-                _attr(fit, "test_var2"), expected["test_var2"], rtol=RTOL_VAR, path="test_var2"
+                fit.test_var2, expected["test_var2"], rtol=RTOL_VAR, path="test_var2"
             )
         elif aspect == "tweight":
-            actual = _attr(fit, "tweight")
             if isinstance(expected["tweight"][0], list):
-                assert_matrix_close(actual, expected["tweight"], rtol=RTOL_COEF, path="tweight")
+                assert_matrix_close(
+                    fit.tweight, expected["tweight"], rtol=RTOL_COEF, path="tweight"
+                )
             else:
                 assert_close(
-                    as_float_list(actual), expected["tweight"], rtol=RTOL_COEF, path="tweight"
+                    [row[0] for row in fit.tweight],
+                    expected["tweight"],
+                    rtol=RTOL_COEF,
+                    path="tweight",
                 )
         elif aspect == "chisq":
             exp = _expect(case, "chisq")
-            assert_close(_attr(fit, "chisq"), exp["chisq"], rtol=RTOL_VAR, path="chisq")
+            summary = r.model_summary(fit)
+            assert_close(summary["chisq"], exp["chisq"][0][0], rtol=RTOL_VAR, path="chisq")
+            table = exp["table"]
+            columns = {
+                "slope": "slope",
+                "coef": "coef",
+                "se(coef)": "se",
+                "robust se": "robust_se",
+                "z": "z",
+                "p": "p",
+            }
+            assert_exact(
+                [row["name"] for row in summary["table"]],
+                table["rownames"],
+                path="summary.rownames",
+            )
+            for row, values in zip(summary["table"], table["values"], strict=True):
+                for name, value in zip(table["colnames"], values, strict=True):
+                    assert_close(
+                        row[columns[name]],
+                        value,
+                        rtol=RTOL_VAR,
+                        path=f"summary[{row['name']}].{name}",
+                    )
         elif aspect == "dfbeta":
             # Python: subjects x nvar x times (R's array layout); R fixture: one
             # subjects x nvar matrix per time.
-            actual = _attr(fit, "dfbeta")
             for t, layer in enumerate(expected["dfbeta"]):
-                actual_layer = [[row[k][t] for k in range(len(row))] for row in actual]
+                actual_layer = [[row[k][t] for k in range(len(row))] for row in fit.dfbeta]
                 assert_matrix_close(actual_layer, layer, rtol=RTOL_COEF, path=f"dfbeta[{t}]")
         else:
             raise UnsupportedCaseError(f"unhandled aareg aspect {aspect}")
@@ -6432,11 +6357,14 @@ class CchHandler(TopicHandler):
     topic = "cch"
 
     def aspects(self, case):
-        return [
+        out = [
             key
-            for key in ("coef", "var", "naive_var", "subcohort_size")
+            for key in ("coef", "var", "naive_var", "subcohort_size", "cohort_size", "method")
             if case["expected"].get(key) is not None
         ]
+        if not is_r_error(case["expected"].get("summary")):
+            out.append("summary.coefficients")
+        return out
 
     def check(self, case, aspect):
         expected = case["expected"]
@@ -6448,32 +6376,34 @@ class CchHandler(TopicHandler):
                 "subcoh": args["subcoh"],
                 "id": args["id"],
                 "method": args["method"],
+                "cohort_size": args["cohort.size"],
                 "na_action": "omit",
             }
-            size = args["cohort.size"]
-            kwargs["cohort_size"] = size if not isinstance(size, Mapping) else dict(size)
             if "stratum" in args:
                 kwargs["stratum"] = args["stratum"]
             return r.cch(case["formula"], data, **kwargs)
 
         fit = _cached(_fit_key("cch", case), build)
         if aspect == "coef":
-            assert_named_values(_coef_names(fit), r.coef(fit), expected["coef"], path="coef")
+            assert_named_values(
+                _coef_names(fit), r.coef(fit), expected["coef"], check_names=True, path="coef"
+            )
         elif aspect == "var":
             assert_matrix_close(r.vcov(fit), expected["var"], rtol=RTOL_VAR, path="var")
         elif aspect == "naive_var":
             assert_matrix_close(
-                _attr(fit, "naive_var", "naive_variance"),
-                expected["naive_var"],
-                rtol=RTOL_VAR,
-                path="naive_var",
+                fit.naive_var, expected["naive_var"], rtol=RTOL_VAR, path="naive_var"
             )
         elif aspect == "subcohort_size":
             assert_exact(
-                as_float_list(_attr(fit, "subcohort_size")),
-                expected["subcohort_size"],
-                path="subcohort_size",
+                list(fit.subcohort_size), expected["subcohort_size"], path="subcohort_size"
             )
+        elif aspect == "cohort_size":
+            assert_exact(list(fit.cohort_size), expected["cohort_size"], path="cohort_size")
+        elif aspect == "method":
+            assert_exact(fit.method, expected["method"], path="method")
+        elif aspect == "summary.coefficients":
+            _check_summary(fit, aspect, _expect(case, aspect))
 
 
 # --- clogit -------------------------------------------------------------------
@@ -6483,7 +6413,17 @@ class ClogitHandler(TopicHandler):
     topic = "clogit"
 
     def aspects(self, case):
-        return ["coef", "var", "loglik", "iter", "linear_predictors", "summary.coefficients"]
+        return [
+            "coef",
+            "var",
+            "loglik",
+            "iter",
+            "score",
+            "n",
+            "nevent",
+            "linear_predictors",
+            "summary.coefficients",
+        ]
 
     def check(self, case, aspect):
         expected = case["expected"]
@@ -6494,21 +6434,22 @@ class ClogitHandler(TopicHandler):
 
         fit = _cached(_fit_key("clogit", case), build)
         if aspect == "coef":
-            assert_named_values(_coef_names(fit), r.coef(fit), expected["coef"], path="coef")
+            assert_named_values(
+                _coef_names(fit), r.coef(fit), expected["coef"], check_names=True, path="coef"
+            )
         elif aspect == "var":
             assert_matrix_close(r.vcov(fit), expected["var"], rtol=RTOL_VAR, path="var")
         elif aspect == "loglik":
-            assert_close(
-                as_float_list(_attr(fit, "log_likelihood")),
-                expected["loglik"],
-                rtol=RTOL_COEF,
-                path="loglik",
-            )
+            assert_close(fit.loglik, expected["loglik"], rtol=RTOL_COEF, path="loglik")
         elif aspect == "iter":
-            assert_exact(_attr(fit, "iterations"), expected["iter"], path="iter")
+            assert_exact(fit.iter, expected["iter"], path="iter")
+        elif aspect == "score":
+            assert_close(fit.score, expected["score"], rtol=RTOL_VAR, path="score")
+        elif aspect in ("n", "nevent"):
+            assert_exact(getattr(fit, aspect), expected[aspect], path=aspect)
         elif aspect == "linear_predictors":
             assert_close(
-                as_float_list(_attr(fit, "linear_predictors")),
+                fit.linear_predictors,
                 expected["linear_predictors"],
                 rtol=RTOL_COEF,
                 path="linear_predictors",

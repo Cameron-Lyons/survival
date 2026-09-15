@@ -35,8 +35,7 @@ from ._coerce import (
     _subset_indices,
     _subset_optional_sequence,
 )
-from ._coxph import _cox_survfit_result
-from ._fit import _is_clogit_fit, _is_coxph_fit, _prediction_inputs
+from ._coxph import ClogitModel, CoxphModel, survfit_coxph
 from ._formula import (
     _apply_formula_na_action,
     _column,
@@ -485,9 +484,9 @@ def survfit(
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"survfit got unexpected keyword argument(s): {unexpected}")
-    if _is_clogit_fit(response):
+    if isinstance(response, ClogitModel):
         raise ValueError("predicted survival curves are not defined for a clogit model")
-    if _is_coxph_fit(response):
+    if isinstance(response, CoxphModel):
         return _survfit_coxph(
             response,
             newdata,
@@ -567,20 +566,14 @@ def _survfit_coxph(
 ) -> Any:
     """``survfit.coxph``: the Cox module owns the curves, this is only the dispatch."""
 
-    rows, offsets = _prediction_inputs(fit, newdata)
-    conf_int, conf_type, _conf_lower = _conf_arguments(conf_int, conf_type, "usual")
-    result = _cox_survfit_result(
+    result = survfit_coxph(
         fit,
-        rows,
-        offsets,
-        True,
         newdata,
-        _start_time_value(start_time),
-        False,
-        _logical(censor, "censor must be TRUE/FALSE"),
-        conf_int,
-        conf_type,
-        compute_confidence=_logical(se_fit, "se.fit must be TRUE/FALSE"),
+        se_fit=se_fit,
+        conf_int=conf_int,
+        conf_type=conf_type,
+        censor=censor,
+        start_time=_start_time_value(start_time),
     )
     if _logical(model, "model must be TRUE/FALSE") and hasattr(result, "model"):
         return dataclasses.replace(result, model=_cox_survfit_model_frame(fit, newdata))

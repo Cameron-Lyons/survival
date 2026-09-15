@@ -16,6 +16,7 @@ import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from operator import index
+from statistics import NormalDist
 from typing import Any
 
 from .. import _survival as _core
@@ -27,11 +28,13 @@ from ._coerce import (
     _float_vector,
     _integer_scalar,
     _keep_rows_after_na_action,
+    _materialize_1d,
     _materialize_labels,
     _matrix_input_column_names,
     _missing_row_indices,
     _normalize_bool_option,
     _normalize_bool_option_with_default,
+    _normalize_conf_level,
     _normalize_optional_bool_option,
     _optional_float_vector,
     _pop_dotted_keyword,
@@ -42,6 +45,7 @@ from ._coerce import (
     _subset_optional_sequence,
 )
 from ._fit import (
+    _fallback_coef_names,
     _fit_location_coef_names,
     _formula_design_for_fit,
     _formula_design_output_names,
@@ -1083,3 +1087,251 @@ def rsurvreg(
         _parms_vector(parms),
         None if seed is None else _integer_scalar(seed, "seed"),
     )
+
+
+# ---------------------------------------------------------------------------
+# survreg methods of the shared generics in ``_models``
+#
+# ``_models`` keeps the coxph branch inline and routes every other fit here by
+# looking up ``<generic>_survreg``; these are R's ``*.survreg`` methods.
+# ---------------------------------------------------------------------------
+
+
+def _normal_two_sided_p_value(statistic: float) -> float:
+    """``2 * pnorm(-abs(z))``."""
+
+    if math.isnan(statistic):
+        return math.nan
+    if math.isinf(statistic):
+        return 0.0
+    return 2.0 * NormalDist().cdf(-abs(statistic))
+
+
+def coef_survreg(fit: Any) -> list[float]:
+    """``coef.survreg``: the location coefficients only."""
+
+    return _location_beta(fit)
+
+
+def coef_names_survreg(fit: Any, *, complete: Any | None = None) -> list[str]:
+    """``names(coef(fit))``; ``complete`` appends the ``Log(scale)`` rows."""
+
+    names = _fit_location_coef_names(fit, len(_location_beta(fit)))
+    if complete is None:
+        return names
+    if _normalize_bool_option(complete, "complete"):
+        names.extend(survreg_scale_names(fit))
+    return names
+
+
+def vcov_survreg(fit: Any, *, complete: Any = True) -> list[list[float]]:
+    """``vcov.survreg``: ``fit$var``, or its location block."""
+
+    return survreg_vcov(fit, _normalize_bool_option_with_default(complete, "complete", True))
+
+
+def confint_survreg(
+    fit: Any, parm: Any | None = None, *, level: Any = 0.95
+) -> list[dict[str, float | str]]:
+    """``confint.survreg``: normal-approximation intervals for the location coefficients."""
+
+    z = NormalDist().inv_cdf(1.0 - (1.0 - _normalize_conf_level(level, "level")) / 2.0)
+    names = coef_names_survreg(fit)
+    coefficients = coef_survreg(fit)
+    variance = survreg_vcov(fit, False)
+    from ._models import _coefficient_selection
+
+    return [
+        {
+            "name": names[idx],
+            "lower": coefficients[idx] - z * math.sqrt(max(float(variance[idx][idx]), 0.0)),
+            "upper": coefficients[idx] + z * math.sqrt(max(float(variance[idx][idx]), 0.0)),
+        }
+        for idx in _coefficient_selection(parm, names)
+    ]
+
+
+def degrees_freedom_survreg(fit: Any) -> int:
+    """``sum(fit$df)``: the coefficients plus the estimated scales."""
+
+    return int(_unwrap_formula_fit(fit).df)
+
+
+def df_residual_survreg(fit: Any) -> int:
+    """``fit$df.residual``."""
+
+    return int(_unwrap_formula_fit(fit).df_residual)
+
+
+def loglik_survreg(fit: Any) -> float:
+    """``fit$loglik[2]``, on the original response scale."""
+
+    return float(_unwrap_formula_fit(fit).log_likelihood)
+
+
+def nobs_survreg(fit: Any) -> int:
+    """``nobs``: the number of observations in the fitted model frame."""
+
+    if isinstance(fit, _FormulaFit) and fit.n_observations is not None:
+        return fit.n_observations
+    model = _unwrap_formula_fit(fit)
+    values = getattr(model, "status", None)
+    if values is None:
+        values = getattr(model, "event_times", None)
+    if values is None:
+        raise TypeError("model does not expose stored observations")
+    return len(list(values))
+
+
+def model_formula_survreg(fit: Any) -> str:
+    """``formula.survreg``."""
+
+    if isinstance(fit, _FormulaFit) and fit.formula is not None:
+        return fit.formula
+    raise TypeError("model_formula requires a formula-based fitted model")
+
+
+def model_weights_survreg(fit: Any) -> list[float] | None:
+    """``weights.survreg``: ``None`` when every case weight is 1."""
+
+    if isinstance(fit, _FormulaFit) and fit.case_weights is not None:
+        return list(fit.case_weights)
+    values = getattr(_unwrap_formula_fit(fit), "weights", None)
+    if values is None:
+        return None
+    weights = [float(value) for value in _materialize_1d(values, "weights")]
+    if all(abs(value - 1.0) <= 1e-12 for value in weights):
+        return None
+    return weights
+
+
+def model_term_names_survreg(fit: Any, terms: Any | None = None) -> list[str]:
+    """``attr(terms(fit), 'term.labels')``, optionally the subset ``terms`` selects."""
+
+    design = _formula_design_for_fit(fit)
+    if design is None:
+        raise TypeError("model_term_names requires a formula-based fitted model")
+    names = [_design_term_name(term) for term in design.covariates]
+    return [names[idx] for idx in _term_selection(terms, names)]
+
+
+def model_matrix_survreg(fit: Any) -> dict[str, Any]:
+    """``model.matrix.survreg``: the design matrix, its column names and ``assign``."""
+
+    model = _unwrap_formula_fit(fit)
+    rows = getattr(model, "covariates", None)
+    if rows is None:
+        rows = getattr(model, "x", None)
+    if rows is None:
+        raise TypeError("model_matrix requires a fitted model with stored covariates")
+    matrix = [[float(value) for value in row] for row in rows]
+    width = len(matrix[0]) if matrix else 0
+    if any(len(row) != width for row in matrix):
+        raise ValueError("stored model matrix must be rectangular")
+
+    design = _formula_design_for_fit(fit)
+    columns = _fallback_coef_names(width)
+    if design is not None:
+        names = _formula_design_output_names(design)
+        if len(names) == width:
+            columns = names
+    elif len(coef_names_survreg(fit)) == width:
+        columns = coef_names_survreg(fit)
+
+    assign = list(range(1, width + 1))
+    if design is not None and len(design.term_assignments) == len(design.covariates):
+        built = [0] if design.intercept else []
+        for term, assignment in zip(design.covariates, design.term_assignments, strict=True):
+            built.extend([assignment] * len(_design_term_output_names(term)))
+        if len(built) == width:
+            assign = built
+    return {"data": matrix, "columns": columns, "assign": assign}
+
+
+def model_frame_survreg(fit: Any) -> dict[str, list[Any]]:
+    """``model.frame.survreg`` for a fit made with ``model=TRUE``."""
+
+    frame = getattr(fit, "model", None)
+    if frame is None:
+        raise TypeError("model_frame requires a stored model frame")
+    if not isinstance(frame, Mapping):
+        raise TypeError("stored model frame must be mapping-like")
+
+    columns: dict[str, list[Any]] = {}
+    for name, values in frame.items():
+        if isinstance(values, Surv):
+            existing = set(columns)
+            if values.start is not None:
+                if "start" not in existing:
+                    columns["start"] = list(values.start)
+                if "stop" not in existing:
+                    columns["stop"] = list(values.time)
+            elif "time" not in existing:
+                columns["time"] = list(values.time)
+            if values.time2 is not None and "time2" not in existing:
+                columns["time2"] = list(values.time2)
+            if "status" not in existing:
+                columns["status"] = list(values.event)
+            continue
+        if isinstance(values, Mapping):
+            continue
+        text_name = str(name)
+        if text_name in {"group", "(id)", "(cluster)", "(strata)"}:
+            columns[text_name] = _materialize_labels(values, text_name)
+            continue
+        materialized = _materialize_1d(values, text_name)
+        if materialized and isinstance(materialized[0], list | tuple):
+            continue
+        columns[text_name] = list(materialized)
+    return columns
+
+
+def model_summary_survreg(fit: Any) -> dict[str, Any]:
+    """``summary.survreg``: the coefficient table plus the fit's scalar pieces."""
+
+    model = _unwrap_formula_fit(fit)
+    coefficients = [float(value) for value in model.coefficients]
+    names = survreg_summary_names(fit)
+    variance = survreg_vcov(fit, True)
+    naive_variance = model.naive_variance_matrix
+    robust = naive_variance is not None
+    if naive_variance is None:
+        naive_variance = variance
+
+    rows: list[dict[str, float | str]] = []
+    for idx, value in enumerate(coefficients):
+        standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
+        naive_standard_error = math.sqrt(max(float(naive_variance[idx][idx]), 0.0))
+        if math.isnan(value):
+            statistic = math.nan
+        elif standard_error > 0.0:
+            statistic = value / standard_error
+        elif value == 0.0:
+            statistic = math.nan
+        else:
+            statistic = math.copysign(math.inf, value)
+        row: dict[str, float | str] = {
+            "name": names[idx],
+            "coef": value,
+            "value": value,
+            "se": standard_error,
+            "naive_se": naive_standard_error,
+            "statistic": statistic,
+            "z": statistic,
+            "p": _normal_two_sided_p_value(statistic),
+        }
+        if robust:
+            row["robust_se"] = standard_error
+        rows.append(row)
+
+    result: dict[str, Any] = {
+        "model_type": "survreg",
+        "coefficients": rows,
+        "coefficient_names": names,
+        "loglik": loglik_survreg(fit),
+        "df": degrees_freedom_survreg(fit),
+        "n": nobs_survreg(fit),
+        "robust": robust,
+    }
+    result.update(survreg_summary(fit))
+    return result
