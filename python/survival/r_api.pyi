@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
 from ._survival import (
@@ -11,6 +11,7 @@ from ._survival import (
     SurvfitKMResult,
 )
 from ._survival import SplineBasisResult as _SplineBasisResult
+from ._survival import YatesContrast as _YatesContrast
 
 class StrataFactor:
     codes: list[int | None]
@@ -186,31 +187,12 @@ class TcutResult:
     cutpoints: list[float]
     labels: list[str]
 
-class SurvObrienResult:
-    statistic: float
-    p_value: float
-    df: int
-    scores: list[float]
-    score_sum: float
-    expected: float
-    variance: float
-
 class YatesResult:
-    levels: list[str]
-    means: list[float]
-    se: list[float]
-    lower: list[float]
-    upper: list[float]
-    n: list[int]
-    predict_type: str
-
-class YatesPairwiseResult:
-    level1: list[str]
-    level2: list[str]
-    difference: list[float]
-    se: list[float]
-    z: list[float]
-    p_value: list[float]
+    estimate: dict[str, list[Any]]
+    test: list[_YatesContrast]
+    mvar: list[list[float]]
+    cmat: list[list[float]]
+    cmat_names: list[str]
 
 class AaregModelResult:
     n: list[int]
@@ -381,7 +363,6 @@ def nsk(
     intercept: Any = False,
     b: Any = 0.05,
     Boundary_knots: Any = ...,
-    **kwargs: Any,
 ) -> _SplineBasisResult: ...
 def pspline(
     x: Any,
@@ -389,38 +370,33 @@ def pspline(
     theta: Any | None = None,
     nterm: Any | None = None,
     degree: Any = 3,
-    eps: Any = 0.1,
+    eps: Any | None = None,
     method: Any | None = None,
     Boundary_knots: Any | None = None,
-    *,
-    boundary_knots: Any | None = None,
     intercept: Any = False,
     penalty: Any = True,
     combine: Any | None = None,
-) -> dict[str, Any]: ...
+    *,
+    boundary_knots: Any | None = None,
+) -> Any: ...
 def survobrien(
-    formula: Any,
+    formula: str,
     data: Any | None = None,
     subset: Any | None = None,
-    na_action: Any | None = "fail",
-    transform: Any | None = None,
-) -> SurvObrienResult | dict[str, list[Any]]: ...
+    na_action: Any | None = "na.omit",
+    transform: Callable[..., Any] | None = None,
+) -> dict[str, list[Any]]: ...
 def yates(
-    predictions: Any,
-    factor: Any,
-    weights: Any | None = None,
-    conf_level: Any | None = None,
+    fit: Any,
+    term: Any,
+    population: Any = "data",
+    levels: Any | None = None,
+    test: Any = "global",
+    predict: Any = "linear",
+    options: Any | None = None,
+    nsim: Any = 200,
+    method: Any = "direct",
 ) -> YatesResult: ...
-def yates_contrast(
-    x: Any,
-    coef: Any,
-    n_obs: Any,
-    n_vars: Any,
-    factor_col: Any,
-    factor_levels: Any,
-    predict_type: str | None = None,
-) -> YatesResult: ...
-def yates_pairwise(result: YatesResult) -> YatesPairwiseResult: ...
 def survexp_us() -> RateTable: ...
 def survexp_mn() -> RateTable: ...
 def survexp_usr() -> RateTable: ...
@@ -824,7 +800,6 @@ def statefig(
     layout: Any,
     connect: Any,
     states: Any | None = None,
-    *,
     margin: Any = 0.03,
     box: Any = True,
     cex: Any = 1,
@@ -836,7 +811,7 @@ def statefig(
     alwd: Any | None = None,
     alty: Any | None = None,
     offset: Any = 0,
-) -> dict[str, Any]: ...
+) -> Any: ...
 def pseudo(
     fit: Any,
     times: Any | None = None,
@@ -849,16 +824,15 @@ def survcheck(
     formula: Any = ...,
     data: Any | None = None,
     subset: Any | None = None,
-    na_action: Any | None = "pass",
+    na_action: Any | None = "na.omit",
     id: Any | None = None,
     istate: Any | None = None,
     istate0: str = "(s0)",
     timefix: bool = True,
     *,
-    time1: Any = ...,
-    time2: Any = ...,
-    status: Any = ...,
-    **kwargs: Any,
+    time1: Any | None = None,
+    time2: Any | None = None,
+    status: Any | None = None,
 ) -> Any: ...
 def basehaz(
     fit: Any,
@@ -1064,37 +1038,26 @@ def rsurvreg(
     scale: Any = 1,
     distribution: str = "weibull",
     parms: Any | None = None,
+    seed: int | None = None,
 ) -> list[float]: ...
 def survreg(
-    response: Surv | str | None = None,
+    formula: str | Surv | None = None,
     data: Any | None = None,
     *,
-    x: Any | None = None,
-    time: Any | None = None,
-    time2: Any | None = None,
-    status: Any | None = None,
-    covariates: Any | None = None,
     weights: Any | None = None,
-    offset: Any | None = None,
-    offsets: Any | None = None,
-    init: Any | None = None,
-    initial: Any | None = None,
-    initial_beta: Any | None = None,
-    strata: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = "fail",
-    dist: str | None = None,
-    distribution: str | None = None,
-    scale: Any = 0.0,
+    dist: Any = "weibull",
+    init: Any | None = None,
+    scale: Any = 0,
+    control: Any | None = None,
     parms: Any | None = None,
     model: Any = False,
+    x: Any = False,
     y: Any = True,
     robust: Any | None = None,
     cluster: Any | None = None,
     score: Any = False,
-    max_iter: int | None = None,
-    eps: float | None = None,
-    tol_chol: float | None = None,
-    control: Any | None = None,
+    offset: Any | None = None,
     **kwargs: Any,
 ) -> Any: ...

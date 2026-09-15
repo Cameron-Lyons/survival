@@ -742,7 +742,6 @@ def test_r_api_stub_tracks_surv_public_signature():
 
     expected = [
         "self",
-        "args",
         "type",
         "origin",
         "time",
@@ -911,32 +910,33 @@ def test_r_api_stub_tracks_survfit_public_signature():
     expected = [
         "response",
         "data",
-        "group",
-        "newdata",
         "weights",
         "subset",
         "na_action",
-        "conf_level",
-        "conf_int",
-        "conf_type",
-        "se_fit",
-        "start_time",
-        "time0",
-        "reverse",
-        "censor",
-        "type",
         "stype",
         "ctype",
         "id",
         "cluster",
         "robust",
         "istate",
+        "timefix",
         "etype",
-        "p0",
         "model",
         "error",
         "entry",
-        "timefix",
+        "time0",
+        "group",
+        "newdata",
+        "se_fit",
+        "conf_int",
+        "conf_type",
+        "conf_lower",
+        "start_time",
+        "influence",
+        "p0",
+        "type",
+        "reverse",
+        "censor",
     ]
     runtime_params = inspect.signature(survival.r_api.survfit).parameters
     assert [
@@ -944,6 +944,25 @@ def test_r_api_stub_tracks_survfit_public_signature():
         for name, parameter in runtime_params.items()
         if parameter.kind is not inspect.Parameter.VAR_KEYWORD
     ] == expected
+    keyword_only = [
+        "group",
+        "newdata",
+        "se_fit",
+        "conf_int",
+        "conf_type",
+        "conf_lower",
+        "start_time",
+        "influence",
+        "p0",
+        "type",
+        "reverse",
+        "censor",
+    ]
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ] == keyword_only
     assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "survfit") == expected
     tree = ast.parse(stub_path.read_text(), filename=str(stub_path))
@@ -1050,10 +1069,6 @@ def test_r_api_stub_tracks_surv_utility_public_signatures():
     for name, expected in expected_by_name.items():
         assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
         assert _pyi_function_arg_names(stub_path, name) == expected
-    assert (
-        inspect.signature(survival.r_api.ratetableDate).parameters["origin_year"].kind
-        is inspect.Parameter.KEYWORD_ONLY
-    )
 
 
 def test_r_api_stub_tracks_survexp_public_signature():
@@ -1062,25 +1077,47 @@ def test_r_api_stub_tracks_survexp_public_signature():
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
     expected = [
-        "time",
-        "age",
-        "year",
-        "ratetable",
-        "sex",
+        "formula",
+        "data",
+        "weights",
+        "subset",
+        "na_action",
+        "rmap",
         "times",
         "method",
         "cohort",
         "conditional",
+        "ratetable",
         "scale",
         "se_fit",
+        "model",
+        "x",
+        "y",
+        "time",
+        "age",
+        "year",
+        "sex",
     ]
     runtime_params = inspect.signature(survival.r_api.survexp).parameters
-    assert list(runtime_params) == expected
-    assert runtime_params["cohort"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert runtime_params["conditional"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert runtime_params["scale"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert runtime_params["se_fit"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    ] == expected
+    keyword_only = [
+        "time",
+        "age",
+        "year",
+        "sex",
+    ]
+    assert [
+        name
+        for name, parameter in runtime_params.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ] == keyword_only
+    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "survexp") == expected
+    assert _pyi_function_kwarg_name(stub_path, "survexp") == "kwargs"
 
     expected_individual = ["time", "age", "year", "ratetable", "sex"]
     assert (
@@ -1220,7 +1257,7 @@ def test_r_api_stub_tracks_tmerge_public_surface():
     ] == keyword_only
     assert runtime_params["args"].kind is inspect.Parameter.VAR_KEYWORD
     assert _pyi_function_arg_names(stub_path, "tmerge") == expected[:-1]
-    assert _pyi_function_kwarg_name(stub_path, "tmerge") == "updates"
+    assert _pyi_function_kwarg_name(stub_path, "tmerge") == "args"
     assert _pyi_class_annotation_names(stub_path, "TMergeOperation") == {
         "kind",
         "time",
@@ -1258,15 +1295,9 @@ def test_r_api_stub_tracks_survobrien_public_signature():
         if parameter.kind is inspect.Parameter.KEYWORD_ONLY
     ] == keyword_only
     assert _pyi_function_arg_names(stub_path, "survobrien") == expected
-    assert _pyi_class_annotation_names(stub_path, "SurvObrienResult") == {
-        "statistic",
-        "p_value",
-        "df",
-        "scores",
-        "score_sum",
-        "expected",
-        "variance",
-    }
+    # survobrien returns R's expanded data frame, not a result class
+    assert "SurvObrienResult" not in _pyi_top_level_names(stub_path)
+    assert _pyi_function_return(stub_path, "survobrien") == "dict[str, list[Any]]"
 
 
 def test_r_api_stub_tracks_survsplit_public_signature():
@@ -1343,13 +1374,9 @@ def test_r_api_stub_tracks_survconcordance_public_signatures():
 
     fit_expected = ["y", "x", "strata", "weight"]
     fit_params = inspect.signature(survival.r_api.survConcordance_fit).parameters
-    assert [
-        name
-        for name, parameter in fit_params.items()
-        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
-    ] == fit_expected
+    assert list(fit_params) == fit_expected
     assert _pyi_function_arg_names(stub_path, "survConcordance_fit") == fit_expected
-    assert _pyi_function_kwarg_name(stub_path, "survConcordance_fit") == "kwargs"
+    assert _pyi_function_kwarg_name(stub_path, "survConcordance_fit") is None
 
 
 def test_r_api_stub_tracks_survcheck_public_signature():
@@ -1371,14 +1398,19 @@ def test_r_api_stub_tracks_survcheck_public_signature():
         "status",
     ]
     runtime_params = inspect.signature(survival.r_api.survcheck).parameters
+    assert list(runtime_params) == expected
+    keyword_only = [
+        "time1",
+        "time2",
+        "status",
+    ]
     assert [
         name
         for name, parameter in runtime_params.items()
-        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
-    ] == expected
-    assert runtime_params["kwargs"].kind is inspect.Parameter.VAR_KEYWORD
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ] == keyword_only
     assert _pyi_function_arg_names(stub_path, "survcheck") == expected
-    assert _pyi_function_kwarg_name(stub_path, "survcheck") == "kwargs"
+    assert _pyi_function_kwarg_name(stub_path, "survcheck") is None
 
 
 def test_r_api_stub_tracks_rttright_public_signature():

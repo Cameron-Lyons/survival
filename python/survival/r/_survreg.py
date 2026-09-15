@@ -555,7 +555,7 @@ def survreg(
     cluster: Any | None = None,
     score: Any = False,
     offset: Any | None = None,
-    **options: Any,
+    **kwargs: Any,
 ) -> SurvregModelResult:
     """Fit a parametric survival regression model, like R's ``survreg``.
 
@@ -566,9 +566,9 @@ def survreg(
     options).
     """
 
-    na_action = _pop_dotted_keyword(options, "na.action", "na_action", na_action, "fail")
-    formula = _pop_dotted_keyword(options, "response", "formula", formula, None)
-    control = _resolve_control(control, options)
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
+    control = _resolve_control(control, kwargs)
     keep_model = _normalize_bool_option_with_default(model, "model", False)
     keep_y = _normalize_bool_option_with_default(y, "y", True)
     keep_score = _normalize_bool_option_with_default(score, "score", False)
