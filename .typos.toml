@@ -20,6 +20,19 @@ parms = "parms"
 parm = "parm"
 inital = "inital"
 
+# Identifiers and message text carried over verbatim from R's sources, including
+# R's own misspellings, so the ports stay diffable against the originals.
+parmameters = "parmameters"  # summary.survreg's printed output
+iteraction = "iteraction"    # yates.R: "cannot deal with iteraction terms"
+implimented = "implimented"  # survfit: "only stype=1, ctype=1 implimented"
+columm = "columm"            # survfit.coxph: "the default curve based on columm means"
+argments = "argments"        # "all additional argments must have a name"
+rcall = "rcall"              # pyears' rate-table call expansion
+alph = "alph"                # nmath pgamma's shape parameter
+infp = "infp"                # survfit residual kernels
+yhat = "yhat"                # survfit residual kernels
+arange = "arange"            # numpy.arange, in the binding tests
+
 [files]
 extend-exclude = [
     "target/",
