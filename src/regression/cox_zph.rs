@@ -11,12 +11,12 @@
 //! (`singledf`), and the global test, and returns the scaled Schoenfeld
 //! residuals `y` against the transformed times `x` for plotting.
 
+use crate::core::risk_sweep::StratumSweep;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::LuDecomposition;
 use crate::internal::statistical::chi2_sf;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{CoxPHFit, default_assign, validate_assign};
-use crate::regression::coxph_support::StratumSweep;
 use ndarray::Array2;
 use pyo3::prelude::*;
 

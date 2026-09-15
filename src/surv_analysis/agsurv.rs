@@ -7,14 +7,19 @@
 //! counts, the hazard increments and their variance, the weighted covariate
 //! means `xbar` that carry the coefficient uncertainty, and (for the
 //! Kalbfleisch-Prentice estimate) the per-time survival increments.
-//! [`coxsurv_fit`] runs it per stratum and [`expand_curve`] /
-//! [`individual_curve`] turn a stratum's pieces into curves for new
-//! covariate rows (`survfit(fit, newdata)`), including the standard error
-//! `sqrt(cumsum(varhaz) + dt' V dt) * risk2` on the cumulative-hazard scale.
+//! [`agsurv_rows`] does the same for a subset of rows (a stratum of a fit)
+//! without copying the data; [`coxsurv_fit`] runs it per stratum and
+//! [`expand_curve`] / [`individual_curve`] turn a stratum's pieces into
+//! curves for new covariate rows (`survfit(fit, newdata)`), including the
+//! standard error `sqrt(cumsum(varhaz) + dt' V dt) * risk2` on the
+//! cumulative-hazard scale.
 //!
 //! Everything here is plain Rust returning [`SurvivalResult`]; the Python
-//! surface lives on `regression::coxph::CoxPHFit`.
+//! surface lives on `regression::coxph::CoxPHFit`, and the legacy
+//! `cox_survfit_baseline` / `basehaz` / `cox_expected_baseline_by_stratum`
+//! bindings are thin views of the same curves.
 
+use crate::core::strata_order::stratum_groups;
 use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::{Array1, Array2, ArrayView2};
 
@@ -28,6 +33,16 @@ pub enum CoxSurvType {
 }
 
 impl CoxSurvType {
+    /// R's integer code: `1` Kalbfleisch-Prentice, `2` Breslow, `3` Efron.
+    pub fn from_code(code: i32) -> Option<Self> {
+        match code {
+            1 => Some(Self::KalbfleischPrentice),
+            2 => Some(Self::Breslow),
+            3 => Some(Self::Efron),
+            _ => None,
+        }
+    }
+
     /// `coxsurv.fit`'s `survtype <- if (stype==1) 1 else ctype+1`.
     pub fn from_stype_ctype(stype: u8, ctype: u8) -> SurvivalResult<Self> {
         match (stype, ctype) {
@@ -41,14 +56,17 @@ impl CoxSurvType {
     }
 }
 
-/// One stratum's data for [`agsurv`]: `start` is present for
-/// (start, stop] data, `risk` is `exp(linear predictor)`.
+/// The data behind a set of Cox survival curves: `start` is present for
+/// (start, stop] data, `risk` is `exp(linear predictor)`, and `means`, when
+/// given, are subtracted from the columns of `x` on the fly (R's
+/// `agsurv(y, x - means, ...)`), so the fitted design matrix is used as is.
 #[derive(Clone, Copy)]
 pub struct AgsurvData<'a> {
     pub start: Option<&'a [f64]>,
     pub stop: &'a [f64],
     pub status: &'a [i32],
     pub x: ArrayView2<'a, f64>,
+    pub means: Option<&'a [f64]>,
     pub weights: &'a [f64],
     pub risk: &'a [f64],
 }
@@ -59,23 +77,31 @@ impl AgsurvData<'_> {
         if n == 0 {
             return Err(SurvivalError::invalid_input("agsurv: no observations"));
         }
-        let check = |name: &str, len: usize| {
-            if len != n {
+        let check = |name: &str, len: usize, expected: usize| {
+            if len != expected {
                 Err(SurvivalError::invalid_input(format!(
-                    "agsurv: {name} has {len} rows but stop has {n}"
+                    "agsurv: {name} has {len} entries, expected {expected}"
                 )))
             } else {
                 Ok(())
             }
         };
         if let Some(start) = self.start {
-            check("start", start.len())?;
+            check("start", start.len(), n)?;
         }
-        check("status", self.status.len())?;
-        check("x", self.x.nrows())?;
-        check("weights", self.weights.len())?;
-        check("risk", self.risk.len())?;
+        check("status", self.status.len(), n)?;
+        check("x", self.x.nrows(), n)?;
+        if let Some(means) = self.means {
+            check("means", means.len(), self.x.ncols())?;
+        }
+        check("weights", self.weights.len(), n)?;
+        check("risk", self.risk.len(), n)?;
         Ok(())
+    }
+
+    /// `x[i, k] - means[k]`.
+    fn centered(&self, i: usize, k: usize) -> f64 {
+        self.x[(i, k)] - self.means.map_or(0.0, |means| means[k])
     }
 }
 
@@ -145,7 +171,7 @@ fn sorted_unique(values: impl Iterator<Item = f64>) -> Vec<f64> {
 /// each unique time.  `risk` and `weights` are those of the deaths in time
 /// order; `denom` is the weighted risk sum at each time.  A single death
 /// solves the estimating equation in closed form, tied deaths by bisection.
-fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[f64]) -> Vec<f64> {
+pub(crate) fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[f64]) -> Vec<f64> {
     let mut km = vec![1.0; ndeath.len()];
     let mut j = 0;
     for (i, &deaths) in ndeath.iter().enumerate() {
@@ -175,13 +201,13 @@ fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[f64]) -> Ve
 /// Port of `src/agsurv5.c`: the Efron hazard sums.  For `d` tied deaths at
 /// a time, `sum1 = mean_k 1/(nrisk - k/d erisk)`, `sum2` the same with the
 /// square, and `xbar` the matching weighted covariate means.
-struct Agsurv5 {
-    sum1: Vec<f64>,
-    sum2: Vec<f64>,
-    xbar: Array2<f64>,
+pub(crate) struct Agsurv5 {
+    pub sum1: Vec<f64>,
+    pub sum2: Vec<f64>,
+    pub xbar: Array2<f64>,
 }
 
-fn agsurv5(
+pub(crate) fn agsurv5(
     ndeath: &[usize],
     nrisk: &[f64],
     erisk: &[f64],
@@ -218,16 +244,47 @@ fn agsurv5(
     Agsurv5 { sum1, sum2, xbar }
 }
 
-/// Port of `R/agsurv.R`: the survival-curve components of one stratum.
+/// Port of `R/agsurv.R`: the survival-curve components of one stratum,
+/// all rows of `data`.
 pub fn agsurv(
     data: &AgsurvData<'_>,
     survtype: CoxSurvType,
     vartype: CoxSurvType,
 ) -> SurvivalResult<AgsurvCurve> {
     data.validate()?;
-    let n = data.stop.len();
+    let rows: Vec<usize> = (0..data.stop.len()).collect();
+    Ok(agsurv_of_rows(data, &rows, survtype, vartype))
+}
+
+/// [`agsurv`] for the stratum made of `rows` (indices into `data`), which
+/// lets a stratified fit reuse its design matrix without copying.
+pub fn agsurv_rows(
+    data: &AgsurvData<'_>,
+    rows: &[usize],
+    survtype: CoxSurvType,
+    vartype: CoxSurvType,
+) -> SurvivalResult<AgsurvCurve> {
+    data.validate()?;
+    if rows.is_empty() {
+        return Err(SurvivalError::invalid_input("agsurv: no observations"));
+    }
+    if let Some(&row) = rows.iter().find(|&&row| row >= data.stop.len()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "agsurv: row {row} is out of range"
+        )));
+    }
+    Ok(agsurv_of_rows(data, rows, survtype, vartype))
+}
+
+fn agsurv_of_rows(
+    data: &AgsurvData<'_>,
+    rows: &[usize],
+    survtype: CoxSurvType,
+    vartype: CoxSurvType,
+) -> AgsurvCurve {
+    let n = rows.len();
     let nvar = data.x.ncols();
-    let time = sorted_unique(data.stop.iter().copied());
+    let time = sorted_unique(rows.iter().map(|&i| data.stop[i]));
     let ntime = time.len();
 
     let mut n_event = vec![0.0; ntime];
@@ -238,13 +295,8 @@ pub fn agsurv(
     let mut xsum = Array2::zeros((ntime, nvar));
     let mut xsum2 = Array2::zeros((ntime, nvar));
     let mut erisk = vec![0.0; ntime];
-    let wrisk: Vec<f64> = data
-        .weights
-        .iter()
-        .zip(data.risk)
-        .map(|(&w, &r)| w * r)
-        .collect();
-    for (i, &weighted_risk) in wrisk.iter().enumerate() {
+    for &i in rows {
+        let weighted_risk = data.weights[i] * data.risk[i];
         let g = group_index(&time, data.stop[i]);
         let death = data.status[i] == 1;
         if death {
@@ -252,7 +304,7 @@ pub fn agsurv(
             ndeath[g] += 1;
             erisk[g] += weighted_risk;
             for k in 0..nvar {
-                xsum2[(g, k)] += weighted_risk * data.x[(i, k)];
+                xsum2[(g, k)] += weighted_risk * data.centered(i, k);
             }
         } else {
             n_censor[g] += data.weights[i];
@@ -260,7 +312,7 @@ pub fn agsurv(
         nrisk[g] += weighted_risk;
         irisk[g] += data.weights[i];
         for k in 0..nvar {
-            xsum[(g, k)] += weighted_risk * data.x[(i, k)];
+            xsum[(g, k)] += weighted_risk * data.centered(i, k);
         }
     }
     reverse_cumsum(&mut nrisk);
@@ -272,16 +324,17 @@ pub fn agsurv(
         // start >= t.  `etime` are the unique entry times; indx(t) points at
         // the first entry time >= t (R's approx(..., method = "constant",
         // f = 1, rule = 2)), or past the end when there is none.
-        let etime = sorted_unique(start.iter().copied());
+        let etime = sorted_unique(rows.iter().map(|&i| start[i]));
         let mut esum = vec![0.0; etime.len()];
         let mut ewt = vec![0.0; etime.len()];
         let mut xout = Array2::zeros((etime.len(), nvar));
-        for i in 0..n {
+        for &i in rows {
+            let weighted_risk = data.weights[i] * data.risk[i];
             let g = group_index(&etime, start[i]);
-            esum[g] += wrisk[i];
+            esum[g] += weighted_risk;
             ewt[g] += data.weights[i];
             for k in 0..nvar {
-                xout[(g, k)] += wrisk[i] * data.x[(i, k)];
+                xout[(g, k)] += weighted_risk * data.centered(i, k);
             }
         }
         reverse_cumsum(&mut esum);
@@ -300,7 +353,11 @@ pub fn agsurv(
     }
 
     let surv = (survtype == CoxSurvType::KalbfleischPrentice).then(|| {
-        let mut deaths: Vec<usize> = (0..n).filter(|&i| data.status[i] == 1).collect();
+        let mut deaths: Vec<usize> = rows
+            .iter()
+            .copied()
+            .filter(|&i| data.status[i] == 1)
+            .collect();
         deaths.sort_by(|&a, &b| data.stop[a].total_cmp(&data.stop[b]).then(a.cmp(&b)));
         let risk: Vec<f64> = deaths.iter().map(|&i| data.risk[i]).collect();
         let weights: Vec<f64> = deaths.iter().map(|&i| data.weights[i]).collect();
@@ -346,7 +403,7 @@ pub fn agsurv(
         *value = running;
     }
 
-    Ok(AgsurvCurve {
+    AgsurvCurve {
         n,
         time,
         n_event,
@@ -358,7 +415,7 @@ pub fn agsurv(
         ndeath,
         xbar,
         surv,
-    })
+    }
 }
 
 /// A survival curve for one or more new covariate rows (the columns of the
@@ -626,36 +683,12 @@ pub fn coxsurv_fit(
             strata.len()
         )));
     }
-    let mut codes = strata.to_vec();
-    codes.sort_unstable();
-    codes.dedup();
-    let mut curves = Vec::with_capacity(codes.len());
-    for &code in &codes {
-        let rows: Vec<usize> = (0..n).filter(|&i| strata[i] == code).collect();
-        let start = data
-            .start
-            .map(|start| rows.iter().map(|&i| start[i]).collect::<Vec<_>>());
-        let stop: Vec<f64> = rows.iter().map(|&i| data.stop[i]).collect();
-        let status: Vec<i32> = rows.iter().map(|&i| data.status[i]).collect();
-        let weights: Vec<f64> = rows.iter().map(|&i| data.weights[i]).collect();
-        let risk: Vec<f64> = rows.iter().map(|&i| data.risk[i]).collect();
-        let mut x = Array2::zeros((rows.len(), data.x.ncols()));
-        for (position, &i) in rows.iter().enumerate() {
-            x.row_mut(position).assign(&data.x.row(i));
-        }
-        curves.push(agsurv(
-            &AgsurvData {
-                start: start.as_deref(),
-                stop: &stop,
-                status: &status,
-                x: x.view(),
-                weights: &weights,
-                risk: &risk,
-            },
-            survtype,
-            vartype,
-        )?);
-    }
+    let groups = stratum_groups(strata);
+    let codes = groups.iter().map(|(code, _)| *code).collect();
+    let curves = groups
+        .iter()
+        .map(|(_, rows)| agsurv_rows(data, rows, survtype, vartype))
+        .collect::<SurvivalResult<Vec<_>>>()?;
     Ok((codes, curves))
 }
 
@@ -734,6 +767,7 @@ mod tests {
             stop: &stop,
             status: &status,
             x: x.view(),
+            means: None,
             weights: &weights,
             risk: &risk,
         };
@@ -765,6 +799,7 @@ mod tests {
             stop: &stop,
             status: &status,
             x: x.view(),
+            means: None,
             weights: &weights,
             risk: &risk,
         };
@@ -789,6 +824,7 @@ mod tests {
             stop: &stop,
             status: &status,
             x: x.view(),
+            means: None,
             weights: &weights,
             risk: &risk,
         };
@@ -811,6 +847,7 @@ mod tests {
             stop: &stop,
             status: &status,
             x: x.view(),
+            means: None,
             weights: &weights,
             risk: &risk,
         };
@@ -838,6 +875,7 @@ mod tests {
             stop: &stop,
             status: &status,
             x: x.view(),
+            means: None,
             weights: &weights,
             risk: &risk,
         };
@@ -873,6 +911,7 @@ mod tests {
             stop: &stop,
             status: &status,
             x: x.view(),
+            means: None,
             weights: &weights,
             risk: &risk,
         };

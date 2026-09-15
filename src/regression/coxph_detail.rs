@@ -9,10 +9,10 @@
 //! information at the fitted coefficients.  One backward sweep per stratum
 //! ([`StratumSweep`]) replaces `coxdetail.c`'s `O(deaths x n)` rescan.
 
+use crate::core::risk_sweep::StratumSweep;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::CoxPHFit;
-use crate::regression::coxph_support::StratumSweep;
 use pyo3::prelude::*;
 
 /// `coxph.detail(fit)`: one entry per unique death time.

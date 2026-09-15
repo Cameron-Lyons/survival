@@ -28,7 +28,12 @@ use pyo3::prelude::*;
 
 use super::exact_ties::{ExactRiskAccumulator, exact_tied_moments};
 
-/// Tie handling of the partial likelihood (R's `coxph(ties = )`).
+/// Tie handling of the partial likelihood (R's `coxph(ties = )`), shared by
+/// the fitters and by every residual kernel of the package.  The C kernels
+/// receive it as `method = as.integer(method == "efron")`, so for them
+/// `Exact` behaves like `Breslow` (R's `coxmart2.c` for the exact fitters);
+/// the routines R refuses for an exact fit (score, Schoenfeld and detail
+/// output) reject it explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[pyclass(eq, eq_int, from_py_object)]
 pub enum TieMethod {
@@ -58,6 +63,22 @@ impl TieMethod {
             Self::Efron => "efron",
             Self::Exact => "exact",
         }
+    }
+
+    /// The `method == "efron"` flag of the C residual kernels.
+    pub(crate) fn is_efron(self) -> bool {
+        self == Self::Efron
+    }
+
+    /// `residuals.coxph`'s refusal for an exact fit: `<what> residuals are
+    /// not available for the exact method`.
+    pub(crate) fn reject_exact(self, what: &str) -> SurvivalResult<()> {
+        if self == Self::Exact {
+            return Err(SurvivalError::invalid_input(format!(
+                "{what} residuals are not available for the exact method"
+            )));
+        }
+        Ok(())
     }
 }
 

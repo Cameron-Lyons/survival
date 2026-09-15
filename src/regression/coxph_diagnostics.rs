@@ -1,23 +1,25 @@
 //! Residuals of a fitted Cox model: R survival's `residuals.coxph()`
-//! (`R/residuals.coxph.R`) and the C kernels it calls.
+//! (`R/residuals.coxph.R`) on top of the package's residual kernels.
 //!
-//! * martingale — `coxmart.c` / `agmart3.c`: `status - risk * (H(stop) -
-//!   H(entry))`, with the Efron correction for a subject's own tied death;
-//! * score — `coxscore2.c` / `agscore3.c`: `int (x - xbar(t)) dM_i(t)`;
-//! * schoenfeld — `coxscho.c`: `x_k - xbar(t_k)` for each death;
+//! * martingale — `residuals::coxmart` / `residuals::agmart`
+//!   (`coxmart.c`, `agmart3.c`);
+//! * score — `scoring::coxscore2` / `scoring::agscore3`
+//!   (`coxscore2.c`, `agscore3.c`);
+//! * schoenfeld — `core::coxscho` (`coxscho.c`);
 //! * deviance, dfbeta, dfbetas, scaledsch and partial are the algebra of
 //!   `residuals.coxph` on top of those, including the `weighted` and
 //!   `collapse` arguments.
 //!
-//! All kernels are single backward sweeps over the sorted rows of each
-//! stratum ([`StratumSweep`]) followed by a lookup of the accumulated hazard
-//! at every row's entry and stop time, so a residual costs `O(n log n)`
-//! rather than the `O(deaths x n)` scan of the older C code.
+//! The kernels take the fit's rows in the caller's order and sort as
+//! `residuals.coxph` does (`order(strata, time, -status)`).
 
+use crate::core::coxscho::coxscho;
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
-use crate::regression::coxph_support::{DeathTime, StratumSweep, step_value};
+use crate::residuals::agmart::agmart_rows;
+use crate::residuals::coxmart::coxmart_rows;
+use crate::scoring::agscore3::agscore3_rows;
+use crate::scoring::coxscore2::coxscore2_rows;
 use ndarray::Array2;
 use pyo3::prelude::*;
 
@@ -95,132 +97,13 @@ fn risk_scores(lp: &[f64]) -> Vec<f64> {
     lp.iter().map(|value| (value + shift).exp()).collect()
 }
 
-/// Per-death-time hazard pieces of one stratum, ascending in time.
-struct HazardSteps {
-    time: Vec<f64>,
-    /// Hazard increment at each death time.
-    hazard: Vec<f64>,
-    /// Hazard increment seen by a death tied at the time (Efron).
-    e_hazard: Vec<f64>,
-    cumhaz: Vec<f64>,
-    /// Cumulative `sum_j h_j xbar_j`, one vector per covariate.
-    xhaz: Vec<Vec<f64>>,
-}
-
-/// One Efron (or Breslow) step of a death time: the `j`-th of `steps`.
-struct HazardStep<'a> {
-    xbar: &'a [f64],
-    hazard: f64,
-    /// `j / d`, the fraction of the tied deaths removed from the risk set.
-    fraction: f64,
-    index: usize,
-    steps: usize,
-}
-
 impl CoxPHFit {
-    fn stratum_sweep<'a>(
-        &'a self,
-        stratum: usize,
-        risk: &'a [f64],
-        second_moments: bool,
-    ) -> StratumSweep<'a> {
-        let (start, end) = self.sorted.bounds[stratum];
-        StratumSweep {
-            stop: &self.time,
-            entry: self.entry.as_deref(),
-            status: &self.status,
-            x: self.x.view(),
-            weights: &self.weights,
-            risk,
-            rows: &self.sorted.order[start..end],
-            second_moments,
+    /// Stratum labels for the kernels: the fit's codes, or one stratum.
+    fn kernel_strata(&self) -> std::borrow::Cow<'_, [i32]> {
+        match &self.strata {
+            Some(strata) => std::borrow::Cow::Borrowed(strata),
+            None => std::borrow::Cow::Owned(vec![0; self.n]),
         }
-    }
-
-    /// Hazard increments of one stratum; `on_step` sees each Efron step of
-    /// each death time (descending times).
-    fn hazard_steps(
-        &self,
-        stratum: usize,
-        risk: &[f64],
-        mut on_step: impl FnMut(&DeathTime<'_>, &HazardStep<'_>),
-    ) -> HazardSteps {
-        let nvar = self.nvar();
-        let efron = self.method == TieMethod::Efron;
-        let mut time = Vec::new();
-        let mut hazard = Vec::new();
-        let mut e_hazard = Vec::new();
-        let mut xbar_hazard: Vec<Vec<f64>> = Vec::new();
-        let mut xbar = vec![0.0; nvar];
-        self.stratum_sweep(stratum, risk, false)
-            .for_each_death_time(|death| {
-                let d = death.ndead();
-                let steps = if efron && d > 1 { d } else { 1 };
-                let wtsum = death.tied.weight / steps as f64;
-                let mut total = 0.0;
-                let mut e_total = 0.0;
-                let mut xh = vec![0.0; nvar];
-                for j in 0..steps {
-                    let fraction = if steps == 1 { 0.0 } else { j as f64 / d as f64 };
-                    let denom = death.risk_set.denom - fraction * death.tied.denom;
-                    let h = wtsum / denom;
-                    total += h;
-                    e_total += h * (1.0 - fraction);
-                    for i in 0..nvar {
-                        xbar[i] = (death.risk_set.a[i] - fraction * death.tied.a[i]) / denom;
-                        xh[i] += xbar[i] * h;
-                    }
-                    on_step(
-                        death,
-                        &HazardStep {
-                            xbar: &xbar,
-                            hazard: h,
-                            fraction,
-                            index: j,
-                            steps,
-                        },
-                    );
-                }
-                time.push(death.time);
-                hazard.push(total);
-                e_hazard.push(e_total);
-                xbar_hazard.push(xh);
-            });
-        time.reverse();
-        hazard.reverse();
-        e_hazard.reverse();
-        xbar_hazard.reverse();
-        let mut cumhaz = hazard.clone();
-        let mut running = 0.0;
-        for value in cumhaz.iter_mut() {
-            running += *value;
-            *value = running;
-        }
-        let mut xhaz = vec![Vec::with_capacity(time.len()); nvar];
-        let mut running = vec![0.0; nvar];
-        for xh in &xbar_hazard {
-            for i in 0..nvar {
-                running[i] += xh[i];
-                xhaz[i].push(running[i]);
-            }
-        }
-        HazardSteps {
-            time,
-            hazard,
-            e_hazard,
-            cumhaz,
-            xhaz,
-        }
-    }
-
-    /// Increment of a per-time step series over a row's (entry, stop].
-    fn interval_increment(&self, times: &[f64], values: &[f64], row: usize) -> f64 {
-        let at_stop = step_value(times, values, self.time[row]);
-        let at_entry = self
-            .entry
-            .as_ref()
-            .map_or(0.0, |entry| step_value(times, values, entry[row]));
-        at_stop - at_entry
     }
 }
 
@@ -228,59 +111,55 @@ impl CoxPHFit {
 /// `agmart3.c`; the Breslow form for the exact method, as `coxmart2.c`).
 pub(crate) fn martingale_residuals(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
     let risk = risk_scores(lp);
-    let mut resid: Vec<f64> = fit.status.iter().map(|&s| f64::from(s)).collect();
-    for stratum in 0..fit.sorted.nstrata() {
-        let steps = fit.hazard_steps(stratum, &risk, |_, _| {});
-        let (start, end) = fit.sorted.bounds[stratum];
-        for &row in &fit.sorted.order[start..end] {
-            resid[row] -= risk[row] * fit.interval_increment(&steps.time, &steps.cumhaz, row);
-            if fit.status[row] == 1 {
-                // A death only experiences the Efron share of its own time.
-                let g = steps.time.partition_point(|&t| t < fit.time[row]);
-                resid[row] += risk[row] * (steps.hazard[g] - steps.e_hazard[g]);
-            }
-        }
+    let strata = fit.kernel_strata();
+    match &fit.entry {
+        Some(entry) => agmart_rows(
+            entry,
+            &fit.time,
+            &fit.status,
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
+        None => coxmart_rows(
+            &fit.time,
+            &fit.status,
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
     }
-    resid
 }
 
 /// Score residuals (`n x nvar`) at the linear predictors `lp`
 /// (`coxscore2.c`, `agscore3.c`).
 pub(crate) fn score_residuals(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<Array2<f64>> {
-    if fit.method == TieMethod::Exact {
-        return Err(SurvivalError::invalid_input(
-            "score residuals are not available for the exact method",
-        ));
-    }
-    let nvar = fit.nvar();
+    fit.method.reject_exact("score")?;
     let risk = risk_scores(lp);
-    let mut resid = Array2::zeros((fit.n, nvar));
-    for stratum in 0..fit.sorted.nstrata() {
-        let steps = fit.hazard_steps(stratum, &risk, |death, step| {
-            // The deaths' own contribution: (x - xbar) dN, spread over the
-            // Efron steps with the partial hazard they experience.
-            let d = death.ndead() as f64;
-            for &row in death.deaths {
-                for i in 0..nvar {
-                    let centered = fit.x[(row, i)] - step.xbar[i];
-                    resid[(row, i)] += if step.steps == 1 {
-                        centered
-                    } else {
-                        centered / d + centered * risk[row] * step.hazard * step.fraction
-                    };
-                }
-            }
-        });
-        let (start, end) = fit.sorted.bounds[stratum];
-        for &row in &fit.sorted.order[start..end] {
-            let dh = fit.interval_increment(&steps.time, &steps.cumhaz, row);
-            for i in 0..nvar {
-                let dxh = fit.interval_increment(&steps.time, &steps.xhaz[i], row);
-                resid[(row, i)] -= risk[row] * (fit.x[(row, i)] * dh - dxh);
-            }
-        }
-    }
-    Ok(resid)
+    let strata = fit.kernel_strata();
+    Ok(match &fit.entry {
+        Some(entry) => agscore3_rows(
+            entry,
+            &fit.time,
+            &fit.status,
+            fit.x.view(),
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
+        None => coxscore2_rows(
+            &fit.time,
+            &fit.status,
+            fit.x.view(),
+            &risk,
+            &fit.weights,
+            &strata,
+            fit.method,
+        ),
+    })
 }
 
 /// Schoenfeld residuals of the deaths (`coxscho.c`), in (stratum, time)
@@ -289,53 +168,31 @@ pub(crate) fn schoenfeld_residuals(
     fit: &CoxPHFit,
     weighted: bool,
 ) -> SurvivalResult<SchoenfeldResiduals> {
-    if fit.method == TieMethod::Exact {
-        return Err(SurvivalError::invalid_input(
-            "schoenfeld residuals are not available for the exact method",
-        ));
-    }
-    let nvar = fit.nvar();
+    fit.method.reject_exact("schoenfeld")?;
     let risk = risk_scores(&fit.linear_predictors);
-    let mut time = Vec::new();
-    let mut strata = Vec::new();
-    let mut rows = Vec::new();
-    let mut residuals = Vec::new();
-    for stratum in 0..fit.sorted.nstrata() {
-        let mut per_stratum: Vec<(usize, Vec<f64>)> = Vec::new();
-        let mut mean = vec![0.0; nvar];
-        fit.hazard_steps(stratum, &risk, |death, step| {
-            // Efron: the mean of the step means, one row per death.
-            if step.index == 0 {
-                mean.fill(0.0);
+    let strata = fit.kernel_strata();
+    let mut kernel = coxscho(
+        fit.entry.as_deref(),
+        &fit.time,
+        &fit.status,
+        fit.x.view(),
+        &risk,
+        &fit.weights,
+        &strata,
+        fit.method,
+    );
+    if weighted {
+        for (row, &index) in kernel.residuals.iter_mut().zip(&kernel.index) {
+            for value in row.iter_mut() {
+                *value *= fit.weights[index];
             }
-            for (value, xbar) in mean.iter_mut().zip(step.xbar) {
-                *value += xbar / step.steps as f64;
-            }
-            if step.index + 1 == step.steps {
-                for &row in death.deaths.iter().rev() {
-                    let scale = if weighted { fit.weights[row] } else { 1.0 };
-                    per_stratum.push((
-                        row,
-                        (0..nvar)
-                            .map(|i| (fit.x[(row, i)] - mean[i]) * scale)
-                            .collect(),
-                    ));
-                }
-            }
-        });
-        per_stratum.reverse();
-        for (row, values) in per_stratum {
-            time.push(fit.time[row]);
-            strata.push(fit.sorted.codes[stratum]);
-            rows.push(row);
-            residuals.push(values);
         }
     }
     Ok(SchoenfeldResiduals {
-        time,
-        strata: fit.strata.as_ref().map(|_| strata),
-        rows,
-        residuals,
+        time: kernel.time,
+        strata: fit.strata.as_ref().map(|_| kernel.strata),
+        rows: kernel.index,
+        residuals: kernel.residuals,
     })
 }
 
@@ -532,6 +389,7 @@ fn rows_matrix(rows: &[Vec<f64>], ncols: usize) -> Array2<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::regression::cox_optimizer::TieMethod;
     use crate::regression::coxph::{CoxphData, CoxphOptions};
 
     fn fit(method: TieMethod, entry: Option<Vec<f64>>) -> CoxPHFit {

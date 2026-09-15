@@ -4,6 +4,8 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::constants::same_time;
+use crate::surv_analysis::agsurv::{AgsurvData, CoxSurvType, agsurv};
+use crate::surv_analysis::cox_baseline::zero_if_nan;
 
 const PY_EXP_CLAMP_MIN: f64 = -745.0;
 const PY_EXP_CLAMP_MAX: f64 = 709.0;
@@ -463,95 +465,13 @@ fn validate_matrix_result_parts(
     Ok(())
 }
 
-fn scaled_hazard_increment(events: f64, scaled_risk_sum: f64, risk_scale: f64) -> f64 {
-    if events > 0.0 && scaled_risk_sum > 0.0 {
-        events / scaled_risk_sum * risk_scale
-    } else {
-        0.0
-    }
-}
-
 fn safe_exp(value: f64) -> f64 {
     value.clamp(PY_EXP_CLAMP_MIN, PY_EXP_CLAMP_MAX).exp()
-}
-
-#[inline]
-fn case_weight(weights: Option<&[f64]>, index: usize) -> f64 {
-    weights.map_or(1.0, |values| values[index])
 }
 
 fn step_value_at(times: &[f64], values: &[f64], time: f64) -> f64 {
     let idx = times.partition_point(|value| *value <= time);
     if idx == 0 { 0.0 } else { values[idx - 1] }
-}
-
-fn basehaz_with_entry_times(
-    time: &[f64],
-    status: &[i32],
-    entry: &[f64],
-    weights: Option<&[f64]>,
-    risk_scores: &[f64],
-    risk_scale: f64,
-) -> (Vec<f64>, Vec<f64>) {
-    let n = time.len();
-    let mut event_times: Vec<f64> = time
-        .iter()
-        .zip(status.iter())
-        .filter_map(|(&event_time, &event)| (event == 1).then_some(event_time))
-        .collect();
-    event_times.sort_by(f64::total_cmp);
-    event_times.dedup_by(|a, b| same_time(*a, *b));
-
-    let mut entry_order: Vec<usize> = (0..n).collect();
-    entry_order.sort_by(|&a, &b| entry[a].total_cmp(&entry[b]).then_with(|| a.cmp(&b)));
-    let mut stop_order: Vec<usize> = (0..n).collect();
-    stop_order.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
-    let mut event_order: Vec<usize> = (0..n).filter(|&idx| status[idx] == 1).collect();
-    event_order.sort_by(|&a, &b| time[a].total_cmp(&time[b]).then_with(|| a.cmp(&b)));
-
-    let mut active = vec![false; n];
-    let mut entry_pos = 0;
-    let mut stop_pos = 0;
-    let mut event_pos = 0;
-    let mut risk_sum = 0.0;
-    let mut cum_hazard = 0.0;
-    let mut hazard = Vec::with_capacity(event_times.len());
-
-    for &event_time in &event_times {
-        while entry_pos < entry_order.len() && entry[entry_order[entry_pos]] < event_time {
-            let idx = entry_order[entry_pos];
-            if !active[idx] {
-                active[idx] = true;
-                risk_sum += risk_scores[idx];
-            }
-            entry_pos += 1;
-        }
-        while stop_pos < stop_order.len() && time[stop_order[stop_pos]] < event_time {
-            let idx = stop_order[stop_pos];
-            if active[idx] {
-                active[idx] = false;
-                risk_sum -= risk_scores[idx];
-            }
-            stop_pos += 1;
-        }
-
-        while event_pos < event_order.len()
-            && time[event_order[event_pos]] < event_time
-            && !same_time(time[event_order[event_pos]], event_time)
-        {
-            event_pos += 1;
-        }
-        let mut events = 0.0;
-        while event_pos < event_order.len() && same_time(time[event_order[event_pos]], event_time) {
-            events += case_weight(weights, event_order[event_pos]);
-            event_pos += 1;
-        }
-
-        cum_hazard += scaled_hazard_increment(events, risk_sum, risk_scale);
-        hazard.push(cum_hazard);
-    }
-
-    (event_times, hazard)
 }
 
 fn validate_sorted_step_times(name: &str, times: &[f64], stratum: i32) -> PyResult<()> {
@@ -998,6 +918,11 @@ pub fn cox_survfit_from_baseline(
     Ok((output_times, survival_curves, cumulative_hazards))
 }
 
+/// The Breslow baseline cumulative hazard at the event times, the legacy
+/// `basehaz` of the Python facade: `agsurv` (`R/agsurv.R`, Breslow / Nelson-
+/// Aalen type) at risk `exp(linear_predictors - center)`, where `centered`
+/// subtracts the mean linear predictor.  The Efron baseline of an Efron fit
+/// is `CoxPHFit::basehaz`.
 #[pyfunction]
 #[pyo3(signature = (time, status, linear_predictors, centered, entry_times=None, weights=None))]
 pub fn basehaz(
@@ -1101,78 +1026,54 @@ pub fn basehaz(
     } else {
         0.0
     };
+    let weight_of = |idx: usize| weights_ref.map_or(1.0, |w| w[idx]);
 
+    // Risk scores relative to the largest one among the rows that count, so
+    // that huge linear predictors do not overflow; the hazard is rescaled
+    // back afterwards.  Zero-weight rows are left out of the sums entirely.
     let max_shifted_lp = linear_predictors
         .iter()
         .enumerate()
-        .filter_map(|(idx, &lp)| (case_weight(weights_ref, idx) > 0.0).then_some(lp - center))
+        .filter_map(|(idx, &lp)| (weight_of(idx) > 0.0).then_some(lp - center))
         .fold(f64::NEG_INFINITY, f64::max);
     let risk_scale = (-max_shifted_lp).exp();
-    let risk_scores: Vec<f64> = linear_predictors
+    let risk: Vec<f64> = linear_predictors
         .iter()
         .enumerate()
         .map(|(idx, &lp)| {
-            let weight = case_weight(weights_ref, idx);
-            if weight == 0.0 {
+            if weight_of(idx) == 0.0 {
                 0.0
             } else {
-                weight * (lp - center - max_shifted_lp).exp()
+                (lp - center - max_shifted_lp).exp()
             }
         })
         .collect();
-
-    if let Some(entry) = entry_times {
-        return Ok(basehaz_with_entry_times(
-            &time,
-            &status,
-            &entry,
-            weights_ref,
-            &risk_scores,
-            risk_scale,
-        ));
-    }
-
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
+    let unit = vec![1.0; n];
+    let x = ndarray::Array2::zeros((n, 0));
+    let curve = agsurv(
+        &AgsurvData {
+            start: entry_times.as_deref(),
+            stop: &time,
+            status: &status,
+            x: x.view(),
+            means: None,
+            weights: weights_ref.unwrap_or(&unit),
+            risk: &risk,
+        },
+        CoxSurvType::Breslow,
+        CoxSurvType::Breslow,
+    )?;
 
     let mut unique_times = Vec::new();
     let mut hazard = Vec::new();
-
-    let mut cumulative_risk: Vec<f64> = vec![0.0; n];
-    let mut running_sum = 0.0;
-    for i in (0..n).rev() {
-        running_sum += risk_scores[indices[i]];
-        cumulative_risk[i] = running_sum;
-    }
-
-    let mut i = 0;
     let mut cum_hazard = 0.0;
-
-    while i < n {
-        let group_start = i;
-        let current_time = time[indices[i]];
-        let mut events = 0.0;
-        let mut has_event = false;
-
-        while i < n && same_time(time[indices[i]], current_time) {
-            if status[indices[i]] == 1 {
-                has_event = true;
-                events += case_weight(weights_ref, indices[i]);
-            }
-            i += 1;
+    for g in 0..curve.time.len() {
+        cum_hazard += zero_if_nan(curve.hazard[g]) * risk_scale;
+        if curve.ndeath[g] > 0 {
+            unique_times.push(curve.time[g]);
+            hazard.push(cum_hazard);
         }
-
-        if !has_event {
-            continue;
-        }
-
-        let risk_sum = cumulative_risk[group_start];
-        cum_hazard += scaled_hazard_increment(events, risk_sum, risk_scale);
-
-        unique_times.push(current_time);
-        hazard.push(cum_hazard);
     }
-
     Ok((unique_times, hazard))
 }
 

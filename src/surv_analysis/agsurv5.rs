@@ -1,3 +1,6 @@
+//! `agsurv5`: the R-named alias of `compute_tied_baseline_summaries`
+//! (`src/agsurv5.c`, the Efron sums).
+
 use super::cox_baseline::compute_tied_baseline_summaries;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
