@@ -1112,7 +1112,9 @@ def _normal_two_sided_p_value(statistic: float) -> float:
         return math.nan
     if math.isinf(statistic):
         return 0.0
-    return 2.0 * NormalDist().cdf(-abs(statistic))
+    # erfc directly: NormalDist.cdf goes through 1 + erf on older Pythons and
+    # cancels for large |z|
+    return math.erfc(abs(statistic) / math.sqrt(2.0))
 
 
 def coef_survreg(fit: Any) -> list[float]:

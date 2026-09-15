@@ -190,8 +190,8 @@ def test_pseudo_collapses_by_subject_and_returns_r_data_frame():
     assert list(frame) == ["id", "time", "resid", "pseudo"]
     assert frame["id"] == [1, 2, 3, 4] * 2
     assert len(frame["pseudo"]) == 8
-    with pytest.raises(NotImplementedError, match="collapse = FALSE"):
-        r.pseudo(fit, times=[2], collapse=False)
+    # collapse = FALSE keeps one row per observation
+    assert len(r.pseudo(fit, times=[2], collapse=False)) == 8
     with pytest.raises(ValueError, match="the times argument is required"):
         r.pseudo(fit)
     with pytest.raises(ValueError, match="'type' should be one of"):

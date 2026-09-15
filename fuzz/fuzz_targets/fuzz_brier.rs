@@ -30,6 +30,7 @@ fuzz_target!(|data: &[u8]| {
     let times: Vec<f64> = (1..=4).map(|k| max_time * k as f64 / 5.0).collect();
     let phat: Vec<Vec<f64>> = times.iter().map(|_| phat.clone()).collect();
     let _ = brier(&BrierInput {
+        start: None,
         time: &time,
         status: &status,
         weights: None,
