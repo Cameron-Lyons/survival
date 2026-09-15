@@ -436,8 +436,8 @@ def survfit(
     weights: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = "na.omit",
-    stype: int = 1,
-    ctype: int = 1,
+    stype: int | None = None,
+    ctype: int | None = None,
     id: Any | None = None,
     cluster: Any | None = None,
     robust: Any | None = None,
@@ -469,7 +469,9 @@ def survfit(
     ``Surv`` object (``group`` gives the curves), or a fitted Cox model (``survfit.coxph``, with
     ``newdata`` and ``censor``).  The other arguments are those of ``survfit.formula`` and of
     the engine it dispatches to; the R spellings ``se.fit``, ``conf.int``, ``conf.type``,
-    ``conf.lower``, ``start.time`` and ``na.action`` are accepted as keywords.  ``reverse``
+    ``conf.lower``, ``start.time`` and ``na.action`` are accepted as keywords.  ``stype`` and
+    ``ctype`` default per method as in R (1/1 for ``survfit.formula``, 2 and the tie method
+    for ``survfit.coxph``).  ``reverse``
     estimates the censoring distribution (the engine's option).  The model frame is kept on
     the result for ``residuals.survfit`` / ``pseudo`` whatever ``model`` says, as R re-reads
     it through ``model.frame``.
@@ -487,18 +489,31 @@ def survfit(
     if isinstance(response, ClogitModel):
         raise ValueError("predicted survival curves are not defined for a clogit model")
     if isinstance(response, CoxphModel):
+        # survfit.coxph's second argument is newdata, so survfit(fit, frame) is R's spelling
         return _survfit_coxph(
             response,
-            newdata,
+            data if newdata is None else newdata,
             se_fit=se_fit,
             conf_int=conf_int,
             conf_type=conf_type,
             start_time=start_time,
             censor=censor,
             model=model,
+            stype=2 if stype is None else stype,
+            ctype=ctype,
+            id=id,
         )
     if newdata is not None:
         raise ValueError("newdata is only used with a fitted Cox model")
+    if type is not None and (stype is not None or ctype is not None):
+        raise ValueError(
+            "cannot have both an old-style 'type' argument and the stype/ctype arguments "
+            "that replaced it"
+        )
+    if stype is None:
+        stype = 1
+    if ctype is None:
+        ctype = 1
     if response is None:
         raise ValueError("a formula argument is required")
     if not _is_bool_like(timefix):
@@ -563,6 +578,9 @@ def _survfit_coxph(
     start_time: Any | None,
     censor: Any,
     model: Any,
+    stype: Any,
+    ctype: Any,
+    id: Any | None,
 ) -> Any:
     """``survfit.coxph``: the Cox module owns the curves, this is only the dispatch."""
 
@@ -574,6 +592,9 @@ def _survfit_coxph(
         conf_type=conf_type,
         censor=censor,
         start_time=_start_time_value(start_time),
+        stype=stype,
+        ctype=ctype,
+        id=id,
     )
     if _logical(model, "model must be TRUE/FALSE") and hasattr(result, "model"):
         return dataclasses.replace(result, model=_cox_survfit_model_frame(fit, newdata))
@@ -736,11 +757,6 @@ def _survfitAJ(
 ) -> SurvfitMultiStateResult:
     """``survfitAJ``: the Aalen-Johansen estimate of the probability in state."""
 
-    if type_ is not None and (stype != 1 or ctype != 1):
-        raise ValueError(
-            "cannot have both an old-style 'type' argument and the stype/ctype arguments "
-            "that replaced it"
-        )
     stype, ctype = _survfit_type_codes(type_, stype, ctype)
     if stype != 1 or ctype != 1:
         warnings.warn("only stype=1, ctype=1 implimented for multi-state data", stacklevel=4)
@@ -866,10 +882,9 @@ def _interval_coding(y: Surv) -> tuple[list[float], list[float], list[int]]:
     status = [int(value) for value in y.event]
     if y.type == "left":
         return list(y.time), list(y.time), [2 if value == 0 else 1 for value in status]
+    # Surv already stores a left-censored row's right end in time1 (time2 is R's placeholder 1)
     time2 = [math.nan if value is None else float(value) for value in y.time2 or ()]
-    # a left-censored interval2 row carries its right end in time1
-    time1 = [t2 if code == 2 else t1 for t1, t2, code in zip(y.time, time2, status, strict=True)]
-    return time1, time2, status
+    return list(y.time), time2, status
 
 
 def _survfitTurnbull(

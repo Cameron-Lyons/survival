@@ -104,7 +104,7 @@ def _newdata_response(fit: Any, newdata: Any) -> Surv:
 def _call_column(fit: Any, name: str, newdata: Any, n: int) -> list[Any] | None:
     """A ``weights=``/``id=`` argument of the original call, re-evaluated on ``newdata``.
 
-    The fit records the column name the argument referred to (``case_weight_column``,
+    The fit records the column name the argument referred to (``weights_column``,
     ``id_column``); an argument given as a vector cannot be re-evaluated, as in R.
     """
 
@@ -1036,7 +1036,7 @@ def brier(
     else:
         response = _newdata_response(fit, newdata)
         n = len(response)
-        weights = _brier_weights(_call_column(fit, "case_weight", newdata, n), n)
+        weights = _brier_weights(_call_column(fit, "weights", newdata, n), n)
         id_values = _call_column(fit, "id", newdata, n)
     if response.type not in {"right", "mright", "counting", "mcounting"}:
         raise ValueError("response must be right censored")

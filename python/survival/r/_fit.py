@@ -87,6 +87,10 @@ class _ModelFrame:
     id: list[Any] | None
     istate: list[Any] | None
     extra: dict[str, list[Any]] = field(default_factory=dict)
+    # the column names the weights= / id= arguments referred to (R keeps the call's
+    # expressions, so brier's newdata can re-evaluate them); None for vector arguments
+    weights_column: str | None = None
+    id_column: str | None = None
 
     @property
     def n(self) -> int:
@@ -334,6 +338,8 @@ def _model_frame(
             for name in (extra or {})
             if aligned[name] is not None
         },
+        weights_column=weights if isinstance(weights, str) else None,
+        id_column=id if isinstance(id, str) else None,
     )
 
 

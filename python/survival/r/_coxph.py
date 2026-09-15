@@ -86,6 +86,9 @@ class CoxphModel:
     id: tuple[Any, ...] | None = None
     cluster: tuple[Any, ...] | None = None
     model: dict[str, Any] | None = None
+    # the columns the call's weights= / id= named, for re-evaluation on newdata
+    weights_column: str | None = None
+    id_column: str | None = None
 
     @property
     def coefficients(self) -> list[float]:
@@ -497,6 +500,8 @@ def _coxph_fit_frame(
         id=None if frame.id is None else tuple(frame.id),
         cluster=None if frame.cluster is None else tuple(frame.cluster),
         model=frame.model_frame() if keep_model else None,
+        weights_column=frame.weights_column,
+        id_column=frame.id_column,
     )
 
 
@@ -544,8 +549,10 @@ def coxph(
     singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
     iter_max = _pop_dotted_keyword(kwargs, "iter.max", "iter_max", iter_max, None)
     toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, None)
-    for ignored in ("_weights_column", "_id_column", "survcheckallow"):
-        kwargs.pop(ignored, None)
+    # the R bridge evaluates weights= / id= itself and names the columns they came from
+    weights_column = kwargs.pop("_weights_column", None)
+    id_column = kwargs.pop("_id_column", None)
+    kwargs.pop("survcheckallow", None)
     if isinstance(control, Mapping):
         control = {key: value for key, value in control.items() if key != "survcheckallow"}
     if kwargs:
@@ -579,6 +586,12 @@ def coxph(
         id=id,
         istate=istate,
     )
+    if weights_column is not None or id_column is not None:
+        frame = replace(
+            frame,
+            weights_column=frame.weights_column or weights_column,
+            id_column=frame.id_column or id_column,
+        )
     return _coxph_fit_frame(
         frame,
         method=method_name,
@@ -1563,12 +1576,11 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
     if not fits:
         raise TypeError("anova requires at least one fitted model")
     if not isinstance(fits[0], CoxphModel):
-        from . import _survreg
+        from ._survreg import SurvregModelResult, anova_survreg
 
-        method = getattr(_survreg, "anova_survreg", None)
-        if method is None:
+        if not isinstance(fits[0], SurvregModelResult):
             raise TypeError("anova requires fitted coxph or survreg models")
-        return method(*fits, test=test)
+        return anova_survreg(*fits, test=test)
     if any(not isinstance(fit, CoxphModel) for fit in fits):
         raise TypeError("All arguments must be Cox models")
     test_name = _anova_test_name(test)

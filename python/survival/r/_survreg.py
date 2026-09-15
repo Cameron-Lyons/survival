@@ -1212,7 +1212,8 @@ def model_term_names_survreg(fit: Any, terms: Any | None = None) -> list[str]:
     if design is None:
         raise TypeError("model_term_names requires a formula-based fitted model")
     names = [_design_term_name(term) for term in design.covariates]
-    return [names[idx] for idx in _term_selection(terms, names)]
+    selection = _term_selection(terms, names)
+    return names if selection is None else [names[idx] for idx in selection]
 
 
 def model_matrix_survreg(fit: Any) -> dict[str, Any]:

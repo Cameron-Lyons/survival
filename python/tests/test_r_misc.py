@@ -319,7 +319,7 @@ def test_brier_matches_r_and_checks_the_data_as_r_does():
         "x": [0.2, 0.2, 0.6, 0.6, 1.0, 1.0],
         "id": [1, 1, 2, 2, 3, 3],
     }
-    counting_fit = r.coxph("Surv(start, stop, status) ~ x", data=counting, id="id", max_iter=0)
+    counting_fit = r.coxph("Surv(start, stop, status) ~ x", data=counting, id="id", iter_max=0)
     counting_result = r.brier(counting_fit, times=[3.0, 5.0, 7.0], detail=True)
     assert counting_result.brier == pytest.approx(
         [0.166967022114529, 0.249285544480962, 0.0356739933472524]
@@ -331,7 +331,7 @@ def test_brier_matches_r_and_checks_the_data_as_r_does():
         "Surv(start, stop, status) ~ x",
         data={**counting, "start": [0.0, 3.0, 0.0, 3.0, 0.0, 4.0]},
         id="id",
-        max_iter=0,
+        iter_max=0,
     )
     with pytest.raises(ValueError, match="flags are >0 in survcheck"):
         r.brier(gap_fit, times=[3.0, 5.0, 7.0])

@@ -381,7 +381,7 @@ def test_predict_survreg_types_and_shapes(lung_weibull):
         r.predict(fit, type="risk")
     with pytest.raises(ValueError, match="unknown model term"):
         r.predict(fit, NEWDATA, type="terms", terms="ph.ecog")
-    with pytest.raises(ValueError, match="not an argument of predict.survreg"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'reference'"):
         r.predict(fit, NEWDATA, reference="strata")
     with pytest.raises(TypeError, match="newdata must be a data frame"):
         r.predict(fit, [[1.0, 50.0, 1.0]])
@@ -446,7 +446,7 @@ def test_residuals_survreg_all_types(lung_weibull):
     assert r.residuals(fit, type="response", weighted=True) == response  # no weights: no-op
     with pytest.raises(ValueError, match="'type' should be one of"):
         r.residuals(fit, type="martingale")
-    with pytest.raises(ValueError, match="terms is only supported for Cox"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'terms'"):
         r.residuals(fit, type="response", terms="age")
 
 

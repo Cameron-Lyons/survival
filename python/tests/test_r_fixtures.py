@@ -160,81 +160,6 @@ KNOWN_FAILURES: dict[str, str] = {
     "coxph_penalized/rats_frailty_gaussian_litter": (
         "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
     ),
-    "coxph_predict/lung_age_sex_breslow/survfit_ctype2:curves.surv": (
-        "mismatch: curve[1].surv[1]: 0.98335 != 0.98327"
-    ),
-    "coxph_predict/lung_age_sex_breslow/survfit_ctype2:curves.std_err": (
-        "mismatch: curve[1].std_err[1]: 0.0084077 != 0.0084477"
-    ),
-    "coxph_predict/lung_age_sex_breslow/survfit_ctype2:curves.cumhaz": (
-        "mismatch: curve[1].cumhaz[1]: 0.016795 != 0.016875"
-    ),
-    "coxph_predict/lung_age_sex_breslow/survfit_ctype2:curves.std_chaz": (
-        "mismatch: curve[1].std_chaz[1]: 0.0084077 != 0.0084477"
-    ),
-    "coxph_predict/lung_age_sex_breslow/survfit_ctype2:curves.conf": (
-        "mismatch: curve[1].lower[1]: 0.96727 != 0.96712"
-    ),
-    "coxph_predict/lung_age_sex_efron/survfit_stype2:curves.surv": (
-        "mismatch: curve[1].surv[1]: 0.98327 != 0.98335"
-    ),
-    "coxph_predict/lung_age_sex_efron/survfit_stype2:curves.std_err": (
-        "mismatch: curve[1].std_err[1]: 0.0084466 != 0.0084067"
-    ),
-    "coxph_predict/lung_age_sex_efron/survfit_stype2:curves.cumhaz": (
-        "mismatch: curve[1].cumhaz[1]: 0.016873 != 0.016793"
-    ),
-    "coxph_predict/lung_age_sex_efron/survfit_stype2:curves.std_chaz": (
-        "mismatch: curve[1].std_chaz[1]: 0.0084466 != 0.0084067"
-    ),
-    "coxph_predict/lung_age_sex_efron/survfit_stype2:curves.conf": (
-        "mismatch: curve[1].lower[1]: 0.96712 != 0.96728"
-    ),
-    "coxph_predict/synthetic_delayed_x/survfit_stype2:curves.surv": (
-        "mismatch: curve[1].surv[5]: 0.41023 != 0.43257"
-    ),
-    "coxph_predict/synthetic_delayed_x/survfit_stype2:curves.std_err": (
-        "mismatch: curve[1].std_err[5]: 0.42652 != 0.39953"
-    ),
-    "coxph_predict/synthetic_delayed_x/survfit_stype2:curves.cumhaz": (
-        "mismatch: curve[1].cumhaz[5]: 0.89103 != 0.83802"
-    ),
-    "coxph_predict/synthetic_delayed_x/survfit_stype2:curves.std_chaz": (
-        "mismatch: curve[1].std_chaz[5]: 0.42652 != 0.39953"
-    ),
-    "coxph_predict/synthetic_delayed_x/survfit_stype2:curves.conf": (
-        "mismatch: curve[1].lower[5]: 0.17782 != 0.19768"
-    ),
-    "coxph_predict/synthetic_ties_breslow/survfit_ctype2:curves.surv": (
-        "mismatch: curve[1].surv[0]: 0.87687 != 0.8715"
-    ),
-    "coxph_predict/synthetic_ties_breslow/survfit_ctype2:curves.std_err": (
-        "mismatch: curve[1].std_err[0]: 0.10228 != 0.10705"
-    ),
-    "coxph_predict/synthetic_ties_breslow/survfit_ctype2:curves.cumhaz": (
-        "mismatch: curve[1].cumhaz[0]: 0.1314 != 0.13754"
-    ),
-    "coxph_predict/synthetic_ties_breslow/survfit_ctype2:curves.std_chaz": (
-        "mismatch: curve[1].std_chaz[0]: 0.10228 != 0.10705"
-    ),
-    "coxph_predict/synthetic_ties_breslow/survfit_ctype2:curves.conf": (
-        "mismatch: curve[1].lower[0]: 0.71759 != 0.70656"
-    ),
-    "coxph_predict/synthetic_ties_efron/survfit_stype2:curves.surv": (
-        "mismatch: curve[1].surv[0]: 0.87066 != 0.87606"
-    ),
-    "coxph_predict/synthetic_ties_efron/survfit_stype2:curves.std_err": (
-        "mismatch: curve[1].std_err[0]: 0.10768 != 0.10288"
-    ),
-    "coxph_predict/synthetic_ties_efron/survfit_stype2:curves.cumhaz": (
-        "mismatch: curve[1].cumhaz[0]: 0.1385 != 0.13233"
-    ),
-    "coxph_predict/synthetic_ties_efron/survfit_stype2:curves.std_chaz": (
-        "mismatch: curve[1].std_chaz[0]: 0.10768 != 0.10288"
-    ),
-    "coxph_predict/synthetic_ties_efron/survfit_stype2:curves.conf": (
-        "mismatch: curve[1].lower[0]: 0.70501 != 0.71608"
-    ),
     "finegray/mgus2_400_death/coxph.loglik": (
         "missing feature: result has none of the attributes ('log_likelihood',)"
     ),
@@ -262,31 +187,6 @@ KNOWN_FAILURES: dict[str, str] = {
     "survcondense/lung_split_age_sex_epi": "mismatch: rows 106 != 0",
     "survexp/lung_coxph_ratetable": (
         "missing feature: survexp with a coxph fit as ratetable is not available"
-    ),
-    "survfit_interval/interval2_synthetic/time_surv": (
-        "mismatch: time: length 8 differs from expected 7"
-    ),
-    "survfit_interval/interval2_synthetic/counts": (
-        "mismatch: n_risk: length 8 differs from expected 7"
-    ),
-    "survfit_interval/interval2_synthetic/std_err": (
-        "mismatch: std_err: length 8 differs from expected 7"
-    ),
-    "survfit_interval/interval2_synthetic/conf": (
-        "mismatch: lower: length 8 differs from expected 7"
-    ),
-    "survfit_interval/interval2_synthetic_group": "mismatch: curve[g=a].time[0]: 1 != 1.5",
-    "survfit_interval/interval_status_synthetic/time_surv": (
-        "mismatch: time: length 8 differs from expected 7"
-    ),
-    "survfit_interval/interval_status_synthetic/counts": (
-        "mismatch: n_risk: length 8 differs from expected 7"
-    ),
-    "survfit_interval/interval_status_synthetic/std_err": (
-        "mismatch: std_err: length 8 differs from expected 7"
-    ),
-    "survfit_interval/interval_status_synthetic/conf": (
-        "mismatch: lower: length 8 differs from expected 7"
     ),
     "survfit_km/lung_sex/summary_table": "mismatch: table[0][4]: 326.08 != 278.76",
     "survfit_km/lung_weighted/summary_table": "mismatch: table[0][4]: 306.45 != 243.32",

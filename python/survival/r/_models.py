@@ -60,6 +60,10 @@ def _survreg_method(generic: str) -> Any:
 
 
 def _dispatch(generic: str, fit: Any, *args: Any, **kwargs: Any) -> Any:
+    from ._survreg import SurvregModelResult
+
+    if not isinstance(fit, SurvregModelResult):
+        raise TypeError(f"{generic} requires a fitted coxph or survreg model")
     return _survreg_method(generic)(fit, *args, **kwargs)
 
 
@@ -906,4 +910,6 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
         return _survdiff_frame(result)
     if hasattr(result, "rows") and hasattr(result, "test"):
         return _anova_frame(result)
+    if hasattr(result, "frame") and hasattr(result, "heading"):  # anova.survreg
+        return result.frame()
     raise TypeError("as_data_frame requires a survival result object")

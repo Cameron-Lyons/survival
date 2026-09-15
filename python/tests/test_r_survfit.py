@@ -560,10 +560,14 @@ def test_aggregate_survfit_averages_the_data_margin():
     from survival.r._types import CoxSurvfitResult
 
     curves = CoxSurvfitResult(
+        n=[3],
         time=[1.0, 2.0],
+        n_risk=[3.0, 2.0],
+        n_event=[1.0, 1.0],
+        n_censor=[0.0, 0.0],
         surv=[[0.9, 0.7, 0.5], [0.8, 0.6, 0.4]],
         cumhaz=[[0.1, 0.3, 0.5], [0.2, 0.4, 0.6]],
-        linear_predictors=[0.0, 0.5, 1.0],
+        type="right",
         std_err=[[0.1, 0.1, 0.1], [0.1, 0.1, 0.1]],
     )
     mean = r.aggregate_survfit(curves)
