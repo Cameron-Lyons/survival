@@ -1,3 +1,4 @@
+pub(crate) mod aft;
 pub(crate) mod cox_risk;
 pub(crate) mod dist;
 pub(crate) mod fenwick;
@@ -7,5 +8,6 @@ pub(crate) mod rng;
 pub(crate) mod simd;
 pub(crate) mod sorting;
 pub(crate) mod statistical;
+pub(crate) mod student_t;
 pub mod typed_inputs;
 pub(crate) mod validation;

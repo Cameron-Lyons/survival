@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 use crate::constants::{DIVISION_FLOOR, exp_ci_bounds_95};
-use crate::internal::statistical::{chi2_cdf, ln_gamma, normal_cdf};
+use crate::internal::statistical::{chi2_cdf, ln_gamma, normal_sf};
 
 fn recurrent_value_error(message: impl Into<String>) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())

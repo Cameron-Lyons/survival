@@ -1,6 +1,13 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+use super::config_validation::{
+    ensure_positive_unit_interval, ensure_positive_usize, ensure_vec_capacity,
+};
+use super::input_validation::{
+    validate_prediction_input, validate_training_shape, validate_training_values,
+};
+
 type NelsonAalenCurve = (Vec<f64>, Vec<f64>);
 type SplitCandidate = (usize, f64, Vec<usize>, Vec<usize>);
 type TreeWithOob = (TreeNode, Vec<usize>);
@@ -46,17 +53,14 @@ impl SurvivalForestInput {
 
 impl SurvivalForestInput {
     fn validate(&self) -> PyResult<()> {
-        if self.x.len() != self.n_obs * self.n_vars {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "x length must equal n_obs * n_vars",
-            ));
-        }
-        if self.time.len() != self.n_obs || self.status.len() != self.n_obs {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "time and status must have length n_obs",
-            ));
-        }
-        Ok(())
+        validate_training_shape(
+            self.x.len(),
+            self.n_obs,
+            self.n_vars,
+            self.time.len(),
+            self.status.len(),
+        )?;
+        validate_training_values(&self.x, &self.time, &self.status)
     }
 }
 
@@ -189,7 +193,8 @@ impl Default for SurvivalForestConfig {
 
 impl SurvivalForestConfig {
     fn validate(&self) -> PyResult<()> {
-        validate_survival_forest_config(self.n_trees, self.sample_fraction, self.n_random_splits)
+        validate_survival_forest_config(self.n_trees, self.sample_fraction, self.n_random_splits)?;
+        ensure_vec_capacity::<TreeWithOob>("n_trees", self.n_trees)
     }
 }
 
@@ -198,21 +203,9 @@ fn validate_survival_forest_config(
     sample_fraction: f64,
     n_random_splits: usize,
 ) -> PyResult<()> {
-    if n_trees == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_trees must be positive",
-        ));
-    }
-    if sample_fraction <= 0.0 || sample_fraction > 1.0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "sample_fraction must be in (0, 1]",
-        ));
-    }
-    if n_random_splits == 0 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "n_random_splits must be positive",
-        ));
-    }
+    ensure_positive_usize("n_trees", n_trees)?;
+    ensure_positive_unit_interval("sample_fraction", sample_fraction)?;
+    ensure_positive_usize("n_random_splits", n_random_splits)?;
     Ok(())
 }
 
@@ -331,7 +324,7 @@ fn find_best_split(
     rng: &mut crate::internal::rng::Rng,
     split_rule: &SplitRule,
 ) -> Option<SplitCandidate> {
-    if indices.len() < 2 * min_node_size {
+    if indices.len() / 2 < min_node_size {
         return None;
     }
 
@@ -419,7 +412,7 @@ fn build_tree(
     let node_times: Vec<f64> = indices.iter().map(|&i| data.time[i]).collect();
     let node_status: Vec<i32> = indices.iter().map(|&i| data.status[i]).collect();
 
-    if indices.len() < 2 * config.min_node_size {
+    if indices.len() / 2 < config.min_node_size {
         return TreeNode::new_leaf(&node_times, &node_status, all_times);
     }
 
@@ -549,6 +542,19 @@ pub struct SurvivalForest {
     _oob_indices: Vec<Vec<usize>>,
 }
 
+impl SurvivalForest {
+    fn fit_validated(
+        py: Python<'_>,
+        input: SurvivalForestInput,
+        config: SurvivalForestConfig,
+    ) -> Self {
+        py.detach(move || {
+            let data = SurvivalForestData::from(&input);
+            fit_survival_forest_inner(&data, &config)
+        })
+    }
+}
+
 #[pymethods]
 impl SurvivalForest {
     #[staticmethod]
@@ -559,12 +565,8 @@ impl SurvivalForest {
         config: &SurvivalForestConfig,
     ) -> PyResult<Self> {
         input.validate()?;
-        let input = input.clone();
-        let config = config.clone();
-        Ok(py.detach(move || {
-            let data = SurvivalForestData::from(&input);
-            fit_survival_forest_inner(&data, &config)
-        }))
+        config.validate()?;
+        Ok(Self::fit_validated(py, input.clone(), config.clone()))
     }
 
     #[staticmethod]
@@ -579,7 +581,8 @@ impl SurvivalForest {
         config: &SurvivalForestConfig,
     ) -> PyResult<Self> {
         let input = SurvivalForestInput::new(x, n_obs, n_vars, time, status)?;
-        Self::fit_typed(py, &input, config)
+        config.validate()?;
+        Ok(Self::fit_validated(py, input, config.clone()))
     }
 
     #[pyo3(signature = (x_new, n_new))]
@@ -588,11 +591,7 @@ impl SurvivalForest {
         x_new: Vec<f64>,
         n_new: usize,
     ) -> PyResult<Vec<Vec<f64>>> {
-        if x_new.len() != n_new * self.n_vars {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "x_new dimensions don't match",
-            ));
-        }
+        validate_prediction_input(&x_new, n_new, self.n_vars)?;
 
         let n_times = self.unique_times.len();
         let n_trees = self.trees.len() as f64;
@@ -830,8 +829,7 @@ pub fn survival_forest(
 ) -> PyResult<SurvivalForest> {
     let cfg = config.cloned().unwrap_or_default();
 
-    let input = SurvivalForestInput::new(x, n_obs, n_vars, time, status)?;
-    SurvivalForest::fit_typed(py, &input, &cfg)
+    SurvivalForest::fit(py, x, n_obs, n_vars, time, status, &cfg)
 }
 
 #[cfg(test)]

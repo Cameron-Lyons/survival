@@ -276,7 +276,7 @@ pub fn iv_cox(
         0.0
     };
 
-    let treatment_pvalue = 2.0 * (1.0 - normal_cdf(treatment_z.abs()));
+    let treatment_pvalue = 2.0 * normal_sf(treatment_z.abs());
 
     let covariate_se: Vec<f64> = final_hessian_cov
         .iter()

@@ -297,7 +297,7 @@ pub fn negative_binomial_frailty(
 
     let p_values: Vec<f64> = z_scores
         .par_iter()
-        .map(|&z| 2.0 * (1.0 - normal_cdf(z.abs())))
+        .map(|&z| 2.0 * normal_sf(z.abs()))
         .collect();
 
     let rate_ratios: Vec<f64> = beta.par_iter().map(|&b| b.exp()).collect();

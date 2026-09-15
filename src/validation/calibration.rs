@@ -1,5 +1,5 @@
 use crate::constants::{PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_SMALL, same_time};
-use crate::internal::statistical::{chi2_sf, normal_cdf};
+use crate::internal::statistical::{chi2_sf, normal_sf};
 use crate::simd_ops::{dot_product_simd, mean_simd, subtract_scalar_simd, sum_of_squares_simd};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -934,7 +934,7 @@ fn spiegelhalter_test(predicted: &[f64], observed: &[i32]) -> (f64, f64) {
         0.0
     };
 
-    let p_value = 2.0 * (1.0 - normal_cdf(z.abs()));
+    let p_value = 2.0 * normal_sf(z.abs());
 
     (z, p_value)
 }

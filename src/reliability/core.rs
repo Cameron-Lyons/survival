@@ -1,5 +1,5 @@
 use crate::constants::normal_ci;
-use crate::internal::statistical::{normal_cdf, normal_inverse_cdf};
+use crate::internal::statistical::{normal_inverse_cdf, normal_sf};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,17 +120,11 @@ pub(crate) fn loglogistic_to_surv(logit: f64) -> f64 {
 }
 
 pub(crate) fn surv_to_probit(surv: f64) -> f64 {
-    if surv <= 0.0 {
-        f64::NEG_INFINITY
-    } else if surv >= 1.0 {
-        f64::INFINITY
-    } else {
-        normal_inverse_cdf(1.0 - surv)
-    }
+    -normal_inverse_cdf(surv)
 }
 
 pub(crate) fn probit_to_surv(z: f64) -> f64 {
-    1.0 - normal_cdf(z)
+    normal_sf(z)
 }
 
 #[pyfunction]
@@ -167,7 +161,7 @@ pub fn reliability(
             ));
         }
 
-        let z = normal_inverse_cdf(1.0 - (1.0 - conf_level) / 2.0);
+        let z = -normal_inverse_cdf((1.0 - conf_level) / 2.0);
 
         let mut trans_se = Vec::with_capacity(surv.len());
         let mut lo = Vec::with_capacity(surv.len());
@@ -410,6 +404,44 @@ mod tests {
 
         assert_eq!(result.estimate.len(), 5);
         assert!((result.estimate[0] - (-0.9_f64.ln())).abs() < 1e-10);
+    }
+
+    #[test]
+    fn probit_reliability_roundtrips_small_survival_and_endpoints() {
+        let probabilities = vec![1.0, 0.5, 1e-20, 1e-100, 1e-300, 0.0];
+        let result = reliability(
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            probabilities.clone(),
+            None,
+            0.95,
+            "probit".to_string(),
+        )
+        .unwrap();
+        // R qnorm(p, lower.tail = FALSE); endpoint signs follow decreasing survival.
+        let expected = [
+            f64::NEG_INFINITY,
+            0.0,
+            9.262_340_089_798_407,
+            21.273_453_560_965_322,
+            37.047_096_299_361_2,
+            f64::INFINITY,
+        ];
+        for (&actual, &expected) in result.estimate.iter().zip(&expected) {
+            if expected.is_finite() {
+                assert!((actual - expected).abs() < 2e-13, "{actual} != {expected}");
+            } else {
+                assert_eq!(actual, expected);
+            }
+        }
+        let restored = reliability_inverse(result.estimate, "probit".to_string()).unwrap();
+        for (&actual, &expected) in restored.iter().zip(&probabilities) {
+            if expected == 0.0 {
+                assert_eq!(actual, expected);
+            } else {
+                assert!((actual / expected - 1.0).abs() < 3e-12);
+            }
+        }
+        assert!(reliability_inverse(vec![f64::NAN], "probit".to_string()).unwrap()[0].is_nan());
     }
 
     #[test]

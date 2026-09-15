@@ -7,7 +7,7 @@ use crate::constants::{
     clamped_normal_ci_bounds, exp_clamped, normal_ci_bounds_95, same_time,
 };
 use crate::internal::matrix::invert_matrix;
-use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_cdf};
+use crate::internal::statistical::{compute_censoring_km, km_step_prob_at, normal_sf};
 
 fn value_error(message: impl Into<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(message.into())
@@ -331,10 +331,7 @@ pub(crate) fn finegray_regression_core(
         })
         .collect();
 
-    let p_values: Vec<f64> = z_scores
-        .iter()
-        .map(|&z| 2.0 * (1.0 - normal_cdf(z.abs())))
-        .collect();
+    let p_values: Vec<f64> = z_scores.iter().map(|&z| 2.0 * normal_sf(z.abs())).collect();
 
     let (ci_lower, ci_upper) = normal_ci_bounds_95(&beta, &std_errors);
 

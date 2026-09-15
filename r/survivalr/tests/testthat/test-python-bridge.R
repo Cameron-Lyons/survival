@@ -1455,7 +1455,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
 
   cox_control <- coxph.control(iter.max = 0, eps = 1e-05, toler.chol = 1e-08, timefix = FALSE)
-  expect_named(cox_control, c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix"))
+  expect_named(cox_control, c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix", "survcheckallow"))
   expect_equal(cox_control[["iter.max"]], 0L)
   expect_false(cox_control[["timefix"]])
   expect_error(coxph.control(iter.max = -1), "iter.max")
@@ -1498,6 +1498,32 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(bridged_cox_fit$residuals, reference_cox_fit$residuals, tolerance = 1e-6)
   expect_equal(bridged_cox_fit$means, reference_cox_fit$means, tolerance = 1e-12)
   expect_equal(bridged_cox_fit$method, reference_cox_fit$method)
+
+  weighted_efron_args <- list(
+    x = matrix(c(-0.5, 0.3, 1.1, -0.2, 0.7, 0.9), ncol = 1L),
+    y = survival::Surv(c(1, 2, 2, 3, 4, 5), c(0, 1, 1, 0, 1, 0)),
+    strata = NULL,
+    offset = c(0.1, -0.2, 0.05, 0, 0.15, -0.1),
+    init = 0.35,
+    weights = c(0.5, 4, 1.25, 2.5, 0.75, 3),
+    method = "efron",
+    rownames = as.character(seq_len(6L)),
+    resid = TRUE,
+    nocenter = c(-1, 0, 1)
+  )
+  bridged_weighted_efron <- do.call(
+    coxph.fit,
+    c(weighted_efron_args, list(control = coxph.control(iter.max = 0)))
+  )
+  reference_weighted_efron <- do.call(
+    survival::coxph.fit,
+    c(weighted_efron_args, list(control = survival::coxph.control(iter.max = 0)))
+  )
+  expect_equal(
+    bridged_weighted_efron$residuals,
+    reference_weighted_efron$residuals,
+    tolerance = 1e-12
+  )
 
   bridged_stratified_cox_fit <- coxph.fit(
     cox_fit_x,
@@ -1566,6 +1592,35 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(bridged_agreg_fit$means, reference_agreg_fit$means, tolerance = 1e-12)
   expect_equal(bridged_agreg_fit$first, reference_agreg_fit$first, tolerance = 1e-12)
   expect_equal(bridged_agreg_fit$info, reference_agreg_fit$info)
+
+  weighted_agreg_args <- list(
+    x = agreg_fit_x,
+    y = agreg_fit_y,
+    strata = NULL,
+    offset = c(0.1, -0.2, 0.05, 0, 0.15, -0.1),
+    init = c(0.35),
+    weights = c(0.5, 4, 1.25, 2.5, 0.75, 3),
+    method = "breslow",
+    rownames = as.character(seq_len(nrow(agreg_fit_x)))
+  )
+  bridged_weighted_agreg_fit <- do.call(
+    agreg.fit,
+    c(weighted_agreg_args, list(control = coxph.control(iter.max = 0)))
+  )
+  reference_weighted_agreg_fit <- do.call(
+    survival::agreg.fit,
+    c(weighted_agreg_args, list(control = survival::coxph.control(iter.max = 0)))
+  )
+  expect_equal(
+    bridged_weighted_agreg_fit$means,
+    reference_weighted_agreg_fit$means,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    bridged_weighted_agreg_fit$linear.predictors,
+    reference_weighted_agreg_fit$linear.predictors,
+    tolerance = 1e-12
+  )
 
   bridged_agexact_fit <- agexact.fit(
     agreg_fit_x,
@@ -3066,6 +3121,102 @@ test_that("R formula wrappers delegate to the Python survival package", {
   aft_dfbeta <- residuals(aft_fit, type = "dfbeta")
   expect_true(is.matrix(aft_dfbeta))
   expect_equal(nrow(aft_dfbeta), nrow(data))
+})
+
+test_that("zero-covariate low-level Cox fits match null-model results", {
+  skip_if_not_installed("reticulate")
+  skip_if_not_installed("survival")
+  skip_if_not(
+    reticulate::py_module_available("survival"),
+    "Python survival package is unavailable"
+  )
+
+  right_y <- survival::Surv(
+    c(1, 2, 2, 3, 4, 5),
+    c(1, 0, 1, 1, 0, 1)
+  )
+  right_args <- list(
+    x = matrix(numeric(), nrow = 6L, ncol = 0L),
+    y = right_y,
+    strata = c(1, 1, 1, 2, 2, 2),
+    offset = c(0.1, -0.2, 0, 0.3, -0.1, 0.2),
+    init = NULL,
+    weights = c(1, 2, 0.5, 1.5, 3, 1),
+    method = "efron",
+    rownames = letters[1:6]
+  )
+  for (keep_residuals in c(TRUE, FALSE)) {
+    bridged <- do.call(
+      coxph.fit,
+      c(
+        right_args,
+        list(control = coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    reference <- do.call(
+      survival::coxph.fit,
+      c(
+        right_args,
+        list(control = survival::coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    expect_equal(bridged, reference, tolerance = 1e-12)
+  }
+
+  vector_args <- right_args
+  vector_args$x <- numeric()
+  expect_equal(
+    do.call(
+      coxph.fit,
+      c(vector_args, list(control = coxph.control(iter.max = 20)))
+    ),
+    do.call(
+      survival::coxph.fit,
+      c(vector_args, list(control = survival::coxph.control(iter.max = 20)))
+    ),
+    tolerance = 1e-12
+  )
+
+  counting_args <- list(
+    x = matrix(numeric(), nrow = 6L, ncol = 0L),
+    y = survival::Surv(
+      c(0, 0, 1, 0, 2, 3),
+      c(2, 2, 3, 4, 4, 5),
+      c(1, 1, 0, 0, 1, 0)
+    ),
+    strata = c(1, 1, 1, 2, 2, 2),
+    offset = c(0.1, -0.2, 0, 0.3, -0.1, 0.2),
+    init = NULL,
+    weights = c(1, 2, 0.5, 1.5, 3, 1),
+    method = "efron",
+    rownames = letters[1:6]
+  )
+  for (keep_residuals in c(TRUE, FALSE)) {
+    bridged <- do.call(
+      agreg.fit,
+      c(
+        counting_args,
+        list(control = coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    reference <- do.call(
+      survival::agreg.fit,
+      c(
+        counting_args,
+        list(control = survival::coxph.control(iter.max = 20), resid = keep_residuals)
+      )
+    )
+    expect_equal(bridged, reference, tolerance = 1e-12)
+  }
+  invalid_counting_args <- counting_args
+  invalid_counting_args$init <- 1
+  expect_error(
+    do.call(
+      agreg.fit,
+      c(invalid_counting_args, list(control = coxph.control()))
+    ),
+    "Wrong length for inital values"
+  )
 })
 
 test_that("tmerge matches native interval, metadata, and class semantics", {
@@ -7489,6 +7640,8 @@ test_that("cch unstratified fits match survival for right and counting data", {
     expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
     expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
     expect_equal(actual$loglik, reference$loglik, tolerance = 1e-11)
+    expect_equal(actual$linear.predictors, reference$linear.predictors, tolerance = 1e-11)
+    expect_equal(unname(actual$means), unname(reference$means), tolerance = 1e-11)
     expect_equal(actual$iter, reference$iter)
     expect_equal(actual$n, reference$n)
     expect_equal(actual$nevent, reference$nevent)
@@ -7545,6 +7698,8 @@ test_that("cch stratified Borgan fits match survival", {
     expect_equal(actual$var, reference$var, tolerance = 1e-11)
     expect_equal(actual$naive.var, reference$naive.var, tolerance = 1e-11)
     expect_equal(actual$phase2var, reference$phase2var, tolerance = 1e-11)
+    expect_equal(actual$linear.predictors, reference$linear.predictors, tolerance = 1e-11)
+    expect_equal(unname(actual$means), unname(reference$means), tolerance = 1e-11)
     expect_equal(actual$opt, reference$opt, tolerance = 1e-11)
     expect_equal(actual$delta, reference$delta, tolerance = 1e-11)
     expect_equal(actual$sc, reference$sc, tolerance = 1e-11)

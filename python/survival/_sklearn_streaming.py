@@ -67,6 +67,8 @@ def _num_samples(X: ArrayLike) -> int:
 def _slice_rows(X: ArrayLike, start_idx: int, end_idx: int) -> NDArray[np.float64]:
     iloc = getattr(X, "iloc", None)
     chunk = iloc[start_idx:end_idx] if iloc is not None else cast(Any, X)[start_idx:end_idx]
+    if np.ma.is_masked(chunk):
+        raise ValueError("X must not contain masked feature values")
     return np.asarray(chunk)
 
 

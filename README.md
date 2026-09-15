@@ -168,6 +168,14 @@ Multi-state fits with retained model frames also support influence residuals
 and pseudo-values for state probabilities, cumulative transition hazards, and
 integrated state occupancy, including grouped, weighted, and subject-collapsed
 counting-process results.
+Ordinary fitted curves support R-style influence residuals and pseudo-values for
+survival, cumulative hazard, and RMST, preserving case weights, subject IDs,
+grouping, estimator settings, and conditional start times. A native query kernel
+uses the fitted risk tables and event prefixes without refitting or building a
+full observation-by-event influence matrix. The fitted RMST path follows R's
+infinitesimal jackknife; the direct time/status pseudo-value API retains its
+existing delete-one RMST calculation. Tied `ctype=2` diagnostics follow R's
+approximation and report the same limitation.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves.
 The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use
@@ -177,6 +185,54 @@ shapes for ordinary predictions and individual time-dependent trajectories.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
+Ridge penalties are jointly optimized with the Cox partial likelihood:
+
+```python
+fit = coxph("Surv(time, status) ~ age + ridge(x, z, theta=2)", data=data)
+fit.df           # effective degrees of freedom for age and the joint ridge term
+fit.variance2    # sampling covariance, distinct from vcov(fit)
+
+selected = coxph("Surv(time, status) ~ age + ridge(x, z, df=1)", data=data)
+selected.history # evaluated theta/df pairs and each controller's next proposal
+```
+
+`ridge(..., theta=..., scale=FALSE)` uses the supplied penalty in the original
+coefficient units. The default scaling uses each column's unweighted sample
+variance before subset or missing-row removal, as in R. Separate ridge calls
+may specify different penalties. Weights, offsets, strata, delayed entry,
+prediction, residuals, and fractional-df information criteria are supported.
+Robust covariance requests produce R's warning and use penalized covariance.
+An exact tie request follows R's penalized Breslow calculation; `fit.method`
+reports the effective method and `fit.requested_method` retains the request.
+Omitting `theta` selects the penalty by effective degrees of freedom, defaulting
+to half the number of columns in each ridge term. `ridge(..., df=..., eps=.1)`
+sets the target and its absolute tolerance. Multiple targets share each joint
+fit; `control={"outer.max": 10}` limits the outer search. The history's final
+row records the evaluated penalty, while its `theta` is R's next proposal,
+which can be NaN at full df. Its `done` flag reports whether the target was met;
+the returned df always describes the attained fit. Targets must be finite and
+between zero and the term's column count. When a full-df controller proposes
+NaN while other terms still need iterations, fitting retains its last finite
+penalty and records the proposal in history.
+If rounding makes interpolation undefined before reaching the target, the
+search bisects an available theta bracket. Extreme scales can therefore follow
+a different search path from R while retaining finite penalties and actual df.
+Ridge interactions, penalized `survreg`, penalized ANOVA, and `cox_zph` are not
+yet implemented and report explicit errors.
+The native `coxph_penalized_fit` also accepts a diagonal penalty and coefficient
+groups directly, returning the fit and `CoxPenaltyDiagnostics`. Its initial and
+final log likelihoods are unpenalized; the formula facade reports R's penalized
+initial likelihood when nonzero initial coefficients are supplied.
+The native `coxph_ridge_fit` additionally returns `CoxRidgeSelection`, including
+the evaluated penalties, proposals, histories, and outer/inner iteration counts.
+The standalone `ridge_fit` uses the same joint Efron optimizer and returns
+coefficients and standard errors in original covariate units. For
+`RidgePenalty.from_df(...)`, the constructor's theta is the search seed;
+`RidgeResult.theta` is the fitted value. Its GCV convention is
+`(-2 * log_likelihood / n_obs) / (1 - df / n_obs)^2`, using the unpenalized
+partial likelihood. `ridge_cv` uses deterministic folds and minimizes
+`-2 / n_obs * sum(loglik_full(beta_train) - loglik_train(beta_train))`, retaining
+full risk sets in the validation comparison and propagating fitting errors.
 Formula fits support `tt(...)` time-varying coefficient terms for right-censored
 and counting-process responses, including R's default O'Brien rank transform
 and custom `tt(x, time, riskset, weights)` callables.
@@ -194,6 +250,19 @@ covariance sweeps stay in Rust; Python performs only formula preparation and
 result labeling.
 R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
 in the bridge and pass named control lists through to the Python API.
+Native R Cox control objects, including `survcheckallow`, are accepted for
+ordinary right-censored and counting-process fits. That setting only affects
+multistate fitting in R. Starting coefficients supplied through `init=` can
+be a single number for a one-parameter model or a vector matching all fitted
+parameters, including estimated log scales for AFT models. Explicit R `NULL`
+values retain the default initialization regardless of argument order.
+Cox and AFT fits warn when iterations are exhausted. Cox coefficient warnings
+use `control={"toler.inf": ...}` and the fitted score and covariance, with R's
+distinct criteria for right-censored, counting-process, and exact fits.
+Zero- and one-iteration requests suppress these diagnostics. Python exposes
+them as `RuntimeWarning`; the bridge raises R warning conditions.
+AFT's default relative convergence tolerance is `1e-9` in both Rust and
+Python, matching `survival::survreg.control()`; callers can set `eps` explicitly.
 Time-dependent start/stop data can be built with the R-compatible `tmerge`
 workflow. Its update builders preserve R's `(tstart, tstop]` boundary rules,
 event placement, cumulative updates, missing-value handling, and classification
@@ -229,11 +298,61 @@ The R-style `predict(...)` and `fitted(...)` generics support Cox linear
 predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
 For `survreg` fits it supports response-scale predictions, linear predictors,
-term contributions, and quantile predictions via `type="quantile"`.
-The AFT optimizer uses positive-definite observed-information Newton steps when
-available and falls back to the stable outer-product system otherwise. The R
-bridge also routes built-in `survreg.fit` matrix calls through this kernel,
+term contributions, and quantile predictions via `type="quantile"` or
+`type="uquantile"` for the model's linear scale. Probabilities include 0 and 1,
+which return the distribution's limits. Quantiles use each row's fitted scale
+and retain Student-t degrees of freedom.
+The native `fit.predict_quantile()` method uses training strata by default;
+new covariates for a model with multiple scales require zero-based
+`strata=...` indices. Pass `transform=False` for linear-scale quantiles.
+`AFTEstimator.predict()` returns the fitted response-scale location, matching
+R's default prediction; `predict_median()` and `predict_quantile()` return
+actual distribution quantiles. Gaussian, logistic, extreme-value, and Student-t
+responses use the identity transform. Native prediction standard errors are
+available for training and new rows and follow the requested response scale.
+Student-t distribution helpers accept `distribution="t", parms=df` and retain
+precision near the median and in rare tails. For example,
+`qsurvreg(1e-20, distribution="t", parms=4)` returns approximately
+`-131607.4013`. Native, Python, and R bridge calls share these calculations.
+For `1000 <= df < 100000`, moderate tails use a short normal
+moment expansion. See the [derivation and validation](docs/student-t-normal-limit.md).
+Gaussian and lognormal calculations use direct lower and upper normal tails,
+preserving representable probabilities beyond eight standard deviations in
+distribution functions, censored likelihoods, and inference. Normal quantiles
+refine a rational approximation with Halley iteration in the central range and
+a log-probability Newton step in extreme tails, including subnormal probability
+inputs. The tail step uses the normal Mills ratio's
+[continued fraction](https://dlmf.nist.gov/7.9.E1). Shared inference routines use
+the upper-tail function directly to avoid reporting zero for small p-values.
+Gaussian, logistic, extreme-value, and Student-t AFT models accept finite real-valued
+responses, including negative values and zero, for all censoring types. Log-time
+families retain their positive-response requirement. Native and sklearn predictions
+use each family's response transformation; `predict_median` and `predict_quantile`
+return distribution quantiles. Right-censored concordance also accepts real-valued
+responses, so these models can be scored directly.
+AFT coefficient accessors report aliased location coefficients as `NaN`, while
+stored training predictions and residuals retain the fitted numeric values.
+As in R, an aliased coefficient makes ordinary `newdata` predictions missing;
+term predictions retain contributions from other terms. AFT `newdata` predictions
+omit formula offsets, while training predictions retain them; the native
+`fit.predict(...)` method still accepts explicit offsets. `vcov(complete=False)`
+retains estimated scale parameters when the model has no aliases.
+The AFT optimizer uses an ordered LDL factorization for its observed-information
+Newton steps, with a score-product fallback when needed. It honors R's
+[`survreg` pivot tolerance](https://github.com/cran/survival/blob/3.8-11/src/cholesky3.c),
+preserves supplied coefficients in aliased directions, and returns zero
+covariance rows and columns for discarded pivots. Each accepted factorization
+is reused for the next step and the final covariance. After the first rejected
+step, the optimizer screens shorter steps using only their likelihood and
+computes full derivatives for improving candidates. The R bridge also routes
+built-in `survreg.fit` matrix calls through this kernel,
 including fixed or stratified scales and interval-censored responses.
+AFT likelihoods and analytic derivatives share the distribution calculations used
+by residual diagnostics, with the optimizer using the true likelihood Hessian.
+Log-tail evaluation preserves very small probabilities, and interval widths are
+computed before log-time transformation to retain adjacent response endpoints.
+Zero-weight observations are omitted from likelihood evaluation; the line search
+rejects non-finite likelihoods or derivatives.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
@@ -246,6 +365,10 @@ The `survival.residuals` name remains the residual diagnostics module; the
 R-style residual generic is available as `survival.r_api.residuals(...)` for
 fitted Cox and `survreg` models (`survival.r_api` re-exports the `survival.r`
 package, which holds the implementation split by concern).
+For AFT models, `type="matrix"` returns six analytic diagnostic columns in R's
+order (`g`, `dg`, `ddg`, `ds`, `dds`, `dsg`), including its interval-censoring
+conventions. Working residuals use the location score divided by negative
+curvature; tail probabilities are evaluated directly to avoid cancellation.
 
 Algorithm bindings are not re-exported from the package root: import them from
 their domain module (`survival.regression.coxph_fit`, not `survival.coxph_fit`).
@@ -276,6 +399,24 @@ Common modules:
 See [`docs/repo-layout.md`](docs/repo-layout.md) for the full Rust and Python
 layout and [`examples/python_package_layout.py`](examples/python_package_layout.py)
 for a runnable module-oriented example.
+
+`DeepSurvConfig`, `GradientBoostSurvivalConfig`, and `SurvivalForestConfig`
+validate settings both when constructed and before fitting. Fields can be changed
+between fits; invalid settings raise `ValueError` before training starts.
+DeepSurv learning rates must remain positive and finite after conversion to
+float32, and its L2 penalty must be nonnegative and finite in that precision.
+Boosting requires `min_samples_leaf >= 1`. Empty DeepSurv hidden layers still
+create a linear network, tree `max_depth=0` creates stumps, and large leaf or node
+minimums disable splitting. Width and count checks use native array size limits.
+
+Native DeepSurv, gradient boosting, and survival forest fitting require finite
+features and times, with event statuses exactly `0` (censored) or `1` (event).
+Negative and zero times and all-censored data remain supported. DeepSurv training
+also requires features to stay finite when converted to float32; ordinary
+rounding and underflow are allowed. Predictions use finite float64 features,
+including values beyond the float32 range. Invalid values raise `ValueError`
+with the field and flattened input index. Forest input construction and typed
+fitting both validate the data; empty prediction batches remain supported.
 
 ## Usage
 
@@ -324,7 +465,7 @@ print(spline.n_cols, spline.knots, spline.boundary_knots)
 ### Concordance
 
 ```python
-from survival import core
+from survival import Surv, concordance
 
 time = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]
 status = [1, 1, 0, 1, 1, 1, 0, 1]
@@ -339,6 +480,26 @@ fit = core.concordancefit(
 )
 print(fit.concordance[0], fit.count[0].concordant, fit.var[0][0], fit.dfbeta[0])
 ```
+
+An observation censored at an event time remains a risk comparator; simultaneous
+events contribute outcome ties. Right-censored and counting-process summaries
+and influence calculations use O(n log n) risk-set sweeps. Raw influence rows are
+derivatives with respect to case weights, holding time-weight multipliers fixed;
+dfbeta applies case weights and uses pooled counts across strata. Variance is
+available with every result, while
+`influence` controls which diagnostic rows are returned. For multiple scores,
+`result.covariance` and `vcov(result)` include the covariance between scores.
+
+By default, `timefix=True` groups near-tied times using R's `aeqSurv` tolerance;
+`timefix=False` preserves exact observed times. `ymin` clips exit times and
+`ymax` limits contributing event times. Strata with fewer than two original
+events use unit time multipliers, including when a horizon is supplied.
+With no comparable pairs, concordance and its variance are `NaN`.
+
+Direct `Surv` inputs accept `strata=labels`. For a single score, `keepstrata`
+controls optional `stratum_labels` and `stratum_counts` fields; counts contain
+the five exclusive pair categories: concordant, discordant, tied predictors,
+tied outcomes, and ties in both. Concordance and covariance pool across strata.
 
 ### Person-Years Calculation
 
@@ -492,6 +653,32 @@ print(prediction.fit, prediction.se_fit)
 print(fit.residuals(residual_type="deviance").values)
 ```
 
+Omitted AFT starts use R's distribution-specific weighted variance estimates,
+censoring-aware working regression, and a preliminary intercept fit when scales
+must be estimated for a model with covariates. This applies to every built-in
+distribution, fixed scales, and stratified scales. `max_iter=0` returns the
+initialized model without taking a main-model optimization step.
+
+With omitted starts and a leading intercept, continuous covariates are centered
+and scaled during fitting; binary columns keep their coding. Coefficients and
+covariance are returned in the original units, while stored predictions are
+computed before converting back to preserve accuracy. As in R, `score_vector`
+uses the working design coordinates. Explicit complete starting vectors bypass
+initialization and rescaling.
+For an estimated-scale model other than an intercept-only model, a numeric
+start can contain just the location coefficients. The initializer retains those
+coefficients in the original design units and appends log-scales from a
+20-iteration intercept-only fit, including weights, offsets, censoring, and
+scale strata. It does not solve for the supplied locations. Intercept-only
+models require log-scales in a supplied starting vector; fixed-scale models
+require only location coefficients. The R `survreg.fit` matrix interface uses
+the same native initialization and returns R's null-fit metadata.
+Zero-weight observations do not determine starting values or working coordinates.
+
+Automatic initialization reports an error for an unusable response scale,
+constant nonbinary covariate that cannot be rescaled, or interval probability
+that rounds to zero. Complete explicit starts remain available for these cases.
+
 ### Cox Proportional Hazards Model
 
 ```python
@@ -580,6 +767,21 @@ print(f"p-value: {result.pvalue}")
 print(f"Variance matrix: {result.var}")
 ```
 
+### Publication Bias Tests
+
+`survival.validation.publication_bias_tests(effects, std_errors)` returns Egger
+intercept, standard error, statistic, and two-sided Student-t probability, along
+with Begg and trim-and-fill results. The Egger calculation regresses standardized
+effects on precision with an intercept and uses `n - 2` degrees of freedom.
+Changing units for both effects and standard errors preserves its inference.
+
+If precision has insufficient variation to identify the two-parameter
+regression, or standardized effects cannot be represented as finite values,
+the four Egger fields are `NaN`; other results remain available. With exactly
+zero residual variance, a nonzero intercept has an infinite statistic and zero
+probability. A zero intercept and zero standard error produce `NaN` for the
+statistic and probability.
+
 ### Built-in Datasets
 
 The library includes 33 classic survival analysis datasets:
@@ -622,6 +824,17 @@ The US, US-by-race and Minnesota population rate tables (`survexp.us`,
 `survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
 `survival.population`.
 
+## Scikit-learn estimators
+
+`survival.sklearn_compat` provides estimators and streaming wrappers that accept
+two-dimensional feature arrays with finite real values, including when
+scikit-learn is not installed. Numeric strings are converted to float64; complex
+values, masked entries, and missing or infinite values are rejected before
+fitting or prediction. Streaming methods check each batch without materializing
+the full input. Direct calls require at least one sample; batched predictions can
+return empty outputs. Cox, AFT, and tree models support arrays with zero feature
+columns; DeepSurv requires at least one feature.
+
 ## API Reference
 
 The public Python surface is broad and evolves quickly. For the most accurate,
@@ -641,6 +854,12 @@ domain module (`survival.regression.coxph_fit`, `survival.surv_analysis.survfitk
   top of the generated bindings.
 - [`python/survival/sklearn_compat.py`](python/survival/sklearn_compat.py):
   scikit-learn-compatible estimators and streaming wrappers.
+
+The sklearn estimators accept targets with shape `(n_samples, 2)` and columns
+`[time, status]`. Times must be finite real numbers; each model applies its own
+response-domain restrictions. Status must be exactly `0` (censored) or `1`
+(event), with boolean values also accepted. Missing, masked, complex, or
+fractional event indicators raise `ValueError` before fitting or scoring.
 
 To inspect available symbols at runtime:
 
@@ -699,10 +918,46 @@ Run Python tests:
 uv run --no-sync pytest python/tests -v
 ```
 
+The `ridge_cox` benchmarks include joint fitting, sampling covariance, and
+effective-df diagnostics. On a local Apple Silicon run with 10,000 rows, eight
+correlated covariates, weights, strata, and one Rayon thread, median times were
+2.884 ms for ordinary Cox, 2.927 ms for mixed fixed-theta ridge, and 2.903 ms for
+grouped fixed-theta ridge. Automatic selection of four df took 12.06 ms over
+four outer fits and eight total Newton iterations (50 samples per case).
+
 Smoke-test benchmarks:
 ```sh
 cargo bench -- --test
 ```
+
+The AFT benchmarks include matched weighted, stratified lognormal fits with
+full-rank and duplicated covariate columns. Five paired release runs on Apple
+Silicon with Rust 1.94 and one Rayon thread compared automatic initialization
+against the zero starts in revision `6e687b37`. Main-model iterations fell from
+8–9 to R's 4–5, but the preliminary scale fit and working regressions increased
+total fitting time by about 11–34% in six of eight cases; the other two timing
+comparisons were inconclusive. For example, the 1,000-row full-rank fit took
+444 µs versus 367 µs, and the 10,000-row duplicated-column fit took 4.842 ms
+versus 3.595 ms. These measurements include all initialization work and input
+cloning. All eight fits converged and were checked against R's coefficients,
+covariance, and likelihood. Each run used at least 50 samples and 0.25 seconds
+per case:
+
+```sh
+RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- \
+  survreg_bench::weighted_stratified_survreg_lognormal --sample-count 50 \
+  --sample-size 1 --min-time 0.25 --timer os
+```
+
+The `gaussian_distribution_bench` group separates central and extreme-tail
+probabilities and quantiles. In a local single-thread Apple Silicon comparison
+against main, batches of 10,000 accurate quantiles took 197.8 microseconds in
+the central range and 340.8 microseconds in the tails, versus 57.7 and 90.77
+microseconds for the previous approximation. A weighted, stratified lognormal
+AFT fit with 10,000 rows took 5.026 ms versus 4.590 ms. The fit evaluates each
+small Gaussian tail once and derives its large complement, limiting the extra
+work required for accurate probabilities. Measurements used at least 50 samples
+per case; the benchmark definitions retain these comparisons for future tuning.
 
 Format and lint:
 ```sh
@@ -741,6 +996,19 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
   `survival.r_api` module.
 - Python 3.11+ and Rust 1.94+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
+
+Fixed-theta and df-selected ridge Cox tests preserve R survival 3.8.11 outputs,
+including three documented upstream discrepancies. This implementation resets
+martingale risk calculations between strata, includes prediction offsets inside
+the exponential, and calculates counting-process interval uncertainty from the
+difference of the cumulative-hazard gradients. R 3.8.11 can report incorrect
+earlier-stratum martingales, add offsets after exponentiation for expected-event
+predictions, and subtract endpoint variances for interval standard errors. The
+fixture generator retains those original values alongside independent corrected
+references computed with R's risk-set accumulator and ordinary Cox residuals at
+the penalized coefficients; these cases are tested explicitly.
+The `model_frame` generic returns plain columns; matrix-valued ridge terms remain
+available on the retained `fit.model` object.
 
 ## License
 

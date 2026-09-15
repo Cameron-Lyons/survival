@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 use crate::constants::{DIVISION_FLOOR, normal_ci_95};
-use crate::internal::statistical::normal_cdf;
+use crate::internal::statistical::normal_sf;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -290,7 +290,7 @@ pub fn tmle_ate(
     let se = var.sqrt();
 
     let z = ate / se.max(DIVISION_FLOOR);
-    let pvalue = 2.0 * (1.0 - normal_cdf(z.abs()));
+    let pvalue = 2.0 * normal_sf(z.abs());
 
     let (ci_lower, ci_upper) = normal_ci_95(ate, se);
 
@@ -481,6 +481,7 @@ pub fn tmle_survival(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal::statistical::normal_cdf;
 
     #[test]
     fn test_config_validation() {

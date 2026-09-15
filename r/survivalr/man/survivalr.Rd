@@ -715,7 +715,7 @@ coxph(formula, data = NULL, ..., subset = NULL, na.action = "fail")
 
 coxph.control(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
-  timefix = TRUE)
+  timefix = TRUE, survcheckallow = "gap")
 
 coxph.fit(x, y, strata, offset, init, control, weights, method,
   rownames, resid = TRUE, nocenter = NULL)
@@ -851,7 +851,8 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{fitted}{survival_py_model}(object, ..., type = NULL, se.fit = FALSE)
 
-\method{summary}{survival_py_model}(object, conf.int = 0.95, scale = 1, ...)
+\method{summary}{survival_py_model}(object, conf.int = 0.95, scale = 1,
+  terms = FALSE, ...)
 
 \method{summary}{survival_py_survfit}(object, times, censored = FALSE,
   scale = 1, extend = FALSE, rmean = getOption("survfit.rmean"),
@@ -1065,7 +1066,10 @@ options handled by the native bridge.}
 \item{transform}{Formula \code{survobrien} option delegated to
 \code{survival::survobrien}, or the time-axis transform for \code{cox.zph}.}
 \item{terms, singledf, global}{Logical controls for term grouping,
-single-degree-of-freedom tests, and the global test in \code{cox.zph}.}
+single-degree-of-freedom tests, and the global test in \code{cox.zph}.
+For penalized Cox model summaries, \code{terms = TRUE} combines each
+multi-column term into one Wald statistic and reports its effective degrees
+of freedom; confidence intervals remain available for each coefficient.}
 \item{covariate}{Direct numeric covariate vector for Python-backed
 \code{survobrien}.}
 \item{scores, risk.scores}{Optional direct concordance score vectors or
@@ -1108,7 +1112,14 @@ labels.}
 \code{survobrien}.}
 \item{ymin, ymax, timewt, influence, ranks, reverse, keepstrata, std.err}{
 Low-level \code{concordancefit} controls matching the R \pkg{survival}
-entry point.}
+entry point. Near-tied times are adjudicated before applying \code{ymin};
+\code{ymax} limits contributing event times without changing the original
+event count used to select time weights. Infinite bounds are allowed.
+For a single score and multiple strata, \code{keepstrata = TRUE}, or a numeric
+threshold at least as large as the number of strata, retains a matrix of
+per-stratum pair counts. Otherwise counts are pooled. Concordance and its
+variance always use pooled counts. Estimates without comparable pairs are
+\code{NaN}.}
 \item{fit, object}{Bridged model or result object.}
 \item{model}{Logical flag accepted for R formula compatibility where
 supported.}
@@ -1133,7 +1144,9 @@ long data frame instead of a matrix.}
 \item{q, p, n}{Quantiles, probabilities, or draw count for the
 \code{survreg} distribution helpers; \code{p} is the confidence level for
 \code{cipoisson} and the survival probabilities for
-\code{survfit_confint}.}
+\code{survfit_confint}. AFT prediction quantiles also accept probabilities
+0 and 1, returning the distribution's limits. Prediction standard errors at
+these limits may be infinite or undefined when the scale is estimated.}
 \item{probs}{Survival quantile probabilities.}
 \item{se}{Standard-error vector for \code{survfit_confint}, or logical flag
 controlling confidence curves for \code{aareg} plots.}
@@ -1161,6 +1174,10 @@ convergence tolerance used when \code{ridge}, \code{frailty.*}, or
 \code{pspline} searches for a penalty matching \code{df}.}
 \item{maxiter, rel.tolerance, debug}{Control options passed through
 \code{survreg.control}.}
+\item{survcheckallow}{Survival-data checks allowed by the Cox control object.
+Retained for compatibility with R's \code{survival} package. It has no effect
+on ordinary right-censored and counting-process Cox fits; multistate Cox
+fitting is not yet supported.}
 \item{dlist}{Distribution-list object for \code{survregDtest}.}
 \item{row.names, optional, make.names}{Standard \code{as.data.frame}
 arguments.}

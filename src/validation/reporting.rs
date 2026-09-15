@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use crate::constants::{
     DIVISION_FLOOR, Z_SCORE_95, exp_ci, exp_ci_bounds, same_time, z_score_for_confidence,
 };
-use crate::internal::statistical::{lower_incomplete_gamma, normal_cdf};
+use crate::internal::statistical::{lower_incomplete_gamma, normal_sf};
 use crate::internal::validation::{
     validate_binary_i32, validate_confidence_level, validate_finite, validate_non_negative,
     validate_positive_finite_slice, validate_probability_slice,
@@ -306,7 +306,7 @@ pub fn forest_plot_data(
         .zip(standard_errors.iter())
         .map(|(&c, &se)| {
             let z_stat = (c / se).abs();
-            2.0 * (1.0 - normal_cdf(z_stat))
+            2.0 * normal_sf(z_stat)
         })
         .collect();
 
@@ -822,6 +822,47 @@ mod tests {
                 .to_string()
                 .contains("alpha must be finite and between 0 and 1")
         );
+    }
+
+    #[test]
+    fn forest_plot_preserves_extreme_wald_p_values() {
+        // R 2 * pnorm(abs(z), lower.tail = FALSE), including values beyond
+        // the point where a binary64 lower-tail CDF rounds to one.
+        let cases = [
+            (0.0_f64, 1.0),
+            (2.0, 4.550_026_389_635_842e-2),
+            (8.0, 1.244_192_114_854_357e-15),
+            (9.0, 2.257_176_811_907_681_6e-19),
+            (10.0, 1.523_970_604_832_105_4e-23),
+            (12.0, 3.552_964_224_155_358e-33),
+        ];
+        for (z, expected) in cases {
+            for sign in [-1.0, 1.0] {
+                let result = forest_plot_data(
+                    vec!["treatment".to_string()],
+                    vec![sign * z],
+                    vec![1.0],
+                    0.95,
+                )
+                .unwrap();
+                let actual = result.p_values[0];
+                assert!(actual > 0.0);
+                assert!(
+                    (actual / expected - 1.0).abs() < 3e-14,
+                    "z={z}: {actual} != {expected}"
+                );
+            }
+        }
+        // A finite coefficient divided by a positive subnormal standard
+        // error can produce an infinite statistic; its limiting p-value is zero.
+        let result = forest_plot_data(
+            vec!["treatment".to_string()],
+            vec![1.0],
+            vec![f64::from_bits(1)],
+            0.95,
+        )
+        .unwrap();
+        assert_eq!(result.p_values, vec![0.0]);
     }
 
     #[test]

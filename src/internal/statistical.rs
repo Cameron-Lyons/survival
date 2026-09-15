@@ -34,6 +34,12 @@ pub(crate) fn normal_cdf(x: f64) -> f64 {
     pnorm(x, true, false)
 }
 
+/// Standard normal survival function (R's `pnorm(x, lower.tail = FALSE)`).
+#[inline]
+pub(crate) fn normal_sf(x: f64) -> f64 {
+    pnorm(x, false, false)
+}
+
 /// Harrell's C of a risk score against right-censored outcomes, as R's
 /// `concordance(Surv(time, event) ~ risk, reverse = TRUE, ymax = horizon)`:
 /// `(concordant + tied / 2) / comparable` over the pairs whose earlier
@@ -197,7 +203,9 @@ pub(crate) fn two_sided_normal_quantile(alpha: f64) -> Option<f64> {
         return None;
     }
 
-    let z = qnorm(alpha / 2.0, false, false);
+    // Halving in log space keeps subnormal alpha values representable: R's
+    // qnorm(log(alpha) - log(2), lower.tail = FALSE, log.p = TRUE).
+    let z = qnorm(alpha.ln() - std::f64::consts::LN_2, false, true);
     z.is_finite().then_some(z)
 }
 

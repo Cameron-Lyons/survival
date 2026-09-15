@@ -255,7 +255,7 @@ if (getRversion() >= "2.15.1") {
     if (nzchar(dot_names[[idx]]) && dot_names[[idx]] %in% vector_args && !is.null(value)) {
       value <- .as_python_vector(value)
     }
-    values[[idx]] <- value
+    values[idx] <- list(value)
   }
   names(values) <- dot_names
   values
@@ -635,11 +635,11 @@ attrassign <- function(object, tt) {
   if (n_row > 0L && any(vapply(rows, length, integer(1)) != n_col)) {
     stop("vcov result must be rectangular")
   }
-  matrix(unlist(rows, use.names = FALSE), nrow = n_row, ncol = n_col, byrow = TRUE)
+  matrix(as.numeric(unlist(rows, use.names = FALSE)), nrow = n_row, ncol = n_col, byrow = TRUE)
 }
 
 .as_coefficient_table <- function(rows, model_type = "coxph", robust = FALSE,
-                                  scale = 1) {
+                                  scale = 1, penalized = FALSE) {
   model_type <- as.character(model_type)[[1L]]
   robust <- length(robust) > 0L && isTRUE(as.logical(robust)[[1L]])
   is_survreg <- identical(model_type, "survreg")
@@ -650,6 +650,8 @@ attrassign <- function(object, tt) {
     } else {
       c("Value", "Std. Error", "z", "p")
     }
+  } else if (penalized) {
+    c("coef", "se(coef)", "se2", "Chisq", "DF", "p")
   } else if (robust) {
     c("coef", "exp(coef)", "se(coef)", "robust se", "z", "Pr(>|z|)")
   } else {
@@ -686,7 +688,22 @@ attrassign <- function(object, tt) {
       if (robust) {
         values <- c(values, row_numeric(row, "naive_se", fallback_name = "se"))
       }
-      return(c(values, statistic, row_numeric(row, "p")))
+      result <- c(values, statistic, row_numeric(row, "p"))
+      if (is.na(coefficient)) {
+        result[is.na(result)] <- NA_real_
+      }
+      return(result)
+    }
+
+    if (penalized) {
+      return(c(
+        coefficient,
+        row_numeric(row, "se"),
+        row_numeric(row, "se2"),
+        row_numeric(row, "chisq"),
+        row_numeric(row, "df"),
+        row_numeric(row, "p")
+      ))
     }
 
     coefficient <- coefficient * cox_scale
@@ -723,14 +740,14 @@ attrassign <- function(object, tt) {
   values
 }
 
-.as_cox_confint_table <- function(coefficient_table, conf.int) {
-  coefficient <- coefficient_table[, "coef"]
+.as_cox_confint_table <- function(coefficient_table, conf.int, scale = 1) {
+  coefficient <- coefficient_table[, "coef"] * scale
   se_column <- if ("robust se" %in% colnames(coefficient_table)) {
     "robust se"
   } else {
     "se(coef)"
   }
-  standard_error <- coefficient_table[, se_column]
+  standard_error <- coefficient_table[, se_column] * scale
   z <- stats::qnorm((1 + conf.int) / 2)
   values <- cbind(
     exp(coefficient),
@@ -1272,6 +1289,15 @@ attrassign <- function(object, tt) {
   .as_prediction_value(value, matrix_result = matrix_result, col.names = col.names)
 }
 
+.survreg_alias_prediction_missing <- function(value) {
+  if (is.numeric(value)) {
+    value[is.nan(value)] <- NA_real_
+  } else if (is.list(value)) {
+    value <- lapply(value, .survreg_alias_prediction_missing)
+  }
+  value
+}
+
 .model_term_names <- function(object, terms = NULL) {
   as.character(.call_r_api("model_term_names", object, terms = terms))
 }
@@ -1455,7 +1481,16 @@ attrassign <- function(object, tt) {
 }
 
 .call_r_api <- function(name, ..., .wrap = character()) {
-  result <- do.call(.python_attr(name), .compact_null(list(...)))
+  arguments <- .compact_null(list(...))
+  if (name %in% c("coxph", "survreg", "clogit")) {
+    captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments)
+    result <- captured$result
+    for (message in captured$warnings) {
+      warning(message, call. = FALSE)
+    }
+  } else {
+    result <- do.call(.python_attr(name), arguments)
+  }
   if (length(.wrap) > 0L) {
     return(.wrap_python(result, .wrap))
   }
@@ -6005,6 +6040,10 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
   fit_stop <- .as_numeric_vector(.result_field(result, "event_times"))
   fit_status <- as.integer(.as_numeric_vector(.result_field(result, "status")))
   fit_y <- Surv(fit_start, fit_stop, fit_status)
+  linear_predictors <- .as_numeric_vector(.result_field(result, "linear_predictors"))
+  linear_predictors <- linear_predictors - as.numeric(
+    .result_field(result, "linear_predictor_center")
+  )
 
   out <- list(
     coefficients = coefficients,
@@ -6012,7 +6051,7 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     loglik = .as_numeric_vector(.result_field(result, "log_likelihood")),
     score = as.numeric(.result_field(result, "score_test")),
     iter = as.integer(.result_field(result, "iterations")),
-    linear.predictors = .as_numeric_vector(.result_field(result, "linear_predictors")),
+    linear.predictors = linear_predictors,
     residuals = .as_numeric_vector(.result_field(result, "residuals")),
     means = stats::setNames(.as_numeric_vector(.result_field(result, "means")), coefficient_names),
     method = method,
@@ -6782,35 +6821,6 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
   list(name = distribution, parameter = parameter)
 }
 
-.survreg_fit_start <- function(y, x, weights, offset, strata, nstrat,
-                               fixed_scale, null_scale = NULL) {
-  status <- y[, ncol(y)]
-  proxy <- ifelse(status == 3, rowMeans(y[, 1:2, drop = FALSE]), y[, 1L])
-  target <- proxy - offset
-  location <- if (ncol(x) == 0L) {
-    numeric()
-  } else {
-    fitted <- try(stats::lm.wfit(x, target, weights)$coefficients, silent = TRUE)
-    if (inherits(fitted, "try-error")) rep(0, ncol(x)) else as.numeric(fitted)
-  }
-  location[!is.finite(location)] <- 0
-  if (!is.null(fixed_scale)) {
-    return(location)
-  }
-  if (!is.null(null_scale)) {
-    return(c(location, null_scale))
-  }
-
-  center <- sum(weights * target) / sum(weights)
-  residual <- target - center
-  log_scale <- vapply(seq_len(nstrat), function(group) {
-    keep <- strata == group
-    variance <- sum(weights[keep] * residual[keep]^2) / sum(weights[keep])
-    log(max(sqrt(variance), sqrt(.Machine$double.eps)))
-  }, numeric(1))
-  c(center, log_scale)
-}
-
 .survreg_fit_core <- function(x, y, weights, offset, initial, controlvals,
                               distribution, distribution_parameter,
                               fixed_scale, strata) {
@@ -6821,7 +6831,7 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
     covariates = .coxph_fit_covariates(x, nrow(x)),
     weights = .as_python_vector(weights),
     offsets = .as_python_vector(offset),
-    initial_beta = as.list(unname(initial)),
+    initial_beta = if (is.null(initial)) NULL else as.list(unname(initial)),
     strata = .as_python_vector(as.integer(strata) - 1L),
     distribution = distribution,
     max_iter = as.integer(controlvals$iter.max),
@@ -6882,32 +6892,43 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
     return(eval.parent(call))
   }
   fixed_scale <- if (scale > 0) as.numeric(scale) else NULL
-  null_x <- matrix(1, nrow = n, ncol = 1L)
-  null_start <- .survreg_fit_start(
-    y, null_x, weights, offset, strata, nstrat, fixed_scale
-  )
-  null_control <- controlvals
-  null_control$iter.max <- 20L
-  null_fit <- .survreg_fit_core(
-    null_x, y, weights, offset, null_start, null_control,
-    native_distribution$name, native_distribution$parameter,
-    fixed_scale, strata
-  )
-  null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
-  null_scale <- if (is.null(fixed_scale)) null_coef[-1L] else numeric()
-
-  if (missing(init) || is.null(init)) {
-    initial <- .survreg_fit_start(
-      y, x, weights, offset, strata, nstrat, fixed_scale, null_scale
-    )
-  } else {
-    initial <- as.numeric(init)
-    if (is.null(fixed_scale) && length(initial) == nvar) {
-      initial <- c(initial, null_scale)
-    }
+  mean_only <- nvar == 1L && all(x == 1)
+  initial <- if (missing(init) || is.null(init)) NULL else as.numeric(init)
+  if (!is.null(initial)) {
     expected <- nvar + if (is.null(fixed_scale)) nstrat else 0L
-    if (length(initial) != expected) {
+    partial <- is.null(fixed_scale) && length(initial) == nvar
+    if (length(initial) != expected && !partial) {
       stop("Wrong length for initial parameters", call. = FALSE)
+    }
+    if (any(!is.finite(initial))) {
+      stop("Initial parameters must contain only finite values", call. = FALSE)
+    }
+    if (partial && mean_only) {
+      stop("Mean-only models require a complete initial vector including log-scale parameters",
+           call. = FALSE)
+    }
+  }
+
+  # The native omitted-start path uses the distribution's variance estimate
+  # and censoring derivatives for the same preliminary fit as R.
+  null_fit <- NULL
+  if (!mean_only) {
+    null_control <- controlvals
+    null_control$iter.max <- 20L
+    null_fit <- .survreg_fit_core(
+      matrix(1, nrow = n, ncol = 1L), y, weights, offset, NULL, null_control,
+      native_distribution$name, native_distribution$parameter,
+      fixed_scale, strata
+    )
+    null_coef <- .as_numeric_vector(.result_field(null_fit, "coefficients"))
+    null_loglik <- as.numeric(.result_field(null_fit, "log_likelihood"))
+    null_variance <- .as_numeric_matrix(.result_field(null_fit, "variance_matrix"))
+    if (any(!is.finite(null_coef)) || !is.finite(null_loglik) ||
+        any(!is.finite(null_variance))) {
+      stop("initial iteration failed (use starting estimates?)", call. = FALSE)
+    }
+    if (!is.null(initial) && is.null(fixed_scale) && length(initial) == nvar) {
+      initial <- c(initial, null_coef[-1L])
     }
   }
 
@@ -6930,18 +6951,18 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
   coefficients <- .as_numeric_vector(.result_field(fit, "coefficients"))
   names(coefficients) <- coefficient_names
   variance <- .as_numeric_matrix(.result_field(fit, "variance_matrix"))
-  dimnames(variance) <- NULL
-  icoef <- if (is.null(fixed_scale)) {
-    null_coef
-  } else {
-    c(null_coef, log(fixed_scale))
-  }
-  names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
+  rescaled <- is.null(initial) && nvar > 1L && all(x[, 1L] == 1) &&
+    any(vapply(seq_len(nvar), function(column) {
+      any(x[, column] != 0 & x[, column] != 1)
+    }, logical(1)))
+  dimnames(variance) <- if (rescaled) NULL else list(coefficient_names, coefficient_names)
   full_loglik <- as.numeric(.result_field(fit, "log_likelihood"))
-  null_loglik <- if (nvar == 1L && all(x == 1)) {
-    full_loglik
+  if (mean_only) {
+    icoef <- coefficients
+    null_loglik <- full_loglik
   } else {
-    as.numeric(.result_field(null_fit, "log_likelihood"))
+    icoef <- if (is.null(fixed_scale)) null_coef else c(null_coef, log(fixed_scale))
+    names(icoef) <- c("Intercept", rep("Log(scale)", nstrat))
   }
 
   list(
@@ -8266,7 +8287,7 @@ aeqSurv <- function(x, tolerance = sqrt(.Machine$double.eps)) {
 
 coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
                           iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
-                          timefix = TRUE) {
+                          timefix = TRUE, survcheckallow = "gap") {
   eps <- .as_finite_scalar(eps, "eps", positive = TRUE)
   toler.chol <- .as_finite_scalar(toler.chol, "toler.chol", positive = TRUE)
   iter.max <- .as_integer_scalar(iter.max, "iter.max", nonnegative = TRUE)
@@ -8279,7 +8300,8 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
     iter.max = iter.max,
     toler.inf = toler.inf,
     outer.max = outer.max,
-    timefix = timefix
+    timefix = timefix,
+    survcheckallow = survcheckallow
   )
 }
 
@@ -8320,11 +8342,23 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   } else {
     stop("y must have 2 or 3 columns", call. = FALSE)
   }
+  if (isTRUE(include_agreg_info) && all(status == 0L)) {
+    stop("Can't fit a Cox model with 0 failures", call. = FALSE)
+  }
   n <- length(time)
-  covariate_matrix <- as.matrix(x)
+  covariate_matrix <- if (!is.matrix(x) && length(x) == 0L) {
+    matrix(numeric(), nrow = n, ncol = 0L)
+  } else {
+    as.matrix(x)
+  }
+  null_model <- ncol(covariate_matrix) == 0L
   x_names <- colnames(covariate_matrix)
   if (is.null(x_names)) {
-    x_names <- paste0("X", seq_len(ncol(covariate_matrix)))
+    x_names <- if (null_model) {
+      character()
+    } else {
+      paste0("X", seq_len(ncol(covariate_matrix)))
+    }
   }
   covariates <- .coxph_fit_covariates(covariate_matrix, n)
 
@@ -8347,6 +8381,12 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   }
   if (!is.null(init)) {
     init <- as.numeric(init)
+  }
+  if (null_model) {
+    if (isTRUE(include_agreg_info) && length(init) != 0L) {
+      stop("Wrong length for inital values", call. = FALSE)
+    }
+    init <- NULL
   }
   if (missing(control) || is.null(control)) {
     control <- coxph.control()
@@ -8375,7 +8415,7 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
       weights = weights,
       offset = offset,
       initial_beta = if (is.null(init)) NULL else as.list(init),
-      max_iter = as.integer(control[["iter.max"]]),
+      max_iter = if (null_model) 0L else as.integer(control[["iter.max"]]),
       eps = as.numeric(control[["eps"]]),
       toler = as.numeric(control[["toler.chol"]]),
       method = method,
@@ -8383,6 +8423,48 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
       nocenter = if (is.null(nocenter)) NULL else as.list(as.numeric(nocenter))
     ))
   )
+
+  messages <- .python_attr("_cox_fit_diagnostic_messages")(
+    fit,
+    counting = !is.null(entry_times),
+    max_iter = if (null_model) 0L else as.integer(control[["iter.max"]]),
+    eps = as.numeric(control[["eps"]]),
+    toler_inf = as.numeric(control[["toler.inf"]])
+  )
+  for (message in messages) {
+    warning(message, call. = FALSE)
+  }
+
+  if (null_model) {
+    loglik <- .as_numeric_vector(.result_field(fit, "log_likelihood"))
+    null_loglik <- if (isTRUE(include_agreg_info)) {
+      loglik[[length(loglik)]]
+    } else {
+      loglik[[1L]]
+    }
+    martingale <- NULL
+    if (isTRUE(resid)) {
+      martingale <- .as_numeric_vector(
+        do.call(reticulate::py_get_attr(fit, "martingale_residuals"), list())
+      )
+      names(martingale) <- as.character(rownames)
+    }
+    out <- list(
+      loglik = null_loglik,
+      linear.predictors = offset
+    )
+    if (!isTRUE(include_agreg_info) && isTRUE(resid)) {
+      out$residuals <- martingale
+    }
+    out$method <- method
+    if (isTRUE(include_class)) {
+      out$class <- c("coxph.null", "coxph")
+    }
+    if (isTRUE(include_agreg_info) && isTRUE(resid)) {
+      out$residuals <- martingale
+    }
+    return(out)
+  }
 
   coefficient_matrix <- .as_numeric_matrix(.result_field(fit, "coefficients"))
   coefficients <- if (nrow(coefficient_matrix) == 0L) {
@@ -10683,13 +10765,18 @@ coef.survival_py_concordance <- function(object, ...) {
 }
 
 vcov.survival_py_concordance <- function(object, ...) {
+  covariance <- .result_field(object, "covariance")
+  if (!is.null(covariance)) {
+    covariance <- .as_numeric_matrix(covariance)
+    return(if (nrow(covariance) == 1L) covariance[[1L]] else covariance)
+  }
   frame <- as.data.frame(object)
   if (nrow(frame) == 1L) {
-    return(4 * as.numeric(frame$variance)[[1L]])
+    return(as.numeric(frame$variance)[[1L]])
   }
   dfbeta <- .result_field(object, "dfbeta")
   if (is.null(dfbeta)) {
-    values <- 4 * as.numeric(frame$variance)
+    values <- as.numeric(frame$variance)
     return(diag(values, nrow = length(values)))
   }
   dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
@@ -10698,7 +10785,7 @@ vcov.survival_py_concordance <- function(object, ...) {
     stop("concordance dfbeta values must be rectangular", call. = FALSE)
   }
   dfbeta_matrix <- do.call(cbind, dfbeta_columns)
-  4 * crossprod(dfbeta_matrix)
+  crossprod(dfbeta_matrix)
 }
 
 coef.concordance <- function(object, ...) {
@@ -10787,7 +10874,19 @@ survConcordance.fit <- function(y, x, strata, weight) {
   values
 }
 
-.concordancefit_count <- function(result, score_names = NULL) {
+.concordancefit_count <- function(result, score_names = NULL, strata = NULL) {
+  stratum_counts <- .result_field(result, "stratum_counts")
+  if (!is.null(stratum_counts)) {
+    count <- .as_numeric_matrix(stratum_counts)
+    labels <- as.character(unlist(.result_field(result, "stratum_labels"), use.names = FALSE))
+    # Python retains encounter order. R uses factor level order, including an
+    # explicitly ordered factor's levels, with unused levels omitted.
+    levels <- if (is.null(strata)) sort(labels) else levels(droplevels(as.factor(strata)))
+    order <- match(levels, labels)
+    count <- count[order, , drop = FALSE]
+    dimnames(count) <- list(levels, c("concordant", "discordant", "tied.x", "tied.y", "tied.xy"))
+    return(count)
+  }
   concordant <- .as_numeric_vector(.result_field(result, "concordant"))
   comparable <- .as_numeric_vector(.result_field(result, "comparable"))
   tied_x <- .as_numeric_vector(.result_field(result, "tied_x"))
@@ -10854,12 +10953,12 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     ranks <- FALSE
     influence <- 0L
   }
-  internal_influence <- if (isTRUE(std.err) && influence == 0L) 1L else influence
+  internal_influence <- if (isTRUE(std.err)) 3L else 0L
   result <- .call_r_api(
     "concordance",
     .as_python_surv(y),
     scores = .as_python_optional_vector(x),
-    strata = if (missing(strata)) NULL else .as_python_vector(strata),
+    strata = if (missing(strata) || length(strata) == 0L) NULL else .as_python_vector(strata),
     weights = if (missing(weights)) NULL else .as_python_vector(weights),
     ymin = ymin,
     ymax = ymax,
@@ -10884,12 +10983,18 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   }
   out <- list(
     concordance = if (length(concordance) == 1L) concordance[[1L]] else concordance,
-    count = .concordancefit_count(result, if (multi_score) score_names else NULL),
+    count = .concordancefit_count(
+      result,
+      if (multi_score) score_names else NULL,
+      if (missing(strata)) NULL else strata
+    ),
     n = as.integer(.result_field(result, "n"))
   )
   variance <- .result_field(result, "variance")
   conditional_variance <- .as_numeric_vector(.result_field(result, "conditional_variance"))
   dfbeta <- .result_field(result, "dfbeta")
+  cluster_levels <- if (!missing(cluster) && !is.null(cluster)) unique(cluster) else NULL
+  cluster_order <- if (!is.null(cluster_levels)) order(cluster_levels) else NULL
   dfbeta_matrix <- NULL
   if (multi_score && !is.null(dfbeta)) {
     dfbeta_columns <- lapply(dfbeta, .as_numeric_vector)
@@ -10898,12 +11003,16 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       stop("concordance dfbeta values must be rectangular", call. = FALSE)
     }
     dfbeta_matrix <- do.call(cbind, dfbeta_columns)
+    if (!is.null(cluster_order)) {
+      dfbeta_matrix <- dfbeta_matrix[cluster_order, , drop = FALSE]
+      rownames(dfbeta_matrix) <- as.character(cluster_levels[cluster_order])
+    }
   }
   if (isTRUE(std.err) && !is.null(variance)) {
     if (multi_score && !is.null(dfbeta_matrix)) {
-      out$var <- 4 * crossprod(dfbeta_matrix)
+      out$var <- crossprod(dfbeta_matrix)
     } else {
-      out$var <- 4 * .as_numeric_vector(variance)
+      out$var <- .as_numeric_vector(variance)
     }
     out$cvar <- if (length(conditional_variance) == 1L) {
       conditional_variance[[1L]]
@@ -10914,9 +11023,14 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (influence %in% c(1L, 3L)) {
     if (!is.null(dfbeta)) {
       out$dfbeta <- if (multi_score && !is.null(dfbeta_matrix)) {
-        2 * dfbeta_matrix
+        dfbeta_matrix
       } else {
-        2 * .as_numeric_vector(dfbeta)
+        values <- .as_numeric_vector(dfbeta)
+        if (!is.null(cluster_order)) {
+          values <- values[cluster_order]
+          names(values) <- as.character(cluster_levels[cluster_order])
+        }
+        values
       }
     }
   }
@@ -10930,7 +11044,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
           stop("concordance influence values must be rectangular", call. = FALSE)
         }
         out$influence <- array(
-          2 * unlist(influence_matrices, use.names = FALSE),
+          unlist(influence_matrices, use.names = FALSE),
           dim = c(matrix_dims[[1L]], length(influence_matrices))
         )
         dimnames(out$influence) <- list(
@@ -10939,7 +11053,7 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
           score_names
         )
       } else {
-        out$influence <- 2 * .as_numeric_matrix(influence_rows)
+        out$influence <- .as_numeric_matrix(influence_rows)
         colnames(out$influence) <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
       }
     }
@@ -11009,7 +11123,12 @@ coxph.wtest <- function(var, b, toler.chol = 1e-09) {
 }
 
 coef.survival_py_model <- function(object, ...) {
-  values <- .as_numeric_vector(.call_r_api("coef", object, ...))
+  values <- .call_r_api("coef", object, ...)
+  values <- if (inherits(object, "survival_py_survreg")) {
+    .as_nullable_numeric_vector(values)
+  } else {
+    .as_numeric_vector(values)
+  }
   names(values) <- as.character(.call_r_api("coef_names", object))
   values
 }
@@ -11024,14 +11143,18 @@ vcov.survival_py_model <- function(object, ..., complete = TRUE) {
 confint.survival_py_model <- function(object, parm, level = 0.95, ...) {
   selected <- if (missing(parm)) NULL else parm
   result <- .call_r_api("confint", object, parm = selected, level = level, ...)
-  .as_confint_matrix(result, level)
+  values <- .as_confint_matrix(result, level)
+  if (inherits(object, "survival_py_survreg")) {
+    values[is.nan(values)] <- NA_real_
+  }
+  values
 }
 
 logLik.survival_py_model <- function(object, ...) {
   value <- as.numeric(.call_r_api("loglik", object, ...))
   result <- structure(
     value,
-    df = as.integer(.call_r_api("degrees_freedom", object)),
+    df = as.numeric(.call_r_api("degrees_freedom", object)),
     class = "logLik"
   )
   if (inherits(object, "survival_py_coxph")) {
@@ -11113,27 +11236,72 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     matrix_result = .predict_matrix_result(type),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
+    value <- .survreg_alias_prediction_missing(value)
+  }
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
-summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
+.penalized_cox_summary_terms <- function(object, coefficient_table, term_df) {
+  matrix_info <- .call_r_api("model_matrix", object)
+  assignments <- as.integer(.as_numeric_vector(matrix_info$assign))
+  group_ids <- unique(assignments)
+  term_names <- as.character(.call_r_api("model_term_names", object))
+  term_df <- .as_numeric_vector(term_df)
+  if (length(group_ids) != length(term_names) || length(term_df) != length(term_names)) {
+    stop("penalized term metadata does not match the model matrix", call. = FALSE)
+  }
+  variance <- stats::vcov(object, complete = TRUE)
+  coefficients <- stats::coef(object)
+  rows <- vector("list", length(group_ids))
+  row_names <- character(length(group_ids))
+  for (i in seq_along(group_ids)) {
+    columns <- which(assignments == group_ids[[i]])
+    if (length(columns) == 1L) {
+      rows[[i]] <- coefficient_table[columns, , drop = FALSE]
+      row_names[[i]] <- rownames(coefficient_table)[columns]
+    } else {
+      statistic <- coxph.wtest(
+        variance[columns, columns, drop = FALSE],
+        unname(as.list(coefficients[columns]))
+      )$test[[1L]]
+      rows[[i]] <- matrix(c(
+        NA_real_, NA_real_, NA_real_, statistic, term_df[[i]],
+        stats::pchisq(statistic, 1, lower.tail = FALSE)
+      ), nrow = 1L)
+      row_names[[i]] <- term_names[[i]]
+    }
+  }
+  result <- do.call(rbind, rows)
+  dimnames(result) <- list(row_names, colnames(coefficient_table))
+  result
+}
+
+summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
+                                     terms = FALSE, ...) {
   result <- .call_r_api("model_summary", object)
   model_type <- as.character(result$model_type)[[1L]]
   robust <- length(result$robust) > 0L && isTRUE(as.logical(result$robust)[[1L]])
+  penalized <- isTRUE(result$penalized)
   coefficient_table <- .as_coefficient_table(
     result$coefficients,
     model_type = model_type,
     robust = robust,
-    scale = scale
+    scale = scale,
+    penalized = penalized
   )
   if (identical(model_type, "survreg")) {
+    if (all(is.na(coefficient_table[, 1L]))) {
+      warning("This model has zero rank --- no summary is provided", call. = FALSE)
+      return(invisible(object))
+    }
     location_coefficients <- result$location_coefficients
     location_names <- result$location_coefficient_names
     if (is.null(location_coefficients) || is.null(location_names)) {
       location_coefficients <- coef(object)
       location_names <- names(location_coefficients)
     }
-    location_coefficients <- .as_numeric_vector(location_coefficients)
+    location_coefficients <- .as_nullable_numeric_vector(location_coefficients)
     location_names <- as.character(location_names)
     if (length(location_coefficients) != length(location_names)) {
       stop("survreg summary coefficient names must match its location coefficients", call. = FALSE)
@@ -11164,9 +11332,13 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
       result$used.robust <- NULL
     } else {
       result$coefficients <- coefficient_table
-      result$used.robust <- robust
+      result$used.robust <- if (penalized) NULL else robust
       if (conf.int) {
-        result$conf.int <- .as_cox_confint_table(coefficient_table, conf.int)
+        result$conf.int <- .as_cox_confint_table(
+          coefficient_table,
+          conf.int,
+          scale = if (penalized) scale else 1
+        )
       } else {
         result$conf.int <- NULL
       }
@@ -11176,28 +11348,38 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1, ...) {
       result$loglik <- c(null_loglik, full_loglik)
       result$nevent <- as.numeric(result$n_event)[[1L]]
 
-      df <- as.integer(result$df)[[1L]]
+      df <- as.numeric(result$df)[[1L]]
       likelihood_test <- -2 * (null_loglik - full_loglik)
       result$logtest <- .cox_summary_test(likelihood_test, df)
-      result$sctest <- .cox_summary_test(result$score_test, df)
-      result$rsq <- c(
-        rsq = 1 - exp(-likelihood_test / result$n),
-        maxrsq = 1 - exp(2 * null_loglik / result$n)
-      )
-
-      unscaled_coefficients <- stats::coef(object)
-      keep <- !is.na(unscaled_coefficients)
-      if (df > 0L && any(keep)) {
-        active_variance <- stats::vcov(object, complete = TRUE)[keep, keep, drop = FALSE]
-        wald <- coxph.wtest(
-          active_variance,
-          unname(as.list(unscaled_coefficients[keep]))
-        )
-        wald_test <- wald$test
+      if (penalized) {
+        result$df <- .as_numeric_vector(result$term_df)
+        result$iter <- as.integer(.as_numeric_vector(result$iter))
+        if (.as_logical_scalar(terms, "terms")) {
+          result$coefficients <- .penalized_cox_summary_terms(
+            object, coefficient_table, result$df
+          )
+        }
       } else {
-        wald_test <- 0
+        result$sctest <- .cox_summary_test(result$score_test, df)
+        result$rsq <- c(
+          rsq = 1 - exp(-likelihood_test / result$n),
+          maxrsq = 1 - exp(2 * null_loglik / result$n)
+        )
+
+        unscaled_coefficients <- stats::coef(object)
+        keep <- !is.na(unscaled_coefficients)
+        if (df > 0L && any(keep)) {
+          active_variance <- stats::vcov(object, complete = TRUE)[keep, keep, drop = FALSE]
+          wald <- coxph.wtest(
+            active_variance,
+            unname(as.list(unscaled_coefficients[keep]))
+          )
+          wald_test <- wald$test
+        } else {
+          wald_test <- 0
+        }
+        result$waldtest <- .cox_summary_test(wald_test, df, round.test = TRUE)
       }
-      result$waldtest <- .cox_summary_test(wald_test, df, round.test = TRUE)
     }
   }
   class(result) <- c("summary.survival_py_model", class(result))
@@ -11219,6 +11401,9 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
     matrix_result = .predict_matrix_result(type),
     col.names = .predict_column_names(object, type, terms = dots[["terms"]])
   )
+  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
+    value <- .survreg_alias_prediction_missing(value)
+  }
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
@@ -11802,6 +11987,10 @@ print.summary.survival_py_model <- function(
 
     p_digits <- max(1, getOption("digits") - 4)
     cat("\n")
+    if (isTRUE(x$penalized)) {
+      cat("Iterations:", x$iter[1L], "outer,", x$iter[2L], "Newton-Raphson\n")
+      cat("Degrees of freedom for terms=", format(round(x$df, 1)), "\n")
+    }
     cat(
       "Likelihood ratio test= ",
       format(round(x$logtest["test"], 2)),
@@ -11810,22 +11999,26 @@ print.summary.survival_py_model <- function(
       "\n",
       sep = ""
     )
-    cat(
-      "Wald test            = ",
-      format(round(x$waldtest["test"], 2)),
-      "  on ", x$waldtest["df"], " df,",
-      "   p=", format.pval(x$waldtest["pvalue"], digits = p_digits),
-      "\n",
-      sep = ""
-    )
-    cat(
-      "Score (logrank) test = ",
-      format(round(x$sctest["test"], 2)),
-      "  on ", x$sctest["df"], " df,",
-      "   p=", format.pval(x$sctest["pvalue"], digits = p_digits),
-      "\n\n",
-      sep = ""
-    )
+    if (!is.null(x$waldtest)) {
+      cat(
+        "Wald test            = ",
+        format(round(x$waldtest["test"], 2)),
+        "  on ", x$waldtest["df"], " df,",
+        "   p=", format.pval(x$waldtest["pvalue"], digits = p_digits),
+        "\n",
+        sep = ""
+      )
+    }
+    if (!is.null(x$sctest)) {
+      cat(
+        "Score (logrank) test = ",
+        format(round(x$sctest["test"], 2)),
+        "  on ", x$sctest["df"], " df,",
+        "   p=", format.pval(x$sctest["pvalue"], digits = p_digits),
+        "\n\n",
+        sep = ""
+      )
+    }
     if (isTRUE(x$used.robust)) {
       cat(
         "  (Note: the likelihood ratio and score tests assume independence of\n",

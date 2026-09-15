@@ -159,7 +159,7 @@ pub fn g_estimation_aft(
 
     let p_values: Vec<f64> = z_scores
         .iter()
-        .map(|&z| 2.0 * (1.0 - normal_cdf(z.abs())))
+        .map(|&z| 2.0 * normal_sf(z.abs()))
         .collect();
 
     let counterfactual_times: Vec<f64> = (0..n)
