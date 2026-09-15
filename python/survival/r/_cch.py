@@ -1,4 +1,5 @@
-"""``cch`` case-cohort models."""
+"""``cch`` case-cohort models (R/cch.R): the argument checks and the model frame;
+the Prentice/SelfPrentice/LinYing/Borgan estimators run in Rust."""
 
 from __future__ import annotations
 
@@ -9,226 +10,224 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
-    _encode_labels,
     _integer_scalar,
     _label_levels,
     _match_string_arg,
     _materialize_1d,
-    _materialize_labels,
     _normalize_bool_option_with_default,
     _pop_dotted_keyword,
 )
-from ._fit import _formula_design_output_names
-from ._formula import (
-    _apply_formula_na_action,
-    _column_or_values,
-    _design_rows_from_spec,
-    _fit_formula_design,
-    _formula_response_spec,
-    _parse_formula,
-    _subset_formula_inputs,
-)
+from ._fit import _model_frame, _strata_factor
 from ._types import CchModelResult
 
-
-def _cch_stratified_cohort_sizes(value: Any, levels: Sequence[Any]) -> list[int]:
-    if isinstance(value, Mapping):
-        missing = [level for level in levels if level not in value]
-        extra = [key for key in value if key not in levels]
-        if missing or extra:
-            raise ValueError("cohort_size mapping keys must match the stratum levels")
-        raw_sizes = [value[level] for level in levels]
-    else:
-        raw_sizes = _materialize_1d(value, "cohort_size")
-        if len(raw_sizes) != len(levels):
-            raise ValueError("cohort_size and stratum levels must have the same length")
-    sizes = [_integer_scalar(item, "cohort_size") for item in raw_sizes]
-    if any(size <= 0 for size in sizes):
-        raise ValueError("cohort_size values must be positive")
-    return sizes
+_METHODS = {
+    "prentice": "Prentice",
+    "selfprentice": "SelfPrentice",
+    "linying": "LinYing",
+    "i.borgan": "I.Borgan",
+    "ii.borgan": "II.Borgan",
+}
 
 
-def cch(
-    formula: str,
-    data: Any,
-    *,
-    subcoh: Any,
-    id: Any,
-    cohort_size: Any | None = None,
-    stratum: Any | None = None,
-    method: str = "Prentice",
-    robust: Any = False,
-    subset: Any | None = None,
-    na_action: str | None = "fail",
-    **kwargs: Any,
-) -> CchModelResult:
-    """Fit an unstratified or sampling-stratified case-cohort Cox model."""
-
-    cohort_size = _pop_dotted_keyword(
-        kwargs,
-        "cohort.size",
-        "cohort_size",
-        cohort_size,
-        None,
-    )
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
-    if kwargs:
-        unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"cch got unexpected keyword argument(s): {unexpected}")
-    if not isinstance(formula, str):
-        raise TypeError("cch formula must be a string")
-    if data is None:
-        raise ValueError("cch formula requires data")
-    if cohort_size is None:
-        raise TypeError("cohort_size is required")
-
-    normalized_method = _match_string_arg(
-        method,
-        "method",
-        ("prentice", "selfprentice", "linying", "i.borgan", "ii.borgan"),
-        "cch method must be 'Prentice', 'SelfPrentice', 'LinYing', 'I.Borgan', or 'II.Borgan'",
-    )
-    method_name = {
-        "prentice": "Prentice",
-        "selfprentice": "SelfPrentice",
-        "linying": "LinYing",
-        "i.borgan": "I.Borgan",
-        "ii.borgan": "II.Borgan",
-    }[normalized_method]
-    stratified = method_name in {"I.Borgan", "II.Borgan"}
-    robust_value = _normalize_bool_option_with_default(robust, "robust", False)
-    if stratified and robust_value:
-        warnings.warn(
-            "robust variance is not implemented for stratified cch analysis",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        robust_value = False
-    elif robust_value and method_name != "LinYing":
-        warnings.warn(
-            f"robust ignored for method ({method_name})",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        robust_value = False
-
-    subcohort_values = _column_or_values(data, subcoh, "subcoh")
-    id_values = _column_or_values(data, id, "id")
-    stratum_values = _column_or_values(data, stratum, "stratum") if stratum is not None else None
-    if subset is not None:
-        data, aligned = _subset_formula_inputs(
-            formula,
-            data,
-            subset,
-            subcohort=subcohort_values,
-            id=id_values,
-            stratum=stratum_values,
-        )
-        subcohort_values = aligned["subcohort"]
-        id_values = aligned["id"]
-        stratum_values = aligned["stratum"]
-    data, aligned = _apply_formula_na_action(
-        formula,
-        data,
-        na_action,
-        subcohort=subcohort_values,
-        id=id_values,
-        stratum=stratum_values,
-    )
-    subcohort_values = aligned["subcohort"]
-    id_values = aligned["id"]
-    stratum_values = aligned["stratum"]
-
-    response_spec = _formula_response_spec(formula)
-    response, terms = _parse_formula(formula, data)
-    if response.type not in {"right", "counting"}:
-        raise NotImplementedError("cch supports right-censored and counting Surv responses")
-    if stratified and stratum_values is None:
-        raise ValueError(f"method ({method_name}) requires stratum")
-    if not stratified and (terms.strata or stratum_values is not None):
-        warnings.warn(
-            f"stratum ignored for method ({method_name})",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-    if terms.offsets:
-        warnings.warn("Offset term ignored", RuntimeWarning, stacklevel=2)
-    if terms.clusters:
-        raise ValueError("cluster() terms are not supported by cch")
-
-    design = _fit_formula_design(data, response_spec, terms, len(response))
-    rows = _design_rows_from_spec(data, design, len(response))
-    if not rows or not rows[0]:
-        raise ValueError("cch formula must contain at least one covariate")
-    coefficient_names = tuple(_formula_design_output_names(design))
-
-    raw_subcohort = _materialize_1d(subcohort_values, "subcoh")
-    if len(raw_subcohort) != len(response):
-        raise ValueError("subcoh must have the same length as the Surv response")
-    fit_subcohort: list[int] = []
-    for row_idx, value in enumerate(raw_subcohort):
+def _subcohort_indicator(values: Sequence[Any]) -> list[int]:
+    out: list[int] = []
+    for value in values:
         if isinstance(value, bool):
-            fit_subcohort.append(int(value))
+            out.append(int(value))
             continue
         try:
             numeric = float(value)
         except (TypeError, ValueError) as exc:
-            raise ValueError("subcoh must contain only 0/1 or boolean values") from exc
-        if not math.isfinite(numeric) or numeric not in {0.0, 1.0}:
             raise ValueError(
-                f"subcoh must contain only 0/1 or boolean values; got {value!r} at row {row_idx}"
-            )
-        fit_subcohort.append(int(numeric))
+                "Permissible values for subcohort indicator are 0/1 or TRUE/FALSE"
+            ) from exc
+        if numeric not in (0.0, 1.0):
+            raise ValueError("Permissible values for subcohort indicator are 0/1 or TRUE/FALSE")
+        out.append(int(numeric))
+    return out
 
-    id_labels = _materialize_labels(id_values, "id")
-    if len(id_labels) != len(response):
-        raise ValueError("id must have the same length as the Surv response")
-    if len(_label_levels(id_labels, "id")) != len(id_labels):
-        raise ValueError("multiple records per id are not allowed")
-    id_codes = _encode_labels(id_labels, "id")
-    stratum_labels: list[Any] | None = None
+
+def _stratified_cohort_sizes(cohort_size: Any, levels: Sequence[str]) -> list[int]:
+    if isinstance(cohort_size, Mapping):
+        sizes = {
+            str(key): _integer_scalar(value, "cohort_size") for key, value in cohort_size.items()
+        }
+        if len(sizes) != len(levels):
+            raise ValueError("cohort.size and stratum do not match")
+        if any(level not in sizes for level in levels):
+            warnings.warn(
+                "stratum levels and names(cohort.size) do not agree", RuntimeWarning, stacklevel=3
+            )
+            return list(sizes.values())
+        return [sizes[level] for level in levels]
+    values = [
+        _integer_scalar(value, "cohort_size")
+        for value in _materialize_1d(cohort_size, "cohort_size")
+    ]
+    if len(values) != len(levels):
+        raise ValueError("cohort.size and stratum do not match")
+    return values
+
+
+def cch(
+    formula: str,
+    data: Any = None,
+    subcoh: Any = None,
+    id: Any = None,
+    stratum: Any | None = None,
+    cohort_size: Any | None = None,
+    method: str = "Prentice",
+    robust: Any = False,
+    *,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    **kwargs: Any,
+) -> CchModelResult:
+    """Fit a case-cohort Cox model (R's ``cch``).
+
+    ``subcoh``, ``id`` and ``stratum`` are vectors or column names of ``data``;
+    ``cohort_size`` is one number, or one per stratum (a mapping keyed by stratum
+    level) for the Borgan estimators.
+    """
+
+    cohort_size = _pop_dotted_keyword(kwargs, "cohort.size", "cohort_size", cohort_size, None)
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    if kwargs:
+        raise TypeError(f"cch got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    if subcoh is None or id is None:
+        raise TypeError("subcoh and id are required")
+    if cohort_size is None:
+        raise TypeError("cohort.size is required")
+    method_name = _METHODS[
+        _match_string_arg(
+            method,
+            "method",
+            tuple(_METHODS),
+            "method must be one of Prentice, SelfPrentice, LinYing, I.Borgan, II.Borgan",
+        )
+    ]
+    stratified = method_name in {"I.Borgan", "II.Borgan"}
+    robust_value = _normalize_bool_option_with_default(robust, "robust", False)
     if stratified:
-        stratum_labels = _materialize_labels(stratum_values, "stratum")
-        if len(stratum_labels) != len(response):
-            raise ValueError("stratum must have the same length as the Surv response")
-        stratum_levels = _label_levels(stratum_labels, "stratum")
-        stratum_codes = _encode_labels(stratum_labels, "stratum")
-        cohort_sizes = _cch_stratified_cohort_sizes(cohort_size, stratum_levels)
+        if robust_value:
+            warnings.warn(
+                "`robust' not implemented for stratified analysis.", RuntimeWarning, stacklevel=2
+            )
+        if stratum is None:
+            raise ValueError(f"method ({method_name}) requires 'stratum'")
+    else:
+        if method_name != "LinYing" and robust_value:
+            warnings.warn(
+                f"`robust' ignored for  method ({method_name})", RuntimeWarning, stacklevel=2
+            )
+        if stratum is not None:
+            warnings.warn(
+                f"'stratum' ignored for method ({method_name})", RuntimeWarning, stacklevel=2
+            )
+        stratum = None
+    robust_value = robust_value and method_name == "LinYing"
+
+    frame = _model_frame(
+        formula,
+        data,
+        subset=subset,
+        na_action=na_action,
+        id=id,
+        extra={"subcoh": subcoh, "stratum": stratum},
+    )
+    y = frame.y
+    if y.type not in {"right", "counting"}:
+        raise ValueError(f'Cox model doesn\'t support "{y.type}" survival data')
+    if frame.terms.offsets:
+        warnings.warn("Offset term ignored", RuntimeWarning, stacklevel=2)
+    if not frame.names:
+        raise ValueError("cch formula must contain at least one covariate")
+    id_values = list(frame.id or [])
+    if len(_label_levels(id_values, "id")) != len(id_values):
+        raise ValueError("Multiple records per id not allowed")
+    subcohort = _subcohort_indicator(frame.extra["subcoh"])
+    outside = sum(1 for sub, event in zip(subcohort, y.event, strict=True) if not sub and not event)
+    if outside:
+        raise ValueError(f"{outside} censored observations not in subcohort")
+    id_codes = list(range(len(id_values)))
+    start = None if y.start is None else list(y.start)
+    status = [int(value) for value in y.event]
+    stratum_labels: tuple[Any, ...] | None = None
+    if stratified:
+        factor = _strata_factor({"stratum": frame.extra["stratum"]}, frame.n, shortlabel=True)
+        stratum_labels = tuple(frame.extra["stratum"])
+        levels = list(factor.levels)
+        codes = [int(code) for code in factor.codes]
+        sizes = _stratified_cohort_sizes(cohort_size, levels)
+        counts = list(factor.counts)
+        if len(id_values) > sum(sizes):
+            raise ValueError("Number of records greater than cohort size")
+        if any(count > size for count, size in zip(counts, sizes, strict=True)):
+            raise ValueError("Population smaller than sample in some strata")
         fit = _core.cch_borgan_fit(
-            list(response.time),
-            list(response.event),
-            rows,
-            fit_subcohort,
+            list(y.time),
+            status,
+            frame.x,
+            subcohort,
             id_codes,
-            stratum_codes,
-            cohort_sizes,
-            start=list(response.start) if response.start is not None else None,
+            codes,
+            sizes,
+            start=start,
             method=method_name,
         )
+        subcohort_size = tuple(counts)
+        cohort_sizes = tuple(sizes)
     else:
-        cohort_size_value = _integer_scalar(cohort_size, "cohort_size")
-        if cohort_size_value <= 0:
-            raise ValueError("cohort_size must be positive")
-        cohort_sizes = [cohort_size_value]
+        if isinstance(cohort_size, Mapping) or (
+            isinstance(cohort_size, Sequence) and not isinstance(cohort_size, str)
+        ):
+            raise ValueError("cohort size must be a scalar for unstratified analysis")
+        size = _integer_scalar(cohort_size, "cohort_size")
+        if len(id_values) > size:
+            raise ValueError("Number of records greater than cohort size")
         fit = _core.cch_fit(
-            list(response.time),
-            list(response.event),
-            rows,
-            fit_subcohort,
+            list(y.time),
+            status,
+            frame.x,
+            subcohort,
             id_codes,
-            cohort_size_value,
-            start=list(response.start) if response.start is not None else None,
+            size,
+            start=start,
             method=method_name,
             robust=robust_value,
         )
+        subcohort_size = (sum(subcohort),)
+        cohort_sizes = (size,)
     return CchModelResult(
         fit=fit,
-        design=design,
         formula=formula,
-        coefficient_names=coefficient_names,
-        response=response,
-        id_values=id_labels,
-        subcohort=fit_subcohort,
-        stratum_values=stratum_labels,
-        cohort_sizes=cohort_sizes,
+        design=frame.design,
+        coef_names=tuple(frame.names),
+        y=y,
+        id=tuple(id_values),
+        subcoh=tuple(subcohort),
+        stratum=stratum_labels,
+        cohort_size=cohort_sizes,
+        subcohort_size=subcohort_size,
     )
+
+
+def summary_cch(fit: CchModelResult) -> dict[str, Any]:
+    """R's ``summary.cch``: ``Value``/``SE``/``Z``/``p`` per coefficient."""
+
+    rows = []
+    for idx, (name, coef) in enumerate(zip(fit.coef_names, fit.coefficients, strict=True)):
+        se = math.sqrt(fit.var[idx][idx])
+        z = abs(coef / se) if se > 0.0 else math.nan
+        p = 2.0 * (1.0 - 0.5 * math.erfc(-z / math.sqrt(2.0)))  # R: 2*(1-pnorm(Z))
+        rows.append({"name": name, "coef": coef, "value": coef, "se": se, "z": z, "p": p})
+    return {
+        "model_type": "cch",
+        "method": fit.method,
+        "cohort_size": list(fit.cohort_size),
+        "subcohort_size": list(fit.subcohort_size),
+        "stratified": fit.stratified,
+        "coefficient_names": list(fit.coef_names),
+        "coefficient_columns": ["Value", "SE", "Z", "p"],
+        "coefficients": rows,
+    }

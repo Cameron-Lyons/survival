@@ -132,6 +132,12 @@ class _FormulaDesign:
 
 @dataclass(frozen=True)
 class _FormulaFit:
+    """Transitional survreg wrapper (still built by ``_survreg.survreg``).
+
+    Cox fits no longer use it: they are ``survival.r._coxph.CoxphModel`` objects.  This
+    class goes away once ``_survreg``/``_misc`` move to their typed wrapper.
+    """
+
     fit: Any
     design: _FormulaDesign | None
     formula: str | None = None
@@ -151,25 +157,6 @@ class _FormulaFit:
     n_observations: int | None = None
 
     def __getattr__(self, name: str) -> Any:
-        if self.conditional_logistic and name in {
-            "basehaz",
-            "basehaz_with_strata",
-            "survival_curve",
-            "survival_curve_with_strata",
-        }:
-            raise ValueError("predicted survival curves are not defined for a clogit model")
-        if self.conditional_logistic and getattr(self.fit, "method", None) == "exact":
-            unavailable = {
-                "score_residuals": "score",
-                "schoenfeld_residuals": "schoenfeld",
-                "scaled_schoenfeld_residuals": "scaledsch",
-                "dfbeta": "dfbeta",
-                "dfbetas": "dfbetas",
-            }
-            if name in unavailable:
-                raise ValueError(
-                    f"{unavailable[name]} residuals are not available for the exact method"
-                )
         if name == "id" and self.id_values is not None:
             return self.id_values
         if name == "x" and self.x_matrix is not None:
@@ -184,23 +171,7 @@ class _FormulaFit:
             return self.score_values
         if name == "n" and self.n_observations is not None:
             return self.n_observations
-        if name == "scaled_schoenfeld_residuals" and hasattr(self.fit, "schoenfeld_residuals"):
-            return self._cox_scaled_schoenfeld_residuals
-        if name == "dfbeta" and hasattr(self.fit, "score_residuals"):
-            return self._cox_dfbeta
-        if name == "dfbetas" and hasattr(self.fit, "score_residuals"):
-            return self._cox_dfbetas
         return getattr(self.fit, name)
-
-    def _cox_scaled_schoenfeld_residuals(self) -> list[list[float]]:
-        raw = [[float(value) for value in row] for row in self.fit.schoenfeld_residuals()]
-        return _cox_scaled_schoenfeld_from_raw(self, raw)
-
-    def _cox_dfbeta(self) -> list[list[float]]:
-        return _cox_dfbeta_from_score_residuals(self, scaled=False)
-
-    def _cox_dfbetas(self) -> list[list[float]]:
-        return _cox_dfbeta_from_score_residuals(self, scaled=True)
 
     @property
     def information_matrix(self) -> list[list[float]]:
@@ -233,53 +204,42 @@ class _FormulaFit:
 
 @dataclass(frozen=True)
 class CchModelResult:
-    """Formula metadata and R-style aliases for a native case-cohort fit."""
+    """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps."""
 
-    fit: Any
-    design: _FormulaDesign
+    fit: _core.CchFitResult
     formula: str
-    coefficient_names: tuple[str, ...]
-    response: Surv
-    id_values: list[Any]
-    subcohort: list[int]
-    stratum_values: list[Any] | None
-    cohort_sizes: list[int]
-
-    def __getattr__(self, name: str) -> Any:
-        aliases = {
-            "var": "information_matrix",
-            "naive_var": "naive_information_matrix",
-            "phase2var": "phase2_variance",
-        }
-        if name == "coef":
-            return list(self.fit.coefficients[0])
-        if name == "x":
-            return self.fit.covariates
-        if name == "y":
-            return self.response
-        if name == "id":
-            return self.id_values
-        if name == "stratum":
-            return self.stratum_values
-        if name == "stratified":
-            return self.fit.stratified
-        return getattr(self.fit, aliases.get(name, name))
+    design: _FormulaDesign
+    coef_names: tuple[str, ...]
+    y: Surv
+    id: tuple[Any, ...]
+    subcoh: tuple[int, ...]
+    stratum: tuple[Any, ...] | None
+    cohort_size: tuple[int, ...]
+    subcohort_size: tuple[int, ...]
 
     @property
-    def coefficients(self) -> list[list[float]]:
-        return self.fit.coefficients
+    def coefficients(self) -> list[float]:
+        return list(self.fit.coefficients)
 
     @property
-    def information_matrix(self) -> list[list[float]]:
-        return self.fit.information_matrix
+    def var(self) -> list[list[float]]:
+        return [list(row) for row in self.fit.var]
 
     @property
-    def variance_matrix(self) -> list[list[float]]:
-        return self.fit.information_matrix
+    def naive_var(self) -> list[list[float]]:
+        return [list(row) for row in self.fit.naive_var]
 
     @property
-    def naive_information_matrix(self) -> list[list[float]]:
-        return self.fit.naive_information_matrix
+    def phase2var(self) -> list[list[float]]:
+        return [list(row) for row in self.fit.phase2var]
+
+    @property
+    def method(self) -> str:
+        return str(self.fit.method)
+
+    @property
+    def stratified(self) -> bool:
+        return bool(self.fit.stratified)
 
 
 @dataclass(frozen=True)
@@ -341,33 +301,35 @@ class _ResponseOperand:
 
 @dataclass(frozen=True)
 class ConcordanceResult:
+    """R's ``concordance`` object.
+
+    ``concordance``, ``var``, ``cvar`` and ``dfbeta`` are scalars/vectors for one
+    predictor and vectors/matrices for several, exactly as ``concordancefit`` returns
+    them; ``count`` is one named row of ``concordant``/``discordant``/``tied.x``/
+    ``tied.y``/``tied.xy`` (a list of rows when several predictors or kept strata),
+    and ``names`` labels those rows (predictor names or stratum levels).
+    """
+
     concordance: float | list[float]
+    count: dict[str, float] | list[dict[str, float]]
     n: int
-    n_event: int
-    reverse: bool = False
-    concordant: float | list[float] = 0.0
-    comparable: float | list[float] = 0.0
-    tied_x: float | list[float] = 0.0
-    tied_y: float | list[float] = 0.0
-    tied_xy: float | list[float] = 0.0
-    ranks: list[dict[str, float]] | list[list[dict[str, float]] | None] | None = None
-    dfbeta: list[float] | list[list[float] | None] | None = None
-    influence: list[list[float]] | list[list[list[float]] | None] | None = None
-    variance: float | list[float | None] | None = None
-    conditional_variance: float | list[float] | None = None
-    score_names: list[str] | None = None
+    names: list[str] | None = None
+    var: float | list[list[float]] | None = None
+    cvar: float | list[float] | None = None
+    dfbeta: list[float] | list[list[float]] | None = None
+    influence: list[list[float]] | list[list[list[float]]] | None = None
+    ranks: list[dict[str, float]] | list[list[dict[str, float]]] | None = None
+    formula: str | None = None
 
     @property
-    def c_index(self) -> float | list[float]:
-        return self.concordance
+    def std(self) -> float | list[float] | None:
+        """``sqrt(var)`` (``sqrt(diag(var))`` for several predictors), as ``print`` reports."""
 
-    @property
-    def var(self) -> float | list[float | None] | None:
-        return self.variance
-
-    @property
-    def cvar(self) -> float | list[float] | None:
-        return self.conditional_variance
+        if self.var is None:
+            return None
+        if isinstance(self.var, list):
+            return [math.sqrt(self.var[idx][idx]) for idx in range(len(self.var))]
+        return math.sqrt(self.var)
 
 
 @dataclass(frozen=True)
@@ -489,117 +451,68 @@ class TMergeFrame(Mapping[str, list[Any]]):
 
 @dataclass(frozen=True)
 class CoxZPHResult:
-    variable_names: list[str]
-    chi2_values: list[float]
-    df: list[int]
-    p_values: list[float]
+    """R's ``cox.zph`` object: ``table`` rows (``name``, ``chisq``, ``df``, ``p``), the
+    transformed times ``x``, the death times ``time``, the scaled Schoenfeld residual
+    matrix ``y`` (one column per term, named by ``names``) and its variance ``var``."""
+
+    table: list[dict[str, float | int | str]]
     x: list[float]
     time: list[float]
     y: list[list[float]]
     var: list[list[float]]
     transform: str
-    global_chi2: float | None
-    global_df: int | None
-    global_p_value: float | None
+    names: tuple[str, ...]
     strata: list[Any] | None = None
 
-    def subset(
-        self,
-        indices: Sequence[int],
-        *,
-        include_global: bool = False,
-    ) -> CoxZPHResult:
-        """Return diagnostics for the selected variables."""
+    def subset(self, indices: Sequence[int]) -> CoxZPHResult:
+        """``[.cox.zph``: keep the selected terms (0-based), dropping deaths that
+        played no role in them (strata by covariate interactions)."""
 
         selected = [index(value) for value in indices]
-        width = len(self.variable_names)
-        if any(value < 0 or value >= width for value in selected):
-            raise IndexError("cox_zph variable index out of range")
-
-        y = [[row[col_idx] for col_idx in selected] for row in self.y]
+        if any(value < 0 or value >= len(self.names) for value in selected):
+            raise IndexError("invalid variable requested")
+        y = [[row[col] for col in selected] for row in self.y]
         keep = list(range(len(y)))
         if self.strata is not None:
-            keep = [
-                row_idx
-                for row_idx, row in enumerate(y)
-                if not all(math.isnan(value) for value in row)
-            ]
-
+            keep = [idx for idx, row in enumerate(y) if not all(math.isnan(v) for v in row)]
         return CoxZPHResult(
-            variable_names=[self.variable_names[col_idx] for col_idx in selected],
-            chi2_values=[self.chi2_values[col_idx] for col_idx in selected],
-            df=[self.df[col_idx] for col_idx in selected],
-            p_values=[self.p_values[col_idx] for col_idx in selected],
-            x=[self.x[row_idx] for row_idx in keep],
-            time=[self.time[row_idx] for row_idx in keep],
-            y=[y[row_idx] for row_idx in keep],
+            table=[self.table[col] for col in selected],
+            x=[self.x[idx] for idx in keep],
+            time=[self.time[idx] for idx in keep],
+            y=[y[idx] for idx in keep],
             var=[[self.var[row][col] for col in selected] for row in selected],
             transform=self.transform,
-            global_chi2=self.global_chi2 if include_global else None,
-            global_df=self.global_df if include_global else None,
-            global_p_value=self.global_p_value if include_global else None,
-            strata=(
-                [self.strata[row_idx] for row_idx in keep] if self.strata is not None else None
-            ),
+            names=tuple(self.names[col] for col in selected),
+            strata=None if self.strata is None else [self.strata[idx] for idx in keep],
         )
-
-    @property
-    def table(self) -> list[dict[str, float | int | str]]:
-        rows: list[dict[str, float | int | str]] = [
-            {
-                "name": name,
-                "chisq": self.chi2_values[idx],
-                "df": self.df[idx],
-                "p": self.p_values[idx],
-            }
-            for idx, name in enumerate(self.variable_names)
-        ]
-        if self.global_chi2 is not None:
-            rows.append(
-                {
-                    "name": "GLOBAL",
-                    "chisq": self.global_chi2,
-                    "df": self.global_df if self.global_df is not None else 0,
-                    "p": self.global_p_value if self.global_p_value is not None else 1.0,
-                }
-            )
-        return rows
 
 
 @dataclass(frozen=True)
 class CoxPHDetailResult:
+    """R's ``coxph.detail`` list: one entry per unique event time (``time``,
+    ``nevent``, ``nrisk``, ``hazard``, ``varhaz``, ``wtrisk``, ``means``, ``score``,
+    ``imat``) plus the ``x``/``y`` data in ``rorder`` order."""
+
     time: list[float]
     nevent: list[int]
     nrisk: list[int]
-    means: list[list[float]]
-    score: list[list[float]]
-    imat: list[list[list[float]]]
     hazard: list[float]
     varhaz: list[float]
     wtrisk: list[float]
+    means: list[list[float]]
+    score: list[list[float]]
+    imat: list[list[list[float]]]
     x: list[list[float]]
     y: list[list[float]]
-    strata: dict[int, int] | None = None
+    strata: dict[str, int] | None = None
     riskmat: list[list[int]] | None = None
+    sortorder: list[int] | None = None
     weights: list[float] | None = None
     nevent_wt: list[float] | None = None
     nrisk_wt: list[float] | None = None
-    sortorder: list[int] | None = None
 
     @property
-    def n_event(self) -> list[int]:
-        return self.nevent
-
-    @property
-    def n_risk(self) -> list[int]:
-        return self.nrisk
-
-    @property
-    def var_hazard(self) -> list[float]:
-        return self.varhaz
-
-    @property
-    def cumulative_hazard(self) -> list[float]:
+    def cumhaz(self) -> list[float]:
         total = 0.0
         values: list[float] = []
         for increment in self.hazard:
@@ -607,24 +520,11 @@ class CoxPHDetailResult:
             values.append(total)
         return values
 
-    def times(self) -> list[float]:
-        return self.time
-
-    def hazards(self) -> list[float]:
-        return self.hazard
-
-    def cumulative_hazards(self) -> list[float]:
-        return self.cumulative_hazard
-
-    def n_risk_at_times(self) -> list[int]:
-        return self.nrisk
-
-    def schoenfeld_residuals(self) -> list[list[float]]:
-        return self.score
-
 
 @dataclass(frozen=True)
 class CoxPHWTestResult:
+    """R's ``coxph.wtest`` list."""
+
     test: list[float]
     df: int
     solve: list[float] | list[list[float]] | float
@@ -632,62 +532,46 @@ class CoxPHWTestResult:
 
 @dataclass(frozen=True)
 class CoxBaseHazardResult:
+    """R's ``basehaz`` data frame: ``hazard`` (one column per newdata row when
+    ``newdata`` had several), ``time`` and the ``strata`` labels."""
+
+    hazard: list[float] | list[list[float]]
     time: list[float]
-    cumhaz: list[float] | list[list[float]]
-    strata: list[int] | None = None
-    centered: bool = True
-    curve_strata: list[int] | None = None
-    strata_labels: list[Any] | None = None
-    curve_strata_labels: list[Any] | None = None
-
-    def __iter__(self):
-        yield self.time
-        yield self.cumhaz
-
-    @property
-    def hazard(self) -> list[float] | list[list[float]]:
-        return self.cumhaz
-
-    @property
-    def cumulative_hazard(self) -> list[float] | list[list[float]]:
-        return self.cumhaz
+    strata: list[str] | None = None
 
 
 @dataclass(frozen=True)
 class CoxSurvfitResult:
+    """R's ``survfit.coxph`` object (class ``survfitcox``).
+
+    ``time``/``n_risk``/``n_event``/``n_censor`` are the strata blocks laid end to end
+    (``strata`` maps each block's name to its length, ``n`` is the size of each);
+    ``surv``, ``cumhaz``, ``std_err``, ``std_chaz``, ``lower`` and ``upper`` are vectors
+    for one curve, or ``ntime x ncurve`` matrices (one column per ``newdata`` row).
+    """
+
+    n: list[int]
     time: list[float]
-    surv: list[list[float]]
-    cumhaz: list[list[float]]
-    linear_predictors: list[float]
-    centered: bool = True
-    strata: list[int] | None = None
-    strata_labels: list[Any] | None = None
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+    surv: list[float] | list[list[float]]
+    cumhaz: list[float] | list[list[float]]
+    type: str
+    strata: dict[str, int] | None = None
+    std_err: list[float] | list[list[float]] | None = None
+    std_chaz: list[float] | list[list[float]] | None = None
+    lower: list[float] | list[list[float]] | None = None
+    upper: list[float] | list[list[float]] | None = None
+    logse: bool = True
+    conf_type: str = "none"
+    conf_int: float | None = None
     start_time: float | None = None
-    std_err: list[list[float]] = field(default_factory=list)
-    std_chaz: list[list[float]] = field(default_factory=list)
-    conf_lower: list[list[float]] = field(default_factory=list)
-    conf_upper: list[list[float]] = field(default_factory=list)
-    model: dict[str, Any] | None = None
-
-    def __iter__(self):
-        yield self.time
-        yield self.surv
+    newdata: Any | None = None
 
     @property
-    def curves(self) -> list[list[float]]:
-        return self.surv
-
-    @property
-    def estimate(self) -> list[list[float]]:
-        return self.surv
-
-    @property
-    def cumulative_hazard(self) -> list[list[float]]:
-        return self.cumhaz
-
-    @property
-    def cumulative_hazard_std_err(self) -> list[list[float]]:
-        return self.std_chaz
+    def ncurve(self) -> int:
+        return len(self.surv[0]) if self.surv and isinstance(self.surv[0], list) else 1
 
 
 @dataclass(frozen=True)
@@ -829,36 +713,6 @@ class _SurvfitComputation:
     @property
     def is_kaplan_meier(self) -> bool:
         return self.stype == 1 and self.ctype == 1
-
-
-def _cox_scaled_schoenfeld_from_raw(fit: Any, raw: list[list[float]]) -> list[list[float]]:
-    beta = _cox_beta(fit)
-    nvar = len(beta)
-    if nvar == 0 or not raw:
-        return raw
-    variance = getattr(fit, "information_matrix", None)
-    if variance is None:
-        raise TypeError("model does not expose coefficient variance")
-    matrix = [list(row) for row in variance]
-    return _core.scale_schoenfeld_residuals(raw, beta, matrix)
-
-
-def _cox_dfbeta_from_score_residuals(fit: Any, *, scaled: bool) -> list[list[float]]:
-    beta = _cox_beta(fit)
-    nvar = len(beta)
-    score_method = getattr(fit, "score_residuals", None)
-    if score_method is None:
-        raise TypeError("model does not expose score residuals")
-    score = [[float(value) for value in row] for row in score_method()]
-    if nvar == 0:
-        return score
-    variance = getattr(fit, "naive_variance", None)
-    if variance is None:
-        variance = getattr(fit, "information_matrix", None)
-    if variance is None:
-        raise TypeError("model does not expose coefficient variance")
-    matrix = [list(row) for row in variance]
-    return _core.cox_dfbeta_from_score_residuals(score, matrix, scaled)
 
 
 def _cox_beta(fit: Any) -> list[float]:

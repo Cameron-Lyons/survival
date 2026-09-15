@@ -1,54 +1,30 @@
-"""``aareg`` Aalen additive regression."""
+"""``aareg`` Aalen additive regression (R/aareg.R, summary.aareg.R): the model
+frame and the summary table; the fit runs in Rust."""
 
 from __future__ import annotations
 
-import warnings
+import math
 from numbers import Real
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
-    _encode_labels,
     _finite_float,
     _float_vector,
     _integer_scalar,
     _label_levels,
-    _materialize_labels,
+    _match_string_arg,
     _normalize_bool_option,
-    _optional_float_vector,
     _pop_dotted_keyword,
 )
-from ._fit import _formula_design_output_names
-from ._formula import (
-    _apply_formula_na_action,
-    _combined_columns,
-    _design_rows_from_spec,
-    _dot_terms,
-    _fit_formula_design,
-    _formula_model_frame,
-    _formula_response_spec,
-    _offset_vector,
-    _parse_formula,
-    _split_terms,
-    _subset_formula_inputs,
-)
+from ._coxph import _pchisq_upper
+from ._fit import _model_frame
 from ._types import AaregModelResult
 
-
-def _normalize_aareg_test(value: Any) -> str:
-    if not isinstance(value, str):
-        raise TypeError("test must be a string")
-    normalized = value.strip().casefold()
-    choices = ("aalen", "variance", "nrisk")
-    if normalized in choices:
-        return normalized
-    matches = [choice for choice in choices if choice.startswith(normalized)]
-    if len(matches) == 1:
-        return matches[0]
-    raise ValueError("test must be one of aalen, variance, or nrisk")
+_TESTS = ("aalen", "variance", "nrisk")
 
 
-def _aareg_taper_values(value: Any) -> list[float]:
+def _taper_values(value: Any) -> list[float]:
     if isinstance(value, Real) and not isinstance(value, bool):
         values = [_finite_float(value, "taper")]
     else:
@@ -59,7 +35,7 @@ def _aareg_taper_values(value: Any) -> list[float]:
 
 
 def aareg(
-    formula: Any,
+    formula: str,
     data: Any | None = None,
     *,
     weights: Any | None = None,
@@ -75,164 +51,173 @@ def aareg(
     x: Any = False,
     y: Any = False,
     **kwargs: Any,
-) -> Any:
-    """Fit Aalen's additive hazards model with R-compatible risk sets."""
+) -> AaregModelResult | _core.AaregResult:
+    """Fit Aalen's additive regression model (R's ``aareg``).
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
-    if kwargs:
-        unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"aareg got unexpected keyword argument(s): {unexpected}")
+    ``survival.aareg`` is also the package-level name of the engine's option-driven
+    ``aareg(AaregOptions)``; an ``AaregOptions`` first argument is handed to it.
+    """
 
     if isinstance(formula, _core.AaregOptions):
-        if (
-            data is not None
-            or weights is not None
-            or subset is not None
-            or cluster is not None
-            or nmin is not None
-            or na_action != "fail"
-            or qrtol != 1e-7
-            or dfbeta is not False
-            or taper != 1.0
-            or test != "aalen"
-            or model is not False
-            or x is not False
-            or y is not False
-        ):
-            raise TypeError("AaregOptions input cannot be combined with formula-style options")
         return _core.aareg(formula)
-    if not isinstance(formula, str):
-        raise TypeError("aareg formula must be a string or AaregOptions")
-
-    response_spec = _formula_response_spec(formula)
-    _lhs, _separator, rhs = formula.partition("~")
-    formula_terms = _split_terms(rhs, _dot_terms(data, response_spec.columns))
-    if len(formula_terms.clusters) > 1:
-        raise ValueError("a formula cannot have multiple cluster terms")
-    ignored_formula_clusters: tuple[str, ...] = ()
-    if formula_terms.clusters and cluster is not None:
-        ignored_formula_clusters = tuple(formula_terms.clusters)
-        warnings.warn(
-            "cluster appears both in a formula and as an argument, formula term ignored",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
-    if subset is not None:
-        data, aligned = _subset_formula_inputs(
-            formula,
-            data,
-            subset,
-            weights=weights,
-            cluster=cluster,
-        )
-        weights = aligned["weights"]
-        cluster = aligned["cluster"]
-    data, aligned = _apply_formula_na_action(
-        formula,
-        data,
-        na_action,
-        exclude_columns=ignored_formula_clusters,
-        weights=weights,
-        cluster=cluster,
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    if kwargs:
+        raise TypeError(f"aareg got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    test_name = _match_string_arg(
+        test, "test", _TESTS, "test must be one of aalen, variance, nrisk"
     )
-    weights = aligned["weights"]
-    cluster = aligned["cluster"]
-
-    response, terms = _parse_formula(formula, data)
+    frame = _model_frame(
+        formula, data, subset=subset, na_action=na_action, weights=weights, cluster=cluster
+    )
+    response = frame.y
     if response.type not in {"right", "counting"}:
-        raise ValueError(f'Aalen model does not support "{response.type}" survival data')
-    if terms.strata:
-        raise ValueError("strata terms are not allowed in aareg formulas")
-    if terms.clusters and cluster is None:
-        cluster = _combined_columns(data, terms.clusters, len(response))
-    if terms.offsets:
-        _offset_vector(data, terms.offsets, len(response))
-
-    design = _fit_formula_design(data, response_spec, terms, len(response))
-    rows = _design_rows_from_spec(data, design, len(response))
-    coefficient_names = ["Intercept", *_formula_design_output_names(design)]
-    fit_weights = _optional_float_vector(weights, "weights", len(response))
-    cluster_values = None if cluster is None else _materialize_labels(cluster, "cluster")
-    if cluster_values is not None and len(cluster_values) != len(response):
-        raise ValueError("cluster must have the same length as the Surv response")
-    cluster_levels = (
-        None if cluster_values is None else list(_label_levels(cluster_values, "cluster"))
-    )
-    cluster_codes = None if cluster_values is None else _encode_labels(cluster_values, "cluster")
-    keep_dfbeta = _normalize_bool_option(dfbeta, "dfbeta") or cluster_values is not None
-    keep_model = _normalize_bool_option(model, "model")
-    keep_x = _normalize_bool_option(x, "x")
-    keep_y = _normalize_bool_option(y, "y")
+        raise ValueError(f'Aalen model doesn\'t support "{response.type}" survival data')
+    if frame.terms.strata:
+        raise ValueError("Strata terms not allowed")
+    cluster_values = frame.cluster
+    cluster_codes = None
+    if cluster_values is not None:
+        levels = _label_levels(cluster_values, "cluster")
+        index = {level: idx for idx, level in enumerate(levels)}
+        cluster_codes = [index[value] for value in cluster_values]
+    keep_dfbeta = _normalize_bool_option(dfbeta, "dfbeta") or cluster_codes is not None
     qrtol_value = _finite_float(qrtol, "qrtol")
     if qrtol_value <= 0.0:
         raise ValueError("qrtol must be positive")
-    nmin_value = None
-    if nmin is not None:
-        nmin_value = _integer_scalar(nmin, "nmin")
-        if nmin_value < 0:
-            raise ValueError("nmin must be non-negative")
-    test_name = _normalize_aareg_test(test)
-
+    nmin_value = None if nmin is None else _integer_scalar(nmin, "nmin")
     raw = _core.aareg_fit(
         list(response.time),
         [int(value) for value in response.event],
-        rows,
+        frame.x,
         start=None if response.start is None else list(response.start),
-        weights=fit_weights,
+        weights=frame.weights,
         cluster=cluster_codes,
         qrtol=qrtol_value,
         nmin=nmin_value,
         dfbeta=keep_dfbeta,
-        taper=_aareg_taper_values(taper),
+        taper=_taper_values(taper),
         test=test_name,
     )
-    test_names = (
-        coefficient_names[1:]
-        if test_name == "variance" and len(coefficient_names) > 2
-        else coefficient_names
-    )
-    model_frame = (
-        _formula_model_frame(
-            data,
-            response,
-            design,
-            extra_columns=() if ignored_formula_clusters else terms.clusters,
-            weights=weights,
-            cluster=cluster_values,
-        )
-        if keep_model
-        else None
-    )
+    coefficient_names = ["Intercept", *frame.names]
     return AaregModelResult(
         n=[int(value) for value in raw.n],
-        times=[float(value) for value in raw.times],
-        n_risk=[float(value) for value in raw.n_risk],
-        coefficient=[[float(value) for value in row] for row in raw.coefficient],
+        times=list(raw.times),
+        n_risk=list(raw.n_risk),
+        coefficient=[list(row) for row in raw.coefficient],
         coefficient_names=coefficient_names,
-        test_statistic=[float(value) for value in raw.test_statistic],
-        test_statistic_names=test_names,
-        test_variance=[[float(value) for value in row] for row in raw.test_variance],
+        test_statistic=list(raw.test_statistic),
+        test_statistic_names=coefficient_names,
+        test_variance=[list(row) for row in raw.test_variance],
         test=str(raw.test),
-        time_weights=[[float(value) for value in row] for row in raw.time_weights],
+        time_weights=[list(row) for row in raw.time_weights],
         dfbeta=(
             None
             if raw.dfbeta is None
-            else [
-                [[float(value) for value in time_values] for time_values in cluster_rows]
-                for cluster_rows in raw.dfbeta
-            ]
+            else [[list(values) for values in rows] for rows in raw.dfbeta]
         ),
         robust_test_variance=(
             None
             if raw.robust_test_variance is None
-            else [[float(value) for value in row] for row in raw.robust_test_variance]
+            else [list(row) for row in raw.robust_test_variance]
         ),
         formula=formula,
-        weights=fit_weights,
+        weights=frame.weights,
         cluster=cluster_values,
-        cluster_levels=cluster_levels,
-        model=model_frame,
-        x=[list(row) for row in rows] if keep_x else None,
-        y=response if keep_y else None,
+        cluster_levels=None
+        if cluster_values is None
+        else list(_label_levels(cluster_values, "cluster")),
+        model=frame.model_frame() if _normalize_bool_option(model, "model") else None,
+        x=frame.x if _normalize_bool_option(x, "x") else None,
+        y=response if _normalize_bool_option(y, "y") else None,
     )
+
+
+def _cumsum(values: list[float]) -> list[float]:
+    out: list[float] = []
+    total = 0.0
+    for value in values:
+        total += value
+        out.append(total)
+    return out
+
+
+def summary_aareg(
+    fit: AaregModelResult,
+    maxtime: Any | None = None,
+    test: Any | None = None,
+    scale: Any = 1.0,
+) -> dict[str, Any]:
+    """R's ``summary.aareg``: the slope of each coefficient curve, the test statistic
+    per covariate and the overall chi-square (which excludes the intercept)."""
+
+    test_name = (
+        fit.test
+        if test is None
+        else _match_string_arg(test, "test", ("aalen", "nrisk"), "test must be aalen or nrisk")
+    )
+    scale_value = _finite_float(scale, "scale")
+    ntime = (
+        len(fit.times)
+        if maxtime is None
+        else sum(1 for t in fit.times if t <= _finite_float(maxtime, "maxtime"))
+    )
+    times = fit.times[:ntime]
+    nvar = len(fit.coefficient_names)
+    if test_name == "aalen":
+        twt = [list(row) for row in fit.time_weights[:ntime]]
+        scales = [sum(row[k] for row in twt) / scale_value for k in range(nvar)]
+    else:
+        twt = [[fit.n_risk[i]] * nvar for i in range(ntime)]
+        scales = [ntime / scale_value] * nvar
+    tx = [[twt[i][k] * fit.coefficient[i][k] for k in range(nvar)] for i in range(ntime)]
+    slope: list[float] = []
+    for k in range(nvar):
+        ctx = _cumsum([row[k] for row in tx])
+        tempwt = sum(twt[i][k] * times[i] ** 2 for i in range(ntime))
+        slope.append(sum(c * t for c, t in zip(ctx, times, strict=True)) / tempwt)
+    if maxtime is not None or fit.test != test_name:
+        test_stat = [sum(row[k] for row in tx) for k in range(nvar)]
+        test_var = [[sum(row[j] * row[k] for row in tx) for k in range(nvar)] for j in range(nvar)]
+        test_var2 = None
+    else:
+        test_stat = list(fit.test_statistic)
+        test_var = fit.test_variance
+        test_var2 = fit.robust_test_variance
+    variance = test_var if test_var2 is None else test_var2
+    se = [math.sqrt(variance[k][k]) for k in range(nvar)]
+    columns = ["slope", "coef", "se(coef)", "z", "p"]
+    rows = []
+    for k, name in enumerate(fit.coefficient_names):
+        z = test_stat[k] / se[k]
+        row: dict[str, Any] = {
+            "name": name,
+            "slope": slope[k],
+            "coef": test_stat[k] / scales[k],
+            "se": math.sqrt(test_var[k][k]) / scales[k],
+            "z": z,
+            "p": 2.0 * _pnorm_lower(-abs(z)),
+        }
+        if test_var2 is not None:
+            row["robust_se"] = se[k] / scales[k]
+        rows.append(row)
+    if test_var2 is not None:
+        columns = ["slope", "coef", "se(coef)", "robust se", "z", "p"]
+    sub_var = [[variance[j][k] for k in range(1, nvar)] for j in range(1, nvar)]
+    chisq = _core.coxph_wtest(sub_var, [test_stat[1:]]).test[0] if nvar > 1 else math.nan
+    return {
+        "model_type": "aareg",
+        "table": rows,
+        "columns": columns,
+        "test": test_name,
+        "test_statistic": test_stat,
+        "test_var": test_var,
+        "test_var2": test_var2,
+        "chisq": chisq,
+        "df": nvar - 1,
+        "p": _pchisq_upper(chisq, nvar - 1),
+        "n": [fit.n[0], len(set(times)), fit.n[2]],
+    }
+
+
+def _pnorm_lower(z: float) -> float:
+    return 0.5 * math.erfc(-z / math.sqrt(2.0))
