@@ -51,7 +51,7 @@ dev = [
 test = [
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "pandas==3.0.5",
+  "pandas==3.0.6",
   "polars==1.44.2",
 ]
 
