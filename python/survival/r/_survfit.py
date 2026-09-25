@@ -14,7 +14,7 @@ import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from .. import _survival as _core
 from ._coerce import (
@@ -65,6 +65,9 @@ from ._types import (
     _ModelOffsetTerm,
     _ModelStrataTerm,
 )
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 _CONF_TYPES = ("log", "log-log", "plain", "none", "logit", "arcsin")
 _CONF_LOWER = ("usual", "peto", "modified")
@@ -1208,6 +1211,21 @@ def _grouping_factors(by: Any, n_data: int) -> list[_core.GroupingFactor]:
     return factors
 
 
+# aggregate.survfit returns a copy of a survfit object; any other object with a surv or
+# pstate data margin gets the engine's AggregateSurvfitResult
+_Survfit = TypeVar("_Survfit", bound="DataclassInstance")
+
+
+@overload
+def aggregate_survfit(x: _Survfit, by: Any | None = None, FUN: str = "mean") -> _Survfit: ...
+
+
+@overload
+def aggregate_survfit(
+    x: Any, by: Any | None = None, FUN: str = "mean"
+) -> _core.AggregateSurvfitResult: ...
+
+
 def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any:
     """R's ``aggregate.survfit``: population-averaged curves of ``survfit(coxfit, newdata)``.
 
@@ -1257,8 +1275,9 @@ def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any:
     return dataclasses.replace(x, **updates)
 
 
-def aggregate_survfit_result(result: Any, groups: Any | None = None) -> Any:
-    """The R bridge's entry point: ``groups`` are the integer codes it built from ``by``."""
+def aggregate_survfit_result(result: _Survfit, groups: Any | None = None) -> _Survfit:
+    """The R bridge's entry point: ``result`` is a survfit object and ``groups`` the integer
+    codes the bridge built from ``by``."""
 
     return aggregate_survfit(result, by=groups)
 

@@ -1,9 +1,12 @@
 """R-style survival API split into cohesive modules; ``survival.r_api`` re-exports it.
 
 ``__all__`` lists R's exported functions under Python spellings (``survreg.control`` is
-``survreg_control``, ``cox.zph`` is ``cox_zph``) and the classes those functions return, so
-fits and results can be named in annotations and ``isinstance`` checks.  The typed surface
-is the inline annotations of the implementation modules (the package ships ``py.typed``).
+``survreg_control``, ``cox.zph`` is ``cox_zph``) and the R-level fit and result classes, so
+they can be named in annotations and ``isinstance`` checks.  The engine classes a few
+functions return (``nsk``'s ``SplineBasisResult``, ``survfit_confint``'s ``ConfidenceBands``,
+``survreg_control``'s ``SurvregControl``) live in the domain modules (``survival.core``,
+``surv_analysis``, ``regression``).  The typed surface is the inline annotations of the
+implementation modules (the package ships ``py.typed``).
 """
 
 from __future__ import annotations
