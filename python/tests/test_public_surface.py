@@ -143,7 +143,10 @@ def test_concordancefit_takes_r_arguments_in_r_order(ovarian):
     assert fit.names == ["1", "2"]
     assert fit.var == approx(0.00322663910613376)
     assert fit.cvar == approx(0.00906273620559335)
-    # std.err = FALSE given positionally, after R's defaults for weights ... keepstrata
+    # std.err = FALSE given positionally, after R's defaults for weights ... keepstrata.
+    # R 3.8-12 returns 0.494845360824742 here, with a warning: without std.err each
+    # stratum's count has five columns, which R/concordance.R reshapes with ncol = 6.  The
+    # assertion is the value R intends, the one std.err = TRUE gives.
     r_defaults = [None, None, None, "n", None, 0, False, False, True, 10]
     quick = r.concordancefit(y, ovarian["age"], ovarian["rx"], *r_defaults, False)
     assert quick.var is None
@@ -163,8 +166,14 @@ def test_concordancefit_orders_strata_like_r_factor_levels(ovarian):
     assert counts(fit.count) == [[3, 20, 0], [23, 64, 0]]
     assert fit.concordance == approx(0.236363636363636)
     assert fit.var == approx(0.00706405300184414)
+    # the strata are read once, so a one-shot iterable gives the same fit
+    once = r.concordancefit(y, ovarian["age"], iter(strata))
+    assert once.names == ["a", "b"]
+    assert counts(once.count) == counts(fit.count)
     with pytest.raises(ValueError, match="strata contains missing values"):
         r.concordancefit(y, ovarian["age"], [None, *strata[1:]])
+    with pytest.raises(ValueError, match="outside the declared categories"):
+        r.concordancefit(y, ovarian["age"], RFactor(strata, ["a"]))
 
 
 def test_cluster_is_the_identity():

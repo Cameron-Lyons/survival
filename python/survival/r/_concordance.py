@@ -11,18 +11,18 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
-    _as_character,
     _as_matrix_rows,
-    _factor_levels,
+    _categories,
+    _factor,
     _finite_float,
     _float_vector,
     _integer_scalar,
-    _is_missing_value,
     _label_levels,
     _materialize_labels,
     _normalize_bool_option,
     _optional_float_vector,
     _pop_dotted_keyword,
+    _r_factor,
 )
 from ._coxph import CoxphModel, predict_coxph
 from ._fit import _model_frame, _newdata_frame
@@ -170,19 +170,19 @@ def concordancefit(
     timewt_name = _timewt_name(timewt)
     if y.start is not None and timewt_name in {"S/G", "n/G2"}:
         raise ValueError(f"{timewt_name} timewt option not supported for (time1, time2) data")
-    strata_codes: list[int] | None = None
+    strata_codes: list[int | None] | None = None
     levels: list[str] = []
     if strata is not None:
         labels = _materialize_labels(strata, "strata")
         if len(labels) != n:
             raise ValueError("y and strata are not the same length")
-        if any(_is_missing_value(label) for label in labels):
+        # R's as.factor(strata): the declared levels in their order, else the sorted values
+        declared = _strata_levels or _categories(strata)
+        strata_codes, levels = _factor(
+            labels if declared is None else _r_factor(labels, declared), "strata"
+        )
+        if None in strata_codes:
             raise ValueError("strata contains missing values")
-        # R's levels(as.factor(strata)): sorted, labelled as as.character does
-        raw_levels = list(_strata_levels) if _strata_levels else _factor_levels(strata, "strata")
-        levels = [_as_character(level) for level in raw_levels]
-        index = {level: idx for idx, level in enumerate(raw_levels)}
-        strata_codes = [index[label] for label in labels]
     weight_values = _optional_float_vector(weights, "weights", n)
     if weight_values is not None and len(weight_values) != n:
         raise ValueError("y and weights are not the same length")
