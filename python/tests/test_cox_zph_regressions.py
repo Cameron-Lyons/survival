@@ -220,5 +220,5 @@ def test_a_computationally_singular_information_matrix_is_an_error(lung):
     data["wt"] = [karno / 100 for karno in data["ph.karno"]]
     data["age2"] = [age * 1e6 for age in data["age"]]
     fit = r.coxph("Surv(time, status) ~ age2 + wt + sex", data)
-    with pytest.raises(RuntimeError, match="computationally singular"):
+    with pytest.raises(RuntimeError, match=r"condition number = 1\.85494e-17\): .* singular"):
         r.cox_zph(fit)

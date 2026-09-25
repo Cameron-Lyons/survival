@@ -283,9 +283,9 @@ pub(crate) fn symmetric_inverse_via_cholesky(
 /// (`La_solve`: LAPACK `dgesv`, then `dgecon`): an exactly zero pivot is an
 /// error naming its column ("exactly singular"), and so is a matrix whose
 /// reciprocal condition number in the 1-norm, `1 / (||A||_1 ||A^-1||_1)`, is
-/// below `.Machine$double.eps` ("computationally singular").  `dgecon`
-/// estimates `||A^-1||_1`; the systems solved here are small, so it is
-/// computed exactly.
+/// below `.Machine$double.eps` ("computationally singular", reporting the
+/// number).  `dgecon` estimates `||A^-1||_1`; the systems solved here are
+/// small, so it is computed exactly.
 #[derive(Debug, Clone)]
 pub(crate) struct LuDecomposition {
     factors: Vec<f64>,
@@ -353,8 +353,12 @@ impl LuDecomposition {
         }
 
         let lu = Self { factors, swaps, n };
-        if lu.reciprocal_condition(anorm) < f64::EPSILON {
-            return Err(SurvivalError::singular(Self::CONTEXT));
+        let rcond = lu.reciprocal_condition(anorm);
+        if rcond < f64::EPSILON {
+            return Err(SurvivalError::singular(format!(
+                "{} (reciprocal condition number = {rcond:.5e})",
+                Self::CONTEXT
+            )));
         }
         Ok(lu)
     }
@@ -788,12 +792,18 @@ mod tests {
             [-900719925474099.2, 900719925474099.2],
         ]);
         assert_matrix_close(&inverse, &expected, 0.5);
-        for singular in [
-            arr2(&[[1.0, 1.0], [1.0, 1.0 + 4e-16]]),
-            arr2(&[[1.0, 0.0], [0.0, 1e-17]]),
+        for (singular, rcond) in [
+            (arr2(&[[1.0, 1.0], [1.0, 1.0 + 4e-16]]), "1.11022e-16"),
+            (arr2(&[[1.0, 0.0], [0.0, 1e-17]]), "1.00000e-17"),
         ] {
             match LuDecomposition::decompose(&singular) {
-                Err(SurvivalError::Singular { columns, .. }) => assert!(columns.is_empty()),
+                Err(SurvivalError::Singular { context, columns }) => {
+                    assert!(columns.is_empty());
+                    assert_eq!(
+                        context,
+                        format!("LU factorisation (reciprocal condition number = {rcond})")
+                    );
+                }
                 other => panic!("expected singular error, got {other:?}"),
             }
         }
