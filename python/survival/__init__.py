@@ -80,6 +80,7 @@ _R_EXPORTS = [
     "TMergeOperation",
     "TcutResult",
     "YatesResult",
+    "YatesModel",
     "aic",
     "aareg",
     "aeqSurv",

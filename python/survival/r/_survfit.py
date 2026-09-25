@@ -1005,7 +1005,7 @@ def survfit0(x: Any, *args: Any, **kwargs: Any) -> Any:
     )
 
 
-def _rmean_option(rmean: Any, fit: SurvfitResult) -> str:
+def _rmean_option(rmean: Any, fit: SurvfitResult | SurvfitMultiStateResult) -> str:
     """``rmean``: ``"none"``, ``"common"``, ``"individual"`` or a truncation time."""
 
     if rmean is None:
@@ -1035,15 +1035,53 @@ def summary_survfit(
     the restricted mean and its se for ``rmean``, the median and its confidence limits).
     """
 
-    if isinstance(object, SurvfitMultiStateResult):
-        raise NotImplementedError("summary.survfitms is not available (no Rust kernel yet)")
-    if not isinstance(object, SurvfitResult):
+    if not isinstance(object, SurvfitResult | SurvfitMultiStateResult):
         raise TypeError("summary.survfit can only be used for survfit and survfit.coxph objects")
     censored = _logical(censored, "censored must be TRUE/FALSE")
     extend = _logical(extend, "extend must be TRUE/FALSE")
     scale = _finite_float(scale, "scale")
     engine = _engine_of(object)
     rmean_option = _rmean_option(rmean, object)
+    if isinstance(object, SurvfitMultiStateResult):
+        requested = (
+            None
+            if times is None
+            else _float_vector([times] if isinstance(times, int | float) else times, "times")
+        )
+        rows = engine.summary(times=requested, censored=censored, extend=extend)
+        values, ends, columns = engine.mean_table(scale=scale, rmean=rmean_option)
+        labels = [f"{group}, {state}" for state in object.states for group in object.strata_names]
+        strata = (
+            None
+            if rows.strata is None
+            else [
+                group
+                for group, size in zip(object.strata_names, rows.strata, strict=True)
+                for _ in range(size)
+            ]
+        )
+        return SummarySurvfitResult(
+            time=[value / scale for value in rows.time],
+            n_risk=rows.n_risk,
+            n_event=rows.n_event,
+            n_censor=rows.n_censor,
+            surv=None,
+            cumhaz=rows.cumhaz,
+            strata=strata,
+            table=NamedMatrix(labels or object.states, columns, values),
+            n=list(rows.n),
+            n_enter=rows.n_enter,
+            std_err=rows.std_err,
+            std_chaz=rows.std_chaz,
+            lower=rows.lower,
+            upper=rows.upper,
+            rmean_endtime=ends or None,
+            conf_int=object.conf_int,
+            conf_type=object.conf_type,
+            pstate=rows.pstate,
+            states=object.states,
+            n_transition=rows.n_transition,
+        )
     table = _core.survmean(_core.survfit0(engine), scale, rmean_option)
     if times is None:
         rows = _core.summary_survfit(engine, censored=censored)

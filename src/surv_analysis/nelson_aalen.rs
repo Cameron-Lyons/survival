@@ -6,6 +6,7 @@
 use super::survfit_confint::{ConfType, survfit_confint};
 use super::survfitkm::{HazardType, SurvfitKMData, SurvfitKMOptions, survfitkm};
 use crate::error::SurvivalResult;
+use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
@@ -119,17 +120,13 @@ pub fn nelson_aalen(
 #[pyfunction(name = "nelson_aalen")]
 #[pyo3(signature = (time, status, weights=None, confidence_level=0.95))]
 pub fn nelson_aalen_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    weights: Option<Vec<f64>>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
+    weights: Option<FloatVec>,
     confidence_level: f64,
 ) -> PyResult<NelsonAalenResult> {
-    Ok(nelson_aalen(
-        &time,
-        &status,
-        weights.as_deref(),
-        confidence_level,
-    )?)
+    Ok(py.detach(|| nelson_aalen(&time, &status, weights.as_deref(), confidence_level))?)
 }
 
 #[cfg(test)]

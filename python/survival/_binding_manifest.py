@@ -903,6 +903,7 @@ BINDINGS = (
     "survdiff",
     "survdiff_one_sample",
     "survexp",
+    "survexp_cox",
     "survexp_mn",
     "survexp_us",
     "survexp_usr",
@@ -958,6 +959,7 @@ BINDINGS = (
     "wlw_model",
     "yates",
     "yates_population_means",
+    "yates_risk",
 )
 
 BINDING_NAMES = frozenset(BINDINGS)
@@ -1446,6 +1448,7 @@ MODULE_BINDINGS = {
         "summary_pyears",
         "SurvExpResult",
         "survexp",
+        "survexp_cox",
         "survexp_mn",
         "survexp_us",
         "survexp_usr",
@@ -1964,6 +1967,7 @@ MODULE_BINDINGS = {
         "YatesEstimate",
         "YatesResult",
         "yates",
+        "yates_risk",
         "yates_population_means",
     ),
 }

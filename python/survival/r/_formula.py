@@ -16,11 +16,14 @@ from ._coerce import (
     _materialize_1d,
     _materialize_labels,
     _missing_row_indices,
+    _mstate_categories,
     _normalize_na_action,
+    _strata_value_label,
     _subset_data,
     _subset_indices,
     _subset_optional_sequence,
 )
+from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
 from ._surv import (
     Surv,
     _formula_response_argument_name,
@@ -46,6 +49,7 @@ from ._types import (
     _ModelOffsetTerm,
     _ModelStrataTerm,
     _NumericDesignTerm,
+    _PenaltyDesignTerm,
     _ResponseOperand,
     _SingleDesignTerm,
     _SurvResponseSpec,
@@ -744,6 +748,8 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
 
 
 def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
+    if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
+        return _penalty_arguments(term.call)[0]
     if term.arithmetic is not None:
         return _arithmetic_expression_columns(term.arithmetic)
     return [term.column]
@@ -938,7 +944,36 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     return _CovariateTerm(term_name)
 
 
-_CALL_TERMS = ("tcut", "cut")
+_CALL_TERMS = ("tcut", "cut", *PENALTY_FUNCTIONS)
+
+
+def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
+    """Parse data-column arguments and literal penalty options without eval."""
+
+    columns = []
+    options = {}
+    for argument in _formula_response_parts(call.split("(", 1)[1][:-1]):
+        named = _formula_named_option(argument)
+        if named is None:
+            name, quoted = _formula_name(argument)
+            if _unsupported_formula_name(name, quoted):
+                raise ValueError(f"unsupported penalty variable {argument!r}")
+            columns.append(name)
+            continue
+        name, value = named
+        if name in options:
+            raise ValueError(f"duplicate penalty option {name!r}")
+        if value == "NULL":
+            options[name] = None
+        elif value.startswith("c(") and value.endswith(")"):
+            options[name] = [
+                _parse_formula_literal(v) for v in _formula_response_parts(value[2:-1])
+            ]
+        else:
+            options[name] = _parse_formula_literal(value)
+    if not columns:
+        raise ValueError("penalty terms require a data column")
+    return columns, options
 
 
 def _parse_call_term(term: str) -> _CovariateTerm | None:
@@ -1268,6 +1303,11 @@ def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
     if term.arithmetic is not None:
         return _arithmetic_expression_values(data, term.arithmetic, n)
     values = _column(data, term.column)
+    if term.transform == "as.numeric":
+        categories = _mstate_categories(_column_source(data, term.column))
+        if categories is not None:
+            codes = {value: i + 1 for i, value in enumerate(categories)}
+            values = [math.nan if _is_missing_value(value) else codes[value] for value in values]
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     return values
@@ -1338,8 +1378,17 @@ def _fit_single_design_term(
     term: _CovariateTerm,
     n: int,
 ) -> _SingleDesignTerm:
+    if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
+        columns, options = _penalty_arguments(term.call)
+        values = {column: _column(data, column) for column in columns}
+        if any(len(value) != n for value in values.values()):
+            raise ValueError("formula columns must have the same length as the Surv response")
+        levels = _mstate_categories(_column_source(data, columns[0]))
+        return fit_penalty(term, columns, values, options, levels)
     values = _term_raw_values(data, term, n)
-    if not term.categorical:
+    if not term.categorical and (
+        term.transform is not None or _mstate_categories(_column_source(data, term.column)) is None
+    ):
         if term.transform is not None:
             _numeric_term_values(values, term)
             return _NumericDesignTerm(term)
@@ -1362,9 +1411,10 @@ def _fit_design_term(
         factors = term.factors
         if factor_order is not None:
             factors = tuple(sorted(factors, key=factor_order.__getitem__))
-        return _InteractionDesignTerm(
-            tuple(_fit_single_design_term(data, factor, n) for factor in factors)
-        )
+        fitted = tuple(_fit_single_design_term(data, factor, n) for factor in factors)
+        if any(isinstance(factor, _PenaltyDesignTerm) for factor in fitted):
+            raise ValueError("penalty terms cannot appear in interactions")
+        return _InteractionDesignTerm(fitted)
     return _fit_single_design_term(data, term, n)
 
 
@@ -1483,6 +1533,8 @@ def _single_design_columns(
     n: int,
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
 ) -> list[list[float]]:
+    if isinstance(spec, _PenaltyDesignTerm):
+        return penalty_columns(spec, {column: _column(data, column) for column in spec.columns})
     if (
         isinstance(spec, _NumericDesignTerm)
         and spec.term.transform == "tt"
@@ -1565,11 +1617,13 @@ def _design_term_name(spec: _DesignTerm) -> str:
 
 
 def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
+    if isinstance(spec, _PenaltyDesignTerm):
+        return list(spec.names)
     term = spec.term
     if isinstance(spec, _CategoricalDesignTerm):
         prefix = _covariate_term_name(term)
         levels = spec.levels if spec.full else spec.levels[1:]
-        return [f"{prefix}{level}" for level in levels]
+        return [f"{prefix}{_strata_value_label(level)}" for level in levels]
     return [_covariate_term_name(term)]
 
 

@@ -4,7 +4,7 @@
 //! of the unit interval before applying the usual transform, so pseudo
 //! values slightly outside `[0, 1]` stay usable.
 
-use crate::internal::statistical::probit;
+use crate::internal::statistical::{normal_cdf, probit};
 use pyo3::prelude::*;
 
 /// `pmax(edge, pmin(mu, 1 - edge))`, evaluated in R's order so an `edge`
@@ -38,7 +38,7 @@ impl LinkFunctionParams {
 #[pymethods]
 impl LinkFunctionParams {
     #[new]
-    fn new(edge: f64) -> Self {
+    pub fn new(edge: f64) -> Self {
         LinkFunctionParams { edge }
     }
 
@@ -76,12 +76,72 @@ impl LinkFunctionParams {
     fn blog_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::blog)
     }
+
+    /// Inverse links use the ordinary link's range, independent of `edge`.
+    pub fn blogit_inverse(&self, eta: f64) -> f64 {
+        if eta.is_nan() {
+            return f64::NAN;
+        }
+        let e = (-eta.abs()).exp();
+        let value = if eta < 0.0 {
+            e / (1.0 + e)
+        } else {
+            1.0 / (1.0 + e)
+        };
+        value.clamp(f64::EPSILON, 1.0 - f64::EPSILON)
+    }
+    pub fn bprobit_inverse(&self, eta: f64) -> f64 {
+        normal_cdf(eta)
+    }
+    pub fn bcloglog_inverse(&self, eta: f64) -> f64 {
+        if eta.is_nan() {
+            return f64::NAN;
+        }
+        (-(-eta.exp()).exp_m1()).clamp(f64::EPSILON, 1.0 - f64::EPSILON)
+    }
+    pub fn blog_inverse(&self, eta: f64) -> f64 {
+        if eta.is_nan() {
+            return f64::NAN;
+        }
+        eta.exp().max(f64::EPSILON)
+    }
+    fn blogit_inverse_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::blogit_inverse)
+    }
+    fn bprobit_inverse_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::bprobit_inverse)
+    }
+    fn bcloglog_inverse_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::bcloglog_inverse)
+    }
+    fn blog_inverse_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
+        self.transform_many(input, Self::blog_inverse)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::f64::consts::LN_2;
+
+    #[test]
+    fn inverse_links_roundtrip_and_handle_extreme_predictors() {
+        let link = LinkFunctionParams::new(0.05);
+        for probability in [0.1, 0.25, 0.5, 0.9] {
+            assert!((link.blogit_inverse(link.blogit(probability)) - probability).abs() < 1e-14);
+            assert!((link.bprobit_inverse(link.bprobit(probability)) - probability).abs() < 1e-8);
+            assert!(
+                (link.bcloglog_inverse(link.bcloglog(probability)) - probability).abs() < 1e-14
+            );
+            assert!((link.blog_inverse(link.blog(probability)) - probability).abs() < 1e-14);
+        }
+        for eta in [f64::NEG_INFINITY, -1000.0, 1000.0, f64::INFINITY] {
+            assert!(link.blogit_inverse(eta).is_finite());
+            assert!(link.bcloglog_inverse(eta).is_finite());
+        }
+        assert!(link.blogit_inverse(f64::NAN).is_nan());
+        assert!(link.blog_inverse(f64::NAN).is_nan());
+    }
 
     #[test]
     fn bounded_links_match_r_survival_reference_values() {

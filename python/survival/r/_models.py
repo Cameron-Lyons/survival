@@ -123,10 +123,12 @@ def nobs(fit: Any) -> int:
     return _dispatch("nobs", fit)
 
 
-def degrees_freedom(fit: Any) -> int:
+def degrees_freedom(fit: Any) -> float:
     """The ``df`` attribute of ``logLik``: the number of estimated coefficients."""
 
     if isinstance(fit, CoxphModel):
+        if fit.penalized is not None:
+            return sum(fit.df)
         return sum(1 for value in fit.coefficients if not math.isnan(value))
     return _dispatch("degrees_freedom", fit)
 

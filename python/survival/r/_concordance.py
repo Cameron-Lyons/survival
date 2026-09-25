@@ -305,11 +305,14 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool) -> _FitData:
     if not isinstance(y, Surv) or lp is None or newdata is not None:
         raise TypeError("object is not an appropriate fit object")
     strata = getattr(fit, "strata", None)
+    levels = tuple(getattr(fit, "strata_levels", ()) or ())
+    if strata is not None and levels:
+        strata = [levels[int(code)] for code in strata]
     return _FitData(
         y=y,
         x=[float(value) for value in lp],
         strata=strata,
-        strata_levels=tuple(getattr(fit, "strata_levels", ()) or ()),
+        strata_levels=levels,
         weights=getattr(fit, "weights", None) if need_weights else None,
         cluster=None,
     )

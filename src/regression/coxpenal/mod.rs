@@ -243,7 +243,6 @@ pub struct CoxpenalFit {
     #[pyo3(get)]
     pub penalty: [f64; 2],
     /// Per model term: 0 ordinary, 1 penalised, 2 sparse.
-    #[pyo3(get)]
     pub pterms: Vec<u8>,
     /// R's `assign2`: the columns of each term in the dense design (a
     /// sparse term keeps its original column).
@@ -1079,6 +1078,14 @@ impl CoxpenalFit {
     #[getter(coxph)]
     fn coxph_getter(&self) -> CoxPHFit {
         self.coxph.clone()
+    }
+
+    #[getter(pterms)]
+    fn pterms_getter(&self) -> Vec<usize> {
+        self.pterms
+            .iter()
+            .map(|&value| usize::from(value))
+            .collect()
     }
 
     #[getter]

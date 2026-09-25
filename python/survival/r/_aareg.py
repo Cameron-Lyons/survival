@@ -99,6 +99,16 @@ def aareg(
         test=test_name,
     )
     coefficient_names = ["Intercept", *frame.names]
+    influences = raw.dfbeta
+    if influences is not None:
+        # R's rowsum(reorder=FALSE) labels clusters in their first appearance
+        # after sorting by stop time, with events before censors at a tie.
+        order = sorted(
+            range(len(response.time)), key=lambda i: (response.time[i], -response.event[i])
+        )
+        codes = list(range(len(order))) if cluster_codes is None else cluster_codes
+        cluster_order = list(dict.fromkeys(codes[i] for i in order))
+        influences = [influences[i] for i in cluster_order]
     return AaregModelResult(
         n=[int(value) for value in raw.n],
         times=list(raw.times),
@@ -112,8 +122,8 @@ def aareg(
         time_weights=[list(row) for row in raw.time_weights],
         dfbeta=(
             None
-            if raw.dfbeta is None
-            else [[list(values) for values in rows] for rows in raw.dfbeta]
+            if influences is None
+            else [[list(values) for values in rows] for rows in influences]
         ),
         robust_test_variance=(
             None

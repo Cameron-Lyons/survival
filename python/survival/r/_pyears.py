@@ -38,6 +38,7 @@ from ._formula import (
     _covariate_term_name,
     _data_column_names,
     _data_row_count,
+    _formula_columns,
     _formula_response_parts,
     _model_strata,
     _parse_formula_literal,
@@ -134,10 +135,16 @@ def _rmap_columns(
 ) -> dict[str, Any]:
     """R's ``rcall`` expansion: every rate-table dimension from ``rmap`` or a same-named column."""
 
+    return _mapped_columns(rmap, ratetable.dimid, data)
+
+
+def _mapped_columns(
+    rmap: Mapping[str, Any] | None, names: Sequence[str], data: Any
+) -> dict[str, Any]:
     columns: dict[str, Any] = {}
     n = _data_row_count(data)
     for name, value in ({} if rmap is None else rmap).items():
-        if str(name) not in ratetable.dimid:
+        if str(name) not in names:
             raise ValueError(f"Variable not found in the ratetable:{name}")
         is_constant = (
             isinstance(value, str) and value not in (_data_column_names(data) or [])
@@ -145,7 +152,7 @@ def _rmap_columns(
         if is_constant:
             value = [value] * n
         columns[str(name)] = value
-    for dimid in ratetable.dimid:
+    for dimid in names:
         columns.setdefault(dimid, dimid)
     return columns
 
@@ -720,6 +727,62 @@ def survexp(
         formula = "time ~ 1"
     if not isinstance(formula, str):
         raise ValueError("A formula argument is required")
+    from ._coxph import CoxphModel, _survfit_curves, predict_coxph
+
+    if isinstance(ratetable, CoxphModel):
+        names = _formula_columns("~" + ratetable.formula.split("~", 1)[1], data)
+        mf = model_frame(
+            formula,
+            data,
+            subset=subset,
+            na_action=na_action or "omit",
+            weights=weights,
+            extra=_mapped_columns(rmap, names, data),
+        )
+        if mf.n == 0:
+            raise ValueError("Data set has 0 rows")
+        response = _survexp_response(mf)
+        method_value = _survexp_method(method, cohort, conditional, response is not None)
+        mapped = {name: _column(mf.data, name) for name in _data_column_names(mf.data) or []}
+        mapped.update(mf.extra)
+        if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):
+            warnings.warn("se.fit value ignored", stacklevel=2)
+        if method_value.startswith("individual"):
+            if response is None:
+                raise ValueError("for individual survival an observation time must be given")
+            hazard = predict_coxph(ratetable, mapped, type="expected")
+            return (
+                hazard if method_value == "individual.h" else [math.exp(-value) for value in hazard]
+            )
+        curves, _ = _survfit_curves(
+            ratetable,
+            mapped,
+            individual=False,
+            id=None,
+            stype=2,
+            ctype=2 if ratetable.method == "efron" else 1,
+            se_fit=False,
+            censor=False,
+        )
+        groups, levels = _survexp_groups(mf)
+        result = _core.survexp_cox(
+            curves,
+            groups or [0] * mf.n,
+            mf.weights or [1.0] * mf.n,
+            y=response,
+            times=_survexp_times(times),
+            method=method_value,
+        )
+        output = _survexp_result(result, levels, mf.n)
+        divisor = _normalize_positive_scale(scale)
+        return SurvExpResult(
+            time=[value / divisor for value in output.time],
+            surv=output.surv,
+            n_risk=output.n_risk,
+            method=output.method,
+            n=output.n,
+            strata=output.strata,
+        )
     table = _ratetable_argument(ratetable)
     mf = model_frame(
         formula,

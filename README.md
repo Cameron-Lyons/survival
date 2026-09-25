@@ -30,6 +30,11 @@ A high-performance survival analysis library written in Rust, with a Python API 
 - Conditional logistic regression
 - Time-splitting utilities
 
+The R-style interface supports penalized Cox formulas, interval-censored AFT
+models, multistate summaries and expected survival from Cox models. See
+[R compatibility](docs/r-compatibility.md) for examples, seeded Yates risk
+predictions, validation coverage and the documented reference differences.
+
 ## Installation
 
 ### From PyPI (Recommended)
@@ -98,6 +103,21 @@ table = surv_analysis.survmean(km)  # R: summary(fit)$table
 test = validation.logrank_test(time, status, [int(s) for s in lung["sex"]])
 print(cox.coefficients, table.median, test.p_value)
 ```
+
+`surv_analysis.survfitkm` and `surv_analysis.nelson_aalen` accept NumPy arrays,
+including strided arrays, pandas/polars columns, and Python sequences. Status
+values must be binary; integral floating-point arrays are accepted with checked
+conversion. The numerical fit runs in Rust with the Python GIL released.
+
+For right-censored curves with independent observations, robust standard errors
+use a linear sweep after sorting, including when fractional case weights select
+robust variance automatically. Repeated clusters, counting-process data, and
+explicit influence matrices use the general influence calculation. Run
+`PYTHONPATH=python python scripts/bench_survival_curves.py` against a release build
+to measure the Python calls, or
+`cargo bench --bench survival_benchmarks -- kaplan_meier` for the Rust kernels.
+See [the algorithm and benchmark notes](docs/kaplan-meier-performance.md) for
+the scope of the optimization and a local before/after comparison.
 
 R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:

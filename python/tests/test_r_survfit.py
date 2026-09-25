@@ -524,8 +524,9 @@ def test_summary_survfit_times_censored_scale_and_rmean_match_r():
         r.summary_survfit(fit, times=[])
     with pytest.raises(ValueError, match="Invalid value for rmean option"):
         r.summary_survfit(fit, rmean="bogus")
-    with pytest.raises(NotImplementedError, match="summary.survfitms"):
-        r.summary_survfit(r.survfit("Surv(time, ev) ~ 1", _mstate_data()))
+    multistate = r.summary_survfit(r.survfit("Surv(time, ev) ~ 1", _mstate_data()))
+    assert multistate.states == ["(s0)", "a", "b"]
+    assert multistate.time == [1, 2, 4, 6]
 
 
 def test_quantile_survfit_matches_r():

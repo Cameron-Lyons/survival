@@ -194,6 +194,23 @@ class YatesResult:
     cmat: list[list[float]]
     cmat_names: list[str]
 
+class YatesModel:
+    formula: str
+    data: Any
+    coefficients: list[float]
+    variance: list[list[float]]
+    sigma2: float | None
+    design: Any
+    model: dict[str, Any]
+    def __init__(
+        self,
+        formula: str,
+        data: Any,
+        coefficients: list[float],
+        variance: list[list[float]],
+        sigma2: float | None = None,
+    ) -> None: ...
+
 class AaregModelResult:
     n: list[int]
     times: list[float]
@@ -338,10 +355,10 @@ def cipoisson(
     p: Any = 0.95,
     method: Any = "exact",
 ) -> tuple[float, float] | list[tuple[float, float]]: ...
-def blogit(x: Any, edge: Any = 0.05) -> float | list[float]: ...
-def bprobit(x: Any, edge: Any = 0.05) -> float | list[float]: ...
-def bcloglog(x: Any, edge: Any = 0.05) -> float | list[float]: ...
-def blog(x: Any, edge: Any = 0.05) -> float | list[float]: ...
+def blogit(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]: ...
+def bprobit(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]: ...
+def bcloglog(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]: ...
+def blog(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]: ...
 def neardate(
     id1: Any,
     id2: Any,
@@ -607,22 +624,25 @@ class SurvfitMultiStateResult:
 
 class SummarySurvfitResult:
     time: list[float]
-    n_risk: list[float]
-    n_event: list[float]
-    n_censor: list[float]
-    surv: list[float]
-    cumhaz: list[float]
+    n_risk: list[float] | list[list[float]]
+    n_event: list[float] | list[list[float]]
+    n_censor: list[float] | list[list[float]]
+    surv: list[float] | None
+    cumhaz: list[float] | list[list[float]]
     strata: list[str] | None
     table: NamedMatrix
     n: list[int]
-    n_enter: list[float] | None
-    std_err: list[float] | None
-    std_chaz: list[float] | None
-    lower: list[float] | None
-    upper: list[float] | None
+    n_enter: list[float] | list[list[float]] | None
+    std_err: list[float] | list[list[float]] | None
+    std_chaz: list[float] | list[list[float]] | None
+    lower: list[float] | list[list[float]] | None
+    upper: list[float] | list[list[float]] | None
     rmean_endtime: list[float] | None
     conf_int: float | None
     conf_type: str | None
+    pstate: list[list[float]] | None
+    states: list[str] | None
+    n_transition: list[list[float]] | None
 
 class SurvfitQuantileResult:
     probs: list[float]
@@ -874,7 +894,7 @@ def model_summary(fit: Any, **kwargs: Any) -> dict[str, Any]: ...
 def model_term_names(fit: Any, terms: Any | None = None) -> list[str]: ...
 def model_weights(fit: Any) -> list[float] | None: ...
 def nobs(fit: Any) -> int: ...
-def degrees_freedom(fit: Any) -> int: ...
+def degrees_freedom(fit: Any) -> float: ...
 def df_residual(fit: Any) -> int: ...
 def aic(fit: Any, *, k: Any = 2.0) -> float: ...
 def bic(fit: Any) -> float: ...

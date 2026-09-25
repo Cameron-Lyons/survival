@@ -50,6 +50,7 @@ from ._fit import (
     _formula_design_for_fit,
     _formula_design_output_names,
     _location_beta,
+    _r_factor_design,
     _unwrap_formula_fit,
 )
 from ._formula import (
@@ -70,7 +71,7 @@ from ._formula import (
     _parse_formula,
     _subset_formula_inputs,
 )
-from ._surv import Surv, _survreg_response_arrays
+from ._surv import Surv, _survreg_response_arrays, is_na_surv
 from ._types import (
     PredictResult,
     _FormulaDesign,
@@ -403,21 +404,18 @@ def _term_structure(
     return tuple(assign), tuple(labels), strata_term
 
 
-def _drop_interval2_missing(
+def _drop_interval_missing(
     spec: Any, data: Any, na_action: str | None, **row_aligned: Any
 ) -> tuple[Any, dict[str, Any]]:
-    """An interval2 endpoint that is NA means censoring: only a row with both endpoints
-    missing is an NA response (``is.na.Surv``).  Those rows, and rows with a missing
-    weight/offset/cluster, go through ``na.action`` here; the covariates go through the
-    shared formula path with the response columns excluded."""
+    """Apply NA handling to the constructed interval response. Missing endpoints
+    can mean censoring, and an unused ``time2`` does not make a response missing.
+    Covariates go through the shared path with response columns excluded."""
 
-    if spec.type != "interval2":
+    if spec.type not in {"interval", "interval2"}:
         return data, row_aligned
-    left, right = _formula_response_values(data, spec)[:2]
-    n = len(left)
-    missing = {
-        row for row, ends in enumerate(zip(left, right, strict=True)) if ends == (None, None)
-    }
+    response = Surv(*_formula_response_values(data, spec), type=spec.type)
+    n = len(response)
+    missing = {row for row, missing in enumerate(is_na_surv(response)) if missing}
     missing |= _missing_row_indices(
         [(name, values) for name, values in row_aligned.items() if values is not None], n
     )
@@ -447,10 +445,10 @@ def _formula_frame(
             formula, data, subset, weights=weights, offset=offset, cluster=cluster
         )
         weights, offset, cluster = aligned["weights"], aligned["offset"], aligned["cluster"]
-    data, aligned = _drop_interval2_missing(
+    data, aligned = _drop_interval_missing(
         spec, data, na_action, weights=weights, offset=offset, cluster=cluster
     )
-    excluded = spec.columns if spec.type == "interval2" else ()
+    excluded = spec.columns if spec.type in {"interval", "interval2"} else ()
     if any(column not in excluded for column in _formula_columns(formula, data)):
         data, aligned = _apply_formula_na_action(
             formula, data, na_action, exclude_columns=excluded, **aligned
@@ -458,7 +456,9 @@ def _formula_frame(
     weights, offset, cluster = aligned["weights"], aligned["offset"], aligned["cluster"]
     response, terms = _parse_formula(formula, data)
     n = len(response)
-    design = _fit_formula_design(data, spec, terms, n, include_intercept=True)
+    design = _r_factor_design(
+        data, _fit_formula_design(data, spec, terms, n, include_intercept=True)
+    )
     if terms.offsets:
         if offset is not None:
             raise ValueError("use only one of formula offset(...) or offset")

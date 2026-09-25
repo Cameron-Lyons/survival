@@ -10,6 +10,7 @@ pub(crate) mod pystep;
 pub(crate) mod ratetable;
 pub(crate) mod ratetable_data;
 pub(crate) mod survexp;
+pub(crate) mod survexp_cox;
 pub(crate) mod survexp_fit;
 
 pub use match_ratetable::{
@@ -29,4 +30,5 @@ pub use ratetable_data::{
     survexp_mn, survexp_mn_table, survexp_us, survexp_us_table, survexp_usr, survexp_usr_table,
 };
 pub use survexp::{SurvExpResult, SurvexpInput, SurvexpMethod, survexp, survexp_py};
+pub use survexp_cox::{survexp_cox, survexp_cox_py};
 pub use survexp_fit::{SurvexpFit, survexp_fit};

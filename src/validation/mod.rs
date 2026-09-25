@@ -131,5 +131,5 @@ pub use uno_c_index_module::{
 };
 pub use yates::{
     YatesContrast, YatesEstimate, YatesInput, YatesResult, YatesTest, population_means,
-    population_means_py, yates, yates_py,
+    population_means_py, yates, yates_py, yates_risk, yates_risk_py,
 };

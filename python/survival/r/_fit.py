@@ -52,6 +52,7 @@ from ._types import (
     _FormulaTerms,
     _InteractionDesignTerm,
     _NumericDesignTerm,
+    _PenaltyDesignTerm,
     _SingleDesignTerm,
     _SurvResponseSpec,
 )
@@ -156,6 +157,8 @@ def _r_factor_design(data: Any, design: _FormulaDesign) -> _FormulaDesign:
 def _column_names(term: _SingleDesignTerm) -> list[str]:
     """``colnames(model.matrix)`` for one term: ``factor(x)level`` with R's labels."""
 
+    if isinstance(term, _PenaltyDesignTerm):
+        return list(term.names)
     prefix = _covariate_term_name(term.term)
     if isinstance(term, _CategoricalDesignTerm):
         levels = term.levels if term.full else term.levels[1:]
