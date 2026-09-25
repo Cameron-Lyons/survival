@@ -441,6 +441,8 @@ def _formula_frame(
 ) -> _SurvregFrame:
     spec = _formula_response_spec(formula)
     weights = _column_or_values(data, weights, "weights")
+    offset = _column_or_values(data, offset, "offset")
+    cluster = _column_or_values(data, cluster, "cluster")
     if subset is not None:
         data, aligned = _subset_formula_inputs(
             formula, data, subset, weights=weights, offset=offset, cluster=cluster

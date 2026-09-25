@@ -227,3 +227,25 @@ def test_start_not_before_stop_rows_are_missing():
         pytest.raises(ValueError, match="missing values"),
     ):
         r.coxph("Surv(start, stop, status) ~ x", BACKWARDS, na_action="fail")
+
+
+def test_survreg_cluster_and_offset_by_column_name(lung):
+    # survreg(Surv(time, status) ~ age + sex, lung, cluster = inst, na.action = na.omit)
+    fit = r.survreg("Surv(time, status) ~ age + sex", lung, cluster="inst", na_action="omit")
+    assert fit.coefficients == pytest.approx(
+        [6.2754148126782914, -0.0122904873923192, 0.3831908492197483], rel=1e-8
+    )
+    assert [fit.var[i][i] for i in range(4)] == pytest.approx(
+        [1.72296116856412e-01, 3.56329613009403e-05, 1.23568611274966e-02, 4.01105215260810e-03],
+        rel=1e-6,
+    )
+    by_vector = r.survreg(
+        "Surv(time, status) ~ age + sex", lung, cluster=lung["inst"], na_action="omit"
+    )
+    assert fit.var == by_vector.var
+
+    # offset= is a Python extension (R's survreg has none), resolved like coxph's
+    data = {**lung, "shift": [0.01 * age for age in lung["age"]]}
+    named = r.survreg("Surv(time, status) ~ sex", data, offset="shift")
+    given = r.survreg("Surv(time, status) ~ sex", data, offset=data["shift"])
+    assert named.coefficients == given.coefficients
