@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from itertools import combinations, product
@@ -29,6 +30,7 @@ from ._surv import (
     _formula_response_argument_name,
     _normalize_surv_type,
     _ordered_named_response_arguments,
+    _time_column,
 )
 from ._types import (
     _MISSING,
@@ -808,6 +810,33 @@ def _subset_formula_inputs(
     return _formula_data_rows(formula, data, indices, n), filtered
 
 
+def _backwards_interval_rows(formula: str, data: Any, n: int) -> set[int]:
+    """The rows of a ``Surv(start, stop, event)`` response with ``start >= stop``.
+
+    R's ``Surv`` turns their start into ``NA`` (with its warning) while ``model.frame``
+    evaluates the response, so ``na.action`` treats them as missing.
+    """
+
+    spec = _response_spec(formula)
+    if (
+        spec is None
+        or not spec.surv
+        or len(spec.arguments) != 3
+        or spec.type not in {None, "counting", "mstate"}
+    ):
+        return set()
+    start = _time_column(
+        _response_arg_values(data, spec.arguments[0], n), "time", "Time variable is not numeric"
+    )
+    stop = _time_column(
+        _response_arg_values(data, spec.arguments[1], n), "time2", "Stop time is not numeric"
+    )
+    rows = {row for row, (begin, end) in enumerate(zip(start, stop, strict=True)) if begin >= end}
+    if rows:
+        warnings.warn("Stop time must be > start time, NA created", stacklevel=5)
+    return rows
+
+
 def _apply_formula_na_action(
     formula: str,
     data: Any,
@@ -830,6 +859,7 @@ def _apply_formula_na_action(
         ],
         n,
     )
+    missing |= _backwards_interval_rows(formula, data, n)
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
         return data, row_aligned

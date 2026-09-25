@@ -3,7 +3,7 @@ variables only, against R 4.5.3 / survival 3.8-12.
 
 The data sets are plain column mappings, so every formula function accepts them directly;
 ``subset`` and ``na.action`` index only the columns the formula uses (R's ``model.frame``),
-whatever the container.
+whatever the container; counting-process rows with ``start >= stop`` are dropped as missing.
 """
 
 from __future__ import annotations
@@ -186,3 +186,44 @@ def test_underscore_columns_are_ordinary_columns(lung):
     # d$`_x` <- d$age; coxph(Surv(time, status) ~ `_x`, d)
     fit = r.coxph("Surv(time, status) ~ `_x`", {**lung, "_x": lung["age"]})
     assert fit.coefficients == pytest.approx([0.0187201792045515], rel=1e-9)
+
+
+# start = c(0, 2, 5, 1), stop = c(10, 12, 6, 1): R's Surv makes the last start NA, and
+# model.frame's na.omit drops that row (na.action = 4).
+BACKWARDS = {
+    "start": [0, 2, 5, 1],
+    "stop": [10, 12, 6, 1],
+    "status": [1, 0, 1, 1],
+    "x": [0.5, 1.2, 2.0, 0.3],
+    "sex": [1, 2, 1, 2],
+}
+
+
+def test_start_not_before_stop_rows_are_missing():
+    with pytest.warns(UserWarning, match="Stop time must be > start time, NA created"):
+        fit = r.coxph("Surv(start, stop, status) ~ x", BACKWARDS, na_action="omit")
+    # coxph(Surv(start, stop, status) ~ x, d)
+    assert fit.n == 3
+    assert fit.coefficients == pytest.approx([0.874234772123199], rel=1e-9)
+    assert fit.loglik == pytest.approx([-1.79175946922805, -1.61414151920695], rel=1e-12)
+
+    with pytest.warns(UserWarning, match="Stop time must be > start time, NA created"):
+        curve = r.survfit("Surv(start, stop, status) ~ 1", BACKWARDS)
+    # survfit(Surv(start, stop, status) ~ 1, d)
+    assert curve.n == [3]
+    assert curve.time == [6.0, 10.0, 12.0]
+    assert curve.n_risk == [3.0, 2.0, 1.0]
+    assert curve.surv == pytest.approx([2 / 3, 1 / 3, 1 / 3], rel=1e-12)
+
+    with pytest.warns(UserWarning, match="Stop time must be > start time, NA created"):
+        table = r.pyears("Surv(start, stop, status) ~ sex", BACKWARDS, scale=1)
+    # pyears(Surv(start, stop, status) ~ sex, d, scale = 1)
+    assert table.pyears == [11.0, 10.0]
+    assert table.n == [2.0, 1.0]
+    assert table.event == [2.0, 0.0]
+
+    with (
+        pytest.warns(UserWarning, match="Stop time must be > start time"),
+        pytest.raises(ValueError, match="missing values"),
+    ):
+        r.coxph("Surv(start, stop, status) ~ x", BACKWARDS, na_action="fail")
