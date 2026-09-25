@@ -8,15 +8,13 @@ def main() -> None:
     print(f"lung rows: {len(lung['time'])}")
     print(f"lung columns: {list(lung)[:4]}")
 
-    concordance = core.perform_concordance1_calculation(
-        [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0],
-        [1.0, 1.0, 1.0, 1.0, 1.0],
-        [0, 1, 2, 3, 4],
-        5,
+    concordance = core.concordancefit(
+        core.SurvivalData([1.0, 2.0, 3.0, 4.0, 5.0], [1, 1, 0, 1, 1]),
+        core.CovariateMatrix([0.2, 0.1, 0.5, 0.4, 0.9], 5, 1),
     )
-    print(f"concordance index: {concordance['concordance_index']:.3f}")
+    print(f"concordance index: {concordance.concordance[0]:.3f}")
 
-    wald = validation.wald_test_py([1.0], [0.5])
+    wald = validation.wald_test([1.0], [[0.5]])
     print(f"wald test result type: {type(wald).__name__}")
 
 
