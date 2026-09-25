@@ -14,16 +14,157 @@
 //! columns (R drops the intercept and strata columns) and the offset
 //! `-sum(fit$means * beta)` that recentres the predictions.
 //!
-//! `predict = "survival"` (and `"risk"`) are not ported: R evaluates them by
-//! Monte-Carlo simulation of the coefficients (`nsim` draws from
-//! `N(beta, V)`) and, for survival, needs `survfit(fit)`'s baseline
-//! cumulative hazard evaluated on the population's linear predictors; a
-//! port needs the Cox baseline curve (time, cumhaz) from the Cox side and
-//! a seeded normal generator.
+//! [`yates_risk`] evaluates marginal relative risks with Monte-Carlo
+//! coefficient covariance, using a seeded R-compatible normal stream.
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
+mod rng;
+
+/// Monte-Carlo covariance for marginal risk predictions. Normal draws use R's
+/// default generator and matrix fill order for reproducible cross-language runs.
+pub fn yates_risk(
+    xmatlist: &[Vec<Vec<f64>>],
+    beta: &[f64],
+    vmat: &[Vec<f64>],
+    means: &[f64],
+    nsim: usize,
+    seed: u32,
+    test: YatesTest,
+) -> SurvivalResult<YatesResult> {
+    if nsim < 2 {
+        return Err(SurvivalError::invalid_input("nsim must be at least two"));
+    }
+    validate_length(beta.len(), means.len(), "means")?;
+    validate_finite(means, "means")?;
+    let cmat = population_means(xmatlist, None)?;
+    yates(&YatesInput {
+        cmat: &cmat,
+        beta,
+        vmat,
+        offset: 0.0,
+        sigma2: None,
+        estimable: None,
+        test,
+    })?;
+    let (values, vectors) = symmetric_eigen(vmat);
+    let largest = values.iter().copied().fold(0.0_f64, f64::max);
+    if values
+        .iter()
+        .any(|&value| value < -f64::EPSILON.sqrt() * largest)
+    {
+        return Err(SurvivalError::invalid_input(
+            "coefficient covariance must be positive semidefinite",
+        ));
+    }
+    let p = beta.len();
+    let root: Vec<Vec<f64>> = (0..p)
+        .map(|i| {
+            (0..p)
+                .map(|j| {
+                    (0..p)
+                        .map(|k| vectors[i][k] * vectors[j][k] * values[k].max(0.0).sqrt())
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
+    let mut rng = rng::RNormal::new(seed);
+    let mut z = vec![vec![0.0; p]; nsim];
+    for j in 0..p {
+        for row in &mut z {
+            row[j] = rng.normal();
+        }
+    }
+    let centered: Vec<Vec<Vec<f64>>> = xmatlist
+        .iter()
+        .map(|rows| {
+            rows.iter()
+                .map(|row| row.iter().zip(means).map(|(x, mean)| x - mean).collect())
+                .collect()
+        })
+        .collect();
+    let predict = |coef: &[f64]| -> Vec<f64> {
+        centered
+            .iter()
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| row.iter().zip(coef).map(|(x, b)| x * b).sum::<f64>().exp())
+                    .sum::<f64>()
+                    / rows.len() as f64
+            })
+            .collect()
+    };
+    let estimates = predict(beta);
+    let mut sample_mean = vec![0.0; estimates.len()];
+    let mut covariance = vec![vec![0.0; estimates.len()]; estimates.len()];
+    for (draw, z) in z.iter().enumerate() {
+        let coef: Vec<f64> = (0..p)
+            .map(|j| beta[j] + (0..p).map(|k| z[k] * root[k][j]).sum::<f64>())
+            .collect();
+        let predictions = predict(&coef);
+        validate_finite(&predictions, "simulated risk")?;
+        let delta: Vec<f64> = predictions
+            .iter()
+            .zip(&sample_mean)
+            .map(|(x, m)| x - m)
+            .collect();
+        for (mean, change) in sample_mean.iter_mut().zip(&delta) {
+            *mean += change / (draw + 1) as f64;
+        }
+        for i in 0..estimates.len() {
+            for j in 0..estimates.len() {
+                covariance[i][j] += delta[i] * (predictions[j] - sample_mean[j]);
+            }
+        }
+    }
+    for row in &mut covariance {
+        for value in row {
+            *value /= (nsim - 1) as f64;
+        }
+    }
+    let identity: Vec<Vec<f64>> = (0..estimates.len())
+        .map(|i| (0..estimates.len()).map(|j| f64::from(i == j)).collect())
+        .collect();
+    let mut result = yates(&YatesInput {
+        cmat: &identity,
+        beta: &estimates,
+        vmat: &covariance,
+        offset: 0.0,
+        sigma2: None,
+        estimable: None,
+        test,
+    })?;
+    result.cmat.clear();
+    Ok(result)
+}
+
+#[pyfunction(name = "yates_risk")]
+#[pyo3(signature=(xmatlist, beta, vmat, means, nsim=200, seed=0, test="global", term=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn yates_risk_py(
+    py: Python<'_>,
+    xmatlist: Vec<Vec<Vec<f64>>>,
+    beta: Vec<f64>,
+    vmat: Vec<Vec<f64>>,
+    means: Vec<f64>,
+    nsim: usize,
+    seed: u32,
+    test: &str,
+    term: Option<&str>,
+) -> PyResult<YatesResult> {
+    let test = YatesTest::parse(test)?;
+    let mut result = py.detach(|| yates_risk(&xmatlist, &beta, &vmat, &means, nsim, seed, test))?;
+    if let Some(term) = term {
+        for row in &mut result.test {
+            if row.name == "global" {
+                row.name = term.to_owned();
+            }
+        }
+    }
+    Ok(result)
+}
 
 /// Which contrasts of the population marginal means to test (R `test`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

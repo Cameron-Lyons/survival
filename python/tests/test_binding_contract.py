@@ -1157,7 +1157,7 @@ def test_r_api_stub_tracks_bounded_link_public_signatures():
     survival = importlib.import_module("survival")
     stub_path = PACKAGE_ROOT / "r_api.pyi"
 
-    expected = ["x", "edge"]
+    expected = ["x", "edge", "inverse"]
     for name in ["blogit", "bprobit", "bcloglog", "blog"]:
         assert list(inspect.signature(getattr(survival.r_api, name)).parameters) == expected
         assert _pyi_function_arg_names(stub_path, name) == expected

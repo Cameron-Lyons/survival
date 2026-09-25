@@ -64,165 +64,26 @@ r = survival.r_api
 #   "error:"           the Python call raises
 # ---------------------------------------------------------------------------
 
+# The remaining numerical differences and their independent checks are
+# documented in docs/r-compatibility.md. Do not add feature/error exemptions.
 KNOWN_FAILURES: dict[str, str] = {
-    "aareg/ovarian_age_ecog_dfbeta/dfbeta": "mismatch: dfbeta[0][3][0]: -0.010642 != 0.051349",
-    "aareg/ovarian_age_rx_dfbeta_nrisk/dfbeta": (
-        "mismatch: dfbeta[0][3][0]: -0.00015217 != 0.049983"
-    ),
     "aareg/veteran_karno_celltype": "mismatch: times: length 104 differs from expected 117",
-    "concordance/aml_x_numeric": (
-        "error: ValueError: as.numeric() formula term 'x' requires numeric values"
-    ),
-    "concordance/coxph_survreg_fits/both.concordance": (
-        "error: TypeError: argument is not an appropriate fit object"
-    ),
-    "coxph/heart_counting_age_surgery_transplant/coef_names": (
-        "mismatch: coef: names ['age', 'surgery', 'transplant'] != ['age', 'surgery', 't..."
-    ),
-    "coxph/heart_counting_age_surgery_transplant/summary.coefficients": (
-        "mismatch: coefficients.rows[2]: 'transplant' != 'transplant1'"
-    ),
-    "coxph/heart_counting_age_surgery_transplant/summary.conf_int": (
-        "mismatch: conf_int has no row 'transplant1'"
-    ),
-    "coxph/heart_counting_breslow/coef_names": (
-        "mismatch: coef: names ['age', 'surgery', 'transplant'] != ['age', 'surgery', 't..."
-    ),
-    "coxph/heart_counting_breslow/summary.coefficients": (
-        "mismatch: coefficients.rows[2]: 'transplant' != 'transplant1'"
-    ),
-    "coxph/heart_counting_breslow/summary.conf_int": "mismatch: conf_int has no row 'transplant1'",
-    # R's concordance decides ties by exact equality of the linear predictors,
-    # and for these two cases the tie pattern depends on the platform's
-    # floating-point rounding: the fixtures (R on CI's reference BLAS) count
-    # 343 tied.x for lung_age_sex_init_iter0 where R with OpenBLAS and the
-    # port count 334; the port reproduces the OpenBLAS results.
     "coxph/lung_age_sex_cluster_inst/concordance.cvar": (
-        "mismatch: cvar[0]: 0.00069155 != 0.00069155 (platform-dependent lp ties)"
+        "mismatch: cvar[0]: 0.00069155 != 0.00069155"
     ),
     "coxph/lung_age_sex_init_iter0/concordance.concordance": (
-        "mismatch: concordance[0]: 0.60258 != 0.60255 (platform-dependent lp ties)"
+        "mismatch: concordance[0]: 0.60258 != 0.60255"
     ),
-    "coxph/lung_age_sex_init_iter0/concordance.count": (
-        "mismatch: count[0]: 11893.0 != 11888.0 (platform-dependent lp ties)"
-    ),
-    "coxph/lung_age_sex_init_iter0/concordance.cvar": (
-        "mismatch: cvar[0]: 0.00067813 != 0.00067811 (platform-dependent lp ties)"
-    ),
-    "coxph/lung_age_sex_init_iter0/concordance.var": (
-        "mismatch: var[0]: 0.00065003 != 0.00064955 (platform-dependent lp ties)"
-    ),
+    "coxph/lung_age_sex_init_iter0/concordance.count": "mismatch: count[0]: 11893 != 11888",
+    "coxph/lung_age_sex_init_iter0/concordance.var": "mismatch: var[0]: 0.00065003 != 0.00064955",
+    "coxph/lung_age_sex_init_iter0/concordance.cvar": "mismatch: cvar[0]: 0.00067813 != 0.00067811",
     "coxph/lung_age_sex_init_iter0/summary.concordance": (
-        "mismatch: concordance.C: 0.60258 != 0.60255 (platform-dependent lp ties)"
+        "mismatch: concordance.C: 0.60258 != 0.60255"
     ),
     "coxph/synthetic_delayed_x_exact/residuals.deviance": (
         "mismatch: residuals.deviance[0]: 1.4061 != 0.83923"
     ),
-    "coxph_penalized/cgd_frailty_gamma_id": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/kidney_frailty_gamma": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/kidney_frailty_gamma_theta_fixed": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/kidney_frailty_gaussian": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/kidney_frailty_gaussian_df": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/kidney_frailty_t": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/lung_pspline_age_df0_aic": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/lung_pspline_age_df4": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/lung_pspline_karno_df3_nterm6": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/lung_ridge_age_sex_theta1": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/lung_ridge_age_sex_theta5_scaled": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/lung_ridge_df2": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/rats_frailty_gamma_litter": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "coxph_penalized/rats_frailty_gaussian_litter": (
-        "missing feature: penalised Cox terms (ridge/pspline/frailty) are not implemented"
-    ),
-    "finegray/mgus2_400_death/coxph.loglik": (
-        "missing feature: result has none of the attributes ('log_likelihood',)"
-    ),
-    "finegray/mgus2_400_pcm/coxph.loglik": (
-        "missing feature: result has none of the attributes ('log_likelihood',)"
-    ),
-    "finegray/mgus2_400_pcm_strata_sex/coxph.loglik": (
-        "missing feature: result has none of the attributes ('log_likelihood',)"
-    ),
-    "finegray/synthetic_ties_a/coxph.loglik": (
-        "missing feature: result has none of the attributes ('log_likelihood',)"
-    ),
-    "royston_brier/lung_age_sex/royston": (
-        "error: AttributeError: 'dict' object has no attribute 'd'"
-    ),
-    "royston_brier/lung_age_sex/royston_adjust": (
-        "error: AttributeError: 'dict' object has no attribute 'd'"
-    ),
-    "royston_brier/pbc_trial_bili_edema/royston": (
-        "error: AttributeError: 'dict' object has no attribute 'd'"
-    ),
-    "royston_brier/veteran_karno_celltype/royston": (
-        "error: AttributeError: 'dict' object has no attribute 'd'"
-    ),
     "survcondense/lung_split_age_sex_epi": "mismatch: rows 106 != 0",
-    "survexp/lung_coxph_ratetable": (
-        "missing feature: survexp with a coxph fit as ratetable is not available"
-    ),
-    "survfit_km/lung_sex/summary_table": "mismatch: table[0][4]: 326.08 != 278.76",
-    "survfit_km/lung_weighted/summary_table": "mismatch: table[0][4]: 306.45 != 243.32",
-    "survfit_km/synthetic_timefix_false/curves.time_counts": (
-        "mismatch: curve[1].time: length 6 differs from expected 8"
-    ),
-    "survfit_km/synthetic_timefix_false/curves.surv": (
-        "mismatch: curve[1].surv: length 6 differs from expected 8"
-    ),
-    "survfit_km/synthetic_timefix_false/curves.std_err": (
-        "mismatch: curve[1].std_err: length 6 differs from expected 8"
-    ),
-    "survfit_km/synthetic_timefix_false/curves.cumhaz": (
-        "mismatch: curve[1].cumhaz: length 6 differs from expected 8"
-    ),
-    "survfit_km/synthetic_timefix_false/curves.std_chaz": (
-        "mismatch: curve[1].std_chaz: length 6 differs from expected 8"
-    ),
-    "survfit_km/synthetic_timefix_false/curves.conf": (
-        "mismatch: curve[1].lower: length 6 differs from expected 8"
-    ),
-    "survfit_km/synthetic_timefix_false/summary_std_err": (
-        "mismatch: summary_std_err: length 5 differs from expected 6"
-    ),
-    "survfit_multistate/mgus2_400_1/summary_times": (
-        "error: NotImplementedError: summary.survfitms is not available (no Rust kern..."
-    ),
-    "survfit_multistate/mgus2_sex/summary_times": (
-        "error: NotImplementedError: summary.survfitms is not available (no Rust kern..."
-    ),
-    "survfit_multistate/myeloid_ms_trt/summary_times": (
-        "error: NotImplementedError: summary.survfitms is not available (no Rust kern..."
-    ),
-    "survfit_multistate/transplant_abo/summary_times": (
-        "error: NotImplementedError: summary.survfitms is not available (no Rust kern..."
-    ),
     "survreg/interval2_synthetic_lognormal_g/residuals.dfbeta": (
         "mismatch: residuals.dfbeta[0][0]: -0.089422 != -0.097002"
     ),
@@ -240,9 +101,6 @@ KNOWN_FAILURES: dict[str, str] = {
     ),
     "survreg/interval2_synthetic_lognormal_g/residuals.matrix": (
         "mismatch: residuals.matrix[0][3]: -0.26241 != 0.26241"
-    ),
-    "survreg/interval2_synthetic_lognormal_g/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
     ),
     "survreg/interval2_synthetic_weibull/residuals.dfbeta": (
         "mismatch: residuals.dfbeta[0][0]: -0.059073 != -0.051779"
@@ -262,87 +120,24 @@ KNOWN_FAILURES: dict[str, str] = {
     "survreg/interval2_synthetic_weibull/residuals.matrix": (
         "mismatch: residuals.matrix[0][3]: 0.32734 != -0.32734"
     ),
-    "survreg/interval2_synthetic_weibull/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "survreg/interval_status_synthetic_weibull/coef": "mismatch: coef[0]: 1.4798 != 1.5711",
-    "survreg/interval_status_synthetic_weibull/coef_names": "mismatch: coef[0]: 1.4798 != 1.5711",
-    "survreg/interval_status_synthetic_weibull/icoef": "mismatch: icoef[0]: 1.4798 != 1.5711",
-    "survreg/interval_status_synthetic_weibull/scale": "mismatch: scale[0]: 0.42808 != 0.53481",
-    "survreg/interval_status_synthetic_weibull/var": "mismatch: var[0][0]: 0.044858 != 0.038118",
-    "survreg/interval_status_synthetic_weibull/loglik": "mismatch: loglik[0]: -7.1063 != -13.97",
-    "survreg/interval_status_synthetic_weibull/iter": "mismatch: iter: 6 != 5",
-    "survreg/interval_status_synthetic_weibull/df_residual": "mismatch: df_residual: 3 != 8",
-    "survreg/interval_status_synthetic_weibull/linear_predictors": (
-        "mismatch: linear_predictors: length 5 differs from expected 10"
-    ),
-    "survreg/interval_status_synthetic_weibull/residuals.response": (
-        "mismatch: residuals.response: length 5 differs from expected 10"
-    ),
-    "survreg/interval_status_synthetic_weibull/residuals.deviance": (
-        "mismatch: residuals.deviance: length 5 differs from expected 10"
-    ),
     "survreg/interval_status_synthetic_weibull/residuals.dfbeta": (
-        "mismatch: residuals.dfbeta: length 5 differs from expected 10"
+        "mismatch: residuals.dfbeta[0][0]: -0.059073 != -0.051779"
     ),
     "survreg/interval_status_synthetic_weibull/residuals.dfbetas": (
-        "mismatch: residuals.dfbetas: length 5 differs from expected 10"
-    ),
-    "survreg/interval_status_synthetic_weibull/residuals.working": (
-        "mismatch: residuals.working: length 5 differs from expected 10"
+        "mismatch: residuals.dfbetas[0][0]: -0.30257 != -0.26521"
     ),
     "survreg/interval_status_synthetic_weibull/residuals.ldcase": (
-        "mismatch: residuals.ldcase: length 5 differs from expected 10"
+        "mismatch: residuals.ldcase[0]: 0.1033 != 0.082091"
     ),
     "survreg/interval_status_synthetic_weibull/residuals.ldresp": (
-        "mismatch: residuals.ldresp: length 5 differs from expected 10"
+        "mismatch: residuals.ldresp[0]: 0.13382 != 0.04104"
     ),
     "survreg/interval_status_synthetic_weibull/residuals.ldshape": (
-        "mismatch: residuals.ldshape: length 5 differs from expected 10"
+        "mismatch: residuals.ldshape[0]: 0.43207 != 0.12055"
     ),
     "survreg/interval_status_synthetic_weibull/residuals.matrix": (
-        "mismatch: residuals.matrix: length 5 differs from expected 10"
+        "mismatch: residuals.matrix[0][3]: 0.32734 != -0.32734"
     ),
-    "survreg/interval_status_synthetic_weibull/predict.response": (
-        "mismatch: predict.response.fit: length 5 differs from expected 10"
-    ),
-    "survreg/interval_status_synthetic_weibull/predict.lp": (
-        "mismatch: predict.lp.fit: length 5 differs from expected 10"
-    ),
-    "survreg/interval_status_synthetic_weibull/predict.quantile": (
-        "mismatch: predict.quantile.fit: length 5 differs from expected 10"
-    ),
-    "survreg/interval_status_synthetic_weibull/predict.uquantile": (
-        "mismatch: predict.uquantile.fit: length 5 differs from expected 10"
-    ),
-    "survreg/interval_status_synthetic_weibull/summary": (
-        "mismatch: summary[(Intercept)].value: 1.4798 != 1.5711"
-    ),
-    "survreg/interval_status_synthetic_weibull/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "survreg/lung_weibull_factor_ph_ecog/coef": "mismatch: coef[0]: 5.9672 != 6.2576",
-    "survreg/lung_weibull_factor_ph_ecog/coef_names": (
-        "mismatch: coef: names ['(Intercept)', 'age', 'sex', 'factor(ph.ecog)0', 'factor..."
-    ),
-    "survreg/lung_weibull_factor_ph_ecog/var": "mismatch: var[0][0]: 0.21528 != 0.21433",
-    "survreg/lung_weibull_factor_ph_ecog/predict.terms": (
-        "mismatch: predict.terms.se_fit[0][2]: 0.014034 != 0.020588"
-    ),
-    "survreg/lung_weibull_factor_ph_ecog/predict_newdata.terms": (
-        "mismatch: predict_newdata.terms.se_fit[0][2]: 0.0359 != 0.041339"
-    ),
-    "survreg/lung_weibull_factor_ph_ecog/summary": (
-        "mismatch: summary[(Intercept)].value: 5.9672 != 6.2576"
-    ),
-    "survreg/lung_weibull_strata_sex/concordance.concordance": "error: KeyError: 0",
-    "survreg/tobin_gaussian_left/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "survreg-extra/interval2_synthetic_gaussian_g/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "survreg-extra/lung_lognormal_strata_sex_full/concordance.concordance": "error: KeyError: 0",
     "survreg-extra/lung_weibull_offset_sex/predict_newdata.response": (
         "mismatch: predict_newdata.response.fit[0]: 356.23 != 131.05"
     ),
@@ -354,64 +149,6 @@ KNOWN_FAILURES: dict[str, str] = {
     ),
     "survreg-extra/lung_weibull_offset_sex/predict_newdata.uquantile": (
         "mismatch: predict_newdata.uquantile.fit[0][0]: 4.0015 != 3.0015"
-    ),
-    "survreg-extra/lung_weibull_weighted_strata_sex/concordance.concordance": "error: KeyError: 0",
-    "survreg-extra/tobin_extreme_left/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "survreg-extra/tobin_logistic_left_full/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "survreg-extra/tobin_t_df6_left/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "survreg-extra/tobin_t_left/concordance.concordance": (
-        "missing feature: ValueError: left or interval censored data is not supported"
-    ),
-    "utilities/bounded_links/blogit_linkinv": (
-        "missing feature: bounded link inverse functions are not exposed"
-    ),
-    "utilities/bounded_links/bprobit_linkinv": (
-        "missing feature: bounded link inverse functions are not exposed"
-    ),
-    "utilities/bounded_links/bcloglog_linkinv": (
-        "missing feature: bounded link inverse functions are not exposed"
-    ),
-    "utilities/bounded_links/blog_linkinv": (
-        "missing feature: bounded link inverse functions are not exposed"
-    ),
-    "utilities/cipoisson": "error: AttributeError: 'list' object has no attribute 'lower'",
-    "utilities/statefig": "error: AttributeError: 'StateFigResult' object has no attribute 'x'",
-    "validation-extra/anova_lung_model_list": (
-        "missing feature: no validation-extra handler for anova_lung_model_list"
-    ),
-    "validation-extra/survfit_lung_sex_rmean_individual": (
-        "missing feature: no validation-extra handler for survfit_lung_sex_rmean_individual"
-    ),
-    "validation-extra/turnbull_dead_jump": (
-        "missing feature: no validation-extra handler for turnbull_dead_jump"
-    ),
-    "validation-extra/turnbull_dead_jump_groups": (
-        "missing feature: no validation-extra handler for turnbull_dead_jump_groups"
-    ),
-    "yates/lung_ph_ecog_factor/cmat_names": (
-        "mismatch: cmat.colnames[0]: 'factor(ph.ecog)1' != 'factor(ph.ecog)1'"
-    ),
-    "yates/lung_ph_ecog_factor_pop_data/cmat_names": (
-        "mismatch: cmat.colnames[0]: 'factor(ph.ecog)1' != 'factor(ph.ecog)1'"
-    ),
-    "yates/veteran_celltype_lm": "missing feature: yates on a lm fit",
-    "yates/veteran_celltype_pop_factorial/cmat_names": (
-        "mismatch: cmat.colnames[3]: 'factor(trt)2' != 'factor(trt)2'"
-    ),
-    "yates/veteran_celltype_pop_sas/cmat_names": (
-        "mismatch: cmat.colnames[3]: 'factor(trt)2' != 'factor(trt)2'"
-    ),
-    "yates/veteran_celltype_predict_risk": (
-        "missing feature: yates predict = 'risk' is not implemented (R simulates the coefficients)"
-    ),
-    "yates/veteran_trt_factor/cmat_names": (
-        "mismatch: cmat.colnames[3]: 'factor(trt)2' != 'factor(trt)2'"
     ),
 }
 
@@ -544,7 +281,9 @@ def _tt_function(source: str) -> Callable[..., Any]:
 
 _CURVE_FIELDS = {
     # r field -> (python attribute candidates, rtol or None for exact)
-    "time": (("time",), 0.0),
+    # jvec serializes to 15 significant digits. Row counts still distinguish
+    # exact near-ties; the displayed times need only roundtrip that precision.
+    "time": (("time",), 5e-15),
     "n_risk": (("n_risk",), 0.0),
     "n_event": (("n_event",), 0.0),
     "n_censor": (("n_censor",), 0.0),
@@ -771,10 +510,10 @@ def _survfit_call(topic: str, case: Mapping[str, Any], *, drop: Sequence[str] = 
     return _cached(_fit_key("survfit", case), build)
 
 
-def _check_summary_table(fit: Any, expected: Mapping[str, Any]) -> None:
+def _check_summary_table(fit: Any, expected: Mapping[str, Any], **kwargs: Any) -> None:
     """``summary(fit)$table``: a matrix with strata row names, or a named vector."""
 
-    table = r.summary_survfit(fit).table
+    table = r.summary_survfit(fit, **kwargs).table
     if "values" in expected:
         assert_exact(table.rownames, expected["rownames"], path="table.rownames")
         assert_exact(table.colnames, expected["colnames"], path="table.colnames")
@@ -861,7 +600,10 @@ class SurvfitKMHandler(TopicHandler):
                 path="summary_std_err",
             )
         elif aspect == "summary_table":
-            _check_summary_table(fit, expected["summary_table"])
+            # generate_fixtures.R supplies these cutoffs to km_case separately
+            # from the fit arguments; they are not stored in case["args"].
+            rmean = {"lung_sex": 500, "lung_weighted": 400}.get(case["name"])
+            _check_summary_table(fit, expected["summary_table"], rmean=rmean)
         elif aspect == "summary_times":
             _check_summary_times(fit, expected["summary_times"])
         elif aspect == "quantile":
@@ -948,7 +690,11 @@ class SurvfitIntervalHandler(TopicHandler):
         return ["time_surv", "counts", "std_err", "conf", "n"]
 
     def check(self, case, aspect):
-        fit = _survfit_call(self.topic, case)
+        self.check_in_topic(self.topic, case, aspect)
+
+    @staticmethod
+    def check_in_topic(topic, case, aspect):
+        fit = _survfit_call(topic, case)
         expected = case["expected"]
         # Turnbull's counts are EM weights, not integers: compare them like estimates
         if aspect == "curves.time_counts":
@@ -1515,7 +1261,7 @@ class CoxphPenalizedHandler(TopicHandler):
         expected = case["expected"]
         out = []
         for key, value in expected.items():
-            if key in ("method", "penalty", "pterms", "nocenter", "coef_names"):
+            if key == "nocenter":
                 continue
             if key == "residuals":
                 out.extend(f"residuals.{sub}" for sub in value)
@@ -1539,12 +1285,33 @@ class CoxphPenalizedHandler(TopicHandler):
         expected = case["expected"]
         if aspect == "coef":
             assert_named_values(_coef_names(fit), r.coef(fit), expected["coef"], path="coef")
+        elif aspect == "coef_names":
+            assert_exact(_coef_names(fit), expected[aspect], path=aspect)
+        elif aspect == "method":
+            assert_exact(fit.method, expected[aspect], path=aspect)
         elif aspect == "var":
             assert_matrix_close(r.vcov(fit), expected["var"], rtol=RTOL_VAR, path="var")
         elif aspect == "loglik":
             assert_close(fit.loglik, expected["loglik"], rtol=RTOL_COEF, path="loglik")
         elif aspect == "iter":
-            assert_exact([fit.iter], expected["iter"][:1], path="iter")
+            assert_exact(fit.iter, expected["iter"], path="iter")
+        elif aspect == "var2":
+            assert_matrix_close(fit.var2, expected[aspect], rtol=RTOL_VAR, path=aspect)
+        elif aspect in ("df", "frail", "fvar", "penalty", "pterms"):
+            assert_close(getattr(fit, aspect), expected[aspect], rtol=RTOL_VAR, path=aspect)
+        elif aspect == "history":
+            entries = list(expected[aspect].values())
+            assert_exact(len(fit.history), len(entries), path="history.length")
+            for actual, exp in zip(fit.history, entries, strict=True):
+                assert_close([actual.theta], exp["theta"], rtol=RTOL_VAR, path="history.theta")
+                assert_exact(actual.done, exp["done"], path="history.done")
+                if exp.get("history") is not None:
+                    history = exp["history"]
+                    rows = history["values"] if isinstance(history, dict) else [history]
+                    assert_matrix_close(actual.history, rows, rtol=RTOL_VAR, path="history.history")
+                for name in ("c_loglik", "half"):
+                    if exp.get(name) is not None:
+                        assert_close(getattr(actual, name), exp[name], rtol=RTOL_VAR, path=name)
         elif aspect == "wald_test":
             assert_close(fit.wald_test, expected["wald_test"], rtol=RTOL_VAR, path="wald_test")
         elif aspect == "means":
@@ -1735,6 +1502,10 @@ class SurvregHandler(TopicHandler):
                     path=f"anova.{key}",
                 )
         elif aspect == "concordance.concordance":
+            if is_r_error(expected["concordance"]):
+                with pytest.raises(ValueError, match="left or interval censored data"):
+                    _concordance_of_fit(fit)
+                return
             _check_concordance_result(
                 _concordance_of_fit(fit), _expect(case, "concordance"), aspect
             )
@@ -1799,7 +1570,7 @@ class ConcordanceHandler(TopicHandler):
             else:
                 cc = r.concordance(
                     r.coxph(case["formula"], data, na_action="omit"),
-                    r.survreg(case["formula"], data, na_action="omit"),
+                    r.coxph("Surv(time, status) ~ age", data, na_action="omit"),
                 )
             _check_concordance_result(cc, expected[key], aspect)
             return
@@ -2049,7 +1820,7 @@ class FinegrayHandler(TopicHandler):
             )
         else:
             assert_close(
-                as_float_list(_attr(fit, "log_likelihood")),
+                fit.loglik,
                 expected["coxph"]["loglik"],
                 rtol=RTOL_COEF,
                 path="loglik",
@@ -2114,13 +1885,35 @@ class YatesHandler(TopicHandler):
 
     @staticmethod
     def check_in_topic(topic: str, case: Mapping[str, Any], aspect: str) -> None:
-        if case.get("fit", "coxph") != "coxph":
-            raise UnsupportedCaseError(f"yates on a {case['fit']} fit")
         args = dict(case.get("args", {}))
         term = args.pop("term")
         expected = case["expected"]
         # yates reads the model frame of the fit (R re-evaluates the call; Python keeps it)
-        fit = _coxph_fit(topic, {**case, "args": {"model": True}})
+        if case.get("fit", "coxph") == "lm":
+            # lm belongs to R's stats package. Fit its least-squares reference
+            # independently, then exercise survival's generic model adapter.
+            import numpy as np
+            from survival.r._formula import _design_rows_from_spec
+
+            data = case_data(topic, case)
+            # The reference formula has an intercept, three contrasts, karno.
+            levels = case["factors"]["celltype"]
+            x = np.array(
+                [
+                    [1.0, *(float(value == level) for level in levels[1:]), karno]
+                    for value, karno in zip(data["celltype"], data["karno"], strict=True)
+                ]
+            )
+            y = np.array(data["time"])
+            beta = np.linalg.lstsq(x, y, rcond=None)[0]
+            sigma2 = float(np.sum((y - x @ beta) ** 2) / (len(y) - x.shape[1]))
+            variance = np.linalg.inv(x.T @ x) * sigma2
+            fit = r.YatesModel(case["formula"], data, beta.tolist(), variance.tolist(), sigma2)
+            assert np.allclose(_design_rows_from_spec(data, fit.design, len(y)), x)
+        else:
+            fit = _coxph_fit(topic, {**case, "args": {"model": True}})
+        if args.get("predict") == "risk":
+            args["options"] = {"seed": 20240601}  # generator's set.seed()
 
         def build():
             try:
@@ -2156,10 +1949,16 @@ class YatesHandler(TopicHandler):
         elif aspect == "mvar":
             assert_matrix_close(result.mvar, expected["mvar"], rtol=RTOL_VAR, path="mvar")
         elif aspect == "cmat":
+            if "cmat" not in expected:
+                assert result.cmat == []
+                return
             assert_matrix_close(
                 result.cmat, expected["cmat"]["values"], rtol=RTOL_COEF, path="cmat"
             )
         else:
+            if "cmat" not in expected:
+                assert result.cmat_names == []
+                return
             assert_exact(result.cmat_names, expected["cmat"]["colnames"], path="cmat.colnames")
 
 
@@ -2187,7 +1986,7 @@ class RoystonBrierHandler(TopicHandler):
         if aspect.startswith("royston"):
             result = r.royston(fit, adjust=aspect.endswith("adjust"))
             for name, value in expected[aspect].items():
-                actual = getattr(result, _ROYSTON_FIELDS[name])
+                actual = result[name]
                 if actual is None:
                     raise FixtureMismatchError(f"royston result lacks {name!r}")
                 assert_close(actual, value, rtol=RTOL_VAR, path=f"{aspect}.{name}")
@@ -2412,6 +2211,7 @@ class ValidationExtraHandler(TopicHandler):
         "survobrien_": SurvobrienHandler,
         "yates_": YatesHandler,
         "survcheck_": SurvcheckHandler,
+        "turnbull_": SurvfitIntervalHandler,
     }
 
     def _delegate(self, case):
@@ -2422,13 +2222,35 @@ class ValidationExtraHandler(TopicHandler):
 
     def aspects(self, case):
         handler = self._delegate(case)
-        return HANDLERS[handler.topic].aspects(case) if handler else ["(no handler)"]
+        return HANDLERS[handler.topic].aspects(case) if handler else list(case["expected"])
 
     def check(self, case, aspect):
         handler = self._delegate(case)
-        if handler is None:
+        if handler is not None:
+            handler.check_in_topic(self.topic, case, aspect)
+        elif case["name"] == "anova_lung_model_list":
+            fits = [r.coxph(formula, case_data(self.topic, case)) for formula in case["formulas"]]
+            result = r.anova(*fits)
+            field = {"p": "p_value"}.get(aspect, aspect)
+            assert_close(
+                as_float_list([getattr(row, field) for row in result.rows]),
+                case["expected"][aspect],
+                rtol=RTOL_VAR,
+                path=aspect,
+            )
+        elif case["name"] == "survfit_lung_sex_rmean_individual":
+            fit = _survfit_call(self.topic, case)
+            if aspect.startswith("summary_table"):
+                options = {
+                    "summary_table_individual": {"rmean": "individual"},
+                    "summary_table_none": {"rmean": "none"},
+                    "summary_table_scale": {"rmean": 365.25, "scale": 365.25},
+                }
+                _check_summary_table(fit, case["expected"][aspect], **options[aspect])
+            else:
+                _check_quantile(fit, case["expected"][aspect])
+        else:
             raise UnsupportedCaseError(f"no validation-extra handler for {case['name']}")
-        handler.check_in_topic(self.topic, case, aspect)
 
 
 # --- survSplit / survcondense / tmerge / neardate (r-data section) --------------
@@ -2790,7 +2612,30 @@ class SurvexpHandler(TopicHandler):
             self._check_table(aspect, expected)
             return
         if name == "lung_coxph_ratetable":
-            raise UnsupportedCaseError("survexp with a coxph fit as ratetable is not available")
+            data = case_data(self.topic, case)
+            model_formula = case["args"]["ratetable"][6:-1]
+            fit = _cached(_fit_key("survexp.coxph", case), lambda: r.coxph(model_formula, data))
+            if aspect == "individual":
+                result = r.survexp("time ~ 1", data, ratetable=fit, cohort=False)
+                assert_close(result, expected[aspect], rtol=RTOL_VAR, path=aspect)
+            else:
+                result = r.survexp(
+                    "~ sex" if aspect == "by_sex" else "~ 1",
+                    data,
+                    ratetable=fit,
+                    times=case["args"]["times"],
+                )
+                exp = expected[aspect]
+                assert_close(result.time, exp["time"], path="time")
+                assert_exact(result.method, exp["method"], path="method")
+                for field in ("surv", "n_risk"):
+                    if aspect == "by_sex":
+                        assert_matrix_close(
+                            getattr(result, field), exp[field], rtol=RTOL_VAR, path=field
+                        )
+                    else:
+                        assert_close(getattr(result, field), exp[field], rtol=RTOL_VAR, path=field)
+            return
         args = dict(case.get("args", {}))
         data = case_data(self.topic, case)
         kwargs = _kwargs(args, data, na_omit=False, drop=("ratetable", "rmap"))
@@ -2884,26 +2729,35 @@ class UtilitiesHandler(TopicHandler):
         if name == "cipoisson":
             if aspect.startswith("scalar"):
                 result = r.cipoisson(5) if aspect == "scalar_k5" else r.cipoisson(0, time=2)
-                assert_close([*result.lower, *result.upper], expected, rtol=RTOL_VAR, path=aspect)
+                assert_close(list(result), expected, rtol=RTOL_VAR, path=aspect)
                 return
             method, _, p = aspect.partition("_")
             result = r.cipoisson(
                 args["k"], time=args["time"], p=0.90 if p == "p90" else 0.95, method=method
             )
-            rows = [list(pair) for pair in zip(result.lower, result.upper, strict=True)]
+            rows = [list(pair) for pair in result]
             assert_matrix_close(rows, expected, rtol=RTOL_VAR, path=aspect)
         elif name == "bounded_links":
             x = args["x"]
             edge = 0.05
-            if aspect.endswith("_linkinv"):
-                raise UnsupportedCaseError("bounded link inverse functions are not exposed")
             link, _, suffix = aspect.partition("_")
+            inverse = suffix == "linkinv"
+            if inverse:
+                # Inputs are literal expressions in generate_fixtures.R.
+                x = {
+                    "blogit": [-3, 0, 3],
+                    "bprobit": [-2, 0, 2],
+                    "bcloglog": [-2, 0, 1],
+                    "blog": [-2, -1, 0],
+                }[link]
             if suffix == "edge01":
                 edge = 0.1
             elif suffix == "edge001":
                 edge = 0.01
             fn = getattr(r, link)
-            assert_close(as_float_list(fn(x, edge)), expected, rtol=RTOL_VAR, path=aspect)
+            assert_close(
+                as_float_list(fn(x, edge, inverse=inverse)), expected, rtol=RTOL_VAR, path=aspect
+            )
         elif name == "nsk_basis":
             if aspect == "lung_age_df3":
                 x = load_dataset("lung")["age"]
@@ -2957,7 +2811,7 @@ class UtilitiesHandler(TopicHandler):
             if aspect.endswith("_column"):  # R: matrix(layout, ncol = 1)
                 layout = [[count] for count in layout]
             result = r.statefig(layout, connect, states=states)
-            coords = [[x, y] for x, y in zip(result.x, result.y, strict=True)]
+            coords = [list(position) for position in result.positions]
             assert_matrix_close(coords, expected, rtol=RTOL_VAR, path=aspect)
         else:
             raise UnsupportedCaseError(f"unhandled utilities case {name}")

@@ -134,6 +134,7 @@ from ._types import (
     YatesResult,
 )
 from ._types import ConcordanceResult as ConcordanceResult
+from ._yates_model import YatesModel
 
 __all__ = [
     "Surv",
@@ -260,4 +261,5 @@ __all__ = [
     "yates",
     "vcov",
     "YatesResult",
+    "YatesModel",
 ]

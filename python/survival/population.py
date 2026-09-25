@@ -20,6 +20,7 @@ __all__ = bind_names(
         "summary_pyears",
         "SurvExpResult",
         "survexp",
+        "survexp_cox",
         "survexp_mn",
         "survexp_us",
         "survexp_usr",

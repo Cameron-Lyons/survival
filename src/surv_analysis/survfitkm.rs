@@ -11,6 +11,7 @@
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
     validate_non_negative,
@@ -18,6 +19,8 @@ use crate::internal::validation::{
 use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+
+mod robust;
 
 /// The `stype` argument of `survfit`: how the survival curve is formed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -595,7 +598,20 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
     // -- infinitesimal jackknife (robust) variance and influence
     let mut influence_surv = None;
     let mut influence_chaz = None;
-    if let Some((cluster, nid)) = data.cluster {
+    if !counting
+        && options.influence == InfluenceRequest::None
+        && data.cluster.is_some_and(|(_, nid)| nid == nused)
+    {
+        robust::independent_variance(
+            data,
+            rows,
+            options,
+            &dtime,
+            event_terms,
+            &mut std_surv,
+            &mut std_chaz,
+        );
+    } else if let Some((cluster, nid)) = data.cluster {
         let want_surv_matrix =
             options.influence.survival() && options.stype == SurvType::KaplanMeier;
         let want_chaz_matrix = options.influence.cumhaz()
@@ -664,31 +680,8 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
             if d0 > 0.0 && d1 > 0.0 {
                 let haz = d1 / nrisk;
                 // per-event derivative terms of the cumulative hazard
-                let (dn_term, risk_term) = match options.ctype {
-                    HazardType::NelsonAalen => (1.0 / nrisk, haz / nrisk),
-                    HazardType::FlemingHarrington => {
-                        let mut dtemp = 0.0; // the working denominator
-                        let mut dtemp2 = 0.0; // sum of squares
-                        let mut dtemp3 = 0.0; // non-death derivative
-                        let temp = nrisk - d1; // weights of the non-deaths
-                        let mut k = d0.floor();
-                        while k > 0.0 {
-                            let frac = k / d0;
-                            let btemp = 1.0 / (temp + frac * d1); // "b" in the math
-                            dtemp += btemp;
-                            dtemp2 += btemp * btemp * frac;
-                            dtemp3 += btemp * btemp;
-                            k -= 1.0;
-                        }
-                        dtemp /= d0; // average denominator
-                        if d1 != d0 {
-                            // case weights
-                            dtemp2 *= d1 / d0;
-                            dtemp3 *= d1 / d0;
-                        }
-                        (dtemp + dtemp3 - dtemp2, dtemp3)
-                    }
-                };
+                let (dn_term, risk_term) =
+                    robust::hazard_influence_terms(d0, d1, nrisk, options.ctype);
                 for g in 0..nid {
                     if options.stype == SurvType::KaplanMeier {
                         inf1[g] = inf1[g] * (1.0 - haz) + gwt[g] * km * haz / nrisk;
@@ -1267,11 +1260,12 @@ pub fn survfitkm(
 #[pyo3(signature = (time, status, start=None, weights=None, strata=None, id=None, cluster=None, stype=1, ctype=1, se_fit=true, conf_int=0.95, conf_type="log", conf_lower="usual", start_time=None, robust=None, influence=0, entry=false, timefix=true, reverse=false))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitkm_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     cluster: Option<Vec<i64>>,
     stype: i32,
@@ -1287,7 +1281,15 @@ pub fn survfitkm_py(
     timefix: bool,
     reverse: bool,
 ) -> PyResult<SurvfitKMResult> {
-    let data = SurvfitKMData::try_new(start, time, status, weights, strata, id, cluster)?;
+    let data = SurvfitKMData::try_new(
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        status.into_inner(),
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
+        id,
+        cluster,
+    )?;
     let options = SurvfitKMOptions {
         stype: SurvType::from_code(stype)?,
         ctype: HazardType::from_code(ctype)?,
@@ -1302,7 +1304,7 @@ pub fn survfitkm_py(
         timefix,
         reverse,
     };
-    Ok(survfitkm(&data, &options)?)
+    Ok(py.detach(|| survfitkm(&data, &options))?)
 }
 
 #[cfg(test)]
@@ -1688,6 +1690,141 @@ mod tests {
                         assert!((value + chaz_row[col] * result.surv[col]).abs() < 1e-12);
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn independent_robust_variance_matches_explicit_influences() {
+        // The matrix path remains a separate, general calculation. Exercise
+        // ties, zero weights, reversed curves, strata and both estimators.
+        for seed in 0..12usize {
+            let n = 61;
+            let data = SurvfitKMData::try_new(
+                None,
+                (0..n).map(|i| ((i * 17 + seed) % 23) as f64).collect(),
+                (0..n).map(|i| i32::from((i + seed) % 3 != 0)).collect(),
+                Some((0..n).map(|i| ((i * 7 + seed) % 13) as f64 / 4.0).collect()),
+                (seed % 2 == 0).then(|| (0..n).map(|i| (i % 3) as i32).collect()),
+                None,
+                // Arbitrary, unique labels must behave like independent rows.
+                Some((0..n).map(|i| 1000 - 7 * i as i64).collect()),
+            )
+            .unwrap();
+            for stype in [SurvType::KaplanMeier, SurvType::ExpCumhaz] {
+                for ctype in [HazardType::NelsonAalen, HazardType::FlemingHarrington] {
+                    for reverse in [false, true] {
+                        let mut options = SurvfitKMOptions {
+                            stype,
+                            ctype,
+                            reverse,
+                            start_time: Some(2.0),
+                            ..Default::default()
+                        };
+                        let fast = survfitkm(&data, &options).unwrap();
+                        options.influence = InfluenceRequest::Both;
+                        let reference = survfitkm(&data, &options).unwrap();
+                        assert_eq!(fast.time, reference.time);
+                        assert!(
+                            fast.surv
+                                .iter()
+                                .zip(&reference.surv)
+                                .all(|(a, b)| { a == b || (a.is_nan() && b.is_nan()) })
+                        );
+                        for (actual, expected) in [
+                            (&fast.std_err, &reference.std_err),
+                            (&fast.std_chaz, &reference.std_chaz),
+                            (&fast.lower, &reference.lower),
+                            (&fast.upper, &reference.upper),
+                        ] {
+                            for (&a, &b) in actual
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .zip(expected.as_ref().unwrap())
+                            {
+                                assert!(
+                                    (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-11,
+                                    "{a} != {b}: seed={seed}, {stype:?}, {ctype:?}, reverse={reverse}"
+                                );
+                            }
+                        }
+                        assert!(fast.influence_surv.is_none());
+                        assert!(fast.influence_chaz.is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn independent_robust_variance_handles_terminal_events_and_zero_weights() {
+        for status in [vec![0, 0, 0], vec![1, 1, 1], vec![0, 1, 1]] {
+            for weights in [vec![0.0; 3], vec![1.0; 3], vec![0.5, 1.5, 2.0]] {
+                let data = SurvfitKMData::try_new(
+                    None,
+                    vec![1.0, 2.0, 2.0],
+                    status.clone(),
+                    Some(weights),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+                let mut options = SurvfitKMOptions {
+                    robust: Some(true),
+                    ..Default::default()
+                };
+                let fast = survfitkm(&data, &options).unwrap();
+                options.influence = InfluenceRequest::Both;
+                let reference = survfitkm(&data, &options).unwrap();
+                assert_vec_approx(
+                    fast.std_err.as_ref().unwrap(),
+                    reference.std_err.as_ref().unwrap(),
+                    1e-12,
+                );
+                assert_vec_approx(
+                    fast.std_chaz.as_ref().unwrap(),
+                    reference.std_chaz.as_ref().unwrap(),
+                    1e-12,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn independent_robust_variance_is_invariant_to_weight_scale() {
+        let mut data = SurvfitKMData::try_new(
+            None,
+            vec![1.0, 2.0, 2.0, 3.0, 4.0],
+            vec![1, 1, 0, 1, 0],
+            Some(vec![0.5, 1.5, 0.75, 2.0, 1.0]),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for ctype in [HazardType::NelsonAalen, HazardType::FlemingHarrington] {
+            let options = SurvfitKMOptions {
+                robust: Some(true),
+                ctype,
+                ..Default::default()
+            };
+            data.weights = Some(vec![0.5, 1.5, 0.75, 2.0, 1.0]);
+            let reference = survfitkm(&data, &options).unwrap();
+            for scale in [1e-100, 1e100, 1e200] {
+                data.weights = Some([0.5, 1.5, 0.75, 2.0, 1.0].map(|w| w * scale).to_vec());
+                let actual = survfitkm(&data, &options).unwrap();
+                assert_vec_approx(
+                    actual.std_err.as_ref().unwrap(),
+                    reference.std_err.as_ref().unwrap(),
+                    1e-12,
+                );
+                assert_vec_approx(
+                    actual.std_chaz.as_ref().unwrap(),
+                    reference.std_chaz.as_ref().unwrap(),
+                    1e-12,
+                );
             }
         }
     }

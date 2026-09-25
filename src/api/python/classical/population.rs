@@ -11,6 +11,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pyears_py, m)?)?;
     m.add_function(wrap_pyfunction!(summary_pyears_py, m)?)?;
     m.add_function(wrap_pyfunction!(survexp_py, m)?)?;
+    m.add_function(wrap_pyfunction!(survexp_cox_py, m)?)?;
 
     register_classes!(
         m,

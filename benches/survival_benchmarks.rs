@@ -100,6 +100,24 @@ fn fitted_coxph_model(n: usize, p: usize) -> CoxPHFit {
 mod kaplan_meier {
     use super::*;
 
+    /// Fractional case weights select the robust variance by default.
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
+    fn survfitkm_weighted(bencher: divan::Bencher, n: usize) {
+        let (time, _, status) = generate_survival_data(n);
+        let data = SurvfitKMData::try_new(
+            None,
+            time,
+            status,
+            Some(generate_case_weights(n)),
+            None,
+            None,
+            None,
+        )
+        .expect("benchmark survival data should be valid");
+        let options = SurvfitKMOptions::default();
+        bencher.bench_local(|| surv_analysis::survfitkm(&data, &options));
+    }
+
     #[divan::bench(args = [100, 1000, 10000, 100000])]
     fn survfitkm(bencher: divan::Bencher, n: usize) {
         let (time, _, status) = generate_survival_data(n);

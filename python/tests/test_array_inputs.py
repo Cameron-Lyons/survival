@@ -44,9 +44,42 @@ def test_survfitkm_with_numpy():
     assert strided.surv == pytest.approx([2 / 3, 2 / 3, 2 / 3])
 
 
-def test_survfitkm_status_must_be_integral():
+@pytest.mark.parametrize("estimator", ["survfitkm", "nelson_aalen"])
+def test_survival_curve_status_must_be_integral(estimator):
+    fit = getattr(survival.surv_analysis, estimator)
+    # Integral float arrays follow the same checked conversion as other
+    # native estimators; fractional status values must never be truncated.
+    result = fit(np.array(_KM_TIME), np.array(_KM_STATUS, dtype=float))
+    assert result.time
     with pytest.raises(TypeError):
-        survival.surv_analysis.survfitkm(np.array(_KM_TIME), np.array(_KM_STATUS, dtype=float))
+        fit(np.array(_KM_TIME), np.array([1.0, 0.5, 0.0, 1.0, 0.0]))
+    with pytest.raises(TypeError):
+        fit(_KM_TIME, np.array([1, 2**40, 0, 1, 0]))
+
+
+@pytest.mark.parametrize("estimator", ["survfitkm", "nelson_aalen"])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_survival_curve_strided_weighted_arrays(estimator, dtype):
+    fit = getattr(survival.surv_analysis, estimator)
+    expected = fit(_KM_TIME, _KM_STATUS, weights=_KM_WEIGHTS)
+    actual = fit(
+        np.array(_KM_TIME, dtype=dtype)[::-1],
+        np.array(_KM_STATUS, dtype=bool)[::-1],
+        weights=np.array(_KM_WEIGHTS, dtype=dtype)[::-1],
+    )
+    assert actual.time == expected.time
+    if estimator == "survfitkm":
+        assert actual.surv == pytest.approx(expected.surv)
+        assert actual.std_err == pytest.approx(expected.std_err)
+    else:
+        assert actual.cumulative_hazard == pytest.approx(expected.cumulative_hazard)
+        assert actual.variance == pytest.approx(expected.variance)
+
+
+@pytest.mark.parametrize("estimator", ["survfitkm", "nelson_aalen"])
+def test_survival_curve_rejects_matrix_inputs(estimator):
+    with pytest.raises(TypeError, match="dimension"):
+        getattr(survival.surv_analysis, estimator)(np.array([_KM_TIME]), _KM_STATUS)
 
 
 @pytest.mark.skipif(not HAS_PANDAS, reason="pandas not installed")

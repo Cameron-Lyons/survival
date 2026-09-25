@@ -110,7 +110,21 @@ class _CategoricalDesignTerm:
     full: bool = False
 
 
-_SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm
+@dataclass(frozen=True)
+class _PenaltyDesignTerm:
+    """A fitted penalty basis, including the state needed to transform new data."""
+
+    term: _CovariateTerm
+    columns: tuple[str, ...]
+    names: tuple[str, ...]
+    penalty: Any
+    degree: int = 3
+    boundary: tuple[float, float] | None = None
+    levels: tuple[Any, ...] = ()
+    intercept: bool = False
+
+
+_SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm | _PenaltyDesignTerm
 
 
 @dataclass(frozen=True)
@@ -828,22 +842,25 @@ class SummarySurvfitResult:
     """R's ``summary.survfit``: the fit at its event times or at ``times``, plus the table."""
 
     time: list[float]
-    n_risk: list[float]
-    n_event: list[float]
-    n_censor: list[float]
-    surv: list[float]
-    cumhaz: list[float]
+    n_risk: list[float] | list[list[float]]
+    n_event: list[float] | list[list[float]]
+    n_censor: list[float] | list[list[float]]
+    surv: list[float] | None
+    cumhaz: list[float] | list[list[float]]
     strata: list[str] | None
     table: NamedMatrix
     n: list[int]
-    n_enter: list[float] | None = None
-    std_err: list[float] | None = None
-    std_chaz: list[float] | None = None
-    lower: list[float] | None = None
-    upper: list[float] | None = None
+    n_enter: list[float] | list[list[float]] | None = None
+    std_err: list[float] | list[list[float]] | None = None
+    std_chaz: list[float] | list[list[float]] | None = None
+    lower: list[float] | list[list[float]] | None = None
+    upper: list[float] | list[list[float]] | None = None
     rmean_endtime: list[float] | None = None
     conf_int: float | None = None
     conf_type: str | None = None
+    pstate: list[list[float]] | None = None
+    states: list[str] | None = None
+    n_transition: list[list[float]] | None = None
 
 
 @dataclass(frozen=True)

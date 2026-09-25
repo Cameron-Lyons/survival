@@ -437,8 +437,9 @@ def test_yates_populations_and_unsupported_options():
     trt = r.yates(factorial_fit, "factor(trt)")
     assert trt.estimate["factor(trt)"] == [1.0, 2.0]
 
-    with pytest.raises(NotImplementedError, match="predict = 'risk'"):
-        r.yates(fit, "celltype", predict="risk")
+    risk = r.yates(fit, "celltype", predict="risk")
+    assert all(value > 0 for value in risk.estimate["pmm"])
+    assert len(risk.mvar) == 4
     with pytest.raises(NotImplementedError, match="sgtt"):
         r.yates(fit, "celltype", method="sgtt")
     with pytest.raises(ValueError, match="not found in the formula"):

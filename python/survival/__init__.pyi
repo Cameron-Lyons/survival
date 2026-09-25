@@ -74,6 +74,9 @@ from .r import (
     TMergeOperation as TMergeOperation,
 )
 from .r import (
+    YatesModel as YatesModel,
+)
+from .r import (
     YatesResult as YatesResult,
 )
 from .r import (

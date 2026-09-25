@@ -135,11 +135,26 @@ def load_dataset(name: str) -> dict[str, list[Any]]:
         loader = getattr(module, candidate, None)
         if loader is not None:
             raw = loader()
-            return {
+            columns = {
                 key: list(value)
                 for key, value in raw.items()
                 if not (isinstance(key, str) and key.startswith("_"))
             }
+            # CSV-backed loaders cannot carry R's factor attributes. Restore
+            # the dataset schema recorded by the generator before fitting.
+            schema = next(
+                case["expected"]["columns"] for case in cases("datasets") if case["dataset"] == name
+            )
+            for column in schema:
+                if column["type"] == "factor":
+                    key = column["name"]
+                    levels = column["levels"]
+                    values = [
+                        None if value is None else str(value).removesuffix(".0")
+                        for value in columns[key]
+                    ]
+                    columns[key] = RFactor(values, levels)
+            return columns
     raise UnsupportedCaseError(
         f"no Python loader for dataset {name!r} (tried {', '.join(candidates)})"
     )
@@ -184,8 +199,12 @@ def case_data(topic: str, case: Mapping[str, Any]) -> dict[str, Any]:
     doc = load_topic(topic)
     if "data_ref" in case:
         columns = decode_frame(doc["data"][case["data_ref"]])
+        if case["data_ref"] == "synthetic_timefix":
+            # Restore the generator's expressions: 15-digit JSON rounding loses
+            # their exact IEEE ties, which timefix=FALSE deliberately preserves.
+            columns["time"] = [0.1 + 0.2, 0.3, 0.7, 0.1 * 7, 1.0, 1.0 + 1e-13, 2.5, 3.1]
     elif "dataset" in case:
-        columns = load_dataset(case["dataset"])
+        columns = dict(load_dataset(case["dataset"]))
         for name, levels in (case.get("factors") or {}).items():
             if name in columns:
                 columns[name] = RFactor(columns[name], levels)

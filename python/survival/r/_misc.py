@@ -71,6 +71,7 @@ from ._types import (
     _InteractionDesignTerm,
     _InteractionTerm,
 )
+from ._yates_model import YatesModel
 
 # ---------------------------------------------------------------------------
 # Access to a fitted coxph object
@@ -255,28 +256,28 @@ def _bounded_link(x: Any, edge: Any, name: str) -> float | list[float]:
     ]
 
 
-def blogit(x: Any, edge: Any = 0.05) -> float | list[float]:
+def blogit(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]:
     """R's ``blogit(edge)$linkfun``: the logit of ``x`` bounded away from 0 and 1."""
 
-    return _bounded_link(x, edge, "blogit")
+    return _bounded_link(x, edge, "blogit_inverse" if inverse else "blogit")
 
 
-def bprobit(x: Any, edge: Any = 0.05) -> float | list[float]:
+def bprobit(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]:
     """R's ``bprobit(edge)$linkfun``: the probit of ``x`` bounded away from 0 and 1."""
 
-    return _bounded_link(x, edge, "bprobit")
+    return _bounded_link(x, edge, "bprobit_inverse" if inverse else "bprobit")
 
 
-def bcloglog(x: Any, edge: Any = 0.05) -> float | list[float]:
+def bcloglog(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]:
     """R's ``bcloglog(edge)$linkfun``: the complementary log-log of bounded ``x``."""
 
-    return _bounded_link(x, edge, "bcloglog")
+    return _bounded_link(x, edge, "bcloglog_inverse" if inverse else "bcloglog")
 
 
-def blog(x: Any, edge: Any = 0.05) -> float | list[float]:
+def blog(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[float]:
     """R's ``blog(edge)$linkfun``: the log of ``x`` bounded below by ``edge``."""
 
-    return _bounded_link(x, edge, "blog")
+    return _bounded_link(x, edge, "blog_inverse" if inverse else "blog")
 
 
 # ---------------------------------------------------------------------------
@@ -1226,19 +1227,20 @@ def yates(
 ) -> YatesResult:
     """Population marginal means of a term of a Cox model and their tests (R's ``yates``).
 
-    Only the linear-predictor scale is available: ``predict="risk"``/``"survival"`` (which R
-    evaluates by Monte-Carlo simulation of the coefficients) and ``method="sgtt"`` are not
-    implemented.  ``population`` is ``"data"``, ``"factorial"``, ``"sas"`` or a data frame.
+    ``predict="risk"`` uses ``nsim`` coefficient draws; ``options={"seed": 0}``
+    controls its reproducible, R-compatible random stream. ``population`` is
+    ``"data"``, ``"factorial"``, ``"sas"`` or a data frame. ``YatesModel`` adapts
+    externally fitted linear models without refitting them.
     """
 
-    del options, nsim
-    engine = _coxph_engine(fit, "the fit does not have a terms structure")
+    external = isinstance(fit, YatesModel)
+    engine = None if external else _coxph_engine(fit, "the fit does not have a terms structure")
     design = _formula_design_for_fit(fit)
     if design is None:
         raise TypeError("the fit does not have a terms structure")
     if _match_string_arg(method, "method", ["direct", "sgtt"], "invalid method") != "direct":
         raise NotImplementedError('yates method = "sgtt" is not implemented')
-    if predict not in {"linear", "lp"}:
+    if predict not in {"linear", "lp", "risk"}:
         raise NotImplementedError(
             f"yates predict = {predict!r} is not implemented (R simulates the coefficients)"
         )
@@ -1254,10 +1256,10 @@ def yates(
         raise TypeError("the population argument must be a data frame or character")
     test_value = _match_string_arg(test, "test", ["global", "trend", "pairwise"], "invalid test")
 
-    beta = coef(fit)
+    beta = fit.coefficients if external else coef(fit)
     if any(math.isnan(value) for value in beta):
         raise NotImplementedError("yates with aliased (NA) coefficients is not implemented")
-    vmat = vcov(fit, complete=False)
+    vmat = fit.variance if external else vcov(fit, complete=False)
     mframe = model_frame(fit)
     yates_term = _yates_term(design, term, levels)
     pdata = _yates_population(mframe, design, yates_term, population)
@@ -1268,11 +1270,39 @@ def yates(
     ]
     cmat = _core.yates_population_means(xmatlist, _yates_weights(mframe, population))
     names = _yates_design_names(design)
-    if design.intercept:  # coxph: the baseline hazard plays the intercept's role
+    if design.intercept and not external:  # Cox baseline supplies the intercept.
         cmat = [row[1:] for row in cmat]
         names = names[1:]
-    offset = -sum(mean * value for mean, value in zip(engine.means, beta, strict=True))
-    result = _core.yates(cmat, beta, vmat, offset=offset, test=test_value)
+        xmatlist = [[row[1:] for row in rows] for rows in xmatlist]
+    means = [0.0] * len(beta) if external else engine.means
+    offset = -sum(mean * value for mean, value in zip(means, beta, strict=True))
+    if predict == "risk":
+        if options is not None and not isinstance(options, Mapping):
+            raise TypeError("options must be a mapping")
+        options = dict(options or {})
+        seed = _integer_scalar(options.pop("seed", 0), "seed")
+        if options:
+            raise TypeError(f"unrecognized risk options: {', '.join(options)}")
+        result = _core.yates_risk(
+            xmatlist,
+            beta,
+            vmat,
+            means,
+            nsim=_integer_scalar(nsim, "nsim"),
+            seed=seed,
+            test=test_value,
+            term=yates_term.name,
+        )
+        names = []
+    else:
+        result = _core.yates(
+            cmat,
+            beta,
+            vmat,
+            offset=offset,
+            test=test_value,
+            sigma2=fit.sigma2 if external else None,
+        )
     return YatesResult(
         estimate={
             yates_term.name: list(yates_term.levels),

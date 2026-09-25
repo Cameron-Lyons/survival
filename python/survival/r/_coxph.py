@@ -39,7 +39,14 @@ from ._coerce import (
     _pop_dotted_keyword,
     _subset_data,
 )
-from ._fit import _model_frame, _ModelFrame, _NewData, _newdata_frame, _tt_terms
+from ._fit import (
+    _design_names_and_assign,
+    _model_frame,
+    _ModelFrame,
+    _NewData,
+    _newdata_frame,
+    _tt_terms,
+)
 from ._formula import _column, _column_or_values, _design_rows_from_spec, _response_arg_columns
 from ._surv import Surv
 from ._types import (
@@ -52,6 +59,7 @@ from ._types import (
     _CovariateTerm,
     _FormulaDesign,
     _FormulaTerms,
+    _PenaltyDesignTerm,
 )
 
 _TIE_METHOD_NAMES = ("breslow", "efron", "exact")
@@ -94,6 +102,20 @@ class CoxphModel:
     # R's coxph returns a skeleton fit when the data has no events: NA
     # coefficients, a zero variance, loglik c(0, 0) and no iterations.
     no_events: bool = False
+    penalized: Any | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        if self.penalized is not None and name in {
+            "df",
+            "var2",
+            "frail",
+            "fvar",
+            "history",
+            "penalty",
+            "pterms",
+        }:
+            return getattr(self.penalized, name)
+        raise AttributeError(name)
 
     @property
     def coefficients(self) -> list[float]:
@@ -136,7 +158,9 @@ class CoxphModel:
         return 0.0 if self.no_events else float(self.fit.wald_test)
 
     @property
-    def iter(self) -> int | None:
+    def iter(self) -> int | list[int] | None:
+        if self.penalized is not None:
+            return list(self.penalized.iter)
         if not self.coef_names:
             return None
         return 0 if self.no_events else int(self.fit.iter)
@@ -468,6 +492,7 @@ def _coxph_fit_frame(
     nocenter: list[float] | None,
     tt: Any,
     keep_model: bool,
+    outer_max: int | None = None,
 ) -> CoxphModel:
     """coxph.R after the model frame: timefix, tt(), robust/cluster, the fit, the
     Wald test and concordance."""
@@ -518,37 +543,83 @@ def _coxph_fit_frame(
     if no_events:
         # R returns the fit without iterating (coefficients NA, variance 0)
         iter_max = 0
-    fit = _core.coxph_fit(
-        list(data.y.time),
-        [int(value) for value in data.y.event],
-        data.x,
-        entry=None if data.y.start is None else list(data.y.start),
-        strata=data.strata,
-        weights=data.weights,
-        offset=data.offset,
-        method=method,
-        init=init_values,
-        iter_max=iter_max,
-        eps=eps,
-        toler_chol=toler_chol,
-        nocenter=nocenter,
-        cluster=cluster,
-        robust=use_robust,
-    )
+    penalized_terms = [
+        term for term in frame.design.covariates if isinstance(term, _PenaltyDesignTerm)
+    ]
+    penalized = None
+    if penalized_terms:
+        if use_robust:
+            warnings.warn(
+                "the robust variance is not defined for a penalized model, option ignored",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            use_robust = False
+        penalized = _core.coxpenal_fit(
+            list(data.y.time),
+            [int(value) for value in data.y.event],
+            data.x,
+            penalties=[term.penalty for term in penalized_terms],
+            pcols=[list(frame.assign[term.term.call]) for term in penalized_terms],
+            assign=[list(columns) for columns in frame.assign.values()],
+            entry=None if data.y.start is None else list(data.y.start),
+            strata=data.strata,
+            weights=data.weights,
+            offset=data.offset,
+            method=method,
+            init=init_values,
+            iter_max=iter_max,
+            outer_max=outer_max,
+            eps=eps,
+            toler_chol=toler_chol,
+            nocenter=nocenter,
+        )
+        fit = penalized.coxph
+        dense = [
+            i
+            for i, term in enumerate(frame.design.covariates)
+            if not (isinstance(term, _PenaltyDesignTerm) and term.penalty.sparse)
+        ]
+        design = replace(
+            frame.design,
+            covariates=tuple(frame.design.covariates[i] for i in dense),
+            term_assignments=tuple(frame.design.term_assignments[i] for i in dense),
+        )
+        names, assign = _design_names_and_assign(design)
+    else:
+        fit = _core.coxph_fit(
+            list(data.y.time),
+            [int(value) for value in data.y.event],
+            data.x,
+            entry=None if data.y.start is None else list(data.y.start),
+            strata=data.strata,
+            weights=data.weights,
+            offset=data.offset,
+            method=method,
+            init=init_values,
+            iter_max=iter_max,
+            eps=eps,
+            toler_chol=toler_chol,
+            nocenter=nocenter,
+            cluster=cluster,
+            robust=use_robust,
+        )
+        design, names, assign = frame.design, frame.names, frame.assign
     aliased = [idx for idx, value in enumerate(fit.coefficients) if math.isnan(value)]
     if aliased and not singular_ok:
         columns = " ".join(str(idx + 1) for idx in aliased)
         raise ValueError(f"X matrix deemed to be singular; variable {columns}")
-    for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, None):
-        warnings.warn(message, RuntimeWarning, stacklevel=3)
+    if penalized is None:
+        for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, None):
+            warnings.warn(message, RuntimeWarning, stacklevel=3)
     return CoxphModel(
         fit=fit,
         no_events=no_events,
         formula=frame.formula,
-        design=frame.design,
+        design=design,
         terms=frame.terms,
-        coef_names=tuple(frame.names),
-        assign=dict(frame.assign),
+        coef_names=tuple(names),
+        assign=dict(assign),
         y=y,
         strata_levels=frame.strata_levels,
         concordance=_fit_concordance(fit, data, cluster),
@@ -560,6 +631,7 @@ def _coxph_fit_frame(
         model=frame.model_frame() if keep_model else None,
         weights_column=frame.weights_column,
         id_column=frame.id_column,
+        penalized=penalized,
     )
 
 
@@ -700,6 +772,11 @@ def coxph(
         else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
         tt=tt,
         keep_model=_normalize_bool_option_with_default(model, "model", False),
+        outer_max=(
+            control.get("outer.max", control.get("outer_max"))
+            if isinstance(control, Mapping)
+            else None
+        ),
     )
 
 
@@ -836,7 +913,11 @@ def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> An
     beta = fit.coefficients
     if not beta:
         return fit
-    df = sum(1 for value in beta if not math.isnan(value))
+    df = (
+        sum(fit.df)
+        if fit.penalized is not None
+        else sum(1 for value in beta if not math.isnan(value))
+    )
     loglik = fit.loglik
     score = fit.score if fit.score is not None else math.nan
     logtest = -2.0 * (loglik[0] - loglik[1])
@@ -1266,7 +1347,7 @@ def _survfit_curves(
     """The engine curves for ``survfit.coxph`` and the name of each block (R's
     ``names(fit$strata)``: the strata levels, or the newdata row numbers)."""
 
-    engine = fit.fit
+    engine = fit.penalized if fit.penalized is not None else fit.fit
     if newdata is None:
         if any(":" in name for name in fit.assign):
             warnings.warn(
