@@ -140,6 +140,7 @@ def test_concordancefit_takes_r_arguments_in_r_order(ovarian):
     fit = r.concordancefit(y, ovarian["age"], ovarian["rx"])
     assert fit.concordance == approx(0.19047619047619)
     assert counts(fit.count) == [[12, 49, 0], [8, 36, 0]]
+    assert fit.names == ["1", "2"]
     assert fit.var == approx(0.00322663910613376)
     assert fit.cvar == approx(0.00906273620559335)
     # std.err = FALSE given positionally, after R's defaults for weights ... keepstrata
@@ -149,6 +150,21 @@ def test_concordancefit_takes_r_arguments_in_r_order(ovarian):
     assert quick.concordance == approx(0.19047619047619)
     with pytest.raises(TypeError, match="unexpected argument"):
         r.concordancefit(y, ovarian["age"], strata_levels=["1", "2"])
+
+
+def test_concordancefit_orders_strata_like_r_factor_levels(ovarian):
+    # R: g <- ifelse(ovarian$resid.ds == 1, "a", "b")  (the data starts with "b")
+    #    concordancefit(Surv(futime, fustat), age, g)$count has rows a, b
+    y = r.Surv(ovarian["futime"], ovarian["fustat"])
+    strata = ["a" if value == 1 else "b" for value in ovarian["resid.ds"]]
+    assert strata[0] == "b"
+    fit = r.concordancefit(y, ovarian["age"], strata)
+    assert fit.names == ["a", "b"]
+    assert counts(fit.count) == [[3, 20, 0], [23, 64, 0]]
+    assert fit.concordance == approx(0.236363636363636)
+    assert fit.var == approx(0.00706405300184414)
+    with pytest.raises(ValueError, match="strata contains missing values"):
+        r.concordancefit(y, ovarian["age"], [None, *strata[1:]])
 
 
 def test_cluster_is_the_identity():

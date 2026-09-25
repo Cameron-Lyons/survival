@@ -11,10 +11,13 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
+    _as_character,
     _as_matrix_rows,
+    _factor_levels,
     _finite_float,
     _float_vector,
     _integer_scalar,
+    _is_missing_value,
     _label_levels,
     _materialize_labels,
     _normalize_bool_option,
@@ -173,10 +176,11 @@ def concordancefit(
         labels = _materialize_labels(strata, "strata")
         if len(labels) != n:
             raise ValueError("y and strata are not the same length")
-        raw_levels = (
-            list(_strata_levels) if _strata_levels else list(_label_levels(labels, "strata"))
-        )
-        levels = [str(level) for level in raw_levels]
+        if any(_is_missing_value(label) for label in labels):
+            raise ValueError("strata contains missing values")
+        # R's levels(as.factor(strata)): sorted, labelled as as.character does
+        raw_levels = list(_strata_levels) if _strata_levels else _factor_levels(strata, "strata")
+        levels = [_as_character(level) for level in raw_levels]
         index = {level: idx for idx, level in enumerate(raw_levels)}
         strata_codes = [index[label] for label in labels]
     weight_values = _optional_float_vector(weights, "weights", n)
