@@ -11747,8 +11747,7 @@ def cox_zph(
     singledf: bool = False,
     global_test: bool = True,
     assign: Sequence[Sequence[int]] | None = None,
-    penalty_second: Sequence[float] | None = None,
-    df: Sequence[float] | None = None,
+    penalized: CoxpenalFit | None = None,
 ) -> CoxZph: ...
 def coxcount1(survival: SurvivalData, strata: Sequence[int] | None = None) -> CoxCountOutput: ...
 def coxcount2(

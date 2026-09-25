@@ -1554,13 +1554,6 @@ def cox_zph(
         transform_arg = [float(value) for value in transform(list(fit.y.time))]
     else:
         raise TypeError("transform must be one of km, rank, identity, log, or a function")
-    penalty_second = None
-    fit_df = None
-    if fit.penalized is not None:
-        fit_df = list(fit.penalized.df)
-        # coxpenal.fit returns coxlist2 only when there is no sparse (frailty) term
-        if fit.penalized.coxlist2 is not None and fit.penalized.coxlist1 is None:
-            penalty_second = list(fit.penalized.coxlist2.second)
     use_terms = _normalize_bool_option(terms, "terms")
     aliased = _aliased(fit)
     if use_terms:
@@ -1577,8 +1570,7 @@ def cox_zph(
         singledf=_normalize_bool_option(singledf, "singledf"),
         global_test=_normalize_bool_option(global_test, "global"),
         assign=assign,
-        penalty_second=penalty_second,
-        df=fit_df,
+        penalized=fit.penalized,
     )
     table: list[dict[str, float | str]] = [
         {"name": name, "chisq": float(row.chisq), "df": float(row.df), "p": float(row.p)}

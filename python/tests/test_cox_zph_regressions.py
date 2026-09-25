@@ -113,8 +113,19 @@ def test_ridge_penalty_enters_as_its_diagonal(lung):
 # cox.zph(coxph(Surv(time, status) ~ age + sex + frailty(id), kidney))$table
 # lung2 <- lung[!is.na(lung$inst), ]
 # cox.zph(coxph(Surv(time, status) ~ pspline(age, df = 3) + sex + frailty(inst), lung2))$table
-def test_sparse_frailty_fits_take_df_from_the_fit(lung):
-    zph = r.cox_zph(r.coxph("Surv(time, status) ~ age + sex + frailty(id)", datasets.load_kidney()))
+# R reads fit$df by position among the tested terms and accepts only fits
+# whose frailty is the last term ("subscript out of bounds" otherwise); any
+# other order must give the same table.
+@pytest.mark.parametrize(
+    ("kidney_terms", "lung_terms"),
+    [
+        ("age + sex + frailty(id)", "pspline(age, df=3) + sex + frailty(inst)"),
+        ("age + frailty(id) + sex", "pspline(age, df=3) + frailty(inst) + sex"),
+        ("frailty(id) + age + sex", "frailty(inst) + pspline(age, df=3) + sex"),
+    ],
+)
+def test_sparse_frailty_fits_take_df_from_the_fit(lung, kidney_terms, lung_terms):
+    zph = r.cox_zph(r.coxph(f"Surv(time, status) ~ {kidney_terms}", datasets.load_kidney()))
     assert [row["name"] for row in zph.table] == ["age", "sex", "GLOBAL"]
     assert _column(zph, "chisq") == pytest.approx(
         [0.0596639502331169, 2.6451729058459819, 2.8523338766384652], rel=1e-9
@@ -128,10 +139,7 @@ def test_sparse_frailty_fits_take_df_from_the_fit(lung):
 
     # With a sparse term coxpenal.fit keeps no coxlist2: the dense pspline
     # penalty is not added to the information.
-    fit = r.coxph(
-        "Surv(time, status) ~ pspline(age, df=3) + sex + frailty(inst)", _complete(lung, "inst")
-    )
-    zph = r.cox_zph(fit)
+    zph = r.cox_zph(r.coxph(f"Surv(time, status) ~ {lung_terms}", _complete(lung, "inst")))
     assert _column(zph, "chisq") == pytest.approx(
         [91.63862907179184, 2.91898671262468, 91.81326620248043], rel=1e-9
     )
