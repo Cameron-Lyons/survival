@@ -189,10 +189,9 @@ def test_a_function_transform_is_applied_to_the_stop_times(lung):
     assert zph.x[:3] == pytest.approx([1.0, math.sqrt(2.0), math.sqrt(2.0)])
     assert zph.time[:3] == [1.0, 2.0, 2.0]
 
-    assert (
-        r.cox_zph(fit, transform=lambda times: times).table
-        == r.cox_zph(fit, transform="identity").table
-    )
+    anonymous = r.cox_zph(fit, transform=lambda times: times)
+    assert anonymous.transform == "user"
+    assert anonymous.table == r.cox_zph(fit, transform="identity").table
     with pytest.raises(ValueError, match="one finite value per observation"):
         r.cox_zph(fit, transform=lambda times: times[1:])
     with pytest.raises(ValueError, match="one finite value per observation"):

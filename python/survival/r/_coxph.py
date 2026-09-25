@@ -1530,8 +1530,9 @@ def cox_zph(
 
     ``transform`` is ``"km"``, ``"rank"``, ``"identity"``, ``"log"`` or a function
     of the (stop) times, which receives them as a list; the result is labelled
-    by the function's ``__name__``.  For a penalized fit the penalty enters the
-    information matrix and the degrees of freedom are ``fit$df``, as in R.
+    by the function's name, or ``"user"`` for an anonymous one.  For a penalized
+    fit the penalty enters the information matrix and the degrees of freedom are
+    ``fit$df``, as in R.
     """
 
     global_test = _pop_dotted_keyword(kwargs, "global", "global_test", global_test, True)
@@ -1550,7 +1551,8 @@ def cox_zph(
         )
         transform_arg = transform_name
     elif callable(transform):
-        transform_name = getattr(transform, "__name__", "user")
+        name = getattr(transform, "__name__", "")
+        transform_name = name if name.isidentifier() else "user"
         transform_arg = [float(value) for value in transform(list(fit.y.time))]
     else:
         raise TypeError("transform must be one of km, rank, identity, log, or a function")
