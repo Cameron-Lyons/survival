@@ -1,7 +1,9 @@
-"""Model frames on the bundled data sets against R 4.5.3 / survival 3.8-12.
+"""Model frames on the bundled data sets, with ``subset``/``na.action`` applied to the formula
+variables only, against R 4.5.3 / survival 3.8-12.
 
-The data sets are plain column mappings, so every formula function accepts them directly,
-with ``subset``, ``na.action`` and ``~ .``.
+The data sets are plain column mappings, so every formula function accepts them directly;
+``subset`` and ``na.action`` index only the columns the formula uses (R's ``model.frame``),
+whatever the container.
 """
 
 from __future__ import annotations
@@ -118,6 +120,16 @@ def test_survsplit_dot_keeps_r_column_order(lung):
     assert len(split["time"]) == 310
 
 
+def test_survsplit_character_id_follows_the_subset():
+    # R cannot add the id column to a subset (its 1:nrow(data) has the wrong length); the
+    # port numbers the rows of data and keeps those of the subset: rows 3 and 4 of aml
+    # (times 13+ and 18) split at 10
+    aml = datasets.load_aml()
+    split = r.survSplit("Surv(time, status) ~ x", aml, cut=[10], id="id", subset=[2, 3])
+    assert split["id"] == [3, 3, 4, 4]
+    assert split["time"] == [10.0, 13.0, 10.0, 18.0]
+
+
 def test_documented_survexp_example(lung):
     # docs/r-compatibility.md's example, against R's
     # survexp(~ sex, lung, ratetable = cox, times = c(0, 100, 365))$surv
@@ -131,6 +143,43 @@ def test_documented_survexp_example(lung):
         [1.0, 0.902619962241841, 0.530666050168176], rel=1e-9
     )
     assert expected.n_risk == [[138.0, 90.0]] * 3
+
+
+def test_polars_frames_with_missing_values_and_subset(lung):
+    pl = pytest.importorskip("polars")
+    frame = pl.DataFrame(lung)
+    # coxph(Surv(time, status) ~ ph.ecog, lung)
+    fit = r.coxph("Surv(time, status) ~ ph.ecog", frame, na_action="omit")
+    assert fit.n == 227
+    assert fit.coefficients == pytest.approx([0.47594344950965], rel=1e-9)
+    assert r.survfit("Surv(time, status) ~ sex", frame, subset=_older(lung)).n == [89, 45]
+
+
+def test_pandas_factor_levels_survive_row_removal():
+    pd = pytest.importorskip("pandas")
+    # aml$x <- factor(aml$x, levels = c("Nonmaintained", "Maintained")); aml$x[3] <- NA
+    frame = pd.DataFrame(datasets.load_aml())
+    frame["x"] = pd.Categorical(frame["x"], categories=["Nonmaintained", "Maintained"])
+    frame.loc[2, "x"] = None
+    curves = r.survfit("Surv(time, status) ~ x", frame)
+    assert curves.n == [12, 10]
+    assert curves.strata_names == ["x=Nonmaintained", "x=Maintained"]
+    fit = r.coxph("Surv(time, status) ~ x", frame, na_action="omit")
+    assert list(fit.coef_names) == ["xMaintained"]
+    assert fit.coefficients == pytest.approx([-0.876828103972665], rel=1e-9)
+
+
+def test_columns_outside_the_formula_are_not_touched(lung):
+    data = {**lung, "meta": [1, 2]}
+    assert r.survfit("Surv(time, status) ~ ph.ecog", data).n == [63, 113, 50, 1]
+    fit = r.coxph("Surv(time, status) ~ ph.ecog", data, na_action="omit")
+    assert fit.coefficients == pytest.approx([0.47594344950965], rel=1e-9)
+
+
+def test_formula_columns_must_have_the_response_length(lung):
+    data = {**lung, "short": lung["age"][:-1]}
+    with pytest.raises(ValueError, match="variable lengths differ \\(found for 'short'\\)"):
+        r.survfit("Surv(time, status) ~ short", data, subset=_older(lung))
 
 
 def test_underscore_columns_are_ordinary_columns(lung):

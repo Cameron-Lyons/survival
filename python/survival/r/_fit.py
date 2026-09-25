@@ -238,8 +238,8 @@ def _model_frame(
     """Evaluate a survival formula on ``data`` the way ``model.frame`` does.
 
     Vector arguments may name a column of ``data``; ``subset`` and ``na.action`` are
-    applied to the data and to every vector argument together (``extra`` carries any
-    further row-aligned vectors, e.g. ``cch``'s ``subcoh``).
+    applied to the formula's variables and to every vector argument together (``extra``
+    carries any further row-aligned vectors, e.g. ``cch``'s ``subcoh``).
     """
 
     if not isinstance(formula, str):

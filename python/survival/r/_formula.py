@@ -19,9 +19,9 @@ from ._coerce import (
     _mstate_categories,
     _normalize_na_action,
     _strata_value_label,
-    _subset_data,
     _subset_indices,
     _subset_optional_sequence,
+    _subset_sequence,
 )
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
 from ._surv import (
@@ -770,18 +770,42 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
+def _formula_data_rows(formula: str, data: Any, rows: list[int], n: int) -> dict[str, Any]:
+    """``data[rows, ]`` restricted to the variables *formula* uses.
+
+    R's ``model.frame`` evaluates only the formula's variables, so ``subset`` and
+    ``na.action`` never copy the other columns of *data* (nor require them to be
+    row-aligned).  The columns keep *data*'s order, so a ``.`` expands to the same
+    terms afterwards, and factor columns keep their levels.
+    """
+
+    columns = _formula_columns(formula, data)
+    names = _data_column_names(data)
+    if names is not None:
+        used = set(columns)
+        columns = [name for name in names if name in used]
+    frame: dict[str, Any] = {}
+    for name in columns:
+        values = _column_source(data, name)
+        if len(values) != n:
+            raise ValueError(f"variable lengths differ (found for '{name}')")
+        frame[name] = _subset_sequence(values, rows, name)
+    return frame
+
+
 def _subset_formula_inputs(
     formula: str,
     data: Any,
     subset: Any,
     **row_aligned: Any,
-) -> tuple[Any, dict[str, Any]]:
-    indices = _subset_indices(subset, _data_row_count(data, formula))
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    n = _data_row_count(data, formula)
+    indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
         for name, values in row_aligned.items()
     }
-    return _subset_data(data, indices), filtered
+    return _formula_data_rows(formula, data, indices, n), filtered
 
 
 def _apply_formula_na_action(
@@ -812,7 +836,7 @@ def _apply_formula_na_action(
     filtered = {
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
-    return _subset_data(data, keep), filtered
+    return _formula_data_rows(formula, data, keep, n), filtered
 
 
 def _data_column_names(data: Any) -> list[Any] | None:
@@ -1780,8 +1804,8 @@ def model_frame(
     columns (``pyears``' ``rmap`` variables).  ``subset`` (a mask or row indices)
     and then ``na_action`` (``"na.pass"``, ``"na.omit"``, ``"na.fail"``; R's
     ``model.frame`` default is ``na.omit``, each caller passes its own default) are
-    applied to the data and the arguments together, after which the response and
-    the terms are evaluated.
+    applied to the formula's variables and the arguments together, after which the
+    response and the terms are evaluated.
     """
 
     if not isinstance(formula, str):
