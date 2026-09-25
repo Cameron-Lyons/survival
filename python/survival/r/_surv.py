@@ -1,6 +1,6 @@
-"""``Surv``/``Surv2`` responses, ``strata``, and the timeline conversions.
+"""``Surv``/``Surv2`` responses, ``strata``/``cluster``, and the timeline conversions.
 
-Ports of ``R/Surv.R``, ``R/Surv2.R``, ``R/strata.R`` and the data side of
+Ports of ``R/Surv.R``, ``R/Surv2.R``, ``R/strata.R``, ``R/cluster.R`` and the data side of
 ``R/fromtimeline.R``: the Python layer builds the response columns the way R's
 ``Surv`` does (status coding, ``origin``, the ``interval2`` to ``interval``
 conversion, multi-state factors) and hands every kernel (``strata``,
@@ -13,7 +13,7 @@ import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from .. import _survival as _core
 from ._coerce import (
@@ -550,7 +550,7 @@ def _survreg_response_arrays(
 
 
 # ---------------------------------------------------------------------------
-# strata
+# strata and cluster
 # ---------------------------------------------------------------------------
 
 
@@ -638,6 +638,16 @@ def strata(
         labels=[None if code is None else result.levels[code] for code in result.codes],
         counts=list(result.counts),
     )
+
+
+_T = TypeVar("_T")
+
+
+def cluster(x: _T) -> _T:
+    """R's ``cluster`` (R/cluster.R): the identity.  Its meaning comes from the model
+    formula, where ``cluster(id)`` names the groups of a robust variance."""
+
+    return x
 
 
 # ---------------------------------------------------------------------------

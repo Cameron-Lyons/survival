@@ -1,16 +1,28 @@
 """R-style survival API split into cohesive modules; ``survival.r_api`` re-exports it.
 
-The ``__all__`` list is exactly the one ``survival.r_api`` has always exported. The redundant
-``name as name`` imports keep the few public names ``r_api`` exposed without listing them
-(``ConcordanceResult``, ``predict_terms_constant``) importable.
+``__all__`` lists R's exported functions under Python spellings (``survreg.control`` is
+``survreg_control``, ``cox.zph`` is ``cox_zph``) and the classes those functions return, so
+fits and results can be named in annotations and ``isinstance`` checks.  The typed surface
+is the inline annotations of the implementation modules (the package ships ``py.typed``).
 """
 
 from __future__ import annotations
 
+from .._survival import AnovaCoxphResult
 from ._aareg import aareg
 from ._cch import cch
-from ._concordance import concordance, survConcordance, survConcordance_fit
-from ._coxph import anova, basehaz, clogit, cox_zph, coxph, coxph_detail, coxph_wtest
+from ._concordance import concordance, concordancefit, survConcordance, survConcordance_fit
+from ._coxph import (
+    ClogitModel,
+    CoxphModel,
+    anova,
+    basehaz,
+    clogit,
+    cox_zph,
+    coxph,
+    coxph_detail,
+    coxph_wtest,
+)
 from ._data_prep import (
     aeqSurv,
     cumevent,
@@ -62,10 +74,10 @@ from ._models import (
     model_weights,
     nobs,
     predict,
+    predict_terms_constant,
     residuals,
     vcov,
 )
-from ._models import predict_terms_constant as predict_terms_constant
 from ._pyears import (
     is_ratetable,
     pyears,
@@ -80,6 +92,7 @@ from ._surv import (
     Surv,
     Surv2,
     Surv2data,
+    cluster,
     format_surv,
     fromtimeline,
     is_na_surv,
@@ -100,10 +113,23 @@ from ._survfit import (
     survfitkm_influence,
 )
 from ._survfit_residuals import pseudo, survfit_residuals
-from ._survreg import dsurvreg, psurvreg, qsurvreg, rsurvreg, survreg
+from ._survreg import (
+    SurvregAnovaResult,
+    SurvregModelResult,
+    dsurvreg,
+    psurvreg,
+    qsurvreg,
+    rsurvreg,
+    survreg,
+    survreg_control,
+    survreg_distributions,
+    survregDtest,
+)
 from ._types import (
     AaregModelResult,
+    BrierResult,
     CchModelResult,
+    ConcordanceResult,
     CoxBaseHazardResult,
     CoxPHDetailResult,
     CoxPHWTestResult,
@@ -114,11 +140,15 @@ from ._types import (
     ModelFrame,
     NamedMatrix,
     PredictResult,
+    PsplineResult,
     PyearsResult,
     RateTable,
+    StateFigResult,
     StrataFactor,
     SummarySurvfitResult,
     Surv2Data,
+    SurvCheckProblem,
+    SurvCheckResult,
     SurvDiffResult,
     SurvExpResult,
     SurvfitCall,
@@ -133,42 +163,54 @@ from ._types import (
     TMergeOperation,
     YatesResult,
 )
-from ._types import ConcordanceResult as ConcordanceResult
 from ._yates_model import YatesModel
 
 __all__ = [
     "Surv",
     "Surv2",
     "Surv2data",
-    "CoxSurvfitResult",
+    "AaregModelResult",
+    "AnovaCoxphResult",
+    "BrierResult",
+    "CchModelResult",
+    "ClogitModel",
+    "ConcordanceResult",
     "CoxBaseHazardResult",
     "CoxPHDetailResult",
     "CoxPHWTestResult",
+    "CoxSurvfitResult",
     "CoxZPHResult",
-    "CchModelResult",
+    "CoxphModel",
     "FineGrayFrame",
     "FineGrayOutput",
     "ModelFrame",
-    "Surv2Data",
-    "Timeline",
-    "TMergeFrame",
-    "TMergeOperation",
+    "NamedMatrix",
     "PredictResult",
+    "PsplineResult",
     "PyearsResult",
     "RateTable",
-    "AaregModelResult",
+    "StateFigResult",
     "StrataFactor",
+    "SummarySurvfitResult",
+    "Surv2Data",
+    "SurvCheckProblem",
+    "SurvCheckResult",
+    "SurvDiffResult",
     "SurvExpResult",
-    "SurvfitResult",
-    "SurvfitMultiStateResult",
-    "SurvfitConfidenceIntervalResult",
     "SurvfitCall",
+    "SurvfitConfidenceIntervalResult",
+    "SurvfitMultiStateResult",
     "SurvfitQuantileResult",
     "SurvfitResidualsResult",
-    "NamedMatrix",
-    "SummarySurvfitResult",
-    "SurvDiffResult",
+    "SurvfitResult",
+    "SurvregAnovaResult",
+    "SurvregModelResult",
+    "TMergeFrame",
+    "TMergeOperation",
     "TcutResult",
+    "Timeline",
+    "YatesModel",
+    "YatesResult",
     "aic",
     "aareg",
     "aeqSurv",
@@ -182,7 +224,9 @@ __all__ = [
     "coef",
     "coef_names",
     "confint",
+    "cluster",
     "concordance",
+    "concordancefit",
     "clogit",
     "cch",
     "coxph",
@@ -226,6 +270,7 @@ __all__ = [
     "pspline",
     "pseudo",
     "predict",
+    "predict_terms_constant",
     "quantile_survfit",
     "psurvreg",
     "qsurvreg",
@@ -256,10 +301,11 @@ __all__ = [
     "survfitkm_influence",
     "survSplit",
     "survreg",
+    "survreg_control",
+    "survreg_distributions",
+    "survregDtest",
     "tcut",
     "totimeline",
     "yates",
     "vcov",
-    "YatesResult",
-    "YatesModel",
 ]

@@ -322,12 +322,12 @@ def nsk(
     intercept: Any = False,
     b: Any = 0.05,
     Boundary_knots: Any = _MISSING,
-) -> Any:
+) -> _core.SplineBasisResult:
     """Natural spline basis whose coefficients are the values at the knots (R's ``nsk``).
 
     ``Boundary_knots`` is R's ``Boundary.knots``: the ``b``/``1 - b`` quantiles of ``x`` by
     default, ``True`` for the range of ``x``, ``False``/``None`` for the outer ``knots``.  Missing
-    ``x`` values give rows of ``NaN``.  Returns the Rust ``SplineBasisResult``.
+    ``x`` values give rows of ``NaN``.
     """
 
     x_values = _numeric_or_nan(x, "x")

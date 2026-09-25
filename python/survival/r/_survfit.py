@@ -52,6 +52,7 @@ from ._formula import (
 )
 from ._surv import Surv, _apply_surv_na_action, _subset_surv
 from ._types import (
+    CoxSurvfitResult,
     NamedMatrix,
     SummarySurvfitResult,
     SurvfitCall,
@@ -463,7 +464,7 @@ def survfit(
     reverse: Any = False,
     censor: Any = True,
     **kwargs: Any,
-) -> Any:
+) -> SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult:
     """R's ``survfit``: Kaplan-Meier / Fleming-Harrington, Aalen-Johansen or Turnbull curves.
 
     ``response`` is a formula string (``"Surv(time, status) ~ sex"``) evaluated in ``data``, a
@@ -582,7 +583,7 @@ def _survfit_coxph(
     stype: Any,
     ctype: Any,
     id: Any | None,
-) -> Any:
+) -> CoxSurvfitResult:
     """``survfit.coxph``: the Cox module owns the curves, this is only the dispatch."""
 
     result = survfit_coxph(
@@ -984,7 +985,7 @@ def _engine_of(x: Any) -> Any:
     return x.engine
 
 
-def survfit0(x: Any, *args: Any, **kwargs: Any) -> Any:
+def survfit0(x: Any, *args: Any, **kwargs: Any) -> SurvfitResult | SurvfitMultiStateResult:
     """R's ``survfit0``: add the row at the starting time ``t0`` to every curve.
 
     A fit made with ``time0 = TRUE`` (or already processed) is returned as is.

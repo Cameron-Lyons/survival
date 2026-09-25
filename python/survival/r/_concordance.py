@@ -134,12 +134,17 @@ def concordancefit(
     std_err: Any = True,
     *,
     names: Sequence[str] | None = None,
-    strata_levels: Sequence[str] | None = None,
-    formula: str | None = None,
+    _strata_levels: Sequence[str] | None = None,
+    _formula: str | None = None,
     **kwargs: Any,
 ) -> ConcordanceResult:
     """R's ``concordancefit``: the concordance of ``y`` (a Surv, or a numeric
-    vector) with one or more predictor columns ``x``."""
+    vector) with one or more predictor columns ``x``.
+
+    ``names`` labels the columns of ``x`` (R reads ``colnames(x)``, else ``X1``, ``X2``, ...).
+    ``concordance`` passes the levels of its strata and the formula it was called with
+    through the private ``_strata_levels`` and ``_formula``.
+    """
 
     std_err = _pop_dotted_keyword(kwargs, "std.err", "std_err", std_err, True)
     if kwargs:
@@ -168,7 +173,9 @@ def concordancefit(
         labels = _materialize_labels(strata, "strata")
         if len(labels) != n:
             raise ValueError("y and strata are not the same length")
-        raw_levels = list(strata_levels) if strata_levels else list(_label_levels(labels, "strata"))
+        raw_levels = (
+            list(_strata_levels) if _strata_levels else list(_label_levels(labels, "strata"))
+        )
         levels = [str(level) for level in raw_levels]
         index = {level: idx for idx, level in enumerate(raw_levels)}
         strata_codes = [index[label] for label in labels]
@@ -209,7 +216,7 @@ def concordancefit(
         cfit = _core.concordancefit_counting(
             _core.CountingProcessData(list(y.start), list(y.time), list(y.event)), matrix, **common
         )
-    return _result(cfit, names, levels, formula)
+    return _result(cfit, names, levels, _formula)
 
 
 def _is_matrix(x: Any) -> bool:
@@ -248,8 +255,8 @@ def _concordance_formula(
         weights=frame.weights,
         cluster=frame.cluster,
         names=frame.names,
-        strata_levels=frame.strata_levels,
-        formula=formula,
+        _strata_levels=frame.strata_levels,
+        _formula=formula,
         **options,
     )
 
@@ -351,11 +358,11 @@ def _concordance_fits(
         first.y,
         [[column[row] for column in (d.x for d in data)] for row in range(len(first.x))],
         strata=first.strata,
-        strata_levels=first.strata_levels or None,
         weights=first.weights,
         cluster=cluster if cluster is not None else first.cluster,
         names=names,
-        formula=getattr(fits[0], "formula", None),
+        _strata_levels=first.strata_levels or None,
+        _formula=getattr(fits[0], "formula", None),
         **options,
     )
 

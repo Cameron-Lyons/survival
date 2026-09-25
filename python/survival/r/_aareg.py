@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 from numbers import Real
-from typing import Any
+from typing import Any, overload
 
 from .. import _survival as _core
 from ._coerce import (
@@ -34,8 +34,33 @@ def _taper_values(value: Any) -> list[float]:
     return values
 
 
+@overload
+def aareg(formula: _core.AaregOptions) -> _core.AaregResult: ...
+
+
+@overload
 def aareg(
     formula: str,
+    data: Any | None = None,
+    *,
+    weights: Any | None = None,
+    subset: Any | None = None,
+    na_action: str | None = "fail",
+    qrtol: Any = 1e-7,
+    nmin: Any | None = None,
+    dfbeta: Any = False,
+    taper: Any = 1.0,
+    test: Any = "aalen",
+    cluster: Any | None = None,
+    model: Any = False,
+    x: Any = False,
+    y: Any = False,
+    **kwargs: Any,
+) -> AaregModelResult: ...
+
+
+def aareg(
+    formula: str | _core.AaregOptions,
     data: Any | None = None,
     *,
     weights: Any | None = None,
