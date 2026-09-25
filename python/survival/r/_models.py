@@ -783,7 +783,7 @@ def _cox_zph_frame(result: CoxZPHResult) -> dict[str, list[Any]]:
     return {
         "name": [str(row["name"]) for row in result.table],
         "chisq": [float(row["chisq"]) for row in result.table],
-        "df": [int(row["df"]) for row in result.table],
+        "df": [float(row["df"]) for row in result.table],
         "p": [float(row["p"]) for row in result.table],
     }
 

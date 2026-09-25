@@ -2671,7 +2671,7 @@ class CoxZphTest:
     @property
     def chisq(self) -> float: ...
     @property
-    def df(self) -> int: ...
+    def df(self) -> float: ...
     @property
     def p(self) -> float: ...
 
@@ -11742,11 +11742,13 @@ def cox_survfit_from_baseline(
 ) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
 def cox_zph(
     fit: CoxPHFit,
-    transform: str = "km",
+    transform: str | Sequence[float] = "km",
     terms: bool = True,
     singledf: bool = False,
     global_test: bool = True,
     assign: Sequence[Sequence[int]] | None = None,
+    penalty_second: Sequence[float] | None = None,
+    df: Sequence[float] | None = None,
 ) -> CoxZph: ...
 def coxcount1(survival: SurvivalData, strata: Sequence[int] | None = None) -> CoxCountOutput: ...
 def coxcount2(

@@ -449,7 +449,7 @@ class PredictResult:
     def se(self) -> Any: ...
 
 class CoxZPHResult:
-    table: list[dict[str, float | int | str]]
+    table: list[dict[str, float | str]]
     x: list[float]
     time: list[float]
     y: list[list[float]]

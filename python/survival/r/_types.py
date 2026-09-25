@@ -592,9 +592,10 @@ class TMergeFrame(Mapping[str, list[Any]]):
 class CoxZPHResult:
     """R's ``cox.zph`` object: ``table`` rows (``name``, ``chisq``, ``df``, ``p``), the
     transformed times ``x``, the death times ``time``, the scaled Schoenfeld residual
-    matrix ``y`` (one column per term, named by ``names``) and its variance ``var``."""
+    matrix ``y`` (one column per term, named by ``names``) and its variance ``var``.
+    ``df`` is a float: a penalized fit's terms have fractional degrees of freedom."""
 
-    table: list[dict[str, float | int | str]]
+    table: list[dict[str, float | str]]
     x: list[float]
     time: list[float]
     y: list[list[float]]
