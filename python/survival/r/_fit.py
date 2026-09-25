@@ -246,8 +246,6 @@ def _model_frame(
         raise TypeError("a formula argument is required")
     if data is None:
         raise ValueError("a data argument is required with a formula")
-    if isinstance(data, Mapping):  # the bundled datasets carry _nrow/_ncol metadata
-        data = {key: value for key, value in data.items() if not str(key).startswith("_")}
     aligned = {
         "weights": _column_or_values(data, weights, "weights"),
         "offset": _column_or_values(data, offset, "offset"),

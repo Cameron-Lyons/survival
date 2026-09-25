@@ -27,18 +27,14 @@ def _approx_matrix(actual, expected, **tolerance):
         assert actual_row == pytest.approx(expected_row, **tolerance)
 
 
-def _frame(loader):
-    return {key: list(values) for key, values in loader().items() if not key.startswith("_")}
-
-
 @pytest.fixture(scope="module")
 def lung():
-    return _frame(survival.datasets.load_lung)
+    return survival.datasets.load_lung()
 
 
 @pytest.fixture(scope="module")
 def tobin():
-    return _frame(survival.datasets.load_tobin)
+    return survival.datasets.load_tobin()
 
 
 @pytest.fixture(scope="module")

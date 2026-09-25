@@ -5,9 +5,8 @@ from survival import core, datasets, validation
 
 def main() -> None:
     lung = datasets.load_lung()
-    columns = [name for name in lung if not name.startswith("_")]
-    print(f"lung rows: {lung['_nrow']}")
-    print(f"lung columns: {columns[:4]}")
+    print(f"lung rows: {len(lung['time'])}")
+    print(f"lung columns: {list(lung)[:4]}")
 
     concordance = core.perform_concordance1_calculation(
         [1.0, 2.0, 3.0, 4.0, 5.0, 1.0, 2.0, 3.0, 4.0, 5.0],

@@ -98,16 +98,19 @@ impl Column {
 /// A column-oriented copy of an R data frame.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DataFrame {
-    pub(crate) nrow: usize,
     pub(crate) columns: Vec<(&'static str, Column)>,
 }
 
+#[cfg(test)]
 impl DataFrame {
+    pub(crate) fn nrow(&self) -> usize {
+        self.columns.first().map_or(0, |(_, column)| column.len())
+    }
+
     pub(crate) fn ncol(&self) -> usize {
         self.columns.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn column(&self, name: &str) -> Option<&Column> {
         self.columns
             .iter()
@@ -143,7 +146,6 @@ impl Dataset {
             .collect();
 
         let mut fields = Vec::with_capacity(ncol);
-        let mut nrow = 0;
         for (line_no, line) in lines.enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -161,21 +163,19 @@ impl Dataset {
                     self.error(format!("line {}, column '{name}': {message}", line_no + 2))
                 })?;
             }
-            nrow += 1;
         }
 
-        Ok(DataFrame { nrow, columns })
+        Ok(DataFrame { columns })
     }
 
-    /// Build the Python dictionary of column lists plus `_nrow`/`_ncol`.
+    /// Build the Python dictionary mapping each column name, in R's column
+    /// order, to its list of values.
     pub(crate) fn to_pydict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let frame = self.parse()?;
         let dict = PyDict::new(py);
         for (name, column) in &frame.columns {
             dict.set_item(*name, column.to_pylist(py)?)?;
         }
-        dict.set_item("_nrow", frame.nrow)?;
-        dict.set_item("_ncol", frame.ncol())?;
         Ok(dict.into())
     }
 
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn parses_typed_columns_in_schema_order() {
         let frame = TOY.parse().unwrap();
-        assert_eq!(frame.nrow, 3);
+        assert_eq!(frame.nrow(), 3);
         assert_eq!(frame.ncol(), 4);
         let names: Vec<&str> = frame.columns.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, ["flag", "id", "score", "label"]);

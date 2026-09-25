@@ -811,9 +811,8 @@ from survival import datasets
 
 # Load the lung cancer dataset
 lung = datasets.load_lung()
-columns = [name for name in lung if not name.startswith("_")]
-print(f"Columns: {columns}")
-print(f"Number of rows: {lung['_nrow']}")
+print(f"Columns: {list(lung)}")
+print(f"Number of rows: {len(lung['time'])}")
 
 # Load the acute myelogenous leukemia dataset
 aml = datasets.load_aml()
@@ -822,8 +821,9 @@ aml = datasets.load_aml()
 veteran = datasets.load_veteran()
 ```
 
-Datasets are returned as column-oriented dictionaries with `_nrow` and `_ncol`
-metadata.
+Datasets are returned as column-oriented dictionaries that map each column name,
+in R's column order, to a list of values, so they can be passed straight to the
+formula functions or to `pandas.DataFrame`/`polars.DataFrame`.
 
 **Available datasets** (every data frame shipped by R's `survival` 3.8, with R's
 exact values, column names and storage modes: R `double` -> `float`, `integer`
