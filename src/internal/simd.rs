@@ -40,12 +40,12 @@ pub fn dot_product(a: &[f64], b: &[f64]) -> f64 {
     let b_rest = b_chunks.remainder();
     for (a_chunk, b_chunk) in a_chunks.zip(b_chunks) {
         for lane in 0..LANES {
-            accumulators[lane] = a_chunk[lane].mul_add(b_chunk[lane], accumulators[lane]);
+            accumulators[lane] += a_chunk[lane] * b_chunk[lane];
         }
     }
     let mut total = combine(accumulators);
     for (&left, &right) in a_rest.iter().zip(b_rest) {
-        total = left.mul_add(right, total);
+        total += left * right;
     }
     total
 }
