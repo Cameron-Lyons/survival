@@ -269,7 +269,7 @@ def test_crossval_wrappers_validate_inputs_and_survreg_covariates():
 
     bad_status = list(status_i32)
     bad_status[2] = 2
-    with pytest.raises(ValueError, match="status values must be 0 or 1"):
+    with pytest.raises(ValueError, match="status must contain only 0/1 values"):
         survival.validation.cv_cox_concordance(time, bad_status, covariates, n_folds=3)
 
     with pytest.raises(ValueError, match="covariates length must match time length"):

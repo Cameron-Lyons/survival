@@ -1156,7 +1156,9 @@ mod tests {
         assert!(
             message(&[vec![1.0, 1.0, 0.0]], &[1.0], 2).contains("start must be less than stop")
         );
-        assert!(message(&[vec![1.0, 2.0]], &[1.0], 2).contains("y status values must be 0 or 1"));
+        assert!(
+            message(&[vec![1.0, 2.0]], &[1.0], 2).contains("y status must contain only 0/1 values")
+        );
         assert!(message(&[vec![1.0, 1.0]], &[1.0], 4).contains("survtype must be 1, 2, or 3"));
         assert!(message(&[vec![1.0, 1.0]], &[-1.0], 2).contains("weights contains negative"));
         assert!(

@@ -556,7 +556,7 @@ mod tests {
             decision_curve_analysis(vec![0.2], vec![1.0], vec![2], 1.0, Some(vec![0.5]))
                 .expect_err("non-binary event should fail")
                 .to_string()
-                .contains("event values must be 0 or 1")
+                .contains("event must contain only 0/1 values")
         );
         assert!(
             decision_curve_analysis(

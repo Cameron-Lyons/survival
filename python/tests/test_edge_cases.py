@@ -206,7 +206,7 @@ def test_expected_events_rejects_invalid_parameters(call, message):
         ),
         (
             lambda: survival.validation.survobrien([1.0, 2.0], [1, 2], [[0.1, 0.2]]),
-            "status values must be 0 or 1",
+            "status must contain only 0/1 values",
         ),
         (
             lambda: survival.validation.survobrien([1.0, float("inf")], [1, 0], [[0.1, 0.2]]),
@@ -249,7 +249,7 @@ def test_survdiff_all_censored_has_zero_degrees_of_freedom():
 
 
 def test_survdiff_rejects_invalid_codes():
-    with pytest.raises(ValueError, match="status values must be 0 or 1"):
+    with pytest.raises(ValueError, match="status must contain only 0/1 values"):
         survival.surv_analysis.survdiff([1.0, 2.0], [1, 2], [1, 2])
     with pytest.raises(ValueError, match="length mismatch"):
         survival.surv_analysis.survdiff([1.0, 2.0], [1, 0], [1])
@@ -273,7 +273,7 @@ def test_coxph_fit_validates_shapes_and_values():
         survival.regression.coxph_fit([1.0, 2.0], [1, 0], [[1.0, 2.0], [3.0]])
     with pytest.raises(ValueError, match="time contains non-finite"):
         survival.regression.coxph_fit([1.0, float("inf")], [1, 0], [[1.0], [2.0]])
-    with pytest.raises(ValueError, match="status values must be 0 or 1"):
+    with pytest.raises(ValueError, match="status must contain only 0/1 values"):
         survival.regression.coxph_fit([1.0, 2.0], [1, 2], [[1.0], [2.0]])
 
 

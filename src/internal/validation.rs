@@ -91,7 +91,7 @@ impl fmt::Display for ValidationError {
             ),
             Self::NonBinary { name, index, value } => write!(
                 f,
-                "{name} values must be 0 or 1; {name} must contain only 0/1 values; got {value} at index {index}"
+                "{name} must contain only 0/1 values; got {value} at index {index}"
             ),
             Self::OutOfRange {
                 name,
@@ -507,10 +507,9 @@ mod tests {
                 value: "2".to_string(),
             }
         );
-        assert!(err.to_string().contains("status values must be 0 or 1"));
-        assert!(
-            err.to_string()
-                .contains("status must contain only 0/1 values")
+        assert_eq!(
+            err.to_string(),
+            "status must contain only 0/1 values; got 2 at index 1"
         );
 
         assert!(validate_binary_f64(&[0.0, 1.0], "status").is_ok());

@@ -70,7 +70,7 @@ def test_typed_inputs_validate_and_expose_their_fields():
         core.SurvivalData([1.0], [1, 0])
     with pytest.raises(ValueError, match="non-finite"):
         core.SurvivalData([float("nan")], [1])
-    with pytest.raises(ValueError, match="status values must be 0 or 1"):
+    with pytest.raises(ValueError, match="status must contain only 0/1 values"):
         core.coxcount1(core.SurvivalData([1.0], [2]))
     # R: Surv(c(0, 0, 2, 0), c(1, 2, 2, 3), c(1, 1, 1, 0)) warns "Stop time
     # must be > start time, NA created" for the zero-length third interval

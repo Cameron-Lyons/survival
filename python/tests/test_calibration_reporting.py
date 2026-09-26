@@ -674,7 +674,7 @@ def test_fairness_public_api_groups_near_tied_threshold_events():
     with pytest.raises(ValueError, match="time contains negative"):
         survival.validation.compute_fairness_metrics([0.5], [-1.0], [1], [0], None)
 
-    with pytest.raises(ValueError, match="event values must be 0 or 1"):
+    with pytest.raises(ValueError, match="event must contain only 0/1 values"):
         survival.validation.compute_fairness_metrics([0.5], [1.0], [2], [0], None)
 
     with pytest.raises(ValueError, match="protected_attribute"):

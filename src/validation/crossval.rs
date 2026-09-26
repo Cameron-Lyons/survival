@@ -624,7 +624,7 @@ mod tests {
             validate_time_status_i32(&[1.0, 2.0], &[1, 2])
                 .expect_err("non-binary status should fail")
                 .to_string()
-                .contains("status values must be 0 or 1")
+                .contains("status must contain only 0/1 values")
         );
         assert!(
             validate_covariates(&[vec![0.1], vec![0.2, 0.3]], 2)
