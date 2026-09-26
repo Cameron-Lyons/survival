@@ -6,7 +6,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from itertools import combinations, compress, product
-from operator import ge
+from operator import ge, truediv
 from typing import Any
 
 from ._coerce import (
@@ -749,7 +749,10 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
         right_values = _arithmetic_expression_values(data, right, n)
         if operator == "*":
             return [left * right for left, right in zip(left_values, right_values, strict=True)]
-        return list(map(_r_divide, left_values, right_values))
+        try:
+            return list(map(truediv, left_values, right_values))
+        except ZeroDivisionError:
+            return list(map(_r_divide, left_values, right_values))
 
     if expression.startswith(("+", "-")):
         values = _arithmetic_expression_values(data, expression[1:].strip(), n)
@@ -762,7 +765,10 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
         left, _operator, right = power
         left_values = _arithmetic_expression_values(data, left, n)
         right_values = _arithmetic_expression_values(data, right, n)
-        return list(map(_r_pow, left_values, right_values))
+        try:
+            return list(map(math.pow, left_values, right_values))
+        except (OverflowError, ValueError):
+            return list(map(_r_pow, left_values, right_values))
 
     literal = _arithmetic_literal(expression)
     if literal is not None:
@@ -813,7 +819,7 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
 def _data_rows(
     data: Any,
     columns: Sequence[str],
-    rows: list[int],
+    rows: Sequence[int],
     n: int,
     read: Mapping[str, list[Any]] | None = None,
 ) -> _FormulaRows:
@@ -905,8 +911,9 @@ def _made_nan_rows(
     missing: set[int],
     n: int,
     read: Mapping[str, list[Any]] | None = None,
-) -> list[int]:
-    """The rows outside ``missing`` at which one of the formula ``variables`` is NaN.
+) -> tuple[set[int], dict[_CovariateTerm, list[float]]]:
+    """The rows outside ``missing`` at which one of the formula ``variables`` is NaN, and
+    the values at the rows outside ``missing`` of the variables it evaluated.
 
     R's ``model.frame`` evaluates every variable before ``na.action`` scans it, so a NaN
     made from values that are present (``log``/``sqrt`` of a negative value, ``0/0``,
@@ -920,14 +927,16 @@ def _made_nan_rows(
         if term.call is None and (term.arithmetic is not None or term.transform in {"log", "sqrt"})
     ]
     if not variables:
-        return []
-    kept = [row for row in range(n) if row not in missing]
-    complete = _data_rows(data, _covariate_columns(variables), kept, n, read)
+        return set(), {}
+    rows: Sequence[int] = range(n)
+    if missing:
+        rows = [row for row in rows if row not in missing]
+        data = _data_rows(data, _covariate_columns(variables), rows, n, read)
+    values = {term: _numeric_variable(data, term, len(rows)) for term in variables}
     made: set[int] = set()
-    for term in variables:
-        values = _numeric_term_values(_term_raw_values(complete, term, len(kept)), term)
-        made.update(compress(kept, map(math.isnan, values)))
-    return sorted(made)
+    for column in values.values():
+        made.update(compress(rows, map(math.isnan, column)))
+    return made, values
 
 
 def _apply_formula_na_action(
@@ -968,7 +977,8 @@ def _apply_formula_na_action(
     missing.update(_backwards_interval_rows(formula, read, n))
     terms = _formula_rhs_terms(formula, data)
     variables = [factor for term in terms.covariates for factor in _covariate_factors(term)]
-    missing.update(_made_nan_rows(data, [*variables, *terms.offsets], missing, n, read))
+    made, _values = _made_nan_rows(data, [*variables, *terms.offsets], missing, n, read)
+    missing.update(made)
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
         return data, row_aligned, []
@@ -1457,10 +1467,12 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
     if transform is None:
         return values
     if transform in {"log", "sqrt"}:
-        result = list(map(_r_log if transform == "log" else _r_sqrt, values))
-        if any(value < 0.0 for value in values):
-            _warn_outside_package(f"NaNs produced in {transform}({term})")
-        return result
+        try:
+            return list(map(math.log if transform == "log" else math.sqrt, values))
+        except ValueError:
+            if any(value < 0.0 for value in values):
+                _warn_outside_package(f"NaNs produced in {transform}({term})")
+            return list(map(_r_log if transform == "log" else _r_sqrt, values))
     if transform == "exp":
         return [math.exp(value) for value in values]
     if transform in {"I", "identity", "as.numeric", "tt"}:
@@ -1478,6 +1490,20 @@ def _numeric_term_values(values: list[Any], term: _CovariateTerm) -> list[float]
             ) from exc
         raise
     return _apply_numeric_transform(numeric, term.transform, term.column)
+
+
+def _numeric_variable(
+    data: Any,
+    term: _CovariateTerm,
+    n: int,
+    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
+) -> list[float]:
+    """The numeric formula variable ``term`` at the rows of *data*, taken from
+    ``evaluated`` (variables already evaluated at those rows) when it is there."""
+
+    if evaluated and term in evaluated:
+        return evaluated[term]
+    return _numeric_term_values(_term_raw_values(data, term, n), term)
 
 
 def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
@@ -1723,26 +1749,17 @@ def _single_design_columns(
     data: Any,
     spec: _SingleDesignTerm,
     n: int,
-    time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
 ) -> list[list[float]]:
     if isinstance(spec, _PenaltyDesignTerm):
         values = {column: _column(data, column) for column in spec.columns}
         if any(len(value) != n for value in values.values()):
             raise ValueError("formula columns must have the same length as the Surv response")
         return penalty_columns(spec, values)
-    if (
-        isinstance(spec, _NumericDesignTerm)
-        and spec.term.transform == "tt"
-        and time_transform_values is not None
-    ):
-        values = list(time_transform_values[spec.term])
-        if len(values) != n:
-            raise ValueError("tt transform result must match the expanded risk-set rows")
-        return [values]
-    values = _term_raw_values(data, spec.term, n)
     if isinstance(spec, _NumericDesignTerm):
-        return [_numeric_term_values(values, spec.term)]
+        return [_numeric_variable(data, spec.term, n, evaluated)]
 
+    values = _term_raw_values(data, spec.term, n)
     levels = spec.levels
     for value in values:
         if all(value != level for level in levels):
@@ -1757,12 +1774,11 @@ def _design_term_columns(
     data: Any,
     spec: _DesignTerm,
     n: int,
-    time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
 ) -> list[list[float]]:
     if isinstance(spec, _InteractionDesignTerm):
         factor_columns = [
-            _single_design_columns(data, factor, n, time_transform_values)
-            for factor in spec.factors
+            _single_design_columns(data, factor, n, evaluated) for factor in spec.factors
         ]
         interaction_columns: list[list[float]] = []
         for reversed_combo in product(*reversed(factor_columns)):
@@ -1771,7 +1787,7 @@ def _design_term_columns(
                 [math.prod(column[idx] for column in column_combo) for idx in range(n)]
             )
         return interaction_columns
-    return _single_design_columns(data, spec, n, time_transform_values)
+    return _single_design_columns(data, spec, n, evaluated)
 
 
 def _design_rows_from_spec(
@@ -1779,12 +1795,16 @@ def _design_rows_from_spec(
     design: _FormulaDesign,
     n: int,
     *,
-    time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
+    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
 ) -> list[list[float]]:
+    """The rows of the design matrix of *data*.  ``evaluated`` holds numeric variables
+    already evaluated at its rows (the ``tt()`` terms' values, the variables the
+    ``na.action`` scan evaluated), which are not evaluated again."""
+
     columns = [
         column
         for term in design.covariates
-        for column in _design_term_columns(data, term, n, time_transform_values)
+        for column in _design_term_columns(data, term, n, evaluated)
     ]
     if design.intercept:
         columns.insert(0, [1.0] * n)
@@ -1915,10 +1935,15 @@ def _combined_columns(data: Any, terms: list[str], n: int) -> list[Any]:
     return _combine_aligned_columns([_column(data, term) for term in terms], n)
 
 
-def _offset_vector(data: Any, terms: Sequence[_CovariateTerm], n: int) -> list[float] | None:
+def _offset_vector(
+    data: Any,
+    terms: Sequence[_CovariateTerm],
+    n: int,
+    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
+) -> list[float] | None:
     if not terms:
         return None
-    columns = [_numeric_term_values(_term_raw_values(data, term, n), term) for term in terms]
+    columns = [_numeric_variable(data, term, n, evaluated) for term in terms]
     return [sum(column[i] for column in columns) for i in range(n)]
 
 

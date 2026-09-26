@@ -391,9 +391,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
             raise ValueError("the tt function must return one value per expanded row")
     return _CoxData(
         y=new_y,
-        x=_design_rows_from_spec(
-            data, frame.design, len(tindex), time_transform_values=transformed
-        ),
+        x=_design_rows_from_spec(data, frame.design, len(tindex), evaluated=transformed),
         strata=riskset,
         weights=weights,
         offset=None if frame.offset is None else [frame.offset[idx] for idx in tindex],

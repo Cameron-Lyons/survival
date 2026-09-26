@@ -267,6 +267,29 @@ def test_predict_keeps_strata_and_response_aligned_past_nan_rows(lung):
     )
 
 
+def test_predict_reads_offsets_and_interactions_past_nan_rows(lung):
+    data = {name: list(values) for name, values in lung.items()}
+    data["w4"] = _shifted(data["wt.loss"], 4.5)
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        fit = r.coxph("Surv(time, status) ~ sqrt(age):sex + offset(log(w4))", data)
+    assert fit.n == 202
+    assert fit.coefficients == approx([-0.0553399261978555])
+    assert fit.loglik == approx([-672.542493944414, -669.484838764443])
+    # row 2 has log(-1) in the offset, row 3 sqrt(-1), row 4 a missing age
+    newdata = {"age": [60, 70, -1, None, 50], "sex": [1, 2, 1, 2, 2], "w4": [10, -1, 20, 5, 3]}
+    lp = [0.0609138141136284, -1.4970225068203580]
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        assert r.predict(fit, newdata, se_fit=True).fit == approx([lp[0], NAN, NAN, NAN, lp[1]])
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        omitted = r.predict(fit, newdata, se_fit=True, na_action="na.omit")
+    assert omitted.fit == approx(lp)
+    assert omitted.se_fit == approx([0.075433092228307, 0.070996799570572])
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        risk = r.predict(fit, newdata, type="risk", se_fit=True, na_action="na.exclude")
+    assert risk.fit == approx([1.062807311249649, NAN, NAN, NAN, 0.223795518737215])
+    assert risk.se_fit == approx([0.0777658955671311, NAN, NAN, NAN, 0.0335864780219077])
+
+
 # --- na.exclude: naresid / napredict -------------------------------------------------------
 
 

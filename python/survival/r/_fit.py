@@ -8,7 +8,7 @@ import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from itertools import product
+from itertools import compress, product
 from typing import Any
 
 from .. import _survival as _core
@@ -448,14 +448,19 @@ def _newdata_frame(
         for term in design.covariates
         for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
     ]
-    missing.update(_made_nan_rows(newdata, [*variables, *design.offsets], missing, n))
+    made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
+    if made:
+        # the design reads the evaluated variables at the rows that stay
+        stays = [row not in made for row in range(n) if row not in missing]
+        evaluated = {term: list(compress(values, stays)) for term, values in evaluated.items()}
+        missing.update(made)
     if missing and _normalize_na_action(na_action) == "fail":
         raise ValueError("missing values in newdata")
     m = n - len(missing)
     if missing:
         newdata = _data_rows(newdata, columns, [row for row in range(n) if row not in missing], n)
-    rows = _design_rows_from_spec(newdata, design, m)
-    offset = _offset_vector(newdata, list(design.offsets), m)
+    rows = _design_rows_from_spec(newdata, design, m, evaluated=evaluated)
+    offset = _offset_vector(newdata, list(design.offsets), m, evaluated)
     strata_codes: list[int] | None = None
     if strata_columns:
         factor = _strata_factor({name: _column_source(newdata, name) for name in strata_columns}, m)
