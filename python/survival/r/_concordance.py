@@ -36,6 +36,7 @@ from ._formula import (
     _formula_name,
     _response_arg_columns,
     _response_arg_values,
+    _strata_term_columns,
 )
 from ._surv import Surv
 from ._survreg import SurvregModelResult, predict_survreg
@@ -380,7 +381,9 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
         if fit.tt:
             raise ValueError("cannot yet handle models with tt terms")
         if newdata is not None:
-            return _newdata_fit_data(fit, newdata, fit.terms.strata, predict_coxph, cluster)
+            return _newdata_fit_data(
+                fit, newdata, _strata_term_columns(fit.terms), predict_coxph, cluster
+            )
         return _FitData(
             y=fit.y,
             x=fit.linear_predictors,
@@ -391,7 +394,7 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
         )
     if isinstance(fit, SurvregModelResult):
         if newdata is not None:
-            return _newdata_fit_data(fit, newdata, fit.strata_columns, predict_survreg, cluster)
+            return _newdata_fit_data(fit, newdata, fit.strata_terms, predict_survreg, cluster)
         if fit.y is None:
             raise ValueError("the survreg fit has no response: refit it with y=True")
         levels = fit.strata_levels
@@ -407,7 +410,11 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
 
 
 def _newdata_fit_data(
-    fit: Any, newdata: Any, strata_columns: Sequence[str], predict: Any, cluster: Any | None
+    fit: Any,
+    newdata: Any,
+    strata_terms: Sequence[Sequence[str]],
+    predict: Any,
+    cluster: Any | None,
 ) -> _FitData:
     """``cord.getdata`` with ``newdata``: the response and strata of the rows
     ``model.frame(Terms, newdata)`` keeps under R's default ``na.omit`` (no response,
@@ -417,7 +424,7 @@ def _newdata_fit_data(
 
     new = _newdata_frame(
         fit.design,
-        strata_columns,
+        strata_terms,
         fit.strata_levels,
         newdata,
         need_strata=True,

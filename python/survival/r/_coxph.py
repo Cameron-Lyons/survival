@@ -69,6 +69,7 @@ from ._formula import (
     _formula_data_rows,
     _formula_design_row_count,
     _response_arg_columns,
+    _strata_term_columns,
 )
 from ._names import _make_unique
 from ._penalties import _pspline_cbase
@@ -1388,7 +1389,7 @@ def _prediction_newdata(
 ) -> _NewData:
     return _newdata_frame(
         fit.design,
-        fit.terms.strata,
+        _strata_term_columns(fit.terms),
         fit.strata_levels,
         newdata,
         need_strata=need_strata,

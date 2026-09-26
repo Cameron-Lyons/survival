@@ -17,8 +17,9 @@ from ._coerce import (
     _normalize_bool_option_with_default,
     _pop_dotted_keyword,
 )
-from ._fit import _model_frame, _r_levels, _strata_factor
+from ._fit import _model_frame, _r_levels
 from ._formula import _column_source
+from ._surv import _complete_codes, _strata
 from ._types import CchModelResult
 
 _METHODS = {
@@ -159,10 +160,10 @@ def cch(
     status = [int(value) for value in y.event]
     stratum_labels: tuple[Any, ...] | None = None
     if stratified:
-        factor = _strata_factor({"stratum": frame.extra["stratum"]}, frame.n, shortlabel=True)
+        factor = _strata([("stratum", frame.extra["stratum"])], shortlabel=True)
         stratum_labels = tuple(frame.extra["stratum"])
         levels = list(factor.levels)
-        codes = [int(code) for code in factor.codes]
+        codes = _complete_codes(factor, "missing values in the stratum")
         sizes = _stratified_cohort_sizes(cohort_size, levels)
         counts = list(factor.counts)
         if len(id_values) > sum(sizes):

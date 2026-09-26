@@ -41,28 +41,28 @@ from ._coerce import (
     _subset_indices,
     _subset_sequence,
 )
-from ._coxph import _coxph_model_frame, survfit_coxph
+from ._coxph import _coxph_model_frame, _has_strata, _prediction_newdata, survfit_coxph
 from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
     _column,
     _column_or_values,
     _column_source,
-    _combined_columns,
     _covariate_term_columns,
     _covariate_term_name,
     _design_rows_from_spec,
     _design_term_output_names,
     _formula_columns,
-    _offset_vector,
     _parse_formula,
+    _strata_keep,
+    _strata_term_columns,
     _subset_formula_inputs,
     _term_values,
 )
 from ._models import _plain_model_frame, coef, model_formula, vcov
 from ._names import _make_names_unique, _make_unique
 from ._penalties import _combine_basis, _pspline_boundary, _pspline_cbase, _pspline_combine
-from ._surv import Surv, _subset_surv
+from ._surv import Surv, _complete_codes, _subset_surv
 from ._types import (
     _MISSING,
     BrierResult,
@@ -835,9 +835,9 @@ def survobrien(
     keepers, continuous = _survobrien_columns(data, terms.covariates, n)
     strata_codes = None
     if terms.strata:
-        strata_values = _combined_columns(data, terms.strata, n)
-        levels = _unique_in_order(strata_values)
-        strata_codes = [levels.index(value) for value in strata_values]
+        strata_codes = _complete_codes(
+            _strata_keep(data, _strata_term_columns(terms)), "missing values in the strata"
+        )
     expansion = _core.survobrien(
         list(response.time),
         [int(event) for event in response.event],
@@ -969,30 +969,24 @@ def _brier_is_simple(response: Surv, id_values: Sequence[Any] | None) -> bool:
 
 
 def _newdata_design(
-    fit: Any, newdata: Any, n: int
-) -> tuple[list[list[float]], list[int] | None, list[float]]:
-    """``model.matrix`` of the fit's terms on ``newdata`` with its strata codes and offsets."""
+    fit: Any, newdata: Any
+) -> tuple[list[list[float]], list[int] | None, list[float] | None]:
+    """``model.matrix`` of the fit's terms on ``newdata`` with its strata codes (coded as the
+    fit's ``strata.keep``) and offsets, as ``survfit.coxph(fit, newdata)`` builds them."""
 
-    design = _formula_design_for_fit(fit)
-    if design is None:
+    if _formula_design_for_fit(fit) is None:
         raise TypeError("newdata requires a model fitted from a formula")
-    rows = _design_rows_from_spec(newdata, design, n)
-    if design.intercept:
-        rows = [row[1:] for row in rows]
-    strata = None
-    if design.strata:
-        values = _combined_columns(newdata, list(design.strata), n)
-        levels = list(design.strata_levels)
-        try:
-            strata = [levels.index(value) for value in values]
-        except ValueError as exc:
-            raise ValueError("newdata contains a stratum not seen in the fit") from exc
-    offsets = _offset_vector(newdata, design.offsets, n)
-    return rows, strata, offsets if offsets is not None else [0.0] * n
+    stratified = _has_strata(fit)
+    new = _prediction_newdata(
+        fit, newdata, need_strata=stratified, need_response=False, na_action="na.fail"
+    )
+    if stratified and new.strata is None:
+        raise ValueError("New data must contain the strata variable(s) of the model")
+    return new.x, new.strata, new.offset
 
 
 def _brier_model_predictions(
-    fit: Any, engine: Any, newdata: Any | None, n: int, times: list[float]
+    fit: Any, engine: Any, newdata: Any | None, times: list[float]
 ) -> list[list[float]]:
     """``1 - summary(survfit(fit, newdata), times, extend = TRUE)$surv``: one row per time.
 
@@ -1002,7 +996,7 @@ def _brier_model_predictions(
     if newdata is None:
         rows, strata, offsets = [list(row) for row in engine.x], engine.strata, list(engine.offset)
     else:
-        rows, strata, offsets = _newdata_design(fit, newdata, n)
+        rows, strata, offsets = _newdata_design(fit, newdata)
     curves = engine.survfit(newdata=rows, new_strata=strata, new_offset=offsets, se_fit=False)
     # one curve per stratum with the rows as columns, or one per row for stratified fits; each
     # getter converts the whole curve, so it is read once
@@ -1067,7 +1061,7 @@ def brier(
         eval_times = [t for t, d in zip(null_curve.time, null_curve.n_event, strict=True) if d > 0]
     else:
         eval_times = _float_vector(times, "times")
-    phat = _brier_model_predictions(fit, engine, newdata, len(response), eval_times)
+    phat = _brier_model_predictions(fit, engine, newdata, eval_times)
     result = _core.brier(
         dtime,
         dstat,
