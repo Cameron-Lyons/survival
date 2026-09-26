@@ -1,7 +1,8 @@
 """Regression tests of ``yates`` against R survival 3.8-12: default (``model = FALSE``) Cox
 fits, aliased coefficients and R's estimability check, ``predict = "survival"``, R's
 ``yates_setup`` errors, and the unused factor levels ``model.frame`` keeps, which give
-``coxph``/``survreg``/``concordance`` an aliased column and ``yates`` an NA level."""
+``coxph``/``survreg``/``concordance``/``cch`` an aliased column, ``yates`` an NA level and
+``aareg`` no full-rank time."""
 
 import importlib
 import math
@@ -127,6 +128,24 @@ def test_yates_gives_na_for_levels_outside_the_row_space_of_the_design():
     assert karno.estimate["pmm"] == approx([0.809107646088914, 0.187975011482542])
     assert karno.estimate["std"] == approx([0.316047949761309, 0.407669579771154])
     assert contrast_rows(karno) == [("global", pytest.approx(35.9851055623022), 1)]
+
+
+def test_yates_leaves_the_strata_out_of_the_design_with_an_aliased_coefficient():
+    # R's yates builds the population rows with model.matrix(Terms), whose strata(trt)
+    # column misaligns them with the coefficients: with g aliased it stops in qr.resid
+    # ("'qr' and 'y' must have the same number of rows").  The reference is R's
+    # computation on model.matrix(fit), without the strata column, for the same fit
+    # without g: C %*% coef(fit) - sum(fit$means * coef(fit)) with karno set to 50 and 70,
+    # sqrt(diag(C %*% vcov(fit) %*% t(C))) and the Wald test of their difference
+    fit = r.coxph(
+        "Surv(time, status) ~ celltype + g + karno + strata(trt)",
+        _veteran(g=lambda data: [float(value == "large") for value in data["celltype"]]),
+    )
+    assert math.isnan(r.coef(fit)[3])
+    karno = r.yates(fit, "karno", levels=[50, 70])
+    assert karno.estimate["pmm"] == approx([0.855348488105333, 0.216010060982913])
+    assert karno.estimate["std"] == approx([0.323087024285841, 0.416656195325482])
+    assert contrast_rows(karno) == [("global", pytest.approx(35.1699614241823), 1)]
 
 
 def test_yates_na_tests_are_those_that_use_a_non_estimable_level():
@@ -473,3 +492,45 @@ def test_a_subset_keeps_the_levels_it_leaves_unused():
     assert r.coef(reg) == approx(
         [6.320348687805493, -0.264727588941228, -0.670775060081751, math.nan]
     )
+
+
+def _nwtco_case_cohort_with_unused_level():
+    # R: nwtco's relapses plus subcohort, age in years, and h the factor of histol with
+    # levels FH, UH and an unused XX
+    nwtco = datasets.load_nwtco()
+    keep = [
+        i
+        for i, (rel, sub) in enumerate(zip(nwtco["rel"], nwtco["in.subcohort"], strict=True))
+        if rel == 1 or sub == 1
+    ]
+    return {
+        "seqno": [nwtco["seqno"][i] for i in keep],
+        "edrel": [nwtco["edrel"][i] for i in keep],
+        "rel": [int(nwtco["rel"][i]) for i in keep],
+        "subcohort": [int(nwtco["in.subcohort"][i]) for i in keep],
+        "age": [nwtco["age"][i] / 12 for i in keep],
+        "h": RFactor([("FH", "UH")[int(nwtco["histol"][i]) - 1] for i in keep], ["FH", "UH", "XX"]),
+    }
+
+
+def test_cch_with_an_unused_level():
+    data = _nwtco_case_cohort_with_unused_level()
+    arguments = {"subcoh": "subcohort", "id": "seqno", "cohort_size": 4028}
+    # R: cch(Surv(edrel, rel) ~ h + age, ...) stops inside coxph ("missing value where
+    # TRUE/FALSE needed") on the NA initial value of the aliased hXX
+    with pytest.raises(ValueError, match="init contains non-finite value NaN"):
+        r.cch("Surv(edrel, rel) ~ h + age", data, **arguments)
+    # R: the same with method = "SelfPrentice": hXX is NA
+    fit = r.cch("Surv(edrel, rel) ~ h + age", data, method="SelfPrentice", **arguments)
+    assert fit.coef_names == ("hUH", "hXX", "age")
+    assert fit.coefficients == approx([1.492705307615764, math.nan, 0.066043805308395])
+    assert [fit.var[i][i] for i in range(3)] == approx(
+        [0.02271371366870318, 0.0, 0.00051099847863195]
+    )
+
+
+def test_aareg_with_an_unused_level_has_no_full_rank_time():
+    # R 3.8-12's aareg(Surv(time, status) ~ g) does not return on this design; the
+    # all-zero gc column leaves no time with a full-rank design
+    with pytest.raises(ValueError, match="no Aalen model can be fit"):
+        r.aareg("Surv(time, status) ~ g", _lung_with_unused_level())
