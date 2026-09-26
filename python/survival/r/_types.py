@@ -371,7 +371,11 @@ class ConcordanceResult:
     predictor and vectors/matrices for several, exactly as ``concordancefit`` returns
     them; ``count`` is one named row of ``concordant``/``discordant``/``tied.x``/
     ``tied.y``/``tied.xy`` (a list of rows when several predictors or kept strata),
-    and ``names`` labels those rows (predictor names or stratum levels).
+    and ``names`` labels those rows (predictor names or stratum levels).  With a
+    cluster, ``dfbeta`` has one row per cluster in sorted cluster order.  ``ranks`` is
+    R's data frame as the columns ``time``/``rank``/``timewt``/``casewt`` (a list of
+    such tables for several predictors; for several fits one table led by a ``fit``
+    column, as ``cord.work`` stacks them).
     """
 
     concordance: float | list[float]
@@ -382,7 +386,7 @@ class ConcordanceResult:
     cvar: float | list[float] | None = None
     dfbeta: list[float] | list[list[float]] | None = None
     influence: list[list[float]] | list[list[list[float]]] | None = None
-    ranks: list[dict[str, float]] | list[list[dict[str, float]]] | None = None
+    ranks: dict[str, list[Any]] | list[dict[str, list[float]]] | None = None
     formula: str | None = None
 
     @property
