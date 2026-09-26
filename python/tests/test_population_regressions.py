@@ -286,6 +286,12 @@ def test_pyears_factor_terms_take_their_levels_as_model_frame_does():
     assert tables("factor(h)", subset=without_z) == (["x", "y", "z"], [865, 280, 0], [3, 2, 0])
     assert tables("as.factor(h)", subset=without_z) == (["x", "y", "z"], [865, 280, 0], [3, 2, 0])
     assert tables("h", subset=without_z) == (["x", "y"], [865, 280], [3, 2])
+    # the levels of o = factor(g, levels = c("b", "c", "a")) keep their declared order,
+    # not the sorted one
+    cohort["o"] = RFactor(cohort["g"], ["b", "c", "a"])
+    assert tables("o") == (["b", "c", "a"], [795, 0, 1050], [3, 0, 3])
+    assert tables("factor(o)") == (["b", "a"], [795, 1050], [3, 3])
+    assert tables("as.factor(o)") == (["b", "c", "a"], [795, 0, 1050], [3, 0, 3])
 
     # a filtered data frame keeps its unused categories:
     # sub <- df[df$grp != "c", ]; pyears(Surv(time, status) ~ factor(grp), sub, scale = 1)
