@@ -401,6 +401,23 @@ pub(crate) fn coxphms_fit_data(
     if data.id.iter().any(|&subject| subject < 1) {
         return Err(SurvivalError::invalid_input("id codes must be 1-based"));
     }
+    if data.istate.contains(&0) {
+        return Err(SurvivalError::invalid_input("istate codes must be 1-based"));
+    }
+    // endpoint 0 is censoring; any other code must be a state the data or
+    // the transitions name, or the stacker would count the event as censored
+    let nstate = data
+        .istate
+        .iter()
+        .chain(&design.to)
+        .copied()
+        .max()
+        .unwrap_or(0);
+    if data.endpoint.iter().any(|&state| state > nstate) {
+        return Err(SurvivalError::invalid_input(
+            "endpoint codes must name a state",
+        ));
+    }
     validate_length(design.nx, data.x_assign.len(), "x_assign")?;
     if design.strata_use.nrows() != data.strata_terms.len() {
         return Err(SurvivalError::invalid_input(
@@ -777,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn fit_data_rejects_misaligned_istate_and_bad_id_codes() {
+    fn fit_data_rejects_misaligned_istate_and_bad_codes() {
         let (istate, endpoint, x) = mtest();
         let data = MsData {
             time: vec![1.0; 10],
@@ -800,9 +817,15 @@ mod tests {
         let mut long = data.clone();
         long.istate.push(1);
         assert!(error(long).contains("istate"));
-        let mut zero = data;
+        let mut zero = data.clone();
         zero.id[0] = 0;
         assert!(error(zero).contains("id codes must be 1-based"));
+        let mut no_state = data.clone();
+        no_state.istate[0] = 0;
+        assert!(error(no_state).contains("istate codes must be 1-based"));
+        let mut past_last = data;
+        past_last.endpoint[0] = 5;
+        assert!(error(past_last).contains("endpoint codes must name a state"));
     }
 
     #[test]
