@@ -30,6 +30,22 @@ def test_cox_survfit_baseline_handles_ties_weights_and_delayed_entry():
     assert result["hazard"] == pytest.approx([1.0 / 3.0, 1.0 / 6.0, 0.0])
     assert result["cumhaz"] == pytest.approx([1.0 / 3.0, 0.5, 0.5])
 
+    # survival:::agsurv(Surv(c(1, 2, 3), c(1, 1, 0)), matrix(0:2, ncol = 1),
+    #                   c(1, 0, 1), c(2, 1, 1), 1, 1): the zero-weight death at 2
+    # counts in ndeath but leaves the Kalbfleisch-Prentice increment at 1
+    kp = survival.surv_analysis.cox_survfit_baseline(
+        [[1.0, 1.0], [2.0, 1.0], [3.0, 0.0]],
+        [[0.0], [1.0], [2.0]],
+        [1.0, 0.0, 1.0],
+        [2.0, 1.0, 1.0],
+        1,
+        1,
+    )
+    assert kp["n_event"] == pytest.approx([1.0, 0.0, 0.0])
+    assert kp["ndeath"] == [1, 1, 0]
+    assert kp["surv"] == pytest.approx([0.57735026918962584, 1.0, 1.0], rel=1e-12)
+    assert kp["varhaz"] == pytest.approx([0.16666666666666666, 0.0, 0.0], rel=1e-12)
+
     with pytest.raises(ValueError, match="start must be less than stop"):
         survival.surv_analysis.cox_survfit_baseline(
             [[1.0, 1.0, 0.0]],

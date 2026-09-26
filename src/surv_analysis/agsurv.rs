@@ -1065,6 +1065,7 @@ mod tests {
         assert_eq!(curve.n_event, vec![1.0, 2.0, 1.0]);
         assert_eq!(curve.n_censor, vec![0.0, 1.0, 0.0]);
         assert_eq!(curve.n_risk, vec![5.0, 4.0, 1.0]);
+        assert_eq!(curve.ndeath, vec![1, 1, 1]);
         assert_close(curve.hazard[0], 1.0 / 6.5);
         assert_close(curve.hazard[1], 2.0 / 5.5);
         assert_close(curve.hazard[2], 2.0);
