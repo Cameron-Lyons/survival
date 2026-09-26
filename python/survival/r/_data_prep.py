@@ -10,6 +10,7 @@ the arguments, call the kernel and label the result.
 from __future__ import annotations
 
 import math
+import numbers
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -782,19 +783,31 @@ def _tmerge_retained(
     )
 
 
-def _tmerge_vector(value: Any, data2: Any, n2: int, name: str) -> list[Any]:
-    """Evaluate a ``tmerge`` argument in ``data2``: a column name, a scalar or a vector."""
+def _tmerge_vector(
+    value: Any,
+    data2: Any,
+    n2: int,
+    name: str,
+    *,
+    recycle: bool = False,
+    mismatch: str | None = None,
+) -> list[Any]:
+    """Evaluate a ``tmerge`` argument in ``data2``, as R does: a string names a column.
 
-    if isinstance(value, str) and value in (_data_column_names(data2) or []):
+    The values must line up with ``id`` (the ``mismatch`` error otherwise); only
+    ``tstart`` recycles a single value (``recycle``).
+    """
+
+    if isinstance(value, str):
+        if value not in (_data_column_names(data2) or []):
+            raise ValueError(f"object '{value}' not found in data2")
         values = _column(data2, value)
-    elif isinstance(value, str | bytes) or not hasattr(value, "__iter__"):
-        values = [value] * n2
     else:
-        values = _materialize_1d(value, name)
-        if len(values) == 1 and n2 != 1:
+        values = _materialize_1d(value, name) if hasattr(value, "__iter__") else [value]
+        if recycle and len(values) == 1:
             values = values * n2
     if len(values) != n2:
-        raise ValueError(f"argument {name} is not the same length as id")
+        raise ValueError(mismatch or f"argument {name} is not the same length as id")
     return values
 
 
@@ -840,19 +853,27 @@ def _first_call_frame(
     return newdata
 
 
-def _censor_value(values: Sequence[Any], declared: Sequence[Any] | None) -> Any:
-    """R's ``tcens`` for a new event variable: the type's censoring value."""
+def _storage_mode(values: Sequence[Any] | None) -> str:
+    """R's storage mode of an update vector: logical, integer, double or character.
 
-    if declared:
-        return declared[0]
-    sample = next((value for value in values if not _is_missing_value(value)), 0)
-    if _is_bool_like(sample):
-        return False
-    if isinstance(sample, str):
-        return ""
-    if isinstance(sample, float):
-        return 0.0
-    return 0
+    Without values the updates are R's ``1L``.
+    """
+
+    if values is None:
+        return "integer"
+    observed = [value for value in values if not _is_missing_value(value)]
+    if any(isinstance(value, str) for value in observed):
+        return "character"
+    if not observed:
+        return "double"
+    if all(_is_bool_like(value) for value in observed):
+        return "logical"
+    if all(isinstance(value, numbers.Integral) for value in observed):
+        return "integer"
+    return "double"
+
+
+_CENSOR_VALUES = {"logical": False, "integer": 0, "double": 0.0, "character": ""}
 
 
 def _numeric_values(values: Sequence[Any]) -> list[float] | None:
@@ -876,8 +897,9 @@ def _numeric_values(values: Sequence[Any]) -> list[float] | None:
 class _TmergeArgument:
     """One ``name = kind(time, value)`` argument evaluated in ``data2``.
 
-    ``values`` are the update values (numeric ones as floats with ``NaN`` for
-    ``NA``), ``numeric`` their float view when every value is a number.
+    ``values`` are the update values as given (``NaN`` for a missing number),
+    ``numeric`` their float view when every value is a number and ``mode`` R's
+    storage mode of the values, which the new variable keeps.
     """
 
     name: str
@@ -885,6 +907,7 @@ class _TmergeArgument:
     time: list[float]
     values: list[Any] | None
     numeric: list[float] | None
+    mode: str
     default: Any
     censor: Any
     levels: list[Any] | None
@@ -892,6 +915,20 @@ class _TmergeArgument:
     @property
     def missing(self) -> list[bool] | None:
         return None if self.values is None else [_is_missing_value(v) for v in self.values]
+
+    def censor_value(self) -> Any:
+        """R's ``tcens`` for a new event variable: the censoring value of its type.
+
+        A factor censors at its first level; ``cumevent`` sums logical events as numbers.
+        """
+
+        if self.censor is not None:
+            return self.censor
+        if self.levels:
+            return self.levels[0]
+        if self.kind == "cumevent" and self.mode == "logical":
+            return _CENSOR_VALUES["double"]
+        return _CENSOR_VALUES[self.mode]
 
 
 def _tmerge_argument(
@@ -902,16 +939,23 @@ def _tmerge_argument(
     numeric = None if values is None else _numeric_values(values)
     if operation.kind in {"cumtdc", "cumevent"} and values is not None and numeric is None:
         raise ValueError("invalid increment for cumtdc or cumevent")
+    if values is not None and numeric is not None:
+        values = [math.nan if _is_missing_value(value) else value for value in values]
+    mode = _storage_mode(values)
     default = control["tdcstart"] if operation.default is None else operation.default
+    if mode == "character" and not _is_missing_value(default):
+        # R's newvar[index == 0] <- default turns a numeric default into a string
+        default = _as_character(default)
     source = operation.value
-    if isinstance(source, str) and source in (_data_column_names(data2) or []):
+    if isinstance(source, str):
         source = _column_source(data2, source)
     return _TmergeArgument(
         name=name,
         kind=operation.kind,
         time=time,
-        values=numeric if numeric is not None else values,
+        values=values,
         numeric=numeric,
+        mode=mode,
         default=default,
         censor=operation.censor,
         levels=None if source is None else _categories(source),
@@ -946,7 +990,7 @@ def _event_values(
     values = [censor] * n_out if prior is None else list(prior)
     for row, source, value in zip(step.event_row, step.event_source, step.event_value, strict=True):
         if argument.kind == "cumevent":
-            values[row] = value
+            values[row] = int(value) if argument.mode == "integer" else value
         elif argument.values is None:
             values[row] = 1
         else:
@@ -1022,11 +1066,7 @@ def _apply_tmerge_argument(
             tdcvar.append(name)
     else:
         if name not in tevent:
-            tevent[name] = (
-                _censor_value([1] if argument.values is None else argument.values, argument.levels)
-                if argument.censor is None
-                else argument.censor
-            )
+            tevent[name] = argument.censor_value()
         expanded[name] = _event_values(step, argument, prior_expanded, tevent[name], len(rows))
     newdata.clear()
     newdata.update(expanded)
@@ -1040,7 +1080,7 @@ def _tmerge_first_call(
     id2: list[Any],
     tstart: Any | None,
     tstop: Any | None,
-    first_operation: TMergeOperation | None,
+    first: tuple[str, TMergeOperation] | None,
     control: Mapping[str, Any],
 ) -> dict[str, list[Any]]:
     """R's first ``tmerge`` call: ``data1`` with the ``(tstart, tstop]`` range of each subject.
@@ -1071,9 +1111,10 @@ def _tmerge_first_call(
         raise ValueError("setting the range, and data1 has id values not in data2")
     n2 = len(id2)
     if tstop is None:
-        if first_operation is None or first_operation.kind != "event":
+        if first is None or first[1].kind != "event":
             raise ValueError("neither a tstop argument nor an initial event argument was found")
-        times = _numeric_or_nan(_tmerge_vector(first_operation.time, data2, n2, "tstop"), "tstop")
+        name, operation = first
+        times = _numeric_or_nan(_tmerge_vector(operation.time, data2, n2, name), "tstop")
         seen: dict[str, int] = {}
         for row, value in enumerate(id2):
             seen.setdefault(_as_character(value), row)
@@ -1081,11 +1122,26 @@ def _tmerge_first_call(
         range_stop = [times[row] for row in seen.values()]
     else:
         range_ids = id2
-        range_stop = _numeric_or_nan(_tmerge_vector(tstop, data2, n2, "tstop"), "tstop")
+        range_stop = _numeric_or_nan(
+            _tmerge_vector(
+                tstop, data2, n2, "tstop", mismatch="tstop and id must be the same length"
+            ),
+            "tstop",
+        )
     start_values = (
         None
         if tstart is None
-        else _numeric_or_nan(_tmerge_vector(tstart, data2, len(range_ids), "tstart"), "tstart")
+        else _numeric_or_nan(
+            _tmerge_vector(
+                tstart,
+                data2,
+                len(range_ids),
+                "tstart",
+                recycle=True,
+                mismatch="tstart and id must be the same length",
+            ),
+            "tstart",
+        )
     )
     return _first_call_frame(columns1, base_ids, range_ids, start_values, range_stop, control)
 
@@ -1143,7 +1199,7 @@ def tmerge(
 
     if first_call:
         newdata = _tmerge_first_call(
-            data1, data2, id, id2, tstart, tstop, next(iter(parsed.values()), None), control
+            data1, data2, id, id2, tstart, tstop, next(iter(parsed.items()), None), control
         )
     else:
         if tstart is not None or tstop is not None:

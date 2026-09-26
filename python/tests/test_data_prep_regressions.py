@@ -150,3 +150,92 @@ def test_aeqsurv_snaps_a_surv2_time_column():
         multi.states,
         multi.repeated,
     )
+
+
+# --- tmerge -------------------------------------------------------------------
+
+
+def _tmerge_base():
+    base = {"id": [1, 2, 3], "futime": [10.0, 20.0, 15.0]}
+    return r.tmerge(base, base, id="id", tstop="futime")
+
+
+def _tmerge_updates():
+    return {
+        "id": [1, 1, 2, 3, 3],
+        "t": [2.0, 5.0, 3.0, 4.0, 30.0],
+        "status": [1, 0, 1, 0, 1],
+        "flag": [True, False, True, False, True],
+        "ilab": [1, 2, None, 3, 4],
+        "clab": ["a", "b", "a", "b", "c"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        # tmerge(d1, u, id = id, ev = event(t, stauts)): object 'stauts' not found
+        ({"ev": ("t", "stauts")}, "object 'stauts' not found"),
+        ({"ev": ("tt", None)}, "object 'tt' not found"),
+        # event(t, 1) and event(5): argument ev is not the same length as id
+        ({"ev": ("t", 1)}, "argument ev is not the same length as id"),
+        ({"ev": (5.0, None)}, "argument ev is not the same length as id"),
+        ({"ev": ("t", [1])}, "argument ev is not the same length as id"),
+    ],
+)
+def test_tmerge_evaluates_arguments_in_data2_like_r(arguments, message):
+    events = {name: r.event(time, value) for name, (time, value) in arguments.items()}
+    with pytest.raises(ValueError, match=message):
+        r.tmerge(_tmerge_base(), _tmerge_updates(), id="id", **events)
+
+
+def test_tmerge_recycles_only_tstart():
+    base = {"id": [1, 2, 3], "futime": [10.0, 20.0, 15.0]}
+    # tmerge(d, d, id = id, tstop = 10): tstop and id must be the same length
+    with pytest.raises(ValueError, match="tstop and id must be the same length"):
+        r.tmerge(base, base, id="id", tstop=10.0)
+    with pytest.raises(ValueError, match="object 'futim' not found"):
+        r.tmerge(base, base, id="id", tstop="futim")
+    with pytest.raises(ValueError, match="tstart and id must be the same length"):
+        r.tmerge(base, base, id="id", tstop="futime", tstart=[1.0, 2.0])
+    # R's tmerge(d, d, id = id, tstop = futime, tstart = 2)
+    frame = r.tmerge(base, base, id="id", tstop="futime", tstart=2)
+    assert frame["tstart"] == [2.0, 2.0, 2.0]
+    assert frame["tstop"] == [10.0, 20.0, 15.0]
+
+
+def test_tmerge_keeps_the_type_of_the_values_like_r():
+    d1, updates = _tmerge_base(), _tmerge_updates()
+    # event(t, flag): logi TRUE FALSE FALSE TRUE FALSE FALSE FALSE, censor FALSE
+    frame = r.tmerge(d1, updates, id="id", ev=r.event("t", "flag"))
+    assert frame["tstart"] == [0.0, 2.0, 5.0, 0.0, 3.0, 0.0, 4.0]
+    assert frame["ev"] == [True, False, False, True, False, False, False]
+    assert all(type(value) is bool for value in frame["ev"])
+    assert frame.tevent == {"ev": False}
+    # tdc(t, ilab): int NA 1 2 NA NA 3
+    frame = r.tmerge(d1, updates, id="id", lab=r.tdc("t", "ilab"))
+    assert _na(frame["lab"]) == [None, 1, 2, None, None, 3]
+    assert all(type(value) is int for value in _na(frame["lab"]) if value is not None)
+    # tdc(t, clab) with tdcstart = -1, and with init = 0: chr "-1" "a" ... / "0" "a" ...
+    frame = r.tmerge(d1, updates, id="id", lab=r.tdc("t", "clab"), options={"tdcstart": -1})
+    assert frame["lab"] == ["-1", "a", "b", "-1", "a", "-1", "b"]
+    frame = r.tmerge(d1, updates, id="id", lab=r.tdc("t", "clab", init=0))
+    assert frame["lab"] == ["0", "a", "b", "0", "a", "0", "b"]
+    # event(t, clab): chr "a" "b" "" "a" "" "b" "", censor ""
+    frame = r.tmerge(d1, updates, id="id", ev=r.event("t", "clab"))
+    assert frame["ev"] == ["a", "b", "", "a", "", "b", ""]
+    assert frame.tevent == {"ev": ""}
+    # event(t): int 1 1 0 1 0 1 0, censor 0L
+    frame = r.tmerge(d1, updates, id="id", ev=r.event("t"))
+    assert frame["ev"] == [1, 1, 0, 1, 0, 1, 0]
+    assert all(type(value) is int for value in frame["ev"])
+    # cumevent(t): int 1 2 0 1 0 1 0; cumevent(t, flag): num 1 0 0 1 0 0 0, censor 0
+    frame = r.tmerge(d1, updates, id="id", n=r.cumevent("t"))
+    assert frame["n"] == [1, 2, 0, 1, 0, 1, 0]
+    assert all(type(value) is int for value in frame["n"])
+    assert frame.tevent == {"n": 0}
+    frame = r.tmerge(d1, updates, id="id", n=r.cumevent("t", "flag"))
+    assert frame["n"] == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    assert all(type(value) is float for value in frame["n"])
+    assert frame.tevent == {"n": 0.0}
+    assert type(frame.tevent["n"]) is float
