@@ -9,6 +9,7 @@ use super::survfit_summary::RmeanOption;
 use super::survfitkm::{
     check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
 };
+use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
@@ -80,11 +81,7 @@ impl SurvfitAJData {
         if let Some(start) = &start {
             validate_length(time.len(), start.len(), "start")?;
             validate_finite(start, "start")?;
-            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "Stop time must be > start time (observation {index})"
-                )));
-            }
+            validate_intervals(start, &time)?;
         }
         if let Some(weights) = &weights {
             validate_length(time.len(), weights.len(), "weights")?;

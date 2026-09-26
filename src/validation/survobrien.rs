@@ -8,6 +8,7 @@
 //! keeper columns, cluster terms) belongs to the caller: it passes the
 //! continuous columns and copies its keeper columns with [`SurvObrienExpansion::row`].
 
+use crate::core::strata_order::validate_intervals;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::step::rank_average;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
@@ -69,11 +70,7 @@ fn validate(input: &SurvObrienInput<'_>) -> SurvivalResult<()> {
     if let Some(start) = input.start {
         validate_length(n, start.len(), "start")?;
         validate_finite(start, "start")?;
-        if let Some(index) = (0..n).find(|&i| start[i] >= input.time[i]) {
-            return Err(SurvivalError::invalid_input(format!(
-                "Stop time must be > start time (row {index})"
-            )));
-        }
+        validate_intervals(start, input.time)?;
     }
     if let Some(strata) = input.strata {
         validate_length(n, strata.len(), "strata")?;

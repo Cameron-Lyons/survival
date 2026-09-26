@@ -6,6 +6,7 @@
 use super::survfit_confint::ConfType;
 use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::core::strata_order::validate_intervals;
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
@@ -48,11 +49,7 @@ impl SurvdiffData {
         if let Some(start) = &start {
             validate_length(time.len(), start.len(), "start")?;
             validate_finite(start, "start")?;
-            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "Stop time must be > start time (observation {index})"
-                )));
-            }
+            validate_intervals(start, &time)?;
         }
         if let Some(strata) = &strata {
             validate_length(time.len(), strata.len(), "strata")?;

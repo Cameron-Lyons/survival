@@ -10,6 +10,7 @@
 
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
@@ -188,11 +189,7 @@ impl SurvfitKMData {
         if let Some(start) = &start {
             validate_length(time.len(), start.len(), "start")?;
             validate_finite(start, "start")?;
-            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "Stop time must be > start time (observation {index})"
-                )));
-            }
+            validate_intervals(start, &time)?;
         }
         if let Some(weights) = &weights {
             validate_length(time.len(), weights.len(), "weights")?;

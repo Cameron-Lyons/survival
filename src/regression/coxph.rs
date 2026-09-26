@@ -18,7 +18,7 @@
 use crate::concordance::{ConcordanceCounts, ConcordanceFit, ConcordanceOptions, concordancefit};
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::core::SurvResponse;
-use crate::core::strata_order::order_within_strata;
+use crate::core::strata_order::{order_within_strata, validate_intervals};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::step::step_at;
@@ -76,11 +76,7 @@ impl CoxphData {
         if let Some(entry) = &entry {
             validate_length(n, entry.len(), "entry")?;
             validate_finite(entry, "entry")?;
-            if let Some(index) = (0..n).find(|&i| entry[i] >= time[i]) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "Stop time must be > start time (row {index})"
-                )));
-            }
+            validate_intervals(entry, &time)?;
         }
         if let Some(weights) = &weights {
             validate_length(n, weights.len(), "weights")?;

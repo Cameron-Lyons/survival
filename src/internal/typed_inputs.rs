@@ -9,6 +9,7 @@
 //! keeps ownership of the objects it passes in; Rust callers should use the
 //! `try_new` constructors, which take ownership and never copy.
 
+use crate::core::strata_order::validate_intervals;
 use crate::internal::validation::{
     validate_equal_len, validate_finite, validate_length, validate_matrix_shape,
     validate_non_empty, validate_non_negative,
@@ -228,15 +229,8 @@ impl CountingProcessData {
         validate_finite(&start, "start")?;
         validate_finite(&stop, "stop")?;
         validate_status_values(&event, "event")?;
-
-        for (index, (&start, &stop)) in start.iter().zip(stop.iter()).enumerate() {
-            if stop < start {
-                return Err(SurvivalError::invalid_input(format!(
-                    "stop {} is before start {} at index {}",
-                    stop, start, index
-                )));
-            }
-        }
+        // R's Surv(start, stop) makes an interval with stop <= start NA
+        validate_intervals(&start, &stop)?;
 
         Ok(Self { start, stop, event })
     }
@@ -642,5 +636,22 @@ mod tests {
 
         assert_eq!(counting.start, vec![-3.0, -1.0]);
         assert_eq!(counting.stop, vec![-1.0, 2.0]);
+    }
+
+    #[test]
+    fn counting_process_data_rejects_empty_intervals_as_surv_does() {
+        // R: Surv(c(0, 0, 2, 0), c(1, 2, 2, 3), c(1, 1, 1, 0)) makes the
+        // third interval NA ("Stop time must be > start time, NA created")
+        let err = CountingProcessData::try_new(
+            vec![0.0, 0.0, 2.0, 0.0],
+            vec![1.0, 2.0, 2.0, 3.0],
+            vec![1, 1, 1, 0],
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Stop time must be > start time (row 2: 2 >= 2)"
+        );
+        assert!(CountingProcessData::try_new(vec![2.0], vec![1.0], vec![1]).is_err());
     }
 }
