@@ -198,7 +198,7 @@ fn canonical_survreg_bootstrap_distribution(distribution: &str) -> Option<&'stat
         "weibull" => Some("weibull"),
         "exponential" => Some("exponential"),
         "rayleigh" => Some("rayleigh"),
-        "extreme" | "extreme_value" | "extremevalue" => Some("extreme_value"),
+        "extreme" | "extreme_value" | "extremevalue" => Some("extreme"),
         "gaussian" | "normal" => Some("gaussian"),
         "logistic" => Some("logistic"),
         "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => Some("lognormal"),

@@ -2,6 +2,7 @@
 //! `R/predict.survreg.R` from the CRAN `survival` package.
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::match_arg::match_arg;
 use crate::internal::validation::{
     ProbabilityBounds, validate_finite, validate_length, validate_probability,
 };
@@ -25,6 +26,7 @@ pub enum SurvregPredictType {
 }
 
 impl SurvregPredictType {
+    /// The `type` choices of `predict.survreg`, in R's order.
     const CHOICES: [(&'static str, Self); 7] = [
         ("response", Self::Response),
         ("link", Self::Lp),
@@ -35,29 +37,11 @@ impl SurvregPredictType {
         ("uquantile", Self::Uquantile),
     ];
 
-    /// `match.arg(type)`: an exact name or a unique prefix.
+    /// `match.arg(type)`: an exact name or a unique prefix (see
+    /// [`match_arg`]).
     pub fn parse(name: &str) -> SurvivalResult<Self> {
-        let key = name.trim().to_lowercase();
-        if let Some((_, kind)) = Self::CHOICES.iter().find(|(choice, _)| *choice == key) {
-            return Ok(*kind);
-        }
-        let mut matches: Vec<Self> = Self::CHOICES
-            .iter()
-            .filter(|(choice, _)| !key.is_empty() && choice.starts_with(key.as_str()))
-            .map(|(_, kind)| *kind)
-            .collect();
-        matches.dedup();
-        match matches.as_slice() {
-            [kind] => Ok(*kind),
-            _ => Err(SurvivalError::invalid_input(format!(
-                "prediction type '{name}' should be one of {}",
-                Self::CHOICES
-                    .iter()
-                    .map(|(choice, _)| format!("\"{choice}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
-        }
+        let index = match_arg(name, &Self::CHOICES.map(|(choice, _)| choice))?;
+        Ok(Self::CHOICES[index].1)
     }
 }
 
@@ -394,14 +378,10 @@ mod tests {
             SurvregPredictType::parse("uq").unwrap(),
             SurvregPredictType::Uquantile
         );
-        assert_eq!(
-            SurvregPredictType::parse("Response").unwrap(),
-            SurvregPredictType::Response
-        );
-        assert_eq!(
-            SurvregPredictType::parse("l").unwrap(),
-            SurvregPredictType::Lp
-        );
+        // match.arg is case sensitive, and "l" is a prefix of "link",
+        // "lp" and "linear" although all three mean the linear predictor.
+        assert!(SurvregPredictType::parse("Response").is_err());
+        assert!(SurvregPredictType::parse("l").is_err());
         assert!(SurvregPredictType::parse("").is_err());
         assert!(SurvregPredictType::parse("mystery").is_err());
     }
