@@ -246,7 +246,7 @@ pub(crate) fn bootstrap_cox(
         original_builder = original_builder.weights(Array1::from_vec(weights));
     }
     let mut original_fit = original_builder.build()?;
-    original_fit.fit();
+    original_fit.fit()?;
     let original_beta = original_fit.results().coefficients;
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
@@ -289,7 +289,7 @@ pub(crate) fn bootstrap_cox(
             }
             match builder.build() {
                 Ok(mut fit) => {
-                    fit.fit();
+                    fit.fit().ok()?;
                     Some(fit.results().coefficients)
                 }
                 Err(_) => None,

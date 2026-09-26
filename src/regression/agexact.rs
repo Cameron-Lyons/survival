@@ -142,7 +142,7 @@ pub fn agexact_fit(data: &AgexactData, options: &AgexactOptions) -> SurvivalResu
         builder = builder.strata(Array1::from_vec(strata.clone()));
     }
     let mut engine = builder.build()?;
-    engine.fit();
+    engine.fit()?;
     let results = engine.results();
     Ok(AgexactFit {
         coefficients: results.coefficients,

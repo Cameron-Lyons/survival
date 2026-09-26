@@ -41,7 +41,7 @@ mod tests {
             .build()
             .expect("Cox fit initialization failed");
 
-        cox_fit.fit();
+        cox_fit.fit().unwrap();
 
         let results = cox_fit.results();
         let (beta, loglik) = (results.coefficients, results.loglik);
@@ -98,7 +98,7 @@ mod tests {
             .build()
             .expect("Cox fit initialization failed");
 
-        cox_fit.fit();
+        cox_fit.fit().unwrap();
 
         let results = cox_fit.results();
         let (beta, flag, iter) = (results.coefficients, results.flag, results.iter);
@@ -464,7 +464,7 @@ mod tests {
                 .build()
                 .expect("Weighted Cox fit init failed");
 
-        cox_fit.fit();
+        cox_fit.fit().unwrap();
 
         let results = cox_fit.results();
         let (beta, iter) = (results.coefficients, results.iter);
@@ -495,7 +495,7 @@ mod tests {
                 .build()
                 .expect("Stratified Cox fit init failed");
 
-        cox_fit.fit();
+        cox_fit.fit().unwrap();
 
         let results = cox_fit.results();
         let (beta, iter) = (results.coefficients, results.iter);
@@ -806,7 +806,7 @@ mod tests {
                 .build()
                 .expect("Cox fit with offset init failed");
 
-        cox_fit.fit();
+        cox_fit.fit().unwrap();
 
         let results = cox_fit.results();
         let (beta, iter) = (results.coefficients, results.iter);

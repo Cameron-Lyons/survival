@@ -863,6 +863,7 @@ impl CoxpenalFit {
         coxph.score = f64::NAN;
         coxph.iter = iter2;
         coxph.flag = coxfit.flag;
+        coxph.info = None;
         coxph.means = means;
         coxph.first = coxfit.u[nfrail..].to_vec();
         coxph.linear_predictors = lp;

@@ -7,7 +7,8 @@
 //! contribution and the information-matrix contribution, so that
 //! `colSums(score)` and `apply(imat, 1:2, sum)` are the fit's score and
 //! information at the fitted coefficients.  One backward sweep per stratum
-//! ([`StratumSweep`]) replaces `coxdetail.c`'s `O(deaths x n)` rescan.
+//! ([`StratumSweep`]) replaces `coxdetail.c`'s `O(deaths x n)` rescan; its
+//! running risk set restarts from zero whenever it empties.
 
 use crate::core::risk_sweep::StratumSweep;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -68,7 +69,35 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
     }
     let nvar = fit.nvar();
     let efron = fit.method == TieMethod::Efron;
-    let risk: Vec<f64> = fit.linear_predictors.iter().map(|lp| lp.exp()).collect();
+    // coxdetail.c centres the covariates at the fit's means (0 for the
+    // nocenter columns) and adds them back to the reported means, so the
+    // second moments do not cancel for covariates with a large mean.
+    let mut x = fit.x.clone();
+    for (mut column, &center) in x.columns_mut().into_iter().zip(&fit.means) {
+        column -= center;
+    }
+    // Risk scores `exp(lp)` as in coxdetail.c, except that a stratum whose
+    // largest linear predictor lies beyond +-200 (agfit4.c's recentring
+    // threshold) is shifted by it so `exp` neither overflows nor underflows;
+    // the outputs built on the denominator are scaled back.
+    let mut risk = vec![0.0; fit.n];
+    let shift: Vec<f64> = fit
+        .sorted
+        .bounds
+        .iter()
+        .map(|&(start, end)| {
+            let rows = &fit.sorted.order[start..end];
+            let top = rows
+                .iter()
+                .map(|&row| fit.linear_predictors[row])
+                .fold(f64::NEG_INFINITY, f64::max);
+            let shift = if top.abs() > 200.0 { top } else { 0.0 };
+            for &row in rows {
+                risk[row] = (fit.linear_predictors[row] - shift).exp();
+            }
+            shift
+        })
+        .collect();
     let mut time = Vec::new();
     let mut nevent = Vec::new();
     let mut nrisk = Vec::new();
@@ -86,12 +115,13 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
             stop: &fit.time,
             entry: fit.entry.as_deref(),
             status: &fit.status,
-            x: fit.x.view(),
+            x: x.view(),
             weights: &fit.weights,
             risk: &risk,
             rows: &fit.sorted.order[start..end],
             second_moments: true,
         };
+        let risk_scale = shift[stratum].exp();
         let first = time.len();
         sweep.for_each_death_time(|death| {
             let d = death.ndead();
@@ -105,7 +135,7 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
                     death
                         .deaths
                         .iter()
-                        .map(|&row| fit.weights[row] * fit.x[(row, i)])
+                        .map(|&row| fit.weights[row] * x[(row, i)])
                         .sum()
                 })
                 .collect();
@@ -118,7 +148,7 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
                 var += meanwt * meanwt / (d2 * d2);
                 let xbar: Vec<f64> = (0..nvar).map(|i| death.efron_a(step, i) / d2).collect();
                 for i in 0..nvar {
-                    mean[i] += xbar[i] / d_f;
+                    mean[i] += (fit.means[i] + xbar[i]) / d_f;
                     u[i] -= meanwt * xbar[i];
                     for k in 0..=i {
                         let value = meanwt
@@ -134,9 +164,9 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
             time.push(death.time);
             nevent.push(d);
             nrisk.push(death.risk_set.count);
-            hazard.push(haz);
-            varhaz.push(var);
-            wtrisk.push(death.risk_set.denom);
+            hazard.push(haz / risk_scale);
+            varhaz.push(var / risk_scale / risk_scale);
+            wtrisk.push(death.risk_set.denom * risk_scale);
             nevent_wt.push(death.tied.weight);
             means.push(mean);
             score.push(u);
@@ -268,6 +298,118 @@ mod tests {
             assert_eq!(detail.wtrisk.len(), 4);
             assert_eq!(detail.nevent_wt[1], 3.0);
         }
+    }
+
+    /// 11 (start, stop] rows whose risk scores span many orders of
+    /// magnitude, at R's coefficients (`iter.max = 0`), with `shift` added
+    /// to the first covariate.
+    fn counting_fit_at_r_coefficients(shift: f64) -> CoxPHFit {
+        let time = vec![15.0, 4.0, 25.0, 8.0, 18.0, 6.0, 9.0, 14.0, 11.0, 64.0, 19.0];
+        let entry = vec![9.0, 2.0, 5.0, 1.0, 14.0, 3.0, 7.0, 6.0, 3.0, 39.0, 2.0];
+        let status = vec![1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1];
+        let x1 = [
+            -3.397587783734524,
+            -4.001456275604981,
+            1.2485501179741572,
+            -1.922243349085923,
+            -0.6191833991904704,
+            0.9541844726560894,
+            0.9722226187833938,
+            -2.083451024212451,
+            -0.557594058080056,
+            -6.582305367737362,
+            0.9175209607015593,
+        ];
+        let x2 = [
+            -1.2399609396099633,
+            -0.9612195837228918,
+            -0.36802848351666784,
+            -0.29505277170923994,
+            -0.432759419947449,
+            3.636570321763567,
+            -1.5241526403027048,
+            1.3906982107759198,
+            1.1836246992905952,
+            2.3943458650099303,
+            -1.2770581196683075,
+        ];
+        let x = Array2::from_shape_fn((11, 2), |(i, j)| if j == 0 { x1[i] + shift } else { x2[i] });
+        let data = CoxphData::try_new(time, Some(entry), status, x, None, None, None).unwrap();
+        let options = CoxphOptions {
+            init: Some(vec![-2.729510672, 2.391046607]),
+            iter_max: 0,
+            ..CoxphOptions::default()
+        };
+        CoxPHFit::fit(data, options).unwrap()
+    }
+
+    fn assert_close(actual: f64, expected: f64, rtol: f64) {
+        assert!(
+            (actual - expected).abs() <= rtol * expected.abs(),
+            "{actual} vs {expected}"
+        );
+    }
+
+    #[test]
+    fn detail_of_counting_data_keeps_small_risk_sets_exact() {
+        // R 3.8-12: coxph.detail(coxph(Surv(st, t, s) ~ x1 + x2, init =
+        // c(-2.729510672, 2.391046607), iter.max = 0, timefix = FALSE)).
+        let detail = coxph_detail(&counting_fit_at_r_coefficients(0.0), false).unwrap();
+        assert_eq!(
+            detail.time,
+            vec![4.0, 6.0, 14.0, 15.0, 18.0, 19.0, 25.0, 64.0]
+        );
+        let hazard = [
+            0.0117538131278798,
+            0.118360346872988,
+            0.00829441948728503,
+            0.131628388009271,
+            37.3485109236605,
+            4126.13694309023,
+            5284.90450618274,
+            3.73036555845107e-09,
+        ];
+        let mean_x1 = [
+            -3.57205179183823,
+            0.322744313035974,
+            -2.16596152280981,
+            -3.38773850910569,
+            -0.60293423955203,
+            1.17596870246578,
+            1.24855011797416,
+            -6.58230536773736,
+        ];
+        let wtrisk = [
+            85.0787730858182,
+            8.44877550986816,
+            120.562988348124,
+            7.59714538120428,
+            0.0267748291770983,
+            0.000242357443243525,
+            0.000189218177704084,
+            268070242.535486,
+        ];
+        for g in 0..8 {
+            assert_close(detail.hazard[g], hazard[g], 1e-12);
+            assert_close(detail.means[g][0], mean_x1[g], 1e-12);
+            assert_close(detail.wtrisk[g], wtrisk[g], 1e-12);
+        }
+        assert_close(detail.varhaz[5], 17025006.073134, 1e-12);
+    }
+
+    #[test]
+    fn detail_centres_the_covariates_at_the_fit_means() {
+        // R 3.8-12 on the same data with x1 + 1e6 (coxdetail.c subtracts
+        // the fit's means before summing).
+        let detail = coxph_detail(&counting_fit_at_r_coefficients(1e6), false).unwrap();
+        let imat = &detail.imat[4];
+        assert_close(imat[0][0], 0.029075474044559, 1e-8);
+        assert_close(imat[1][0], -0.00170079031707362, 1e-8);
+        assert_close(imat[0][1], -0.00170079031707362, 1e-8);
+        assert_close(imat[1][1], 0.00144288193816428, 1e-8);
+        assert_close(detail.means[4][0], 999999.397065761, 1e-14);
+        let total: f64 = detail.imat.iter().flatten().flatten().sum();
+        assert_close(total, 14.3540251466645, 1e-8);
     }
 
     #[test]
