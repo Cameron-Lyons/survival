@@ -48,8 +48,9 @@ from ._formula import (
     _parse_formula,
     _strata_term_values,
     _subset_formula_inputs,
-    _surv_response_model_name,
     _term_values,
+    _timeline_counting,
+    _timeline_response,
 )
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subset_surv
 from ._types import (
@@ -224,13 +225,18 @@ def _formula_model_frame(
     na_action: str | None,
     extras: dict[str, Any],
 ) -> _SurvfitData:
-    """``model.frame(formula, data, weights, subset, na.action, id, cluster, istate)``."""
+    """``model.frame(formula, data, weights, subset, na.action, id, cluster, istate)``;
+    timeline data (a ``Surv2`` response) is converted before the ``na.action``, as
+    survfit.R does."""
 
+    response_name = _formula_response_spec(formula).name
     extras = {
         name: _column_source(data, values) if isinstance(values, str) else values
         for name, values in extras.items()
     }
-    if subset is not None:
+    if _timeline_response(formula):
+        formula, data, extras = _timeline_counting(formula, data, subset, extras)
+    elif subset is not None:
         data, extras = _subset_formula_inputs(formula, data, subset, **extras)
     spec = _formula_response_spec(formula)
     # is.na(Surv): a missing endpoint of an interval-censored response is a censoring code
@@ -274,7 +280,7 @@ def _formula_model_frame(
             columns[name] = _strata_term_values(data, model_term.columns)
         elif not isinstance(model_term, _ModelOffsetTerm | _ModelClusterTerm):
             raise ValueError(f"unsupported survfit formula term {model_term!r}")
-    return _survfit_data(response, _surv_response_model_name(spec), columns, extras)
+    return _survfit_data(response, response_name, columns, extras)
 
 
 def _surv_model_frame(

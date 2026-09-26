@@ -68,7 +68,6 @@ _R_EXPORTS = [
     "CchModelResult",
     "Surv",
     "Surv2",
-    "Surv2data",
     "FineGrayFrame",
     "FineGrayOutput",
     "RateTable",

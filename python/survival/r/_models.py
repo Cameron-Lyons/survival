@@ -359,7 +359,9 @@ def _model_frame_formula(
 ) -> dict[str, list[Any]]:
     if "na.action" in kwargs:
         kwargs["na_action"] = kwargs.pop("na.action")
-    frame = _formula_model_frame(formula, data, **kwargs)
+    # a Surv2 response has no time/status columns here, so survSplit's timeline
+    # switch stays internal
+    frame = _formula_model_frame(formula, data, **kwargs, timeline=False)
     columns: dict[str, Any] = {}
     response_columns: tuple[str, ...] = ()
     if frame.response is not None:

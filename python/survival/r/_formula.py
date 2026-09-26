@@ -12,12 +12,14 @@ from typing import Any
 
 import numpy as np
 
+from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
     _as_character,
     _coerce_array_like,
     _finite_float,
     _floats_or_nan,
+    _hashable_group_value,
     _is_missing_value,
     _keep_rows_after_na_action,
     _materialize_1d,
@@ -32,14 +34,17 @@ from ._coerce import (
     _strata_value_label,
     _subset_indices,
     _subset_optional_sequence,
+    _subset_sequence,
     _warn_outside_package,
 )
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
 from ._surv import (
     Surv,
+    Surv2,
     _formula_response_argument_name,
     _normalize_surv_type,
     _ordered_named_response_arguments,
+    _repeated_option,
     _strata,
     _time_column,
 )
@@ -582,6 +587,10 @@ def _parse_formula_origin_option(value: str) -> float:
     return _finite_float(value, "origin")
 
 
+_SURV2_CALLS = ("Surv2(", "survival::Surv2(")
+_SURV_CALLS = ("Surv(", "survival::Surv(", *_SURV2_CALLS)
+
+
 @lru_cache(maxsize=512)
 def _formula_response_spec(formula: str) -> _SurvResponseSpec:
     lhs, sep, _rhs = formula.partition("~")
@@ -589,12 +598,11 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
         raise ValueError("formula must contain '~'")
 
     lhs = lhs.strip()
-    if lhs.startswith("Surv(") and lhs.endswith(")"):
-        response_inner = lhs[5:-1]
-    elif lhs.startswith("survival::Surv(") and lhs.endswith(")"):
-        response_inner = lhs[15:-1]
-    else:
+    if not (lhs.startswith(_SURV_CALLS) and lhs.endswith(")")):
         raise ValueError("formula response must be Surv(...)")
+    response_inner = lhs.partition("(")[2][:-1]
+    if lhs.startswith(_SURV2_CALLS):
+        return _timeline_response_spec(response_inner)
 
     columns: list[str] = []
     surv_type: str | None = None
@@ -653,11 +661,55 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
     )
 
 
+def _timeline_response_spec(inner: str) -> _SurvResponseSpec:
+    """A ``Surv2(time, event, repeated = FALSE)`` response (R/Surv2.R), its arguments
+    matched as R matches them: by name, then the rest by position."""
+
+    formals = ("time", "event", "repeated")
+    named: dict[str, str] = {}
+    positional: list[str] = []
+    for part in _formula_response_parts(inner):
+        option = _formula_named_option(part)
+        if option is None:
+            positional.append(part)
+            continue
+        name, value = option
+        if name not in formals:
+            raise ValueError(f"unused argument ({name} = {value}) in Surv2(...)")
+        if name in named:
+            raise ValueError(f"formula Surv2(...) contains multiple {name}= arguments")
+        named[name] = value
+    unmatched = [name for name in formals if name not in named]
+    if len(positional) > len(unmatched):
+        raise ValueError("unused argument in Surv2(...)")
+    named.update(zip(unmatched, positional, strict=False))
+    if "time" not in named:
+        raise ValueError("must have a time argument")
+    if "event" not in named:
+        raise ValueError("must have an event argument")
+    repeated: Any = False
+    if "repeated" in named:
+        repeated = _parse_formula_literal(named["repeated"])
+        if not (isinstance(repeated, bool) or repeated == "first"):
+            raise ValueError("invalid value for repeated option")
+    arguments = (named["time"], named["event"])
+    columns: list[str] = []
+    for argument in arguments:
+        _append_unique(columns, _response_arg_columns(argument))
+    return _SurvResponseSpec(
+        arguments=arguments,
+        columns=tuple(columns),
+        type=None,
+        timeline=True,
+        repeated=repeated,
+    )
+
+
 @lru_cache(maxsize=512)
 def _response_spec(formula: str) -> _SurvResponseSpec | None:
     """The left-hand side of any survival formula.
 
-    ``Surv(...)`` responses go through :func:`_formula_response_spec`; an empty
+    ``Surv(...)`` and ``Surv2(...)`` responses go through :func:`_formula_response_spec`; an empty
     left-hand side (``~ sex``) gives ``None`` and a plain expression (``time ~ 1``,
     ``stop / 365.25 ~ surgery``) a numeric response spec with ``surv=False``.
     """
@@ -668,7 +720,7 @@ def _response_spec(formula: str) -> _SurvResponseSpec | None:
     lhs = lhs.strip()
     if not lhs:
         return None
-    if lhs.startswith(("Surv(", "survival::Surv(")) and lhs.endswith(")"):
+    if lhs.startswith(_SURV_CALLS) and lhs.endswith(")"):
         return _formula_response_spec(formula)
     return _SurvResponseSpec(
         arguments=(lhs,),
@@ -1249,27 +1301,36 @@ def _data_rows(
     """``data[rows, columns]``, the columns in *data*'s order; factor and ``tcut`` columns
     keep their attributes, and numeric columns stay numpy arrays."""
 
-    names = _data_column_names(data)
-    if names is not None:
-        used = set(columns)
-        columns = [name for name in names if name in used]
-    frame: dict[str, Any] = {}
-    index: np.ndarray | None = None
-    for name in columns:
-        source = _column_source(data, name)
-        array = _numeric_ndarray(source)
-        if array is not None:
-            if len(array) != n:
-                raise ValueError(f"variable lengths differ (found for '{name}')")
-            if index is None:
-                index = np.asarray(rows, dtype=np.intp)
-            frame[name] = array[index]
-            continue
-        values = _coerce_array_like(source, name)
-        if len(values) != n:
-            raise ValueError(f"variable lengths differ (found for '{name}')")
-        frame[name] = _rows_of(source, [values[row] for row in rows])
+    index = np.asarray(rows, dtype=np.intp)
+    frame = {
+        name: _column_rows(_column_source(data, name), name, rows, index, n)
+        for name in _data_order(data, columns)
+    }
     return _FormulaRows(frame, len(rows))
+
+
+def _data_order(data: Any, columns: Sequence[str]) -> list[str]:
+    """*columns* in *data*'s column order."""
+
+    names = _data_column_names(data)
+    if names is None:
+        return list(columns)
+    used = set(columns)
+    return [name for name in names if name in used]
+
+
+def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray, n: int) -> Any:
+    """``source[rows]`` of the data column *name* (*index* is *rows* as an array)."""
+
+    array = _numeric_ndarray(source)
+    if array is not None:
+        if len(array) != n:
+            raise ValueError(f"variable lengths differ (found for '{name}')")
+        return array[index]
+    values = _coerce_array_like(source, name)
+    if len(values) != n:
+        raise ValueError(f"variable lengths differ (found for '{name}')")
+    return _rows_of(source, [values[row] for row in rows])
 
 
 def _formula_data_rows(
@@ -2307,10 +2368,6 @@ def _formula_design_columns(design: _FormulaDesign) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
-def _surv_response_model_name(spec: _SurvResponseSpec) -> str:
-    return f"Surv({', '.join(spec.arguments)})"
-
-
 def _formula_model_frame(
     data: Any,
     response: Surv,
@@ -2325,7 +2382,7 @@ def _formula_model_frame(
     id: Any | None = None,
     istate: Any | None = None,
 ) -> dict[str, Any]:
-    frame: dict[str, Any] = {_surv_response_model_name(design.response): response}
+    frame: dict[str, Any] = {design.response.name: response}
     columns: list[str] = []
     _append_unique(columns, design.response.columns)
     _append_unique(columns, _formula_design_columns(design))
@@ -2399,10 +2456,172 @@ _MODEL_FRAME_ARGUMENTS = ("weights", "offset", "id", "cluster", "istate")
 def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
     """Evaluate a ``Surv(...)`` response spec against *data*."""
 
+    if spec.timeline:
+        raise ValueError("response must be a survival object")
     args = _formula_response_values(data, spec)
     if len(args) not in {1, 2, 3}:
         raise ValueError("Surv(...) formula response must have 1, 2, or 3 column arguments")
     return Surv(*args, type=spec.type, origin=spec.origin)
+
+
+def _surv2_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv2:
+    """Evaluate a ``Surv2(...)`` response spec against *data*."""
+
+    time, event = _formula_response_values(data, spec)
+    return Surv2(time, event, spec.repeated)
+
+
+# ---------------------------------------------------------------------------
+# Timeline data: R's surv2counting (R/fromtimeline.R), which coxph, survfit,
+# survcheck and fromtimeline run on the model frame of a Surv2 response
+# before its na.action.
+# ---------------------------------------------------------------------------
+
+_TSTART, _TSTOP, _STATUS = "(tstart)", "(tstop)", "(status)"
+
+
+def _timeline_counting(
+    formula: str,
+    data: Any,
+    subset: Any | None,
+    arguments: Mapping[str, Any],
+    *,
+    repeated: Any | None = None,
+    lvcf: bool = True,
+    require_repeats: bool = False,
+    carry_clusters: bool = True,
+) -> tuple[str, _FormulaRows, dict[str, Any]]:
+    """R's ``surv2counting(mf)`` for the ``Surv2`` formula *formula* (or a ``Surv(time,
+    status)`` one) on *data* after ``subset``, with the row-aligned *arguments* (vectors or
+    column names of *data*).
+
+    Each subject's rows pair up: row ``j + 1`` gives the end time and outcome of the
+    interval that row ``j`` starts, and supplies everything else.  With *lvcf* a missing
+    formula variable takes the subject's last value (the ``(...)`` arguments are left
+    alone), and when every subject starts in a state the ``istate`` argument becomes that
+    current state, which an ``istate`` given must agree with.  The result is a formula with
+    the counting-process response ``Surv([(tstart), ](tstop), (status))`` (one interval per
+    subject gives the right-censored form), the data it reads and the arguments at its
+    rows, for the caller's ``na.action``.  *repeated* overrides the response's own;
+    *require_repeats* refuses data in which no subject has two rows (fromtimeline's check).
+    Without *carry_clusters* a ``cluster()`` term's variable is not carried forward either:
+    coxph.R turns that term into its ``cluster`` argument before the model frame.
+    """
+
+    arguments = {
+        name: None if value is None else _column_or_values(data, value, name)
+        for name, value in arguments.items()
+    }
+    if subset is not None:
+        data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
+    spec = _formula_response_spec(formula)
+    if spec.timeline:
+        response: Surv | Surv2 = _surv2_from_spec(data, spec)
+        time, status = response.time, response.status
+        if repeated is None:
+            repeated = response.repeated
+    else:
+        # fromtimeline's Surv(time, status) form of a timeline
+        response = _surv_from_spec(data, spec)
+        if response.type in {"counting", "mcounting"}:
+            raise ValueError("response cannot be of counting process type")
+        if response.type not in {"right", "mright"}:
+            raise ValueError(f"not valid for {response.type} censored data")
+        time, status = response.time, response.event
+    n = len(time)
+    ids = arguments.get("id")
+    if ids is None or len(ids := _materialize_labels(ids, "id")) != n:
+        raise ValueError("id statement is required")
+    if require_repeats and len(set(map(_hashable_group_value, ids))) == n:
+        raise ValueError("data does not appear to be timeline data")
+    if any(map(_is_missing_value, ids)) or any(map(math.isnan, time)):
+        raise ValueError("id and time cannot be missing")
+    _lhs, _sep, rhs = formula.partition("~")
+    terms = _formula_rhs_terms(formula, data)
+    model_columns = (
+        _covariate_columns(terms.covariates) + terms.strata + _offset_columns(terms.offsets)
+    )
+    variables = _data_order(data, model_columns + terms.clusters)
+    sources = {name: _column_source(data, name) for name in variables}
+    carried = set(variables if carry_clusters else model_columns)
+    # the variables to carry forward: those with a missing value
+    masks: dict[str, list[bool]] = {}
+    if lvcf:
+        for name, source in sources.items():
+            if name not in carried:
+                continue
+            missing = _missing_row_indices([(name, source)], n)
+            if missing:
+                masks[name] = [row in missing for row in range(n)]
+    result = _core.surv2counting(
+        ids,
+        list(time),
+        list(status),
+        bool(response.states),
+        _repeated_option(repeated),
+        list(masks.values()),
+    )
+    rows = list(result.row)
+    carry_from = dict(zip(masks, result.carry_from, strict=True))
+    columns: dict[str, Any] = {}
+    for name, source in sources.items():
+        take = carry_from.get(name, rows)
+        columns[name] = _column_rows(source, name, take, np.asarray(take, dtype=np.intp), n)
+    outcome: Any = list(result.status)
+    if response.states:
+        labels = ("censor", *response.states)
+        outcome = _r_factor([labels[code] for code in outcome], labels)
+    if result.counting:
+        columns[_TSTART] = list(result.tstart)
+    columns[_TSTOP] = list(result.tstop)
+    columns[_STATUS] = outcome
+    converted = {
+        name: None if values is None else _subset_sequence(values, rows, name)
+        for name, values in arguments.items()
+    }
+    if result.istate is not None:
+        current = [response.states[code - 1] for code in result.istate]
+        given = converted.get("istate")
+        if given is not None and not _istate_agrees(given, result.istate, current):
+            raise ValueError("istate argument does not agree with initial Surv2 values")
+        converted["istate"] = _r_factor(current, response.states)
+    response_columns = [_TSTART, _TSTOP, _STATUS] if result.counting else [_TSTOP, _STATUS]
+    counting_formula = f"Surv({', '.join(f'`{name}`' for name in response_columns)}) ~{rhs}"
+    return counting_formula, _FormulaRows(columns, len(rows)), converted
+
+
+def _timeline_response(formula: Any) -> bool:
+    """Whether *formula* is a formula string with a ``Surv2`` response."""
+
+    if not isinstance(formula, str):
+        return False
+    spec = _response_spec(formula)
+    return spec is not None and spec.timeline
+
+
+def _timeline_model_frame(columns: dict[str, Any], formula: str) -> dict[str, Any]:
+    """The model frame of a fit to the :func:`_timeline_counting` form of *formula*, as
+    R's: the counting-process response (the first column) under the ``Surv2`` name,
+    without the columns it was built from.  Other formulas' frames are returned as is."""
+
+    if not _timeline_response(formula):
+        return columns
+    (_name, response), *rest = columns.items()
+    reserved = {_TSTART, _TSTOP, _STATUS}
+    return {
+        _formula_response_spec(formula).name: response,
+        **{name: values for name, values in rest if name not in reserved},
+    }
+
+
+def _istate_agrees(given: Any, codes: Sequence[int], current: Sequence[str]) -> bool:
+    """Whether an ``istate`` argument names the current states of a timeline: as the
+    state codes when it is numeric, else as the state names."""
+
+    values = _materialize_labels(given, "istate")
+    if all(isinstance(value, int | float) and not isinstance(value, bool) for value in values):
+        return all(value == code for value, code in zip(values, codes, strict=True))
+    return all(_as_character(value) == state for value, state in zip(values, current, strict=True))
 
 
 def _numeric_response(data: Any, spec: _SurvResponseSpec, n: int) -> list[float]:
@@ -2425,6 +2644,7 @@ def model_frame(
     cluster: Any | None = None,
     istate: Any | None = None,
     extra: Mapping[str, Any] | None = None,
+    timeline: bool = False,
 ) -> ModelFrame:
     """R's ``model.frame`` call every survival fitter starts with.
 
@@ -2435,7 +2655,8 @@ def model_frame(
     and then ``na_action`` (``"na.omit"``, R's default, ``"na.exclude"``,
     ``"na.pass"``, ``"na.fail"``, or ``None`` for none) are applied to the formula's
     variables and the arguments together, after which the response and the terms
-    are evaluated.
+    are evaluated.  A ``Surv2`` response is refused unless *timeline* says the caller
+    takes one.
     """
 
     if not isinstance(formula, str):
@@ -2463,9 +2684,12 @@ def model_frame(
 
     spec = _response_spec(formula)
     n = _data_row_count(data, formula)
-    response: Surv | None = None
+    response: Surv | Surv2 | None = None
     y: list[float] | None = None
-    if spec is not None and spec.surv:
+    if spec is not None and spec.timeline and timeline:
+        response = _surv2_from_spec(data, spec)
+        n = len(response)
+    elif spec is not None and spec.surv:
         response = _surv_from_spec(data, spec)
         n = len(response)
     elif spec is not None:
