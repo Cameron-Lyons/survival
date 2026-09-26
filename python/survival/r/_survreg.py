@@ -698,31 +698,28 @@ def _location_names(fit: Any, complete: bool = True) -> list[str]:
     return [name for name, value in zip(names, beta, strict=True) if not math.isnan(value)]
 
 
-def survreg_scale_names(fit: Any) -> list[str]:
-    """``vcov.survreg``'s names of the ``Log(scale)`` rows: ``Log(scale)`` for one scale,
-    ``Log(scale[<stratum>])`` for each stratum's (``names(fit$scale)``)."""
+def _scale_labels(fit: Any, stratum_template: str) -> list[str]:
+    """The labels of the estimated scales: ``Log(scale)`` for a single scale; for a scale
+    per stratum, ``stratum_template`` filled with each stratum (``names(fit$scale)``)."""
 
     scales = _estimated_scale_count(_unwrap_formula_fit(fit))
     if scales > 1:
-        return [f"Log(scale[{level}])" for level in fit.strata_levels]
+        return [stratum_template.format(level) for level in fit.strata_levels]
     return ["Log(scale)"] * scales
 
 
 def survreg_summary_names(fit: Any) -> list[str]:
-    """Row names of ``summary.survreg``'s table: the scale rows of a stratified fit are
-    ``names(fit$scale)``, the strata levels."""
+    """Row names of ``summary.survreg``'s table: a stratum's scale row is named by the
+    stratum."""
 
-    scales = _estimated_scale_count(_unwrap_formula_fit(fit))
-    if scales > 1:
-        return _location_names(fit) + list(fit.strata_levels)
-    return _location_names(fit) + ["Log(scale)"] * scales
+    return _location_names(fit) + _scale_labels(fit, "{}")
 
 
 def survreg_vcov_names(fit: Any, complete: bool = True) -> list[str]:
     """``dimnames(vcov(fit, complete))``: the location names (the aliased ones left out
-    without ``complete``), then the ``Log(scale)`` rows."""
+    without ``complete``), then ``Log(scale)``, or ``Log(scale[<stratum>])`` per stratum."""
 
-    return _location_names(fit, complete) + survreg_scale_names(fit)
+    return _location_names(fit, complete) + _scale_labels(fit, "Log(scale[{}])")
 
 
 def survreg_vcov(fit: Any, complete: bool = True) -> list[list[float]]:
@@ -740,13 +737,13 @@ def survreg_vcov(fit: Any, complete: bool = True) -> list[list[float]]:
     return [[variance[row][column] for column in keep] for row in keep]
 
 
-def survreg_summary(fit: Any) -> dict[str, Any]:
+def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
     """The pieces of ``summary.survreg`` that are not the coefficient table."""
 
-    model = _unwrap_formula_fit(fit)
+    model = fit.fit
     distribution = model.distribution
     parms = list(distribution.parms)
-    loglik = [float(model.intercept_only_log_likelihood), float(model.log_likelihood)]
+    loglik = fit.loglik
     summary: dict[str, Any] = {
         "location_coefficients": _location_beta(model),
         "location_coefficient_names": _location_names(fit),
