@@ -11,6 +11,8 @@ from itertools import compress
 from operator import index
 from typing import Any
 
+from .. import _survival as _core
+
 _EXP_CLAMP_MIN = -745.0
 _EXP_CLAMP_MAX = 709.0
 _SURVFIT_TIME_EPSILON = 1e-9
@@ -47,6 +49,8 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
         raise ValueError(f"{name} is required")
     if isinstance(values, Mapping):
         return _coerce_mapping_rows(values, name)
+    if isinstance(values, _core.TcutResult):
+        return list(values.values)
     if hasattr(values, "to_list"):
         values = values.to_list()
     elif hasattr(values, "to_numpy"):
@@ -294,15 +298,22 @@ def _subset_indices(subset: Any, n: int) -> list[int]:
     return indices
 
 
+def _rows_of(source: Any, kept: list[Any]) -> Any:
+    """``source[rows]`` from the values at the kept rows, with what R's ``[`` methods
+    keep: a factor's levels, and a ``tcut``'s cutpoints and labels (``[.tcut``)."""
+
+    if isinstance(source, _core.TcutResult):
+        # scale 1 keeps the already scaled values and cutpoints
+        return _core.tcut(kept, list(source.cutpoints), list(source.labels), 1.0)
+    categories = _mstate_categories(source)
+    return kept if categories is None else _RFactorVector(kept, categories)
+
+
 def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
     materialized = _coerce_array_like(values, name)
     if indices and max(indices) >= len(materialized):
         raise ValueError(f"{name} must have enough rows for subset")
-    subsetted = [materialized[idx] for idx in indices]
-    categories = _mstate_categories(values)
-    if categories is not None:
-        return _RFactorVector(subsetted, categories)
-    return subsetted
+    return _rows_of(values, [materialized[idx] for idx in indices])
 
 
 def _subset_optional_sequence(

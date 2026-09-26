@@ -23,7 +23,7 @@ from ._coerce import (
     _missing_row_indices,
     _mstate_categories,
     _normalize_na_action,
-    _RFactorVector,
+    _rows_of,
     _strata_value_label,
     _subset_indices,
     _subset_optional_sequence,
@@ -1163,8 +1163,9 @@ def _data_rows(
     n: int,
     read: Mapping[str, list[Any]] | None = None,
 ) -> _FormulaRows:
-    """``data[rows, columns]``, the columns in *data*'s order; factor columns keep their
-    levels.  *read* holds columns the caller already materialised from *data*."""
+    """``data[rows, columns]``, the columns in *data*'s order; factor and ``tcut`` columns
+    keep their attributes.  *read* holds columns the caller already materialised from
+    *data*."""
 
     names = _data_column_names(data)
     if names is not None:
@@ -1177,9 +1178,7 @@ def _data_rows(
         values = read[name] if name in read else _coerce_array_like(source, name)
         if len(values) != n:
             raise ValueError(f"variable lengths differ (found for '{name}')")
-        kept = [values[row] for row in rows]
-        categories = _mstate_categories(source)
-        frame[name] = kept if categories is None else _RFactorVector(kept, categories)
+        frame[name] = _rows_of(source, [values[row] for row in rows])
     return _FormulaRows(frame, len(rows))
 
 
@@ -2381,7 +2380,8 @@ def model_frame(
 
     The extra arguments may be column names of *data* or row-aligned vectors, as
     R evaluates ``weights = wt`` in the data; ``extra`` names further such
-    columns (``pyears``' ``rmap`` variables).  ``subset`` (a mask or row indices)
+    columns (``pyears``' ``rmap`` variables and ``tcut``/``cut`` values), which a
+    missing value removes like a formula variable.  ``subset`` (a mask or row indices)
     and then ``na_action`` (``"na.omit"``, R's default, ``"na.exclude"``,
     ``"na.pass"``, ``"na.fail"``, or ``None`` for none) are applied to the formula's
     variables and the arguments together, after which the response and the terms
