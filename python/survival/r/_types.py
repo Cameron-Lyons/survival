@@ -371,7 +371,11 @@ class ConcordanceResult:
     predictor and vectors/matrices for several, exactly as ``concordancefit`` returns
     them; ``count`` is one named row of ``concordant``/``discordant``/``tied.x``/
     ``tied.y``/``tied.xy`` (a list of rows when several predictors or kept strata),
-    and ``names`` labels those rows (predictor names or stratum levels).
+    and ``names`` labels those rows (predictor names or stratum levels).  With a
+    cluster, ``dfbeta`` has one row per cluster in sorted cluster order.  ``ranks`` is
+    R's data frame as the columns ``time``/``rank``/``timewt``/``casewt`` (a list of
+    such tables for several predictors; for several fits one table led by a ``fit``
+    column, as ``cord.work`` stacks them).
     """
 
     concordance: float | list[float]
@@ -382,7 +386,7 @@ class ConcordanceResult:
     cvar: float | list[float] | None = None
     dfbeta: list[float] | list[list[float]] | None = None
     influence: list[list[float]] | list[list[list[float]]] | None = None
-    ranks: list[dict[str, float]] | list[list[dict[str, float]]] | None = None
+    ranks: dict[str, list[Any]] | list[dict[str, list[float]]] | None = None
     formula: str | None = None
 
     @property
@@ -394,6 +398,22 @@ class ConcordanceResult:
         if isinstance(self.var, list):
             return [math.sqrt(self.var[idx][idx]) for idx in range(len(self.var))]
         return math.sqrt(self.var)
+
+
+@dataclass(frozen=True)
+class SurvConcordanceResult:
+    """R's deprecated ``survConcordance`` object.
+
+    ``stats`` is ``survConcordance.fit``'s row of ``concordant``/``discordant``/
+    ``tied.risk``/``tied.time``/``std(c-d)``, or one such row per stratum keyed by its
+    level; ``std_err`` is R's ``std.err``, the summed ``std(c-d)`` over twice the number
+    of comparable pairs.
+    """
+
+    concordance: float
+    stats: dict[str, float] | dict[str, dict[str, float]]
+    n: int
+    std_err: float
 
 
 @dataclass(frozen=True)

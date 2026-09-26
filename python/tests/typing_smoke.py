@@ -23,6 +23,7 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(r.concordance(cox), r.ConcordanceResult)
     y = r.Surv(data["time"], data["status"])
     assert_type(r.concordancefit(y, data["age"]), r.ConcordanceResult)
+    assert_type(r.survConcordance("Surv(time, status) ~ age", data), r.SurvConcordanceResult)
     assert_type(r.aareg("Surv(time, status) ~ age", data), r.AaregModelResult)
     assert_type(r.aggregate_survfit(curves), r.CoxSurvfitResult)
     # were ``survival`` unresolvable, --ignore-missing-imports would make every r.* above

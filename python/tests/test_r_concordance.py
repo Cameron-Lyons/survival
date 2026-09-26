@@ -109,12 +109,14 @@ def test_influence_ranks_and_bounds(ovarian):
     both = r.concordance("Surv(futime, fustat) ~ age", ovarian, influence=3)
     assert both.dfbeta is not None
     assert both.influence is not None
-    ranks = r.concordance("Surv(futime, fustat) ~ age", ovarian, ranks=True)
-    assert len(ranks.ranks) == 12
-    assert ranks.ranks[0] == approx(
+    ranks = r.concordance("Surv(futime, fustat) ~ age", ovarian, ranks=True).ranks
+    assert list(ranks) == ["time", "rank", "timewt", "casewt"]
+    assert len(ranks["time"]) == 12
+    first = {name: column[0] for name, column in ranks.items()}
+    assert first == approx(
         {"time": 59.0, "rank": -0.807692307692308, "timewt": 26.0, "casewt": 1.0}
     )
-    assert ranks.ranks[1]["rank"] == approx(-0.88)
+    assert ranks["rank"][1] == approx(-0.88)
     ymax = r.concordance("Surv(futime, fustat) ~ age", ovarian, ymax=500)
     assert ymax.concordance == approx(0.203045685279188)
     assert counts(ymax.count) == [40, 157, 0, 0, 0]
@@ -194,4 +196,5 @@ def test_concordancefit_and_deprecated_entry_points(ovarian):
     with pytest.warns(DeprecationWarning, match="deprecated"):
         stats = r.survConcordance_fit(y, ovarian["age"])
     assert (stats["concordant"], stats["discordant"]) == (171.0, 47.0)
-    assert stats["std(c-d)"] == approx(2 * math.sqrt(0.00683429490130578) * 218, rel=1e-6)
+    # R: 2 * npair * sqrt(cvar), the Cox-model standard deviation of C - D
+    assert stats["std(c-d)"] == approx(39.5558676641869, rel=1e-12)
