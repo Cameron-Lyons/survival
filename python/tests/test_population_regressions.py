@@ -337,3 +337,31 @@ def test_pyears_without_categories_takes_the_default_category_data():
     assert result.n == [2.0]
     assert result.event == [1.0]
     assert result.dims == []
+
+
+def _lung_complete():
+    lung = datasets.load_lung()
+    names = ("time", "status", "ph.ecog", "age", "sex")
+    keep = [i for i, value in enumerate(lung["ph.ecog"]) if value is not None and value == value]
+    return {name: [lung[name][i] for i in keep] for name in names}
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        ("conditional", [0.87251720451695414, 0.54191836041458719, 0.29172902012919327]),
+        ("hakulinen", [0.87322851549148728, 0.55136764205543476, 0.31200140920479119]),
+    ],
+)
+def test_survexp_coxph_group_with_nobody_at_risk_is_missing(method, expected):
+    # lung2 <- na.omit(lung[, c("time", "status", "ph.ecog", "age", "sex")])
+    # survexp(Surv(time, status) ~ ph.ecog, lung2, ratetable = coxph(Surv(time, status) ~
+    #         age + sex, lung2), method = method, times = c(100, 300, 500))
+    lung = _lung_complete()
+    fit = r.coxph("Surv(time, status) ~ age + sex", lung)
+    result = r.survexp(
+        "Surv(time, status) ~ ph.ecog", lung, ratetable=fit, method=method, times=[100, 300, 500]
+    )
+    assert [row[0] for row in result.surv] == approx(expected, rel=1e-9)
+    # ph.ecog = 3 has one subject, who dies at 118
+    assert [row[3] for row in result.surv] == approx([0.82587377664176709, NAN, NAN], rel=1e-9)
