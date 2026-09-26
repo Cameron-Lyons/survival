@@ -34,14 +34,15 @@ from ._coerce import (
     _materialize_1d,
     _materialize_labels,
     _missing_row_indices,
-    _mstate_categories,
     _normalize_bool_option,
     _normalize_na_action,
+    _r_factor_levels,
     _scalar_or_vector,
     _subset_indices,
     _subset_sequence,
 )
 from ._coxph import _coxph_model_frame, _has_strata, _prediction_newdata, survfit_coxph
+from ._coxphms import CoxphmsModel
 from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
@@ -128,19 +129,6 @@ def _call_column(fit: Any, name: str, newdata: Any, n: int) -> list[Any] | None:
     if len(values) != n:
         raise ValueError(f"wrong length for {name}")
     return values
-
-
-def _r_factor_levels(values: Sequence[Any]) -> list[Any]:
-    """The levels ``as.factor`` gives ``values``: R factor levels when present, else sorted."""
-
-    categories = _mstate_categories(values)
-    present = {value for value in values if not _is_missing_value(value)}
-    if categories is not None:
-        return [level for level in _materialize_1d(categories, "levels") if level in present]
-    try:
-        return sorted(present)
-    except TypeError:
-        return sorted(present, key=str)
 
 
 def _unique_in_order(values: Sequence[Any]) -> list[Any]:
@@ -892,6 +880,8 @@ def royston(
     then, as in R.
     """
 
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError("not defined for multi-state models")
     engine = _coxph_engine(fit, "function defined only for coxph models")
     ties_value = _normalize_bool_option(ties, "ties")
     adjust_value = _normalize_bool_option(adjust, "adjust")
@@ -1030,6 +1020,9 @@ def brier(
 ) -> BrierResult:
     """Brier score of a Cox model with inverse-probability-of-censoring weights (R's ``brier``)."""
 
+    if isinstance(fit, CoxphmsModel):
+        # R fails later with "times contains missing or infinite values"
+        raise ValueError("brier is not defined for multi-state coxph fits")
     engine = _coxph_engine(fit, "fit must be a coxph object")
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
@@ -1335,6 +1328,8 @@ def yates(
     externally fitted linear models without refitting them.
     """
 
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError("multi-state coxph not yet supported")
     external = isinstance(fit, YatesModel)
     engine = None if external else _coxph_engine(fit, "the fit does not have a terms structure")
     design = _formula_design_for_fit(fit)

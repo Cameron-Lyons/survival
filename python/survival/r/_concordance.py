@@ -29,6 +29,7 @@ from ._coerce import (
     _r_factor,
 )
 from ._coxph import CoxphModel, predict_coxph
+from ._coxphms import CoxphmsModel
 from ._fit import _model_frame, _ModelFrame, _newdata_frame
 from ._formula import (
     _column_source,
@@ -367,7 +368,7 @@ class _FitData:
 
     y: Surv
     x: list[float]
-    strata: list[str] | None
+    strata: list[str | None] | None
     strata_levels: tuple[str, ...]
     weights: list[float] | None
     cluster: Sequence[Any] | None
@@ -377,6 +378,12 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
     """``cord.getdata``.  An explicit ``cluster`` replaces the fit's own; a survreg
     fit's ``cluster()`` term is not used, as in R."""
 
+    if isinstance(fit, CoxphmsModel):
+        # R fails with "x and y are not the same length"
+        raise ValueError(
+            "concordance is not available for multi-state coxph fits; the fit's "
+            "concordance component holds the value computed on the stacked data"
+        )
     if isinstance(fit, CoxphModel):
         if fit.tt:
             raise ValueError("cannot yet handle models with tt terms")

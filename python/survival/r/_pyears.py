@@ -287,6 +287,11 @@ def _ratetable_argument(ratetable: Any) -> RateTable:
         return _core.survexp_us()
     if isinstance(ratetable, RateTable):
         return ratetable
+    from ._coxphms import CoxphmsModel
+
+    if isinstance(ratetable, CoxphmsModel):
+        # pyears.R and survexp.R refuse a coxphms fit before their coxph branch
+        raise ValueError("Invalid rate table")
     if hasattr(ratetable, "coefficients") or hasattr(ratetable, "linear_predictors"):
         raise NotImplementedError("a coxph fit as the ratetable is not supported yet")
     raise ValueError("Invalid rate table")
@@ -1161,7 +1166,10 @@ def survexp(
     if not isinstance(formula, str):
         raise ValueError("A formula argument is required")
     from ._coxph import CoxphModel, _survfit_curves, predict_coxph
+    from ._coxphms import CoxphmsModel
 
+    if isinstance(ratetable, CoxphmsModel):
+        raise ValueError("Invalid rate table")
     if isinstance(ratetable, CoxphModel):
         method_value = _survexp_method(
             method, cohort, conditional, _response_spec(formula) is not None

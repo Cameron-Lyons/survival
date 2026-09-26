@@ -6,6 +6,8 @@
 //! `coxph_detail`, `cox.zph` in `cox_zph` and the case-cohort estimators in
 //! `cch`.  [`TieMethod`] is the one tie-handling enum of the crate, shared
 //! by the fitters and every kernel.
+//! The multi-state Cox model (`coxphms`: the stacked data and its fit) is
+//! in `coxphms`.
 //! Penalised Cox models (R's `coxpenal.fit`: `ridge()`, `pspline()` and
 //! `frailty()` terms) live in `coxpenal` and penalised parametric models
 //! (`survpenal.fit`) in `survpenal`, both on the penalty machinery of
@@ -25,6 +27,7 @@ pub(crate) mod coxph;
 pub(crate) mod coxph_detail;
 pub(crate) mod coxph_diagnostics;
 pub(crate) mod coxph_wtest;
+pub(crate) mod coxphms;
 pub(crate) mod cure_models;
 pub(crate) mod elastic_net;
 pub(crate) mod exact_ties;
@@ -74,6 +77,7 @@ pub use coxph::{
 pub use coxph_detail::{CoxphDetail, coxph_detail, coxph_detail_py};
 pub use coxph_diagnostics::{CoxResidualType, Residuals, SchoenfeldResiduals};
 pub use coxph_wtest::{CoxphWtest, coxph_wtest_py, wald_tests};
+pub use coxphms::coxphms_fit;
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
     CureModelComparisonResult, LinkFunction, MixtureCureConfig, MixtureCureResult,

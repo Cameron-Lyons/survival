@@ -28,6 +28,7 @@ from ._coxph import (
     coxph_detail,
     coxph_wtest,
 )
+from ._coxphms import CoxphmsModel, CoxphmsShare
 from ._data_prep import (
     aeqSurv,
     cumevent,
@@ -189,6 +190,8 @@ __all__ = [
     "CoxSurvfitResult",
     "CoxZPHResult",
     "CoxphModel",
+    "CoxphmsModel",
+    "CoxphmsShare",
     "FineGrayFrame",
     "FineGrayOutput",
     "ModelFrame",
