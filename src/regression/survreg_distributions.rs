@@ -204,6 +204,28 @@ fn invalid(message: impl Into<String>) -> SurvivalError {
     SurvivalError::invalid_input(message)
 }
 
+/// `pt(z, df)` and `pt(-z, df)` from one `pt` call.  `pt` computes the same
+/// `pbeta` value `v` for `z` and `-z` and only then picks the tail, `v` or
+/// `0.5 - v + 0.5` (`R_D_Cval`), so both columns come out bit for bit from
+/// `v = pt(-|z|, df)` for the finite `df` that [`SurvregDistribution::dtest`]
+/// requires.
+fn t_tails(z: f64, df: f64) -> (f64, f64) {
+    let v = student_t_cdf(-z.abs(), df);
+    let other = 0.5 - v + 0.5;
+    if z > 0.0 { (other, v) } else { (v, other) }
+}
+
+/// `dt(z, df)` and the closed-form `f'/f` and `f''/f` columns of the `t`
+/// family's `density`: everything but the two `pt` columns.
+fn t_density(z: f64, df: f64) -> [f64; 3] {
+    let denom = df + z * z;
+    [
+        student_t_pdf(z, df),
+        -(df + 1.0) * z / denom,
+        (df + 1.0) * (z * z * (df + 3.0) / denom - 1.0) / denom,
+    ]
+}
+
 impl SurvregDistribution {
     /// `survreg`'s lookup of a character `dist`,
     /// `survreg.distributions[[match.arg(dist, names(survreg.distributions))]]`:
@@ -482,15 +504,46 @@ impl SurvregDistribution {
             },
             SurvregFamily::T => {
                 let df = self.df();
-                let denom = df + z * z;
+                let (cdf, survival) = t_tails(z, df);
+                let [pdf, score, curvature] = t_density(z, df);
                 SurvregDensity {
-                    cdf: student_t_cdf(z, df),
-                    survival: student_t_cdf(-z, df),
-                    pdf: student_t_pdf(z, df),
-                    score: -(df + 1.0) * z / denom,
-                    curvature: (df + 1.0) * (z * z * (df + 3.0) / denom - 1.0) / denom,
+                    cdf,
+                    survival,
+                    pdf,
+                    score,
+                    curvature,
                 }
             }
+        }
+    }
+
+    /// `density(z, parms)[, 3]`: `f(z)` without the other columns.
+    fn base_pdf(&self, z: f64) -> f64 {
+        match self.family {
+            SurvregFamily::ExtremeValue => {
+                let w = z.exp();
+                w * (-w).exp()
+            }
+            SurvregFamily::Logistic => {
+                let w = z.exp();
+                let denom = 1.0 + w;
+                w / (denom * denom)
+            }
+            SurvregFamily::Gaussian => dnorm(z, false),
+            SurvregFamily::T => student_t_pdf(z, self.df()),
+        }
+    }
+
+    /// `density(z, parms)[, 1]`: `F(z)` without the other columns.
+    fn base_cdf(&self, z: f64) -> f64 {
+        match self.family {
+            SurvregFamily::ExtremeValue => 1.0 - (-z.exp()).exp(),
+            SurvregFamily::Logistic => {
+                let w = z.exp();
+                w / (1.0 + w)
+            }
+            SurvregFamily::Gaussian => pnorm(z, true, false),
+            SurvregFamily::T => student_t_cdf(z, self.df()),
         }
     }
 
@@ -506,8 +559,9 @@ impl SurvregDistribution {
 
     /// The distribution evaluation used by the fitting kernel: `exvalue_d`,
     /// `logistic_d` and `gauss_d` of `survregc1.c` for the built-in
-    /// families, and for the `t` family the R-level [`Self::density`] the
-    /// way `survregc2.c` consumes it (`f' = f * f'/f`).
+    /// families, and for the `t` family the columns of the R-level
+    /// [`Self::density`] that `survregc2.c` reads for the case (`f' = f *
+    /// f'/f`): exact rows need no `pt`, censored rows one.
     ///
     /// Returns `[_, f, f'/f, f''/f]` for [`KernelCase::Density`] and
     /// `[F, 1 - F, f, f']` for [`KernelCase::Distribution`].
@@ -563,10 +617,14 @@ impl SurvregDistribution {
                 }
             }
             SurvregFamily::T => {
-                let d = self.density(z);
+                let df = self.df();
+                let [pdf, score, curvature] = t_density(z, df);
                 match case {
-                    KernelCase::Density => [0.0, d.pdf, d.score, d.curvature],
-                    KernelCase::Distribution => [d.cdf, d.survival, d.pdf, d.pdf * d.score],
+                    KernelCase::Density => [0.0, pdf, score, curvature],
+                    KernelCase::Distribution => {
+                        let (cdf, survival) = t_tails(z, df);
+                        [cdf, survival, pdf, pdf * score]
+                    }
                 }
             }
         }
@@ -576,13 +634,13 @@ impl SurvregDistribution {
     pub fn pdf(&self, x: f64, mean: f64, scale: f64) -> f64 {
         let dx = self.transform.derivative(x);
         let z = (self.transform.apply(x) - mean) / scale;
-        self.density(z).pdf * dx / scale
+        self.base_pdf(z) * dx / scale
     }
 
     /// `psurvreg(q, mean, scale, distribution, parms)` for one value.
     pub fn cdf(&self, q: f64, mean: f64, scale: f64) -> f64 {
         let z = (self.transform.apply(q) - mean) / scale;
-        self.density(z).cdf
+        self.base_cdf(z)
     }
 
     /// `qsurvreg(p, mean, scale, distribution, parms)` for one value.
@@ -917,6 +975,32 @@ mod tests {
                 assert_close(distribution[3], d.pdf * d.score, 1e-13);
             }
         }
+    }
+
+    #[test]
+    fn t_tails_are_the_two_pt_values_exactly() {
+        let t = SurvregDistribution::from_name("t", None).unwrap();
+        for z in [-40.0, -2.5, -0.3, 0.0, -0.0, 0.7, 3.1, 1e60, f64::INFINITY] {
+            let lower = student_t_cdf(z, 4.0);
+            let upper = student_t_cdf(-z, 4.0);
+            let d = t.density(z);
+            let kernel = t.kernel(z, KernelCase::Distribution);
+            assert_eq!((d.cdf, d.survival), (lower, upper), "z = {z}");
+            assert_eq!((kernel[0], kernel[1]), (lower, upper), "z = {z}");
+            assert_eq!(t.cdf(z, 0.0, 1.0), lower, "z = {z}");
+        }
+        // R: pt(c(-2.5, 3.1, 1e60), 4) and pt(-c(-2.5, 3.1, 1e60), 4)
+        let relative = |actual: f64, expected: f64| {
+            assert!(
+                (actual / expected - 1.0).abs() < 1e-13,
+                "expected {expected}, got {actual}"
+            );
+        };
+        relative(t.density(-2.5).cdf, 0.033_383_272_405_994_06);
+        relative(t.density(-2.5).survival, 0.966_616_727_594_006);
+        relative(t.density(3.1).cdf, 0.981_889_444_481_280_5);
+        relative(t.density(3.1).survival, 0.018_110_555_518_719_56);
+        relative(t.density(1e60).survival, 3.000_000_000_000_396_3e-240);
     }
 
     #[test]

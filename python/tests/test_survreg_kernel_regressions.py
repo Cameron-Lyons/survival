@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from .helpers import setup_survival_import
@@ -39,6 +41,39 @@ def test_dpqr_distribution_names_are_case_folded_but_not_partially_matched():
             helper([0.5], 0, 1, "weib")
     with pytest.raises(ValueError, match="Distribution not found"):
         r.rsurvreg(2, 0, 1, "exp", seed=1)
+
+
+def test_t_fits_are_unchanged(lung):
+    # R's survreg(Surv(time, status) ~ age + sex, lung, dist = "t") to all the digits this
+    # port computes: taking both t tails from one pt() call must not move the fit.
+    fit = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t")
+    assert fit.fit.coefficients == pytest.approx(
+        [307.34358133147515, -2.4707923357292465, 128.58458914302994, 5.279364620574666],
+        rel=1e-12,
+    )
+    assert fit.fit.log_likelihood == pytest.approx(-1179.86538713346, rel=1e-12)
+
+    # survreg(Surv(log(time), status) ~ age + ph.ecog + strata(sex), lung, dist = "t",
+    #         parms = 8)
+    logged = dict(lung, ltime=[math.log(time) for time in lung["time"]])
+    strata = r.survreg(
+        "Surv(ltime, status) ~ age + ph.ecog + strata(sex)",
+        data=logged,
+        na_action="omit",
+        dist="t",
+        parms=8,
+    )
+    assert strata.fit.coefficients == pytest.approx(
+        [
+            6.743464277529713,
+            -0.010257032556250977,
+            -0.38265929760663714,
+            -0.10147952338058526,
+            -0.2598049628238328,
+        ],
+        rel=1e-12,
+    )
+    assert strata.fit.log_likelihood == pytest.approx(-273.81113429967894, rel=1e-12)
 
 
 def test_predict_and_residual_types_follow_match_arg(t_fit):

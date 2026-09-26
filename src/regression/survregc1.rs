@@ -7,8 +7,8 @@
 //! `survregc2.c`, the variant that evaluates a user-written density through
 //! an R callback, differs from `survregc1.c` only in where the density
 //! summary comes from; [`SurvregDistribution::kernel`] hides that difference
-//! (the `t` family goes through the five-column `density` exactly as the
-//! callback does), so one sweep serves every distribution.  Sparse frailty
+//! (the `t` family evaluates the columns of its R `density` that the callback
+//! would read), so one sweep serves every distribution.  Sparse frailty
 //! terms (`nf > 0`, used only by `survreg7.c`) are not supported.
 
 use crate::regression::survreg_distributions::{KernelCase, SurvregDistribution};
