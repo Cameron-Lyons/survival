@@ -448,7 +448,9 @@ def _newdata_frame(
             remap = [level_index[level] for level in factor.levels]
         except KeyError as exc:
             raise ValueError("New data has a strata not found in the original model") from exc
-        strata_codes = [remap[code] for code in _complete_codes(factor, "missing strata")]
+        strata_codes = [
+            remap[code] for code in _complete_codes(factor, "missing values in the strata")
+        ]
     y = _newdata_response(newdata, design.response) if response_columns else None
     return _NewData(
         data=newdata,

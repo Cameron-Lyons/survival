@@ -379,14 +379,14 @@ def test_missing_strata_are_refused_when_na_action_keeps_them():
 
 
 def test_concordance_newdata_codes_several_strata_terms_as_the_fit():
-    # v <- veteran; v$celltype <- as.character(v$celltype)
-    # fit <- coxph(Surv(time, status) ~ karno + strata(trt) + strata(celltype), v)
-    # concordance(fit, newdata = v[1:40, ])$concordance
+    # fit <- coxph(Surv(time, status) ~ karno + strata(trt) + strata(celltype), veteran)
+    # concordance(fit, newdata = veteran[veteran$celltype %in% c("squamous", "large"), ])
+    # (the subset lacks two celltype levels, so its strata are found only when coded as the fit)
     veteran = _veteran()
-    veteran = veteran.assign(celltype=veteran["celltype"].astype(str))
     fit = r.coxph("Surv(time, status) ~ karno + strata(trt) + strata(celltype)", veteran)
-    result = r.concordance(fit, newdata=veteran.iloc[:40])
-    assert result.concordance == pytest.approx(0.64745308310992, rel=1e-12)
+    subset = veteran[veteran["celltype"].isin(["squamous", "large"])]
+    result = r.concordance(fit, newdata=subset)
+    assert result.concordance == pytest.approx(0.688836104513064, rel=1e-12)
 
 
 def _lung_sex_reversed():

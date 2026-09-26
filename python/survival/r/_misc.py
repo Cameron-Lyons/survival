@@ -976,10 +976,11 @@ def _newdata_design(
 
     if _formula_design_for_fit(fit) is None:
         raise TypeError("newdata requires a model fitted from a formula")
+    stratified = _has_strata(fit)
     new = _prediction_newdata(
-        fit, newdata, need_strata=_has_strata(fit), need_response=False, na_action="na.fail"
+        fit, newdata, need_strata=stratified, need_response=False, na_action="na.fail"
     )
-    if _has_strata(fit) and new.strata is None:
+    if stratified and new.strata is None:
         raise ValueError("New data must contain the strata variable(s) of the model")
     return new.x, new.strata, new.offset
 
