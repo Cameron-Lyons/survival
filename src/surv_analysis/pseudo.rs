@@ -15,6 +15,7 @@ use super::survfitaj::{
 use super::survfitkm::{SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::sorting::sorted_indices_by;
+use crate::internal::step::find_interval;
 use crate::internal::validation::{validate_finite, validate_non_empty};
 use ndarray::{Array2, Array3};
 use pyo3::prelude::*;
@@ -60,11 +61,6 @@ pub struct SurvfitResid {
     pub times: Vec<f64>,
     #[pyo3(get)]
     pub values: Vec<Vec<f64>>,
-}
-
-/// `findInterval(t, dtime)`: the number of event times `<= t`.
-fn find_interval(dtime: &[f64], t: f64) -> usize {
-    dtime.partition_point(|&x| x <= t)
 }
 
 /// R's `approx(x, y, xout)` (linear, `yleft = 0`); `x` increasing.
@@ -120,14 +116,17 @@ fn rsurvpart1(
     }
     // tindex = largest event time <= reporting time, yindex the same for
     // each row's end time, sindex for its entry time
-    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let tindex: Vec<usize> = times
+        .iter()
+        .map(|&t| find_interval(&dtime, t, false))
+        .collect();
     let yindex: Vec<usize> = rows
         .iter()
-        .map(|&r| find_interval(&dtime, stop[r]))
+        .map(|&r| find_interval(&dtime, stop[r], false))
         .collect();
     let sindex: Option<Vec<usize>> = start.map(|start| {
         rows.iter()
-            .map(|&r| find_interval(&dtime, start[r]))
+            .map(|&r| find_interval(&dtime, start[r], false))
             .collect()
     });
     // the dN term applies to all reporting times at or after a death
@@ -833,14 +832,17 @@ fn rsurvpart2_cumhaz(
         let value = fit.n_risk[events[e]][state];
         if value == 0.0 { 1.0 } else { value }
     };
-    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let tindex: Vec<usize> = times
+        .iter()
+        .map(|&t| find_interval(&dtime, t, false))
+        .collect();
     let yindex: Vec<usize> = rows
         .iter()
-        .map(|&r| find_interval(&dtime, etime[r]))
+        .map(|&r| find_interval(&dtime, etime[r], false))
         .collect();
     let sindex: Option<Vec<usize>> = entry.map(|entry| {
         rows.iter()
-            .map(|&r| find_interval(&dtime, entry[r]))
+            .map(|&r| find_interval(&dtime, entry[r], false))
             .collect()
     });
     for k in 0..nhaz {

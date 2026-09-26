@@ -8,6 +8,7 @@
 use super::survfitaj::{SurvfitAJCounts, SurvfitAJResult};
 use super::survfitkm::{SurvfitCounts, SurvfitInfluence, SurvfitKMResult};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::step::find_interval;
 use crate::internal::validation::validate_finite;
 use ndarray::{Array2, ShapeBuilder};
 use pyo3::prelude::*;
@@ -473,16 +474,6 @@ pub fn survmean(
         }
     }
     Ok(table)
-}
-
-/// `findInterval(t, times)`: the number of `times` that are `<= t`
-/// (`left_open`: `< t`).  `times` must be sorted.
-fn find_interval(times: &[f64], t: f64, left_open: bool) -> usize {
-    if left_open {
-        times.partition_point(|&x| x < t)
-    } else {
-        times.partition_point(|&x| x <= t)
-    }
 }
 
 /// `summary.survfit` without a `times` argument: `censored = FALSE` keeps

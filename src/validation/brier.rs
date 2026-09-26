@@ -10,6 +10,7 @@
 
 use crate::data_prep::aeq_surv;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::step::step_at;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::surv_analysis::{HazardType, SurvType, SurvfitKMData, SurvfitKMOptions, survfitkm};
 use pyo3::prelude::*;
@@ -58,13 +59,6 @@ pub struct BrierResult {
     pub phat: Vec<Vec<f64>>,
     /// Effective sample size `1 / sum(w^2)` at each time.
     pub eff_n: Vec<f64>,
-}
-
-/// Value of a right-continuous step function at `at`: `1` before the
-/// first step (`summary.survfit(extend = TRUE)` before any event).
-fn step_value_at(times: &[f64], values: &[f64], at: f64) -> f64 {
-    let index = times.partition_point(|&time| time <= at);
-    if index == 0 { 1.0 } else { values[index - 1] }
 }
 
 /// `survfit(Surv(time, status) ~ 1, weights, se.fit = FALSE)`: the
@@ -159,7 +153,7 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
     let p0: Vec<f64> = input
         .times
         .iter()
-        .map(|&at| 1.0 - step_value_at(&null_time, &null_surv, at))
+        .map(|&at| 1.0 - step_at(&null_time, &null_surv, at, 1.0))
         .collect();
 
     // Censoring distribution, with censorings nudged past tied events.
@@ -194,7 +188,7 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
             let weight = if dtime < at && status[j] == 0.0 {
                 0.0
             } else {
-                case_weight[j] / step_value_at(&censor_time, &censor_surv, dtime.min(at))
+                case_weight[j] / step_at(&censor_time, &censor_surv, dtime.min(at), 1.0)
             };
             let (b0, b1) = if dtime > at {
                 (p0[i] * p0[i], input.phat[i][j] * input.phat[i][j])

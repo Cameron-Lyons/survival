@@ -7,6 +7,7 @@ use super::pyears::rows_to_matrix;
 use super::ratetable::RateTable;
 use super::survexp_fit::survexp_fit;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::step::sort_unique;
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -190,14 +191,13 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
         }
         (None, Some(times)) => {
             let max_time = times.iter().copied().fold(0.0, f64::max);
-            (sorted_unique(times), vec![max_time; n])
+            (sort_unique(times.iter().copied()), vec![max_time; n])
         }
-        (Some(y), None) => (sorted_unique(y), y.to_vec()),
+        (Some(y), None) => (sort_unique(y.iter().copied()), y.to_vec()),
         (Some(y), Some(times)) => {
             let max_time = times.iter().copied().fold(0.0, f64::max);
-            let mut all = times.to_vec();
-            all.extend(y.iter().copied().filter(|&t| t < max_time));
-            (sorted_unique(&all), y.to_vec())
+            let early = y.iter().copied().filter(|&t| t < max_time);
+            (sort_unique(times.iter().copied().chain(early)), y.to_vec())
         }
     };
     let fit = survexp_fit(
@@ -250,13 +250,6 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
         n_risk,
         method: label.to_string(),
     })
-}
-
-fn sorted_unique(values: &[f64]) -> Vec<f64> {
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    sorted.dedup();
-    sorted
 }
 
 /// Python entry point of [`survexp`]: `positions` is `match_ratetable(...).r`,

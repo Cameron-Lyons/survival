@@ -14,6 +14,7 @@ use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
 use crate::internal::numpy_utils::{FloatVec, IntVec};
+use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
     validate_non_negative,
@@ -1137,25 +1138,6 @@ fn apply_timefix(
 ) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
     let fixed = crate::data_prep::aeq_surv(time, start, None)?;
     Ok((fixed.time2, fixed.time))
-}
-
-/// `keep[order(values[keep])]`, ties in `keep` order.
-///
-/// Sorting `(value, row)` pairs rather than an index vector keeps the
-/// keys next to each other in memory, which is several times faster than
-/// an indirect comparison sort at a million rows.  `parallel` splits the
-/// sort itself over threads; a caller sorting several curves at once
-/// parallelises over the curves instead.
-pub(crate) fn ordered_subset(keep: &[usize], values: &[f64], parallel: bool) -> Vec<usize> {
-    let mut pairs: Vec<(f64, usize)> = keep.iter().map(|&i| (values[i], i)).collect();
-    let order =
-        |a: &(f64, usize), b: &(f64, usize)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1));
-    if parallel && pairs.len() > PARALLEL_THRESHOLD_LARGE {
-        pairs.par_sort_unstable_by(order);
-    } else {
-        pairs.sort_unstable_by(order);
-    }
-    pairs.into_iter().map(|(_, i)| i).collect()
 }
 
 /// The rows of each curve in data order: `split(seq_along(x), x)`.

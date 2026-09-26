@@ -19,6 +19,7 @@ use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::FloatVec;
+use crate::internal::step::rank_average;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxpenal::CoxpenalFit;
 use crate::regression::coxph::{CoxPHFit, default_assign, validate_assign};
@@ -350,27 +351,6 @@ fn km_transform(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64>
     km
 }
 
-/// R's `rank()`: average ranks for ties.
-fn average_ranks(values: &[f64]) -> Vec<f64> {
-    let n = values.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
-    let mut ranks = vec![0.0; n];
-    let mut position = 0;
-    while position < n {
-        let mut end = position;
-        while end < n && values[order[end]] == values[order[position]] {
-            end += 1;
-        }
-        let average = (position + 1 + end) as f64 / 2.0;
-        for &row in &order[position..end] {
-            ranks[row] = average;
-        }
-        position = end;
-    }
-    ranks
-}
-
 fn solve(matrix: &Array2<f64>, rhs: &[f64]) -> SurvivalResult<Vec<f64>> {
     LuDecomposition::decompose(matrix)?.solve(rhs)
 }
@@ -482,7 +462,7 @@ pub fn cox_zph<'a>(
         .collect();
     let ttimes: Vec<f64> = match transform {
         ZphTransform::Identity => fit.time.clone(),
-        ZphTransform::Rank => average_ranks(&fit.time),
+        ZphTransform::Rank => rank_average(&fit.time),
         ZphTransform::Log => fit.time.iter().map(|t| t.ln()).collect(),
         ZphTransform::Km => km_transform(&fit.time, fit.entry.as_deref(), &fit.status),
         ZphTransform::Values(values) => {
@@ -820,7 +800,7 @@ mod tests {
         assert!(km[1] > 0.0 && km[1] < 1.0);
         assert_eq!(km[1], km[2]);
         assert_eq!(
-            average_ranks(&[3.0, 1.0, 3.0, 2.0]),
+            rank_average(&[3.0, 1.0, 3.0, 2.0]),
             vec![3.5, 1.0, 3.5, 2.0]
         );
     }

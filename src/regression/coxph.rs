@@ -21,6 +21,7 @@ use crate::core::SurvResponse;
 use crate::core::strata_order::order_within_strata;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::internal::step::step_at;
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
@@ -30,7 +31,7 @@ use crate::regression::coxph_diagnostics::{
 use crate::regression::coxph_wtest::{wald_statistic, wald_tests};
 use crate::surv_analysis::agsurv::{
     AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, IntegratedCurve, agsurv_rows,
-    cum_xbar_at, cumhaz_at, expand_curve, individual_curve, integrate_curve, step_at,
+    cum_xbar_at, cumhaz_at, expand_curve, individual_curve, integrate_curve,
 };
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::prelude::*;

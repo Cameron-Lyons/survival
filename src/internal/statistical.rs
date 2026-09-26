@@ -1,5 +1,6 @@
 use crate::constants::{DEFAULT_CONCORDANCE, LCG64_INCREMENT, LCG64_MULTIPLIER, TIME_EPSILON};
 use crate::internal::dist::{lgammafn, pchisq, pgamma, pnorm, pt, qnorm, qt};
+use crate::internal::step::step_at;
 
 #[inline]
 pub(crate) fn sample_normal(rng: &mut crate::internal::rng::Rng) -> f64 {
@@ -155,25 +156,7 @@ pub(crate) fn compute_censoring_km(time: &[f64], status: &[i32]) -> (Vec<f64>, V
 
 #[inline]
 pub(crate) fn km_step_prob_at(t: f64, unique_times: &[f64], km_values: &[f64]) -> f64 {
-    if unique_times.is_empty() {
-        return 1.0;
-    }
-    if t < unique_times[0] {
-        return 1.0;
-    }
-
-    let mut left = 0;
-    let mut right = unique_times.len();
-    while left < right {
-        let mid = (left + right) / 2;
-        if unique_times[mid] <= t {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
-    }
-
-    if left == 0 { 1.0 } else { km_values[left - 1] }
+    step_at(unique_times, km_values, t, 1.0)
 }
 
 /// Standard normal quantile (R's `qnorm(p)`); `p <= 0` gives `-Inf` and

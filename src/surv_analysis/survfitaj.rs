@@ -6,12 +6,11 @@
 use super::survfit_aj_summary::{AJMeanTable, summary_survfit_aj, survmean_aj};
 use super::survfit_confint::{ConfType, survfit_confint, validate_conf_int};
 use super::survfit_summary::RmeanOption;
-use super::survfitkm::{
-    check_curve_indices, ordered_subset, rows_by_curve, select_items, survflag,
-};
+use super::survfitkm::{check_curve_indices, rows_by_curve, select_items, survflag};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
+use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_non_negative,
 };

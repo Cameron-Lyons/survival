@@ -21,6 +21,7 @@
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{extract_matrix_f64, extract_vec_f64};
+use crate::internal::step::{find_interval, sort_unique, step_at};
 use crate::internal::validation::{
     validate_binary_f64, validate_finite, validate_length, validate_non_empty,
     validate_non_negative, validate_positive, validate_sorted,
@@ -165,14 +166,6 @@ fn group_index(keys: &[f64], value: f64) -> usize {
     keys.partition_point(|&key| key < value)
 }
 
-/// Sorted unique values (exact comparison, as R's `unique`).
-fn sorted_unique(values: impl Iterator<Item = f64>) -> Vec<f64> {
-    let mut sorted: Vec<f64> = values.collect();
-    sorted.sort_by(f64::total_cmp);
-    sorted.dedup();
-    sorted
-}
-
 /// Port of `src/agsurv4.c`: the Kalbfleisch-Prentice survival increment at
 /// each unique time.  `risk` and `weights` are those of the deaths in time
 /// order; `denom` is the weighted risk sum at each time.  A single death
@@ -289,7 +282,7 @@ fn agsurv_of_rows(
 ) -> AgsurvCurve {
     let n = rows.len();
     let nvar = data.x.ncols();
-    let time = sorted_unique(rows.iter().map(|&i| data.stop[i]));
+    let time = sort_unique(rows.iter().map(|&i| data.stop[i]));
     let ntime = time.len();
 
     let mut n_event = vec![0.0; ntime];
@@ -329,7 +322,7 @@ fn agsurv_of_rows(
         // start >= t.  `etime` are the unique entry times; indx(t) points at
         // the first entry time >= t (R's approx(..., method = "constant",
         // f = 1, rule = 2)), or past the end when there is none.
-        let etime = sorted_unique(rows.iter().map(|&i| start[i]));
+        let etime = sort_unique(rows.iter().map(|&i| start[i]));
         let mut esum = vec![0.0; etime.len()];
         let mut ewt = vec![0.0; etime.len()];
         let mut xout = Array2::zeros((etime.len(), nvar));
@@ -678,18 +671,6 @@ pub fn cumhaz_at(curve: &AgsurvCurve, t: f64) -> f64 {
     step_at(&curve.time, &curve.cumhaz, t, 0.0)
 }
 
-/// Value at `t` of the right-continuous step function that is `initial`
-/// before the first of the sorted `times` and `values[i]` from `times[i]`
-/// on: `c(initial, values)[findInterval(t, times) + 1]`.
-pub fn step_at(times: &[f64], values: &[f64], t: f64, initial: f64) -> f64 {
-    let index = times.partition_point(|&time| time <= t);
-    if index == 0 {
-        initial
-    } else {
-        values[index - 1]
-    }
-}
-
 /// Cumulative sums of `varhaz` and of the rows of `xbar`, the two
 /// integrated pieces `predict.coxph` needs for the standard error of an
 /// expected count.
@@ -721,11 +702,9 @@ pub fn integrate_curve(curve: &AgsurvCurve) -> IntegratedCurve {
 
 /// Row of `rbind(0, cum_xbar)[findInterval(t, time) + 1, ]`.
 pub fn cum_xbar_at(curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64) -> Array1<f64> {
-    let index = curve.time.partition_point(|&time| time <= t);
-    if index == 0 {
-        Array1::zeros(integrated.cum_xbar.ncols())
-    } else {
-        integrated.cum_xbar.row(index - 1).to_owned()
+    match find_interval(&curve.time, t, false) {
+        0 => Array1::zeros(integrated.cum_xbar.ncols()),
+        index => integrated.cum_xbar.row(index - 1).to_owned(),
     }
 }
 
