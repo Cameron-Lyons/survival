@@ -11774,6 +11774,7 @@ def coxpenal_fit(
     eps: float | None = None,
     toler_chol: float | None = None,
     nocenter: Sequence[float] | None = None,
+    cluster: Sequence[int] | None = None,
 ) -> CoxpenalFit: ...
 def coxph_detail(fit: CoxPHFit, riskmat: bool = False) -> CoxphDetail: ...
 def coxph_fit(

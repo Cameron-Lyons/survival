@@ -12,13 +12,14 @@
 //! `coxlist2`), iterates the inner fit and the `cfun`s over `theta`, restarts
 //! each inner fit from the solution of the closest earlier `theta`, and
 //! assembles the fit (`coxph.penal` plus the `coxph()` post-processing of
-//! `R/coxph.R`: `n`, `nevent`, the Wald test).
+//! `R/coxph.R`: the offset centring, `n`, `nevent`, the Wald test and the
+//! concordance).
 //!
 //! The fitted dense part is kept as a [`CoxPHFit`] so that `predict()`,
-//! the residual types and `survfit()` of a `coxph.penal` object come from
-//! the same code as for a plain Cox model; `survfit.coxph` drops the sparse
-//! frailty from the risk scores of a frailty model, which
-//! [`CoxpenalFit::survfit`] reproduces.
+//! the residual types, the concordance and `survfit()` of a `coxph.penal`
+//! object come from the same code as for a plain Cox model;
+//! `survfit.coxph` drops the sparse frailty from the risk scores of a
+//! frailty model, which [`CoxpenalFit::survfit`] reproduces.
 
 mod control;
 mod df;
@@ -41,9 +42,9 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{
-    Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, CoxphData, CoxphOptions, SurvfitOptions,
+    Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, CoxphData, FittedCox, SurvfitOptions,
+    add_offset_mean, centre_offset, nocenter_columns,
 };
-use crate::regression::coxph_diagnostics::martingale_residuals;
 use crate::regression::coxph_wtest::wald_statistic;
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -150,7 +151,7 @@ impl CoxpenalData {
 }
 
 /// Fitting options: `coxph.control()` (`iter.max`, `outer.max`, `eps`,
-/// `toler.chol`), `init` and `nocenter`.
+/// `toler.chol`), `init`, `nocenter` and the cluster.
 #[derive(Debug, Clone)]
 pub struct CoxpenalOptions {
     /// Breslow or Efron; the exact method has no penalised kernel.
@@ -170,6 +171,10 @@ pub struct CoxpenalOptions {
     /// sparse frailty column is not the last one; this port evaluates the
     /// rule on the dense columns themselves.)
     pub nocenter: Option<Vec<f64>>,
+    /// Cluster codes (`cluster()`, or the id of a robust request).  A
+    /// penalised fit has no robust variance, but `coxph()` still passes the
+    /// cluster to the concordance.
+    pub cluster: Option<Vec<i32>>,
 }
 
 impl Default for CoxpenalOptions {
@@ -182,6 +187,7 @@ impl Default for CoxpenalOptions {
             eps: COX_CONVERGENCE_TOLERANCE,
             toler_chol: COX_RANK_TOLERANCE,
             nocenter: Some(vec![-1.0, 0.0, 1.0]),
+            cluster: None,
         }
     }
 }
@@ -260,8 +266,8 @@ pub struct CoxpenalFit {
     #[pyo3(get)]
     pub frail_index: Option<Vec<usize>>,
     /// The last penalty evaluations (`coxlist1` for the sparse term,
-    /// `coxlist2` for the dense ones); `cox.zph` reads the dense second
-    /// derivative.
+    /// `coxlist2` for the dense ones); `cox.zph` adds the dense second
+    /// derivative to the information of a fit without a sparse term.
     #[pyo3(get)]
     pub coxlist1: Option<CoxPenaltyTerms>,
     #[pyo3(get)]
@@ -481,7 +487,8 @@ fn dot_row(x: &Array2<f64>, row: usize, coef: &[f64]) -> f64 {
 }
 
 impl CoxpenalFit {
-    /// `coxpenal.fit` followed by the `coxph()` post-processing.
+    /// `coxpenal.fit` at the centred offset, followed by the `coxph()`
+    /// post-processing.
     pub fn fit(data: CoxpenalData, options: CoxpenalOptions) -> SurvivalResult<Self> {
         if options.method == TieMethod::Exact {
             return Err(SurvivalError::invalid_input(
@@ -496,7 +503,7 @@ impl CoxpenalFit {
         let nevent = data.status.iter().filter(|&&s| s == 1).count();
         let n_eff = nevent as f64;
         let weights = data.weights.clone().unwrap_or_else(|| vec![1.0; n]);
-        let offset = data.offset.clone().unwrap_or_else(|| vec![0.0; n]);
+        let (offset, offset_mean) = centre_offset(data.offset.as_deref(), n);
         let eps2 = options.eps.sqrt();
 
         // pterms: 0 ordinary, 1 penalised, 2 sparse.
@@ -639,14 +646,8 @@ impl CoxpenalFit {
             coxlist2: CoxPenaltyTerms::zeros(nvar, second2, nvar),
         };
 
-        let docenter: Vec<bool> = (0..nvar)
-            .map(|col| {
-                !options
-                    .nocenter
-                    .as_ref()
-                    .is_some_and(|values| xx.column(col).iter().all(|value| values.contains(value)))
-            })
-            .collect();
+        let nocenter = nocenter_columns(&xx, options.nocenter.as_deref());
+        let docenter: Vec<bool> = nocenter.iter().map(|&skip| !skip).collect();
         let mut kernel = Kernel::new(KernelData {
             stop: &data.time,
             start: data.entry.as_deref(),
@@ -793,18 +794,21 @@ impl CoxpenalFit {
         }
         let coxfit = coxfit.expect("outer.max >= 1");
 
-        // Linear predictors (with the frailty) and the martingale residuals.
+        // Linear predictors (with the frailty) at the centred offset.
         let center: f64 = means.iter().zip(&beta).map(|(m, b)| m * b).sum();
         let lp_no_frailty: Vec<f64> = (0..n)
             .map(|i| offset[i] + dot_row(&xx, i, &beta) - center)
             .collect();
-        let lp: Vec<f64> = match &frailx {
-            Some(frailx) => lp_no_frailty
-                .iter()
-                .zip(frailx)
-                .map(|(lp, &g)| lp + fbeta[g])
-                .collect(),
-            None => lp_no_frailty.clone(),
+        let (lp, lp_no_frailty) = match &frailx {
+            Some(frailx) => (
+                lp_no_frailty
+                    .iter()
+                    .zip(frailx)
+                    .map(|(lp, &g)| lp + fbeta[g])
+                    .collect(),
+                Some(lp_no_frailty),
+            ),
+            None => (lp_no_frailty, None),
         };
 
         let dftemp = match dftemp {
@@ -834,58 +838,57 @@ impl CoxpenalFit {
             .map(|b| if b.is_nan() { 0.0 } else { *b })
             .collect();
 
-        // The dense part as a Cox model: the engine of coxph.fit at the
-        // penalised coefficients, then the penalised summaries in place.
-        let mut coxph = CoxPHFit::fit(
-            CoxphData::try_new(
-                data.time.clone(),
-                data.entry.clone(),
-                data.status.clone(),
-                xx,
-                data.weights.clone(),
-                data.strata.clone(),
-                data.offset.clone(),
-            )?,
-            CoxphOptions {
-                method: options.method,
-                init: Some(coef_or_zero.clone()),
-                iter_max: 0,
-                eps: options.eps,
-                toler_chol: options.toler_chol,
-                nocenter: options.nocenter.clone(),
-                cluster: None,
-                robust: Some(false),
-            },
-        )?;
-        coxph.coefficients = coefficients;
-        coxph.var = dftemp.var.clone();
-        coxph.loglik = [loglik0, coxfit.loglik + penalty];
-        coxph.score = f64::NAN;
-        coxph.iter = iter2;
-        coxph.flag = coxfit.flag;
-        coxph.info = None;
-        coxph.means = means;
-        coxph.first = coxfit.u[nfrail..].to_vec();
-        coxph.linear_predictors = lp;
-        coxph.residuals = if data.entry.is_some() {
-            martingale_residuals(&coxph, &coxph.linear_predictors)
-        } else {
+        // Martingale residuals: coxfit5_c's expected events for
+        // right-censored data, agmart3 (from the linear predictors) for
+        // (start, stop] data.
+        let residuals = data.entry.is_none().then(|| {
             let expected = kernel.expected_events();
             data.status
                 .iter()
                 .zip(&expected)
                 .map(|(&s, e)| f64::from(s) - e)
                 .collect()
-        };
+        });
         let shift: Vec<f64> = coef_or_zero
             .iter()
             .enumerate()
             .map(|(i, b)| b - options.init.as_ref().map_or(0.0, |init| init[i]))
             .collect();
-        coxph.wald_test = wald_statistic(&coxph.var, &shift, options.toler_chol)?;
-        let curve_fit = frailx.is_some().then(|| {
+        let wald_test = wald_statistic(&dftemp.var, &shift, options.toler_chol)?;
+
+        // The dense part as a Cox model, with coxph()'s concordance of the
+        // final linear predictors.
+        let coxph = CoxPHFit::from_fitted(
+            CoxphData {
+                time: data.time,
+                entry: data.entry,
+                status: data.status,
+                x: xx,
+                weights: data.weights,
+                strata: data.strata,
+                offset: data.offset,
+            },
+            FittedCox {
+                method: options.method,
+                coefficients,
+                var: dftemp.var,
+                loglik: [loglik0, coxfit.loglik + penalty],
+                iter: iter2,
+                flag: coxfit.flag,
+                means,
+                nocenter,
+                first: coxfit.u[nfrail..].to_vec(),
+                linear_predictors: lp,
+                offset_mean,
+                residuals,
+                wald_test,
+            },
+            options.cluster.as_deref(),
+        )?;
+        let curve_fit = lp_no_frailty.map(|mut lp| {
+            add_offset_mean(&mut lp, offset_mean);
             let mut curve = coxph.clone();
-            curve.linear_predictors = lp_no_frailty;
+            curve.linear_predictors = lp;
             curve
         });
 
@@ -1204,9 +1207,10 @@ impl CoxpenalFit {
 /// to the columns `pcols[i]` of `x`; `assign` lists the columns of every
 /// model term (each `pcols` entry must be one of them) and defaults to the
 /// penalised groups plus one term per remaining column, in column order.
-/// A sparse frailty term is a single column of group codes.
+/// A sparse frailty term is a single column of group codes.  `cluster`
+/// only enters the concordance (a penalised fit has no robust variance).
 #[pyfunction]
-#[pyo3(signature = (time, status, x, penalties, pcols, assign=None, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, outer_max=None, eps=None, toler_chol=None, nocenter=None))]
+#[pyo3(signature = (time, status, x, penalties, pcols, assign=None, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, outer_max=None, eps=None, toler_chol=None, nocenter=None, cluster=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxpenal_fit(
     time: Vec<f64>,
@@ -1226,6 +1230,7 @@ pub fn coxpenal_fit(
     eps: Option<f64>,
     toler_chol: Option<f64>,
     nocenter: Option<Vec<f64>>,
+    cluster: Option<Vec<i32>>,
 ) -> PyResult<CoxpenalFit> {
     if x.len() != time.len() {
         return Err(SurvivalError::invalid_input(format!(
@@ -1272,6 +1277,7 @@ pub fn coxpenal_fit(
         eps: eps.unwrap_or(defaults.eps),
         toler_chol: toler_chol.unwrap_or(defaults.toler_chol),
         nocenter: nocenter.or(defaults.nocenter),
+        cluster,
     };
     Ok(CoxpenalFit::fit(data, options)?)
 }
@@ -1279,6 +1285,7 @@ pub fn coxpenal_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::regression::coxph::CoxphOptions;
 
     fn kidney_like() -> (Vec<f64>, Vec<i32>, Array2<f64>) {
         // Four groups of three, one covariate.
