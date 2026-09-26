@@ -79,6 +79,8 @@ from ._types import (
     _DesignTerm,
     _FormulaDesign,
     _FormulaTerms,
+    _InteractionTerm,
+    _ModelCovariateTerm,
     _PenaltyDesignTerm,
 )
 
@@ -1772,6 +1774,25 @@ def _survfit_types(fit: CoxphModel, type_: Any, stype: Any, ctype: Any) -> tuple
     return stype_value, ctype_value
 
 
+def _check_interaction_margins(fit: CoxphModel) -> None:
+    """``survfit.coxph`` refuses a model with an interaction whose lower-order terms are
+    not all in it (a 2 in ``attr(Terms, "factors")``); strata terms do not count."""
+
+    terms = [
+        frozenset(term.term.factors)
+        if isinstance(term.term, _InteractionTerm)
+        else frozenset([term.term])
+        for term in fit.terms.model_terms
+        if isinstance(term, _ModelCovariateTerm)
+    ]
+    present = set(terms)
+    if any(len(term) > 1 and any(term - {v} not in present for v in term) for term in terms):
+        raise ValueError(
+            "not able to create a curve for models that contain an interaction without "
+            "the lower order effect"
+        )
+
+
 def _curve_columns(values: list[list[float]]) -> Any:
     """A curve block as R stores it: a vector for one curve, ``ntime x ncurve`` rows otherwise."""
 
@@ -1818,6 +1839,7 @@ def _survfit_curves(
     """The engine curves for ``survfit.coxph`` and the name of each block (R's
     ``names(fit$strata)``: the strata levels, or the newdata row numbers)."""
 
+    _check_interaction_margins(fit)
     engine = fit.penalized if fit.penalized is not None else fit.fit
     options: dict[str, Any] = {
         "stype": stype,
@@ -1828,12 +1850,11 @@ def _survfit_curves(
     }
     if newdata is None:
         if any(":" in name for name in fit.assign):
-            warnings.warn(
+            _warn_outside_package(
                 "the model contains interactions; the default curve based on columm means "
                 "of the X matrix is almost certainly not useful. Consider adding a newdata "
                 "argument.",
                 RuntimeWarning,
-                stacklevel=3,
             )
         curves = engine.survfit(**options)
         return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []

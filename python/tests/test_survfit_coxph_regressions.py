@@ -1,9 +1,12 @@
 """survfit.coxph regressions against R 4.5.3 with survival 3.8-12.
 
 The old-style ``type`` picks R's curve, ``individual`` is accepted with R's warning,
-``start.time`` builds the curves from the rows still at risk at that time, and penalized
-fits give ``id`` curves.
+``start.time`` builds the curves from the rows still at risk at that time, penalized fits
+give ``id`` curves, and models with an interaction missing its lower-order terms are
+refused.
 """
+
+import warnings
 
 import pytest
 
@@ -242,3 +245,55 @@ def test_start_time_errors_as_r(lung_fit):
     for value in ("a", [1, 2]):
         with pytest.raises(ValueError, match="start.time must be a single numeric value"):
             lung_fit.survfit(start_time=value)
+
+
+# ---------------------------------------------------------------------------
+# interactions without their lower-order terms
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "age:sex",
+        "age + age:sex",
+        "sex + age:sex",
+        "sex/age",
+        "age:sex + strata(ph.ecog)",
+        "age + sex:ph.ecog",
+        "age*sex + age:ph.ecog",
+        "age + factor(sex) + sex:ph.ecog",
+    ],
+)
+def test_interaction_without_its_lower_order_terms_is_refused(lung, formula):
+    fit = r.coxph(f"Surv(time, status) ~ {formula}", lung)
+    message = "not able to create a curve for models that contain an interaction without"
+    for newdata in (None, {"age": [60], "sex": [1], "ph.ecog": [1]}):
+        with pytest.raises(ValueError, match=message):
+            r.survfit(fit, newdata)
+    # basehaz and survexp(ratetable = fit) build the same curves
+    with pytest.raises(ValueError, match=message):
+        r.basehaz(fit)
+    with pytest.raises(ValueError, match=message):
+        r.survexp("~ 1", lung, ratetable=fit)
+
+
+@pytest.mark.parametrize(
+    ("formula", "at_means", "at_newdata"),
+    [
+        ("age*sex", 0.9958231307313569, 0.9951672901084396),
+        ("age + sex + age:sex", 0.9958231307313569, 0.9951672901084396),
+        ("age*sex + strata(ph.ecog)", 0.9846822, 0.9901979),
+        ("age*sex*ph.ecog", 0.9961871, 0.9953258),
+    ],
+)
+def test_interaction_with_its_margins_gives_curves(lung, formula, at_means, at_newdata):
+    fit = r.coxph(f"Surv(time, status) ~ {formula}", lung)
+    with pytest.warns(RuntimeWarning, match="the model contains interactions") as caught:
+        curve = r.survfit(fit)
+    assert caught[0].filename == __file__
+    assert curve.surv[0] == pytest.approx(at_means, rel=1e-7)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        newdata = r.survfit(fit, {"age": [60], "sex": [1], "ph.ecog": [1]})
+    assert newdata.surv[0] == pytest.approx(at_newdata, rel=1e-7)
