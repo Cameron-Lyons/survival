@@ -7,6 +7,7 @@ import os
 import sys
 import warnings
 from collections.abc import Mapping, Sequence
+from itertools import compress
 from operator import index
 from typing import Any
 
@@ -211,7 +212,11 @@ def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
         materialized = _coerce_array_like(values, name)
         if len(materialized) != n:
             raise ValueError(f"{name} must have length {n}")
-        missing.update(idx for idx, value in enumerate(materialized) if _row_has_missing(value))
+        try:
+            # a numeric column is missing only where it is NaN
+            missing.update(compress(range(n), map(math.isnan, materialized)))
+        except (TypeError, OverflowError):
+            missing.update(idx for idx, value in enumerate(materialized) if _row_has_missing(value))
     return missing
 
 
