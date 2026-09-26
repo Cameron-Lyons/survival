@@ -96,6 +96,10 @@ The important feature combinations are:
   `extension-module`, so `build.rs` must keep libpython linkage working for
   local tests.
 
+`ComputeBackend::CUDA` (like `OpenCL`, `Metal` and `Vulkan`) is an API enum
+value only: this build implements the CPU backend, and the others report
+themselves unavailable rather than pretending to execute.
+
 ## Binding And Stub Workflow
 
 When adding, removing, or renaming a PyO3 binding:
