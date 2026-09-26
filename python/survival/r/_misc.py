@@ -58,7 +58,7 @@ from ._formula import (
     _term_values,
 )
 from ._models import coef, model_formula, model_frame, vcov
-from ._names import _make_unique
+from ._names import _make_names_unique, _make_unique
 from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
@@ -829,8 +829,9 @@ def survobrien(
     Returns the expanded data frame (a mapping of columns): the response, the untransformed
     variables of the factor and ``I()`` terms, the ``strata`` and ``cluster`` columns (or
     ``.id.``, the source row), the transformed continuous variables and the risk-set number
-    ``.strata.``.  A repeated name is made unique as in R (``z``, ``z.1``, ...).  String
-    columns count as factors.
+    ``.strata.``.  The column names are made syntactic and unique as R's ``data.frame`` does
+    (``log(z)`` becomes ``log.z.``, a repeated ``z`` becomes ``z.1``).  String columns count
+    as factors.
     """
 
     if (
@@ -869,16 +870,20 @@ def survobrien(
     else:
         columns.append(("time", list(expansion.time)))
     columns.append(("status", list(expansion.status)))
+    # data[knames]: `[.data.frame` makes the names of the kept and strata variables unique
+    knames = [*keepers, *terms.strata]
     columns += [
-        (name, list(_subset_sequence(_column(data, name), rows, name)))
-        for name in [*keepers, *terms.strata, *terms.clusters]
+        (label, list(_subset_sequence(_column(data, name), rows, name)))
+        for label, name in zip(
+            [*_make_unique(knames), *terms.clusters], [*knames, *terms.clusters], strict=True
+        )
     ]
     if not terms.clusters:
         columns.append((".id.", [row + 1 for row in rows]))
     columns += _survobrien_transformed(transform, continuous, expansion)
     columns.append((".strata.", list(expansion.strata)))
-    # data.frame()'s check.names makes the column names unique
-    names = _make_unique([name for name, _values in columns])
+    # data.frame()'s check.names: make.names(unique = TRUE)
+    names = _make_names_unique([name for name, _values in columns])
     return {name: values for name, (_label, values) in zip(names, columns, strict=True)}
 
 

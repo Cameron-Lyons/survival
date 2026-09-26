@@ -64,3 +64,16 @@ def _make_unique(names: Sequence[str]) -> list[str]:
         counts[name] = count + 1
         out.append(unique)
     return out
+
+
+def _make_names_unique(names: Sequence[str]) -> list[str]:
+    """R's ``make.names(names, unique = TRUE)``, the names ``data.frame``'s ``check.names``
+    gives: the names that were already syntactic keep their claim on a name, so
+    ``make.unique`` runs over them before the names ``make.names`` changed."""
+
+    syntactic = [_make_names(name) for name in names]
+    order = sorted(range(len(names)), key=lambda i: syntactic[i] != names[i])
+    out = [""] * len(names)
+    for i, unique in zip(order, _make_unique([syntactic[i] for i in order]), strict=True):
+        out[i] = unique
+    return out
