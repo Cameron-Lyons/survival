@@ -1075,6 +1075,19 @@ impl CoxPenalty {
             _ => None,
         }
     }
+
+    /// The distribution of a `frailty` term: `"gamma"`, `"gaussian"` or `"t"`.
+    #[getter]
+    fn distribution(&self) -> Option<&'static str> {
+        match &self.term {
+            PenaltyTerm::Frailty(frailty) => Some(match frailty.distribution {
+                FrailtyFamily::Gamma => "gamma",
+                FrailtyFamily::Gaussian => "gaussian",
+                FrailtyFamily::T(_) => "t",
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[pymethods]

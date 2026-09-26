@@ -39,6 +39,7 @@ from ._coerce import (
     _normalize_numeric_sequence_or_none,
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
+    _r_format_number,
     _subset_data,
     _warn_outside_package,
 )
@@ -61,6 +62,7 @@ from ._types import (
     CoxZPHResult,
     PredictResult,
     _CovariateTerm,
+    _DesignTerm,
     _FormulaDesign,
     _FormulaTerms,
     _PenaltyDesignTerm,
@@ -143,10 +145,11 @@ class CoxphModel:
 
     @property
     def loglik(self) -> list[float]:
-        """``fit$loglik``: null and fitted values (one value for a null model, as R)."""
+        """``fit$loglik``: null and fitted values (one value for a null model, as R;
+        a penalized fit without coefficients, a frailty alone, keeps both)."""
 
         values = list(self.fit.loglik)
-        return values if self.coef_names else values[:1]
+        return values if self.coef_names or self.penalized is not None else values[:1]
 
     @property
     def score(self) -> float | None:
@@ -225,8 +228,10 @@ class CoxphModel:
     def survfit(self, newdata: Any | None = None, **kwargs: Any) -> CoxSurvfitResult:
         return survfit_coxph(self, newdata, **kwargs)
 
-    def summary(self, conf_int: float = 0.95, scale: float = 1.0) -> dict[str, Any]:
-        return summary_coxph(self, conf_int=conf_int, scale=scale)
+    def summary(
+        self, conf_int: float = 0.95, scale: float = 1.0, terms: bool = False
+    ) -> dict[str, Any]:
+        return summary_coxph(self, conf_int=conf_int, scale=scale, terms=terms)
 
 
 @dataclass(frozen=True)
@@ -247,6 +252,41 @@ def _active_assign(fit: CoxphModel) -> list[list[int]]:
 
     aliased = _aliased(fit)
     return [[col for col in cols if not aliased[col]] for cols in fit.assign.values()]
+
+
+def _fit_frame(fit: CoxphModel) -> _ModelFrame:
+    if fit._frame is None:
+        raise TypeError("the fit keeps no model frame")
+    return fit._frame
+
+
+def _model_terms(fit: CoxphModel) -> list[tuple[str, _DesignTerm]]:
+    """The model's covariate terms, labelled (R's ``names(fit$pterms)``): those of
+    ``fit.assign`` plus a sparse frailty, which has no coefficients."""
+
+    frame = _fit_frame(fit)
+    return list(zip(frame.assign, frame.design.covariates, strict=True))
+
+
+def _term_labels(fit: CoxphModel) -> list[str]:
+    return [label for label, _term in _model_terms(fit)]
+
+
+def _sparse_term(fit: CoxphModel) -> int | None:
+    """The position among :func:`_model_terms` of a sparse penalized term."""
+
+    if fit.penalized is None or 2 not in fit.penalized.pterms:
+        return None
+    return list(fit.penalized.pterms).index(2)
+
+
+def _coxph_df(fit: CoxphModel) -> float:
+    """The model degrees of freedom of R's summary, anova and logLik methods:
+    ``sum(fit$df)`` for a penalized fit, else the number of non-NA coefficients."""
+
+    if fit.penalized is not None:
+        return float(sum(fit.penalized.df))
+    return sum(1 for value in fit.coefficients if not math.isnan(value))
 
 
 # ---------------------------------------------------------------------------
@@ -662,9 +702,7 @@ def _coxph_model_frame(fit: CoxphModel) -> dict[str, Any]:
 
     if fit.model is not None:
         return fit.model
-    if fit._frame is None:
-        raise TypeError("the fit keeps no model frame")
-    return fit._frame.model_frame()
+    return _fit_frame(fit).model_frame()
 
 
 def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, Any]]:
@@ -944,7 +982,7 @@ def clogit(
 
 
 # ---------------------------------------------------------------------------
-# summary.coxph / coxph.wtest
+# summary.coxph / summary.coxph.penal / coxph.wtest
 # ---------------------------------------------------------------------------
 
 
@@ -976,19 +1014,40 @@ def _coefficient_table(
     return columns, rows
 
 
-def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> Any:
-    """R's ``summary.coxph`` as a dict keyed like the R list (the fit itself for a null
-    model, as R returns the object unchanged)."""
+def _conf_int_rows(
+    names: Sequence[str], beta: Sequence[float], se: Sequence[float], conf_int: Any
+) -> list[dict[str, Any]]:
+    """The ``conf.int`` table of the summaries: ``exp(coef)``, ``exp(-coef)`` and the
+    limits, from the scaled coefficients and standard errors."""
 
+    level = _normalize_conf_level(conf_int, "conf_int")
+    z = NormalDist().inv_cdf((1.0 + level) / 2.0)
+    return [
+        {
+            "name": name,
+            "exp(coef)": math.exp(b),
+            "exp(-coef)": math.exp(-b),
+            "lower": math.exp(b - z * error),
+            "upper": math.exp(b + z * error),
+        }
+        for name, b, error in zip(names, beta, se, strict=True)
+    ]
+
+
+def summary_coxph(
+    fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0, terms: Any = False
+) -> Any:
+    """R's ``summary.coxph`` as a dict keyed like the R list (the fit itself for a null
+    model, as R returns the object unchanged); a penalized fit dispatches to
+    :func:`summary_coxph_penal`, the only method that reads ``terms``."""
+
+    if fit.penalized is not None:
+        return summary_coxph_penal(fit, conf_int=conf_int, scale=scale, terms=terms)
     scale_value = _finite_float(scale, "scale")
     beta = fit.coefficients
     if not beta:
         return fit
-    df = (
-        sum(fit.df)
-        if fit.penalized is not None
-        else sum(1 for value in beta if not math.isnan(value))
-    )
+    df = _coxph_df(fit)
     loglik = fit.loglik
     score = fit.score if fit.score is not None else math.nan
     logtest = -2.0 * (loglik[0] - loglik[1])
@@ -1021,20 +1080,12 @@ def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> An
         "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
     }
     if conf_int:
-        level = _normalize_conf_level(conf_int, "conf_int")
-        z = NormalDist().inv_cdf((1.0 + level) / 2.0)
-        result["conf_int"] = [
-            {
-                "name": name,
-                "exp(coef)": math.exp(b),
-                "exp(-coef)": math.exp(-b),
-                "lower": math.exp(b - z * float(row["se"])),
-                "upper": math.exp(b + z * float(row["se"])),
-            }
-            for name, b, row in zip(
-                fit.coef_names, [v * scale_value for v in beta], rows, strict=True
-            )
-        ]
+        result["conf_int"] = _conf_int_rows(
+            fit.coef_names,
+            [value * scale_value for value in beta],
+            [float(row["se"]) for row in rows],
+            conf_int,
+        )
     wald = fit.wald_test
     if wald is not None:
         result["waldtest"] = {
@@ -1048,6 +1099,187 @@ def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> An
             "df": df,
             "pvalue": _core.pchisq(fit.rscore, df, lower_tail=False),
         }
+    return result
+
+
+def _penal_row(
+    name: str, coef: float, se: float, se2: float, chisq: float, df: float, p: float
+) -> dict[str, Any]:
+    return {"name": name, "coef": coef, "se": se, "se2": se2, "chisq": chisq, "df": df, "p": p}
+
+
+def _wald_row(name: str, coef: float, var: float, var2: float) -> dict[str, Any]:
+    """A coefficient's row of summary.coxph.penal: ``Chisq = coef^2 / var`` on 1 df."""
+
+    chisq = coef * coef / var if var > 0.0 else math.nan
+    return _penal_row(
+        name,
+        coef,
+        math.sqrt(var),
+        math.sqrt(var2),
+        chisq,
+        1.0,
+        _core.pchisq(chisq, 1.0, lower_tail=False),
+    )
+
+
+def _block(matrix: list[list[float]], index: Sequence[int]) -> list[list[float]]:
+    return [[matrix[i][j] for j in index] for i in index]
+
+
+def _quadratic_form(x: Sequence[float], matrix: list[list[float]]) -> float:
+    return sum(a * row[j] * x[j] for a, row in zip(x, matrix, strict=True) for j in range(len(x)))
+
+
+def _pspline_print(
+    label: str,
+    term: _PenaltyDesignTerm,
+    coef: list[float],
+    var: list[list[float]],
+    var2: list[list[float]],
+    df: float,
+    history: Any,
+) -> tuple[list[dict[str, Any]], str]:
+    """pspline()'s ``printfun``: the spline's linear trend (a weighted regression of
+    the coefficients on the basis centres ``cbase``) and the test of the rest on
+    ``df - 1`` degrees of freedom."""
+
+    lower = term.boundary[0]
+    nterm = term.penalty.nterm
+    knots = _core.pspline_basis([lower], nterm, term.degree, term.boundary).knots
+    cbase = [knots[j] + (lower - knots[0]) for j in range(1, nterm + term.degree)]
+    test1 = _core.coxph_wtest(var, [coef], 1e-9).test[0]
+    xmat = [[1.0] * len(cbase), cbase]
+    # V^- X, and the second row of [X' V^- X]^- X' V^- (the weights of the slope)
+    xsig = _core.coxph_wtest(var, xmat, 1e-9).solve
+    xvx = [
+        [sum(x * row[b] for x, row in zip(column, xsig, strict=True)) for b in (0, 1)]
+        for column in xmat
+    ]
+    cmat = _core.coxph_wtest(xvx, xsig, 1e-9).solve[1]
+    linear = sum(c * b for c, b in zip(cmat, coef, strict=True))
+    lvar1 = _quadratic_form(cmat, var)
+    test2 = linear * linear / lvar1 if lvar1 > 0.0 else math.nan
+    nonlinear = test1 - test2
+    rows = [
+        _penal_row(
+            f"{label}, linear",
+            linear,
+            math.sqrt(lvar1),
+            math.sqrt(_quadratic_form(cmat, var2)),
+            test2,
+            1.0,
+            _core.pchisq(test2, 1.0, lower_tail=False),
+        ),
+        # max(.5, df - 1) stops silly p-values for a chisq of 0 on 0 df
+        _penal_row(
+            f"{label}, nonlin",
+            math.nan,
+            math.nan,
+            math.nan,
+            nonlinear,
+            df - 1.0,
+            _core.pchisq(nonlinear, max(0.5, df - 1.0), lower_tail=False),
+        ),
+    ]
+    return rows, f"Theta= {_r_format_number(history.theta)}"
+
+
+def _frailty_print(
+    label: str, term: _PenaltyDesignTerm, test: float, df: float, history: Any
+) -> tuple[dict[str, Any], str]:
+    """The frailty distributions' ``printfun``: the Wald test of the random effects on
+    the term's df, and the variance of the random effect."""
+
+    theta = history.history[-1][0] if history.history else history.theta
+    text = f"Variance of random effect= {_r_format_number(theta)}"
+    if term.penalty.distribution == "gamma":
+        text += f"   I-likelihood = {_r_format_number(round(history.c_loglik, 1), 10)}"
+    # max(df, .5) stops silly p-values
+    p = _core.pchisq(test, max(df, 0.5), lower_tail=False)
+    return _penal_row(label, math.nan, math.nan, math.nan, test, df, p), text
+
+
+def summary_coxph_penal(
+    fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0, terms: Any = False
+) -> dict[str, Any]:
+    """R's ``summary.coxph.penal`` as a dict keyed like the R list.
+
+    ``coefficients`` has one row per term with columns ``coef``, ``se(coef)``,
+    ``se2`` (from the sandwich variance ``var2``), ``Chisq``, ``DF`` and ``p``: a
+    pspline gives its linear and nonlinear parts, a frailty the Wald test of its
+    random effects on the term's df (``print2`` holds their theta), and any other
+    coefficient a Wald test on 1 df; ``terms`` makes a multi-column unpenalized
+    term one row.  There is no score, Wald or R-squared test.
+    """
+
+    penalized = fit.penalized
+    if penalized is None:
+        raise TypeError("summary_coxph_penal requires a penalized Cox fit")
+    scale_value = _finite_float(scale, "scale")
+    term_tests = _normalize_bool_option(terms, "terms")
+    beta = fit.coefficients
+    if not beta and penalized.frail is None:
+        raise ValueError("Penalized summary function can't be used for a null model")
+    var, var2 = fit.var, fit.var2
+    histories = {history.term: history for history in penalized.history}
+    rows: list[dict[str, Any]] = []
+    print2: list[str] = []
+    for i, (label, term) in enumerate(_model_terms(fit)):
+        columns, df = penalized.assign2[i], penalized.df[i]
+        penalty = term.penalty.kind if isinstance(term, _PenaltyDesignTerm) else None
+        coef = [] if penalized.pterms[i] == 2 else [beta[col] for col in columns]
+        if penalty == "pspline":
+            spline_rows, text = _pspline_print(
+                label, term, coef, _block(var, columns), _block(var2, columns), df, histories[i]
+            )
+            rows.extend(spline_rows)
+            print2.append(text)
+        elif penalty == "frailty":
+            if penalized.pterms[i] == 2:
+                test = sum(b * b / v for b, v in zip(penalized.frail, penalized.fvar, strict=True))
+            else:
+                test = coxph_wtest(_block(var, columns), coef).test[0]
+            row, text = _frailty_print(label, term, test, df, histories[i])
+            rows.append(row)
+            print2.append(text)
+        elif term_tests and len(columns) > 1:
+            test = coxph_wtest(_block(var, columns), coef).test[0]
+            p = _core.pchisq(test, 1.0, lower_tail=False)
+            rows.append(_penal_row(label, math.nan, math.nan, math.nan, test, df, p))
+        else:
+            rows.extend(
+                _wald_row(fit.coef_names[col], beta[col], var[col][col], var2[col][col])
+                for col in columns
+            )
+    logtest = -2.0 * (fit.loglik[0] - fit.loglik[1])
+    df_total = _coxph_df(fit)
+    result: dict[str, Any] = {
+        "model_type": "coxph.penal",
+        "n": fit.n,
+        "nevent": fit.nevent,
+        "n_event": fit.nevent,
+        "loglik": fit.loglik[1],
+        "null_loglik": fit.loglik[0],
+        "iter": fit.iter,
+        "df": list(penalized.df),
+        "coefficient_columns": ["coef", "se(coef)", "se2", "Chisq", "DF", "p"],
+        "coefficients": rows,
+        "print2": print2,
+        "logtest": {
+            "test": logtest,
+            "df": df_total,
+            "pvalue": _core.pchisq(logtest, df_total, lower_tail=False),
+        },
+        "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
+    }
+    if conf_int and beta:
+        result["conf_int"] = _conf_int_rows(
+            fit.coef_names,
+            [value * scale_value for value in beta],
+            [math.sqrt(var[idx][idx]) * scale_value for idx in range(len(beta))],
+            conf_int,
+        )
     return result
 
 
@@ -1233,22 +1465,18 @@ def predict_coxph(
         if need_response and new.y is not None and new.y.type != fit.y.type:
             raise ValueError("New data has a different survival type than the model")
 
+    pred: Any
+    se: Any
     if predict_type == "terms":
-        selected = _terms_selection(terms, list(fit.assign))
-        result = fit.fit.predict_terms(
-            newdata=None if new is None else new.x,
-            new_strata=None if new is None else new.strata,
-            new_offset=None if new is None else new.offset,
-            se_fit=include_se,
-            reference=reference_name,
-            assign=_active_assign(fit),
-        )
-        pred: Any = [[row[idx] for idx in selected] for row in result.fit]
-        se: Any = (
-            None
-            if result.se_fit is None
-            else [[row[idx] for idx in selected] for row in result.se_fit]
-        )
+        selected = _terms_selection(terms, _term_labels(fit))
+    if predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign:
+        pred, se = _frailty_prediction(fit, new, include_se)
+        if predict_type == "risk":
+            pred = [math.exp(value) for value in pred]
+    elif predict_type == "terms":
+        rows, se_rows = _predict_terms(fit, new, include_se, reference_name)
+        pred = [[row[idx] for idx in selected] for row in rows]
+        se = None if se_rows is None else [[row[idx] for idx in selected] for row in se_rows]
     else:
         result = fit.fit.predict(
             predict_type,
@@ -1269,6 +1497,50 @@ def predict_coxph(
         if se is not None:
             se = _rowsum(se, collapse, squares=True)
     return PredictResult(pred, se) if include_se else pred
+
+
+def _frailty_prediction(
+    fit: CoxphModel, new: _NewData | None, se_fit: bool
+) -> tuple[list[float], list[float] | None]:
+    """predict.coxph.penal for a model of a sparse frailty alone: the linear predictor
+    (for types lp, risk and terms), with the frailties' standard errors ``sqrt(fvar)``
+    (not rescaled for the risk, as in R), and 0 for new data."""
+
+    if new is not None:
+        return [0.0] * new.n, [0.0] * new.n if se_fit else None
+    penalized = fit.penalized
+    se = [math.sqrt(penalized.fvar[group]) for group in penalized.frail_index]
+    return fit.linear_predictors, se if se_fit else None
+
+
+def _predict_terms(
+    fit: CoxphModel, new: _NewData | None, se_fit: bool, reference: str
+) -> tuple[list[list[float]], list[list[float]] | None]:
+    """The ``terms`` predictions of every model term.  As in predict.coxph.penal, a
+    sparse frailty's column holds the subjects' frailties (with standard errors
+    ``sqrt(fvar)``), and 0 for new data."""
+
+    result = fit.fit.predict_terms(
+        newdata=None if new is None else new.x,
+        new_strata=None if new is None else new.strata,
+        new_offset=None if new is None else new.offset,
+        se_fit=se_fit,
+        reference=reference,
+        assign=_active_assign(fit),
+    )
+    rows = [list(row) for row in result.fit]
+    se_rows = None if result.se_fit is None else [list(row) for row in result.se_fit]
+    position = _sparse_term(fit)
+    if position is not None:
+        penalized = fit.penalized
+        for i, row in enumerate(rows):
+            group = penalized.frail_index[i] if new is None else None
+            row.insert(position, 0.0 if group is None else penalized.frail[group])
+            if se_rows is not None:
+                se_rows[i].insert(
+                    position, 0.0 if group is None else math.sqrt(penalized.fvar[group])
+                )
+    return rows, se_rows
 
 
 def predict_terms_constant(fit: CoxphModel) -> float:
@@ -1344,6 +1616,9 @@ def residuals_coxph(
     weighted_value = _normalize_optional_bool_option(weighted, "weighted")
     if weighted_value is None:
         weighted_value = otype in {"dfbeta", "dfbetas"}
+    # residuals.coxph.null
+    if not fit.coef_names and fit.penalized is None and otype not in {"martingale", "deviance"}:
+        raise ValueError(f"'{otype}' residuals are not defined for a null model")
     if fit.method == "exact" and otype in {"score", "schoenfeld", "scaledsch", "dfbeta", "dfbetas"}:
         raise ValueError(f"{otype} residuals are not available for the exact method")
     codes = _collapse_codes(fit, collapse)
@@ -1756,16 +2031,33 @@ def _anova_test_name(test: Any) -> str | None:
     raise ValueError("test must be 'Chisq' or None")
 
 
-def _nested_frame(fit: CoxphModel, columns: Sequence[int]) -> _ModelFrame:
-    """The reduced model frame anova.coxph refits: ``Y ~ X[, columns] + strata + offset``."""
+def _model_matrix_by_term(fit: CoxphModel) -> list[tuple[list[str], list[list[float]]]]:
+    """``model.matrix(fit)`` split by term: each term's column names and columns.  A
+    penalized term enters with its basis columns, a sparse frailty with its group
+    codes (``as.numeric(factor(x))``), which is how R's model matrix holds them."""
 
-    names = [fit.coef_names[col] for col in columns]
+    x = fit.x
+    blocks = [
+        ([fit.coef_names[col] for col in cols], [[row[col] for row in x] for col in cols])
+        for cols in fit.assign.values()
+    ]
+    position = _sparse_term(fit)
+    if position is not None:
+        codes = [float(group + 1) for group in fit.penalized.frail_index]
+        blocks.insert(position, ([_term_labels(fit)[position]], [codes]))
+    return blocks
+
+
+def _nested_frame(fit: CoxphModel, names: list[str], columns: list[list[float]]) -> _ModelFrame:
+    """The reduced model anova.coxph refits, ``Y ~ X[, assign <= k] + strata + offset``:
+    plain numeric columns, so every term is refitted unpenalized."""
+
     return _ModelFrame(
         formula=fit.formula,
         data=None,
         y=fit.y,
-        x=[[row[col] for col in columns] for row in fit.x],
-        design=fit.design,
+        x=[list(row) for row in zip(*columns, strict=True)],
+        design=replace(fit.design, covariates=(), term_assignments=()),
         terms=fit.terms,
         names=names,
         assign={name: (idx,) for idx, name in enumerate(names)},
@@ -1780,16 +2072,22 @@ def _nested_frame(fit: CoxphModel, columns: Sequence[int]) -> _ModelFrame:
 
 
 def _anova_single(fit: CoxphModel, test: str | None) -> Any:
+    """anova.coxph for one model.  As in R, where anova.coxph.penal is not registered,
+    the leading terms of a penalized model are refitted unpenalized and the full model
+    counts ``sum(fit$df)``, so a step's Df can be fractional or negative."""
+
     if fit.rscore is not None:
         raise ValueError("Can't do anova tables with robust variances")
-    aliased = _aliased(fit)
-    term_names = list(fit.assign)
+    blocks = _model_matrix_by_term(fit)
     logliks = [fit.loglik[0]]
-    dfs = [0]
-    for term_idx in range(len(term_names) - 1):
-        columns = [col for name in term_names[: term_idx + 1] for col in fit.assign[name]]
+    dfs = [0.0]
+    for k in range(1, len(blocks)):
         nested = _coxph_fit_frame(
-            _nested_frame(fit, columns),
+            _nested_frame(
+                fit,
+                [name for names, _ in blocks[:k] for name in names],
+                [column for _, columns in blocks[:k] for column in columns],
+            ),
             method=fit.method,
             init=None,
             iter_max=20,
@@ -1803,11 +2101,11 @@ def _anova_single(fit: CoxphModel, test: str | None) -> Any:
             keep_model=False,
         )
         logliks.append(nested.loglik[1])
-        dfs.append(sum(1 for value in nested.coefficients if not math.isnan(value)))
-    if term_names:
+        dfs.append(_coxph_df(nested))
+    if blocks:
         logliks.append(fit.loglik[1])
-        dfs.append(sum(1 for value in aliased if not value))
-    return _core.anova_coxph(logliks, dfs, ["NULL", *term_names], sequential=True, test=test)
+        dfs.append(_coxph_df(fit))
+    return _core.anova_coxph(logliks, dfs, ["NULL", *_term_labels(fit)], sequential=True, test=test)
 
 
 def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
@@ -1831,7 +2129,7 @@ def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
     if len(fits) == 1:
         return _anova_single(fits[0], test)
     logliks = [fit.loglik[-1] for fit in fits]
-    dfs = [sum(1 for value in fit.coefficients if not math.isnan(value)) for fit in fits]
+    dfs = [_coxph_df(fit) for fit in fits]
     return _core.anova_coxph(logliks, dfs, None, sequential=False, test=test)
 
 
