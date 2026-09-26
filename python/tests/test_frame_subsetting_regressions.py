@@ -9,10 +9,13 @@ whatever the container; counting-process rows with ``start >= stop`` are dropped
 from __future__ import annotations
 
 import datetime
+import math
+import warnings
 
 import pytest
 
 from .helpers import setup_survival_import
+from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r_api
@@ -264,6 +267,56 @@ def test_start_not_before_stop_rows_are_missing():
         pytest.raises(ValueError, match="missing values"),
     ):
         r.coxph("Surv(start, stop, status) ~ x", BACKWARDS, na_action="fail")
+
+
+def test_start_not_before_stop_warns_once_at_the_caller():
+    from survival.r._formula import model_frame
+
+    for fit in (r.coxph, r.concordance):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fit("Surv(start, stop, status) ~ x", BACKWARDS, na_action="omit")
+        assert [str(warning.message) for warning in caught] == [
+            "Stop time must be > start time, NA created"
+        ]
+        assert caught[0].filename == __file__
+    # model.frame(Surv(start, stop, status) ~ x, d, na.action = na.pass): 4 rows, start NA
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        frame = model_frame("Surv(start, stop, status) ~ x", BACKWARDS, na_action="pass")
+    assert len(caught) == 1
+    assert frame.n == 4
+    assert math.isnan(frame.response.start[3])
+
+
+def test_start_not_before_stop_in_named_and_multistate_responses():
+    # coxph(Surv(time = start, time2 = stop, event = status) ~ x, d)
+    with pytest.warns(UserWarning, match="Stop time must be > start time, NA created"):
+        fit = r.coxph(
+            "Surv(time = start, time2 = stop, event = status) ~ x", BACKWARDS, na_action="omit"
+        )
+    assert fit.n == 3
+    assert fit.coefficients == pytest.approx([0.874234772123199], rel=1e-9)
+    # m$event <- factor(c("a", "censor", "b", "a", "b", "b"), c("censor", "a", "b"))
+    # survfit(Surv(start, stop, event) ~ 1, m, id = id): the fifth row has start = stop
+    data = {
+        "id": [1, 2, 3, 4, 5, 6],
+        "start": [0, 0, 2, 0, 4, 1],
+        "stop": [5, 4, 8, 7, 4, 6],
+        "event": RFactor(["a", "censor", "b", "a", "b", "b"], ["censor", "a", "b"]),
+    }
+    with pytest.warns(UserWarning, match="Stop time must be > start time, NA created"):
+        curves = r.survfit("Surv(start, stop, event) ~ 1", data, id="id")
+    assert curves.n == [5]
+    assert curves.time == [4.0, 5.0, 6.0, 7.0, 8.0]
+    assert curves.pstate == [
+        [1.0, 0.0, 0.0],
+        [0.75, 0.25, 0.0],
+        [0.5, 0.25, 0.25],
+        [0.25, 0.5, 0.25],
+        [0.0, 0.5, 0.5],
+    ]
+    assert [row[0] for row in curves.n_risk] == [5.0, 4.0, 3.0, 2.0, 1.0]
 
 
 def test_survreg_cluster_and_offset_by_column_name(lung):

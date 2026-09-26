@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import math
+import os
+import sys
+import warnings
 from collections.abc import Mapping, Sequence
 from operator import index
 from typing import Any
@@ -16,6 +19,7 @@ _VARIANCE_SCALE_FLOOR = 1e-12
 _COX_DFBETAS_SCALE_FLOOR = 1e-10
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
+_PACKAGE_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
 
 
 def _coerce_mapping_rows(values: Mapping[Any, Any], name: str) -> list[list[Any]]:
@@ -216,6 +220,21 @@ def _keep_rows_after_na_action(
     if action == "fail":
         raise ValueError(f"missing values in {context}")
     return [idx for idx in range(n) if idx not in missing]
+
+
+def _warn_outside_package(message: str) -> None:
+    """``warnings.warn(message)`` reported at the first caller outside this package.
+
+    Shared helpers run at a different depth under each public function, so no fixed
+    ``stacklevel`` fits them all (``skip_file_prefixes`` needs Python 3.12).
+    """
+
+    frame = sys._getframe(1)
+    level = 2
+    while frame.f_back is not None and frame.f_code.co_filename.startswith(_PACKAGE_PREFIX):
+        frame = frame.f_back
+        level += 1
+    warnings.warn(message, stacklevel=level)
 
 
 def _is_bool_like(value: Any) -> bool:

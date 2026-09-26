@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
-from itertools import combinations, product
+from itertools import combinations, compress, product
+from operator import ge
 from typing import Any
 
 from ._coerce import (
@@ -23,6 +23,7 @@ from ._coerce import (
     _subset_indices,
     _subset_optional_sequence,
     _subset_sequence,
+    _warn_outside_package,
 )
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
 from ._surv import (
@@ -825,11 +826,12 @@ def _subset_formula_inputs(
     return _formula_data_rows(formula, data, indices, n), filtered
 
 
-def _backwards_interval_rows(formula: str, data: Any, n: int) -> set[int]:
+def _backwards_interval_rows(formula: str, data: Any, n: int) -> list[int]:
     """The rows of a ``Surv(start, stop, event)`` response with ``start >= stop``.
 
     R's ``Surv`` turns their start into ``NA`` (with its warning) while ``model.frame``
-    evaluates the response, so ``na.action`` treats them as missing.
+    evaluates the response, so ``na.action`` treats them as missing.  A ``NaN``
+    endpoint compares false; ``None``/``pd.NA`` go through ``Surv``'s conversion.
     """
 
     spec = _response_spec(formula)
@@ -839,16 +841,17 @@ def _backwards_interval_rows(formula: str, data: Any, n: int) -> set[int]:
         or len(spec.arguments) != 3
         or spec.type not in {None, "counting", "mstate"}
     ):
-        return set()
-    start = _time_column(
-        _response_arg_values(data, spec.arguments[0], n), "time", "Time variable is not numeric"
-    )
-    stop = _time_column(
-        _response_arg_values(data, spec.arguments[1], n), "time2", "Stop time is not numeric"
-    )
-    rows = {row for row, (begin, end) in enumerate(zip(start, stop, strict=True)) if begin >= end}
+        return []
+    start = _materialize_1d(_response_arg_values(data, spec.arguments[0], n), "time")
+    stop = _materialize_1d(_response_arg_values(data, spec.arguments[1], n), "time2")
+    try:
+        rows = list(compress(range(n), map(ge, start, stop)))
+    except TypeError:
+        start = _time_column(start, "time", "Time variable is not numeric")
+        stop = _time_column(stop, "time2", "Stop time is not numeric")
+        rows = list(compress(range(n), map(ge, start, stop)))
     if rows:
-        warnings.warn("Stop time must be > start time, NA created", stacklevel=5)
+        _warn_outside_package("Stop time must be > start time, NA created")
     return rows
 
 
@@ -874,7 +877,7 @@ def _apply_formula_na_action(
         ],
         n,
     )
-    missing |= _backwards_interval_rows(formula, data, n)
+    missing.update(_backwards_interval_rows(formula, data, n))
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
         return data, row_aligned
