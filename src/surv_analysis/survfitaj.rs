@@ -6,7 +6,10 @@
 use super::survfit_aj_summary::{AJMeanTable, summary_survfit_aj, survmean_aj};
 use super::survfit_confint::{ConfType, survfit_confint, validate_conf_int};
 use super::survfit_summary::RmeanOption;
-use super::survfitkm::{check_curve_indices, rows_by_curve, select_items, survflag};
+use super::survfitkm::{
+    check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
+};
+use crate::data_prep::first_appearance_codes;
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
@@ -298,23 +301,7 @@ impl SurvfitAJResult {
 
     /// Row range of each curve in the stacked matrices.
     pub fn curve_ranges(&self) -> Vec<std::ops::Range<usize>> {
-        match &self.strata {
-            Some(strata) => {
-                let mut start = 0;
-                strata
-                    .iter()
-                    .map(|&count| {
-                        let range = start..start + count;
-                        start += count;
-                        range
-                    })
-                    .collect()
-            }
-            None => {
-                let whole = 0..self.time.len();
-                vec![whole]
-            }
-        }
+        curve_ranges(self.strata.as_deref(), self.time.len())
     }
 
     /// `fit[curves, ]` (`[.survfitms`): the curves at the given positions of
@@ -958,21 +945,6 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
 // The R-level driver
 // ---------------------------------------------------------------------------
 
-fn codes_by_first_appearance(values: &[i64]) -> (Vec<usize>, Vec<i64>) {
-    let mut levels = Vec::new();
-    let mut lookup = HashMap::new();
-    let codes = values
-        .iter()
-        .map(|&value| {
-            *lookup.entry(value).or_insert_with(|| {
-                levels.push(value);
-                levels.len() - 1
-            })
-        })
-        .collect();
-    (codes, levels)
-}
-
 fn rows_to_vec(matrix: &Array2<f64>, columns: std::ops::Range<usize>) -> Vec<Vec<f64>> {
     matrix
         .outer_iter()
@@ -1015,7 +987,7 @@ pub(crate) fn aj_prepare(data: &SurvfitAJData, timefix: bool) -> SurvivalResult<
     let weights: Vec<f64> = data.weights.clone().unwrap_or_else(|| vec![1.0; n_all]);
     // id: a dummy value when absent
     let (id, _) = match &data.id {
-        Some(id) => codes_by_first_appearance(id),
+        Some(id) => first_appearance_codes(id),
         None => ((0..n_all).collect(), (0..n_all as i64).collect()),
     };
     // istate levels: as given, else alphabetical, else "(s0)"
@@ -1088,23 +1060,7 @@ pub fn survfitaj(
         }
     }
     // curves: the strata levels come from the full data
-    let strata_levels: Vec<i32> = match &data.strata {
-        Some(strata) => {
-            let mut levels = strata.clone();
-            levels.sort_unstable();
-            levels.dedup();
-            levels
-        }
-        None => vec![0],
-    };
-    let x_all: Vec<usize> = (0..n_all)
-        .map(|i| match &data.strata {
-            Some(strata) => strata_levels
-                .binary_search(&strata[i])
-                .expect("code is a level"),
-            None => 0,
-        })
-        .collect();
+    let (strata_levels, x_all) = strata_index(data.strata.as_deref(), n_all);
     // start.time: remove rows that end before it
     let rows: Vec<usize> = match options.start_time {
         Some(start_time) => {
@@ -1141,7 +1097,7 @@ pub fn survfitaj(
     let cluster: Vec<usize> = match data.cluster.as_ref().or(data.id.as_ref()) {
         Some(labels) => {
             let subset: Vec<i64> = rows.iter().map(|&i| labels[i]).collect();
-            codes_by_first_appearance(&subset).0
+            first_appearance_codes(&subset).0
         }
         None => (0..n).collect(),
     };
@@ -1284,14 +1240,14 @@ pub fn survfitaj(
             utime.into_iter().filter(|&t| t >= t0).collect()
         };
         // clusters renumbered per curve, in order of appearance
-        let subset: Vec<i64> = keep.iter().map(|&i| cluster[i] as i64).collect();
-        let (renumbered, unique) = codes_by_first_appearance(&subset);
+        let subset: Vec<usize> = keep.iter().map(|&i| cluster[i]).collect();
+        let (renumbered, unique) = first_appearance_codes(&subset);
         for (&i, code) in keep.iter().zip(renumbered) {
             c2[i] = code;
         }
         let nclust = unique.len();
         // R names the influence rows `uclust`: the clusters' numbers
-        let clusters: Vec<i64> = unique.iter().map(|&code| code + 1).collect();
+        let clusters: Vec<i64> = unique.iter().map(|&code| code as i64 + 1).collect();
         let n_id = {
             let mut ids: Vec<usize> = keep.iter().map(|&i| id[i]).collect();
             ids.sort_unstable();

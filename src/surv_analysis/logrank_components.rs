@@ -4,7 +4,7 @@
 //! expected survival probabilities.
 
 use super::survfit_confint::ConfType;
-use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
@@ -104,19 +104,6 @@ impl SurvDiffResult {
     pub fn exp_totals(&self) -> Vec<f64> {
         self.exp.iter().map(|row| row.iter().sum()).collect()
     }
-}
-
-fn sorted_levels(codes: &[i32]) -> Vec<i32> {
-    let mut levels = codes.to_vec();
-    levels.sort_unstable();
-    levels.dedup();
-    levels
-}
-
-fn level_index(levels: &[i32], code: i32) -> usize {
-    levels
-        .binary_search(&code)
-        .expect("code is one of its own levels")
 }
 
 /// The Kaplan-Meier curve of one stratum as `survdiff2.c` uses it for the
@@ -298,24 +285,13 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
         (data.start.clone(), data.time.clone())
     };
     let n = time.len();
-    let group_levels = sorted_levels(&data.group);
+    let (group_levels, group) = strata_index(Some(&data.group), n);
     let ngroup = group_levels.len();
     if ngroup < 2 {
         return Err(SurvivalError::invalid_input("There is only 1 group"));
     }
-    let group: Vec<usize> = data
-        .group
-        .iter()
-        .map(|&code| level_index(&group_levels, code))
-        .collect();
-    let strata_levels = data.strata.as_deref().map(sorted_levels);
-    let nstrat = strata_levels.as_ref().map_or(1, Vec::len);
-    let stratum: Vec<usize> = (0..n)
-        .map(|i| match (&data.strata, &strata_levels) {
-            (Some(strata), Some(levels)) => level_index(levels, strata[i]),
-            _ => 0,
-        })
-        .collect();
+    let (strata_levels, stratum) = strata_index(data.strata.as_deref(), n);
+    let nstrat = strata_levels.len();
     let kaplan = if rho == 0.0 {
         None
     } else {
@@ -399,7 +375,7 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
         chisq,
         pvalue: pchisq(chisq, df as f64, false, false),
         df,
-        strata: strata_levels.map(|_| strata_counts),
+        strata: data.strata.is_some().then_some(strata_counts),
         group_codes: group_levels,
     })
 }
