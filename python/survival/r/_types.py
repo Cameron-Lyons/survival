@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from operator import index
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .. import _survival as _core
 
@@ -742,6 +742,29 @@ class SurvfitCall:
     type: str | None = None
 
 
+class _EngineInfluence(NamedTuple):
+    """Pickled in place of influence matrices that are views of the ``engine``'s own.
+
+    ``pickle`` and ``copy`` would otherwise store each matrix twice, once in the fit's
+    list and once in the encoded engine, and a restored fit would hold two copies;
+    ``__setstate__`` takes the matrices from the restored engine instead (and names the
+    rows of a Kaplan-Meier curve's matrices by ``clname``, as ``_km_result`` does).
+    """
+
+    clname: Sequence[Any] | None
+
+
+def _views_of_engine(mine: Sequence[Any] | None, engines: Sequence[Any] | None) -> bool:
+    """Whether each influence matrix of ``mine`` is a view of the engine curve's matrix."""
+
+    if not mine or engines is None or len(mine) != len(engines):
+        return False
+    return all(
+        curve.values.__array_interface__ == engine.values.__array_interface__
+        for curve, engine in zip(mine, engines, strict=True)
+    )
+
+
 @dataclass(frozen=True)
 class SurvfitInfluenceMatrix:
     """One curve's ``influence.surv`` or ``influence.chaz`` matrix of a ``survfit`` object.
@@ -817,6 +840,26 @@ class SurvfitResult:
 
         return list(self.strata) if self.strata else []
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        for name in ("influence_surv", "influence_chaz"):
+            matrices = state[name]
+            if _views_of_engine(
+                [matrix.influence for matrix in matrices or ()], getattr(self.engine, name, None)
+            ) and all(matrix.clname is matrices[0].clname for matrix in matrices):
+                state[name] = _EngineInfluence(matrices[0].clname)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        for name in ("influence_surv", "influence_chaz"):
+            if isinstance(state[name], _EngineInfluence):
+                clname = state[name].clname
+                state[name] = [
+                    SurvfitInfluenceMatrix(curve, clname)
+                    for curve in getattr(state["engine"], name)
+                ]
+        self.__dict__.update(state)
+
 
 @dataclass(frozen=True)
 class SurvfitMultiStateResult:
@@ -871,6 +914,17 @@ class SurvfitMultiStateResult:
     @property
     def strata_names(self) -> list[str]:
         return list(self.strata) if self.strata else []
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        if _views_of_engine(self.influence_pstate, getattr(self.engine, "influence_pstate", None)):
+            state["influence_pstate"] = _EngineInfluence(None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        if isinstance(state["influence_pstate"], _EngineInfluence):
+            state["influence_pstate"] = state["engine"].influence_pstate
+        self.__dict__.update(state)
 
 
 @dataclass(frozen=True)

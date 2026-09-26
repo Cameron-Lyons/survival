@@ -23,6 +23,7 @@ use crate::internal::validation::{
 use ndarray::{Array2, ShapeBuilder};
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 mod robust;
@@ -222,8 +223,8 @@ impl SurvfitKMData {
 
 /// Unweighted counts, reported alongside the weighted ones when case
 /// weights are present (R's `counts` component).
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitCounts {
     #[pyo3(get)]
     pub n_risk: Vec<f64>,
@@ -237,6 +238,12 @@ pub struct SurvfitCounts {
 
 #[pymethods]
 impl SurvfitCounts {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     /// The counts of one stratum, for callers that split a curve set.
     #[new]
     #[pyo3(signature = (n_risk, n_event, n_censor, n_enter = None))]
@@ -264,17 +271,23 @@ impl SurvfitCounts {
 /// The matrix is column-major, one contiguous column per time as
 /// `survfitkm.c` writes it (R's layout), and shared: clones of the fit and
 /// the NumPy array Python reads (a read-only view) do not copy it.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(frozen, from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", frozen, from_py_object)]
 pub struct SurvfitInfluence {
     #[pyo3(get)]
     pub cluster: Vec<i64>,
+    #[serde(with = "crate::internal::pickle::memory_order")]
     pub values: Arc<Array2<f64>>,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
 impl SurvfitInfluence {
+    /// Pickle and copy support (see `internal::pickle`).
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     /// The `clusters x times` matrix as a read-only NumPy array.
     #[getter(values)]
     fn values_array<'py>(this: &Bound<'py, Self>) -> Bound<'py, numpy::PyArray2<f64>> {
@@ -290,8 +303,8 @@ impl SurvfitInfluence {
 /// `std_err` is the standard error of `log(surv)` when `logse` is true (the
 /// Greenwood variance) and of `surv` itself otherwise (robust variance);
 /// `std_chaz` is always the standard error of `cumhaz`.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitKMResult {
     /// Observations used by each curve.
     #[pyo3(get)]
@@ -620,6 +633,12 @@ pub(crate) fn select_items<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> 
 
 #[pymethods]
 impl SurvfitKMResult {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     /// `fit[curves]`: see [`SurvfitKMResult::select_curves`].
     #[pyo3(name = "select_curves")]
     fn py_select_curves(&self, curves: Vec<usize>) -> PyResult<Self> {

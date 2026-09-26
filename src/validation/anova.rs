@@ -14,6 +14,7 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// How the models were produced, which decides the sign convention of
 /// the chi-square column exactly as R does.
@@ -26,8 +27,8 @@ pub enum AnovaKind {
 }
 
 /// One row of the table.  The first model has no test (R's `NA` cells).
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct AnovaRow {
     /// R's row name: `"NULL"` then the term labels, or `"1"`, `"2"`, ...
     pub name: String,
@@ -39,13 +40,15 @@ pub struct AnovaRow {
 }
 
 /// R's `anova` data frame for Cox models.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct AnovaCoxphResult {
     pub rows: Vec<AnovaRow>,
     /// `"Chisq"` when p-values were requested (R's `test` argument).
     pub test: Option<String>,
 }
+
+crate::internal::pickle::picklable!(AnovaRow, AnovaCoxphResult);
 
 /// Build the analysis-of-deviance table from the models' final partial
 /// log-likelihoods and their degrees of freedom (`sum(fit$df)` for a

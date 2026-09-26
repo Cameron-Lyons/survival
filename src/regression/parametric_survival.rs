@@ -25,10 +25,11 @@ use crate::residuals::survreg_resid::{
 };
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// `survreg.control()`: the iteration settings of a fit.
-#[pyclass(from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[pyclass(module = "survival._survival", from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SurvregControl {
     /// `iter.max` (R default 30).
     #[pyo3(get, set)]
@@ -70,6 +71,12 @@ impl SurvregControl {
 
 #[pymethods]
 impl SurvregControl {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     #[new]
     #[pyo3(signature = (iter_max=30, rel_tolerance=1e-9, toler_chol=1e-10))]
     fn new(iter_max: usize, rel_tolerance: f64, toler_chol: f64) -> PyResult<Self> {
@@ -244,8 +251,8 @@ impl SurvregData {
 }
 
 /// A fitted `survreg` model: the components of R's `survreg` object.
-#[pyclass(from_py_object)]
-#[derive(Debug, Clone, PartialEq)]
+#[pyclass(module = "survival._survival", from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurvregFit {
     /// The location coefficients followed by one `Log(scale)` per estimated
     /// stratum, as `survreg.fit` returns them (R's `survreg` moves the
@@ -370,6 +377,12 @@ impl SurvregFit {
 
 #[pymethods]
 impl SurvregFit {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     /// `predict(object, newdata, type, se.fit, p, terms)`.  `offset` and
     /// `strata` describe the rows of `newdata`; `assign` gives the term
     /// number of every design column for `type = "terms"`.

@@ -49,6 +49,7 @@ use crate::regression::coxph::{
 use crate::regression::coxph_wtest::wald_statistic;
 use ndarray::Array2;
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// `coxph.control()$outer.max`.
@@ -167,8 +168,8 @@ impl Default for CoxpenalOptions {
 }
 
 /// The search history of one penalised term (`fit$history[[i]]`).
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PenaltyHistory {
     /// Index of the model term.
     #[pyo3(get)]
@@ -193,14 +194,16 @@ pub struct PenaltyHistory {
     pub half: Option<i64>,
 }
 
+crate::internal::pickle::picklable!(PenaltyHistory);
+
 /// A fitted penalised Cox model (R's `coxph.penal` object).
 ///
 /// The dense coefficients live in `coxph`, a [`CoxPHFit`] whose
 /// coefficients, variance (`H^{-1}`), means, linear predictors (including a
 /// sparse frailty) and martingale residuals are those of the penalised fit;
 /// its `predict()` and residual methods are R's for a `coxph.penal` object.
-#[pyclass(skip_from_py_object)]
-#[derive(Debug, Clone)]
+#[pyclass(module = "survival._survival", skip_from_py_object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoxpenalFit {
     pub coxph: CoxPHFit,
     /// The same fit with the frailty removed from the linear predictors,
@@ -946,14 +949,28 @@ impl CoxpenalFit {
 
 /// A penalty term for [`coxpenal_fit`]: `ridge()`, `pspline()`, `frailty()`
 /// or a Python callback.
-#[pyclass(from_py_object)]
-#[derive(Debug, Clone)]
+#[pyclass(module = "survival._survival", from_py_object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoxPenalty {
     pub term: PenaltyTerm,
 }
 
 #[pymethods]
 impl CoxPenalty {
+    /// Pickle and copy support (see `internal::pickle`); a callback term
+    /// pickles its callable, which pickle must be able to reach by name.
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        match &self.term {
+            PenaltyTerm::Callback(callback) => (
+                py.get_type::<Self>().getattr("callback")?,
+                (callback.fexpr.clone_ref(py), callback.diag, callback.sparse),
+            )
+                .into_pyobject(py),
+            _ => crate::internal::pickle::reduce(py, self)?.into_pyobject(py),
+        }
+    }
+
     /// `ridge(..., theta, df, eps, scale)`; `scale_values` are the column
     /// variances R's `ridge()` takes in the model frame, before `subset` and
     /// `na.action` (by default those of the rows fitted).
@@ -1076,6 +1093,12 @@ impl CoxPenalty {
 
 #[pymethods]
 impl CoxpenalFit {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     /// The dense part of the fit as a Cox model: `predict()`, the residual
     /// types and `survfit()` with new data come from here.
     #[getter(coxph)]

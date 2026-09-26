@@ -1,4 +1,5 @@
-"""Hooks that call back into Python from Rust (R's ``coxpenal.fit`` penalty callback)."""
+"""Hooks between Python and Rust: R's ``coxpenal.fit`` penalty callback and the pickle
+reconstructor of the native result classes."""
 
 import warnings
 from collections.abc import Callable, Mapping
@@ -10,6 +11,7 @@ __all__ = bind_names(
     globals(),
     [
         "CoxPenaltyTerms",
+        "_unpickle",
         "cox_callback",
     ],
 )

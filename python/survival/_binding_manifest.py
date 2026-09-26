@@ -510,6 +510,7 @@ BINDINGS = (
     "YatesCurves",
     "YatesEstimate",
     "YatesResult",
+    "_unpickle",
     "aareg_fit",
     "active_learning_selection",
     "advanced_calibration_metrics",
@@ -1437,6 +1438,7 @@ MODULE_BINDINGS = {
     ),
     "pybridge": (
         "CoxPenaltyTerms",
+        "_unpickle",
         "cox_callback",
     ),
     "qol": (

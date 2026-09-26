@@ -26,6 +26,7 @@ use crate::internal::qr::LinpackQr;
 use crate::internal::simd::dot_product;
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 mod rng;
 
 /// Which contrasts of the population marginal means to test (R `test`).
@@ -75,8 +76,8 @@ pub struct YatesInput<'a> {
 }
 
 /// One tested contrast: R's `test` matrix row.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct YatesContrast {
     pub name: String,
     /// `NaN` for a contrast that uses a non-estimable level (R's `NA`).
@@ -86,6 +87,8 @@ pub struct YatesContrast {
     /// Sum of squares (`chisq * sigma2`), linear models only.
     pub ss: Option<f64>,
 }
+
+crate::internal::pickle::picklable!(YatesContrast);
 
 /// One level's population marginal mean and standard error (R's
 /// `estimate` data frame); `pmm` is `NaN` for a non-estimable level.

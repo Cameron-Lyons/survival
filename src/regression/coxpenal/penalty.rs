@@ -20,6 +20,7 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::lgammafn;
 use ndarray::Array2;
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "python")]
 use std::sync::Arc;
 
@@ -35,8 +36,8 @@ use std::sync::Arc;
 /// the term's derivative and penalty (`coxpenal.fit` negates the `pfun`
 /// values so that the kernel can add them to the score and the log
 /// likelihood), and `coef` holds the coefficients after any recentring.
-#[pyclass(frozen, get_all, skip_from_py_object)]
-#[derive(Debug, Clone, PartialEq)]
+#[pyclass(module = "survival._survival", frozen, get_all, skip_from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoxPenaltyTerms {
     /// Coefficients after any recentring the penalty function applied.
     pub coef: Vec<f64>,
@@ -49,6 +50,8 @@ pub struct CoxPenaltyTerms {
     /// "Force this term to zero" flags.
     pub flag: Vec<bool>,
 }
+
+crate::internal::pickle::picklable!(CoxPenaltyTerms);
 
 impl CoxPenaltyTerms {
     /// R's initial `coxlist1`/`coxlist2`: zeros, nothing flagged.
@@ -84,7 +87,7 @@ pub(crate) struct PenaltyValue {
 }
 
 /// How `pspline()` chooses its smoothing parameter.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PsplineMethod {
     /// `theta` given: no calibration (`0 < theta < 1`).
     Fixed(f64),
@@ -96,7 +99,7 @@ pub enum PsplineMethod {
 }
 
 /// The distribution of a `frailty()` term (R's `distribution` argument).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum FrailtyFamily {
     Gamma,
     Gaussian,
@@ -136,7 +139,7 @@ impl FrailtyFamily {
 }
 
 /// How a `frailty()` term chooses its variance `theta`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrailtyMethod {
     /// Gamma only: the EM-equivalent profile likelihood (`frailty.controlgam`).
     Em,
@@ -183,7 +186,7 @@ impl FrailtyMethod {
 }
 
 /// `ridge(..., theta, df = nvar/2, eps = .1, scale = TRUE)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RidgePenalty {
     /// A fixed `theta`; `None` calibrates to `df`.
     pub theta: Option<f64>,
@@ -200,7 +203,7 @@ pub struct RidgePenalty {
 
 /// The penalty side of `pspline(x, df = 4, theta, nterm = 2.5 * df, eps = .1,
 /// method, intercept = FALSE, ...)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PsplinePenalty {
     pub method: PsplineMethod,
     /// Number of interior knot intervals; with the degree it sets the
@@ -212,7 +215,7 @@ pub struct PsplinePenalty {
 }
 
 /// `frailty(x, distribution, sparse, theta, df, eps, method, tdf, ...)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrailtyPenalty {
     pub distribution: FrailtyFamily,
     pub method: FrailtyMethod,
@@ -254,12 +257,14 @@ pub struct CallbackPenalty {
 }
 
 /// One penalised term of the model: which R penalty it is and its arguments.
-#[derive(Debug, Clone)]
+/// A callback has no serde form: `CoxPenalty` pickles its callable instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PenaltyTerm {
     Ridge(RidgePenalty),
     Pspline(PsplinePenalty),
     Frailty(FrailtyPenalty),
     #[cfg(feature = "python")]
+    #[serde(skip)]
     Callback(CallbackPenalty),
 }
 
