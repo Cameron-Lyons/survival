@@ -418,19 +418,24 @@ def _reshape(values: Sequence[float] | None, dims: Sequence[int]) -> Any:
 def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[Any]]:
     """R's ``data.frame = TRUE`` layout: one row per cell with person-years."""
 
-    cells = list(range(len(result.pyears)))
-    if terms:
-        cells = [cell for cell in cells if result.pyears[cell] > 0.0]
+    # each getter copies the whole table out of the kernel result: read it once
+    tables = {"pyears": result.pyears, "n": result.n}
+    if result.expected is not None:
+        tables["expected"] = result.expected
+    if result.event is not None:
+        tables["event"] = result.event
+    pyears = tables["pyears"]
+    cells = (
+        [cell for cell, value in enumerate(pyears) if value > 0.0]
+        if terms
+        else list(range(len(pyears)))
+    )
     frame: dict[str, list[Any]] = {}
     for depth, term in enumerate(terms):
         stride = math.prod(len(other.levels) for other in terms[:depth])
         frame[term.label] = [term.levels[(cell // stride) % len(term.levels)] for cell in cells]
-    frame["pyears"] = [result.pyears[cell] for cell in cells]
-    frame["n"] = [result.n[cell] for cell in cells]
-    if result.expected is not None:
-        frame["expected"] = [result.expected[cell] for cell in cells]
-    if result.event is not None:
-        frame["event"] = [result.event[cell] for cell in cells]
+    for name, values in tables.items():
+        frame[name] = [values[cell] for cell in cells]
     return frame
 
 
