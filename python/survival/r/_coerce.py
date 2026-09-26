@@ -199,6 +199,15 @@ def _float_or_nan(value: Any) -> float:
     return math.nan if _is_missing_value(value) else float(value)
 
 
+def _floats_or_nan(values: Sequence[Any]) -> list[float]:
+    """:func:`_float_or_nan` of each value, as fast as ``float`` when none is missing."""
+
+    try:
+        return list(map(float, values))
+    except TypeError:
+        return list(map(_float_or_nan, values))
+
+
 def _row_has_missing(value: Any) -> bool:
     value_type = type(value)
     if value is None:

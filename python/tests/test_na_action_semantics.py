@@ -211,6 +211,81 @@ def test_a_nan_made_by_a_transform_is_missing_at_fit_time(lung):
     assert ratio.coefficients == approx([0.000902963530977684, -0.507022142653092311])
 
 
+def _zero_in_row_4(lung):
+    data = {name: list(values) for name, values in lung.items()}
+    data["z"] = [1.0] * len(data["time"])
+    data["z"][3] = 0.0
+    return data
+
+
+def test_a_nan_made_by_response_arithmetic_is_missing(lung):
+    # (time * z) / z is 0/0 in row 4, so is.na(Surv) is true there
+    data = _zero_in_row_4(lung)
+    omitted = r.NaAction(rows=(4,), kind="omit")
+    weibull = r.survreg("Surv((time*z)/z, status) ~ age", data)
+    assert weibull.na_action == omitted
+    assert r.coef(weibull) == approx([6.9074762720703964, -0.0138842402422049])
+    assert weibull.scale == approx([0.759933579197352])
+    assert weibull.loglik == approx([-1147.46788529479, -1145.44806934620])
+    loglik = [-744.569012754743, -742.381987266693]
+    for formula in (
+        "Surv((time*z)/z, status) ~ age",
+        "Surv((time-time)/z, time, status) ~ age",
+        "Surv(time, (status*z)/z) ~ age",
+    ):
+        fit = r.coxph(formula, data)
+        assert fit.n == 227
+        assert fit.na_action == omitted
+        assert fit.coefficients == approx([0.0190652146354321])
+        assert fit.loglik == approx(loglik)
+    excluded = r.coxph("Surv((time*z)/z, status) ~ age", data, na_action="na.exclude")
+    assert r.residuals(excluded)[:5] == approx(
+        [0.167222290867874, -0.238885398981479, -2.554857754967571, NAN, -1.757315075289537]
+    )
+    curve = r.survfit("Surv((time*z)/z, status) ~ 1", data)
+    assert curve.n == [227]
+    assert r.summary_survfit(curve, times=[100, 500]).surv == approx(
+        [0.863369376585236, 0.294728931480036]
+    )
+    test = r.survdiff("Surv((time*z)/z, status) ~ sex", data)
+    assert test.n == [137, 90]
+    assert test.exp == approx([90.8465938529577, 73.1534061470423])
+    assert test.chisq == approx(10.1162362776144)
+    table = r.pyears("(time*z)/z ~ sex", data, scale=1)
+    assert table.pyears == approx([38876, 30507])
+    assert table.n == approx([137, 90])
+    # an interval-censored response is missing only where is.na(Surv) says so: a NaN
+    # lower end with an upper end is left censored
+    data["lo"] = list(data["time"])
+    data["hi"] = [t if s == 2 else None for t, s in zip(data["time"], data["status"], strict=True)]
+    interval = r.survreg('Surv((lo*z)/z, hi, type="interval2") ~ age', data)
+    assert interval.na_action is None
+    assert r.coef(interval) == approx([6.8847585806028126, -0.0135873927531807])
+    assert interval.scale == approx([0.762264829061663])
+
+
+def test_an_na_inside_response_arithmetic_is_missing(lung):
+    data = _zero_in_row_4(lung)
+    data["time"][5] = None
+    counting = r.coxph("Surv((time-time)/z, time, status) ~ age", data)
+    assert counting.n == 226
+    assert counting.na_action == r.NaAction(rows=(4, 6), kind="omit")
+    assert counting.coefficients == approx([0.0228400340985728])
+    with pytest.raises(ValueError, match="missing values in formula data"):
+        r.coxph("Surv((time-time)/z, time, status) ~ age", data, na_action="na.fail")
+    data["lo"] = list(data["time"])
+    data["hi"] = [t if s == 2 else None for t, s in zip(lung["time"], data["status"], strict=True)]
+    interval = r.survreg('Surv((lo*z)/z, hi, type="interval2") ~ age', data)
+    assert interval.na_action == r.NaAction(rows=(6,), kind="omit")
+    assert r.coef(interval) == approx([7.0326698204154239, -0.0162139566499659])
+    assert interval.scale == approx([0.74739471937042])
+    assert interval.loglik == approx([-1145.27198127864, -1142.48727077039])
+    # under na.pass the NA reaches the design, which both fitters refuse as R does
+    for fitter in (r.coxph, r.survreg):
+        with pytest.raises(ValueError, match="data contains an infinite predictor"):
+            fitter("Surv(time, status) ~ I(wt.loss/10)", lung, na_action="na.pass")
+
+
 def test_predict_counts_a_nan_made_by_a_transform_as_missing(lung):
     root = r.coxph("Surv(time, status) ~ sqrt(age)", lung)
     with pytest.warns(UserWarning, match=r"NaNs produced in sqrt\(age\)"):

@@ -13,6 +13,7 @@ from ._coerce import (
     _DEFAULT_NA_ACTION,
     _coerce_array_like,
     _finite_float,
+    _floats_or_nan,
     _is_missing_value,
     _keep_rows_after_na_action,
     _label_levels,
@@ -781,7 +782,7 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     try:
-        return [float(value) for value in values]
+        return _floats_or_nan(values)  # R's arithmetic keeps an NA missing
     except (TypeError, ValueError) as exc:
         raise ValueError(f"I() formula term {expression!r} requires numeric values") from exc
 
@@ -905,6 +906,24 @@ def _backwards_interval_rows(formula: str, data: Any, n: int) -> list[int]:
     return rows
 
 
+def _response_variables(spec: _SurvResponseSpec | None) -> list[_CovariateTerm]:
+    """The arithmetic arguments of the response, as the variables ``na.action`` evaluates.
+
+    ``is.na(Surv(...))`` is true where one of them is NaN (``Surv((time * z) / z,
+    status)`` at ``z = 0``).  An interval-censored response is left to ``is.na(Surv)``,
+    which reads a missing endpoint as a censoring code.
+    """
+
+    if spec is None or spec.type in {"interval", "interval2"}:
+        return []
+    arguments = [_unwrap_response_identity(argument) for argument in spec.arguments]
+    return [
+        _CovariateTerm(argument, arithmetic=argument)
+        for argument in arguments
+        if _is_formula_arithmetic_expression(argument)
+    ]
+
+
 def _made_nan_rows(
     data: Any,
     variables: Iterable[_CovariateTerm],
@@ -976,8 +995,12 @@ def _apply_formula_na_action(
     missing.update(missing_rows)
     missing.update(_backwards_interval_rows(formula, read, n))
     terms = _formula_rhs_terms(formula, data)
-    variables = [factor for term in terms.covariates for factor in _covariate_factors(term)]
-    made, _values = _made_nan_rows(data, [*variables, *terms.offsets], missing, n, read)
+    variables = [
+        *_response_variables(_response_spec(formula)),
+        *(factor for term in terms.covariates for factor in _covariate_factors(term)),
+        *terms.offsets,
+    ]
+    made, _values = _made_nan_rows(data, variables, missing, n, read)
     missing.update(made)
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
@@ -1975,7 +1998,7 @@ def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
 def _numeric_response(data: Any, spec: _SurvResponseSpec, n: int) -> list[float]:
     values = _response_arg_values(data, spec.arguments[0], n)
     try:
-        return [math.nan if _is_missing_value(value) else float(value) for value in values]
+        return _floats_or_nan(values)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"formula response {spec.arguments[0]!r} must be numeric") from exc
 
