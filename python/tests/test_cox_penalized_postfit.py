@@ -207,6 +207,85 @@ def test_summary_of_a_pspline_fit_splits_linear_and_nonlinear(lung):
     assert fit.summary()["coefficients"] == r.model_summary(fit)["coefficients"]
 
 
+def test_summary_of_a_combined_pspline_regresses_on_its_own_columns(lung):
+    # combine leaves six basis columns, five of them coefficients, so five centres
+    label = "pspline(age, df=3, combine=c(1,1,2,2,3,3,4,4,5,5))"
+    summary = r.model_summary(_fit(f"{label} + sex", lung))
+    names, (coef, se, se2, chisq, df, p) = _columns(summary)
+    assert names == [f"{label}, linear", f"{label}, nonlin", "sex"]
+    assert coef == approx([0.034583101696571951, math.nan, -0.51473619012718363])
+    assert se == approx([0.017960713517079171, math.nan, 0.16791964804737974])
+    assert se2 == approx([0.017955024019871375, math.nan, 0.16776879218443561])
+    assert chisq == approx([3.7074961795528423, 2.5161751471819005, 9.3965055988920145])
+    assert df == approx([1.0, 1.9844839495571058, 1.0])
+    assert p == approx([0.054168590851075532, 0.28129849669833967, 0.0021739939917128043])
+    assert summary["print2"] == ["Theta= 0.5110452"]
+    logtest = summary["logtest"]
+    assert [logtest["test"], logtest["df"], logtest["pvalue"]] == approx(
+        [17.588746134000303, 3.9826879941503579, 0.0014608699659437213]
+    )
+
+    # a pspline that keeps its intercept column has one centre too few, and R's
+    # printfun stops in coxph.wtest
+    with pytest.raises(ValueError, match="Argument lengths do not match"):
+        r.model_summary(_fit("pspline(age, df=3, intercept=TRUE) + sex", lung))
+
+
+def test_summary_of_an_unpenalized_pspline_beside_a_frailty(lung_inst):
+    # pspline(penalty=FALSE) is a plain matrix term: a Wald row per column
+    label = "pspline(age, nterm=4, penalty=FALSE)"
+    fit = _fit(f"{label} + frailty(inst)", lung_inst)
+    summary = r.model_summary(fit)
+    names, (coef, se, se2, chisq, df, p) = _columns(summary)
+    assert names == [f"{label}{j}" for j in range(1, 7)] + ["frailty(inst)"]
+    assert coef == approx(
+        [
+            -4.9715619178111403,
+            -2.1742182141858089,
+            -3.4488342118047375,
+            -2.3110730434398925,
+            -3.5996566913091264,
+            12.733169845570391,
+            math.nan,
+        ]
+    )
+    assert se[:6] == approx(
+        [
+            13.177466268067967,
+            11.638423051110346,
+            12.092470370128614,
+            11.823981081314686,
+            12.206551418172047,
+            13.735604382471438,
+        ]
+    )
+    assert se2[0] == approx(13.177464777230766)
+    assert chisq == approx(
+        [
+            0.14233833421551273,
+            0.034899401584772942,
+            0.081341948624736135,
+            0.038203213148683413,
+            0.086963336959059848,
+            0.85936471317291885,
+            5.8721580212739523e-05,
+        ]
+    )
+    assert df == approx([1.0] * 6 + [7.2079458877993829e-05])
+    assert p[0] == approx(0.7059673693936519)
+    assert p[6] == approx(0.91878835628628841)
+    assert summary["print2"] == ["Variance of random effect= 5e-07   I-likelihood = -739.8"]
+    assert summary["logtest"]["df"] == approx(6.0000693914216106)
+
+    # terms=TRUE: one row on the term's df, p on 1 df as R
+    names, (coef, _, _, chisq, df, p) = _columns(r.model_summary(fit, terms=True))
+    assert names == [label, "frailty(inst)"]
+    assert math.isnan(coef[0])
+    assert chisq == approx([11.465769540897004, 5.8721580212739523e-05])
+    assert df == approx([5.9999973119627326, 7.2079458877993829e-05])
+    assert p == approx([0.00070889869989559419, 0.91878835628628841])
+
+
 def test_summary_of_frailty_fits(lung_inst, lung_ecog, kidney):
     summary = r.model_summary(_fit("age + frailty(inst, df=4)", lung_inst))
     names, (coef, se, se2, chisq, df, p) = _columns(summary)

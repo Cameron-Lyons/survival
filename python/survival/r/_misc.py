@@ -59,7 +59,7 @@ from ._formula import (
 )
 from ._models import coef, model_formula, model_frame, vcov
 from ._names import _make_names_unique, _make_unique
-from ._penalties import _combine_basis, _pspline_boundary, _pspline_combine
+from ._penalties import _combine_basis, _pspline_boundary, _pspline_cbase, _pspline_combine
 from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
@@ -438,10 +438,9 @@ def pspline(
     if not intercept_value:
         matrix = [row[1:] for row in matrix]
         dmat = [row[1:] for row in dmat[1:]]
-    knots = list(basis.knots)
     return PsplineResult(
         basis=matrix,
-        knots=knots,
+        knots=list(basis.knots),
         nterm=basis.nterm,
         degree=basis.degree,
         boundary_knots=basis.boundary_knots,
@@ -451,7 +450,7 @@ def pspline(
         eps=eps_value,
         method=method_value,
         dmat=dmat,
-        cbase=[knots[idx] + (boundary[0] - knots[0]) for idx in range(1, nvar)],
+        cbase=_pspline_cbase(basis.nterm, basis.degree, boundary, nvar),
         theta=theta_value,
         combine=combine_codes,
     )

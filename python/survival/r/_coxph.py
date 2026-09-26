@@ -53,6 +53,7 @@ from ._fit import (
     _tt_terms,
 )
 from ._formula import _column, _column_or_values, _design_rows_from_spec, _response_arg_columns
+from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
     CoxBaseHazardResult,
@@ -1146,21 +1147,21 @@ def _pspline_print(
 ) -> tuple[list[dict[str, Any]], str]:
     """pspline()'s ``printfun``: the spline's linear trend (a weighted regression of
     the coefficients on the basis centres ``cbase``) and the test of the rest on
-    ``df - 1`` degrees of freedom."""
+    ``df - 1`` degrees of freedom.  ``cbase`` has a centre for every basis column but
+    the first, so as in R a pspline that keeps its intercept column fails coxph.wtest's
+    length check."""
 
-    lower = term.boundary[0]
-    nterm = term.penalty.nterm
-    knots = _core.pspline_basis([lower], nterm, term.degree, term.boundary).knots
-    cbase = [knots[j] + (lower - knots[0]) for j in range(1, nterm + term.degree)]
-    test1 = _core.coxph_wtest(var, [coef], 1e-9).test[0]
-    xmat = [[1.0] * len(cbase), cbase]
-    # V^- X, and the second row of [X' V^- X]^- X' V^- (the weights of the slope)
-    xsig = _core.coxph_wtest(var, xmat, 1e-9).solve
+    nvar = len(coef) + (0 if term.intercept else 1)
+    cbase = _pspline_cbase(term.nterm, term.degree, term.boundary, nvar)
+    test1 = coxph_wtest(var, coef).test[0]
+    # xmat = cbind(1, cbase) and xsig = V X, for V a g-inverse of var
+    xmat = [[1.0, centre] for centre in cbase]
+    xsig = coxph_wtest(var, xmat).solve
+    # the slope's weights: the second row of [X' V X]^- X' V
     xvx = [
-        [sum(x * row[b] for x, row in zip(column, xsig, strict=True)) for b in (0, 1)]
-        for column in xmat
+        [sum(x[a] * v[b] for x, v in zip(xmat, xsig, strict=True)) for b in (0, 1)] for a in (0, 1)
     ]
-    cmat = _core.coxph_wtest(xvx, xsig, 1e-9).solve[1]
+    cmat = coxph_wtest(xvx, [list(row) for row in zip(*xsig, strict=True)]).solve[1]
     linear = sum(c * b for c, b in zip(cmat, coef, strict=True))
     lvar1 = _quadratic_form(cmat, var)
     test2 = linear * linear / lvar1 if lvar1 > 0.0 else math.nan
@@ -1231,7 +1232,7 @@ def summary_coxph_penal(
     print2: list[str] = []
     for i, (label, term) in enumerate(_model_terms(fit)):
         columns, df = penalized.assign2[i], penalized.df[i]
-        penalty = term.penalty.kind if isinstance(term, _PenaltyDesignTerm) else None
+        penalty = term.kind if isinstance(term, _PenaltyDesignTerm) and term.penalized else None
         coef = [] if penalized.pterms[i] == 2 else [beta[col] for col in columns]
         if penalty == "pspline":
             spline_rows, text = _pspline_print(

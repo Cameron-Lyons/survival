@@ -197,6 +197,20 @@ def _combine_basis(rows: Sequence[Sequence[float]], groups: Sequence[int]) -> li
     return combined
 
 
+def _pspline_cbase(
+    nterm: int, degree: int, boundary: tuple[float, float], nvar: int
+) -> list[float]:
+    """pspline.R's ``cbase``, the centres of the basis functions its printfun regresses
+    the coefficients on: ``knots[2:nvar] + (Boundary.knots[1] - knots[1])`` for the knots
+    ``Boundary.knots[1] + dx * ((-degree):(nterm - 1))``, where ``nvar`` counts the basis
+    columns after ``combine`` and before the first one is dropped."""
+
+    lower, upper = boundary
+    dx = (upper - lower) / nterm
+    knots = [lower + dx * k for k in range(-degree, nvar - degree)]
+    return [knot + (lower - knots[0]) for knot in knots[1:]]
+
+
 def penalty_columns(
     spec: _PenaltyDesignTerm, values: Mapping[str, Sequence[Any]]
 ) -> list[list[float]]:
