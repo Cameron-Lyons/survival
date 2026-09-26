@@ -2,16 +2,15 @@
 //! the fitter behind `coxph()` when the formula has `ridge()`, `pspline()`
 //! or `frailty()` terms, producing the `coxph.penal` object.
 //!
-//! The pieces follow the R sources: [`penalty`] holds the terms and their
-//! `pfun`s, [`control`] the `cfun`s that choose each term's smoothing
-//! parameter, [`kernel`] the C Newton-Raphson kernels (`coxfit5.c`,
-//! `agfit5.c` with `cholesky3`/`chsolve3`/`chinv3`) and [`df`] the
-//! degrees-of-freedom computation (`coxpenal.df`).  This module is the outer
-//! loop: it removes a sparse frailty column from the design, composes the
-//! penalty callbacks (`f.expr1`/`f.expr2`, the persistent `coxlist1`/
-//! `coxlist2`), iterates the inner fit and the `cfun`s over `theta`, restarts
-//! each inner fit from the solution of the closest earlier `theta`, and
-//! assembles the fit (`coxph.penal` plus the `coxph()` post-processing of
+//! The penalty terms, their `cfun`s, `coxpenal.df` and the pieces of the
+//! outer loop are shared with `survpenal.fit` in
+//! [`crate::regression::penalized`]; [`kernel`] holds the C Newton-Raphson
+//! kernels (`coxfit5.c`, `agfit5.c`).  This module is the outer loop: it
+//! removes a sparse frailty column from the design, composes the penalty
+//! callbacks (`f.expr1`/`f.expr2`, the persistent `coxlist1`/`coxlist2`),
+//! iterates the inner fit and the `cfun`s over `theta`, restarts each inner
+//! fit from the solution of the closest earlier `theta`, and assembles the
+//! fit (`coxph.penal` plus the `coxph()` post-processing of
 //! `R/coxph.R`: the offset centring, `n`, `nevent`, the Wald test and the
 //! concordance).
 //!
@@ -21,22 +20,16 @@
 //! `survfit.coxph` drops the sparse frailty from the risk scores of a
 //! frailty model, which [`CoxpenalFit::survfit`] reproduces.
 
-mod control;
-mod df;
 mod kernel;
-mod penalty;
 
 #[cfg(feature = "python")]
-pub use penalty::CallbackPenalty;
-pub use penalty::{
-    CoxPenaltyTerms, FrailtyFamily, FrailtyMethod, FrailtyPenalty, PenaltyTerm, PsplineMethod,
-    PsplinePenalty, RidgePenalty,
+pub use crate::regression::penalized::CallbackPenalty;
+pub use crate::regression::penalized::{
+    CoxPenaltyTerms, FrailtyFamily, FrailtyMethod, FrailtyPenalty, ModelTerm, PenaltyHistory,
+    PenaltyTerm, PsplineMethod, PsplinePenalty, RidgePenalty,
 };
 
-use self::control::{Control, ControlInput, ControlState};
-use self::df::{DfInput, TermDf, coxpenal_df};
-use self::kernel::{InnerFit, Kernel, KernelData, PenaltyCallback, PenaltyShape};
-use self::penalty::Pparm;
+use self::kernel::{InnerFit, Kernel, KernelData};
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{matrix_from_rows, matrix_rows};
@@ -47,21 +40,17 @@ use crate::regression::coxph::{
     add_offset_mean, centre_offset, newdata_from_python, nocenter_columns,
 };
 use crate::regression::coxph_wtest::wald_statistic;
+use crate::regression::penalized::df::{DfInput, TermDf, coxpenal_df};
+use crate::regression::penalized::terms::{
+    Composer, PenaltyCallback, build_term_states, closest_saved, drop_sparse_column, histories,
+    penalty_shape, update_controls, validate_terms,
+};
 use ndarray::Array2;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 /// `coxph.control()$outer.max`.
 pub const COXPENAL_OUTER_MAX: usize = 10;
-
-/// One model term: its design columns (R's `assign` entry) and, for a
-/// penalised term, its penalty (`pcols`/`pattr`).
-#[derive(Debug, Clone)]
-pub struct ModelTerm {
-    pub columns: Vec<usize>,
-    pub penalty: Option<PenaltyTerm>,
-}
 
 /// Validated inputs of a penalised Cox fit.  `cox.x` holds every design
 /// column, including the single column of group codes of a sparse frailty
@@ -78,49 +67,7 @@ impl CoxpenalData {
     pub fn try_new(cox: CoxphData, terms: Vec<ModelTerm>) -> SurvivalResult<Self> {
         // coxpenal.fit is reached only for data with events
         cox.check_fit_input()?;
-        let ncol = cox.x.ncols();
-        let mut owner = vec![None; ncol];
-        for (t, term) in terms.iter().enumerate() {
-            if term.columns.is_empty() {
-                return Err(SurvivalError::invalid_input(format!(
-                    "term {t} has no columns"
-                )));
-            }
-            for &column in &term.columns {
-                if column >= ncol {
-                    return Err(SurvivalError::invalid_input(format!(
-                        "term {t} refers to column {column}, but x has {ncol}"
-                    )));
-                }
-                if owner[column].replace(t).is_some() {
-                    return Err(SurvivalError::invalid_input(format!(
-                        "column {column} belongs to more than one term"
-                    )));
-                }
-            }
-        }
-        if let Some(column) = owner.iter().position(Option::is_none) {
-            return Err(SurvivalError::invalid_input(format!(
-                "column {column} belongs to no term"
-            )));
-        }
-        if terms.iter().all(|term| term.penalty.is_none()) {
-            return Err(SurvivalError::invalid_input("Invalid pcols or pattr arg"));
-        }
-        let sparse: Vec<&ModelTerm> = terms
-            .iter()
-            .filter(|term| term.penalty.as_ref().is_some_and(PenaltyTerm::is_sparse))
-            .collect();
-        if sparse.len() > 1 {
-            return Err(SurvivalError::invalid_input(
-                "Only one sparse penalty term allowed",
-            ));
-        }
-        if sparse.first().is_some_and(|term| term.columns.len() > 1) {
-            return Err(SurvivalError::invalid_input(
-                "Sparse term must be single column",
-            ));
-        }
+        validate_terms(cox.x.ncols(), &terms)?;
         Ok(Self { cox, terms })
     }
 }
@@ -166,35 +113,6 @@ impl Default for CoxpenalOptions {
         }
     }
 }
-
-/// The search history of one penalised term (`fit$history[[i]]`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[pyclass(module = "survival._survival", from_py_object)]
-pub struct PenaltyHistory {
-    /// Index of the model term.
-    #[pyo3(get)]
-    pub term: usize,
-    /// The last theta the search proposed (the fit used the previous one
-    /// when the search stopped).
-    #[pyo3(get)]
-    pub theta: f64,
-    #[pyo3(get)]
-    pub done: bool,
-    /// One row per outer iteration (plus the known starting points of a
-    /// `df` search), columns named by `columns`.
-    #[pyo3(get)]
-    pub history: Vec<Vec<f64>>,
-    #[pyo3(get)]
-    pub columns: Vec<String>,
-    /// The corrected log likelihood of a gamma frailty (`c.loglik`).
-    #[pyo3(get)]
-    pub c_loglik: Option<f64>,
-    /// `frailty.controldf`'s bisection counter.
-    #[pyo3(get)]
-    pub half: Option<i64>,
-}
-
-crate::internal::pickle::picklable!(PenaltyHistory);
 
 /// A fitted penalised Cox model (R's `coxph.penal` object).
 ///
@@ -251,214 +169,6 @@ pub struct CoxpenalFit {
     pub coxlist2: Option<CoxPenaltyTerms>,
 }
 
-/// A penalised term with its fit-time state: `pparm`, `cfun`, the current
-/// `theta` and the search state.
-struct TermState<'a> {
-    /// Position in the data's `terms`.
-    index: usize,
-    term: &'a PenaltyTerm,
-    /// Columns in the dense design (empty for the sparse term).
-    columns: Vec<usize>,
-    pparm: Pparm,
-    control: Control,
-    state: ControlState,
-    /// Events per group (frailty terms).
-    events_by_group: Vec<f64>,
-}
-
-/// The penalty callbacks `f.expr1`/`f.expr2` with their persistent
-/// `coxlist1`/`coxlist2`.
-struct Composer<'a> {
-    terms: Vec<TermState<'a>>,
-    sparse: Option<usize>,
-    full_imat: bool,
-    coxlist1: CoxPenaltyTerms,
-    coxlist2: CoxPenaltyTerms,
-}
-
-impl PenaltyCallback for Composer<'_> {
-    fn call(&mut self, which: i32, coef: &mut [f64]) -> SurvivalResult<&CoxPenaltyTerms> {
-        if which == 1 {
-            let sparse = self.sparse.expect("a sparse term exists");
-            let term = &self.terms[sparse];
-            let nfrail = coef.len();
-            let value = term.term.evaluate(coef, term.state.theta, &term.pparm, 1)?;
-            let list = &mut self.coxlist1;
-            list.coef = value.coef;
-            if !value.flag {
-                list.first = value.first.iter().map(|v| -v).collect();
-                list.second = value.second;
-            }
-            list.penalty = -value.penalty;
-            list.flag = vec![value.flag];
-            if list.coef.len() != nfrail
-                || list.first.len() != nfrail
-                || list.second.len() != nfrail
-            {
-                return Err(SurvivalError::computation("Incorrect length in coxlist1"));
-            }
-            coef.copy_from_slice(&list.coef);
-            return Ok(&self.coxlist1);
-        }
-        let nvar = coef.len();
-        let list = &mut self.coxlist2;
-        list.coef = coef.to_vec();
-        let mut pentot = 0.0;
-        for term in self.terms.iter().filter(|term| !term.term.is_sparse()) {
-            let pen_col = &term.columns;
-            let p = pen_col.len();
-            let coef_term: Vec<f64> = pen_col.iter().map(|&c| list.coef[c]).collect();
-            let value = term
-                .term
-                .evaluate(&coef_term, term.state.theta, &term.pparm, 2)?;
-            if value.coef.len() != p {
-                return Err(SurvivalError::computation("Length error in coxlist2"));
-            }
-            for (&c, &b) in pen_col.iter().zip(&value.coef) {
-                list.coef[c] = b;
-            }
-            if value.flag {
-                for &c in pen_col {
-                    list.flag[c] = true;
-                }
-            } else {
-                if value.first.len() != p {
-                    return Err(SurvivalError::computation("Length error in coxlist2"));
-                }
-                for (k, &c) in pen_col.iter().enumerate() {
-                    list.flag[c] = false;
-                    list.first[c] = -value.first[k];
-                }
-                let recycled = |k: usize| value.second[k % value.second.len()];
-                if value.second.is_empty()
-                    || (self.full_imat && (p * p) % value.second.len() != 0)
-                    || (!self.full_imat && p % value.second.len() != 0)
-                {
-                    return Err(SurvivalError::computation("Length error in coxlist2"));
-                }
-                if self.full_imat {
-                    // R's tmat[pen.col, pen.col] <- second fills the block
-                    // column-major, recycling a diagonal-only vector (an R
-                    // quirk kept for fidelity: such a term combined with a
-                    // full-matrix term gets its diagonal replicated across
-                    // the block).
-                    for col in 0..p {
-                        for row in 0..p {
-                            list.second[pen_col[col] * nvar + pen_col[row]] =
-                                recycled(col * p + row);
-                        }
-                    }
-                } else {
-                    for (k, &c) in pen_col.iter().enumerate() {
-                        list.second[c] = recycled(k);
-                    }
-                }
-            }
-            pentot -= value.penalty;
-        }
-        list.penalty = pentot;
-        coef.copy_from_slice(&list.coef);
-        Ok(&self.coxlist2)
-    }
-}
-
-/// The `cfun` and `cparm` of a term; `ncols` is the number of design
-/// columns of the term, `n` the number of observations and `eps2` R's
-/// fallback tolerance `sqrt(control$eps)`.
-fn control_of(term: &PenaltyTerm, ncols: usize, n: usize, eps2: f64) -> SurvivalResult<Control> {
-    let control = match term {
-        PenaltyTerm::Ridge(ridge) => match ridge.theta {
-            Some(theta) => Control::Fixed { theta },
-            None => Control::Df {
-                df: ridge.df.unwrap_or(ncols as f64 / 2.0),
-                eps: ridge.eps,
-                thetas: vec![0.0],
-                dfs: vec![ncols as f64],
-                guess: 1.0,
-                gamma_correction: false,
-            },
-        },
-        PenaltyTerm::Pspline(spline) => match spline.method {
-            PsplineMethod::Fixed(theta) => Control::Fixed { theta },
-            PsplineMethod::Df(df) => Control::Df {
-                df,
-                eps: spline.eps,
-                thetas: vec![1.0, 0.0],
-                dfs: vec![1.0, spline.nterm as f64],
-                guess: 1.0 - df / spline.nterm as f64,
-                gamma_correction: false,
-            },
-            PsplineMethod::Aic => Control::Aic {
-                eps: spline.eps,
-                init: vec![0.5, 0.95],
-                lower: 0.0,
-                upper: Some(1.0),
-                caic: false,
-                gamma_correction: false,
-            },
-        },
-        PenaltyTerm::Frailty(frailty) => {
-            let eps = frailty.eps.unwrap_or(eps2);
-            let gamma = frailty.distribution == FrailtyFamily::Gamma;
-            if let Some(init) = &frailty.init
-                && init.len() != 2
-            {
-                return Err(SurvivalError::invalid_input(
-                    "frailty init must hold two starting values for theta",
-                ));
-            }
-            let df_control = |df: f64| Control::Df {
-                df,
-                eps,
-                thetas: vec![0.0],
-                dfs: vec![0.0],
-                guess: 3.0 * df / frailty.n.unwrap_or(n) as f64,
-                gamma_correction: gamma,
-            };
-            match frailty.method {
-                FrailtyMethod::Fixed if gamma => Control::Gamma {
-                    theta: frailty.theta,
-                    eps,
-                    init: frailty.init.clone(),
-                },
-                FrailtyMethod::Fixed => Control::Fixed {
-                    theta: frailty.theta.expect("fixed frailty has theta"),
-                },
-                FrailtyMethod::Em => Control::Gamma {
-                    theta: None,
-                    eps,
-                    init: frailty.init.clone(),
-                },
-                FrailtyMethod::Reml => Control::Gauss {
-                    eps,
-                    init: frailty.init.clone(),
-                },
-                FrailtyMethod::Aic => Control::Aic {
-                    eps,
-                    init: vec![0.1, 1.0],
-                    lower: 0.0,
-                    upper: None,
-                    caic: frailty.caic,
-                    gamma_correction: gamma,
-                },
-                FrailtyMethod::Df => df_control(frailty.df.expect("df method has df")),
-            }
-        }
-        #[cfg(feature = "python")]
-        PenaltyTerm::Callback(_) => Control::Fixed { theta: f64::NAN },
-    };
-    Ok(control)
-}
-
-/// `tapply(status, group, sum)`: events per group in ascending group order.
-fn events_by_group(groups: &[i64], status: &[i32]) -> Vec<f64> {
-    let mut sums = BTreeMap::new();
-    for (&g, &s) in groups.iter().zip(status) {
-        *sums.entry(g).or_insert(0.0) += f64::from(s);
-    }
-    sums.into_values().collect()
-}
-
 fn dot_row(x: &Array2<f64>, row: usize, coef: &[f64]) -> f64 {
     x.row(row).iter().zip(coef).map(|(v, b)| v * b).sum()
 }
@@ -480,70 +190,15 @@ impl CoxpenalFit {
             return Err(SurvivalError::invalid_input("invalid value for outer.max"));
         }
         let n = data.n();
-        let ncol = data.x.ncols();
         let nevent = data.status.iter().filter(|&&s| s == 1).count();
         let n_eff = nevent as f64;
         let weights = data.weights.clone().unwrap_or_else(|| vec![1.0; n]);
         let (offset, offset_mean) = centre_offset(data.offset.as_deref(), n);
         let eps2 = options.eps.sqrt();
 
-        // pterms: 0 ordinary, 1 penalised, 2 sparse.
-        let pterms: Vec<u8> = model_terms
-            .iter()
-            .map(|term| match &term.penalty {
-                None => 0,
-                Some(penalty) if penalty.is_sparse() => 2,
-                Some(_) => 1,
-            })
-            .collect();
-        let sparse_term = pterms.iter().position(|&p| p == 2);
-        let shape = PenaltyShape {
-            sparse: sparse_term.is_some(),
-            dense: pterms.contains(&1),
-            full_imat: !model_terms
-                .iter()
-                .filter_map(|term| term.penalty.as_ref())
-                .filter(|penalty| !penalty.is_sparse())
-                .all(PenaltyTerm::is_diagonal),
-        };
-
+        let (pterms, sparse_term, shape) = penalty_shape(&model_terms);
         // Remove the sparse term's column from the design.
-        let fcol = sparse_term.map(|t| model_terms[t].columns[0]);
-        let (xx, assign2, frailx, nfrail) = match fcol {
-            Some(fcol) => {
-                let keep: Vec<usize> = (0..ncol).filter(|&c| c != fcol).collect();
-                let xx = Array2::from_shape_fn((n, ncol - 1), |(i, j)| data.x[(i, keep[j])]);
-                let assign2: Vec<Vec<usize>> = model_terms
-                    .iter()
-                    .map(|term| {
-                        term.columns
-                            .iter()
-                            .map(|&c| if c > fcol { c - 1 } else { c })
-                            .collect()
-                    })
-                    .collect();
-                // match(x, sort(unique(x))), 0-based.
-                let mut levels: Vec<f64> = data.x.column(fcol).to_vec();
-                levels.sort_by(f64::total_cmp);
-                levels.dedup();
-                let frailx: Vec<usize> = data
-                    .x
-                    .column(fcol)
-                    .iter()
-                    .map(|v| levels.binary_search_by(|l| l.total_cmp(v)).expect("level"))
-                    .collect();
-                (xx, assign2, Some(frailx), levels.len())
-            }
-            None => (
-                data.x.clone(),
-                model_terms
-                    .iter()
-                    .map(|term| term.columns.clone())
-                    .collect(),
-                None,
-                0,
-            ),
-        };
+        let (xx, assign2, frailx, nfrail) = drop_sparse_column(data.x.view(), &model_terms);
         let nvar = xx.ncols();
 
         // Initial values.
@@ -563,69 +218,18 @@ impl CoxpenalFit {
         validate_finite(&finit, "init")?;
 
         // The penalised terms: pparm, cfun and the first theta.
-        let mut terms = Vec::new();
-        for (index, term) in model_terms.iter().enumerate() {
-            let Some(penalty) = &term.penalty else {
-                continue;
-            };
-            let columns: Vec<usize> = if penalty.is_sparse() {
-                Vec::new()
-            } else {
-                assign2[index].clone()
-            };
-            let x_term = Array2::from_shape_fn((n, columns.len()), |(i, j)| xx[(i, columns[j])]);
-            let events = if let PenaltyTerm::Frailty(_) = penalty {
-                let groups: Vec<i64> = match &frailx {
-                    Some(frailx) if penalty.is_sparse() => {
-                        frailx.iter().map(|&g| g as i64).collect()
-                    }
-                    _ => (0..n)
-                        .map(|i| {
-                            // c(group %*% 1:ncol(group)) for an indicator matrix.
-                            x_term
-                                .row(i)
-                                .iter()
-                                .enumerate()
-                                .map(|(j, v)| v * (j + 1) as f64)
-                                .sum::<f64>()
-                                .round() as i64
-                        })
-                        .collect(),
-                };
-                events_by_group(&groups, &data.status)
-            } else {
-                Vec::new()
-            };
-            let control = control_of(
-                penalty,
-                if penalty.is_sparse() {
-                    nfrail
-                } else {
-                    columns.len()
-                },
-                n,
-                eps2,
-            )?;
-            let state = control.initial();
-            terms.push(TermState {
-                index,
-                term: penalty,
-                columns,
-                pparm: penalty.pparm(&x_term)?,
-                control,
-                state,
-                events_by_group: events,
-            });
-        }
+        let terms = build_term_states(
+            &model_terms,
+            &assign2,
+            &xx,
+            frailx.as_deref(),
+            nfrail,
+            n,
+            &data.status,
+            eps2,
+        )?;
         let need_df = terms.iter().any(|term| term.control.needs_df());
-        let second2 = if shape.full_imat { nvar * nvar } else { nvar };
-        let mut composer = Composer {
-            sparse: terms.iter().position(|term| term.term.is_sparse()),
-            terms,
-            full_imat: shape.full_imat,
-            coxlist1: CoxPenaltyTerms::zeros(nfrail, nfrail, 1),
-            coxlist2: CoxPenaltyTerms::zeros(nvar, second2, nvar),
-        };
+        let mut composer = Composer::new(terms, nfrail, nvar, shape.full_imat, false);
 
         let nocenter = nocenter_columns(&xx, options.nocenter.as_deref());
         let docenter: Vec<bool> = nocenter.iter().map(|&skip| !skip).collect();
@@ -729,30 +333,16 @@ impl CoxpenalFit {
             }
 
             // The control functions.
-            let mut done = true;
-            for term in composer.terms.iter_mut() {
-                let coef_term: Vec<f64> = if term.term.is_sparse() {
-                    fbeta.clone()
-                } else {
-                    term.columns.iter().map(|&c| beta[c]).collect()
-                };
-                let (df, trh) = match &dftemp {
-                    Some(df) => (df.df[term.index], df.trh[term.index]),
-                    None => (f64::NAN, f64::NAN),
-                };
-                let input = ControlInput {
-                    iter: outer,
-                    plik: loglik1,
-                    loglik: inner.loglik,
-                    neff: n_eff,
-                    df,
-                    trh,
-                    events_by_group: &term.events_by_group,
-                    coef: &coef_term,
-                };
-                term.state = term.control.update(&term.state, input)?;
-                done &= term.state.done;
-            }
+            let done = update_controls(
+                &mut composer.terms,
+                outer,
+                loglik1,
+                inner.loglik,
+                n_eff,
+                dftemp.as_ref(),
+                &beta,
+                &fbeta,
+            )?;
             coxfit = Some(inner);
             if done {
                 break;
@@ -761,15 +351,7 @@ impl CoxpenalFit {
             // Starting values for the next iteration: the solution of the
             // closest earlier theta (the first of equally close ones).
             let next: Vec<f64> = composer.terms.iter().map(|term| term.state.theta).collect();
-            let mut which = 0;
-            let mut best = f64::INFINITY;
-            for (k, saved) in theta_save.iter().enumerate() {
-                let distance: f64 = saved.iter().zip(&next).map(|(a, b)| (a - b).powi(2)).sum();
-                if distance < best {
-                    best = distance;
-                    which = k;
-                }
-            }
+            let which = closest_saved(&theta_save, &next);
             init = coef_save[which].clone();
             finit = fcoef_save[which].clone();
         }
@@ -865,24 +447,7 @@ impl CoxpenalFit {
             curve
         });
 
-        let history = composer
-            .terms
-            .iter()
-            .map(|term| PenaltyHistory {
-                term: term.index,
-                theta: term.state.theta,
-                done: term.state.done,
-                history: term.state.history.clone(),
-                columns: term
-                    .control
-                    .history_columns()
-                    .iter()
-                    .map(|name| (*name).to_string())
-                    .collect(),
-                c_loglik: term.state.c_loglik,
-                half: term.state.half,
-            })
-            .collect();
+        let history = histories(&composer.terms);
         Ok(Self {
             coxph,
             curve_fit,
@@ -1335,6 +900,7 @@ pub fn coxpenal_fit(
 mod tests {
     use super::*;
     use crate::regression::coxph::CoxphOptions;
+    use crate::regression::penalized::terms::control_of;
 
     fn kidney_like() -> (Vec<f64>, Vec<i32>, Array2<f64>) {
         // Four groups of three, one covariate.

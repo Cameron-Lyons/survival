@@ -7,7 +7,8 @@
 //! `cch`.  [`TieMethod`] is the one tie-handling enum of the crate, shared
 //! by the fitters and every kernel.
 //! Penalised Cox models (R's `coxpenal.fit`: `ridge()`, `pspline()` and
-//! `frailty()` terms) live in `coxpenal`.
+//! `frailty()` terms) live in `coxpenal`, on the penalty machinery of
+//! `penalized`.
 
 #[path = "aareg_fit.rs"]
 pub(crate) mod aareg_fit_module;
@@ -36,6 +37,7 @@ pub(crate) mod high_dimensional;
 pub(crate) mod joint_competing;
 pub(crate) mod longitudinal_survival;
 pub(crate) mod parametric_survival;
+pub(crate) mod penalized;
 pub(crate) mod recurrent_events;
 pub(crate) mod spline_hazard;
 pub(crate) mod survreg_distributions;
