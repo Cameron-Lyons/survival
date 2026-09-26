@@ -1201,6 +1201,7 @@ fn aj_inputs(
     istate_levels: Option<Vec<String>>,
     cluster: Option<Vec<i64>>,
     p0: Option<Vec<f64>>,
+    start_time: Option<f64>,
     timefix: bool,
 ) -> SurvivalResult<(SurvfitAJData, SurvfitAJOptions)> {
     let data = SurvfitAJData::try_new(
@@ -1217,6 +1218,7 @@ fn aj_inputs(
     )?;
     let options = SurvfitAJOptions {
         p0,
+        start_time,
         timefix,
         ..Default::default()
     };
@@ -1225,7 +1227,7 @@ fn aj_inputs(
 
 /// Python binding of [`survfitresid_aj`].
 #[pyfunction(name = "survfitresid_aj")]
-#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true))]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_aj_py(
     time: Vec<f64>,
@@ -1244,6 +1246,7 @@ pub fn survfitresid_aj_py(
     collapse: bool,
     weighted: Option<bool>,
     timefix: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitAJResid> {
     let (data, options) = aj_inputs(
         time,
@@ -1257,6 +1260,7 @@ pub fn survfitresid_aj_py(
         istate_levels,
         cluster,
         p0,
+        start_time,
         timefix,
     )?;
     Ok(survfitresid_aj(
@@ -1271,7 +1275,7 @@ pub fn survfitresid_aj_py(
 
 /// Python binding of [`pseudo_aj`].
 #[pyfunction(name = "pseudo_aj")]
-#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true))]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_aj_py(
     time: Vec<f64>,
@@ -1289,6 +1293,7 @@ pub fn pseudo_aj_py(
     type_: &str,
     timefix: bool,
     collapse: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitAJResid> {
     let (data, options) = aj_inputs(
         time,
@@ -1302,6 +1307,7 @@ pub fn pseudo_aj_py(
         istate_levels,
         cluster,
         p0,
+        start_time,
         timefix,
     )?;
     Ok(pseudo_aj(
@@ -1323,12 +1329,14 @@ fn km_inputs(
     id: Option<Vec<i64>>,
     stype: i32,
     ctype: i32,
+    start_time: Option<f64>,
     timefix: bool,
 ) -> SurvivalResult<(SurvfitKMData, SurvfitKMOptions)> {
     let data = SurvfitKMData::try_new(start, time, status, weights, strata, id, None)?;
     let options = SurvfitKMOptions {
         stype: SurvType::from_code(stype)?,
         ctype: super::survfitkm::HazardType::from_code(ctype)?,
+        start_time,
         timefix,
         ..Default::default()
     };
@@ -1337,7 +1345,7 @@ fn km_inputs(
 
 /// Python binding of [`survfitresid`].
 #[pyfunction(name = "survfitresid")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_py(
     time: Vec<f64>,
@@ -1353,9 +1361,10 @@ pub fn survfitresid_py(
     collapse: bool,
     weighted: Option<bool>,
     timefix: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
-        time, status, start, weights, strata, id, stype, ctype, timefix,
+        time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
     Ok(survfitresid(
         &data,
@@ -1369,7 +1378,7 @@ pub fn survfitresid_py(
 
 /// Python binding of [`pseudo`].
 #[pyfunction(name = "pseudo")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_py(
     time: Vec<f64>,
@@ -1384,9 +1393,10 @@ pub fn pseudo_py(
     ctype: i32,
     timefix: bool,
     collapse: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
-        time, status, start, weights, strata, id, stype, ctype, timefix,
+        time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
     Ok(pseudo(
         &data,

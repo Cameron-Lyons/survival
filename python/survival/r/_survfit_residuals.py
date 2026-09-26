@@ -71,8 +71,6 @@ def _check_survfit_object(fit: Any) -> SurvfitResult | SurvfitMultiStateResult:
         raise TypeError("argument must be a survfit object")
     if fit.type == "interval":
         raise ValueError("residuals for interval-censored data are not available")
-    if fit.call.start_time is not None:
-        raise NotImplementedError("residuals of a curve fitted with start.time are not available")
     return fit
 
 
@@ -106,6 +104,7 @@ def _kernel_residuals(
         "id": frame.id_codes(),
         "type_": type_,
         "timefix": call.timefix,
+        "start_time": call.start_time,
     }
     if collapse is not None:
         common.update(collapse=collapse, weighted=weighted)

@@ -214,3 +214,71 @@ def test_pseudo_multistate_has_subject_state_time_layout():
     assert len(single[0]) == 3
     assert not isinstance(single[0][0], list)
     assert all(not math.isnan(v) for row in single for v in row)
+
+
+# R 4.5.3, survival 3.8-12 for the tests below
+
+
+def _mgus2_competing_risks(n=60):
+    # R: m <- mgus2 with m$etime <- ifelse(pstat == 0, futime, ptime) and
+    # m$event <- factor(ifelse(pstat == 0, 2 * death, 1), 0:2, c("censor", "pcm", "death"))
+    mgus2 = survival.datasets.load_mgus2()
+    labels = ["censor", "pcm", "death"]
+    etime, event = [], []
+    for row in range(n):
+        progressed = mgus2["pstat"][row] != 0
+        etime.append(mgus2["ptime"][row] if progressed else mgus2["futime"][row])
+        event.append(labels[1] if progressed else labels[2 * int(mgus2["death"][row])])
+    return {"etime": etime, "event": r._r_factor(event, labels)}
+
+
+def test_residuals_and_pseudo_of_a_start_time_fit_match_r():
+    # R: the residuals and pseudo values at times c(20, 40) of
+    # fit <- survfit(Surv(time, status) ~ 1, aml, start.time = 10)
+    fit = r.survfit("Surv(time, status) ~ 1", survival.datasets.load_aml(), start_time=10)
+
+    result = r.survfit_residuals(fit, times=[20, 40])
+    assert len(result.resid) == 23
+    # the row ending at 9 is not part of the curve
+    assert result.resid[0] == [0.0, 0.0]
+    _close(result.resid[1], [-0.04585537918871252, -0.01959631589261219])
+    _close(result.resid[3], [-0.05322499370118418, -0.02274572380392486])
+    cumhaz = r.survfit_residuals(fit, times=[20, 40], type="cumhaz")
+    _close(cumhaz.resid[1], [0.05227690204622154, 0.05227690204622154])
+    values = r.pseudo(fit, times=[20, 40])
+    _close(values[0], [0.825396825396825, 0.352733686067019])
+    assert values[1][0] == pytest.approx(0.0, abs=1e-12)
+    assert values[1][1] == pytest.approx(0.0, abs=1e-12)
+    _close(values[3], [-0.132653061224490, -0.0566893424036282])
+    _close(r.pseudo(fit, times=[20, 40], type="rmst")[0], [9.03968253968254, 20.30599647266314])
+
+    # survfit(Surv(time, status) ~ x, aml, start.time = 10): rows 1, 2, 12, 13
+    by_group = r.survfit("Surv(time, status) ~ x", survival.datasets.load_aml(), start_time=10)
+    resid = r.survfit_residuals(by_group, times=[20, 40]).resid
+    _close(resid[1], [-0.07875, -0.0405])
+    assert resid[11] == [0.0, 0.0]
+    group_values = r.pseudo(by_group, times=[20, 40])
+    _close(group_values[0], [0.7875, 0.405])
+    _close(group_values[12], [0.875, 0.291666666666667])
+
+
+def test_multistate_residuals_and_pseudo_of_a_start_time_fit_match_r():
+    # R: fit <- survfit(Surv(etime, event) ~ 1, data = m[1:60, ], start.time = 12), then
+    # resid(fit, times = c(24, 60))[i, , ] and pseudo(fit, times = c(24, 60))[i, , ]
+    fit = r.survfit("Surv(etime, event) ~ 1", _mgus2_competing_risks(), start_time=12)
+    assert fit.n == [49]
+    assert fit.start_time == 12.0
+
+    result = r.survfit_residuals(fit, times=[24, 60])
+    assert len(result.resid) == 60
+    assert result.columns == ["(s0)", "pcm", "death"]
+    first = result.resid[0]
+    _close(first[0], [0.00444444444444444, -0.008602150537634409])
+    _close(first[1], [0.0, -0.000277777777777778])
+    _close(first[2], [-0.00444444444444444, 0.008879928315412186])
+    # row 5 ends at 8, before the start, and still takes part as in R
+    _close(result.resid[4][0], [-0.0122222222222222, -0.008602150537634403])
+    values = r.pseudo(fit, times=[24, 60])
+    _close(values[0][0], [1.115736961451247, 0.21048935703313554])
+    _close(values[0][2], [-0.115736961451247, 0.78271359081266911])
+    _close(values[4][2], [0.700929705215419, 0.78271359081266878])

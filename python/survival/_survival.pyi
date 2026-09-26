@@ -13014,6 +13014,7 @@ def pseudo(
     ctype: int = 1,
     timefix: bool = True,
     collapse: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitResid: ...
 def pseudo_aj(
     time: Sequence[float],
@@ -13031,6 +13032,7 @@ def pseudo_aj(
     type_: str = "pstate",
     timefix: bool = True,
     collapse: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitAJResid: ...
 def pseudo_gee_regression(
     pseudo_values: Sequence[Sequence[float]],
@@ -13641,6 +13643,7 @@ def survfitresid(
     collapse: bool = False,
     weighted: bool | None = None,
     timefix: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitResid: ...
 def survfitresid_aj(
     time: Sequence[float],
@@ -13659,6 +13662,7 @@ def survfitresid_aj(
     collapse: bool = False,
     weighted: bool | None = None,
     timefix: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitAJResid: ...
 def survival_at_times(
     time: Sequence[float],
