@@ -8,7 +8,7 @@
 //! ...)` reaches the same engine and adds the `coxph` post-processing.
 
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
-use crate::error::{SurvivalError, SurvivalResult};
+use crate::error::SurvivalResult;
 use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
@@ -75,21 +75,7 @@ pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<
     let n = data.n();
     let nvar = data.x.ncols();
     data.check_fit_input()?;
-    if data
-        .weights
-        .as_ref()
-        .is_some_and(|weights| weights.iter().any(|&w| w != 1.0))
-    {
-        return Err(SurvivalError::invalid_input(
-            "Case weights are not supported for the exact method",
-        ));
-    }
     if let Some(init) = &options.init {
-        if init.len() != nvar {
-            return Err(SurvivalError::invalid_input(
-                "Wrong length for inital values",
-            ));
-        }
         validate_finite(init, "init")?;
     }
     let doscale = nocenter_columns(&data.x, options.nocenter.as_deref())
@@ -113,6 +99,9 @@ pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<
     }
     if let Some(strata) = data.strata {
         builder = builder.strata(Array1::from_vec(strata));
+    }
+    if let Some(weights) = data.weights {
+        builder = builder.weights(Array1::from_vec(weights));
     }
     let mut engine = builder.build()?;
     engine.fit()?;
