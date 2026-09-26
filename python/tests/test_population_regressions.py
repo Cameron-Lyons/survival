@@ -365,3 +365,18 @@ def test_survexp_coxph_group_with_nobody_at_risk_is_missing(method, expected):
     assert [row[0] for row in result.surv] == approx(expected, rel=1e-9)
     # ph.ecog = 3 has one subject, who dies at 118
     assert [row[3] for row in result.surv] == approx([0.82587377664176709, NAN, NAN], rel=1e-9)
+
+
+def test_pyears_cut_terms_sort_their_breaks_like_r():
+    # pyears(Surv(time, status) ~ cut(age / 365.25, c(70, 0, 60, 100)), d2, scale = 1)
+    data = {
+        "time": [100, 250, 400, 30, 700, 365],
+        "status": [1, 0, 1, 0, 1, 0],
+        "age": [value * 365.25 for value in (60, 65, 70, 55, 80, 75)],
+    }
+    term = "cut(age / 365.25, c(70, 0, 60, 100))"
+    result = r.pyears(f"Surv(time, status) ~ {term}", data, scale=1)
+    assert result.dimnames == {term: ["(0,60]", "(60,70]", "(70,100]"]}
+    assert result.pyears == [130, 650, 1065]
+    assert result.n == [2, 2, 2]
+    assert result.event == [1, 1, 1]

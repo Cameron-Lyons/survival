@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date as _Date
@@ -314,13 +315,12 @@ def _cut_term(mf: ModelFrame, text: str, data: Any) -> _PyearsTerm:
 
     arguments = _formula_response_parts(text[4:-1])
     x = _arithmetic_expression_values(mf.data, arguments[0], mf.n)
-    breaks = _r_vector_literal(arguments[1], data)
+    breaks = sorted(_r_vector_literal(arguments[1], data))
     codes: list[float] = []
     for value in x:
-        position = next(
-            (k for k in range(1, len(breaks)) if breaks[k - 1] < value <= breaks[k]), None
-        )
-        codes.append(math.nan if position is None else float(position))
+        # breaks[k - 1] < value <= breaks[k]; outside (breaks[0], breaks[-1]] is NA
+        k = bisect_left(breaks, value)
+        codes.append(float(k) if 0 < k < len(breaks) else math.nan)
     return _PyearsTerm(text, 1, codes, _cut_labels(breaks), [])
 
 
