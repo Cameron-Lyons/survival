@@ -252,3 +252,101 @@ def test_ids_convert_from_python_and_numpy_scalars():
     assert list(result.sizes) == [2, 2, 2, 2, 1]
     with pytest.raises(TypeError, match="an id must be an int, float or str, not NoneType"):
         survival.data_prep.cluster([1, None])
+
+
+# --- rttright -----------------------------------------------------------------
+
+
+def _rtt_right():
+    return {
+        "time": [1, 2, 2, 3, 3, 3, 4, 5, 5, 6, 7, 8, 2, 4, 4, 9],
+        "status": [1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0],
+        "g": ["a", "b", "a", "b", "a", "b", "a", "b", "a", "b", "a", "b", "a", "a", "b", "b"],
+        "w": [1, 2, 1, 0.5, 1, 3, 2, 1, 1, 1, 2, 1, 0.25, 1, 2, 1],
+    }
+
+
+def test_rttright_right_censored_ties_weights_and_strata_match_r():
+    data = _rtt_right()
+    # rttright(Surv(time, status) ~ 1, d)
+    assert r.rttright("Surv(time, status) ~ 1", data) == pytest.approx(
+        [
+            0.0625,
+            0,
+            0.0625,
+            0,
+            0.0677083333333333,
+            0,
+            0.0827546296296296,
+            0.0965470679012346,
+            0,
+            0,
+            0.160911779835391,
+            0,
+            0.0625,
+            0,
+            0.0827546296296296,
+            0,
+        ],
+        rel=1e-13,
+    )
+    # rttright(Surv(time, status) ~ g, d, weights = w)
+    a, b = 0.108108108108108, 0.216216216216216
+    assert r.rttright("Surv(time, status) ~ g", data, weights="w") == pytest.approx(
+        [a, 0, a, 0, a, 0, b, 1 / 6, 0, 0, 2 * b, 0, a / 4, 0, 1 / 3, 0], rel=1e-13
+    )
+    # ... renorm = FALSE
+    assert r.rttright("Surv(time, status) ~ g", data, weights="w", renorm=False) == pytest.approx(
+        [1, 0, 1, 0, 1, 0, 2, 1.91666666666667, 0, 0, 4, 0, 0.25, 0, 3.83333333333333, 0],
+        rel=1e-13,
+    )
+    # ... times = c(2, 3, 4.5, 10), one column per time
+    matrix = r.rttright("Surv(time, status) ~ g", data, weights="w", times=[2, 3, 4.5, 10])
+    c, e, f = 0.173913043478261, 0.0869565217391304, 0.105263157894737
+    expected = [
+        [a, c, a, 0.0434782608695652, a, 0.260869565217391, b, e, a, e, b, e, a / 4, a, c, e],
+        [a, 0, a, 0.0526315789473684, a, 0.315789473684211, b, f, a, f, b, f, a / 4, a, 2 * f, f],
+        [a, 0, a, 0, a, 0, b, 1 / 6, 0.144144144144144, 1 / 6, 0.288288288288288, 1 / 6]
+        + [a / 4, 0, 1 / 3, 1 / 6],
+        [a, 0, a, 0, a, 0, b, 1 / 6, 0, 0, 2 * b, 0, a / 4, 0, 1 / 3, 0],
+    ]
+    for column, values in enumerate(expected):
+        assert [row[column] for row in matrix] == pytest.approx(values, rel=1e-13)
+
+
+def test_rttright_counting_process_data_match_r():
+    data = {
+        "id": [1, 1, 2, 3, 3, 3, 4, 5, 5, 6, 7, 7],
+        "t1": [0, 2, 0, 0, 1, 4, 0, 0, 3, 0, 0, 5],
+        "t2": [2, 5, 3, 1, 4, 6, 4, 3, 7, 5, 5, 8],
+        "s": [0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1],
+        "x": [1, 1, 2, 1, 1, 1, 2, 2, 2, 1, 2, 2],
+        "z": [1, 2, 1, 1, 2, 2, 1, 1, 2, 2, 1, 2],
+        "w": [1, 1, 2, 1, 1, 1, 0.5, 1, 1, 3, 1, 1],
+    }
+    # rttright(Surv(t1, t2, s) ~ 1, dc, id = id)
+    expected = [0, 0.2, 0, 0, 0, 0.2, 0, 0, 0, 0.2, 0, 0.4]
+    assert r.rttright("Surv(t1, t2, s) ~ 1", data, id="id") == pytest.approx(expected, rel=1e-13)
+    # ... ~ x, weights = w
+    assert r.rttright("Surv(t1, t2, s) ~ x", data, id="id", weights="w") == pytest.approx(
+        [0, 0.2, 0, 0, 0, 0.2, 0, 0, 0, 0.6, 0, 1], rel=1e-13
+    )
+    # ... ~ z, where z changes within a subject: R counts a subject once per stratum
+    assert r.rttright("Surv(t1, t2, s) ~ z", data, id="id") == pytest.approx(expected, rel=1e-13)
+
+
+def test_rttright_multistate_data_match_r():
+    data = {
+        "time": [1, 2, 2, 3, 4, 4, 5, 6],
+        "st": r_coerce._RFactorVector(["c", "a", "c", "b", "a", "c", "b", "c"], ["c", "a", "b"]),
+    }
+    # rttright(Surv(time, st) ~ 1, dm)
+    p, q, u = 1 / 7, 0.171428571428571, 0.257142857142857
+    assert r.rttright("Surv(time, st) ~ 1", data) == pytest.approx(
+        [0, p, 0, q, q, 0, u, 0], rel=1e-13
+    )
+    # ... times = c(2, 4, 7)
+    matrix = r.rttright("Surv(time, st) ~ 1", data, times=[2, 4, 7])
+    expected = [[0, p, p, p, p, p, p, p], [0, p, 0, q, q, q, q, q], [0, p, 0, q, q, 0, u, 0]]
+    for column, values in enumerate(expected):
+        assert [row[column] for row in matrix] == pytest.approx(values, rel=1e-13)
