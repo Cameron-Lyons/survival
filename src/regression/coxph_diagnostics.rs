@@ -16,7 +16,6 @@
 use crate::core::coxscho::coxscho;
 use crate::core::strata_order::rowsum;
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::matrix::matrix_from_rows;
 use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
 use crate::residuals::agmart::agmart_rows;
 use crate::residuals::coxmart::coxmart_rows;
@@ -381,6 +380,15 @@ impl CoxPHFit {
         assign: Option<&[Vec<usize>]>,
     ) -> SurvivalResult<Residuals> {
         let weighted = weighted.unwrap_or(kind.default_weighted());
+        // One row per death and a column per coefficient, `0 x nvar` without
+        // deaths.
+        let death_matrix = |residuals: SchoenfeldResiduals| {
+            Array2::from_shape_vec(
+                (residuals.residuals.len(), self.nvar()),
+                residuals.residuals.into_iter().flatten().collect(),
+            )
+            .map_err(|err| SurvivalError::invalid_input(err.to_string()))
+        };
         Ok(match kind {
             CoxResidualType::Martingale => {
                 Residuals::Vector(self.martingale_residuals(weighted, collapse)?)
@@ -391,14 +399,12 @@ impl CoxPHFit {
             CoxResidualType::Score => Residuals::Matrix(self.score_residuals(weighted, collapse)?),
             CoxResidualType::Dfbeta => Residuals::Matrix(self.dfbeta(weighted, collapse)?),
             CoxResidualType::Dfbetas => Residuals::Matrix(self.dfbetas(weighted, collapse)?),
-            CoxResidualType::Schoenfeld => Residuals::Matrix(matrix_from_rows(
-                &self.schoenfeld_residuals(weighted)?.residuals,
-                "residuals",
-            )?),
-            CoxResidualType::ScaledSchoenfeld => Residuals::Matrix(matrix_from_rows(
-                &self.scaled_schoenfeld_residuals(weighted)?.residuals,
-                "residuals",
-            )?),
+            CoxResidualType::Schoenfeld => {
+                Residuals::Matrix(death_matrix(self.schoenfeld_residuals(weighted)?)?)
+            }
+            CoxResidualType::ScaledSchoenfeld => {
+                Residuals::Matrix(death_matrix(self.scaled_schoenfeld_residuals(weighted)?)?)
+            }
             CoxResidualType::Partial => {
                 let default = default_assign(self.nvar());
                 Residuals::Matrix(self.partial_residuals(
@@ -556,6 +562,38 @@ mod tests {
         assert_eq!(scaled.residuals.len(), 5);
         let weighted = model.schoenfeld_residuals(true).unwrap();
         assert!((weighted.residuals[1][0] - schoenfeld.residuals[1][0] * 1.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn schoenfeld_matrix_without_deaths_keeps_one_column_per_coefficient() {
+        // R: coxph(Surv(t, rep(0, 8)) ~ x1 + x2, init = c(0.2, -0.1),
+        //    iter.max = 0); dim(residuals(fit, "schoenfeld")) is 0 2, and
+        //    likewise for "scaledsch".
+        let x = Array2::from_shape_vec(
+            (8, 2),
+            vec![
+                -1.2, 0.5, 0.4, -1.0, 1.1, 0.3, -0.3, 1.2, 0.8, -0.7, 1.7, 0.9, -0.9, 0.1, 0.2,
+                -1.3,
+            ],
+        )
+        .unwrap();
+        let time = vec![2.0, 2.0, 3.0, 4.0, 4.0, 3.0, 5.0, 5.0];
+        let data = CoxphData::try_new(time, None, vec![0; 8], x, None, None, None).unwrap();
+        let options = CoxphOptions {
+            init: Some(vec![0.2, -0.1]),
+            iter_max: 0,
+            ..CoxphOptions::default()
+        };
+        let model = CoxPHFit::fit(data, options).unwrap();
+        for kind in [
+            CoxResidualType::Schoenfeld,
+            CoxResidualType::ScaledSchoenfeld,
+        ] {
+            let Residuals::Matrix(values) = model.residuals(kind, None, None, None).unwrap() else {
+                panic!("matrix residuals")
+            };
+            assert_eq!(values.dim(), (0, 2), "{kind:?}");
+        }
     }
 
     #[test]
