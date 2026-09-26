@@ -12,10 +12,9 @@
 //! downstream works with the struct.
 
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::dist::{dnorm, erf, pnorm, qnorm};
+use crate::internal::dist::{dnorm, dt, erf, erfc, pnorm, pt, qnorm, qt};
 use crate::internal::match_arg::match_arg;
 use crate::internal::rng::{RUniform, Rng};
-use crate::internal::statistical::{erfc, student_t_cdf, student_t_inverse_cdf, student_t_pdf};
 use crate::internal::validation::{validate_equal_len, validate_finite, validate_positive};
 use pyo3::prelude::*;
 use std::f64::consts::{PI, SQRT_2};
@@ -210,7 +209,7 @@ fn invalid(message: impl Into<String>) -> SurvivalError {
 /// `v = pt(-|z|, df)` for the finite `df` that [`SurvregDistribution::dtest`]
 /// requires.
 fn t_tails(z: f64, df: f64) -> (f64, f64) {
-    let v = student_t_cdf(-z.abs(), df);
+    let v = pt(-z.abs(), df, true, false);
     let other = 0.5 - v + 0.5;
     if z > 0.0 { (other, v) } else { (v, other) }
 }
@@ -220,7 +219,7 @@ fn t_tails(z: f64, df: f64) -> (f64, f64) {
 fn t_density(z: f64, df: f64) -> [f64; 3] {
     let denom = df + z * z;
     [
-        student_t_pdf(z, df),
+        dt(z, df, false),
         -(df + 1.0) * z / denom,
         (df + 1.0) * (z * z * (df + 3.0) / denom - 1.0) / denom,
     ]
@@ -456,9 +455,9 @@ impl SurvregDistribution {
                 let df = self.df();
                 let width = if interval { (y2 - y1) / scale } else { 0.0 };
                 let center = if interval { (y1 + y2) / 2.0 } else { y1 };
-                let temp2 = (2.0 * student_t_cdf(width / 2.0, df) - 1.0).ln();
+                let temp2 = (2.0 * pt(width / 2.0, df, true, false) - 1.0).ln();
                 let loglik = if status == 1 {
-                    -(student_t_pdf(0.0, df) * scale).ln()
+                    -(dt(0.0, df, false) * scale).ln()
                 } else if interval {
                     temp2
                 } else {
@@ -522,7 +521,7 @@ impl SurvregDistribution {
     fn base_pdf(&self, z: f64) -> f64 {
         match self.family {
             SurvregFamily::Gaussian => dnorm(z, false),
-            SurvregFamily::T => student_t_pdf(z, self.df()),
+            SurvregFamily::T => dt(z, self.df(), false),
             SurvregFamily::ExtremeValue | SurvregFamily::Logistic => self.density(z).pdf,
         }
     }
@@ -532,7 +531,7 @@ impl SurvregDistribution {
     fn base_cdf(&self, z: f64) -> f64 {
         match self.family {
             SurvregFamily::Gaussian => pnorm(z, true, false),
-            SurvregFamily::T => student_t_cdf(z, self.df()),
+            SurvregFamily::T => pt(z, self.df(), true, false),
             SurvregFamily::ExtremeValue | SurvregFamily::Logistic => self.density(z).cdf,
         }
     }
@@ -543,7 +542,7 @@ impl SurvregDistribution {
             SurvregFamily::ExtremeValue => (-(1.0 - p).ln()).ln(),
             SurvregFamily::Logistic => (p / (1.0 - p)).ln(),
             SurvregFamily::Gaussian => qnorm(p, true, false),
-            SurvregFamily::T => student_t_inverse_cdf(p, self.df()),
+            SurvregFamily::T => qt(p, self.df(), true, false),
         }
     }
 
@@ -995,8 +994,8 @@ mod tests {
     fn t_tails_are_the_two_pt_values_exactly() {
         let t = SurvregDistribution::from_name("t", None).unwrap();
         for z in [-40.0, -2.5, -0.3, 0.0, -0.0, 0.7, 3.1, 1e60, f64::INFINITY] {
-            let lower = student_t_cdf(z, 4.0);
-            let upper = student_t_cdf(-z, 4.0);
+            let lower = pt(z, 4.0, true, false);
+            let upper = pt(-z, 4.0, true, false);
             let d = t.density(z);
             let kernel = t.kernel(z, KernelCase::Distribution);
             assert_eq!((d.cdf, d.survival), (lower, upper), "z = {z}");
