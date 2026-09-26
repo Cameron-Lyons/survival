@@ -1521,9 +1521,7 @@ def predict_coxph(
         if predict_type == "risk":
             pred = [math.exp(value) for value in pred]
     elif predict_type == "terms":
-        rows, se_rows = _predict_terms(fit, new, include_se, reference_name)
-        pred = [[row[idx] for idx in selected] for row in rows]
-        se = None if se_rows is None else [[row[idx] for idx in selected] for row in se_rows]
+        pred, se = _predict_terms(fit, new, include_se, reference_name, selected)
     else:
         result = fit.fit.predict(
             predict_type,
@@ -1575,31 +1573,39 @@ def _frailty_prediction(
 
 
 def _predict_terms(
-    fit: CoxphModel, new: _NewData | None, se_fit: bool, reference: str
+    fit: CoxphModel, new: _NewData | None, se_fit: bool, reference: str, selected: list[int]
 ) -> tuple[list[list[float]], list[list[float]] | None]:
-    """The ``terms`` predictions of every model term.  As in predict.coxph.penal, a
-    sparse frailty's column holds the subjects' frailties (with standard errors
-    ``sqrt(fvar)``), and 0 for new data."""
+    """The ``terms`` predictions of the ``selected`` model terms (positions among
+    :func:`_model_terms`).  As in predict.coxph.penal, a sparse frailty's column holds
+    the subjects' frailties (with standard errors ``sqrt(fvar)``), and 0 for new
+    data."""
 
+    active = _active_assign(fit)
+    position = _sparse_term(fit)
+    # the engine's terms are the model terms without the sparse one
+    engine_terms = [
+        idx if position is None or idx < position else idx - 1
+        for idx in selected
+        if idx != position
+    ]
     result = fit.fit.predict_terms(
         newdata=None if new is None else new.x,
         new_strata=None if new is None else new.strata,
         new_offset=None if new is None else new.offset,
         se_fit=se_fit,
         reference=reference,
-        assign=_active_assign(fit),
+        assign=[active[idx] for idx in engine_terms],
     )
-    rows = [list(row) for row in result.fit]
-    se_rows = None if result.se_fit is None else [list(row) for row in result.se_fit]
-    position = _sparse_term(fit)
-    if position is not None:
+    rows, se_rows = result.fit, result.se_fit
+    if position is not None and position in selected:
+        column = selected.index(position)
         penalized = fit.penalized
         for i, row in enumerate(rows):
             group = penalized.frail_index[i] if new is None else None
-            row.insert(position, 0.0 if group is None else penalized.frail[group])
+            row.insert(column, 0.0 if group is None else penalized.frail[group])
             if se_rows is not None:
                 se_rows[i].insert(
-                    position, 0.0 if group is None else math.sqrt(penalized.fvar[group])
+                    column, 0.0 if group is None else math.sqrt(penalized.fvar[group])
                 )
     return rows, se_rows
 
