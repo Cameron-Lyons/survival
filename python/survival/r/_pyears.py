@@ -215,6 +215,12 @@ def _rmap_value(name: str, text: str, data: Any, n: int) -> list[Any]:
     """The values of the ``rmap`` entry *name*, a string *text* naming no column."""
 
     literal = _r_literal(text)
+    sign, rest = text.strip()[:1], text.strip()[1:]
+    if literal is None and sign in {"-", "+"}:
+        # a signed R number, such as -365.25, is a constant too
+        number = _r_literal(rest)
+        if isinstance(number, float):
+            literal = -number if sign == "-" else number
     if literal is not None:
         return [literal] * n
     word, quoted = _formula_name(text)

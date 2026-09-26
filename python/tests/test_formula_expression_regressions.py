@@ -404,14 +404,22 @@ def test_an_rmap_word_or_quoted_string_is_a_constant(race, expected):
     assert usr.expected == approx(expected)
 
 
-def test_an_rmap_number_is_its_value():
-    # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us, scale = 1,
-    #        rmap = list(age = 21915, sex = sex, year = year))
-    rmap = {"age": "21915", "sex": "sex", "year": "year"}
+@pytest.mark.parametrize(
+    ("age", "expected"),
+    [
+        # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us, scale = 1,
+        #        rmap = list(age = 21915, sex = sex, year = year))
+        ("21915", [0.039888584560963558, 0.016090412028239812]),
+        ("+21915", [0.039888584560963558, 0.016090412028239812]),
+        ("-365.25", [0.019455489256699928, 0.013241362722314643]),
+    ],
+)
+def test_an_rmap_number_is_its_value(age, expected):
+    rmap = {"age": age, "sex": "sex", "year": "year"}
     result = r.pyears(
         "Surv(time, status) ~ grp", _cohort(), ratetable=r.survexp_us(), rmap=rmap, scale=1
     )
-    assert result.expected == approx([0.039888584560963558, 0.016090412028239812])
+    assert result.expected == approx(expected)
 
 
 @pytest.mark.parametrize(("name", "text"), [("year", "1995-03-01"), ("age", "60 * 365.25")])
