@@ -10,8 +10,6 @@ from collections.abc import Mapping, Sequence
 from operator import index
 from typing import Any
 
-from .. import _survival as _core
-
 _EXP_CLAMP_MIN = -745.0
 _EXP_CLAMP_MAX = 709.0
 _SURVFIT_TIME_EPSILON = 1e-9
@@ -222,8 +220,9 @@ def _keep_rows_after_na_action(
     return [idx for idx in range(n) if idx not in missing]
 
 
-def _warn_outside_package(message: str) -> None:
-    """``warnings.warn(message)`` reported at the first caller outside this package.
+def _warn_outside_package(message: str, category: type[Warning] = UserWarning) -> None:
+    """``warnings.warn(message, category)`` reported at the first caller outside this
+    package.
 
     Shared helpers run at a different depth under each public function, so no fixed
     ``stacklevel`` fits them all (``skip_file_prefixes`` needs Python 3.12).
@@ -234,7 +233,7 @@ def _warn_outside_package(message: str) -> None:
     while frame.f_back is not None and frame.f_code.co_filename.startswith(_PACKAGE_PREFIX):
         frame = frame.f_back
         level += 1
-    warnings.warn(message, stacklevel=level)
+    warnings.warn(message, category, stacklevel=level)
 
 
 def _is_bool_like(value: Any) -> bool:
@@ -693,134 +692,3 @@ def _control_mapping(control: Any | None, name: str) -> dict[str, Any]:
         return {str(key): value for key, value in items}
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{name} must be a mapping") from exc
-
-
-def _pop_control_alias(
-    control: dict[str, Any],
-    aliases: tuple[str, ...],
-    canonical: str,
-    current: Any,
-    default: Any,
-) -> tuple[Any, str | None]:
-    present = [alias for alias in aliases if alias in control]
-    if not present:
-        return current, None
-    first = present[0]
-    value = control.pop(first)
-    for alias in present[1:]:
-        other = control.pop(alias)
-        if other != value:
-            raise ValueError(f"use only one of control.{first} or control.{alias}")
-    if current != default:
-        raise ValueError(f"use only one of {canonical} or control.{first}")
-    return value, first
-
-
-def _pop_finite_control_value(
-    control: dict[str, Any],
-    aliases: tuple[str, ...],
-    *,
-    positive: bool,
-) -> float | None:
-    present = [alias for alias in aliases if alias in control]
-    if not present:
-        return None
-    first = present[0]
-    value = control.pop(first)
-    for alias in present[1:]:
-        other = control.pop(alias)
-        if other != value:
-            raise ValueError(f"use only one of control.{first} or control.{alias}")
-    numeric = _finite_float(value, f"control.{first}")
-    if positive and numeric <= 0.0:
-        raise ValueError(f"control.{first} must be positive")
-    return numeric
-
-
-def _reject_unknown_control_options(control: dict[str, Any], function_name: str) -> None:
-    if control:
-        unexpected = ", ".join(sorted(control))
-        raise ValueError(f"{function_name} control has unsupported option(s): {unexpected}")
-
-
-def _apply_coxph_control(
-    control: Any | None,
-    max_iter: int,
-    eps: float | None,
-    toler: float | None,
-) -> tuple[int, float | None, float | None, bool]:
-    values = _control_mapping(control, "coxph control")
-    if not values:
-        return max_iter, eps, toler, True
-
-    max_iter_value, name = _pop_control_alias(
-        values,
-        ("iter.max", "iter_max", "max_iter"),
-        "max_iter",
-        max_iter,
-        20,
-    )
-    if name is not None:
-        max_iter = _integer_scalar(max_iter_value, f"control.{name}")
-
-    eps_value, name = _pop_control_alias(values, ("eps",), "eps", eps, None)
-    if name is not None:
-        eps = _finite_float(eps_value, f"control.{name}")
-
-    toler_value, name = _pop_control_alias(
-        values,
-        ("toler.chol", "toler_chol", "tol_chol", "toler"),
-        "toler",
-        toler,
-        None,
-    )
-    if name is not None:
-        toler = _finite_float(toler_value, f"control.{name}")
-
-    timefix_value, name = _pop_control_alias(
-        values,
-        ("timefix", "time.fix", "time_fix"),
-        "timefix",
-        True,
-        True,
-    )
-    fix_time = _normalize_bool_option(timefix_value, f"control.{name}") if name else True
-
-    _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
-    _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
-    _reject_unknown_control_options(values, "coxph")
-    return max_iter, eps, toler, fix_time
-
-
-def _aeq_times(
-    *columns: Sequence[float], tolerance: float | None = None
-) -> tuple[list[float], ...]:
-    """R's ``aeqSurv`` on one or two time columns (``time``, or ``start``/``stop``).
-
-    This is the package's only timefix path: the Rust ``aeq_surv`` kernel snaps
-    near-tied times exactly as R does, and raises R's "an interval has effective
-    length 0" error when a ``(start, stop]`` interval collapses.
-    """
-
-    if len(columns) not in {1, 2}:
-        raise ValueError("_aeq_times takes one or two time columns")
-    first = [float(value) for value in columns[0]]
-    if len(columns) == 1:
-        return (list(_core.aeq_surv(first, None, tolerance).time),)
-    second = [float(value) for value in columns[1]]
-    result = _core.aeq_surv(first, second, tolerance)
-    return list(result.time), list(result.time2 or [])
-
-
-def _survdiff_timefix_values(times: list[float], timefix: bool) -> list[float]:
-    """Alias of :func:`_aeq_times` for one column (kept for the modules that import it)."""
-
-    if not timefix:
-        return times
-    return _aeq_times(times)[0]
-
-
-def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
-    """Alias of :func:`_aeq_times` (kept for the modules that import it)."""
-
-    return _aeq_times(*vectors)

@@ -103,7 +103,7 @@ def test_counting_fit_reports_exp_overflow_like_r():
         fit(2000.0)
 
 
-def test_heart_offset_is_absorbed_by_recentring():
+def test_heart_offset_is_centred_before_the_fit():
     heart = datasets.load_heart()
     x = [
         [age, float(transplant)]
@@ -120,10 +120,11 @@ def test_heart_offset_is_absorbed_by_recentring():
         )
         for offset in (0.0, -750.0)
     }
-    # R: agreg.fit(cbind(age, transplant), Surv(start, stop, event), offset = o).
-    assert fits[0.0].info == [2, 0, 0, 0]
-    assert fits[-750.0].info == [2, 5, 0, 0]
+    # R: coxph(Surv(start, stop, event) ~ age + transplant + offset(o), heart) centres
+    # the offset before agreg.fit, so the -750 never reaches the risk scores (the
+    # kernel's own recentring of it is tested in cox_optimizer.rs).
     for fit in fits.values():
+        assert fit.info == [2, 0, 0, 0]
         assert fit.iter == 4
         assert fit.coefficients == pytest.approx(
             [0.0307422562590614, -0.00417824732163875], rel=1e-9

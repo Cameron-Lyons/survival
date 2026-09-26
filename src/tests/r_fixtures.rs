@@ -6470,8 +6470,6 @@ struct PenalCase {
     fit: CoxpenalFit,
     /// R's coefficient names (the sparse frailty has none).
     names: Vec<String>,
-    rows: Vec<usize>,
-    response: Response,
 }
 
 fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
@@ -6613,12 +6611,7 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
         ..CoxpenalOptions::default()
     };
     let fit = CoxpenalFit::fit(data, options).map_err(|err| format!("coxpenal: {err}"))?;
-    Ok(PenalCase {
-        fit,
-        names,
-        rows,
-        response,
-    })
+    Ok(PenalCase { fit, names })
 }
 
 const PENAL_ASPECTS: &[&str] = &[
@@ -6799,80 +6792,11 @@ fn check_penal_aspect(case: &PenalCase, expected: &Value, aspect: &str) -> Resul
             assert_vec(&actual, &nums(expected)?, RTOL_COEF, "deviance")
         }
         "concordance" => {
-            use crate::concordance::{ConcordanceOptions, concordancefit};
-            use crate::core::SurvResponse;
             let expected = &expected["concordance"];
             if is_r_error(expected) {
                 return Ok(());
             }
-            let lp = Array2::from_shape_vec((coxph.n, 1), coxph.linear_predictors.clone())
-                .map_err(|err| err.to_string())?;
-            let options = ConcordanceOptions {
-                reverse: true,
-                timefix: false,
-                ..ConcordanceOptions::default()
-            };
-            let time = pick(&case.response.time, &case.rows);
-            let status = pick(&case.response.status, &case.rows);
-            let concordance = match &case.response.start {
-                Some(start) => {
-                    let data = crate::data_types::CountingProcessData::try_new(
-                        pick(start, &case.rows),
-                        time,
-                        status,
-                    )
-                    .map_err(|err| err.to_string())?;
-                    concordancefit(
-                        SurvResponse::Counting(&data),
-                        lp.view(),
-                        None,
-                        None,
-                        None,
-                        &options,
-                    )
-                }
-                None => {
-                    let data = crate::data_types::SurvivalData::try_new(time, status)
-                        .map_err(|err| err.to_string())?;
-                    concordancefit(
-                        SurvResponse::Right(&data),
-                        lp.view(),
-                        None,
-                        None,
-                        None,
-                        &options,
-                    )
-                }
-            }
-            .map_err(|err| format!("concordancefit: {err}"))?;
-            assert_vec(
-                &concordance.concordance,
-                &nums(&expected["concordance"])?,
-                RTOL_COEF,
-                "concordance",
-            )?;
-            let names =
-                serde_json::json!(["concordant", "discordant", "tied.x", "tied.y", "tied.xy"]);
-            let count = &concordance.count[0];
-            assert_vec(
-                &[
-                    count.concordant,
-                    count.discordant,
-                    count.tied_x,
-                    count.tied_y,
-                    count.tied_xy,
-                ],
-                &named_values(&expected["count"], &names)?,
-                1e-12,
-                "concordance.count",
-            )?;
-            let var = concordance.var.as_ref().ok_or("concordance var is None")?;
-            assert_vec(
-                &[var[0][0]],
-                &nums(&expected["var"])?,
-                RTOL_VAR,
-                "concordance.var",
-            )
+            check_fitted_concordance(&coxph.concordance, expected)
         }
         "predict_lp" => {
             let expected = &expected["predict_lp"];

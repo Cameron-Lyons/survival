@@ -15,9 +15,10 @@
 //! residual types of `R/residuals.coxph.R` (`coxph_diagnostics`).  The
 //! per-stratum baseline curves are computed once and cached.
 
-use crate::concordance::{ConcordanceFit, ConcordanceOptions, concordancefit};
+use crate::concordance::{ConcordanceCounts, ConcordanceFit, ConcordanceOptions, concordancefit};
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::core::SurvResponse;
+use crate::core::strata_order::order_within_strata;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
@@ -31,12 +32,14 @@ use crate::surv_analysis::agsurv::{
     AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, IntegratedCurve, agsurv_rows,
     cum_xbar_at, cumhaz_at, expand_curve, individual_curve, integrate_curve, step_at,
 };
-use ndarray::{Array1, Array2, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::prelude::*;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Validated inputs of a Cox fit, in the caller's row order (`Surv(time,
-/// status) ~ x` or `Surv(entry, time, status) ~ x`).
+/// status) ~ x` or `Surv(entry, time, status) ~ x`); the fit checks the
+/// predictor values and weights ([`CoxphData::check_fit_input`]).
 #[derive(Debug, Clone)]
 pub struct CoxphData {
     pub time: Vec<f64>,
@@ -69,11 +72,6 @@ impl CoxphData {
         validate_length(n, status.len(), "status")?;
         validate_binary_i32(&status, "status")?;
         validate_length(n, x.nrows(), "x")?;
-        if let Some(value) = x.iter().find(|value| !value.is_finite()) {
-            return Err(SurvivalError::invalid_input(format!(
-                "x contains non-finite value {value}"
-            )));
-        }
         if let Some(entry) = &entry {
             validate_length(n, entry.len(), "entry")?;
             validate_finite(entry, "entry")?;
@@ -86,9 +84,6 @@ impl CoxphData {
         if let Some(weights) = &weights {
             validate_length(n, weights.len(), "weights")?;
             validate_finite(weights, "weights")?;
-            if weights.iter().any(|&w| w <= 0.0) {
-                return Err(SurvivalError::invalid_input("Invalid weights, must be >0"));
-            }
         }
         if let Some(strata) = &strata {
             validate_length(n, strata.len(), "strata")?;
@@ -110,6 +105,26 @@ impl CoxphData {
 
     pub fn n(&self) -> usize {
         self.time.len()
+    }
+
+    /// The checks `coxph()` makes only once the data have events (data
+    /// without events get their fit first): finite predictors, and the
+    /// fitters' positive case weights (`coxph.fit`, `agreg.fit`,
+    /// `coxpenal.fit`).
+    pub fn check_fit_input(&self) -> SurvivalResult<()> {
+        if let Some(value) = self.x.iter().find(|value| !value.is_finite()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "x contains non-finite value {value}"
+            )));
+        }
+        if self
+            .weights
+            .as_ref()
+            .is_some_and(|weights| weights.iter().any(|&w| w <= 0.0))
+        {
+            return Err(SurvivalError::invalid_input("Invalid weights, must be >0"));
+        }
+        Ok(())
     }
 }
 
@@ -188,6 +203,20 @@ impl SortedRows {
             codes,
             stratum_index,
         }
+    }
+
+    /// The rows in (stratum, time, original index) order, the order the
+    /// engine sorts them in.
+    pub(crate) fn by_time(time: &[f64], strata: Option<&[i32]>) -> Self {
+        let order = match strata {
+            Some(strata) => order_within_strata(strata, |a, b| time[a].total_cmp(&time[b])),
+            None => {
+                let mut order: Vec<usize> = (0..time.len()).collect();
+                order.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
+                order
+            }
+        };
+        Self::new(order, strata)
     }
 
     pub(crate) fn nstrata(&self) -> usize {
@@ -479,18 +508,74 @@ fn crossprod(rows: &Array2<f64>) -> Array2<f64> {
     rows.t().dot(rows)
 }
 
+/// `coxph()`'s offset centring: the offsets minus their (unweighted) mean,
+/// which keeps `exp()` of the risk scores in range, and that mean.  An
+/// absent or all-zero offset is zero with mean 0.
+pub(crate) fn centre_offset(offset: Option<&[f64]>, n: usize) -> (Vec<f64>, f64) {
+    match offset {
+        Some(offset) if offset.iter().any(|&value| value != 0.0) => {
+            let mean = offset.iter().sum::<f64>() / n as f64;
+            (offset.iter().map(|value| value - mean).collect(), mean)
+        }
+        _ => (vec![0.0; n], 0.0),
+    }
+}
+
+/// R's `nocenter` rule: a column whose values all belong to `values` is
+/// neither centred nor scaled by the fitter.
+pub(crate) fn nocenter_columns(x: &Array2<f64>, values: Option<&[f64]>) -> Vec<bool> {
+    (0..x.ncols())
+        .map(|col| {
+            values.is_some_and(|values| x.column(col).iter().all(|value| values.contains(value)))
+        })
+        .collect()
+}
+
+/// `coxph()` adds the mean offset back to the linear predictors the fitter
+/// computed at the centred offset.
+pub(crate) fn add_offset_mean(linear_predictors: &mut [f64], offset_mean: f64) {
+    if offset_mean != 0.0 {
+        for value in linear_predictors {
+            *value += offset_mean;
+        }
+    }
+}
+
+/// A Cox model whose parameters another fitter estimated (`coxpenal.fit`),
+/// in the data's row order: what [`CoxPHFit::from_fitted`] assembles.
+pub(crate) struct FittedCox {
+    pub method: TieMethod,
+    pub coefficients: Vec<f64>,
+    pub var: Array2<f64>,
+    pub loglik: [f64; 2],
+    pub iter: usize,
+    pub flag: i32,
+    pub means: Vec<f64>,
+    pub nocenter: Vec<bool>,
+    /// Score vector at the final coefficients.
+    pub first: Vec<f64>,
+    /// The linear predictors at the centred offset ([`centre_offset`]).
+    pub linear_predictors: Vec<f64>,
+    /// The offsets' mean, added back to the stored linear predictors.
+    pub offset_mean: f64,
+    /// Martingale residuals; `None` computes them from the linear predictors.
+    pub residuals: Option<Vec<f64>>,
+    pub wald_test: f64,
+}
+
 impl CoxPHFit {
     /// Fits the model: `coxph.fit` / `agreg.fit` / `coxexact.fit` /
-    /// `agexact.fit` followed by the post-processing of `coxph()`.
+    /// `agexact.fit` at the centred offset, followed by the post-processing
+    /// of `coxph()`.
     pub fn fit(data: CoxphData, options: CoxphOptions) -> SurvivalResult<Self> {
         let n = data.n();
         let nvar = data.x.ncols();
         let nevent = data.status.iter().filter(|&&s| s == 1).count();
-        if data.entry.is_some() && nevent == 0 {
-            return Err(SurvivalError::invalid_input(
-                "Can't fit a Cox model with 0 failures",
-            ));
+        let (centred_offset, offset_mean) = centre_offset(data.offset.as_deref(), n);
+        if nevent == 0 {
+            return Ok(Self::without_events(data, centred_offset, &options));
         }
+        data.check_fit_input()?;
         if let Some(init) = &options.init {
             if init.len() != nvar {
                 return Err(SurvivalError::invalid_input(
@@ -499,16 +584,7 @@ impl CoxPHFit {
             }
             validate_finite(init, "init")?;
         }
-        let nocenter: Vec<bool> = (0..nvar)
-            .map(|col| {
-                options.nocenter.as_ref().is_some_and(|values| {
-                    data.x
-                        .column(col)
-                        .iter()
-                        .all(|value| values.contains(value))
-                })
-            })
-            .collect();
+        let nocenter = nocenter_columns(&data.x, options.nocenter.as_deref());
         let doscale = nocenter.iter().map(|&skip| !skip).collect();
 
         let mut engine = CoxFitBuilder::new(
@@ -528,8 +604,8 @@ impl CoxPHFit {
         if let Some(strata) = &data.strata {
             engine = engine.strata(Array1::from_vec(strata.clone()));
         }
-        if let Some(offset) = &data.offset {
-            engine = engine.offset(Array1::from_vec(offset.clone()));
+        if data.offset.is_some() {
+            engine = engine.offset(Array1::from_vec(centred_offset.clone()));
         }
         if let Some(weights) = &data.weights {
             engine = engine.weights(Array1::from_vec(weights.clone()));
@@ -542,6 +618,8 @@ impl CoxPHFit {
         let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
         // The linear predictor uses the fitted values; only afterwards are
         // the aliased coefficients marked NA (`coef[which.sing] <- NA`).
+        // Residuals, the robust variance and the concordance use it at the
+        // centred offset; the mean offset is added back at the end.
         let mut coefficients = results.coefficients;
         let center: f64 = coefficients
             .iter()
@@ -556,7 +634,7 @@ impl CoxPHFit {
                     .zip(&coefficients)
                     .map(|(x, b)| x * b)
                     .sum::<f64>()
-                    + offset[i]
+                    + centred_offset[i]
                     - center
             })
             .collect();
@@ -661,6 +739,128 @@ impl CoxPHFit {
             .map(|(i, b)| b - options.init.as_ref().map_or(0.0, |init| init[i]))
             .collect();
         fit.wald_test = wald_statistic(&fit.var, &shift, options.toler_chol)?;
+        add_offset_mean(&mut fit.linear_predictors, offset_mean);
+        Ok(fit)
+    }
+
+    /// `coxph()`'s fit of data without events, made before any fitter runs:
+    /// `NA` coefficients, a zero variance, `loglik = c(0, 0)`, zero
+    /// residuals, the unweighted column means and a concordance without
+    /// pairs.  As in R the linear predictors are the centred offset.
+    fn without_events(data: CoxphData, centred_offset: Vec<f64>, options: &CoxphOptions) -> Self {
+        let n = data.n();
+        let nvar = data.x.ncols();
+        let means = (0..nvar)
+            .map(|col| data.x.column(col).sum() / n as f64)
+            .collect();
+        let concordance = ConcordanceFit {
+            concordance: vec![f64::NAN],
+            n,
+            count: vec![ConcordanceCounts {
+                concordant: 0.0,
+                discordant: 0.0,
+                tied_x: 0.0,
+                tied_y: 0.0,
+                tied_xy: 0.0,
+            }],
+            count_strata: None,
+            var: None,
+            cvar: None,
+            dfbeta: None,
+            influence: None,
+            ranks: None,
+        };
+        Self {
+            coefficients: vec![f64::NAN; nvar],
+            var: Array2::zeros((nvar, nvar)),
+            naive_var: None,
+            loglik: [0.0; 2],
+            score: 0.0,
+            rscore: None,
+            wald_test: 0.0,
+            iter: 0,
+            flag: 0,
+            info: None,
+            linear_predictors: centred_offset,
+            residuals: vec![0.0; n],
+            means,
+            first: vec![0.0; nvar],
+            n,
+            nevent: 0,
+            method: options.method,
+            nocenter: nocenter_columns(&data.x, options.nocenter.as_deref()),
+            sorted: SortedRows::by_time(&data.time, data.strata.as_deref()),
+            time: data.time,
+            entry: data.entry,
+            status: data.status,
+            x: data.x,
+            weights: data.weights.unwrap_or_else(|| vec![1.0; n]),
+            strata: data.strata,
+            offset: data.offset.unwrap_or_else(|| vec![0.0; n]),
+            cluster: None,
+            concordance,
+            curves: OnceLock::new(),
+        }
+    }
+
+    /// A fit whose parameters another fitter estimated (`coxpenal.fit`),
+    /// with `coxph()`'s post-processing: the martingale residuals when not
+    /// given and the concordance of the final linear predictors.  `cluster`
+    /// only enters the concordance: `coxph()` passes it to `concordancefit`
+    /// although a penalized fit has no robust variance.  There is no score
+    /// test.
+    pub(crate) fn from_fitted(
+        data: CoxphData,
+        fitted: FittedCox,
+        cluster: Option<&[i32]>,
+    ) -> SurvivalResult<Self> {
+        let n = data.n();
+        let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
+        let concordance = linear_predictor_concordance(
+            &data.time,
+            data.entry.as_deref(),
+            &data.status,
+            &fitted.linear_predictors,
+            &weights,
+            data.strata.as_deref(),
+            cluster,
+        )?;
+        let mut fit = Self {
+            coefficients: fitted.coefficients,
+            var: fitted.var,
+            naive_var: None,
+            loglik: fitted.loglik,
+            score: f64::NAN,
+            rscore: None,
+            wald_test: fitted.wald_test,
+            iter: fitted.iter,
+            flag: fitted.flag,
+            info: None,
+            linear_predictors: fitted.linear_predictors,
+            residuals: Vec::new(),
+            means: fitted.means,
+            first: fitted.first,
+            n,
+            nevent: data.status.iter().filter(|&&s| s == 1).count(),
+            method: fitted.method,
+            sorted: SortedRows::by_time(&data.time, data.strata.as_deref()),
+            time: data.time,
+            entry: data.entry,
+            status: data.status,
+            x: data.x,
+            weights,
+            strata: data.strata,
+            offset: data.offset.unwrap_or_else(|| vec![0.0; n]),
+            nocenter: fitted.nocenter,
+            cluster: None,
+            concordance,
+            curves: OnceLock::new(),
+        };
+        fit.residuals = match fitted.residuals {
+            Some(residuals) => residuals,
+            None => martingale_residuals(&fit, &fit.linear_predictors),
+        };
+        add_offset_mean(&mut fit.linear_predictors, fitted.offset_mean);
         Ok(fit)
     }
 
@@ -698,18 +898,21 @@ impl CoxPHFit {
             / total
     }
 
-    /// Per-stratum `agsurv` pieces at `x - means` and `risk =
-    /// exp(linear_predictors - log_risk_shift)`, in the fit's stratum order.
+    /// Per-stratum `agsurv` pieces at `x - means`, in the fit's stratum
+    /// order, with `survfit.coxph`'s `risk = exp(X %*% beta + offset -
+    /// xcenter)`: the risks relative to a subject at the means and the mean
+    /// offset, so a large offset neither overflows nor rounds the baseline
+    /// survival to 1.
     fn compute_curves(
         &self,
         survtype: CoxSurvType,
         vartype: CoxSurvType,
-        log_risk_shift: f64,
     ) -> SurvivalResult<Vec<AgsurvCurve>> {
+        let offset_mean = self.offset_mean();
         let risk: Vec<f64> = self
             .linear_predictors
             .iter()
-            .map(|lp| (lp - log_risk_shift).exp())
+            .map(|lp| (lp - offset_mean).exp())
             .collect();
         let data = AgsurvData {
             start: self.entry.as_deref(),
@@ -735,18 +938,17 @@ impl CoxPHFit {
             return Ok(curves);
         }
         let survtype = self.default_survtype();
-        let curves = self.compute_curves(survtype, survtype, 0.0)?;
+        let curves = self.compute_curves(survtype, survtype)?;
         Ok(self.curves.get_or_init(|| curves))
     }
 
-    /// Relative risk of a centred covariate row: `exp(x2c %*% coef + offset2)`.
-    fn relative_risk(&self, x2c: &[f64], offset2: f64) -> f64 {
-        (x2c.iter()
-            .zip(self.coefficients_or_zero())
-            .map(|(x, b)| x * b)
-            .sum::<f64>()
-            + offset2)
-            .exp()
+    /// The curves of one hazard type: the cached ones for the fit's own.
+    fn curves_for(&self, survtype: CoxSurvType) -> SurvivalResult<Cow<'_, [AgsurvCurve]>> {
+        if survtype == self.default_survtype() {
+            Ok(Cow::Borrowed(self.baseline_curves()?))
+        } else {
+            Ok(Cow::Owned(self.compute_curves(survtype, survtype)?))
+        }
     }
 
     fn check_newdata(&self, newdata: &CoxNewData) -> SurvivalResult<()> {
@@ -770,16 +972,21 @@ impl CoxPHFit {
     }
 
     /// Centred new covariate rows (`newx - means`) and their relative risks
-    /// on the fit's scale.
+    /// on the baseline curves' scale, `survfit.coxph`'s `risk2 = exp(x2 %*%
+    /// beta + offset2 - xcenter)`.
     fn centered_newdata(&self, newdata: &CoxNewData) -> (Array2<f64>, Vec<f64>) {
         let mut x2c = newdata.x.clone();
         for (col, &mean) in self.means.iter().enumerate() {
             x2c.column_mut(col).mapv_inplace(|value| value - mean);
         }
-        let risk2: Vec<f64> = (0..newdata.nrows())
-            .map(|i| {
+        let coef = self.coefficients_or_zero();
+        let offset_mean = self.offset_mean();
+        let risk2: Vec<f64> = x2c
+            .outer_iter()
+            .enumerate()
+            .map(|(i, row)| {
                 let offset2 = newdata.offset.as_ref().map_or(0.0, |o| o[i]);
-                self.relative_risk(&x2c.row(i).to_vec(), offset2)
+                (row.dot(&ArrayView1::from(&coef)) + offset2 - offset_mean).exp()
             })
             .collect();
         (x2c, risk2)
@@ -788,18 +995,19 @@ impl CoxPHFit {
     /// `basehaz(fit, centered)`.
     pub fn basehaz(&self, centered: bool) -> SurvivalResult<Basehaz> {
         let curves = self.baseline_curves()?;
-        // survfit(fit) evaluates the curve at x = means and the mean
-        // offset; uncentred divides the offset sum(means * coef) back out.
-        let mut scale = self.offset_mean().exp();
-        if !centered {
+        // the curves are survfit(fit)'s, at x = means and the mean offset;
+        // uncentred divides the offset sum(means * coef) back out.
+        let scale = if centered {
+            1.0
+        } else {
             let center: f64 = self
                 .means
                 .iter()
                 .zip(self.coefficients_or_zero())
                 .map(|(m, b)| m * b)
                 .sum();
-            scale *= (-center).exp();
-        }
+            (-center).exp()
+        };
         let mut time = Vec::new();
         let mut hazard = Vec::new();
         let mut strata = Vec::new();
@@ -835,26 +1043,12 @@ impl CoxPHFit {
         if let Some(newdata) = newdata {
             self.check_newdata(newdata)?;
         }
-        let offset_mean = self.offset_mean();
-        // Kalbfleisch-Prentice needs the risks on survfit's scale
-        // (relative to the mean offset); the other types only depend on
-        // risk2 * baseline, so the cached predict-scale curves serve.
-        let kp = survtype == CoxSurvType::KalbfleischPrentice;
-        let shift = if kp { offset_mean } else { 0.0 };
-        let computed;
-        let curves: &[AgsurvCurve] = if !kp && survtype == self.default_survtype() {
-            self.baseline_curves()?
-        } else {
-            computed = self.compute_curves(survtype, survtype, shift)?;
-            &computed
-        };
-        let (x2c, mut risk2) = match newdata {
+        let curves = self.curves_for(survtype)?;
+        let (x2c, risk2) = match newdata {
             Some(newdata) => self.centered_newdata(newdata),
-            None => (Array2::zeros((1, self.nvar())), vec![offset_mean.exp()]),
+            // the curve at the means and the mean offset
+            None => (Array2::zeros((1, self.nvar())), vec![1.0]),
         };
-        for value in risk2.iter_mut() {
-            *value *= (-shift).exp();
-        }
         let varmat = options.se_fit.then_some(&self.var);
         let mut result = Vec::new();
         let new_strata = newdata.and_then(|newdata| newdata.strata.as_deref());
@@ -911,19 +1105,8 @@ impl CoxPHFit {
             1
         });
         let survtype = CoxSurvType::from_stype_ctype(options.stype, ctype)?;
-        let kp = survtype == CoxSurvType::KalbfleischPrentice;
-        let shift = if kp { self.offset_mean() } else { 0.0 };
-        let computed;
-        let curves: &[AgsurvCurve] = if !kp && survtype == self.default_survtype() {
-            self.baseline_curves()?
-        } else {
-            computed = self.compute_curves(survtype, survtype, shift)?;
-            &computed
-        };
-        let (x2c, mut risk2) = self.centered_newdata(newdata);
-        for value in risk2.iter_mut() {
-            *value *= (-shift).exp();
-        }
+        let curves = self.curves_for(survtype)?;
+        let (x2c, risk2) = self.centered_newdata(newdata);
         let varmat = options.se_fit.then_some(&self.var);
         let mut ids: Vec<i32> = Vec::new();
         for &value in id {
@@ -947,7 +1130,7 @@ impl CoxPHFit {
                     risk2: risk2[i],
                 })
                 .collect();
-            let curve = individual_curve(curves, survtype, &intervals, varmat)?;
+            let curve = individual_curve(&curves, survtype, &intervals, varmat)?;
             let stratum = intervals
                 .first()
                 .map_or(0, |interval| self.sorted.codes[interval.stratum]);
@@ -1132,7 +1315,15 @@ impl CoxPHFit {
             if !se_fit {
                 return Ok(CoxPrediction { fit, se_fit: None });
             }
-            let risk: Vec<f64> = self.linear_predictors.iter().map(|lp| lp.exp()).collect();
+            // predict.coxph's exp(linear.predictors), relative to the mean
+            // offset as the baseline curves are (the standard error does not
+            // depend on that scale)
+            let offset_mean = self.offset_mean();
+            let risk: Vec<f64> = self
+                .linear_predictors
+                .iter()
+                .map(|lp| (lp - offset_mean).exp())
+                .collect();
             let se = self.expected_se(
                 self.x.view(),
                 Some(&self.means),
@@ -1878,6 +2069,117 @@ mod tests {
         assert!(total.abs() < 1e-10);
     }
 
+    /// `coxph()` fits at the centred offset and adds the mean back, so
+    /// offsets near the limits of `exp()` give R's fit
+    /// (`coxph(Surv(time, status) ~ x1 + offset(708 + x2))`, and `-740`).
+    #[test]
+    fn offsets_are_centred_before_fitting() {
+        let base = lung_like_data();
+        let lp_without_shift = [
+            0.689_312_979_161_027_5,
+            0.292_366_411_600_775_64,
+            0.523_664_123_307_610_3,
+            1.593_893_127_820_649_6,
+            0.425_190_839_527_484_2,
+            0.856_488_551_234_319,
+            0.928_244_271_967_232_4,
+            0.790_839_695_380_901_6,
+        ];
+        let residuals = [
+            0.833_716_415_337_278_3,
+            0.888_195_914_321_604_3,
+            -0.190_854_674_879_980_42,
+            -0.158_633_253_137_838_05,
+            0.639_931_579_226_752_9,
+            -0.668_367_507_721_713_4,
+            -0.252_386_478_362_365_3,
+            -1.091_601_994_783_737_2,
+        ];
+        for shift in [708.0, -740.0] {
+            let offset = base.x.column(1).iter().map(|x2| shift + x2).collect();
+            let data = CoxphData::try_new(
+                base.time.clone(),
+                None,
+                base.status.clone(),
+                base.x.slice(ndarray::s![.., ..1]).to_owned(),
+                None,
+                None,
+                Some(offset),
+            )
+            .unwrap();
+            let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
+            assert!((fit.coefficients[0] - 0.671_755_720_732_935_5).abs() < 1e-9);
+            assert!((fit.loglik[0] - -8.483_319_079_073_608).abs() < 1e-9);
+            assert!((fit.loglik[1] - -8.313_974_981_255_075).abs() < 1e-9);
+            for (lp, expected) in fit.linear_predictors.iter().zip(lp_without_shift) {
+                assert!((lp - (shift + expected)).abs() < 1e-9);
+            }
+            for (actual, expected) in fit.residuals.iter().zip(residuals) {
+                assert!((actual - expected).abs() < 1e-9);
+            }
+            assert!((fit.concordance.concordance[0] - 6.0 / 19.0).abs() < 1e-12);
+            // The offset is kept as given.
+            assert!((fit.offset[0] - (shift + 1.0)).abs() < 1e-12);
+        }
+    }
+
+    /// Without events `coxph()` returns before any fitter runs: R's
+    /// `coxph(Surv(start, stop, status) ~ x + offset(off), weights = w)` on
+    /// four censored rows.
+    #[test]
+    fn data_without_events_gets_coxph_skeleton_fit() {
+        let data = CoxphData::try_new(
+            vec![2.0, 3.0, 4.0, 5.0],
+            Some(vec![0.0, 0.0, 1.0, 1.0]),
+            vec![0; 4],
+            Array2::from_shape_vec((4, 1), vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+            Some(vec![1.0, 2.0, 3.0, 4.0]),
+            None,
+            Some(vec![0.1, 0.2, 0.3, 0.4]),
+        )
+        .unwrap();
+        let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
+        assert!(fit.coefficients[0].is_nan());
+        assert_eq!(fit.var[(0, 0)], 0.0);
+        assert_eq!(fit.loglik, [0.0, 0.0]);
+        assert_eq!((fit.score, fit.wald_test, fit.iter), (0.0, 0.0, 0));
+        // Unweighted column means; the linear predictors are the centred offset.
+        assert_eq!(fit.means, vec![2.5]);
+        for (lp, expected) in fit.linear_predictors.iter().zip([-0.15, -0.05, 0.05, 0.15]) {
+            assert!((lp - expected).abs() < 1e-12);
+        }
+        assert_eq!(fit.residuals, vec![0.0; 4]);
+        assert_eq!(fit.nevent, 0);
+        assert!(fit.concordance.concordance[0].is_nan());
+        assert_eq!(fit.concordance.count[0].concordant, 0.0);
+        assert!(fit.concordance.var.is_none());
+    }
+
+    #[test]
+    fn predictors_and_weights_are_checked_only_for_data_with_events() {
+        let data = |status: Vec<i32>| {
+            CoxphData::try_new(
+                vec![2.0, 3.0, 4.0, 5.0],
+                None,
+                status,
+                Array2::from_shape_vec((4, 1), vec![1.0, f64::INFINITY, 3.0, 4.0]).unwrap(),
+                Some(vec![0.0, 2.0, 3.0, 4.0]),
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let fit = CoxPHFit::fit(data(vec![0; 4]), CoxphOptions::default()).unwrap();
+        assert!(fit.coefficients[0].is_nan());
+        assert_eq!(fit.means, vec![f64::INFINITY]);
+        let err = CoxPHFit::fit(data(vec![1, 0, 0, 0]), CoxphOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("x contains non-finite value inf"));
+        let mut finite = data(vec![1, 0, 0, 0]);
+        finite.x[(1, 0)] = 2.0;
+        let err = CoxPHFit::fit(finite, CoxphOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("Invalid weights, must be >0"));
+    }
+
     #[test]
     fn null_model_reports_the_log_likelihood_and_residuals() {
         let data = CoxphData::try_new(
@@ -1930,18 +2232,6 @@ mod tests {
                 vec![1, 0],
                 Array2::zeros((2, 1)),
                 None,
-                None,
-                None
-            )
-            .is_err()
-        );
-        assert!(
-            CoxphData::try_new(
-                vec![1.0, 2.0],
-                None,
-                vec![1, 0],
-                Array2::zeros((2, 1)),
-                Some(vec![1.0, 0.0]),
                 None,
                 None
             )

@@ -9,23 +9,25 @@ does: the model frame, argument checking, dispatch and result labelling.
 from __future__ import annotations
 
 import math
+import numbers
 import sys
 import warnings
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from statistics import NormalDist
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
-    _apply_coxph_control,
     _as_matrix_rows,
     _as_rows,
     _coerce_array_like,
+    _control_mapping,
     _cox_tie_method,
     _finite_float,
     _float_vector,
     _integer_scalar,
+    _is_bool_like,
     _is_missing_value,
     _label_levels,
     _match_string_arg,
@@ -38,7 +40,9 @@ from ._coerce import (
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
     _subset_data,
+    _warn_outside_package,
 )
+from ._data_prep import aeqSurv
 from ._fit import (
     _design_names_and_assign,
     _model_frame,
@@ -64,6 +68,8 @@ from ._types import (
 
 _TIE_METHOD_NAMES = ("breslow", "efron", "exact")
 _LOG_DOUBLE_MAX = math.log(sys.float_info.max)
+# coxph.control's default toler.chol, .Machine$double.eps ^ .75
+_TOLER_CHOL = sys.float_info.epsilon**0.75
 
 
 # ---------------------------------------------------------------------------
@@ -99,10 +105,11 @@ class CoxphModel:
     # the columns the call's weights= / id= named, for re-evaluation on newdata
     weights_column: str | None = None
     id_column: str | None = None
-    # R's coxph returns a skeleton fit when the data has no events: NA
-    # coefficients, a zero variance, loglik c(0, 0) and no iterations.
-    no_events: bool = False
     penalized: Any | None = None
+    # the model frame the fit was made from (after subset and na.action), which
+    # model.frame(fit) rebuilds when the fit did not keep it; the design rows are
+    # dropped, since model.frame() does not use them
+    _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
         if self.penalized is not None and name in {
@@ -119,8 +126,6 @@ class CoxphModel:
 
     @property
     def coefficients(self) -> list[float]:
-        if self.no_events:
-            return [math.nan] * len(self.coef_names)
         return [float(value) for value in self.fit.coefficients]
 
     @property
@@ -155,7 +160,7 @@ class CoxphModel:
     def wald_test(self) -> float | None:
         if not self.coef_names:
             return None
-        return 0.0 if self.no_events else float(self.fit.wald_test)
+        return float(self.fit.wald_test)
 
     @property
     def iter(self) -> int | list[int] | None:
@@ -163,7 +168,7 @@ class CoxphModel:
             return list(self.penalized.iter)
         if not self.coef_names:
             return None
-        return 0 if self.no_events else int(self.fit.iter)
+        return int(self.fit.iter)
 
     @property
     def linear_predictors(self) -> list[float]:
@@ -247,17 +252,6 @@ def _active_assign(fit: CoxphModel) -> list[list[int]]:
 # ---------------------------------------------------------------------------
 # coxph
 # ---------------------------------------------------------------------------
-
-
-def _aeq_surv(y: Surv) -> Surv:
-    """``aeqSurv``: snap times that are equal up to floating-point noise together."""
-
-    if y.start is None:
-        fixed = _core.aeq_surv(list(y.time))
-        return Surv(list(fixed.time), list(y.event), type=y.type)
-    fixed = _core.aeq_surv(list(y.start), list(y.time))
-    time2 = fixed.time2 if fixed.time2 is not None else list(y.time)
-    return Surv(list(fixed.time), list(time2), list(y.event), type=y.type)
 
 
 def _obrien_time_transform(
@@ -354,6 +348,9 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
 
 
 def _check_init(init: Any, x: list[list[float]], offset: list[float] | None) -> list[float]:
+    """coxph.R's check of ``init``: ``exp(X %*% init - sum(colMeans(X) * init) + offset)``
+    at the centred offset must neither overflow nor underflow everywhere."""
+
     values = _float_vector(init, "init")
     nvar = len(x[0]) if x else 0
     if len(values) != nvar:
@@ -361,11 +358,12 @@ def _check_init(init: Any, x: list[list[float]], offset: list[float] | None) -> 
     n = len(x)
     means = [sum(row[col] for row in x) / n for col in range(nvar)] if n else []
     center = sum(mean * value for mean, value in zip(means, values, strict=True))
+    offset_mean = sum(offset) / n if offset is not None else 0.0
     risks = []
     for idx, row in enumerate(x):
         eta = sum(a * b for a, b in zip(row, values, strict=True)) - center
         if offset is not None:
-            eta += offset[idx]
+            eta += offset[idx] - offset_mean
         try:
             risks.append(math.exp(eta))
         except OverflowError:
@@ -401,27 +399,10 @@ def _cluster_codes(values: Sequence[Any]) -> list[int]:
     return [codes[value] for value in values]
 
 
-def _fit_concordance(
-    fit: _core.CoxPHFit, data: _CoxData, cluster: list[int] | None
-) -> dict[str, float]:
-    """``fit$concordance``: counts, C and its se from ``concordancefit(reverse=TRUE)``."""
+def _concordance_summary(cfit: Any) -> dict[str, float]:
+    """``fit$concordance``: the summed counts, C and its se of the fit's
+    ``concordancefit(reverse=TRUE)`` (NA C and se for data without events)."""
 
-    y = data.y
-    x = _core.CovariateMatrix(list(fit.linear_predictors), len(y), 1)
-    weights = None if data.weights is None else _core.Weights(list(data.weights))
-    kwargs: dict[str, Any] = {
-        "weights": weights,
-        "strata": data.strata,
-        "cluster": cluster,
-        "reverse": True,
-        "timefix": False,
-    }
-    if y.start is None:
-        cfit = _core.concordancefit(_core.SurvivalData(list(y.time), list(y.event)), x, **kwargs)
-    else:
-        cfit = _core.concordancefit_counting(
-            _core.CountingProcessData(list(y.start), list(y.time), list(y.event)), x, **kwargs
-        )
     counts = cfit.count
     variance = cfit.var[0][0] if cfit.var is not None else math.nan
     return {
@@ -438,11 +419,16 @@ def _fit_concordance(
 def _cox_fit_diagnostic_messages(
     fit: Any, iter_max: int, eps: float | None, toler_inf: float | None
 ) -> list[str]:
-    """R's ``coxph.fit`` convergence warnings for an engine fit (also the R bridge's).
+    """The convergence warnings of R's Cox fitters for an engine fit (also the R bridge's).
 
-    ``infs = |u %*% var|``: after the iterations ran out the fit may be infinite; a
-    converged fit whose score still moves a coefficient by more than ``toler.inf``
-    of its size converged before that variable did.
+    ``infs = |u %*% imat|``, with the fitter's model-based variance (the naive one of a
+    robust fit): after the iterations ran out the fit may be infinite; a converged fit
+    whose score still moves a coefficient by more than ``toler.inf`` of its size
+    converged before that variable did.  ``coxph.fit`` (right-censored
+    Breslow/Efron) also flags a non-finite score; ``agreg.fit`` ((start, stop]
+    Breslow/Efron) flags a non-finite score or ``infs > toler.inf * (1 + |coef|)``
+    without the ``eps`` floor and stops on an overflowed fit; ``coxexact.fit`` and
+    ``agexact.fit`` keep only the ``eps`` and ``toler.inf`` tests.
     """
 
     coef = list(fit.coefficients)
@@ -452,30 +438,50 @@ def _cox_fit_diagnostic_messages(
     eps_value = 1e-9 if eps is None else float(eps)
     toler = math.sqrt(eps_value) if toler_inf is None else float(toler_inf)
     u = list(fit.first)
-    var = fit.var
-    infs = [
-        abs(sum(u[i] * var[i][j] for i in range(nvar)) if var else math.nan) for j in range(nvar)
-    ]
-    messages: list[str] = []
-    if fit.flag == 1000:
-        messages.append("Ran out of iterations and did not converge")
-        if max(fit.linear_predictors, default=0.0) > 500 or any(
-            not math.isfinite(value) for value in infs
-        ):
-            messages.append("one or more coefficients may be infinite")
-        return messages
-    which = [
-        j + 1
-        for j in range(nvar)
-        if not math.isfinite(u[j]) or (infs[j] > eps_value and infs[j] > toler * abs(coef[j]))
-    ]
-    if which:
-        messages.append(
-            "Loglik converged before variable "
-            + ",".join(str(index) for index in which)
-            + "; coefficient may be infinite. "
-        )
-    return messages
+    var = fit.var if fit.naive_var is None else fit.naive_var
+    infs = [abs(sum(u[i] * var[i][j] for i in range(nvar))) for j in range(nvar)]
+    info = fit.info
+    if info is not None:  # agreg.fit
+        # the fitter's coefficients, before an aliased one is marked NA
+        raw = [0.0 if math.isnan(b) and var[j][j] == 0.0 else b for j, b in enumerate(coef)]
+        if not all(math.isfinite(value) for value in [*raw, *(v for row in var for v in row)]):
+            raise ValueError(
+                "routine failed due to numeric overflow."
+                "This should never happen.  Please contact the author."
+            )
+        if info[3] > 0:
+            return ["Ran out of iterations and did not converge"]
+        which = [
+            j + 1
+            for j in range(nvar)
+            if not math.isfinite(u[j]) or infs[j] > toler * (1.0 + abs(raw[j]))
+        ]
+        suffix = "; beta may be infinite. "
+    elif _TIE_METHOD_NAMES[int(fit.method)] == "exact":  # coxexact.fit, agexact.fit
+        if fit.flag == 1000:
+            return ["Ran out of iterations and did not converge"]
+        which = [
+            j + 1 for j in range(nvar) if infs[j] > eps_value and infs[j] > toler * abs(coef[j])
+        ]
+        suffix = "; beta may be infinite. "
+    else:  # coxph.fit
+        if fit.flag == 1000:
+            messages = ["Ran out of iterations and did not converge"]
+            # coxph.fit's lp is at coxph()'s centred offset
+            offset = list(fit.offset)
+            lp_max = max(fit.linear_predictors) - sum(offset) / len(offset)
+            if lp_max > 500 or any(not math.isfinite(value) for value in infs):
+                messages.append("one or more coefficients may be infinite")
+            return messages
+        which = [
+            j + 1
+            for j in range(nvar)
+            if not math.isfinite(u[j]) or (infs[j] > eps_value and infs[j] > toler * abs(coef[j]))
+        ]
+        suffix = "; coefficient may be infinite. "
+    if not which:
+        return []
+    return ["Loglik converged before variable " + ",".join(map(str, which)) + suffix]
 
 
 def _coxph_fit_frame(
@@ -492,14 +498,15 @@ def _coxph_fit_frame(
     nocenter: list[float] | None,
     tt: Any,
     keep_model: bool,
+    toler_inf: float | None = None,
     outer_max: int | None = None,
 ) -> CoxphModel:
-    """coxph.R after the model frame: timefix, tt(), robust/cluster, the fit, the
-    Wald test and concordance."""
+    """coxph.R after the model frame: timefix, tt(), robust/cluster, the fit (or the
+    fit of data without events), the convergence warnings and the concordance."""
 
     if frame.y.type not in {"right", "counting"}:
         raise ValueError(f'Cox model doesn\'t support "{frame.y.type}" survival data')
-    y = _aeq_surv(frame.y) if timefix else frame.y
+    y = aeqSurv(frame.y) if timefix else frame.y
     tt_terms = _tt_terms(frame.design)
     if tt_terms:
         if keep_model:
@@ -515,8 +522,6 @@ def _coxph_fit_frame(
             cluster=frame.cluster,
             id=frame.id,
         )
-    if any(not math.isfinite(value) for row in data.x for value in row):
-        raise ValueError("data contains an infinite predictor")
     if data.offset is not None and any(
         not math.isfinite(value) or value > _LOG_DOUBLE_MAX for value in data.offset
     ):
@@ -525,11 +530,14 @@ def _coxph_fit_frame(
     has_cluster = data.cluster is not None
     use_robust = _robust_default(data, has_cluster) if robust is None else robust
     cluster: list[int] | None = None
-    if has_cluster and not use_robust:
-        warnings.warn(
-            "cluster specified with robust=FALSE, cluster ignored", RuntimeWarning, stacklevel=3
-        )
-    elif has_cluster:
+    if has_cluster:
+        if not use_robust:
+            # coxph() still hands the cluster to the concordance
+            warnings.warn(
+                "cluster specified with robust=FALSE, cluster ignored",
+                RuntimeWarning,
+                stacklevel=3,
+            )
         cluster = _cluster_codes(data.cluster or [])
     elif use_robust and data.id is not None:
         cluster = _cluster_codes(data.id)
@@ -538,14 +546,17 @@ def _coxph_fit_frame(
             cluster = list(range(len(data.y)))
         else:
             raise ValueError("one of cluster or id is needed")
-    init_values = None if init is None else _check_init(init, data.x, data.offset)
+    # without events coxph() returns before checking the predictors or init and
+    # before fitting anything, penalized terms included
     no_events = not any(int(value) for value in data.y.event)
-    if no_events:
-        # R returns the fit without iterating (coefficients NA, variance 0)
-        iter_max = 0
-    penalized_terms = [
-        term for term in frame.design.covariates if isinstance(term, _PenaltyDesignTerm)
-    ]
+    if not no_events and any(not math.isfinite(value) for row in data.x for value in row):
+        raise ValueError("data contains an infinite predictor")
+    init_values = None if init is None or no_events else _check_init(init, data.x, data.offset)
+    penalized_terms = (
+        []
+        if no_events
+        else [term for term in frame.design.covariates if isinstance(term, _PenaltyDesignTerm)]
+    )
     penalized = None
     if penalized_terms:
         if use_robust:
@@ -573,6 +584,7 @@ def _coxph_fit_frame(
             eps=eps,
             toler_chol=toler_chol,
             nocenter=nocenter,
+            cluster=cluster,
         )
         fit = penalized.coxph
         dense = [
@@ -605,16 +617,24 @@ def _coxph_fit_frame(
             robust=use_robust,
         )
         design, names, assign = frame.design, frame.names, frame.assign
-    aliased = [idx for idx, value in enumerate(fit.coefficients) if math.isnan(value)]
-    if aliased and not singular_ok:
-        columns = " ".join(str(idx + 1) for idx in aliased)
-        raise ValueError(f"X matrix deemed to be singular; variable {columns}")
-    if penalized is None:
-        for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, None):
-            warnings.warn(message, RuntimeWarning, stacklevel=3)
+    if not no_events:
+        aliased = [idx for idx, value in enumerate(fit.coefficients) if math.isnan(value)]
+        if aliased and not singular_ok:
+            columns = " ".join(str(idx + 1) for idx in aliased)
+            raise ValueError(f"X matrix deemed to be singular; variable {columns}")
+        if penalized is None:
+            for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, toler_inf):
+                warnings.warn(message, RuntimeWarning, stacklevel=3)
+        elif iter_max > 1 and penalized.inner_failures:
+            # coxpenal.fit's warning, R's spelling kept
+            warnings.warn(
+                "Inner loop failed to coverge for iterations "
+                + " ".join(map(str, penalized.inner_failures)),
+                RuntimeWarning,
+                stacklevel=3,
+            )
     return CoxphModel(
         fit=fit,
-        no_events=no_events,
         formula=frame.formula,
         design=design,
         terms=frame.terms,
@@ -622,7 +642,7 @@ def _coxph_fit_frame(
         assign=dict(assign),
         y=y,
         strata_levels=frame.strata_levels,
-        concordance=_fit_concordance(fit, data, cluster),
+        concordance=_concordance_summary(fit.concordance),
         n=frame.n,
         timefix=timefix,
         tt=bool(tt_terms),
@@ -632,7 +652,19 @@ def _coxph_fit_frame(
         weights_column=frame.weights_column,
         id_column=frame.id_column,
         penalized=penalized,
+        _frame=replace(frame, x=[]),
     )
+
+
+def _coxph_model_frame(fit: CoxphModel) -> dict[str, Any]:
+    """R's ``model.frame(fit)`` for a Cox model: ``fit$model`` when the fit kept it
+    (``model=TRUE``), else the model frame rebuilt from the data it was fitted to."""
+
+    if fit.model is not None:
+        return fit.model
+    if fit._frame is None:
+        raise TypeError("the fit keeps no model frame")
+    return fit._frame.model_frame()
 
 
 def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, Any]]:
@@ -664,6 +696,81 @@ def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, An
     return f"{surv} ~ {' + '.join(names)}", data
 
 
+# the coxph.control formals coxph() can only receive through **kwargs
+_COXPH_CONTROL_KWARGS = ("iter.max", "toler.chol", "toler.inf", "outer.max", "survcheckallow")
+
+
+def _control_number(value: Any, message: str, *, zero_ok: bool = False) -> float:
+    """coxph.control's ``if (!is.numeric(x) || x <= 0) stop(message)`` (``x < 0`` when
+    ``zero_ok``)."""
+
+    if not isinstance(value, numbers.Real) or _is_bool_like(value):
+        raise TypeError(message)
+    numeric = float(value)
+    if not (numeric >= 0.0 if zero_ok else numeric > 0.0):
+        raise ValueError(message)
+    return numeric
+
+
+def _control_integer(value: Any, message: str, *, zero_ok: bool = False) -> int:
+    """A checked coxph.control option through ``as.integer()``: truncated, and refused
+    with the option's message where as.integer gives ``NA`` (outside R's integer
+    range)."""
+
+    numeric = _control_number(value, message, zero_ok=zero_ok)
+    if numeric >= 2.0**31:
+        raise ValueError(message)
+    return int(numeric)
+
+
+def coxph_control(
+    eps: Any = 1e-9,
+    toler_chol: Any = _TOLER_CHOL,
+    iter_max: Any = 20,
+    toler_inf: Any | None = None,
+    outer_max: Any = 10,
+    timefix: Any = True,
+    survcheckallow: Any = "gap",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """R's ``coxph.control``: the checked fitting options under R's names.
+
+    ``toler_inf`` defaults to ``sqrt(eps)``; ``iter_max`` and ``outer_max`` are
+    truncated to integers; ``toler.chol``, ``iter.max``, ``toler.inf`` and
+    ``outer.max`` may also be given with their dotted names.  Warns, as R does, when
+    ``eps`` is not above ``toler_chol``.
+    """
+
+    toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, _TOLER_CHOL)
+    iter_max = _pop_dotted_keyword(kwargs, "iter.max", "iter_max", iter_max, 20)
+    toler_inf = _pop_dotted_keyword(kwargs, "toler.inf", "toler_inf", toler_inf, None)
+    outer_max = _pop_dotted_keyword(kwargs, "outer.max", "outer_max", outer_max, 10)
+    if kwargs:
+        raise TypeError(f"unused argument(s): {', '.join(sorted(kwargs))}")
+    iterations = _control_integer(iter_max, "Invalid value for iterations", zero_ok=True)
+    eps_value = _control_number(eps, "Invalid convergence criteria")
+    toler_value = _control_number(toler_chol, "invalid value for toler.chol")
+    if eps_value <= toler_value:
+        _warn_outside_package("For numerical accuracy, tolerance should be < eps", RuntimeWarning)
+    inf_value = (
+        math.sqrt(eps_value)
+        if toler_inf is None
+        else _control_number(toler_inf, "The toler.inf setting must be >0")
+    )
+    if not _is_bool_like(timefix):
+        raise TypeError("timefix must be TRUE or FALSE")
+    outer = _control_integer(outer_max, "invalid value for outer.max")
+    return {
+        "eps": eps_value,
+        "toler.chol": toler_value,
+        "iter.max": iterations,
+        "toler.inf": inf_value,
+        "outer.max": outer,
+        "timefix": bool(timefix),
+        "survcheckallow": survcheckallow,
+    }
+
+
 def coxph(
     formula: str | Surv | None = None,
     data: Any | None = None,
@@ -691,6 +798,8 @@ def coxph(
     iter_max: Any | None = None,
     eps: Any | None = None,
     toler_chol: Any | None = None,
+    toler_inf: Any | None = None,
+    outer_max: Any | None = None,
     timefix: Any | None = None,
     **kwargs: Any,
 ) -> CoxphModel:
@@ -699,21 +808,31 @@ def coxph(
     ``formula`` is an R formula string with a ``Surv`` response; ``strata()``,
     ``cluster()``, ``offset()`` and ``tt()`` terms are honoured, as are the
     ``weights``/``offset``/``strata``/``cluster``/``id`` arguments given as vectors
-    or as column names of ``data``.  ``eps``/``toler_chol``/``iter_max``/``timefix``
-    are ``coxph.control`` options and may also be given through ``control``.
+    or as column names of ``data``.  As in R, the :func:`coxph_control` options
+    (``eps``, ``toler_chol``, ``iter_max``, ``toler_inf``, ``outer_max``, ``timefix``,
+    dotted or not) are used when no ``control`` is given, and ignored otherwise.
     """
 
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
-    iter_max = _pop_dotted_keyword(kwargs, "iter.max", "iter_max", iter_max, None)
-    toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, None)
     # the R bridge evaluates weights= / id= itself and names the columns they came from
     weights_column = kwargs.pop("_weights_column", None)
     id_column = kwargs.pop("_id_column", None)
-    kwargs.pop("survcheckallow", None)
-    if isinstance(control, Mapping):
-        control = {key: value for key, value in control.items() if key != "survcheckallow"}
+    # coxph.R hands its ... to coxph.control
+    control_args = {
+        name: value
+        for name, value in (
+            ("iter_max", iter_max),
+            ("eps", eps),
+            ("toler_chol", toler_chol),
+            ("toler_inf", toler_inf),
+            ("outer_max", outer_max),
+            ("timefix", timefix),
+        )
+        if value is not None
+    }
+    control_args.update({key: kwargs.pop(key) for key in _COXPH_CONTROL_KWARGS if key in kwargs})
     if kwargs:
         raise ValueError(f"Argument {', '.join(sorted(kwargs))} not matched")
     if formula is None:
@@ -726,14 +845,11 @@ def coxph(
     _ = _normalize_bool_option_with_default(y, "y", True)
 
     method_name = _cox_tie_method(method, ties)
-    max_iter = 20 if iter_max is None else _integer_scalar(iter_max, "iter_max")
-    eps_value = None if eps is None else _finite_float(eps, "eps")
-    toler_value = None if toler_chol is None else _finite_float(toler_chol, "toler_chol")
-    max_iter, eps_value, toler_value, fix_time = _apply_coxph_control(
-        control, max_iter, eps_value, toler_value
+    options = (
+        coxph_control(**control_args)
+        if control is None
+        else coxph_control(**_control_mapping(control, "control"))
     )
-    if timefix is not None:
-        fix_time = _normalize_bool_option(timefix, "timefix")
 
     frame = _model_frame(
         formula,
@@ -761,10 +877,12 @@ def coxph(
         frame,
         method=method_name,
         init=init,
-        iter_max=max_iter,
-        eps=eps_value,
-        toler_chol=toler_value,
-        timefix=fix_time,
+        iter_max=options["iter.max"],
+        eps=options["eps"],
+        toler_chol=options["toler.chol"],
+        toler_inf=options["toler.inf"],
+        outer_max=options["outer.max"],
+        timefix=options["timefix"],
         robust=_normalize_optional_bool_option(robust, "robust"),
         singular_ok=_normalize_bool_option_with_default(singular_ok, "singular_ok", True),
         nocenter=[]
@@ -772,11 +890,6 @@ def coxph(
         else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
         tt=tt,
         keep_model=_normalize_bool_option_with_default(model, "model", False),
-        outer_max=(
-            control.get("outer.max", control.get("outer_max"))
-            if isinstance(control, Mapping)
-            else None
-        ),
     )
 
 
