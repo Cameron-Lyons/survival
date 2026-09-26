@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date as _Date
 from datetime import datetime as _DateTime
+from datetime import timedelta as _TimeDelta
 from typing import Any
 
 from .. import _survival as _core
@@ -90,17 +91,44 @@ def is_ratetable(x: Any, verbose: bool = False) -> bool | list[str]:
     return ["wrong class"] if verbose else False
 
 
+_EPOCH_ORDINAL = _Date(1970, 1, 1).toordinal()
+_ONE_DAY = _TimeDelta(days=1)
+
+
+def _is_numpy_scalar(value: Any, name: str) -> bool:
+    value_type = type(value)
+    return value_type.__module__ == "numpy" and value_type.__name__ == name
+
+
+def _day_count(value: Any) -> float:
+    """A number as ``match.ratetable`` ``unclass``es it: a time difference counts days."""
+
+    if type(value) is float or type(value) is int:
+        return float(value)
+    if isinstance(value, _TimeDelta):
+        return value / _ONE_DAY
+    if _is_missing_value(value):
+        return math.nan
+    if _is_numpy_scalar(value, "timedelta64"):
+        return float(value / type(value)(1, "D"))
+    return float(value)
+
+
 def _ratetable_day(value: Any) -> float:
     """``ratetableDate`` of one value: dates become days since 1970-01-01, numbers pass."""
 
+    # pandas' NaT is a date instance, so only a plain date skips the missing check
+    if type(value) is _Date:
+        return float(value.toordinal() - _EPOCH_ORDINAL)
     if _is_missing_value(value):
         return math.nan
-    if isinstance(value, _DateTime | _Date):
-        return _core.ratetable_date(value.year, value.month, value.day)
+    if isinstance(value, _Date):
+        return float(value.toordinal() - _EPOCH_ORDINAL)
+    if _is_numpy_scalar(value, "datetime64"):
+        return float(value.astype("datetime64[D]").astype("int64"))
     if isinstance(value, str):
-        parsed = _Date.fromisoformat(value[:10])
-        return _core.ratetable_date(parsed.year, parsed.month, parsed.day)
-    return float(value)
+        return float(_Date.fromisoformat(value[:10]).toordinal() - _EPOCH_ORDINAL)
+    return _day_count(value)
 
 
 def ratetableDate(x: Any) -> float | list[float]:
@@ -159,19 +187,44 @@ def _mapped_columns(
     return columns
 
 
+def _is_date_column(values: Sequence[Any]) -> bool:
+    """``match.ratetable``'s ``datecheck``: the column holds dates or date-times."""
+
+    first = next((value for value in values if not _is_missing_value(value)), None)
+    return isinstance(first, _Date) or _is_numpy_scalar(first, "datetime64")
+
+
 def _rate_positions(mf: ModelFrame, ratetable: RateTable) -> list[list[float]]:
-    """R's ``match.ratetable(rdata, ratetable)$R`` for the model frame's rate variables."""
+    """R's ``match.ratetable(rdata, ratetable)$R`` for the model frame's rate variables.
+
+    Labels go to the kernel as strings.  As in R, dates are an error in a factor or
+    continuous dimension (type 1 or 2) and become days since 1970-01-01 in a date
+    dimension (type 3 or 4); time differences (R's ``difftime``) count days.
+    """
 
     names = list(ratetable.dimid)
-    columns: list[Any] = []
-    for name in names:
-        values = mf.extra[name]
-        if all(isinstance(value, str) or _is_missing_value(value) for value in values) and any(
-            isinstance(value, str) for value in values
+    types = ratetable.type_codes()
+    values = [mf.extra[name] for name in names]
+    misplaced = [
+        name
+        for name, code, column in zip(names, types, values, strict=True)
+        if code < 3 and _is_date_column(column)
+    ]
+    if misplaced:
+        raise ValueError(
+            "Data has a date type variable, but the reference ratetable is not a date "
+            "variable: " + " ".join(misplaced)
+        )
+    columns: list[list[str] | list[float]] = []
+    for code, column in zip(types, values, strict=True):
+        if all(isinstance(value, str) or _is_missing_value(value) for value in column) and any(
+            isinstance(value, str) for value in column
         ):
-            columns.append([str(value) for value in values])
+            columns.append([str(value) for value in column])
+        elif code > 2:
+            columns.append([_ratetable_day(value) for value in column])
         else:
-            columns.append([_ratetable_day(value) for value in values])
+            columns.append([_day_count(value) for value in column])
     return _core.match_ratetable(ratetable, names, columns).r
 
 

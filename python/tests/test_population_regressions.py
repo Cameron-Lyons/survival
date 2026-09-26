@@ -257,3 +257,74 @@ def test_summary_pyears_rejects_what_r_rejects():
     assert single.dim == []
     assert single.n == 6.0
     assert single.rate == pytest.approx(3 / 5.0513347022587274, rel=1e-12)
+
+
+def _dated():
+    return {
+        "time": [100.0, 200.0, 365.0],
+        "status": [1, 0, 1],
+        "sex": ["male", "female", "male"],
+        "birth": [
+            datetime.date(1950, 3, 1),
+            datetime.date(1960, 7, 15),
+            datetime.date(1945, 11, 30),
+        ],
+        "entry": [datetime.date(2000, 1, 1), datetime.date(2001, 6, 1), datetime.date(1999, 3, 15)],
+    }
+
+
+def test_dates_in_a_non_date_rate_dimension_are_errors():
+    data = _dated()
+    message = "Data has a date type variable, but the reference ratetable is not a date variable"
+    # R stops on survexp(~1, d, rmap = list(age = birth, sex = sex, year = entry), times = 365)
+    with pytest.raises(ValueError, match=f"{message}: age$"):
+        r.survexp("~1", data, rmap={"age": "birth", "sex": "sex", "year": "entry"}, times=[365])
+    # pyears(..., rmap = list(age = birth, sex = sexd, year = entry)): every dimension named
+    data["sexd"] = data["birth"]
+    with pytest.raises(ValueError, match=f"{message}: age sex$"):
+        r.pyears(
+            "Surv(time, status) ~ 1",
+            data,
+            rmap={"age": "birth", "sex": "sexd", "year": "entry"},
+            ratetable=r.survexp_us(),
+        )
+
+
+def test_time_differences_are_ages_in_days():
+    data = _dated()
+    ages = [entry - birth for entry, birth in zip(data["entry"], data["birth"], strict=True)]
+    # R: survexp(~1, d, rmap = list(age = entry - birth, sex = sex, year = entry), times = 365)$surv
+    expected = 0.99519210488657173
+    for age in (ages, [age.days for age in ages]):
+        fit = r.survexp("~1", data, rmap={"age": age, "sex": "sex", "year": "entry"}, times=[365])
+        assert fit.surv == approx([expected])
+    # pyears(Surv(time, status) ~ 1, d, rmap = list(age = entry - birth, ...))
+    result = r.pyears(
+        "Surv(time, status) ~ 1",
+        data,
+        rmap={"age": ages, "sex": "sex", "year": "entry"},
+        ratetable=r.survexp_us(),
+    )
+    assert result.expected == pytest.approx(0.0096802978484023857, rel=1e-12)
+
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    births = pd.Series(pd.to_datetime(data["birth"]))
+    entries = pd.Series(pd.to_datetime(data["entry"]))
+    for age in (list(entries - births), list(np.array(ages, dtype="timedelta64[D]"))):
+        fit = r.survexp("~1", data, rmap={"age": age, "sex": "sex", "year": "entry"}, times=[365])
+        assert fit.surv == approx([expected])
+    frame = pd.DataFrame({**data, "birth": births, "entry": entries})
+    with pytest.raises(ValueError, match="not a date variable: age"):
+        r.survexp("~1", frame, rmap={"age": "birth", "sex": "sex", "year": "entry"}, times=[365])
+    dated = r.survexp(
+        "~1",
+        data,
+        rmap={
+            "age": ages,
+            "sex": "sex",
+            "year": list(np.array(data["entry"], dtype="datetime64[D]")),
+        },
+        times=[365],
+    )
+    assert dated.surv == approx([expected])
