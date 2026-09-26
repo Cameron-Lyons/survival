@@ -43,6 +43,7 @@ from ._coerce import (
 from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
+    _arithmetic_expression_columns,
     _column,
     _column_or_values,
     _column_source,
@@ -755,24 +756,34 @@ def survcheck(
 
 def _survobrien_columns(
     data: Any, covariates: Sequence[Any], n: int
-) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
-    """Split the model terms into the factor ones R leaves alone and the continuous ones it
-    transforms."""
+) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    """Split the model terms into the ones R leaves alone (``keepers <- factors | protected``)
+    and the continuous ones it transforms.
 
-    keepers: list[tuple[str, list[Any]]] = []
+    A kept term contributes the data columns it references (R's ``all.vars``): the column of a
+    factor or of a non-numeric term, the variables of an ``I()`` (AsIs) expression.
+    """
+
+    keepers: list[str] = []
     continuous: list[tuple[str, list[float]]] = []
     for term in covariates:
         if isinstance(term, _InteractionTerm):
             raise ValueError("This function cannot deal with iteraction terms")
-        values = _term_values(data, term, n)
+        if term.transform == "I":
+            keepers.extend(
+                [term.column]
+                if term.arithmetic is None
+                else _arithmetic_expression_columns(term.arithmetic)
+            )
+            continue
         numeric = None
         if not term.categorical:
             try:
-                numeric = [float(value) for value in values]
+                numeric = [float(value) for value in _term_values(data, term, n)]
             except (TypeError, ValueError):
                 numeric = None
         if numeric is None:
-            keepers.append((term.column, values))
+            keepers.append(term.column)
         else:
             continuous.append((_covariate_term_name(term), numeric))
     if not continuous:
@@ -823,8 +834,9 @@ def survobrien(
     """O'Brien's logit-rank expansion of a data set, like R's ``survobrien``.
 
     Returns the expanded data frame (a mapping of columns): the response, the untransformed
-    factor columns, the ``strata`` and ``cluster`` columns (or ``.id.``, the source row), the
-    transformed continuous variables and the risk-set number ``.strata.``.
+    variables of the factor and ``I()`` terms, the ``strata`` and ``cluster`` columns (or
+    ``.id.``, the source row), the transformed continuous variables and the risk-set number
+    ``.strata.``.  String columns count as factors.
     """
 
     if (
@@ -864,9 +876,7 @@ def survobrien(
     else:
         frame["time"] = list(expansion.time)
     frame["status"] = list(expansion.status)
-    for name, values in keepers:
-        frame[name] = [values[row] for row in rows]
-    for name in [*terms.strata, *terms.clusters]:
+    for name in [*keepers, *terms.strata, *terms.clusters]:
         frame[name] = list(_subset_sequence(_column(data, name), rows, name))
     if not terms.clusters:
         frame[".id."] = [row + 1 for row in rows]
