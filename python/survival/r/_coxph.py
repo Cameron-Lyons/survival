@@ -418,9 +418,10 @@ def _cox_fit_diagnostic_messages(
 ) -> list[str]:
     """The convergence warnings of R's Cox fitters for an engine fit (also the R bridge's).
 
-    ``infs = |u %*% var|``: after the iterations ran out the fit may be infinite; a
-    converged fit whose score still moves a coefficient by more than ``toler.inf`` of
-    its size converged before that variable did.  ``coxph.fit`` (right-censored
+    ``infs = |u %*% imat|``, with the fitter's model-based variance (the naive one of a
+    robust fit): after the iterations ran out the fit may be infinite; a converged fit
+    whose score still moves a coefficient by more than ``toler.inf`` of its size
+    converged before that variable did.  ``coxph.fit`` (right-censored
     Breslow/Efron) also flags a non-finite score; ``agreg.fit`` ((start, stop]
     Breslow/Efron) flags a non-finite score or ``infs > toler.inf * (1 + |coef|)``
     without the ``eps`` floor and stops on an overflowed fit; ``coxexact.fit`` and
@@ -434,7 +435,7 @@ def _cox_fit_diagnostic_messages(
     eps_value = 1e-9 if eps is None else float(eps)
     toler = math.sqrt(eps_value) if toler_inf is None else float(toler_inf)
     u = list(fit.first)
-    var = fit.var
+    var = fit.var if fit.naive_var is None else fit.naive_var
     infs = [abs(sum(u[i] * var[i][j] for i in range(nvar))) for j in range(nvar)]
     info = fit.info
     if info is not None:  # agreg.fit

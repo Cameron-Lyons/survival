@@ -50,6 +50,7 @@ def separated():
         "s": [1, 1, 0, 1, 1, 1, 0, 1, 1, 1],
         "x": [1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
         "z": [0.3, -0.1, 0.5, 0.2, -0.4, 0.1, 0.9, -0.2, 0.4, 0.0],
+        "id": [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
     }
 
 
@@ -286,6 +287,42 @@ def test_each_fitter_has_its_own_convergence_rule(separated):
     for formula in ("Surv(start, t, s) ~ x + z", "Surv(t, s) ~ x + z"):
         messages = _fit_quietly(formula, separated, iter_max=3)[1]
         assert messages == ["Ran out of iterations and did not converge"]
+
+
+def test_robust_fits_test_convergence_with_the_naive_variance(separated):
+    coefficient = "Loglik converged before variable 1; coefficient may be infinite. "
+    beta = "Loglik converged before variable 1; beta may be infinite. "
+    for formula, kwargs, message, var in [
+        (
+            "Surv(t, s) ~ x + z + cluster(id)",
+            {},
+            coefficient,
+            [0.44372942314433855, 0.19240479257421977, 0.4507052716267313],
+        ),
+        (
+            "Surv(t, s) ~ x + z",
+            {"robust": True},
+            coefficient,
+            [0.3201858520764012, 0.34557372333926617, 0.9167766801508698],
+        ),
+        (
+            "Surv(start, t, s) ~ x + z + cluster(id)",
+            {},
+            beta,
+            [0.4437300297044401, 0.1924055464165384, 0.450706103605473],
+        ),
+        # an id with repeated events makes the fit robust by default
+        (
+            "Surv(start, t, s) ~ x + z",
+            {"id": "id"},
+            beta,
+            [0.4437300297044401, 0.1924055464165384, 0.450706103605473],
+        ),
+    ]:
+        fit, messages = _fit_quietly(formula, separated, **kwargs)
+        assert messages == [message], (formula, kwargs)
+        assert [fit.var[0][0], fit.var[0][1], fit.var[1][1]] == approx(var, rel=1e-6)
+        assert fit.naive_var[0][0] == approx(5.066063e8, rel=1e-6)
 
 
 def test_eps_below_toler_chol_warns(separated):
