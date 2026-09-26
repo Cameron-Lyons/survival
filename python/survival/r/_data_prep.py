@@ -450,12 +450,16 @@ def _survsplit_object(
 
 
 def _row_codes(columns: Sequence[Sequence[Any]]) -> list[int]:
-    """One code per row for the combination of values across *columns* (``NA`` matches ``NA``)."""
+    """One code per row for the combination of values across *columns*.
+
+    Values are compared as R's ``==`` does, so ``0.3`` and ``0.1 + 0.2`` differ;
+    ``NA`` matches ``NA``.
+    """
 
     codes: dict[tuple[Any, ...], int] = {}
     result: list[int] = []
     for row in zip(*columns, strict=True):
-        key = tuple("NA" if _is_missing_value(value) else _as_character(value) for value in row)
+        key = tuple(None if _is_missing_value(value) else value for value in row)
         result.append(codes.setdefault(key, len(codes)))
     return result
 
@@ -509,6 +513,7 @@ def survcondense(
         mf.id, list(response.start or ()), list(response.time), _row_codes(comparison)
     )
     keep = list(condensed.keep)
+    new_start = condensed.start
     output: dict[str, list[Any]] = {}
     for name, values in variables:
         output.setdefault(name, [values[row] for row in keep])
@@ -518,9 +523,7 @@ def survcondense(
     id_column = id_name or (id if isinstance(id, str) else "id")
     output.setdefault(str(id_column), [mf.id[row] for row in keep])
     time_name, time2_name, event_name = _surv_argument_names(mf)
-    output[_output_name(start or time_name or "tstart", "start")] = [
-        condensed.start[row] for row in keep
-    ]
+    output[_output_name(start or time_name or "tstart", "start")] = [new_start[row] for row in keep]
     output[_output_name(end or time2_name or "tstop", "end")] = [response.time[row] for row in keep]
     output[_output_name(event or event_name or "event", "event")] = _status_labels(
         response.states, [response.event[row] for row in keep]
