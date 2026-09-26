@@ -43,7 +43,7 @@ pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
 pub use aareg_fit_module::{AaregFitResult, aareg_fit};
-pub use agexact::{AgexactData, AgexactFit, AgexactOptions, agexact_fit, agexact_py};
+pub use agexact::{AgexactFit, AgexactOptions, agexact_fit, agexact_py};
 pub use blogit::LinkFunctionParams;
 pub use cause_specific_cox_module::{
     CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
