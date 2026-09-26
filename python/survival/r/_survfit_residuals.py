@@ -78,6 +78,8 @@ def _call_codes(fit: SurvfitResult | SurvfitMultiStateResult) -> tuple[int, int]
     """``Call$stype`` and ``Call$ctype`` as ``residuals.survfit`` reads them, 1 when absent.
 
     An old-style ``type`` reaches ``survfitKM`` through ``...``, so its call has neither.
+    That holds because ``survfit`` refuses ``type`` together with ``stype``/``ctype`` (as
+    ``survfitAJ`` does); ``survfitKM`` accepts both, and ``Call`` would then keep them.
     """
 
     call = fit.call
