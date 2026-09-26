@@ -364,6 +364,22 @@ def test_id_curves_are_named_by_the_id_values(heart_fit, pid, strata):
     assert curve.surv[:3] == approx([0.991314038209925, 0.965110733471733, 0.938764141475753])
 
 
+@pytest.mark.parametrize(
+    ("pid", "strata"),
+    [
+        ([0.1 + 0.2, 0.1 + 0.2, 0.3, 0.3], {"0.3": 85, "0.3.1": 102}),
+        ([1, 1, "1", "1"], {"1": 85, "1.1": 102}),
+    ],
+)
+def test_id_values_that_print_alike_keep_a_curve_each(heart_fit, pid, strata):
+    # R: pid = c(0.1 + 0.2, 0.1 + 0.2, 0.3, 0.3) gives two curves, both named "0.3"
+    curve = r.survfit(heart_fit, _heart_newdata(pid=pid), id="pid")
+    assert curve.strata == strata
+    assert curve.n == [172, 172]
+    assert sum(curve.strata.values()) == len(curve.time)
+    assert [curve.surv[0], curve.surv[85]] == approx([0.991314038209925, 0.988905694053077])
+
+
 def test_id_curves_leave_out_rows_with_a_missing_value(heart_fit):
     for newdata in (
         _heart_newdata(pid=["b", None, "a", "a"]),
@@ -386,6 +402,30 @@ def test_stratified_newdata_curves_are_named_by_the_row_names(lung):
     assert r.survfit(fit, events, censor=False).strata == {"p": 99, "q": 51}
     subset = pd.DataFrame({"age": [50, None, 60], "sex": [2, 1, 2]}, index=[5, 6, 7])
     assert r.survfit(fit, subset).strata == {"5": 87, "7": 87}
+
+
+def test_an_index_that_cannot_be_rs_row_names_gives_the_row_numbers(lung):
+    # R: rbind(data.frame(age = c(50, 60), sex = 1:2), data.frame(age = c(70, 80), sex = 1:2))
+    # numbers the rows 1..4, where pd.concat repeats the index 0, 1; labels that repeat
+    # under as.character or are missing cannot be R row names either
+    pd = pytest.importorskip("pandas")
+    fit = r.coxph("Surv(time, status) ~ age + strata(sex)", lung)
+    newdata = pd.concat(
+        [
+            pd.DataFrame({"age": [50, 60], "sex": [1, 2]}),
+            pd.DataFrame({"age": [70, 80], "sex": [1, 2]}),
+        ]
+    )
+    for index in (None, [1, 2, "1", "2"], [0.1 + 0.2, 0.3, 5, 6], ["a", None, "b", "c"]):
+        frame = newdata if index is None else newdata.set_axis(pd.Index(index, dtype=object))
+        curve = r.survfit(fit, frame)
+        assert curve.strata == {"1": 119, "2": 87, "3": 119, "4": 87}
+        assert curve.n == [138, 90, 138, 90]
+        assert sum(curve.strata.values()) == len(curve.time) == 412
+        assert [curve.surv[row] for row in (0, 119, 206, 325)] == approx(
+            [0.982676086421029, 0.989248906353565, 0.976119901176607, 0.985161358364436]
+        )
+        assert r.survfit(fit, frame, censor=False).strata == {"1": 99, "2": 51, "3": 99, "4": 51}
 
 
 # ---------------------------------------------------------------------------

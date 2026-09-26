@@ -70,6 +70,7 @@ from ._formula import (
     _formula_design_row_count,
     _response_arg_columns,
 )
+from ._names import _make_unique
 from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
@@ -1830,15 +1831,18 @@ def _confidence_limits(surv: Any, std_err: Any, conf_type: str, conf_int: float)
 
 def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
     """R's ``row.names`` of ``data`` at the 0-based ``rows``: a data frame's own index
-    labels, else the 1-based row numbers (R's automatic row names)."""
+    labels when they can be R row names (none missing, no two alike under
+    ``as.character``), else the 1-based row numbers (R's automatic row names, which is
+    also what ``rbind`` gives two data frames that have them)."""
 
     index = None if isinstance(data, Mapping) else getattr(data, "index", None)
-    if index is None or (
+    if index is not None and not (
         type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
     ):
-        return [str(row + 1) for row in rows]
-    labels = list(index)
-    return [_as_character(labels[row]) for row in rows]
+        labels = [_as_character(label) for label in index]
+        if len(set(labels)) == len(labels) and not any(map(_is_missing_value, index)):
+            return [labels[row] for row in rows]
+    return [str(row + 1) for row in rows]
 
 
 def _survfit_newdata(
@@ -1914,11 +1918,13 @@ def _survfit_curves(
         if ids is None:  # individual = TRUE: one subject
             codes, labels = [0] * new.n, []
         else:
-            # coxsurv.fit's curves are the unique ids in order of first appearance
+            # coxsurv.fit's curves are the unique ids in order of first appearance, named
+            # by as.character; make.unique keeps apart distinct ids that print alike
+            # (0.1 + 0.2 and 0.3), whose repeated names R keeps but a dict cannot
             levels = _label_levels(ids, "id")
             index = {label: code for code, label in enumerate(levels)}
             codes = [index[label] for label in ids]
-            labels = [_as_character(label) for label in levels]
+            labels = _make_unique([_as_character(label) for label in levels])
         curves = engine.survfit_individual(
             new.x,
             list(new.y.start),
