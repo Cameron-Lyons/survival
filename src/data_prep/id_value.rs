@@ -75,14 +75,41 @@ impl SubjectId for &str {
 /// strings.  `NaN` is rejected at the boundary because R's `id` cannot be
 /// missing.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "python", derive(pyo3::FromPyObject))]
 pub enum IdValue {
-    #[cfg_attr(feature = "python", pyo3(transparent))]
     Int(i64),
-    #[cfg_attr(feature = "python", pyo3(transparent))]
     Float(f64),
-    #[cfg_attr(feature = "python", pyo3(transparent))]
     Str(String),
+}
+
+/// A `str` or `float` (numpy's `str_` and `float64` included) converts
+/// without a failed attempt; anything else is tried as an integer (`int`,
+/// `bool`, numpy integers), then as a float (an `int` beyond `i64`,
+/// `numpy.float32`).
+#[cfg(feature = "python")]
+impl<'py> pyo3::FromPyObject<'_, 'py> for IdValue {
+    type Error = pyo3::PyErr;
+
+    fn extract(obj: pyo3::Borrowed<'_, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        use pyo3::prelude::*;
+        use pyo3::types::{PyFloat, PyString};
+
+        if let Ok(text) = obj.cast::<PyString>() {
+            return Ok(Self::Str(text.to_str()?.to_owned()));
+        }
+        if let Ok(number) = obj.cast::<PyFloat>() {
+            return Ok(Self::Float(number.value()));
+        }
+        if let Ok(value) = obj.extract::<i64>() {
+            return Ok(Self::Int(value));
+        }
+        if let Ok(value) = obj.extract::<f64>() {
+            return Ok(Self::Float(value));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "an id must be an int, float or str, not {}",
+            obj.get_type().name()?
+        )))
+    }
 }
 
 /// The normalised identity of an [`IdValue`].

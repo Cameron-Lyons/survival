@@ -3,6 +3,7 @@
 import importlib
 import math
 
+import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
@@ -239,3 +240,15 @@ def test_tmerge_keeps_the_type_of_the_values_like_r():
     assert all(type(value) is float for value in frame["n"])
     assert frame.tevent == {"n": 0.0}
     assert type(frame.tevent["n"]) is float
+
+
+# --- subject ids --------------------------------------------------------------
+
+
+def test_ids_convert_from_python_and_numpy_scalars():
+    ids = [np.int64(3), 3.0, np.float32(1.5), 1.5, "a", np.str_("a"), True, 1, 2**70]
+    result = survival.data_prep.cluster(ids)
+    assert list(result.codes) == [0, 0, 1, 1, 2, 2, 3, 3, 4]
+    assert list(result.sizes) == [2, 2, 2, 2, 1]
+    with pytest.raises(TypeError, match="an id must be an int, float or str, not NoneType"):
+        survival.data_prep.cluster([1, None])
