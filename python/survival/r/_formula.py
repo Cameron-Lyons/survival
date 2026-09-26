@@ -1004,8 +1004,13 @@ def _vector_arithmetic(left: Sequence[Any], operator: str, right: Sequence[Any])
     return [function(x[i % len(x)], y[i % len(y)]) for i in range(max(len(x), len(y)))]
 
 
+# C's FLT_EPSILON, the fuzz seq.c's seq_colon adds to the length of from:to
+_FLT_EPSILON = 2.0**-23
+
+
 def _r_colon(start: Sequence[Any], end: Sequence[Any]) -> list[float]:
-    """R's ``from:to``: steps of one from the first element of ``from`` towards ``to``."""
+    """R's ``from:to`` (seq.c's ``seq_colon``): steps of one from the first element of
+    ``from`` towards ``to``, ``|to - from| + 1 + FLT_EPSILON`` of them truncated."""
 
     if not start or not end:
         raise ValueError("argument of length 0")
@@ -1013,7 +1018,7 @@ def _r_colon(start: Sequence[Any], end: Sequence[Any]) -> list[float]:
     if not (math.isfinite(first) and math.isfinite(last)):
         raise ValueError("NA/NaN argument")
     step = 1.0 if first <= last else -1.0
-    return [first + step * k for k in range(int(abs(last - first) + 1e-10) + 1)]
+    return [first + step * k for k in range(int(abs(last - first) + 1 + _FLT_EPSILON))]
 
 
 def _seq_len(count: float) -> list[float]:
@@ -1031,18 +1036,23 @@ def _seq_length(start: float, stop: float, count: int) -> list[float]:
     return [start, *(start + i * by for i in range(1, count - 1)), stop]
 
 
+# seq.default's formals before its ``...``
 _SEQ_FORMALS = ("from", "to", "by", "length.out", "along.with")
 
 
 def _r_seq(arguments: Sequence[str]) -> list[float]:
     """R's ``seq.default`` of literal arguments."""
 
-    given = {
-        name: _literal_vector(value)
-        for name, value in _match_arguments("seq", arguments, _SEQ_FORMALS).items()
-    }
-    if set(given) == {"from"}:
-        # seq(n) is 1:n, seq(x) of a vector 1:length(x)
+    extra: list[str] = []
+    matched = _match_arguments("seq", arguments, _SEQ_FORMALS, dots=extra)
+    given = {name: _literal_vector(value) for name, value in matched.items()}
+    if extra:
+        # R's chkDots: the arguments in seq.default's ... are dropped with a warning
+        names = ", ".join(f"'{name}'" for name in extra)
+        plural = "s" if len(extra) > 1 else ""
+        _warn_outside_package(f"extra argument{plural} {names} will be disregarded")
+    elif set(given) == {"from"}:
+        # seq(n) is 1:n, seq(x) of a vector 1:length(x) (R's nargs() == 1)
         only = given["from"]
         if len(only) != 1:
             return _seq_len(len(only))
@@ -1100,13 +1110,18 @@ def _r_seq(arguments: Sequence[str]) -> list[float]:
 
 
 def _match_arguments(
-    function: str, arguments: Sequence[str], formals: Sequence[str]
+    function: str,
+    arguments: Sequence[str],
+    formals: Sequence[str],
+    *,
+    dots: list[str] | None = None,
 ) -> dict[str, str]:
     """R's matching of the *arguments* of a call to *function*'s *formals*.
 
     Names match exactly, then as the unique prefix of a formal; the unnamed arguments
-    fill the remaining formals in order.  An argument that matches no formal is an
-    error (R's ``unused argument``).
+    fill the remaining formals in order.  An argument that matches no formal goes to
+    *dots* when the function has R's ``...`` (its name, empty when unnamed), and is an
+    error (R's ``unused argument``) otherwise.
     """
 
     matched: dict[str, str] = {}
@@ -1131,7 +1146,10 @@ def _match_arguments(
             formal for formal in formals if formal.startswith(name) and formal not in exact
         ]
         if not candidates:
-            raise ValueError(f"{function}(): unused argument ({name} = {value})")
+            if dots is None:
+                raise ValueError(f"{function}(): unused argument ({name} = {value})")
+            dots.append(name)
+            continue
         if len(candidates) > 1:
             raise ValueError(f"{function}(): argument {name} matches multiple formal arguments")
         if candidates[0] in matched:
@@ -1142,7 +1160,9 @@ def _match_arguments(
         matched[candidates[0]] = value
     remaining = [formal for formal in formals if formal not in matched]
     if len(positional) > len(remaining):
-        raise ValueError(f"{function}(): unused argument ({positional[len(remaining)]})")
+        if dots is None:
+            raise ValueError(f"{function}(): unused argument ({positional[len(remaining)]})")
+        dots.extend("" for _ in positional[len(remaining) :])
     matched.update(zip(remaining, positional, strict=False))
     return matched
 

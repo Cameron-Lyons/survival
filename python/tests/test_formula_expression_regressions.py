@@ -560,6 +560,10 @@ def test_in_operator_builds_interactions_left_to_right():
         ("0:2 * 50", [0.0, 50.0, 100.0]),
         ("-1:2", [-1.0, 0.0, 1.0, 2.0]),
         ("1.5:4", [1.5, 2.5, 3.5]),
+        # seq_colon counts |to - from| + 1 + FLT_EPSILON steps
+        ("0:2.9999999", [0.0, 1.0, 2.0, 3.0]),
+        ("0:2.99999", [0.0, 1.0, 2.0]),
+        ("0.5:2.4999999", [0.5, 1.5, 2.5]),
         ("3:1", [3.0, 2.0, 1.0]),
         ("-2^2", [-4.0]),
         ("2^-1", [0.5]),
@@ -602,9 +606,20 @@ def test_literal_vectors_evaluate_literals_only():
         r_formula._literal_vector("seq(1, 0, 1)")
     with pytest.raises(ValueError, match="too many arguments"):
         r_formula._literal_vector("seq(1, 2, 3, 4)")
-    with pytest.raises(ValueError, match=r"unused argument \(bogus = 3\)"):
-        r_formula._literal_vector("seq(1, 2, bogus = 3)")
+    with pytest.raises(ValueError, match=r"unused argument \(bogus = 1\)"):
+        r_formula._match_arguments("tcut", ["age", "bogus = 1"], ("x", "breaks"))
     with pytest.raises(ValueError, match="matches multiple formal arguments"):
         r_formula._match_arguments("cut", ["age", "r = 1"], ("x", "right", "range"))
     with pytest.raises(ValueError, match="matched by multiple actual arguments"):
         r_formula._match_arguments("cut", ["x = age", "x = 1"], ("x", "breaks"))
+
+
+def test_seq_disregards_extra_arguments_with_a_warning():
+    # seq(1, 2, bogus = 3): R's seq.default warns and drops what lands in its ...
+    with pytest.warns(UserWarning, match="extra argument 'bogus' will be disregarded"):
+        assert r_formula._literal_vector("seq(1, 2, bogus = 3)") == [1.0, 2.0]
+    # seq(5, bogus = 3) is 5:1, not seq_len(5): R's nargs() counts the extra argument
+    with pytest.warns(UserWarning, match="extra argument 'bogus'"):
+        assert r_formula._literal_vector("seq(5, bogus = 3)") == [5.0, 4.0, 3.0, 2.0, 1.0]
+    with pytest.warns(UserWarning, match="extra arguments 'bogus', 'foo' will be disregarded"):
+        assert r_formula._literal_vector("seq(1, 5, 2, bogus = 3, foo = 4)") == [1.0, 3.0, 5.0]
