@@ -2,10 +2,11 @@
 
 The old-style ``type`` picks R's curve, ``start.time`` builds the curves from the rows still
 at risk, models with an interaction missing its lower-order terms are refused, incomplete
-newdata rows are left out (``na.omit``) and curves carry R's names (id values, newdata row
-names).
+newdata rows are left out (``na.omit``), curves carry R's names (id values, newdata row
+names) and the confidence limits of a newdata matrix come from one ``survfit_confint``.
 """
 
+import dataclasses
 import math
 import warnings
 
@@ -16,6 +17,7 @@ from .helpers import setup_survival_import
 survival = setup_survival_import()
 r = survival.r
 datasets = survival.datasets
+_coxph = survival.r._coxph
 
 
 def approx(values, rel=1e-10):
@@ -384,3 +386,94 @@ def test_stratified_newdata_curves_are_named_by_the_row_names(lung):
     assert r.survfit(fit, events, censor=False).strata == {"p": 99, "q": 51}
     subset = pd.DataFrame({"age": [50, None, 60], "sex": [2, 1, 2]}, index=[5, 6, 7])
     assert r.survfit(fit, subset).strata == {"5": 87, "7": 87}
+
+
+# ---------------------------------------------------------------------------
+# confidence limits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("conf_type", "lower_first", "upper_100", "lower_last"),
+    [
+        (
+            "log",
+            [0.987718630476997, 0.991277903285601, 0.98285527624013],
+            [0.67432962944107, 0.746457273563999, 0.535477134744255],
+            [0.0204669031590677, 0.0658211279880695, 0.00536157735877467],
+        ),
+        (
+            "log-log",
+            [0.970430878417979, 0.978998197849288, 0.959248211541189],
+            [0.654071289720423, 0.733040590246919, 0.522336861985058],
+            [0.0162981271190139, 0.0569855034865478, 0.004298992304298],
+        ),
+        (
+            "logit",
+            [0.970684137843333, 0.979126309085245, 0.959723277059395],
+            [0.658122263769626, 0.735036668916016, 0.52621810082315],
+            [0.0199407753930985, 0.063715156775195, 0.00530614257241901],
+        ),
+        (
+            "arcsin",
+            [0.983692988040375, 0.988423852463425, 0.9772959764672],
+            [0.660175136397012, 0.737703702241873, 0.52558777946064],
+            [0.0125966260892016, 0.0540349489889424, 0.0025673912582926],
+        ),
+        (
+            "plain",
+            [0.987685165269576, 0.991261072659632, 0.982790238321204],
+            [0.662368267752421, 0.740656745163708, 0.524962302634194],
+            [0.0, 0.0383253057670392, 0.0],
+        ),
+    ],
+)
+def test_newdata_confidence_limits_match_r(lung_fit, conf_type, lower_first, upper_100, lower_last):
+    newdata = {"age": [50, 60, 70], "sex": [1, 2, 1]}
+    curve = r.survfit(lung_fit, newdata, conf_type=conf_type)
+    assert curve.lower[0] == approx(lower_first)
+    assert curve.upper[99] == approx(upper_100)
+    assert curve.lower[185] == approx(lower_last)
+
+
+def test_survfit_reads_the_curves_once_and_limits_them_in_one_call(monkeypatch, lung):
+    # the curve getters convert the whole ntime x m block, and R calls survfit_confint once on
+    # the whole matrix: one read of each block per curve, one call for all the columns
+    fit = r.coxph("Surv(time, status) ~ age + strata(sex)", lung)
+    newdata = {"age": [50, 60, 70]}
+    expected = r.survfit(fit, newdata)
+    reads = []
+
+    class Curve:
+        def __init__(self, curve):
+            self._curve = curve
+            self.reads = {"surv": 0, "cumhaz": 0, "std_err": 0}
+            reads.append(self.reads)
+
+        def __getattr__(self, name):
+            if name in self.reads:
+                self.reads[name] += 1
+            return getattr(self._curve, name)
+
+    class Engine:
+        def __init__(self, engine):
+            self._engine = engine
+
+        def __getattr__(self, name):
+            return getattr(self._engine, name)
+
+        def survfit(self, **kwargs):
+            return [Curve(curve) for curve in self._engine.survfit(**kwargs)]
+
+    calls = []
+    confint = _coxph._core.survfit_confint
+
+    def counted(*args):
+        calls.append(len(args[0]))
+        return confint(*args)
+
+    monkeypatch.setattr(_coxph._core, "survfit_confint", counted)
+    curve = r.survfit(dataclasses.replace(fit, fit=Engine(fit.fit)), newdata)
+    assert (curve.lower, curve.upper) == (expected.lower, expected.upper)
+    assert reads == [{"surv": 1, "cumhaz": 1, "std_err": 1}] * 2
+    assert calls == [len(expected.time) * 3]

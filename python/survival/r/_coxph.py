@@ -14,6 +14,7 @@ import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from itertools import chain
 from statistics import NormalDist
 from typing import Any
 
@@ -1797,27 +1798,34 @@ def _check_interaction_margins(fit: CoxphModel) -> None:
         )
 
 
-def _curve_columns(values: list[list[float]]) -> Any:
-    """A curve block as R stores it: a vector for one curve, ``ntime x ncurve`` rows otherwise."""
+def _curve_block(curves: list[Any], name: str) -> Any:
+    """One matrix of the curves (``surv``, ``cumhaz`` or ``std_err``) as R stores it: the
+    curves' rows end to end, ``ntime x ncurve`` rows, or a vector for one column."""
 
-    if values and len(values[0]) == 1:
-        return [row[0] for row in values]
-    return [list(row) for row in values]
+    rows = [row for curve in curves for row in getattr(curve, name)]
+    if rows and len(rows[0]) == 1:
+        return [row[0] for row in rows]
+    return rows
 
 
 def _confidence_limits(surv: Any, std_err: Any, conf_type: str, conf_int: float) -> tuple[Any, Any]:
-    if surv and isinstance(surv[0], list):
-        columns = list(zip(*surv, strict=True))
-        se_columns = list(zip(*std_err, strict=True))
-        bands = [
-            _core.survfit_confint(list(p), list(se), True, conf_type, conf_int)
-            for p, se in zip(columns, se_columns, strict=True)
-        ]
-        lower = [list(row) for row in zip(*(band.lower for band in bands), strict=True)]
-        upper = [list(row) for row in zip(*(band.upper for band in bands), strict=True)]
-        return lower, upper
-    band = _core.survfit_confint(list(surv), list(std_err), True, conf_type, conf_int)
-    return list(band.lower), list(band.upper)
+    """``survfit_confint`` on the whole ``surv`` matrix at once, as R calls it (it works
+    elementwise), with the limits cut back into rows."""
+
+    if not (surv and isinstance(surv[0], list)):
+        band = _core.survfit_confint(surv, std_err, True, conf_type, conf_int)
+        return band.lower, band.upper
+    width = len(surv[0])
+    band = _core.survfit_confint(
+        list(chain.from_iterable(surv)),
+        list(chain.from_iterable(std_err)),
+        True,
+        conf_type,
+        conf_int,
+    )
+    lower, upper = band.lower, band.upper
+    starts = range(0, len(lower), width)
+    return [lower[i : i + width] for i in starts], [upper[i : i + width] for i in starts]
 
 
 def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
@@ -1996,23 +2004,19 @@ def survfit_coxph(
         censor=censor_value,
         start_time=start,
     )
-    surv_rows = [row for curve in curves for row in curve.surv]
-    cumhaz_rows = [row for curve in curves for row in curve.cumhaz]
-    std_rows = [row for curve in curves for row in (curve.std_err or [])] if include_se else []
-    surv = _curve_columns(surv_rows)
-    cumhaz = _curve_columns(cumhaz_rows)
-    std_err = _curve_columns(std_rows) if include_se else None
+    surv = _curve_block(curves, "surv")
+    std_err = _curve_block(curves, "std_err") if include_se else None
     lower = upper = None
     if include_se and conf_type_name != "none":
         lower, upper = _confidence_limits(surv, std_err, conf_type_name, level)
     return CoxSurvfitResult(
-        n=[int(curve.n) for curve in curves],
-        time=[float(t) for curve in curves for t in curve.time],
-        n_risk=[float(v) for curve in curves for v in curve.n_risk],
-        n_event=[float(v) for curve in curves for v in curve.n_event],
-        n_censor=[float(v) for curve in curves for v in curve.n_censor],
+        n=[curve.n for curve in curves],
+        time=[t for curve in curves for t in curve.time],
+        n_risk=[v for curve in curves for v in curve.n_risk],
+        n_event=[v for curve in curves for v in curve.n_event],
+        n_censor=[v for curve in curves for v in curve.n_censor],
         surv=surv,
-        cumhaz=cumhaz,
+        cumhaz=_curve_block(curves, "cumhaz"),
         type=fit.y.type,
         strata={name: len(curve.time) for name, curve in zip(strata_names, curves, strict=True)}
         if strata_names
