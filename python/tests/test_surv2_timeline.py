@@ -215,9 +215,10 @@ def test_surv2_requires_an_id_and_a_timeline_fitter():
         r.coxph("Surv2(t, s) ~ x", data, id="id")
     with pytest.raises(ValueError, match="invalid value for repeated option"):
         r.coxph("Surv2(t, s, repeated = 'often') ~ x", _timeline(), id="id")
-    for kwargs in ({}, {"timeline": True}):
-        with pytest.raises((ValueError, TypeError), match="survival object|'timeline'"):
-            r.model_frame("Surv2(t, s) ~ x", _timeline(), **kwargs)
+    with pytest.raises(ValueError, match="survival object"):
+        r.model_frame("Surv2(t, s) ~ x", _timeline())
+    with pytest.raises(TypeError, match="'timeline'"):
+        r.model_frame("Surv2(t, s) ~ x", _timeline(), timeline=True)
 
 
 # --- survfit and survcheck ---------------------------------------------------
