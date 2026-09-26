@@ -982,8 +982,10 @@ def test_subsetting(sf, sfs):
     assert death.p0 == [[0.0]]
     # deviation: n_id stays (R drops it)
     assert death.n_id == [1384]
-    with pytest.raises(ValueError, match="state subset"):
+    with pytest.raises(ValueError, match="summary of a state subset"):
         r.summary_survfit(death)
+    with pytest.raises(ValueError, match="survfit0 of a state subset"):
+        r.survfit0(death)
     part = _subset_coxms_curves(sf, data=[0], states=["pcm", "death"])
     assert part.pstate[49, 0].tolist() == approx([0.0272954726877502, 0.107959427282836])
     men = _subset_coxms_curves(sfs, strata=["M"])
@@ -995,8 +997,61 @@ def test_subsetting(sf, sfs):
             [0.514985376803818, 0.0234239568748938, 0.461590666321289],
         ]
     )
-    assert men.engine is None
     assert _subset_coxms_curves(sfs, strata=["F"], data=[1]).pstate.shape == (227, 1, 3)
+
+
+def test_stratum_subset_summary_and_survfit0(sfs):
+    """R's ``summary(sfs[2, , ])`` and ``survfit0(sfs[2, , ])``: one stratum keeps its
+    label, and survmean2 drops it from the table's row names."""
+
+    men = _subset_coxms_curves(sfs, strata=["M"])
+    summary = r.summary_survfit(men, times=[100, 200])
+    assert (summary.time, summary.strata) == ([100, 200], ["M", "M"])
+    assert summary.n_risk == [[263, 0, 0], [58, 0, 0]]
+    assert summary.n_event == [[0, 35, 375], [0, 19, 95]]
+    assert summary.pstate.ravel(order="F").tolist() == approx(
+        [
+            0.6497133402188464,
+            0.3646046028718571,
+            0.2391721752448915,
+            0.0381661499431241,
+            0.0500432025693536,
+            0.1067950918820372,
+            0.0429055328640814,
+            0.0589417779403732,
+            0.3002434572117996,
+            0.5286003052461055,
+            0.7179222918910271,
+            0.9028920721165029,
+        ]
+    )
+    table = summary.table
+    assert table.rownames == [f"{i}, {state}" for state in men.states for i in (1, 2)]
+    values = np.array(table.values)
+    assert values[:, 0].tolist() == [746] * 6
+    assert values[:, 1].tolist() == [0, 0, 56, 56, 486, 486]
+    assert values[:, 2].tolist() == approx(
+        [
+            176.6896743191297,
+            67.2519253597446,
+            37.5438413153094,
+            20.9329198240534,
+            209.7664843655609,
+            335.8151548162019,
+        ]
+    )
+    everything = r.summary_survfit(men)
+    assert everything.pstate.shape == (183, 2, 3)
+    assert everything.strata[:3] == ["M", "M", "M"]
+    zero = r.survfit0(men)
+    assert zero.strata == {"M": 228}
+    assert zero.time[:3] == [0, 1, 2]
+    assert zero.n_risk[:2] == [[746, 0, 0], [746, 0, 0]]
+    assert zero.pstate.shape == (228, 2, 3)
+    assert zero.pstate[0].tolist() == [[1, 0, 0], [1, 0, 0]]
+    frame = r.as_data_frame(men)
+    assert len(frame["time"]) == 227 * 2 * 3
+    assert set(frame["strata"]) == {"M"}
 
 
 # ---------------------------------------------------------------------------

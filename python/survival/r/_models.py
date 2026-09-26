@@ -743,8 +743,8 @@ def _subset_coxms_curves(
     the newdata rows.  A state subset keeps those columns of ``pstate``, ``n_risk``,
     ``n_event`` and ``p0`` (``n_censor`` keeps its columns, as R's), drops ``cumhaz``
     and ``n_transition`` and records ``oldstate``.  ``transitions`` is always dropped,
-    and the engine unless every stratum and state is kept.  Unlike R, ``n_id`` and
-    every column of ``n_transition`` are kept.
+    and the engine (the counts ``summary`` and ``survfit0`` need) unless every state is
+    kept.  Unlike R, ``n_id`` and every column of ``n_transition`` are kept.
     """
 
     names = result.strata_names
@@ -774,6 +774,9 @@ def _subset_coxms_curves(
         return [[values[row][c] for c in columns] for row in rows]
 
     state_columns = None if every_state else kept_states
+    engine = result.engine
+    if engine is not None and not every_stratum:
+        engine = engine.select_curves(kept_strata)
     cumhaz = None
     if every_state and result.cumhaz is not None:
         cumhaz = result.cumhaz[np.ix_(rows, kept_data, range(result.cumhaz.shape[2]))]
@@ -798,7 +801,7 @@ def _subset_coxms_curves(
         newdata=None
         if result.newdata is None
         else {name: [values[i] for i in kept_data] for name, values in result.newdata.items()},
-        engine=result.engine if every_stratum and every_state else None,
+        engine=engine if every_state else None,
     )
 
 

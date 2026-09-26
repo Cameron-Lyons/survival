@@ -253,20 +253,31 @@ fn summary_index(
     index
 }
 
-/// [`summary_index`]'s `selection` for the curves `fit`: rows of
-/// `survfit0_aj(fit)` when `times` are given, of `fit` otherwise.
+/// [`summary_index`]'s `selection` for the curves `fit`, in the encoding of
+/// [`survfit0_aj_rows`]: a row of `fit`, or `-1 - s` for the row at `t0`
+/// that `survfit0_aj` inserts into curve `s` (only when `times` are given).
 pub(crate) fn summary_rows(
     fit: &SurvfitAJResult,
     times: Option<&[f64]>,
     censored: bool,
     extend: bool,
-) -> SurvivalResult<Vec<usize>> {
+) -> SurvivalResult<Vec<i64>> {
     let requested = summary_times(times)?;
-    let index = match &requested {
-        Some(times) => summary_index(&survfit0_aj(fit), Some(times), censored, extend),
-        None => summary_index(fit, None, censored, extend),
-    };
-    Ok(index.selection)
+    Ok(match &requested {
+        Some(times) => {
+            let rows = survfit0_aj_rows(fit);
+            summary_index(&survfit0_aj(fit), Some(times), censored, extend)
+                .selection
+                .into_iter()
+                .map(|i| rows[i])
+                .collect()
+        }
+        None => summary_index(fit, None, censored, extend)
+            .selection
+            .into_iter()
+            .map(|i| i as i64)
+            .collect(),
+    })
 }
 
 /// Select step-function values and accumulate counts between reporting times.

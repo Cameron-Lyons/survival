@@ -11654,6 +11654,11 @@ def coxph_fit(
     cluster: Sequence[int] | None = None,
     robust: bool | None = None,
 ) -> CoxPHFit: ...
+def coxph_wtest(
+    var: Sequence[Sequence[float]],
+    b: Sequence[Sequence[float]],
+    toler_chol: float = 1e-09,
+) -> CoxphWtest: ...
 def coxphms_curves(
     time: ArrayLike,
     endpoint: ArrayLike,
@@ -11717,11 +11722,6 @@ def coxphms_fit(
     NDArray[np.int32] | None,
     NDArray[np.float64] | None,
 ]: ...
-def coxph_wtest(
-    var: Sequence[Sequence[float]],
-    b: Sequence[Sequence[float]],
-    toler_chol: float = 1e-09,
-) -> CoxphWtest: ...
 def coxscore2(
     survival: SurvivalData,
     covariates: CovariateMatrix,

@@ -1052,22 +1052,33 @@ def _survfit0_cox(x: CoxSurvfitResult) -> CoxSurvfitResult:
     )
 
 
-def _coxms_engine(x: CoxSurvfitMultiStateResult) -> _core.SurvfitAJResult:
-    """The counts and time grid of multi-state Cox curves, which a stratum or state
-    subset no longer has."""
+def _coxms_engine(x: CoxSurvfitMultiStateResult, operation: str) -> _core.SurvfitAJResult:
+    """The counts and time grid of multi-state Cox curves, which a state subset no
+    longer has."""
 
     if x.engine is None:
         raise ValueError(
-            "summary of a stratum or state subset of multi-state Cox curves is not supported"
+            f"{operation} of a state subset of multi-state Cox curves is not supported"
         )
     return x.engine
+
+
+def _coxms_strata(
+    x: CoxSurvfitMultiStateResult, engine: _core.SurvfitAJResult
+) -> dict[str, int] | None:
+    """``x``'s stratum labels with the row counts of ``engine`` (derived from
+    ``x.engine``), which has no ``strata`` when it holds a single curve."""
+
+    if x.strata is None:
+        return None
+    return dict(zip(x.strata, engine.strata or [len(engine.time)], strict=True))
 
 
 def _survfit0_arrays(
     x: CoxSurvfitMultiStateResult, rows: NDArray[np.intp]
 ) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
-    """``pstate`` and ``cumhaz`` of ``survfit0(x)``: ``rows`` are the engine's
-    ``survfit0_rows``, and an inserted row (``-1 - s``) starts stratum ``s`` at its
+    """``pstate`` and ``cumhaz`` at the engine's ``rows``, encoded as its
+    ``survfit0_rows``: an inserted row (``-1 - s``) starts stratum ``s`` at its
     ``p0`` with no hazard."""
 
     copied = rows >= 0
@@ -1087,7 +1098,7 @@ def _survfit0_coxms(x: CoxSurvfitMultiStateResult) -> CoxSurvfitMultiStateResult
 
     if x.time0:
         return x
-    engine = _coxms_engine(x)
+    engine = _coxms_engine(x, "survfit0")
     engine0 = _core.survfit0_aj(engine)
     pstate, cumhaz = _survfit0_arrays(x, np.asarray(engine.survfit0_rows(), dtype=np.intp))
     return dataclasses.replace(
@@ -1097,7 +1108,7 @@ def _survfit0_coxms(x: CoxSurvfitMultiStateResult) -> CoxSurvfitMultiStateResult
         n_event=engine0.n_event,
         n_censor=engine0.n_censor,
         n_transition=engine0.n_transition,
-        strata=None if x.strata is None else dict(zip(x.strata, engine0.strata or (), strict=True)),
+        strata=_coxms_strata(x, engine0),
         pstate=pstate,
         cumhaz=cumhaz,
         time0=True,
@@ -1106,16 +1117,17 @@ def _survfit0_coxms(x: CoxSurvfitMultiStateResult) -> CoxSurvfitMultiStateResult
 
 
 def _coxms_table_labels(x: CoxSurvfitMultiStateResult) -> list[str]:
-    """``survmean2``'s row names: stratum fastest, then the newdata row (when there are
-    two or more), then the state."""
+    """``survmean2``'s row names: stratum fastest (when there are two or more), then
+    the newdata row (when there are two or more), then the state."""
 
     ndata = x.pstate.shape[1]
     groups = [f"{i}" for i in range(1, ndata + 1)] if ndata > 1 else [""]
+    names = x.strata_names if len(x.strata_names) > 1 else []
     labels = []
     for state in x.states:
         for group in groups:
             suffix = f"{group}, {state}" if group else state
-            labels.extend([f"{name}, {suffix}" for name in x.strata_names] or [suffix])
+            labels.extend([f"{name}, {suffix}" for name in names] or [suffix])
     return labels
 
 
@@ -1130,31 +1142,23 @@ def _summary_coxms(
     """``summary.survfitms`` of multi-state Cox curves: the engine's counts at the
     reported rows, the curves at the same rows, and ``survmean2``'s table."""
 
-    engine = _coxms_engine(x)
+    engine = _coxms_engine(x, "summary")
     counts = engine.summary(times=times, censored=censored, extend=extend)
     rows = np.asarray(
         engine.summary_rows(times=times, censored=censored, extend=extend), dtype=np.intp
     )
-    if times is None:
-        pstate, cumhaz = x.pstate, x.cumhaz
-    else:
-        pstate, cumhaz = _survfit0_arrays(x, np.asarray(engine.survfit0_rows(), dtype=np.intp))
+    pstate, cumhaz = _survfit0_arrays(x, rows)
     values, ends, columns = engine.mean_table_data(x.pstate, x.p0, scale=scale, rmean=rmean)
-    strata = None
-    if counts.strata is not None:
-        strata = [
-            name
-            for name, size in zip(x.strata_names, counts.strata, strict=True)
-            for _ in range(size)
-        ]
+    sizes = _coxms_strata(x, counts)
+    strata = None if sizes is None else [name for name, size in sizes.items() for _ in range(size)]
     return SummarySurvfitCoxmsResult(
         time=[value / scale for value in counts.time],
         n_risk=counts.n_risk,
         n_event=counts.n_event,
         n_censor=counts.n_censor,
         n_transition=counts.n_transition if x.n_transition is not None else None,
-        pstate=pstate[rows],
-        cumhaz=None if cumhaz is None else cumhaz[rows],
+        pstate=pstate,
+        cumhaz=cumhaz,
         strata=strata,
         table=NamedMatrix(_coxms_table_labels(x), columns, values),
         rmean_endtime=ends or None,

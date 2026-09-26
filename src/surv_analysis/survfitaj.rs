@@ -493,8 +493,7 @@ impl SurvfitAJResult {
     }
 
     /// The rows whose `pstate` and `cumhaz` `summary(self, times, censored,
-    /// extend)` reports: rows of `survfit0_aj(self)` when `times` are given,
-    /// of `self` otherwise.
+    /// extend)` reports, encoded as in `survfit0_rows`.
     #[pyo3(signature=(times=None, censored=false, extend=false))]
     fn summary_rows(
         &self,
@@ -509,12 +508,12 @@ impl SurvfitAJResult {
     /// `survmean2`'s table for curves on this fit's time grid and counts
     /// with a newdata dimension (`survfit.coxphms`): `pstate` is `(ntime,
     /// ndata, nstate)` and `p0` has a row per curve.  The rows run over the
-    /// curves fastest, then the newdata rows, then the states.
+    /// curves fastest, then the newdata rows, then the states.  The table is
+    /// one pass over `pstate`, read in place.
     #[cfg(feature = "python")]
     #[pyo3(signature=(pstate, p0, scale=1.0, rmean="common"))]
     fn mean_table_data(
         &self,
-        py: Python<'_>,
         pstate: numpy::PyReadonlyArray3<'_, f64>,
         p0: Vec<Vec<f64>>,
         scale: f64,
@@ -532,17 +531,14 @@ impl SurvfitAJResult {
         if p0.len() != self.n_curves() || p0.iter().any(|row| row.len() != nstate) {
             return Err(SurvivalError::invalid_input("p0 needs a row per curve").into());
         }
-        let pstate = pstate.to_owned();
-        py.detach(|| {
-            survmean_coxms(
-                self,
-                ndata,
-                |i, j, state| pstate[(i, j, state)],
-                &p0,
-                scale,
-                option,
-            )
-        })
+        survmean_coxms(
+            self,
+            ndata,
+            |i, j, state| pstate[(i, j, state)],
+            &p0,
+            scale,
+            option,
+        )
         .map_err(Into::into)
     }
 
