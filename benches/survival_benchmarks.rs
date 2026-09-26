@@ -481,7 +481,7 @@ mod finegray_interval_expansion {
         bencher.with_inputs(|| inputs.clone()).bench_local_values(
             |(tstart, tstop, ctime, cprob, extend, keep)| {
                 black_box(
-                    finegray(tstart, tstop, ctime, cprob, extend, keep)
+                    finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep)
                         .expect("benchmark Fine-Gray inputs should be valid"),
                 )
             },
@@ -501,7 +501,7 @@ mod finegray_interval_expansion {
         bencher.with_inputs(|| inputs.clone()).bench_local_values(
             |(tstart, tstop, ctime, cprob, extend, keep)| {
                 black_box(
-                    finegray(tstart, tstop, ctime, cprob, extend, keep)
+                    finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep)
                         .expect("benchmark Fine-Gray inputs should be valid"),
                 )
             },

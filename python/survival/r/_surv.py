@@ -9,6 +9,7 @@ conversion, multi-state factors) and hands every kernel (``strata``,
 
 from __future__ import annotations
 
+import copy
 import math
 import warnings
 from collections.abc import Sequence
@@ -688,6 +689,13 @@ class Surv2:
 
     def __len__(self) -> int:
         return len(self.time)
+
+    def replace_times(self, *, time: Sequence[float]) -> Surv2:
+        """The same response with its time column replaced (``aeqSurv``)."""
+
+        result = copy.copy(self)
+        object.__setattr__(result, "time", tuple(time))
+        return result
 
 
 def _repeated_option(repeated: Any) -> str:

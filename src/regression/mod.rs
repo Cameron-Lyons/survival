@@ -84,7 +84,7 @@ pub use fast_cox_module::{
     FastCoxCVConfig, FastCoxConfig, FastCoxPath, FastCoxPathConfig, FastCoxResult,
     FastCoxSolverConfig, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
 };
-pub use finegray_data::{FineGrayOutput, finegray};
+pub use finegray_data::{FineGrayOutput, finegray, finegray_py};
 pub use finegray_regression_module::{
     CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
 };

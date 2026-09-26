@@ -58,7 +58,9 @@ pub struct SurvSplitResult {
 
 /// The kernel of `src/survsplit.c`: split every `(tstart, tstop]` at the
 /// cutpoints strictly inside it.  Rows with a missing endpoint pass
-/// through unchanged.  `cut` must be sorted and unique.
+/// through unchanged; `survsplit.c` gives them interval 1 (R's episode 2)
+/// and leaves their `censor` flag unset, which is `false` here.  `cut` must
+/// be sorted and unique.
 pub fn survsplit_intervals(
     tstart: &[f64],
     tstop: &[f64],
@@ -88,7 +90,7 @@ pub fn survsplit_intervals(
     for i in 0..n {
         if tstart[i].is_nan() || tstop[i].is_nan() {
             out.row.push(i);
-            out.interval.push(0);
+            out.interval.push(1);
             out.start.push(tstart[i]);
             out.end.push(tstop[i]);
             out.censor.push(false);
@@ -306,6 +308,8 @@ mod tests {
 
         let nan = survsplit_intervals(&[f64::NAN], &[f64::NAN], &[5.0]).unwrap();
         assert_eq!(nan.row, vec![0]);
+        assert_eq!(nan.interval, vec![1]);
+        assert_eq!(nan.censor, vec![false]);
         assert!(nan.start[0].is_nan());
     }
 
