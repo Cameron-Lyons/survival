@@ -42,6 +42,7 @@ from ._formula import (
     _formula_response_parts,
     _model_strata,
     _parse_formula_literal,
+    _response_spec,
     _term_values,
     model_frame,
 )
@@ -736,19 +737,27 @@ def survexp(
     from ._coxph import CoxphModel, _survfit_curves, predict_coxph
 
     if isinstance(ratetable, CoxphModel):
+        method_value = _survexp_method(
+            method, cohort, conditional, _response_spec(formula) is not None
+        )
         names = _formula_columns("~" + ratetable.formula.split("~", 1)[1], data)
+        extra = _mapped_columns(rmap, names, data)
+        if method_value.startswith("individual"):
+            # predict(type = "expected") also reads the Cox model's response: R's
+            # survexp adds the data's remaining columns to the rate variables
+            for name in _formula_columns(ratetable.formula, data):
+                extra.setdefault(name, name)
         mf = model_frame(
             formula,
             data,
             subset=subset,
             na_action=na_action or "omit",
             weights=weights,
-            extra=_mapped_columns(rmap, names, data),
+            extra=extra,
         )
         if mf.n == 0:
             raise ValueError("Data set has 0 rows")
         response = _survexp_response(mf)
-        method_value = _survexp_method(method, cohort, conditional, response is not None)
         mapped = {name: _column(mf.data, name) for name in _data_column_names(mf.data) or []}
         mapped.update(mf.extra)
         if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):

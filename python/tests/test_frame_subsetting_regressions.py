@@ -150,6 +150,29 @@ def test_documented_survexp_example(lung):
     assert expected.n_risk == [[138.0, 90.0]] * 3
 
 
+def test_individual_survexp_reads_the_cox_response_at_the_kept_rows(lung):
+    # R's survexp cbind()s the whole data to the kept rows, which fails once rows are
+    # dropped, so the references are its values on the pre-filtered data:
+    # cox <- coxph(Surv(time, status) ~ age + sex, lung)
+    # survexp(time ~ 1, lung[lung$age > 60, ], ratetable = cox, method = "individual.s")
+    cox = r.coxph("Surv(time, status) ~ age + sex", lung)
+    surv = r.survexp("time ~ 1", lung, ratetable=cox, method="individual.s", subset=_older(lung))
+    assert len(surv) == 134
+    assert [surv[0], surv[1], surv[2], surv[-1]] == pytest.approx(
+        [0.3694979799320738, 0.2218481744495137, 0.0142114308695469, 0.6931096104493144],
+        rel=1e-9,
+    )
+    assert sum(surv) == pytest.approx(75.0943712365867, rel=1e-9)
+    # survexp(time ~ ph.ecog, lung[!is.na(lung$ph.ecog), ], ratetable = cox,
+    #         method = "individual.h")
+    hazard = r.survexp("time ~ ph.ecog", lung, ratetable=cox, method="individual.h")
+    assert len(hazard) == 227
+    assert [hazard[0], hazard[1], hazard[2], hazard[-1]] == pytest.approx(
+        [0.995610005639748, 1.505762029951437, 3.129819240110218, 0.203602296262451], rel=1e-9
+    )
+    assert sum(hazard) == pytest.approx(165.117656791387, rel=1e-9)
+
+
 # test_r_pyears' cohort: survexp(~ 1, d, rmap = list(age = age, sex = sex, year = year), ...)
 COHORT = {
     "time": [100, 400, 900, 300],
