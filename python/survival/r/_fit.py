@@ -133,17 +133,24 @@ class _ModelFrame:
         return [self.strata_levels[code] for code in self.strata]
 
 
-def _r_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
-    """``levels(factor(x))``: the column's own categories when it carries them
-    (a pandas Categorical / R factor), else the sorted distinct values."""
+def _model_frame_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
+    """``levels(x)`` of a model-frame variable: the column's own categories when it
+    carries them (a pandas Categorical / R factor), unused ones included, since
+    ``model.frame`` keeps them (``drop.unused.levels = FALSE``); else the sorted distinct
+    values *levels*."""
 
     categories = _mstate_categories(values)
     if categories is not None:
-        present = set(levels)
-        return tuple(
-            level for level in _materialize_1d(categories, "categories") if level in present
-        )
+        return tuple(_materialize_1d(categories, "categories"))
     return tuple(sorted(levels, key=_strata_level_sort_key))
+
+
+def _r_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
+    """``levels(factor(x))``: the levels of :func:`_model_frame_levels` among the distinct
+    values *levels* (``factor()`` drops the unused ones)."""
+
+    present = set(levels)
+    return tuple(level for level in _model_frame_levels(values, levels) if level in present)
 
 
 def _r_factor_design(data: Any, design: _FormulaDesign) -> _FormulaDesign:
@@ -153,7 +160,8 @@ def _r_factor_design(data: Any, design: _FormulaDesign) -> _FormulaDesign:
     def relevel(term: _SingleDesignTerm) -> _SingleDesignTerm:
         if not isinstance(term, _CategoricalDesignTerm):
             return term
-        return replace(term, levels=_r_levels(_column_source(data, term.term.column), term.levels))
+        source = _column_source(data, term.term.column)
+        return replace(term, levels=_model_frame_levels(source, term.levels))
 
     covariates: list[_DesignTerm] = []
     for term in design.covariates:

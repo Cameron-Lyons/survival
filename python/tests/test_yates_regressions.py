@@ -1,6 +1,7 @@
 """Regression tests of ``yates`` against R survival 3.8-12: default (``model = FALSE``) Cox
-fits, aliased coefficients and R's estimability check, ``predict = "survival"`` and R's
-``yates_setup`` errors."""
+fits, aliased coefficients and R's estimability check, ``predict = "survival"``, R's
+``yates_setup`` errors, and the unused factor levels ``model.frame`` keeps, which give
+``coxph``/``survreg``/``concordance`` an aliased column and ``yates`` an NA level."""
 
 import importlib
 import math
@@ -358,3 +359,77 @@ def test_yates_simulation_validates_its_inputs():
         _core.yates_risk([[[1.0]]], [0.1], [[1.0]], [0.0], nsim=1)
     with pytest.raises(ValueError, match="estimable"):
         _core.yates_risk([[[1.0]]], [0.1], [[1.0]], [0.0], estimable=[True, False])
+
+
+# --- unused factor levels ----------------------------------------------------------
+
+
+def _lung_with_unused_level():
+    # R: lung's time and status with g alternating "a", "b", a factor with levels a, b, c
+    lung = datasets.load_lung()
+    n = len(lung["time"])
+    return {
+        "time": lung["time"],
+        "status": lung["status"],
+        "g": RFactor([("a", "b")[idx % 2] for idx in range(n)], ["a", "b", "c"]),
+    }
+
+
+def test_unused_factor_levels_stay_as_aliased_columns():
+    data = _lung_with_unused_level()
+    # R: coxph of g
+    fit = r.coxph("Surv(time, status) ~ g", data)
+    assert list(fit.coef_names) == ["gb", "gc"]
+    assert r.coef(fit) == approx([0.383302234567895, math.nan])
+    assert_rows_close(r.vcov(fit), [[0.024849256452365, 0.0], [0.0, 0.0]])
+    assert r.vcov(fit, complete=False) == [[pytest.approx(0.024849256452365)]]
+    assert r.predict(fit, newdata={"g": RFactor(["a", "b"], ["a", "b", "c"])}) == approx(
+        [0.0, 0.383302234567895]
+    )
+    # R: yates of g
+    result = r.yates(fit, "g")
+    assert result.estimate["g"] == ["a", "b", "c"]
+    assert result.estimate["pmm"] == approx([0.0, 0.383302234567895, math.nan])
+    assert result.estimate["std"] == approx([0.0, 0.157636469296813, math.nan])
+    assert result.test[0].df is None
+    assert result.cmat == [[0.0], [1.0], [0.0]]
+
+    # R: survreg of g
+    reg = r.survreg("Surv(time, status) ~ g", data)
+    assert r.coef(reg) == approx([6.160629273095066, -0.273915136202959, math.nan])
+    assert_rows_close(
+        r.vcov(reg),
+        [
+            [0.006803439880034439, -0.00680489553126721, 0.0, 0.000028130659140692],
+            [-0.006804895531267208, 0.01353797823472198, 0.0, -0.000228308598940690],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.000028130659140692, -0.000228308598940690, 0.0, 0.003868466061947127],
+        ],
+    )
+    # R: concordance of g
+    concordance = r.concordance("Surv(time, status) ~ g", data)
+    assert concordance.concordance == approx([0.437518736884181, 0.5])
+
+
+def test_a_subset_keeps_the_levels_it_leaves_unused():
+    # R: coxph of e = factor(ph.ecog) on lung with subset = ph.ecog < 3, which leaves
+    # level 3 unused
+    lung = datasets.load_lung()
+    lung["e"] = RFactor(lung["ph.ecog"], [0.0, 1.0, 2.0, 3.0])
+    subset = [value is not None and value < 3 for value in lung["ph.ecog"]]
+    fit = r.coxph("Surv(time, status) ~ e", lung, subset=subset)
+    assert list(fit.coef_names) == ["e1", "e2", "e3"]
+    assert r.coef(fit) == approx([0.368640502213039, 0.915301849920346, math.nan])
+    assert_rows_close(
+        r.vcov(fit),
+        [
+            [0.0394653413067124, 0.0273465588279593, 0.0],
+            [0.0273465588279593, 0.0504267870542204, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+    )
+    # R: the same survreg fit
+    reg = r.survreg("Surv(time, status) ~ e", lung, subset=subset)
+    assert r.coef(reg) == approx(
+        [6.320348687805493, -0.264727588941228, -0.670775060081751, math.nan]
+    )
