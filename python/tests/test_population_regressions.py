@@ -259,6 +259,52 @@ def test_summary_pyears_rejects_what_r_rejects():
     assert single.rate == pytest.approx(3 / 5.0513347022587274, rel=1e-12)
 
 
+def test_pyears_factor_terms_take_their_levels_as_model_frame_does():
+    cohort = _cohort()
+    cohort["h"] = ["x", "y", "x", "y", "z", "x"]
+    cohort["w"] = [1, 1, None, None, 1, None]
+
+    def tables(term, **kwargs):
+        result = r.pyears(f"Surv(time, status) ~ {term}", cohort, scale=1, **kwargs)
+        return result.dimnames[term], result.pyears, result.n
+
+    # pyears(Surv(time, status) ~ factor(g), d2, scale = 1): factor() drops the empty level c,
+    # which as.factor(g) and a bare g keep
+    assert tables("factor(g)") == (["a", "b"], [1050, 795], [3, 3])
+    assert tables("as.factor(g)") == (["a", "b", "c"], [1050, 795, 0], [3, 3, 0])
+    assert tables("g") == (["a", "b", "c"], [1050, 795, 0], [3, 3, 0])
+    # model.frame calls factor() before subset = g != "b" (and na.action) remove rows,
+    # so b stays a level
+    without_b = [level != "b" for level in cohort["g"]]
+    assert tables("factor(g)", subset=without_b) == (["a", "b"], [1050, 0], [3, 0])
+    result = r.pyears("Surv(time, status) ~ factor(g) + w", cohort, scale=1)
+    assert result.dimnames["factor(g)"] == ["a", "b"]
+    assert result.pyears == [[1050], [0]]
+    # ... and a character column keeps its levels under factor() and as.factor(), where the
+    # bare column is tabulated from the rows subset = h != "z" keeps
+    without_z = [level != "z" for level in cohort["h"]]
+    assert tables("factor(h)", subset=without_z) == (["x", "y", "z"], [865, 280, 0], [3, 2, 0])
+    assert tables("as.factor(h)", subset=without_z) == (["x", "y", "z"], [865, 280, 0], [3, 2, 0])
+    assert tables("h", subset=without_z) == (["x", "y"], [865, 280], [3, 2])
+
+    # a filtered data frame keeps its unused categories:
+    # sub <- df[df$grp != "c", ]; pyears(Surv(time, status) ~ factor(grp), sub, scale = 1)
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame(
+        {
+            "time": cohort["time"],
+            "status": cohort["status"],
+            "grp": pd.Categorical(["a", "a", "b", "b", "a", "c"], categories=["a", "b", "c"]),
+        }
+    )
+    sub = frame[frame["grp"] != "c"]
+    for term, levels in (("factor(grp)", ["a", "b"]), ("as.factor(grp)", ["a", "b", "c"])):
+        result = r.pyears(f"Surv(time, status) ~ {term}", sub, scale=1)
+        assert result.dimnames == {term: levels}
+        assert result.pyears == [1050, 430, 0][: len(levels)]
+        assert result.event == [2, 1, 0][: len(levels)]
+
+
 def _dated():
     return {
         "time": [100.0, 200.0, 365.0],

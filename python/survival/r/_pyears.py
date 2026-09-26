@@ -23,6 +23,7 @@ from .. import _survival as _core
 from ._coerce import (
     _as_character,
     _factor,
+    _factor_levels,
     _finite_float,
     _float_vector,
     _is_missing_value,
@@ -324,6 +325,27 @@ def _cut_term(mf: ModelFrame, text: str, data: Any) -> _PyearsTerm:
     return _PyearsTerm(text, 1, codes, _cut_labels(breaks), [])
 
 
+def _factor_call_term(mf: ModelFrame, term: _CovariateTerm, label: str, data: Any) -> _PyearsTerm:
+    """A ``factor(x)`` or ``as.factor(x)`` formula term.  model.frame evaluates the call
+    on the whole *data* before ``subset`` and ``na.action`` remove rows, so the levels
+    are the whole column's: every declared one for ``as.factor``, those in use for
+    ``factor``."""
+
+    whole = _column_source(data, term.column)
+    levels = _factor_levels(whole, label)
+    if term.categorical_wrapper == "factor":
+        used = {
+            value for value in _materialize_labels(whole, label) if not _is_missing_value(value)
+        }
+        levels = [level for level in levels if level in used]
+    index = {level: code + 1.0 for code, level in enumerate(levels)}
+    codes = [
+        math.nan if _is_missing_value(value) else index[value]
+        for value in _column(mf.data, term.column)
+    ]
+    return _PyearsTerm(label, 1, codes, [_as_character(level) for level in levels], [])
+
+
 def _pyears_term(mf: ModelFrame, term: _CovariateTerm, data: Any) -> _PyearsTerm:
     label = _covariate_term_name(term)
     if term.call is not None:
@@ -332,12 +354,14 @@ def _pyears_term(mf: ModelFrame, term: _CovariateTerm, data: Any) -> _PyearsTerm
             if term.call.startswith("tcut(")
             else _cut_term(mf, term.call, data)
         )
+    if term.categorical_wrapper is not None:
+        return _factor_call_term(mf, term, label, data)
     source = _column_source(mf.data, term.column) if term.arithmetic is None else None
     if isinstance(source, TcutResult):
         return _PyearsTerm(
             label, 0, list(source.values), list(source.labels), list(source.cutpoints)
         )
-    # R's as.factor keeps every declared level of a factor, empty or not
+    # pyears' as.factor keeps every declared level of a factor column, empty or not
     values = (
         source
         if source is not None and term.transform is None
