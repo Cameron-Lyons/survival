@@ -39,6 +39,7 @@ use self::kernel::{InnerFit, Kernel, KernelData, PenaltyCallback, PenaltyShape};
 use self::penalty::Pparm;
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{
@@ -974,24 +975,6 @@ impl CoxpenalFit {
         self.check_newdata_allowed()?;
         self.curve_source().survfit_individual(newdata, id, options)
     }
-}
-
-fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
-    matrix.outer_iter().map(|row| row.to_vec()).collect()
-}
-
-fn matrix_from_rows(rows: &[Vec<f64>], name: &str) -> SurvivalResult<Array2<f64>> {
-    let ncols = rows.first().map_or(0, Vec::len);
-    if rows.iter().any(|row| row.len() != ncols) {
-        return Err(SurvivalError::invalid_input(format!(
-            "{name} must be rectangular"
-        )));
-    }
-    Array2::from_shape_vec(
-        (rows.len(), ncols),
-        rows.iter().flatten().copied().collect(),
-    )
-    .map_err(|err| SurvivalError::invalid_input(err.to_string()))
 }
 
 /// A penalty term for [`coxpenal_fit`]: `ridge()`, `pspline()`, `frailty()`

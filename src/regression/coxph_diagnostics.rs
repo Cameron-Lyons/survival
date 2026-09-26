@@ -15,6 +15,7 @@
 
 use crate::core::coxscho::coxscho;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::matrix::matrix_from_rows;
 use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
 use crate::residuals::agmart::agmart_rows;
 use crate::residuals::coxmart::coxmart_rows;
@@ -323,17 +324,17 @@ impl CoxPHFit {
             }
             ResidualType::Schoenfeld => {
                 let schoenfeld = schoenfeld_residuals(self, weighted)?;
-                Ok(Residuals::Matrix(rows_matrix(
+                Ok(Residuals::Matrix(matrix_from_rows(
                     &schoenfeld.residuals,
-                    self.nvar(),
-                )))
+                    "residuals",
+                )?))
             }
             ResidualType::ScaledSchoenfeld => {
                 let scaled = self.scaled_schoenfeld_residuals(weighted)?;
-                Ok(Residuals::Matrix(rows_matrix(
+                Ok(Residuals::Matrix(matrix_from_rows(
                     &scaled.residuals,
-                    self.nvar(),
-                )))
+                    "residuals",
+                )?))
             }
             ResidualType::Partial => {
                 let default = default_assign(self.nvar());
@@ -376,14 +377,6 @@ impl CoxPHFit {
         }
         Ok(schoenfeld)
     }
-}
-
-fn rows_matrix(rows: &[Vec<f64>], ncols: usize) -> Array2<f64> {
-    Array2::from_shape_vec(
-        (rows.len(), ncols),
-        rows.iter().flatten().copied().collect(),
-    )
-    .expect("rows have the coefficient width")
 }
 
 #[cfg(test)]

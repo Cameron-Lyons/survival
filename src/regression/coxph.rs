@@ -20,6 +20,7 @@ use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERAN
 use crate::core::SurvResponse;
 use crate::core::strata_order::order_within_strata;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
@@ -488,24 +489,6 @@ impl Default for SurvfitOptions {
             start_time: None,
         }
     }
-}
-
-fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
-    matrix.outer_iter().map(|row| row.to_vec()).collect()
-}
-
-fn matrix_from_rows(rows: &[Vec<f64>], name: &str) -> SurvivalResult<Array2<f64>> {
-    let ncols = rows.first().map_or(0, Vec::len);
-    if rows.iter().any(|row| row.len() != ncols) {
-        return Err(SurvivalError::invalid_input(format!(
-            "{name} must be rectangular"
-        )));
-    }
-    Array2::from_shape_vec(
-        (rows.len(), ncols),
-        rows.iter().flatten().copied().collect(),
-    )
-    .map_err(|err| SurvivalError::invalid_input(err.to_string()))
 }
 
 fn crossprod(rows: &Array2<f64>) -> Array2<f64> {

@@ -21,6 +21,7 @@
 //! for its removal, so the list is a strict burndown.
 #![cfg(test)]
 
+use crate::internal::matrix::matrix_rows;
 use crate::regression::cch::{CchFitResult, cch_borgan_fit, cch_fit};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::cox_zph::{CoxZphTest, ZphTransform, cox_zph};
@@ -2704,7 +2705,12 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             }
             Ok(())
         }
-        "var" => assert_matrix(&fit.var_rows(), &matrix(&expected["var"])?, RTOL_VAR, "var"),
+        "var" => assert_matrix(
+            &matrix_rows(&fit.var),
+            &matrix(&expected["var"])?,
+            RTOL_VAR,
+            "var",
+        ),
         "naive_var" => match (&fit.naive_var, expected["naive_var"].is_null()) {
             (None, true) => Ok(()),
             (Some(naive), false) => assert_matrix(
@@ -2793,8 +2799,12 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             if is_r_error(expected) || expected.is_null() {
                 return Ok(());
             }
-            let wtest = coxph_wtest_py(fit.var_rows(), vec![fit.coefficients_or_zero()], 1e-9)
-                .map_err(|err| format!("{err:?}"))?;
+            let wtest = coxph_wtest_py(
+                matrix_rows(&fit.var),
+                vec![fit.coefficients_or_zero()],
+                1e-9,
+            )
+            .map_err(|err| format!("{err:?}"))?;
             let expected_test = match num(&expected["test"]) {
                 Ok(value) => value,
                 Err(_) => matrix(&expected["test"])?[0][0],
@@ -2810,12 +2820,6 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             assert_vec(&solve, &expected_solve, RTOL_VAR, "wtest.solve")
         }
         other => unsupported(format!("aspect {other}")),
-    }
-}
-
-impl CoxPHFit {
-    fn var_rows(&self) -> Vec<Vec<f64>> {
-        self.var.outer_iter().map(|row| row.to_vec()).collect()
     }
 }
 
@@ -6420,11 +6424,6 @@ fn cox_fit_with_ties(
     CoxPHFit::fit(data, options).map_err(|err| format!("coxph: {err}"))
 }
 
-/// Rows of a square `ndarray` matrix.
-fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
-    matrix.rows().into_iter().map(|row| row.to_vec()).collect()
-}
-
 // ---------------------------------------------------------------------------
 // coxph_penalized (key: coxpenal)
 // ---------------------------------------------------------------------------
@@ -6675,7 +6674,7 @@ fn check_penal_aspect(case: &PenalCase, expected: &Value, aspect: &str) -> Resul
             Ok(())
         }
         "var" => assert_matrix(
-            &coxph.var_rows(),
+            &matrix_rows(&coxph.var),
             &matrix(&expected["var"])?,
             RTOL_VAR,
             "var",

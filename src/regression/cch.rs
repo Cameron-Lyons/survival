@@ -8,6 +8,7 @@
 //! through [`CoxPHFit`].
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{CoxPHFit, CoxphData, CoxphOptions};
 use crate::regression::coxph_diagnostics::{ResidualType, Residuals};
@@ -123,18 +124,6 @@ pub struct CchFitResult {
     /// point estimate, as R does (`fit$coefficients <- fit1$coefficients`).
     #[pyo3(get)]
     pub fit: CoxPHFit,
-}
-
-fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
-    matrix.outer_iter().map(|row| row.to_vec()).collect()
-}
-
-fn matrix_from_rows(rows: &[Vec<f64>], ncols: usize) -> Array2<f64> {
-    Array2::from_shape_vec(
-        (rows.len(), ncols),
-        rows.iter().flatten().copied().collect(),
-    )
-    .expect("rectangular rows")
 }
 
 fn validate_cch_inputs(
@@ -328,12 +317,11 @@ struct CoxInput {
 /// `coxph(Surv(start, stop, status) ~ x + offset, weights, init, iter.max)`
 /// with `coxph`'s defaults (Efron ties, `nocenter = c(-1, 0, 1)`).
 fn fit_cox(input: CoxInput, init: Option<Vec<f64>>, iter_max: usize) -> SurvivalResult<CoxPHFit> {
-    let nvar = input.x.first().map_or(0, Vec::len);
     let data = CoxphData::try_new(
         input.stop,
         Some(input.start),
         input.status,
-        matrix_from_rows(&input.x, nvar),
+        matrix_from_rows(&input.x, "x")?,
         input.weights,
         None,
         Some(input.offset),
