@@ -187,12 +187,12 @@ def _mapped_columns(
 ) -> dict[str, Any]:
     """``rmap``'s entries, then a same-named column for each other variable in *names*.
 
-    A string naming a column of *data* stays that column.  Any other string is R code:
-    an R constant (``60``, ``"white"``) or a bare word (``white``) is a constant, and an
-    expression
+    A string naming a column of *data* stays that column.  An R constant (``21915``,
+    ``"white"``) is its value, and an expression reading columns of *data*
     (``ageyr * 365.25``, or ``accept_dt - birth_dt`` with the dates as days since
-    1970-01-01) is evaluated in *data*, as R evaluates ``rmap`` in the model frame.
-    Any other scalar is a constant.
+    1970-01-01) is evaluated there, as R evaluates ``rmap`` in the model frame.  Any
+    other string (a word such as ``white``, or ``1995-03-01``) is a constant label, and
+    so is any other scalar.
     """
 
     columns: dict[str, Any] = {}
@@ -224,6 +224,10 @@ def _rmap_value(name: str, text: str, data: Any, n: int) -> list[Any]:
         used = _expression_columns(text)
     except ValueError as exc:
         raise ValueError(f"rmap {name} = {text}: {exc}") from exc
+    if not used:
+        # a string reading no column, such as "1995-03-01", is a label as a quoted R
+        # string is (not the arithmetic 1995 - 3 - 1)
+        return [text] * n
     values = {}
     for column in used:
         raw = _column(data, column)

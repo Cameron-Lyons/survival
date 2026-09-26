@@ -404,15 +404,24 @@ def test_an_rmap_word_or_quoted_string_is_a_constant(race, expected):
     assert usr.expected == approx(expected)
 
 
-@pytest.mark.parametrize("age", ["60 * 365.25", "21915"])
-def test_an_rmap_expression_reading_no_column_is_evaluated(age):
+def test_an_rmap_number_is_its_value():
     # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us, scale = 1,
-    #        rmap = list(age = 60 * 365.25, sex = sex, year = year))
-    rmap = {"age": age, "sex": "sex", "year": "year"}
+    #        rmap = list(age = 21915, sex = sex, year = year))
+    rmap = {"age": "21915", "sex": "sex", "year": "year"}
     result = r.pyears(
         "Surv(time, status) ~ grp", _cohort(), ratetable=r.survexp_us(), rmap=rmap, scale=1
     )
     assert result.expected == approx([0.039888584560963558, 0.016090412028239812])
+
+
+@pytest.mark.parametrize(("name", "text"), [("year", "1995-03-01"), ("age", "60 * 365.25")])
+def test_an_rmap_string_reading_no_column_is_a_label(name, text):
+    # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us,
+    #        rmap = list(age = ageyr * 365.25, sex = sex, year = "1995-03-01")):
+    # a quoted string, not the day count 1995 - 3 - 1
+    rmap = {"age": "ageyr * 365.25", "sex": "sex", "year": "year", name: text}
+    with pytest.raises(ValueError, match=f"for this ratetable, {name} must be a continuous"):
+        r.pyears("Surv(time, status) ~ grp", _cohort(), ratetable=r.survexp_us(), rmap=rmap)
 
 
 def test_an_rmap_expression_that_cannot_be_read_is_an_error():
