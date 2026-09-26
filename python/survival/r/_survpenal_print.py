@@ -132,7 +132,8 @@ def _signif(value: float, digits: int) -> float:
     """R's ``signif``, ported from ``fprec`` (nmath/fprec.c): scale by a power of
     ten and round half to even, so ``signif(0.000125, 2)`` is ``0.00012``.  Within
     ``1e-306 < |value| < 1e306`` it matches R bit for bit; beyond that R's powers of
-    ten can differ from these in the last bits."""
+    ten differ from these in the last bits, which can move the result by an ulp or,
+    next to ``DBL_MAX``, by one in the last kept digit."""
 
     if not math.isfinite(value) or value == 0.0:
         return value
