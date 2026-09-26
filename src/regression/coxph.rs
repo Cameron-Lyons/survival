@@ -32,8 +32,9 @@ use crate::surv_analysis::agsurv::{
     AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, IntegratedCurve, agsurv_rows,
     cum_xbar_at, cumhaz_at, expand_curve, individual_curve, integrate_curve, step_at,
 };
-use ndarray::{Array1, Array2, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::prelude::*;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Validated inputs of a Cox fit, in the caller's row order (`Surv(time,
@@ -897,18 +898,21 @@ impl CoxPHFit {
             / total
     }
 
-    /// Per-stratum `agsurv` pieces at `x - means` and `risk =
-    /// exp(linear_predictors - log_risk_shift)`, in the fit's stratum order.
+    /// Per-stratum `agsurv` pieces at `x - means`, in the fit's stratum
+    /// order, with `survfit.coxph`'s `risk = exp(X %*% beta + offset -
+    /// xcenter)`: the risks relative to a subject at the means and the mean
+    /// offset, so a large offset neither overflows nor rounds the baseline
+    /// survival to 1.
     fn compute_curves(
         &self,
         survtype: CoxSurvType,
         vartype: CoxSurvType,
-        log_risk_shift: f64,
     ) -> SurvivalResult<Vec<AgsurvCurve>> {
+        let offset_mean = self.offset_mean();
         let risk: Vec<f64> = self
             .linear_predictors
             .iter()
-            .map(|lp| (lp - log_risk_shift).exp())
+            .map(|lp| (lp - offset_mean).exp())
             .collect();
         let data = AgsurvData {
             start: self.entry.as_deref(),
@@ -934,18 +938,17 @@ impl CoxPHFit {
             return Ok(curves);
         }
         let survtype = self.default_survtype();
-        let curves = self.compute_curves(survtype, survtype, 0.0)?;
+        let curves = self.compute_curves(survtype, survtype)?;
         Ok(self.curves.get_or_init(|| curves))
     }
 
-    /// Relative risk of a centred covariate row: `exp(x2c %*% coef + offset2)`.
-    fn relative_risk(&self, x2c: &[f64], offset2: f64) -> f64 {
-        (x2c.iter()
-            .zip(self.coefficients_or_zero())
-            .map(|(x, b)| x * b)
-            .sum::<f64>()
-            + offset2)
-            .exp()
+    /// The curves of one hazard type: the cached ones for the fit's own.
+    fn curves_for(&self, survtype: CoxSurvType) -> SurvivalResult<Cow<'_, [AgsurvCurve]>> {
+        if survtype == self.default_survtype() {
+            Ok(Cow::Borrowed(self.baseline_curves()?))
+        } else {
+            Ok(Cow::Owned(self.compute_curves(survtype, survtype)?))
+        }
     }
 
     fn check_newdata(&self, newdata: &CoxNewData) -> SurvivalResult<()> {
@@ -969,16 +972,21 @@ impl CoxPHFit {
     }
 
     /// Centred new covariate rows (`newx - means`) and their relative risks
-    /// on the fit's scale.
+    /// on the baseline curves' scale, `survfit.coxph`'s `risk2 = exp(x2 %*%
+    /// beta + offset2 - xcenter)`.
     fn centered_newdata(&self, newdata: &CoxNewData) -> (Array2<f64>, Vec<f64>) {
         let mut x2c = newdata.x.clone();
         for (col, &mean) in self.means.iter().enumerate() {
             x2c.column_mut(col).mapv_inplace(|value| value - mean);
         }
-        let risk2: Vec<f64> = (0..newdata.nrows())
-            .map(|i| {
+        let coef = self.coefficients_or_zero();
+        let offset_mean = self.offset_mean();
+        let risk2: Vec<f64> = x2c
+            .outer_iter()
+            .enumerate()
+            .map(|(i, row)| {
                 let offset2 = newdata.offset.as_ref().map_or(0.0, |o| o[i]);
-                self.relative_risk(&x2c.row(i).to_vec(), offset2)
+                (row.dot(&ArrayView1::from(&coef)) + offset2 - offset_mean).exp()
             })
             .collect();
         (x2c, risk2)
@@ -987,18 +995,19 @@ impl CoxPHFit {
     /// `basehaz(fit, centered)`.
     pub fn basehaz(&self, centered: bool) -> SurvivalResult<Basehaz> {
         let curves = self.baseline_curves()?;
-        // survfit(fit) evaluates the curve at x = means and the mean
-        // offset; uncentred divides the offset sum(means * coef) back out.
-        let mut scale = self.offset_mean().exp();
-        if !centered {
+        // the curves are survfit(fit)'s, at x = means and the mean offset;
+        // uncentred divides the offset sum(means * coef) back out.
+        let scale = if centered {
+            1.0
+        } else {
             let center: f64 = self
                 .means
                 .iter()
                 .zip(self.coefficients_or_zero())
                 .map(|(m, b)| m * b)
                 .sum();
-            scale *= (-center).exp();
-        }
+            (-center).exp()
+        };
         let mut time = Vec::new();
         let mut hazard = Vec::new();
         let mut strata = Vec::new();
@@ -1034,26 +1043,12 @@ impl CoxPHFit {
         if let Some(newdata) = newdata {
             self.check_newdata(newdata)?;
         }
-        let offset_mean = self.offset_mean();
-        // Kalbfleisch-Prentice needs the risks on survfit's scale
-        // (relative to the mean offset); the other types only depend on
-        // risk2 * baseline, so the cached predict-scale curves serve.
-        let kp = survtype == CoxSurvType::KalbfleischPrentice;
-        let shift = if kp { offset_mean } else { 0.0 };
-        let computed;
-        let curves: &[AgsurvCurve] = if !kp && survtype == self.default_survtype() {
-            self.baseline_curves()?
-        } else {
-            computed = self.compute_curves(survtype, survtype, shift)?;
-            &computed
-        };
-        let (x2c, mut risk2) = match newdata {
+        let curves = self.curves_for(survtype)?;
+        let (x2c, risk2) = match newdata {
             Some(newdata) => self.centered_newdata(newdata),
-            None => (Array2::zeros((1, self.nvar())), vec![offset_mean.exp()]),
+            // the curve at the means and the mean offset
+            None => (Array2::zeros((1, self.nvar())), vec![1.0]),
         };
-        for value in risk2.iter_mut() {
-            *value *= (-shift).exp();
-        }
         let varmat = options.se_fit.then_some(&self.var);
         let mut result = Vec::new();
         let new_strata = newdata.and_then(|newdata| newdata.strata.as_deref());
@@ -1110,19 +1105,8 @@ impl CoxPHFit {
             1
         });
         let survtype = CoxSurvType::from_stype_ctype(options.stype, ctype)?;
-        let kp = survtype == CoxSurvType::KalbfleischPrentice;
-        let shift = if kp { self.offset_mean() } else { 0.0 };
-        let computed;
-        let curves: &[AgsurvCurve] = if !kp && survtype == self.default_survtype() {
-            self.baseline_curves()?
-        } else {
-            computed = self.compute_curves(survtype, survtype, shift)?;
-            &computed
-        };
-        let (x2c, mut risk2) = self.centered_newdata(newdata);
-        for value in risk2.iter_mut() {
-            *value *= (-shift).exp();
-        }
+        let curves = self.curves_for(survtype)?;
+        let (x2c, risk2) = self.centered_newdata(newdata);
         let varmat = options.se_fit.then_some(&self.var);
         let mut ids: Vec<i32> = Vec::new();
         for &value in id {
@@ -1146,7 +1130,7 @@ impl CoxPHFit {
                     risk2: risk2[i],
                 })
                 .collect();
-            let curve = individual_curve(curves, survtype, &intervals, varmat)?;
+            let curve = individual_curve(&curves, survtype, &intervals, varmat)?;
             let stratum = intervals
                 .first()
                 .map_or(0, |interval| self.sorted.codes[interval.stratum]);
@@ -1331,7 +1315,15 @@ impl CoxPHFit {
             if !se_fit {
                 return Ok(CoxPrediction { fit, se_fit: None });
             }
-            let risk: Vec<f64> = self.linear_predictors.iter().map(|lp| lp.exp()).collect();
+            // predict.coxph's exp(linear.predictors), relative to the mean
+            // offset as the baseline curves are (the standard error does not
+            // depend on that scale)
+            let offset_mean = self.offset_mean();
+            let risk: Vec<f64> = self
+                .linear_predictors
+                .iter()
+                .map(|lp| (lp - offset_mean).exp())
+                .collect();
             let se = self.expected_se(
                 self.x.view(),
                 Some(&self.means),

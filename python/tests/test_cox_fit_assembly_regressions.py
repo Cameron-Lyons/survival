@@ -120,6 +120,55 @@ def test_offset_centring_reaches_init_robust_counting_exact_and_penalized_fits(o
     )
 
 
+@pytest.mark.parametrize("shift", [50.0, 707.0, -740.0])
+def test_curves_are_on_survfit_scale_for_any_offset(ovarian, shift):
+    # survfit.coxph's risk = exp(X %*% beta + offset - xcenter), with the mean offset in
+    # xcenter, so R gives the same curves for every shift; risks of exp(lp) would round
+    # the baseline survival to 1 (shift 50) or overflow (707, -740)
+    data = dict(ovarian, o=[shift + value for value in ovarian["ecog.ps"]])
+    fit = r.coxph("Surv(futime, fustat) ~ age + rx + offset(o)", data)
+    curve = r.survfit(fit)
+    assert curve.surv[:3] == approx([0.990179987806773, 0.979324577815282, 0.966546096122788])
+    assert curve.cumhaz[:3] == approx(
+        [0.00986854651275763, 0.02089215124030774, 0.03402628760372377]
+    )
+    assert curve.std_err[:3] == approx([0.0118712460770787, 0.0202149778939414, 0.0293319303754243])
+    assert r.basehaz(fit).hazard[:3] == approx(
+        [0.00986854651275763, 0.02089215124030774, 0.03402628760372377]
+    )
+    assert r.basehaz(fit, centered=False).hazard[:3] == approx(
+        [1.02218186765594e-05, 2.16400441002742e-05, 3.52443535298833e-05]
+    )
+    newdata = {"age": [50, 60], "rx": [1, 2], "o": [shift, shift + 2.0]}
+    curves = r.survfit(fit, newdata)
+    assert [list(row) for row in curves.surv[:3]] == [
+        approx([0.998541928933378, 0.981335052618955]),
+        approx([0.996915712437477, 0.960897106751261]),
+        approx([0.994981604782447, 0.937101155152480]),
+    ]
+    assert [list(row) for row in curves.std_err[:3]] == [
+        approx([0.00201187062820124, 0.02286885101362282]),
+        approx([0.00364002826848285, 0.03912943523690722]),
+        approx([0.00548271019033175, 0.05709001852477361]),
+    ]
+    assert r.survfit(fit, stype=1, ctype=1).surv[:3] == approx(
+        [0.989629373513725, 0.977807859795110, 0.963909470409273]
+    )
+
+
+def test_expected_counts_keep_their_scale_with_an_offset(ovarian):
+    # R 3.8-12 gives these for shift 50; for 707 its agsurv call gets an infinite risk
+    data = dict(ovarian, o=[50.0 + value for value in ovarian["ecog.ps"]])
+    fit = r.coxph("Surv(futime, fustat) ~ age + rx + offset(o)", data)
+    expected = r.predict(fit, type="expected", se_fit=True)
+    assert expected.fit[:3] == approx([0.104780445538452, 0.304543878327944, 0.415580837217333])
+    assert expected.se_fit[:3] == approx([0.106033726389833, 0.229533138188893, 0.250513978450509])
+    survival_prob = r.predict(fit, type="survival", se_fit=True)
+    assert survival_prob.se_fit[:3] == approx(
+        [0.0954857261059137, 0.1692714321196184, 0.1653284140605831]
+    )
+
+
 # --- data without events --------------------------------------------------------
 
 
