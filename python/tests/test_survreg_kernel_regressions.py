@@ -23,6 +23,22 @@ def t_fit(lung):
     return r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t")
 
 
+def test_rsurvreg_seed_reproduces_r_set_seed():
+    # R's set.seed(1) followed by rsurvreg(3, 0, 1)
+    assert r.rsurvreg(3, 0, 1, seed=1) == pytest.approx(
+        [0.30857707804919837, 0.46541242439391811, 0.85062791335182275], rel=1e-14
+    )
+    # set.seed(42) followed by rsurvreg(4, 1:4, 0.5, "lognormal")
+    assert r.rsurvreg(4, [1, 2, 3, 4], 0.5, "lognormal", seed=42) == pytest.approx(
+        [5.3950357131052664, 15.884418122831969, 15.144704122077824, 88.055546326660618],
+        rel=1e-14,
+    )
+    # set.seed(-7) followed by rsurvreg(3, 1, 2, "t", parms = 5): R's seeds are signed
+    assert r.rsurvreg(3, 1, 2, "t", parms=5, seed=-7) == pytest.approx(
+        [0.044519774037484416, 1.2104777027768425, -0.419870560940246], rel=1e-14
+    )
+
+
 def test_dpqr_distribution_names_are_case_folded_but_not_partially_matched():
     # R's dsurvreg(c(0.5, 2), 0.2, 1.5, "Weibull"), psurvreg(c(0.5, 2), 0.2, 1.5, "LogNormal")
     # and qsurvreg(c(0.25, 0.9), 1, 0.5, "LOGLOGISTIC")

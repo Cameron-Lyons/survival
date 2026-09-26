@@ -14,7 +14,7 @@
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{dnorm, erf, pnorm, qnorm};
 use crate::internal::match_arg::match_arg;
-use crate::internal::rng::Rng;
+use crate::internal::rng::{RUniform, Rng};
 use crate::internal::statistical::{erfc, student_t_cdf, student_t_inverse_cdf, student_t_pdf};
 use crate::internal::validation::{validate_equal_len, validate_finite, validate_positive};
 use pyo3::prelude::*;
@@ -796,9 +796,11 @@ pub fn qsurvreg(
     )?)
 }
 
-/// `rsurvreg(n, mean, scale, distribution, parms)`: `qsurvreg(runif(n), ...)`
-/// drawn from the crate's generator (`seed` makes the draw reproducible; the
-/// stream is not R's).
+/// `rsurvreg(n, mean, scale, distribution, parms)`: `qsurvreg(runif(n), ...)`.
+/// With a `seed` the uniforms are R's, so the draw equals R's
+/// `set.seed(seed); rsurvreg(n, mean, scale, distribution, parms)`; without
+/// one they come from the crate's clock-seeded generator, whose stream is not
+/// R's.
 #[pyfunction]
 #[pyo3(signature = (n, mean, scale, distribution="weibull", parms=None, seed=None))]
 pub fn rsurvreg(
@@ -807,11 +809,19 @@ pub fn rsurvreg(
     scale: Vec<f64>,
     distribution: &str,
     parms: Option<Vec<f64>>,
-    seed: Option<u64>,
+    seed: Option<i32>,
 ) -> PyResult<Vec<f64>> {
     let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
-    let mut rng = seed.map_or_else(Rng::new, Rng::with_seed);
-    let uniform: Vec<f64> = (0..n).map(|_| rng.f64()).collect();
+    let uniform: Vec<f64> = match seed {
+        Some(seed) => {
+            let mut rng = RUniform::new(seed as u32);
+            (0..n).map(|_| rng.unif_rand()).collect()
+        }
+        None => {
+            let mut rng = Rng::new();
+            (0..n).map(|_| rng.f64()).collect()
+        }
+    };
     Ok(distribution_values(
         &uniform,
         &mean,
@@ -1051,6 +1061,52 @@ mod tests {
         assert!(dsurvreg(vec![1.0], vec![0.0], vec![0.0], "weibull", None).is_err());
         assert!(qsurvreg(vec![0.5], vec![0.0], vec![1.0], "t", None).is_ok());
         assert!(qsurvreg(vec![0.5], vec![0.0], vec![1.0], "t", Some(vec![1.0])).is_err());
+    }
+
+    #[test]
+    fn rsurvreg_with_a_seed_reproduces_r_set_seed() {
+        let assert_all_close = |actual: Vec<f64>, expected: &[f64]| {
+            assert_eq!(actual.len(), expected.len());
+            for (a, e) in actual.iter().zip(expected) {
+                assert_close(*a, *e, 1e-15);
+            }
+        };
+        // set.seed(1); rsurvreg(3, 0, 1)
+        assert_all_close(
+            rsurvreg(3, vec![0.0], vec![1.0], "weibull", None, Some(1)).unwrap(),
+            &[
+                0.308_577_078_049_198_4,
+                0.465_412_424_393_918_1,
+                0.850_627_913_351_822_8,
+            ],
+        );
+        // set.seed(42); rsurvreg(4, 1:4, 0.5, "lognormal")
+        assert_all_close(
+            rsurvreg(
+                4,
+                vec![1.0, 2.0, 3.0, 4.0],
+                vec![0.5],
+                "lognormal",
+                None,
+                Some(42),
+            )
+            .unwrap(),
+            &[
+                5.395_035_713_105_266,
+                15.884_418_122_831_969,
+                15.144_704_122_077_824,
+                88.055_546_326_660_62,
+            ],
+        );
+        // set.seed(-7); rsurvreg(3, 1, 2, "t", parms = 5)
+        assert_all_close(
+            rsurvreg(3, vec![1.0], vec![2.0], "t", Some(vec![5.0]), Some(-7)).unwrap(),
+            &[
+                0.044_519_774_037_484_416,
+                1.210_477_702_776_842_5,
+                -0.419_870_560_940_246,
+            ],
+        );
     }
 
     #[test]
