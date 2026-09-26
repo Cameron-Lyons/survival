@@ -203,8 +203,18 @@ def test_summary_rows_leave_the_influence_matrices_out():
     assert len(engine.influence_surv) == 2
 
 
-@pytest.mark.parametrize("rmean", ["none", "common", "individual", "4.5"])
-@pytest.mark.parametrize("start_time", [None, 1.5])
+@pytest.mark.parametrize(
+    ("rmean", "start_time"),
+    [
+        *(
+            (rmean, start_time)
+            for rmean in ("none", "common", "individual", "4.5")
+            for start_time in (None, 1.5)
+        ),
+        # before the second curve's first time (2): nothing of it is kept but its t0 row
+        ("1.5", None),
+    ],
+)
 def test_survmean_of_the_fit_equals_that_of_its_survfit0(rmean, start_time):
     # summary.survfit reads survmean(survfit0(fit)); the table is that of the fit itself
     fit = r.survfit("Surv(time, status) ~ g", _groups(), influence=True, start_time=start_time)
