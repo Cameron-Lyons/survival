@@ -8,7 +8,6 @@ times) and the per-stratum split (the ``finegray`` kernel).
 from __future__ import annotations
 
 import math
-import re
 import warnings
 from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
@@ -24,6 +23,7 @@ from ._coerce import (
 )
 from ._data_prep import aeqSurv
 from ._formula import _column, _model_variables, model_frame
+from ._names import _make_names
 from ._surv import Surv, strata
 from ._types import FineGrayFrame, ModelFrame
 
@@ -97,35 +97,6 @@ def _subject_layout(
     if previous is not None:
         last[previous] = True
     return first, last, delay
-
-
-def _make_names(value: str) -> str:
-    """R's ``make.names`` for one name."""
-
-    name = re.sub(r"[^A-Za-z0-9._]", ".", value)
-    if not name or not (name[0].isalpha() or (name[0] == "." and not name[1:2].isdigit())):
-        name = f"X{name}"
-    reserved = {
-        "if",
-        "else",
-        "repeat",
-        "while",
-        "function",
-        "for",
-        "next",
-        "break",
-        "TRUE",
-        "FALSE",
-        "NULL",
-        "Inf",
-        "NaN",
-        "NA",
-        "NA_integer_",
-        "NA_real_",
-        "NA_character_",
-        "NA_complex_",
-    }
-    return f"{name}." if name in reserved else name
 
 
 def _etype_index(states: Sequence[str], etype: Any) -> int:

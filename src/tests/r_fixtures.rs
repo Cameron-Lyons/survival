@@ -5773,13 +5773,13 @@ fn r_fixtures_royston_brier() {
                                 .collect()
                         })
                         .collect();
-                    let result = brier(&BrierInput {
+                    let result = brier(BrierInput {
                         start: None,
                         time: &fit.time,
                         status: &fit.status,
                         weights: None,
                         times: &times,
-                        phat: &phat,
+                        phat,
                         ties: aspect != "brier_ties_false",
                         efron: false,
                         timefix: true,
