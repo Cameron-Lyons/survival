@@ -248,6 +248,18 @@ def test_yates_predicts_restricted_mean_survival_as_r():
     )
     assert restricted.test[0].chisq == pytest.approx(33.1839742963497)
 
+    # R: the same with options = list(rmean = Inf) and nsim = 50, which equals the default
+    unrestricted = r.yates(
+        fit, "celltype", predict="survival", options={"rmean": math.inf, "seed": SEED}, nsim=50
+    )
+    assert unrestricted.estimate["pmm"] == approx(
+        [220.0263455561152, 99.7310793197197, 72.2119953964263, 152.2398949340128]
+    )
+    assert unrestricted.estimate["std"] == approx(
+        [8.97519671693424, 32.89450238924809, 20.78022118298346, 48.20696060965924]
+    )
+    assert unrestricted.test[0].chisq == pytest.approx(63.3011823078696)
+
 
 def test_yates_setup_errors_follow_r():
     fit = r.coxph("Surv(time, status) ~ celltype + karno + trt", _veteran())
@@ -263,20 +275,24 @@ def test_yates_setup_errors_follow_r():
         r.yates(fit, "celltype", predict=lambda eta: eta)
     with pytest.raises(TypeError, match="unrecognized risk options: rmean"):
         r.yates(fit, "celltype", predict="risk", options={"rmean": 100})
-    lp = r.yates(fit, "celltype", predict="lp")
-    assert lp.estimate == r.yates(fit, "celltype").estimate
+    linear = r.yates(fit, "celltype").estimate
+    assert r.yates(fit, "celltype", predict="lp").estimate == linear
+    # R: predict = NULL, which match.arg takes as "lp"
+    assert r.yates(fit, "celltype", predict=None).estimate == linear
 
 
 def test_yates_model_uses_the_linear_predictor_for_other_predictions():
-    # R's yates_setup.default: a warning, then the linear predictor
+    # R's yates passes predict= to yates_setup.default, whose argument is type, so it neither
+    # checks nor warns and gives the linear predictor (R: yates(lm(time ~ karno, veteran),
+    # "karno", levels = c(40, 60), predict = "risk") is silent)
     data = _veteran()
     model = r.YatesModel("time ~ karno", data, [-60.0, 3.0], [[400.0, -6.0], [-6.0, 0.1]])
     linear = r.yates(model, "karno", levels=[40, 60])
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        risk = r.yates(model, "karno", levels=[40, 60], predict="risk")
-    assert any("linear predictor estimate used by default" in str(w.message) for w in caught)
-    assert risk.estimate == linear.estimate
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for predict in ("risk", "survival", None):
+            other = r.yates(model, "karno", levels=[40, 60], predict=predict)
+            assert other.estimate == linear.estimate
     # -60 + 3 * karno, with variance (1, karno) V (1, karno)'
     assert linear.estimate["pmm"] == approx([60.0, 120.0])
     assert linear.estimate["std"] == approx([math.sqrt(80.0), math.sqrt(40.0)])

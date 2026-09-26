@@ -1238,8 +1238,10 @@ _COXPH_PREDICT = ["lp", "risk", "expected", "terms", "survival", "linear"]
 
 
 def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
-    """R's ``yates_setup``: ``yates_setup.coxph`` for a Cox model; ``yates_setup.default``,
-    which knows only the linear predictor, for a ``YatesModel``.
+    """R's ``yates_setup``: ``yates_setup.coxph`` for a Cox model; ``yates_setup.default``
+    for a ``YatesModel``, which gives the linear predictor whatever ``predict`` is (``yates``
+    passes it as ``predict=``, which that method's ``type`` argument never receives, so R
+    neither checks nor warns).
 
     ``options`` holds R's ``rmean`` for ``predict="survival"`` and the ``seed`` of R's
     generator (``set.seed``) for the simulated predictions.
@@ -1248,16 +1250,10 @@ def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
     if callable(predict) or isinstance(predict, Mapping):
         raise ValueError("user written prediction functions are not yet supported")
     if isinstance(fit, YatesModel):
-        if predict not in ("linear", "link"):
-            warnings.warn(
-                "no yates_setup method exists for a model of class YatesModel and estimate "
-                f"type {predict}, linear predictor estimate used by default",
-                RuntimeWarning,
-                stacklevel=3,
-            )
         return _YatesSetup("linear")
     kind = _match_string_arg(
-        predict,
+        # match.arg(NULL) is the first choice
+        "lp" if predict is None else predict,
         "predict",
         _COXPH_PREDICT,
         "'predict' should be one of " + ", ".join(f'"{name}"' for name in _COXPH_PREDICT),
@@ -1279,7 +1275,10 @@ def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
         warnings.simplefilter("ignore")
         baseline = survfit_coxph(fit, censor=False)
     rmean = settings.get("rmean")
-    rmean = max(baseline.time) if rmean is None else _finite_float(rmean, "rmean")
+    try:
+        rmean = max(baseline.time) if rmean is None else float(rmean)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("rmean must be numeric") from exc
     if baseline.strata is not None:
         raise ValueError("stratified models not yet supported")
     return _YatesSetup("survival", seed, baseline, rmean)
