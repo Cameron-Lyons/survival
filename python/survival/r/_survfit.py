@@ -32,6 +32,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _r_factor,
     _scalar_or_vector,
+    _start_time_value,
     _strata_level_sort_key,
     _strata_value_label,
     _subset_indices,
@@ -429,20 +430,6 @@ def _influence_level(influence: Any) -> int:
             raise ValueError("influence argument must be 0, 1, 2, or 3")
         return int(influence)
     raise ValueError("influence argument must be numeric or logical")
-
-
-def _start_time_value(start_time: Any | None) -> float | None:
-    if start_time is None:
-        return None
-    if isinstance(start_time, bool | str):
-        raise ValueError("start.time must be a single numeric value")
-    try:
-        value = float(start_time)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("start.time must be a single numeric value") from exc
-    if not math.isfinite(value):
-        raise ValueError("start.time must be a single numeric value")
-    return value
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ from ._coerce import (
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
     _r_format_number,
+    _start_time_value,
     _subset_optional_sequence,
     _warn_outside_package,
 )
@@ -1768,11 +1769,19 @@ def _survfit_curves(
     ctype: int,
     se_fit: bool,
     censor: bool,
+    start_time: float | None = None,
 ) -> tuple[list[Any], list[str]]:
     """The engine curves for ``survfit.coxph`` and the name of each block (R's
     ``names(fit$strata)``: the strata levels, or the newdata row numbers)."""
 
     engine = fit.penalized if fit.penalized is not None else fit.fit
+    options: dict[str, Any] = {
+        "stype": stype,
+        "ctype": ctype,
+        "se_fit": se_fit,
+        "censor": censor,
+        "start_time": start_time,
+    }
     if newdata is None:
         if any(":" in name for name in fit.assign):
             warnings.warn(
@@ -1782,7 +1791,7 @@ def _survfit_curves(
                 RuntimeWarning,
                 stacklevel=3,
             )
-        curves = engine.survfit(stype=stype, ctype=ctype, se_fit=se_fit, censor=censor)
+        curves = engine.survfit(**options)
         return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
     new = _prediction_newdata(
         fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action="fail"
@@ -1801,21 +1810,10 @@ def _survfit_curves(
             _survfit_id_codes(newdata, id, new.n) if id is not None else [0] * new.n,
             new_strata=new.strata,
             new_offset=new.offset,
-            stype=stype,
-            ctype=ctype,
-            se_fit=se_fit,
-            censor=censor,
+            **options,
         )
         return curves, [str(idx + 1) for idx in range(len(curves))] if len(curves) > 1 else []
-    curves = engine.survfit(
-        newdata=new.x,
-        new_strata=new.strata,
-        new_offset=new.offset,
-        stype=stype,
-        ctype=ctype,
-        se_fit=se_fit,
-        censor=censor,
-    )
+    curves = engine.survfit(newdata=new.x, new_strata=new.strata, new_offset=new.offset, **options)
     if new.strata is not None:
         return curves, [str(idx + 1) for idx in range(len(curves))]
     return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
@@ -1842,6 +1840,7 @@ def survfit_coxph(
     ``newdata`` there is one curve per row (per row in its own stratum when the
     strata variables are present, otherwise every stratum for every row).  ``id``
     (with counting-process ``newdata``) gives one time-dependent curve per subject.
+    ``start_time`` builds the curves from the rows still at risk at that time.
     """
 
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
@@ -1854,8 +1853,6 @@ def survfit_coxph(
         raise ValueError("predicted survival curves are not defined for a clogit model")
     if fit.tt:
         raise ValueError("The survfit function can not process coxph models with a tt term")
-    if start_time is not None:
-        raise NotImplementedError("survfit(start.time=) is not available for Cox models")
     include_se = _normalize_bool_option(se_fit, "se_fit")
     stype_value = _integer_scalar(stype, "stype")
     if stype_value not in (1, 2):
@@ -1879,6 +1876,7 @@ def survfit_coxph(
     individual_value = _normalize_bool_option(individual, "individual") or id is not None
     if individual_value and newdata is None:
         raise ValueError("the id option only makes sense with new data")
+    start = _start_time_value(start_time)
 
     curves, strata_names = _survfit_curves(
         fit,
@@ -1889,6 +1887,7 @@ def survfit_coxph(
         ctype=ctype_value,
         se_fit=include_se,
         censor=censor_value,
+        start_time=start,
     )
     surv_rows = [row for curve in curves for row in curve.surv]
     cumhaz_rows = [row for curve in curves for row in curve.cumhaz]
@@ -1918,6 +1917,7 @@ def survfit_coxph(
         logse=True,
         conf_type=conf_type_name,
         conf_int=level if conf_type_name != "none" else None,
+        start_time=start,
         newdata=newdata,
     )
 

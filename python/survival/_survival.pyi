@@ -2238,6 +2238,7 @@ class CoxPHFit:
         ctype: int | None = None,
         se_fit: bool = True,
         censor: bool = True,
+        start_time: float | None = None,
     ) -> list[CoxSurvfitCurve]: ...
     def survfit_individual(
         self,
@@ -2251,6 +2252,7 @@ class CoxPHFit:
         ctype: int | None = None,
         se_fit: bool = True,
         censor: bool = True,
+        start_time: float | None = None,
     ) -> list[CoxSurvfitCurve]: ...
     @property
     def cluster(self) -> list[int] | None: ...
@@ -2507,6 +2509,7 @@ class CoxpenalFit:
         ctype: int | None = None,
         se_fit: bool = True,
         censor: bool = True,
+        start_time: float | None = None,
     ) -> list[CoxSurvfitCurve]: ...
     @property
     def assign2(self) -> list[list[int]]: ...

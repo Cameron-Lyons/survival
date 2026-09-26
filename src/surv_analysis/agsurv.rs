@@ -263,7 +263,9 @@ pub fn agsurv(
 }
 
 /// [`agsurv`] for the stratum made of `rows` (indices into `data`), which
-/// lets a stratified fit reuse its design matrix without copying.
+/// lets a stratified fit reuse its design matrix without copying.  A
+/// stratum without rows has an empty curve (`n = 0`, no times), as
+/// `survfit.coxph` keeps a stratum that `start.time` emptied.
 pub fn agsurv_rows(
     data: &AgsurvData<'_>,
     rows: &[usize],
@@ -271,9 +273,6 @@ pub fn agsurv_rows(
     vartype: CoxSurvType,
 ) -> SurvivalResult<AgsurvCurve> {
     data.validate()?;
-    if rows.is_empty() {
-        return Err(SurvivalError::invalid_input("agsurv: no observations"));
-    }
     if let Some(&row) = rows.iter().find(|&&row| row >= data.stop.len()) {
         return Err(SurvivalError::invalid_input(format!(
             "agsurv: row {row} is out of range"
@@ -1030,6 +1029,33 @@ mod tests {
         // dt at t=1 for row 0: hazard * 1 - xbar.
         let dt = curve.hazard[0] * 1.0 - curve.xbar[(0, 0)];
         assert_close(std_err[(0, 0)], (curve.varhaz[0] + dt * 0.5 * dt).sqrt());
+    }
+
+    #[test]
+    fn a_stratum_without_rows_has_an_empty_curve() {
+        let stop = [1.0, 2.0];
+        let status = [1, 0];
+        let x = arr2(&[[0.0], [1.0]]);
+        let weights = [1.0; 2];
+        let risk = [1.0; 2];
+        let data = AgsurvData {
+            start: None,
+            stop: &stop,
+            status: &status,
+            x: x.view(),
+            means: None,
+            weights: &weights,
+            risk: &risk,
+        };
+        let kp = CoxSurvType::KalbfleischPrentice;
+        let curve = agsurv_rows(&data, &[], kp, kp).unwrap();
+        assert_eq!(curve.n, 0);
+        assert!(curve.time.is_empty() && curve.cumhaz.is_empty());
+        assert_eq!(curve.xbar.dim(), (0, 1));
+        assert_eq!(curve.surv, Some(Vec::new()));
+        let expanded = expand_curve(&curve, kp, x.view(), &[1.0, 2.0], None).unwrap();
+        assert_eq!(expanded.surv.dim(), (0, 2));
+        assert!(agsurv_rows(&data, &[2], kp, kp).is_err());
     }
 
     #[test]

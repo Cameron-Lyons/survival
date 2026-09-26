@@ -1190,8 +1190,8 @@ impl CoxpenalFit {
         Ok(self.basehaz(centered)?)
     }
 
-    /// `survfit(fit, newdata, stype, ctype, se.fit, censor)`.
-    #[pyo3(name = "survfit", signature = (newdata = None, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true))]
+    /// `survfit(fit, newdata, stype, ctype, se.fit, censor, start.time)`.
+    #[pyo3(name = "survfit", signature = (newdata = None, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true, start_time = None))]
     #[allow(clippy::too_many_arguments)]
     fn survfit_py(
         &self,
@@ -1202,6 +1202,7 @@ impl CoxpenalFit {
         ctype: Option<u8>,
         se_fit: bool,
         censor: bool,
+        start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
         let newdata = match newdata {
             Some(x) => {
@@ -1229,6 +1230,7 @@ impl CoxpenalFit {
                 ctype,
                 se_fit,
                 censor,
+                start_time,
             },
         )?)
     }
