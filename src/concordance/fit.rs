@@ -34,6 +34,7 @@ use crate::internal::validation::{
 };
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// R's `timewt` argument: the weight given to each event time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,8 +106,8 @@ impl Default for ConcordanceOptions {
 }
 
 /// The five pair counts of one predictor (or one stratum).
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConcordanceCounts {
     #[pyo3(get)]
     pub concordant: f64,
@@ -138,8 +139,8 @@ impl ConcordanceCounts {
 
 /// R's `ranks` data frame: one row per event whose time weight is positive,
 /// in ascending time order.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConcordanceRanks {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -155,8 +156,8 @@ pub struct ConcordanceRanks {
 
 /// The `concordance` object.  Vectors indexed by predictor column have
 /// length one for a single predictor.
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConcordanceFit {
     /// Concordance per predictor column.
     #[pyo3(get)]
@@ -190,6 +191,8 @@ pub struct ConcordanceFit {
     #[pyo3(get)]
     pub ranks: Option<Vec<ConcordanceRanks>>,
 }
+
+crate::internal::pickle::picklable!(ConcordanceCounts, ConcordanceRanks, ConcordanceFit);
 
 struct SurvTimes {
     start: Option<Vec<f64>>,

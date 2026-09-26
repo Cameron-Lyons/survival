@@ -20,6 +20,7 @@ use crate::internal::validation::{
 };
 use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// The data of a `survfit(Surv(...) ~ strata, id, istate, weights, cluster)`
@@ -159,8 +160,8 @@ impl Default for SurvfitAJOptions {
 
 /// Unweighted counts of a multi-state fit, reported when case weights are
 /// present.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitAJCounts {
     #[pyo3(get)]
     pub n_risk: Vec<Vec<f64>>,
@@ -172,26 +173,35 @@ pub struct SurvfitAJCounts {
     pub n_enter: Option<Vec<Vec<f64>>>,
 }
 
+crate::internal::pickle::picklable!(SurvfitAJCounts);
+
 /// One curve's influence on `pstate`: `values[[cluster, time, state]]`,
 /// column-major like R's `influence.pstate` array.  The array is shared:
 /// clones of the fit and the NumPy array Python reads (a read-only view) do
 /// not copy it.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(frozen, from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", frozen, from_py_object)]
 pub struct SurvfitAJInfluence {
     /// R's row names `uclust`: the number (1, 2, ...) of each cluster in
     /// order of first appearance in the rows the fit uses.
     #[pyo3(get)]
     pub cluster: Vec<i64>,
+    #[serde(with = "crate::internal::pickle::memory_order")]
     pub values: Arc<Array3<f64>>,
     /// The influence on the estimated `p0`, `[[cluster, state]]`, when it
     /// was estimated and not every subject started in the same state.
+    #[serde(with = "crate::internal::pickle::memory_order::option")]
     pub i0: Option<Array2<f64>>,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
 impl SurvfitAJInfluence {
+    /// Pickle and copy support (see `internal::pickle`).
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     /// The `clusters x times x states` array as a read-only NumPy array.
     #[getter(values)]
     fn values_array<'py>(this: &Bound<'py, Self>) -> Bound<'py, numpy::PyArray3<f64>> {
@@ -217,8 +227,8 @@ impl SurvfitAJInfluence {
 /// `n_transition`, `cumhaz`, `std_chaz` are the observed transitions
 /// `hazard_from[k] -> hazard_to[k]` (0-based state indices, R's
 /// `"from:to"` column names use 1-based ones).
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitAJResult {
     #[pyo3(get)]
     pub n: Vec<usize>,
@@ -443,6 +453,12 @@ impl SurvfitAJResult {
 
 #[pymethods]
 impl SurvfitAJResult {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     #[pyo3(signature=(times=None, censored=false, extend=false))]
     fn summary(
         &self,

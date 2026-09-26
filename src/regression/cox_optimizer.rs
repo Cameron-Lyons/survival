@@ -28,6 +28,7 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{chinv2, cholesky2, chsolve2};
 use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use super::exact_ties::{ExactRiskAccumulator, exact_tied_moments};
 
@@ -37,13 +38,15 @@ use super::exact_ties::{ExactRiskAccumulator, exact_tied_moments};
 /// `Exact` behaves like `Breslow` (R's `coxmart2.c` for the exact fitters);
 /// the routines R refuses for an exact fit (score, Schoenfeld and detail
 /// output) reject it explicitly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum TieMethod {
     Breslow,
     Efron,
     Exact,
 }
+
+crate::internal::pickle::picklable!(TieMethod);
 
 impl TieMethod {
     /// Parses R's `ties` argument (case-insensitive); `None` is R's default,

@@ -846,6 +846,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
+ "serde",
 ]
 
 [[package]]
@@ -1227,6 +1228,7 @@ dependencies = [
 name = "survival"
 version = "2.0.0"
 dependencies = [
+ "bincode",
  "burn",
  "divan",
  "ndarray",

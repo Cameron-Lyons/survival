@@ -10884,6 +10884,7 @@ class YatesResult:
     @property
     def test(self) -> list[YatesContrast]: ...
 
+def _unpickle(cls: Any, state: Any) -> Any: ...
 def aareg_fit(
     stop: Sequence[float],
     status: Sequence[int],

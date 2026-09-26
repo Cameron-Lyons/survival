@@ -35,6 +35,7 @@ use crate::surv_analysis::agsurv::{
 };
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -163,7 +164,7 @@ impl Default for CoxphOptions {
 
 /// Rows grouped by stratum and sorted by (stratum, time, original index),
 /// the order every C kernel of the package expects.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SortedRows {
     /// Original row indices in sorted order.
     pub order: Vec<usize>,
@@ -229,8 +230,8 @@ impl SortedRows {
 /// A fitted Cox model (R's `coxph` object).  As in R, the coefficient of a
 /// redundant (aliased) covariate is `NaN` (R's `NA`) with a zero row and
 /// column in `var`; every computation on the fit treats it as 0.
-#[pyclass(skip_from_py_object)]
-#[derive(Debug, Clone)]
+#[pyclass(module = "survival._survival", skip_from_py_object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoxPHFit {
     /// Coefficients; `NaN` marks an aliased covariate.
     #[pyo3(get)]
@@ -312,6 +313,7 @@ pub struct CoxPHFit {
     pub(crate) sorted: SortedRows,
     /// Per-stratum baseline curves at `x - means`, `risk = exp(lp)`, for the
     /// hazard type matching the tie method.
+    #[serde(skip)]
     curves: OnceLock<Vec<AgsurvCurve>>,
 }
 
@@ -1610,6 +1612,12 @@ pub(crate) fn newdata_from_python(
 
 #[pymethods]
 impl CoxPHFit {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     #[getter]
     fn var(&self) -> Vec<Vec<f64>> {
         matrix_rows(&self.var)

@@ -17,6 +17,7 @@ use crate::internal::match_arg::match_arg;
 use crate::internal::rng::{RUniform, Rng};
 use crate::internal::validation::{validate_equal_len, validate_finite, validate_positive};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::f64::consts::{PI, SQRT_2};
 
 /// `sqrt(2 * pi)` as `#define SPI` in `survregc1.c`.
@@ -28,8 +29,8 @@ const KERNEL_CLAMP: f64 = 200.0;
 /// A distribution with its own `init`/`deviance`/`density`/`quantile`
 /// definition in `survreg.distributions` (`extreme`, `logistic`, `gaussian`
 /// and `t`); the remaining entries are transforms of one of these.
-#[pyclass(eq, eq_int, from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SurvregFamily {
     ExtremeValue,
     Logistic,
@@ -38,8 +39,8 @@ pub enum SurvregFamily {
 }
 
 /// The `trans`/`dtrans`/`itrans` triple of a derived distribution.
-#[pyclass(eq, eq_int, from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SurvregTransform {
     /// No transform: the response is modelled directly.
     Identity,
@@ -47,6 +48,8 @@ pub enum SurvregTransform {
     /// log-logistic, exponential, Rayleigh).
     Log,
 }
+
+crate::internal::pickle::picklable!(SurvregFamily, SurvregTransform);
 
 impl SurvregTransform {
     /// `trans(y)`.
@@ -99,8 +102,8 @@ pub struct SurvregDensity {
 }
 
 /// One entry of R's `survreg.distributions`.
-#[pyclass(from_py_object)]
-#[derive(Debug, Clone, PartialEq)]
+#[pyclass(module = "survival._survival", from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurvregDistribution {
     /// R's `name` component ("Weibull", "Log Normal", ...).
     #[pyo3(get)]
@@ -640,6 +643,12 @@ impl SurvregDistribution {
 
 #[pymethods]
 impl SurvregDistribution {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     /// `survreg.distributions[[name]]` with optional `parms` (see
     /// [`SurvregDistribution::from_name`]).
     #[new]
