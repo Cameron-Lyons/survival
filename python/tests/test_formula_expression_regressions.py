@@ -707,6 +707,10 @@ def test_literal_vectors_evaluate_literals_only():
     ]
     with pytest.raises(ValueError, match="unsupported formula vector expression: brk"):
         r_formula._literal_vector("c(0, brk)")
+    # 1_000 is Python's digit separator, not an R number
+    with pytest.raises(ValueError, match="unsupported formula vector expression: 1_000"):
+        r_formula._literal_vector("c(0, 1_000)")
+    assert r_formula._r_literal("1_000") is None
     with pytest.raises(ValueError, match="wrong sign in 'by' argument"):
         r_formula._literal_vector("seq(1, 0, 1)")
     with pytest.raises(ValueError, match="too many arguments"):

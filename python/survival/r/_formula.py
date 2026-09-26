@@ -350,6 +350,8 @@ def _parse_formula_literal(value: str) -> Any:
         lowered = value.lower()
 
     try:
+        if "_" in value:  # a Python digit separator, not R
+            raise ValueError(value)
         numeric = float(value)
     except ValueError as exc:
         raise ValueError(
@@ -821,7 +823,8 @@ def _r_literal(text: str) -> Any:
     if text == "Inf":
         return math.inf
     number = text.removesuffix("L")
-    if not number or not (number[0].isdigit() or number[0] == "."):
+    # float() also reads Python's digit separators (1_000), which R does not
+    if not number or not (number[0].isdigit() or number[0] == ".") or "_" in number:
         return None
     try:
         return float(number)
