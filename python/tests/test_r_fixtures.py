@@ -1413,7 +1413,7 @@ class SurvregHandler(TopicHandler):
                 path="loglik",
             )
         elif aspect == "iter":
-            assert_exact(_attr(fit, "iterations"), expected["iter"], path="iter")
+            assert_exact(_attr(fit, "iter"), expected["iter"], path="iter")
         elif aspect == "df":
             assert_exact(r.degrees_freedom(fit), expected["df"], path="df")
         elif aspect == "df_residual":

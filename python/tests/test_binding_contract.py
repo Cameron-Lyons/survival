@@ -149,7 +149,8 @@ def _restore_survival_modules():
     Several tests here purge ``survival`` from ``sys.modules`` to watch the package
     import itself lazily.  Re-importing the extension builds fresh type objects, so a
     later test holding a fit made against the old ones fails its ``isinstance`` checks
-    (``_is_survreg_fit`` and friends).  Restoring keeps that leakage inside this file.
+    (the generics' dispatch on result classes).  Restoring keeps that leakage inside this
+    file.
     """
 
     saved = {

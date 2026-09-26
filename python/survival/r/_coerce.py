@@ -13,11 +13,6 @@ from typing import Any
 
 from .. import _survival as _core
 
-_EXP_CLAMP_MIN = -745.0
-_EXP_CLAMP_MAX = 709.0
-_SURVFIT_TIME_EPSILON = 1e-9
-_VARIANCE_SCALE_FLOOR = 1e-12
-_COX_DFBETAS_SCALE_FLOOR = 1e-10
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
 _PACKAGE_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
@@ -391,38 +386,9 @@ def _label_levels(values: list[Any], name: str) -> tuple[Any, ...]:
     return tuple(labels)
 
 
-def _encode_groups(
-    group: Any,
-    n: int,
-    *,
-    levels: Sequence[Any] | None = None,
-) -> list[int]:
-    values = _materialize_labels(group, "group")
-    if len(values) != n:
-        raise ValueError("group must have the same length as the Surv response")
-    if levels is not None:
-        return _encode_labels_with_levels(values, levels, "group")
-    return _encode_labels(values, "group")
-
-
 def _encode_labels(values: list[Any], name: str) -> list[int]:
     labels = {value: idx for idx, value in enumerate(_label_levels(values, name))}
     return [labels[value] for value in values]
-
-
-def _encode_labels_with_levels(
-    values: list[Any],
-    levels: Sequence[Any],
-    name: str,
-) -> list[int]:
-    try:
-        labels = {value: idx for idx, value in enumerate(levels)}
-    except TypeError as exc:
-        raise TypeError(f"{name} contains unhashable labels") from exc
-    try:
-        return [labels[value] for value in values]
-    except KeyError as exc:
-        raise ValueError(f"{name} contains a value outside the supplied levels") from exc
 
 
 def _cox_tie_method(method: str | None, ties: str | None) -> str:
@@ -621,7 +587,6 @@ def _factor(values: Any, name: str = "values") -> tuple[list[int | None], list[s
 _strata_value_label = _as_character
 _strata_level_sort_key = _r_sort_key
 _mstate_event_label = _as_character
-_survdiff_r_level_sort_key = _r_sort_key
 
 
 def _normalize_positive_scale(value: Any) -> float:
@@ -670,6 +635,27 @@ def _normalize_conf_level(conf_level: Any, name: str = "conf_level") -> float:
     if not math.isfinite(value) or not 0.0 < value < 1.0:
         raise ValueError(f"{name} must be between 0 and 1")
     return value
+
+
+def _coefficient_selection(parm: Any, names: list[str]) -> list[int]:
+    """``confint``'s ``parm``: coefficient names or 1-based positions, as 0-based indices
+    (every coefficient when ``None``)."""
+
+    if parm is None:
+        return list(range(len(names)))
+    values = [parm] if isinstance(parm, str | int) else list(_materialize_1d(parm, "parm"))
+    indices: list[int] = []
+    for value in values:
+        if isinstance(value, str):
+            if value not in names:
+                raise ValueError(f"unknown coefficient name {value!r}")
+            indices.append(names.index(value))
+        else:
+            idx = _integer_scalar(value, "parm") - 1
+            if idx < 0 or idx >= len(names):
+                raise IndexError("parm index out of range")
+            indices.append(idx)
+    return indices
 
 
 def _pop_dotted_keyword(

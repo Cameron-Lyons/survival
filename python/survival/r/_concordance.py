@@ -392,13 +392,13 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
     if isinstance(fit, SurvregModelResult):
         if newdata is not None:
             return _newdata_fit_data(fit, newdata, fit.strata_columns, predict_survreg, cluster)
-        if fit.y_response is None:
+        if fit.y is None:
             raise ValueError("the survreg fit has no response: refit it with y=True")
         levels = fit.strata_levels
         return _FitData(
-            y=fit.y_response,
+            y=fit.y,
             x=list(fit.linear_predictors),
-            strata=[levels[int(code)] for code in fit.strata] if levels else None,
+            strata=[levels[int(code)] for code in fit.fit.strata] if levels else None,
             strata_levels=levels,
             weights=fit.weights if need_weights else None,
             cluster=cluster,

@@ -620,8 +620,31 @@ def _reshape(values: Sequence[float] | None, dims: Sequence[int]) -> Any:
     return None if values is None else _row_major([float(value) for value in values], dims)
 
 
+def _cell_frame(
+    tables: Mapping[str, Sequence[Any]], dimnames: Mapping[str, Sequence[str]]
+) -> dict[str, list[Any]]:
+    """R's ``data.frame = TRUE`` layout of the column-major ``tables``: one row per cell
+    with person-years (every cell without terms), a column per term then the tables
+    (pyears.R: ``expand.grid(dimnames)[pyears > 0, ]``)."""
+
+    pyears = tables["pyears"]
+    cells = (
+        [cell for cell, value in enumerate(pyears) if value > 0.0]
+        if dimnames
+        else list(range(len(pyears)))
+    )
+    frame: dict[str, list[Any]] = {}
+    stride = 1
+    for label, levels in dimnames.items():
+        frame[label] = [levels[(cell // stride) % len(levels)] for cell in cells]
+        stride *= len(levels)
+    for name, values in tables.items():
+        frame[name] = [values[cell] for cell in cells]
+    return frame
+
+
 def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[Any]]:
-    """R's ``data.frame = TRUE`` layout: one row per cell with person-years."""
+    """The ``data.frame = TRUE`` layout of the kernel's result."""
 
     # each getter copies the whole table out of the kernel result: read it once
     tables = {"pyears": result.pyears, "n": result.n}
@@ -629,19 +652,7 @@ def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[A
         tables["expected"] = result.expected
     if result.event is not None:
         tables["event"] = result.event
-    pyears = tables["pyears"]
-    cells = (
-        [cell for cell, value in enumerate(pyears) if value > 0.0]
-        if terms
-        else list(range(len(pyears)))
-    )
-    frame: dict[str, list[Any]] = {}
-    for depth, term in enumerate(terms):
-        stride = math.prod(len(other.levels) for other in terms[:depth])
-        frame[term.label] = [term.levels[(cell // stride) % len(term.levels)] for cell in cells]
-    for name, values in tables.items():
-        frame[name] = [values[cell] for cell in cells]
-    return frame
+    return _cell_frame(tables, {term.label: term.levels for term in terms})
 
 
 def _pyears_result(
@@ -825,20 +836,16 @@ def pyears(
 
 
 def _pyears_result_frame(result: PyearsResult) -> dict[str, list[Any]]:
-    """``as_data_frame`` of a ``pyears`` result (its ``data.frame = TRUE`` layout)."""
+    """``as_data_frame`` of a ``pyears`` result: its ``data.frame = TRUE`` layout."""
 
     if result.data is not None:
         return {name: list(values) for name, values in result.data.items()}
-    cells = list(range(max(1, math.prod(result.dim))))
-    labels = result.group
-    frame: dict[str, list[Any]] = {"group": [labels[cell] for cell in cells]}
-    flat = {
+    tables = {
         name: _flatten(getattr(result, name), result.dim)
         for name in ("pyears", "n", "expected", "event")
         if getattr(result, name) is not None
     }
-    frame.update(flat)
-    return frame
+    return _cell_frame(tables, result.dimnames)
 
 
 def _flatten(values: Any, dims: Sequence[int]) -> list[float]:
@@ -1005,18 +1012,6 @@ def summary_pyears(
         rr=_reshape(summary.rr, dims),
         ci_rr=limits(summary.ci_rr_lower, summary.ci_rr_upper),
     )
-
-
-def _finegray_frame(result: Any) -> dict[str, list[Any]]:
-    """``as_data_frame`` of a raw ``FineGrayOutput``."""
-
-    return {
-        "row": [int(value) for value in result.row],
-        "start": [float(value) for value in result.start],
-        "end": [float(value) for value in result.end],
-        "wt": [float(value) for value in result.wt],
-        "add": [int(value) for value in result.add],
-    }
 
 
 # ---------------------------------------------------------------------------

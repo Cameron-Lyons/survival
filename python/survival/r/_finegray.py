@@ -304,3 +304,15 @@ def finegray(
     if not columns[output_names[0]]:
         raise ValueError("selected endpoint has no events")
     return FineGrayFrame(columns, event=response.states[enum - 1])
+
+
+def _finegray_frame(result: Any) -> dict[str, list[Any]]:
+    """``as_data_frame`` of a raw ``FineGrayOutput``."""
+
+    return {
+        "row": [int(value) for value in result.row],
+        "start": [float(value) for value in result.start],
+        "end": [float(value) for value in result.end],
+        "wt": [float(value) for value in result.wt],
+        "add": [int(value) for value in result.add],
+    }

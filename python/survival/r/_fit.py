@@ -1,6 +1,6 @@
 """The shared model-frame path (R's ``model.frame`` + ``model.matrix`` for a survival
-formula) used by ``coxph``, ``cch``, ``aareg`` and ``concordance``, plus the survreg
-accessors ``_survreg``/``_models`` still share."""
+formula) used by ``coxph``, ``cch``, ``aareg`` and ``concordance``, and the ``newdata``
+and ``naresid`` helpers the model methods share."""
 
 from __future__ import annotations
 
@@ -35,7 +35,6 @@ from ._formula import (
     _data_rows,
     _design_rows_from_spec,
     _design_term_name,
-    _design_term_output_names,
     _fit_formula_design,
     _formula_design_columns,
     _formula_design_row_count,
@@ -53,10 +52,8 @@ from ._types import (
     NaAction,
     _CategoricalDesignTerm,
     _CovariateTerm,
-    _cox_beta,
     _DesignTerm,
     _FormulaDesign,
-    _FormulaFit,
     _FormulaTerms,
     _InteractionDesignTerm,
     _NumericDesignTerm,
@@ -552,51 +549,9 @@ def _rowsum_excluded(values: list[Any], codes: Sequence[int], excluded: Sequence
 
 
 # ---------------------------------------------------------------------------
-# survreg accessors (transitional: shared with _survreg/_models until survreg moves
-# to its typed wrapper)
+# accessors
 # ---------------------------------------------------------------------------
-
-
-def _unwrap_formula_fit(fit: Any) -> Any:
-    return fit.fit if isinstance(fit, _FormulaFit) else fit
 
 
 def _formula_design_for_fit(fit: Any) -> _FormulaDesign | None:
     return getattr(fit, "design", None)
-
-
-def _is_survreg_fit(fit: Any) -> bool:
-    return isinstance(_unwrap_formula_fit(fit), _core.SurvregFit)
-
-
-def _location_beta(fit: Any) -> list[float]:
-    """The location coefficients: R's ``fit$coefficients`` for survreg (NaN when singular),
-    the Cox coefficients otherwise."""
-
-    model = _unwrap_formula_fit(fit)
-    if isinstance(model, _core.SurvregFit):
-        return [float(value) for value in model.coefficients[: len(model.means)]]
-    return _cox_beta(fit)
-
-
-def _fallback_coef_names(width: int) -> list[str]:
-    return [f"x{idx + 1}" for idx in range(width)]
-
-
-def _formula_design_output_names(design: _FormulaDesign) -> list[str]:
-    names = [name for term in design.covariates for name in _design_term_output_names(term)]
-    if design.intercept:
-        names.insert(0, "(Intercept)")
-    return names
-
-
-def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
-    design = _formula_design_for_fit(fit)
-    if design is not None:
-        names = _formula_design_output_names(design)
-        if len(names) == width:
-            return names
-    coefficient_names = getattr(fit, "coefficient_names", None)
-    if coefficient_names is not None and len(coefficient_names) == width:
-        return list(coefficient_names)
-    return _fallback_coef_names(width)
