@@ -1465,13 +1465,12 @@ def _fit_single_design_term(
     data: Any,
     term: _CovariateTerm,
     n: int,
+    full_data: Any,
 ) -> _SingleDesignTerm:
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         columns, options = _penalty_arguments(term.call)
-        values = {column: _column(data, column) for column in columns}
-        if any(len(value) != n for value in values.values()):
-            raise ValueError("formula columns must have the same length as the Surv response")
-        levels = _mstate_categories(_column_source(data, columns[0]))
+        values = {column: _column(full_data, column) for column in columns}
+        levels = _mstate_categories(_column_source(full_data, columns[0]))
         return fit_penalty(term, columns, values, options, levels)
     values = _term_raw_values(data, term, n)
     if not term.categorical and (
@@ -1493,17 +1492,21 @@ def _fit_design_term(
     data: Any,
     term: _CovariateSpec,
     n: int,
+    full_data: Any,
     factor_order: Mapping[_CovariateTerm, int] | None = None,
 ) -> _DesignTerm:
     if isinstance(term, _InteractionTerm):
         factors = term.factors
         if factor_order is not None:
             factors = tuple(sorted(factors, key=factor_order.__getitem__))
-        fitted = tuple(_fit_single_design_term(data, factor, n) for factor in factors)
-        if any(isinstance(factor, _PenaltyDesignTerm) for factor in fitted):
+        fitted = tuple(_fit_single_design_term(data, factor, n, full_data) for factor in factors)
+        if any(
+            isinstance(factor, _PenaltyDesignTerm) and factor.penalty is not None
+            for factor in fitted
+        ):
             raise ValueError("penalty terms cannot appear in interactions")
         return _InteractionDesignTerm(fitted)
-    return _fit_single_design_term(data, term, n)
+    return _fit_single_design_term(data, term, n, full_data)
 
 
 def _formula_factor_order(terms: Sequence[_CovariateSpec]) -> dict[_CovariateTerm, int]:
@@ -1563,7 +1566,16 @@ def _fit_formula_design(
     n: int,
     *,
     include_intercept: bool = False,
+    full_data: Any | None = None,
 ) -> _FormulaDesign:
+    """The design of *terms* on the *n* rows of *data*.
+
+    *full_data* is the data before ``subset`` and ``na.action`` (by default *data*): R's
+    ``model.frame`` evaluates the ``pspline``, ``ridge`` and ``frailty`` terms on it.
+    """
+
+    if full_data is None:
+        full_data = data
     strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
     factor_order = _formula_factor_order(terms.covariates)
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
@@ -1584,7 +1596,7 @@ def _fit_formula_design(
     promoted_no_intercept_factor = contrast_intercept
     design_terms: list[_DesignTerm] = []
     for term in ordered_terms:
-        fitted_term = _fit_design_term(data, term, n, factor_order)
+        fitted_term = _fit_design_term(data, term, n, full_data, factor_order)
         raw_factors = frozenset(_covariate_factors(term))
         categorical_factors = _categorical_design_factors(fitted_term)
         full_factors = {
@@ -1622,7 +1634,10 @@ def _single_design_columns(
     time_transform_values: Mapping[_CovariateTerm, Sequence[float]] | None = None,
 ) -> list[list[float]]:
     if isinstance(spec, _PenaltyDesignTerm):
-        return penalty_columns(spec, {column: _column(data, column) for column in spec.columns})
+        values = {column: _column(data, column) for column in spec.columns}
+        if any(len(value) != n for value in values.values()):
+            raise ValueError("formula columns must have the same length as the Surv response")
+        return penalty_columns(spec, values)
     if (
         isinstance(spec, _NumericDesignTerm)
         and spec.term.transform == "tt"

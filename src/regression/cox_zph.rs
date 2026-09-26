@@ -955,7 +955,7 @@ mod tests {
             None,
             vec![ModelTerm {
                 columns: vec![0, 1],
-                penalty: Some(PenaltyTerm::ridge(Some(1.0), None, 1e-5, false).unwrap()),
+                penalty: Some(PenaltyTerm::ridge(Some(1.0), None, 1e-5, false, None).unwrap()),
             }],
         )
         .unwrap();
@@ -1011,9 +1011,10 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .unwrap();
-        let ridge = PenaltyTerm::ridge(Some(1.0), None, 1e-5, false).unwrap();
+        let ridge = PenaltyTerm::ridge(Some(1.0), None, 1e-5, false, None).unwrap();
         let x1 = usize::from(position == 0);
         let terms = (0..3)
             .map(|col| ModelTerm {

@@ -78,6 +78,7 @@ from ._types import (
     _FormulaFit,
     _ModelCovariateTerm,
     _ModelStrataTerm,
+    _PenaltyDesignTerm,
 )
 
 SurvregDistribution = _core.SurvregDistribution
@@ -440,6 +441,7 @@ def _formula_frame(
     keep_model: bool,
 ) -> _SurvregFrame:
     spec = _formula_response_spec(formula)
+    full_data = data
     weights = _column_or_values(data, weights, "weights")
     offset = _column_or_values(data, offset, "offset")
     cluster = _column_or_values(data, cluster, "cluster")
@@ -460,7 +462,8 @@ def _formula_frame(
     response, terms = _parse_formula(formula, data)
     n = len(response)
     design = _r_factor_design(
-        data, _fit_formula_design(data, spec, terms, n, include_intercept=True)
+        data,
+        _fit_formula_design(data, spec, terms, n, include_intercept=True, full_data=full_data),
     )
     if terms.offsets:
         if offset is not None:
@@ -510,6 +513,20 @@ def _formula_frame(
         if keep_model
         else None,
     )
+
+
+def _refuse_penalty_terms(design: _FormulaDesign | None) -> None:
+    """survreg.R stops on frailty terms and fits ridge()/pspline() through survpenal.fit."""
+
+    kinds = [
+        term.penalty.kind
+        for term in (() if design is None else design.covariates)
+        if isinstance(term, _PenaltyDesignTerm) and term.penalty is not None
+    ]
+    if "frailty" in kinds:
+        raise ValueError("survreg does not support frailty terms")
+    if kinds:
+        raise NotImplementedError("penalized survreg (survpenal.fit) is not implemented")
 
 
 def _matrix_frame(
@@ -615,6 +632,8 @@ def survreg(
         raise ValueError("Invalid scale value")
     if scale_value > 0.0 and frame.strata is not None and len(frame.strata_levels) > 1:
         raise ValueError("The scale argument is not valid with multiple strata")
+
+    _refuse_penalty_terms(frame.design)
 
     time, status, time2 = _survreg_response_arrays(response)
     cluster_codes = (  # as.numeric(as.factor(cluster)); unused when robust = FALSE

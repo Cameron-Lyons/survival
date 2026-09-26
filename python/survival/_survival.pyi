@@ -2323,6 +2323,7 @@ class CoxPenalty:
         tdf: float = 5.0,
         caic: bool = False,
         init: Sequence[float] | None = None,
+        n: int | None = None,
     ) -> CoxPenalty: ...
     @staticmethod
     def pspline(
@@ -2339,9 +2340,12 @@ class CoxPenalty:
         df: float | None = None,
         eps: float = 0.1,
         scale: bool = True,
+        scale_values: Sequence[float] | None = None,
     ) -> CoxPenalty: ...
     @property
     def diag(self) -> bool: ...
+    @property
+    def distribution(self) -> str | None: ...
     @property
     def kind(self) -> str: ...
     @property

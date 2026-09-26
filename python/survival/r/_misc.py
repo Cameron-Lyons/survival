@@ -56,6 +56,7 @@ from ._formula import (
     _term_values,
 )
 from ._models import coef, model_formula, model_frame, vcov
+from ._penalties import _combine_basis, _pspline_combine
 from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
@@ -374,25 +375,6 @@ def _pspline_method(
     return df_value, None, nterm_value, 0.1 if eps_value is None else eps_value, "df"
 
 
-def _pspline_combine(matrix: list[list[float]], combine: Any, intercept: bool) -> list[int]:
-    """R's ``combine`` argument: add up the basis columns with equal ``combine`` codes."""
-
-    codes = _float_vector(combine, "combine")
-    if any(c != math.floor(c) or c < 0 for c in codes) or any(
-        b < a for a, b in zip(codes, codes[1:], strict=False)
-    ):
-        raise ValueError("combine must be an increasing vector of positive integers")
-    ctemp = [int(c) for c in codes] if intercept else [0, *(int(c) for c in codes)]
-    if len(ctemp) != len(matrix[0]):
-        raise ValueError("wrong length for combine")
-    groups = sorted(set(ctemp))
-    for row_idx, row in enumerate(matrix):
-        matrix[row_idx] = [
-            sum(v for v, c in zip(row, ctemp, strict=True) if c == g) for g in groups
-        ]
-    return [int(c) for c in codes]
-
-
 def _second_difference_penalty(nvar: int) -> list[list[float]]:
     """R's ``t(D) %*% D`` for the second-difference matrix ``D`` of ``nvar`` coefficients."""
 
@@ -449,7 +431,11 @@ def pspline(
     basis = _core.pspline_basis(x_values, nterm_value, _integer_scalar(degree, "degree"), boundary)
 
     matrix = [list(row) for row in basis.basis]
-    combine_codes = None if combine is None else _pspline_combine(matrix, combine, intercept_value)
+    combine_codes = None
+    if combine is not None:
+        groups = _pspline_combine(combine, len(matrix[0]), intercept_value)
+        matrix = _combine_basis(matrix, groups)
+        combine_codes = list(groups if intercept_value else groups[1:])
     nvar = len(matrix[0])
     dmat = _second_difference_penalty(nvar)
     if not intercept_value:
