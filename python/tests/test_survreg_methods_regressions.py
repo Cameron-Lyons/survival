@@ -242,6 +242,22 @@ def test_vcov_keeps_every_stratum_scale_where_r_recycles_the_alias_pattern(lung_
     ]
 
 
+def test_vcov_keeps_the_stratum_scale_r_drops_when_one_scale_row_is_left(lung):
+    # R's recycled pattern (TRUE, FALSE, TRUE) keeps Log(scale[sex=1]), drops
+    # Log(scale[sex=2]) and, one scale row being left, labels it "Log(scale)" without an
+    # error; the port keeps both, R's fit$var[-2, -2]
+    data = dict(lung, one=[1.0] * len(lung["age"]))
+    fit = r.survreg("Surv(time, status) ~ one + age + strata(sex)", data=data)
+    assert math.isnan(r.coef(fit)[1])
+    assert_matrix(r.vcov(fit, complete=False), STRATA_VAR)
+    assert _survreg.survreg_vcov_names(fit, False) == [
+        "(Intercept)",
+        "age",
+        "Log(scale[sex=1])",
+        "Log(scale[sex=2])",
+    ]
+
+
 def test_vcov_of_a_fixed_scale_fit_has_no_scale_rows(lung_age2):
     # R: vcov(survreg(Surv(time, status) ~ age + age2 + sex, lung, dist = "exponential"),
     #         complete = FALSE)
@@ -428,6 +444,15 @@ def test_summary_correlation_leaves_out_an_aliased_coefficient(aliased):
     )
 
 
+def test_summary_correlation_of_a_single_coefficient(lung):
+    # R's diag(1/stds) of a single standard error is an identity matrix of size 1/se, so
+    # summary(survreg(Surv(time, status) ~ 1, lung, dist = "exponential"),
+    # correlation = TRUE) stops with "non-conformable arguments" (and with 1 <= 1/se < 2
+    # returns the variance); the port returns R's cov2cor(fit$var)
+    fit = r.survreg("Surv(time, status) ~ 1", data=lung, dist="exponential")
+    assert_matrix(r.model_summary(fit, correlation=True)["correlation"], [[1.0]])
+
+
 # --- anova -----------------------------------------------------------------------------------
 
 
@@ -462,10 +487,11 @@ def test_anova_p_values_are_pchisq(lung):
 
 def test_chisq_p_values_follow_stat_anova():
     # R: stat.anova's pchisq(dev * sign(df), abs(df), lower.tail = FALSE), NA at df 0
-    # and at a negative statistic; pchisq(0, 1, lower.tail = FALSE) is 1
+    # and at a negative statistic; pchisq(0, 1, lower.tail = FALSE) is 1, and a
+    # fractional df is kept: pchisq(3, 1.5) and pchisq(4.5, 2.5)
     assert _survreg._chisq_p_values(
-        [math.nan, 3.0, 2.0, -1.0, 5.0, -5.0, 0.0],
-        [math.nan, 1.0, 0.0, 1.0, -2.0, -2.0, 1.0],
+        [math.nan, 3.0, 2.0, -1.0, 5.0, -5.0, 0.0, 3.0, -4.5],
+        [math.nan, 1.0, 0.0, 1.0, -2.0, -2.0, 1.0, 1.5, -2.5],
     ) == approx(
         [
             math.nan,
@@ -475,6 +501,8 @@ def test_chisq_p_values_follow_stat_anova():
             math.nan,
             0.0820849986238988,
             1.0,
+            0.14759955436475097,
+            0.15499954779476385,
         ],
         rel=1e-14,
     )
