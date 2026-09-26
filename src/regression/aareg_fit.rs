@@ -1231,41 +1231,6 @@ pub fn aareg_fit_py(
 mod tests {
     use super::*;
 
-    /// [`aareg_fit`] with the arguments of the Python binding.
-    #[allow(clippy::too_many_arguments)]
-    fn fit(
-        stop: Vec<f64>,
-        status: Vec<i32>,
-        covariates: Vec<Vec<f64>>,
-        start: Option<Vec<f64>>,
-        weights: Option<Vec<f64>>,
-        cluster: Option<Vec<i32>>,
-        qrtol: f64,
-        nmin: Option<usize>,
-        dfbeta: bool,
-        taper: Option<Vec<f64>>,
-        test: &str,
-        test_cluster: Option<Vec<i32>>,
-    ) -> SurvivalResult<AaregFitResult> {
-        let data = AaregData {
-            stop,
-            status,
-            covariates,
-            start,
-            weights,
-            cluster,
-            test_cluster,
-        };
-        let options = AaregOptions {
-            qrtol,
-            nmin,
-            dfbeta,
-            taper: taper.unwrap_or_else(|| vec![1.0]),
-            test: AaregTest::parse(test)?,
-        };
-        aareg_fit(&data, &options)
-    }
-
     fn assert_close(actual: f64, expected: f64) {
         assert!(
             (actual - expected).abs() < 1e-11,
@@ -1275,26 +1240,27 @@ mod tests {
 
     #[test]
     fn right_censored_fit_matches_reference_values() {
-        let result = fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-            vec![1, 1, 1, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            None,
-            None,
-            None,
-            1e-7,
-            Some(1),
-            false,
-            None,
-            "aalen",
-            None,
+        let result = aareg_fit(
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+                status: vec![1, 1, 1, 1, 0, 1],
+                covariates: vec![
+                    vec![0.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![2.0, 1.0],
+                    vec![1.0, 2.0],
+                    vec![3.0, -1.0],
+                    vec![-1.0, 0.0],
+                ],
+                start: None,
+                weights: None,
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1320,26 +1286,27 @@ mod tests {
 
     #[test]
     fn counting_weighted_fit_matches_reference_values() {
-        let result = fit(
-            vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
-            vec![1, 1, 0, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
-            None,
-            1e-7,
-            Some(1),
-            false,
-            None,
-            "aalen",
-            None,
+        let result = aareg_fit(
+            &AaregData {
+                stop: vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
+                status: vec![1, 1, 0, 1, 0, 1],
+                covariates: vec![
+                    vec![0.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![2.0, 1.0],
+                    vec![1.0, 2.0],
+                    vec![3.0, -1.0],
+                    vec![-1.0, 0.0],
+                ],
+                start: Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1360,26 +1327,28 @@ mod tests {
 
     #[test]
     fn clustered_influence_matches_reference_values() {
-        let result = fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-            vec![1, 1, 1, 1, 0, 1],
-            vec![
-                vec![0.0],
-                vec![1.0],
-                vec![2.0],
-                vec![1.0],
-                vec![3.0],
-                vec![-1.0],
-            ],
-            Some(vec![0.0; 6]),
-            None,
-            Some(vec![0, 0, 1, 1, 2, 2]),
-            1e-7,
-            Some(1),
-            true,
-            None,
-            "aalen",
-            None,
+        let result = aareg_fit(
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+                status: vec![1, 1, 1, 1, 0, 1],
+                covariates: vec![
+                    vec![0.0],
+                    vec![1.0],
+                    vec![2.0],
+                    vec![1.0],
+                    vec![3.0],
+                    vec![-1.0],
+                ],
+                start: Some(vec![0.0; 6]),
+                weights: None,
+                cluster: Some(vec![0, 0, 1, 1, 2, 2]),
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                dfbeta: true,
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1431,28 +1400,30 @@ mod tests {
 
     #[test]
     fn tapered_fit_matches_reference_values() {
-        let result = fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0],
-            vec![1, 1, 1, 1, 0, 1, 1, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-                vec![0.25, 0.5],
-                vec![1.5, -0.5],
-            ],
-            None,
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0, 1.25, 0.75]),
-            None,
-            1e-7,
-            Some(1),
-            false,
-            Some(vec![1.0, 2.0, 4.0]),
-            "aalen",
-            None,
+        let result = aareg_fit(
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0],
+                status: vec![1, 1, 1, 1, 0, 1, 1, 1],
+                covariates: vec![
+                    vec![0.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![2.0, 1.0],
+                    vec![1.0, 2.0],
+                    vec![3.0, -1.0],
+                    vec![-1.0, 0.0],
+                    vec![0.25, 0.5],
+                    vec![1.5, -0.5],
+                ],
+                start: None,
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0, 1.25, 0.75]),
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                taper: vec![1.0, 2.0, 4.0],
+                ..AaregOptions::default()
+            },
         )
         .expect("tapered fit should succeed");
 
@@ -1475,26 +1446,28 @@ mod tests {
 
     #[test]
     fn variance_test_matches_reference_values() {
-        let result = fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-            vec![1, 1, 1, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            None,
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
-            None,
-            1e-7,
-            Some(1),
-            false,
-            None,
-            "variance",
-            None,
+        let result = aareg_fit(
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+                status: vec![1, 1, 1, 1, 0, 1],
+                covariates: vec![
+                    vec![0.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![2.0, 1.0],
+                    vec![1.0, 2.0],
+                    vec![3.0, -1.0],
+                    vec![-1.0, 0.0],
+                ],
+                start: None,
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                test: AaregTest::Variance,
+                ..AaregOptions::default()
+            },
         )
         .expect("variance test should succeed");
 
@@ -1515,26 +1488,29 @@ mod tests {
 
     #[test]
     fn distinct_test_clusters_match_counting_process_reference_order() {
-        let result = fit(
-            vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
-            vec![1, 1, 0, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
-            Some(vec![0, 0, 1, 1, 2, 2]),
-            1e-7,
-            Some(1),
-            true,
-            Some(vec![1.0, 2.0]),
-            "aalen",
-            Some(vec![0, 1, 1, 2, 2, 0]),
+        let result = aareg_fit(
+            &AaregData {
+                stop: vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
+                status: vec![1, 1, 0, 1, 0, 1],
+                covariates: vec![
+                    vec![0.0, 1.0],
+                    vec![1.0, 0.0],
+                    vec![2.0, 1.0],
+                    vec![1.0, 2.0],
+                    vec![3.0, -1.0],
+                    vec![-1.0, 0.0],
+                ],
+                start: Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
+                cluster: Some(vec![0, 0, 1, 1, 2, 2]),
+                test_cluster: Some(vec![0, 1, 1, 2, 2, 0]),
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                dfbeta: true,
+                taper: vec![1.0, 2.0],
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1645,19 +1621,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid_survival_inputs() {
-        let error = fit(
-            vec![1.0],
-            vec![2],
-            vec![vec![0.0]],
-            None,
-            None,
-            None,
-            1e-7,
-            None,
-            false,
-            None,
-            "aalen",
-            None,
+        let error = aareg_fit(
+            &AaregData {
+                stop: vec![1.0],
+                status: vec![2],
+                covariates: vec![vec![0.0]],
+                start: None,
+                weights: None,
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                ..AaregOptions::default()
+            },
         )
         .expect_err("non-binary status should fail");
         assert!(
