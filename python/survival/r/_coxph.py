@@ -40,6 +40,7 @@ from ._coerce import (
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
     _subset_data,
+    _warn_outside_package,
 )
 from ._data_prep import aeqSurv
 from ._fit import (
@@ -711,6 +712,17 @@ def _control_number(value: Any, message: str, *, zero_ok: bool = False) -> float
     return numeric
 
 
+def _control_integer(value: Any, message: str, *, zero_ok: bool = False) -> int:
+    """A checked coxph.control option through ``as.integer()``: truncated, and refused
+    with the option's message where as.integer gives ``NA`` (outside R's integer
+    range)."""
+
+    numeric = _control_number(value, message, zero_ok=zero_ok)
+    if numeric >= 2.0**31:
+        raise ValueError(message)
+    return int(numeric)
+
+
 def coxph_control(
     eps: Any = 1e-9,
     toler_chol: Any = _TOLER_CHOL,
@@ -735,13 +747,11 @@ def coxph_control(
     outer_max = _pop_dotted_keyword(kwargs, "outer.max", "outer_max", outer_max, 10)
     if kwargs:
         raise TypeError(f"unused argument(s): {', '.join(sorted(kwargs))}")
-    iterations = _control_number(iter_max, "Invalid value for iterations", zero_ok=True)
+    iterations = _control_integer(iter_max, "Invalid value for iterations", zero_ok=True)
     eps_value = _control_number(eps, "Invalid convergence criteria")
     toler_value = _control_number(toler_chol, "invalid value for toler.chol")
     if eps_value <= toler_value:
-        warnings.warn(
-            "For numerical accuracy, tolerance should be < eps", RuntimeWarning, stacklevel=2
-        )
+        _warn_outside_package("For numerical accuracy, tolerance should be < eps", RuntimeWarning)
     inf_value = (
         math.sqrt(eps_value)
         if toler_inf is None
@@ -749,14 +759,13 @@ def coxph_control(
     )
     if not _is_bool_like(timefix):
         raise TypeError("timefix must be TRUE or FALSE")
-    outer = _control_number(outer_max, "invalid value for outer.max")
+    outer = _control_integer(outer_max, "invalid value for outer.max")
     return {
         "eps": eps_value,
         "toler.chol": toler_value,
-        # as.integer() truncates
-        "iter.max": int(iterations),
+        "iter.max": iterations,
         "toler.inf": inf_value,
-        "outer.max": int(outer),
+        "outer.max": outer,
         "timefix": bool(timefix),
         "survcheckallow": survcheckallow,
     }

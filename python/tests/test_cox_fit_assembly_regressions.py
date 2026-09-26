@@ -338,6 +338,13 @@ def test_coxph_control_defaults_and_checks(separated):
         r.coxph_control(toler_inf=0)
     with pytest.raises(ValueError, match="invalid value for outer.max"):
         r.coxph_control(outer_max=0)
+    # where as.integer() gives NA
+    with pytest.raises(ValueError, match="Invalid value for iterations"):
+        r.coxph_control(iter_max=math.inf)
+    with pytest.raises(ValueError, match="Invalid value for iterations"):
+        r.coxph_control(iter_max=2.0**31)
+    with pytest.raises(ValueError, match="invalid value for outer.max"):
+        r.coxph_control(outer_max=math.inf)
     with pytest.raises(TypeError, match="timefix must be TRUE or FALSE"):
         r.coxph_control(timefix="yes")
     with pytest.raises(TypeError, match="unused argument"):
@@ -416,10 +423,14 @@ def test_eps_below_toler_chol_warns(separated):
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         fit = r.coxph("Surv(t, s) ~ x + z", separated, control={"eps": 1e-12, "toler.chol": 1e-10})
+        r.coxph_control(eps=1e-12, toler_chol=1e-10)
     assert _messages(record) == [
         "For numerical accuracy, tolerance should be < eps",
         "Ran out of iterations and did not converge",
+        "For numerical accuracy, tolerance should be < eps",
     ]
+    # each warning points at the caller, whether coxph() or the user called coxph_control
+    assert {item.filename for item in record} == {__file__}
     assert fit.iter == 21
 
 

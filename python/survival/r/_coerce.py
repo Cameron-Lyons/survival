@@ -220,8 +220,9 @@ def _keep_rows_after_na_action(
     return [idx for idx in range(n) if idx not in missing]
 
 
-def _warn_outside_package(message: str) -> None:
-    """``warnings.warn(message)`` reported at the first caller outside this package.
+def _warn_outside_package(message: str, category: type[Warning] = UserWarning) -> None:
+    """``warnings.warn(message, category)`` reported at the first caller outside this
+    package.
 
     Shared helpers run at a different depth under each public function, so no fixed
     ``stacklevel`` fits them all (``skip_file_prefixes`` needs Python 3.12).
@@ -232,7 +233,7 @@ def _warn_outside_package(message: str) -> None:
     while frame.f_back is not None and frame.f_code.co_filename.startswith(_PACKAGE_PREFIX):
         frame = frame.f_back
         level += 1
-    warnings.warn(message, stacklevel=level)
+    warnings.warn(message, category, stacklevel=level)
 
 
 def _is_bool_like(value: Any) -> bool:
