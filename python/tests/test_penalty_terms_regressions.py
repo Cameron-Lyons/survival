@@ -322,6 +322,16 @@ def test_pspline_without_penalty_can_be_in_an_interaction(lung):
     )
 
 
+@pytest.mark.parametrize(
+    "rhs", ["ridge(age, theta = 1):sex", "sex:pspline(age, df = 2)", "sex + frailty(inst):sex"]
+)
+def test_penalized_terms_are_refused_in_interactions(lung, rhs):
+    # coxph.R's message; R 3.8-12 stops before it with "missing value where TRUE/FALSE
+    # needed", because the penalty column's name matches no term label
+    with pytest.raises(ValueError, match="^Penalty terms cannot be in an interaction$"):
+        _coxph(f"Surv(time, status) ~ {rhs}", lung, na_action="na.omit")
+
+
 # --- survreg ---------------------------------------------------------------------------
 
 
@@ -347,6 +357,8 @@ def test_survreg_fits_an_unpenalized_pspline_with_the_knots_before_subset(lung):
         ("age + frailty(inst, df = 2)", ValueError, "survreg does not support frailty terms"),
         ("age + frailty.gaussian(inst)", ValueError, "survreg does not support frailty terms"),
         ("ridge(age, theta = 1) + frailty(inst)", ValueError, "does not support frailty"),
+        # R reports that survreg does not support frailty terms
+        ("sex + frailty(inst):sex", ValueError, "Penalty terms cannot be in an interaction"),
     ],
 )
 def test_survreg_refuses_penalized_terms(lung, rhs, error, message):
