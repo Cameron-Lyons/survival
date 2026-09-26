@@ -623,6 +623,13 @@ def test_penalty_options_are_r_values(rhs, coefficients):
     assert fit.coefficients[: len(coefficients)] == approx(coefficients, rel=1e-9)
 
 
+def test_a_penalty_vector_written_with_c_stays_a_vector():
+    # coxph(Surv(time, status) ~ age + frailty(inst, init = c(0.5)), lung) fails in R's
+    # frailty.controlaic (missing value where TRUE/FALSE needed)
+    with pytest.raises(ValueError, match="frailty init must hold two starting values"):
+        r.coxph("Surv(time, status) ~ age + frailty(inst, init = c(0.5))", datasets.load_lung())
+
+
 def test_a_comparison_in_surv_is_not_a_variable_name():
     # survSplit(Surv(time, status == 2) ~ ., data.frame(time = c(5, 15), status = c(1, 2),
     #           x = 1:2), cut = 10): the event column is "event", not "status == 2"

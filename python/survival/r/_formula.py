@@ -1595,10 +1595,14 @@ def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
         try:
             options[name] = _parse_formula_literal(value)
         except ValueError:
-            # R has no scalars: a computed value of length one (df = 2*2) is the scalar
-            # the penalty takes
+            # R has no scalars: a computed number of length one (df = 2*2) or a string
+            # (method = c("aic")) is the scalar the penalty takes, while numbers written
+            # with c() stay a vector (init = c(0.5))
             values = _literal_vector(value)
-            options[name] = values[0] if len(values) == 1 else values
+            scalar = len(values) == 1 and (
+                isinstance(values[0], str) or not value.strip().startswith("c(")
+            )
+            options[name] = values[0] if scalar else values
     if not columns:
         raise ValueError("penalty terms require a data column")
     return columns, options
