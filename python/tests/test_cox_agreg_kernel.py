@@ -109,7 +109,7 @@ def test_heart_offset_is_absorbed_by_recentring():
         [age, float(transplant)]
         for age, transplant in zip(heart["age"], heart["transplant"], strict=True)
     ]
-    n = heart["_nrow"]
+    n = len(heart["stop"])
     fits = {
         offset: core.coxph_fit(
             heart["stop"],
@@ -206,7 +206,7 @@ def test_iterations_reported_when_they_run_out(method, counting, expected_iter, 
     lung = datasets.load_lung()
     rows = [
         i
-        for i in range(lung["_nrow"])
+        for i in range(len(lung["time"]))
         if all(lung[name][i] is not None for name in ("age", "sex", "ph.ecog"))
     ]
     fit = core.coxph_fit(

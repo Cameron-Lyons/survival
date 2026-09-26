@@ -18,10 +18,9 @@ datasets = survival.datasets
 def _complete(data, *columns):
     """The rows of a bundled dataset with no missing value in ``columns``."""
 
-    keep = [i for i in range(data["_nrow"]) if all(data[name][i] is not None for name in columns)]
-    return {
-        name: [values[i] for i in keep] for name, values in data.items() if isinstance(values, list)
-    }
+    n = len(next(iter(data.values())))
+    keep = [i for i in range(n) if all(data[name][i] is not None for name in columns)]
+    return {name: [values[i] for i in keep] for name, values in data.items()}
 
 
 def _column(zph, key):
