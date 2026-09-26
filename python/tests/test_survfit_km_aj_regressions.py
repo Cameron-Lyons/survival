@@ -232,6 +232,23 @@ def test_km_influence_rows_are_named_by_cluster_id_or_row_number():
     assert _survfit_strata_curves(by_group)["2"].influence_surv[0].cluster == [102, 204, 309]
 
 
+def test_km_influence_rows_share_one_clname_per_fit():
+    # R: f <- survfit(Surv(time, status) ~ g, d, cluster = cl, influence = TRUE);
+    # rownames(f$influence.surv[[2]]) and those of survfit0(f)$influence.surv[[2]] are q m z
+    data = {**_labelled(), "cl": ["z", "q", "q", "m", "m", "z"]}
+    fit = r.survfit("Surv(time, status) ~ g", data, cluster="cl", influence=True)
+    assert [curve.cluster for curve in fit.influence_chaz] == [["z", "q", "m"], ["q", "m", "z"]]
+    assert isinstance(fit.influence_surv[1].influence, survival.surv_analysis.SurvfitInfluence)
+    # survfit0 and the split curves keep the engine's codes and reuse the fit's levels
+    clname = fit.influence_surv[0].clname
+    derived = [r.survfit0(fit), *_survfit_strata_curves(fit).values()]
+    for curve in derived:
+        matrices = [*curve.influence_surv, *curve.influence_chaz]
+        assert all(matrix.clname is clname for matrix in matrices)
+    assert derived[0].influence_surv[1].cluster == ["q", "m", "z"]
+    assert derived[2].influence_surv[0].cluster == ["q", "m", "z"]
+
+
 def test_aj_influence_rows_are_numbered_as_in_r():
     # dimnames(fit$influence.pstate)[[1]]: survfitAJ names the rows by the cluster numbers
     data = _labelled()

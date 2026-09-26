@@ -117,6 +117,15 @@ class _SurvfitData:
     def cluster_codes(self) -> list[int] | None:
         return None if self.cluster is None else _encode_labels(self.cluster, "cluster")
 
+    def clname(self) -> tuple[Any, ...] | None:
+        """``survfitKM``'s ``clname``: the cluster (else id) levels the engine's codes index.
+
+        ``None`` when there is neither: the engine then labels the rows ``1..n`` itself.
+        """
+
+        labels = self.id if self.cluster is None else self.cluster
+        return None if labels is None else _label_levels(labels, "cluster")
+
     def istate_labels(self) -> tuple[list[str] | None, list[str] | None]:
         """The starting states as strings and, for a factor, its level order."""
 
@@ -677,7 +686,8 @@ def _survfitKM(
     )
     call = SurvfitCall(frame.terms, stype, ctype, timefix, start, id=id_name)
     labels = _curve_labels(engine, frame.x_levels)
-    return _km_result(engine, labels, call, frame.model, se_fit)
+    clname = frame.clname() if influence > 0 else None
+    return _km_result(engine, labels, call, frame.model, se_fit, clname)
 
 
 def _curve_labels(
@@ -703,24 +713,14 @@ def _strata_table(
     return {label: int(size) for label, size in zip(labels, engine.strata, strict=True) if size > 0}
 
 
-def _influence_with_labels(
-    influence: list[_core.SurvfitInfluence] | None, model: dict[str, Any] | None
+def _named_influence(
+    influence: list[_core.SurvfitInfluence] | None, clname: Sequence[Any] | None
 ) -> list[SurvfitInfluenceMatrix] | None:
-    """The engine's influence matrices with R's row names ``clname``.
-
-    The engine labels a cluster by the code it was given (the cluster, else the id, as
-    ``factor(x, unique(x))`` codes) or by the observation number when there is neither.
-    """
+    """The engine's influence matrices, their rows named ``clname[code]`` as R names them."""
 
     if influence is None:
         return None
-    values = None if model is None else model.get("(cluster)", model.get("(id)"))
-    levels = None if values is None else _label_levels(list(values), "cluster")
-
-    def rownames(codes: list[int]) -> list[Any]:
-        return list(codes) if levels is None else [levels[code] for code in codes]
-
-    return [SurvfitInfluenceMatrix(rownames(curve.cluster), curve.values) for curve in influence]
+    return [SurvfitInfluenceMatrix(curve, clname) for curve in influence]
 
 
 def _km_result(
@@ -729,10 +729,14 @@ def _km_result(
     call: SurvfitCall,
     model: dict[str, Any] | None,
     se_fit: bool,
+    clname: Sequence[Any] | None,
     *,
     time0: bool = False,
 ) -> SurvfitResult:
-    """A ``survfit`` object from the engine output; ``se.fit = FALSE`` drops the se parts."""
+    """A ``survfit`` object from the engine output; ``se.fit = FALSE`` drops the se parts.
+
+    ``clname`` names the rows of the influence matrices (``_SurvfitData.clname``).
+    """
 
     return SurvfitResult(
         n=[int(value) for value in engine.n],
@@ -756,8 +760,8 @@ def _km_result(
         conf_int=engine.conf_int if se_fit else None,
         conf_type=engine.conf_type if se_fit else None,
         conf_lower=engine.conf_lower if se_fit and engine.conf_lower != "usual" else None,
-        influence_surv=_influence_with_labels(engine.influence_surv, model),
-        influence_chaz=_influence_with_labels(engine.influence_chaz, model),
+        influence_surv=_named_influence(engine.influence_surv, clname),
+        influence_chaz=_named_influence(engine.influence_chaz, clname),
         time0=time0,
         call=call,
         model=model,
@@ -1029,8 +1033,9 @@ def _derived_survfit(
 ) -> Any:
     """``x`` rebuilt from ``engine``, a subset or the ``survfit0`` of ``x.engine``.
 
-    The call, model frame and ``se.fit`` carry over, and so do the multi-state parts the
-    engine does not know about: a dropped ``n_id`` and the ``oldstate`` of ``fit[, states]``.
+    The call, model frame and ``se.fit`` carry over, and so do the parts the engine does not
+    know about: a dropped ``n_id`` and the ``oldstate`` of ``fit[, states]``, and the
+    ``clname`` of the influence rows, since the engine keeps its cluster codes.
     """
 
     se_fit = x.std_err is not None
@@ -1039,7 +1044,9 @@ def _derived_survfit(
         return dataclasses.replace(
             fit, n_id=None if x.n_id is None else fit.n_id, oldstate=x.oldstate
         )
-    return _km_result(engine, x.strata_names, x.call, x.model, se_fit, time0=time0)
+    influence = x.influence_surv or x.influence_chaz
+    clname = influence[0].clname if influence else None
+    return _km_result(engine, x.strata_names, x.call, x.model, se_fit, clname, time0=time0)
 
 
 def survfit0(x: Any, *args: Any, **kwargs: Any) -> SurvfitResult | SurvfitMultiStateResult:

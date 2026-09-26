@@ -746,12 +746,23 @@ class SurvfitInfluenceMatrix:
     ``values[k]`` is the influence of cluster ``cluster[k]`` at each time of the curve;
     ``cluster`` holds R's row names: the ``cluster`` (else ``id``) values, in order of first
     appearance, or the observation numbers ``1..n`` when the observations are the clusters.
-    It is the engine's ``survival.surv_analysis.SurvfitInfluence`` with its cluster codes
-    replaced by those names.
+    Like ``survfitKM``, which names the rows ``clname[clusterid]``, it holds the engine's
+    ``survival.surv_analysis.SurvfitInfluence`` (0-based cluster codes) and ``clname``, the
+    levels every curve of the fit shares, or ``None`` when the engine's labels are already
+    the observation numbers.  The Rust matrix becomes Python lists only when it is read.
     """
 
-    cluster: list[Any]
-    values: list[list[float]]
+    influence: _core.SurvfitInfluence
+    clname: Sequence[Any] | None = field(default=None, repr=False)
+
+    @property
+    def cluster(self) -> list[Any]:
+        codes = self.influence.cluster
+        return codes if self.clname is None else [self.clname[code] for code in codes]
+
+    @property
+    def values(self) -> list[list[float]]:
+        return self.influence.values
 
 
 @dataclass(frozen=True)
