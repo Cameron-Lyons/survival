@@ -6,7 +6,7 @@ import math
 import os
 import sys
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from itertools import compress
 from operator import index
 from typing import Any
@@ -193,6 +193,12 @@ def _is_missing_value(value: Any) -> bool:
         return False
 
 
+def _float_or_nan(value: Any) -> float:
+    """``float(value)``, with NaN for a missing value (R's ``NA``)."""
+
+    return math.nan if _is_missing_value(value) else float(value)
+
+
 def _row_has_missing(value: Any) -> bool:
     value_type = type(value)
     if value is None:
@@ -322,17 +328,18 @@ def _as_matrix_rows(
     name: str,
     *,
     allow_empty_columns: bool,
+    convert: Callable[[Any], float] = float,
 ) -> list[list[float]]:
     rows = _coerce_array_like(values, name)
     if not rows:
         raise ValueError(f"{name} must not be empty")
     if not isinstance(rows[0], list | tuple):
-        return [[float(value)] for value in rows]
+        return [[convert(value)] for value in rows]
 
     width = len(rows[0])
     if width == 0 and not allow_empty_columns:
         raise ValueError(f"{name} must have at least one column")
-    matrix = [[float(value) for value in row] for row in rows]
+    matrix = [[convert(value) for value in row] for row in rows]
     if any(len(row) != width for row in matrix):
         raise ValueError(f"{name} must be rectangular")
     return matrix

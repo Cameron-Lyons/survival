@@ -434,3 +434,43 @@ def test_survreg_predict_gives_na_for_incomplete_newdata(lung, missing):
     )
     with pytest.raises(ValueError, match="missing values in newdata"):
         r.predict(fit, newdata, na_action="na.fail")
+
+
+def test_survreg_predict_gives_na_rows_of_the_right_width_for_all_missing_newdata(lung):
+    fit = r.survreg("Surv(time, status) ~ age + sex", lung)
+    newdata = {"age": [None, None], "sex": [1, 2]}
+    assert r.predict(fit, newdata, type="lp") == approx([NAN, NAN])
+    rows_approx(r.predict(fit, newdata, type="quantile"), [[NAN, NAN], [NAN, NAN]])
+    rows_approx(r.predict(fit, newdata, type="terms"), [[NAN, NAN], [NAN, NAN]])
+    for predict_type in ("lp", "quantile", "terms"):
+        assert r.predict(fit, newdata, type=predict_type, na_action="na.omit") == []
+
+
+def test_survreg_design_matrix_predict_reads_missing_values_as_na(lung):
+    # R: survreg(Surv(time, status) ~ age, lung) and newdata age = c(50, NA)
+    y = r.Surv(lung["time"], lung["status"])
+    fit = r.survreg(y, x=[[1.0, age] for age in lung["age"]])
+    assert r.coef(fit) == approx([6.8871206208890206, -0.0136082883341056])
+    for missing in (None, NAN):
+        newdata = [[1.0, 50.0], [1.0, missing]]
+        assert r.predict(fit, newdata, type="lp") == approx([6.20670620418374, NAN])
+        rows_approx(
+            r.predict(fit, newdata, type="quantile"),
+            [[89.9484363245842, 934.04964400822], [NAN, NAN]],
+        )
+        assert r.predict(fit, newdata, type="lp", na_action="na.omit") == approx([6.20670620418374])
+        with pytest.raises(ValueError, match="missing values in newdata"):
+            r.predict(fit, newdata, na_action="na.fail")
+    named = r.survreg(y, x={"one": [1.0] * len(lung["age"]), "age": list(lung["age"])})
+    assert r.predict(named, {"one": [1.0, 1.0], "age": [50, None]}, type="lp") == approx(
+        [6.20670620418374, NAN]
+    )
+
+
+@pytest.mark.parametrize("na_action", ["omit", "na_omit", "na.omit", "fail", "na.fail", None])
+def test_survreg_design_matrix_accepts_every_spelling_of_the_actions_it_ignores(lung, na_action):
+    y = r.Surv(lung["time"], lung["status"])
+    fit = r.survreg(y, x=[[1.0, age] for age in lung["age"]], na_action=na_action)
+    assert r.coef(fit) == approx([6.8871206208890206, -0.0136082883341056])
+    with pytest.raises(ValueError, match="subset and na_action require a formula"):
+        r.survreg(y, x=[[1.0, age] for age in lung["age"]], na_action="na.exclude")

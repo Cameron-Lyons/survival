@@ -22,13 +22,14 @@ from typing import Any
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _as_matrix_rows,
     _as_rows,
     _control_mapping,
     _encode_labels,
     _finite_float,
+    _float_or_nan,
     _float_vector,
     _integer_scalar,
-    _is_missing_value,
     _materialize_1d,
     _materialize_labels,
     _matrix_input_column_names,
@@ -599,7 +600,7 @@ def survreg(
             keep_model=keep_model,
         )
     elif isinstance(formula, Surv):
-        if subset is not None or na_action not in {None, "fail", "pass", _DEFAULT_NA_ACTION}:
+        if subset is not None or _normalize_na_action(na_action) not in {"fail", "pass", "omit"}:
             raise ValueError("subset and na_action require a formula")
         keep_x = True
         frame = _matrix_frame(formula, x, weights=weights, offset=offset, cluster=cluster)
@@ -752,12 +753,11 @@ def _newdata_inputs(fit: Any, newdata: Any, na_action: str) -> _NewData:
         names = getattr(fit, "coefficient_names", None)
         if names is not None and (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
             columns = [_column(newdata, name) for name in names]
-            rows = [
-                [math.nan if _is_missing_value(col[row]) else float(col[row]) for col in columns]
-                for row in range(len(columns[0]))
-            ]
+            rows = [list(map(_float_or_nan, values)) for values in zip(*columns, strict=True)]
         else:
-            rows = _as_rows(newdata, "newdata")
+            rows = _as_matrix_rows(
+                newdata, "newdata", allow_empty_columns=False, convert=_float_or_nan
+            )
         missing = [row for row, values in enumerate(rows) if any(map(math.isnan, values))]
         if missing and na_action == "fail":
             raise ValueError("missing values in newdata")
