@@ -20,7 +20,7 @@ TOY = {
 
 
 def _veteran():
-    data = {k: v for k, v in survival.datasets.load_veteran().items() if not k.startswith("_")}
+    data = survival.datasets.load_veteran()
     data["celltype"] = RFactor(data["celltype"], ["squamous", "smallcell", "adeno", "large"])
     return data
 

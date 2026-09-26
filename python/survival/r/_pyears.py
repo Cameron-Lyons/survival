@@ -42,6 +42,7 @@ from ._formula import (
     _formula_response_parts,
     _model_strata,
     _parse_formula_literal,
+    _response_spec,
     _term_values,
     model_frame,
 )
@@ -239,12 +240,12 @@ class _PyearsTerm:
     cuts: list[float]
 
 
-def _tcut_term(mf: ModelFrame, text: str) -> _PyearsTerm:
+def _tcut_term(mf: ModelFrame, text: str, data: Any) -> _PyearsTerm:
     """A ``tcut(x, breaks[, labels = c(...)])`` formula term."""
 
     arguments = _formula_response_parts(text[5:-1])
     x = _float_vector(_column(mf.data, arguments[0]), arguments[0])
-    breaks = _r_vector_literal(arguments[1], mf.data)
+    breaks = _r_vector_literal(arguments[1], data)
     labels = None
     for argument in arguments[2:]:
         name, _sep, value = argument.partition("=")
@@ -254,12 +255,12 @@ def _tcut_term(mf: ModelFrame, text: str) -> _PyearsTerm:
     return _PyearsTerm(text, 0, list(cut.values), list(cut.labels), list(cut.cutpoints))
 
 
-def _cut_term(mf: ModelFrame, text: str) -> _PyearsTerm:
+def _cut_term(mf: ModelFrame, text: str, data: Any) -> _PyearsTerm:
     """A ``cut(x, breaks)`` formula term: R's right-closed intervals ``(a, b]``."""
 
     arguments = _formula_response_parts(text[4:-1])
     x = _arithmetic_expression_values(mf.data, arguments[0], mf.n)
-    breaks = _r_vector_literal(arguments[1], mf.data)
+    breaks = _r_vector_literal(arguments[1], data)
     codes: list[float] = []
     for value in x:
         position = next(
@@ -269,11 +270,13 @@ def _cut_term(mf: ModelFrame, text: str) -> _PyearsTerm:
     return _PyearsTerm(text, 1, codes, _cut_labels(breaks), [])
 
 
-def _pyears_term(mf: ModelFrame, term: _CovariateTerm) -> _PyearsTerm:
+def _pyears_term(mf: ModelFrame, term: _CovariateTerm, data: Any) -> _PyearsTerm:
     label = _covariate_term_name(term)
     if term.call is not None:
         return (
-            _tcut_term(mf, term.call) if term.call.startswith("tcut(") else _cut_term(mf, term.call)
+            _tcut_term(mf, term.call, data)
+            if term.call.startswith("tcut(")
+            else _cut_term(mf, term.call, data)
         )
     source = _column_source(mf.data, term.column) if term.arithmetic is None else None
     if isinstance(source, TcutResult):
@@ -286,12 +289,16 @@ def _pyears_term(mf: ModelFrame, term: _CovariateTerm) -> _PyearsTerm:
     )
 
 
-def _pyears_terms(mf: ModelFrame) -> list[_PyearsTerm]:
+def _pyears_terms(mf: ModelFrame, data: Any) -> list[_PyearsTerm]:
+    """The category dimensions.  A ``tcut``/``cut`` breaks argument naming a column is
+    read whole from the caller's *data*: R evaluates the terms before ``subset`` and
+    ``na.action`` remove rows."""
+
     terms: list[_PyearsTerm] = []
     for term in mf.terms.covariates:
         if isinstance(term, _InteractionTerm):
             raise ValueError("Pyears cannot have interaction terms")
-        terms.append(_pyears_term(mf, term))
+        terms.append(_pyears_term(mf, term, data))
     for columns in mf.terms.strata:
         raise ValueError(f"unsupported pyears term strata({columns})")
     return terms
@@ -519,7 +526,7 @@ def pyears(
     if mf.n == 0:
         raise ValueError("Data set has 0 observations")
     stop_values, start_values, event_values = _pyears_followup(mf)
-    terms = _pyears_terms(mf)
+    terms = _pyears_terms(mf, data)
     result = _core.pyears(
         stop_values,
         start_values,
@@ -730,19 +737,27 @@ def survexp(
     from ._coxph import CoxphModel, _survfit_curves, predict_coxph
 
     if isinstance(ratetable, CoxphModel):
+        method_value = _survexp_method(
+            method, cohort, conditional, _response_spec(formula) is not None
+        )
         names = _formula_columns("~" + ratetable.formula.split("~", 1)[1], data)
+        extra = _mapped_columns(rmap, names, data)
+        if method_value.startswith("individual"):
+            # predict(type = "expected") also reads the Cox model's response: R's
+            # survexp adds the data's remaining columns to the rate variables
+            for name in _formula_columns(ratetable.formula, data):
+                extra.setdefault(name, name)
         mf = model_frame(
             formula,
             data,
             subset=subset,
             na_action=na_action or "omit",
             weights=weights,
-            extra=_mapped_columns(rmap, names, data),
+            extra=extra,
         )
         if mf.n == 0:
             raise ValueError("Data set has 0 rows")
         response = _survexp_response(mf)
-        method_value = _survexp_method(method, cohort, conditional, response is not None)
         mapped = {name: _column(mf.data, name) for name in _data_column_names(mf.data) or []}
         mapped.update(mf.extra)
         if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):

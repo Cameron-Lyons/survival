@@ -369,7 +369,11 @@ def survSplit(
             data = {str(name): _column_source(data, str(name)) for name in names}
             data[idname] = list(range(1, n + 1))
             added_id = True
-    mf = model_frame(formula, data, subset=subset, na_action=na_action, id=None if idname else id)
+    # a character id names a data column, which the model frame subsets with the rows
+    id_column = idname if added_id or idname in names else None
+    mf = model_frame(
+        formula, data, subset=subset, na_action=na_action, id=id if idname is None else id_column
+    )
     # R only invents the id column for right-censored (time, status) data
     if added_id and (mf.response is None or mf.response.type != "right"):
         data = {name: values for name, values in data.items() if name != idname}
@@ -384,7 +388,7 @@ def survSplit(
     else:
         newdata = _split_frame(dict(_model_variables(mf)), rows)
         if idname is not None and (added_id or idname in names):
-            newdata[idname] = [_column(mf.data, idname)[row] for row in rows]
+            newdata[idname] = [mf.id[row] for row in rows]
     states = () if mf.response is None else mf.response.states
     time_name, time2_name, event_name = _surv_argument_names(mf)
     if mf.response is None or mf.response.ncol == 2:

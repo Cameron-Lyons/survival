@@ -5,10 +5,12 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
-from itertools import combinations, product
+from itertools import combinations, compress, product
+from operator import ge
 from typing import Any
 
 from ._coerce import (
+    _coerce_array_like,
     _finite_float,
     _is_missing_value,
     _keep_rows_after_na_action,
@@ -18,10 +20,11 @@ from ._coerce import (
     _missing_row_indices,
     _mstate_categories,
     _normalize_na_action,
+    _RFactorVector,
     _strata_value_label,
-    _subset_data,
     _subset_indices,
     _subset_optional_sequence,
+    _warn_outside_package,
 )
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
 from ._surv import (
@@ -29,6 +32,7 @@ from ._surv import (
     _formula_response_argument_name,
     _normalize_surv_type,
     _ordered_named_response_arguments,
+    _time_column,
 )
 from ._types import (
     _MISSING,
@@ -601,9 +605,24 @@ def _response_spec(formula: str) -> _SurvResponseSpec | None:
     )
 
 
+class _FormulaRows(dict[str, Any]):
+    """``data[rows, ]`` restricted to a formula's variables (see :func:`_formula_data_rows`).
+
+    Like R's data frame it keeps its row count without any column, as for ``~ 1``.
+    """
+
+    __slots__ = ("nrow",)
+
+    def __init__(self, columns: dict[str, Any], nrow: int) -> None:
+        super().__init__(columns)
+        self.nrow = nrow
+
+
 def _data_row_count(data: Any, formula: str | None = None) -> int:
     """The number of rows of *data*: the first response column, else the first column."""
 
+    if isinstance(data, _FormulaRows):
+        return data.nrow
     spec = None if formula is None else _response_spec(formula)
     if spec is not None and spec.columns:
         return len(_column(data, spec.columns[0]))
@@ -770,18 +789,82 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
+def _formula_data_rows(
+    formula: str,
+    data: Any,
+    rows: list[int],
+    n: int,
+    read: Mapping[str, list[Any]] | None = None,
+) -> _FormulaRows:
+    """``data[rows, ]`` restricted to the variables *formula* uses.
+
+    R's ``model.frame`` evaluates only the formula's variables, so ``subset`` and
+    ``na.action`` never copy the other columns of *data* (nor require them to be
+    row-aligned).  The columns keep *data*'s order, so a ``.`` expands to the same
+    terms afterwards, and factor columns keep their levels.  *read* holds columns
+    the caller already materialised from *data*.
+    """
+
+    columns = _formula_columns(formula, data)
+    names = _data_column_names(data)
+    if names is not None:
+        used = set(columns)
+        columns = [name for name in names if name in used]
+    read = {} if read is None else read
+    frame: dict[str, Any] = {}
+    for name in columns:
+        source = _column_source(data, name)
+        values = read[name] if name in read else _coerce_array_like(source, name)
+        if len(values) != n:
+            raise ValueError(f"variable lengths differ (found for '{name}')")
+        kept = [values[row] for row in rows]
+        categories = _mstate_categories(source)
+        frame[name] = kept if categories is None else _RFactorVector(kept, categories)
+    return _FormulaRows(frame, len(rows))
+
+
 def _subset_formula_inputs(
     formula: str,
     data: Any,
     subset: Any,
     **row_aligned: Any,
-) -> tuple[Any, dict[str, Any]]:
-    indices = _subset_indices(subset, _data_row_count(data, formula))
+) -> tuple[_FormulaRows, dict[str, Any]]:
+    n = _data_row_count(data, formula)
+    indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
         for name, values in row_aligned.items()
     }
-    return _subset_data(data, indices), filtered
+    return _formula_data_rows(formula, data, indices, n), filtered
+
+
+def _backwards_interval_rows(formula: str, data: Any, n: int) -> list[int]:
+    """The rows of a ``Surv(start, stop, event)`` response with ``start >= stop``.
+
+    R's ``Surv`` turns their start into ``NA`` (with its warning) while ``model.frame``
+    evaluates the response, so ``na.action`` treats them as missing.  A ``NaN``
+    endpoint compares false; ``None``/``pd.NA`` go through ``Surv``'s conversion.
+    """
+
+    spec = _response_spec(formula)
+    if (
+        spec is None
+        or not spec.surv
+        or len(spec.arguments) != 3
+        or spec.type not in {None, "counting", "mstate"}
+    ):
+        return []
+    start = _materialize_1d(_response_arg_values(data, spec.arguments[0], n), "time")
+    stop = _materialize_1d(_response_arg_values(data, spec.arguments[1], n), "time2")
+    try:
+        rows = list(compress(range(n), map(ge, start, stop)))
+    except TypeError:
+        start = _time_column(start, "time", "Time variable is not numeric")
+        stop = _time_column(stop, "time2", "Stop time is not numeric")
+        rows = list(compress(range(n), map(ge, start, stop)))
+    if rows:
+        _warn_outside_package("Stop time must be > start time, NA created")
+    return rows
 
 
 def _apply_formula_na_action(
@@ -797,22 +880,27 @@ def _apply_formula_na_action(
         return data, row_aligned
 
     excluded = set(exclude_columns)
-    columns = [column for column in _formula_columns(formula, data) if column not in excluded]
+    read = {
+        column: _column(data, column)
+        for column in _formula_columns(formula, data)
+        if column not in excluded
+    }
     n = _data_row_count(data, formula)
     missing = _missing_row_indices(
         [
-            *[(column, _column(data, column)) for column in columns],
+            *read.items(),
             *((name, values) for name, values in row_aligned.items() if values is not None),
         ],
         n,
     )
+    missing.update(_backwards_interval_rows(formula, read, n))
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
         return data, row_aligned
     filtered = {
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
-    return _subset_data(data, keep), filtered
+    return _formula_data_rows(formula, data, keep, n, read), filtered
 
 
 def _data_column_names(data: Any) -> list[Any] | None:
@@ -1780,8 +1868,8 @@ def model_frame(
     columns (``pyears``' ``rmap`` variables).  ``subset`` (a mask or row indices)
     and then ``na_action`` (``"na.pass"``, ``"na.omit"``, ``"na.fail"``; R's
     ``model.frame`` default is ``na.omit``, each caller passes its own default) are
-    applied to the data and the arguments together, after which the response and
-    the terms are evaluated.
+    applied to the formula's variables and the arguments together, after which the
+    response and the terms are evaluated.
     """
 
     if not isinstance(formula, str):

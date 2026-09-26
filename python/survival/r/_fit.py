@@ -238,16 +238,14 @@ def _model_frame(
     """Evaluate a survival formula on ``data`` the way ``model.frame`` does.
 
     Vector arguments may name a column of ``data``; ``subset`` and ``na.action`` are
-    applied to the data and to every vector argument together (``extra`` carries any
-    further row-aligned vectors, e.g. ``cch``'s ``subcoh``).
+    applied to the formula's variables and to every vector argument together (``extra``
+    carries any further row-aligned vectors, e.g. ``cch``'s ``subcoh``).
     """
 
     if not isinstance(formula, str):
         raise TypeError("a formula argument is required")
     if data is None:
         raise ValueError("a data argument is required with a formula")
-    if isinstance(data, Mapping):  # the bundled datasets carry _nrow/_ncol metadata
-        data = {key: value for key, value in data.items() if not str(key).startswith("_")}
     aligned = {
         "weights": _column_or_values(data, weights, "weights"),
         "offset": _column_or_values(data, offset, "offset"),

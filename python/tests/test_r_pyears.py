@@ -1,7 +1,6 @@
 """``pyears``, ``survexp`` and the rate-table helpers against R 4.5 / survival 3.8.11."""
 
 import datetime
-import warnings
 
 import pytest
 
@@ -172,9 +171,11 @@ def test_survexp_argument_checks_follow_r():
         r.survexp("~ grp:sex", data, rmap=_RMAP, times=[1])
     with pytest.raises(ValueError, match="Can't use tcut variables in expected survival"):
         r.survexp("~ tcut(age, c(0, 100) * 365.25)", data, rmap=_RMAP, times=[1])
+    with pytest.raises(ValueError, match="Illegal response value"):
+        r.survexp("Surv(time - 50, time, status) ~ 1", data, rmap=_RMAP, times=[1])
     with (
-        pytest.raises(ValueError, match="Illegal response value"),
-        warnings.catch_warnings(action="ignore"),
+        pytest.warns(UserWarning, match="Stop time must be > start time, NA created"),
+        pytest.raises(ValueError, match="Data set has 0 rows"),
     ):
         r.survexp("Surv(time, time, status) ~ 1", data, rmap=_RMAP, times=[1])
     with pytest.warns(UserWarning, match="weights ignored"):

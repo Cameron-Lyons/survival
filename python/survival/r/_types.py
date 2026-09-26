@@ -326,10 +326,11 @@ class _SurvResponseSpec:
 class ModelFrame:
     """R's ``model.frame`` for a survival formula.
 
-    ``data`` is the caller's data after ``subset`` and the ``na.action``; ``response``
-    is the ``Surv`` response (``y`` a plain numeric response such as ``time ~ 1``, or
-    both ``None`` for ``~ x``); the R-style extra arguments (``weights``, ``offset``,
-    ``id``, ``cluster``, ``istate``) are row aligned with it.
+    ``data`` is the caller's data or, when ``subset`` or the ``na.action`` removed rows,
+    a mapping of the formula's variables at the kept rows; ``response`` is the ``Surv``
+    response (``y`` a plain numeric response such as ``time ~ 1``, or both ``None`` for
+    ``~ x``); the R-style extra arguments (``weights``, ``offset``, ``id``, ``cluster``,
+    ``istate``) are row aligned with it.
     """
 
     formula: str

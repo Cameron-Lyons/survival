@@ -41,7 +41,6 @@ from ._coerce import (
     _quantile_vector,
     _strata_level_sort_key,
     _strata_value_label,
-    _subset_data,
     _subset_optional_sequence,
 )
 from ._fit import (
@@ -62,6 +61,7 @@ from ._formula import (
     _design_term_output_names,
     _fit_formula_design,
     _formula_columns,
+    _formula_data_rows,
     _formula_design_row_count,
     _formula_model_frame,
     _formula_model_term_degree,
@@ -405,12 +405,13 @@ def _term_structure(
 
 
 def _drop_interval_missing(
-    spec: Any, data: Any, na_action: str | None, **row_aligned: Any
+    formula: str, data: Any, na_action: str | None, **row_aligned: Any
 ) -> tuple[Any, dict[str, Any]]:
     """Apply NA handling to the constructed interval response. Missing endpoints
     can mean censoring, and an unused ``time2`` does not make a response missing.
     Covariates go through the shared path with response columns excluded."""
 
+    spec = _formula_response_spec(formula)
     if spec.type not in {"interval", "interval2"}:
         return data, row_aligned
     response = Surv(*_formula_response_values(data, spec), type=spec.type)
@@ -422,7 +423,7 @@ def _drop_interval_missing(
     keep = _keep_rows_after_na_action(missing, n, na_action, "formula data")
     if keep is None:
         return data, row_aligned
-    return _subset_data(data, keep), {
+    return _formula_data_rows(formula, data, keep, n), {
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
 
@@ -440,13 +441,15 @@ def _formula_frame(
 ) -> _SurvregFrame:
     spec = _formula_response_spec(formula)
     weights = _column_or_values(data, weights, "weights")
+    offset = _column_or_values(data, offset, "offset")
+    cluster = _column_or_values(data, cluster, "cluster")
     if subset is not None:
         data, aligned = _subset_formula_inputs(
             formula, data, subset, weights=weights, offset=offset, cluster=cluster
         )
         weights, offset, cluster = aligned["weights"], aligned["offset"], aligned["cluster"]
     data, aligned = _drop_interval_missing(
-        spec, data, na_action, weights=weights, offset=offset, cluster=cluster
+        formula, data, na_action, weights=weights, offset=offset, cluster=cluster
     )
     excluded = spec.columns if spec.type in {"interval", "interval2"} else ()
     if any(column not in excluded for column in _formula_columns(formula, data)):
