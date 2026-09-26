@@ -39,6 +39,12 @@ def test_rsurvreg_seed_reproduces_r_set_seed():
     )
 
 
+def test_rsurvreg_rejects_the_seed_r_reads_as_na():
+    # R's set.seed(-2147483648) stops: -2^31 is NA_integer_
+    with pytest.raises(ValueError, match="supplied seed is not a valid integer"):
+        r.rsurvreg(3, 0, 1, seed=-(2**31))
+
+
 def test_dpqr_distribution_names_are_case_folded_but_not_partially_matched():
     # R's dsurvreg(c(0.5, 2), 0.2, 1.5, "Weibull"), psurvreg(c(0.5, 2), 0.2, 1.5, "LogNormal")
     # and qsurvreg(c(0.25, 0.9), 1, 0.5, "LOGLOGISTIC")

@@ -798,7 +798,8 @@ pub fn qsurvreg(
 
 /// `rsurvreg(n, mean, scale, distribution, parms)`: `qsurvreg(runif(n), ...)`.
 /// With a `seed` the uniforms are R's, so the draw equals R's
-/// `set.seed(seed); rsurvreg(n, mean, scale, distribution, parms)`; without
+/// `set.seed(seed); rsurvreg(n, mean, scale, distribution, parms)`, and
+/// `seed = -2^31`, R's `NA_integer_`, is an error as in `set.seed`; without
 /// one they come from the crate's clock-seeded generator, whose stream is not
 /// R's.
 #[pyfunction]
@@ -813,6 +814,7 @@ pub fn rsurvreg(
 ) -> PyResult<Vec<f64>> {
     let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
     let uniform: Vec<f64> = match seed {
+        Some(i32::MIN) => return Err(invalid("supplied seed is not a valid integer").into()),
         Some(seed) => {
             let mut rng = RUniform::new(seed as u32);
             (0..n).map(|_| rng.unif_rand()).collect()
@@ -1106,6 +1108,16 @@ mod tests {
                 1.210_477_702_776_842_5,
                 -0.419_870_560_940_246,
             ],
+        );
+    }
+
+    #[test]
+    fn rsurvreg_rejects_the_seed_r_reads_as_na() {
+        // set.seed(-2147483648): "supplied seed is not a valid integer"
+        let err = rsurvreg(3, vec![0.0], vec![1.0], "weibull", None, Some(i32::MIN)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("supplied seed is not a valid integer")
         );
     }
 
