@@ -1,6 +1,7 @@
 """survfit.coxph regressions against R 4.5.3 with survival 3.8-12.
 
-``start.time`` builds the curves from the rows still at risk at that time.
+``start.time`` builds the curves from the rows still at risk at that time, and penalized
+fits give ``id`` curves.
 """
 
 import pytest
@@ -153,6 +154,16 @@ def test_start_time_keeps_a_stratum_it_empties():
     assert found.strata == {"1": 0, "2": 10}
     assert found.n == [0, 10]
     assert found.surv == [row[1] for row in every.surv]
+
+
+def test_penalized_fits_take_start_time_and_id():
+    fit = r.coxph("Surv(start, stop, event) ~ pspline(age) + transplant", datasets.load_heart())
+    assert r.survfit(fit, start_time=100).surv[:3] == approx(
+        [0.979207892618949, 0.958406550548767, 0.958406550548767]
+    )
+    subjects = r.survfit(fit, _heart_newdata(pid=[1, 1, 2, 2]), id="pid")
+    assert subjects.strata == {"1": 85, "2": 102}
+    assert subjects.surv[:3] == approx([0.992080652630845, 0.968123794410737, 0.94398730070863])
 
 
 def test_start_time_errors_as_r(lung_fit):

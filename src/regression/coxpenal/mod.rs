@@ -43,7 +43,7 @@ use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{
     Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, CoxphData, FittedCox, SurvfitOptions,
-    add_offset_mean, centre_offset, nocenter_columns,
+    add_offset_mean, centre_offset, newdata_from_python, nocenter_columns,
 };
 use crate::regression::coxph_wtest::wald_statistic;
 use ndarray::Array2;
@@ -942,19 +942,37 @@ impl CoxpenalFit {
         self.curve_source().basehaz(centered)
     }
 
-    /// `survfit(fit, newdata, ...)`; new data cannot be used with a frailty
-    /// term, as in R.
+    /// New data cannot be used with a frailty term, as in R.
+    fn check_newdata_allowed(&self) -> SurvivalResult<()> {
+        if self.frail.is_some() {
+            return Err(SurvivalError::invalid_input(
+                "Newdata cannot be used when a model has frailty terms",
+            ));
+        }
+        Ok(())
+    }
+
+    /// `survfit(fit, newdata, ...)`.
     pub fn survfit(
         &self,
         newdata: Option<&CoxNewData>,
         options: SurvfitOptions,
     ) -> SurvivalResult<Vec<CoxSurvfitCurve>> {
-        if newdata.is_some() && self.frail.is_some() {
-            return Err(SurvivalError::invalid_input(
-                "Newdata cannot be used when a model has frailty terms",
-            ));
+        if newdata.is_some() {
+            self.check_newdata_allowed()?;
         }
         self.curve_source().survfit(newdata, options)
+    }
+
+    /// `survfit(fit, newdata, id)` for time-dependent new data.
+    pub fn survfit_individual(
+        &self,
+        newdata: &CoxNewData,
+        id: &[i32],
+        options: SurvfitOptions,
+    ) -> SurvivalResult<Vec<CoxSurvfitCurve>> {
+        self.check_newdata_allowed()?;
+        self.curve_source().survfit_individual(newdata, id, options)
     }
 }
 
@@ -1204,27 +1222,49 @@ impl CoxpenalFit {
         censor: bool,
         start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
-        let newdata = match newdata {
-            Some(x) => {
-                let x = if x.is_empty() {
-                    Array2::zeros((0, self.coxph.nvar()))
-                } else {
-                    matrix_from_rows(&x, "newdata")?
-                };
-                Some(CoxNewData::try_new(x, new_strata, new_offset, None, None)?)
-            }
-            None => {
-                if new_strata.is_some() || new_offset.is_some() {
-                    return Err(SurvivalError::invalid_input(
-                        "new_strata and new_offset require newdata",
-                    )
-                    .into());
-                }
-                None
-            }
-        };
+        let newdata =
+            newdata_from_python(&self.coxph, newdata, new_strata, new_offset, None, None)?;
         Ok(self.survfit(
             newdata.as_ref(),
+            SurvfitOptions {
+                stype,
+                ctype,
+                se_fit,
+                censor,
+                start_time,
+            },
+        )?)
+    }
+
+    /// `survfit(fit, newdata, id)` for time-dependent new data.
+    #[pyo3(name = "survfit_individual", signature = (newdata, new_entry, new_time, id, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true, start_time = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn survfit_individual_py(
+        &self,
+        newdata: Vec<Vec<f64>>,
+        new_entry: Vec<f64>,
+        new_time: Vec<f64>,
+        id: Vec<i32>,
+        new_strata: Option<Vec<i32>>,
+        new_offset: Option<Vec<f64>>,
+        stype: u8,
+        ctype: Option<u8>,
+        se_fit: bool,
+        censor: bool,
+        start_time: Option<f64>,
+    ) -> PyResult<Vec<CoxSurvfitCurve>> {
+        let newdata = newdata_from_python(
+            &self.coxph,
+            Some(newdata),
+            new_strata,
+            new_offset,
+            Some(new_time),
+            Some(new_entry),
+        )?
+        .expect("newdata was supplied");
+        Ok(self.survfit_individual(
+            &newdata,
+            &id,
             SurvfitOptions {
                 stype,
                 ctype,

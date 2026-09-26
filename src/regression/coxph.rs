@@ -1601,7 +1601,8 @@ impl CoxPHFit {
     }
 }
 
-fn newdata_from_python(
+/// A `CoxNewData` from the binding arguments; `None` without `x`.
+pub(crate) fn newdata_from_python(
     fit: &CoxPHFit,
     x: Option<Vec<Vec<f64>>>,
     strata: Option<Vec<i32>>,

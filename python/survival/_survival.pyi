@@ -2511,6 +2511,20 @@ class CoxpenalFit:
         censor: bool = True,
         start_time: float | None = None,
     ) -> list[CoxSurvfitCurve]: ...
+    def survfit_individual(
+        self,
+        newdata: Sequence[Sequence[float]],
+        new_entry: Sequence[float],
+        new_time: Sequence[float],
+        id: Sequence[int],
+        new_strata: Sequence[int] | None = None,
+        new_offset: Sequence[float] | None = None,
+        stype: int = 2,
+        ctype: int | None = None,
+        se_fit: bool = True,
+        censor: bool = True,
+        start_time: float | None = None,
+    ) -> list[CoxSurvfitCurve]: ...
     @property
     def assign2(self) -> list[list[int]]: ...
     @property
