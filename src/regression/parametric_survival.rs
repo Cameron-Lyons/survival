@@ -8,7 +8,9 @@
 //! [`crate::regression::survregc1`], the distributions in
 //! [`crate::regression::survreg_distributions`], predictions in
 //! [`crate::regression::survreg_predict`] and residuals in
-//! [`crate::residuals::survreg_resid`].
+//! [`crate::residuals::survreg_resid`].  The penalised fit
+//! (`survpenal.fit`) in [`crate::regression::survpenal`] shares the response
+//! transform, the intercept-only fit, `survreg6` and the robust variance.
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{cholesky2, chsolve2, symmetric_inverse_via_cholesky};
@@ -23,7 +25,7 @@ use crate::regression::survregc1::{SurvregKernel, SurvregLikelihood};
 use crate::residuals::survreg_resid::{
     SurvregResidType, SurvregResiduals, residuals_survreg, survreg_deriv,
 };
-use ndarray::{Array2, ArrayView2};
+use ndarray::{Array2, ArrayView2, CowArray, Ix2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +43,10 @@ pub struct SurvregControl {
     /// `toler.chol`: the Cholesky pivot tolerance (R default 1e-10).
     #[pyo3(get, set)]
     pub toler_chol: f64,
+    /// `outer.max`: the outer iterations over the smoothing parameters of a
+    /// penalised fit (R default 10); unpenalised fits do not read it.
+    #[pyo3(get, set)]
+    pub outer_max: usize,
 }
 
 impl Default for SurvregControl {
@@ -49,12 +55,13 @@ impl Default for SurvregControl {
             iter_max: 30,
             rel_tolerance: 1e-9,
             toler_chol: 1e-10,
+            outer_max: 10,
         }
     }
 }
 
 impl SurvregControl {
-    fn validate(&self) -> SurvivalResult<()> {
+    pub(crate) fn validate(&self) -> SurvivalResult<()> {
         if !self.rel_tolerance.is_finite() || self.rel_tolerance <= 0.0 {
             return Err(SurvivalError::invalid_input(
                 "rel_tolerance must be a finite positive value",
@@ -78,12 +85,18 @@ impl SurvregControl {
     }
 
     #[new]
-    #[pyo3(signature = (iter_max=30, rel_tolerance=1e-9, toler_chol=1e-10))]
-    fn new(iter_max: usize, rel_tolerance: f64, toler_chol: f64) -> PyResult<Self> {
+    #[pyo3(signature = (iter_max=30, rel_tolerance=1e-9, toler_chol=1e-10, outer_max=10))]
+    fn new(
+        iter_max: usize,
+        rel_tolerance: f64,
+        toler_chol: f64,
+        outer_max: usize,
+    ) -> PyResult<Self> {
         let control = Self {
             iter_max,
             rel_tolerance,
             toler_chol,
+            outer_max,
         };
         control.validate()?;
         Ok(control)
@@ -223,6 +236,18 @@ impl SurvregData {
             .and_then(|s| s.iter().max())
             .map_or(1, |&max| max + 1)
     }
+
+    /// The `n x nvar` design matrix.
+    pub(crate) fn design(&self) -> CowArray<'_, f64, Ix2> {
+        let n = self.n();
+        let nvar = self.nvar();
+        Array2::from_shape_fn((n, nvar), |(i, j)| self.covariates[i][j]).into()
+    }
+}
+
+/// A design matrix in the representation of [`SurvregFit::covariates`].
+pub(crate) fn fit_covariates(design: Array2<f64>) -> Vec<Vec<f64>> {
+    design.outer_iter().map(|row| row.to_vec()).collect()
 }
 
 #[pymethods]
@@ -291,13 +316,15 @@ pub struct SurvregFit {
     /// fixed).
     #[pyo3(get)]
     pub scale: Vec<f64>,
-    /// `df`: number of parameters (`length(coefficients)`).
+    /// `sum(fit$df)`: the number of parameters (`length(coefficients)`),
+    /// or the effective degrees of freedom of a penalised fit (`NaN` when
+    /// one of its terms has none, R's `NA`).
     #[pyo3(get)]
-    pub df: usize,
-    /// `df.residual`: `n - df`, negative when the design has more
+    pub df: f64,
+    /// `df.residual`: `n - sum(df)`, negative when the design has more
     /// parameters than observations (R does not guard this either).
     #[pyo3(get)]
-    pub df_residual: i64,
+    pub df_residual: f64,
     /// `means`: column means of the design matrix.
     #[pyo3(get)]
     pub means: Vec<f64>,
@@ -389,7 +416,7 @@ impl SurvregFit {
     #[pyo3(name = "predict")]
     #[pyo3(signature = (newdata=None, predict_type="response", se_fit=false, p=None, offset=None, strata=None, assign=None, terms=None))]
     #[allow(clippy::too_many_arguments)]
-    fn predict_py(
+    pub(crate) fn predict_py(
         &self,
         newdata: Option<Vec<Vec<f64>>>,
         predict_type: &str,
@@ -426,7 +453,7 @@ impl SurvregFit {
     /// `residuals(object, type, rsigma, collapse, weighted)`.
     #[pyo3(name = "residuals")]
     #[pyo3(signature = (residual_type="response", rsigma=true, collapse=None, weighted=false))]
-    fn residuals_py(
+    pub(crate) fn residuals_py(
         &self,
         residual_type: &str,
         rsigma: bool,
@@ -452,17 +479,17 @@ impl SurvregFit {
 
 /// The response on the fitting scale plus the likelihood correction for the
 /// transform, as prepared by `survreg()` before calling `survreg.fit`.
-struct FittingResponse {
-    time: Vec<f64>,
-    time2: Option<Vec<f64>>,
-    status: Vec<i32>,
-    y1: Vec<f64>,
-    y2: Vec<f64>,
+pub(crate) struct FittingResponse {
+    pub time: Vec<f64>,
+    pub time2: Option<Vec<f64>>,
+    pub status: Vec<i32>,
+    pub y1: Vec<f64>,
+    pub y2: Vec<f64>,
     /// `logcorrect`: `sum(weights * log(dtrans(y)))` over exact rows.
-    logcorrect: f64,
+    pub logcorrect: f64,
 }
 
-fn fitting_response(
+pub(crate) fn fitting_response(
     data: &SurvregData,
     distribution: &SurvregDistribution,
     weights: &[f64],
@@ -514,8 +541,10 @@ fn fitting_response(
 }
 
 /// The `derfun` of `survreg.fit`: `dg` and `ddg` of every observation at
-/// `eta` (per observation) and `sigma` (per observation).
-fn derfun(
+/// `eta` (per observation) and `sigma` (per observation).  The upper
+/// endpoint of an interval-censored row gets the distribution's `parms`,
+/// which survpenal.fit.R:85 drops.
+pub(crate) fn derfun(
     distribution: &SurvregDistribution,
     response: &FittingResponse,
     eta: &[f64],
@@ -537,15 +566,15 @@ fn derfun(
 }
 
 /// The value of `survreg6`.
-struct Survreg6Fit {
+pub(crate) struct Survreg6Fit {
     /// The parameter vector as passed in, with the first `nvar2` entries
     /// updated (a trailing fixed `log(scale)` is left untouched).
-    beta: Vec<f64>,
-    iter: usize,
-    var: Array2<f64>,
-    loglik: f64,
-    converged: bool,
-    u: Vec<f64>,
+    pub beta: Vec<f64>,
+    pub iter: usize,
+    pub var: Array2<f64>,
+    pub loglik: f64,
+    pub converged: bool,
+    pub u: Vec<f64>,
 }
 
 /// `chsolve2` of the score against `imat`, or against `JJ` when `imat` is
@@ -584,7 +613,7 @@ fn invert_information(imat: &Array2<f64>, tol_chol: f64) -> SurvivalResult<Array
 /// `src/survreg6.c`: Newton-Raphson with step halving.  `beta` holds the
 /// starting values (`nvar` coefficients, the `log(scale)` per estimated
 /// stratum, or the fixed `log(scale)` when none is estimated).
-fn survreg6(
+pub(crate) fn survreg6(
     kernel: &SurvregKernel<'_>,
     maxiter: usize,
     mut beta: Vec<f64>,
@@ -739,6 +768,84 @@ fn all_finite<'a>(values: impl IntoIterator<Item = &'a f64>) -> bool {
     values.into_iter().all(|v| v.is_finite())
 }
 
+/// The intercept-only fit that gives both `survreg.fit` and `survpenal.fit`
+/// their starting scale (survreg.fit.R:135-171, survpenal.fit.R:371-398):
+/// `survreg6` for 20 iterations on a column of ones from the distribution's
+/// `init` (the doubled standard deviation, or the fixed `scale`) with the
+/// mean improved by the "glim" trick.  `nstrat2` scales are estimated.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn intercept_only_fit(
+    distribution: &SurvregDistribution,
+    response: &FittingResponse,
+    weights: &[f64],
+    offset: &[f64],
+    strata: &[usize],
+    nstrata: usize,
+    nstrat2: usize,
+    scale: f64,
+    eps: f64,
+    tol_chol: f64,
+) -> SurvivalResult<Survreg6Fit> {
+    let n = response.y1.len();
+    let yy: Vec<f64> = (0..n)
+        .map(|i| {
+            if response.status[i] != 3 {
+                response.y1[i]
+            } else {
+                (response.y1[i] + response.y2[i]) / 2.0
+            }
+        })
+        .collect();
+    let coef = distribution.init(&yy, weights)?;
+    // init returns sigma^2; we need log(sigma), doubled for safety.
+    let vars = if scale > 0.0 {
+        scale.ln()
+    } else {
+        (4.0 * coef[1]).ln() / 2.0
+    };
+    let mut coef0 = vec![coef[0]];
+    coef0.extend(std::iter::repeat_n(vars, nstrata));
+    // A better initial value for the mean using the "glim" trick.
+    let (dg, ddg) = derfun(distribution, response, &yy, |_| vars.exp());
+    let wt: Vec<f64> = ddg.iter().zip(weights).map(|(d, w)| -d * w).collect();
+    coef0[0] = (0..n)
+        .map(|i| weights[i] * dg[i] + wt[i] * (yy[i] - offset[i]))
+        .sum::<f64>()
+        / wt.iter().sum::<f64>();
+    let ones = Array2::<f64>::ones((n, 1));
+    let kernel0 = SurvregKernel {
+        y1: &response.y1,
+        y2: &response.y2,
+        status: &response.status,
+        covariates: ones.view(),
+        weights,
+        offset,
+        strata,
+        nstrat: nstrat2,
+        distribution,
+    };
+    survreg6(&kernel0, 20, coef0, eps, tol_chol)
+}
+
+/// The robust variance of survreg.R: `crossprod(residuals(fit, "dfbeta",
+/// weighted = TRUE, collapse = cluster))`.
+pub(crate) fn robust_variance(
+    fit: &SurvregFit,
+    cluster: Option<&[usize]>,
+) -> SurvivalResult<Vec<Vec<f64>>> {
+    let dfbeta = fit.residuals(SurvregResidType::Dfbeta, true, cluster, true)?;
+    let width = fit.coefficients.len();
+    let mut sandwich = vec![vec![0.0; width]; width];
+    for row in &dfbeta.values {
+        for j in 0..width {
+            for k in 0..width {
+                sandwich[j][k] += row[j] * row[k];
+            }
+        }
+    }
+    Ok(sandwich)
+}
+
 /// `survreg(...)` for prepared inputs: fits `distribution` to `data`.
 ///
 /// `init` are starting values (`nvar` coefficients, optionally followed by
@@ -779,7 +886,7 @@ pub fn survreg_fit(
     let nstrat2 = if scale > 0.0 { 0 } else { nstrata };
     let nvar2 = nvar + nstrat2;
 
-    let x_original = Array2::from_shape_fn((n, nvar), |(i, j)| data.covariates[i][j]);
+    let x_original = data.design();
     let means: Vec<f64> = x_original
         .columns()
         .into_iter()
@@ -788,7 +895,7 @@ pub fn survreg_fit(
 
     // Rescale the X matrix (more stable), but only if the first column is an
     // intercept and no starting values were given.
-    let mut x = x_original.clone();
+    let mut x = x_original.to_owned();
     let mut rescaled: Option<(Vec<f64>, Vec<f64>)> = None;
     if init.is_none() && x.column(0).iter().all(|&v| v == 1.0) && nvar > 1 {
         let okay: Vec<bool> = x.columns().into_iter().map(is_binary_column).collect();
@@ -820,38 +927,21 @@ pub fn survreg_fit(
             }
         })
         .collect();
-    let ones = Array2::<f64>::ones((n, 1));
     let fit0 = if meanonly {
         None
     } else {
-        let coef = distribution.init(&yy, &weights)?;
-        // init returns sigma^2; we need log(sigma), doubled for safety.
-        let vars = if scale > 0.0 {
-            scale.ln()
-        } else {
-            (4.0 * coef[1]).ln() / 2.0
-        };
-        let mut coef0 = vec![coef[0]];
-        coef0.extend(std::iter::repeat_n(vars, nstrata));
-        // A better initial value for the mean using the "glim" trick.
-        let (dg, ddg) = derfun(distribution, &response, &yy, |_| vars.exp());
-        let wt: Vec<f64> = ddg.iter().zip(&weights).map(|(d, w)| -d * w).collect();
-        coef0[0] = (0..n)
-            .map(|i| weights[i] * dg[i] + wt[i] * (yy[i] - offset[i]))
-            .sum::<f64>()
-            / wt.iter().sum::<f64>();
-        let kernel0 = SurvregKernel {
-            y1: &response.y1,
-            y2: &response.y2,
-            status: &response.status,
-            covariates: ones.view(),
-            weights: &weights,
-            offset: &offset,
-            strata: &strata,
-            nstrat: nstrat2,
+        let fit0 = intercept_only_fit(
             distribution,
-        };
-        let fit0 = survreg6(&kernel0, 20, coef0, eps, tol_chol)?;
+            &response,
+            &weights,
+            &offset,
+            &strata,
+            nstrata,
+            nstrat2,
+            scale,
+            eps,
+            tol_chol,
+        )?;
         if !all_finite(&fit0.beta) || !fit0.loglik.is_finite() || !all_finite(fit0.var.iter()) {
             return Err(SurvivalError::computation(
                 "initial iteration failed (use starting estimates?)",
@@ -970,15 +1060,15 @@ pub fn survreg_fit(
         converged: fit.converged,
         linear_predictors,
         scale: scales,
-        df: nvar2,
-        df_residual: n as i64 - nvar2 as i64,
+        df: nvar2 as f64,
+        df_residual: n as f64 - nvar2 as f64,
         means,
         n,
         distribution: distribution.clone(),
         time: response.time,
         time2: response.time2,
         status: response.status,
-        covariates: data.covariates.clone(),
+        covariates: fit_covariates(x_original.into_owned()),
         strata,
         weights: data.weights.clone(),
         offset,
@@ -987,38 +1077,28 @@ pub fn survreg_fit(
     };
 
     if robust {
-        // var <- crossprod(residuals(fit, "dfbeta", weighted = TRUE, collapse = cluster))
-        let dfbeta = fit.residuals(
-            SurvregResidType::Dfbeta,
-            true,
-            data.cluster.as_deref(),
-            true,
-        )?;
-        let width = nvar2;
-        let mut sandwich = vec![vec![0.0; width]; width];
-        for row in &dfbeta.values {
-            for j in 0..width {
-                for k in 0..width {
-                    sandwich[j][k] += row[j] * row[k];
-                }
-            }
-        }
+        let sandwich = robust_variance(&fit, data.cluster.as_deref())?;
         fit.naive_variance_matrix = Some(std::mem::replace(&mut fit.variance_matrix, sandwich));
     }
 
-    // Set singular coefficients to NA; purposely not done until the
-    // residuals have been computed.
-    let singular_variance = fit
+    mark_singular(&mut fit);
+    Ok(fit)
+}
+
+/// Sets the location coefficients with a zero variance to `NaN` (R's `NA`);
+/// survreg.R does this only after the residuals of the robust variance.
+pub(crate) fn mark_singular(fit: &mut SurvregFit) {
+    let nvar = fit.nvar();
+    let variance = fit
         .naive_variance_matrix
         .as_deref()
         .unwrap_or(&fit.variance_matrix);
-    let singular: Vec<bool> = (0..nvar).map(|j| singular_variance[j][j] == 0.0).collect();
+    let singular: Vec<bool> = (0..nvar).map(|j| variance[j][j] == 0.0).collect();
     for (coefficient, &is_singular) in fit.coefficients.iter_mut().zip(&singular) {
         if is_singular {
             *coefficient = f64::NAN;
         }
     }
-    Ok(fit)
 }
 
 /// `survreg(Surv(time, time2, status) ~ x, weights, offset, strata, dist,
@@ -1072,6 +1152,7 @@ pub(crate) fn survreg_from_codes(
         iter_max: max_iter.unwrap_or(defaults.iter_max),
         rel_tolerance: eps.unwrap_or(defaults.rel_tolerance),
         toler_chol: tol_chol.unwrap_or(defaults.toler_chol),
+        ..defaults
     };
     survreg_fit(
         &data,
@@ -1137,7 +1218,8 @@ mod tests {
         assert_eq!(control.iter_max, 30);
         assert_eq!(control.rel_tolerance, 1e-9);
         assert_eq!(control.toler_chol, 1e-10);
-        assert!(SurvregControl::new(30, 0.0, 1e-10).is_err());
+        assert_eq!(control.outer_max, 10);
+        assert!(SurvregControl::new(30, 0.0, 1e-10, 10).is_err());
     }
 
     #[test]
@@ -1215,8 +1297,8 @@ mod tests {
         .unwrap();
         assert!(fit.converged);
         assert_eq!(fit.coefficients.len(), 3);
-        assert_eq!(fit.df, 3);
-        assert_eq!(fit.df_residual, 9);
+        assert_eq!(fit.df, 3.0);
+        assert_eq!(fit.df_residual, 9.0);
         assert_eq!(fit.scale.len(), 1);
         assert_eq!(fit.icoef.len(), 2);
         assert_eq!(fit.variance_matrix.len(), 3);
@@ -1247,7 +1329,7 @@ mod tests {
         assert_eq!(fit.coefficients.len(), 2);
         assert_eq!(fit.variance_matrix.len(), 2);
         assert_eq!(fit.icoef, vec![fit.icoef[0], 0.0]);
-        assert_eq!(fit.df, 2);
+        assert_eq!(fit.df, 2.0);
     }
 
     #[test]
@@ -1579,8 +1661,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fit.n, 3);
-        assert_eq!(fit.df, 4);
-        assert_eq!(fit.df_residual, -1);
+        assert_eq!(fit.df, 4.0);
+        assert_eq!(fit.df_residual, -1.0);
     }
 
     #[test]

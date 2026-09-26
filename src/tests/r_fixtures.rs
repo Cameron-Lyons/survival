@@ -4468,14 +4468,14 @@ fn check_survreg_topic(topic: &str) {
         report.record(
             name,
             "df",
-            (|| assert_scalar(fit.df as f64, num(&expected["df"])?, 0.0, "df"))(),
+            (|| assert_scalar(fit.df, num(&expected["df"])?, 0.0, "df"))(),
         );
         report.record(
             name,
             "df_residual",
             (|| {
                 assert_scalar(
-                    fit.df_residual as f64,
+                    fit.df_residual,
                     num(&expected["df_residual"])?,
                     0.0,
                     "df_residual",

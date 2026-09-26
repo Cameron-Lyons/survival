@@ -1,23 +1,24 @@
 //! `coxpenal.df` (`R/coxpenal.df.R`): the effective degrees of freedom of
-//! each term of a penalised Cox model, after Gray (1992), together with the
-//! two variance estimates `H^{-1}` (`var`) and `H^{-1} I H^{-1}` (`var2`),
-//! where `H` is the penalised information and `I` the information of the
-//! partial likelihood alone.
+//! each term of a penalised model (both `coxpenal.fit` and `survpenal.fit`
+//! call it), after Gray (1992), together with the two variance estimates
+//! `H^{-1}` (`var`) and `H^{-1} I H^{-1}` (`var2`), where `H` is the
+//! penalised information and `I` the information of the likelihood alone.
 //!
 //! The inputs are the dense slices of the Cholesky factor of `H` and of its
-//! inverse (`hmat`, `hinv`: `nvar` rows, `nfrail + nvar` columns, as
-//! [`super::kernel`] returns them — R's matrices transposed), `D^{-1}` of
-//! the factorisation (`fdiag`) and the penalty second derivatives.  With a
-//! sparse frailty term only the dense corner of the inverse is formed.
+//! inverse (`hmat`, `hinv`: `nvar` rows, `nfrail + nvar` columns, as the
+//! penalised Newton kernels return them — R's matrices transposed),
+//! `D^{-1}` of the factorisation (`fdiag`) and the penalty second
+//! derivatives.  With a sparse frailty term only the dense corner of the
+//! inverse is formed.
 
-use super::kernel::PenaltyShape;
+use super::terms::PenaltyShape;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::coxph_wtest::wald_tests;
 use ndarray::Array2;
 
 /// What `coxpenal.df` returns.
 #[derive(Debug, Clone)]
-pub(super) struct TermDf {
+pub(crate) struct TermDf {
     /// `H^{-1}` for the dense coefficients (empty without them).
     pub var: Array2<f64>,
     /// `H^{-1} I H^{-1}`.
@@ -31,7 +32,7 @@ pub(super) struct TermDf {
 }
 
 /// The inputs of [`coxpenal_df`].
-pub(super) struct DfInput<'a> {
+pub(crate) struct DfInput<'a> {
     pub hmat: &'a Array2<f64>,
     pub hinv: &'a Array2<f64>,
     pub fdiag: &'a [f64],
@@ -49,8 +50,12 @@ pub(super) struct DfInput<'a> {
 }
 
 /// `coxph.wtest(var, b)$solve` with R's default tolerance: the generalised
-/// solve `var^{-1} b`.
+/// solve `var^{-1} b`.  A 1x1 `var` takes coxph.wtest's scalar branch,
+/// `b / var` (R/coxph.wtest.R:28-31), which is `NaN` for an aliased column.
 fn generalised_solve(var: &Array2<f64>, b: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
+    if var.len() == 1 && b.nrows() == 1 {
+        return Ok(b.mapv(|value| value / var[(0, 0)]));
+    }
     let solve = wald_tests(var, b, 1e-9)?.solve;
     Array2::from_shape_vec(
         (b.nrows(), b.ncols()),
@@ -85,7 +90,7 @@ fn penalty_matrix(pen2: &[f64], nvar: usize) -> Array2<f64> {
     }
 }
 
-pub(super) fn coxpenal_df(input: DfInput<'_>) -> SurvivalResult<TermDf> {
+pub(crate) fn coxpenal_df(input: DfInput<'_>) -> SurvivalResult<TermDf> {
     let nvar = input.hmat.nrows();
     let nvar2 = input.fdiag.len();
     let nf = nvar2 - nvar;
@@ -271,6 +276,19 @@ mod tests {
         .unwrap();
         assert_eq!(split.df.len(), 2);
         assert!((split.df[0] - var2[(0, 0)] / hinv_full[(0, 0)]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_one_by_one_solve_divides_as_coxph_wtest_does() {
+        let b = Array2::from_elem((1, 1), 0.7);
+        let zero = Array2::zeros((1, 1));
+        assert!(generalised_solve(&zero, &Array2::zeros((1, 1))).unwrap()[(0, 0)].is_nan());
+        let var = Array2::from_elem((1, 1), 0.3);
+        let wald = wald_tests(&var, &b, 1e-9).unwrap().solve;
+        assert_eq!(
+            generalised_solve(&var, &b).unwrap()[(0, 0)].to_bits(),
+            wald[0][0].to_bits()
+        );
     }
 
     #[test]

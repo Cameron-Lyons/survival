@@ -4,8 +4,8 @@ survival 3.8-12.
 R evaluates these functions in ``model.frame``, before ``subset`` and ``na.action``: the
 pspline knots, the ridge variances and the frailty groups, ``sparse`` default and df
 search come from all the rows.  The coefficients are named as R names them, pspline takes
-``combine`` and ``penalty = FALSE``, and survreg refuses penalized terms instead of fitting
-them unpenalized.
+``combine`` and ``penalty = FALSE``, and survreg fits ridge() and pspline() terms penalized
+and refuses frailty terms.
 """
 
 import math
@@ -349,18 +349,27 @@ def test_survreg_fits_an_unpenalized_pspline_with_the_knots_before_subset(lung):
     )
 
 
+def test_survreg_fits_ridge_and_pspline_terms_penalized(lung):
+    # survreg(Surv(time, status) ~ ridge(age, sex, theta = 1), lung)
+    fit = r.survreg("Surv(time, status) ~ ridge(age, sex, theta = 1)", lung)
+    assert fit.coefficients == approx([6.27390503073021, -0.0122117247372104, 0.380638679432984])
+    assert fit.df == approx([0.995994322064926, 1.99215425102188, 0.9998740366961])
+    # survreg(Surv(time, status) ~ pspline(age, df = 3) + sex, lung)
+    fit = r.survreg("Surv(time, status) ~ pspline(age, df = 3) + sex", lung)
+    assert fit.coefficients[:2] == approx([6.24585597390229, -0.252583945887303])
+    assert fit.df[1] == approx(3.06393485506937)
+
+
 @pytest.mark.parametrize(
-    ("rhs", "error", "message"),
+    ("rhs", "message"),
     [
-        ("ridge(age, sex, theta = 1)", NotImplementedError, "survpenal.fit"),
-        ("pspline(age, df = 3) + sex", NotImplementedError, "survpenal.fit"),
-        ("age + frailty(inst, df = 2)", ValueError, "survreg does not support frailty terms"),
-        ("age + frailty.gaussian(inst)", ValueError, "survreg does not support frailty terms"),
-        ("ridge(age, theta = 1) + frailty(inst)", ValueError, "does not support frailty"),
+        ("age + frailty(inst, df = 2)", "survreg does not support frailty terms"),
+        ("age + frailty.gaussian(inst)", "survreg does not support frailty terms"),
+        ("ridge(age, theta = 1) + frailty(inst)", "does not support frailty"),
         # R reports that survreg does not support frailty terms
-        ("sex + frailty(inst):sex", ValueError, "Penalty terms cannot be in an interaction"),
+        ("sex + frailty(inst):sex", "Penalty terms cannot be in an interaction"),
     ],
 )
-def test_survreg_refuses_penalized_terms(lung, rhs, error, message):
-    with pytest.raises(error, match=message):
+def test_survreg_refuses_frailty_terms(lung, rhs, message):
+    with pytest.raises(ValueError, match=message):
         r.survreg(f"Surv(time, status) ~ {rhs}", lung, na_action="na.omit")

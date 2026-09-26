@@ -119,6 +119,7 @@ def test_result_classes_live_in_the_extension_module():
         native.TieMethod,
         native.ConcordanceFit,
         native.SurvregFit,
+        native.SurvpenalFit,
         native.SurvregControl,
         native.SurvregDistribution,
         native.SurvfitKMResult,
@@ -233,6 +234,21 @@ def test_survreg_round_trip(lung, formula, how):
             np.asarray(r.residuals(fit, type=type_))
         )
     np.testing.assert_equal(r.model_summary(again), r.model_summary(fit))
+
+
+@pytest.mark.parametrize("how", COPIES)
+def test_penalized_survreg_round_trip(lung, how):
+    fit = r.survreg("Surv(time, status) ~ pspline(age, df = 3) + sex", lung)
+    again = COPIES[how](fit)
+    assert_same_native(fit.penalized, COPIES[how](fit.penalized))
+    assert again.is_penalized
+    assert again.df == approx(fit.df)
+    assert again.history["pspline(age, df = 3)"].history == approx(
+        fit.history["pspline(age, df = 3)"].history
+    )
+    assert np.asarray(r.predict(again, type="lp")) == approx(np.asarray(r.predict(fit, type="lp")))
+    control = native.SurvregControl(outer_max=3)
+    assert COPIES[how](control).outer_max == 3
 
 
 def test_restored_survreg_reproduces_r(lung):
