@@ -5,10 +5,11 @@
 
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// A `tcut` object.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TcutResult {
     /// The (scaled) values, unchanged otherwise.
     #[pyo3(get)]
@@ -20,6 +21,8 @@ pub struct TcutResult {
     #[pyo3(get)]
     pub labels: Vec<String>,
 }
+
+crate::internal::pickle::picklable!(TcutResult);
 
 /// R's `seq(from, to, length.out = n)`: interior points are
 /// `from + k * (to - from) / (n - 1)` and the last is exactly `to`.

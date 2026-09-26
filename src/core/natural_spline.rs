@@ -15,10 +15,11 @@ use crate::internal::qr::LinpackQr;
 use crate::internal::validation::validate_finite;
 use ndarray::{Array2, s};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// A natural spline basis matrix with the attributes R attaches to it.
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SplineBasisResult {
     /// Row-major `n_rows x n_cols` basis values (`NaN` rows for missing x).
     #[pyo3(get)]
@@ -33,6 +34,8 @@ pub struct SplineBasisResult {
     #[pyo3(get)]
     pub boundary_knots: (f64, f64),
 }
+
+crate::internal::pickle::picklable!(SplineBasisResult);
 
 /// The knot specification of an `nsk` term: interior knots (or a target
 /// `df`), boundary knots (`None` = the 5%/95% quantiles of the data, R's

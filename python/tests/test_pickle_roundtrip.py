@@ -67,7 +67,13 @@ def mgus2_states():
 
 @pytest.fixture(scope="module")
 def cox_fits(lung):
+    # (start, stop] data, whose rows the fitter sorts into its own order
+    split = r.survSplit(
+        "Surv(time, status) ~ age + sex + ph.ecog", lung, cut=[100], start="t0", end="t1"
+    )
     return {
+        "counting": r.coxph("Surv(t0, t1, status) ~ age + sex + strata(ph.ecog)", split),
+        "exact": r.coxph("Surv(time, status) ~ age + sex", lung, ties="exact"),
         "plain": r.coxph("Surv(time, status) ~ age + sex", lung),
         "strata": r.coxph("Surv(time, status) ~ age + strata(sex)", lung),
         "robust": r.coxph("Surv(time, status) ~ age + sex + cluster(inst)", lung),
@@ -120,13 +126,23 @@ def test_result_classes_live_in_the_extension_module():
         native.SurvfitAJResult,
         native.SurvfitAJCounts,
         native.SurvfitAJInfluence,
+        native.AnovaCoxphResult,
+        native.AnovaRow,
+        native.YatesContrast,
+        native.SurvCheckFlags,
+        native.SurvCheckTransitions,
+        native.SurvCheckEvents,
+        native.TcutResult,
+        native.SplineBasisResult,
     ):
         assert cls.__module__ == "survival._survival"
         assert round_trip(cls) is cls
 
 
 @pytest.mark.parametrize("how", COPIES)
-@pytest.mark.parametrize("kind", ["plain", "strata", "robust", "pspline", "frailty"])
+@pytest.mark.parametrize(
+    "kind", ["plain", "strata", "counting", "exact", "robust", "pspline", "frailty"]
+)
 def test_coxph_round_trip_keeps_every_method(cox_fits, kind, how):
     fit = cox_fits[kind]
     again = COPIES[how](fit)
@@ -140,11 +156,14 @@ def test_coxph_round_trip_keeps_every_method(cox_fits, kind, how):
             np.asarray(r.predict(fit, type=type_))
         )
     for type_ in ("martingale", "deviance", "score", "dfbeta"):
+        if kind == "exact" and type_ not in ("martingale", "deviance"):
+            continue  # R has no score residuals for the exact partial likelihood
         assert np.asarray(r.residuals(again, type=type_)) == approx(
             np.asarray(r.residuals(fit, type=type_))
         )
-    schoenfeld = r.residuals(fit, type="schoenfeld")
-    assert r.residuals(again, type="schoenfeld").values == approx(np.asarray(schoenfeld.values))
+    if kind != "exact":
+        schoenfeld = r.residuals(fit, type="schoenfeld")
+        assert r.residuals(again, type="schoenfeld").values == approx(np.asarray(schoenfeld.values))
     np.testing.assert_equal(r.model_summary(again), r.model_summary(fit))
     if kind != "frailty":
         curve, curve_again = r.survfit(fit), r.survfit(again)
@@ -164,6 +183,18 @@ def test_restored_coxph_reproduces_r(cox_fits):
     )
     pspline = round_trip(cox_fits["pspline"])
     assert pspline.loglik == approx([-749.909801390395, -741.026634314088])
+    counting = round_trip(cox_fits["counting"])
+    assert r.coef(counting) == approx([0.0107721611223054, -0.5535169257963722])
+    assert counting.loglik == approx([-566.906517584651, -560.674008643026])
+    assert list(r.residuals(counting, type="martingale"))[:3] == approx(
+        [-0.137898486011657, 0.154439304726364, -0.153778766711812]
+    )
+    exact = copy.deepcopy(cox_fits["exact"])
+    assert r.coef(exact) == approx([0.0170603236756335, -0.5138634696379791])
+    assert exact.loglik == approx([-731.077044479620, -724.016323095385])
+    assert list(r.residuals(exact, type="deviance"))[:2] == approx(
+        [0.00526424745514941, -0.43784124918713996]
+    )
     frailty = copy.deepcopy(cox_fits["frailty"])
     assert frailty.loglik == approx([-744.799933702646, -742.705318882127])
     assert r.coef(frailty) == approx([0.0186357548299227])
@@ -254,6 +285,32 @@ def test_concordance_round_trip(cox_fits, how):
     assert again.var == approx(result.var)
     native_fit = cox_fits["plain"].fit.concordance
     assert_same_native(native_fit, COPIES[how](native_fit))
+
+
+@pytest.mark.parametrize("how", COPIES)
+def test_other_native_results_round_trip(lung, mgus2_states, how):
+    anova = COPIES[how](r.anova(r.coxph("Surv(time, status) ~ age + sex", lung)))
+    assert [row.name for row in anova.rows] == ["NULL", "age", "sex"]
+    assert [row.loglik for row in anova.rows] == approx(
+        [-749.909801390395, -747.789352207734, -742.848245783770]
+    )
+    assert [row.chisq for row in anova.rows[1:]] == approx([4.24089836532130, 9.88221284792735])
+    assert [row.p_value for row in anova.rows[1:]] == approx(
+        [0.03946128102607811, 0.00166884120417826]
+    )
+    yates = r.yates(r.coxph("Surv(time, status) ~ age + factor(ph.ecog)", lung), "ph.ecog")
+    (test,) = COPIES[how](yates).test
+    assert (test.name, test.df) == ("global", 3)
+    assert test.chisq == approx(16.6275607944514)
+    check = COPIES[how](r.survcheck("Surv(etime, event) ~ 1", mgus2_states, id="id"))
+    assert check.transitions.counts == [[115, 860, 409], [0, 0, 0], [0, 0, 0]]
+    assert check.flag.overlap == check.flag.gap == 0
+    assert_same_native(check.events, COPIES[how](check.events))
+    tcut = COPIES[how](r.tcut([1.0, 5.0, 10.0], [0, 4, 8, 12]))
+    assert tcut.labels == ["0+ thru  4", "4+ thru  8", "8+ thru 12"]
+    basis = COPIES[how](r.nsk(lung["age"], df=3))
+    assert (basis.n_rows, basis.n_cols, basis.knots) == (228, 3, [59.0, 67.0])
+    assert basis.basis[:3] == approx([-0.0417023472422705, 0.195461467161017, 0.842748609639831])
 
 
 def test_tie_method_and_distribution_enums_round_trip():

@@ -9,6 +9,7 @@ use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 /// The initial state of every row, given as codes into a level set (an R
@@ -53,8 +54,8 @@ pub struct SurvCheckProblem {
 }
 
 /// Counts of each problem type (R's `flag` vector).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[pyclass(from_py_object, get_all)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckFlags {
     pub overlap: usize,
     pub gap: usize,
@@ -65,8 +66,8 @@ pub struct SurvCheckFlags {
 
 /// R's `transitions` table: `from` states by `to` states (plus the
 /// censoring column), rows and columns that are entirely zero removed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[pyclass(from_py_object, get_all)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckTransitions {
     pub from_states: Vec<String>,
     pub to_states: Vec<String>,
@@ -77,14 +78,16 @@ pub struct SurvCheckTransitions {
 
 /// R's `events` table: for each state (and `(any)` when there is more than
 /// one event state) the number of subjects with `count[j]` visits.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[pyclass(from_py_object, get_all)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckEvents {
     pub states: Vec<String>,
     /// The distinct visit counts labelling the columns.
     pub count: Vec<usize>,
     pub subjects: Vec<Vec<usize>>,
 }
+
+crate::internal::pickle::picklable!(SurvCheckFlags, SurvCheckTransitions, SurvCheckEvents);
 
 /// Result of [`survcheck`], mirroring R's `survcheck` object.
 #[derive(Debug, Clone, PartialEq)]
