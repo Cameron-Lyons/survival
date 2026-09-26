@@ -796,6 +796,20 @@ def test_errors(mg, my):
     fails("an element of the formula list is not a formula", [base, 3], mg, id="id")
     fails("all formulas must have a left and right side", [base, "~ sex"], mg, id="id")
     fails(r"offset\(\) terms are not supported", [base + " + offset(o)", "1:3 ~ sex"], mg, id="id")
+    # R gives cluster(grp) a coefficient on 1:3
+    fails(
+        r"cluster\(\) terms are only allowed in the first formula",
+        [base, "1:3 ~ sex + cluster(grp)"],
+        mg,
+        id="id",
+    )
+    # R fails with "missing value where TRUE/FALSE needed" in coxph
+    fails(
+        "a shared baseline hazard has no observed reference transition",
+        [base, "2:3 + 1:3 + 1:2 ~ 1 / shared"],
+        mg,
+        id="id",
+    )
     fails("use strata\\(\\) terms", "Surv(etime, event) ~ age", mg, id="id", strata="sex")
     censored = mg.iloc[:50].assign(event=cat(["censor"] * 50, ["censor", "pcm", "death"]))
     fails("needs at least one event", "Surv(etime, event) ~ age", censored, id="id")
@@ -862,6 +876,30 @@ def test_cluster_term_keeps_the_list(mg):
     assert fit.wald_test == approx(224.229720522159, rel=1e-6)
     argument = r.coxph(["Surv(etime, event) ~ age", "1:3 ~ mspike"], mg, id="id", cluster="grp")
     assert argument.var == [approx(row) for row in fit.var]
+
+
+def test_cluster_term_in_a_single_formula(mg, my):
+    fit = r.coxph("Surv(etime, event) ~ age + cluster(grp)", mg, id="id")
+    assert fit.coef_names == ("age_1:2", "age_1:3")
+    assert fit.coefficients == approx([0.0131634349599425, 0.0618940325295464])
+    assert fit.loglik == approx([-6351.08896303735, -6173.70118451254])
+    assert diag(fit.var) == approx([4.86279463410306e-05, 1.88448878195120e-05], rel=1e-6)
+    assert fit.rscore == approx(43.5907708214182, rel=1e-6)
+    assert fit.wald_test == approx(211.120387274636, rel=1e-6)
+    argument = r.coxph("Surv(etime, event) ~ age", mg, id="id", cluster="grp")
+    assert argument.coefficients == approx(fit.coefficients)
+    assert argument.var == [approx(row) for row in fit.var]
+
+    counting = r.coxph("Surv(tstart, tstop, event) ~ trt + cluster(sex)", my, id="id")
+    assert counting.coefficients == approx(
+        [-0.141385262465604, -0.390325247666303, -0.261815307928580]
+    )
+    assert counting.loglik == approx([-3881.64862876869, -3876.56285548747])
+    assert diag(counting.var) == approx(
+        [0.000272845209744701, 0.007751566691457243, 0.082127194391246397], rel=1e-6
+    )
+    assert counting.rscore == approx(2.0, rel=1e-6)
+    assert counting.wald_test == approx(73.2642235543448, rel=1e-6)
 
 
 def test_blocks_follow_their_first_transition(my):

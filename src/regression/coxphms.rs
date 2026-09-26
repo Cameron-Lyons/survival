@@ -391,11 +391,15 @@ pub(crate) fn coxphms_fit_data(
         (data.weights.as_ref().map(Vec::len), "weights"),
         (data.offset.as_ref().map(Vec::len), "offset"),
         (data.cluster.as_ref().map(Vec::len), "cluster"),
+        (Some(data.istate.len()), "istate"),
         (Some(data.id.len()), "id"),
     ] {
         if let Some(len) = values {
             validate_length(n, len, name)?;
         }
+    }
+    if data.id.iter().any(|&subject| subject < 1) {
+        return Err(SurvivalError::invalid_input("id codes must be 1-based"));
     }
     validate_length(design.nx, data.x_assign.len(), "x_assign")?;
     if design.strata_use.nrows() != data.strata_terms.len() {
@@ -770,6 +774,35 @@ mod tests {
         .unwrap();
         assert_eq!(stack.block, [1, 1, 1, 1, 2, 2]);
         assert_eq!(stack.strata, [0, 0, 0, 0, 1, 2]);
+    }
+
+    #[test]
+    fn fit_data_rejects_misaligned_istate_and_bad_id_codes() {
+        let (istate, endpoint, x) = mtest();
+        let data = MsData {
+            time: vec![1.0; 10],
+            entry: None,
+            endpoint,
+            istate,
+            x,
+            strata_terms: Vec::new(),
+            id: vec![1, 1, 1, 2, 3, 4, 4, 4, 5, 5],
+            x_assign: vec![1],
+            weights: None,
+            offset: None,
+            cluster: None,
+        };
+        let error = |data: MsData| {
+            coxphms_fit_data(data, &mtest_design(), CoxphOptions::default())
+                .unwrap_err()
+                .to_string()
+        };
+        let mut long = data.clone();
+        long.istate.push(1);
+        assert!(error(long).contains("istate"));
+        let mut zero = data;
+        zero.id[0] = 0;
+        assert!(error(zero).contains("id codes must be 1-based"));
     }
 
     #[test]

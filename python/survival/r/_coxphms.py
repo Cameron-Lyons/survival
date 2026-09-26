@@ -187,7 +187,7 @@ class _CovariateLine:
 class _FormulaList:
     """R's formula list: the master formula the model frame is made from (the first
     formula's terms, then those of every line), the first formula's right-hand side
-    without its ``cluster()`` term, and the covariate lines."""
+    and the covariate lines."""
 
     master: str
     dformula_rhs: str
@@ -343,6 +343,9 @@ def _formula_list(formulas: Sequence[Any], statedata: Any | None) -> _FormulaLis
             raise ValueError(
                 "offset() terms are not supported in a list of formulas (use the offset argument)"
             )
+    for line in lines:
+        if any(isinstance(term, _ModelClusterTerm) for term in _split_terms(line.rhs).model_terms):
+            raise ValueError("cluster() terms are only allowed in the first formula of a list")
     # the term labels of each line; a removal ("- x") adds none
     added = [
         term
@@ -351,14 +354,7 @@ def _formula_list(formulas: Sequence[Any], statedata: Any | None) -> _FormulaLis
         if op == "+" and term not in {"0", "1"}
     ]
     master = f"{response} ~ {' + '.join([dformula_rhs, *added])}"
-    # a cluster() term of the first formula is the cluster argument (the master
-    # formula keeps it for the model frame), not one of the transitions' terms
-    default = " ".join(
-        f"{op} {term}"
-        for op, term in _formula_tokens(dformula_rhs)
-        if not term.startswith("cluster(")
-    )
-    return _FormulaList(master, default, tuple(lines), columns)
+    return _FormulaList(master, dformula_rhs, tuple(lines), columns)
 
 
 # ---------------------------------------------------------------------------
@@ -378,15 +374,20 @@ def _term_key(term: _FormulaModelTerm) -> Any:
 
 
 def _model_terms(rhs: str) -> list[_FormulaModelTerm]:
+    """The terms parsecovar2 matches: a ``cluster()`` term is the cluster argument and
+    an ``offset()`` the offset, neither one a transition's term."""
+
     return [
-        term for term in _split_terms(rhs).model_terms if not isinstance(term, _ModelOffsetTerm)
+        term
+        for term in _split_terms(rhs).model_terms
+        if not isinstance(term, _ModelOffsetTerm | _ModelClusterTerm)
     ]
 
 
 def _termmatch(terms: Sequence[_FormulaModelTerm], allterm: Sequence[Any]) -> list[int]:
     positions = []
     for term in terms:
-        if isinstance(term, _ModelClusterTerm) or _term_key(term) not in allterm:
+        if _term_key(term) not in allterm:
             raise ValueError("termmatch failure 1")
         positions.append(allterm.index(_term_key(term)))
     return positions
