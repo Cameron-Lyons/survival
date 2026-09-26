@@ -70,6 +70,9 @@ from ._formula import (
     _formula_design_row_count,
     _response_arg_columns,
     _strata_term_columns,
+    _timeline_counting,
+    _timeline_model_frame,
+    _timeline_response,
 )
 from ._names import _make_unique
 from ._penalties import _pspline_cbase
@@ -730,7 +733,7 @@ def _coxph_model_frame(fit: CoxphModel) -> dict[str, Any]:
 
     if fit.model is not None:
         return fit.model
-    return _fit_frame(fit).model_frame()
+    return _timeline_model_frame(_fit_frame(fit).model_frame(), fit.formula)
 
 
 def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, Any]]:
@@ -917,17 +920,32 @@ def coxph(
         else coxph_control(**_control_mapping(control, "control"))
     )
 
+    arguments = {
+        "weights": weights,
+        "offset": offset,
+        "strata": strata,
+        "cluster": cluster,
+        "id": id,
+        "istate": istate,
+    }
+    fit_formula = formula
+    if _timeline_response(formula):
+        # coxph.R converts timeline data (surv2counting) before its na.action
+        weights_column = weights_column or (weights if isinstance(weights, str) else None)
+        id_column = id_column or (id if isinstance(id, str) else None)
+        fit_formula, data, arguments = _timeline_counting(formula, data, subset, arguments)
+        subset = None
     frame = _model_frame(
-        formula,
+        fit_formula,
         data,
         subset=subset,
         na_action=na_action,
-        weights=weights,
-        offset=offset,
-        strata_arg=strata,
-        cluster=cluster,
-        id=id,
-        istate=istate,
+        weights=arguments["weights"],
+        offset=arguments["offset"],
+        strata_arg=arguments["strata"],
+        cluster=arguments["cluster"],
+        id=arguments["id"],
+        istate=arguments["istate"],
     )
     if weights_column is not None or id_column is not None:
         frame = replace(
@@ -939,7 +957,7 @@ def coxph(
     # model frame of an ordinary fit)
     if frame.y.type in {"mright", "mcounting"}:
         raise NotImplementedError("multi-state coxph models are not implemented")
-    return _coxph_fit_frame(
+    fit = _coxph_fit_frame(
         frame,
         method=method_name,
         init=init,
@@ -957,6 +975,10 @@ def coxph(
         tt=tt,
         keep_model=_normalize_bool_option_with_default(model, "model", False),
     )
+    if fit_formula is formula:
+        return fit
+    model = None if fit.model is None else _timeline_model_frame(fit.model, formula)
+    return replace(fit, formula=formula, model=model)
 
 
 def clogit(

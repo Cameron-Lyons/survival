@@ -53,9 +53,6 @@ from .r import (
     Surv2 as Surv2,
 )
 from .r import (
-    Surv2data as Surv2data,
-)
-from .r import (
     SurvExpResult as SurvExpResult,
 )
 from .r import (

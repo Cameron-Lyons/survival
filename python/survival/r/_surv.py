@@ -1,10 +1,11 @@
 """``Surv``/``Surv2`` responses, ``strata``/``cluster``, and the timeline conversions.
 
-Ports of ``R/Surv.R``, ``R/Surv2.R``, ``R/strata.R``, ``R/cluster.R`` and the data side of
-``R/fromtimeline.R``: the Python layer builds the response columns the way R's
+Ports of ``R/Surv.R``, ``R/Surv2.R``, ``R/strata.R``, ``R/cluster.R`` and ``totimeline``
+of ``R/fromtimeline.R``: the Python layer builds the response columns the way R's
 ``Surv`` does (status coding, ``origin``, the ``interval2`` to ``interval``
-conversion, multi-state factors) and hands every kernel (``strata``,
-``surv2counting``, ``totimeline``) R's inputs.
+conversion, multi-state factors) and hands every kernel (``strata``, ``totimeline``)
+R's inputs.  The ``Surv2`` formulas of the model functions and ``fromtimeline`` are
+converted in :mod:`survival.r._formula`.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from ._coerce import (
     _r_format_numbers,
     _subset_sequence,
 )
-from ._types import _MISSING, StrataFactor, Surv2Data, Timeline
+from ._types import _MISSING, StrataFactor, Timeline
 
 # ---------------------------------------------------------------------------
 # Surv
@@ -767,74 +768,14 @@ class Surv2:
 
 
 def _repeated_option(repeated: Any) -> str:
+    """R's ``repeated`` option (``FALSE``, ``TRUE`` or ``"first"``) as the
+    ``surv2counting`` kernel spells it."""
+
     if isinstance(repeated, str) and repeated.lower() == "first":
         return "first"
     if _is_bool_like(repeated):
         return "true" if repeated else "false"
     raise ValueError("invalid value for repeated option")
-
-
-def Surv2data(
-    time: Any,
-    status: Any,
-    *,
-    states: Any | None = None,
-    repeated: Any = False,
-    id: Any,
-) -> Surv2Data:
-    """The data side of R's ``surv2counting``: timeline rows to counting-process rows.
-
-    ``status`` holds R's integer codes (0 censored, otherwise the state number) and
-    ``states`` the state names of a multi-state timeline; the result's ``row`` gives
-    the input row each interval starts from.
-    """
-
-    time_values = _time_column(time, "time", "Time variable is not numeric")
-    status_values: list[int | None] = []
-    for value in _materialize_1d(status, "status"):
-        if _is_missing_value(value):
-            status_values.append(None)
-            continue
-        numeric = float(value)
-        if not math.isfinite(numeric) or not numeric.is_integer():
-            raise ValueError("Surv2 status values must be integer codes")
-        status_values.append(int(numeric))
-    id_values = _materialize_labels(id, "id")
-    if len(status_values) != len(time_values) or len(id_values) != len(time_values):
-        raise ValueError("id statement is required")
-    if any(_is_missing_value(value) for value in id_values) or any(
-        math.isnan(value) for value in time_values
-    ):
-        raise ValueError("id and time cannot be missing")
-    state_names = (
-        [] if states is None else [str(value) for value in _materialize_1d(states, "states")]
-    )
-    result = _core.surv2counting(
-        id_values, time_values, status_values, bool(state_names), _repeated_option(repeated)
-    )
-    kind = "counting" if result.counting else "right"
-    return Surv2Data(
-        row=list(result.row),
-        start=list(result.tstart),
-        stop=list(result.tstop),
-        status=list(result.status),
-        istate=None if result.istate is None else list(result.istate),
-        states=state_names,
-        type=f"m{kind}" if state_names else kind,
-    )
-
-
-def fromtimeline(
-    time: Any,
-    status: Any,
-    *,
-    id: Any,
-    states: Any | None = None,
-    repeated: Any = False,
-) -> Surv2Data:
-    """R's ``fromtimeline`` data side: :func:`Surv2data` under its exported name."""
-
-    return Surv2data(time, status, states=states, repeated=repeated, id=id)
 
 
 def totimeline(

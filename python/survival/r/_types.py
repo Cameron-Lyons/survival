@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
-    from ._surv import Surv
+    from ._surv import Surv, Surv2
 
 
 # _core class re-exports.
@@ -267,7 +267,8 @@ class _SurvResponseSpec:
     """The left-hand side of a formula: a ``Surv(...)`` call, or a plain numeric response.
 
     ``surv`` is ``False`` for a formula such as ``time ~ 1`` (``pyears``, ``survexp``),
-    whose single argument is the follow-up expression.
+    whose single argument is the follow-up expression.  ``timeline`` marks a
+    ``Surv2(time, event)`` response, whose ``repeated`` option it keeps.
     """
 
     arguments: tuple[str, ...]
@@ -275,12 +276,16 @@ class _SurvResponseSpec:
     type: str | None
     origin: float = 0.0
     surv: bool = True
+    timeline: bool = False
+    repeated: bool | str = False
 
     @property
     def name(self) -> str:
         """R's name of the response column in the model frame."""
 
-        return f"Surv({', '.join(self.arguments)})" if self.surv else self.arguments[0]
+        if not self.surv:
+            return self.arguments[0]
+        return f"{'Surv2' if self.timeline else 'Surv'}({', '.join(self.arguments)})"
 
 
 @dataclass(frozen=True)
@@ -303,9 +308,9 @@ class ModelFrame:
 
     ``data`` is the caller's data or, when ``subset`` or the ``na.action`` removed rows,
     a mapping of the formula's variables at the kept rows; ``response`` is the ``Surv``
-    response (``y`` a plain numeric response such as ``time ~ 1``, or both ``None`` for
-    ``~ x``); the R-style extra arguments (``weights``, ``offset``, ``id``, ``cluster``,
-    ``istate``) are row aligned with it.  ``na_action`` records the rows the
+    (or ``Surv2``) response (``y`` a plain numeric response such as ``time ~ 1``, or both
+    ``None`` for ``~ x``); the R-style extra arguments (``weights``, ``offset``, ``id``,
+    ``cluster``, ``istate``) are row aligned with it.  ``na_action`` records the rows the
     ``na.action`` removed (``None`` when it removed none).
     """
 
@@ -313,7 +318,7 @@ class ModelFrame:
     data: Any
     n: int
     spec: _SurvResponseSpec | None
-    response: Surv | None
+    response: Surv | Surv2 | None
     y: list[float] | None
     terms: _FormulaTerms
     weights: list[Any] | None = None
@@ -422,24 +427,6 @@ class StrataFactor:
 
     def __len__(self) -> int:
         return len(self.codes)
-
-
-@dataclass(frozen=True)
-class Surv2Data:
-    """Counting-process rows built from a ``Surv2`` timeline (R's ``surv2counting``).
-
-    ``row`` is the zero-based input row each interval starts from; ``type`` is the
-    ``Surv`` type of the ``(start, stop, status)`` response; ``istate`` holds the
-    state codes each interval starts in when the timeline records initial states.
-    """
-
-    row: list[int]
-    start: list[float]
-    stop: list[float]
-    status: list[int | None]
-    istate: list[int] | None
-    states: list[str]
-    type: str
 
 
 @dataclass(frozen=True)

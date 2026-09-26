@@ -58,6 +58,8 @@ from ._formula import (
     _strata_term_columns,
     _subset_formula_inputs,
     _term_values,
+    _timeline_counting,
+    _timeline_response,
 )
 from ._models import _plain_model_frame, coef, model_formula, vcov
 from ._names import _make_names_unique, _make_unique
@@ -665,7 +667,8 @@ def survcheck(
 
     ``formula`` is ``Surv(...) ~ ...`` evaluated in ``data`` (or a ``Surv`` object); ``id`` and
     ``istate`` are column names of ``data`` or vectors.  Problem rows are reported as 1-based
-    row numbers of ``data`` after ``subset``, as R does.
+    row numbers of ``data`` after ``subset``, as R does (of the counting-process rows for
+    ``Surv2`` timeline data, which is converted first).
 
     The R bridge evaluates the model frame itself and passes the response as integer codes
     (``id``, ``time1``, ``time2``, ``status`` and optionally ``istate``) without a formula; that
@@ -680,7 +683,12 @@ def survcheck(
         raise ValueError("time1, time2 and status are only used when no formula is given")
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
-    frame = _model_frame(formula, data, subset, na_action, id=id, istate=istate)
+    extras = {"id": id, "istate": istate}
+    if _timeline_response(formula):
+        # survcheck.R converts timeline data before its na.action
+        formula, data, extras = _timeline_counting(formula, data, subset, extras)
+        subset = None
+    frame = _model_frame(formula, data, subset, na_action, **extras)
     response = frame.response
     n = len(response)
     if n == 0:

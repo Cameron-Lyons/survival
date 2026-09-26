@@ -14,7 +14,7 @@ import numbers
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from .. import _survival as _core
 from ._coerce import (
@@ -43,11 +43,12 @@ from ._formula import (
     _model_strata,
     _model_variables,
     _response_spec,
+    _timeline_counting,
     _unsupported_formula_name,
     model_frame,
 )
 from ._surv import Surv, Surv2
-from ._types import ModelFrame, TcutResult, TMergeFrame, TMergeOperation
+from ._types import ModelFrame, TcutResult, TMergeFrame, TMergeOperation, _SurvResponseSpec
 
 # ---------------------------------------------------------------------------
 # tcut, neardate, lvcf, nostutter
@@ -359,13 +360,14 @@ def survSplit(
 ) -> dict[str, list[Any]]:
     """R's ``survSplit``: split survival records at the ``cut`` times.
 
-    ``formula`` is ``Surv(...) ~ terms``.  R's old-style call gives no formula
+    ``formula`` is ``Surv(...) ~ terms`` or, for timeline data, ``Surv2(...) ~ terms``,
+    whose cut rows are inserted into the timeline.  R's old-style call gives no formula
     (or the data frame in its place) and names the ``end`` and ``event`` columns
     instead, splitting ``Surv([start, ]end, event) ~ .``.  ``id`` names the
-    subject column to add for ``(time, status)`` data, or is the subject vector
-    of ``Surv2`` timeline data.  A ``Surv`` (or ``Surv2``) object may also be given
-    as ``response`` (or ``formula``) with ``data`` holding the covariates, one row
-    per observation.
+    subject column to add for ``(time, status)`` data, or gives the subjects (a vector
+    or a column name) of ``Surv2`` timeline data.  A ``Surv`` (or ``Surv2``) object may
+    also be given as ``response`` (or ``formula``) with ``data`` holding the covariates,
+    one row per observation.
     """
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
@@ -398,7 +400,7 @@ def survSplit(
     added_id = False
     if idname is not None and idname not in names:
         spec = _response_spec(formula)
-        if spec is not None and spec.surv and len(spec.arguments) == 2:
+        if spec is not None and spec.surv and not spec.timeline and len(spec.arguments) == 2:
             n = _data_row_count(data, formula)
             data = {str(name): _column_source(data, str(name)) for name in names}
             data[idname] = list(range(1, n + 1))
@@ -406,13 +408,20 @@ def survSplit(
     # a character id names a data column, which the model frame subsets with the rows
     id_column = idname if added_id or idname in names else None
     mf = model_frame(
-        formula, data, subset=subset, na_action=na_action, id=id if idname is None else id_column
+        formula,
+        data,
+        subset=subset,
+        na_action=na_action,
+        id=id if idname is None else id_column,
+        timeline=True,
     )
     # R only invents the id column for right-censored (time, status) data
     if added_id and (mf.response is None or mf.response.type != "right"):
         data = {name: values for name, values in data.items() if name != idname}
         added_id = False
-    split = _split_kernel(mf.response, cut_values, zero_value, timefix, None)
+    # a Surv2 timeline keeps its (time, event) form: cut rows are inserted into it
+    timeline = isinstance(mf.response, Surv2)
+    split = _split_kernel(mf.response, cut_values, zero_value, timefix, mf.id if timeline else None)
     rows = split.row
     # R's rightdot: with ``~ .`` and no rows dropped the data itself is split, so
     # every column keeps its place
@@ -420,11 +429,18 @@ def survSplit(
         newdata = _split_frame(_data_columns(data, "data"), rows)
     else:
         newdata = _split_frame(dict(_model_variables(mf)), rows)
-        if idname is not None and (added_id or idname in names):
+        if timeline:
+            newdata["(id)"] = [mf.id[row] for row in rows]
+        elif idname is not None and (added_id or idname in names):
             newdata[idname] = [mf.id[row] for row in rows]
     states = () if mf.response is None else mf.response.states
     time_name, time2_name, event_name = _surv_argument_names(mf)
-    if mf.response is None or mf.response.ncol == 2:
+    if timeline:
+        # the Surv2 arguments that are variable names name the columns, whatever
+        # start and event say
+        start = time_name or start or "tstart"
+        event = time2_name or event or "event"
+    elif mf.response is None or mf.response.ncol == 2:
         end = end or time_name or "tstop"
         event = event or time2_name or event_name or "event"
         start = start or "tstart"
@@ -433,13 +449,10 @@ def survSplit(
         event = event or event_name or "event"
         start = start or time_name or "tstart"
     newdata[_output_name(start, "start")] = split.start
-    newdata[_output_name(end, "end")] = split.end
+    if not timeline:
+        newdata[_output_name(end, "end")] = split.end
     newdata[_output_name(event, "event")] = _status_labels(states, split.status)
-    if episode is not None:
-        newdata[_output_name(episode, "episode")] = [value + 1 for value in split.interval]
-    if added is not None:
-        newdata[_output_name(added, "added")] = split.censor
-    return newdata
+    return _split_extras(newdata, split, episode, added)
 
 
 def _survsplit_object(
@@ -470,11 +483,97 @@ def _survsplit_object(
     if not isinstance(response, Surv2):
         newdata[_output_name(end or "tstop", "end")] = split.end
     newdata[_output_name(event or "event", "event")] = _status_labels(response.states, split.status)
+    return _split_extras(newdata, split, episode, added)
+
+
+def _split_extras(
+    newdata: dict[str, list[Any]], split: Any, episode: str | None, added: str | None
+) -> dict[str, list[Any]]:
+    """survSplit's optional ``episode`` (interval number) and ``added`` (inserted row) columns."""
+
     if episode is not None:
         newdata[_output_name(episode, "episode")] = [value + 1 for value in split.interval]
     if added is not None:
         newdata[_output_name(added, "added")] = split.censor
     return newdata
+
+
+# ---------------------------------------------------------------------------
+# fromtimeline
+# ---------------------------------------------------------------------------
+
+
+def fromtimeline(
+    formula: str,
+    data: Any,
+    subset: Any | None = None,
+    id: Any | None = None,
+    repeated: Any = False,
+    lvcf: Any = True,
+    yname: Any | None = None,
+) -> dict[str, list[Any]]:
+    """R's ``fromtimeline`` (R/fromtimeline.R): timeline data as counting-process data.
+
+    ``formula`` is ``Surv2(time, event) ~ terms`` (or ``Surv(time, event) ~ terms``) and
+    ``id`` (a column name or a vector) gives the subjects, whose consecutive rows become
+    intervals as :func:`coxph` makes them; with ``lvcf`` a missing variable takes the
+    subject's last value.  The result holds the model variables, ``istate`` when every
+    subject starts in a state, and the response columns: named ``yname`` or, by default,
+    after the response's arguments (``t1``, ``t2`` and ``s`` for ``Surv2(t, s)``).
+    """
+
+    if not isinstance(formula, str):
+        raise ValueError("a formula argument is required")
+    if data is None:
+        raise ValueError("the data argument is required")
+    if id is None:
+        raise ValueError("the id argument is required")
+    spec = _response_spec(formula)
+    if spec is None or not spec.surv:
+        raise ValueError("response must be a survival object")
+    counting_formula, rows, arguments = _timeline_counting(
+        formula,
+        data,
+        subset,
+        {"id": id},
+        repeated=repeated,
+        lvcf=_normalize_bool_option(lvcf, "lvcf"),
+        require_repeats=True,
+    )
+    mf = model_frame(counting_formula, rows, na_action=None)
+    new = {name: _materialize_1d(values, name) for name, values in _model_variables(mf)}
+    if arguments.get("istate") is not None:
+        new["(istate)" if "istate" in new else "istate"] = list(arguments["istate"])
+    response = cast(Surv, mf.response)
+    counting = response.start is not None
+    status = _status_labels(response.states, response.event)
+    times = [list(response.start), list(response.time)] if counting else [list(response.time)]
+    taken = {spec.name, *new}
+    if yname is None:
+        names = _timeline_response_names(spec, counting)
+        names = [f"_{name}_" if name in taken else name for name in names]
+    else:
+        names = [str(name) for name in _scalar_or_vector(yname, "yname")]
+        if any(name in taken for name in names):
+            raise ValueError("element of yname conflicts with an existing name in the data")
+        if len(names) != 3 and (counting or len(names) != 2):
+            raise ValueError("wrong length for yname")
+        if not counting:
+            names = [names[0], names[-1]]
+    return {**new, **dict(zip(names, [*times, status], strict=True))}
+
+
+def _timeline_response_names(spec: _SurvResponseSpec, counting: bool) -> list[str]:
+    """fromtimeline's default response names: ``tstart``, ``tstop`` and ``status``, or
+    the response's time argument (with 1 and 2 appended for intervals) and its event
+    argument when they are variable names."""
+
+    time_name, event_name = (_surv_argument_name(argument) for argument in spec.arguments[:2])
+    if counting:
+        names = [f"{time_name}1", f"{time_name}2"] if time_name else ["tstart", "tstop"]
+    else:
+        names = [time_name or "tstart"]
+    return [*names, event_name or "status"]
 
 
 # ---------------------------------------------------------------------------
