@@ -517,33 +517,23 @@ impl SurvregDistribution {
         }
     }
 
-    /// `density(z, parms)[, 3]`: `f(z)` without the other columns.
+    /// `density(z, parms)[, 3]`: `f(z)`, skipping the other columns where
+    /// they cost more than `f` itself.
     fn base_pdf(&self, z: f64) -> f64 {
         match self.family {
-            SurvregFamily::ExtremeValue => {
-                let w = z.exp();
-                w * (-w).exp()
-            }
-            SurvregFamily::Logistic => {
-                let w = z.exp();
-                let denom = 1.0 + w;
-                w / (denom * denom)
-            }
             SurvregFamily::Gaussian => dnorm(z, false),
             SurvregFamily::T => student_t_pdf(z, self.df()),
+            SurvregFamily::ExtremeValue | SurvregFamily::Logistic => self.density(z).pdf,
         }
     }
 
-    /// `density(z, parms)[, 1]`: `F(z)` without the other columns.
+    /// `density(z, parms)[, 1]`: `F(z)`, skipping the other columns where
+    /// they cost more than `F` itself.
     fn base_cdf(&self, z: f64) -> f64 {
         match self.family {
-            SurvregFamily::ExtremeValue => 1.0 - (-z.exp()).exp(),
-            SurvregFamily::Logistic => {
-                let w = z.exp();
-                w / (1.0 + w)
-            }
             SurvregFamily::Gaussian => pnorm(z, true, false),
             SurvregFamily::T => student_t_cdf(z, self.df()),
+            SurvregFamily::ExtremeValue | SurvregFamily::Logistic => self.density(z).cdf,
         }
     }
 
@@ -968,6 +958,18 @@ mod tests {
         let w = 0.4f64.exp();
         assert_close(d.survival, (-w).exp(), 1e-15);
         assert_close(d.score, 1.0 - w, 1e-15);
+    }
+
+    #[test]
+    fn base_pdf_and_cdf_are_the_density_columns_exactly() {
+        for name in ["extreme", "logistic", "gaussian", "t"] {
+            let dist = SurvregDistribution::from_name(name, None).unwrap();
+            for z in [-40.0, -2.5, -0.3, 0.0, 0.7, 3.1, 40.0] {
+                let d = dist.density(z);
+                assert_eq!(dist.base_pdf(z), d.pdf, "{name} pdf at {z}");
+                assert_eq!(dist.base_cdf(z), d.cdf, "{name} cdf at {z}");
+            }
+        }
     }
 
     #[test]
