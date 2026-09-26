@@ -62,14 +62,6 @@ const RTOL_VAR: f64 = 1e-6;
 /// case) -> reason.  A listed entry that passes fails the run.
 const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
-        "concordance/coxph_survreg_fits/both.concordance",
-        "missing feature: concordance of several fits at once (the joint variance)",
-    ),
-    (
-        "concordance/coxph_survreg_fits/survreg.concordance",
-        "missing feature: concordance of a survreg fit",
-    ),
-    (
         "coxph/lung_age_sex_cluster_inst/concordance",
         "mismatch: tied linear predictors decided by floating-point noise: cvar[0]: 0.00069155 != 0.00069155",
     ),
@@ -2791,9 +2783,9 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             if cox.cluster_from_id {
                 let unclustered =
                     linear_predictor_concordance(fit, crate::concordance::TimeWeight::N, None)?;
-                return check_fitted_concordance(&unclustered, expected);
+                return check_fitted_concordance(&unclustered, &[], expected);
             }
-            check_fitted_concordance(&fit.concordance, expected)
+            check_fitted_concordance(&fit.concordance, &[], expected)
         }
         "wtest" => {
             let expected = &expected["wtest"];
@@ -4295,9 +4287,87 @@ fn check_survreg_distribution(key: &str, expected: &Value) -> Result<(), String>
 }
 
 /// Every case of a `survreg`-shaped topic (`survreg`, `survreg-extra`).
-fn check_survreg_topic(topic: &str) {
+/// A survreg case's fit, with the model frame, formula and design
+/// column of each term that the prediction checks rebuild designs from.
+struct SurvregCase {
+    fit: SurvregFit,
+    frame: Frame,
+    formula: String,
+    assign: Vec<usize>,
+}
+
+/// `survreg(formula, data, weights, dist, parms, init, scale, control,
+/// robust)` for a fixture case.
+fn survreg_fit_for_case(doc: &Value, case: &Value) -> Result<SurvregCase, String> {
     use crate::regression::parametric_survival::{SurvregControl, SurvregData, survreg_fit};
     use crate::regression::survreg_distributions::SurvregDistribution;
+
+    let args = &case["args"];
+    let frame = case_frame(doc, case)?;
+    let formula = text(&case["formula"]).ok_or("no formula")?;
+    let response = survreg_response(formula, &frame)?;
+    // R's survreg fits an intercept (the kernel takes the design
+    // matrix as given), so add the column of ones R would.
+    let mut design = design(formula, &frame)?;
+    if formula_has_intercept(formula) {
+        design = design.with_intercept();
+    }
+    let weights = arg_nums(case, "weights");
+    let rows: Vec<usize> = (0..response.time.len())
+        .filter(|&i| {
+            response.time[i].is_finite()
+                && design.rows[i].iter().all(|v| v.is_finite())
+                && design.strata.as_ref().is_none_or(|s| s[i] >= 0)
+                && design.offset.as_ref().is_none_or(|o| o[i].is_finite())
+                && weights.as_ref().is_none_or(|w| w[i].is_finite())
+        })
+        .collect();
+    let strata = design.strata.as_ref().map(|s| {
+        pick(s, &rows)
+            .into_iter()
+            .map(|code| code as usize)
+            .collect::<Vec<usize>>()
+    });
+    let cluster = survreg_cluster_codes(formula, &frame)?.map(|codes| pick(&codes, &rows));
+    let data = SurvregData::try_new(
+        pick(&response.time, &rows),
+        pick(&response.status, &rows),
+        rows.iter().map(|&i| design.rows[i].clone()).collect(),
+        response.time2.as_ref().map(|t| pick(t, &rows)),
+        weights.as_ref().map(|w| pick(w, &rows)),
+        design.offset.as_ref().map(|o| pick(o, &rows)),
+        strata,
+        cluster,
+    )
+    .map_err(|err| format!("SurvregData: {err}"))?;
+    let parms = arg_nums(case, "parms");
+    let distribution =
+        SurvregDistribution::from_name(text(&args["dist"]).unwrap_or("weibull"), parms.as_deref())
+            .map_err(|err| format!("distribution: {err}"))?;
+    let init = arg_nums(case, "init");
+    let scale = args["scale"].as_f64().unwrap_or(0.0);
+    let mut control = SurvregControl::default();
+    if let Some(iter_max) = args["control"]["iter.max"].as_u64() {
+        control.iter_max = iter_max as usize;
+    }
+    let fit = survreg_fit(
+        &data,
+        &distribution,
+        init.as_deref(),
+        scale,
+        &control,
+        is_true(&args["robust"]),
+    )
+    .map_err(|err| format!("survreg: {err}"))?;
+    Ok(SurvregCase {
+        fit,
+        assign: design_assign(formula, &design.names),
+        frame,
+        formula: formula.to_string(),
+    })
+}
+
+fn check_survreg_topic(topic: &str) {
     use crate::residuals::survreg_resid::SurvregResidType;
 
     let doc = load_topic(topic);
@@ -4315,70 +4385,12 @@ fn check_survreg_topic(topic: &str) {
             }
             continue;
         }
-        let args = &case["args"];
-        let context = (|| -> Result<_, String> {
-            let frame = case_frame(&doc, case)?;
-            let formula = text(&case["formula"]).ok_or("no formula")?;
-            let response = survreg_response(formula, &frame)?;
-            // R's survreg fits an intercept (the kernel takes the design
-            // matrix as given), so add the column of ones R would.
-            let mut design = design(formula, &frame)?;
-            if formula_has_intercept(formula) {
-                design = design.with_intercept();
-            }
-            let weights = arg_nums(case, "weights");
-            let rows: Vec<usize> = (0..response.time.len())
-                .filter(|&i| {
-                    response.time[i].is_finite()
-                        && design.rows[i].iter().all(|v| v.is_finite())
-                        && design.strata.as_ref().is_none_or(|s| s[i] >= 0)
-                        && design.offset.as_ref().is_none_or(|o| o[i].is_finite())
-                        && weights.as_ref().is_none_or(|w| w[i].is_finite())
-                })
-                .collect();
-            let strata = design.strata.as_ref().map(|s| {
-                pick(s, &rows)
-                    .into_iter()
-                    .map(|code| code as usize)
-                    .collect::<Vec<usize>>()
-            });
-            let cluster = survreg_cluster_codes(formula, &frame)?.map(|codes| pick(&codes, &rows));
-            let data = SurvregData::try_new(
-                pick(&response.time, &rows),
-                pick(&response.status, &rows),
-                rows.iter().map(|&i| design.rows[i].clone()).collect(),
-                response.time2.as_ref().map(|t| pick(t, &rows)),
-                weights.as_ref().map(|w| pick(w, &rows)),
-                design.offset.as_ref().map(|o| pick(o, &rows)),
-                strata,
-                cluster,
-            )
-            .map_err(|err| format!("SurvregData: {err}"))?;
-            let parms = arg_nums(case, "parms");
-            let distribution = SurvregDistribution::from_name(
-                text(&args["dist"]).unwrap_or("weibull"),
-                parms.as_deref(),
-            )
-            .map_err(|err| format!("distribution: {err}"))?;
-            let init = arg_nums(case, "init");
-            let scale = args["scale"].as_f64().unwrap_or(0.0);
-            let mut control = SurvregControl::default();
-            if let Some(iter_max) = args["control"]["iter.max"].as_u64() {
-                control.iter_max = iter_max as usize;
-            }
-            let fit = survreg_fit(
-                &data,
-                &distribution,
-                init.as_deref(),
-                scale,
-                &control,
-                is_true(&args["robust"]),
-            )
-            .map_err(|err| format!("survreg: {err}"))?;
-            let assign = design_assign(formula, &design.names);
-            Ok((fit, frame, formula.to_string(), assign))
-        })();
-        let (fit, frame, formula, assign) = match context {
+        let SurvregCase {
+            fit,
+            frame,
+            formula,
+            assign,
+        } = match survreg_fit_for_case(&doc, case) {
             Err(message) => {
                 for aspect in ["coef", "scale", "loglik", "var", "linear_predictors"] {
                     report.record(name, aspect, Err(message.clone()));
@@ -4866,7 +4878,9 @@ fn r_fixtures_concordance() {
             for (fit, expected) in expected.as_object().expect("fit results") {
                 let result = match (&cox, fit.as_str()) {
                     (Err(err), _) => Err(err.clone()),
-                    (Ok(cox), "coxph") => check_fitted_concordance(&cox.fit.concordance, expected),
+                    (Ok(cox), "coxph") => {
+                        check_fitted_concordance(&cox.fit.concordance, &[], expected)
+                    }
                     (Ok(cox), "coxph_timewt_S") => {
                         // concordance(fit, timewt = "S"): concordancefit on the
                         // linear predictors with the fit's data.
@@ -4875,10 +4889,35 @@ fn r_fixtures_concordance() {
                             crate::concordance::TimeWeight::S,
                             cox.fit.cluster.as_deref(),
                         )
-                        .and_then(|fit| check_fitted_concordance(&fit, expected))
+                        .and_then(|fit| check_fitted_concordance(&fit, &[], expected))
                     }
-                    (Ok(_), "survreg") => unsupported("concordance of a survreg fit"),
-                    (Ok(_), other) => unsupported(format!("concordance of several fits ({other})")),
+                    (Ok(_), "survreg") => survreg_fit_for_case(&doc, case)
+                        .and_then(|survreg| survreg_concordance(&survreg.fit))
+                        .and_then(|fit| check_fitted_concordance(&fit, &[], expected)),
+                    (Ok(cox), "both") => {
+                        // concordance(cfit, cfit2), cfit2 the fit on age
+                        // alone: concordancefit on cbind(lp1, lp2) with
+                        // reverse = TRUE (no weights, strata or cluster).
+                        let mut age_only = case.clone();
+                        age_only["formula"] = Value::from("Surv(time, status) ~ age");
+                        cox_fit_for_case(&doc, &age_only)
+                            .and_then(|cox2| {
+                                let lp = Array2::from_shape_fn((cox.fit.n, 2), |(i, j)| {
+                                    [&cox.fit, &cox2.fit][j].linear_predictors[i]
+                                });
+                                fitted_concordance(
+                                    &cox.fit,
+                                    lp.view(),
+                                    crate::concordance::TimeWeight::N,
+                                    None,
+                                )
+                            })
+                            .and_then(|fit| {
+                                let names = ["cfit".to_string(), "cfit2".to_string()];
+                                check_fitted_concordance(&fit, &names, expected)
+                            })
+                    }
+                    (Ok(_), other) => unsupported(format!("concordance of {other}")),
                 };
                 report.record(name, &format!("{fit}.concordance"), result);
             }
@@ -4899,13 +4938,15 @@ fn r_fixtures_concordance() {
     report.finish();
 }
 
-/// Every aspect of a fitted model's `concordance()` object.
+/// Every aspect of a fitted model's `concordance()` object; `fit_names`
+/// are the row names of a per-fit `count` matrix.
 fn check_fitted_concordance(
     fit: &crate::concordance::ConcordanceFit,
+    fit_names: &[String],
     expected: &Value,
 ) -> Result<(), String> {
     for aspect in CONCORDANCE_ASPECTS {
-        check_concordance_fit(fit, &[], expected, aspect)?;
+        check_concordance_fit(fit, fit_names, expected, aspect)?;
     }
     Ok(())
 }
@@ -4917,10 +4958,22 @@ fn linear_predictor_concordance(
     timewt: crate::concordance::TimeWeight,
     cluster: Option<&[i32]>,
 ) -> Result<crate::concordance::ConcordanceFit, String> {
+    let x = Array2::from_shape_vec((fit.n, 1), fit.linear_predictors.clone())
+        .map_err(|err| err.to_string())?;
+    fitted_concordance(fit, x.view(), timewt, cluster)
+}
+
+/// `concordancefit(y, x, strata, weights, cluster, reverse = TRUE, timewt)`
+/// on the data of a Cox fit: `x` holds the linear predictors of one or
+/// more fits to those data.
+fn fitted_concordance(
+    fit: &CoxPHFit,
+    x: ndarray::ArrayView2<'_, f64>,
+    timewt: crate::concordance::TimeWeight,
+    cluster: Option<&[i32]>,
+) -> Result<crate::concordance::ConcordanceFit, String> {
     use crate::concordance::{ConcordanceOptions, concordancefit};
     use crate::core::SurvResponse;
-    let x = ndarray::Array2::from_shape_vec((fit.n, 1), fit.linear_predictors.clone())
-        .map_err(|err| err.to_string())?;
     let options = ConcordanceOptions {
         timewt,
         reverse: true,
@@ -4946,11 +4999,35 @@ fn linear_predictor_concordance(
     };
     concordancefit(
         response,
-        x.view(),
+        x,
         Some(&fit.weights),
         fit.strata.as_deref(),
         cluster,
         &options,
+    )
+    .map_err(|err| format!("concordancefit: {err}"))
+}
+
+/// `concordance.survreg` for a right-censored fit: `concordancefit(y, lp,
+/// weights, reverse = FALSE)`, a longer predicted time going with a longer
+/// survival.
+fn survreg_concordance(fit: &SurvregFit) -> Result<crate::concordance::ConcordanceFit, String> {
+    use crate::concordance::{ConcordanceOptions, concordancefit};
+    use crate::core::SurvResponse;
+    if fit.time2.is_some() {
+        return unsupported("harness: concordance of an interval-censored survreg fit");
+    }
+    let response = crate::data_types::SurvivalData::try_new(fit.time.clone(), fit.status.clone())
+        .map_err(|err| err.to_string())?;
+    let x = Array2::from_shape_vec((fit.n, 1), fit.linear_predictors.clone())
+        .map_err(|err| err.to_string())?;
+    concordancefit(
+        SurvResponse::Right(&response),
+        x.view(),
+        fit.weights.as_deref(),
+        None,
+        None,
+        &ConcordanceOptions::default(),
     )
     .map_err(|err| format!("concordancefit: {err}"))
 }
@@ -6804,7 +6881,7 @@ fn check_penal_aspect(case: &PenalCase, expected: &Value, aspect: &str) -> Resul
             if is_r_error(expected) {
                 return Ok(());
             }
-            check_fitted_concordance(&coxph.concordance, expected)
+            check_fitted_concordance(&coxph.concordance, &[], expected)
         }
         "predict_lp" => {
             let expected = &expected["predict_lp"];
