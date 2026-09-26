@@ -112,7 +112,12 @@ class _CategoricalDesignTerm:
 
 @dataclass(frozen=True)
 class _PenaltyDesignTerm:
-    """A fitted penalty basis, including the state needed to transform new data."""
+    """A fitted penalty basis, including the state needed to transform new data.
+
+    ``nterm``, ``degree``, ``boundary``, ``intercept`` and ``combine`` (the group of every
+    basis column when pspline's ``combine`` sums them) describe a pspline basis, whose
+    ``penalty`` is ``None`` for ``pspline(penalty=FALSE)``; ``levels`` are a frailty's groups.
+    """
 
     term: _CovariateTerm
     columns: tuple[str, ...]
@@ -122,6 +127,18 @@ class _PenaltyDesignTerm:
     boundary: tuple[float, float] | None = None
     levels: tuple[Any, ...] = ()
     intercept: bool = False
+    nterm: int = 0
+    combine: tuple[int, ...] | None = None
+
+    @property
+    def penalized(self) -> bool:
+        """False for ``pspline(penalty=FALSE)``, whose basis is an ordinary matrix term."""
+        return self.penalty is not None
+
+    @property
+    def kind(self) -> str:
+        """The penalty function: ``"ridge"``, ``"pspline"`` or ``"frailty"``."""
+        return self.penalty.kind if self.penalized else "pspline"
 
 
 _SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm | _PenaltyDesignTerm

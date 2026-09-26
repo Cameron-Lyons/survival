@@ -555,7 +555,11 @@ def _coxph_fit_frame(
     penalized_terms = (
         []
         if no_events
-        else [term for term in frame.design.covariates if isinstance(term, _PenaltyDesignTerm)]
+        else [
+            term
+            for term in frame.design.covariates
+            if isinstance(term, _PenaltyDesignTerm) and term.penalized
+        ]
     )
     penalized = None
     if penalized_terms:
@@ -590,7 +594,7 @@ def _coxph_fit_frame(
         dense = [
             i
             for i, term in enumerate(frame.design.covariates)
-            if not (isinstance(term, _PenaltyDesignTerm) and term.penalty.sparse)
+            if not (isinstance(term, _PenaltyDesignTerm) and term.penalized and term.penalty.sparse)
         ]
         design = replace(
             frame.design,

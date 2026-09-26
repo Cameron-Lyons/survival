@@ -105,21 +105,32 @@ pub enum FrailtyFamily {
 }
 
 impl FrailtyFamily {
-    /// `frailty(distribution = )` with R's partial matching of `"gamma"`,
-    /// `"gaussian"` and `"t"`.
+    /// `frailty(distribution = )`: R's `pmatch(distribution, c("gamma",
+    /// "gaussian", "t"))`, an exact name or an unambiguous prefix of one;
+    /// anything else names a missing `frailty.<distribution>` function.
     pub fn parse(name: &str, tdf: f64) -> SurvivalResult<Self> {
-        let lower = name.to_ascii_lowercase();
-        let matches = |full: &str| !lower.is_empty() && full.starts_with(&lower);
-        if matches("gamma") {
-            Ok(Self::Gamma)
-        } else if matches("gaussian") {
-            Ok(Self::Gaussian)
-        } else if matches("t") {
-            Ok(Self::T(tdf))
-        } else {
-            Err(SurvivalError::invalid_input(format!(
-                "Function 'frailty.{name}' not found"
-            )))
+        let families = [Self::Gamma, Self::Gaussian, Self::T(tdf)];
+        let exact = families.into_iter().find(|family| family.r_name() == name);
+        let partial = || {
+            let mut prefixed = families
+                .into_iter()
+                .filter(|family| !name.is_empty() && family.r_name().starts_with(name));
+            match (prefixed.next(), prefixed.next()) {
+                (Some(family), None) => Some(family),
+                _ => None,
+            }
+        };
+        exact.or_else(partial).ok_or_else(|| {
+            SurvivalError::invalid_input(format!("Function 'frailty.{name}' not found"))
+        })
+    }
+
+    /// The R distribution name.
+    pub fn r_name(self) -> &'static str {
+        match self {
+            Self::Gamma => "gamma",
+            Self::Gaussian => "gaussian",
+            Self::T(_) => "t",
         }
     }
 }
@@ -179,10 +190,12 @@ pub struct RidgePenalty {
     /// Target degrees of freedom; `None` is R's default `nvar / 2`.
     pub df: Option<f64>,
     pub eps: f64,
-    /// Scale the penalty of each column by its variance (`pparm`; R takes
-    /// the variance over the model frame before `na.action`, this port over
-    /// the rows fitted).
+    /// Scale the penalty of each column by its variance (`pparm`).
     pub scale: bool,
+    /// The column variances R's `ridge()` computes in `model.frame`, over
+    /// each column's non-missing values before `subset` and `na.action`;
+    /// `None` takes them from the rows fitted.
+    pub scale_values: Option<Vec<f64>>,
 }
 
 /// The penalty side of `pspline(x, df = 4, theta, nterm = 2.5 * df, eps = .1,
@@ -206,7 +219,7 @@ pub struct FrailtyPenalty {
     /// The variance of the random effect (`method = "fixed"`).
     pub theta: Option<f64>,
     /// Target degrees of freedom (`method = "df"`); the search starts from
-    /// `3 * df / n` (R's `guess`, with `n` the model-frame length).
+    /// `3 * df / n` (R's `guess`).
     pub df: Option<f64>,
     /// Convergence tolerance of the outer iteration; `None` is R's fallback
     /// to `sqrt(coxph.control()$eps)` (the `eps2` entry `coxpenal.fit`
@@ -222,6 +235,9 @@ pub struct FrailtyPenalty {
     /// Starting values of `theta` for the `em` and `reml` searches (R's
     /// `init` passed through `...`).
     pub init: Option<Vec<f64>>,
+    /// The `n` of the `df` guess: R's `length(unclass(x))`, the model-frame
+    /// rows before `subset` and `na.action`; `None` is the rows fitted.
+    pub n: Option<usize>,
 }
 
 /// A user-defined penalty evaluated in Python (the `cox_callback` contract):
@@ -249,12 +265,14 @@ pub enum PenaltyTerm {
 
 impl PenaltyTerm {
     /// `ridge(..., theta, df, eps, scale)`: exactly one of `theta` and `df`
-    /// may be given.
+    /// may be given; `scale_values` are the column variances of the model
+    /// frame (see [`RidgePenalty::scale_values`]).
     pub fn ridge(
         theta: Option<f64>,
         df: Option<f64>,
         eps: f64,
         scale: bool,
+        scale_values: Option<Vec<f64>>,
     ) -> SurvivalResult<Self> {
         if theta.is_some() && df.is_some() {
             return Err(SurvivalError::invalid_input(
@@ -266,6 +284,7 @@ impl PenaltyTerm {
             df,
             eps,
             scale,
+            scale_values,
         }))
     }
 
@@ -327,7 +346,8 @@ impl PenaltyTerm {
     /// init)`: the argument checks of `frailty.gamma`, `frailty.gaussian`
     /// and `frailty.t`.  `method = None` is R's missing `method`: `theta`
     /// gives `fixed`, `df` gives `df` (`aic` for `df = 0` outside the gamma
-    /// family), else the family's default.
+    /// family), else the family's default.  `n` is the length of `x` (see
+    /// [`FrailtyPenalty::n`]).
     #[allow(clippy::too_many_arguments)]
     pub fn frailty(
         distribution: FrailtyFamily,
@@ -338,6 +358,7 @@ impl PenaltyTerm {
         method: Option<&str>,
         caic: bool,
         init: Option<Vec<f64>>,
+        n: Option<usize>,
     ) -> SurvivalResult<Self> {
         let allowed: &[FrailtyMethod] = match distribution {
             FrailtyFamily::Gamma => &[
@@ -427,6 +448,7 @@ impl PenaltyTerm {
             caic,
             sparse,
             init,
+            n,
         }))
     }
 
@@ -461,25 +483,35 @@ impl PenaltyTerm {
         }
     }
 
-    /// The term's `pparm`, computed from its design columns (`x`, `n x p`):
-    /// the column variances of a scaled `ridge`, the difference-penalty
-    /// matrix of a `pspline`.
-    pub(crate) fn pparm(&self, x: &Array2<f64>) -> Pparm {
-        match self {
-            Self::Ridge(term) if term.scale => Pparm::Scale(
-                x.columns()
-                    .into_iter()
-                    .map(|column| {
-                        // R's var(): the n - 1 denominator.
-                        let n = column.len() as f64;
-                        let mean = column.sum() / n;
-                        column.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0)
-                    })
-                    .collect(),
-            ),
+    /// The term's `pparm` for its design columns (`x`, `n x p`): the column
+    /// variances of a scaled `ridge` (the model frame's when given, else
+    /// those of `x`), the difference-penalty matrix of a `pspline`.
+    pub(crate) fn pparm(&self, x: &Array2<f64>) -> SurvivalResult<Pparm> {
+        Ok(match self {
+            Self::Ridge(term) if term.scale => match &term.scale_values {
+                Some(values) if values.len() != x.ncols() => {
+                    return Err(SurvivalError::invalid_input(format!(
+                        "ridge scale_values has {} entries for {} columns",
+                        values.len(),
+                        x.ncols()
+                    )));
+                }
+                Some(values) => Pparm::Scale(values.clone()),
+                None => Pparm::Scale(
+                    x.columns()
+                        .into_iter()
+                        .map(|column| {
+                            // R's var(): the n - 1 denominator.
+                            let n = column.len() as f64;
+                            let mean = column.sum() / n;
+                            column.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0)
+                        })
+                        .collect(),
+                ),
+            },
             Self::Pspline(term) => Pparm::Dmat(difference_penalty(x.ncols(), term.intercept)),
             _ => Pparm::None,
-        }
+        })
     }
 
     /// The term's `pfun` at `coef` for the smoothing parameter `theta`
@@ -694,14 +726,15 @@ mod tests {
     use super::*;
 
     fn value(term: &PenaltyTerm, coef: &[f64], theta: f64, x: &Array2<f64>) -> PenaltyValue {
-        term.evaluate(coef, theta, &term.pparm(x), 2).unwrap()
+        term.evaluate(coef, theta, &term.pparm(x).unwrap(), 2)
+            .unwrap()
     }
 
     #[test]
     fn ridge_penalty_matches_r() {
         let x =
             Array2::from_shape_vec((4, 2), vec![1.0, 2.0, 2.0, 4.0, 3.0, 8.0, 4.0, 16.0]).unwrap();
-        let scaled = PenaltyTerm::ridge(Some(2.0), None, 0.1, true).unwrap();
+        let scaled = PenaltyTerm::ridge(Some(2.0), None, 0.1, true, None).unwrap();
         let out = value(&scaled, &[0.5, -1.0], 2.0, &x);
         let vars = [5.0 / 3.0, 115.0 / 3.0];
         assert!((out.penalty - (0.25 * vars[0] + 1.0 * vars[1])).abs() < 1e-12);
@@ -709,12 +742,18 @@ mod tests {
         assert!((out.second[1] - 2.0 * vars[1]).abs() < 1e-12);
         assert!(!out.flag);
 
-        let plain = PenaltyTerm::ridge(Some(2.0), None, 0.1, false).unwrap();
+        let plain = PenaltyTerm::ridge(Some(2.0), None, 0.1, false, None).unwrap();
         let out = value(&plain, &[0.5, -1.0], 2.0, &x);
         assert!((out.penalty - 1.25).abs() < 1e-12);
         assert_eq!(out.first, vec![1.0, -2.0]);
         assert_eq!(out.second, vec![2.0]);
-        assert!(PenaltyTerm::ridge(Some(1.0), Some(2.0), 0.1, true).is_err());
+        assert!(PenaltyTerm::ridge(Some(1.0), Some(2.0), 0.1, true, None).is_err());
+
+        // The model frame's variances replace those of the fitted columns.
+        let framed = PenaltyTerm::ridge(Some(2.0), None, 0.1, true, Some(vec![3.0, 0.5])).unwrap();
+        assert_eq!(framed.pparm(&x).unwrap(), Pparm::Scale(vec![3.0, 0.5]));
+        let short = PenaltyTerm::ridge(Some(2.0), None, 0.1, true, Some(vec![3.0])).unwrap();
+        assert!(short.pparm(&x).is_err());
     }
 
     #[test]
@@ -725,7 +764,7 @@ mod tests {
         };
         assert_eq!(inner.nterm, 10);
         let x = Array2::zeros((3, 4));
-        let Pparm::Dmat(dmat) = term.pparm(&x) else {
+        let Pparm::Dmat(dmat) = term.pparm(&x).unwrap() else {
             panic!("dmat")
         };
         // Full 5 x 5 D'D with the first row/column dropped.
@@ -766,6 +805,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .unwrap();
         let out = value(&gamma, &[0.1, -0.2, 0.3], 0.5, &x);
@@ -783,6 +823,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .unwrap();
@@ -805,6 +846,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         )
         .unwrap();
@@ -829,6 +871,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
                 None
             )
             .is_err()
@@ -842,6 +885,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
                 None
             )
             .is_err()
@@ -855,11 +899,31 @@ mod tests {
                 None,
                 Some("df"),
                 false,
+                None,
                 None
             )
             .is_err()
         );
-        assert!(FrailtyFamily::parse("gau", 5.0).is_ok());
-        assert!(FrailtyFamily::parse("weibull", 5.0).is_err());
+    }
+
+    #[test]
+    fn frailty_distributions_are_pmatched() {
+        for (name, family) in [
+            ("gamma", "gamma"),
+            ("gam", "gamma"),
+            ("gau", "gaussian"),
+            ("t", "t"),
+        ] {
+            assert_eq!(FrailtyFamily::parse(name, 5.0).unwrap().r_name(), family);
+        }
+        assert_eq!(
+            FrailtyFamily::parse("t", 7.0).unwrap(),
+            FrailtyFamily::T(7.0)
+        );
+        // Ambiguous prefixes and other cases name a missing function, as in R.
+        for name in ["g", "ga", "Gamma", "", "weibull"] {
+            let message = FrailtyFamily::parse(name, 5.0).unwrap_err().to_string();
+            assert!(message.contains(&format!("Function 'frailty.{name}' not found")));
+        }
     }
 }

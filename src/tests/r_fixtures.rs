@@ -6513,6 +6513,7 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
                     penal_arg_f64(&call, "df")?,
                     penal_arg_f64(&call, "eps")?.unwrap_or(0.1),
                     scale,
+                    None,
                 )
                 .map_err(|err| format!("ridge: {err}"))?
             }
@@ -6575,6 +6576,7 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
                     penal_arg_f64(&call, "eps")?,
                     call.named.get("method").map(String::as_str),
                     call.named.get("caic").is_some_and(|v| v == "TRUE"),
+                    None,
                     None,
                 )
                 .map_err(|err| format!("frailty: {err}"))?
