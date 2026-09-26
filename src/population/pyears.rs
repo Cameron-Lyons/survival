@@ -423,8 +423,15 @@ pub fn pyears_py(
 ) -> PyResult<PyearsResult> {
     let n = stop.len();
     let followup = PyearsFollowup { start, stop, event };
+    // Without categories the default empty `categories_data` stands for n
+    // rows of nothing.
+    let data = if factors.is_empty() && categories_data.is_empty() {
+        Array2::zeros((n, 0))
+    } else {
+        rows_to_matrix(&categories_data, n, factors.len(), "categories_data")?
+    };
     let categories = PyearsCategories {
-        data: rows_to_matrix(&categories_data, n, factors.len(), "categories_data")?,
+        data,
         factors,
         dims,
         cuts,

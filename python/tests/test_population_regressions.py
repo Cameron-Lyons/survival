@@ -328,3 +328,12 @@ def test_time_differences_are_ages_in_days():
         times=[365],
     )
     assert dated.surv == approx([expected])
+
+
+def test_pyears_without_categories_takes_the_default_category_data():
+    # pyears(Surv(c(1, 2), c(1, 0)) ~ 1)
+    result = population.pyears([1.0, 2.0], event=[1.0, 0.0])
+    assert result.pyears == approx([0.0082135523613963042])
+    assert result.n == [2.0]
+    assert result.event == [1.0]
+    assert result.dims == []
