@@ -1222,12 +1222,14 @@ pub fn survfitaj(
     }
     let mut curves: Vec<Curve> = Vec::with_capacity(n_curves);
     let mut c2 = vec![0usize; n];
+    // R's logical atrisk, set for one curve at a time, and its row offset
+    // n2 <- cumsum(c(0, n.per.curve))
+    let mut is_atrisk = vec![false; n];
+    let mut row_offset = 0;
     let single = n_curves == 1;
-    for ((curve, &code), keep) in strata_levels
-        .iter()
-        .enumerate()
-        .zip(rows_by_curve(&x, n_curves))
-    {
+    for (&code, keep) in strata_levels.iter().zip(rows_by_curve(&x, n_curves)) {
+        let curve_offset = row_offset;
+        row_offset += keep.len();
         if keep.is_empty() {
             continue;
         }
@@ -1312,19 +1314,21 @@ pub fn survfitaj(
                     // those are not the curve's own rows.  Kept as R does it:
                     // row offset + k contributes to the cluster of the k-th
                     // row of the curve.
-                    let offset: usize = (0..curve)
-                        .map(|earlier| x.iter().filter(|&&value| value == earlier).count())
-                        .sum();
-                    let at_risk = |row: usize| atrisk.contains(&row);
+                    for &i in &atrisk {
+                        is_atrisk[i] = true;
+                    }
                     for (k, &curve_row) in keep.iter().enumerate() {
-                        let row = offset + k;
-                        if row >= n || !at_risk(row) {
+                        let row = curve_offset + k;
+                        if !is_atrisk[row] {
                             continue;
                         }
                         for j in 0..nstate {
                             let indicator = if istate[row] == j { 1.0 } else { 0.0 };
                             u0[[c2[curve_row], j]] += weights[row] * (indicator - p00[j]) / wtsum;
                         }
+                    }
+                    for &i in &atrisk {
+                        is_atrisk[i] = false;
                     }
                     sd0 = Some(
                         (0..nstate)
@@ -1719,6 +1723,52 @@ mod tests {
                     assert!(close(norm, expected, 1e-10), "{norm} != {expected}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn estimated_p0_influence_reads_rows_at_r_curve_offsets() {
+        // survfit(Surv(start, stop, ev) ~ g, id = id, istate = istate,
+        // influence = TRUE) with the two curves' rows interleaved: p0 is
+        // estimated at t0 = 2 and survfitAJ.R reads curve k's rows at its
+        // offset in the data, R's n2 <- cumsum(c(0, n.per.curve))
+        let istate = ["a", "b", "a", "a", "b", "b", "a", "b", "a", "b", "a", "a"];
+        let data = SurvfitAJData::try_new(
+            Some(vec![0.0; 12]),
+            vec![5.0, 3.0, 7.0, 2.0, 4.0, 6.0, 8.0, 1.0, 9.0, 3.0, 6.0, 5.0],
+            vec![1, 0, 2, 1, 0, 2, 2, 0, 1, 2, 0, 1],
+            names(&["b", "c"]),
+            None,
+            Some((0..12).map(|i| i % 2).collect()),
+            Some((1..=12).collect()),
+            Some(names(&istate)),
+            Some(names(&["a", "b", "c"])),
+            None,
+        )
+        .unwrap();
+        let options = SurvfitAJOptions {
+            influence: true,
+            ..Default::default()
+        };
+        let fit = survfitaj(&data, &options).unwrap();
+        assert_eq!(fit.t0, 2.0);
+        assert!(close(fit.p0[0][0], 5.0 / 6.0, 1e-12) && close(fit.p0[1][0], 0.4, 1e-12));
+        // fit$i0[[k]][, "a"] (column "b" is its negative) and fit$se0
+        let influence = fit.influence_pstate.as_ref().unwrap();
+        let expected = [
+            [1.0 / 36.0, 0.0, 1.0 / 36.0, 0.0, -5.0 / 36.0, 0.0],
+            [0.0, 0.0, 0.0, -0.08, 0.0, 0.12],
+        ];
+        for (curve, expected) in influence.iter().zip(expected) {
+            let i0 = curve.i0.as_ref().unwrap();
+            for (k, &value) in expected.iter().enumerate() {
+                assert!(close(i0[k][0], value, 1e-12) && close(i0[k][1], -value, 1e-12));
+                assert_eq!(i0[k][2], 0.0);
+            }
+        }
+        let se0 = fit.se0.as_ref().unwrap();
+        for (row, expected) in se0.iter().zip([(1.0f64 / 48.0).sqrt(), 0.0208f64.sqrt()]) {
+            assert!(close(row[0], expected, 1e-12) && close(row[1], expected, 1e-12));
         }
     }
 
