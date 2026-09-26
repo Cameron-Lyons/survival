@@ -170,9 +170,6 @@ pub(crate) fn cholesky2(matrix: &mut Array2<f64>, toler: f64) -> i32 {
 /// information matrix.
 ///
 /// Panics if `y.len()` differs from the matrix order.
-// Canonical helper; `regression/cox_optimizer.rs` and `regression/coxph_wtest.rs`
-// still carry private copies and are expected to migrate to this one.
-#[allow(dead_code)]
 pub(crate) fn chsolve2(chol: &Array2<f64>, y: &mut [f64]) {
     let n = chol.nrows();
     assert_eq!(n, chol.ncols(), "chsolve2 requires a square matrix");
@@ -500,8 +497,8 @@ pub(crate) fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
 }
 
 /// Always-successful inverse of a flattened row-major `n x n` information or
-/// covariance matrix, kept for residual and frailty code that reports rather
-/// than fails on a singular fit.
+/// covariance matrix, for the spatial frailty fit, which reports rather than
+/// fails on a singular fit.
 ///
 /// A non-singular matrix gets its exact LU inverse. A singular one gets R's
 /// `chinv2` generalised inverse of the symmetrised matrix (see

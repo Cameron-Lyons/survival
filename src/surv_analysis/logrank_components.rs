@@ -4,11 +4,14 @@
 //! expected survival probabilities.
 
 use super::survfit_confint::ConfType;
-use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::core::strata_order::validate_intervals;
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
+use crate::internal::step::find_interval;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
 };
@@ -47,11 +50,7 @@ impl SurvdiffData {
         if let Some(start) = &start {
             validate_length(time.len(), start.len(), "start")?;
             validate_finite(start, "start")?;
-            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "Stop time must be > start time (observation {index})"
-                )));
-            }
+            validate_intervals(start, &time)?;
         }
         if let Some(strata) = &strata {
             validate_length(time.len(), strata.len(), "strata")?;
@@ -106,19 +105,6 @@ impl SurvDiffResult {
     }
 }
 
-fn sorted_levels(codes: &[i32]) -> Vec<i32> {
-    let mut levels = codes.to_vec();
-    levels.sort_unstable();
-    levels.dedup();
-    levels
-}
-
-fn level_index(levels: &[i32], code: i32) -> usize {
-    levels
-        .binary_search(&code)
-        .expect("code is one of its own levels")
-}
-
 /// The Kaplan-Meier curve of one stratum as `survdiff2.c` uses it for the
 /// G-rho weights: a left-continuous function, `S(t-)`, read off the
 /// `survfitkm` curve of the stratum.
@@ -129,7 +115,7 @@ struct LeftContinuousKM<'a> {
 
 impl LeftContinuousKM<'_> {
     fn at(&self, t: f64) -> f64 {
-        match self.time.partition_point(|&x| x < t) {
+        match find_interval(self.time, t, true) {
             0 => 1.0,
             k => self.surv[k - 1],
         }
@@ -248,15 +234,6 @@ fn survdiff_chisq(
     Ok((chisq, df))
 }
 
-/// `aeqSurv` on the time columns.
-fn timefix_times(
-    start: Option<&[f64]>,
-    time: &[f64],
-) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
-    let fixed = crate::data_prep::aeq_surv(time, start, None)?;
-    Ok((fixed.time2, fixed.time))
-}
-
 /// `survfit(Surv(...) ~ strata)` on the (already binned) data: the
 /// Kaplan-Meier curves the G-rho weights are read from.
 fn stratum_curves(
@@ -293,29 +270,18 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
         return Err(SurvivalError::invalid_input("rho must be finite"));
     }
     let (start, time) = if timefix {
-        timefix_times(data.start.as_deref(), &data.time)?
+        aeq_counting(data.start.as_deref(), &data.time)?
     } else {
         (data.start.clone(), data.time.clone())
     };
     let n = time.len();
-    let group_levels = sorted_levels(&data.group);
+    let (group_levels, group) = strata_index(Some(&data.group), n);
     let ngroup = group_levels.len();
     if ngroup < 2 {
         return Err(SurvivalError::invalid_input("There is only 1 group"));
     }
-    let group: Vec<usize> = data
-        .group
-        .iter()
-        .map(|&code| level_index(&group_levels, code))
-        .collect();
-    let strata_levels = data.strata.as_deref().map(sorted_levels);
-    let nstrat = strata_levels.as_ref().map_or(1, Vec::len);
-    let stratum: Vec<usize> = (0..n)
-        .map(|i| match (&data.strata, &strata_levels) {
-            (Some(strata), Some(levels)) => level_index(levels, strata[i]),
-            _ => 0,
-        })
-        .collect();
+    let (strata_levels, stratum) = strata_index(data.strata.as_deref(), n);
+    let nstrat = strata_levels.len();
     let kaplan = if rho == 0.0 {
         None
     } else {
@@ -399,7 +365,7 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
         chisq,
         pvalue: pchisq(chisq, df as f64, false, false),
         df,
-        strata: strata_levels.map(|_| strata_counts),
+        strata: data.strata.is_some().then_some(strata_counts),
         group_codes: group_levels,
     })
 }

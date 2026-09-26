@@ -27,6 +27,7 @@ use crate::concordance::kernels::{
     FastKm, SweepInput, SweepOutput, btree, concordance_sweep, fastkm,
 };
 use crate::core::strata_order::{SurvResponse, rowsum, stratum_groups, validate_intervals};
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_negative,
@@ -436,11 +437,7 @@ pub fn concordancefit(
 /// `aeqSurv`: bin times that differ by less than `sqrt(.Machine$double.eps)`
 /// (absolutely or relative to the mean absolute time).
 fn timefix(times: &mut SurvTimes) -> SurvivalResult<()> {
-    let fixed = crate::data_prep::aeq_surv(&times.stop, times.start.as_deref(), None)?;
-    if let (Some(start), Some(fixed_start)) = (&mut times.start, fixed.time2) {
-        start.copy_from_slice(&fixed_start);
-    }
-    times.stop = fixed.time;
+    (times.start, times.stop) = aeq_counting(times.start.as_deref(), &times.stop)?;
     Ok(())
 }
 

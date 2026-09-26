@@ -8,13 +8,20 @@
 //! curve, `dS(t) / dw_i`; the pseudo value is `n * S(t) - (n - 1) *
 //! S_{-i}(t)`, which the IJ approximates as `S(t) + n * dS(t) / dw_i`.
 
-use super::survfit_summary::{RmeanOption, summary_survfit_times, survfit0_with, survmean};
+use super::survfit_aj_summary::{summary_survfit_aj, time_in_state};
+use super::survfit_summary::{
+    RmeanOption, summary_survfit_times, survfit0_aj, survfit0_with, survmean,
+};
 use super::survfitaj::{
     AJPrepared, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, aj_prepare, survfitaj,
 };
-use super::survfitkm::{SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+use super::survfitkm::{
+    SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm,
+};
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::sorting::sorted_indices_by;
+use crate::internal::step::find_interval;
 use crate::internal::validation::{validate_finite, validate_non_empty};
 use ndarray::{Array2, Array3};
 use pyo3::prelude::*;
@@ -60,11 +67,6 @@ pub struct SurvfitResid {
     pub times: Vec<f64>,
     #[pyo3(get)]
     pub values: Vec<Vec<f64>>,
-}
-
-/// `findInterval(t, dtime)`: the number of event times `<= t`.
-fn find_interval(dtime: &[f64], t: f64) -> usize {
-    dtime.partition_point(|&x| x <= t)
 }
 
 /// R's `approx(x, y, xout)` (linear, `yleft = 0`); `x` increasing.
@@ -120,14 +122,17 @@ fn rsurvpart1(
     }
     // tindex = largest event time <= reporting time, yindex the same for
     // each row's end time, sindex for its entry time
-    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let tindex: Vec<usize> = times
+        .iter()
+        .map(|&t| find_interval(&dtime, t, false))
+        .collect();
     let yindex: Vec<usize> = rows
         .iter()
-        .map(|&r| find_interval(&dtime, stop[r]))
+        .map(|&r| find_interval(&dtime, stop[r], false))
         .collect();
     let sindex: Option<Vec<usize>> = start.map(|start| {
         rows.iter()
-            .map(|&r| find_interval(&dtime, start[r]))
+            .map(|&r| find_interval(&dtime, start[r], false))
             .collect()
     });
     // the dN term applies to all reporting times at or after a death
@@ -361,23 +366,7 @@ fn residuals_from_fit(
     let times = prepare_times(times, options.timefix)?;
     let n = data.time.len();
     // the rows of each curve, in data order
-    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
-        || vec![0],
-        |strata| {
-            let mut levels = strata.clone();
-            levels.sort_unstable();
-            levels.dedup();
-            levels
-        },
-    );
-    let curve_of: Vec<usize> = (0..n)
-        .map(|i| match &data.strata {
-            Some(strata) => strata_levels
-                .binary_search(&strata[i])
-                .expect("strata codes come from the data"),
-            None => 0,
-        })
-        .collect();
+    let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), n);
     let ranges = fit.curve_ranges();
     // residuals.survfit scores the rows of the k-th level with fit[k]: a curve
     // that start.time emptied is not fitted, which leaves more levels than
@@ -400,8 +389,7 @@ fn residuals_from_fit(
         ));
     }
     let (start, stop) = if options.timefix {
-        let fixed = crate::data_prep::aeq_surv(&data.time, data.start.as_deref(), None)?;
-        (fixed.time2, fixed.time)
+        aeq_counting(data.start.as_deref(), &data.time)?
     } else {
         (data.start.clone(), data.time.clone())
     };
@@ -833,14 +821,17 @@ fn rsurvpart2_cumhaz(
         let value = fit.n_risk[events[e]][state];
         if value == 0.0 { 1.0 } else { value }
     };
-    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let tindex: Vec<usize> = times
+        .iter()
+        .map(|&t| find_interval(&dtime, t, false))
+        .collect();
     let yindex: Vec<usize> = rows
         .iter()
-        .map(|&r| find_interval(&dtime, etime[r]))
+        .map(|&r| find_interval(&dtime, etime[r], false))
         .collect();
     let sindex: Option<Vec<usize>> = entry.map(|entry| {
         rows.iter()
-            .map(|&r| find_interval(&dtime, entry[r]))
+            .map(|&r| find_interval(&dtime, entry[r], false))
             .collect()
     });
     for k in 0..nhaz {
@@ -919,23 +910,7 @@ fn residuals_aj_from_fit(
         check,
     } = aj_prepare(data, options.timefix)?;
     let nstate = fit.states.len();
-    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
-        || vec![0],
-        |strata| {
-            let mut levels = strata.clone();
-            levels.sort_unstable();
-            levels.dedup();
-            levels
-        },
-    );
-    let curve_of: Vec<usize> = (0..n)
-        .map(|i| match &data.strata {
-            Some(strata) => strata_levels
-                .binary_search(&strata[i])
-                .expect("strata codes come from the data"),
-            None => 0,
-        })
-        .collect();
+    let (_, curve_of) = strata_index(data.strata.as_deref(), n);
     let cluster: Vec<i64> = match (&data.cluster, &data.id) {
         (Some(cluster), _) => cluster.clone(),
         (None, Some(id)) => id.clone(),
@@ -1100,70 +1075,6 @@ fn residuals_aj_from_fit(
     })
 }
 
-/// `summary(fit, times = , extend = TRUE)$pstate` / `$cumhaz` of one curve
-/// at `t`: the row of `survfit0(fit)` at the largest time `<= t`, its first
-/// row (`p0` / 0, or the curve's own first row when it starts at `t0`)
-/// before that.
-fn aj_value_at(
-    fit: &SurvfitAJResult,
-    curve: usize,
-    range: &std::ops::Range<usize>,
-    t: f64,
-    cumhaz: bool,
-) -> Vec<f64> {
-    let count = fit.time[range.clone()].partition_point(|&x| x <= t);
-    if count == 0 {
-        let starts_at_t0 = !range.is_empty() && fit.time[range.start] == fit.t0;
-        match (cumhaz, starts_at_t0) {
-            (true, true) => fit.cumhaz[range.start].clone(),
-            (true, false) => vec![0.0; fit.hazard_from.len()],
-            (false, true) => fit.pstate[range.start].clone(),
-            (false, false) => fit.p0[curve].clone(),
-        }
-    } else if cumhaz {
-        fit.cumhaz[range.start + count - 1].clone()
-    } else {
-        fit.pstate[range.start + count - 1].clone()
-    }
-}
-
-/// `survmean2`'s mean time in state up to `maxtime`: the area under each
-/// state's probability from `t0`.
-fn aj_mean_time_in_state(
-    fit: &SurvfitAJResult,
-    curve: usize,
-    range: &std::ops::Range<usize>,
-    maxtime: f64,
-) -> Vec<f64> {
-    let nstate = fit.states.len();
-    // the survfit0 rows: (t0, p0) unless the curve already starts at t0
-    let mut tt = Vec::with_capacity(range.len() + 1);
-    let mut rows: Vec<&Vec<f64>> = Vec::with_capacity(range.len() + 1);
-    if range.is_empty() || fit.time[range.start] != fit.t0 {
-        tt.push(fit.t0);
-        rows.push(&fit.p0[curve]);
-    }
-    for i in range.clone() {
-        tt.push(fit.time[i]);
-        rows.push(&fit.pstate[i]);
-    }
-    let mut out = vec![0.0; nstate];
-    for (k, &t) in tt.iter().enumerate() {
-        if t >= maxtime {
-            break;
-        }
-        let next = tt
-            .get(k + 1)
-            .copied()
-            .filter(|&next| next < maxtime)
-            .unwrap_or(maxtime);
-        for j in 0..nstate {
-            out[j] += (next - t) * rows[k][j];
-        }
-    }
-    out
-}
-
 /// Port of `pseudo` for multi-state curves: `pstate(t) + n * residual`
 /// with `n` the number of subjects of the curve.
 pub fn pseudo_aj(
@@ -1176,7 +1087,6 @@ pub fn pseudo_aj(
     let fit = survfitaj(data, options)?;
     let mut residuals =
         residuals_aj_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
-    let ranges = fit.curve_ranges();
     // summary(fit, rmean = t) checks the truncation point against the
     // start.time when the fit has one (survfitAJ keeps it), the smallest
     // time otherwise
@@ -1188,22 +1098,40 @@ pub fn pseudo_aj(
             "Truncation point for the mean time in state is < smallest survival",
         ));
     }
-    // yhat[curve][time][column]
-    let yhat: Vec<Vec<Vec<f64>>> = ranges
-        .iter()
-        .enumerate()
-        .map(|(curve, range)| {
-            residuals
-                .times
-                .iter()
-                .map(|&t| match kind {
-                    PseudoResidualType::Pstate => aj_value_at(&fit, curve, range, t, false),
-                    PseudoResidualType::Cumhaz => aj_value_at(&fit, curve, range, t, true),
-                    PseudoResidualType::Auc => aj_mean_time_in_state(&fit, curve, range, t),
+    // yhat[curve][time][column]: summary(fit, times, extend = TRUE) for
+    // pstate and cumhaz, survmean2's area of survfit0(fit) for the AUC
+    let yhat: Vec<Vec<Vec<f64>>> = match kind {
+        PseudoResidualType::Pstate | PseudoResidualType::Cumhaz => {
+            let summary = summary_survfit_aj(&fit, Some(&residuals.times), false, true)?;
+            let values = match kind {
+                PseudoResidualType::Cumhaz => &summary.cumhaz,
+                _ => &summary.pstate,
+            };
+            summary
+                .curve_ranges()
+                .into_iter()
+                .map(|range| values[range].to_vec())
+                .collect()
+        }
+        PseudoResidualType::Auc => {
+            let fit0 = survfit0_aj(&fit);
+            let nstate = fit0.states.len();
+            fit0.curve_ranges()
+                .into_iter()
+                .map(|range| {
+                    residuals
+                        .times
+                        .iter()
+                        .map(|&t| {
+                            (0..nstate)
+                                .map(|state| time_in_state(&fit0, range.clone(), t, state))
+                                .collect()
+                        })
+                        .collect()
                 })
                 .collect()
-        })
-        .collect();
+        }
+    };
     for (by_col, &curve) in residuals.values.iter_mut().zip(&residuals.curve) {
         let nn = fit.n_id[curve] as f64;
         for (k, col) in by_col.iter_mut().enumerate() {

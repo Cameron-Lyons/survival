@@ -9,11 +9,13 @@
 //! `validation` summaries all read its [`SurvfitKMResult`].
 
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::core::strata_order::validate_intervals;
+use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
 use crate::internal::numpy_utils::{FloatVec, IntVec};
+use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
     validate_non_negative,
@@ -186,11 +188,7 @@ impl SurvfitKMData {
         if let Some(start) = &start {
             validate_length(time.len(), start.len(), "start")?;
             validate_finite(start, "start")?;
-            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "Stop time must be > start time (observation {index})"
-                )));
-            }
+            validate_intervals(start, &time)?;
         }
         if let Some(weights) = &weights {
             validate_length(time.len(), weights.len(), "weights")?;
@@ -361,23 +359,7 @@ impl SurvfitKMResult {
 
     /// Row range of each curve in the stacked vectors.
     pub fn curve_ranges(&self) -> Vec<std::ops::Range<usize>> {
-        match &self.strata {
-            Some(strata) => {
-                let mut start = 0;
-                strata
-                    .iter()
-                    .map(|&count| {
-                        let range = start..start + count;
-                        start += count;
-                        range
-                    })
-                    .collect()
-            }
-            None => {
-                let whole = 0..self.time.len();
-                vec![whole]
-            }
-        }
+        curve_ranges(self.strata.as_deref(), self.time.len())
     }
 
     /// Standard error on the survival scale (`summary.survfit` reports it
@@ -1084,23 +1066,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
 // The R-level driver
 // ---------------------------------------------------------------------------
 
-/// `factor(x, unique(x))`: integer codes in order of first appearance, with
-/// the levels.
-fn codes_by_first_appearance(values: &[i64]) -> (Vec<usize>, Vec<i64>) {
-    let mut levels = Vec::new();
-    let mut lookup = std::collections::HashMap::new();
-    let codes = values
-        .iter()
-        .map(|&value| {
-            *lookup.entry(value).or_insert_with(|| {
-                levels.push(value);
-                levels.len() - 1
-            })
-        })
-        .collect();
-    (codes, levels)
-}
-
 /// Port of `survflag` (`R/xtras.R`): `1 * (first interval of a subject) +
 /// 2 * (last interval)`, where a gap between consecutive intervals or a
 /// change of curve also ends a sequence.
@@ -1129,33 +1094,44 @@ pub(crate) fn survflag(start: &[f64], stop: &[f64], id: &[usize], group: &[usize
     flag
 }
 
-/// `aeqSurv`: bin the time columns jointly so that near-ties become ties
-/// (an interval that collapses to length 0 is an error there).
-fn apply_timefix(
-    start: Option<&[f64]>,
-    time: &[f64],
-) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
-    let fixed = crate::data_prep::aeq_surv(time, start, None)?;
-    Ok((fixed.time2, fixed.time))
+/// Row range of each curve in vectors stacked curve by curve, `strata`
+/// holding the number of rows of each (one curve of `len` rows without).
+pub(crate) fn curve_ranges(strata: Option<&[usize]>, len: usize) -> Vec<std::ops::Range<usize>> {
+    match strata {
+        Some(counts) => {
+            let mut start = 0;
+            counts
+                .iter()
+                .map(|&count| {
+                    let range = start..start + count;
+                    start += count;
+                    range
+                })
+                .collect()
+        }
+        None => std::iter::once(0..len).collect(),
+    }
 }
 
-/// `keep[order(values[keep])]`, ties in `keep` order.
-///
-/// Sorting `(value, row)` pairs rather than an index vector keeps the
-/// keys next to each other in memory, which is several times faster than
-/// an indirect comparison sort at a million rows.  `parallel` splits the
-/// sort itself over threads; a caller sorting several curves at once
-/// parallelises over the curves instead.
-pub(crate) fn ordered_subset(keep: &[usize], values: &[f64], parallel: bool) -> Vec<usize> {
-    let mut pairs: Vec<(f64, usize)> = keep.iter().map(|&i| (values[i], i)).collect();
-    let order =
-        |a: &(f64, usize), b: &(f64, usize)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1));
-    if parallel && pairs.len() > PARALLEL_THRESHOLD_LARGE {
-        pairs.par_sort_unstable_by(order);
-    } else {
-        pairs.sort_unstable_by(order);
-    }
-    pairs.into_iter().map(|(_, i)| i).collect()
+/// `as.integer(factor(strata))` minus one for integer strata codes: the
+/// sorted distinct codes and the zero-based level of each row.  Without
+/// strata every one of the `n` rows is in the single level `0`.
+pub(crate) fn strata_index(strata: Option<&[i32]>, n: usize) -> (Vec<i32>, Vec<usize>) {
+    let Some(codes) = strata else {
+        return (vec![0], vec![0; n]);
+    };
+    let mut levels = codes.to_vec();
+    levels.sort_unstable();
+    levels.dedup();
+    let index = codes
+        .iter()
+        .map(|code| {
+            levels
+                .binary_search(code)
+                .expect("strata code is one of its own levels")
+        })
+        .collect();
+    (levels, index)
 }
 
 /// The rows of each curve in data order: `split(seq_along(x), x)`.
@@ -1236,7 +1212,7 @@ pub fn survfitkm(
     let n_all = data.n();
     let counting = data.start.is_some();
     let (start, time) = if options.timefix {
-        apply_timefix(data.start.as_deref(), &data.time)?
+        aeq_counting(data.start.as_deref(), &data.time)?
     } else {
         (data.start.clone(), data.time.clone())
     };
@@ -1272,27 +1248,10 @@ pub fn survfitkm(
         Some(w) => pick(w),
         None => vec![1.0; n],
     };
-    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
-        || vec![0],
-        |strata| {
-            // levels come from the full data, as in R, so a stratum that
-            // start.time empties still gets an n of 0
-            let mut levels = strata.clone();
-            levels.sort_unstable();
-            levels.dedup();
-            levels
-        },
-    );
-    let x: Vec<usize> = rows
-        .iter()
-        .map(|&i| {
-            data.strata.as_ref().map_or(0, |strata| {
-                strata_levels
-                    .binary_search(&strata[i])
-                    .expect("strata code is one of its own levels")
-            })
-        })
-        .collect();
+    // levels come from the full data, as in R, so a stratum that
+    // start.time empties still gets an n of 0
+    let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), data.time.len());
+    let x: Vec<usize> = rows.iter().map(|&i| curve_of[i]).collect();
 
     // cluster / id / robust logic
     let has_cluster = data.cluster.is_some();
@@ -1301,7 +1260,7 @@ pub fn survfitkm(
     let has_robust = options.robust.is_some();
     let id_codes: Option<Vec<usize>> = data.id.as_ref().map(|id| {
         let subset: Vec<i64> = rows.iter().map(|&i| id[i]).collect();
-        codes_by_first_appearance(&subset).0
+        first_appearance_codes(&subset).0
     });
     let mut influence = options.influence;
     let mut entry = options.entry && has_id;
@@ -1333,11 +1292,11 @@ pub fn survfitkm(
     // (cluster code per row, R's clname); None = no robust variance
     let cluster: Option<(Vec<usize>, Vec<i64>)> = if let Some(source) = &cluster_source {
         // R warns "cluster specified with robust=FALSE, cluster ignored"
-        robust.then(|| codes_by_first_appearance(source))
+        robust.then(|| first_appearance_codes(source))
     } else if robust {
         if let Some(id) = &data.id {
             let subset: Vec<i64> = rows.iter().map(|&i| id[i]).collect();
-            Some(codes_by_first_appearance(&subset))
+            Some(first_appearance_codes(&subset))
         } else if !counting || !has_robust {
             Some(((0..n).collect(), (1..=n as i64).collect()))
         } else {
@@ -1399,12 +1358,12 @@ pub fn survfitkm(
         // appearance so each curve's influence matrix has only its own rows
         let (kernel_cluster, curve_clusters) = match &cluster {
             Some((codes, labels)) => {
-                let subset: Vec<i64> = keep.iter().map(|&i| codes[i] as i64).collect();
-                let (renumbered, unique) = codes_by_first_appearance(&subset);
+                let subset: Vec<usize> = keep.iter().map(|&i| codes[i]).collect();
+                let (renumbered, unique) = first_appearance_codes(&subset);
                 for (&i, code) in keep.iter().zip(renumbered) {
                     ctemp[i] = code;
                 }
-                let names = unique.iter().map(|&code| labels[code as usize]).collect();
+                let names = unique.iter().map(|&code| labels[code]).collect();
                 (Some((ctemp.as_slice(), unique.len())), names)
             }
             None => (None, Vec::new()),

@@ -19,10 +19,11 @@ use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::FloatVec;
+use crate::internal::step::rank_average;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxpenal::CoxpenalFit;
 use crate::regression::coxph::{CoxPHFit, default_assign, validate_assign};
-use ndarray::{Array2, s};
+use ndarray::{Array2, Axis, s};
 #[cfg(feature = "python")]
 use pyo3::Borrowed;
 #[cfg(feature = "python")]
@@ -350,27 +351,6 @@ fn km_transform(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64>
     km
 }
 
-/// R's `rank()`: average ranks for ties.
-fn average_ranks(values: &[f64]) -> Vec<f64> {
-    let n = values.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
-    let mut ranks = vec![0.0; n];
-    let mut position = 0;
-    while position < n {
-        let mut end = position;
-        while end < n && values[order[end]] == values[order[position]] {
-            end += 1;
-        }
-        let average = (position + 1 + end) as f64 / 2.0;
-        for &row in &order[position..end] {
-            ranks[row] = average;
-        }
-        position = end;
-    }
-    ranks
-}
-
 fn solve(matrix: &Array2<f64>, rhs: &[f64]) -> SurvivalResult<Vec<f64>> {
     LuDecomposition::decompose(matrix)?.solve(rhs)
 }
@@ -405,16 +385,6 @@ fn zph_test(chisq: f64, df: f64) -> CoxZphTest {
         df,
         p: pchisq(chisq, df, false, false),
     }
-}
-
-fn submatrix(matrix: &Array2<f64>, rows: &[usize], cols: &[usize]) -> Array2<f64> {
-    let mut out = Array2::zeros((rows.len(), cols.len()));
-    for (i, &r) in rows.iter().enumerate() {
-        for (j, &c) in cols.iter().enumerate() {
-            out[(i, j)] = matrix[(r, c)];
-        }
-    }
-    out
 }
 
 /// `cox.zph(fit, transform, terms, singledf, global)` (`global_test` is
@@ -482,7 +452,7 @@ pub fn cox_zph<'a>(
         .collect();
     let ttimes: Vec<f64> = match transform {
         ZphTransform::Identity => fit.time.clone(),
-        ZphTransform::Rank => average_ranks(&fit.time),
+        ZphTransform::Rank => rank_average(&fit.time),
         ZphTransform::Log => fit.time.iter().map(|t| t.ln()).collect(),
         ZphTransform::Km => km_transform(&fit.time, fit.entry.as_deref(), &fit.status),
         ZphTransform::Values(values) => {
@@ -522,7 +492,7 @@ pub fn cox_zph<'a>(
             .copied()
             .chain(columns.iter().map(|&j| j + nvar))
             .collect();
-        let imat = submatrix(&imatr, &kk, &kk);
+        let imat = imatr.select(Axis(0), &kk).select(Axis(1), &kk);
         let test = if singledf && columns.len() > 1 {
             let inverse = LuDecomposition::decompose(&imat)?.inverse()?;
             let offset = nvar;
@@ -613,7 +583,7 @@ pub fn cox_zph<'a>(
         sresid = sresid.dot(&temp);
         vmean = temp.t().dot(&vmean).dot(&temp);
         let firsts: Vec<usize> = assign.iter().map(|columns| columns[0]).collect();
-        used_terms = submatrix(&used, &(0..used.nrows()).collect::<Vec<_>>(), &firsts);
+        used_terms = used.select(Axis(1), &firsts);
     }
     let ncol = sresid.ncols();
 
@@ -631,7 +601,7 @@ pub fn cox_zph<'a>(
         if k.is_empty() || rows.is_empty() {
             continue;
         }
-        let vk = submatrix(&vmean, &k, &k);
+        let vk = vmean.select(Axis(0), &k).select(Axis(1), &k);
         if k.len() == 1 {
             for &g in &rows {
                 y[(g, k[0])] = sresid[(g, k[0])] / vk[(0, 0)];
@@ -820,7 +790,7 @@ mod tests {
         assert!(km[1] > 0.0 && km[1] < 1.0);
         assert_eq!(km[1], km[2]);
         assert_eq!(
-            average_ranks(&[3.0, 1.0, 3.0, 2.0]),
+            rank_average(&[3.0, 1.0, 3.0, 2.0]),
             vec![3.5, 1.0, 3.5, 2.0]
         );
     }

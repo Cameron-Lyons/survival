@@ -1,7 +1,7 @@
 //! Public re-exports of the crate's vectorised reductions.
 //!
-//! The implementation lives in `crate::internal::simd`; these aliases keep
-//! the historical `*_simd` names used by callers and benchmarks.
+//! The implementation lives in `crate::internal::simd`; these aliases give
+//! it the `*_simd` names used by the validation modules and benchmarks.
 
 pub use crate::internal::simd::{
     dot_product as dot_product_simd, mean as mean_simd, subtract_scalar as subtract_scalar_simd,

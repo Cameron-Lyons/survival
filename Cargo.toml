@@ -31,7 +31,6 @@ survival-pyo3-macros-shim = { version = "0.1.0", path = "survival-pyo3-macros-sh
 default = []
 python = ["dep:numpy", "dep:pyo3", "dep:pyo3-build-config"]
 ml = ["dep:burn"]
-cuda = []
 extension-module = ["python", "pyo3/extension-module"]
 
 [dev-dependencies]

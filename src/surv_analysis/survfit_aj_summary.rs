@@ -60,18 +60,7 @@ pub fn survmean_aj(
             ];
             if mean {
                 let end = ends[curve];
-                let area: f64 = range
-                    .clone()
-                    .map(|i| {
-                        let next = if i + 1 < range.end {
-                            fit.time[i + 1].min(end)
-                        } else {
-                            end
-                        };
-                        (next - fit.time[i]).max(0.0) * fit.pstate[i][state]
-                    })
-                    .sum();
-                row.push(area / scale);
+                row.push(time_in_state(&fit, range.clone(), end, state) / scale);
                 if let Some(auc) = &fit.std_auc {
                     let times = &fit.time[range.clone()];
                     let hi = times.partition_point(|&time| time < end);
@@ -103,6 +92,28 @@ pub fn survmean_aj(
         ends.truncate(1);
     }
     Ok((rows, ends, columns))
+}
+
+/// `survmean2`'s restricted mean time in `state` up to `end` for the rows
+/// `range` of one curve of a `survfit0_aj` fit: the area under the state's
+/// probability curve from the curve's first time to `end`.
+pub(crate) fn time_in_state(
+    fit0: &SurvfitAJResult,
+    range: std::ops::Range<usize>,
+    end: f64,
+    state: usize,
+) -> f64 {
+    range
+        .clone()
+        .map(|i| {
+            let next = if i + 1 < range.end {
+                fit0.time[i + 1].min(end)
+            } else {
+                end
+            };
+            (next - fit0.time[i]).max(0.0) * fit0.pstate[i][state]
+        })
+        .sum()
 }
 
 /// Select step-function values and accumulate counts between reporting times.

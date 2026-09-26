@@ -685,7 +685,7 @@ mod tests {
             )
             .expect_err("non-binary event should fail")
             .to_string()
-            .contains("event values must be 0 or 1")
+            .contains("event must contain only 0/1 values")
         );
 
         assert!(
