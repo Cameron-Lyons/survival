@@ -1597,16 +1597,18 @@ def _predict_terms(
         assign=[active[idx] for idx in engine_terms],
     )
     rows, se_rows = result.fit, result.se_fit
-    if position is not None and position in selected:
-        column = selected.index(position)
+    # the frailty column goes in at each place the selection names it, left to right
+    columns = [column for column, idx in enumerate(selected) if idx == position]
+    if columns:
         penalized = fit.penalized
         for i, row in enumerate(rows):
             group = penalized.frail_index[i] if new is None else None
-            row.insert(column, 0.0 if group is None else penalized.frail[group])
-            if se_rows is not None:
-                se_rows[i].insert(
-                    column, 0.0 if group is None else math.sqrt(penalized.fvar[group])
-                )
+            value = 0.0 if group is None else penalized.frail[group]
+            se = 0.0 if group is None else math.sqrt(penalized.fvar[group])
+            for column in columns:
+                row.insert(column, value)
+                if se_rows is not None:
+                    se_rows[i].insert(column, se)
     return rows, se_rows
 
 

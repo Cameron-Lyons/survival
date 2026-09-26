@@ -153,6 +153,19 @@ def test_predict_terms_places_a_sparse_frailty_among_the_selection(lung):
     assert swapped.se_fit == [row[::-1] for row in full.se_fit]
     frailty = r.predict(fit, type="terms", terms=[2])
     assert frailty == [[row[1]] for row in full.fit]
+    # R's predict.coxph.penal fails on a repeated sparse term; each repeat is a column
+    repeated = r.predict(fit, type="terms", terms=[2, 1, 2], se_fit=True)
+    assert repeated.fit == [[row[1], row[0], row[1]] for row in full.fit]
+    assert repeated.se_fit == [[row[1], row[0], row[1]] for row in full.se_fit]
+
+
+def test_predict_terms_pads_a_repeated_sparse_frailty(lung):
+    fit = r.coxph(
+        "Surv(time, status) ~ sex + frailty(inst, sparse=TRUE)", lung, na_action="na.exclude"
+    )
+    padded = r.predict(fit, type="terms", terms=[2, 2])
+    assert len(padded) == 228
+    assert {len(row) for row in padded} == {2}
 
 
 def test_model_matrix_numbers_terms_as_r(lung):

@@ -469,10 +469,9 @@ def fitted(fit: Any, **kwargs: Any) -> Any:
 
 
 @fitted.register(CoxphModel)
-def _fitted_cox(fit: CoxphModel, **kwargs: Any) -> list[float]:
+def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
     # fitted.coxph(object, ...) is object$linear.predictors: centred at the overall
     # means, not padded by naresid, other arguments ignored
-    del kwargs
     return fit.linear_predictors
 
 
