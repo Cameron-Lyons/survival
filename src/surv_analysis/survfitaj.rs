@@ -9,7 +9,7 @@ use super::survfit_summary::RmeanOption;
 use super::survfitkm::{
     check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
 };
-use crate::data_prep::first_appearance_codes;
+use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
@@ -967,15 +967,15 @@ pub(crate) fn aj_prepare(data: &SurvfitAJData, timefix: bool) -> SurvivalResult<
     let n_all = data.time.len();
     let counting = data.start.is_some();
     let (start, time) = if timefix {
-        let fixed = crate::data_prep::aeq_surv(&data.time, data.start.as_deref(), None)?;
-        if let Some(fixed_start) = &fixed.time2
-            && fixed_start.iter().zip(&fixed.time).any(|(s, t)| s == t)
+        let (start, time) = aeq_counting(data.start.as_deref(), &data.time)?;
+        if let Some(start) = &start
+            && start.iter().zip(&time).any(|(s, t)| s == t)
         {
             return Err(SurvivalError::invalid_input(
                 "aeqSurv exception, an interval has effective length 0",
             ));
         }
-        (fixed.time2, fixed.time)
+        (start, time)
     } else {
         (data.start.clone(), data.time.clone())
     };

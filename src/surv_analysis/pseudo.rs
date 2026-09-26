@@ -18,6 +18,7 @@ use super::survfitaj::{
 use super::survfitkm::{
     SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm,
 };
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::sorting::sorted_indices_by;
 use crate::internal::step::find_interval;
@@ -388,8 +389,7 @@ fn residuals_from_fit(
         ));
     }
     let (start, stop) = if options.timefix {
-        let fixed = crate::data_prep::aeq_surv(&data.time, data.start.as_deref(), None)?;
-        (fixed.time2, fixed.time)
+        aeq_counting(data.start.as_deref(), &data.time)?
     } else {
         (data.start.clone(), data.time.clone())
     };

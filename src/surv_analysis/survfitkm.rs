@@ -10,7 +10,7 @@
 
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
-use crate::data_prep::first_appearance_codes;
+use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
@@ -1098,16 +1098,6 @@ pub(crate) fn survflag(start: &[f64], stop: &[f64], id: &[usize], group: &[usize
     flag
 }
 
-/// `aeqSurv`: bin the time columns jointly so that near-ties become ties
-/// (an interval that collapses to length 0 is an error there).
-fn apply_timefix(
-    start: Option<&[f64]>,
-    time: &[f64],
-) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
-    let fixed = crate::data_prep::aeq_surv(time, start, None)?;
-    Ok((fixed.time2, fixed.time))
-}
-
 /// Row range of each curve in vectors stacked curve by curve, `strata`
 /// holding the number of rows of each (one curve of `len` rows without).
 pub(crate) fn curve_ranges(strata: Option<&[usize]>, len: usize) -> Vec<std::ops::Range<usize>> {
@@ -1226,7 +1216,7 @@ pub fn survfitkm(
     let n_all = data.n();
     let counting = data.start.is_some();
     let (start, time) = if options.timefix {
-        apply_timefix(data.start.as_deref(), &data.time)?
+        aeq_counting(data.start.as_deref(), &data.time)?
     } else {
         (data.start.clone(), data.time.clone())
     };

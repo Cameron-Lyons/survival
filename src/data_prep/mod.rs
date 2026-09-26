@@ -26,7 +26,9 @@ pub(crate) mod tcut;
 pub(crate) mod tmerge;
 pub(crate) mod totimeline;
 
-pub use aeq_surv::{AeqSurvResult, DEFAULT_TOLERANCE, aeq_surv, aeq_surv_py, aeq_times};
+pub use aeq_surv::{
+    AeqSurvResult, DEFAULT_TOLERANCE, aeq_counting, aeq_surv, aeq_surv_py, aeq_times,
+};
 pub use cluster::{ClusterResult, cluster, cluster_py};
 pub use id_value::{IdKey, IdValue, SubjectId, first_appearance_codes};
 pub use lvcf::{lvcf, lvcf_py};

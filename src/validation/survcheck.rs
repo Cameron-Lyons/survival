@@ -5,7 +5,7 @@
 //! of R's `survcheck` (response construction, `na.action`, row renumbering)
 //! belongs to the caller; this module receives the already-built response.
 
-use crate::data_prep::aeq_surv;
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
@@ -397,14 +397,6 @@ fn validate(input: &SurvCheckInput<'_>) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// Apply `aeqSurv` to both time columns at once, as R does for a
-/// counting-process response.
-fn timefix_times(time1: Option<&[f64]>, time2: &[f64]) -> SurvivalResult<(Vec<f64>, Vec<f64>)> {
-    let n = time2.len();
-    let fixed = aeq_surv(time2, time1, None)?;
-    Ok((fixed.time2.unwrap_or_else(|| vec![0.0; n]), fixed.time))
-}
-
 /// Check a multi-state (or plain) survival response for consistency, as
 /// R's `survcheck` does: build the current-state vector, the transitions
 /// and events tables, and flag overlapping, gapped, jumped and teleported
@@ -413,7 +405,8 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
     validate(input)?;
     let n = input.id.len();
     let (time1, time2) = if input.timefix {
-        timefix_times(input.time1, input.time2)?
+        let (time1, time2) = aeq_counting(input.time1, input.time2)?;
+        (time1.unwrap_or_else(|| vec![0.0; n]), time2)
     } else {
         (
             input.time1.map_or_else(|| vec![0.0; n], <[f64]>::to_vec),

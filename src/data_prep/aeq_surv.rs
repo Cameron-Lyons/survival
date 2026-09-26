@@ -22,9 +22,6 @@ pub struct AeqSurvResult {
     /// The second time column of counting-process data.
     #[pyo3(get)]
     pub time2: Option<Vec<f64>>,
-    /// Zero-based rows in which at least one time value changed.
-    #[pyo3(get)]
-    pub changed: Vec<usize>,
 }
 
 /// The unique finite times with near ties removed (R's `cuts`), or `None`
@@ -86,7 +83,6 @@ pub fn aeq_surv(
     let unchanged = || AeqSurvResult {
         time: time.to_vec(),
         time2: time2.map(<[f64]>::to_vec),
-        changed: Vec::new(),
     };
     if tolerance <= 0.0 {
         return Ok(unchanged());
@@ -107,21 +103,27 @@ pub fn aeq_surv(
             }
         }
     }
-    let same = |a: f64, b: f64| a == b || (a.is_nan() && b.is_nan());
-    let changed = (0..time.len())
-        .filter(|&i| {
-            !same(new_time[i], time[i])
-                || new_time2
-                    .as_ref()
-                    .zip(time2)
-                    .is_some_and(|(n, o)| !same(n[i], o[i]))
-        })
-        .collect();
     Ok(AeqSurvResult {
         time: new_time,
         time2: new_time2,
-        changed,
     })
+}
+
+/// `aeqSurv` with R's default tolerance on the time columns of a
+/// right-censored (`start` absent) or counting-process response, returned
+/// as `(start, stop)`.
+pub fn aeq_counting(
+    start: Option<&[f64]>,
+    stop: &[f64],
+) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
+    match start {
+        Some(start) => {
+            let fixed = aeq_surv(start, Some(stop), None)?;
+            let stop = fixed.time2.expect("aeq_surv keeps the second column");
+            Ok((Some(fixed.time), stop))
+        }
+        None => Ok((None, aeq_surv(stop, None, None)?.time)),
+    }
 }
 
 /// `aeqSurv` on a single time column with R's default tolerance: the
@@ -152,7 +154,6 @@ mod tests {
         let time = [1.0, 2.0, 3.0, 4.0, 5.0];
         let result = aeq_surv(&time, None, None).unwrap();
         assert_eq!(result.time, time);
-        assert!(result.changed.is_empty());
         assert!(aeq_surv(&[], None, None).unwrap().time.is_empty());
         assert_eq!(aeq_times(&[1.0, 1.0, 1.0]), vec![1.0, 1.0, 1.0]);
     }
@@ -161,19 +162,16 @@ mod tests {
     fn near_ties_collapse_onto_the_earliest_value() {
         let result = aeq_surv(&[1.0, 1.0 + 1e-10, 2.0, 3.0], None, Some(1e-8)).unwrap();
         assert_eq!(result.time, vec![1.0, 1.0, 2.0, 3.0]);
-        assert_eq!(result.changed, vec![1]);
 
         // Adjacent cutpoints within tolerance chain onto the first.
         let result = aeq_surv(&[1.0, 1.0 + 9e-9, 1.0 + 18e-9], None, Some(1e-8)).unwrap();
         assert_eq!(result.time, vec![1.0, 1.0, 1.0]);
-        assert_eq!(result.changed, vec![1, 2]);
     }
 
     #[test]
     fn relative_tolerance_uses_the_mean_absolute_time() {
         let result = aeq_surv(&[1e9, 1e9 + 1.0, 1e9 + 20.0], None, Some(1e-8)).unwrap();
         assert_eq!(result.time, vec![1e9, 1e9, 1e9 + 20.0]);
-        assert_eq!(result.changed, vec![1]);
         // The fixture case `right_1e9`: 2.000000001 is tied with 2.
         let result = aeq_surv(&[1.0, 1.00000000000001, 2.0, 2.000000001, 3.0], None, None).unwrap();
         assert_eq!(result.time, vec![1.0, 1.0, 2.0, 2.0, 3.0]);
@@ -186,7 +184,13 @@ mod tests {
         let result = aeq_surv(&start, Some(&stop), None).unwrap();
         assert_eq!(result.time, vec![0.0, 0.0, 1.0, 1.5]);
         assert_eq!(result.time2, Some(vec![1.0, 1.0, 2.0, 2.5]));
-        assert_eq!(result.changed, vec![1]);
+        let (fixed_start, fixed_stop) = aeq_counting(Some(&start), &stop).unwrap();
+        assert_eq!(fixed_start, Some(result.time));
+        assert_eq!(fixed_stop, vec![1.0, 1.0, 2.0, 2.5]);
+        assert_eq!(
+            aeq_counting(None, &stop).unwrap(),
+            (None, vec![1.0, 1.0, 2.0, 2.5])
+        );
 
         let zero_length = aeq_surv(&[0.0, 1.0], Some(&[1.0, 1.0 + 1e-12]), None);
         assert!(

@@ -6,6 +6,7 @@
 use super::survfit_confint::ConfType;
 use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
@@ -235,15 +236,6 @@ fn survdiff_chisq(
     Ok((chisq, df))
 }
 
-/// `aeqSurv` on the time columns.
-fn timefix_times(
-    start: Option<&[f64]>,
-    time: &[f64],
-) -> SurvivalResult<(Option<Vec<f64>>, Vec<f64>)> {
-    let fixed = crate::data_prep::aeq_surv(time, start, None)?;
-    Ok((fixed.time2, fixed.time))
-}
-
 /// `survfit(Surv(...) ~ strata)` on the (already binned) data: the
 /// Kaplan-Meier curves the G-rho weights are read from.
 fn stratum_curves(
@@ -280,7 +272,7 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
         return Err(SurvivalError::invalid_input("rho must be finite"));
     }
     let (start, time) = if timefix {
-        timefix_times(data.start.as_deref(), &data.time)?
+        aeq_counting(data.start.as_deref(), &data.time)?
     } else {
         (data.start.clone(), data.time.clone())
     };

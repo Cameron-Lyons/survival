@@ -8,7 +8,7 @@
 //! distribution and the weighting are computed here.  The Python entry
 //! point lives in `pybridge::brier`.
 
-use crate::data_prep::aeq_surv;
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::step::step_at;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
@@ -128,16 +128,10 @@ fn validate(input: &BrierInput<'_>) -> SurvivalResult<()> {
 pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
     validate(&input)?;
     let n = input.time.len();
-    let (start, time): (Option<Vec<f64>>, Vec<f64>) = match (input.timefix, input.start) {
-        (false, start) => (start.map(<[f64]>::to_vec), input.time.to_vec()),
-        (true, None) => (None, aeq_surv(input.time, None, None)?.time),
-        (true, Some(start)) => {
-            let fixed = aeq_surv(start, Some(input.time), None)?;
-            let stop = fixed
-                .time2
-                .ok_or_else(|| SurvivalError::computation("aeqSurv dropped the stop times"))?;
-            (Some(fixed.time), stop)
-        }
+    let (start, time) = if input.timefix {
+        aeq_counting(input.start, input.time)?
+    } else {
+        (input.start.map(<[f64]>::to_vec), input.time.to_vec())
     };
     let status: Vec<f64> = input.status.iter().map(|&s| f64::from(s)).collect();
     let weights: Vec<f64> = input.weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
