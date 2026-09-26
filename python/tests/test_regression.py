@@ -457,7 +457,7 @@ def test_survreg_fit_predictions_match_r():
         [1.5406568557700573, 1.1391801296374089]
     )
 
-    with pytest.raises(ValueError, match="prediction type 'bogus'"):
+    with pytest.raises(ValueError, match="'arg' should be one of \"response\""):
         fit.predict(predict_type="bogus")
     with pytest.raises(ValueError, match="probabilities between 0 and 1"):
         fit.predict(newdata=newdata, predict_type="quantile", p=[1.5])
@@ -514,7 +514,7 @@ def test_survreg_fit_residuals_match_r():
         ],
     )
 
-    with pytest.raises(ValueError, match="residual type 'bogus'"):
+    with pytest.raises(ValueError, match="'arg' should be one of \"response\""):
         fit.residuals(residual_type="bogus")
 
 

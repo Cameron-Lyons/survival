@@ -9,6 +9,7 @@
 //! values.
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::match_arg::match_arg;
 use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_distributions::SurvregDistribution;
@@ -38,6 +39,7 @@ pub enum SurvregResidType {
 }
 
 impl SurvregResidType {
+    /// The `type` choices of `residuals.survreg`, in R's order.
     const CHOICES: [(&'static str, Self); 9] = [
         ("response", Self::Response),
         ("deviance", Self::Deviance),
@@ -50,28 +52,11 @@ impl SurvregResidType {
         ("matrix", Self::Matrix),
     ];
 
-    /// `match.arg(type)`: an exact name or a unique prefix.
+    /// `match.arg(type)`: an exact name or a unique prefix (see
+    /// [`match_arg`]).
     pub fn parse(name: &str) -> SurvivalResult<Self> {
-        let key = name.trim().to_lowercase();
-        if let Some((_, kind)) = Self::CHOICES.iter().find(|(choice, _)| *choice == key) {
-            return Ok(*kind);
-        }
-        let matches: Vec<Self> = Self::CHOICES
-            .iter()
-            .filter(|(choice, _)| !key.is_empty() && choice.starts_with(key.as_str()))
-            .map(|(_, kind)| *kind)
-            .collect();
-        match matches.as_slice() {
-            [kind] => Ok(*kind),
-            _ => Err(SurvivalError::invalid_input(format!(
-                "residual type '{name}' should be one of {}",
-                Self::CHOICES
-                    .iter()
-                    .map(|(choice, _)| format!("\"{choice}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
-        }
+        let index = match_arg(name, &Self::CHOICES.map(|(choice, _)| choice))?;
+        Ok(Self::CHOICES[index].1)
     }
 
     /// Whether R returns a matrix (one row per observation) for this type.
@@ -403,10 +388,7 @@ mod tests {
             SurvregResidType::parse("dev").unwrap(),
             SurvregResidType::Deviance
         );
-        assert_eq!(
-            SurvregResidType::parse("Matrix").unwrap(),
-            SurvregResidType::Matrix
-        );
+        assert!(SurvregResidType::parse("Matrix").is_err());
         assert!(SurvregResidType::parse("ld").is_err());
         assert!(SurvregResidType::parse("").is_err());
         assert!(SurvregResidType::parse("dfb").is_err());
