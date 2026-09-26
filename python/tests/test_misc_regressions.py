@@ -1,6 +1,7 @@
 """Regression tests of ``brier``, ``survcheck``, ``survobrien`` and ``cch`` against R survival
 3.8-12: the curves brier reads, survcheck's row numbers after ``na.omit``, survobrien's
-``I()`` terms and the id order of cch's Borgan score residuals."""
+``I()`` terms, the id order of cch's Borgan score residuals, and R's ``make.names`` and
+``make.unique``, which name survobrien's and finegray's columns."""
 
 import importlib
 import math
@@ -14,6 +15,7 @@ survival = setup_survival_import()
 r = survival.r
 datasets = survival.datasets
 r_misc = importlib.import_module("survival.r._misc")
+r_names = importlib.import_module("survival.r._names")
 
 
 def approx(values, rel=1e-8):
@@ -270,6 +272,44 @@ def test_survobrien_makes_repeated_column_names_unique():
             0.0,
         ]
     )
+
+
+def test_make_names_follows_r():
+    names = ["in", "(z)", "1x", ".1x", "-z", "a b", "_z", "..1", "...", "I(z^2)", ""]
+    names += ["NA", "TRUE", "function", "x.y", ".z", "z_1", "\u00e9"]
+    # the names R's make.names gives
+    assert [r_names._make_names(name) for name in names] == [
+        "in.",
+        "X.z.",
+        "X1x",
+        "X.1x",
+        "X.z",
+        "a.b",
+        "X_z",
+        "..1",
+        "...",
+        "I.z.2.",
+        "X",
+        "NA.",
+        "TRUE.",
+        "function.",
+        "x.y",
+        ".z",
+        "z_1",
+        "\u00e9",
+    ]
+    # the names R's make.unique gives
+    assert r_names._make_unique(["z", "z", "z.1", "z"]) == ["z", "z.2", "z.1", "z.3"]
+
+    # R: finegray(Surv(time, ev) ~ x, d, count = "in") names the count column "in."
+    data = {
+        "time": [1, 2, 2, 3, 4, 5, 6, 7],
+        "ev": RFactor(["a", "b", "censor", "a", "b", "censor", "a", "b"], ["censor", "a", "b"]),
+        "x": [0.5, 1.2, 0.7, 0.9, 1.5, 0.3, 1.1, 0.8],
+    }
+    frame = r.finegray("Surv(time, ev) ~ x", data, count="in")
+    assert list(frame) == ["x", "fgstart", "fgstop", "fgstatus", "fgwt", "in."]
+    assert frame["in."] == [0, 0, 1, 2, 0, 0, 0, 1, 0, 0, 0]
 
 
 # --- cch ---------------------------------------------------------------------

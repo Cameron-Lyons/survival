@@ -58,6 +58,7 @@ from ._formula import (
     _term_values,
 )
 from ._models import coef, model_formula, model_frame, vcov
+from ._names import _make_unique
 from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
@@ -752,29 +753,6 @@ def survcheck(
 # ---------------------------------------------------------------------------
 # survobrien
 # ---------------------------------------------------------------------------
-
-
-def _make_unique(names: Sequence[str]) -> list[str]:
-    """R's ``make.unique``: a repeated name becomes ``name.1``, ``name.2``, ... skipping any
-    name already in *names* or given out earlier."""
-
-    taken = set(names)
-    seen: set[str] = set()
-    counts: dict[str, int] = {}
-    out: list[str] = []
-    for name in names:
-        if name not in seen:
-            seen.add(name)
-            out.append(name)
-            continue
-        count = counts.get(name, 1)
-        while f"{name}.{count}" in taken:
-            count += 1
-        unique = f"{name}.{count}"
-        taken.add(unique)
-        counts[name] = count + 1
-        out.append(unique)
-    return out
 
 
 def _survobrien_columns(
