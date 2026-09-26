@@ -386,6 +386,30 @@ class AggregationMethod:
     def __int__(self) -> int: ...
     def __repr__(self) -> str: ...
 
+class AgsurvCurve:
+    @property
+    def cumhaz(self) -> list[float]: ...
+    @property
+    def hazard(self) -> list[float]: ...
+    @property
+    def n(self) -> int: ...
+    @property
+    def n_censor(self) -> list[float]: ...
+    @property
+    def n_event(self) -> list[float]: ...
+    @property
+    def n_risk(self) -> list[float]: ...
+    @property
+    def ndeath(self) -> list[int]: ...
+    @property
+    def surv(self) -> list[float] | None: ...
+    @property
+    def time(self) -> list[float]: ...
+    @property
+    def varhaz(self) -> list[float]: ...
+    @property
+    def xbar(self) -> list[list[float]]: ...
+
 class AllChangepointsResult:
     def __repr__(self) -> str: ...
     @property
@@ -2176,46 +2200,46 @@ class CoxPHFit:
     def deviance_residuals(
         self,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[float]: ...
     def dfbeta(
         self,
         weighted: bool = True,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def dfbetas(
         self,
         weighted: bool = True,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def hazard_ratios(self) -> list[float]: ...
     def martingale_residuals(
         self,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[float]: ...
     def partial_residuals(
         self,
         assign: Sequence[Sequence[int]] | None = None,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def predict(
         self,
         type: str = "lp",
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
-        new_time: Sequence[float] | None = None,
-        new_entry: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
+        new_time: ArrayLike | None = None,
+        new_entry: ArrayLike | None = None,
         se_fit: bool = False,
         reference: str = "strata",
     ) -> CoxPrediction: ...
     def predict_terms(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         se_fit: bool = False,
         reference: str = "sample",
         assign: Sequence[Sequence[int]] | None = None,
@@ -2225,13 +2249,13 @@ class CoxPHFit:
     def score_residuals(
         self,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def survfit(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         stype: int = 2,
         ctype: int | None = None,
         se_fit: bool = True,
@@ -2240,12 +2264,12 @@ class CoxPHFit:
     ) -> list[CoxSurvfitCurve]: ...
     def survfit_individual(
         self,
-        newdata: Sequence[Sequence[float]],
-        new_entry: Sequence[float],
-        new_time: Sequence[float],
-        id: Sequence[int],
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike,
+        new_entry: ArrayLike,
+        new_time: ArrayLike,
+        id: ArrayLike,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         stype: int = 2,
         ctype: int | None = None,
         se_fit: bool = True,
@@ -2500,9 +2524,9 @@ class CoxpenalFit:
     def basehaz(self, centered: bool = True) -> Basehaz: ...
     def survfit(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         stype: int = 2,
         ctype: int | None = None,
         se_fit: bool = True,
@@ -2511,12 +2535,12 @@ class CoxpenalFit:
     ) -> list[CoxSurvfitCurve]: ...
     def survfit_individual(
         self,
-        newdata: Sequence[Sequence[float]],
-        new_entry: Sequence[float],
-        new_time: Sequence[float],
-        id: Sequence[int],
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike,
+        new_entry: ArrayLike,
+        new_time: ArrayLike,
+        id: ArrayLike,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         stype: int = 2,
         ctype: int | None = None,
         se_fit: bool = True,
@@ -9568,11 +9592,11 @@ class SurvpenalFit:
     def __repr__(self) -> str: ...
     def predict(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
+        newdata: ArrayLike | None = None,
         predict_type: str = "response",
         se_fit: bool = False,
-        p: Sequence[float] | None = None,
-        offset: Sequence[float] | None = None,
+        p: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
         strata: Sequence[int] | None = None,
         assign: Sequence[int] | None = None,
         terms: Sequence[int] | None = None,
@@ -9657,12 +9681,12 @@ class SurvregControl:
 class SurvregData:
     def __init__(
         self,
-        time: Sequence[float],
-        status: Sequence[int],
-        covariates: Sequence[Sequence[float]],
-        time2: Sequence[float] | None = None,
-        weights: Sequence[float] | None = None,
-        offset: Sequence[float] | None = None,
+        time: ArrayLike,
+        status: ArrayLike,
+        covariates: ArrayLike,
+        time2: ArrayLike | None = None,
+        weights: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
         strata: Sequence[int] | None = None,
         cluster: Sequence[int] | None = None,
     ) -> None: ...
@@ -9720,11 +9744,11 @@ class SurvregFit:
     def __repr__(self) -> str: ...
     def predict(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
+        newdata: ArrayLike | None = None,
         predict_type: str = "response",
         se_fit: bool = False,
-        p: Sequence[float] | None = None,
-        offset: Sequence[float] | None = None,
+        p: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
         strata: Sequence[int] | None = None,
         assign: Sequence[int] | None = None,
         terms: Sequence[int] | None = None,
@@ -10971,18 +10995,18 @@ class YatesResult:
 def _survpenal_fit_from_state(state: bytes) -> SurvpenalFit: ...
 def _unpickle(cls: Any, state: Any) -> Any: ...
 def aareg_fit(
-    stop: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    cluster: Sequence[int] | None = None,
+    stop: ArrayLike,
+    status: ArrayLike,
+    covariates: ArrayLike,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    cluster: ArrayLike | None = None,
     qrtol: float = 1e-07,
     nmin: int | None = None,
     dfbeta: bool = False,
     taper: Sequence[float] | None = None,
     test: str = "aalen",
-    test_cluster: Sequence[int] | None = None,
+    test_cluster: ArrayLike | None = None,
 ) -> AaregFitResult: ...
 def active_learning_selection(
     covariates: Sequence[Sequence[float]],
@@ -11008,12 +11032,12 @@ def aeq_surv(
     tolerance: float | None = None,
 ) -> AeqSurvResult: ...
 def agexact(
-    start: Sequence[float],
-    stop: Sequence[float],
-    event: Sequence[int],
-    x: Sequence[Sequence[float]],
-    offset: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike,
+    stop: ArrayLike,
+    event: ArrayLike,
+    x: ArrayLike,
+    offset: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     init: Sequence[float] | None = None,
     iter_max: int | None = None,
     eps: float | None = None,
@@ -11021,7 +11045,7 @@ def agexact(
     nocenter: Sequence[float] | None = None,
 ) -> AgexactFit: ...
 def aggregate_survfit(
-    surv: Sequence[Sequence[float]] | None = None,
+    surv: ArrayLike | None = None,
     pstate: Sequence[Sequence[Sequence[float]]] | None = None,
     by: Sequence[GroupingFactor] | None = None,
     fun: str = "mean",
@@ -11035,9 +11059,9 @@ def agmart(input: AndersenGillInput, ties: str = "efron") -> list[float]: ...
 def agscore3(
     counting: CountingProcessData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> list[list[float]]: ...
 def analyze_local_global(
@@ -11270,24 +11294,24 @@ def cause_specific_cox_all(
     tol: float = 1e-09,
 ) -> list[CauseSpecificCoxResult]: ...
 def cch_borgan_fit(
-    stop: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    subcohort: Sequence[int],
+    stop: ArrayLike,
+    status: ArrayLike,
+    covariates: ArrayLike,
+    subcohort: ArrayLike,
     id: Sequence[int],
     stratum: Sequence[int],
     cohort_sizes: Sequence[int],
-    start: Sequence[float] | None = None,
+    start: ArrayLike | None = None,
     method: str = "I.Borgan",
 ) -> CchFitResult: ...
 def cch_fit(
-    stop: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    subcohort: Sequence[int],
+    stop: ArrayLike,
+    status: ArrayLike,
+    covariates: ArrayLike,
+    subcohort: ArrayLike,
     id: Sequence[int],
     cohort_size: int,
-    start: Sequence[float] | None = None,
+    start: ArrayLike | None = None,
     method: str = "Prentice",
     robust: bool = False,
 ) -> CchFitResult: ...
@@ -11460,8 +11484,8 @@ def concordancefit(
     survival: SurvivalData,
     x: CovariateMatrix,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
-    cluster: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
+    cluster: ArrayLike | None = None,
     timewt: str = "n",
     ymin: float | None = None,
     ymax: float | None = None,
@@ -11476,8 +11500,8 @@ def concordancefit_counting(
     counting: CountingProcessData,
     x: CovariateMatrix,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
-    cluster: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
+    cluster: ArrayLike | None = None,
     timewt: str = "n",
     ymin: float | None = None,
     ymax: float | None = None,
@@ -11595,13 +11619,13 @@ def covariate_shift_conformal_survival(
 ) -> CovariateShiftConformalResult: ...
 def cox_callback(which: int, coef: ArrayLike, fexpr: Any) -> CoxPenaltyTerms: ...
 def cox_survfit_baseline(
-    y: Any,
-    x: Any,
-    weights: Any,
-    risk: Any,
+    y: ArrayLike,
+    x: ArrayLike,
+    weights: ArrayLike,
+    risk: ArrayLike,
     survtype: int,
     vartype: int,
-) -> dict[str, Any]: ...
+) -> AgsurvCurve: ...
 def cox_zph(
     fit: CoxPHFit | CoxpenalFit,
     transform: str | Sequence[float] | None = None,
@@ -11617,16 +11641,16 @@ def coxcount2(
 ) -> CoxCountOutput: ...
 def coxmart(input: CoxMartInput, ties: str = "efron") -> list[float]: ...
 def coxpenal_fit(
-    time: Sequence[float],
-    status: Sequence[int],
-    x: Sequence[Sequence[float]],
+    time: ArrayLike,
+    status: ArrayLike,
+    x: ArrayLike,
     penalties: Sequence[CoxPenalty],
     pcols: Sequence[Sequence[int]],
     assign: Sequence[Sequence[int]] | None = None,
-    entry: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
-    weights: Sequence[float] | None = None,
-    offset: Sequence[float] | None = None,
+    entry: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
     method: str = "efron",
     init: Sequence[float] | None = None,
     iter_max: int | None = None,
@@ -11634,24 +11658,24 @@ def coxpenal_fit(
     eps: float | None = None,
     toler_chol: float | None = None,
     nocenter: Sequence[float] | None = None,
-    cluster: Sequence[int] | None = None,
+    cluster: ArrayLike | None = None,
 ) -> CoxpenalFit: ...
 def coxph_detail(fit: CoxPHFit, riskmat: bool = False) -> CoxphDetail: ...
 def coxph_fit(
-    time: Sequence[float],
-    status: Sequence[int],
-    x: Sequence[Sequence[float]],
-    entry: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
-    weights: Sequence[float] | None = None,
-    offset: Sequence[float] | None = None,
+    time: ArrayLike,
+    status: ArrayLike,
+    x: ArrayLike,
+    entry: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
     method: str = "efron",
     init: Sequence[float] | None = None,
     iter_max: int | None = None,
     eps: float | None = None,
     toler_chol: float | None = None,
     nocenter: Sequence[float] | None = None,
-    cluster: Sequence[int] | None = None,
+    cluster: ArrayLike | None = None,
     robust: bool | None = None,
 ) -> CoxPHFit: ...
 def coxph_wtest(
@@ -11725,9 +11749,9 @@ def coxphms_fit(
 def coxscore2(
     survival: SurvivalData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> list[list[float]]: ...
 def cqr_conformal_survival(
@@ -12109,12 +12133,12 @@ def federated_cox(
     seed: int | None = None,
 ) -> FederatedSurvivalResult: ...
 def finegray(
-    tstart: Sequence[float],
-    tstop: Sequence[float],
-    ctime: Sequence[float],
-    cprob: Sequence[float],
-    extend: Sequence[bool],
-    keep: Sequence[bool],
+    tstart: ArrayLike,
+    tstop: ArrayLike,
+    ctime: ArrayLike,
+    cprob: ArrayLike,
+    extend: ArrayLike,
+    keep: ArrayLike,
 ) -> FineGrayOutput: ...
 def finegray_regression(
     time: Sequence[float],
@@ -12916,12 +12940,12 @@ def prune_survival_model(
     sparsity_target: float = 0.5,
 ) -> PruningResult: ...
 def pseudo(
-    time: Sequence[float],
-    status: Sequence[int],
+    time: ArrayLike,
+    status: ArrayLike,
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     type_: str = "pstate",
     stype: int = 1,
@@ -12932,13 +12956,13 @@ def pseudo(
     call_stype: int | None = None,
 ) -> SurvfitResid: ...
 def pseudo_aj(
-    time: Sequence[float],
-    state: Sequence[int],
+    time: ArrayLike,
+    state: ArrayLike,
     states: Sequence[str],
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     istate: Sequence[str] | None = None,
     istate_levels: Sequence[str] | None = None,
@@ -12991,16 +13015,16 @@ def pwp_model(
     config: PWPConfig,
 ) -> PWPResult: ...
 def pyears(
-    stop: Sequence[float],
-    start: Sequence[float] | None = None,
-    event: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
+    stop: ArrayLike,
+    start: ArrayLike | None = None,
+    event: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
     factors: Sequence[int] = ...,
     dims: Sequence[int] = ...,
     cuts: Sequence[Sequence[float]] = ...,
-    categories_data: Sequence[Sequence[float]] = ...,
+    categories_data: ArrayLike | None = None,
     ratetable: RateTable | None = None,
-    ratetable_positions: Sequence[Sequence[float]] | None = None,
+    ratetable_positions: ArrayLike | None = None,
     expect: str = "event",
     scale: float = 365.25,
 ) -> PyearsResult: ...
@@ -13236,17 +13260,17 @@ def sample_size_survival_freedman(
 def schoenfeld_residuals(
     survival: SurvivalData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> CoxschoResiduals: ...
 def schoenfeld_residuals_counting(
     counting: CountingProcessData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> CoxschoResiduals: ...
 def score_test(score: Sequence[float], information: Sequence[Sequence[float]]) -> TestResult: ...
@@ -13429,23 +13453,23 @@ def survcondense(
     row_code: Sequence[int],
 ) -> SurvcondenseResult: ...
 def survdiff(
-    time: Sequence[float],
-    status: Sequence[int],
-    group: Sequence[int],
-    start: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    time: ArrayLike,
+    status: ArrayLike,
+    group: ArrayLike,
+    start: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     rho: float = 0.0,
     timefix: bool = True,
 ) -> SurvDiffResult: ...
 def survdiff_one_sample(
-    status: Sequence[int],
-    expected: Sequence[float],
+    status: ArrayLike,
+    expected: ArrayLike,
     rho: float = 0.0,
 ) -> SurvDiffResult: ...
 def survexp(
     ratetable: RateTable,
-    positions: Sequence[Sequence[float]],
-    y: Sequence[float] | None = None,
+    positions: ArrayLike,
+    y: ArrayLike | None = None,
     group: Sequence[int] | None = None,
     times: Sequence[float] | None = None,
     method: str | None = None,
@@ -13476,12 +13500,12 @@ def survfit_confint(
     ulimit: bool = True,
 ) -> ConfidenceBands: ...
 def survfitaj(
-    time: Sequence[float],
-    state: Sequence[int],
+    time: ArrayLike,
+    state: ArrayLike,
     states: Sequence[str],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     istate: Sequence[str] | None = None,
     istate_levels: Sequence[str] | None = None,
@@ -13525,12 +13549,12 @@ def survfitkm(
     reverse: bool = False,
 ) -> SurvfitKMResult: ...
 def survfitresid(
-    time: Sequence[float],
-    status: Sequence[int],
+    time: ArrayLike,
+    status: ArrayLike,
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     type_: str = "pstate",
     stype: int = 1,
@@ -13542,13 +13566,13 @@ def survfitresid(
     call_stype: int | None = None,
 ) -> SurvfitResid: ...
 def survfitresid_aj(
-    time: Sequence[float],
-    state: Sequence[int],
+    time: ArrayLike,
+    state: ArrayLike,
     states: Sequence[str],
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     istate: Sequence[str] | None = None,
     istate_levels: Sequence[str] | None = None,
@@ -13749,14 +13773,14 @@ def tipping_point_analysis(
 ) -> float | None: ...
 def tmerge_step(
     id: Sequence[int | float | str],
-    start: Sequence[float],
-    stop: Sequence[float],
+    start: ArrayLike,
+    stop: ArrayLike,
     update_id: Sequence[int | float | str],
-    update_time: Sequence[float],
+    update_time: ArrayLike,
     kind: str,
-    value: Sequence[float] | None = None,
-    missing: Sequence[bool] | None = None,
-    prior: Sequence[float] | None = None,
+    value: ArrayLike | None = None,
+    missing: ArrayLike | None = None,
+    prior: ArrayLike | None = None,
     default: float = ...,
     delay: float = 0.0,
     na_rm: bool = True,

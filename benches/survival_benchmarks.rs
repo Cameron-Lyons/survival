@@ -1,10 +1,12 @@
+use ndarray::Array2;
 use std::hint::black_box;
 use survival::concordance::{ConcordanceOptions, concordancefit};
 use survival::core::SurvResponse;
 use survival::data_types::SurvivalData;
 use survival::regression::{
-    AaregData, AaregOptions, CoxPHFit, SurvregControl, SurvregData, SurvregDistribution, aareg_fit,
-    agexact_py, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg_fit,
+    AaregData, AaregOptions, AgexactOptions, CoxPHFit, CoxphData, CoxphOptions, SurvregControl,
+    SurvregData, SurvregDistribution, TieMethod, aareg_fit, agexact_fit, cch, cch_borgan, finegray,
+    survreg_fit,
 };
 use survival::surv_analysis::{
     self, PseudoResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
@@ -35,21 +37,34 @@ fn generate_predictions(n: usize) -> Vec<f64> {
     (0..n).map(|i| 0.1 + (i % 8) as f64 * 0.1).collect()
 }
 
-fn generate_covariates(n: usize, p: usize) -> Vec<Vec<f64>> {
-    (0..n)
-        .map(|i| {
-            (0..p)
-                .map(|j| {
-                    let centered_i = (i % 17) as f64 - 8.0;
-                    let centered_j = (j % 5) as f64 - 2.0;
-                    centered_i * 0.03 + centered_j * 0.1 + ((i * (j + 3)) % 11) as f64 * 0.01
-                })
-                .collect()
-        })
-        .collect()
+fn generate_covariates(n: usize, p: usize) -> Array2<f64> {
+    Array2::from_shape_fn((n, p), |(i, j)| {
+        let centered_i = (i % 17) as f64 - 8.0;
+        let centered_j = (j % 5) as f64 - 2.0;
+        centered_i * 0.03 + centered_j * 0.1 + ((i * (j + 3)) % 11) as f64 * 0.01
+    })
 }
 
-fn generate_tied_regression_data(n: usize, p: usize) -> (Vec<f64>, Vec<i32>, Vec<Vec<f64>>) {
+/// `coxph.control(iter.max = 20)` with the given ties, tolerances left at
+/// their defaults.
+fn cox_options(method: TieMethod) -> CoxphOptions {
+    CoxphOptions {
+        method,
+        iter_max: 20,
+        ..CoxphOptions::default()
+    }
+}
+
+/// [`cox_options`] with `eps = 1e-7` and `toler.chol = 1e-9`.
+fn tight_cox_options(method: TieMethod) -> CoxphOptions {
+    CoxphOptions {
+        eps: 1e-7,
+        toler_chol: 1e-9,
+        ..cox_options(method)
+    }
+}
+
+fn generate_tied_regression_data(n: usize, p: usize) -> (Vec<f64>, Vec<i32>, Array2<f64>) {
     let time = (0..n)
         .map(|i| 1.0 + (i % 80) as f64 * 0.25 + (i / 80) as f64 * 0.01)
         .collect();
@@ -78,22 +93,10 @@ fn generate_strata(n: usize, n_strata: usize) -> Vec<i32> {
 
 fn fitted_coxph_model(n: usize, p: usize) -> CoxPHFit {
     let (time, status, covariates) = generate_tied_regression_data(n, p);
-    coxph_fit(
-        time,
-        status,
-        covariates,
-        None,
-        None,
-        None,
-        None,
-        "breslow",
-        None,
-        Some(20),
-        None,
-        None,
-        None,
-        None,
-        None,
+    CoxPHFit::fit(
+        CoxphData::try_new(time, None, status, covariates, None, None, None)
+            .expect("benchmark Cox data should be valid"),
+        cox_options(TieMethod::Breslow),
     )
     .expect("benchmark Cox PH fit should converge")
 }
@@ -196,7 +199,7 @@ mod pseudo_bench {
 mod aareg_bench {
     use super::*;
 
-    type AaregInputs = (Vec<f64>, Vec<i32>, Vec<Vec<f64>>, Vec<f64>);
+    type AaregInputs = (Vec<f64>, Vec<i32>, Array2<f64>, Vec<f64>);
 
     fn inputs(n: usize, p: usize) -> AaregInputs {
         let (stop, status, covariates) = generate_tied_regression_data(n, p);
@@ -518,31 +521,26 @@ mod exact_counting_process_cox {
 
     #[divan::bench(args = [1000, 2000, 4000])]
     fn untied_scaling(bencher: divan::Bencher, n: usize) {
-        #[cfg(feature = "python")]
-        pyo3::Python::initialize();
-
         let start = vec![0.0; n];
         let stop: Vec<f64> = (1..=n).map(|value| value as f64).collect();
         let event = vec![1; n];
-        let x: Vec<Vec<f64>> = (0..n).map(|value| vec![(value % 17) as f64]).collect();
+        let x = Array2::from_shape_fn((n, 1), |(value, _)| (value % 17) as f64);
         let inputs = (start, stop, event, x);
 
         bencher
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_py(
-                        start,
-                        stop,
-                        event,
-                        x,
-                        None,
-                        None,
-                        None,
-                        Some(0),
-                        Some(1e-9),
-                        Some(1e-9),
-                        None,
+                    agexact_fit(
+                        CoxphData::try_new(stop, Some(start), event, x, None, None, None)
+                            .expect("benchmark counting-process data should be valid"),
+                        &AgexactOptions {
+                            init: None,
+                            iter_max: 0,
+                            eps: 1e-9,
+                            toler_chol: 1e-9,
+                            nocenter: None,
+                        },
                     )
                     .expect("untied exact counting-process benchmark should succeed"),
                 )
@@ -551,33 +549,28 @@ mod exact_counting_process_cox {
 
     #[divan::bench]
     fn tied_24_of_12(bencher: divan::Bencher) {
-        #[cfg(feature = "python")]
-        pyo3::Python::initialize();
-
         const N: usize = 24;
         const DEATHS: usize = 12;
         let start = vec![0.0; N];
         let stop = vec![1.0; N];
         let event: Vec<i32> = (0..N).map(|person| i32::from(person < DEATHS)).collect();
-        let x: Vec<Vec<f64>> = (0..N).map(|value| vec![value as f64]).collect();
+        let x = Array2::from_shape_fn((N, 1), |(value, _)| value as f64);
         let inputs = (start, stop, event, x);
 
         bencher
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_py(
-                        start,
-                        stop,
-                        event,
-                        x,
-                        None,
-                        None,
-                        None,
-                        Some(0),
-                        Some(1e-9),
-                        Some(1e-9),
-                        None,
+                    agexact_fit(
+                        CoxphData::try_new(stop, Some(start), event, x, None, None, None)
+                            .expect("benchmark counting-process data should be valid"),
+                        &AgexactOptions {
+                            init: None,
+                            iter_max: 0,
+                            eps: 1e-9,
+                            toler_chol: 1e-9,
+                            nocenter: None,
+                        },
                     )
                     .expect("benchmark exact counting-process fit should succeed"),
                 )
@@ -593,22 +586,18 @@ mod cox_regression {
         let (time, status, covariates) = generate_tied_regression_data(n, 4);
 
         bencher.bench_local(|| {
-            let fit = coxph_fit(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                None,
-                None,
-                None,
-                None,
-                "efron",
-                None,
-                Some(20),
-                Some(1e-7),
-                Some(1e-9),
-                None,
-                None,
-                None,
+            let fit = CoxPHFit::fit(
+                CoxphData::try_new(
+                    time.clone(),
+                    None,
+                    status.clone(),
+                    covariates.clone(),
+                    None,
+                    None,
+                    None,
+                )
+                .expect("benchmark Cox data should be valid"),
+                tight_cox_options(TieMethod::Efron),
             )
             .expect("benchmark Cox PH Efron fit should converge");
             black_box(fit);
@@ -621,22 +610,18 @@ mod cox_regression {
         let entry_times = generate_entry_times(&time);
 
         bencher.bench_local(|| {
-            let fit = coxph_fit(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                Some(entry_times.clone()),
-                None,
-                None,
-                None,
-                "efron",
-                None,
-                Some(20),
-                Some(1e-7),
-                Some(1e-9),
-                None,
-                None,
-                None,
+            let fit = CoxPHFit::fit(
+                CoxphData::try_new(
+                    time.clone(),
+                    Some(entry_times.clone()),
+                    status.clone(),
+                    covariates.clone(),
+                    None,
+                    None,
+                    None,
+                )
+                .expect("benchmark Cox data should be valid"),
+                tight_cox_options(TieMethod::Efron),
             )
             .expect("benchmark counting-process Cox PH Efron fit should converge");
             black_box(fit);
@@ -648,22 +633,18 @@ mod cox_regression {
         let (time, status, covariates) = generate_tied_regression_data(n, 4);
 
         bencher.bench_local(|| {
-            let fit = coxph_fit(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                None,
-                None,
-                None,
-                None,
-                "breslow",
-                None,
-                Some(20),
-                Some(1e-7),
-                Some(1e-9),
-                None,
-                None,
-                None,
+            let fit = CoxPHFit::fit(
+                CoxphData::try_new(
+                    time.clone(),
+                    None,
+                    status.clone(),
+                    covariates.clone(),
+                    None,
+                    None,
+                    None,
+                )
+                .expect("benchmark Cox data should be valid"),
+                tight_cox_options(TieMethod::Breslow),
             )
             .expect("benchmark Cox PH Breslow fit should converge");
             black_box(fit);
@@ -677,22 +658,18 @@ mod cox_regression {
         let strata = generate_strata(n, 3);
 
         bencher.bench_local(|| {
-            let fit = coxph_fit(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                None,
-                Some(strata.clone()),
-                Some(weights.clone()),
-                None,
-                "efron",
-                None,
-                Some(20),
-                Some(1e-7),
-                Some(1e-9),
-                None,
-                None,
-                None,
+            let fit = CoxPHFit::fit(
+                CoxphData::try_new(
+                    time.clone(),
+                    None,
+                    status.clone(),
+                    covariates.clone(),
+                    Some(weights.clone()),
+                    Some(strata.clone()),
+                    None,
+                )
+                .expect("benchmark Cox data should be valid"),
+                tight_cox_options(TieMethod::Efron),
             )
             .expect("benchmark weighted stratified Cox PH fit should converge");
             black_box(fit);
@@ -705,22 +682,18 @@ mod cox_regression {
         let weights = generate_case_weights(n);
         let strata = generate_strata(n, 3);
         let entry_times: Vec<f64> = time.iter().map(|time| (time - 0.5).max(0.0)).collect();
-        let fit = coxph_fit(
-            time,
-            status,
-            covariates,
-            Some(entry_times),
-            Some(strata),
-            Some(weights),
-            None,
-            "efron",
-            None,
-            Some(20),
-            Some(1e-7),
-            Some(1e-9),
-            None,
-            None,
-            None,
+        let fit = CoxPHFit::fit(
+            CoxphData::try_new(
+                time,
+                Some(entry_times),
+                status,
+                covariates,
+                Some(weights),
+                Some(strata),
+                None,
+            )
+            .expect("benchmark Cox data should be valid"),
+            tight_cox_options(TieMethod::Efron),
         )
         .expect("benchmark Cox PH fit should converge");
 
@@ -737,28 +710,22 @@ mod cox_regression {
         let (time, status, covariates) = generate_tied_regression_data(n, 4);
         let weights = generate_case_weights(n);
         let strata = generate_strata(n, 3);
-        let fit = coxph_fit(
-            time,
-            status,
-            covariates,
-            None,
-            Some(strata),
-            Some(weights),
-            None,
-            "efron",
-            None,
-            Some(20),
-            Some(1e-7),
-            Some(1e-9),
-            None,
-            None,
-            None,
+        let fit = CoxPHFit::fit(
+            CoxphData::try_new(
+                time,
+                None,
+                status,
+                covariates,
+                Some(weights),
+                Some(strata),
+                None,
+            )
+            .expect("benchmark Cox data should be valid"),
+            tight_cox_options(TieMethod::Efron),
         )
         .expect("benchmark Cox PH fit should converge");
-        let rows = generate_covariates(3, 4);
         let newdata = survival::regression::CoxNewData::try_new(
-            ndarray::Array2::from_shape_vec((3, 4), rows.into_iter().flatten().collect())
-                .expect("rectangular rows"),
+            generate_covariates(3, 4),
             Some(vec![0, 1, 2]),
             None,
             None,
@@ -783,22 +750,18 @@ mod cox_regression {
         let weights = generate_case_weights(n);
         let strata = generate_strata(n, 3);
         let entry_times: Vec<f64> = time.iter().map(|time| (time - 0.5).max(0.0)).collect();
-        let fit = coxph_fit(
-            time,
-            status,
-            covariates,
-            Some(entry_times),
-            Some(strata),
-            Some(weights),
-            None,
-            "efron",
-            None,
-            Some(20),
-            Some(1e-7),
-            Some(1e-9),
-            None,
-            None,
-            None,
+        let fit = CoxPHFit::fit(
+            CoxphData::try_new(
+                time,
+                Some(entry_times),
+                status,
+                covariates,
+                Some(weights),
+                Some(strata),
+                None,
+            )
+            .expect("benchmark Cox data should be valid"),
+            tight_cox_options(TieMethod::Efron),
         )
         .expect("benchmark Cox PH fit should converge");
 
@@ -821,22 +784,18 @@ mod cox_regression {
         let weights = generate_case_weights(n);
         let strata = generate_strata(n, 3);
         let entry_times: Vec<f64> = time.iter().map(|time| (time - 0.5).max(0.0)).collect();
-        let fit = coxph_fit(
-            time,
-            status,
-            covariates,
-            Some(entry_times),
-            Some(strata),
-            Some(weights),
-            None,
-            "efron",
-            None,
-            Some(20),
-            Some(1e-7),
-            Some(1e-9),
-            None,
-            None,
-            None,
+        let fit = CoxPHFit::fit(
+            CoxphData::try_new(
+                time,
+                Some(entry_times),
+                status,
+                covariates,
+                Some(weights),
+                Some(strata),
+                None,
+            )
+            .expect("benchmark Cox data should be valid"),
+            tight_cox_options(TieMethod::Efron),
         )
         .expect("benchmark Cox PH fit should converge");
 
@@ -891,7 +850,6 @@ mod cox_residual_kernels {
     use super::*;
     use survival::core::schoenfeld_residuals;
     use survival::data_types::{AndersenGillInput, CountingProcessData, CoxMartInput, Weights};
-    use survival::regression::TieMethod;
     use survival::residuals::{agmart, coxmart};
     use survival::scoring::{agscore3, coxscore2};
 
@@ -918,12 +876,9 @@ mod cox_residual_kernels {
         let status: Vec<i32> = (0..n).map(|i| i32::from(i % 5 != 0)).collect();
         let covariates = generate_covariates(n, p);
         let score: Vec<f64> = covariates
-            .iter()
+            .outer_iter()
             .map(|row| (0.3 * row[0] - 0.2 * row[1]).exp())
             .collect();
-        let covariates =
-            ndarray::Array2::from_shape_vec((n, p), covariates.into_iter().flatten().collect())
-                .expect("rectangular covariates");
         KernelInputs {
             time,
             entry,
@@ -1015,7 +970,7 @@ mod cox_residual_kernels {
 mod case_cohort_bench {
     use super::*;
 
-    type CaseCohortData = (Vec<f64>, Vec<i32>, Vec<Vec<f64>>, Vec<i32>, Vec<i64>);
+    type CaseCohortData = (Vec<f64>, Vec<i32>, Array2<f64>, Vec<i32>, Vec<i64>);
 
     fn case_cohort_data(n: usize, p: usize) -> CaseCohortData {
         // Use strictly spaced event times so Prentice's entry-delta stays representable,
@@ -1043,7 +998,7 @@ mod case_cohort_bench {
     fn prentice(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         bencher.bench_local(|| {
-            let fit = cch_fit(
+            let fit = cch(
                 time.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1063,7 +1018,7 @@ mod case_cohort_bench {
     fn lin_ying_robust(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         bencher.bench_local(|| {
-            let fit = cch_fit(
+            let fit = cch(
                 time.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1084,7 +1039,7 @@ mod case_cohort_bench {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         let stratum = (0..n).map(|idx| (idx / 4) % 2).collect::<Vec<_>>();
         bencher.bench_local(|| {
-            let fit = cch_borgan_fit(
+            let fit = cch_borgan(
                 time.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1105,7 +1060,7 @@ mod case_cohort_bench {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         let stratum = (0..n).map(|idx| (idx / 4) % 2).collect::<Vec<_>>();
         bencher.bench_local(|| {
-            let fit = cch_borgan_fit(
+            let fit = cch_borgan(
                 time.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1132,6 +1087,7 @@ mod survreg_bench {
             iter_max: 30,
             rel_tolerance: 1e-7,
             toler_chol: 1e-9,
+            ..SurvregControl::default()
         };
         bencher.bench_local(|| {
             let fit = survreg_fit(black_box(data), &distribution, None, 0.0, &control, false)

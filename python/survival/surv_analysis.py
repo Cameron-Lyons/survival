@@ -10,6 +10,7 @@ __all__ = bind_names(
         "AggregateSurvfitResult",
         "GroupingFactor",
         "aggregate_survfit",
+        "AgsurvCurve",
         "cox_survfit_baseline",
         "step_values_at",
         "IllnessDeathConfig",

@@ -58,7 +58,7 @@ pub use cause_specific_cox_module::{
     CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
     cause_specific_cox_all,
 };
-pub use cch::{CchFitResult, cch_borgan_fit, cch_fit};
+pub use cch::{CchFitResult, cch, cch_borgan, cch_borgan_fit, cch_fit};
 pub use cox_optimizer::TieMethod;
 #[cfg(feature = "python")]
 pub use cox_zph::cox_zph_py;

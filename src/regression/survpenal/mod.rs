@@ -23,11 +23,12 @@ mod tests;
 use self::kernel::{Survreg7Fit, survreg7};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{lu_inverse, matrix_rows};
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
 use crate::internal::validation::validate_finite;
 use crate::regression::coxpenal::CoxPenalty;
 use crate::regression::parametric_survival::{
-    SurvregControl, SurvregData, SurvregFit, fit_covariates, fitting_response, intercept_only_fit,
-    mark_singular, robust_variance,
+    SurvregControl, SurvregData, SurvregFit, fitting_response, intercept_only_fit, mark_singular,
+    robust_variance,
 };
 use crate::regression::penalized::df::{DfInput, TermDf, coxpenal_df};
 use crate::regression::penalized::terms::{
@@ -434,7 +435,7 @@ impl SurvpenalFit {
             time: response.time,
             time2: response.time2,
             status: response.status,
-            covariates: fit_covariates(xx),
+            covariates: xx,
             strata,
             weights: survreg_data.weights.clone(),
             offset,
@@ -570,17 +571,19 @@ impl SurvpenalFit {
     #[allow(clippy::too_many_arguments)]
     fn predict_py(
         &self,
-        newdata: Option<Vec<Vec<f64>>>,
+        py: Python<'_>,
+        newdata: Option<FloatMatrix>,
         predict_type: &str,
         se_fit: bool,
-        p: Option<Vec<f64>>,
-        offset: Option<Vec<f64>>,
+        p: Option<FloatVec>,
+        offset: Option<FloatVec>,
         strata: Option<Vec<usize>>,
         assign: Option<Vec<usize>>,
         terms: Option<Vec<usize>>,
     ) -> PyResult<SurvregPrediction> {
         self.check_not_sparse("Predictions not available for sparse models")?;
         self.survreg.predict_py(
+            py,
             newdata,
             predict_type,
             se_fit,
@@ -598,6 +601,7 @@ impl SurvpenalFit {
     #[pyo3(signature = (residual_type="response", rsigma=true, collapse=None, weighted=false))]
     fn residuals_py(
         &self,
+        py: Python<'_>,
         residual_type: &str,
         rsigma: bool,
         collapse: Option<Vec<usize>>,
@@ -605,7 +609,7 @@ impl SurvpenalFit {
     ) -> PyResult<SurvregResiduals> {
         self.check_not_sparse("Residualss not available for sparse models")?;
         self.survreg
-            .residuals_py(residual_type, rsigma, collapse, weighted)
+            .residuals_py(py, residual_type, rsigma, collapse, weighted)
     }
 
     fn __repr__(&self) -> String {

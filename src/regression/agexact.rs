@@ -9,7 +9,8 @@
 
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::error::SurvivalResult;
-use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::internal::matrix::matrix_rows;
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
 use crate::regression::coxph::{CoxphData, nocenter_columns};
@@ -123,20 +124,28 @@ pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<
 #[pyo3(signature = (start, stop, event, x, offset=None, strata=None, init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn agexact_py(
-    start: Vec<f64>,
-    stop: Vec<f64>,
-    event: Vec<i32>,
-    x: Vec<Vec<f64>>,
-    offset: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    py: Python<'_>,
+    start: FloatVec,
+    stop: FloatVec,
+    event: IntVec,
+    x: FloatMatrix,
+    offset: Option<FloatVec>,
+    strata: Option<IntVec>,
     init: Option<Vec<f64>>,
     iter_max: Option<usize>,
     eps: Option<f64>,
     toler_chol: Option<f64>,
     nocenter: Option<Vec<f64>>,
 ) -> PyResult<AgexactFit> {
-    let x = matrix_from_rows(&x, "x")?;
-    let data = CoxphData::try_new(stop, Some(start), event, x, None, strata, offset)?;
+    let data = CoxphData::try_new(
+        stop.into_inner(),
+        Some(start.into_inner()),
+        event.into_inner(),
+        x.into_inner(),
+        None,
+        strata.map(IntVec::into_inner),
+        offset.map(FloatVec::into_inner),
+    )?;
     let defaults = AgexactOptions::default();
     let options = AgexactOptions {
         init,
@@ -145,7 +154,7 @@ pub fn agexact_py(
         toler_chol: toler_chol.unwrap_or(defaults.toler_chol),
         nocenter,
     };
-    Ok(agexact_fit(data, &options)?)
+    Ok(py.detach(|| agexact_fit(data, &options))?)
 }
 
 #[cfg(test)]

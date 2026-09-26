@@ -109,13 +109,10 @@ fn kidney(
     terms: Vec<(Vec<usize>, Option<PenaltyTerm>)>,
     strata: bool,
 ) -> SurvpenalData {
-    let covariates = (0..76)
-        .map(|i| {
-            std::iter::once(1.0)
-                .chain(columns.iter().map(|column| column[i]))
-                .collect()
-        })
-        .collect();
+    let covariates = Array2::from_shape_fn((76, columns.len() + 1), |(i, j)| match j {
+        0 => 1.0,
+        _ => columns[j - 1][i],
+    });
     let strata = strata.then(|| SEX.iter().map(|&s| s as usize - 1).collect());
     let survreg = SurvregData::try_new(
         TIME.to_vec(),

@@ -11,6 +11,7 @@ use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
+use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::step::find_interval;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
@@ -424,25 +425,33 @@ pub fn survdiff_one_sample(
 /// Python binding of [`survdiff`].
 #[pyfunction(name = "survdiff")]
 #[pyo3(signature = (time, status, group, start=None, strata=None, rho=0.0, timefix=true))]
+#[allow(clippy::too_many_arguments)]
 pub fn survdiff_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
-    start: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
+    group: IntVec,
+    start: Option<FloatVec>,
+    strata: Option<IntVec>,
     rho: f64,
     timefix: bool,
 ) -> PyResult<SurvDiffResult> {
-    let data = SurvdiffData::try_new(start, time, status, group, strata)?;
-    Ok(survdiff(&data, rho, timefix)?)
+    let data = SurvdiffData::try_new(
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        status.into_inner(),
+        group.into_inner(),
+        strata.map(IntVec::into_inner),
+    )?;
+    Ok(py.detach(|| survdiff(&data, rho, timefix))?)
 }
 
 /// Python binding of [`survdiff_one_sample`].
 #[pyfunction(name = "survdiff_one_sample")]
 #[pyo3(signature = (status, expected, rho=0.0))]
 pub fn survdiff_one_sample_py(
-    status: Vec<i32>,
-    expected: Vec<f64>,
+    status: IntVec,
+    expected: FloatVec,
     rho: f64,
 ) -> PyResult<SurvDiffResult> {
     Ok(survdiff_one_sample(&status, &expected, rho)?)

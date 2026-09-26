@@ -76,20 +76,47 @@ Each also implements `IntoPyObject`, so returning one (or exposing it through a
 trip; `FloatMatrix::from_flat(values, ncol)` covers flat buffers with an
 explicit column count.
 
-Migration for binding owners, one signature at a time:
+The core bindings take these types for every numeric vector and matrix input
+(`coxph_fit`, `coxpenal_fit`, `agexact`, `SurvregData`, `cch_fit`,
+`aareg_fit`, `pyears`, `survexp`, `survdiff`, `survfitkm`, `survfitaj`, the
+pseudo-value and residual kernels, `cox_survfit_baseline`, ...), so NumPy
+arrays are read in one copy instead of element by element, and nested lists
+keep working. For new bindings:
 
-1. Replace `Vec<f64>`/`Vec<i32>`/`Vec<bool>` parameters with `FloatVec`/
-   `IntVec`/`BoolVec`, and `Vec<Vec<f64>>` or flat-plus-`ncol` pairs with
-   `FloatMatrix`; call `.into_inner()` (or deref to a slice / `Array2`) where
-   the core routine is invoked. Python callers keep passing lists; NumPy and
-   DataFrame columns now work too.
-2. Replace `&Bound<PyAny>` parameters that went through `extract_vec_f64`/
-   `extract_vec_i32`/`extract_matrix_f64` with the same types; those helpers
-   now delegate to them and disappear once the last caller moves.
-3. Return `FloatVec`/`FloatMatrix` (or use them as `#[pyo3(get)]` field types)
-   for large numeric results so Python receives NumPy arrays.
-4. Do not call `Python::attach` inside a `#[pyfunction]`: it already runs
+1. Take `FloatVec`/`IntVec`/`BoolVec` for vectors and `FloatMatrix` for
+   matrices, and move `.into_inner()` into the core data type (an `Array2`
+   goes straight into, for example, `CoxphData`). `extract_vec_f64`/
+   `extract_vec_i32` remain only for `&Bound<PyAny>` arguments of beyond-R
+   code.
+2. Keep getters that Python consumers iterate by row (`CoxPHFit.x`,
+   `SurvregData.covariates`) returning lists; return `FloatVec`/`FloatMatrix`
+   where the consumer wants NumPy.
+3. Do not call `Python::attach` inside a `#[pyfunction]`: it already runs
    attached, and typed `#[pyclass]` results need no `PyDict`.
+
+### Releasing the GIL
+
+A binding whose kernel does more than O(n) work takes `py: Python<'_>`, does
+the Python-facing work attached (argument extraction, `*Data::try_new`
+validation, option parsing such as `TieMethod::parse`) and runs only the
+kernel inside `py.detach(|| ...)`, converting its `SurvivalResult` after it
+returns:
+
+```rust
+let data = CoxphData::try_new(time.into_inner(), ...)?;
+let options = CoxphOptions { method: TieMethod::parse(Some(method))?, ... };
+Ok(py.detach(move || CoxPHFit::fit(data, options))?)
+```
+
+The closure may capture owned buffers and `&` references to `#[pyclass]`
+values (none is `unsendable`, so they are `Sync`), never a `Bound`, a `PyRef`
+or a borrowed NumPy view. Code that must call back into Python from a detached
+kernel re-attaches with `Python::attach` (the `coxpenal` callback penalty).
+The core fit, prediction and residual bindings follow this rule, so fits on
+several Python threads run in parallel; `python/tests/test_gil_release.py`
+checks it. Two things still run attached: `survmean`, and building the
+nested-list results of methods such as `CoxPHFit.dfbeta`, which bounds how far
+those calls overlap.
 
 ## Python Layout
 

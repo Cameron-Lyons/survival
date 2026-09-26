@@ -92,6 +92,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m,
         GEEConfig,
         GEEResult,
+        AgsurvCurve,
         SurvfitKMResult,
         SurvfitCounts,
         SurvfitInfluence,

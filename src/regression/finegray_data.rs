@@ -5,6 +5,7 @@
 //! probability relative to the row's own.
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{BoolVec, FloatVec};
 use crate::internal::validation::validate_finite;
 use pyo3::prelude::*;
 
@@ -149,14 +150,15 @@ fn validate_finegray_inputs(
 /// Python entry point of [`finegray`].
 #[pyfunction(name = "finegray")]
 pub fn finegray_py(
-    tstart: Vec<f64>,
-    tstop: Vec<f64>,
-    ctime: Vec<f64>,
-    cprob: Vec<f64>,
-    extend: Vec<bool>,
-    keep: Vec<bool>,
+    py: Python<'_>,
+    tstart: FloatVec,
+    tstop: FloatVec,
+    ctime: FloatVec,
+    cprob: FloatVec,
+    extend: BoolVec,
+    keep: BoolVec,
 ) -> PyResult<FineGrayOutput> {
-    Ok(finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep)?)
+    Ok(py.detach(|| finegray(&tstart, &tstop, &ctime, &cprob, &extend, &keep))?)
 }
 
 #[cfg(test)]

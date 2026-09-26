@@ -660,6 +660,7 @@ pub fn cox_zph<'a>(
 #[pyfunction(name = "cox_zph")]
 #[pyo3(signature = (fit, transform = None, terms = true, singledf = false, global_test = true, assign = None))]
 pub fn cox_zph_py(
+    py: Python<'_>,
     fit: &Bound<'_, PyAny>,
     transform: Option<ZphTransform>,
     terms: bool,
@@ -678,14 +679,17 @@ pub fn cox_zph_py(
             .borrow();
         ZphFit::Coxph(&coxph)
     };
-    Ok(cox_zph(
-        fit,
-        &transform.unwrap_or(ZphTransform::Km),
-        terms,
-        singledf,
-        global_test,
-        assign.as_deref(),
-    )?)
+    let transform = transform.unwrap_or(ZphTransform::Km);
+    Ok(py.detach(|| {
+        cox_zph(
+            fit,
+            &transform,
+            terms,
+            singledf,
+            global_test,
+            assign.as_deref(),
+        )
+    })?)
 }
 
 #[cfg(test)]

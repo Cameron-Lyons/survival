@@ -8,10 +8,11 @@
 //! through [`CoxPHFit`].
 
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::internal::matrix::matrix_rows;
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{CoxPHFit, CoxphData, CoxphOptions};
-use ndarray::Array2;
+use ndarray::{Array2, ArrayView2, Axis};
 use pyo3::prelude::*;
 use std::collections::HashSet;
 
@@ -128,7 +129,7 @@ pub struct CchFitResult {
 fn validate_cch_inputs(
     stop: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: Option<&[f64]>,
     subcohort: &[i32],
     id: &[i64],
@@ -140,7 +141,7 @@ fn validate_cch_inputs(
     }
     for (name, len) in [
         ("status", status.len()),
-        ("covariates", covariates.len()),
+        ("covariates", covariates.nrows()),
         ("subcohort", subcohort.len()),
         ("id", id.len()),
     ] {
@@ -205,18 +206,13 @@ fn validate_cch_inputs(
             ));
         }
     }
-    let width = covariates.first().map_or(0, Vec::len);
+    let width = covariates.ncols();
     if width == 0 {
         return Err(SurvivalError::invalid_input(
             "covariates must contain at least one column",
         ));
     }
-    if covariates.iter().any(|row| row.len() != width) {
-        return Err(SurvivalError::invalid_input(
-            "covariates must be rectangular",
-        ));
-    }
-    if covariates.iter().flatten().any(|value| !value.is_finite()) {
+    if covariates.iter().any(|value| !value.is_finite()) {
         return Err(SurvivalError::invalid_input(
             "covariates must contain only finite values",
         ));
@@ -228,7 +224,7 @@ fn validate_cch_inputs(
 fn validate_borgan_inputs(
     stop: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: Option<&[f64]>,
     subcohort: &[i32],
     id: &[i64],
@@ -307,7 +303,7 @@ fn event_time_delta(stop: &[f64], status: &[i32]) -> f64 {
 struct CoxInput {
     stop: Vec<f64>,
     status: Vec<i32>,
-    x: Vec<Vec<f64>>,
+    x: Array2<f64>,
     start: Vec<f64>,
     offset: Vec<f64>,
     weights: Option<Vec<f64>>,
@@ -320,7 +316,7 @@ fn fit_cox(input: CoxInput, init: Option<Vec<f64>>, iter_max: usize) -> Survival
         input.stop,
         Some(input.start),
         input.status,
-        matrix_from_rows(&input.x, "x")?,
+        input.x,
         input.weights,
         None,
         Some(input.offset),
@@ -348,7 +344,7 @@ struct CchComputation {
 fn augmented_fit(
     stop: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: &[f64],
     subcohort: &[i32],
     cohort_size: usize,
@@ -377,7 +373,7 @@ fn augmented_fit(
             CoxInput {
                 stop: stop.to_vec(),
                 status: status.to_vec(),
-                x: covariates.to_vec(),
+                x: covariates.to_owned(),
                 start: entry,
                 offset: vec![0.0; stop.len()],
                 weights: None,
@@ -390,10 +386,15 @@ fn augmented_fit(
         None
     };
 
+    let rows: Vec<usize> = case_indices
+        .iter()
+        .chain(&subcohort_indices)
+        .copied()
+        .collect();
     let mut input = CoxInput {
         stop: Vec::new(),
         status: Vec::new(),
-        x: Vec::new(),
+        x: covariates.select(Axis(0), &rows),
         start: Vec::new(),
         offset: Vec::new(),
         weights: None,
@@ -401,14 +402,12 @@ fn augmented_fit(
     for &idx in &case_indices {
         input.stop.push(stop[idx]);
         input.status.push(1);
-        input.x.push(covariates[idx].clone());
         input.start.push(start[idx]);
         input.offset.push(-100.0);
     }
     for &idx in &subcohort_indices {
         input.stop.push(stop[idx]);
         input.status.push(0);
-        input.x.push(covariates[idx].clone());
         input.start.push(start[idx]);
         input.offset.push(0.0);
     }
@@ -441,7 +440,7 @@ fn augmented_fit(
 fn lin_ying_fit(
     stop: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: &[f64],
     subcohort: &[i32],
     cohort_size: usize,
@@ -474,7 +473,7 @@ fn lin_ying_fit(
         CoxInput {
             stop: stop.to_vec(),
             status: status.to_vec(),
-            x: covariates.to_vec(),
+            x: covariates.to_owned(),
             start: start.to_vec(),
             offset: offsets,
             weights: None,
@@ -595,7 +594,7 @@ struct BorganComputation {
 fn borgan_fit(
     stop: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: &[f64],
     subcohort: &[i32],
     id: &[i64],
@@ -654,64 +653,54 @@ fn borgan_fit(
         .map(|(&population, &sample)| population as f64 / sample as f64)
         .collect();
 
-    // Rows of the Cox fit and the input row each comes from.
-    let mut source_indices = Vec::new();
-    let mut input = CoxInput {
-        stop: Vec::new(),
-        status: Vec::new(),
-        x: Vec::new(),
-        start: Vec::new(),
-        offset: Vec::new(),
-        weights: Some(Vec::new()),
+    // Rows of the Cox fit: the input row each comes from and whether it
+    // enters as a case (I.Borgan: the cases as pseudo-cases, then the whole
+    // subcohort censored; II.Borgan: the data as they are).
+    let (source_indices, cases): (Vec<usize>, Vec<bool>) = match method {
+        BorganMethod::I => (0..observed_n)
+            .filter(|&i| status[i] == 1)
+            .map(|i| (i, true))
+            .chain(
+                (0..observed_n)
+                    .filter(|&i| subcohort[i] == 1)
+                    .map(|i| (i, false)),
+            )
+            .unzip(),
+        BorganMethod::II => (0..observed_n).map(|i| (i, status[i] == 1)).unzip(),
     };
-    let weights = input.weights.as_mut().expect("weights are present");
-    let mut phase2_start = 0usize;
-    match method {
-        BorganMethod::I => {
-            let case_indices: Vec<usize> = (0..observed_n).filter(|&i| status[i] == 1).collect();
-            let subcohort_indices: Vec<usize> =
-                (0..observed_n).filter(|&i| subcohort[i] == 1).collect();
-            phase2_start = case_indices.len();
-            for idx in case_indices {
-                source_indices.push(idx);
-                input.stop.push(stop[idx]);
-                input.status.push(1);
-                input.x.push(covariates[idx].clone());
-                input.start.push(start[idx]);
-                input.offset.push(-100.0);
-                weights.push(1.0);
-            }
-            for idx in subcohort_indices {
-                source_indices.push(idx);
-                input.stop.push(stop[idx]);
-                input.status.push(0);
-                input.x.push(covariates[idx].clone());
-                input.start.push(start[idx]);
-                input.offset.push(0.0);
-                weights.push(sampling_inverse[stratum[idx]]);
-            }
-        }
-        BorganMethod::II => {
-            source_indices.extend(0..observed_n);
-            input.stop.extend_from_slice(stop);
-            input.status.extend_from_slice(status);
-            input.x.extend_from_slice(covariates);
-            input.start.extend_from_slice(start);
-            input.offset.resize(observed_n, 0.0);
-            weights.extend((0..observed_n).map(|idx| {
-                if status[idx] == 1 {
-                    1.0
-                } else {
-                    sampling_inverse[stratum[idx]]
-                }
-            }));
-        }
-    }
-
+    let case_offset = match method {
+        BorganMethod::I => -100.0,
+        BorganMethod::II => 0.0,
+    };
+    let input = CoxInput {
+        stop: source_indices.iter().map(|&i| stop[i]).collect(),
+        status: cases.iter().map(|&case| i32::from(case)).collect(),
+        x: covariates.select(Axis(0), &source_indices),
+        start: source_indices.iter().map(|&i| start[i]).collect(),
+        offset: cases
+            .iter()
+            .map(|&case| if case { case_offset } else { 0.0 })
+            .collect(),
+        weights: Some(
+            source_indices
+                .iter()
+                .zip(&cases)
+                .map(|(&i, &case)| {
+                    if case {
+                        1.0
+                    } else {
+                        sampling_inverse[stratum[i]]
+                    }
+                })
+                .collect(),
+        ),
+    };
     let fit = fit_cox(input, None, 25)?;
     let score_rows = fit.score_residuals(false, None)?;
     let phase2_rows: Vec<usize> = match method {
-        BorganMethod::I => (phase2_start..score_rows.nrows()).collect(),
+        BorganMethod::I => {
+            (cases.iter().filter(|&&case| case).count()..score_rows.nrows()).collect()
+        }
         BorganMethod::II => (0..observed_n).filter(|&i| status[i] == 0).collect(),
     };
     let mut phase2_scores = Array2::zeros((phase2_rows.len(), score_rows.ncols()));
@@ -789,24 +778,23 @@ fn finish(computation: CchComputation, metadata: CchMetadata) -> CchFitResult {
 
 /// `cch(Surv(start, stop, status) ~ x, subcoh, id, cohort.size, method, robust)`
 /// for the unstratified estimators.
-#[pyfunction]
-#[pyo3(signature = (stop, status, covariates, subcohort, id, cohort_size, start=None, method="Prentice", robust=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn cch_fit(
+pub fn cch(
     stop: Vec<f64>,
     status: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
+    covariates: Array2<f64>,
     subcohort: Vec<i32>,
     id: Vec<i64>,
     cohort_size: usize,
     start: Option<Vec<f64>>,
     method: &str,
     robust: bool,
-) -> PyResult<CchFitResult> {
+) -> SurvivalResult<CchFitResult> {
+    let covariates = covariates.view();
     validate_cch_inputs(
         &stop,
         &status,
-        &covariates,
+        covariates,
         start.as_deref(),
         &subcohort,
         &id,
@@ -819,7 +807,7 @@ pub fn cch_fit(
         UnstratifiedMethod::Prentice => augmented_fit(
             &stop,
             &status,
-            &covariates,
+            covariates,
             &entry,
             &subcohort,
             cohort_size,
@@ -828,7 +816,7 @@ pub fn cch_fit(
         UnstratifiedMethod::SelfPrentice => augmented_fit(
             &stop,
             &status,
-            &covariates,
+            covariates,
             &entry,
             &subcohort,
             cohort_size,
@@ -837,7 +825,7 @@ pub fn cch_fit(
         UnstratifiedMethod::LinYing => lin_ying_fit(
             &stop,
             &status,
-            &covariates,
+            covariates,
             &entry,
             &subcohort,
             cohort_size,
@@ -859,24 +847,23 @@ pub fn cch_fit(
 }
 
 /// `cch(..., stratum, cohort.size = per-stratum sizes, method = "I.Borgan" | "II.Borgan")`.
-#[pyfunction]
-#[pyo3(signature = (stop, status, covariates, subcohort, id, stratum, cohort_sizes, start=None, method="I.Borgan"))]
 #[allow(clippy::too_many_arguments)]
-pub fn cch_borgan_fit(
+pub fn cch_borgan(
     stop: Vec<f64>,
     status: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
+    covariates: Array2<f64>,
     subcohort: Vec<i32>,
     id: Vec<i64>,
     stratum: Vec<usize>,
     cohort_sizes: Vec<usize>,
     start: Option<Vec<f64>>,
     method: &str,
-) -> PyResult<CchFitResult> {
+) -> SurvivalResult<CchFitResult> {
+    let covariates = covariates.view();
     validate_borgan_inputs(
         &stop,
         &status,
-        &covariates,
+        covariates,
         start.as_deref(),
         &subcohort,
         &id,
@@ -893,7 +880,7 @@ pub fn cch_borgan_fit(
     let borgan = borgan_fit(
         &stop,
         &status,
-        &covariates,
+        covariates,
         &entry,
         &subcohort,
         &id,
@@ -915,16 +902,78 @@ pub fn cch_borgan_fit(
     ))
 }
 
+/// Python binding of [`cch`].
+#[pyfunction]
+#[pyo3(signature = (stop, status, covariates, subcohort, id, cohort_size, start=None, method="Prentice", robust=false))]
+#[allow(clippy::too_many_arguments)]
+pub fn cch_fit(
+    py: Python<'_>,
+    stop: FloatVec,
+    status: IntVec,
+    covariates: FloatMatrix,
+    subcohort: IntVec,
+    id: Vec<i64>,
+    cohort_size: usize,
+    start: Option<FloatVec>,
+    method: &str,
+    robust: bool,
+) -> PyResult<CchFitResult> {
+    Ok(py.detach(|| {
+        cch(
+            stop.into_inner(),
+            status.into_inner(),
+            covariates.into_inner(),
+            subcohort.into_inner(),
+            id,
+            cohort_size,
+            start.map(FloatVec::into_inner),
+            method,
+            robust,
+        )
+    })?)
+}
+
+/// Python binding of [`cch_borgan`].
+#[pyfunction]
+#[pyo3(signature = (stop, status, covariates, subcohort, id, stratum, cohort_sizes, start=None, method="I.Borgan"))]
+#[allow(clippy::too_many_arguments)]
+pub fn cch_borgan_fit(
+    py: Python<'_>,
+    stop: FloatVec,
+    status: IntVec,
+    covariates: FloatMatrix,
+    subcohort: IntVec,
+    id: Vec<i64>,
+    stratum: Vec<usize>,
+    cohort_sizes: Vec<usize>,
+    start: Option<FloatVec>,
+    method: &str,
+) -> PyResult<CchFitResult> {
+    Ok(py.detach(|| {
+        cch_borgan(
+            stop.into_inner(),
+            status.into_inner(),
+            covariates.into_inner(),
+            subcohort.into_inner(),
+            id,
+            stratum,
+            cohort_sizes,
+            start.map(FloatVec::into_inner),
+            method,
+        )
+    })?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    type CchFixture = (Vec<f64>, Vec<i32>, Vec<Vec<f64>>, Vec<i32>, Vec<i64>);
+    type CchFixture = (Vec<f64>, Vec<i32>, Array2<f64>, Vec<i32>, Vec<i64>);
     type CountingCchFixture = (
         Vec<f64>,
         Vec<f64>,
         Vec<i32>,
-        Vec<Vec<f64>>,
+        Array2<f64>,
         Vec<i32>,
         Vec<i64>,
     );
@@ -933,16 +982,8 @@ mod tests {
         (
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
             vec![1, 0, 1, 0, 1, 0, 1, 1],
-            vec![
-                vec![-0.8],
-                vec![-0.2],
-                vec![0.3],
-                vec![0.9],
-                vec![-0.5],
-                vec![0.6],
-                vec![1.2],
-                vec![-1.0],
-            ],
+            Array2::from_shape_vec((8, 1), vec![-0.8, -0.2, 0.3, 0.9, -0.5, 0.6, 1.2, -1.0])
+                .unwrap(),
             vec![1, 1, 1, 1, 1, 1, 0, 0],
             (1..=8).collect(),
         )
@@ -966,11 +1007,7 @@ mod tests {
             0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0,
             0.0, 0.0, 1.0,
         ];
-        let covariates = x
-            .into_iter()
-            .zip(z)
-            .map(|(left, right)| vec![left, right])
-            .collect();
+        let covariates = Array2::from_shape_fn((20, 2), |(i, j)| if j == 0 { x[i] } else { z[i] });
         let subcohort = (0..20).map(|idx| i32::from(idx < 14)).collect();
         (
             start,
@@ -1003,7 +1040,7 @@ mod tests {
     fn unstratified_methods_fit_real_survival_times() {
         let (stop, status, covariates, subcohort, id) = fixture();
         for method in ["Prentice", "SelfPrentice", "LinYing"] {
-            let result = cch_fit(
+            let result = cch(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1056,7 +1093,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance) in expected {
-            let result = cch_fit(
+            let result = cch(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1105,7 +1142,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance) in expected {
-            let result = cch_fit(
+            let result = cch(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1153,7 +1190,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance, expected_opt) in expected {
-            let result = cch_borgan_fit(
+            let result = cch_borgan(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1196,7 +1233,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance) in expected {
-            let result = cch_borgan_fit(
+            let result = cch_borgan(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1243,7 +1280,7 @@ mod tests {
             ),
         ];
         for (method, expected_head, expected_last) in expected {
-            let result = cch_borgan_fit(
+            let result = cch_borgan(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1266,7 +1303,7 @@ mod tests {
     fn rejects_censored_rows_outside_subcohort() {
         let (stop, status, covariates, mut subcohort, id) = fixture();
         subcohort[1] = 0;
-        let error = cch_fit(
+        let error = cch(
             stop, status, covariates, subcohort, id, 20, None, "Prentice", false,
         )
         .expect_err("invalid sampling should fail");
@@ -1293,22 +1330,14 @@ mod tests {
                     status[idx] = 1;
                 }
             }
-            let covariates = (0..n)
-                .map(|i| {
-                    (0..p)
-                        .map(|j| {
-                            let centered_i = (i % 17) as f64 - 8.0;
-                            let centered_j = (j % 5) as f64 - 2.0;
-                            centered_i * 0.03
-                                + centered_j * 0.1
-                                + ((i * (j + 3)) % 11) as f64 * 0.01
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
+            let covariates = Array2::from_shape_fn((n, p), |(i, j)| {
+                let centered_i = (i % 17) as f64 - 8.0;
+                let centered_j = (j % 5) as f64 - 2.0;
+                centered_i * 0.03 + centered_j * 0.1 + ((i * (j + 3)) % 11) as f64 * 0.01
+            });
             let id = (0..n).map(|idx| idx as i64).collect::<Vec<_>>();
             for method in ["Prentice", "LinYing"] {
-                cch_fit(
+                cch(
                     stop.clone(),
                     status.clone(),
                     covariates.clone(),
