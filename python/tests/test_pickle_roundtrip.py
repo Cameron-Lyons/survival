@@ -7,6 +7,7 @@ original.  The reference values are R 4.5.3 with survival 3.8-12 on ``lung``.
 """
 
 import copy
+import dataclasses
 import multiprocessing
 import pickle
 from concurrent.futures import ProcessPoolExecutor
@@ -263,6 +264,29 @@ def test_restored_survfit_reproduces_r(lung):
     )
     # The influence matrices keep R's column-major layout.
     assert all(curve.influence.values.flags.f_contiguous for curve in fit.influence_surv)
+
+
+@pytest.mark.parametrize("how", COPIES)
+def test_survfit_influence_is_kept_once(lung, mgus2_states, how):
+    """The influence matrices of a copy are views of its engine's, as in the original."""
+    km = r.survfit("Surv(time, status) ~ sex", lung, influence=3, cluster="inst")
+    aj = r.survfit("Surv(etime, event) ~ sex", mgus2_states, id="id", influence=True)
+    for fit, names in ((km, ("influence_surv", "influence_chaz")), (aj, ("influence_pstate",))):
+        again = COPIES[how](fit)
+        for name in names:
+            for curve, engine_curve, original in zip(
+                getattr(again, name), getattr(again.engine, name), getattr(fit, name), strict=True
+            ):
+                assert curve.values.__array_interface__ == engine_curve.values.__array_interface__
+                np.testing.assert_array_equal(curve.values, original.values)
+                assert curve.values.flags.f_contiguous
+                assert curve.cluster == original.cluster
+    # Each matrix is pickled once, inside the engine.
+    matrices = sum(curve.values.nbytes for curve in km.influence_surv + km.influence_chaz)
+    assert len(pickle.dumps(km)) < len(pickle.dumps(km.engine)) + matrices / 2
+    # Matrices that are not the engine's own are kept as they are.
+    detached = dataclasses.replace(km, engine=None)
+    assert COPIES[how](detached).influence_surv[0].cluster == km.influence_surv[0].cluster
 
 
 @pytest.mark.parametrize("how", COPIES)
