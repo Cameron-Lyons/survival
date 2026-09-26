@@ -275,9 +275,17 @@ def test_pspline_combine_is_checked_as_in_r(lung, combine, message):
         _coxph(f"Surv(time, status) ~ pspline(age, df = 4, combine = {combine})", lung)
 
 
-def test_pspline_boundary_knots_are_checked_as_in_r(lung):
+@pytest.mark.parametrize("knots", ["c(40)", "40", "c(40, 60, 80)", "c(50, 50)", "c(80, 40)"])
+def test_pspline_boundary_knots_are_checked_as_in_r(lung, knots):
+    # R: "Invalid values for Boundary.knots" for each of these
     with pytest.raises(ValueError, match="Invalid values for Boundary.knots"):
-        _coxph("Surv(time, status) ~ pspline(age, Boundary.knots = c(80, 40))", lung)
+        _coxph(f"Surv(time, status) ~ pspline(age, Boundary.knots = {knots})", lung)
+
+
+def test_pspline_scalar_boundary_knots_are_one_value(lung):
+    # pspline(lung$age, Boundary.knots = 40): "Invalid values for Boundary.knots"
+    with pytest.raises(ValueError, match="Invalid values for Boundary.knots"):
+        r.pspline(lung["age"], Boundary_knots=40)
 
 
 def test_pspline_without_penalty_is_an_ordinary_matrix_term(lung):

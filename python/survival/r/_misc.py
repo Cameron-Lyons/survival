@@ -56,7 +56,7 @@ from ._formula import (
     _term_values,
 )
 from ._models import coef, model_formula, model_frame, vcov
-from ._penalties import _combine_basis, _pspline_combine
+from ._penalties import _combine_basis, _pspline_boundary, _pspline_combine
 from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
@@ -420,13 +420,7 @@ def pspline(
         raise ValueError("x must contain at least one non-missing value")
     if nterm_value < 3:
         raise ValueError("Too few basis functions")
-    if boundary_arg is None:
-        boundary = (min(observed), max(observed))
-    else:
-        values = _float_vector(boundary_arg, "Boundary.knots")
-        if len(values) != 2 or not values[0] < values[1]:
-            raise ValueError("Invalid values for Boundary.knots")
-        boundary = (values[0], values[1])
+    boundary = _pspline_boundary(boundary_arg, observed)
     intercept_value = _normalize_bool_option(intercept, "intercept")
     basis = _core.pspline_basis(x_values, nterm_value, _integer_scalar(degree, "degree"), boundary)
 

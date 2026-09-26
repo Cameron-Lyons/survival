@@ -20,6 +20,7 @@ from ._coerce import (
     _integer_scalar,
     _is_missing_value,
     _normalize_bool_option,
+    _scalar_or_vector,
     _strata_level_sort_key,
     _strata_value_label,
 )
@@ -78,14 +79,7 @@ def _fit_pspline(
     penalized = _normalize_bool_option(kwargs.pop("penalty", True), "penalty")
     intercept = _normalize_bool_option(kwargs.pop("intercept", False), "intercept")
     penalty = _core.CoxPenalty.pspline(intercept=intercept, **kwargs)
-    if boundary is None:
-        observed = _observed(x)
-        knots = (min(observed), max(observed))
-    else:
-        given = _float_vector(boundary, "Boundary.knots")
-        if len(given) != 2 or not given[0] < given[1]:
-            raise ValueError("Invalid values for Boundary.knots")
-        knots = (given[0], given[1])
+    knots = _pspline_boundary(boundary, _observed(x))
     nterm = penalty.nterm
     groups = None if combine is None else _pspline_combine(combine, nterm + degree, intercept)
     nvar = nterm + degree if groups is None else len(set(groups))
@@ -157,6 +151,18 @@ def _r_var(values: Sequence[float]) -> float:
         return math.nan
     mean = math.fsum(values) / n
     return math.fsum((value - mean) ** 2 for value in values) / (n - 1)
+
+
+def _pspline_boundary(boundary: Any, observed: Sequence[float]) -> tuple[float, float]:
+    """pspline.R's ``Boundary.knots``: ``range(x)`` over the non-missing values unless
+    given, when it must be two increasing numbers."""
+
+    if boundary is None:
+        return (min(observed), max(observed))
+    given = [float(value) for value in _scalar_or_vector(boundary, "Boundary.knots")]
+    if len(given) != 2 or not given[0] < given[1]:
+        raise ValueError("Invalid values for Boundary.knots")
+    return (given[0], given[1])
 
 
 def _pspline_combine(combine: Any, ncol: int, intercept: bool) -> tuple[int, ...]:
