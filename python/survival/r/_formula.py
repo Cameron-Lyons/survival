@@ -603,9 +603,24 @@ def _response_spec(formula: str) -> _SurvResponseSpec | None:
     )
 
 
+class _FormulaRows(dict[str, Any]):
+    """``data[rows, ]`` restricted to a formula's variables (see :func:`_formula_data_rows`).
+
+    Like R's data frame it keeps its row count without any column, as for ``~ 1``.
+    """
+
+    __slots__ = ("nrow",)
+
+    def __init__(self, columns: dict[str, Any], nrow: int) -> None:
+        super().__init__(columns)
+        self.nrow = nrow
+
+
 def _data_row_count(data: Any, formula: str | None = None) -> int:
     """The number of rows of *data*: the first response column, else the first column."""
 
+    if isinstance(data, _FormulaRows):
+        return data.nrow
     spec = None if formula is None else _response_spec(formula)
     if spec is not None and spec.columns:
         return len(_column(data, spec.columns[0]))
@@ -772,7 +787,7 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
-def _formula_data_rows(formula: str, data: Any, rows: list[int], n: int) -> dict[str, Any]:
+def _formula_data_rows(formula: str, data: Any, rows: list[int], n: int) -> _FormulaRows:
     """``data[rows, ]`` restricted to the variables *formula* uses.
 
     R's ``model.frame`` evaluates only the formula's variables, so ``subset`` and
@@ -792,7 +807,7 @@ def _formula_data_rows(formula: str, data: Any, rows: list[int], n: int) -> dict
         if len(values) != n:
             raise ValueError(f"variable lengths differ (found for '{name}')")
         frame[name] = _subset_sequence(values, rows, name)
-    return frame
+    return _FormulaRows(frame, len(rows))
 
 
 def _subset_formula_inputs(
@@ -800,7 +815,7 @@ def _subset_formula_inputs(
     data: Any,
     subset: Any,
     **row_aligned: Any,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[_FormulaRows, dict[str, Any]]:
     n = _data_row_count(data, formula)
     indices = _subset_indices(subset, n)
     filtered = {

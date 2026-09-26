@@ -8,6 +8,8 @@ whatever the container; counting-process rows with ``start >= stop`` are dropped
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from .helpers import setup_survival_import
@@ -143,6 +145,41 @@ def test_documented_survexp_example(lung):
         [1.0, 0.902619962241841, 0.530666050168176], rel=1e-9
     )
     assert expected.n_risk == [[138.0, 90.0]] * 3
+
+
+# test_r_pyears' cohort: survexp(~ 1, d, rmap = list(age = age, sex = sex, year = year), ...)
+COHORT = {
+    "time": [100, 400, 900, 300],
+    "status": [1, 0, 1, 1],
+    "age": [60 * 365.25, 70 * 365.25, 65 * 365.25, 80 * 365.25],
+    "sex": [1, 2, 1, 2],
+    "year": [
+        datetime.date(1995, 3, 1),
+        datetime.date(1996, 6, 15),
+        datetime.date(1997, 1, 1),
+        datetime.date(1998, 9, 9),
+    ],
+}
+RMAP = {"age": "age", "sex": "sex", "year": "year"}
+
+
+def test_formula_without_variables_keeps_the_row_count(lung):
+    # survexp(~ 1, d, rmap = ..., times = c(100, 365), subset = 1:3)
+    expected = r.survexp("~ 1", COHORT, rmap=RMAP, times=[100, 365], subset=[0, 1, 2])
+    assert expected.surv == pytest.approx([0.994953810814338, 0.981707980764119], rel=1e-12)
+    assert expected.n_risk == [3.0, 3.0]
+    # d$age[2] <- NA, or weights = c(1, NA, 1, 1): na.omit drops the second row
+    missing_age = {**COHORT, "age": [60 * 365.25, None, 65 * 365.25, 80 * 365.25]}
+    for data, weights in [(missing_age, None), (COHORT, [1, None, 1, 1])]:
+        expected = r.survexp("~ 1", data, rmap=RMAP, times=[100, 365], weights=weights)
+        assert expected.surv == pytest.approx([0.99190083517764, 0.97085650908476], rel=1e-12)
+        assert expected.n == 3
+    # cox <- coxph(Surv(time, status) ~ age + sex, lung)
+    # survexp(~ 1, lung, ratetable = cox, times = c(0, 100, 365), subset = age > 60)$surv
+    cox = r.coxph("Surv(time, status) ~ age + sex", lung, model=True)
+    expected = r.survexp("~ 1", lung, ratetable=cox, times=[0, 100, 365], subset=_older(lung))
+    assert expected.surv == pytest.approx([1.0, 0.846345174244281, 0.363816232574727], rel=1e-9)
+    assert expected.n_risk == [134.0] * 3
 
 
 def test_polars_frames_with_missing_values_and_subset(lung):
