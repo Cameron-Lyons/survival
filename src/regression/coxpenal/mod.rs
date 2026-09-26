@@ -89,7 +89,9 @@ impl CoxpenalData {
         offset: Option<Vec<f64>>,
         terms: Vec<ModelTerm>,
     ) -> SurvivalResult<Self> {
+        // coxpenal.fit is reached only for data with events
         let base = CoxphData::try_new(time, entry, status, x, weights, strata, offset)?;
+        base.check_fit_input()?;
         let ncol = base.x.ncols();
         let mut owner = vec![None; ncol];
         for (t, term) in terms.iter().enumerate() {

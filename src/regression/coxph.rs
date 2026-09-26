@@ -37,7 +37,8 @@ use pyo3::prelude::*;
 use std::sync::OnceLock;
 
 /// Validated inputs of a Cox fit, in the caller's row order (`Surv(time,
-/// status) ~ x` or `Surv(entry, time, status) ~ x`).
+/// status) ~ x` or `Surv(entry, time, status) ~ x`); the fit checks the
+/// predictor values and weights ([`CoxphData::check_fit_input`]).
 #[derive(Debug, Clone)]
 pub struct CoxphData {
     pub time: Vec<f64>,
@@ -70,11 +71,6 @@ impl CoxphData {
         validate_length(n, status.len(), "status")?;
         validate_binary_i32(&status, "status")?;
         validate_length(n, x.nrows(), "x")?;
-        if let Some(value) = x.iter().find(|value| !value.is_finite()) {
-            return Err(SurvivalError::invalid_input(format!(
-                "x contains non-finite value {value}"
-            )));
-        }
         if let Some(entry) = &entry {
             validate_length(n, entry.len(), "entry")?;
             validate_finite(entry, "entry")?;
@@ -87,9 +83,6 @@ impl CoxphData {
         if let Some(weights) = &weights {
             validate_length(n, weights.len(), "weights")?;
             validate_finite(weights, "weights")?;
-            if weights.iter().any(|&w| w <= 0.0) {
-                return Err(SurvivalError::invalid_input("Invalid weights, must be >0"));
-            }
         }
         if let Some(strata) = &strata {
             validate_length(n, strata.len(), "strata")?;
@@ -111,6 +104,26 @@ impl CoxphData {
 
     pub fn n(&self) -> usize {
         self.time.len()
+    }
+
+    /// The checks `coxph()` makes only once the data have events (data
+    /// without events get their fit first): finite predictors, and the
+    /// fitters' positive case weights (`coxph.fit`, `agreg.fit`,
+    /// `coxpenal.fit`).
+    pub fn check_fit_input(&self) -> SurvivalResult<()> {
+        if let Some(value) = self.x.iter().find(|value| !value.is_finite()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "x contains non-finite value {value}"
+            )));
+        }
+        if self
+            .weights
+            .as_ref()
+            .is_some_and(|weights| weights.iter().any(|&w| w <= 0.0))
+        {
+            return Err(SurvivalError::invalid_input("Invalid weights, must be >0"));
+        }
+        Ok(())
     }
 }
 
@@ -561,6 +574,7 @@ impl CoxPHFit {
         if nevent == 0 {
             return Ok(Self::without_events(data, centred_offset, &options));
         }
+        data.check_fit_input()?;
         if let Some(init) = &options.init {
             if init.len() != nvar {
                 return Err(SurvivalError::invalid_input(
@@ -2150,6 +2164,31 @@ mod tests {
     }
 
     #[test]
+    fn predictors_and_weights_are_checked_only_for_data_with_events() {
+        let data = |status: Vec<i32>| {
+            CoxphData::try_new(
+                vec![2.0, 3.0, 4.0, 5.0],
+                None,
+                status,
+                Array2::from_shape_vec((4, 1), vec![1.0, f64::INFINITY, 3.0, 4.0]).unwrap(),
+                Some(vec![0.0, 2.0, 3.0, 4.0]),
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let fit = CoxPHFit::fit(data(vec![0; 4]), CoxphOptions::default()).unwrap();
+        assert!(fit.coefficients[0].is_nan());
+        assert_eq!(fit.means, vec![f64::INFINITY]);
+        let err = CoxPHFit::fit(data(vec![1, 0, 0, 0]), CoxphOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("x contains non-finite value inf"));
+        let mut finite = data(vec![1, 0, 0, 0]);
+        finite.x[(1, 0)] = 2.0;
+        let err = CoxPHFit::fit(finite, CoxphOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("Invalid weights, must be >0"));
+    }
+
+    #[test]
     fn null_model_reports_the_log_likelihood_and_residuals() {
         let data = CoxphData::try_new(
             vec![1.0, 2.0, 3.0],
@@ -2201,18 +2240,6 @@ mod tests {
                 vec![1, 0],
                 Array2::zeros((2, 1)),
                 None,
-                None,
-                None
-            )
-            .is_err()
-        );
-        assert!(
-            CoxphData::try_new(
-                vec![1.0, 2.0],
-                None,
-                vec![1, 0],
-                Array2::zeros((2, 1)),
-                Some(vec![1.0, 0.0]),
                 None,
                 None
             )

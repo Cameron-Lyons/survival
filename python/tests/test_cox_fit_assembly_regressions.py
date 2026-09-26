@@ -133,6 +133,8 @@ def censored():
         "w": [1, 2, 3, 4],
         "off": [0.1, 0.2, 0.3, 0.4],
         "x01": [0, 1, 1, 1],
+        "xi": [1, math.inf, 3, 4],
+        "w0": [0, 2, 3, 4],
     }
 
 
@@ -165,6 +167,27 @@ def test_data_without_events_skip_init_penalties_and_nocenter(censored):
     assert math.isnan(ridge.coefficients[0])
     assert (ridge.means, ridge.iter) == ([2.5], 0)
     assert r.coxph("Surv(stop, status) ~ x01", censored).means == [0.75]
+
+
+@pytest.mark.parametrize("response", ["Surv(stop, status)", "Surv(start, stop, status)"])
+def test_data_without_events_skip_the_predictor_and_weight_checks(censored, response):
+    # coxph() returns before its infinite-predictor check and the fitters' weights > 0
+    infinite = r.coxph(f"{response} ~ xi", censored)
+    assert math.isnan(infinite.coefficients[0])
+    assert infinite.means == [math.inf]
+    assert infinite.linear_predictors == [0.0] * 4
+    ridge = r.coxph(f"{response} ~ ridge(xi, theta=1)", censored)
+    assert math.isnan(ridge.coefficients[0])
+    zero_weight = r.coxph(f"{response} ~ x", censored, weights="w0")
+    assert math.isnan(zero_weight.coefficients[0])
+    assert zero_weight.means == [2.5]
+    with_event = dict(censored, status=[1, 0, 0, 0])
+    with pytest.raises(ValueError, match="data contains an infinite predictor"):
+        r.coxph(f"{response} ~ xi", with_event)
+    with pytest.raises(ValueError, match="Invalid weights, must be >0"):
+        r.coxph(f"{response} ~ x", with_event, weights="w0")
+    with pytest.raises(ValueError, match="Invalid weights, must be >0"):
+        r.coxph(f"{response} ~ ridge(x, theta=1)", with_event, weights="w0")
 
 
 # --- one concordance ------------------------------------------------------------

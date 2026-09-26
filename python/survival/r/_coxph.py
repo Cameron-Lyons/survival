@@ -520,8 +520,6 @@ def _coxph_fit_frame(
             cluster=frame.cluster,
             id=frame.id,
         )
-    if any(not math.isfinite(value) for row in data.x for value in row):
-        raise ValueError("data contains an infinite predictor")
     if data.offset is not None and any(
         not math.isfinite(value) or value > _LOG_DOUBLE_MAX for value in data.offset
     ):
@@ -546,9 +544,11 @@ def _coxph_fit_frame(
             cluster = list(range(len(data.y)))
         else:
             raise ValueError("one of cluster or id is needed")
-    # without events coxph() returns before checking init or fitting anything,
-    # penalized terms included
+    # without events coxph() returns before checking the predictors or init and
+    # before fitting anything, penalized terms included
     no_events = not any(int(value) for value in data.y.event)
+    if not no_events and any(not math.isfinite(value) for row in data.x for value in row):
+        raise ValueError("data contains an infinite predictor")
     init_values = None if init is None or no_events else _check_init(init, data.x, data.offset)
     penalized_terms = (
         []
