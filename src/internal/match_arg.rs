@@ -6,7 +6,9 @@ use crate::error::{SurvivalError, SurvivalResult};
 /// `pmatch` rules.  Matching is case sensitive; an exact match wins,
 /// otherwise `arg` must be a prefix of exactly one choice (an ambiguous
 /// prefix matches nothing), and the empty string never matches.  A miss is
-/// R's error, `'arg' should be one of "a", "b", ...`.
+/// R's error, `'arg' should be one of "a", "b", ...`, with the ASCII quotes
+/// `dQuote` gives under `options(useFancyQuotes = FALSE)` rather than the
+/// curly ones of a UTF-8 locale.
 pub(crate) fn match_arg(arg: &str, choices: &[&str]) -> SurvivalResult<usize> {
     if let Some(index) = choices.iter().position(|choice| *choice == arg) {
         return Ok(index);

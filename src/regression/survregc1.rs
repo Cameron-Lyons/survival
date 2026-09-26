@@ -28,7 +28,8 @@ pub(crate) struct SurvregKernel<'a> {
     pub y2: &'a [f64],
     /// Censoring code per observation: 0 right, 1 exact, 2 left, 3 interval.
     pub status: &'a [i32],
-    /// `n x nvar` design matrix, in standard (row major) layout.
+    /// `n x nvar` design matrix; a view that is not in standard (row major)
+    /// layout is copied into one per evaluation.
     pub covariates: ArrayView2<'a, f64>,
     pub weights: &'a [f64],
     pub offset: &'a [f64],
@@ -238,10 +239,8 @@ impl SurvregKernel<'_> {
         let nvar = self.nvar();
         let nvar2 = self.nvar2();
         debug_assert!(beta.len() > nvar, "beta must carry a log(scale)");
-        let design = self
-            .covariates
-            .as_slice()
-            .expect("the design matrix is in standard layout");
+        let design = self.covariates.as_standard_layout();
+        let design = design.as_slice().expect("standard layout");
         let mut loglik = 0.0;
         let mut u = vec![0.0; nvar2];
         let mut imat = vec![0.0; nvar2 * nvar2];
@@ -510,6 +509,37 @@ mod tests {
         assert_eq!(with.loglik, without.loglik);
         assert_eq!(with.u, without.u);
         assert_eq!(with.imat, without.imat);
+    }
+
+    #[test]
+    fn a_column_major_design_gives_the_same_likelihood() {
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let y1 = [0.2, 0.9, 1.3, 0.4];
+        let status = [1, 0, 1, 2];
+        let rows = [1.0, 0.5, 1.0, -0.2, 1.0, 1.1, 1.0, 0.3];
+        let row_major = Array2::from_shape_vec((4, 2), rows.to_vec()).unwrap();
+        let column_major = row_major.t().to_owned();
+        let ones = [1.0; 4];
+        let zeros = [0.0; 4];
+        let strata = [0; 4];
+        let kernel = |covariates| SurvregKernel {
+            y1: &y1,
+            y2: &y1,
+            status: &status,
+            covariates,
+            weights: &ones,
+            offset: &zeros,
+            strata: &strata,
+            nstrat: 1,
+            distribution: &weibull,
+        };
+        let beta = [0.3, 0.2, -0.1];
+        let expected = kernel(row_major.view()).evaluate(&beta, true);
+        let got = kernel(column_major.t()).evaluate(&beta, true);
+        assert_eq!(got.loglik, expected.loglik);
+        assert_eq!(got.u, expected.u);
+        assert_eq!(got.imat, expected.imat);
+        assert_eq!(got.jj, expected.jj);
     }
 
     #[test]
