@@ -368,6 +368,16 @@ def test_print_guards_and_surface(lung, f_ps):
         assert getattr(survival.r_api, name) is getattr(r, name)
 
 
+def test_signif_rounds_halfway_cases_like_r():
+    from survival.r._survpenal_print import _signif
+
+    # R 4.5.3: signif(values, digits), printed with sprintf("%.17g")
+    values = [0.000125, 0.0125, 0.35, 2.5e-10, 0.45, 1.5e-300, -0.000125]
+    digits = [2, 2, 1, 1, 1, 1, 2]
+    expected = [0.00012, 0.012, 0.4, 2.0000000000000001e-10, 0.4, 1.9999999999999987e-300, -0.00012]
+    assert [_signif(v, d) for v, d in zip(values, digits, strict=True)] == expected
+
+
 # --- summary.survreg -----------------------------------------------------------------------
 
 

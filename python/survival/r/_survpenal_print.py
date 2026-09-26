@@ -20,7 +20,7 @@ from ._coerce import (
 )
 from ._coxph import _block, _pspline_print, _wald_row, coxph_wtest
 from ._formula import _design_term_name
-from ._survreg import SurvregModelResult
+from ._survreg import SurvregModelResult, survreg_df
 from ._types import NaAction, _PenaltyDesignTerm
 
 _COLUMNS = ("coef", "se(coef)", "se2", "Chisq", "DF", "p")
@@ -112,12 +112,54 @@ def _term_table(
     return names, rows, history
 
 
+def _pow_di(x: float, n: int) -> float:
+    """R's ``R_pow_di`` (arithmetic.c): ``x^n`` by repeated squaring."""
+
+    result = 1.0
+    negative = n < 0
+    n = abs(n)
+    while True:
+        if n & 1:
+            result *= x
+        n >>= 1
+        if not n:
+            break
+        x *= x
+    return 1.0 / result if negative else result
+
+
 def _signif(value: float, digits: int) -> float:
-    """R's ``signif``."""
+    """R's ``signif``, ported from ``fprec`` (nmath/fprec.c): scale by a power of
+    ten and round half to even, so ``signif(0.000125, 2)`` is ``0.00012``.  Within
+    ``1e-306 < |value| < 1e306`` it matches R bit for bit; beyond that R's powers of
+    ten can differ from these in the last bits."""
 
     if not math.isfinite(value) or value == 0.0:
         return value
-    return float(f"{value:.{digits - 1}e}")
+    max10e = sys.float_info.max_10_exp
+    dig = min(max(digits, 1), 22)
+    sign = -1.0 if value < 0.0 else 1.0
+    x = abs(value)
+    l10 = math.log10(x)
+    e10 = dig - 1 - math.floor(l10)
+    if l10 < max10e - 2:
+        p10 = 1.0
+        if e10 > max10e:
+            p10 = _pow_di(10.0, e10 - max10e)
+            e10 = max10e
+        if e10 > 0:
+            pow10 = _pow_di(10.0, e10)
+            return sign * (round(x * pow10 * p10) / pow10) / p10
+        pow10 = _pow_di(10.0, -e10)
+        return sign * round(x / pow10) * pow10
+    do_round = max10e - l10 >= _pow_di(10.0, -dig)
+    e2 = dig + (1 if e10 > 0 else 6) - 22
+    p10 = _pow_di(10.0, e2)
+    big = _pow_di(10.0, e10 - e2)
+    x = x * p10 * big
+    if do_round:
+        x += 0.5
+    return sign * (math.floor(x) / p10) / big
 
 
 def _format_column(values: Sequence[float], digits: int) -> list[str]:
@@ -242,7 +284,7 @@ def print_survreg_penal(
     )
     loglik = fit.loglik
     logtest = -2.0 * (loglik[0] - loglik[1])
-    logtest_df = float(fit.fit.df) - fit.idf
+    logtest_df = survreg_df(fit) - fit.idf
     logtest_p = _core.pchisq(logtest, logtest_df, lower_tail=False)
     # format.pval at pdig = max(1, digits - 4) (print.survreg.penal.R:114)
     test = (
