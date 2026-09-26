@@ -214,10 +214,10 @@ pub(crate) fn cv_cox(
                 builder = builder.weights(Array1::from_vec(sorted_weights));
             }
             let beta = match builder.build() {
-                Ok(mut fit) => {
-                    fit.fit();
-                    fit.results().coefficients
-                }
+                Ok(mut fit) => match fit.fit() {
+                    Ok(()) => fit.results().coefficients,
+                    Err(_) => vec![0.0; nvar],
+                },
                 Err(_) => vec![0.0; nvar],
             };
             let linear_predictor: Vec<f64> = test_indices

@@ -231,6 +231,13 @@ pub struct CoxPHFit {
     /// `-2` converged while step halving, `1000` did not converge.
     #[pyo3(get)]
     pub flag: i32,
+    /// `agreg.fit`'s `info` for a (start, stop] Breslow or Efron fit: the
+    /// rank of the information matrix at the initial coefficients, the
+    /// number of recentrings of the risk scores, the number of step
+    /// halvings, and 1 when the iterations ran out.  `None` for the other
+    /// fitters.
+    #[pyo3(get)]
+    pub info: Option<[i32; 4]>,
     /// `x %*% coef + offset - sum(coef * means)`.
     #[pyo3(get)]
     pub linear_predictors: Vec<f64>,
@@ -528,14 +535,13 @@ impl CoxPHFit {
             engine = engine.weights(Array1::from_vec(weights.clone()));
         }
         let mut engine = engine.build()?;
-        engine.fit();
+        engine.fit()?;
         let results = engine.results();
 
         let offset = data.offset.unwrap_or_else(|| vec![0.0; n]);
         let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
         // The linear predictor uses the fitted values; only afterwards are
-        // the aliased coefficients marked NA (`coxph.fit`: `coef[which.sing] <- NA`
-        // unless iter.max = 0).
+        // the aliased coefficients marked NA (`coef[which.sing] <- NA`).
         let mut coefficients = results.coefficients;
         let center: f64 = coefficients
             .iter()
@@ -554,7 +560,14 @@ impl CoxPHFit {
                     - center
             })
             .collect();
-        if options.iter_max > 0 && results.flag >= 0 && (results.flag as usize) < nvar {
+        // `which.sing <- diag(var) == 0` when the rank is below nvar
+        // (`coxph.fit`'s flag, negative ranks and -2 included; `agreg.fit`'s
+        // rank at the initial coefficients).  `coxph.fit` and `agreg.fit`
+        // leave the coefficients alone when no iterations were requested,
+        // the exact fitters do not.
+        let rank = results.info.map_or(results.flag, |info| info[0]);
+        let exact = options.method == TieMethod::Exact;
+        if (exact || options.iter_max > 0) && i64::from(rank) < nvar as i64 {
             for (j, coefficient) in coefficients.iter_mut().enumerate() {
                 if results.var[(j, j)] == 0.0 {
                     *coefficient = f64::NAN;
@@ -584,6 +597,7 @@ impl CoxPHFit {
             wald_test: 0.0,
             iter: results.iter,
             flag: results.flag,
+            info: results.info,
             linear_predictors,
             residuals: Vec::new(),
             means: results.means,
