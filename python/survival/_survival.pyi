@@ -10826,11 +10826,23 @@ class YatesContrast:
     @property
     def chisq(self) -> float: ...
     @property
-    def df(self) -> int: ...
+    def df(self) -> int | None: ...
     @property
     def name(self) -> str: ...
     @property
     def ss(self) -> float | None: ...
+
+class YatesCurves:
+    @property
+    def cumhaz(self) -> list[list[float]]: ...
+    @property
+    def lower(self) -> list[list[float]]: ...
+    @property
+    def std_err(self) -> list[list[float]]: ...
+    @property
+    def surv(self) -> list[list[float]]: ...
+    @property
+    def upper(self) -> list[list[float]]: ...
 
 class YatesEstimate:
     @property
@@ -10845,6 +10857,8 @@ class YatesResult:
     def estimate(self) -> list[YatesEstimate]: ...
     @property
     def mvar(self) -> list[list[float]]: ...
+    @property
+    def summary(self) -> YatesCurves | None: ...
     @property
     def test(self) -> list[YatesContrast]: ...
 
@@ -13675,6 +13689,11 @@ def yates(
     estimable: Sequence[bool] | None = None,
     test: str = "global",
 ) -> YatesResult: ...
+def yates_estimable(
+    xmatlist: Sequence[Sequence[Sequence[float]]],
+    x: Sequence[Sequence[float]],
+    intercept: bool = False,
+) -> list[bool]: ...
 def yates_population_means(
     xmatlist: Sequence[Sequence[Sequence[float]]],
     weights: Sequence[float] | None = None,
@@ -13684,6 +13703,22 @@ def yates_risk(
     beta: Sequence[float],
     vmat: Sequence[Sequence[float]],
     means: Sequence[float],
+    estimable: Sequence[bool] | None = None,
+    nsim: int = 200,
+    seed: int = 0,
+    test: str = "global",
+    term: str | None = None,
+) -> YatesResult: ...
+def yates_survival(
+    xmatlist: Sequence[Sequence[Sequence[float]]],
+    beta: Sequence[float],
+    vmat: Sequence[Sequence[float]],
+    means: Sequence[float],
+    time: Sequence[float],
+    cumhaz: Sequence[float],
+    rmean: float,
+    conf_int: float = 0.95,
+    estimable: Sequence[bool] | None = None,
     nsim: int = 200,
     seed: int = 0,
     test: str = "global",

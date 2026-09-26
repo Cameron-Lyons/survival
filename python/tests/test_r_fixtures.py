@@ -1882,7 +1882,6 @@ class YatesHandler(TopicHandler):
         args = dict(case.get("args", {}))
         term = args.pop("term")
         expected = case["expected"]
-        # yates reads the model frame of the fit (R re-evaluates the call; Python keeps it)
         if case.get("fit", "coxph") == "lm":
             # lm belongs to R's stats package. Fit its least-squares reference
             # independently, then exercise survival's generic model adapter.
@@ -1905,7 +1904,7 @@ class YatesHandler(TopicHandler):
             fit = r.YatesModel(case["formula"], data, beta.tolist(), variance.tolist(), sigma2)
             assert np.allclose(_design_rows_from_spec(data, fit.design, len(y)), x)
         else:
-            fit = _coxph_fit(topic, {**case, "args": {"model": True}})
+            fit = _coxph_fit(topic, {**case, "args": {}})
         if args.get("predict") == "risk":
             args["options"] = {"seed": 20240601}  # generator's set.seed()
 
@@ -1937,7 +1936,9 @@ class YatesHandler(TopicHandler):
         elif aspect == "test":
             table = expected["test"]
             assert_exact([row.name for row in result.test], table["rownames"], path="test.names")
-            actual = [[row.chisq, float(row.df)] for row in result.test]
+            actual = [
+                [row.chisq, math.nan if row.df is None else float(row.df)] for row in result.test
+            ]
             values = [row[:2] for row in table["values"]]
             assert_matrix_close(actual, values, rtol=RTOL_VAR, path="test")
         elif aspect == "mvar":

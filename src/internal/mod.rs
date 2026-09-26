@@ -4,6 +4,7 @@ pub(crate) mod fenwick;
 pub(crate) mod match_arg;
 pub(crate) mod matrix;
 pub(crate) mod numpy_utils;
+pub(crate) mod qr;
 pub(crate) mod rng;
 pub(crate) mod simd;
 pub(crate) mod sorting;

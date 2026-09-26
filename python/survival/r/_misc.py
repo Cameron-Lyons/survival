@@ -16,8 +16,9 @@ from __future__ import annotations
 import bisect
 import math
 import re
+import warnings
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .. import _survival as _core
@@ -40,6 +41,7 @@ from ._coerce import (
     _subset_indices,
     _subset_sequence,
 )
+from ._coxph import _coxph_model_frame, survfit_coxph
 from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
@@ -57,13 +59,14 @@ from ._formula import (
     _subset_formula_inputs,
     _term_values,
 )
-from ._models import coef, model_formula, model_frame, vcov
+from ._models import _plain_model_frame, coef, model_formula, vcov
 from ._names import _make_names_unique, _make_unique
 from ._penalties import _combine_basis, _pspline_boundary, _pspline_cbase, _pspline_combine
 from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
     BrierResult,
+    CoxSurvfitResult,
     PsplineResult,
     StateFigResult,
     SurvCheckCodes,
@@ -1151,16 +1154,20 @@ def _factorial_population(
     return pdata
 
 
+def _yates_model_frame(fit: Any) -> dict[str, list[Any]]:
+    """``mframe <- fit$model; if (is.null(mframe)) mframe <- model.frame(fit)``."""
+
+    return _plain_model_frame(fit.model if isinstance(fit, YatesModel) else _coxph_model_frame(fit))
+
+
 def _yates_population(
     mframe: dict[str, list[Any]],
     design: _FormulaDesign,
     term: _YatesTerm,
-    population: Any,
+    population: str,
 ) -> dict[str, list[Any]]:
     """R's ``yates_xmat`` population rows over the adjusting variables."""
 
-    if isinstance(population, Mapping):
-        return {str(name): list(values) for name, values in population.items()}
     adjusters = [spec for spec in _design_factors(design) if spec.term.column != term.column]
     categorical = {
         spec.term.column: list(spec.levels)
@@ -1189,7 +1196,7 @@ def _yates_population(
     return out
 
 
-def _yates_weights(mframe: Mapping[str, list[Any]], population: Any) -> list[float] | None:
+def _yates_weights(mframe: Mapping[str, list[Any]], population: str) -> list[float] | None:
     """Case weights of the ``data`` population: the model weights, else equal weight per id."""
 
     if population != "data":
@@ -1211,6 +1218,98 @@ def _yates_design_names(design: _FormulaDesign) -> list[str]:
     return names
 
 
+def _columns(rows: Sequence[Sequence[float]], keep: Sequence[int]) -> list[list[float]]:
+    return [[row[idx] for idx in keep] for row in rows]
+
+
+@dataclass(frozen=True)
+class _YatesSetup:
+    """What R's ``yates_setup`` gives ``yates``: the prediction (``linear``, ``risk`` or
+    ``survival``), the seed of its simulation and, for ``survival``, the baseline curve
+    and the restricted-mean horizon ``rmean``."""
+
+    predict: str
+    seed: int = 0
+    baseline: CoxSurvfitResult | None = None
+    rmean: float = math.inf
+
+
+_COXPH_PREDICT = ["lp", "risk", "expected", "terms", "survival", "linear"]
+
+
+def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
+    """R's ``yates_setup``: ``yates_setup.coxph`` for a Cox model; ``yates_setup.default``
+    for a ``YatesModel``, which gives the linear predictor whatever ``predict`` is (``yates``
+    passes it as ``predict=``, which that method's ``type`` argument never receives, so R
+    neither checks nor warns).
+
+    ``options`` holds R's ``rmean`` for ``predict="survival"`` and the ``seed`` of R's
+    generator (``set.seed``) for the simulated predictions.
+    """
+
+    if callable(predict) or isinstance(predict, Mapping):
+        raise ValueError("user written prediction functions are not yet supported")
+    if isinstance(fit, YatesModel):
+        return _YatesSetup("linear")
+    kind = _match_string_arg(
+        # match.arg(NULL) is the first choice
+        "lp" if predict is None else predict,
+        "predict",
+        _COXPH_PREDICT,
+        "'predict' should be one of " + ", ".join(f'"{name}"' for name in _COXPH_PREDICT),
+    )
+    if kind in ("lp", "linear"):
+        return _YatesSetup("linear")
+    if kind in ("expected", "terms"):
+        raise ValueError(f"type {kind} is not supported")
+    if options is not None and not isinstance(options, Mapping):
+        raise TypeError("options must be a mapping")
+    settings = dict(options or {})
+    unknown = set(settings) - ({"seed"} if kind == "risk" else {"seed", "rmean"})
+    if unknown:
+        raise TypeError(f"unrecognized {kind} options: {', '.join(sorted(map(str, unknown)))}")
+    seed = _integer_scalar(settings.get("seed", 0), "seed")
+    if kind == "risk":
+        return _YatesSetup("risk", seed)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        baseline = survfit_coxph(fit, censor=False)
+    rmean = settings.get("rmean")
+    try:
+        rmean = max(baseline.time) if rmean is None else float(rmean)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("rmean must be numeric") from exc
+    if baseline.strata is not None:
+        raise ValueError("stratified models not yet supported")
+    return _YatesSetup("survival", seed, baseline, rmean)
+
+
+def _yates_estimable(fit: Any, design: _FormulaDesign, xmatlist: list[Any]) -> list[bool]:
+    """R's estimability check for a fit with aliased coefficients, against the unique rows
+    of ``model.matrix(fit)`` (a Cox model's with a leading column of ones)."""
+
+    if isinstance(fit, YatesModel):
+        n = len(next(iter(fit.model.values())))
+        return _core.yates_estimable(xmatlist, _design_rows_from_spec(fit.model, design, n))
+    return _core.yates_estimable(xmatlist, fit.x, intercept=design.intercept)
+
+
+def _yates_survival_summary(
+    baseline: CoxSurvfitResult, curves: _core.YatesCurves
+) -> CoxSurvfitResult:
+    """R's ``summary`` function of ``yates_setup.coxph``: the baseline curve carrying each
+    level's simulated mean survival, one column per level."""
+
+    return replace(
+        baseline,
+        surv=curves.surv,
+        cumhaz=curves.cumhaz,
+        std_err=curves.std_err,
+        lower=curves.lower,
+        upper=curves.upper,
+    )
+
+
 def yates(
     fit: Any,
     term: Any,
@@ -1224,9 +1323,13 @@ def yates(
 ) -> YatesResult:
     """Population marginal means of a term of a Cox model and their tests (R's ``yates``).
 
-    ``predict="risk"`` uses ``nsim`` coefficient draws; ``options={"seed": 0}``
-    controls its reproducible, R-compatible random stream. ``population`` is
-    ``"data"``, ``"factorial"``, ``"sas"`` or a data frame. ``YatesModel`` adapts
+    ``predict`` is the linear predictor (``"linear"``/``"lp"``), ``"risk"`` or
+    ``"survival"`` (the mean survival restricted to ``options={"rmean": ...}``, by default
+    the last time of the baseline curve, with the simulated curves in ``summary``); the
+    latter two average ``nsim`` coefficient draws, and ``options={"seed": 0}`` seeds
+    their R-compatible random stream.  ``population`` is ``"data"``, ``"factorial"``,
+    ``"sas"`` or a data frame.  With aliased coefficients, a level the fit cannot
+    estimate has an NA mean and the tests that use it are NA.  ``YatesModel`` adapts
     externally fitted linear models without refitting them.
     """
 
@@ -1235,12 +1338,9 @@ def yates(
     design = _formula_design_for_fit(fit)
     if design is None:
         raise TypeError("the fit does not have a terms structure")
+    setup = _yates_setup(fit, predict, options)
     if _match_string_arg(method, "method", ["direct", "sgtt"], "invalid method") != "direct":
         raise NotImplementedError('yates method = "sgtt" is not implemented')
-    if predict not in {"linear", "lp", "risk"}:
-        raise NotImplementedError(
-            f"yates predict = {predict!r} is not implemented (R simulates the coefficients)"
-        )
     if isinstance(population, str):
         population = _match_string_arg(
             population.lower(),
@@ -1254,52 +1354,71 @@ def yates(
     test_value = _match_string_arg(test, "test", ["global", "trend", "pairwise"], "invalid test")
 
     beta = fit.coefficients if external else coef(fit)
-    if any(math.isnan(value) for value in beta):
-        raise NotImplementedError("yates with aliased (NA) coefficients is not implemented")
+    kept = [idx for idx, value in enumerate(beta) if not math.isnan(value)]
     vmat = fit.variance if external else vcov(fit, complete=False)
-    mframe = model_frame(fit)
+    if len(vmat) > len(kept):
+        vmat = _columns([vmat[idx] for idx in kept], kept)
     yates_term = _yates_term(design, term, levels)
-    pdata = _yates_population(mframe, design, yates_term, population)
+    if isinstance(population, Mapping):
+        pdata = {str(name): list(values) for name, values in population.items()}
+        weights = None
+    else:
+        mframe = _yates_model_frame(fit)
+        pdata = _yates_population(mframe, design, yates_term, population)
+        weights = _yates_weights(mframe, population)
     n_pop = len(next(iter(pdata.values())))
     xmatlist = [
         _design_rows_from_spec({**pdata, yates_term.column: [level] * n_pop}, design, n_pop)
         for level in yates_term.levels
     ]
-    cmat = _core.yates_population_means(xmatlist, _yates_weights(mframe, population))
-    names = _yates_design_names(design)
-    if design.intercept and not external:  # Cox baseline supplies the intercept.
-        cmat = [row[1:] for row in cmat]
-        names = names[1:]
-        xmatlist = [[row[1:] for row in rows] for rows in xmatlist]
-    means = [0.0] * len(beta) if external else engine.means
-    offset = -sum(mean * value for mean, value in zip(means, beta, strict=True))
-    if predict == "risk":
-        if options is not None and not isinstance(options, Mapping):
-            raise TypeError("options must be a mapping")
-        options = dict(options or {})
-        seed = _integer_scalar(options.pop("seed", 0), "seed")
-        if options:
-            raise TypeError(f"unrecognized risk options: {', '.join(options)}")
-        result = _core.yates_risk(
-            xmatlist,
-            beta,
-            vmat,
-            means,
-            nsim=_integer_scalar(nsim, "nsim"),
-            seed=seed,
-            test=test_value,
-            term=yates_term.name,
-        )
-        names = []
-    else:
+    estimable = _yates_estimable(fit, design, xmatlist) if len(kept) < len(beta) else None
+    # the coefficient columns: a Cox model's baseline absorbs the intercept
+    first = 1 if design.intercept and not external else 0
+    columns = [first + idx for idx in kept]
+    design_names = _yates_design_names(design)
+    names = [design_names[idx] for idx in columns]
+    beta = [beta[idx] for idx in kept]
+    means = [0.0] * len(beta) if external else [engine.means[idx] for idx in kept]
+    summary = None
+    if setup.predict == "linear":
         result = _core.yates(
-            cmat,
+            _columns(_core.yates_population_means(xmatlist, weights), columns),
             beta,
             vmat,
-            offset=offset,
-            test=test_value,
+            offset=-sum(mean * value for mean, value in zip(means, beta, strict=True)),
             sigma2=fit.sigma2 if external else None,
+            estimable=estimable,
+            test=test_value,
         )
+        if not result.cmat:
+            names = []
+    else:
+        simulation = {
+            "estimable": estimable,
+            "nsim": _integer_scalar(nsim, "nsim"),
+            "seed": setup.seed,
+            "test": test_value,
+            "term": yates_term.name,
+        }
+        xmatlist = [_columns(rows, columns) for rows in xmatlist]
+        if setup.baseline is None:
+            result = _core.yates_risk(xmatlist, beta, vmat, means, **simulation)
+        else:
+            baseline = setup.baseline
+            result = _core.yates_survival(
+                xmatlist,
+                beta,
+                vmat,
+                means,
+                baseline.time,
+                baseline.cumhaz,
+                setup.rmean,
+                conf_int=baseline.conf_int,
+                **simulation,
+            )
+            if result.summary is not None:
+                summary = _yates_survival_summary(baseline, result.summary)
+        names = []
     return YatesResult(
         estimate={
             yates_term.name: list(yates_term.levels),
@@ -1310,4 +1429,5 @@ def yates(
         mvar=result.mvar,
         cmat=result.cmat,
         cmat_names=names,
+        summary=summary,
     )
