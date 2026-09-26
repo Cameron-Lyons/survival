@@ -23,6 +23,7 @@ from ._coxph import (
     clogit,
     cox_zph,
     coxph,
+    coxph_control,
     coxph_detail,
     coxph_wtest,
 )
@@ -233,6 +234,7 @@ __all__ = [
     "clogit",
     "cch",
     "coxph",
+    "coxph_control",
     "coxph_detail",
     "coxph_wtest",
     "cox_zph",
