@@ -220,7 +220,11 @@ class _FormulaFit:
 
 @dataclass(frozen=True)
 class CchModelResult:
-    """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps."""
+    """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps.
+
+    ``sc_ids`` are the ids of the rows of the Borgan estimators' ``sc`` (R's rownames), in
+    R's ``rowsum`` order: numbers ascending, factor ids in level order, other labels sorted.
+    """
 
     fit: _core.CchFitResult
     formula: str
@@ -232,6 +236,7 @@ class CchModelResult:
     stratum: tuple[Any, ...] | None
     cohort_size: tuple[int, ...]
     subcohort_size: tuple[int, ...]
+    sc_ids: tuple[Any, ...] | None
 
     @property
     def coefficients(self) -> list[float]:
@@ -248,6 +253,12 @@ class CchModelResult:
     @property
     def phase2var(self) -> list[list[float]]:
         return [list(row) for row in self.fit.phase2var]
+
+    @property
+    def sc(self) -> list[list[float]] | None:
+        """The Borgan estimators' weighted score residuals collapsed by id, one row per id."""
+
+        return None if self.fit.sc is None else [list(row) for row in self.fit.sc]
 
     @property
     def method(self) -> str:

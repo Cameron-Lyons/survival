@@ -114,7 +114,8 @@ pub struct CchFitResult {
     /// Borgan's phase-two score matrix (`delta`).
     #[pyo3(get)]
     pub delta: Option<Vec<Vec<f64>>>,
-    /// Borgan's weighted score residuals collapsed by `id` (`sc`).
+    /// Borgan's weighted score residuals collapsed by `id` (`sc`), one row
+    /// per id in ascending id order as R's `rowsum` gives them.
     #[pyo3(get)]
     pub sc: Option<Vec<Vec<f64>>>,
     /// The Cox fit the estimator is built on.  For Prentice it is the fit
@@ -622,6 +623,7 @@ fn borgan_fit(
     covariates: &[Vec<f64>],
     start: &[f64],
     subcohort: &[i32],
+    id: &[i64],
     stratum: &[usize],
     cohort_sizes: &[usize],
     method: BorganMethod,
@@ -754,10 +756,19 @@ fn borgan_fit(
         &fit.var,
     );
     let naive_var = &fit.var + &phase_two.variance;
-    // resid(fit, type = "score", collapse = id, weighted = TRUE): one row per
-    // input record.
-    let id: Vec<i32> = source_indices.iter().map(|&idx| idx as i32).collect();
-    let sc = residual_matrix(&fit, ResidualType::Score, true, Some(&id))?;
+    // resid(fit, type = "score", collapse = id, weighted = TRUE): rowsum
+    // sums the rows of each id in ascending id order, so the fit's rows are
+    // collapsed by the rank of their record's id.
+    let mut sorted_ids = id.to_vec();
+    sorted_ids.sort_unstable();
+    let id_rank = source_indices
+        .iter()
+        .map(|&idx| {
+            let rank = sorted_ids.partition_point(|&other| other < id[idx]);
+            i32::try_from(rank).map_err(|_| SurvivalError::invalid_input("too many ids"))
+        })
+        .collect::<SurvivalResult<Vec<i32>>>()?;
+    let sc = residual_matrix(&fit, ResidualType::Score, true, Some(&id_rank))?;
     Ok(BorganComputation {
         computation: CchComputation {
             fit,
@@ -910,6 +921,7 @@ pub fn cch_borgan_fit(
         &covariates,
         &entry,
         &subcohort,
+        &id,
         &stratum,
         &cohort_sizes,
         method,
@@ -1223,6 +1235,55 @@ mod tests {
             .expect("counting-process Borgan fit should succeed");
             assert_close(&result.coefficients, &expected_coefficients);
             assert_matrix_close(&result.var, &expected_variance);
+        }
+    }
+
+    #[test]
+    fn borgan_score_rows_follow_sorted_ids() {
+        // Ids beyond the i32 range in shuffled order: R's rowsum returns the
+        // rows of ids 5e9, 5e9 + 1, ... (input rows 0, 3, 6, 9, ..., 17 last).
+        let (_start, stop, status, covariates, subcohort, _id) = r_parity_fixture();
+        let id: Vec<i64> = (0..20).map(|idx| 5_000_000_000 + (idx * 7) % 20).collect();
+        let stratum = (0..stop.len()).map(|idx| idx % 2).collect::<Vec<_>>();
+        let expected = [
+            (
+                "I.Borgan",
+                vec![
+                    vec![-0.664_965_487_606_828_2, -0.511_831_438_511_137_3],
+                    vec![-0.021_142_928_162_665_442, 0.241_456_711_550_872_4],
+                    vec![-0.284_542_592_959_238_7, 0.164_834_899_484_085_2],
+                    vec![-0.065_345_843_492_456_98, -0.026_156_179_000_141_73],
+                ],
+                vec![0.283_422_987_062_024_6, -0.682_247_044_321_936_2],
+            ),
+            (
+                "II.Borgan",
+                vec![
+                    vec![-0.665_163_480_465_053_3, -0.260_030_146_485_725_5],
+                    vec![0.237_892_654_174_453_6, -0.197_349_688_612_477_04],
+                    vec![-0.636_184_351_176_586_9, 0.396_514_009_933_732_54],
+                    vec![-0.052_836_343_597_766_29, -0.034_247_919_710_438_06],
+                ],
+                vec![0.228_970_883_533_036_96, -0.292_637_611_338_951_3],
+            ),
+        ];
+        for (method, expected_head, expected_last) in expected {
+            let result = cch_borgan_fit(
+                stop.clone(),
+                status.clone(),
+                covariates.clone(),
+                subcohort.clone(),
+                id.clone(),
+                stratum.clone(),
+                vec![40, 40],
+                None,
+                method,
+            )
+            .expect("Borgan fit should succeed");
+            let sc = result.sc.expect("Borgan score residuals");
+            assert_eq!(sc.len(), 20);
+            assert_matrix_close(&sc[..4], &expected_head);
+            assert_close(&sc[19], &expected_last);
         }
     }
 

@@ -7,6 +7,7 @@ import math
 import pytest
 
 from .helpers import setup_survival_import
+from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r
@@ -193,6 +194,107 @@ def nwtco_case_cohort():
     }
 
 
+def _borgan(data, method, ids):
+    """R's cch(Surv(edrel, rel) ~ stage + histol + age, subcoh = ~subcohort, id = ids,
+    stratum = ~instit, cohort.size = table(nwtco$instit), method = method)."""
+
+    return r.cch(
+        "Surv(edrel, rel) ~ stage + histol + age",
+        data,
+        subcoh="subcohort",
+        id=ids,
+        stratum="instit",
+        cohort_size={"1": 3622, "2": 406},
+        method=method,
+    )
+
+
+def test_cch_borgan_score_rows_follow_r_id_order(nwtco_case_cohort):
+    expected = {
+        "I.Borgan": (
+            [
+                [
+                    0.434508125693249,
+                    0.455160419557487,
+                    -1.1975296944037,
+                    0.500361160937554,
+                    2.94647571817348,
+                ],
+                [
+                    -0.282498126382607,
+                    0.695542315336831,
+                    -0.219370797286702,
+                    -0.362620647175176,
+                    9.59587870520824,
+                ],
+                [
+                    0.127112961705576,
+                    0.133154676656036,
+                    0.0854300195617015,
+                    0.146377904872864,
+                    -0.55424715485416,
+                ],
+            ],
+            [
+                0.707731047133707,
+                -0.311572305679621,
+                -0.19475394326966,
+                0.656850908927333,
+                -3.95407439623791,
+            ],
+        ),
+        "II.Borgan": (
+            [
+                [
+                    0.374883691848907,
+                    0.393913948561484,
+                    -1.03535116790586,
+                    0.430058324745435,
+                    2.54142695721559,
+                ],
+                [
+                    -0.27895267540261,
+                    0.687161896070355,
+                    -0.223760609505231,
+                    -0.376778709231142,
+                    9.40784279908694,
+                ],
+                [
+                    0.12943654732043,
+                    0.136007147154606,
+                    0.0865279755087688,
+                    0.148486759791869,
+                    -0.565534452075215,
+                ],
+            ],
+            [
+                0.582059737144811,
+                -0.250141225433122,
+                -0.16496839140021,
+                0.54319555458312,
+                -3.25525952959897,
+            ],
+        ),
+    }
+    n = len(nwtco_case_cohort["rid"])
+    for method, (head, last) in expected.items():
+        fit = _borgan(nwtco_case_cohort, method, "rid")
+        assert fit.sc_ids == tuple(range(1, n + 1))
+        assert_rows_close(fit.sc[:3], head)
+        assert fit.sc[-1] == approx(last)
+
+    numeric = _borgan(nwtco_case_cohort, "I.Borgan", "rid")
+    # character ids sort as strings: p1, p10, p100, ...
+    character = _borgan(nwtco_case_cohort, "I.Borgan", "cid")
+    assert character.sc_ids[:5] == ("p1", "p10", "p100", "p1000", "p1001")
+    assert character.sc[1] == approx(numeric.sc[9])
+    # factor ids follow their levels: factor(rid, levels = n:1) gives the rows of 1154, 1153, ...
+    factor_id = RFactor(nwtco_case_cohort["rid"], range(n, 0, -1))
+    factor = _borgan(nwtco_case_cohort, "I.Borgan", factor_id)
+    assert factor.sc_ids[:3] == (n, n - 1, n - 2)
+    assert_rows_close(factor.sc, numeric.sc[::-1])
+
+
 def test_cch_prentice_fit_carries_the_point_estimate(nwtco_case_cohort):
     # R's Prentice sets fit$coefficients <- fit1$coefficients on the augmented-data fit
     fit = r.cch(
@@ -212,3 +314,4 @@ def test_cch_prentice_fit_carries_the_point_estimate(nwtco_case_cohort):
         ]
     )
     assert list(fit.fit.fit.coefficients) == fit.coefficients
+    assert (fit.sc, fit.sc_ids) == (None, None)

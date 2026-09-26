@@ -17,7 +17,8 @@ from ._coerce import (
     _normalize_bool_option_with_default,
     _pop_dotted_keyword,
 )
-from ._fit import _model_frame, _strata_factor
+from ._fit import _model_frame, _r_levels, _strata_factor
+from ._formula import _column_source
 from ._types import CchModelResult
 
 _METHODS = {
@@ -143,13 +144,17 @@ def cch(
     if not frame.names:
         raise ValueError("cch formula must contain at least one covariate")
     id_values = list(frame.id or [])
-    if len(_label_levels(id_values, "id")) != len(id_values):
+    id_levels = _label_levels(id_values, "id")
+    if len(id_levels) != len(id_values):
         raise ValueError("Multiple records per id not allowed")
     subcohort = _subcohort_indicator(frame.extra["subcoh"])
     outside = sum(1 for sub, event in zip(subcohort, y.event, strict=True) if not sub and not event)
     if outside:
         raise ValueError(f"{outside} censored observations not in subcohort")
-    id_codes = list(range(len(id_values)))
+    # the Borgan score rows are collapsed by id in R's rowsum order (sort(unique(id)))
+    sorted_ids = _r_levels(_column_source(data, id) if isinstance(id, str) else id, id_levels)
+    id_rank = {value: rank for rank, value in enumerate(sorted_ids)}
+    id_codes = [id_rank[value] for value in id_values]
     start = None if y.start is None else list(y.start)
     status = [int(value) for value in y.event]
     stratum_labels: tuple[Any, ...] | None = None
@@ -209,6 +214,7 @@ def cch(
         stratum=stratum_labels,
         cohort_size=cohort_sizes,
         subcohort_size=subcohort_size,
+        sc_ids=sorted_ids if stratified else None,
     )
 
 
