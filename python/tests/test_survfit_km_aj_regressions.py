@@ -1,7 +1,7 @@
 """survfit (Kaplan-Meier / Aalen-Johansen) regressions against R 4.5.3 with survival 3.8-12.
 
 Curves derived from a fit (a stratum, ``fit[, states]``, ``survfit0``) are rebuilt from the
-engine.
+engine and KM fits keep R's ``time0``/``start.time`` semantics.
 """
 
 from __future__ import annotations
@@ -147,3 +147,40 @@ def test_split_turnbull_strata_take_their_rows():
 
     assert first.strata is None
     assert (first.n, first.time, first.surv) == (alone.n, alone.time, alone.surv)
+
+
+# ---------------------------------------------------------------------------
+# time0 and start.time: survfitKM and survfitTurnbull set neither
+# ---------------------------------------------------------------------------
+
+
+def test_survfit0_adds_the_time_0_row_to_a_time0_km_fit():
+    # survfit0(survfit(Surv(c(1, 2, 3, 4, 5), c(1, 0, 1, 1, 0)) ~ 1, time0 = TRUE))
+    fit = r.survfit(r.Surv([1, 2, 3, 4, 5], [1, 0, 1, 1, 0]), time0=True)
+    fit0 = r.survfit0(fit)
+
+    _close(fit0.time, [0, 1, 2, 3, 4, 5])
+    _close(fit0.surv, [1, 0.8, 0.8, 0.533333333333333, 0.266666666666667, 0.266666666666667])
+    se = [0, 0.223606797749979, 0.223606797749979, 0.465474668125631] + [0.84656167328002] * 2
+    _close(fit0.std_err, se, 1e-12)
+
+
+def test_rmean_of_a_start_time_km_fit_is_checked_against_its_first_time():
+    # f <- survfit(Surv(time, status) ~ 1, lung, start.time = 100): f$start.time is NULL
+    fit = r.survfit("Surv(time, status) ~ 1", survival.datasets.load_lung(), start_time=100)
+
+    assert fit.start_time is None
+    assert fit.t0 == 100.0
+    with pytest.raises(ValueError, match="Truncation point for the mean time in state"):
+        r.summary_survfit(fit, rmean=100.5)
+    table = r.summary_survfit(fit, rmean=200).table.values[0]
+    _close(table[4:6], [90.8389344412138, 1.5456137540005], 1e-12)
+    assert r.survfit0(fit).time[:2] == [100.0, 105.0]
+
+
+def test_turnbull_fits_record_neither_start_time_nor_time0():
+    data = {"l": [1, 2, None, 4], "r": [3, 4, 2, None]}
+    fit = r.survfit("Surv(l, r, type = 'interval2') ~ 1", data, start_time=1, time0=True)
+
+    assert (fit.start_time, fit.time0, fit.t0) == (None, False, 1.0)
+    _close(fit.time, [1.5, 2.5, 4])

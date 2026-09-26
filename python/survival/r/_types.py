@@ -748,7 +748,9 @@ class SurvfitResult:
     otherwise (the robust variance); ``std_chaz`` is always that of ``cumhaz``.  ``model`` is
     the model frame of the call (R re-evaluates it through ``model.frame``) and ``engine`` the
     Rust result the summary methods work from (absent for Turnbull curves, whose ``cumhaz``
-    and ``t0`` are the values R's ``survfit0`` derives).
+    and ``t0`` are the values R's ``survfit0`` derives).  As in R, a ``start.time`` shows only
+    as ``t0`` (``start_time`` stays unset) and ``time0`` marks a curve that already starts
+    with its ``t0`` row, the result of ``survfit0``.
     """
 
     n: list[int]

@@ -277,8 +277,9 @@ def test_survfit_weights_report_unweighted_counts_and_robust_se():
 def test_survfit_start_time_conditions_the_curves():
     fit = r.survfit("Surv(time, status) ~ group", _toy_data(), start_time=2)
 
+    # survfitKM records start.time only as t0 (fit$start.time is NULL in R)
     assert fit.t0 == 2.0
-    assert fit.start_time == 2.0
+    assert fit.start_time is None
     assert fit.call.start_time == 2.0
     assert fit.n == [3, 4]
     assert fit.strata == {"group=A": 3, "group=B": 4}
@@ -370,10 +371,12 @@ def test_survfit_subset_and_na_action_follow_r_model_frame():
     assert len(subset.model["group"]) == 5
 
 
-def test_survfit_time0_is_accepted_and_recorded():
+def test_survfit_time0_is_accepted_and_ignored_by_survfitkm():
+    # survfitKM takes time0 but never uses it, so survfit0 still adds the time 0 row
     fit = r.survfit("Surv(time, status) ~ 1", _toy_data(), time0=True)
-    assert fit.time0 is True
-    assert r.survfit0(fit) is fit
+    assert fit.time0 is False
+    assert fit.time[0] == 1.0
+    assert r.survfit0(fit).time[0] == 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -552,7 +552,6 @@ def survfit(
         "type_": type,
         "robust": robust,
         "timefix": bool(timefix),
-        "time0": time0,
         "id_name": id if isinstance(id, str) else None,
     }
     surv_type = frame.y.type
@@ -568,8 +567,16 @@ def survfit(
             reverse=reverse,
             **common,
         )
+    # survfitKM and survfitTurnbull take time0 but never use it
     return _survfitAJ(
-        frame, stype=stype, ctype=ctype, influence=influence, entry=entry, p0=p0, **common
+        frame,
+        stype=stype,
+        ctype=ctype,
+        influence=influence,
+        entry=entry,
+        p0=p0,
+        time0=time0,
+        **common,
     )
 
 
@@ -627,7 +634,6 @@ def _survfitKM(
     entry: bool,
     reverse: Any,
     timefix: bool,
-    time0: bool,
     id_name: str | None,
 ) -> SurvfitResult:
     """``survfitKM``: the argument checks, then one call of the engine for all curves."""
@@ -667,7 +673,7 @@ def _survfitKM(
     )
     call = SurvfitCall(frame.terms, stype, ctype, timefix, start, id=id_name)
     labels = _curve_labels(engine, frame.x_levels)
-    return _km_result(engine, labels, call, frame.model, se_fit, time0=time0)
+    return _km_result(engine, labels, call, frame.model, se_fit)
 
 
 def _curve_labels(
@@ -700,7 +706,7 @@ def _km_result(
     model: dict[str, Any] | None,
     se_fit: bool,
     *,
-    time0: bool,
+    time0: bool = False,
 ) -> SurvfitResult:
     """A ``survfit`` object from the engine output; ``se.fit = FALSE`` drops the se parts."""
 
@@ -728,7 +734,6 @@ def _km_result(
         conf_lower=engine.conf_lower if se_fit and engine.conf_lower != "usual" else None,
         influence_surv=engine.influence_surv,
         influence_chaz=engine.influence_chaz,
-        start_time=call.start_time,
         time0=time0,
         call=call,
         model=model,
@@ -905,7 +910,6 @@ def _survfitTurnbull(
     start_time: Any,
     robust: Any,
     timefix: bool,
-    time0: bool,
     id_name: str | None,
 ) -> SurvfitResult:
     """``survfitTurnbull``: the EM estimate for interval censored data, one curve per level."""
@@ -968,8 +972,6 @@ def _survfitTurnbull(
         logse=True if se_fit else None,
         conf_int=conf_int if se_fit else None,
         conf_type=conf_type if se_fit else None,
-        start_time=start,
-        time0=time0,
         call=SurvfitCall(frame.terms, 1, 1, timefix, start, id=id_name),
         model=frame.model,
     )
@@ -1011,7 +1013,8 @@ def _derived_survfit(
 def survfit0(x: Any, *args: Any, **kwargs: Any) -> SurvfitResult | SurvfitMultiStateResult:
     """R's ``survfit0``: add the row at the starting time ``t0`` to every curve.
 
-    A fit made with ``time0 = TRUE`` (or already processed) is returned as is.
+    A fit that already has it (a ``survfit0`` result, or a multi-state fit made with
+    ``time0 = TRUE``) is returned as is.
     """
 
     if args or kwargs:
