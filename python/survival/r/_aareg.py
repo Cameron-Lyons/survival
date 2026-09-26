@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 from numbers import Real
-from typing import Any, overload
+from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
@@ -34,11 +34,6 @@ def _taper_values(value: Any) -> list[float]:
     return values
 
 
-@overload
-def aareg(formula: _core.AaregOptions) -> _core.AaregResult: ...
-
-
-@overload
 def aareg(
     formula: str,
     data: Any | None = None,
@@ -56,35 +51,9 @@ def aareg(
     x: Any = False,
     y: Any = False,
     **kwargs: Any,
-) -> AaregModelResult: ...
+) -> AaregModelResult:
+    """Fit Aalen's additive regression model (R's ``aareg``)."""
 
-
-def aareg(
-    formula: str | _core.AaregOptions,
-    data: Any | None = None,
-    *,
-    weights: Any | None = None,
-    subset: Any | None = None,
-    na_action: str | None = "fail",
-    qrtol: Any = 1e-7,
-    nmin: Any | None = None,
-    dfbeta: Any = False,
-    taper: Any = 1.0,
-    test: Any = "aalen",
-    cluster: Any | None = None,
-    model: Any = False,
-    x: Any = False,
-    y: Any = False,
-    **kwargs: Any,
-) -> AaregModelResult | _core.AaregResult:
-    """Fit Aalen's additive regression model (R's ``aareg``).
-
-    ``survival.aareg`` is also the package-level name of the engine's option-driven
-    ``aareg(AaregOptions)``; an ``AaregOptions`` first argument is handed to it.
-    """
-
-    if isinstance(formula, _core.AaregOptions):
-        return _core.aareg(formula)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     if kwargs:
         raise TypeError(f"aareg got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")

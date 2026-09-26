@@ -34,7 +34,6 @@ fn pspline_basis_py(
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(aareg, m)?)?;
     m.add_function(wrap_pyfunction!(aareg_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;
@@ -56,12 +55,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     register_classes!(
         m,
-        AaregConfidenceInterval,
-        AaregDiagnostics,
-        AaregFitDetails,
         AaregFitResult,
-        AaregOptions,
-        AaregResult,
         PsplineBasis,
         CoxCountOutput,
         CoxPHFit,

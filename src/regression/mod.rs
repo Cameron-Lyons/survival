@@ -11,8 +11,6 @@
 
 #[path = "aareg_fit.rs"]
 pub(crate) mod aareg_fit_module;
-#[path = "aareg.rs"]
-pub(crate) mod aareg_module;
 pub(crate) mod agexact;
 pub(crate) mod blogit;
 #[path = "cause_specific_cox.rs"]
@@ -45,9 +43,6 @@ pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
 pub use aareg_fit_module::{AaregFitResult, aareg_fit};
-pub use aareg_module::{
-    AaregConfidenceInterval, AaregDiagnostics, AaregFitDetails, AaregOptions, AaregResult, aareg,
-};
 pub use agexact::{AgexactData, AgexactFit, AgexactOptions, agexact_fit, agexact_py};
 pub use blogit::LinkFunctionParams;
 pub use cause_specific_cox_module::{
