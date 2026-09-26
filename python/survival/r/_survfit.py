@@ -14,7 +14,7 @@ import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from .. import _survival as _core
 from ._coerce import (
@@ -52,6 +52,7 @@ from ._formula import (
 )
 from ._surv import Surv, _apply_surv_na_action, _subset_surv
 from ._types import (
+    CoxSurvfitResult,
     NamedMatrix,
     SummarySurvfitResult,
     SurvfitCall,
@@ -64,6 +65,9 @@ from ._types import (
     _ModelOffsetTerm,
     _ModelStrataTerm,
 )
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 _CONF_TYPES = ("log", "log-log", "plain", "none", "logit", "arcsin")
 _CONF_LOWER = ("usual", "peto", "modified")
@@ -463,7 +467,7 @@ def survfit(
     reverse: Any = False,
     censor: Any = True,
     **kwargs: Any,
-) -> Any:
+) -> SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult:
     """R's ``survfit``: Kaplan-Meier / Fleming-Harrington, Aalen-Johansen or Turnbull curves.
 
     ``response`` is a formula string (``"Surv(time, status) ~ sex"``) evaluated in ``data``, a
@@ -582,7 +586,7 @@ def _survfit_coxph(
     stype: Any,
     ctype: Any,
     id: Any | None,
-) -> Any:
+) -> CoxSurvfitResult:
     """``survfit.coxph``: the Cox module owns the curves, this is only the dispatch."""
 
     result = survfit_coxph(
@@ -984,7 +988,7 @@ def _engine_of(x: Any) -> Any:
     return x.engine
 
 
-def survfit0(x: Any, *args: Any, **kwargs: Any) -> Any:
+def survfit0(x: Any, *args: Any, **kwargs: Any) -> SurvfitResult | SurvfitMultiStateResult:
     """R's ``survfit0``: add the row at the starting time ``t0`` to every curve.
 
     A fit made with ``time0 = TRUE`` (or already processed) is returned as is.
@@ -1207,6 +1211,21 @@ def _grouping_factors(by: Any, n_data: int) -> list[_core.GroupingFactor]:
     return factors
 
 
+# aggregate.survfit returns a copy of a survfit object; any other object with a surv or
+# pstate data margin gets the engine's AggregateSurvfitResult
+_Survfit = TypeVar("_Survfit", bound="DataclassInstance")
+
+
+@overload
+def aggregate_survfit(x: _Survfit, by: Any | None = None, FUN: str = "mean") -> _Survfit: ...
+
+
+@overload
+def aggregate_survfit(
+    x: Any, by: Any | None = None, FUN: str = "mean"
+) -> _core.AggregateSurvfitResult: ...
+
+
 def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any:
     """R's ``aggregate.survfit``: population-averaged curves of ``survfit(coxfit, newdata)``.
 
@@ -1256,8 +1275,9 @@ def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any:
     return dataclasses.replace(x, **updates)
 
 
-def aggregate_survfit_result(result: Any, groups: Any | None = None) -> Any:
-    """The R bridge's entry point: ``groups`` are the integer codes it built from ``by``."""
+def aggregate_survfit_result(result: _Survfit, groups: Any | None = None) -> _Survfit:
+    """The R bridge's entry point: ``result`` is a survfit object and ``groups`` the integer
+    codes the bridge built from ``by``."""
 
     return aggregate_survfit(result, by=groups)
 

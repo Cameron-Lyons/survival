@@ -12,6 +12,8 @@ from typing import Any
 from .. import _survival as _core
 from ._coerce import (
     _as_matrix_rows,
+    _categories,
+    _factor,
     _finite_float,
     _float_vector,
     _integer_scalar,
@@ -20,6 +22,7 @@ from ._coerce import (
     _normalize_bool_option,
     _optional_float_vector,
     _pop_dotted_keyword,
+    _r_factor,
 )
 from ._coxph import CoxphModel, predict_coxph
 from ._fit import _model_frame, _newdata_frame
@@ -134,12 +137,17 @@ def concordancefit(
     std_err: Any = True,
     *,
     names: Sequence[str] | None = None,
-    strata_levels: Sequence[str] | None = None,
-    formula: str | None = None,
+    _strata_levels: Sequence[str] | None = None,
+    _formula: str | None = None,
     **kwargs: Any,
 ) -> ConcordanceResult:
     """R's ``concordancefit``: the concordance of ``y`` (a Surv, or a numeric
-    vector) with one or more predictor columns ``x``."""
+    vector) with one or more predictor columns ``x``.
+
+    ``names`` labels the columns of ``x`` (R reads ``colnames(x)``, else ``X1``, ``X2``, ...).
+    ``concordance`` passes the levels of its strata and the formula it was called with
+    through the private ``_strata_levels`` and ``_formula``.
+    """
 
     std_err = _pop_dotted_keyword(kwargs, "std.err", "std_err", std_err, True)
     if kwargs:
@@ -162,16 +170,19 @@ def concordancefit(
     timewt_name = _timewt_name(timewt)
     if y.start is not None and timewt_name in {"S/G", "n/G2"}:
         raise ValueError(f"{timewt_name} timewt option not supported for (time1, time2) data")
-    strata_codes: list[int] | None = None
+    strata_codes: list[int | None] | None = None
     levels: list[str] = []
     if strata is not None:
         labels = _materialize_labels(strata, "strata")
         if len(labels) != n:
             raise ValueError("y and strata are not the same length")
-        raw_levels = list(strata_levels) if strata_levels else list(_label_levels(labels, "strata"))
-        levels = [str(level) for level in raw_levels]
-        index = {level: idx for idx, level in enumerate(raw_levels)}
-        strata_codes = [index[label] for label in labels]
+        # R's as.factor(strata): the declared levels in their order, else the sorted values
+        declared = _strata_levels or _categories(strata)
+        strata_codes, levels = _factor(
+            labels if declared is None else _r_factor(labels, declared), "strata"
+        )
+        if None in strata_codes:
+            raise ValueError("strata contains missing values")
     weight_values = _optional_float_vector(weights, "weights", n)
     if weight_values is not None and len(weight_values) != n:
         raise ValueError("y and weights are not the same length")
@@ -209,7 +220,7 @@ def concordancefit(
         cfit = _core.concordancefit_counting(
             _core.CountingProcessData(list(y.start), list(y.time), list(y.event)), matrix, **common
         )
-    return _result(cfit, names, levels, formula)
+    return _result(cfit, names, levels, _formula)
 
 
 def _is_matrix(x: Any) -> bool:
@@ -248,8 +259,8 @@ def _concordance_formula(
         weights=frame.weights,
         cluster=frame.cluster,
         names=frame.names,
-        strata_levels=frame.strata_levels,
-        formula=formula,
+        _strata_levels=frame.strata_levels,
+        _formula=formula,
         **options,
     )
 
@@ -351,11 +362,11 @@ def _concordance_fits(
         first.y,
         [[column[row] for column in (d.x for d in data)] for row in range(len(first.x))],
         strata=first.strata,
-        strata_levels=first.strata_levels or None,
         weights=first.weights,
         cluster=cluster if cluster is not None else first.cluster,
         names=names,
-        formula=getattr(fits[0], "formula", None),
+        _strata_levels=first.strata_levels or None,
+        _formula=getattr(fits[0], "formula", None),
         **options,
     )
 
