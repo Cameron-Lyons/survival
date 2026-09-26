@@ -5,7 +5,6 @@ use super::survfit_summary::{RmeanOption, survfit0_aj};
 use super::survfitaj::SurvfitAJResult;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_finite;
-use pyo3::prelude::*;
 
 /// State-major table rows (`n`, `nevent`, optionally `rmean`, `se(rmean)`)
 /// and truncation times. Within each state the curves vary fastest.
@@ -214,25 +213,4 @@ pub fn summary_survfit_aj(
     out.influence_pstate = None;
     out.counts = None;
     Ok(out)
-}
-
-#[pymethods]
-impl SurvfitAJResult {
-    #[pyo3(signature=(times=None, censored=false, extend=false))]
-    fn summary(
-        &self,
-        py: Python<'_>,
-        times: Option<Vec<f64>>,
-        censored: bool,
-        extend: bool,
-    ) -> PyResult<Self> {
-        py.detach(|| summary_survfit_aj(self, times.as_deref(), censored, extend))
-            .map_err(Into::into)
-    }
-    #[pyo3(signature=(scale=1.0, rmean="common"))]
-    fn mean_table(&self, py: Python<'_>, scale: f64, rmean: &str) -> PyResult<AJMeanTable> {
-        let option = RmeanOption::parse(rmean)?;
-        py.detach(|| survmean_aj(self, scale, option))
-            .map_err(Into::into)
-    }
 }

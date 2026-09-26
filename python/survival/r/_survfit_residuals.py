@@ -71,9 +71,16 @@ def _check_survfit_object(fit: Any) -> SurvfitResult | SurvfitMultiStateResult:
         raise TypeError("argument must be a survfit object")
     if fit.type == "interval":
         raise ValueError("residuals for interval-censored data are not available")
-    if fit.call.start_time is not None:
-        raise NotImplementedError("residuals of a curve fitted with start.time are not available")
     return fit
+
+
+def _warn_approximate(fit: SurvfitResult | SurvfitMultiStateResult, type_: str) -> None:
+    """``rsurvpart1``'s warning: the hazard part ignores the ctype = 2 split of tied events."""
+
+    stype, ctype = fit.call.stype, fit.call.ctype
+    hazard_based = type_ == "cumhaz" or (type_ == "pstate" and stype == 2)
+    if isinstance(fit, SurvfitResult) and ctype == 2 and hazard_based:
+        warnings.warn("code for ctype=2 not yet completed, result is approximate", stacklevel=3)
 
 
 def _row_labels(frame: _SurvfitData, codes: list[int]) -> list[Any]:
@@ -106,6 +113,7 @@ def _kernel_residuals(
         "id": frame.id_codes(),
         "type_": type_,
         "timefix": call.timefix,
+        "start_time": call.start_time,
     }
     if collapse is not None:
         common.update(collapse=collapse, weighted=weighted)
@@ -219,6 +227,7 @@ def survfit_residuals(
     _logical(extra, "extra")
     type_ = _residual_type(type)
     times = _residual_times(times)
+    _warn_approximate(fit, type_)
 
     frame = _survfit_data_from_fit(fit)
     cluster = frame.cluster if frame.cluster is not None else frame.id
@@ -273,6 +282,7 @@ def pseudo(
     data_frame = _logical(data_frame, "data.frame")
     type_ = "pstate" if type is None else _residual_type(type)
     times = _residual_times(times)
+    _warn_approximate(fit, type_)
 
     frame = _survfit_data_from_fit(fit)
     n_curves = len(fit.strata) if fit.strata else 1

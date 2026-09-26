@@ -320,7 +320,9 @@ fn prepare_times(times: &[f64], timefix: bool) -> SurvivalResult<Vec<f64>> {
 /// A `start_time` in the options drops observations from the curve but
 /// not from the residuals: R hands the whole model frame to `rsurvpart1`,
 /// where a row that ends before the first event time of the curve has no
-/// event-time index and therefore a residual of 0 at every time.
+/// event-time index and therefore a residual of 0 at every time.  A
+/// `start_time` that removes every observation of a stratum is refused, as
+/// R refuses it.
 pub fn survfitresid(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
@@ -363,6 +365,14 @@ fn residuals_from_fit(
         })
         .collect();
     let ranges = fit.curve_ranges();
+    // residuals.survfit scores the rows of the k-th level with fit[k]: a curve
+    // that start.time emptied is not fitted, which leaves more levels than
+    // curves and `[.survfit` stops ("strata k not matched")
+    if ranges.len() != strata_levels.len() {
+        return Err(SurvivalError::invalid_input(
+            "start.time has removed all the observations from at least one curve",
+        ));
+    }
     let collapse = collapse
         && data.id.as_ref().is_some_and(|id| {
             let mut unique = id.clone();
@@ -1201,6 +1211,7 @@ fn aj_inputs(
     istate_levels: Option<Vec<String>>,
     cluster: Option<Vec<i64>>,
     p0: Option<Vec<f64>>,
+    start_time: Option<f64>,
     timefix: bool,
 ) -> SurvivalResult<(SurvfitAJData, SurvfitAJOptions)> {
     let data = SurvfitAJData::try_new(
@@ -1217,6 +1228,7 @@ fn aj_inputs(
     )?;
     let options = SurvfitAJOptions {
         p0,
+        start_time,
         timefix,
         ..Default::default()
     };
@@ -1225,7 +1237,7 @@ fn aj_inputs(
 
 /// Python binding of [`survfitresid_aj`].
 #[pyfunction(name = "survfitresid_aj")]
-#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true))]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_aj_py(
     time: Vec<f64>,
@@ -1244,6 +1256,7 @@ pub fn survfitresid_aj_py(
     collapse: bool,
     weighted: Option<bool>,
     timefix: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitAJResid> {
     let (data, options) = aj_inputs(
         time,
@@ -1257,6 +1270,7 @@ pub fn survfitresid_aj_py(
         istate_levels,
         cluster,
         p0,
+        start_time,
         timefix,
     )?;
     Ok(survfitresid_aj(
@@ -1271,7 +1285,7 @@ pub fn survfitresid_aj_py(
 
 /// Python binding of [`pseudo_aj`].
 #[pyfunction(name = "pseudo_aj")]
-#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true))]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_aj_py(
     time: Vec<f64>,
@@ -1289,6 +1303,7 @@ pub fn pseudo_aj_py(
     type_: &str,
     timefix: bool,
     collapse: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitAJResid> {
     let (data, options) = aj_inputs(
         time,
@@ -1302,6 +1317,7 @@ pub fn pseudo_aj_py(
         istate_levels,
         cluster,
         p0,
+        start_time,
         timefix,
     )?;
     Ok(pseudo_aj(
@@ -1323,12 +1339,14 @@ fn km_inputs(
     id: Option<Vec<i64>>,
     stype: i32,
     ctype: i32,
+    start_time: Option<f64>,
     timefix: bool,
 ) -> SurvivalResult<(SurvfitKMData, SurvfitKMOptions)> {
     let data = SurvfitKMData::try_new(start, time, status, weights, strata, id, None)?;
     let options = SurvfitKMOptions {
         stype: SurvType::from_code(stype)?,
         ctype: super::survfitkm::HazardType::from_code(ctype)?,
+        start_time,
         timefix,
         ..Default::default()
     };
@@ -1337,7 +1355,7 @@ fn km_inputs(
 
 /// Python binding of [`survfitresid`].
 #[pyfunction(name = "survfitresid")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_py(
     time: Vec<f64>,
@@ -1353,9 +1371,10 @@ pub fn survfitresid_py(
     collapse: bool,
     weighted: Option<bool>,
     timefix: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
-        time, status, start, weights, strata, id, stype, ctype, timefix,
+        time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
     Ok(survfitresid(
         &data,
@@ -1369,7 +1388,7 @@ pub fn survfitresid_py(
 
 /// Python binding of [`pseudo`].
 #[pyfunction(name = "pseudo")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_py(
     time: Vec<f64>,
@@ -1384,9 +1403,10 @@ pub fn pseudo_py(
     ctype: i32,
     timefix: bool,
     collapse: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
-        time, status, start, weights, strata, id, stype, ctype, timefix,
+        time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
     Ok(pseudo(
         &data,
@@ -1660,6 +1680,52 @@ mod tests {
                 .to_string()
                 .contains("smallest survival")
         );
+    }
+
+    #[test]
+    fn start_time_that_empties_a_stratum_is_refused() {
+        // d <- data.frame(t = c(1:8, 5:7, 9), e = c(1,1,0,1, 0,1,1,0, 1,0,1,1),
+        //                 g = rep(1:3, each = 4))
+        // fit <- survfit(Surv(t, e) ~ g, d, start.time = 5) has n = 0 4 4 and
+        // residuals(fit, times = c(6, 7)) and pseudo() stop: "strata 3 not
+        // matched"; on d[1:8, ] (n = 0 4) "strata 2 not matched"
+        let time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 5.0, 6.0, 7.0, 9.0];
+        let status = [1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1];
+        let strata = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
+        let options = SurvfitKMOptions {
+            start_time: Some(5.0),
+            ..Default::default()
+        };
+        let refused = |result: SurvivalResult<SurvfitResid>| {
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("start.time has removed all the observations from at least one curve")
+        };
+        for (rows, n) in [(12, vec![0, 4, 4]), (8, vec![0, 4])] {
+            let data = SurvfitKMData::try_new(
+                None,
+                time[..rows].to_vec(),
+                status[..rows].to_vec(),
+                None,
+                Some(strata[..rows].to_vec()),
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(survfitkm(&data, &options).unwrap().n, n);
+            for kind in [ResidualType::Pstate, ResidualType::Auc] {
+                assert!(refused(survfitresid(
+                    &data,
+                    &options,
+                    &[6.0, 7.0],
+                    kind,
+                    false,
+                    false
+                )));
+                assert!(refused(pseudo(&data, &options, &[6.0, 7.0], kind, true)));
+            }
+        }
     }
 
     #[test]

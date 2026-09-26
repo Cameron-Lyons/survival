@@ -9021,6 +9021,8 @@ class SurvfitAJResult:
         scale: float = 1.0,
         rmean: str = "common",
     ) -> tuple[list[list[float]], list[float], list[str]]: ...
+    def select_curves(self, curves: Sequence[int]) -> SurvfitAJResult: ...
+    def select_states(self, states: Sequence[int]) -> SurvfitAJResult: ...
     def summary(
         self,
         times: Sequence[float] | None = None,
@@ -9124,6 +9126,7 @@ class SurvfitInfluence:
     def values(self) -> list[list[float]]: ...
 
 class SurvfitKMResult:
+    def select_curves(self, curves: Sequence[int]) -> SurvfitKMResult: ...
     @property
     def conf_int(self) -> float: ...
     @property
@@ -12717,6 +12720,7 @@ def pseudo(
     ctype: int = 1,
     timefix: bool = True,
     collapse: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitResid: ...
 def pseudo_aj(
     time: Sequence[float],
@@ -12734,6 +12738,7 @@ def pseudo_aj(
     type_: str = "pstate",
     timefix: bool = True,
     collapse: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitAJResid: ...
 def pseudo_gee_regression(
     pseudo_values: Sequence[Sequence[float]],
@@ -13323,6 +13328,7 @@ def survfitresid(
     collapse: bool = False,
     weighted: bool | None = None,
     timefix: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitResid: ...
 def survfitresid_aj(
     time: Sequence[float],
@@ -13341,6 +13347,7 @@ def survfitresid_aj(
     collapse: bool = False,
     weighted: bool | None = None,
     timefix: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitAJResid: ...
 def survival_at_times(
     time: Sequence[float],

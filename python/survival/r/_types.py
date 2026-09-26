@@ -760,6 +760,32 @@ class SurvfitCall:
 
 
 @dataclass(frozen=True)
+class SurvfitInfluenceMatrix:
+    """One curve's ``influence.surv`` or ``influence.chaz`` matrix of a ``survfit`` object.
+
+    ``values[k]`` is the influence of cluster ``cluster[k]`` at each time of the curve;
+    ``cluster`` holds R's row names: the ``cluster`` (else ``id``) values, in order of first
+    appearance, or the observation numbers ``1..n`` when the observations are the clusters.
+    Like ``survfitKM``, which names the rows ``clname[clusterid]``, it holds the engine's
+    ``survival.surv_analysis.SurvfitInfluence`` (0-based cluster codes) and ``clname``, the
+    levels every curve of the fit shares, or ``None`` when the engine's labels are already
+    the observation numbers.  The Rust matrix becomes Python lists only when it is read.
+    """
+
+    influence: _core.SurvfitInfluence
+    clname: Sequence[Any] | None = field(default=None, repr=False)
+
+    @property
+    def cluster(self) -> list[Any]:
+        codes = self.influence.cluster
+        return codes if self.clname is None else [self.clname[code] for code in codes]
+
+    @property
+    def values(self) -> list[list[float]]:
+        return self.influence.values
+
+
+@dataclass(frozen=True)
 class SurvfitResult:
     """R's ``survfit`` object for a single-endpoint curve (``survfitKM`` / ``survfitTurnbull``).
 
@@ -768,7 +794,9 @@ class SurvfitResult:
     otherwise (the robust variance); ``std_chaz`` is always that of ``cumhaz``.  ``model`` is
     the model frame of the call (R re-evaluates it through ``model.frame``) and ``engine`` the
     Rust result the summary methods work from (absent for Turnbull curves, whose ``cumhaz``
-    and ``t0`` are the values R's ``survfit0`` derives).
+    and ``t0`` are the values R's ``survfit0`` derives).  As in R, a ``start.time`` shows only
+    as ``t0`` and ``time0`` marks a curve that already starts with its ``t0`` row, the result
+    of ``survfit0``.
     """
 
     n: list[int]
@@ -792,9 +820,8 @@ class SurvfitResult:
     conf_int: float | None = None
     conf_type: str | None = None
     conf_lower: str | None = None
-    influence_surv: list[_core.SurvfitInfluence] | None = None
-    influence_chaz: list[_core.SurvfitInfluence] | None = None
-    start_time: float | None = None
+    influence_surv: list[SurvfitInfluenceMatrix] | None = None
+    influence_chaz: list[SurvfitInfluenceMatrix] | None = None
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
     model: dict[str, Any] | None = None
@@ -815,7 +842,10 @@ class SurvfitMultiStateResult:
     ``n_censor``, ``pstate``, ``std_err``, ``lower`` and ``upper`` are ``states``, those of
     ``n_transition``, ``cumhaz`` and ``std_chaz`` the observed transitions ``hazard_names``
     (R's ``"from:to"`` column names).  ``p0`` has one row per curve and ``transitions`` is
-    ``survcheck``'s table of observed transitions (from state x to state or censored).
+    ``survcheck``'s table of observed transitions (from state x to state or censored), which
+    ``fit[, states]`` drops, as it drops ``n_id`` from a fit without strata.  The rows of
+    each ``influence_pstate`` array are named, as in R, by the clusters' numbers ``1, 2, ...``
+    in order of first appearance.
     """
 
     n: list[int]
@@ -829,8 +859,8 @@ class SurvfitMultiStateResult:
     p0: list[list[float]]
     states: list[str]
     hazard_names: list[str]
-    transitions: NamedMatrix
-    n_id: list[int]
+    transitions: NamedMatrix | None
+    n_id: list[int] | None
     type: str
     t0: float
     n_enter: list[list[float]] | None = None
