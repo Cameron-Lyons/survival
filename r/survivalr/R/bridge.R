@@ -705,9 +705,9 @@ attrassign <- function(object, tt) {
   row_values <- function(row) {
     coefficient <- row_numeric(row, "coef")
     if (is_survreg) {
-      statistic <- row_numeric(row, "z", fallback_name = "statistic")
+      statistic <- row_numeric(row, "z")
       values <- c(
-        row_numeric(row, "value", fallback_name = "coef"),
+        coefficient,
         if (robust) {
           row_numeric(row, "robust_se", fallback_name = "se")
         } else {
@@ -11615,7 +11615,11 @@ dim.survival_py_survfit <- function(x) {
     }
     target <- seq_len(dims[[dimension]])
     names(target) <- labels[[dimension]]
-    as.list(as.integer(unname(target[index])) - 1L)
+    selected <- unname(target[index])
+    if (anyNA(selected)) {
+      stop("subscript out of bounds", call. = FALSE)
+    }
+    as.list(as.integer(selected) - 1L)
   }, subscripts, names(dims))
   names(positions) <- names(dims)
   .wrap_python(
@@ -12004,6 +12008,11 @@ print.summary.survival_py_model <- function(
     x$coefficients
   }
   print(coefficient_table, digits = digits, ...)
-  cat("logLik=", x$loglik, " df=", x$df, " n=", x$n, "\n", sep = "")
+  cat(
+    "logLik=", paste(format(x$loglik, digits = digits), collapse = " "),
+    " df=", paste(format(x$df, digits = digits), collapse = " "),
+    " n=", x$n, "\n",
+    sep = ""
+  )
   invisible(x)
 }

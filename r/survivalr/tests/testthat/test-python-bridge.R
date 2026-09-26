@@ -8010,6 +8010,13 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   expect_equal(penalized_summary$logtest, reference_penalized$logtest, tolerance = 1e-6)
   expect_equal(penalized_summary$iter, reference_penalized$iter)
   expect_output(print(penalized_summary), "pspline\\(age, df = 4\\), non")
+  # a penalized survreg fit has one loglik per model and one df per term
+  penalized_aft <- survreg(Surv(time, status) ~ pspline(age, df = 3) + sex, data = lung)
+  expect_output(
+    print(summary(penalized_aft)),
+    "logLik=-1154 -1146 df=0.4901 3.0639 0.9976 0.9987 n=228",
+    fixed = TRUE
+  )
 
   # multi-state coxph: formula lists, coef/vcov(matrix = TRUE) and the curves' dim and [
   mgus <- survival::mgus2
@@ -8039,6 +8046,8 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   expect_equal(dim(curves[1, ]), dim(reference_curves[1, ]))
   expect_equal(dim(curves[, "pcm"]), dim(reference_curves[, "pcm"]))
   expect_error(curves[1], "single index subscripts are not supported")
+  expect_error(curves[, "bogus"], "subscript out of bounds")
+  expect_error(curves[5, ], "subscript out of bounds")
   curve_summary <- summary(curves, times = c(100, 200))
   reference_summary <- summary(reference_curves, times = c(100, 200))
   expect_equal(curve_summary$pstate, reference_summary$pstate, tolerance = 1e-7, ignore_attr = TRUE)
