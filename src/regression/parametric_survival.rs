@@ -536,11 +536,17 @@ struct Survreg6Fit {
 }
 
 /// `chsolve2` of the score against `imat`, or against `JJ` when `imat` is
-/// not positive definite: the Newton (or Fisher) step.
-fn newton_step(lik: &SurvregLikelihood, tol_chol: f64) -> Vec<f64> {
+/// not positive definite: the Newton (or Fisher) step from `beta`, where
+/// `lik` was evaluated.
+fn newton_step(
+    kernel: &SurvregKernel<'_>,
+    beta: &[f64],
+    lik: &SurvregLikelihood,
+    tol_chol: f64,
+) -> Vec<f64> {
     let mut chol = lik.imat.clone();
     if cholesky2(&mut chol, tol_chol) < 0 {
-        chol = lik.jj.clone();
+        chol = kernel.jj(beta);
         cholesky2(&mut chol, tol_chol);
     }
     let mut step = lik.u.clone();
@@ -579,7 +585,7 @@ fn survreg6(
     let lik = kernel.evaluate(&beta);
     let mut loglik = lik.loglik;
     let mut usave = lik.u.clone();
-    let step = newton_step(&lik, tol_chol);
+    let step = newton_step(kernel, &beta, &lik, tol_chol);
     for i in 0..nvar2 {
         newbeta[i] = beta[i] + step[i];
     }
@@ -645,7 +651,7 @@ fn survreg6(
             // A standard Newton-Raphson step.
             halving = 0;
             loglik = newlk;
-            let step = newton_step(&newlik, tol_chol);
+            let step = newton_step(kernel, &newbeta, &newlik, tol_chol);
             beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
             for (value, delta) in newbeta.iter_mut().zip(&step) {
                 *value += delta;
@@ -1314,6 +1320,52 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn indefinite_information_takes_the_jj_step_as_r_does() {
+        // From init = c(0, 0) the information matrix of these fits is not
+        // positive definite for many iterations, so survreg6 steps with JJ.
+        // R: survreg(Surv(futime, fustat) ~ age, ovarian[1:12, ], dist = name,
+        // init = c(0, 0)) gives coef and log(scale), loglik[2] and iter.
+        let data = ovarian();
+        for (name, expected, loglik, iter) in [
+            (
+                "lognormal",
+                [
+                    11.701_859_522_329_269,
+                    -0.095_839_930_809_458_17,
+                    -0.776_636_167_471_362_7,
+                ],
+                -52.608_054_041_853_52,
+                27,
+            ),
+            (
+                "t",
+                [
+                    2_079.895_859_200_901,
+                    -27.063_395_933_205_125,
+                    4.655_623_836_140_029,
+                ],
+                -52.740_090_934_516_374,
+                9,
+            ),
+        ] {
+            let fit = survreg_fit(
+                &data,
+                &SurvregDistribution::from_name(name, None).unwrap(),
+                Some(&[0.0, 0.0]),
+                0.0,
+                &SurvregControl::default(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(fit.iterations, iter, "{name}");
+            for (actual, expected) in fit.coefficients.iter().zip(expected) {
+                assert_close(*actual, expected, 1e-12);
+            }
+            assert_close(fit.log_likelihood, loglik, 1e-12);
+        }
     }
 
     #[test]
