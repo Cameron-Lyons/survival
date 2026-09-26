@@ -12572,14 +12572,6 @@ def non_mixture_cure_model(
     covariates: Sequence[float],
     config: NonMixtureCureConfig,
 ) -> NonMixtureCureResult: ...
-def norisk(
-    time1: Sequence[float],
-    time2: Sequence[float],
-    status: Sequence[int],
-    sort1: Sequence[int],
-    sort2: Sequence[int],
-    strata: Sequence[int],
-) -> list[int]: ...
 def nostutter(
     id: Sequence[int | float | str],
     state: Sequence[int | float | str | None],

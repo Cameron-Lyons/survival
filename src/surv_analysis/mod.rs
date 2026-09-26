@@ -9,7 +9,6 @@ pub(crate) mod illness_death;
 pub(crate) mod logrank_components;
 pub(crate) mod multi_state;
 pub(crate) mod nelson_aalen;
-pub(crate) mod norisk;
 pub(crate) mod pseudo;
 pub(crate) mod pseudo_gee;
 pub(crate) mod semi_markov;
@@ -43,7 +42,6 @@ pub use multi_state::{
     estimate_transition_intensities, fit_markov_msm, fit_multi_state_model,
 };
 pub use nelson_aalen::{NelsonAalenResult, nelson_aalen, nelson_aalen_py};
-pub use norisk::{norisk_flags, norisk_py};
 pub use pseudo::{
     ResidualType, SurvfitAJResid, SurvfitResid, pseudo, pseudo_aj, pseudo_aj_py, pseudo_py,
     survfitresid, survfitresid_aj, survfitresid_aj_py, survfitresid_py,

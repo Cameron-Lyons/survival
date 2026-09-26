@@ -309,15 +309,3 @@ def test_pspline_basis_matches_r_spline_des():
     )
     assert result.basis[9][1:] == pytest.approx([0, 0, 0, 1 / 6, 0.66666666666666663, 1 / 6])
     assert all(sum(row) == pytest.approx(1.0) for row in result.basis)
-
-
-def test_norisk_validates_public_inputs():
-    with pytest.raises(ValueError, match="strata values must be strictly increasing"):
-        survival.surv_analysis.norisk(
-            [0.0, 1.0, 2.0],
-            [1.0, 2.0, 3.0],
-            [1, 0, 1],
-            [0, 1, 2],
-            [0, 1, 2],
-            [2, 1],
-        )

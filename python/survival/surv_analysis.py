@@ -31,7 +31,6 @@ __all__ = bind_names(
         "fit_multi_state_model",
         "NelsonAalenResult",
         "nelson_aalen",
-        "norisk",
         "GEEConfig",
         "GEEResult",
         "SurvfitResid",

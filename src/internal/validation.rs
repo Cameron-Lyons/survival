@@ -340,50 +340,6 @@ pub(crate) fn validate_matrix_shape(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PermutationIndexError {
-    Negative { position: usize, value: i32 },
-    OutOfBounds { position: usize, value: String },
-    Duplicate { position: usize, value: usize },
-}
-
-fn mark_permutation_index(
-    seen: &mut [bool],
-    position: usize,
-    zero_based_value: usize,
-    display_value: usize,
-) -> Result<(), PermutationIndexError> {
-    if zero_based_value >= seen.len() {
-        return Err(PermutationIndexError::OutOfBounds {
-            position,
-            value: display_value.to_string(),
-        });
-    }
-    if seen[zero_based_value] {
-        return Err(PermutationIndexError::Duplicate {
-            position,
-            value: display_value,
-        });
-    }
-    seen[zero_based_value] = true;
-    Ok(())
-}
-
-pub(crate) fn validate_zero_based_i32_permutation(
-    values: &[i32],
-    n: usize,
-) -> Result<(), PermutationIndexError> {
-    let mut seen = vec![false; n];
-    for (position, &value) in values.iter().enumerate() {
-        if value < 0 {
-            return Err(PermutationIndexError::Negative { position, value });
-        }
-        let value = value as usize;
-        mark_permutation_index(&mut seen, position, value, value)?;
-    }
-    Ok(())
-}
-
 /// Finite values in `[0, 1]`, reported as `PyErr` for binding-level callers.
 pub(crate) fn validate_probability_slice(values: &[f64], name: &str) -> Result<(), PyErr> {
     validate_finite(values, name)?;
@@ -599,30 +555,5 @@ mod tests {
         }
         .into();
         assert!(err.to_string().contains("time cannot be empty"));
-    }
-
-    #[test]
-    fn zero_based_i32_permutation_rejects_invalid_indices() {
-        assert!(validate_zero_based_i32_permutation(&[2, 0, 1], 3).is_ok());
-
-        let negative = validate_zero_based_i32_permutation(&[0, -1, 1], 3)
-            .expect_err("negative index should fail");
-        assert_eq!(
-            negative,
-            PermutationIndexError::Negative {
-                position: 1,
-                value: -1,
-            }
-        );
-
-        let out_of_bounds = validate_zero_based_i32_permutation(&[0, 3, 1], 3)
-            .expect_err("out-of-bounds index should fail");
-        assert_eq!(
-            out_of_bounds,
-            PermutationIndexError::OutOfBounds {
-                position: 1,
-                value: "3".to_string(),
-            }
-        );
     }
 }

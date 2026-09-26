@@ -266,39 +266,6 @@ def test_relative_survival_public_apis_and_validation():
         survival.relative.excess_hazard_regression([1.0], [1], [0.5], 1, 1, [0.01], 10, 0.0)
 
 
-def test_norisk():
-    time1 = [0.0, 1.0, 2.0, 3.0, 4.0]
-    time2 = [1.0, 2.0, 3.0, 4.0, 5.0]
-    status = [1, 0, 1, 0, 1]
-    sort1 = [0, 1, 2, 3, 4]
-    sort2 = [0, 1, 2, 3, 4]
-    strata = [1, 0, 0, 0, 0]
-
-    result = survival.surv_analysis.norisk(time1, time2, status, sort1, sort2, strata)
-    assert isinstance(result, list)
-    assert len(result) == len(time1)
-
-
-def test_norisk_validates_public_inputs():
-    with pytest.raises(ValueError, match="time2 length"):
-        survival.surv_analysis.norisk([0.0, 1.0], [1.0], [1, 0], [0, 1], [0, 1], [])
-
-    with pytest.raises(ValueError, match="finite"):
-        survival.surv_analysis.norisk([float("nan")], [1.0], [1], [0], [0], [])
-
-    with pytest.raises(ValueError, match="status values"):
-        survival.surv_analysis.norisk([0.0], [1.0], [2], [0], [0], [])
-
-    with pytest.raises(ValueError, match="sort1 index out of bounds"):
-        survival.surv_analysis.norisk([0.0], [1.0], [1], [-1], [0], [])
-
-    with pytest.raises(ValueError, match="sort1 must be a permutation"):
-        survival.surv_analysis.norisk([0.0, 1.0], [1.0, 2.0], [1, 0], [0, 0], [0, 1], [])
-
-    with pytest.raises(ValueError, match="strata values"):
-        survival.surv_analysis.norisk([0.0], [1.0], [1], [0], [0], [2])
-
-
 def test_finegray():
     tstart = [0.0, 0.0, 0.0, 0.0]
     tstop = [1.0, 2.0, 3.0, 4.0]
