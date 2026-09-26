@@ -500,6 +500,49 @@ def test_coxph_transforms_of_expressions_match_r(rhs, names, coefficients, n):
     assert fit.n == n
 
 
+def test_comparisons_coerce_a_string_or_a_factor_as_r_does():
+    lung = datasets.load_lung()
+    # d$f <- factor(ifelse(sex == 1, "1", "2")): R's Ops.factor compares the labels, and a
+    # number compared with a string is as.character(number)
+    data = {**lung, "f": r._r_factor(["1" if sex == 1 else "2" for sex in lung["sex"]], ["1", "2"])}
+    for rhs, names, coefficients in [
+        ("I(f == 2)", ["I(f == 2)TRUE"], [-0.53102353761950805]),
+        ("I(f != 2)", ["I(f != 2)TRUE"], [0.53102353761950649]),
+        ("as.numeric(f == 2)", ["as.numeric(f == 2)"], [-0.53102353761950805]),
+        (
+            "as.numeric(f == 2) + age",
+            ["as.numeric(f == 2)", "age"],
+            [-0.513218517108384176, 0.017045331845411293],
+        ),
+        ('I(sex == "2")', ['I(sex == "2")TRUE'], [-0.53102353761950805]),
+        ('I(age == "60")', ['I(age == "60")TRUE'], [-0.0077053755111580755]),
+        ('I(age*1.5 == "105")', ['I(age*1.5 == "105")TRUE'], [0.03511306967484052]),
+        ("I(sex == TRUE)", ["I(sex == TRUE)TRUE"], [0.53102353761950649]),
+    ]:
+        fit = r.coxph(f"Surv(time, status) ~ {rhs}", data)
+        assert list(fit.coef_names) == names
+        assert fit.coefficients == approx(coefficients, rel=1e-9)
+    # survfit(Surv(time, status) ~ I(f == 2), d)
+    curves = r.survfit("Surv(time, status) ~ I(f == 2)", data)
+    assert list(curves.strata) == ["I(f == 2)=FALSE", "I(f == 2)=TRUE"]
+    curves = r.survfit('Surv(time, status) ~ I(sex == "2")', data)
+    assert list(curves.strata) == ['I(sex == "2")=FALSE', 'I(sex == "2")=TRUE']
+    # the response too: coxph(Surv(time, status == "2") ~ sex, lung)
+    fit = r.coxph('Surv(time, status == "2") ~ sex', lung)
+    assert fit.coefficients == approx([-0.53102353761950816], rel=1e-9)
+    # R orders strings by the locale's collation and gives NA for a factor ('<' not
+    # meaningful for factors)
+    for rhs in ("I(f < 2)", 'I(sex < "2")'):
+        with pytest.raises(ValueError, match="of character or factor values is not supported"):
+            r.coxph(f"Surv(time, status) ~ {rhs}", data)
+
+
+def test_a_comparison_inside_arithmetic_counts_true_as_one():
+    # coxph(Surv(time, status) ~ I((age > 60) + 0), lung)
+    fit = r.coxph("Surv(time, status) ~ I((age > 60) + 0)", datasets.load_lung())
+    assert fit.coefficients == approx([0.21615449288090741], rel=1e-9)
+
+
 def test_a_nan_made_by_a_transform_of_an_expression_is_missing():
     # coxph(Surv(time, status) ~ sqrt(wt.loss + 10), lung): sqrt of a negative is NaN
     with pytest.warns(UserWarning, match="NaNs produced"):

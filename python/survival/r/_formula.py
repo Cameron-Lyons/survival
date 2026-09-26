@@ -12,6 +12,7 @@ from typing import Any
 
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _as_character,
     _coerce_array_like,
     _finite_float,
     _floats_or_nan,
@@ -80,6 +81,17 @@ def _column_source(data: Any, name: str) -> Any:
 
 def _column(data: Any, name: str) -> list[Any]:
     return _materialize_1d(_column_source(data, name), name)
+
+
+def _comparison_column(data: Any, name: str) -> list[Any]:
+    """A data column as R's relational operators read it: a factor is its labels as
+    strings (``Ops.factor``), any other column its own values."""
+
+    source = _column_source(data, name)
+    values = _materialize_1d(source, name)
+    if _mstate_categories(source) is None:
+        return values
+    return [None if _is_missing_value(value) else _as_character(value) for value in values]
 
 
 def _as_numeric_column(data: Any, name: str) -> list[Any]:
@@ -443,12 +455,24 @@ def _response_operand_values(
 ) -> tuple[list[Any] | None, Any]:
     if operand.column is None:
         return None, operand.value
-    return _column(data, operand.column), None
+    return _comparison_column(data, operand.column), None
 
 
 def _compare_response_values(left: Any, operator: str, right: Any) -> bool | None:
+    """R's relational *operator* on one pair of values (``NA`` is ``None``).  As in R's
+    ``relop``, a string operand makes both strings (``as.character``: ``2`` is ``"2"``,
+    ``TRUE`` is ``"TRUE"``); other operands compare as numbers."""
+
     if _is_missing_value(left) or _is_missing_value(right):
         return None
+    if isinstance(left, str) or isinstance(right, str):
+        # R orders strings by the locale's collation (and a factor not at all)
+        if operator not in {"==", "!="}:
+            raise ValueError(
+                f"formula comparison {operator!r} of character or factor values is not supported"
+            )
+        equal = _as_character(left) == _as_character(right)
+        return equal if operator == "==" else not equal
     if operator == "==":
         return left == right
     if operator == "!=":
@@ -458,7 +482,7 @@ def _compare_response_values(left: Any, operator: str, right: Any) -> bool | Non
         left_numeric = float(left)
         right_numeric = float(right)
     except (TypeError, ValueError) as exc:
-        raise ValueError("ordered formula response comparisons require numeric values") from exc
+        raise ValueError("ordered formula comparisons require numeric values") from exc
 
     if operator == "<=":
         return left_numeric <= right_numeric
@@ -742,6 +766,8 @@ def _arithmetic_expression_columns(expression: str) -> list[str]:
 
     if _arithmetic_literal(expression) is not None:
         return []
+    if _top_level_comparison(expression) is not None:
+        return _expression_columns(expression)
 
     call = _numeric_call(expression)
     if call is not None:
@@ -868,6 +894,9 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
     literal = _arithmetic_literal(expression)
     if literal is not None:
         return [literal] * n
+    if _top_level_comparison(expression) is not None:
+        # a parenthesised comparison, TRUE counting 1: I((age > 60) + 0)
+        return _floats_or_nan(_expression_values(data, expression, n))
 
     call = _numeric_call(expression)
     if call is not None:
@@ -913,8 +942,8 @@ def _expression_values(data: Any, expression: str, n: int) -> list[Any]:
 
 
 def _comparison_operand(data: Any, text: str, n: int) -> list[Any]:
-    """One side of a formula comparison: a literal, a column's own values (strings and
-    factor labels compare as they are) or arithmetic."""
+    """One side of a formula comparison: a literal, a column (a factor as its labels)
+    or arithmetic."""
 
     literal = _r_literal(text)
     if literal is not None:
@@ -922,7 +951,7 @@ def _comparison_operand(data: Any, text: str, n: int) -> list[Any]:
     column, quoted = _formula_name(text)
     if _unsupported_formula_name(column, quoted):
         return _arithmetic_expression_values(data, text, n)
-    values = _column(data, column)
+    values = _comparison_column(data, column)
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     return values
