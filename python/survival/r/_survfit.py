@@ -57,7 +57,7 @@ from ._types import (
     NamedMatrix,
     SummarySurvfitResult,
     SurvfitCall,
-    SurvfitInfluence,
+    SurvfitInfluenceMatrix,
     SurvfitMultiStateResult,
     SurvfitQuantileResult,
     SurvfitResult,
@@ -705,7 +705,7 @@ def _strata_table(
 
 def _influence_with_labels(
     influence: list[_core.SurvfitInfluence] | None, model: dict[str, Any] | None
-) -> list[SurvfitInfluence] | None:
+) -> list[SurvfitInfluenceMatrix] | None:
     """The engine's influence matrices with R's row names ``clname``.
 
     The engine labels a cluster by the code it was given (the cluster, else the id, as
@@ -720,7 +720,7 @@ def _influence_with_labels(
     def rownames(codes: list[int]) -> list[Any]:
         return list(codes) if levels is None else [levels[code] for code in codes]
 
-    return [SurvfitInfluence(rownames(curve.cluster), curve.values) for curve in influence]
+    return [SurvfitInfluenceMatrix(rownames(curve.cluster), curve.values) for curve in influence]
 
 
 def _km_result(

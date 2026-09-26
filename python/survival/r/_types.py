@@ -740,12 +740,14 @@ class SurvfitCall:
 
 
 @dataclass(frozen=True)
-class SurvfitInfluence:
+class SurvfitInfluenceMatrix:
     """One curve's ``influence.surv`` or ``influence.chaz`` matrix of a ``survfit`` object.
 
     ``values[k]`` is the influence of cluster ``cluster[k]`` at each time of the curve;
     ``cluster`` holds R's row names: the ``cluster`` (else ``id``) values, in order of first
     appearance, or the observation numbers ``1..n`` when the observations are the clusters.
+    It is the engine's ``survival.surv_analysis.SurvfitInfluence`` with its cluster codes
+    replaced by those names.
     """
 
     cluster: list[Any]
@@ -787,8 +789,8 @@ class SurvfitResult:
     conf_int: float | None = None
     conf_type: str | None = None
     conf_lower: str | None = None
-    influence_surv: list[SurvfitInfluence] | None = None
-    influence_chaz: list[SurvfitInfluence] | None = None
+    influence_surv: list[SurvfitInfluenceMatrix] | None = None
+    influence_chaz: list[SurvfitInfluenceMatrix] | None = None
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
     model: dict[str, Any] | None = None

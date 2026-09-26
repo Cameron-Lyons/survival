@@ -209,7 +209,7 @@ def test_km_influence_rows_are_named_by_cluster_id_or_row_number():
     data = _labelled()
 
     fit = r.survfit("Surv(time, status) ~ 1", data, cluster="cl", influence=True)
-    assert isinstance(fit.influence_surv[0], r.SurvfitInfluence)
+    assert isinstance(fit.influence_surv[0], r.SurvfitInfluenceMatrix)
     assert fit.influence_surv[0].cluster == ["z", "q", "m"]
     assert fit.influence_chaz[0].cluster == ["z", "q", "m"]
     _close(
