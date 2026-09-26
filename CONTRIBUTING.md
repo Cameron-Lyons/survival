@@ -96,11 +96,6 @@ The important feature combinations are:
   `extension-module`, so `build.rs` must keep libpython linkage working for
   local tests.
 
-The `cuda` Cargo feature is retained as a compatibility placeholder only.
-It does not enable CUDA execution. `ComputeBackend::CUDA` is retained as an API
-enum value, but unavailable GPU backends should report unavailable rather than
-pretending to execute.
-
 ## Binding And Stub Workflow
 
 When adding, removing, or renaming a PyO3 binding:

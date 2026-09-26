@@ -1,9 +1,6 @@
-pub const CHOLESKY_TOL: f64 = 1e-10;
 /// Legacy absolute tolerance of [`same_time`]; not R's `timefix`.
 pub const TIME_EPSILON: f64 = 1e-9;
 pub const CONVERGENCE_EPSILON: f64 = 1e-6;
-pub const STRICT_EPSILON: f64 = 1e-5;
-pub const CLOGIT_TOLERANCE: f64 = 1e-6;
 pub const DIVISION_FLOOR: f64 = 1e-10;
 pub const GAUSSIAN_ELIMINATION_TOL: f64 = 1e-12;
 pub const DEFAULT_RANDOM_SEED: u64 = 42;
@@ -17,7 +14,6 @@ pub const Z_SCORE_90: f64 = 1.6448536269514715;
 pub const Z_SCORE_95: f64 = 1.9599639845400536;
 pub const Z_SCORE_99: f64 = 2.5758293035489;
 
-pub const TIED_PAIR_WEIGHT: f64 = 0.5;
 pub const DEFAULT_CONCORDANCE: f64 = 0.5;
 
 /// Two-sided normal critical value for a confidence level, exactly as R's
@@ -154,7 +150,6 @@ pub fn exp_ci_bounds(
 pub const PARALLEL_THRESHOLD_SMALL: usize = 100;
 pub const PARALLEL_THRESHOLD_MEDIUM: usize = 500;
 pub const PARALLEL_THRESHOLD_LARGE: usize = 1000;
-pub const PARALLEL_THRESHOLD_XLARGE: usize = 10000;
 
 pub const COX_MAX_ITER: usize = 20;
 pub const COX_CONVERGENCE_TOLERANCE: f64 = 1e-9;
@@ -170,14 +165,6 @@ pub fn exp_clamped(value: f64) -> f64 {
     value.clamp(EXP_CLAMP_MIN, EXP_CLAMP_MAX).exp()
 }
 
-#[inline]
-pub fn exp_clamped_ci(log_estimate: f64, standard_error: f64, z_score: f64) -> (f64, f64) {
-    let (lower, upper) = normal_ci(log_estimate, standard_error, z_score);
-    (exp_clamped(lower), exp_clamped(upper))
-}
-
-pub const CONVERGENCE_FLAG: i32 = 1000;
-
 pub const DEFAULT_CONFORMAL_COVERAGE: f64 = 0.9;
 pub const DEFAULT_IPCW_TRIM: f64 = 0.01;
 pub const IPCW_SURVIVAL_FLOOR: f64 = DEFAULT_IPCW_TRIM;
@@ -192,16 +179,6 @@ pub const DEFAULT_ALPHA: f64 = 0.05;
 pub const DEFAULT_POWER: f64 = 0.8;
 pub const DEFAULT_ALLOCATION_RATIO: f64 = 1.0;
 pub const DEFAULT_SIDED: usize = 2;
-
-pub const CONCORDANCE_COUNT_SIZE: usize = 5;
-pub const CONCORDANCE_COUNT_SIZE_EXTENDED: usize = 6;
-
-pub const MAX_HALVING_ITERATIONS: usize = 10;
-pub const STEP_HALVE_FACTOR: f64 = 0.5;
-pub const STEP_DOUBLE_FACTOR: f64 = 2.0;
-
-pub const ROYSTON_KAPPA_FACTOR: f64 = 8.0;
-pub const ROYSTON_VARIANCE_FACTOR: f64 = 6.0;
 
 /// Legacy near-tie test with a fixed absolute tolerance
 /// ([`TIME_EPSILON`]), kept for the modules without an R counterpart that
