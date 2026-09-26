@@ -2,6 +2,7 @@
 3.8-12: the curves brier reads, survcheck's row numbers after ``na.omit``, survobrien's
 ``I()`` terms and the id order of cch's Borgan score residuals."""
 
+import importlib
 import math
 
 import pytest
@@ -12,6 +13,7 @@ from .r_fixture_support import RFactor
 survival = setup_survival_import()
 r = survival.r
 datasets = survival.datasets
+r_misc = importlib.import_module("survival.r._misc")
 
 
 def approx(values, rel=1e-8):
@@ -48,6 +50,56 @@ def test_brier_reads_the_model_curves_at_the_evaluation_times():
     assert len(default.times) == 139
     assert sum(default.brier) == approx(23.8320240782286)
     assert default.brier[-1] == approx(0.0513206230245228)
+
+
+@pytest.mark.parametrize("formula", ["x", "x + strata(g)"])
+def test_brier_reads_each_model_curve_once(monkeypatch, formula):
+    # a curve's time and surv getters convert the whole curve (ntimes x n for an unstratified
+    # fit), so brier reads each of them once per curve, not once per subject
+    data = {
+        "time": [2, 3, 3, 5, 6, 8, 9, 11, 12, 14],
+        "status": [1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "x": [0.5, 1.2, -0.3, 0.8, 2.1, -1.0, 0.4, 1.5, -0.7, 0.9],
+        "g": [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+    }
+    fit = r.coxph(f"Surv(time, status) ~ {formula}", data=data)
+    expected = r.brier(fit, times=[3, 6, 10])
+    curves = []
+
+    class Curve:
+        def __init__(self, curve):
+            self._curve = curve
+            self.reads = {"time": 0, "surv": 0}
+            curves.append(self)
+
+        @property
+        def time(self):
+            self.reads["time"] += 1
+            return self._curve.time
+
+        @property
+        def surv(self):
+            self.reads["surv"] += 1
+            return self._curve.surv
+
+    class Engine:
+        def __init__(self, engine):
+            self._engine = engine
+
+        def __getattr__(self, name):
+            return getattr(self._engine, name)
+
+        def survfit(self, **kwargs):
+            return [Curve(curve) for curve in self._engine.survfit(**kwargs)]
+
+    engine_of = r_misc._coxph_engine
+    monkeypatch.setattr(
+        r_misc, "_coxph_engine", lambda fit, message: Engine(engine_of(fit, message))
+    )
+    result = r.brier(fit, times=[3, 6, 10])
+    assert result.brier == expected.brier
+    assert len(curves) == (1 if formula == "x" else len(data["time"]))
+    assert [curve.reads for curve in curves] == [{"time": 1, "surv": 1}] * len(curves)
 
 
 # --- survcheck ---------------------------------------------------------------
