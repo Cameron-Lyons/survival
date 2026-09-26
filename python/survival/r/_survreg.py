@@ -1004,18 +1004,16 @@ def _refit_terms(fit: SurvregModelResult, keep: int) -> Any:
 
 
 def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:
-    """``stat.anova(test="Chisq")``: ``pchisq(dev, |df|, lower=FALSE)``, NA otherwise."""
+    """``stat.anova(test="Chisq")``: ``pchisq(dev * sign(df), |df|, lower=FALSE)``, NA at a
+    zero df or a negative statistic (``pchisq`` carries a NaN deviance or df through)."""
 
     p_values = []
     for value, degrees in zip(deviance, df, strict=True):
-        if math.isnan(value) or math.isnan(degrees) or degrees == 0:
-            p_values.append(math.nan)
-            continue
         statistic = value * math.copysign(1.0, degrees)
-        if statistic < 0.0:
+        if degrees == 0 or statistic < 0.0:
             p_values.append(math.nan)
         else:
-            p_values.append(float(_core.lrt_test(statistic / 2.0, 0.0, int(abs(degrees))).p_value))
+            p_values.append(_core.pchisq(statistic, abs(degrees), lower_tail=False))
     return p_values
 
 
@@ -1172,7 +1170,13 @@ def rsurvreg(
     parms: Any | None = None,
     seed: int | None = None,
 ) -> list[float]:
-    """Random draws from the ``survreg`` distributions (R's ``rsurvreg``; ``seed`` is ours)."""
+    """Random draws from the ``survreg`` distributions (R's ``rsurvreg``,
+    ``qsurvreg(runif(n), ...)``).
+
+    ``seed=s`` draws R's uniforms, so the result equals R's ``set.seed(s);
+    rsurvreg(n, ...)``; without a seed the uniforms come from a clock-seeded generator
+    whose stream is not R's.
+    """
 
     count = _integer_scalar(n, "n")
     if count < 0:

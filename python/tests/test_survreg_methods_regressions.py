@@ -1,9 +1,9 @@
-"""survreg's vcov, confint and summary methods against R 4.5.3 / survival 3.8-12.
+"""survreg's vcov, confint, summary and anova methods against R 4.5.3 / survival 3.8-12.
 
 vcov.survreg keeps the ``Log(scale)`` rows and, without ``complete``, drops only the
 aliased coefficients, naming a stratum's scale ``Log(scale[<stratum>])``;
 summary.survreg returns the (intercept-only, full) log-likelihood pair, ``var`` and, on
-request, the correlation matrix.
+request, the correlation matrix; anova.survreg's p-values are nmath's ``pchisq``.
 """
 
 import math
@@ -425,4 +425,56 @@ def test_summary_correlation_leaves_out_an_aliased_coefficient(aliased):
             [-0.388564253663504611, 0.041224216750194102, 1.0, 0.155825248091624236],
             [0.024283373618960557, -0.092959524732490195, 0.155825248091624236, 1.0],
         ],
+    )
+
+
+# --- anova -----------------------------------------------------------------------------------
+
+
+def test_anova_p_values_are_pchisq(lung):
+    # R: anova(survreg(Surv(time, status) ~ karno + celltype + age, veteran))
+    veteran = survival.datasets.load_veteran()
+    fit = r.survreg("Surv(time, status) ~ karno + celltype + age", data=veteran)
+    table = r.anova(fit)
+    assert table.df == approx([math.nan, 1.0, 3.0, 1.0])
+    assert table.p == approx(
+        [
+            math.nan,
+            3.1038630560756744e-11,
+            2.6794020174592112e-04,
+            6.2162065847962478e-01,
+        ]
+    )
+
+    # R: anova(f1, f2, f3) and anova(f2, f1) for f1 = ~ age, f2 = ~ age + sex (Weibull)
+    # and f3 = ~ age + sex (lognormal): NA at the zero df and at the negative deviance
+    f1 = r.survreg("Surv(time, status) ~ age", data=lung)
+    f2 = r.survreg("Surv(time, status) ~ age + sex", data=lung)
+    f3 = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="lognormal")
+    table = r.anova(f1, f2, f3)
+    assert table.df == approx([math.nan, 1.0, 0.0])
+    assert table.deviance == approx([math.nan, 9.6788413665326516, -23.3914223240822139])
+    assert table.p == approx([math.nan, 0.0018640213902380439, math.nan])
+    reversed_table = r.anova(f2, f1)
+    assert reversed_table.df == approx([math.nan, -1.0])
+    assert reversed_table.p == approx([math.nan, 0.0018640213902380439])
+
+
+def test_chisq_p_values_follow_stat_anova():
+    # R: stat.anova's pchisq(dev * sign(df), abs(df), lower.tail = FALSE), NA at df 0
+    # and at a negative statistic; pchisq(0, 1, lower.tail = FALSE) is 1
+    assert _survreg._chisq_p_values(
+        [math.nan, 3.0, 2.0, -1.0, 5.0, -5.0, 0.0],
+        [math.nan, 1.0, 0.0, 1.0, -2.0, -2.0, 1.0],
+    ) == approx(
+        [
+            math.nan,
+            0.083264516663550558,
+            math.nan,
+            math.nan,
+            math.nan,
+            0.0820849986238988,
+            1.0,
+        ],
+        rel=1e-14,
     )
