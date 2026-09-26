@@ -112,7 +112,12 @@ class _CategoricalDesignTerm:
 
 @dataclass(frozen=True)
 class _PenaltyDesignTerm:
-    """A fitted penalty basis, including the state needed to transform new data."""
+    """A fitted penalty basis, including the state needed to transform new data.
+
+    ``nterm``, ``degree``, ``boundary``, ``intercept`` and ``combine`` (the group of every
+    basis column when pspline's ``combine`` sums them) describe a pspline basis, whose
+    ``penalty`` is ``None`` for ``pspline(penalty=FALSE)``; ``levels`` are a frailty's groups.
+    """
 
     term: _CovariateTerm
     columns: tuple[str, ...]
@@ -122,6 +127,18 @@ class _PenaltyDesignTerm:
     boundary: tuple[float, float] | None = None
     levels: tuple[Any, ...] = ()
     intercept: bool = False
+    nterm: int = 0
+    combine: tuple[int, ...] | None = None
+
+    @property
+    def penalized(self) -> bool:
+        """False for ``pspline(penalty=FALSE)``, whose basis is an ordinary matrix term."""
+        return self.penalty is not None
+
+    @property
+    def kind(self) -> str:
+        """The penalty function: ``"ridge"``, ``"pspline"`` or ``"frailty"``."""
+        return self.penalty.kind if self.penalized else "pspline"
 
 
 _SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm | _PenaltyDesignTerm
@@ -220,7 +237,11 @@ class _FormulaFit:
 
 @dataclass(frozen=True)
 class CchModelResult:
-    """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps."""
+    """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps.
+
+    ``sc_ids`` are the ids of the rows of the Borgan estimators' ``sc`` (R's rownames), in
+    R's ``rowsum`` order: numbers ascending, factor ids in level order, other labels sorted.
+    """
 
     fit: _core.CchFitResult
     formula: str
@@ -232,6 +253,7 @@ class CchModelResult:
     stratum: tuple[Any, ...] | None
     cohort_size: tuple[int, ...]
     subcohort_size: tuple[int, ...]
+    sc_ids: tuple[Any, ...] | None
 
     @property
     def coefficients(self) -> list[float]:
@@ -248,6 +270,13 @@ class CchModelResult:
     @property
     def phase2var(self) -> list[list[float]]:
         return [list(row) for row in self.fit.phase2var]
+
+    @property
+    def sc(self) -> list[list[float]] | None:
+        """The Borgan estimators' weighted score residuals collapsed by id, one row per id."""
+
+        sc = self.fit.sc
+        return None if sc is None else [list(row) for row in sc]
 
     @property
     def method(self) -> str:

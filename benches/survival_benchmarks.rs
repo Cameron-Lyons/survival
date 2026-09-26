@@ -320,19 +320,21 @@ mod brier_score {
     fn brier_ipcw(bencher: divan::Bencher, n: usize) {
         let (time, status, times, phat) = brier_inputs(n);
 
-        bencher.bench_local(|| {
-            brier(&BrierInput {
-                start: None,
-                time: &time,
-                status: &status,
-                weights: None,
-                times: &times,
-                phat: &phat,
-                ties: true,
-                efron: false,
-                timefix: true,
-            })
-        });
+        bencher
+            .with_inputs(|| phat.clone())
+            .bench_local_values(|phat| {
+                brier(BrierInput {
+                    start: None,
+                    time: &time,
+                    status: &status,
+                    weights: None,
+                    times: &times,
+                    phat,
+                    ties: true,
+                    efron: false,
+                    timefix: true,
+                })
+            });
     }
 
     #[divan::bench(args = [100, 1000, 10000, 100000])]
@@ -340,19 +342,21 @@ mod brier_score {
         let (time, status, times, phat) = brier_inputs(n);
         let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 5) as f64 * 0.1).collect();
 
-        bencher.bench_local(|| {
-            brier(&BrierInput {
-                start: None,
-                time: &time,
-                status: &status,
-                weights: Some(&weights),
-                times: &times,
-                phat: &phat,
-                ties: true,
-                efron: false,
-                timefix: true,
-            })
-        });
+        bencher
+            .with_inputs(|| phat.clone())
+            .bench_local_values(|phat| {
+                brier(BrierInput {
+                    start: None,
+                    time: &time,
+                    status: &status,
+                    weights: Some(&weights),
+                    times: &times,
+                    phat,
+                    ties: true,
+                    efron: false,
+                    timefix: true,
+                })
+            });
     }
 }
 

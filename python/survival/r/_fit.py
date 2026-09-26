@@ -246,6 +246,7 @@ def _model_frame(
         raise TypeError("a formula argument is required")
     if data is None:
         raise ValueError("a data argument is required with a formula")
+    full_data = data
     aligned = {
         "weights": _column_or_values(data, weights, "weights"),
         "offset": _column_or_values(data, offset, "offset"),
@@ -316,7 +317,8 @@ def _model_frame(
         raise ValueError("weights must be finite")
 
     design = _r_factor_design(
-        data, _fit_formula_design(data, _formula_response_spec(formula), terms, n)
+        data,
+        _fit_formula_design(data, _formula_response_spec(formula), terms, n, full_data=full_data),
     )
     names, assign = _design_names_and_assign(design)
     return _ModelFrame(

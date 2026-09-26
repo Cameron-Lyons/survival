@@ -31,8 +31,9 @@ pub struct BrierInput<'a> {
     /// null curve, is chosen by the caller since `phat` must match).
     pub times: &'a [f64],
     /// Model predicted probability of an event by each evaluation time:
-    /// `phat[i][j]` for time `i`, subject `j` (R's `p1`).
-    pub phat: &'a [Vec<f64>],
+    /// `phat[i][j]` for time `i`, subject `j` (R's `p1`); it becomes the
+    /// result's `phat`.
+    pub phat: Vec<Vec<f64>>,
     /// Move censorings just after tied events before estimating the
     /// censoring distribution (R `ties`).
     pub ties: bool,
@@ -130,8 +131,8 @@ fn validate(input: &BrierInput<'_>) -> SurvivalResult<()> {
 
 /// Brier score, its null-model counterpart and the resulting R-squared at
 /// each evaluation time.
-pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
-    validate(input)?;
+pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
+    validate(&input)?;
     let n = input.time.len();
     let (start, time): (Option<Vec<f64>>, Vec<f64>) = match (input.timefix, input.start) {
         (false, start) => (start.map(<[f64]>::to_vec), input.time.to_vec()),
@@ -233,7 +234,7 @@ pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
         brier,
         rsquared,
         p0,
-        phat: input.phat.to_vec(),
+        phat: input.phat,
         eff_n,
     })
 }
@@ -246,14 +247,13 @@ mod tests {
     fn matches_a_hand_calculation() {
         // Two subjects, no censoring: the censoring curve stays at 1 and the
         // weights are the normalised case weights.
-        let phat = vec![vec![0.2, 0.6]];
-        let result = brier(&BrierInput {
+        let result = brier(BrierInput {
             start: None,
             time: &[1.0, 3.0],
             status: &[1, 1],
             weights: None,
             times: &[2.0],
-            phat: &phat,
+            phat: vec![vec![0.2, 0.6]],
             ties: true,
             efron: false,
             timefix: true,
@@ -273,14 +273,13 @@ mod tests {
     fn censoring_weights_follow_the_ipcw_rule() {
         // Subject 2 censored at 2 (shifted to 2.5) gets weight zero at time
         // 3; the others are reweighted by the censoring survival.
-        let phat = vec![vec![0.3, 0.3, 0.3]];
-        let result = brier(&BrierInput {
+        let result = brier(BrierInput {
             start: None,
             time: &[1.0, 2.0, 4.0],
             status: &[1, 0, 1],
             weights: None,
             times: &[3.0],
-            phat: &phat,
+            phat: vec![vec![0.3; 3]],
             ties: true,
             efron: false,
             timefix: true,
@@ -296,26 +295,25 @@ mod tests {
 
     #[test]
     fn efron_null_model_uses_the_corrected_hazard() {
-        let phat = vec![vec![0.5; 3]];
-        let km = brier(&BrierInput {
+        let km = brier(BrierInput {
             start: None,
             time: &[1.0, 1.0, 2.0],
             status: &[1, 1, 0],
             weights: None,
             times: &[1.5],
-            phat: &phat,
+            phat: vec![vec![0.5; 3]],
             ties: true,
             efron: false,
             timefix: true,
         })
         .unwrap();
-        let efron = brier(&BrierInput {
+        let efron = brier(BrierInput {
             start: None,
             time: &[1.0, 1.0, 2.0],
             status: &[1, 1, 0],
             weights: None,
             times: &[1.5],
-            phat: &phat,
+            phat: vec![vec![0.5; 3]],
             ties: true,
             efron: true,
             timefix: true,
@@ -328,13 +326,13 @@ mod tests {
 
     #[test]
     fn shapes_are_validated() {
-        let bad = brier(&BrierInput {
+        let bad = brier(BrierInput {
             start: None,
             time: &[1.0, 2.0],
             status: &[1, 0],
             weights: None,
             times: &[1.0, 2.0],
-            phat: &[vec![0.1, 0.2], vec![0.3]],
+            phat: vec![vec![0.1, 0.2], vec![0.3]],
             ties: true,
             efron: false,
             timefix: true,

@@ -127,6 +127,7 @@ imports from the ones above it):
   `inherits(x, "survival.r._types.<Class>")` guard in `r/survivalr/R/bridge.R`
   must be updated if a result class moves to another module
 - `_coerce`: input coercion, option normalisation, shared numeric helpers
+- `_names`: R's `make.names` and `make.unique` for data-frame column names
 - `_surv`: `Surv`, `Surv2`, timeline conversion, `format_surv`, `strata`,
   `cluster`
 - `_formula`: tokenizer/parser, terms, design matrices, model-frame builders

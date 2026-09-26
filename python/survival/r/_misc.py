@@ -13,6 +13,7 @@ Rust fit behind the result (``coefficients``, ``var``, ``means``, ``loglik``, ``
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -46,6 +47,7 @@ from ._formula import (
     _column_or_values,
     _column_source,
     _combined_columns,
+    _covariate_term_columns,
     _covariate_term_name,
     _design_rows_from_spec,
     _design_term_output_names,
@@ -56,6 +58,8 @@ from ._formula import (
     _term_values,
 )
 from ._models import coef, model_formula, model_frame, vcov
+from ._names import _make_names_unique, _make_unique
+from ._penalties import _combine_basis, _pspline_boundary, _pspline_combine
 from ._surv import Surv, _subset_surv
 from ._types import (
     _MISSING,
@@ -374,25 +378,6 @@ def _pspline_method(
     return df_value, None, nterm_value, 0.1 if eps_value is None else eps_value, "df"
 
 
-def _pspline_combine(matrix: list[list[float]], combine: Any, intercept: bool) -> list[int]:
-    """R's ``combine`` argument: add up the basis columns with equal ``combine`` codes."""
-
-    codes = _float_vector(combine, "combine")
-    if any(c != math.floor(c) or c < 0 for c in codes) or any(
-        b < a for a, b in zip(codes, codes[1:], strict=False)
-    ):
-        raise ValueError("combine must be an increasing vector of positive integers")
-    ctemp = [int(c) for c in codes] if intercept else [0, *(int(c) for c in codes)]
-    if len(ctemp) != len(matrix[0]):
-        raise ValueError("wrong length for combine")
-    groups = sorted(set(ctemp))
-    for row_idx, row in enumerate(matrix):
-        matrix[row_idx] = [
-            sum(v for v, c in zip(row, ctemp, strict=True) if c == g) for g in groups
-        ]
-    return [int(c) for c in codes]
-
-
 def _second_difference_penalty(nvar: int) -> list[list[float]]:
     """R's ``t(D) %*% D`` for the second-difference matrix ``D`` of ``nvar`` coefficients."""
 
@@ -438,18 +423,16 @@ def pspline(
         raise ValueError("x must contain at least one non-missing value")
     if nterm_value < 3:
         raise ValueError("Too few basis functions")
-    if boundary_arg is None:
-        boundary = (min(observed), max(observed))
-    else:
-        values = _float_vector(boundary_arg, "Boundary.knots")
-        if len(values) != 2 or not values[0] < values[1]:
-            raise ValueError("Invalid values for Boundary.knots")
-        boundary = (values[0], values[1])
+    boundary = _pspline_boundary(boundary_arg, observed)
     intercept_value = _normalize_bool_option(intercept, "intercept")
     basis = _core.pspline_basis(x_values, nterm_value, _integer_scalar(degree, "degree"), boundary)
 
     matrix = [list(row) for row in basis.basis]
-    combine_codes = None if combine is None else _pspline_combine(matrix, combine, intercept_value)
+    combine_codes = None
+    if combine is not None:
+        groups = _pspline_combine(combine, len(matrix[0]), intercept_value)
+        matrix = _combine_basis(matrix, groups)
+        combine_codes = list(groups if intercept_value else groups[1:])
     nvar = len(matrix[0])
     dmat = _second_difference_penalty(nvar)
     if not intercept_value:
@@ -518,6 +501,7 @@ def _frailty_encoding(
 class _ModelFrame:
     response: Surv
     extras: dict[str, list[Any] | None]
+    kept: list[int]
     omitted: list[int]
 
 
@@ -553,7 +537,8 @@ def _model_frame(
     row-aligned arguments such as ``id`` and ``istate``, given as vectors or column names.
 
     ``subset`` is applied first, then ``na.action`` to the formula variables, the response and
-    the extras; ``omitted`` records the 0-based rows of the subset that ``na.omit`` dropped.
+    the extras; ``kept`` and ``omitted`` record the 0-based rows of the subset that ``na.omit``
+    kept and dropped.
     """
 
     action = _normalize_na_action(na_action)
@@ -592,6 +577,7 @@ def _model_frame(
             name: None if name not in frame else _materialize_labels(frame[name], name)
             for name in extras
         },
+        kept=kept,
         omitted=sorted(omitted),
     )
 
@@ -724,7 +710,7 @@ def survcheck(
         timefix=timefix,
     )
     # R reports rows of the data before missing values were removed.
-    row_numbers = [idx + 1 for idx in range(n + len(frame.omitted)) if idx not in frame.omitted]
+    row_numbers = [idx + 1 for idx in frame.kept]
     return SurvCheckResult(
         states=raw.states,
         transitions=raw.transitions,
@@ -751,24 +737,26 @@ def survcheck(
 
 def _survobrien_columns(
     data: Any, covariates: Sequence[Any], n: int
-) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
-    """Split the model terms into the factor ones R leaves alone and the continuous ones it
-    transforms."""
+) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    """Split the model terms into the ones R leaves alone (``keepers <- factors | protected``:
+    factors, non-numeric terms and ``I()`` (AsIs) terms) and the continuous ones it transforms.
 
-    keepers: list[tuple[str, list[Any]]] = []
+    A kept term contributes every data column it references (R's ``all.vars``), once per term.
+    """
+
+    keepers: list[str] = []
     continuous: list[tuple[str, list[float]]] = []
     for term in covariates:
         if isinstance(term, _InteractionTerm):
             raise ValueError("This function cannot deal with iteraction terms")
-        values = _term_values(data, term, n)
         numeric = None
-        if not term.categorical:
+        if term.transform != "I" and not term.categorical:
             try:
-                numeric = [float(value) for value in values]
+                numeric = [float(value) for value in _term_values(data, term, n)]
             except (TypeError, ValueError):
                 numeric = None
         if numeric is None:
-            keepers.append((term.column, values))
+            keepers.extend(_covariate_term_columns(term))
         else:
             continuous.append((_covariate_term_name(term), numeric))
     if not continuous:
@@ -780,19 +768,19 @@ def _survobrien_transformed(
     transform: Callable[..., Any] | None,
     continuous: list[tuple[str, list[float]]],
     expansion: Any,
-) -> dict[str, list[float]]:
+) -> list[tuple[str, list[float]]]:
     """The transformed columns: the Rust logit-rank default, or ``transform`` applied to the
     values of every risk set (R's ``lapply(indx, function(x) transform(z[x]))``)."""
 
     if transform is None:
-        return {
-            name: list(column)
+        return [
+            (name, list(column))
             for (name, _values), column in zip(continuous, expansion.transformed, strict=True)
-        }
+        ]
     blocks: dict[int, list[int]] = {}
     for position, block in enumerate(expansion.strata):
         blocks.setdefault(block, []).append(position)
-    out: dict[str, list[float]] = {}
+    out: list[tuple[str, list[float]]] = []
     for name, values in continuous:
         column = [0.0] * len(expansion.row)
         for positions in blocks.values():
@@ -805,7 +793,7 @@ def _survobrien_transformed(
                 raise ValueError("Transform function must be 1 to 1")
             for position, value in zip(positions, result, strict=True):
                 column[position] = value
-        out[name] = column
+        out.append((name, column))
     return out
 
 
@@ -819,8 +807,11 @@ def survobrien(
     """O'Brien's logit-rank expansion of a data set, like R's ``survobrien``.
 
     Returns the expanded data frame (a mapping of columns): the response, the untransformed
-    factor columns, the ``strata`` and ``cluster`` columns (or ``.id.``, the source row), the
-    transformed continuous variables and the risk-set number ``.strata.``.
+    variables of the factor and ``I()`` terms, the ``strata`` and ``cluster`` columns (or
+    ``.id.``, the source row), the transformed continuous variables and the risk-set number
+    ``.strata.``.  The column names are made syntactic and unique as R's ``data.frame`` does
+    (``log(z)`` becomes ``log.z.``, a repeated ``z`` becomes ``z.1``).  String columns count
+    as factors.
     """
 
     if (
@@ -853,22 +844,27 @@ def survobrien(
         strata=strata_codes,
     )
     rows = list(expansion.row)
-    frame: dict[str, list[Any]] = {}
+    columns: list[tuple[str, list[Any]]] = []
     if expansion.start is not None:
-        frame["start"] = list(expansion.start)
-        frame["stop"] = list(expansion.time)
+        columns += [("start", list(expansion.start)), ("stop", list(expansion.time))]
     else:
-        frame["time"] = list(expansion.time)
-    frame["status"] = list(expansion.status)
-    for name, values in keepers:
-        frame[name] = [values[row] for row in rows]
-    for name in [*terms.strata, *terms.clusters]:
-        frame[name] = list(_subset_sequence(_column(data, name), rows, name))
+        columns.append(("time", list(expansion.time)))
+    columns.append(("status", list(expansion.status)))
+    # data[knames]: `[.data.frame` makes the names of the kept and strata variables unique
+    knames = [*keepers, *terms.strata]
+    columns += [
+        (label, list(_subset_sequence(_column(data, name), rows, name)))
+        for label, name in zip(
+            [*_make_unique(knames), *terms.clusters], [*knames, *terms.clusters], strict=True
+        )
+    ]
     if not terms.clusters:
-        frame[".id."] = [row + 1 for row in rows]
-    frame.update(_survobrien_transformed(transform, continuous, expansion))
-    frame[".strata."] = list(expansion.strata)
-    return frame
+        columns.append((".id.", [row + 1 for row in rows]))
+    columns += _survobrien_transformed(transform, continuous, expansion)
+    columns.append((".strata.", list(expansion.strata)))
+    # data.frame()'s check.names: make.names(unique = TRUE)
+    names = _make_names_unique([name for name, _values in columns])
+    return {name: values for name, (_label, values) in zip(names, columns, strict=True)}
 
 
 # ---------------------------------------------------------------------------
@@ -1006,15 +1002,17 @@ def _brier_model_predictions(
     else:
         rows, strata, offsets = _newdata_design(fit, newdata, n)
     curves = engine.survfit(newdata=rows, new_strata=strata, new_offset=offsets, se_fit=False)
-    # one curve per stratum with the rows as columns, or one per row for stratified fits
-    per_subject: list[list[float]] = []
+    # one curve per stratum with the rows as columns, or one per row for stratified fits; each
+    # getter converts the whole curve, so it is read once
+    phat: list[list[float]] = [[] for _ in times]
     for curve in curves:
-        width = len(curve.surv[0]) if curve.surv else 0
-        per_subject.extend(
-            _core.step_values_at(list(curve.time), [row[j] for row in curve.surv], times, 1.0)
-            for j in range(width)
-        )
-    return [[1.0 - subject[i] for subject in per_subject] for i in range(len(times))]
+        curve_times, surv = list(curve.time), curve.surv
+        width = len(surv[0]) if surv else 0
+        for row, at in zip(phat, times, strict=True):
+            # the last step at or before `at`; the curves are 1 before their first time
+            index = bisect.bisect_right(curve_times, at)
+            row.extend([1.0 - value for value in surv[index - 1]] if index else [0.0] * width)
+    return phat
 
 
 def brier(
@@ -1086,7 +1084,7 @@ def brier(
         brier=result.brier,
         times=result.times,
         p0=result.p0,
-        phat=result.phat,
+        phat=phat,
         eff_n=result.eff_n,
     )
 

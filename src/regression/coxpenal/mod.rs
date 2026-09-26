@@ -437,7 +437,7 @@ fn control_of(term: &PenaltyTerm, ncols: usize, n: usize, eps2: f64) -> Survival
                 eps,
                 thetas: vec![0.0],
                 dfs: vec![0.0],
-                guess: 3.0 * df / n as f64,
+                guess: 3.0 * df / frailty.n.unwrap_or(n) as f64,
                 gamma_correction: gamma,
             };
             match frailty.method {
@@ -632,7 +632,7 @@ impl CoxpenalFit {
                 index,
                 term: penalty,
                 columns,
-                pparm: penalty.pparm(&x_term),
+                pparm: penalty.pparm(&x_term)?,
                 control,
                 state,
                 events_by_group: events,
@@ -986,12 +986,20 @@ pub struct CoxPenalty {
 
 #[pymethods]
 impl CoxPenalty {
-    /// `ridge(..., theta, df, eps, scale)`.
+    /// `ridge(..., theta, df, eps, scale)`; `scale_values` are the column
+    /// variances R's `ridge()` takes in the model frame, before `subset` and
+    /// `na.action` (by default those of the rows fitted).
     #[staticmethod]
-    #[pyo3(signature = (theta=None, df=None, eps=0.1, scale=true))]
-    fn ridge(theta: Option<f64>, df: Option<f64>, eps: f64, scale: bool) -> PyResult<Self> {
+    #[pyo3(signature = (theta=None, df=None, eps=0.1, scale=true, scale_values=None))]
+    fn ridge(
+        theta: Option<f64>,
+        df: Option<f64>,
+        eps: f64,
+        scale: bool,
+        scale_values: Option<Vec<f64>>,
+    ) -> PyResult<Self> {
         Ok(Self {
-            term: PenaltyTerm::ridge(theta, df, eps, scale)?,
+            term: PenaltyTerm::ridge(theta, df, eps, scale, scale_values)?,
         })
     }
 
@@ -1015,9 +1023,10 @@ impl CoxPenalty {
 
     /// `frailty(x, distribution, sparse, theta, df, eps, method, tdf, caic,
     /// init)`: a sparse term is one column of group codes, a dense one the
-    /// indicator matrix of the groups.
+    /// indicator matrix of the groups.  `n` is R's `length(x)` in the model
+    /// frame, before `subset` and `na.action` (by default the rows fitted).
     #[staticmethod]
-    #[pyo3(signature = (distribution="gamma", sparse=true, theta=None, df=None, eps=None, method=None, tdf=5.0, caic=false, init=None))]
+    #[pyo3(signature = (distribution="gamma", sparse=true, theta=None, df=None, eps=None, method=None, tdf=5.0, caic=false, init=None, n=None))]
     #[allow(clippy::too_many_arguments)]
     fn frailty(
         distribution: &str,
@@ -1029,10 +1038,21 @@ impl CoxPenalty {
         tdf: f64,
         caic: bool,
         init: Option<Vec<f64>>,
+        n: Option<usize>,
     ) -> PyResult<Self> {
         let distribution = FrailtyFamily::parse(distribution, tdf)?;
         Ok(Self {
-            term: PenaltyTerm::frailty(distribution, sparse, theta, df, eps, method, caic, init)?,
+            term: PenaltyTerm::frailty(
+                distribution,
+                sparse,
+                theta,
+                df,
+                eps,
+                method,
+                caic,
+                init,
+                n,
+            )?,
         })
     }
 
@@ -1080,11 +1100,7 @@ impl CoxPenalty {
     #[getter]
     fn distribution(&self) -> Option<&'static str> {
         match &self.term {
-            PenaltyTerm::Frailty(frailty) => Some(match frailty.distribution {
-                FrailtyFamily::Gamma => "gamma",
-                FrailtyFamily::Gaussian => "gaussian",
-                FrailtyFamily::T(_) => "t",
-            }),
+            PenaltyTerm::Frailty(frailty) => Some(frailty.distribution.r_name()),
             _ => None,
         }
     }
@@ -1347,7 +1363,7 @@ mod tests {
             None,
             vec![ModelTerm {
                 columns: vec![0],
-                penalty: Some(PenaltyTerm::ridge(Some(1e-10), None, 0.1, false).unwrap()),
+                penalty: Some(PenaltyTerm::ridge(Some(1e-10), None, 0.1, false, None).unwrap()),
             }],
         )
         .unwrap();
@@ -1389,6 +1405,7 @@ mod tests {
                             None,
                             None,
                             false,
+                            None,
                             None,
                         )
                         .unwrap(),
@@ -1463,7 +1480,7 @@ mod tests {
                 None,
                 vec![ModelTerm {
                     columns: vec![0],
-                    penalty: Some(PenaltyTerm::ridge(Some(1e-12), None, 0.1, false).unwrap()),
+                    penalty: Some(PenaltyTerm::ridge(Some(1e-12), None, 0.1, false, None).unwrap()),
                 }],
             )
             .unwrap();
@@ -1499,6 +1516,7 @@ mod tests {
                         None,
                         false,
                         None,
+                        None,
                     )
                     .unwrap(),
                 ),
@@ -1520,9 +1538,32 @@ mod tests {
     }
 
     #[test]
+    fn the_frailty_df_search_starts_from_the_model_frame_length() {
+        // frailty(x, df = 4) starts from theta = 3 * df / length(x), x being
+        // the model-frame column before subset and na.action.
+        let frailty = |n| {
+            PenaltyTerm::frailty(
+                FrailtyFamily::Gamma,
+                true,
+                None,
+                Some(4.0),
+                None,
+                None,
+                false,
+                None,
+                n,
+            )
+            .unwrap()
+        };
+        let guess = |term: &PenaltyTerm| control_of(term, 5, 200, 1e-4).unwrap().initial().theta;
+        assert_eq!(guess(&frailty(Some(228))), 3.0 * 4.0 / 228.0);
+        assert_eq!(guess(&frailty(None)), 3.0 * 4.0 / 200.0);
+    }
+
+    #[test]
     fn invalid_terms_are_rejected() {
         let (time, status, x) = kidney_like();
-        let ridge = PenaltyTerm::ridge(Some(1.0), None, 0.1, true).unwrap();
+        let ridge = PenaltyTerm::ridge(Some(1.0), None, 0.1, true, None).unwrap();
         let frailty = |sparse: bool| {
             PenaltyTerm::frailty(
                 FrailtyFamily::Gamma,
@@ -1532,6 +1573,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
                 None,
             )
             .unwrap()
