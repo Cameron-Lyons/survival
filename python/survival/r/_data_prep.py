@@ -13,7 +13,7 @@ import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, TypeVar
 
 from .. import _survival as _core
 from ._coerce import (
@@ -194,8 +194,11 @@ def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> list[An
 # ---------------------------------------------------------------------------
 
 
-def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:
-    """R's ``aeqSurv``: snap near-tied times of a ``Surv`` object."""
+_SurvT = TypeVar("_SurvT", Surv, Surv2)
+
+
+def aeqSurv(x: _SurvT, tolerance: Any | None = None) -> _SurvT:
+    """R's ``aeqSurv``: snap near-tied times of a ``Surv`` or ``Surv2`` object."""
 
     if tolerance is not None:
         try:
@@ -208,6 +211,8 @@ def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:
             return x
     else:
         tolerance_value = None
+    if isinstance(x, Surv2):
+        return x.replace_times(time=_core.aeq_surv(list(x.time), None, tolerance_value).time)
     if not isinstance(x, Surv):
         raise TypeError("argument is not a Surv object")
     if x.start is not None:

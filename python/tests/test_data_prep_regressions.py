@@ -9,6 +9,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 r = survival.r_api
+r_coerce = importlib.import_module("survival.r._coerce")
 r_data_prep = importlib.import_module("survival.r._data_prep")
 
 
@@ -128,3 +129,24 @@ def test_survsplit_puts_a_missing_row_in_the_second_episode():
     assert frame["tstart"] == [0.0, 3.0, 0.0, 0.0, 3.0]
     assert frame["ep"] == [1, 2, 2, 1, 2]
     assert frame["status"] == [0, 1, 1, 0, 0]
+
+
+# --- aeqSurv ------------------------------------------------------------------
+
+
+def test_aeqsurv_snaps_a_surv2_time_column():
+    # aeqSurv(Surv2(c(1, 1 + 1e-12, 3), c(0, 1, 1))): times 1 1 3, status kept
+    fixed = r.aeqSurv(r.Surv2([1, 1 + 1e-12, 3], [0, 1, 1]))
+    assert isinstance(fixed, r.Surv2)
+    assert fixed.time == (1.0, 1.0, 3.0)
+    assert fixed.status == (0, 1, 1)
+    assert fixed.repeated is False
+    states = r_coerce._RFactorVector(["a", "b", "a"], ["a", "b"])
+    multi = r.Surv2([1, 1 + 1e-12, 3], states, repeated=True)
+    fixed = r.aeqSurv(multi)
+    assert fixed.time == (1.0, 1.0, 3.0)
+    assert (fixed.status, fixed.states, fixed.repeated) == (
+        multi.status,
+        multi.states,
+        multi.repeated,
+    )
