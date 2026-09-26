@@ -7,11 +7,13 @@
 //! `deviance`, `density` and `quantile` functions), an optional response
 //! [`SurvregTransform`] (`trans`/`dtrans`/`itrans`), an optional fixed
 //! `scale` and the distribution `parms`.  Distribution names are parsed once,
-//! in [`SurvregDistribution::from_name`]; everything downstream works with the
-//! struct.
+//! by [`SurvregDistribution::from_name`] (`survreg`'s `match.arg`) or by the
+//! case-folded exact lookup of the `d/p/q/rsurvreg` functions; everything
+//! downstream works with the struct.
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{dnorm, erf, pnorm, qnorm};
+use crate::internal::match_arg::match_arg;
 use crate::internal::rng::Rng;
 use crate::internal::statistical::{erfc, student_t_cdf, student_t_inverse_cdf, student_t_pdf};
 use crate::internal::validation::{validate_equal_len, validate_finite, validate_positive};
@@ -202,51 +204,34 @@ fn invalid(message: impl Into<String>) -> SurvivalError {
     SurvivalError::invalid_input(message)
 }
 
-/// `match.arg(dist, names(survreg.distributions))`: an exact match wins,
-/// otherwise a unique prefix.  Names are case-folded (as `dsurvreg` does)
-/// and `extreme_value`/`extreme-value` are accepted for `extreme` because
-/// that is how [`SurvregFamily::ExtremeValue`] is spelled.
-fn resolve_builtin(name: &str) -> SurvivalResult<usize> {
-    let key = name.trim().to_lowercase();
-    let key = match key.as_str() {
-        "extreme_value" | "extreme-value" | "extreme value" => "extreme".to_string(),
-        _ => key,
-    };
-    if key.is_empty() {
-        return Err(invalid("distribution name must not be empty"));
-    }
-    if let Some(index) = BUILTIN_DISTRIBUTIONS
-        .iter()
-        .position(|(builtin, ..)| *builtin == key)
-    {
-        return Ok(index);
-    }
-    let matches: Vec<usize> = BUILTIN_DISTRIBUTIONS
-        .iter()
-        .enumerate()
-        .filter(|(_, (builtin, ..))| builtin.starts_with(key.as_str()))
-        .map(|(index, _)| index)
-        .collect();
-    match matches.as_slice() {
-        [index] => Ok(*index),
-        _ => Err(invalid(format!(
-            "'{name}' should be one of {}",
-            BUILTIN_DISTRIBUTIONS
-                .iter()
-                .map(|(builtin, ..)| format!("\"{builtin}\""))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))),
-    }
-}
-
 impl SurvregDistribution {
-    /// `survreg.distributions[[dist]]` for a character `dist`, with the
-    /// `parms` handling of `survreg()`: parameters are only accepted by
-    /// families that define them, and unspecified parameters take their
-    /// default (`df = 4` for `t`).
+    /// `survreg`'s lookup of a character `dist`,
+    /// `survreg.distributions[[match.arg(dist, names(survreg.distributions))]]`:
+    /// case sensitive, with unique prefixes such as `"exp"` accepted (see
+    /// [`match_arg`]).  `parms` are only accepted by families that define
+    /// them, and unspecified parameters take their default (`df = 4` for
+    /// `t`).
     pub fn from_name(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
-        let (_, display, family, transform, scale) = BUILTIN_DISTRIBUTIONS[resolve_builtin(name)?];
+        let index = match_arg(name, &BUILTIN_DISTRIBUTIONS.map(|(builtin, ..)| builtin))?;
+        Self::builtin(index, parms)
+    }
+
+    /// The lookup of `dsurvreg`/`psurvreg`/`qsurvreg`/`rsurvreg`,
+    /// `survreg.distributions[[casefold(distribution)]]`: an exact name after
+    /// case folding (`"Weibull"` is found, the prefix `"weib"` is not).
+    fn lookup(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
+        let key = name.to_lowercase();
+        let index = BUILTIN_DISTRIBUTIONS
+            .iter()
+            .position(|(builtin, ..)| *builtin == key)
+            .ok_or_else(|| invalid("Distribution not found"))?;
+        Self::builtin(index, parms)
+    }
+
+    /// Entry `index` of `survreg.distributions` with the `parms` handling of
+    /// [`Self::from_name`].
+    fn builtin(index: usize, parms: Option<&[f64]>) -> SurvivalResult<Self> {
+        let (_, display, family, transform, scale) = BUILTIN_DISTRIBUTIONS[index];
         let parms = match (family, parms) {
             (SurvregFamily::T, Some(values)) => {
                 if values.len() != 1 {
@@ -703,7 +688,7 @@ pub fn dsurvreg(
     distribution: &str,
     parms: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::from_name(distribution, parms.as_deref())?;
+    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
     Ok(distribution_values(
         &x,
         &mean,
@@ -723,7 +708,7 @@ pub fn psurvreg(
     distribution: &str,
     parms: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::from_name(distribution, parms.as_deref())?;
+    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
     Ok(distribution_values(
         &q,
         &mean,
@@ -743,7 +728,7 @@ pub fn qsurvreg(
     distribution: &str,
     parms: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::from_name(distribution, parms.as_deref())?;
+    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
     Ok(distribution_values(
         &p,
         &mean,
@@ -766,7 +751,7 @@ pub fn rsurvreg(
     parms: Option<Vec<f64>>,
     seed: Option<u64>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::from_name(distribution, parms.as_deref())?;
+    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
     let mut rng = seed.map_or_else(Rng::new, Rng::with_seed);
     let uniform: Vec<f64> = (0..n).map(|_| rng.f64()).collect();
     Ok(distribution_values(
@@ -790,32 +775,50 @@ mod tests {
     }
 
     #[test]
-    fn names_resolve_like_match_arg() {
+    fn survreg_names_resolve_like_match_arg() {
         assert_eq!(
             SurvregDistribution::from_name("weibull", None)
                 .unwrap()
                 .name,
             "Weibull"
         );
+        // survreg(dist = "exp") and "logn": unique prefixes.
         assert_eq!(
             SurvregDistribution::from_name("exp", None).unwrap().name,
             "Exponential"
         );
         assert_eq!(
-            SurvregDistribution::from_name("LogNormal", None)
-                .unwrap()
-                .family,
+            SurvregDistribution::from_name("logn", None).unwrap().family,
             SurvregFamily::Gaussian
         );
-        assert_eq!(
-            SurvregDistribution::from_name("extreme_value", None)
-                .unwrap()
-                .transform,
-            SurvregTransform::Identity
-        );
-        assert!(SurvregDistribution::from_name("log", None).is_err());
-        assert!(SurvregDistribution::from_name("mystery", None).is_err());
-        assert!(SurvregDistribution::from_name("", None).is_err());
+        // match.arg is case sensitive and "log" is ambiguous.
+        for name in ["log", "Weibull", "extreme_value", "mystery", ""] {
+            let err = SurvregDistribution::from_name(name, None).unwrap_err();
+            assert!(
+                err.to_string()
+                    .starts_with("'arg' should be one of \"extreme\""),
+                "{name}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn dpqr_names_are_case_folded_exact_matches() {
+        // dsurvreg(c(0.5, 2), 0.2, 1.5, "Weibull"); psurvreg(c(0.5, 2), 0, 1,
+        // "T", parms = 5); dsurvreg(1, 0, 1, "weib") is "Distribution not found".
+        let d = dsurvreg(vec![0.5, 2.0], vec![0.2], vec![1.5], "Weibull", None).unwrap();
+        assert_close(d[0], 0.423_554_101_409_290_8, 1e-15);
+        assert_close(d[1], 0.115_429_127_863_144_91, 1e-15);
+        let p = psurvreg(vec![0.5, 2.0], vec![0.0], vec![1.0], "T", Some(vec![5.0])).unwrap();
+        assert_close(p[0], 0.680_850_564_179_535_5, 1e-15);
+        assert_close(p[1], 0.949_030_260_585_070_9, 1e-15);
+        for name in ["weib", "exp", "extreme_value", ""] {
+            let err = dsurvreg(vec![1.0], vec![0.0], vec![1.0], name, None).unwrap_err();
+            assert!(
+                err.to_string().contains("Distribution not found"),
+                "{name}: {err}"
+            );
+        }
     }
 
     #[test]

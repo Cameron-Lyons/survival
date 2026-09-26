@@ -717,5 +717,5 @@ def test_survreg_distribution_functions_match_r():
         r.rsurvreg(-1, mean=0.5)
     with pytest.raises(ValueError, match="length"):
         r.dsurvreg([1.0, 2.0, 3.0], mean=[0.0, 1.0])
-    with pytest.raises(ValueError, match="nope"):
+    with pytest.raises(ValueError, match="Distribution not found"):
         r.dsurvreg([1.0], mean=0.0, distribution="nope")

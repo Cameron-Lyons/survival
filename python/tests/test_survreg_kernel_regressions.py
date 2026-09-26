@@ -21,6 +21,26 @@ def t_fit(lung):
     return r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t")
 
 
+def test_dpqr_distribution_names_are_case_folded_but_not_partially_matched():
+    # R's dsurvreg(c(0.5, 2), 0.2, 1.5, "Weibull"), psurvreg(c(0.5, 2), 0.2, 1.5, "LogNormal")
+    # and qsurvreg(c(0.25, 0.9), 1, 0.5, "LOGLOGISTIC")
+    assert r.dsurvreg([0.5, 2], 0.2, 1.5, "Weibull") == pytest.approx(
+        [0.42355410140929078, 0.11542912786314491], rel=1e-14
+    )
+    assert r.psurvreg([0.5, 2], 0.2, 1.5, "LogNormal") == pytest.approx(
+        [0.27577755285638794, 0.62883325964355896], rel=1e-14
+    )
+    assert r.qsurvreg([0.25, 0.9], 1, 0.5, "LOGLOGISTIC") == pytest.approx(
+        [1.5694007453940979, 8.1548454853771375], rel=1e-14
+    )
+    # dsurvreg(1, 0, 1, "weib"): survreg.distributions[["weib"]] is NULL
+    for helper in (r.dsurvreg, r.psurvreg, r.qsurvreg):
+        with pytest.raises(ValueError, match="Distribution not found"):
+            helper([0.5], 0, 1, "weib")
+    with pytest.raises(ValueError, match="Distribution not found"):
+        r.rsurvreg(2, 0, 1, "exp", seed=1)
+
+
 def test_predict_and_residual_types_follow_match_arg(t_fit):
     fit = t_fit.fit
     # predict(fit, type = "line") is "linear"; "l" and "lin" also prefix "link" and "lp",
@@ -45,3 +65,12 @@ def test_predict_and_residual_types_follow_match_arg(t_fit):
     )
     with pytest.raises(ValueError, match='\'arg\' should be one of "response", "deviance"'):
         fit.residuals(residual_type="Matrix")
+
+
+def test_survreg_distribution_names_follow_match_arg():
+    assert core.SurvregDistribution("exp").name == "Exponential"
+    assert core.SurvregDistribution("logn").name == "Log Normal"
+    # survreg(..., dist = "Weibull") and dist = "log" (ambiguous) stop() in R
+    for bad in ("Weibull", "log", "extreme_value"):
+        with pytest.raises(ValueError, match="'arg' should be one of \"extreme\""):
+            core.SurvregDistribution(bad)

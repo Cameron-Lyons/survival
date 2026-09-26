@@ -566,7 +566,7 @@ def test_survreg_distribution_helpers_match_r():
     assert exponential.name == "Exponential"
     assert exponential.scale == pytest.approx(1.0)
 
-    with pytest.raises(ValueError, match="'normal' should be one of"):
+    with pytest.raises(ValueError, match="'arg' should be one of \"extreme\""):
         regression.SurvregDistribution("normal")
 
     # dsurvreg / psurvreg / qsurvreg with R's recycling of mean and scale
