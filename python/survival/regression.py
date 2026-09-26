@@ -6,13 +6,7 @@ from ._binding_utils import bind_names
 __all__ = bind_names(
     globals(),
     [
-        "AaregOptions",
-        "AaregConfidenceInterval",
-        "AaregDiagnostics",
-        "AaregFitDetails",
         "AaregFitResult",
-        "AaregResult",
-        "aareg",
         "aareg_fit",
         "LinkFunctionParams",
         "CchFitResult",
@@ -52,7 +46,6 @@ __all__ = bind_names(
         "SurvregPredictType",
         "SurvregResidType",
         "SurvregFit",
-        "survreg",
         "survreg_fit",
         "survreg_dtest",
         "dsurvreg",

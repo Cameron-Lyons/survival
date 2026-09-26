@@ -524,7 +524,6 @@ def test_root_exports_resolve_to_their_home_modules():
         assert getattr(survival, name) is getattr(sklearn_compat, name), name
     for name in lists["_PUBLIC_MODULES"]:
         assert getattr(survival, name) is sys.modules[f"survival.{name}"], name
-    assert survival.survreg is not survival.regression.survreg
     assert survival.neardate is not survival.data_prep.neardate
     assert survival.is_surv(survival.Surv([1.0])) is True
     assert survival.is_surv([1.0]) is False

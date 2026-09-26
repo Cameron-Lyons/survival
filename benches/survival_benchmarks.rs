@@ -3,7 +3,8 @@ use survival::concordance::{ConcordanceOptions, concordancefit};
 use survival::core::SurvResponse;
 use survival::data_types::SurvivalData;
 use survival::regression::{
-    CoxPHFit, aareg_fit, agexact_py, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg,
+    CoxPHFit, SurvregControl, SurvregData, SurvregDistribution, aareg_fit, agexact_py,
+    cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg_fit,
 };
 use survival::surv_analysis::{
     self, ResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
@@ -1110,67 +1111,48 @@ mod case_cohort_bench {
 mod survreg_bench {
     use super::*;
 
-    fn status_as_survreg(status: &[i32]) -> Vec<f64> {
-        status.iter().map(|&value| f64::from(value)).collect()
+    fn bench_fit(bencher: divan::Bencher, data: &SurvregData, distribution: &str) {
+        let distribution = SurvregDistribution::from_name(distribution, None)
+            .expect("benchmark distribution is built in");
+        let control = SurvregControl {
+            iter_max: 30,
+            rel_tolerance: 1e-7,
+            toler_chol: 1e-9,
+        };
+        bencher.bench_local(|| {
+            let fit = survreg_fit(black_box(data), &distribution, None, 0.0, &control, false)
+                .expect("benchmark survreg fit should converge");
+            black_box(fit);
+        });
     }
 
     #[divan::bench(args = [100, 1000, 5000])]
     fn survreg_weibull(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates) = generate_tied_regression_data(n, 3);
-        let status = status_as_survreg(&status);
-
-        bencher.bench_local(|| {
-            let fit = survreg(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                None,
-                None,
-                None,
-                None,
-                Some("weibull"),
-                Some(30),
-                Some(1e-7),
-                Some(1e-9),
-                None,
-                None,
-                None,
-            )
-            .expect("benchmark Weibull survreg fit should converge");
-            black_box(fit);
-        });
+        let data = SurvregData::try_new(time, status, covariates, None, None, None, None, None)
+            .expect("benchmark survreg data is valid");
+        bench_fit(bencher, &data, "weibull");
     }
 
     #[divan::bench(args = [100, 1000, 5000])]
     fn weighted_stratified_survreg_lognormal(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates) = generate_tied_regression_data(n, 3);
-        let status = status_as_survreg(&status);
-        let weights = generate_case_weights(n);
-        let strata: Vec<usize> = generate_strata(n, 3)
+        let strata = generate_strata(n, 3)
             .into_iter()
             .map(|value| value as usize)
             .collect();
-
-        bencher.bench_local(|| {
-            let fit = survreg(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                Some(weights.clone()),
-                None,
-                None,
-                Some(strata.clone()),
-                Some("lognormal"),
-                Some(30),
-                Some(1e-7),
-                Some(1e-9),
-                None,
-                None,
-                None,
-            )
-            .expect("benchmark weighted stratified lognormal survreg fit should converge");
-            black_box(fit);
-        });
+        let data = SurvregData::try_new(
+            time,
+            status,
+            covariates,
+            None,
+            Some(generate_case_weights(n)),
+            None,
+            Some(strata),
+            None,
+        )
+        .expect("benchmark survreg data is valid");
+        bench_fit(bencher, &data, "lognormal");
     }
 }
 

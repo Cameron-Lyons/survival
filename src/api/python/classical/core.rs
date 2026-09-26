@@ -34,7 +34,6 @@ fn pspline_basis_py(
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(aareg, m)?)?;
     m.add_function(wrap_pyfunction!(aareg_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;
@@ -44,24 +43,15 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cch_borgan_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount1_py, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount2_py, m)?)?;
-    m.add_function(wrap_pyfunction!(norisk_py, m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_py, m)?)?;
     m.add_function(wrap_pyfunction!(pspline_basis_py, m)?)?;
     m.add_function(wrap_pyfunction!(agexact_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_py, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_detail_py, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_baseline_survival_steps, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_tied_baseline_summaries, m)?)?;
-    m.add_function(wrap_pyfunction!(cox_expected_baseline_by_stratum, m)?)?;
 
     register_classes!(
         m,
-        AaregConfidenceInterval,
-        AaregDiagnostics,
-        AaregFitDetails,
         AaregFitResult,
-        AaregOptions,
-        AaregResult,
         PsplineBasis,
         CoxCountOutput,
         CoxPHFit,

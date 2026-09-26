@@ -395,7 +395,7 @@ pub(crate) fn bootstrap_survreg(
     distribution: &str,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::parametric_survival::survreg;
+    use crate::regression::parametric_survival::survreg_from_codes;
     let n = time.len();
     let nvar = covariates.nrows();
     let cov_vecs: Vec<Vec<f64>> = (0..n)
@@ -405,7 +405,7 @@ pub(crate) fn bootstrap_survreg(
         std::io::Error::new(std::io::ErrorKind::InvalidInput, SURVREG_DISTRIBUTION_ERROR)
     })?;
 
-    let original = survreg(
+    let original = survreg_from_codes(
         time.to_vec(),
         status.to_vec(),
         cov_vecs.clone(),
@@ -430,7 +430,7 @@ pub(crate) fn bootstrap_survreg(
             let boot_status: Vec<f64> = indices.iter().map(|&i| status[i]).collect();
             let boot_covariates: Vec<Vec<f64>> =
                 indices.iter().map(|&i| cov_vecs[i].clone()).collect();
-            match survreg(
+            match survreg_from_codes(
                 boot_time,
                 boot_status,
                 boot_covariates,

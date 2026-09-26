@@ -15,7 +15,7 @@
 
 use crate::constants::GAUSSIAN_ELIMINATION_TOL;
 use crate::error::{SurvivalError, SurvivalResult};
-use ndarray::{Array1, Array2};
+use ndarray::Array2;
 use std::borrow::Cow;
 
 pub(crate) fn standardize_row_major_matrix(
@@ -455,18 +455,6 @@ impl LuDecomposition {
     }
 }
 
-/// Solves `A x = b` by partial-pivot LU. `None` when `A` is not square,
-/// contains non-finite values, is singular, or `b` has the wrong length —
-/// callers map that to their own error; use [`LuDecomposition`] directly for
-/// the structured [`SurvivalError`].
-pub(crate) fn lu_solve(matrix: &Array2<f64>, vector: &Array1<f64>) -> Option<Array1<f64>> {
-    let factorization = LuDecomposition::decompose(matrix).ok()?;
-    factorization
-        .solve(vector.as_slice()?)
-        .ok()
-        .map(Array1::from_vec)
-}
-
 /// Dense inverse by partial-pivot LU; `Err(SurvivalError::Singular)` names the
 /// first column at which elimination broke down.
 pub(crate) fn lu_inverse(matrix: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
@@ -829,35 +817,6 @@ mod tests {
             lu.solve(&[1.0, f64::NAN]),
             Err(SurvivalError::InvalidInput(_))
         ));
-    }
-
-    #[test]
-    fn test_lu_solve() {
-        let matrix = arr2(&[[2.0, 1.0], [1.0, 3.0]]);
-        let vector = Array1::from_vec(vec![3.0, 4.0]);
-        let result = lu_solve(&matrix, &vector).unwrap();
-        assert_close(2.0 * result[0] + result[1], 3.0, 1e-10);
-        assert_close(result[0] + 3.0 * result[1], 4.0, 1e-10);
-    }
-
-    #[test]
-    fn test_lu_solve_uses_partial_pivoting() {
-        let matrix = arr2(&[[0.0, 2.0], [1.0, 3.0]]);
-        let vector = Array1::from_vec(vec![4.0, 5.0]);
-        let result = lu_solve(&matrix, &vector).unwrap();
-        assert_close(result[0], -1.0, 1e-12);
-        assert_close(result[1], 2.0, 1e-12);
-    }
-
-    #[test]
-    fn test_lu_solve_rejects_singular_and_malformed_systems() {
-        let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
-        let rhs = Array1::from_vec(vec![1.0, 2.0]);
-        assert!(lu_solve(&singular, &rhs).is_none());
-
-        let nonsquare = Array2::from_shape_vec((2, 3), vec![1.0; 6]).unwrap();
-        assert!(lu_solve(&nonsquare, &rhs).is_none());
-        assert!(lu_solve(&arr2(&[[1.0, 0.0], [0.0, 1.0]]), &Array1::zeros(1)).is_none());
     }
 
     #[test]

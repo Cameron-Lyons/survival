@@ -998,19 +998,17 @@ pub fn survreg_fit(
 }
 
 /// `survreg(Surv(time, time2, status) ~ x, weights, offset, strata, dist,
-/// init, scale, parms, control)` on prepared inputs.
+/// init, scale, parms, control)` on prepared inputs, for the resampling
+/// routines of `crate::validation` that hold `Surv` status codes as floats.
 ///
 /// `covariates` is the full design matrix (include a column of ones for the
 /// intercept).  `distribution` is an R distribution name (`weibull`,
 /// `exponential`, `rayleigh`, `extreme`, `gaussian`, `logistic`,
 /// `lognormal`/`loggaussian`, `loglogistic`, `t`), `distribution_parameter`
 /// the degrees of freedom of the `t` family, `fixed_scale` R's `scale`
-/// argument (`None` estimates it).  A user-defined [`SurvregDistribution`]
-/// goes through [`survreg_fit`] instead.
-#[pyfunction]
-#[pyo3(signature = (time, status, covariates, weights=None, offsets=None, initial_beta=None, strata=None, distribution=None, max_iter=None, eps=None, tol_chol=None, time2=None, fixed_scale=None, distribution_parameter=None))]
+/// argument (`None` estimates it).
 #[allow(clippy::too_many_arguments)]
-pub fn survreg(
+pub(crate) fn survreg_from_codes(
     time: Vec<f64>,
     status: Vec<f64>,
     covariates: Vec<Vec<f64>>,
@@ -1025,7 +1023,7 @@ pub fn survreg(
     time2: Option<Vec<f64>>,
     fixed_scale: Option<f64>,
     distribution_parameter: Option<f64>,
-) -> PyResult<SurvregFit> {
+) -> SurvivalResult<SurvregFit> {
     let parms: Option<Vec<f64>> = distribution_parameter.map(|df| vec![df]);
     let distribution =
         SurvregDistribution::from_name(distribution.unwrap_or("weibull"), parms.as_deref())?;
@@ -1051,14 +1049,14 @@ pub fn survreg(
         rel_tolerance: eps.unwrap_or(defaults.rel_tolerance),
         toler_chol: tol_chol.unwrap_or(defaults.toler_chol),
     };
-    Ok(survreg_fit(
+    survreg_fit(
         &data,
         &distribution,
         initial_beta.as_deref(),
         fixed_scale.unwrap_or(0.0),
         &control,
         false,
-    )?)
+    )
 }
 
 /// `survreg.fit` with typed inputs: [`survreg_fit`] for Python, accepting a
@@ -1542,9 +1540,9 @@ mod tests {
     }
 
     #[test]
-    fn python_entry_point_parses_names_and_codes() {
+    fn status_codes_and_distribution_names_are_parsed() {
         let data = ovarian();
-        let fit = survreg(
+        let fit = survreg_from_codes(
             data.time.clone(),
             data.status.iter().map(|&s| f64::from(s)).collect(),
             data.covariates.clone(),
@@ -1563,7 +1561,7 @@ mod tests {
         .unwrap();
         assert_eq!(fit.distribution.parms, vec![6.0]);
         assert!(
-            survreg(
+            survreg_from_codes(
                 data.time.clone(),
                 vec![0.5; data.n()],
                 data.covariates.clone(),

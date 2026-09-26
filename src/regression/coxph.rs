@@ -1211,7 +1211,7 @@ impl CoxPHFit {
         let variance_at =
             |curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64, row: usize| {
                 let chaz = cumhaz_at(curve, t);
-                let varh = step_at(&curve.time, &integrated.cum_varhaz, t);
+                let varh = step_at(&curve.time, &integrated.cum_varhaz, t, 0.0);
                 let xbar = cum_xbar_at(curve, integrated, t);
                 let dt: Vec<f64> = (0..self.nvar())
                     .map(|k| chaz * (x[(row, k)] - means.map_or(0.0, |m| m[k])) - xbar[k])

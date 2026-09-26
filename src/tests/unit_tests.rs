@@ -1,17 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::data_prep::{SurvSplitResponse, survsplit};
-    use crate::surv_analysis::{SurvdiffData, agsurv4, survdiff};
-
-    #[test]
-    fn test_agsurv4_public_alias() {
-        let result = agsurv4(vec![0, 1], vec![2.0], vec![0.5], 2, vec![1.0, 4.0]).unwrap();
-        assert_eq!(
-            result.len(),
-            2,
-            "Backward-compatible agsurv4 alias should remain callable"
-        );
-    }
+    use crate::surv_analysis::{SurvdiffData, survdiff};
 
     fn survdiff_right(
         time: Vec<f64>,

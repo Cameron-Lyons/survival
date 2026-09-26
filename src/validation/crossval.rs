@@ -344,7 +344,7 @@ pub(crate) fn cv_survreg(
     distribution: &str,
     config: &CVConfig,
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::parametric_survival::survreg;
+    use crate::regression::parametric_survival::survreg_from_codes;
     let n = time.len();
     let nvar = covariates.nrows();
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
@@ -361,7 +361,7 @@ pub(crate) fn cv_survreg(
             let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
             let train_status: Vec<f64> = train_indices.iter().map(|&i| status[i]).collect();
             let train_covariates = covariate_rows_for_indices(covariates, nvar, &train_indices);
-            let fit_result = survreg(
+            let fit_result = survreg_from_codes(
                 train_time,
                 train_status,
                 train_covariates,
@@ -381,7 +381,7 @@ pub(crate) fn cv_survreg(
             let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
             let test_status: Vec<f64> = test_indices.iter().map(|&i| status[i]).collect();
             let test_covariates = covariate_rows_for_indices(covariates, nvar, test_indices);
-            let test_fit = survreg(
+            let test_fit = survreg_from_codes(
                 test_time,
                 test_status,
                 test_covariates,
