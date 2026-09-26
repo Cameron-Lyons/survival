@@ -1,11 +1,14 @@
 """The multi-state Cox model: R's ``coxph`` for a ``Surv(time, state)`` or
 ``Surv(start, stop, state)`` response (R/coxph.R, parsecovar.R, multimiss.R,
-stacker.R, print.coxph.R's ``coef.coxphms`` and xtras.R's ``vcov.coxphms``).
+stacker.R, print.coxph.R's ``coef.coxphms``, xtras.R's ``vcov.coxphms``,
+predict.coxphms.R and residuals.coxphms.R).
 
 :func:`coxph` hands a multi-state model frame to :func:`fit_multistate`, which does
 what coxph.R's multi-state sections do: the missing values of a formula list,
 ``survcheck2``, the transition maps (``parsecovar1``-``parsecovar3``), then the Rust
-``coxphms_fit`` stacks the data, fits it and computes ``share``.
+``coxphms_fit`` stacks the data, fits it and computes ``share``.  The methods work
+on the Cox fit of the stacked data and put its rows back on the data rows through
+``rmap``.
 """
 
 from __future__ import annotations
@@ -20,10 +23,14 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
+    _as_character,
+    _categories,
     _float_vector,
     _is_missing_value,
+    _match_string_arg,
     _materialize_labels,
     _normalize_na_action,
+    _normalize_optional_bool_option,
     _r_factor_levels,
     _rows_of,
 )
@@ -33,9 +40,11 @@ from ._coxph import (
     _cluster_codes,
     _concordance_summary,
     _cox_fit_diagnostic_messages,
+    _prediction_newdata,
+    _row_names,
 )
 from ._data_prep import aeqSurv
-from ._fit import _ModelFrame, _tt_terms
+from ._fit import _excluded_rows, _ModelFrame, _pad_rows, _tt_terms
 from ._formula import (
     _covariate_factors,
     _formula_model_term_degree,
@@ -104,6 +113,8 @@ class _MsData:
     # the user strata (strata(mf[stangle$vars], shortlabel = TRUE)); -1 missing
     strata: np.ndarray | None
     strata_levels: tuple[str, ...]
+    # rownames(mf) of every row before the na.action (after subset)
+    row_labels: tuple[str, ...]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -145,15 +156,11 @@ class CoxphmsModel(CoxphModel):
         return [None if code < 0 else self.ms.strata_levels[code] for code in codes]
 
 
-def _not_yet(name: str) -> NotImplementedError:
-    return NotImplementedError(f"{name} is not implemented for multi-state coxph fits yet")
-
-
 def _refuse_multistate(fit: Any, name: str) -> None:
     """The methods not yet ported for a multi-state fit refuse it."""
 
     if isinstance(fit, CoxphmsModel):
-        raise _not_yet(name)
+        raise NotImplementedError(f"{name} is not implemented for multi-state coxph fits yet")
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +759,7 @@ def _means(x: np.ndarray, nocenter: Sequence[float]) -> tuple[float, ...]:
 def fit_multistate(
     frame: _ModelFrame,
     *,
+    row_labels: Sequence[str],
     formulas: _FormulaList | None,
     na_action: str | None,
     method: str,
@@ -946,6 +954,7 @@ def fit_multistate(
         phbaseline=tuple(int(p) for p in tmap.phbaseline),
         strata=user_strata,
         strata_levels=tuple(frame.strata_levels),
+        row_labels=tuple(row_labels),
     )
     strata_labels = [f"strata({', '.join(columns)})" for columns in strata_columns.values()]
     return CoxphmsModel(
@@ -1021,3 +1030,280 @@ def vcov_coxphms(fit: CoxphmsModel, *, complete: bool = True, matrix: bool = Fal
         block[np.ix_(rows, rows)] = var[np.ix_(index[rows] - 1, index[rows] - 1)]
         blocks[label] = NamedMatrix(rownames, rownames, block.tolist())
     return blocks
+
+
+# ---------------------------------------------------------------------------
+# predict.coxphms
+# ---------------------------------------------------------------------------
+
+_PREDICT_INCOMPLETE = "predict.coxphms not complete for type expected, survival and terms"
+
+
+def _fitted_row_labels(fit: CoxphmsModel, *, padded: bool = False) -> list[str]:
+    """``rownames(model.frame(fit))``: the data's row names of the rows the fit kept,
+    or with ``padded`` of every row (``naresid.exclude`` puts the others back)."""
+
+    labels = fit.ms.row_labels
+    if padded or fit.na_action is None:
+        return list(labels)
+    gone = {row - 1 for row in fit.na_action.rows}
+    return [label for row, label in enumerate(labels) if row not in gone]
+
+
+def predict_coxphms(
+    fit: CoxphmsModel,
+    newdata: Any | None = None,
+    *,
+    type: str = "lp",
+    se_fit: Any = False,
+    na_action: Any | None = None,
+    terms: Any | None = None,
+    collapse: Any | None = None,
+    reference: str | None = None,
+) -> NamedMatrix:
+    """R's ``predict.coxphms``: the linear predictor (``lp``) or risk score of every
+    row for every transition, one column per transition.
+
+    The rows are those of the unstacked design (``model.matrix(fit)``, NaN where a
+    formula list left a covariate missing) or of ``newdata`` (its complete rows, R's
+    ``na.omit``).  Types expected, survival and terms, and the strata reference, are
+    not available in R; ``se_fit``, ``na_action``, ``terms`` and ``collapse`` are
+    accepted and ignored, as R does.  Unlike R, the ``ph()`` rows of
+    ``coef(fit, matrix=True)``, which scale baseline hazards, are left out of the
+    linear predictor rather than failing as non-conformable.
+    """
+
+    predict_type = _match_string_arg(
+        type,
+        "type",
+        ("lp", "risk", "expected", "terms", "survival"),
+        "type must be one of lp, risk, expected, terms, survival",
+    )
+    if reference is None:
+        reference_name = (
+            "sample" if predict_type == "terms" or len(fit.smap.values) == 1 else "strata"
+        )
+    else:
+        reference_name = _match_string_arg(
+            reference,
+            "reference",
+            ("strata", "sample", "zero"),
+            "reference must be one of strata, sample, zero",
+        )
+    if predict_type not in {"lp", "risk"}:
+        raise ValueError(_PREDICT_INCOMPLETE)
+    if reference_name == "strata":
+        raise ValueError("strata reference unfinished")
+    if newdata is None:
+        x = fit.ms.x
+        rownames = _fitted_row_labels(fit)
+    else:
+        new = _prediction_newdata(
+            fit, newdata, need_strata=False, need_response=False, na_action="na.omit"
+        )
+        x = np.asarray(new.x, dtype=np.float64).reshape(new.n, len(fit.ms.x_names))
+        missing = set(new.missing)
+        rownames = _row_names(
+            newdata, [row for row in range(new.n + len(missing)) if row not in missing]
+        )
+    if reference_name == "sample":
+        x = x - np.asarray(fit.ms.means)
+    beta = np.asarray(coef_coxphms(fit, matrix=True).values, dtype=np.float64)
+    eta = x @ beta[: len(fit.ms.x_names)]
+    values = eta if predict_type == "lp" else np.exp(eta)
+    return NamedMatrix(rownames, list(fit.cmap.colnames), values.tolist())
+
+
+# ---------------------------------------------------------------------------
+# residuals.coxphms
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CoxphmsSchoenfeldResiduals:
+    """``residuals(fit, type = "schoenfeld" | "scaledsch")`` of a multi-state fit: one
+    row of ``values`` per event of the stacked data, in (stratum, time) order.  ``time``
+    holds the event times (R's row names), ``transition`` the transition of each event,
+    ``strata`` the 1-based stacked stratum of each event when the model has
+    ``strata()`` terms (``attr(, "strata")``, else ``None``) and ``colnames`` the
+    coefficient names."""
+
+    values: list[list[float]] = field(repr=False)
+    time: list[float] = field(repr=False)
+    transition: list[str] = field(repr=False)
+    strata: list[int] | None = field(repr=False)
+    colnames: list[str]
+
+
+def _collapse_groups(
+    fit: CoxphmsModel, collapse: Any, *, by_level: bool
+) -> tuple[np.ndarray, list[str]] | None:
+    """residuals.coxphms's groups: ``TRUE`` means the cluster (else the id), a vector
+    has one value per row of the model frame.  They are numbered in order of first
+    appearance, R's ``factor(cluster, unique(cluster))``, except that with ``by_level``
+    (``rowsum(reorder = TRUE)`` of the score family) the groups of a factor vector
+    follow its level order and the missing values' group goes last.  All missing
+    values form one group labelled ``"NA"``; the other labels are the values."""
+
+    if collapse is None or collapse is False:
+        return None
+    declared = None
+    if collapse is True:
+        values = list(fit.cluster if fit.cluster is not None else fit.id or ())
+    else:
+        values = _materialize_labels(collapse, "collapse")
+        if len(values) != fit.n:
+            raise ValueError("collapse vector not the same length as the model frame")
+        if by_level:
+            declared = _categories(collapse)
+    if declared is None:
+        # every missing value is the one NA group (NaNs never compare equal)
+        missing = [_is_missing_value(value) for value in values]
+        keys = [None if miss else value for value, miss in zip(values, missing, strict=True)]
+        codes = _unique_codes(keys) - 1
+        first = np.unique(codes, return_index=True)[1]
+        labels = [_as_character(values[row]) for row in first.tolist()]
+        if by_level and any(missing):
+            na_code = codes[missing.index(True)]
+            codes = np.where(codes == na_code, len(labels) - 1, codes - (codes > na_code))
+            labels.append(labels.pop(int(na_code)))
+        return codes, labels
+    position = {level: code for code, level in enumerate(declared)}
+    level_codes = np.array([position.get(value, len(declared)) for value in values])
+    present, codes = np.unique(level_codes, return_inverse=True)
+    labels = [*map(_as_character, declared), "NA"]
+    return codes, [labels[code] for code in present.tolist()]
+
+
+def _rowsum_codes(values: np.ndarray, codes: np.ndarray, nrow: int) -> np.ndarray:
+    total = np.zeros((nrow, values.shape[1]))
+    np.add.at(total, codes, values)
+    return total
+
+
+def residuals_coxphms(
+    fit: CoxphmsModel,
+    *,
+    type: str = "martingale",
+    collapse: Any = False,
+    weighted: Any | None = None,
+    na_action: Any | None = None,
+) -> NamedMatrix | CoxphmsSchoenfeldResiduals:
+    """R's ``residuals.coxphms``: martingale residuals with one column per transition,
+    score, dfbeta and dfbetas residuals with one column per coefficient (one row per
+    data row, or per group with ``collapse``), or the Schoenfeld and scaled Schoenfeld
+    residuals of the events as a :class:`CoxphmsSchoenfeldResiduals`.
+
+    The residuals of the stacked fit are put back on the data row each stacked row
+    came from.  ``weighted`` (default for dfbeta and dfbetas) multiplies each stacked
+    row by its own data row's case weight; ``na_action`` ("na.omit" or "na.exclude")
+    changes how a fit's removed rows are padded.  Schoenfeld residuals ignore
+    ``collapse``, as in R.  Unlike R, every data row the stacking leaves out gets
+    zero score residuals, and the columns of the martingale residuals follow the
+    transition of each stacked row, so shared and common baselines keep one column
+    per transition.
+    """
+
+    omit = fit.na_action
+    if omit is not None and na_action is not None:
+        kind = _normalize_na_action(na_action)
+        if kind not in {"omit", "exclude"}:
+            raise ValueError("changing to an unrecognized na.action type")
+        omit = replace(omit, kind=kind)
+    types = ("martingale", "score", "schoenfeld", "dfbeta", "dfbetas", "scaledsch")
+    otype = _match_string_arg(type, "type", types, f"type must be one of {', '.join(types)}")
+    weighted_value = _normalize_optional_bool_option(weighted, "weighted")
+    if weighted_value is None:
+        weighted_value = otype in {"dfbeta", "dfbetas"}
+    engine = fit.fit
+    rindex = fit.rmap[:, 0] - 1
+    colnames = list(fit.coef_names)
+
+    if otype in {"schoenfeld", "scaledsch"}:
+        result = (
+            engine.schoenfeld_residuals(weighted=weighted_value)
+            if otype == "schoenfeld"
+            else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
+        )
+        labels = fit.cmap.colnames
+        return CoxphmsSchoenfeldResiduals(
+            values=[list(row) for row in result.residuals],
+            time=list(result.time),
+            transition=[labels[k] for k in fit.ms.hazard[np.asarray(result.rows)].tolist()],
+            strata=None
+            if result.strata is None or not fit.ms.strata_terms
+            else [int(code) + 1 for code in result.strata],
+            colnames=colnames,
+        )
+
+    groups = _collapse_groups(fit, collapse, by_level=otype != "martingale")
+    if otype == "martingale":
+        hazard = fit.ms.hazard
+        present = np.unique(hazard)
+        values = np.zeros((fit.n, len(present)))
+        values[rindex, np.searchsorted(present, hazard)] = engine.residuals
+        if weighted_value and fit.ms.weights is not None:
+            values *= fit.ms.weights[:, None]
+        colnames = [fit.cmap.colnames[k] for k in present.tolist()]
+        if groups is not None:
+            codes, labels = groups
+            return NamedMatrix(labels, colnames, _rowsum_codes(values, codes, len(labels)).tolist())
+        rows = values.tolist()
+        rownames = None
+    else:
+        method = {
+            "score": engine.score_residuals,
+            "dfbeta": engine.dfbeta,
+            "dfbetas": engine.dfbetas,
+        }[otype]
+        if groups is None:
+            codes, nrow = rindex, fit.n
+        else:
+            codes, nrow = groups[0][rindex], len(groups[1])
+        # the engine sums the stacked rows by code, in increasing code order
+        summed = np.asarray(method(weighted=weighted_value, collapse=codes.tolist()))
+        values = np.zeros((nrow, len(colnames)))
+        values[np.unique(codes)] = summed.reshape(-1, len(colnames))
+        if groups is not None:
+            return NamedMatrix(groups[1], colnames, values.tolist())
+        rows = values.tolist()
+        rownames = _fitted_row_labels(fit)
+    excluded = _excluded_rows(omit)
+    if excluded:
+        rows = _pad_rows(rows, excluded)
+        rownames = None if rownames is None else _fitted_row_labels(fit, padded=True)
+    return NamedMatrix(rownames, colnames, rows)
+
+
+# ---------------------------------------------------------------------------
+# cox.zph / coxph.detail on the stacked data
+# ---------------------------------------------------------------------------
+
+
+def _zph_assign(fit: CoxphmsModel) -> list[tuple[str, list[int]]]:
+    """cox.zph's ``asgn`` with ``terms = TRUE`` for a multi-state fit (attrassign.R's
+    ``expandassign``): the 0-based coefficients of each term, a model term within one
+    transition, named ``<term label>_<transition>``, found in column-major order of
+    ``cmap``; each ``ph()`` coefficient is a term of its own, named by the coefficient
+    (R fails on those)."""
+
+    labels = {col: label for label, cols in fit.assign.items() for col in cols}
+    cmap = np.asarray(fit.cmap.values, dtype=np.int64)
+    nx = len(fit.ms.x_names)
+    groups: dict[str, list[int]] = {}
+    seen: set[int] = set()
+    for k, transition in enumerate(fit.cmap.colnames):
+        for row in range(nx):
+            coef = int(cmap[row, k])
+            if coef > 0 and coef not in seen:
+                seen.add(coef)
+                groups.setdefault(f"{labels[row]}_{transition}", []).append(coef - 1)
+    ph = sorted({int(coef) for coef in cmap[nx:].ravel() if coef > 0})
+    return [*groups.items(), *((fit.coef_names[coef - 1], [coef - 1]) for coef in ph)]
+
+
+def _stacked_strata_labels(codes: Sequence[int]) -> list[str]:
+    """The 0-based stacked strata codes as the 1-based labels ``"1"``, ``"2"``, ...
+    (R's integer stacker strata)."""
+
+    return [str(int(code) + 1) for code in codes]

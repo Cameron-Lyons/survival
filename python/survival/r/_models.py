@@ -43,7 +43,7 @@ from ._coxph import (
     summary_coxph,
 )
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
-from ._coxphms import CoxphmsModel, _not_yet, coef_coxphms, vcov_coxphms
+from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
 from ._finegray import _finegray_frame
 from ._formula import _column as _formula_column
 from ._formula import _formula_columns
@@ -311,11 +311,6 @@ def _model_term_names_aareg(fit: AaregModelResult, terms: Any | None = None) -> 
     return [names[idx] for idx in _terms_selection(terms, names)]
 
 
-@model_term_names.register(CoxphmsModel)
-def _model_term_names_coxphms(fit: CoxphmsModel, terms: Any | None = None) -> list[str]:
-    raise _not_yet("model_term_names")
-
-
 model_term_names.register(SurvregModelResult, model_term_names_survreg)
 
 
@@ -333,11 +328,6 @@ def _model_weights_fit(
     return None if fit.weights is None else list(fit.weights)
 
 
-@model_weights.register(CoxphmsModel)
-def _model_weights_coxphms(fit: CoxphmsModel) -> list[float] | None:
-    raise _not_yet("model_weights")
-
-
 @singledispatch
 def model_matrix(fit: Any, data: Any | None = None) -> dict[str, Any]:
     """``model.matrix(fit)``: the design matrix, its column names and ``assign``."""
@@ -352,9 +342,13 @@ def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any
     the incomplete ones).  ``assign`` numbers each column's term by its position in
     the model's term labels, which count ``strata()`` terms (the columns keep R's
     numbering "wrt the original model matrix") but not ``cluster()``; ``strata`` is
-    ``attr(X, "strata")``, each row's stratum, ``None`` for an unstratified fit."""
+    ``attr(X, "strata")``, each row's stratum, ``None`` for an unstratified fit.
 
-    assign = [0] * len(fit.coef_names)
+    A multi-state fit's design is the unstacked one, a column per covariate (NaN
+    where a formula list left a covariate missing)."""
+
+    names = list(fit.ms.x_names) if isinstance(fit, CoxphmsModel) else list(fit.coef_names)
+    assign = [0] * len(names)
     for term_idx, columns in zip(fit.design.term_assignments, fit.assign.values(), strict=True):
         for col in columns:
             assign[col] = term_idx
@@ -369,12 +363,7 @@ def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any
             if new.strata is None:
                 raise ValueError("data must contain the strata variable(s) of the model")
             strata = [fit.strata_levels[code] for code in new.strata]
-    return {"data": rows, "columns": list(fit.coef_names), "assign": assign, "strata": strata}
-
-
-@model_matrix.register(CoxphmsModel)
-def _model_matrix_coxphms(fit: CoxphmsModel, data: Any | None = None) -> dict[str, Any]:
-    raise _not_yet("model_matrix")
+    return {"data": rows, "columns": names, "assign": assign, "strata": strata}
 
 
 model_matrix.register(SurvregModelResult, model_matrix_survreg)
@@ -517,11 +506,6 @@ def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
     # fitted.coxph(object, ...) is object$linear.predictors: centred at the overall
     # means, not padded by naresid, other arguments ignored
     return fit.linear_predictors
-
-
-@fitted.register(CoxphmsModel)
-def _fitted_coxphms(fit: CoxphmsModel, **_kwargs: Any) -> list[float]:
-    raise _not_yet("fitted")
 
 
 @singledispatch

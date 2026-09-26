@@ -45,6 +45,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _r_format_number,
     _start_time_value,
+    _subset_indices,
     _subset_optional_sequence,
     _warn_outside_package,
 )
@@ -64,6 +65,7 @@ from ._fit import (
 from ._formula import (
     _column,
     _column_or_values,
+    _data_row_count,
     _data_rows,
     _design_rows_from_spec,
     _formula_data_rows,
@@ -960,6 +962,8 @@ def coxph(
             formula, data, subset, arguments, carry_clusters=False
         )
         subset = None
+    elif subset is not None and data is not None:
+        subset = _subset_indices(subset, _data_row_count(data, fit_formula))
     # a formula list defers its missing values until the transitions are known
     frame = _model_frame(
         fit_formula,
@@ -1001,8 +1005,11 @@ def coxph(
             raise ValueError("use strata() terms in the formula for multi-state models")
         from ._coxphms import _survcheckallow, fit_multistate
 
+        # rownames(mf) before the na.action, which the residuals and predictions carry
+        source_rows = range(_data_row_count(data, fit_formula)) if subset is None else subset
         fit: CoxphModel = fit_multistate(
             frame,
+            row_labels=_row_names(data, source_rows),
             formulas=formulas,
             na_action=na_action,
             # coxph.R: breslow when neither ties nor method was given
@@ -1527,16 +1534,27 @@ def predict_coxph(
     :class:`PredictResult` of predictions and standard errors when ``se_fit``.  Without
     ``newdata`` a ``na.exclude`` fit's predictions are NaN at the rows it removed
     (``napredict``); ``na_action`` applies to ``newdata``, whose incomplete rows are NaN
-    (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).
+    (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).  A
+    multi-state fit's predictions are :func:`survival.r._coxphms.predict_coxphms`'s.
     """
 
-    from ._coxphms import _refuse_multistate
+    from ._coxphms import CoxphmsModel, predict_coxphms
 
-    _refuse_multistate(fit, "predict")
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
         raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    if isinstance(fit, CoxphmsModel):
+        return predict_coxphms(
+            fit,
+            newdata,
+            type=type,
+            se_fit=se_fit,
+            na_action=na_action,
+            terms=terms,
+            collapse=collapse,
+            reference=reference,
+        )
     if fit.tt:
         raise ValueError("function not defined for models with tt() terms")
     predict_type = _match_string_arg(
@@ -1688,11 +1706,13 @@ def _predict_terms(
 
 
 def predict_terms_constant(fit: CoxphModel) -> float:
-    """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``."""
+    """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``.  A
+    multi-state fit has no terms prediction (predict.coxphms)."""
 
-    from ._coxphms import _refuse_multistate
+    from ._coxphms import _PREDICT_INCOMPLETE, CoxphmsModel
 
-    _refuse_multistate(fit, "predict_terms_constant")
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError(_PREDICT_INCOMPLETE)
     return sum(
         coefficient * mean
         for coefficient, mean in zip(fit.coefficients, fit.means, strict=True)
@@ -1782,12 +1802,25 @@ def residuals_coxph(
     vector for a one-variable model, as in R; Schoenfeld residuals come as a
     :class:`CoxSchoenfeldResiduals`, one row per death.  A ``na.exclude`` fit's
     residuals other than Schoenfeld's are NaN at the rows it removed (``naresid``),
-    and a ``collapse`` vector then covers those rows too.
+    and a ``collapse`` vector then covers those rows too.  A multi-state fit's
+    residuals are :func:`survival.r._coxphms.residuals_coxphms`'s, which also takes
+    ``na_action``.
     """
 
-    from ._coxphms import _refuse_multistate
+    from ._coxphms import CoxphmsModel, residuals_coxphms
 
-    _refuse_multistate(fit, "residuals")
+    if isinstance(fit, CoxphmsModel):
+        # residuals.coxphms's na.action overrides the kind of the fit's na.action
+        na_action = _pop_dotted_keyword(
+            kwargs, "na.action", "na_action", kwargs.pop("na_action", None), None
+        )
+        if kwargs:
+            raise TypeError(
+                f"residuals got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+            )
+        return residuals_coxphms(
+            fit, type=type, collapse=collapse, weighted=weighted, na_action=na_action
+        )
     if kwargs:
         raise TypeError(
             f"residuals got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
@@ -2211,16 +2244,21 @@ def cox_zph(
     by the function's name, or ``"user"`` for an anonymous one.  For a penalized
     fit the penalty enters the information matrix and the degrees of freedom are
     ``fit$df``, as in R.
+
+    A multi-state fit is tested on its stacked data (coxph.getdata stacks it), with
+    one term per model term and transition; its ``strata`` are the stacked strata
+    ``"1"``, ``"2"``, ...  Unlike R, this works for models with ``strata()`` terms or
+    ``ph()`` coefficients.
     """
 
     global_test = _pop_dotted_keyword(kwargs, "global", "global_test", global_test, True)
     if kwargs:
         raise TypeError(f"cox_zph got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
-    from ._coxphms import _refuse_multistate
+    from ._coxphms import CoxphmsModel, _stacked_strata_labels, _zph_assign
 
     if not isinstance(fit, CoxphModel):
         raise TypeError("argument must be the result of a coxph fit")
-    _refuse_multistate(fit, "cox_zph")
+    multistate = isinstance(fit, CoxphmsModel)
     if not fit.coef_names:
         raise ValueError("there are no score residuals for a Null model")
     if fit.tt:
@@ -2234,18 +2272,22 @@ def cox_zph(
     elif callable(transform):
         name = getattr(transform, "__name__", "")
         transform_name = name if name.isidentifier() else "user"
-        transform_arg = [float(value) for value in transform(list(fit.y.time))]
+        times = fit.fit.time if multistate else fit.y.time
+        transform_arg = [float(value) for value in transform(list(times))]
     else:
         raise TypeError("transform must be one of km, rank, identity, log, or a function")
     use_terms = _normalize_bool_option(terms, "terms")
-    aliased = _aliased(fit)
-    if use_terms:
-        assign = [[col for col in cols if not aliased[col]] for cols in fit.assign.values()]
-        names = [name for name, cols in zip(fit.assign, assign, strict=True) if cols]
-        assign = [cols for cols in assign if cols]
+    groups: list[tuple[str, Sequence[int]]]
+    if not use_terms:
+        groups = [(name, [col]) for col, name in enumerate(fit.coef_names)]
+    elif isinstance(fit, CoxphmsModel):  # narrows fit, which multistate does not
+        groups = list(_zph_assign(fit))
     else:
-        names = [name for name, alias in zip(fit.coef_names, aliased, strict=True) if not alias]
-        assign = [[col] for col, alias in enumerate(aliased) if not alias]
+        groups = list(fit.assign.items())
+    aliased = _aliased(fit)
+    groups = [(name, [col for col in cols if not aliased[col]]) for name, cols in groups]
+    names = [name for name, cols in groups if cols]
+    assign = [list(cols) for _name, cols in groups if cols]
     result = _core.cox_zph(
         fit.penalized if fit.penalized is not None else fit.fit,
         transform=transform_arg,
@@ -2268,7 +2310,9 @@ def cox_zph(
             }
         )
     strata = None
-    if result.strata is not None and fit.strata_levels:
+    if result.strata is not None and multistate:
+        strata = _stacked_strata_labels(result.strata)
+    elif result.strata is not None and fit.strata_levels:
         strata = [fit.strata_levels[int(code)] for code in result.strata]
     return CoxZPHResult(
         table=table,
@@ -2282,25 +2326,32 @@ def cox_zph(
     )
 
 
-def _detail_response(fit: CoxphModel) -> list[list[float]]:
+def _detail_response(
+    start: Sequence[float] | None, time: Sequence[float], status: Sequence[Any]
+) -> list[list[float]]:
     """``coxph.detail``'s ``y``: always in (start, stop, status) form."""
 
-    y = fit.y
-    if y.start is not None:
-        return [[s, t, float(e)] for s, t, e in zip(y.start, y.time, y.event, strict=True)]
-    mintime = min(y.time) if y.time else 0.0
-    start = 2 * mintime - 1 if mintime < 0 else -1.0
-    return [[start, t, float(e)] for t, e in zip(y.time, y.event, strict=True)]
+    if start is not None:
+        return [[s, t, float(e)] for s, t, e in zip(start, time, status, strict=True)]
+    mintime = min(time) if time else 0.0
+    begin = 2 * mintime - 1 if mintime < 0 else -1.0
+    return [[begin, t, float(e)] for t, e in zip(time, status, strict=True)]
 
 
 def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHDetailResult:
-    """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood."""
+    """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood.
 
-    from ._coxphms import _refuse_multistate
+    A multi-state fit is described on its stacked data (coxph.getdata stacks it): ``x``
+    and ``y`` have one row per stacked row, and ``strata`` counts the times of each
+    stacked stratum ``"1"``, ``"2"``, ...  Unlike R, this works for models with
+    ``strata()`` terms.
+    """
+
+    from ._coxphms import CoxphmsModel, _stacked_strata_labels
 
     if not isinstance(fit, CoxphModel):
         raise TypeError("coxph_detail requires a fitted coxph model")
-    _refuse_multistate(fit, "coxph_detail")
+    multistate = isinstance(fit, CoxphmsModel)
     if fit.method not in {"breslow", "efron"}:
         raise ValueError(f"Detailed output is not available for the {fit.method} method")
     order_name = _match_string_arg(
@@ -2308,18 +2359,27 @@ def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHD
     )
     include_riskmat = _normalize_bool_option(riskmat, "riskmat")
     detail = _core.coxph_detail(fit.fit, riskmat=include_riskmat)
-    y = _detail_response(fit)
-    x = fit.x
+    if multistate:
+        engine = fit.fit
+        y = _detail_response(engine.entry, engine.time, engine.status)
+        x = [list(row) for row in engine.x]
+    else:
+        y = _detail_response(fit.y.start, fit.y.time, fit.y.event)
+        x = fit.x
     n = len(y)
     strata_codes = fit.fit.strata or [0] * n
     order = sorted(range(n), key=lambda idx: (strata_codes[idx], y[idx][1], -y[idx][2]))
     weights = list(fit.fit.weights)
     weighted = any(value != 1.0 for value in weights)
     strata_table: dict[str, int] | None = None
-    if detail.strata is not None and fit.strata_levels:
+    if detail.strata is not None and (multistate or fit.strata_levels):
+        labels = (
+            _stacked_strata_labels(detail.strata)
+            if multistate
+            else [fit.strata_levels[int(code)] for code in detail.strata]
+        )
         strata_table = {}
-        for code in detail.strata:
-            label = fit.strata_levels[int(code)]
+        for label in labels:
             strata_table[label] = strata_table.get(label, 0) + 1
     risk_rows = None if detail.riskmat is None else [list(row) for row in detail.riskmat]
     if order_name == "time":
@@ -2471,18 +2531,19 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
         fits = tuple(fits[0])
     if not fits:
         raise TypeError("anova requires at least one fitted model")
+    from ._coxphms import CoxphmsModel
+
+    if any(isinstance(fit, CoxphmsModel) for fit in fits):
+        # anova.coxphms (reached through anova.coxph) stops here
+        raise NotImplementedError("anova not yet available for multistate")
     if not isinstance(fits[0], CoxphModel):
         from ._survreg import SurvregModelResult, anova_survreg
 
         if not isinstance(fits[0], SurvregModelResult):
             raise TypeError("anova requires fitted coxph or survreg models")
         return anova_survreg(*fits, test=test)
-    from ._coxphms import _refuse_multistate
-
     if any(not isinstance(fit, CoxphModel) for fit in fits):
         raise TypeError("All arguments must be Cox models")
-    for fit in fits:
-        _refuse_multistate(fit, "anova")
     test_name = _anova_test_name(test)
     if len(fits) == 1:
         return _anova_single(fits[0], test_name)

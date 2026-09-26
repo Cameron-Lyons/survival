@@ -1259,22 +1259,8 @@ def test_array_columns_and_pickle(mg, mg_fit):
 
 
 def test_methods_not_yet_ported_refuse(mg, mg_fit):
-    not_yet = [
-        lambda fit: r.predict(fit),
-        lambda fit: r.predict_terms_constant(fit),
-        lambda fit: r.residuals(fit),
-        lambda fit: r.survfit(fit),
-        lambda fit: r.cox_zph(fit),
-        lambda fit: r.coxph_detail(fit),
-        lambda fit: r.anova(fit),
-        lambda fit: r.fitted(fit),
-        lambda fit: r.model_matrix(fit),
-        lambda fit: r.model_term_names(fit),
-        lambda fit: r.model_weights(fit),
-    ]
-    for call in not_yet:
-        with pytest.raises(NotImplementedError, match="multi-state coxph fits yet"):
-            call(mg_fit)
+    with pytest.raises(NotImplementedError, match="multi-state coxph fits yet"):
+        r.survfit(mg_fit)
     refused = [
         (lambda fit: r.basehaz(fit), "the basehaz function is not implemented for multi-state"),
         (lambda fit: r.yates(fit, "sex"), "multi-state coxph not yet supported"),
