@@ -25,8 +25,7 @@ use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
 use crate::regression::coxph_diagnostics::{
-    ResidualType, Residuals, SchoenfeldResiduals, collapse_rows, martingale_residuals,
-    schoenfeld_residuals, score_residuals,
+    SchoenfeldResiduals, collapse_rows, martingale_residuals_at, score_residuals_at,
 };
 use crate::regression::coxph_wtest::{wald_statistic, wald_tests};
 use crate::surv_analysis::agsurv::{
@@ -683,7 +682,7 @@ impl CoxPHFit {
             sorted,
             curves: OnceLock::new(),
         };
-        fit.residuals = martingale_residuals(&fit, &fit.linear_predictors);
+        fit.residuals = martingale_residuals_at(&fit, &fit.linear_predictors);
 
         let robust = options.robust.unwrap_or(fit.cluster.is_some());
         if !robust {
@@ -710,7 +709,7 @@ impl CoxPHFit {
                     .collect(),
                 None => vec![0.0; n],
             };
-            let scores = score_residuals(&fit, &lp0)?;
+            let scores = score_residuals_at(&fit, &lp0)?;
             let scores = collapse_rows(&scores, Some(&fit.weights), Some(&cluster));
             let u: Vec<f64> = (0..nvar).map(|j| scores.column(j).sum()).collect();
             let u_matrix = Array2::from_shape_vec((nvar, 1), u)
@@ -845,7 +844,7 @@ impl CoxPHFit {
         };
         fit.residuals = match fitted.residuals {
             Some(residuals) => residuals,
-            None => martingale_residuals(&fit, &fit.linear_predictors),
+            None => martingale_residuals_at(&fit, &fit.linear_predictors),
         };
         add_offset_mean(&mut fit.linear_predictors, fitted.offset_mean);
         Ok(fit)
@@ -1557,33 +1556,6 @@ fn finish_curve(
     }
 }
 
-impl CoxPHFit {
-    fn residual_vector(
-        &self,
-        kind: ResidualType,
-        weighted: bool,
-        collapse: Option<&[i32]>,
-    ) -> PyResult<Vec<f64>> {
-        match self.residuals(kind, Some(weighted), collapse, None)? {
-            Residuals::Vector(values) => Ok(values),
-            Residuals::Matrix(_) => unreachable!("vector residual types"),
-        }
-    }
-
-    fn residual_matrix(
-        &self,
-        kind: ResidualType,
-        weighted: bool,
-        collapse: Option<&[i32]>,
-        assign: Option<&[Vec<usize>]>,
-    ) -> PyResult<Vec<Vec<f64>>> {
-        match self.residuals(kind, Some(weighted), collapse, assign)? {
-            Residuals::Matrix(values) => Ok(matrix_rows(&values)),
-            Residuals::Vector(_) => unreachable!("matrix residual types"),
-        }
-    }
-}
-
 /// A `CoxNewData` from the binding arguments; `None` without `x`.
 pub(crate) fn newdata_from_python(
     fit: &CoxPHFit,
@@ -1727,7 +1699,7 @@ impl CoxPHFit {
         weighted: bool,
         collapse: Option<Vec<i32>>,
     ) -> PyResult<Vec<f64>> {
-        self.residual_vector(ResidualType::Martingale, weighted, collapse.as_deref())
+        Ok(self.martingale_residuals(weighted, collapse.as_deref())?)
     }
 
     /// `residuals(fit, type = "deviance", weighted, collapse)`.
@@ -1737,7 +1709,7 @@ impl CoxPHFit {
         weighted: bool,
         collapse: Option<Vec<i32>>,
     ) -> PyResult<Vec<f64>> {
-        self.residual_vector(ResidualType::Deviance, weighted, collapse.as_deref())
+        Ok(self.deviance_residuals(weighted, collapse.as_deref())?)
     }
 
     /// `residuals(fit, type = "score", weighted, collapse)`.
@@ -1747,25 +1719,27 @@ impl CoxPHFit {
         weighted: bool,
         collapse: Option<Vec<i32>>,
     ) -> PyResult<Vec<Vec<f64>>> {
-        self.residual_matrix(ResidualType::Score, weighted, collapse.as_deref(), None)
+        Ok(matrix_rows(
+            &self.score_residuals(weighted, collapse.as_deref())?,
+        ))
     }
 
     /// `residuals(fit, type = "dfbeta", weighted, collapse)`.
     #[pyo3(name = "dfbeta", signature = (weighted = true, collapse = None))]
     fn dfbeta_py(&self, weighted: bool, collapse: Option<Vec<i32>>) -> PyResult<Vec<Vec<f64>>> {
-        self.residual_matrix(ResidualType::Dfbeta, weighted, collapse.as_deref(), None)
+        Ok(matrix_rows(&self.dfbeta(weighted, collapse.as_deref())?))
     }
 
     /// `residuals(fit, type = "dfbetas", weighted, collapse)`.
     #[pyo3(name = "dfbetas", signature = (weighted = true, collapse = None))]
     fn dfbetas_py(&self, weighted: bool, collapse: Option<Vec<i32>>) -> PyResult<Vec<Vec<f64>>> {
-        self.residual_matrix(ResidualType::Dfbetas, weighted, collapse.as_deref(), None)
+        Ok(matrix_rows(&self.dfbetas(weighted, collapse.as_deref())?))
     }
 
     /// `residuals(fit, type = "schoenfeld", weighted)`.
     #[pyo3(name = "schoenfeld_residuals", signature = (weighted = false))]
     fn schoenfeld_residuals_py(&self, weighted: bool) -> PyResult<SchoenfeldResiduals> {
-        Ok(schoenfeld_residuals(self, weighted)?)
+        Ok(self.schoenfeld_residuals(weighted)?)
     }
 
     /// `residuals(fit, type = "scaledsch", weighted)`.
@@ -1783,12 +1757,12 @@ impl CoxPHFit {
         weighted: bool,
         collapse: Option<Vec<i32>>,
     ) -> PyResult<Vec<Vec<f64>>> {
-        self.residual_matrix(
-            ResidualType::Partial,
+        let assign = assign.unwrap_or_else(|| default_assign(self.nvar()));
+        Ok(matrix_rows(&self.partial_residuals(
+            &assign,
             weighted,
             collapse.as_deref(),
-            assign.as_deref(),
-        )
+        )?))
     }
 
     /// `survfit(fit, newdata, id)` for time-dependent new data.

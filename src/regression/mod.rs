@@ -66,7 +66,7 @@ pub use coxph::{
     CoxphOptions, PredictReference, SurvfitOptions, coxph_fit,
 };
 pub use coxph_detail::{CoxphDetail, coxph_detail, coxph_detail_py};
-pub use coxph_diagnostics::{ResidualType, Residuals, SchoenfeldResiduals};
+pub use coxph_diagnostics::{CoxResidualType, Residuals, SchoenfeldResiduals};
 pub use coxph_wtest::{CoxphWtest, coxph_wtest_py, wald_tests};
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,

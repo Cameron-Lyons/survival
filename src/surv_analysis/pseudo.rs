@@ -22,7 +22,7 @@ use pyo3::prelude::*;
 /// The `type` argument of `residuals.survfit` / `pseudo`, after R's
 /// aliases (`survival`, `chaz`, `rmst`, `rmts`, `sojourn`) are folded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ResidualType {
+pub enum PseudoResidualType {
     /// Probability in state: the survival curve.
     #[default]
     Pstate,
@@ -32,7 +32,7 @@ pub enum ResidualType {
     Auc,
 }
 
-impl ResidualType {
+impl PseudoResidualType {
     pub fn parse(value: &str) -> SurvivalResult<Self> {
         match value.to_ascii_lowercase().as_str() {
             "pstate" | "survival" => Ok(Self::Pstate),
@@ -96,7 +96,7 @@ fn rsurvpart1(
     stop: &[f64],
     status: &[i32],
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     stype: SurvType,
     fit: &SurvfitKMResult,
     curve: std::ops::Range<usize>,
@@ -160,8 +160,8 @@ fn rsurvpart1(
     };
     let mut resid = vec![vec![0.0; ntime]; n];
     match kind {
-        ResidualType::Cumhaz | ResidualType::Pstate
-            if kind == ResidualType::Cumhaz || stype == SurvType::ExpCumhaz =>
+        PseudoResidualType::Cumhaz | PseudoResidualType::Pstate
+            if kind == PseudoResidualType::Cumhaz || stype == SurvType::ExpCumhaz =>
         {
             // the hazard is the primary thing; for stype = 2 the survival
             // is exp(-cumhaz) with derivative -S(t) * d(cumhaz)
@@ -184,14 +184,14 @@ fn rsurvpart1(
                         Some(s) => term1 + hsum[s] - term2,
                         None => term1 - term2,
                     };
-                    if kind == ResidualType::Pstate {
+                    if kind == PseudoResidualType::Pstate {
                         value = -value * surv_table[tindex[j]];
                     }
                     resid[row][j] = value;
                 }
             }
         }
-        ResidualType::Pstate => {
+        PseudoResidualType::Pstate => {
             // avoid a 0/0 issue when S(t) = 0 and hazard = 1
             let temp: Vec<f64> = hazard
                 .iter()
@@ -225,7 +225,7 @@ fn rsurvpart1(
                 }
             }
         }
-        ResidualType::Auc => {
+        PseudoResidualType::Auc => {
             // see survfit:AUC in the methods document
             let t0 = if dtime[0] > 0.0 {
                 0.0
@@ -291,7 +291,7 @@ fn rsurvpart1(
                 }
             }
         }
-        ResidualType::Cumhaz => unreachable!("handled by the first arm"),
+        PseudoResidualType::Cumhaz => unreachable!("handled by the first arm"),
     }
     resid
 }
@@ -336,7 +336,7 @@ pub fn survfitresid(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     call_stype: SurvType,
     collapse: bool,
     weighted: bool,
@@ -353,7 +353,7 @@ fn residuals_from_fit(
     options: &SurvfitKMOptions,
     fit: &SurvfitKMResult,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     call_stype: SurvType,
     collapse: bool,
     weighted: bool,
@@ -490,7 +490,7 @@ pub fn pseudo(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     call_stype: SurvType,
     collapse: bool,
 ) -> SurvivalResult<SurvfitResid> {
@@ -501,7 +501,7 @@ pub fn pseudo(
     // summary(fit, rmean = t) refuses a truncation point before the first
     // time of the fit (survfitKM objects carry no start.time)
     let smallest = fit.time.iter().copied().fold(f64::INFINITY, f64::min);
-    if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
+    if kind == PseudoResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
         return Err(SurvivalError::invalid_input(
             "Truncation point for the mean time in state is < smallest survival",
         ));
@@ -517,7 +517,7 @@ pub fn pseudo(
     let n_curves = fit.n_curves();
     // yhat[time][curve]
     let yhat: Vec<Vec<f64>> = match kind {
-        ResidualType::Pstate | ResidualType::Cumhaz => {
+        PseudoResidualType::Pstate | PseudoResidualType::Cumhaz => {
             let summary = summary_survfit_times(&fit, times, true)?;
             let ranges = summary.curve_ranges();
             (0..times.len())
@@ -525,14 +525,14 @@ pub fn pseudo(
                     ranges
                         .iter()
                         .map(|range| match kind {
-                            ResidualType::Pstate => summary.surv[range.start + j],
+                            PseudoResidualType::Pstate => summary.surv[range.start + j],
                             _ => summary.cumhaz[range.start + j],
                         })
                         .collect()
                 })
                 .collect()
         }
-        ResidualType::Auc => {
+        PseudoResidualType::Auc => {
             let fit0 = survfit0_with(&fit, false);
             let mut yhat = Vec::with_capacity(times.len());
             for &t in times {
@@ -892,7 +892,7 @@ pub fn survfitresid_aj(
     data: &SurvfitAJData,
     options: &SurvfitAJOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
@@ -905,7 +905,7 @@ fn residuals_aj_from_fit(
     options: &SurvfitAJOptions,
     fit: &SurvfitAJResult,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
@@ -953,7 +953,7 @@ fn residuals_aj_from_fit(
         ));
     }
     let ncol = match kind {
-        ResidualType::Cumhaz => fit.hazard_from.len(),
+        PseudoResidualType::Cumhaz => fit.hazard_from.len(),
         _ => nstate,
     };
     let mut resid = vec![vec![vec![0.0; times.len()]; ncol]; n];
@@ -964,7 +964,7 @@ fn residuals_aj_from_fit(
             continue;
         }
         let values: Vec<Vec<Vec<f64>>> = match kind {
-            ResidualType::Cumhaz => rsurvpart2_cumhaz(
+            PseudoResidualType::Cumhaz => rsurvpart2_cumhaz(
                 &rows,
                 start.as_deref(),
                 &time,
@@ -974,7 +974,7 @@ fn residuals_aj_from_fit(
                 fit,
                 range.clone(),
             ),
-            ResidualType::Pstate | ResidualType::Auc => {
+            PseudoResidualType::Pstate | PseudoResidualType::Auc => {
                 let p0 = &fit.p0[curve];
                 // initial leverage when p0 was estimated and the initial
                 // states vary; unweighted, as rsurvpart2 has it
@@ -1015,10 +1015,10 @@ fn residuals_aj_from_fit(
                     i0: &inf0,
                     otime: &times,
                     starttime: fit.t0,
-                    doauc: kind == ResidualType::Auc,
+                    doauc: kind == PseudoResidualType::Auc,
                 });
                 let source = match kind {
-                    ResidualType::Auc => infa.expect("auc requested"),
+                    PseudoResidualType::Auc => infa.expect("auc requested"),
                     _ => infp,
                 };
                 (0..rows.len())
@@ -1035,7 +1035,7 @@ fn residuals_aj_from_fit(
         }
     }
     let columns: Vec<String> = match kind {
-        ResidualType::Cumhaz => fit
+        PseudoResidualType::Cumhaz => fit
             .hazard_from
             .iter()
             .zip(&fit.hazard_to)
@@ -1170,7 +1170,7 @@ pub fn pseudo_aj(
     data: &SurvfitAJData,
     options: &SurvfitAJOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     collapse: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
     let fit = survfitaj(data, options)?;
@@ -1183,7 +1183,7 @@ pub fn pseudo_aj(
     let smallest = options
         .start_time
         .unwrap_or_else(|| fit.time.iter().copied().fold(f64::INFINITY, f64::min));
-    if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
+    if kind == PseudoResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
         return Err(SurvivalError::invalid_input(
             "Truncation point for the mean time in state is < smallest survival",
         ));
@@ -1197,9 +1197,9 @@ pub fn pseudo_aj(
                 .times
                 .iter()
                 .map(|&t| match kind {
-                    ResidualType::Pstate => aj_value_at(&fit, curve, range, t, false),
-                    ResidualType::Cumhaz => aj_value_at(&fit, curve, range, t, true),
-                    ResidualType::Auc => aj_mean_time_in_state(&fit, curve, range, t),
+                    PseudoResidualType::Pstate => aj_value_at(&fit, curve, range, t, false),
+                    PseudoResidualType::Cumhaz => aj_value_at(&fit, curve, range, t, true),
+                    PseudoResidualType::Auc => aj_mean_time_in_state(&fit, curve, range, t),
                 })
                 .collect()
         })
@@ -1294,7 +1294,7 @@ pub fn survfitresid_aj_py(
         &data,
         &options,
         &times,
-        ResidualType::parse(type_)?,
+        PseudoResidualType::parse(type_)?,
         collapse,
         weighted.unwrap_or(collapse),
     )?)
@@ -1341,7 +1341,7 @@ pub fn pseudo_aj_py(
         &data,
         &options,
         &times,
-        ResidualType::parse(type_)?,
+        PseudoResidualType::parse(type_)?,
         collapse,
     )?)
 }
@@ -1399,7 +1399,7 @@ pub fn survfitresid_py(
         &data,
         &options,
         &times,
-        ResidualType::parse(type_)?,
+        PseudoResidualType::parse(type_)?,
         call_stype,
         collapse,
         weighted.unwrap_or(collapse),
@@ -1434,7 +1434,7 @@ pub fn pseudo_py(
         &data,
         &options,
         &times,
-        ResidualType::parse(type_)?,
+        PseudoResidualType::parse(type_)?,
         call_stype,
         collapse,
     )?)
@@ -1468,7 +1468,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             false,
             false,
@@ -1484,7 +1484,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Cumhaz,
+            PseudoResidualType::Cumhaz,
             options.stype,
             false,
             false,
@@ -1497,7 +1497,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Auc,
+            PseudoResidualType::Auc,
             options.stype,
             false,
             false,
@@ -1511,7 +1511,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             true,
         )
@@ -1523,7 +1523,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Cumhaz,
+            PseudoResidualType::Cumhaz,
             options.stype,
             true,
         )
@@ -1534,7 +1534,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Auc,
+            PseudoResidualType::Auc,
             options.stype,
             true,
         )
@@ -1557,7 +1557,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             false,
             false,
@@ -1567,7 +1567,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Cumhaz,
+            PseudoResidualType::Cumhaz,
             options.stype,
             false,
             false,
@@ -1597,7 +1597,7 @@ mod tests {
             &data,
             &options,
             &[5.0],
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             false,
             false,
@@ -1607,7 +1607,7 @@ mod tests {
             &data,
             &options,
             &[5.0],
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             true,
             true,
@@ -1627,7 +1627,7 @@ mod tests {
                 &data,
                 &options,
                 &[5.0],
-                ResidualType::Pstate,
+                PseudoResidualType::Pstate,
                 options.stype,
                 true,
                 false
@@ -1639,7 +1639,7 @@ mod tests {
             &data,
             &options,
             &[5.0],
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             true,
         )
@@ -1659,7 +1659,7 @@ mod tests {
             &data,
             &options,
             &[12.0, 24.0, 48.0],
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             true,
         )
@@ -1673,7 +1673,7 @@ mod tests {
             &second,
             &options,
             &[12.0, 24.0, 48.0],
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             true,
         )
@@ -1723,8 +1723,15 @@ mod tests {
         let data = ties_mstate();
         let options = SurvfitAJOptions::default();
         let times = [2.0, 5.0, 8.0];
-        let resid =
-            survfitresid_aj(&data, &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid_aj(
+            &data,
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.columns, vec!["(s0)", "a", "b"]);
         assert_eq!(resid.values.len(), 16);
         let fit = survfitaj(&data, &options).unwrap();
@@ -1745,13 +1752,13 @@ mod tests {
             );
         }
         // pseudo values average to the estimate
-        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo_aj(&data, &options, &times, PseudoResidualType::Pstate, true).unwrap();
         for j in 0..3 {
             let mean = ps.values.iter().map(|by_col| by_col[j][0]).sum::<f64>() / 16.0;
             assert!(close(mean, fit.pstate[row_at_2][j]));
         }
         // cumulative hazard and sojourn residuals sum to zero over subjects
-        for kind in [ResidualType::Cumhaz, ResidualType::Auc] {
+        for kind in [PseudoResidualType::Cumhaz, PseudoResidualType::Auc] {
             let resid = survfitresid_aj(&data, &options, &times, kind, false, false).unwrap();
             let ncol = resid.columns.len();
             for k in 0..ncol {
@@ -1761,8 +1768,15 @@ mod tests {
                 }
             }
         }
-        let cumhaz =
-            survfitresid_aj(&data, &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        let cumhaz = survfitresid_aj(
+            &data,
+            &options,
+            &times,
+            PseudoResidualType::Cumhaz,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(cumhaz.columns, vec!["1:2", "1:3"]);
     }
 
@@ -1779,7 +1793,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             false,
             false,
@@ -1795,7 +1809,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             options.stype,
             true,
         )
@@ -1810,7 +1824,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Auc,
+            PseudoResidualType::Auc,
             options.stype,
             true,
         )
@@ -1822,7 +1836,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Auc,
+            PseudoResidualType::Auc,
             options.stype,
             false,
             false,
@@ -1836,7 +1850,7 @@ mod tests {
                 &aml(),
                 &options,
                 &[5.0, 24.0],
-                ResidualType::Auc,
+                PseudoResidualType::Auc,
                 options.stype,
                 true
             )
@@ -1878,7 +1892,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(survfitkm(&data, &options).unwrap().n, n);
-            for kind in [ResidualType::Pstate, ResidualType::Auc] {
+            for kind in [PseudoResidualType::Pstate, PseudoResidualType::Auc] {
                 assert!(refused(survfitresid(
                     &data,
                     &options,
@@ -1910,25 +1924,32 @@ mod tests {
             ..Default::default()
         };
         let times = [2.0, 5.0, 8.0];
-        let resid =
-            survfitresid_aj(&data, &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid_aj(
+            &data,
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.values.len(), 16);
         // values[row][state][time]: the rows before the start take part
         assert!(close(resid.values[0][0][1], -0.03312800480769231));
         assert!(close(resid.values[0][1][1], 0.04965444711538462));
         assert!(close(resid.values[1][2][1], 0.045_973_557_692_307_7));
         assert!(close(resid.values[2][1][1], -0.00262920673076923));
-        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo_aj(&data, &options, &times, PseudoResidualType::Pstate, true).unwrap();
         assert!(close(ps.values[0][0][1], 0.175105168269231));
         assert!(close(ps.values[0][1][1], 0.808_969_350_961_538_4));
         assert!(close(ps.values[2][2][1], 0.2034254807692308));
-        let auc = pseudo_aj(&data, &options, &times, ResidualType::Auc, true).unwrap();
+        let auc = pseudo_aj(&data, &options, &times, PseudoResidualType::Auc, true).unwrap();
         assert!(close(auc.values[0][0][2], 0.350116436298077));
         assert!(close(auc.values[0][1][2], 5.621_788_611_778_847));
         assert!(close(auc.values[2][2][2], 1.1062199519230769));
         // the truncation point is checked against the start.time
         assert!(
-            pseudo_aj(&data, &options, &[1.5, 5.0], ResidualType::Auc, true)
+            pseudo_aj(&data, &options, &[1.5, 5.0], PseudoResidualType::Auc, true)
                 .unwrap_err()
                 .to_string()
                 .contains("smallest survival")
@@ -1950,7 +1971,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             kaplan_meier,
             false,
             false,
@@ -1963,7 +1984,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Auc,
+            PseudoResidualType::Auc,
             kaplan_meier,
             false,
             false,
@@ -1976,7 +1997,7 @@ mod tests {
             &aml(),
             &options,
             &times,
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
             kaplan_meier,
             true,
         )
@@ -1992,7 +2013,7 @@ mod tests {
             &aml(),
             &fh2,
             &times,
-            ResidualType::Cumhaz,
+            PseudoResidualType::Cumhaz,
             kaplan_meier,
             false,
             false,
@@ -2004,15 +2025,18 @@ mod tests {
 
     #[test]
     fn rejects_bad_arguments() {
-        assert!(ResidualType::parse("weird").is_err());
-        assert_eq!(ResidualType::parse("RMST").unwrap(), ResidualType::Auc);
+        assert!(PseudoResidualType::parse("weird").is_err());
+        assert_eq!(
+            PseudoResidualType::parse("RMST").unwrap(),
+            PseudoResidualType::Auc
+        );
         let options = SurvfitKMOptions::default();
         assert!(
             survfitresid(
                 &aml(),
                 &options,
                 &[],
-                ResidualType::Pstate,
+                PseudoResidualType::Pstate,
                 options.stype,
                 false,
                 false
@@ -2024,7 +2048,7 @@ mod tests {
                 &aml(),
                 &options,
                 &[f64::NAN],
-                ResidualType::Pstate,
+                PseudoResidualType::Pstate,
                 options.stype,
                 false,
                 false

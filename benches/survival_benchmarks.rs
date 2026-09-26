@@ -7,7 +7,7 @@ use survival::regression::{
     cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg_fit,
 };
 use survival::surv_analysis::{
-    self, ResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
+    self, PseudoResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
     survmean,
 };
 use survival::validation::{BrierInput, brier, uno_c_index};
@@ -168,7 +168,7 @@ mod pseudo_bench {
         let data = SurvfitKMData::right_censored(time, status)
             .expect("benchmark pseudo-value inputs should be valid");
         let options = SurvfitKMOptions::default();
-        let kind = ResidualType::parse(type_).expect("known residual type");
+        let kind = PseudoResidualType::parse(type_).expect("known residual type");
         bencher.bench_local(|| {
             black_box(
                 pseudo(&data, &options, &eval_times, kind, options.stype, true)
@@ -805,7 +805,7 @@ mod cox_regression {
         bencher.bench_local(|| {
             let residuals = fit
                 .residuals(
-                    survival::regression::ResidualType::Schoenfeld,
+                    survival::regression::CoxResidualType::Schoenfeld,
                     None,
                     None,
                     None,
@@ -842,7 +842,12 @@ mod cox_regression {
 
         bencher.bench_local(|| {
             let residuals = fit
-                .residuals(survival::regression::ResidualType::Score, None, None, None)
+                .residuals(
+                    survival::regression::CoxResidualType::Score,
+                    None,
+                    None,
+                    None,
+                )
                 .expect("benchmark score residuals should succeed");
             black_box(residuals);
         });
@@ -854,7 +859,12 @@ mod cox_regression {
 
         bencher.bench_local(|| {
             let residuals = black_box(&model)
-                .residuals(survival::regression::ResidualType::Dfbeta, None, None, None)
+                .residuals(
+                    survival::regression::CoxResidualType::Dfbeta,
+                    None,
+                    None,
+                    None,
+                )
                 .expect("benchmark dfbeta residuals should succeed");
             black_box(residuals);
         });

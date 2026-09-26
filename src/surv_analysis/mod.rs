@@ -43,7 +43,7 @@ pub use multi_state::{
 };
 pub use nelson_aalen::{NelsonAalenResult, nelson_aalen, nelson_aalen_py};
 pub use pseudo::{
-    ResidualType, SurvfitAJResid, SurvfitResid, pseudo, pseudo_aj, pseudo_aj_py, pseudo_py,
+    PseudoResidualType, SurvfitAJResid, SurvfitResid, pseudo, pseudo_aj, pseudo_aj_py, pseudo_py,
     survfitresid, survfitresid_aj, survfitresid_aj_py, survfitresid_py,
 };
 pub use pseudo_gee::{GEEConfig, GEEResult, pseudo_gee_regression};

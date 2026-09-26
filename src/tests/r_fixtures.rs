@@ -33,18 +33,17 @@ use crate::regression::coxph::{
     PredictReference, SurvfitOptions,
 };
 use crate::regression::coxph_detail::coxph_detail;
-use crate::regression::coxph_diagnostics::{ResidualType, Residuals};
+use crate::regression::coxph_diagnostics::{CoxResidualType, Residuals};
 use crate::regression::coxph_wtest::coxph_wtest_py;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_predict::SurvregNewdata;
 use crate::surv_analysis::{
     AggregateFun, AggregateGroups, ConfLower, ConfType, GroupingFactor, HazardType,
-    InfluenceRequest, ResidualType as PseudoResidualType, RmeanOption, SurvDiffResult, SurvType,
-    SurvdiffData, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, SurvfitKMData,
-    SurvfitKMOptions, SurvfitKMResult, SurvfitQuantiles, SurvmeanTable, aggregate_survfit, pseudo,
-    pseudo_aj, quantile_survfit, summary_survfit, summary_survfit_times, survdiff,
-    survdiff_one_sample, survfit0, survfit0_aj, survfitaj, survfitkm, survfitresid,
-    survfitresid_aj, survmean,
+    InfluenceRequest, PseudoResidualType, RmeanOption, SurvDiffResult, SurvType, SurvdiffData,
+    SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, SurvfitKMData, SurvfitKMOptions,
+    SurvfitKMResult, SurvfitQuantiles, SurvmeanTable, aggregate_survfit, pseudo, pseudo_aj,
+    quantile_survfit, summary_survfit, summary_survfit_times, survdiff, survdiff_one_sample,
+    survfit0, survfit0_aj, survfitaj, survfitkm, survfitresid, survfitresid_aj, survmean,
 };
 use ndarray::{Array2, Array3, Axis};
 use serde_json::Value;
@@ -2777,7 +2776,9 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             if is_r_error(expected) {
                 return Ok(());
             }
-            let actual = residual_vector(fit, ResidualType::Deviance)?;
+            let actual = fit
+                .deviance_residuals(false, None)
+                .map_err(|err| format!("{err}"))?;
             assert_vec(&actual, &nums(expected)?, RTOL_COEF, "deviance")
         }
         "concordance" => {
@@ -2823,17 +2824,9 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
     }
 }
 
-fn residual_vector(fit: &CoxPHFit, kind: ResidualType) -> Result<Vec<f64>, String> {
-    match fit.residuals(kind, None, None, None) {
-        Ok(Residuals::Vector(values)) => Ok(values),
-        Ok(Residuals::Matrix(_)) => Err("expected a residual vector".to_string()),
-        Err(err) => Err(format!("{err}")),
-    }
-}
-
 fn residual_matrix(
     fit: &CoxPHFit,
-    kind: ResidualType,
+    kind: CoxResidualType,
     assign: &[Vec<usize>],
 ) -> Result<Vec<Vec<f64>>, String> {
     match fit.residuals(kind, None, None, Some(assign)) {
@@ -3030,7 +3023,7 @@ fn r_fixtures_coxph_diagnostics() {
                 Err(message) => Err(message.clone()),
                 Ok(cox) => (|| {
                     let residual_type =
-                        ResidualType::parse(kind).map_err(|err| format!("{err}"))?;
+                        CoxResidualType::parse(kind).map_err(|err| format!("{err}"))?;
                     let actual = residual_matrix(&cox.fit, residual_type, &cox.assign)?;
                     let expected_matrix = if value.is_object() {
                         matrix(&value["values"])?
@@ -6801,7 +6794,9 @@ fn check_penal_aspect(case: &PenalCase, expected: &Value, aspect: &str) -> Resul
             if is_r_error(expected) {
                 return Ok(());
             }
-            let actual = residual_vector(coxph, ResidualType::Deviance)?;
+            let actual = coxph
+                .deviance_residuals(false, None)
+                .map_err(|err| format!("{err}"))?;
             assert_vec(&actual, &nums(expected)?, RTOL_COEF, "deviance")
         }
         "concordance" => {
