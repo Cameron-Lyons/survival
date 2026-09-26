@@ -7,9 +7,11 @@ import os
 import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from itertools import compress
+from itertools import compress, repeat
 from operator import index
-from typing import Any
+from typing import Any, cast
+
+import numpy as np
 
 from .. import _survival as _core
 
@@ -94,7 +96,7 @@ def _materialize_1d(values: Any, name: str) -> list[Any]:
 
 def _materialize_labels(values: Any, name: str) -> list[Any]:
     result = _coerce_array_like(values, name)
-    if any(isinstance(value, list) for value in result):
+    if any(map(isinstance, result, repeat(list))):
         raise ValueError(f"{name} must be one-dimensional")
     return result
 
@@ -236,9 +238,43 @@ def _row_has_missing(value: Any) -> bool:
     return _is_missing_value(value)
 
 
+def _numeric_ndarray(values: Any, kinds: str = "fiu") -> np.ndarray | None:
+    """*values* as a 1-D numpy array when it is an ndarray or a pandas/polars column whose
+    dtype kind is one of *kinds* (``"b"`` adds logicals), else ``None``.
+
+    Object, string, datetime and nullable extension columns (which ``to_numpy`` turns into
+    object arrays) and factor-like columns get ``None``: they keep the per-element paths
+    that know ``None``, ``pd.NA``, ``NaT`` and declared levels.
+    """
+
+    if isinstance(values, np.ndarray):
+        array = values
+    elif hasattr(values, "to_numpy") and hasattr(values, "dtype"):
+        if _categories(values) is not None:
+            return None
+        try:
+            array = values.to_numpy()
+        except Exception:
+            return None
+        if not isinstance(array, np.ndarray):
+            return None
+    else:
+        return None
+    if array.ndim != 1 or array.dtype.kind not in kinds:
+        return None
+    return array
+
+
 def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
     missing: set[int] = set()
     for name, values in columns:
+        array = _numeric_ndarray(values, "biuf")
+        if array is not None:
+            if len(array) != n:
+                raise ValueError(f"{name} must have length {n}")
+            if array.dtype.kind == "f":
+                missing.update(np.flatnonzero(np.isnan(array)).tolist())
+            continue
         materialized = _coerce_array_like(values, name)
         if len(materialized) != n:
             raise ValueError(f"{name} must have length {n}")
@@ -539,9 +575,9 @@ def _r_sort_key(value: Any) -> tuple[Any, ...]:
         numeric = float(value)
     except (TypeError, ValueError):
         return (1, str(value))
-    if math.isfinite(numeric):
-        return (0, numeric)
-    return (1, str(value))
+    if math.isnan(numeric):
+        return (1, str(value))
+    return (0, numeric)
 
 
 def _factor_levels(values: Any, name: str = "values") -> list[Any]:
@@ -554,31 +590,50 @@ def _factor_levels(values: Any, name: str = "values") -> list[Any]:
     declared = _categories(values)
     if declared is not None:
         return [level for level in declared if not _is_missing_value(level)]
-    unique: dict[Any, None] = {}
-    for value in _materialize_labels(values, name):
-        if _is_missing_value(value):
-            continue
-        try:
-            unique.setdefault(value, None)
-        except TypeError as exc:
-            raise TypeError(f"{name} contains unhashable labels") from exc
-    return sorted(unique, key=_r_sort_key)
+    array = _numeric_ndarray(values, "biuf")
+    if array is not None:
+        return _numeric_factor(array)[1].tolist()
+    try:
+        unique = dict.fromkeys(_materialize_labels(values, name))
+    except TypeError as exc:
+        raise TypeError(f"{name} contains unhashable labels") from exc
+    return sorted((value for value in unique if not _is_missing_value(value)), key=_r_sort_key)
+
+
+def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:
+    """``factor(x)`` of a numeric or logical array: codes (``None`` where NaN) and the
+    sorted distinct values, which is R's ``sort(unique(x))`` level order."""
+
+    present = ~np.isnan(array) if array.dtype.kind == "f" else None
+    observed = array if present is None else array[present]
+    levels, inverse = np.unique(observed, return_inverse=True)
+    if levels.dtype.kind == "f":
+        levels = levels + 0.0  # -0 and 0 are one level, labelled "0"
+    if present is None or present.all():
+        return inverse.tolist(), levels
+    full = np.zeros(len(array), dtype=np.int64)
+    full[present] = inverse
+    codes = cast(list[int | None], full.tolist())
+    for row in np.flatnonzero(~present).tolist():
+        codes[row] = None
+    return codes, levels
 
 
 def _factor(values: Any, name: str = "values") -> tuple[list[int | None], list[str]]:
     """R's ``factor(x)`` as zero-based codes (``None`` for ``NA``) and level labels."""
 
+    array = _numeric_ndarray(values, "biuf")
+    if array is not None:
+        numeric_codes, numeric_levels = _numeric_factor(array)
+        return numeric_codes, [_as_character(level) for level in numeric_levels.tolist()]
     levels = _factor_levels(values, name)
     index = {level: code for code, level in enumerate(levels)}
-    codes: list[int | None] = []
-    for value in _materialize_labels(values, name):
-        if _is_missing_value(value):
-            codes.append(None)
-            continue
-        try:
-            codes.append(index[value])
-        except KeyError as exc:
-            raise ValueError(f"{name} contains a value outside the declared categories") from exc
+    materialized = _materialize_labels(values, name)
+    codes: list[int | None] = list(map(index.get, materialized))
+    if None in codes:
+        for value, code in zip(materialized, codes, strict=True):
+            if code is None and not _is_missing_value(value):
+                raise ValueError(f"{name} contains a value outside the declared categories")
     return codes, [_as_character(level) for level in levels]
 
 

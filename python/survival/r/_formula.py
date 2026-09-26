@@ -10,6 +10,8 @@ from itertools import combinations, compress, product
 from operator import add, ge, mul, sub, truediv
 from typing import Any
 
+import numpy as np
+
 from ._coerce import (
     _DEFAULT_NA_ACTION,
     _as_character,
@@ -24,6 +26,9 @@ from ._coerce import (
     _missing_row_indices,
     _mstate_categories,
     _normalize_na_action,
+    _numeric_ndarray,
+    _r_factor,
+    _RFactorVector,
     _rows_of,
     _strata_value_label,
     _subset_indices,
@@ -36,6 +41,7 @@ from ._surv import (
     _formula_response_argument_name,
     _normalize_surv_type,
     _ordered_named_response_arguments,
+    _strata,
     _time_column,
 )
 from ._types import (
@@ -1240,21 +1246,27 @@ def _data_rows(
     columns: Sequence[str],
     rows: Sequence[int],
     n: int,
-    read: Mapping[str, list[Any]] | None = None,
 ) -> _FormulaRows:
     """``data[rows, columns]``, the columns in *data*'s order; factor and ``tcut`` columns
-    keep their attributes.  *read* holds columns the caller already materialised from
-    *data*."""
+    keep their attributes, and numeric columns stay numpy arrays."""
 
     names = _data_column_names(data)
     if names is not None:
         used = set(columns)
         columns = [name for name in names if name in used]
-    read = {} if read is None else read
     frame: dict[str, Any] = {}
+    index: np.ndarray | None = None
     for name in columns:
         source = _column_source(data, name)
-        values = read[name] if name in read else _coerce_array_like(source, name)
+        array = _numeric_ndarray(source, "biuf")
+        if array is not None:
+            if len(array) != n:
+                raise ValueError(f"variable lengths differ (found for '{name}')")
+            if index is None:
+                index = np.asarray(rows, dtype=np.intp)
+            frame[name] = array[index]
+            continue
+        values = _coerce_array_like(source, name)
         if len(values) != n:
             raise ValueError(f"variable lengths differ (found for '{name}')")
         frame[name] = _rows_of(source, [values[row] for row in rows])
@@ -1266,7 +1278,6 @@ def _formula_data_rows(
     data: Any,
     rows: list[int],
     n: int,
-    read: Mapping[str, list[Any]] | None = None,
 ) -> _FormulaRows:
     """``data[rows, ]`` restricted to the variables *formula* uses.
 
@@ -1276,7 +1287,7 @@ def _formula_data_rows(
     terms afterwards.
     """
 
-    return _data_rows(data, _formula_columns(formula, data), rows, n, read)
+    return _data_rows(data, _formula_columns(formula, data), rows, n)
 
 
 def _subset_formula_inputs(
@@ -1346,7 +1357,6 @@ def _made_nan_rows(
     variables: Iterable[_CovariateTerm],
     missing: set[int],
     n: int,
-    read: Mapping[str, list[Any]] | None = None,
 ) -> tuple[set[int], dict[_CovariateTerm, list[float]]]:
     """The rows outside ``missing`` at which one of the formula ``variables`` is NaN, and
     the values at the rows outside ``missing`` of the variables it evaluated.
@@ -1367,7 +1377,7 @@ def _made_nan_rows(
     rows: Sequence[int] = range(n)
     if missing:
         rows = [row for row in rows if row not in missing]
-        data = _data_rows(data, _covariate_columns(variables), rows, n, read)
+        data = _data_rows(data, _covariate_columns(variables), rows, n)
     values = {term: _numeric_variable(data, term, len(rows)) for term in variables}
     made: set[int] = set()
     for column in values.values():
@@ -1396,28 +1406,28 @@ def _apply_formula_na_action(
         return data, row_aligned, []
 
     excluded = set(exclude_columns)
-    read = {
-        column: _column(data, column)
+    sources = {
+        column: _column_source(data, column)
         for column in _formula_columns(formula, data)
         if column not in excluded
     }
     n = _data_row_count(data, formula)
     missing = _missing_row_indices(
         [
-            *read.items(),
+            *sources.items(),
             *((name, values) for name, values in row_aligned.items() if values is not None),
         ],
         n,
     )
     missing.update(missing_rows)
-    missing.update(_backwards_interval_rows(formula, read, n))
+    missing.update(_backwards_interval_rows(formula, sources, n))
     terms = _formula_rhs_terms(formula, data)
     variables = [
         *_response_variables(_response_spec(formula)),
         *(factor for term in terms.covariates for factor in _covariate_factors(term)),
         *terms.offsets,
     ]
-    made, _values = _made_nan_rows(data, variables, missing, n, read)
+    made, _values = _made_nan_rows(data, variables, missing, n)
     missing.update(made)
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
@@ -1425,7 +1435,7 @@ def _apply_formula_na_action(
     filtered = {
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
-    return _formula_data_rows(formula, data, keep, n, read), filtered, sorted(missing)
+    return _formula_data_rows(formula, data, keep, n), filtered, sorted(missing)
 
 
 def _na_action_record(na_action: str | None, removed: Sequence[int]) -> NaAction | None:
@@ -2002,35 +2012,6 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
     return _numeric_term_values(values, term)
 
 
-def _term_columns(
-    data: Any,
-    term: _CovariateSpec,
-    n: int,
-) -> list[list[float]]:
-    if isinstance(term, _InteractionTerm):
-        factor_columns = [_term_columns(data, factor, n) for factor in term.factors]
-        interaction_columns: list[list[float]] = []
-        for column_combo in product(*factor_columns):
-            interaction_columns.append(
-                [math.prod(column[idx] for column in column_combo) for idx in range(n)]
-            )
-        return interaction_columns
-
-    values = _term_raw_values(data, term, n)
-    if not term.categorical:
-        if term.transform is not None:
-            return [_numeric_term_values(values, term)]
-        try:
-            numeric = _numeric_term_values(values, term)
-        except (TypeError, ValueError):
-            numeric = None
-        if numeric is not None:
-            return [numeric]
-
-    levels = _categorical_levels(values, term.column)
-    return [[1.0 if value == level else 0.0 for value in values] for level in levels[1:]]
-
-
 def _categorical_levels(values: list[Any], column: str) -> tuple[Any, ...]:
     labels: dict[Any, None] = {}
     for value in values:
@@ -2271,7 +2252,9 @@ def _design_rows_from_spec(
     ]
     if design.intercept:
         columns.insert(0, [1.0] * n)
-    return [[column[i] for column in columns] for i in range(n)]
+    if not columns:
+        return [[] for _row in range(n)]
+    return list(map(list, zip(*columns, strict=True)))
 
 
 def _covariate_term_name(term: _CovariateTerm) -> str:
@@ -2530,26 +2513,49 @@ def model_frame(
     )
 
 
-def _strata_term_values(mf: ModelFrame, columns: Sequence[str]) -> list[Any]:
-    """R's ``strata(a, b)`` model-frame column: the stratum label of each row."""
+def _strata_term(data: Any, columns: Sequence[str]) -> StrataFactor:
+    """R's ``strata(a, b)`` formula term evaluated on *data* (R's default label rule)."""
 
-    from ._surv import strata
-
-    factor = strata(*[_column(mf.data, column) for column in columns], labels=list(columns))
-    return list(factor.labels)
+    return _strata([(column, _column_source(data, column)) for column in columns])
 
 
-def _model_variables(mf: ModelFrame) -> list[tuple[str, list[Any]]]:
+def _strata_term_values(data: Any, columns: Sequence[str]) -> _RFactorVector:
+    """The model-frame column of a ``strata(a, b)`` term: the factor ``strata()`` returns."""
+
+    factor = _strata_term(data, columns)
+    return _r_factor(factor.labels, factor.levels)
+
+
+def _strata_keep(data: Any, terms: Sequence[Sequence[str]]) -> StrataFactor:
+    """``strata.keep`` of coxph.R, survreg.R and survdiff.R for the ``strata()`` terms
+    (each given by its columns): the one term's factor, else ``strata(m[, vars],
+    shortlabel = TRUE)`` of the terms' factors."""
+
+    if len(terms) == 1:
+        return _strata_term(data, terms[0])
+    return _strata(
+        [(f"strata({', '.join(term)})", _strata_term_values(data, term)) for term in terms],
+        shortlabel=True,
+    )
+
+
+def _strata_term_columns(terms: _FormulaTerms) -> tuple[tuple[str, ...], ...]:
+    """The columns of each ``strata()`` term of *terms*, in formula order."""
+
+    return tuple(term.columns for term in terms.model_terms if isinstance(term, _ModelStrataTerm))
+
+
+def _model_variables(mf: ModelFrame) -> list[tuple[str, Any]]:
     """R's ``mf[-1]``: one evaluated column per formula term, in formula order.
 
-    Interactions contribute their factors; ``strata()`` becomes the strata label,
+    Interactions contribute their factors; ``strata()`` becomes the strata factor,
     ``offset()`` the numeric offset; ``cluster()`` terms are left out.
     """
 
-    columns: list[tuple[str, list[Any]]] = []
+    columns: list[tuple[str, Any]] = []
     seen: set[str] = set()
 
-    def add(name: str, values: list[Any]) -> None:
+    def add(name: str, values: Any) -> None:
         if name not in seen:
             seen.add(name)
             columns.append((name, values))
@@ -2563,7 +2569,7 @@ def _model_variables(mf: ModelFrame) -> list[tuple[str, list[Any]]]:
                 add(_covariate_term_name(factor), _term_values(mf.data, factor, mf.n))
         elif isinstance(model_term, _ModelStrataTerm):
             name = f"strata({', '.join(model_term.columns)})"
-            add(name, _strata_term_values(mf, model_term.columns))
+            add(name, _strata_term_values(mf.data, model_term.columns))
         elif isinstance(model_term, _ModelOffsetTerm):
             term = model_term.term
             values = _numeric_term_values(_term_raw_values(mf.data, term, mf.n), term)
@@ -2579,8 +2585,6 @@ def _model_strata(mf: ModelFrame) -> StrataFactor | None:
     the grouping factor, whose ``codes`` are zero based.
     """
 
-    from ._surv import strata
-
     terms = mf.terms
     if any(isinstance(term, _InteractionTerm) for term in terms.covariates):
         raise ValueError("Interaction terms are not valid for this function")
@@ -2590,8 +2594,4 @@ def _model_strata(mf: ModelFrame) -> StrataFactor | None:
     if not variables:
         return None
     # strata(mf[ovars]) hands R a named list, so the labels are never shortened
-    return strata(
-        *[values for _name, values in variables],
-        labels=[n for n, _v in variables],
-        shortlabel=False,
-    )
+    return _strata(variables, shortlabel=False)

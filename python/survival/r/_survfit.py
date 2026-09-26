@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, overload
 from .. import _survival as _core
 from ._coerce import (
     _encode_labels,
+    _factor,
     _finite_float,
     _float_vector,
     _is_bool_like,
@@ -33,7 +34,6 @@ from ._coerce import (
     _r_factor,
     _scalar_or_vector,
     _start_time_value,
-    _strata_level_sort_key,
     _strata_value_label,
     _subset_indices,
     _subset_optional_sequence,
@@ -41,17 +41,17 @@ from ._coerce import (
 from ._coxph import ClogitModel, CoxphModel, survfit_coxph
 from ._formula import (
     _apply_formula_na_action,
-    _column,
     _column_source,
     _covariate_term_name,
     _formula_columns,
     _formula_response_spec,
     _parse_formula,
+    _strata_term_values,
     _subset_formula_inputs,
     _surv_response_model_name,
     _term_values,
 )
-from ._surv import Surv, _apply_surv_na_action, _subset_surv
+from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subset_surv
 from ._types import (
     CoxSurvfitResult,
     NamedMatrix,
@@ -138,68 +138,17 @@ class _SurvfitData:
         return [_mstate_event_label(value) for value in self.istate], levels
 
 
-def _factor_levels(values: Any, materialized: Sequence[Any]) -> list[Any]:
-    """R's ``factor(x)`` levels: the factor's own levels, else the sorted unique values."""
-
-    categories = _mstate_categories(values)
-    if categories is not None:
-        return list(categories)
-    unique = {value: None for value in materialized if not _is_missing_value(value)}
-    return sorted(unique, key=_strata_level_sort_key)
-
-
-def _level_codes(values: Any, name: str) -> tuple[list[int | None], list[str]]:
-    """The 0-based level code of each value (``None`` when missing) and the level labels."""
-
-    materialized = _materialize_labels(values, name)
-    levels = _factor_levels(values, materialized)
-    index = {level: code for code, level in enumerate(levels)}
-    codes = [None if _is_missing_value(value) else index[value] for value in materialized]
-    return codes, [_strata_value_label(level) for level in levels]
-
-
-def _strata_factor(columns: dict[str, Any], shortlabel: bool) -> _core.StrataResult:
-    """R's ``strata()`` on named columns (its label rule is the caller's)."""
-
-    coded = [_level_codes(values, name) for name, values in columns.items()]
-    return _core.strata(
-        list(columns),
-        [labels for _codes, labels in coded],
-        [codes for codes, _labels in coded],
-        shortlabel=shortlabel,
-    )
-
-
-def _strata_term_values(data: Any, columns: Sequence[str], n: int) -> Any:
-    """The column a ``strata(a, b)`` term adds to the model frame: R's ``strata()`` factor."""
-
-    raw = {column: _column_source(data, column) for column in columns}
-    shortlabel = all(
-        _mstate_categories(values) is not None
-        or all(isinstance(value, str) for value in _column(data, column) if value is not None)
-        for column, values in raw.items()
-    )
-    factor = _strata_factor(raw, shortlabel)
-    if len(factor.codes) != n:
-        raise ValueError("formula columns must have the same length as the Surv response")
-    labels = [None if code is None else factor.levels[code] for code in factor.codes]
-    return _r_factor(labels, factor.levels)
-
-
-def _curve_factor(columns: dict[str, Any], n: int) -> tuple[list[int], list[str]]:
+def _curve_factor(
+    columns: dict[str, Any], n: int, *, shortlabel: bool = False
+) -> tuple[list[int], list[str]]:
     """``X <- strata(mf[ll])``, or ``factor(rep(1, n))`` for ``~ 1``."""
 
     if not columns:
         return [0] * n, ["1"]
-    factor = _strata_factor(columns, shortlabel=False)
+    factor = _strata(list(columns.items()), shortlabel=shortlabel)
     if len(factor.codes) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
-    codes = []
-    for code in factor.codes:
-        if code is None:
-            raise ValueError("missing values in the grouping variables")
-        codes.append(int(code))
-    return codes, list(factor.levels)
+    return _complete_codes(factor, "missing values in the grouping variables"), factor.levels
 
 
 def _case_weights(weights: Any | None, n: int) -> list[float] | None:
@@ -236,18 +185,19 @@ def _survfit_data(
     response_name: str,
     columns: dict[str, Any],
     extras: dict[str, Any],
-    x_levels: list[str] | None = None,
+    *,
+    shortlabel: bool = False,
 ) -> _SurvfitData:
     """Assemble the model frame and the curve factor from the response and its columns.
 
     ``extras`` holds the special arguments (``weights``, ``id``, ``cluster``, ``istate``),
-    ``columns`` the grouping terms; ``x_levels`` overrides the curve labels.
+    ``columns`` the grouping terms; ``shortlabel`` gives the curves bare level labels.
     """
 
     n = len(response)
     if n == 0:
         raise ValueError("data set has no non-missing observations")
-    x_codes, levels = _curve_factor(columns, n)
+    x_codes, levels = _curve_factor(columns, n, shortlabel=shortlabel)
     model: dict[str, Any] = {response_name: response, **columns}
     aligned = {name: _aligned(extras[name], n, name) for name in _SPECIALS}
     for name, values in aligned.items():
@@ -256,7 +206,7 @@ def _survfit_data(
     return _SurvfitData(
         y=response,
         x_codes=x_codes,
-        x_levels=levels if x_levels is None else x_levels,
+        x_levels=levels,
         weights=_case_weights(aligned["weights"], n),
         id=aligned["id"],
         cluster=aligned["cluster"],
@@ -321,7 +271,7 @@ def _formula_model_frame(
             columns[_covariate_term_name(term)] = values
         elif isinstance(model_term, _ModelStrataTerm):
             name = f"strata({', '.join(model_term.columns)})"
-            columns[name] = _strata_term_values(data, model_term.columns, n)
+            columns[name] = _strata_term_values(data, model_term.columns)
         elif not isinstance(model_term, _ModelOffsetTerm | _ModelClusterTerm):
             raise ValueError(f"unsupported survfit formula term {model_term!r}")
     return _survfit_data(response, _surv_response_model_name(spec), columns, extras)
@@ -351,8 +301,7 @@ def _surv_model_frame(
     group = aligned.pop("group")
     columns = {} if group is None else {"group": group}
     # a bare vector has no variable name to label its levels with
-    levels = None if group is None else list(_strata_factor(columns, shortlabel=True).levels)
-    return _survfit_data(response, "response", columns, aligned, levels)
+    return _survfit_data(response, "response", columns, aligned, shortlabel=True)
 
 
 def _survfit_data_from_fit(fit: SurvfitResult | SurvfitMultiStateResult) -> _SurvfitData:
@@ -1389,7 +1338,7 @@ def _grouping_factors(by: Any, n_data: int) -> list[_core.GroupingFactor]:
         items = [(None, by)]
     factors = []
     for name, values in items:
-        codes, labels = _level_codes(values, "by")
+        codes, labels = _factor(values, "by")
         if len(codes) != n_data:
             raise ValueError("arguments must have the same length")
         if any(code is None for code in codes):

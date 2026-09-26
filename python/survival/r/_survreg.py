@@ -42,8 +42,6 @@ from ._coerce import (
     _optional_float_vector,
     _pop_dotted_keyword,
     _quantile_vector,
-    _strata_level_sort_key,
-    _strata_value_label,
 )
 from ._fit import (
     _excluded_rows,
@@ -69,9 +67,11 @@ from ._formula import (
     _na_action_record,
     _offset_vector,
     _parse_formula,
+    _strata_keep,
+    _strata_term_columns,
     _subset_formula_inputs,
 )
-from ._surv import Surv, _survreg_response_arrays, is_na_surv
+from ._surv import Surv, _complete_codes, _survreg_response_arrays, is_na_surv
 from ._types import (
     NaAction,
     PredictResult,
@@ -137,7 +137,7 @@ class SurvregModelResult:
     assign: tuple[int, ...] = field(default=(), repr=False)
     term_labels: tuple[str, ...] = ()
     strata_term: int = field(default=0, repr=False)
-    strata_columns: tuple[str, ...] = field(default=(), repr=False)
+    strata_terms: tuple[tuple[str, ...], ...] = field(default=(), repr=False)
     strata_levels: tuple[str, ...] = ()
     na_action: NaAction | None = field(default=None, repr=False)
 
@@ -385,6 +385,7 @@ class _SurvregFrame:
     assign: tuple[int, ...] = ()
     term_labels: tuple[str, ...] = ()
     strata_term: int = 0
+    strata_terms: tuple[tuple[str, ...], ...] = ()
     strata: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
     weights: list[float] | None = None
@@ -392,45 +393,6 @@ class _SurvregFrame:
     cluster: list[Any] | None = None
     model: dict[str, Any] | None = None
     na_action: NaAction | None = None
-
-
-def _is_categorical(values: Sequence[Any]) -> bool:
-    return hasattr(values, "categories") or any(isinstance(value, str) for value in values)
-
-
-def _column_levels(values: Sequence[Any]) -> list[Any]:
-    categories = getattr(values, "categories", None)
-    if categories is not None:
-        return list(categories)
-    return sorted({value for value in values if value is not None}, key=_strata_level_sort_key)
-
-
-def _strata_factor(data: Any, columns: Sequence[str], n: int) -> tuple[list[int], tuple[str, ...]]:
-    """R's ``strata(m[, vars])``: 0-based codes and level labels (``name=level, ...``)."""
-
-    values = [_column(data, name) for name in columns]
-    shortlabel = all(_is_categorical(column) for column in values)
-    codes = [0] * n
-    labels = [""] * n
-    for term, (name, column) in enumerate(zip(columns, values, strict=True)):
-        levels = _column_levels(column)
-        level_labels = [_strata_value_label(level) for level in levels]
-        if not shortlabel:
-            level_labels = [f"{name}={label}" for label in level_labels]
-            if term:
-                width = max(len(label) for label in level_labels)
-                level_labels = [label.ljust(width) for label in level_labels]
-        position = {level: idx for idx, level in enumerate(levels)}
-        for row in range(n):
-            if column[row] is None:
-                raise ValueError("strata contains missing values")
-            code = position[column[row]]
-            codes[row] = codes[row] * len(levels) + code
-            labels[row] = level_labels[code] if not term else f"{labels[row]}, {level_labels[code]}"
-    observed = sorted(set(codes))
-    lookup = {code: idx for idx, code in enumerate(observed)}
-    level_names = tuple(labels[codes.index(code)] for code in observed)
-    return [lookup[code] for code in codes], level_names
 
 
 def _term_structure(
@@ -516,7 +478,13 @@ def _formula_frame(
             )
         else:
             cluster = _column(data, terms.clusters[0])
-    strata, strata_levels = _strata_factor(data, terms.strata, n) if terms.strata else (None, ())
+    strata_terms = _strata_term_columns(terms)
+    strata: list[int] | None = None
+    strata_levels: tuple[str, ...] = ()
+    if strata_terms:
+        factor = _strata_keep(data, strata_terms)
+        strata = _complete_codes(factor, "strata contains missing values")
+        strata_levels = tuple(factor.levels)
     model_terms = [
         term
         for term in terms.model_terms
@@ -531,6 +499,7 @@ def _formula_frame(
         assign=assign,
         term_labels=term_labels,
         strata_term=strata_term,
+        strata_terms=strata_terms,
         strata=strata,
         strata_levels=strata_levels,
         weights=_optional_float_vector(weights, "weights", n),
@@ -725,7 +694,7 @@ def survreg(
         assign=frame.assign,
         term_labels=frame.term_labels,
         strata_term=frame.strata_term,
-        strata_columns=tuple(frame.design.strata) if frame.design is not None else (),
+        strata_terms=frame.strata_terms,
         strata_levels=frame.strata_levels,
         na_action=frame.na_action,
     )
@@ -850,11 +819,12 @@ def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _N
     if not (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
         raise TypeError("newdata must be a data frame with the model's columns")
     # Terms keeps the strata() term, so its variables are required
-    for name in fit.strata_columns:
-        _column_source(newdata, name)
+    for term in fit.strata_terms:
+        for name in term:
+            _column_source(newdata, name)
     return _newdata_frame(
         design,
-        fit.strata_columns,
+        fit.strata_terms,
         fit.strata_levels,
         newdata,
         need_strata=bool(fit.strata_levels),

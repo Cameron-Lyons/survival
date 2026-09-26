@@ -144,12 +144,10 @@ def test_model_frame_builds_the_response_and_row_aligned_arguments():
     assert mf.id == list(range(8))
     assert mf.offset == pytest.approx([1.0 + value for value in data["x2"]])
     assert mf.terms.strata == ["group"]
-    assert dict(r_formula._model_variables(mf)) == {
-        "x1": data["x1"],
-        # a character strata variable gets R's short labels
-        "strata(group)": ["A"] * 4 + ["B"] * 4,
-        "offset(x2)": data["x2"],
-    }
+    variables = dict(r_formula._model_variables(mf))
+    # the strata() term is a factor; a character strata variable gets R's short labels
+    assert list(variables.pop("strata(group)")) == ["A"] * 4 + ["B"] * 4
+    assert variables == {"x1": data["x1"], "offset(x2)": data["x2"]}
     groups = r_formula._model_strata(mf)
     assert len(groups.levels) == 8
     assert groups.levels[0] == "x1=0.1, strata(group)=A"

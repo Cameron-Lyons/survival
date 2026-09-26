@@ -11,12 +11,9 @@ from dataclasses import dataclass, field, replace
 from itertools import compress, product
 from typing import Any
 
-from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
     _float_vector,
-    _is_missing_value,
-    _label_levels,
     _materialize_1d,
     _materialize_labels,
     _missing_row_indices,
@@ -45,11 +42,14 @@ from ._formula import (
     _na_action_record,
     _offset_vector,
     _parse_formula,
+    _strata_keep,
+    _strata_term_columns,
     _subset_formula_inputs,
 )
-from ._surv import Surv
+from ._surv import Surv, _complete_codes, _strata
 from ._types import (
     NaAction,
+    StrataFactor,
     _CategoricalDesignTerm,
     _CovariateTerm,
     _DesignTerm,
@@ -205,45 +205,6 @@ def _design_names_and_assign(
     return names, assign
 
 
-def _factor(column: Any, name: str) -> tuple[list[str], list[int | None]]:
-    """R's ``factor(x)``: the levels (as character) and 0-based codes (None = NA)."""
-
-    values = _materialize_1d(column, name)
-    present = [value for value in values if not _is_missing_value(value)]
-    levels = _r_levels(column, _label_levels(present, name))
-    index = {level: idx for idx, level in enumerate(levels)}
-    codes = [None if _is_missing_value(value) else index[value] for value in values]
-    return [_strata_value_label(level) for level in levels], codes
-
-
-def _is_character(column: Any) -> bool:
-    """``is.character(x) | is.factor(x)``: what makes ``strata()`` drop the ``name=`` prefix."""
-
-    if _mstate_categories(column) is not None:
-        return True
-    values = _materialize_1d(column, "strata")
-    return all(isinstance(value, str) or _is_missing_value(value) for value in values)
-
-
-def _strata_factor(
-    columns: Mapping[str, Any], n: int, *, shortlabel: bool | None = None
-) -> _core.StrataResult:
-    """``strata(mf[, vars])``: R's labels (``name=level``, or the bare level when
-    every variable is character/factor) and compact codes."""
-
-    if any(len(_materialize_1d(column, name)) != n for name, column in columns.items()):
-        raise ValueError("strata columns must have the same length as the Surv response")
-    factors = [_factor(column, name) for name, column in columns.items()]
-    if shortlabel is None:
-        shortlabel = all(_is_character(column) for column in columns.values())
-    return _core.strata(
-        list(columns),
-        [levels for levels, _codes in factors],
-        [codes for _levels, codes in factors],
-        shortlabel=shortlabel,
-    )
-
-
 def _model_frame(
     formula: str,
     data: Any,
@@ -290,15 +251,17 @@ def _model_frame(
 
     strata_codes: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
+    factor: StrataFactor | None = None
     if terms.strata:
         if aligned["strata"] is not None:
             raise ValueError("use only one of formula strata(...) or strata")
-        factor = _strata_factor({name: _column_source(data, name) for name in terms.strata}, n)
-        strata_codes = [int(code) for code in factor.codes]
-        strata_levels = tuple(factor.levels)
+        factor = _strata_keep(data, _strata_term_columns(terms))
     elif aligned["strata"] is not None:
-        factor = _strata_factor({"strata": _materialize_labels(aligned["strata"], "strata")}, n)
-        strata_codes = [int(code) for code in factor.codes]
+        factor = _strata([("strata", aligned["strata"])])
+    if factor is not None:
+        if len(factor.codes) != n:
+            raise ValueError("strata columns must have the same length as the Surv response")
+        strata_codes = _complete_codes(factor, "missing values in the strata")
         strata_levels = tuple(factor.levels)
 
     offset_values = _offset_vector(data, terms.offsets, n) if terms.offsets else None
@@ -424,7 +387,7 @@ def _newdata_response(newdata: Any, spec: _SurvResponseSpec) -> Surv | None:
 
 def _newdata_frame(
     design: _FormulaDesign,
-    strata_terms: Sequence[str],
+    strata_terms: Sequence[Sequence[str]],
     strata_levels: Sequence[str],
     newdata: Any,
     *,
@@ -435,7 +398,8 @@ def _newdata_frame(
     """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata,
     na.action)``).
 
-    Strata columns are looked up only when ``need_strata`` (R's ``found.strata``),
+    The ``strata()`` terms (the columns of each) are looked up only when ``need_strata``
+    (R's ``found.strata``) and coded as the fit coded them (``strata.keep``);
     the response only when ``need_response`` (``predict(type='expected')``,
     ``survfit(id=)``); either is ``None`` when absent from ``newdata``.  A row with a
     missing value in one of these variables or in a covariate or offset variable (a
@@ -445,7 +409,9 @@ def _newdata_frame(
     """
 
     present = set(_newdata_columns(newdata))
-    strata_columns = list(strata_terms) if need_strata and set(strata_terms) <= present else []
+    strata_columns = [column for term in strata_terms for column in term]
+    if not (need_strata and set(strata_columns) <= present):
+        strata_columns = []
     response_columns = (
         list(design.response.columns)
         if need_response and set(design.response.columns) <= present
@@ -476,12 +442,13 @@ def _newdata_frame(
     offset = _offset_vector(newdata, list(design.offsets), m, evaluated)
     strata_codes: list[int] | None = None
     if strata_columns:
-        factor = _strata_factor({name: _column_source(newdata, name) for name in strata_columns}, m)
+        factor = _strata_keep(newdata, strata_terms)
         level_index = {level: idx for idx, level in enumerate(strata_levels)}
         try:
-            strata_codes = [level_index[factor.levels[int(code)]] for code in factor.codes]
+            remap = [level_index[level] for level in factor.levels]
         except KeyError as exc:
             raise ValueError("New data has a strata not found in the original model") from exc
+        strata_codes = [remap[code] for code in _complete_codes(factor, "missing strata")]
     y = _newdata_response(newdata, design.response) if response_columns else None
     return _NewData(
         data=newdata,
