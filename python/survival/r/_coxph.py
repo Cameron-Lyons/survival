@@ -12,7 +12,7 @@ import math
 import numbers
 import sys
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from statistics import NormalDist
 from typing import Any
@@ -20,6 +20,7 @@ from typing import Any
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _as_character,
     _as_matrix_rows,
     _as_rows,
     _coerce_array_like,
@@ -53,6 +54,7 @@ from ._fit import (
     _model_frame,
     _ModelFrame,
     _NewData,
+    _newdata_columns,
     _newdata_frame,
     _pad_rows,
     _rowsum_excluded,
@@ -61,8 +63,10 @@ from ._fit import (
 from ._formula import (
     _column,
     _column_or_values,
+    _data_rows,
     _design_rows_from_spec,
     _formula_data_rows,
+    _formula_design_row_count,
     _response_arg_columns,
 )
 from ._penalties import _pspline_cbase
@@ -1816,12 +1820,45 @@ def _confidence_limits(surv: Any, std_err: Any, conf_type: str, conf_int: float)
     return list(band.lower), list(band.upper)
 
 
-def _survfit_id_codes(newdata: Any, id: Any, n: int) -> list[int]:
-    labels = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
-    if len(labels) != n:
-        raise ValueError("id must have one value per newdata row")
-    index = {label: idx for idx, label in enumerate(_label_levels(labels, "id"))}
-    return [index[label] for label in labels]
+def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
+    """R's ``row.names`` of ``data`` at the 0-based ``rows``: a data frame's own index
+    labels, else the 1-based row numbers (R's automatic row names)."""
+
+    index = None if isinstance(data, Mapping) else getattr(data, "index", None)
+    if index is None or (
+        type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
+    ):
+        return [str(row + 1) for row in rows]
+    labels = list(index)
+    return [_as_character(labels[row]) for row in rows]
+
+
+def _survfit_newdata(
+    fit: CoxphModel, newdata: Any, *, individual: bool, id: Any | None
+) -> tuple[_NewData, list[int], list[Any] | None]:
+    """R's ``model.frame(Terms2, newdata, id = id, na.action = na.omit)``: the newdata
+    pieces at the rows without a missing value in a variable the curves read (the
+    ``id`` included), those rows (0-based, for the curve names) and their ``id``."""
+
+    n = _formula_design_row_count(newdata, fit.design)
+    rows = list(range(n))
+    ids = None
+    if id is not None:
+        ids = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
+        if len(ids) != n:
+            raise ValueError("id must have one value per newdata row")
+        rows = [row for row in rows if not _is_missing_value(ids[row])]
+        if len(rows) < n:
+            newdata = _data_rows(newdata, _newdata_columns(newdata), rows, n)
+    new = _prediction_newdata(
+        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action="na.omit"
+    )
+    if new.missing:
+        dropped = set(new.missing)
+        rows = [row for position, row in enumerate(rows) if position not in dropped]
+    if not rows:
+        raise ValueError("all rows of newdata have missing values")
+    return new, rows, None if ids is None else [ids[row] for row in rows]
 
 
 def _survfit_curves(
@@ -1837,7 +1874,7 @@ def _survfit_curves(
     start_time: float | None = None,
 ) -> tuple[list[Any], list[str]]:
     """The engine curves for ``survfit.coxph`` and the name of each block (R's
-    ``names(fit$strata)``: the strata levels, or the newdata row numbers)."""
+    ``names(fit$strata)``: the strata levels, the id values or the newdata row names)."""
 
     _check_interaction_margins(fit)
     engine = fit.penalized if fit.penalized is not None else fit.fit
@@ -1858,9 +1895,7 @@ def _survfit_curves(
             )
         curves = engine.survfit(**options)
         return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
-    new = _prediction_newdata(
-        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action="fail"
-    )
+    new, rows, ids = _survfit_newdata(fit, newdata, individual=individual, id=id)
     if individual:
         if new.y is None:
             raise ValueError("newdata must contain the response variables when id is given")
@@ -1868,19 +1903,27 @@ def _survfit_curves(
             raise ValueError("Survival type of newdata does not match the fitted model")
         if new.y.start is None:
             raise ValueError("Individual=TRUE is only valid for counting process data")
+        if ids is None:  # individual = TRUE: one subject
+            codes, labels = [0] * new.n, []
+        else:
+            # coxsurv.fit's curves are the unique ids in order of first appearance
+            levels = _label_levels(ids, "id")
+            index = {label: code for code, label in enumerate(levels)}
+            codes = [index[label] for label in ids]
+            labels = [_as_character(label) for label in levels]
         curves = engine.survfit_individual(
             new.x,
             list(new.y.start),
             list(new.y.time),
-            _survfit_id_codes(newdata, id, new.n) if id is not None else [0] * new.n,
+            codes,
             new_strata=new.strata,
             new_offset=new.offset,
             **options,
         )
-        return curves, [str(idx + 1) for idx in range(len(curves))] if len(curves) > 1 else []
+        return curves, labels if len(curves) > 1 else []
     curves = engine.survfit(newdata=new.x, new_strata=new.strata, new_offset=new.offset, **options)
     if new.strata is not None:
-        return curves, [str(idx + 1) for idx in range(len(curves))]
+        return curves, _row_names(newdata, rows)
     return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
 
 
@@ -1904,8 +1947,9 @@ def survfit_coxph(
 
     Without ``newdata`` the curve is for the average covariate (``fit$means``); with
     ``newdata`` there is one curve per row (per row in its own stratum when the
-    strata variables are present, otherwise every stratum for every row).  ``id``
-    (with counting-process ``newdata``) gives one time-dependent curve per subject.
+    strata variables are present, otherwise every stratum for every row), and rows
+    with a missing value are left out (R's ``na.omit``).  ``id`` (with
+    counting-process ``newdata``) gives one time-dependent curve per subject.
     ``stype``/``ctype`` default to 2 and the tie method; the old-style ``type``
     (``"kalbfleisch-prentice"``, ``"aalen"``, ``"efron"``, ...) sets them when neither is
     given.  ``start_time`` builds the curves from the rows still at risk at that time.

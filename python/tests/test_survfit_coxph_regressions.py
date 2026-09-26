@@ -1,11 +1,12 @@
 """survfit.coxph regressions against R 4.5.3 with survival 3.8-12.
 
-The old-style ``type`` picks R's curve, ``individual`` is accepted with R's warning,
-``start.time`` builds the curves from the rows still at risk at that time, penalized fits
-give ``id`` curves, and models with an interaction missing its lower-order terms are
-refused.
+The old-style ``type`` picks R's curve, ``start.time`` builds the curves from the rows still
+at risk, models with an interaction missing its lower-order terms are refused, incomplete
+newdata rows are left out (``na.omit``) and curves carry R's names (id values, newdata row
+names).
 """
 
+import math
 import warnings
 
 import pytest
@@ -297,3 +298,89 @@ def test_interaction_with_its_margins_gives_curves(lung, formula, at_means, at_n
         warnings.simplefilter("error")
         newdata = r.survfit(fit, {"age": [60], "sex": [1], "ph.ecog": [1]})
     assert newdata.surv[0] == pytest.approx(at_newdata, rel=1e-7)
+
+
+# ---------------------------------------------------------------------------
+# newdata with missing values
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("missing", [None, math.nan])
+def test_incomplete_newdata_rows_are_left_out(lung_fit, missing):
+    # R: survfit(fit, newdata = data.frame(age = c(50, NA, 60), sex = c(1, 2, 1))) drops row 2
+    newdata = {"age": [50, missing, 60], "sex": [1, 2, 1]}
+    curve = r.survfit(lung_fit, newdata)
+    assert curve.newdata is newdata
+    assert (len(curve.surv), curve.ncurve) == (186, 2)
+    assert curve.surv[0] == approx([0.995860486224548, 0.995093079780872])
+    assert curve.std_err[0] == approx([0.00418849710737933, 0.0049280485101332])
+    assert curve.surv[99] == approx([0.551371678359325, 0.493621308396549])
+    hazard = r.basehaz(lung_fit, newdata)
+    assert hazard.hazard[0] == approx([0.00414810528056652, 0.0049189986803758])
+    single = r.survfit(lung_fit, {"age": [50, missing], "sex": [1, 2]})
+    assert single.surv[:3] == approx([0.995860486224548, 0.983427001357142, 0.979264585784987])
+    with pytest.raises(ValueError, match="all rows of newdata have missing values"):
+        r.survfit(lung_fit, {"age": [missing, missing], "sex": [1, 2]})
+
+
+def test_newdata_rows_missing_a_strata_offset_or_transformed_value(lung):
+    stratified = r.coxph("Surv(time, status) ~ age + strata(sex)", lung)
+    curve = r.survfit(stratified, {"age": [50, 60, 70], "sex": [1, None, 2]})
+    assert curve.strata == {"1": 119, "3": 87}
+    assert [curve.surv[0], curve.surv[119]] == approx([0.982676086421029, 0.987368363848863])
+    every = r.survfit(stratified, {"age": [50, None, 70]})
+    assert every.strata == {"sex=1": 119, "sex=2": 87}
+    assert every.ncurve == 2
+    offset = r.coxph("Surv(time, status) ~ age + offset(wt.loss/100)", lung)
+    curve = r.survfit(offset, {"age": [50, 60, 70], "wt.loss": [5, None, -2]})
+    assert (len(curve.surv), curve.ncurve) == (179, 2)
+    assert curve.surv[0] == approx([0.996718777244269, 0.995255629692632])
+    logged = r.coxph("Surv(time, status) ~ log(age) + sex", lung)
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        curve = r.survfit(logged, {"age": [50, -1, 60], "sex": [1, 2, 1]})
+    assert curve.surv[0] == approx([0.995858312428209, 0.995026804966051])
+
+
+# ---------------------------------------------------------------------------
+# curve names
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("pid", "strata"),
+    [
+        (["b", "b", "a", "a"], {"b": 85, "a": 102}),
+        ([10, 10, 20, 20], {"10": 85, "20": 102}),
+        ([10.0, 10.0, 20.0, 20.0], {"10": 85, "20": 102}),
+        ([10.5, 10.5, 20, 20], {"10.5": 85, "20": 102}),
+        ([1, 1, 1, 1], None),
+    ],
+)
+def test_id_curves_are_named_by_the_id_values(heart_fit, pid, strata):
+    curve = r.survfit(heart_fit, _heart_newdata(pid=pid), id="pid")
+    assert curve.strata == strata
+    assert curve.surv[:3] == approx([0.991314038209925, 0.965110733471733, 0.938764141475753])
+
+
+def test_id_curves_leave_out_rows_with_a_missing_value(heart_fit):
+    for newdata in (
+        _heart_newdata(pid=["b", None, "a", "a"]),
+        _heart_newdata(age=[-5, None, 3, 3]),
+    ):
+        curve = r.survfit(heart_fit, newdata, id="pid")
+        assert curve.strata == {"b": 39, "a": 102}
+        assert curve.n == [172, 172]
+        assert curve.surv[:3] == approx([0.991314038209925, 0.965110733471733, 0.938764141475753])
+
+
+def test_stratified_newdata_curves_are_named_by_the_row_names(lung):
+    pd = pytest.importorskip("pandas")
+    fit = r.coxph("Surv(time, status) ~ age + strata(sex)", lung)
+    named = pd.DataFrame({"age": [50, 70, 60], "sex": [2, 1, 2]}, index=["x", "y", "z"])
+    assert r.survfit(fit, named).strata == {"x": 87, "y": 119, "z": 87}
+    automatic = pd.DataFrame({"age": [50, 70, 60], "sex": [2, 1, 2]})
+    assert r.survfit(fit, automatic).strata == {"1": 87, "2": 119, "3": 87}
+    events = pd.DataFrame({"age": [50, 60], "sex": [1, 2]}, index=["p", "q"])
+    assert r.survfit(fit, events, censor=False).strata == {"p": 99, "q": 51}
+    subset = pd.DataFrame({"age": [50, None, 60], "sex": [2, 1, 2]}, index=[5, 6, 7])
+    assert r.survfit(fit, subset).strata == {"5": 87, "7": 87}
