@@ -1,8 +1,8 @@
-"""survfit at scale, against R 4.5.3 with survival 3.8-12.
+"""survfit's influence matrices and summaries at scale, against R 4.5.3 with survival 3.8-12.
 
 The influence matrices are read-only NumPy views of the engine's column-major arrays, so a
-read copies nothing, and the influence of an estimated ``p0`` is computed in one pass over
-the rows, with R's row offsets.
+read copies nothing; ``summary`` and ``survmean`` never copy them; and the influence of an
+estimated ``p0`` is computed in one pass over the rows, with R's row offsets.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 r = survival.r_api
+sa = survival.surv_analysis
 _survfit_strata_curves = r._survfit_strata_curves
 
 
@@ -127,6 +128,95 @@ def test_strata_influence_matches_r_and_split_curves_share_it():
     )
     split = _survfit_strata_curves(fit)["2"].influence_chaz[0].values
     assert np.shares_memory(split, second)
+
+
+# ---------------------------------------------------------------------------
+# summary and survmean of an influence fit
+# ---------------------------------------------------------------------------
+
+
+def _groups():
+    data = _weighted()
+    return {key: data[key] for key in ("time", "status", "g")}
+
+
+def test_summary_of_an_influence_fit_matches_r():
+    # R: s <- summary(survfit(Surv(time, status) ~ g, d, influence = TRUE))
+    fit = r.survfit("Surv(time, status) ~ g", _groups(), influence=True)
+    summary = r.summary_survfit(fit)
+    assert summary.time == [1, 6, 2, 3, 5]
+    assert summary.surv == pytest.approx([0.75, 0.0, 0.75, 0.5, 0.25], rel=1e-12)
+    se = 0.21650635094610965
+    assert summary.std_err == pytest.approx([se, 0.0, se, 0.25, se], rel=1e-12)
+    np.testing.assert_allclose(
+        summary.table.values,
+        [
+            [4, 4, 4, 2, 4.75, 1.08253175473054841, 6, 1, 6],
+            [4, 4, 4, 3, 4.25, 0.96014321848357598, 4, 2, np.nan],
+        ],
+        rtol=1e-12,
+    )
+    # R: the same at times 2 and 5 with rmean 6
+    at = r.summary_survfit(fit, times=[2, 5], rmean=6)
+    assert at.surv == pytest.approx([0.75, 0.75, 0.75, 0.25], rel=1e-12)
+    assert at.std_err == pytest.approx([se] * 4, rel=1e-12)
+    assert at.n_risk == [3, 1, 4, 2]
+    assert at.n_event == [1, 0, 1, 2]
+    assert at.n_censor == [1, 1, 0, 0]
+    np.testing.assert_allclose(
+        [row[4:6] for row in at.table.values],
+        [[4.75, 1.08253175473054841], [4.0, 0.79056941504209488]],
+        rtol=1e-12,
+    )
+
+
+def test_summary_is_the_same_with_and_without_influence():
+    # influence = TRUE implies robust = TRUE: the fits differ only by the matrices
+    data = _groups()
+    for times in (None, [2, 5]):
+        with_influence = r.summary_survfit(
+            r.survfit("Surv(time, status) ~ g", data, influence=True), times=times
+        )
+        without = r.summary_survfit(
+            r.survfit("Surv(time, status) ~ g", data, robust=True), times=times
+        )
+        for field in ("time", "n_risk", "n_event", "n_censor", "surv", "cumhaz", "strata"):
+            assert getattr(with_influence, field) == getattr(without, field), field
+        for field in ("std_err", "std_chaz", "lower", "upper"):
+            np.testing.assert_allclose(
+                getattr(with_influence, field), getattr(without, field), rtol=1e-12, err_msg=field
+            )
+        np.testing.assert_allclose(with_influence.table.values, without.table.values, rtol=1e-12)
+
+
+@pytest.mark.parametrize("rmean", ["none", "common", "individual", "4.5"])
+@pytest.mark.parametrize("start_time", [None, 1.5])
+def test_survmean_of_the_fit_equals_that_of_its_survfit0(rmean, start_time):
+    # summary.survfit reads survmean(survfit0(fit)); the table is that of the fit itself
+    fit = r.survfit("Surv(time, status) ~ g", _groups(), influence=True, start_time=start_time)
+    plain = sa.survmean(fit.engine, 1.0, rmean)
+    with_t0 = sa.survmean(sa.survfit0(fit.engine), 1.0, rmean)
+    for field in ("records", "n_max", "n_start", "events", "rmean", "se_rmean", "median"):
+        assert getattr(plain, field) == getattr(with_t0, field), field
+    np.testing.assert_array_equal(plain.lower, with_t0.lower)
+    np.testing.assert_array_equal(plain.upper, with_t0.upper)
+    np.testing.assert_array_equal(plain.end_time, with_t0.end_time)
+
+
+def test_summary_rmean_checks_the_first_time_of_a_start_time_fit():
+    # R: f <- survfit(Surv(time, status) ~ 1, d, influence = TRUE, start.time = 1.5)
+    fit = r.survfit("Surv(time, status) ~ 1", _groups(), influence=True, start_time=1.5)
+    with pytest.raises(
+        ValueError, match="Truncation point for the mean time in state is < smallest"
+    ):
+        r.summary_survfit(fit, rmean=1.8)
+    # summary(f, rmean = 4)$table
+    table = r.summary_survfit(fit, rmean=4).table
+    np.testing.assert_allclose(
+        table.values[0],
+        [7, 7, 7, 4, 2.04285714285714270, 0.28317236609754631, 5, 3, np.nan],
+        rtol=1e-12,
+    )
 
 
 # ---------------------------------------------------------------------------

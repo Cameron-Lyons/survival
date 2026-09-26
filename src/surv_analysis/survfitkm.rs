@@ -391,6 +391,16 @@ impl SurvfitKMResult {
         })
     }
 
+    /// The fit without its influence matrices, for the summaries, which
+    /// never read them (the matrices are shared, so none is copied).
+    pub fn clone_without_influence(&self) -> Self {
+        Self {
+            influence_surv: None,
+            influence_chaz: None,
+            ..self.clone()
+        }
+    }
+
     /// `fit[curves]` (`[.survfit`): the curves at the given positions of
     /// `strata` (0-based, in the order given) as a result of their own.  A
     /// single curve has no `strata`, like a fit without strata.

@@ -22,6 +22,12 @@ fn r_tolerance() -> f64 {
 /// 1`, `cumhaz = 0`, zero counts and zero standard errors into every curve
 /// that does not already start there.  Influence matrices get a zero column.
 pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
+    survfit0_with(fit, true)
+}
+
+/// [`survfit0`], leaving out the influence matrices unless
+/// `keep_influence`: the summaries built on it never read them.
+pub(crate) fn survfit0_with(fit: &SurvfitKMResult, keep_influence: bool) -> SurvfitKMResult {
     let t0 = fit.t0;
     let ranges = fit.curve_ranges();
     let inserts: Vec<bool> = ranges
@@ -29,7 +35,11 @@ pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
         .map(|range| range.is_empty() || fit.time[range.start] != t0)
         .collect();
     if inserts.iter().all(|&insert| !insert) {
-        return fit.clone();
+        return if keep_influence {
+            fit.clone()
+        } else {
+            fit.clone_without_influence()
+        };
     }
     let n_new: usize = fit.time.len() + inserts.iter().filter(|&&insert| insert).count();
     // build the stacked vectors with the extra rows
@@ -51,7 +61,7 @@ pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
         values.as_ref().map(|values| addto(values, zero, false))
     };
     let add_influence = |list: &Option<Vec<SurvfitInfluence>>| -> Option<Vec<SurvfitInfluence>> {
-        let list = list.as_ref()?;
+        let list = list.as_ref().filter(|_| keep_influence)?;
         let with_zero_column = |influence: &SurvfitInfluence| {
             // column-major: the new first column is nid zeros ahead of the rest
             let (nid, ntime) = influence.values.dim();
@@ -475,9 +485,10 @@ fn find_interval(times: &[f64], t: f64, left_open: bool) -> usize {
 /// `summary.survfit` without a `times` argument: `censored = FALSE` keeps
 /// only the rows with events, accumulating the censoring and entry counts
 /// in between into the next kept row; `censored = TRUE` is the fit itself.
-/// Either way `std_err` is put on the survival scale (`logse = false`).
+/// Either way `std_err` is put on the survival scale (`logse = false`) and,
+/// as in R, the influence matrices are not part of the summary.
 pub fn summary_survfit(fit: &SurvfitKMResult, censored: bool) -> SurvfitKMResult {
-    let mut out = fit.clone();
+    let mut out = fit.clone_without_influence();
     if !censored {
         let ranges = fit.curve_ranges();
         let keep: Vec<usize> = (0..fit.time.len())
@@ -524,8 +535,6 @@ pub fn summary_survfit(fit: &SurvfitKMResult, censored: bool) -> SurvfitKMResult
             .strata
             .as_ref()
             .map(|_| kept_ranges.iter().map(ExactSizeIterator::len).collect());
-        out.influence_surv = None;
-        out.influence_chaz = None;
     }
     out.std_err = out.std_err_surv_scale();
     out.logse = false;
@@ -548,9 +557,10 @@ pub fn summary_survfit_times(
     }
     validate_finite(times, "times")?;
     let dosum = times.windows(2).all(|pair| pair[1] > pair[0]);
-    let fit0 = survfit0(fit);
+    let fit0 = survfit0_with(fit, false);
     let ranges = fit0.curve_ranges();
     let mut out = SurvfitKMResult {
+        n: fit0.n.clone(),
         time: Vec::new(),
         n_risk: Vec::new(),
         n_event: Vec::new(),
@@ -564,10 +574,16 @@ pub fn summary_survfit_times(
         lower: fit0.lower.as_ref().map(|_| Vec::new()),
         upper: fit0.upper.as_ref().map(|_| Vec::new()),
         strata: fit0.strata.as_ref().map(|_| Vec::new()),
+        strata_codes: fit0.strata_codes.clone(),
+        n_id: fit0.n_id.clone(),
+        logse: false,
+        conf_int: fit0.conf_int,
+        conf_type: fit0.conf_type.clone(),
+        conf_lower: fit0.conf_lower.clone(),
+        type_: fit0.type_.clone(),
+        t0: fit0.t0,
         influence_surv: None,
         influence_chaz: None,
-        logse: false,
-        ..fit0.clone()
     };
     for range in &ranges {
         let curve_time = &fit0.time[range.clone()];
