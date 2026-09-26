@@ -1137,11 +1137,16 @@ class StateFigResult:
 
 @dataclass(frozen=True)
 class YatesResult:
-    """R's ``yates`` object (population marginal means on the linear predictor scale).
+    """R's ``yates`` object (population marginal means).
 
     ``estimate`` is R's data frame: one column per tested variable listing its levels, then
-    ``pmm`` and ``std``.  ``test`` rows carry R's row names (``global``, ``1 vs 2``, ...).
-    ``cmat`` is the population-averaged design over the coefficient columns ``cmat_names``.
+    ``pmm`` and ``std`` (``pmm`` is NaN for a level the fit cannot estimate).  ``test`` rows
+    carry R's row names (``global``, ``1 vs 2``, ...; ``chisq`` NaN and ``df`` None for R's
+    NA).  ``cmat`` is the population-averaged design over the coefficient columns
+    ``cmat_names`` (empty for a simulated prediction or when no level is estimable).
+    ``summary`` holds the simulated curves of ``predict="survival"``: the baseline
+    ``survfit`` object with one column of ``surv``, ``cumhaz``, ``std_err``, ``lower`` and
+    ``upper`` per level.
     """
 
     estimate: dict[str, list[Any]]
@@ -1149,6 +1154,7 @@ class YatesResult:
     mvar: list[list[float]]
     cmat: list[list[float]]
     cmat_names: list[str]
+    summary: CoxSurvfitResult | None = None
 
 
 @dataclass(frozen=True)

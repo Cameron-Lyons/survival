@@ -132,6 +132,7 @@ pub use uno_c_index_module::{
     c_index_decomposition, compare_uno_c_indices, gonen_heller_concordance, uno_c_index,
 };
 pub use yates::{
-    YatesContrast, YatesEstimate, YatesInput, YatesResult, YatesTest, population_means,
-    population_means_py, yates, yates_py, yates_risk, yates_risk_py,
+    YatesContrast, YatesCurves, YatesEstimate, YatesInput, YatesPredictor, YatesResult,
+    YatesSimulation, YatesTest, population_means, population_means_py, yates, yates_estimable,
+    yates_estimable_py, yates_py, yates_risk_py, yates_simulate, yates_survival_py,
 };

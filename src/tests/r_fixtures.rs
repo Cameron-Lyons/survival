@@ -5652,7 +5652,7 @@ fn check_yates_case(doc: &Value, case: &Value, report: &mut Report) {
                         let actual: Vec<Vec<f64>> = result
                             .test
                             .iter()
-                            .map(|t| vec![t.chisq, t.df as f64])
+                            .map(|t| vec![t.chisq, t.df.map_or(f64::NAN, |df| df as f64)])
                             .collect();
                         assert_matrix(&actual, &table, RTOL_VAR, "test")
                     }

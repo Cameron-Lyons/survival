@@ -507,6 +507,7 @@ BINDINGS = (
     "WeightDiagnostics",
     "Weights",
     "YatesContrast",
+    "YatesCurves",
     "YatesEstimate",
     "YatesResult",
     "aareg_fit",
@@ -937,8 +938,10 @@ BINDINGS = (
     "wei_lin_weissfeld",
     "wlw_model",
     "yates",
+    "yates_estimable",
     "yates_population_means",
     "yates_risk",
+    "yates_survival",
 )
 
 BINDING_NAMES = frozenset(BINDINGS)
@@ -1922,10 +1925,13 @@ MODULE_BINDINGS = {
         "gonen_heller_concordance",
         "uno_c_index",
         "YatesContrast",
+        "YatesCurves",
         "YatesEstimate",
         "YatesResult",
         "yates",
+        "yates_estimable",
         "yates_risk",
+        "yates_survival",
         "yates_population_means",
     ),
 }
