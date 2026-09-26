@@ -915,6 +915,82 @@ class SurvfitMultiStateResult:
 
 
 @dataclass(frozen=True)
+class CoxSurvfitMultiStateResult:
+    """R's ``survfit.coxphms`` object (class ``c("survfitcoxms", "survfitms",
+    "survfit")``): probability-in-state curves predicted from a multi-state Cox model.
+
+    ``pstate[t, i, s]`` is the probability of state ``states[s]`` at ``time[t]`` for
+    newdata row ``i``, and ``cumhaz[t, i, k]`` the cumulative hazard of transition
+    ``cumhaz_names[k]`` (every transition of the model).  The counts (``n_risk``,
+    ``n_event``, ``n_censor``: time x state; ``n_transition``: time x the observed
+    transitions of ``transitions``) are the Aalen-Johansen ones of the data, as are
+    ``n``, ``n_id`` and ``p0`` (one entry or row per stratum).  Strata stack their
+    times, ``strata`` giving each block's length.  ``newdata`` holds the rows the curves
+    are for (or the group labels after ``aggregate``).  ``engine`` holds the counts and
+    time grid; it is dropped by a stratum or state subset, as is ``cumhaz`` by a state
+    subset (``oldstate`` then records the original states).
+    """
+
+    n: list[int]
+    time: list[float] = field(repr=False)
+    n_risk: list[list[float]] = field(repr=False)
+    n_event: list[list[float]] = field(repr=False)
+    n_censor: list[list[float]] = field(repr=False)
+    n_transition: list[list[float]] | None = field(repr=False)
+    n_id: list[int]
+    pstate: NDArray[np.float64] = field(repr=False, compare=False)
+    cumhaz: NDArray[np.float64] | None = field(repr=False, compare=False)
+    cumhaz_names: list[str]
+    p0: list[list[float]] = field(repr=False)
+    states: list[str]
+    transitions: NamedMatrix | None
+    type: str
+    t0: float
+    start_time: float | None
+    strata: dict[str, int] | None
+    newdata: dict[str, list[Any]] | None = field(repr=False)
+    stype: int = 2
+    ctype: int = 1
+    time0: bool = False
+    oldstate: tuple[str, ...] | None = None
+    engine: _core.SurvfitAJResult | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def strata_names(self) -> list[str]:
+        return list(self.strata) if self.strata else []
+
+    @property
+    def dim(self) -> dict[str, int]:
+        """R's ``dim(fit)``: the strata (when stratified), newdata rows and states."""
+
+        dims = {"strata": len(self.strata)} if self.strata else {}
+        dims["data"] = int(self.pstate.shape[1])
+        dims["states"] = len(self.states)
+        return dims
+
+
+@dataclass(frozen=True)
+class SummarySurvfitCoxmsResult:
+    """R's ``summary.survfitms`` of a :class:`CoxSurvfitMultiStateResult`: the curves at
+    their event times (or at ``times``), ``pstate``/``cumhaz`` arrays of shape (time,
+    newdata row, state/transition), and ``survmean2``'s table (one row per stratum,
+    newdata row and state, the stratum varying fastest)."""
+
+    time: list[float]
+    n_risk: list[list[float]]
+    n_event: list[list[float]]
+    n_censor: list[list[float]]
+    n_transition: list[list[float]] | None
+    pstate: NDArray[np.float64] = field(repr=False, compare=False)
+    cumhaz: NDArray[np.float64] | None = field(repr=False, compare=False)
+    strata: list[str] | None
+    table: NamedMatrix
+    rmean_endtime: list[float] | None
+    states: list[str]
+    newdata: dict[str, list[Any]] | None = field(repr=False)
+
+
+@dataclass(frozen=True)
 class SummarySurvfitResult:
     """R's ``summary.survfit``: the fit at its event times or at ``times``, plus the table."""
 

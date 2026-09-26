@@ -19,6 +19,8 @@ from functools import singledispatch
 from statistics import NormalDist
 from typing import Any
 
+import numpy as np
+
 from .. import _survival as _core
 from ._aareg import summary_aareg
 from ._cch import summary_cch
@@ -71,9 +73,11 @@ from ._types import (
     ConcordanceResult,
     CoxBaseHazardResult,
     CoxPHDetailResult,
+    CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
     CoxZPHResult,
     PyearsResult,
+    SummarySurvfitCoxmsResult,
     SurvDiffResult,
     SurvfitMultiStateResult,
     SurvfitResult,
@@ -525,6 +529,13 @@ residuals.register(SurvregModelResult, residuals_survreg)
 residuals.register(_SurvfitCurves, survfit_residuals)
 
 
+@residuals.register(CoxSurvfitMultiStateResult)
+def _residuals_coxms(fit: CoxSurvfitMultiStateResult, **kwargs: Any) -> Any:
+    # R's residuals.survfit returns the Aalen-Johansen residuals of the data, which
+    # ignore the Cox model and the newdata
+    raise TypeError("residuals are not defined for multi-state Cox curves")
+
+
 @singledispatch
 def confint(
     fit: Any, parm: Any | None = None, *, level: Any = 0.95
@@ -566,7 +577,7 @@ def model_summary(fit: Any, **kwargs: Any) -> Any:
 model_summary.register(CoxphModel, summary_coxph)
 model_summary.register(AaregModelResult, summary_aareg)
 model_summary.register(SurvregModelResult, model_summary_survreg)
-model_summary.register(_SurvfitCurves, summary_survfit)
+model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
 model_summary.register(PyearsResult, summary_pyears)
 
 
@@ -665,6 +676,130 @@ def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list
             )
         frame["state"].extend([state] * row_count)
     return frame
+
+
+def _summary_coxms_frame(summary: SummarySurvfitCoxmsResult) -> dict[str, list[Any]]:
+    """``summary(fit, data.frame = TRUE)`` of multi-state Cox curves
+    (summary.survfitms.R): the (time, stratum) rows vary fastest, then the newdata
+    rows, then the states; the counts repeat for every newdata row."""
+
+    nt, nd, ns = summary.pstate.shape
+    per_state = nd * nt
+
+    def counts(values: list[list[float]]) -> list[float]:
+        return [float(values[t][s]) for s in range(ns) for _ in range(nd) for t in range(nt)]
+
+    frame: dict[str, list[Any]] = {
+        "time": list(summary.time) * (nd * ns),
+        "n.risk": counts(summary.n_risk),
+        "n.event": counts(summary.n_event),
+        "n.censor": counts(summary.n_censor),
+        "pstate": summary.pstate.ravel(order="F").tolist(),
+    }
+    if summary.strata is not None:
+        frame["strata"] = list(summary.strata) * (nd * ns)
+    frame["state"] = [state for state in summary.states for _ in range(per_state)]
+    for name, values in (summary.newdata or {}).items():
+        frame[name] = [values[i] for _ in range(ns) for i in range(nd) for _ in range(nt)]
+    return frame
+
+
+def _coxms_curves_frame(result: CoxSurvfitMultiStateResult) -> dict[str, list[Any]]:
+    """Multi-state Cox curves as R's ``summary(fit, censored = TRUE, data.frame = TRUE)``."""
+
+    return _summary_coxms_frame(summary_survfit(result, censored=True))
+
+
+def _positions(selection: Any, count: int, labels: Sequence[str], name: str) -> list[int]:
+    """0-based positions among ``count`` items from indices or, when the items have
+    ``labels``, labels."""
+
+    positions = []
+    for value in _materialize_1d(selection, name):
+        if isinstance(value, str):
+            if value not in labels:
+                raise ValueError(f"{name} {value!r} is not one of {', '.join(labels)}")
+            positions.append(labels.index(value))
+        else:
+            position = _integer_scalar(value, name)
+            if not 0 <= position < count:
+                raise IndexError(f"{name} index {position} is out of bounds")
+            positions.append(position)
+    if not positions:
+        raise ValueError(f"select at least one {name} value")
+    return positions
+
+
+def _subset_coxms_curves(
+    result: CoxSurvfitMultiStateResult,
+    strata: Any | None = None,
+    data: Any | None = None,
+    states: Any | None = None,
+) -> CoxSurvfitMultiStateResult:
+    """``fit[strata, data, states]`` of multi-state Cox curves (``[.survfitms``):
+    each argument ``None`` (keep all) or 0-based indices, stratum labels or state names.
+
+    Strata select their time rows and their ``n``, ``n_id`` and ``p0`` rows; ``data``
+    the newdata rows.  A state subset keeps those columns of ``pstate``, ``n_risk``,
+    ``n_event`` and ``p0`` (``n_censor`` keeps its columns, as R's), drops ``cumhaz``
+    and ``n_transition`` and records ``oldstate``.  ``transitions`` is always dropped,
+    and the engine unless every stratum and state is kept.  Unlike R, ``n_id`` and
+    every column of ``n_transition`` are kept.
+    """
+
+    names = result.strata_names
+    sizes = list(result.strata.values()) if result.strata else [len(result.time)]
+    starts = np.cumsum([0, *sizes])
+    if strata is None:
+        kept_strata = list(range(len(sizes)))
+    elif not names:
+        raise ValueError("the curves have no strata to select")
+    else:
+        kept_strata = _positions(strata, len(names), names, "strata")
+    ndata = result.pstate.shape[1]
+    kept_data = list(range(ndata)) if data is None else _positions(data, ndata, (), "data")
+    nstate = len(result.states)
+    kept_states = (
+        list(range(nstate))
+        if states is None
+        else _positions(states, nstate, result.states, "states")
+    )
+    every_stratum = kept_strata == list(range(len(sizes)))
+    every_state = kept_states == list(range(nstate))
+    rows = [row for s in kept_strata for row in range(starts[s], starts[s + 1])]
+
+    def pick(values: list[list[float]], columns: list[int] | None = None) -> list[list[float]]:
+        if columns is None:
+            return [values[row] for row in rows]
+        return [[values[row][c] for c in columns] for row in rows]
+
+    state_columns = None if every_state else kept_states
+    cumhaz = None
+    if every_state and result.cumhaz is not None:
+        cumhaz = result.cumhaz[np.ix_(rows, kept_data, range(result.cumhaz.shape[2]))]
+    return dataclasses.replace(
+        result,
+        n=[result.n[s] for s in kept_strata],
+        n_id=[result.n_id[s] for s in kept_strata],
+        time=[result.time[row] for row in rows],
+        n_risk=pick(result.n_risk, state_columns),
+        n_event=pick(result.n_event, state_columns),
+        n_censor=pick(result.n_censor),
+        n_transition=None
+        if not every_state or result.n_transition is None
+        else pick(result.n_transition),
+        pstate=result.pstate[np.ix_(rows, kept_data, kept_states)],
+        cumhaz=cumhaz,
+        p0=[[result.p0[s][c] for c in kept_states] for s in kept_strata],
+        states=[result.states[c] for c in kept_states],
+        oldstate=result.oldstate if every_state else tuple(result.oldstate or result.states),
+        transitions=None,
+        strata=None if not names else {names[s]: sizes[s] for s in kept_strata},
+        newdata=None
+        if result.newdata is None
+        else {name: [values[i] for i in kept_data] for name, values in result.newdata.items()},
+        engine=result.engine if every_stratum and every_state else None,
+    )
 
 
 # --- the R bridge's grouped view of a stratified curve set --------------------------------
@@ -1055,6 +1190,8 @@ as_data_frame.register(Surv, _surv_response_frame)
 as_data_frame.register(CoxSurvfitResult, _cox_survfit_frame)
 as_data_frame.register(CoxBaseHazardResult, _cox_basehaz_frame)
 as_data_frame.register(SurvfitMultiStateResult, _survfit_multistate_frame)
+as_data_frame.register(CoxSurvfitMultiStateResult, _coxms_curves_frame)
+as_data_frame.register(SummarySurvfitCoxmsResult, _summary_coxms_frame)
 as_data_frame.register(SurvfitResult, _survfit_frame)
 as_data_frame.register(CoxZPHResult, _cox_zph_frame)
 as_data_frame.register(CoxPHDetailResult, _coxph_detail_frame)

@@ -17,7 +17,10 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(r.survreg("Surv(time, status) ~ age", data), r.SurvregModelResult)
     assert_type(
         r.survfit("Surv(time, status) ~ sex", data),
-        r.SurvfitResult | r.SurvfitMultiStateResult | r.CoxSurvfitResult,
+        r.SurvfitResult
+        | r.SurvfitMultiStateResult
+        | r.CoxSurvfitResult
+        | r.CoxSurvfitMultiStateResult,
     )
     assert_type(r.brier(cox), r.BrierResult)
     assert_type(r.concordance(cox), r.ConcordanceResult)

@@ -985,6 +985,3 @@ def test_refusals(mg, fa1):
     for call, message in refused:
         with pytest.raises(ValueError, match=message):
             call(fa1)
-    new = pd.DataFrame({"age": [60], "sex": ["F"]})
-    with pytest.raises(NotImplementedError, match="multi-state coxph fits yet"):
-        r.survfit(fa1, newdata=new)

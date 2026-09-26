@@ -83,6 +83,7 @@ from ._types import (
     CoxBaseHazardResult,
     CoxPHDetailResult,
     CoxPHWTestResult,
+    CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
     CoxZPHResult,
     NaAction,
@@ -2104,7 +2105,7 @@ def survfit_coxph(
     fit: CoxphModel,
     newdata: Any | None = None,
     *,
-    se_fit: Any = True,
+    se_fit: Any | None = None,
     conf_int: Any = 0.95,
     individual: Any | None = None,
     stype: Any | None = None,
@@ -2115,7 +2116,7 @@ def survfit_coxph(
     id: Any | None = None,
     type: str | None = None,
     **kwargs: Any,
-) -> CoxSurvfitResult:
+) -> CoxSurvfitResult | CoxSurvfitMultiStateResult:
     """R's ``survfit.coxph``: predicted survival curves from a Cox model.
 
     Without ``newdata`` the curve is for the average covariate (``fit$means``); with
@@ -2126,14 +2127,33 @@ def survfit_coxph(
     ``stype``/``ctype`` default to 2 and the tie method; the old-style ``type``
     (``"kalbfleisch-prentice"``, ``"aalen"``, ``"efron"``, ...) sets them when neither is
     given.  ``start_time`` builds the curves from the rows still at risk at that time.
+    ``se_fit`` defaults to true.  A multi-state fit goes to
+    :func:`survival.r._coxphms.survfit_coxphms`, with the further keywords of that method.
     """
 
-    from ._coxphms import _refuse_multistate
+    from ._coxphms import CoxphmsModel, survfit_coxphms
 
-    _refuse_multistate(fit, "survfit")
+    if isinstance(fit, CoxphmsModel):
+        if se_fit is not None:
+            kwargs["se_fit"] = se_fit
+        return survfit_coxphms(
+            fit,
+            newdata,
+            conf_int=conf_int,
+            individual=False if individual is None else individual,
+            stype=stype,
+            ctype=ctype,
+            conf_type=conf_type,
+            censor=censor,
+            start_time=start_time,
+            id=id,
+            type=type,
+            **kwargs,
+        )
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
     conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
-    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, True)
+    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, None)
+    se_fit = True if se_fit is None else se_fit
     start_time = _pop_dotted_keyword(kwargs, "start.time", "start_time", start_time, None)
     if kwargs:
         raise TypeError(f"survfit got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")

@@ -29,40 +29,52 @@ from ._coerce import (
     _is_missing_value,
     _match_string_arg,
     _materialize_labels,
+    _normalize_bool_option,
     _normalize_na_action,
     _normalize_optional_bool_option,
+    _pop_dotted_keyword,
     _r_factor_levels,
     _rows_of,
+    _start_time_value,
+    _warn_outside_package,
 )
 from ._coxph import (
     _LOG_DOUBLE_MAX,
     CoxphModel,
+    _check_interaction_margins,
     _cluster_codes,
     _concordance_summary,
     _cox_fit_diagnostic_messages,
+    _fit_frame,
     _prediction_newdata,
     _row_names,
+    _survfit_types,
 )
 from ._data_prep import aeqSurv
-from ._fit import _excluded_rows, _ModelFrame, _pad_rows, _tt_terms
+from ._fit import _excluded_rows, _ModelFrame, _newdata_columns, _pad_rows, _tt_terms
 from ._formula import (
+    _column_source,
     _covariate_factors,
     _formula_model_term_degree,
     _formula_tokens,
     _scan,
     _split_terms,
     _strata_term,
+    _strata_term_columns,
     _top_level,
 )
 from ._surv import Surv, _missing_rows
 from ._types import (
+    CoxSurvfitMultiStateResult,
     NaAction,
     NamedMatrix,
+    _CategoricalDesignTerm,
     _FormulaModelTerm,
     _ModelClusterTerm,
     _ModelCovariateTerm,
     _ModelOffsetTerm,
     _ModelStrataTerm,
+    _NumericDesignTerm,
     _PenaltyDesignTerm,
 )
 
@@ -154,13 +166,6 @@ class CoxphmsModel(CoxphModel):
         if codes is None:
             return None
         return [None if code < 0 else self.ms.strata_levels[code] for code in codes]
-
-
-def _refuse_multistate(fit: Any, name: str) -> None:
-    """The methods not yet ported for a multi-state fit refuse it."""
-
-    if isinstance(fit, CoxphmsModel):
-        raise NotImplementedError(f"{name} is not implemented for multi-state coxph fits yet")
 
 
 # ---------------------------------------------------------------------------
@@ -1307,3 +1312,234 @@ def _stacked_strata_labels(codes: Sequence[int]) -> list[str]:
     (R's integer stacker strata)."""
 
     return [str(int(code) + 1) for code in codes]
+
+
+# ---------------------------------------------------------------------------
+# survfit.coxphms
+# ---------------------------------------------------------------------------
+
+
+def _as_frame_columns(newdata: Any) -> dict[str, list[Any]]:
+    """``newdata`` as named columns; a mapping of scalars is one row (R allows a named
+    list there)."""
+
+    columns = {str(name): _column_source(newdata, name) for name in _newdata_columns(newdata)}
+    if isinstance(newdata, Mapping) and all(np.ndim(value) == 0 for value in columns.values()):
+        return {name: [value] for name, value in columns.items()}
+    return {name: list(values) for name, values in columns.items()}
+
+
+def _share_dummies(fit: CoxphmsModel, newdata: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    """survfit.coxphms's stand-ins for the variables of shared-hazard "gamma" terms that
+    ``newdata`` leaves out (their coefficients are set to 0): a factor's first level,
+    or a simple numeric variable's mean."""
+
+    if fit.share is None:
+        return newdata
+    nx = len(fit.ms.x_names)
+    gamma = {column for column, vtype in enumerate(fit.share.vtype[:nx]) if vtype == 2}
+    nrow = len(next(iter(newdata.values()), []))
+    filled = dict(newdata)
+    for columns, term in zip(fit.assign.values(), fit.design.covariates, strict=True):
+        if not gamma & set(columns):
+            continue
+        if isinstance(term, _CategoricalDesignTerm):
+            value = term.levels[0]
+        elif isinstance(term, _NumericDesignTerm) and term.term.transform is None:
+            value = fit.ms.means[columns[0]]
+        else:
+            continue
+        name = term.term.column
+        if name not in filled:
+            filled[name] = [value] * nrow
+    return filled
+
+
+def _check_newdata_strata(fit: CoxphmsModel, newdata: dict[str, list[Any]]) -> None:
+    """Strata variables in ``newdata`` must take levels of the fit (``model.frame``'s
+    ``xlev`` check); they select no curves."""
+
+    terms = _strata_term_columns(fit.terms)
+    if not terms or not all(column in newdata for columns in terms for column in columns):
+        return
+    data = _fit_frame(fit).data
+    for columns in terms:
+        fitted = set(_strata_term(data, columns).levels)
+        for level in _strata_term(newdata, columns).levels:
+            if level not in fitted:
+                raise ValueError(f"factor strata({', '.join(columns)}) has new level {level}")
+
+
+def _coxms_newdata(
+    fit: CoxphmsModel, newdata: Any, na_action: Any | None
+) -> tuple[np.ndarray, np.ndarray | None, dict[str, list[Any]]]:
+    """``model.frame(Terms2, newdata, na.action)`` and ``model.matrix`` for the curves:
+    the design and offset of the complete rows, and those rows of ``newdata``."""
+
+    columns = _share_dummies(fit, _as_frame_columns(newdata))
+    _check_newdata_strata(fit, columns)
+    new = _prediction_newdata(
+        fit, columns, need_strata=True, need_response=False, na_action="na.omit"
+    )
+    action = "omit" if na_action is None else _normalize_na_action(na_action)
+    if new.missing:
+        if action == "fail":
+            raise ValueError("missing values in object")
+        if action == "pass":
+            raise ValueError("newdata rows with missing values need na_action='na.omit'")
+    if new.n == 0:
+        raise ValueError("all rows of newdata have missing values")
+    missing = set(new.missing)
+    kept = [row for row in range(new.n + len(missing)) if row not in missing]
+    x = np.asarray(new.x, dtype=np.float64).reshape(new.n, len(fit.ms.x_names))
+    offset = None if new.offset is None else np.asarray(new.offset, dtype=np.float64)
+    used = {name: [values[row] for row in kept] for name, values in columns.items()}
+    return x, offset, used
+
+
+def survfit_coxphms(
+    fit: CoxphmsModel,
+    newdata: Any | None = None,
+    *,
+    se_fit: Any = False,
+    conf_int: Any = 0.95,
+    individual: Any = False,
+    stype: Any | None = None,
+    ctype: Any | None = None,
+    conf_type: Any = "log",
+    censor: Any = True,
+    start_time: Any | None = None,
+    id: Any | None = None,
+    influence: Any = False,
+    na_action: Any | None = None,
+    type: Any | None = None,
+    p0: Any | None = None,
+    time0: Any = False,
+    **kwargs: Any,
+) -> CoxSurvfitMultiStateResult:
+    """R's ``survfit.coxphms``: probability-in-state curves from a multi-state Cox
+    model, one per ``newdata`` row (every stratum gets a curve for every row).
+
+    The time grid, the counts and ``p0`` are those of the Aalen-Johansen estimate of the
+    data (``survfitAJ``); ``pstate`` and ``cumhaz`` are the model's.  ``stype`` 1
+    updates the state probabilities by ``p (I + A)``, 2 (the default) by ``p expm(A)``;
+    ``ctype`` defaults to 2 for an Efron fit, else 1.  ``start_time`` drops the rows
+    that end by then, and ``p0`` / ``time0`` are survfitAJ's.  Standard errors are not
+    available: ``se_fit=True`` warns; ``conf_int``, ``conf_type``, ``censor`` and
+    ``influence`` are accepted and ignored.  Incomplete ``newdata`` rows are left out
+    (``na.omit``; ``na.fail`` refuses them).  Unlike R the offsets are used, aliased
+    coefficients count as 0 and ``newdata`` keeps only the rows used.
+    """
+
+    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
+    conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
+    conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
+    start_time = _pop_dotted_keyword(kwargs, "start.time", "start_time", start_time, None)
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, None)
+    if kwargs:
+        raise TypeError(f"survfit got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    if newdata is None:
+        raise ValueError("multi-state survival requires a newdata argument")
+    if id is not None or _normalize_bool_option(individual, "individual"):
+        raise ValueError("using a covariate path is not supported for multi-state")
+    if _normalize_bool_option(se_fit, "se_fit"):
+        _warn_outside_package("se.fit not yet implemented for multistate coxph models")
+    stype_value, ctype_value = _survfit_types(fit, type, stype, ctype)
+    ms = fit.ms
+    if ms.strata_terms:
+        _check_interaction_margins(fit)
+    start = _start_time_value(start_time)
+    time0_value = _normalize_bool_option(time0, "time0")
+    p0_value = None if p0 is None else _float_vector(p0, "p0")
+
+    # the rows of the curves: none with a missing user stratum, none ending by start.time
+    y = fit.y
+    time = np.asarray(y.time, dtype=np.float64)
+    keep = np.ones(len(time), dtype=bool) if ms.strata is None else ms.strata >= 0
+    if start is not None:
+        keep &= time > start
+        if not keep.any():
+            raise ValueError("start.time has removed all observations")
+        survfit_start = start
+    else:
+        # survfitAJ's start.time <- min(Y[, 2], 0): the status column of right-censored
+        # data, the stop time of counting-process data
+        survfit_start = 0.0 if y.start is None else min(0.0, float(time.min()))
+    rows = np.flatnonzero(keep)
+    subset = len(rows) < len(time)
+    y_used = y.subset(rows.tolist()) if subset else y
+    events = np.array([0 if e is None else int(e) for e in y_used.event])
+    istate_values = (
+        None
+        if ms.istate_values is None
+        else _rows_of(ms.istate_values, [ms.istate_values[i] for i in rows.tolist()])
+    )
+    check = _survcheck2(y_used, events, ms.id[rows], istate_values, SURVCHECK_FLAGS)
+    if check.states != list(fit.states):
+        raise ValueError("failed to rebuild the data set")
+
+    x2, offset2, used = _coxms_newdata(fit, newdata, na_action)
+    beta = np.nan_to_num(np.asarray(fit.coefficients, dtype=np.float64), nan=0.0)
+    cmap = np.asarray(fit.cmap.values, dtype=np.int32)
+    if fit.share is not None:
+        gamma = cmap[np.asarray(fit.share.vtype) == 2]
+        beta[gamma[gamma > 0] - 1] = 0.0
+    labels = list(fit.cmap.colnames)
+    trans_from, trans_to = zip(*(label.split(":") for label in labels), strict=True)
+    engine, pstate, cumhaz = _core.coxphms_curves(
+        time[rows],
+        ms.endpoint[rows],
+        check.istate,
+        ms.x[rows],
+        cmap.flatten(order="F"),
+        cmap.shape[0],
+        np.asarray(fit.smap.values[0], dtype=np.int32),
+        np.asarray(trans_from, dtype=np.int32),
+        np.asarray(trans_to, dtype=np.int32),
+        ms.id[rows],
+        list(fit.states),
+        beta,
+        np.asarray(ms.means, dtype=np.float64),
+        x2,
+        stype_value,
+        ctype_value,
+        entry=None if y.start is None else np.asarray(y.start, dtype=np.float64)[rows],
+        weights=None if ms.weights is None else ms.weights[rows],
+        offset=None if ms.offset is None else ms.offset[rows],
+        strata=None if ms.strata is None else ms.strata[rows],
+        strata_terms=[codes[rows] for codes in ms.strata_terms] or None,
+        strata_use=ms.strata_use.flatten(order="F") if ms.strata_terms else None,
+        share_scale=None if fit.share is None else np.asarray(fit.share.scale),
+        newoffset=offset2,
+        start_time=survfit_start,
+        p0=p0_value,
+        time0=time0_value,
+    )
+    strata = None
+    if engine.strata is not None:
+        names = [ms.strata_levels[code] for code in engine.strata_codes or ()]
+        strata = dict(zip(names, engine.strata, strict=True))
+    return CoxSurvfitMultiStateResult(
+        n=[int(value) for value in engine.n],
+        time=list(engine.time),
+        n_risk=engine.n_risk,
+        n_event=engine.n_event,
+        n_censor=engine.n_censor,
+        n_transition=engine.n_transition,
+        n_id=[int(value) for value in engine.n_id],
+        pstate=np.ascontiguousarray(pstate),
+        cumhaz=np.ascontiguousarray(cumhaz),
+        cumhaz_names=labels,
+        p0=engine.p0,
+        states=list(fit.states),
+        transitions=check.transitions,
+        type=engine.type,
+        t0=engine.t0,
+        start_time=engine.start_time,
+        strata=strata,
+        newdata=used,
+        stype=stype_value,
+        ctype=ctype_value,
+        time0=time0_value,
+        engine=engine,
+    )
