@@ -14,7 +14,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survfitaj_py, m)?)?;
     m.add_function(wrap_pyfunction!(survdiff_py, m)?)?;
     m.add_function(wrap_pyfunction!(survdiff_one_sample_py, m)?)?;
-    m.add_function(wrap_pyfunction!(finegray, m)?)?;
+    m.add_function(wrap_pyfunction!(finegray_py, m)?)?;
     m.add_function(wrap_pyfunction!(finegray_regression, m)?)?;
     m.add_function(wrap_pyfunction!(competing_risks_cif, m)?)?;
     m.add_function(wrap_pyfunction!(survreg, m)?)?;

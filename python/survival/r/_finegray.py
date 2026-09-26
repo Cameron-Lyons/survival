@@ -49,16 +49,13 @@ def _censoring_curves(
         se_fit=False,
         timefix=False,
     )
-    counts = fit.strata or [len(fit.time)]
+    times, survs, events = fit.time, fit.surv, fit.n_event
     curves: list[_CensoringCurve] = []
     offset = 0
-    for count in counts:
-        rows = range(offset, offset + count)
+    for count in fit.strata or [len(times)]:
+        rows = [row for row in range(offset, offset + count) if events[row] > 0]
         curves.append(
-            _CensoringCurve(
-                time=[fit.time[row] for row in rows if fit.n_event[row] > 0],
-                surv=[fit.surv[row] for row in rows if fit.n_event[row] > 0],
-            )
+            _CensoringCurve(time=[times[row] for row in rows], surv=[survs[row] for row in rows])
         )
         offset += count
     return curves
