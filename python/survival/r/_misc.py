@@ -519,6 +519,7 @@ def _frailty_encoding(
 class _ModelFrame:
     response: Surv
     extras: dict[str, list[Any] | None]
+    kept: list[int]
     omitted: list[int]
 
 
@@ -554,7 +555,8 @@ def _model_frame(
     row-aligned arguments such as ``id`` and ``istate``, given as vectors or column names.
 
     ``subset`` is applied first, then ``na.action`` to the formula variables, the response and
-    the extras; ``omitted`` records the 0-based rows of the subset that ``na.omit`` dropped.
+    the extras; ``kept`` and ``omitted`` record the 0-based rows of the subset that ``na.omit``
+    kept and dropped.
     """
 
     action = _normalize_na_action(na_action)
@@ -593,6 +595,7 @@ def _model_frame(
             name: None if name not in frame else _materialize_labels(frame[name], name)
             for name in extras
         },
+        kept=kept,
         omitted=sorted(omitted),
     )
 
@@ -725,7 +728,7 @@ def survcheck(
         timefix=timefix,
     )
     # R reports rows of the data before missing values were removed.
-    row_numbers = [idx + 1 for idx in range(n + len(frame.omitted)) if idx not in frame.omitted]
+    row_numbers = [idx + 1 for idx in frame.kept]
     return SurvCheckResult(
         states=raw.states,
         transitions=raw.transitions,

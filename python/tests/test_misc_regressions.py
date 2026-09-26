@@ -47,3 +47,42 @@ def test_brier_reads_the_model_curves_at_the_evaluation_times():
     assert len(default.times) == 139
     assert sum(default.brier) == approx(23.8320240782286)
     assert default.brier[-1] == approx(0.0513206230245228)
+
+
+# --- survcheck ---------------------------------------------------------------
+
+
+def test_survcheck_numbers_problem_rows_of_the_data_before_na_omit():
+    # R: survcheck(Surv(t1, t2, st) ~ x, data = d, id = id), na.omit dropping the rows where x
+    # is missing
+    gap = r.survcheck(
+        "Surv(t1, t2, st) ~ x",
+        data={
+            "id": [1, 1, 2, 2, 3, 3, 4, 4],
+            "t1": [0, 1, 0, 2, 0, 1, 0, 3],
+            "t2": [1, 3, 2, 4, 2, 3, 2, 5],
+            "st": [0, 1, 0, 1, 0, 1, 0, 1],
+            "x": [1, None, 2, 3, None, 4, 5, 6],
+        },
+        id="id",
+    )
+    assert gap.na_action == [2, 5]
+    assert (gap.flag.overlap, gap.flag.gap) == (0, 1)
+    assert (gap.gap.row, gap.gap.id) == ([8], [4])
+    assert gap.overlap is None
+
+    overlap = r.survcheck(
+        "Surv(t1, t2, st) ~ x",
+        data={
+            "id": [1, 1, 2, 2, 3, 3],
+            "t1": [0, 1, 0, 1, 0, 3],
+            "t2": [1, 3, 2, 4, 2, 5],
+            "st": [0, 1, 0, 1, 0, 1],
+            "x": [None, 1, 2, 3, None, 4],
+        },
+        id="id",
+    )
+    assert overlap.na_action == [1, 5]
+    assert (overlap.flag.overlap, overlap.flag.gap) == (1, 0)
+    assert (overlap.overlap.row, overlap.overlap.id) == ([4], [2])
+    assert overlap.gap is None
