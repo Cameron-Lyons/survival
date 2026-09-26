@@ -87,6 +87,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;
     m.add_function(wrap_pyfunction!(coxph_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(coxphms_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxpenal_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_borgan_fit, m)?)?;
