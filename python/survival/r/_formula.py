@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import math
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from itertools import combinations, compress, product
-from operator import ge, truediv
+from operator import add, ge, mul, sub, truediv
 from typing import Any
 
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _as_character,
     _coerce_array_like,
     _finite_float,
     _floats_or_nan,
@@ -22,7 +24,7 @@ from ._coerce import (
     _missing_row_indices,
     _mstate_categories,
     _normalize_na_action,
-    _RFactorVector,
+    _rows_of,
     _strata_value_label,
     _subset_indices,
     _subset_optional_sequence,
@@ -79,6 +81,30 @@ def _column_source(data: Any, name: str) -> Any:
 
 def _column(data: Any, name: str) -> list[Any]:
     return _materialize_1d(_column_source(data, name), name)
+
+
+def _comparison_column(data: Any, name: str) -> list[Any]:
+    """A data column as R's relational operators read it: a factor is its labels as
+    strings (``Ops.factor``), any other column its own values."""
+
+    source = _column_source(data, name)
+    values = _materialize_1d(source, name)
+    if _mstate_categories(source) is None:
+        return values
+    return [None if _is_missing_value(value) else _as_character(value) for value in values]
+
+
+def _as_numeric_column(data: Any, name: str) -> list[Any]:
+    """R's ``as.numeric`` of a data column: a factor's 1-based level codes (NaN where
+    missing), any other column's own values."""
+
+    source = _column_source(data, name)
+    values = _materialize_1d(source, name)
+    categories = _mstate_categories(source)
+    if categories is None:
+        return values
+    codes = {value: i + 1 for i, value in enumerate(categories)}
+    return [math.nan if _is_missing_value(value) else codes[value] for value in values]
 
 
 def _formula_name(name: str) -> tuple[str, bool]:
@@ -231,14 +257,17 @@ def _formula_tokens(rhs: str) -> list[tuple[str, str]]:
 def _find_top_level_arithmetic_operator(
     expression: str,
     operators: set[str],
+    *,
+    quotes: bool = False,
 ) -> tuple[str, str, str] | None:
-    """The right-most top-level binary operator of *operators* (unary signs skipped)."""
+    """The right-most top-level binary operator of *operators* (unary signs and the
+    sign of a number's exponent skipped)."""
 
-    for idx, char in reversed(_top_level(expression, quotes=False)):
+    for idx, char in reversed(_top_level(expression, quotes=quotes)):
         if char not in operators:
             continue
         previous = _previous_non_space(expression, idx)
-        if previous is None or previous in "+-*/(^":
+        if previous is None or previous in "+-*/(^:<>=!&|" or _is_exponent_sign(expression, idx):
             continue
         left = expression[:idx].strip()
         right = expression[idx + 1 :].strip()
@@ -248,10 +277,12 @@ def _find_top_level_arithmetic_operator(
     return None
 
 
-def _find_top_level_power_operator(expression: str) -> tuple[str, str, str] | None:
+def _find_top_level_power_operator(
+    expression: str, *, quotes: bool = False
+) -> tuple[str, str, str] | None:
     """The left-most top-level ``^``."""
 
-    for idx, char in _top_level(expression, quotes=False):
+    for idx, char in _top_level(expression, quotes=quotes):
         if char != "^":
             continue
         left = expression[:idx].strip()
@@ -260,6 +291,21 @@ def _find_top_level_power_operator(expression: str) -> tuple[str, str, str] | No
             raise ValueError("formula arithmetic terms require both operands")
         return left, char, right
     return None
+
+
+def _is_exponent_sign(text: str, idx: int) -> bool:
+    """Whether the sign at *idx* belongs to a number's exponent (``1e-3``)."""
+
+    if idx < 2 or text[idx - 1] not in "eE":
+        return False
+    start = idx - 1
+    while start > 0 and (text[start - 1].isdigit() or text[start - 1] == "."):
+        start -= 1
+    mantissa = text[start : idx - 1]
+    if not any(char.isdigit() for char in mantissa):
+        return False
+    # a mantissa that ends a name (x1e-3) is the name minus a number
+    return start == 0 or not (text[start - 1].isalnum() or text[start - 1] in "._")
 
 
 def _previous_non_space(text: str, idx: int) -> str | None:
@@ -284,6 +330,12 @@ def _strip_outer_formula_parentheses(term: str) -> str:
 
 
 def _parse_formula_literal(value: str) -> Any:
+    """A constant of a ``Surv()`` response comparison, ``rep()`` or a penalty option,
+    typed for Python: a whole number written without a point or exponent is an ``int``
+    (``rep()``'s count must be one) and ``T``/``F`` are logical.  Unlike
+    :func:`_r_literal`, which formula arithmetic and vectors read constants with, a
+    value that is not a finite constant is an error."""
+
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
@@ -298,6 +350,8 @@ def _parse_formula_literal(value: str) -> Any:
         lowered = value.lower()
 
     try:
+        if "_" in value:  # a Python digit separator, not R
+            raise ValueError(value)
         numeric = float(value)
     except ValueError as exc:
         raise ValueError(
@@ -403,12 +457,24 @@ def _response_operand_values(
 ) -> tuple[list[Any] | None, Any]:
     if operand.column is None:
         return None, operand.value
-    return _column(data, operand.column), None
+    return _comparison_column(data, operand.column), None
 
 
 def _compare_response_values(left: Any, operator: str, right: Any) -> bool | None:
+    """R's relational *operator* on one pair of values (``NA`` is ``None``).  As in R's
+    ``relop``, a string operand makes both strings (``as.character``: ``2`` is ``"2"``,
+    ``TRUE`` is ``"TRUE"``); other operands compare as numbers."""
+
     if _is_missing_value(left) or _is_missing_value(right):
         return None
+    if isinstance(left, str) or isinstance(right, str):
+        # R orders strings by the locale's collation (and a factor not at all)
+        if operator not in {"==", "!="}:
+            raise ValueError(
+                f"formula comparison {operator!r} of character or factor values is not supported"
+            )
+        equal = _as_character(left) == _as_character(right)
+        return equal if operator == "==" else not equal
     if operator == "==":
         return left == right
     if operator == "!=":
@@ -418,7 +484,7 @@ def _compare_response_values(left: Any, operator: str, right: Any) -> bool | Non
         left_numeric = float(left)
         right_numeric = float(right)
     except (TypeError, ValueError) as exc:
-        raise ValueError("ordered formula response comparisons require numeric values") from exc
+        raise ValueError("ordered formula comparisons require numeric values") from exc
 
     if operator == "<=":
         return left_numeric <= right_numeric
@@ -660,13 +726,13 @@ def _offset_columns(terms: Sequence[_CovariateTerm]) -> list[str]:
 
 
 def _arithmetic_literal(value: str) -> float | None:
-    try:
-        literal = float(value)
-    except ValueError:
-        return None
-    if not math.isfinite(literal):
-        raise ValueError("formula arithmetic literals must be finite")
-    return literal
+    """The number R's constant *value* is in arithmetic (``TRUE`` counts one), or
+    ``None`` when *value* is not a constant."""
+
+    literal = _r_literal(value)
+    if isinstance(literal, str):
+        raise ValueError(f"non-numeric argument to binary operator: {value.strip()}")
+    return None if literal is None else float(literal)
 
 
 def _is_formula_arithmetic_expression(expression: str) -> bool:
@@ -702,11 +768,68 @@ def _arithmetic_expression_columns(expression: str) -> list[str]:
 
     if _arithmetic_literal(expression) is not None:
         return []
+    if _top_level_comparison(expression) is not None:
+        return _expression_columns(expression)
+
+    call = _numeric_call(expression)
+    if call is not None:
+        return _expression_columns(call[1])
 
     column, quoted = _formula_name(expression)
     if _unsupported_formula_name(column, quoted):
         raise ValueError(f"unsupported formula arithmetic term: {expression}")
     return [column]
+
+
+def _expression_columns(expression: str) -> list[str]:
+    """The data columns an arithmetic expression or a comparison reads."""
+
+    comparison = _top_level_comparison(_strip_outer_formula_parentheses(expression))
+    if comparison is None:
+        return _arithmetic_expression_columns(expression)
+    columns: list[str] = []
+    for operand in (comparison[0], comparison[2]):
+        if _r_literal(operand) is None:
+            _append_unique(columns, _arithmetic_expression_columns(operand))
+    return columns
+
+
+# The calls formula arithmetic evaluates: R's functions of one numeric argument and
+# the wrappers that return theirs unchanged.
+_NUMERIC_CALLS = ("log", "sqrt", "exp", "I", "identity", "as.numeric")
+
+
+def _numeric_call(expression: str) -> tuple[str, str] | None:
+    """``(function, argument)`` of a call such as ``log(x + 1)`` in formula arithmetic."""
+
+    for function in _NUMERIC_CALLS:
+        if expression.startswith(f"{function}(") and expression.endswith(")"):
+            arguments = _formula_response_parts(expression[len(function) + 1 : -1])
+            if len(arguments) != 1:
+                raise ValueError(f"unsupported formula arithmetic term: {expression}")
+            return function, arguments[0]
+    return None
+
+
+def _r_literal(text: str) -> Any:
+    """R's constant *text* (a quoted string, ``TRUE``/``FALSE``, ``Inf`` or a number, as
+    a double), or ``None`` when *text* is not one."""
+
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    if text in {"TRUE", "FALSE"}:
+        return text == "TRUE"
+    if text == "Inf":
+        return math.inf
+    number = text.removesuffix("L")
+    # float() also reads Python's digit separators (1_000), which R does not
+    if not number or not (number[0].isdigit() or number[0] == ".") or "_" in number:
+        return None
+    try:
+        return float(number)
+    except ValueError:
+        return None
 
 
 def _r_divide(numerator: float, denominator: float) -> float:
@@ -774,11 +897,29 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
     literal = _arithmetic_literal(expression)
     if literal is not None:
         return [literal] * n
+    if _top_level_comparison(expression) is not None:
+        # a parenthesised comparison, TRUE counting 1: I((age > 60) + 0)
+        return _floats_or_nan(_expression_values(data, expression, n))
+
+    call = _numeric_call(expression)
+    if call is not None:
+        function, argument = call
+        column, quoted = _formula_name(argument)
+        if function == "as.numeric" and not _unsupported_formula_name(column, quoted):
+            return _numeric_column(expression, _as_numeric_column(data, column), n)
+        # a logical argument counts TRUE as 1 (R's as.numeric)
+        values = _floats_or_nan(_expression_values(data, argument, n))
+        return _apply_numeric_transform(values, function, argument)
 
     column, quoted = _formula_name(expression)
     if _unsupported_formula_name(column, quoted):
         raise ValueError(f"unsupported formula arithmetic term: {expression}")
-    values = _column(data, column)
+    return _numeric_column(expression, _column(data, column), n)
+
+
+def _numeric_column(expression: str, values: list[Any], n: int) -> list[float]:
+    """The column *values* an arithmetic *expression* reads, as numbers."""
+
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     try:
@@ -787,11 +928,288 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
         raise ValueError(f"I() formula term {expression!r} requires numeric values") from exc
 
 
+def _expression_values(data: Any, expression: str, n: int) -> list[Any]:
+    """A formula variable written as R arithmetic (floats) or as a comparison (R's
+    logical: ``True``/``False``, ``None`` where an operand is missing)."""
+
+    comparison = _top_level_comparison(_strip_outer_formula_parentheses(expression))
+    if comparison is None:
+        return _arithmetic_expression_values(data, expression, n)
+    left, operator, right = comparison
+    return [
+        _compare_response_values(a, operator, b)
+        for a, b in zip(
+            _comparison_operand(data, left, n), _comparison_operand(data, right, n), strict=True
+        )
+    ]
+
+
+def _comparison_operand(data: Any, text: str, n: int) -> list[Any]:
+    """One side of a formula comparison: a literal, a column (a factor as its labels)
+    or arithmetic."""
+
+    literal = _r_literal(text)
+    if literal is not None:
+        return [literal] * n
+    column, quoted = _formula_name(text)
+    if _unsupported_formula_name(column, quoted):
+        return _arithmetic_expression_values(data, text, n)
+    values = _comparison_column(data, column)
+    if len(values) != n:
+        raise ValueError("formula columns must have the same length as the Surv response")
+    return values
+
+
+# ---------------------------------------------------------------------------
+# Literal vectors: the R vectors formula arguments spell out (cut breaks and
+# labels, penalty options), evaluated from literals only, never with eval.
+# ---------------------------------------------------------------------------
+
+
+def _literal_vector(expression: str) -> list[Any]:
+    """The R vector *expression* writes with literals only.
+
+    Constants (numbers, strings, ``TRUE``/``FALSE``/``T``/``F``, ``Inf``; ``NULL`` is
+    empty), ``c(...)``, ``from:to``, ``seq(...)``, ``seq_len(n)`` and ``+ - * / ^`` of
+    those, the shorter operand recycled as R does.  Computed numbers are doubles.
+    """
+
+    text = _strip_outer_formula_parentheses(expression)
+    literal = _r_literal(text)
+    if literal is not None:
+        return [literal]
+    if text in {"T", "F"}:
+        return [text == "T"]
+    if text == "NULL":
+        return []
+    # split at the operator R binds loosest: + -, then * /, :, a sign, ^
+    for operators in ({"+", "-"}, {"*", "/"}):
+        split = _find_top_level_arithmetic_operator(text, operators, quotes=True)
+        if split is not None:
+            left, operator, right = split
+            return _vector_arithmetic(_literal_vector(left), operator, _literal_vector(right))
+    colons = [idx for idx, char in _top_level(text) if char == ":"]
+    if colons:
+        return _r_colon(
+            _literal_vector(text[: colons[-1]]), _literal_vector(text[colons[-1] + 1 :])
+        )
+    if text.startswith(("-", "+")):
+        sign = -1.0 if text[0] == "-" else 1.0
+        return _vector_arithmetic([sign], "*", _literal_vector(text[1:]))
+    split = _find_top_level_power_operator(text, quotes=True)
+    if split is not None:
+        return _vector_arithmetic(_literal_vector(split[0]), "^", _literal_vector(split[2]))
+    function, opening, inner = text.partition("(")
+    if opening and text.endswith(")"):
+        arguments = _formula_response_parts(inner[:-1])
+        if function == "c":
+            values: list[Any] = []
+            for argument in arguments:
+                named = _formula_named_option(argument)
+                values.extend(_literal_vector(argument if named is None else named[1]))
+            return values
+        if function == "seq":
+            return _r_seq(arguments)
+        if function == "seq_len" and len(arguments) == 1:
+            return _seq_len(_numeric_scalar(_literal_vector(arguments[0]), "length.out"))
+    raise ValueError(f"unsupported formula vector expression: {expression.strip()}")
+
+
+def _numeric_vector(values: Sequence[Any]) -> list[float]:
+    """``as.numeric`` of literal values: ``TRUE`` counts one; strings are an error."""
+
+    if any(isinstance(value, str) for value in values):
+        raise ValueError("non-numeric argument to a formula vector expression")
+    return [float(value) for value in values]
+
+
+def _numeric_scalar(values: Sequence[Any], name: str) -> float:
+    if len(values) != 1:
+        raise ValueError(f"'{name}' must be of length 1")
+    return _numeric_vector(values)[0]
+
+
+_VECTOR_OPERATORS = {"+": add, "-": sub, "*": mul, "/": _r_divide, "^": _r_pow}
+
+
+def _vector_arithmetic(left: Sequence[Any], operator: str, right: Sequence[Any]) -> list[float]:
+    """R's elementwise arithmetic, the shorter operand recycled."""
+
+    x, y = _numeric_vector(left), _numeric_vector(right)
+    if not x or not y:
+        return []
+    function = _VECTOR_OPERATORS[operator]
+    return [function(x[i % len(x)], y[i % len(y)]) for i in range(max(len(x), len(y)))]
+
+
+# C's FLT_EPSILON, the fuzz seq.c's seq_colon adds to the length of from:to
+_FLT_EPSILON = 2.0**-23
+
+
+def _r_colon(start: Sequence[Any], end: Sequence[Any]) -> list[float]:
+    """R's ``from:to`` (seq.c's ``seq_colon``): steps of one from the first element of
+    ``from`` towards ``to``, ``|to - from| + 1 + FLT_EPSILON`` of them truncated."""
+
+    if not start or not end:
+        raise ValueError("argument of length 0")
+    first, last = _numeric_vector(start[:1])[0], _numeric_vector(end[:1])[0]
+    if not (math.isfinite(first) and math.isfinite(last)):
+        raise ValueError("NA/NaN argument")
+    step = 1.0 if first <= last else -1.0
+    return [first + step * k for k in range(int(abs(last - first) + 1 + _FLT_EPSILON))]
+
+
+def _seq_len(count: float) -> list[float]:
+    """R's ``seq_len(count)``."""
+
+    return [float(k) for k in range(1, int(count) + 1)]
+
+
+def _seq_length(start: float, stop: float, count: int) -> list[float]:
+    """R's ``seq(from, to, length.out = count)``: ``from + i * by`` inside, ``to`` last."""
+
+    if count <= 2:
+        return [start, stop][:count]
+    by = (stop - start) / (count - 1)
+    return [start, *(start + i * by for i in range(1, count - 1)), stop]
+
+
+# seq.default's formals before its ``...``
+_SEQ_FORMALS = ("from", "to", "by", "length.out", "along.with")
+
+
+def _r_seq(arguments: Sequence[str]) -> list[float]:
+    """R's ``seq.default`` of literal arguments."""
+
+    extra: list[str] = []
+    matched = _match_arguments("seq", arguments, _SEQ_FORMALS, dots=extra)
+    given = {name: _literal_vector(value) for name, value in matched.items()}
+    if extra:
+        # R's chkDots: the arguments in seq.default's ... are dropped with a warning
+        names = ", ".join(f"'{name}'" for name in extra)
+        plural = "s" if len(extra) > 1 else ""
+        _warn_outside_package(f"extra argument{plural} {names} will be disregarded")
+    elif set(given) == {"from"}:
+        # seq(n) is 1:n, seq(x) of a vector 1:length(x) (R's nargs() == 1)
+        only = given["from"]
+        if len(only) != 1:
+            return _seq_len(len(only))
+        if not math.isfinite(_numeric_scalar(only, "from")):
+            raise ValueError("'from' must be a finite number")
+        return _r_colon([1.0], only)
+    length: float | None = None
+    if "along.with" in given:
+        length = float(len(given["along.with"]))
+    elif "length.out" in given:
+        length = float(math.ceil(_numeric_vector(given["length.out"][:1])[0]))
+    ends: dict[str, float] = {}
+    for name in ("from", "to"):
+        if name in given:
+            value = _numeric_scalar(given[name], name)
+            if not math.isfinite(value):
+                raise ValueError(f"'{name}' must be a finite number")
+            ends[name] = value
+    by = _numeric_scalar(given["by"], "by") if "by" in given else None
+    if length is None:
+        start, stop = ends.get("from", 1.0), ends.get("to", 1.0)
+        if by is None:
+            return _r_colon([start], [stop])
+        delta = stop - start
+        if delta == 0.0 and stop == 0.0:
+            return [stop]
+        steps = _r_divide(delta, by)
+        if not math.isfinite(steps):
+            if by == 0.0 and delta == 0.0:
+                return [start]
+            raise ValueError("invalid '(to - from)/by'")
+        if steps < 0.0:
+            raise ValueError("wrong sign in 'by' argument")
+        if abs(delta) / max(abs(stop), abs(start)) < 100 * sys.float_info.epsilon:
+            return [start]
+        values = [start + k * by for k in range(int(steps + 1e-10) + 1)]
+        return [min(value, stop) if by > 0 else max(value, stop) for value in values]
+    if not math.isfinite(length) or length < 0:
+        raise ValueError("'length.out' must be a non-negative number")
+    count = int(length)
+    if count == 0:
+        return []
+    if not ends and by is None:
+        return _seq_len(count)
+    if by is None:
+        start = ends.get("from", ends.get("to", 1.0) - (count - 1))
+        stop = ends.get("to", start + (count - 1))
+        return [start] * count if start == stop else _seq_length(start, stop, count)
+    if "to" not in ends:
+        start = ends.get("from", 1.0)
+        return [start + k * by for k in range(count)]
+    if "from" not in ends:
+        return [ends["to"] - k * by for k in range(count - 1, -1, -1)]
+    raise ValueError("too many arguments")
+
+
+def _match_arguments(
+    function: str,
+    arguments: Sequence[str],
+    formals: Sequence[str],
+    *,
+    dots: list[str] | None = None,
+) -> dict[str, str]:
+    """R's matching of the *arguments* of a call to *function*'s *formals*.
+
+    Names match exactly, then as the unique prefix of a formal; the unnamed arguments
+    fill the remaining formals in order.  An argument that matches no formal goes to
+    *dots* when the function has R's ``...`` (its name, empty when unnamed), and is an
+    error (R's ``unused argument``) otherwise.
+    """
+
+    matched: dict[str, str] = {}
+    partial: list[tuple[str, str]] = []
+    positional: list[str] = []
+    for argument in arguments:
+        named = _formula_named_option(argument)
+        if named is None:
+            positional.append(argument)
+        elif named[0] in formals:
+            if named[0] in matched:
+                raise ValueError(
+                    f'{function}(): formal argument "{named[0]}" matched by multiple actual '
+                    "arguments"
+                )
+            matched[named[0]] = named[1]
+        else:
+            partial.append(named)
+    exact = set(matched)
+    for name, value in partial:
+        candidates = [
+            formal for formal in formals if formal.startswith(name) and formal not in exact
+        ]
+        if not candidates:
+            if dots is None:
+                raise ValueError(f"{function}(): unused argument ({name} = {value})")
+            dots.append(name)
+            continue
+        if len(candidates) > 1:
+            raise ValueError(f"{function}(): argument {name} matches multiple formal arguments")
+        if candidates[0] in matched:
+            raise ValueError(
+                f'{function}(): formal argument "{candidates[0]}" matched by multiple actual '
+                "arguments"
+            )
+        matched[candidates[0]] = value
+    remaining = [formal for formal in formals if formal not in matched]
+    if len(positional) > len(remaining):
+        if dots is None:
+            raise ValueError(f"{function}(): unused argument ({positional[len(remaining)]})")
+        dots.extend("" for _ in positional[len(remaining) :])
+    matched.update(zip(remaining, positional, strict=False))
+    return matched
+
+
 def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         return _penalty_arguments(term.call)[0]
     if term.arithmetic is not None:
-        return _arithmetic_expression_columns(term.arithmetic)
+        return _expression_columns(term.arithmetic)
     return [term.column]
 
 
@@ -824,8 +1242,9 @@ def _data_rows(
     n: int,
     read: Mapping[str, list[Any]] | None = None,
 ) -> _FormulaRows:
-    """``data[rows, columns]``, the columns in *data*'s order; factor columns keep their
-    levels.  *read* holds columns the caller already materialised from *data*."""
+    """``data[rows, columns]``, the columns in *data*'s order; factor and ``tcut`` columns
+    keep their attributes.  *read* holds columns the caller already materialised from
+    *data*."""
 
     names = _data_column_names(data)
     if names is not None:
@@ -838,9 +1257,7 @@ def _data_rows(
         values = read[name] if name in read else _coerce_array_like(source, name)
         if len(values) != n:
             raise ValueError(f"variable lengths differ (found for '{name}')")
-        kept = [values[row] for row in rows]
-        categories = _mstate_categories(source)
-        frame[name] = kept if categories is None else _RFactorVector(kept, categories)
+        frame[name] = _rows_of(source, [values[row] for row in rows])
     return _FormulaRows(frame, len(rows))
 
 
@@ -1063,7 +1480,7 @@ def _remove_values(target: list[Any], values: list[Any]) -> None:
 
 
 def _unsupported_formula_name(name: str, quoted: bool) -> bool:
-    return not quoted and any(token in name for token in "():*/+-^%")
+    return not quoted and any(token in name for token in "():*/+-^%=<>!&|")
 
 
 def _factor_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None:
@@ -1074,11 +1491,17 @@ def _factor_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None
     return None
 
 
-def _transform_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None:
-    for wrapper in ("log", "sqrt", "exp", "I", "identity", "as.numeric", "tt"):
+def _transform_argument(term: str) -> tuple[str, str] | None:
+    """``(transform, argument)`` of a ``log``/``sqrt``/``exp``/``I``/``identity``/
+    ``as.numeric``/``tt`` term."""
+
+    for wrapper in (*_NUMERIC_CALLS, "tt"):
         prefix = f"{wrapper}("
         if term.startswith(prefix) and term.endswith(")"):
-            return wrapper, _formula_name_items(term[len(prefix) : -1])
+            arguments = _formula_response_parts(term[len(prefix) : -1])
+            if len(arguments) != 1:
+                raise ValueError(f"{wrapper}() requires exactly one column")
+            return wrapper, arguments[0]
     return None
 
 
@@ -1121,23 +1544,24 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
             categorical_wrapper=wrapper,
         )
 
-    for wrapper in ("I", "identity"):
-        prefix = f"{wrapper}("
-        if term.startswith(prefix) and term.endswith(")"):
-            expression = term[len(prefix) : -1].strip()
-            if _is_formula_arithmetic_expression(expression):
-                _arithmetic_expression_columns(expression)
-                return _CovariateTerm(expression, transform=wrapper, arithmetic=expression)
-
-    transform_items = _transform_column_items(term)
-    if transform_items is not None:
-        transform, column_items = transform_items
-        columns = [column for column, _quoted in column_items]
-        if len(columns) != 1:
-            raise ValueError(f"{transform}() requires exactly one column")
-        if any(_unsupported_formula_name(column, quoted) for column, quoted in column_items):
-            raise ValueError(f"unsupported formula term(s): {columns[0]}")
-        return _CovariateTerm(columns[0], transform=transform)
+    transform_argument = _transform_argument(term)
+    if transform_argument is not None:
+        transform, argument = transform_argument
+        column, quoted = _formula_name(argument)
+        if not _unsupported_formula_name(column, quoted):
+            return _CovariateTerm(column, transform=transform)
+        if transform == "tt":
+            raise ValueError(f"unsupported formula term(s): {column}")
+        _expression_columns(argument)
+        # I() and identity() keep a comparison logical, which the design codes as a
+        # factor (I(sex == 2)TRUE); the other transforms count TRUE as 1
+        logical = (
+            transform in {"I", "identity"}
+            and _top_level_comparison(_strip_outer_formula_parentheses(argument)) is not None
+        )
+        return _CovariateTerm(
+            argument, categorical=logical, transform=transform, arithmetic=argument
+        )
 
     call_term = _parse_call_term(term)
     if call_term is not None:
@@ -1170,37 +1594,54 @@ def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
             raise ValueError(f"duplicate penalty option {name!r}")
         if value == "NULL":
             options[name] = None
-        elif value.startswith("c(") and value.endswith(")"):
-            options[name] = [
-                _parse_formula_literal(v) for v in _formula_response_parts(value[2:-1])
-            ]
-        else:
+            continue
+        try:
             options[name] = _parse_formula_literal(value)
+        except ValueError:
+            # R has no scalars: a vector of length one (df = c(4), theta = 1/2,
+            # method = c("aic")) is the scalar the penalty takes
+            values = _literal_vector(value)
+            options[name] = values[0] if len(values) == 1 else values
     if not columns:
         raise ValueError("penalty terms require a data column")
     return columns, options
 
 
+# The formals of the categorising calls pyears evaluates, in R's order
+_CALL_FORMALS = {
+    "tcut": ("x", "breaks", "labels", "scale"),
+    "cut": ("x", "breaks", "labels", "include.lowest", "right", "dig.lab", "ordered_result"),
+}
+
+
+def _call_arguments(call: str) -> dict[str, str]:
+    """The arguments of a ``tcut()``/``cut()`` term by formal name, matched as R does."""
+
+    function, _sep, inner = call.partition("(")
+    return _match_arguments(function, _formula_response_parts(inner[:-1]), _CALL_FORMALS[function])
+
+
 def _parse_call_term(term: str) -> _CovariateTerm | None:
-    """A ``tcut(x, ...)``/``cut(x, ...)`` term: categorical, reading the column of ``x``."""
+    """A ``tcut(x, ...)``/``cut(x, ...)`` or penalty term: categorical, reading the
+    column of its variable ``x``."""
 
     for function in _CALL_TERMS:
         prefix = f"{function}("
         if not (term.startswith(prefix) and term.endswith(")")):
             continue
-        arguments = _formula_response_parts(term[len(prefix) : -1])
-        if not arguments:
-            raise ValueError(f"{function}() requires a variable")
-        first = arguments[0]
-        if _is_formula_arithmetic_expression(first):
-            columns = _arithmetic_expression_columns(first)
-            if not columns:
-                raise ValueError(f"{function}() requires a data column")
-            return _CovariateTerm(columns[0], categorical=True, arithmetic=first, call=term)
-        column, quoted = _formula_name(first)
-        if _unsupported_formula_name(column, quoted):
-            raise ValueError(f"unsupported formula term(s): {term}")
-        return _CovariateTerm(column, categorical=True, call=term)
+        if function in _CALL_FORMALS:
+            x = _call_arguments(term).get("x")
+            if x is None:
+                raise ValueError(f"{function}() requires a variable")
+        else:
+            x = _penalty_arguments(term)[0][0]
+        column, quoted = _formula_name(x)
+        if not _unsupported_formula_name(column, quoted):
+            return _CovariateTerm(column, categorical=True, call=term)
+        columns = _expression_columns(x)
+        if not columns:
+            raise ValueError(f"{function}() requires a data column")
+        return _CovariateTerm(columns[0], categorical=True, arithmetic=x, call=term)
     return None
 
 
@@ -1305,9 +1746,10 @@ def _parse_covariate_expression(
 
     in_parts = _split_top_level_token(term, "%in%")
     if len(in_parts) > 1:
+        # a %in% b is a:b; the fit orders each interaction's factors as R's terms() does
         parsed_groups = [_parse_interaction_term(part, dot_terms) for part in in_parts]
-        nested_expanded = parsed_groups[-1]
-        for nested_group in reversed(parsed_groups[:-1]):
+        nested_expanded = parsed_groups[0]
+        for nested_group in parsed_groups[1:]:
             next_expanded: list[_CovariateSpec] = []
             for current, nested in product(nested_expanded, nested_group):
                 _append_unique(next_expanded, [_interaction_from_terms((current, nested))])
@@ -1533,13 +1975,11 @@ def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
     if term.call is not None:
         raise ValueError(f"unsupported formula term(s): {term.call}")
     if term.arithmetic is not None:
-        return _arithmetic_expression_values(data, term.arithmetic, n)
-    values = _column(data, term.column)
+        return _expression_values(data, term.arithmetic, n)
     if term.transform == "as.numeric":
-        categories = _mstate_categories(_column_source(data, term.column))
-        if categories is not None:
-            codes = {value: i + 1 for i, value in enumerate(categories)}
-            values = [math.nan if _is_missing_value(value) else codes[value] for value in values]
+        values = _as_numeric_column(data, term.column)
+    else:
+        values = _column(data, term.column)
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     return values
@@ -1557,7 +1997,7 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
         return [math.prod(values[idx] for values in numeric_values) for idx in range(n)]
 
     values = _term_raw_values(data, term, n)
-    if term.transform is None:
+    if term.transform is None or term.categorical:
         return values
     return _numeric_term_values(values, term)
 
@@ -2010,7 +2450,8 @@ def model_frame(
 
     The extra arguments may be column names of *data* or row-aligned vectors, as
     R evaluates ``weights = wt`` in the data; ``extra`` names further such
-    columns (``pyears``' ``rmap`` variables).  ``subset`` (a mask or row indices)
+    columns (``pyears``' ``rmap`` variables and ``tcut``/``cut`` values), which a
+    missing value removes like a formula variable.  ``subset`` (a mask or row indices)
     and then ``na_action`` (``"na.omit"``, R's default, ``"na.exclude"``,
     ``"na.pass"``, ``"na.fail"``, or ``None`` for none) are applied to the formula's
     variables and the arguments together, after which the response and the terms

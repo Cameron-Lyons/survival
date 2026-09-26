@@ -562,7 +562,8 @@ class PyearsResult:
     ``pyears``, ``n``, ``event`` and ``expected`` are the R arrays as row-major
     nested lists over ``dim`` (a flat list for one dimension, a scalar list for no
     grouping); ``dimnames`` maps each term label to its level labels, in formula
-    order.  ``data`` is the ``data.frame = TRUE`` layout instead.
+    order.  ``data`` is the ``data.frame = TRUE`` layout instead.  ``na_action``
+    records the rows the ``na.action`` removed (``None`` when it removed none).
     """
 
     pyears: Any
@@ -575,6 +576,7 @@ class PyearsResult:
     event: Any = None
     expected: Any = None
     data: dict[str, list[Any]] | None = None
+    na_action: NaAction | None = None
 
     @property
     def group(self) -> list[str]:

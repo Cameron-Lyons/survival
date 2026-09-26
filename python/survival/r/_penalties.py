@@ -128,6 +128,9 @@ def _fit_frailty(
     if "." in kind:
         kwargs.setdefault("distribution", kind.split(".", 1)[1])
     kwargs.setdefault("sparse", len(groups) > 5)
+    if kwargs.get("init") is not None:
+        # frailty.controlaic reads init[1] and init[2]; a single value is refused
+        kwargs["init"] = _float_vector(_scalar_or_vector(kwargs["init"], "init"), "init")
     penalty = _core.CoxPenalty.frailty(n=len(x), **kwargs)
     if penalty.sparse:
         names: tuple[str, ...] = (term.call,)
@@ -169,7 +172,7 @@ def _pspline_combine(combine: Any, ncol: int, intercept: bool) -> tuple[int, ...
     """pspline.R's checks of ``combine``: the group of each of the ``ncol`` basis columns,
     with the first column (dropped unless ``intercept``) coded 0 in front of them."""
 
-    codes = _float_vector(combine, "combine")
+    codes = _float_vector(_scalar_or_vector(combine, "combine"), "combine")
     if any(not code.is_integer() or code < 0 for code in codes) or any(
         b < a for a, b in pairwise(codes)
     ):
