@@ -247,17 +247,17 @@ def _surv_argument_names(mf: ModelFrame) -> tuple[str | None, str | None, str | 
     return names[0], None, None
 
 
-def _status_labels(states: Sequence[str], status: Sequence[Any]) -> list[Any]:
-    """R's ``factor(status, 0:length(states), labels = c("censor", states))``."""
+def _status_labels(states: Sequence[str], status: Sequence[float | int | None]) -> list[Any]:
+    """R's ``factor(status, 0:length(states), labels = c("censor", states))``.
 
-    labels = ["censor", *states] if states else None
-    result: list[Any] = []
-    for value in status:
-        if _is_missing_value(value):
-            result.append(None)
-        else:
-            result.append(labels[int(value)] if labels else int(value))
-    return result
+    ``status`` holds the integer codes, with ``None`` or ``NaN`` (the kernels'
+    missing value) for ``NA``.
+    """
+
+    if not states:
+        return [None if code is None or code != code else int(code) for code in status]
+    labels = ["censor", *states]
+    return [None if code is None or code != code else labels[int(code)] for code in status]
 
 
 def _cut_points(cut: Any) -> list[float]:
@@ -274,7 +274,7 @@ def _output_name(value: Any, name: str) -> str:
 
 
 def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> dict[str, list[Any]]:
-    return {name: [values[row] for row in rows] for name, values in columns.items()}
+    return {name: list(map(values.__getitem__, rows)) for name, values in columns.items()}
 
 
 def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
@@ -293,6 +293,23 @@ def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
     if len({len(values) for values in columns.values()}) > 1:
         raise ValueError(f"{name} columns must have equal lengths")
     return columns
+
+
+def _old_style_formula(data: Any, start: Any, end: Any, event: Any) -> str:
+    """The formula of R's old-style ``survSplit`` call: ``Surv([start, ]end, event) ~ .``."""
+
+    if end is None or event is None:
+        raise ValueError("either a formula or the end and event arguments are required")
+    names = _data_column_names(data) or []
+    if not (isinstance(event, str) and event in names):
+        raise ValueError("'event' must be a variable name in the data set")
+    if not (isinstance(end, str) and end in names):
+        raise ValueError("'end' must be a variable name in the data set")
+    start = "tstart" if start is None else start
+    if not isinstance(start, str):
+        raise ValueError("'start' must be a variable name")
+    columns = [start, end, event] if start in names else [end, event]
+    return f"Surv({', '.join(f'`{name}`' for name in columns)}) ~ ."
 
 
 def _split_kernel(response: Any, cut: list[float], zero: float, timefix: bool, id: Any) -> Any:
@@ -334,10 +351,13 @@ def survSplit(
 ) -> dict[str, list[Any]]:
     """R's ``survSplit``: split survival records at the ``cut`` times.
 
-    ``formula`` is ``Surv(...) ~ terms``; a ``Surv`` (or ``Surv2``) object may be
-    given as ``response`` with ``data`` holding the covariates instead (R's old-style
-    call).  ``id`` names the subject column to add for ``(time, status)`` data, or is
-    the subject vector of ``Surv2`` timeline data.
+    ``formula`` is ``Surv(...) ~ terms``.  R's old-style call gives no formula
+    (or the data frame in its place) and names the ``end`` and ``event`` columns
+    instead, splitting ``Surv([start, ]end, event) ~ .``.  ``id`` names the
+    subject column to add for ``(time, status)`` data, or is the subject vector
+    of ``Surv2`` timeline data.  A ``Surv`` (or ``Surv2``) object may also be given
+    as ``response`` (or ``formula``) with ``data`` holding the covariates, one row
+    per observation.
     """
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
@@ -355,7 +375,13 @@ def survSplit(
         return _survsplit_object(
             response, data, cut_values, zero_value, timefix, id, start, end, event, episode, added
         )
-    if not isinstance(formula, str):
+    if formula is None or _data_column_names(formula) is not None:
+        if data is None:
+            if formula is None:
+                raise ValueError("a data frame is required")
+            data = formula
+        formula = _old_style_formula(data, start, end, event)
+    elif not isinstance(formula, str):
         raise ValueError("either a formula or the end and event arguments are required")
     if data is None:
         raise ValueError("a data argument is required")
@@ -379,11 +405,10 @@ def survSplit(
         data = {name: values for name, values in data.items() if name != idname}
         added_id = False
     split = _split_kernel(mf.response, cut_values, zero_value, timefix, None)
-    rows = list(split.row)
-    right_dot = formula.partition("~")[2].strip() == "." and mf.n == len(
-        next(iter(_data_columns(data, "data").values()), [])
-    )
-    if right_dot:
+    rows = split.row
+    # R's rightdot: with ``~ .`` and no rows dropped the data itself is split, so
+    # every column keeps its place
+    if formula.partition("~")[2].strip() == "." and mf.n == _data_row_count(data):
         newdata = _split_frame(_data_columns(data, "data"), rows)
     else:
         newdata = _split_frame(dict(_model_variables(mf)), rows)
@@ -399,13 +424,13 @@ def survSplit(
         end = end or time2_name or "tstop"
         event = event or event_name or "event"
         start = start or time_name or "tstart"
-    newdata[_output_name(start, "start")] = list(split.start)
-    newdata[_output_name(end, "end")] = list(split.end)
+    newdata[_output_name(start, "start")] = split.start
+    newdata[_output_name(end, "end")] = split.end
     newdata[_output_name(event, "event")] = _status_labels(states, split.status)
     if episode is not None:
         newdata[_output_name(episode, "episode")] = [value + 1 for value in split.interval]
     if added is not None:
-        newdata[_output_name(added, "added")] = list(split.censor)
+        newdata[_output_name(added, "added")] = split.censor
     return newdata
 
 
@@ -426,21 +451,21 @@ def _survsplit_object(
 
     split = _split_kernel(response, cut, zero, timefix, id)
     two_columns = isinstance(response, Surv2) or response.start is None
-    rows = list(split.row)
+    rows = split.row
     columns = {} if data is None else _data_columns(data, "data")
     if columns and len(next(iter(columns.values()))) != len(response):
         raise ValueError("data must have one row per response observation")
     newdata = _split_frame(columns, rows)
     if isinstance(id, str) and two_columns and id not in newdata:
         newdata[id] = [row + 1 for row in rows]
-    newdata[_output_name(start or "tstart", "start")] = list(split.start)
+    newdata[_output_name(start or "tstart", "start")] = split.start
     if not isinstance(response, Surv2):
-        newdata[_output_name(end or "tstop", "end")] = list(split.end)
+        newdata[_output_name(end or "tstop", "end")] = split.end
     newdata[_output_name(event or "event", "event")] = _status_labels(response.states, split.status)
     if episode is not None:
         newdata[_output_name(episode, "episode")] = [value + 1 for value in split.interval]
     if added is not None:
-        newdata[_output_name(added, "added")] = list(split.censor)
+        newdata[_output_name(added, "added")] = split.censor
     return newdata
 
 
