@@ -148,6 +148,118 @@ def test_tt_expansion_reads_only_the_formula_columns():
     assert fit.coefficients == approx(expected)
 
 
+# --- NaN made by log, sqrt and arithmetic -------------------------------------------------
+
+
+def _shifted(values, shift):
+    return [None if value is None or math.isnan(value) else value + shift for value in values]
+
+
+def test_a_nan_made_by_a_transform_is_missing_at_fit_time(lung):
+    data = {name: list(values) for name, values in lung.items()}
+    data["w2"] = _shifted(data["wt.loss"], 5)
+    rows = (1, 20, 22, 27, 29, 33, 34, 36, 44, 46, 56, 63, 108, 138, 141, 178, 183, 192)
+    rows += (193, 206, 209, 217)
+    with pytest.warns(UserWarning, match=r"NaNs produced in sqrt\(w2\)"):
+        fit = r.coxph("Surv(time, status) ~ sqrt(w2)", data)
+    assert fit.n == 206
+    assert fit.na_action == r.NaAction(rows=rows, kind="omit")
+    assert fit.coefficients == approx([0.0488384446760115])
+    assert fit.loglik == approx([-644.373862475350, -643.949395528701])
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        excluded = r.coxph("Surv(time, status) ~ sqrt(w2)", data, na_action="na.exclude")
+    martingale = r.residuals(excluded)
+    assert len(martingale) == 228
+    assert martingale[:3] == approx([NAN, -0.0978818255932974, -2.8963891942316859])
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        weibull = r.survreg("Surv(time, status) ~ sqrt(w2)", data)
+    assert weibull.na_action == r.NaAction(rows=rows, kind="omit")
+    assert r.coef(weibull) == approx([6.2215045486025868, -0.0363994493305636])
+    assert weibull.scale == approx([0.747308782227756])
+    with (
+        pytest.warns(UserWarning, match="NaNs produced"),
+        pytest.raises(ValueError, match="missing values in formula data"),
+    ):
+        r.coxph("Surv(time, status) ~ sqrt(w2)", data, na_action="na.fail")
+    data["w4"] = _shifted(data["wt.loss"], 4.5)
+    with pytest.warns(UserWarning, match=r"NaNs produced in log\(w4\)"):
+        offset = r.coxph("Surv(time, status) ~ age + offset(log(w4))", data)
+    assert offset.n == 202
+    assert offset.na_action.rows == tuple(sorted({*rows, 17, 139, 182, 225}))
+    assert offset.coefficients == approx([0.0250684861996581])
+    # log(0) is -Inf, not NA; 0/0 is NaN, a nonzero value over 0 is Inf
+    with (
+        pytest.warns(UserWarning, match="NaNs produced"),
+        pytest.raises(ValueError, match="data contains an infinite predictor"),
+    ):
+        r.coxph("Surv(time, status) ~ log(wt.loss)", data)
+    with pytest.raises(ValueError, match="data contains an infinite predictor"):
+        r.coxph("Surv(time, status) ~ I(wt.loss/ph.ecog)", data)
+    # d is 0 where wt.loss is, so wt.loss/d is 0/0 there
+    wt_loss = _shifted(data["wt.loss"], 0)
+    data["d"] = [None if value is None else float(value != 0) for value in wt_loss]
+    ratio = r.coxph("Surv(time, status) ~ I(wt.loss/d) + sex", data)
+    assert ratio.n == 180
+    assert len(ratio.na_action) == 48
+    assert ratio.coefficients == approx([0.000902963530977684, -0.507022142653092311])
+
+
+def test_predict_counts_a_nan_made_by_a_transform_as_missing(lung):
+    root = r.coxph("Surv(time, status) ~ sqrt(age)", lung)
+    with pytest.warns(UserWarning, match=r"NaNs produced in sqrt\(age\)"):
+        assert r.predict(root, {"age": [50, -1]}) == approx([-0.23381015810109, NAN])
+    log_age = r.coxph("Surv(time, status) ~ log(age)", lung)
+    with pytest.warns(UserWarning, match="NaNs produced"):
+        assert r.predict(log_age, {"age": [50, -1]}, na_action="na.omit") == approx(
+            [-0.233687257176816]
+        )
+    fit = r.coxph("Surv(time, status) ~ I(wt.loss/ph.karno) + I(age^0.5)", lung)
+    assert fit.coefficients == approx([0.113902416027138, 0.331741366403163])
+    newdata = {"wt.loss": [10, 0, 10], "ph.karno": [80, 0, 80], "age": [60, 60, -4]}
+    assert r.predict(fit, newdata) == approx([-0.0456299106266535, NAN, NAN])
+    assert r.predict(fit, newdata, na_action="na.omit") == approx([-0.0456299106266535])
+
+
+def test_predict_keeps_strata_and_response_aligned_past_nan_rows(lung):
+    # row 2 is Inf - Inf, row 3 has a missing age
+    newdata = {
+        "age": [60, math.inf, None, 70],
+        "wt.loss": [5, math.inf, 3, 10],
+        "sex": [1, 2, 1, 2],
+        "time": [100, 200, 300, 400],
+        "status": [1, 0, 1, 1],
+    }
+    cox = r.coxph("Surv(time, status) ~ I(age - wt.loss) + strata(sex)", lung)
+    assert cox.coefficients == approx([0.00585435315648175])
+    lp = [0.0163281568504999, 0.0390744036258201]
+    expected = [0.171924694592218, 0.642203943775121]
+    assert r.predict(cox, newdata) == approx([lp[0], NAN, NAN, lp[1]])
+    assert r.predict(cox, newdata, type="expected") == approx([expected[0], NAN, NAN, expected[1]])
+    assert r.predict(cox, newdata, na_action="na.omit") == approx(lp)
+    omitted = r.predict(cox, newdata, type="expected", se_fit=True, na_action="na.omit")
+    assert omitted.fit == approx(expected)
+    assert omitted.se_fit == approx([0.0385400257934624, 0.1211150325754276])
+    groups = [1, 2, 2, 3]
+    assert r.predict(cox, newdata, collapse=groups, na_action="na.omit") == approx(lp)
+    assert r.predict(cox, newdata, type="expected", collapse=groups, na_action="na.omit") == approx(
+        expected
+    )
+    weibull = r.survreg("Surv(time, status) ~ I(age - wt.loss) + strata(sex)", lung)
+    assert r.coef(weibull) == approx([6.35637625611459089, -0.00479619370498527])
+    assert r.predict(weibull, newdata, type="lp") == approx(
+        [6.09258560234040, NAN, NAN, 6.06860463381547]
+    )
+    assert r.predict(weibull, newdata, type="lp", na_action="na.omit") == approx(
+        [6.09258560234040, 6.06860463381547]
+    )
+    assert r.predict(weibull, newdata, type="quantile", p=0.5) == approx(
+        [329.27722369405, NAN, NAN, 342.53834389147]
+    )
+    assert r.predict(weibull, newdata, type="quantile", p=0.5, na_action="na.omit") == approx(
+        [329.27722369405, 342.53834389147]
+    )
+
+
 # --- na.exclude: naresid / napredict -------------------------------------------------------
 
 

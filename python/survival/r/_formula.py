@@ -643,7 +643,7 @@ def _covariate_factors(term: _CovariateSpec) -> tuple[_CovariateTerm, ...]:
     return (term,)
 
 
-def _covariate_columns(terms: list[_CovariateSpec]) -> list[str]:
+def _covariate_columns(terms: Iterable[_CovariateSpec]) -> list[str]:
     columns: list[str] = []
     for term in terms:
         for factor in _covariate_factors(term):
@@ -708,6 +708,29 @@ def _arithmetic_expression_columns(expression: str) -> list[str]:
     return [column]
 
 
+def _r_divide(numerator: float, denominator: float) -> float:
+    """R's ``numerator / denominator`` (IEEE): ``±Inf`` over zero, NaN for ``0/0``."""
+
+    try:
+        return numerator / denominator
+    except ZeroDivisionError:
+        if numerator == 0.0 or math.isnan(numerator):
+            return math.nan
+        return math.copysign(math.inf, numerator) * math.copysign(1.0, denominator)
+
+
+def _r_pow(base: float, exponent: float) -> float:
+    """R's ``base ^ exponent`` (``R_pow``): NaN for a negative base with a fractional
+    exponent, ``Inf`` for zero to a negative power, ``±Inf`` on overflow."""
+
+    try:
+        return math.pow(base, exponent)
+    except OverflowError:
+        return -math.inf if base < 0.0 and exponent % 2.0 == 1.0 else math.inf
+    except ValueError:
+        return math.inf if base == 0.0 else math.nan
+
+
 def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[float]:
     expression = _strip_outer_formula_parentheses(expression)
     additive = _find_top_level_arithmetic_operator(expression, {"+", "-"})
@@ -726,9 +749,7 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
         right_values = _arithmetic_expression_values(data, right, n)
         if operator == "*":
             return [left * right for left, right in zip(left_values, right_values, strict=True)]
-        if any(value == 0.0 for value in right_values):
-            raise ValueError("formula arithmetic division by zero")
-        return [left / right for left, right in zip(left_values, right_values, strict=True)]
+        return list(map(_r_divide, left_values, right_values))
 
     if expression.startswith(("+", "-")):
         values = _arithmetic_expression_values(data, expression[1:].strip(), n)
@@ -741,16 +762,7 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
         left, _operator, right = power
         left_values = _arithmetic_expression_values(data, left, n)
         right_values = _arithmetic_expression_values(data, right, n)
-        powered: list[float] = []
-        for left_value, right_value in zip(left_values, right_values, strict=True):
-            try:
-                value = math.pow(left_value, right_value)
-            except ValueError as exc:
-                raise ValueError("formula arithmetic power produced a non-real value") from exc
-            if not math.isfinite(value):
-                raise ValueError("formula arithmetic power produced a non-finite value")
-            powered.append(value)
-        return powered
+        return list(map(_r_pow, left_values, right_values))
 
     literal = _arithmetic_literal(expression)
     if literal is not None:
@@ -776,13 +788,20 @@ def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
     return [term.column]
 
 
+def _formula_rhs_terms(formula: str, data: Any) -> _FormulaTerms:
+    """The terms of *formula*'s right-hand side, a ``.`` standing for the other columns
+    of *data*."""
+
+    spec = _response_spec(formula)
+    _lhs, _sep, rhs = formula.partition("~")
+    return _split_terms(rhs, _dot_terms(data, [] if spec is None else list(spec.columns)))
+
+
 def _formula_columns(formula: str, data: Any) -> list[str]:
     spec = _response_spec(formula)
-    args = [] if spec is None else list(spec.columns)
-    _lhs, _sep, rhs = formula.partition("~")
-    terms = _split_terms(rhs, _dot_terms(data, args))
+    terms = _formula_rhs_terms(formula, data)
     columns = (
-        args
+        ([] if spec is None else list(spec.columns))
         + _covariate_columns(terms.covariates)
         + terms.strata
         + _offset_columns(terms.offsets)
@@ -880,6 +899,37 @@ def _backwards_interval_rows(formula: str, data: Any, n: int) -> list[int]:
     return rows
 
 
+def _made_nan_rows(
+    data: Any,
+    variables: Iterable[_CovariateTerm],
+    missing: set[int],
+    n: int,
+    read: Mapping[str, list[Any]] | None = None,
+) -> list[int]:
+    """The rows outside ``missing`` at which one of the formula ``variables`` is NaN.
+
+    R's ``model.frame`` evaluates every variable before ``na.action`` scans it, so a NaN
+    made from values that are present (``log``/``sqrt`` of a negative value, ``0/0``,
+    ``Inf - Inf``) is missing as well.  Only arithmetic and ``log``/``sqrt`` make one, so
+    no other variable is evaluated; an interaction's product is not a variable.
+    """
+
+    variables = [
+        term
+        for term in dict.fromkeys(variables)
+        if term.call is None and (term.arithmetic is not None or term.transform in {"log", "sqrt"})
+    ]
+    if not variables:
+        return []
+    kept = [row for row in range(n) if row not in missing]
+    complete = _data_rows(data, _covariate_columns(variables), kept, n, read)
+    made: set[int] = set()
+    for term in variables:
+        values = _numeric_term_values(_term_raw_values(complete, term, len(kept)), term)
+        made.update(compress(kept, map(math.isnan, values)))
+    return sorted(made)
+
+
 def _apply_formula_na_action(
     formula: str,
     data: Any,
@@ -916,6 +966,9 @@ def _apply_formula_na_action(
     )
     missing.update(missing_rows)
     missing.update(_backwards_interval_rows(formula, read, n))
+    terms = _formula_rhs_terms(formula, data)
+    variables = [factor for term in terms.covariates for factor in _covariate_factors(term)]
+    missing.update(_made_nan_rows(data, [*variables, *terms.offsets], missing, n, read))
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
         return data, row_aligned, []
@@ -1386,17 +1439,28 @@ def _parse_formula(formula: str, data: Any) -> tuple[Surv, _FormulaTerms]:
     return surv, terms
 
 
+def _r_log(value: float) -> float:
+    """R's ``log``: ``-Inf`` at zero and NaN below it."""
+
+    if value > 0.0:
+        return math.log(value)
+    return -math.inf if value == 0.0 else math.nan
+
+
+def _r_sqrt(value: float) -> float:
+    """R's ``sqrt``: NaN below zero."""
+
+    return math.sqrt(value) if value >= 0.0 else math.nan
+
+
 def _apply_numeric_transform(values: list[float], transform: str | None, term: str) -> list[float]:
     if transform is None:
         return values
-    if transform == "log":
-        if any(value <= 0.0 for value in values):
-            raise ValueError(f"log() formula term {term!r} requires positive values")
-        return [math.log(value) for value in values]
-    if transform == "sqrt":
+    if transform in {"log", "sqrt"}:
+        result = list(map(_r_log if transform == "log" else _r_sqrt, values))
         if any(value < 0.0 for value in values):
-            raise ValueError(f"sqrt() formula term {term!r} requires nonnegative values")
-        return [math.sqrt(value) for value in values]
+            _warn_outside_package(f"NaNs produced in {transform}({term})")
+        return result
     if transform == "exp":
         return [math.exp(value) for value in values]
     if transform in {"I", "identity", "as.numeric", "tt"}:

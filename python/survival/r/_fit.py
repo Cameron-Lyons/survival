@@ -42,6 +42,7 @@ from ._formula import (
     _formula_model_frame,
     _formula_response_spec,
     _formula_response_values,
+    _made_nan_rows,
     _na_action_record,
     _offset_vector,
     _parse_formula,
@@ -424,9 +425,10 @@ def _newdata_frame(
     Strata columns are looked up only when ``need_strata`` (R's ``found.strata``),
     the response only when ``need_response`` (``predict(type='expected')``,
     ``survfit(id=)``); either is ``None`` when absent from ``newdata``.  A row with a
-    missing value in one of these variables, or in a covariate or offset (including a
-    NaN a transform made), is left out and listed in ``missing``: ``na.fail`` refuses
-    it, and a prediction pads it back as NaN for ``na.pass`` and ``na.exclude``.
+    missing value in one of these variables or in a covariate or offset variable (a
+    NaN that ``log``, ``sqrt`` or arithmetic made included) is left out and listed in
+    ``missing``: ``na.fail`` refuses it, and a prediction pads it back as NaN for
+    ``na.pass`` and ``na.exclude``.
     """
 
     present = set(_newdata_columns(newdata))
@@ -441,26 +443,19 @@ def _newdata_frame(
     )
     n = _formula_design_row_count(newdata, design)
     missing = _missing_row_indices([(name, _column_source(newdata, name)) for name in columns], n)
-    kept = [row for row in range(n) if row not in missing]
-    if missing:
-        newdata = _data_rows(newdata, columns, kept, n)
-    rows = _design_rows_from_spec(newdata, design, len(kept))
-    offset = _offset_vector(newdata, list(design.offsets), len(kept))
-    made = [
-        i
-        for i, row in enumerate(rows)
-        if any(map(math.isnan, row)) or (offset is not None and math.isnan(offset[i]))
+    variables = [
+        part.term
+        for term in design.covariates
+        for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
     ]
-    if made:
-        missing.update(kept[i] for i in made)
-        made_rows = set(made)
-        complete = [i for i in range(len(kept)) if i not in made_rows]
-        newdata = _data_rows(newdata, columns, complete, len(kept))
-        rows = [rows[i] for i in complete]
-        offset = None if offset is None else [offset[i] for i in complete]
+    missing.update(_made_nan_rows(newdata, [*variables, *design.offsets], missing, n))
     if missing and _normalize_na_action(na_action) == "fail":
         raise ValueError("missing values in newdata")
-    m = len(rows)
+    m = n - len(missing)
+    if missing:
+        newdata = _data_rows(newdata, columns, [row for row in range(n) if row not in missing], n)
+    rows = _design_rows_from_spec(newdata, design, m)
+    offset = _offset_vector(newdata, list(design.offsets), m)
     strata_codes: list[int] | None = None
     if strata_columns:
         factor = _strata_factor({name: _column_source(newdata, name) for name in strata_columns}, m)
