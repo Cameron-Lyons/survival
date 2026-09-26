@@ -1654,6 +1654,34 @@ def _drop_single_column(rows: list[list[float]], nvar: int) -> Any:
     return [row[0] for row in rows] if nvar == 1 else rows
 
 
+@dataclass(frozen=True)
+class CoxSchoenfeldResiduals:
+    """``residuals(fit, type = "schoenfeld" | "scaledsch")``: one row of ``values`` per
+    death (a vector for a one-variable model, as in R), labelled as R labels the matrix:
+    ``time`` holds the death times (its row names), ``colnames`` the coefficient names,
+    and ``strata`` the deaths per stratum in level order (``attr(, "strata")``, R's
+    ``table(strata[deaths])``), ``None`` for an unstratified fit."""
+
+    values: Any = field(repr=False)
+    time: list[float] = field(repr=False)
+    strata: dict[str, int] | None
+    colnames: list[str]
+
+
+def _schoenfeld_result(fit: CoxphModel, residuals: Any) -> CoxSchoenfeldResiduals:
+    strata: dict[str, int] | None = None
+    if residuals.strata is not None and fit.strata_levels:
+        strata = dict.fromkeys(fit.strata_levels, 0)
+        for code in residuals.strata:
+            strata[fit.strata_levels[code]] += 1
+    return CoxSchoenfeldResiduals(
+        values=_drop_single_column(residuals.residuals, fit.nvar),
+        time=residuals.time,
+        strata=strata,
+        colnames=list(fit.coef_names),
+    )
+
+
 def residuals_coxph(
     fit: CoxphModel,
     *,
@@ -1664,10 +1692,11 @@ def residuals_coxph(
 ) -> Any:
     """R's ``residuals.coxph``.
 
-    Score, Schoenfeld and dfbeta residuals are matrices (one row per observation
-    or event) that drop to a vector for a one-variable model, as in R.  A
-    ``na.exclude`` fit's residuals are NaN at the rows it removed (``naresid``), and
-    a ``collapse`` vector then covers those rows too.
+    Score and dfbeta residuals are matrices (one row per observation) that drop to a
+    vector for a one-variable model, as in R; Schoenfeld residuals come as a
+    :class:`CoxSchoenfeldResiduals`, one row per death.  A ``na.exclude`` fit's
+    residuals other than Schoenfeld's are NaN at the rows it removed (``naresid``),
+    and a ``collapse`` vector then covers those rows too.
     """
 
     if kwargs:
@@ -1697,7 +1726,7 @@ def residuals_coxph(
             if otype == "schoenfeld"
             else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
         )
-        return _drop_single_column([list(row) for row in residuals.residuals], nvar)
+        return _schoenfeld_result(fit, residuals)
     # naresid comes before the collapse: the engine sums the fit's rows, and a group
     # holding a row na.exclude removed sums to NA
     padded_codes = codes if excluded and collapse is not True else None
