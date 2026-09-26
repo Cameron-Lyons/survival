@@ -15,6 +15,7 @@ datasets = survival.datasets
 concordancefit = survival.r._concordance.concordancefit
 
 COUNT_NAMES = ("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
+SURVCONCORDANCE_NAMES = ("concordant", "discordant", "tied.risk", "tied.time", "std(c-d)")
 
 
 def approx(values, rel=1e-9):
@@ -243,6 +244,66 @@ def test_character_clusters_and_strata_come_out_in_sorted_order(ovarian):
     assert counts(result.count) == [[8, 36, 0, 0, 0], [12, 49, 0, 0, 0]]
     with pytest.raises(ValueError, match="cluster contains missing values"):
         concordancefit(y, ovarian["age"], cluster=[None, *cluster[1:]])
+
+
+# --- survConcordance and survConcordance.fit ---------------------------------------------
+
+
+def _row(values):
+    return dict(zip(SURVCONCORDANCE_NAMES, values, strict=True))
+
+
+# s <- survConcordance(Surv(time, status) ~ age, lung); s$concordance; s$stats; s$std.err
+# s2 <- survConcordance(Surv(time, status) ~ age + strata(sex), lung)
+def test_survconcordance_reports_r_statistics(lung):
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        result = r.survConcordance("Surv(time, status) ~ age", lung)
+    assert isinstance(result, r.SurvConcordanceResult)
+    assert result.concordance == approx(0.550239832117518)
+    assert result.n == 228
+    assert result.stats == approx(_row([10717, 8706, 591, 28, 1041.8707158463]))
+    assert result.std_err == approx(0.0260285479126186)
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        stratified = r.survConcordance("Surv(time, status) ~ age + strata(sex)", lung)
+    assert stratified.concordance == approx(0.545896226415094)
+    assert stratified.stats == {
+        "sex=1": approx(_row([4382, 3502, 239, 15, 515.732989747100])),
+        "sex=2": approx(_row([1249, 1156, 72, 2, 231.739333593359])),
+    }
+    assert stratified.std_err == approx(0.0352581284594556)
+    with (
+        pytest.warns(DeprecationWarning, match="deprecated"),
+        pytest.raises(ValueError, match="Only one predictor variable allowed"),
+    ):
+        r.survConcordance("Surv(time, status) ~ age + sex", lung)
+
+
+# lw$w <- rep(c(1, 2, 0.5, 1.5), length.out = nrow(lw))
+# survConcordance.fit(Surv(lung$time, lung$status), lung$age, lung$sex)
+# survConcordance.fit(Surv(lw$time, lw$status), lw$age, weight = lw$w)
+# survConcordance.fit(Surv(heart$start, heart$stop, heart$event), heart$age)
+# survConcordance(Surv(time, status) ~ age, lw, weights = w)[c("concordance", "std.err")]
+@pytest.mark.filterwarnings("ignore:survConcordance:DeprecationWarning")
+def test_survconcordance_fit_rows_per_stratum_weights_and_counting_data(lung):
+    y = r.Surv(lung["time"], lung["status"])
+    weights = ([1, 2, 0.5, 1.5] * 57)[:228]
+    stratified = r.survConcordance_fit(y, lung["age"], lung["sex"])
+    weighted = r.survConcordance_fit(y, lung["age"], weight=weights)
+    heart = datasets.load_heart()
+    counting = r.survConcordance_fit(
+        r.Surv(heart["start"], heart["stop"], heart["event"]), heart["age"]
+    )
+    weighted_formula = r.survConcordance(
+        "Surv(time, status) ~ age", {**lung, "w": weights}, weights="w"
+    )
+    assert stratified == {
+        "1": approx(_row([4382, 3502, 239, 15, 515.732989747100])),
+        "2": approx(_row([1249, 1156, 72, 2, 231.739333593359])),
+    }
+    assert weighted == approx(_row([16740, 13900.75, 885.75, 50.25, 1464.73677985241]))
+    assert counting == approx(_row([2600, 1918, 1, 16, 335.637929153228]))
+    assert weighted_formula.concordance == approx(0.545029578291279)
+    assert weighted_formula.std_err == approx(0.0232302472499708)
 
 
 # --- the fit-object path -----------------------------------------------------------------

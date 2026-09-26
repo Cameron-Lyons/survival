@@ -401,6 +401,22 @@ class ConcordanceResult:
 
 
 @dataclass(frozen=True)
+class SurvConcordanceResult:
+    """R's deprecated ``survConcordance`` object.
+
+    ``stats`` is ``survConcordance.fit``'s row of ``concordant``/``discordant``/
+    ``tied.risk``/``tied.time``/``std(c-d)``, or one such row per stratum keyed by its
+    level; ``std_err`` is R's ``std.err``, the summed ``std(c-d)`` over twice the number
+    of comparable pairs.
+    """
+
+    concordance: float
+    stats: dict[str, float] | dict[str, dict[str, float]]
+    n: int
+    std_err: float
+
+
+@dataclass(frozen=True)
 class PredictResult:
     fit: Any
     se_fit: Any

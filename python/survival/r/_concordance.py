@@ -1,5 +1,6 @@
 """``concordance``/``concordancefit`` (R/concordance.R) and the deprecated
-``survConcordance`` entry points, on the Rust ``concordancefit`` kernel."""
+``survConcordance`` entry points (R/survConcordance.R, survConcordance.fit.R), on the
+Rust ``concordancefit`` kernel."""
 
 from __future__ import annotations
 
@@ -27,15 +28,16 @@ from ._coerce import (
     _r_factor,
 )
 from ._coxph import CoxphModel, predict_coxph
-from ._fit import _model_frame, _newdata_frame
+from ._fit import _model_frame, _ModelFrame, _newdata_frame
 from ._formula import _column_source, _data_column_names, _formula_name
 from ._surv import Surv
 from ._survreg import SurvregModelResult, predict_survreg
-from ._types import ConcordanceResult
+from ._types import ConcordanceResult, SurvConcordanceResult
 
 _TIMEWT_CHOICES = ("n", "S", "S/G", "n/G2", "I")
 _COUNT_NAMES = ("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
 _RANK_NAMES = ("time", "rank", "timewt", "casewt")
+_SURVCONCORDANCE_NAMES = ("concordant", "discordant", "tied.risk", "tied.time", "std(c-d)")
 
 
 def _timewt_name(timewt: Any) -> str:
@@ -560,6 +562,67 @@ def concordance(
     return _concordance_fits([object, *more], newdata=newdata, cluster=cluster, options=options)
 
 
+def _survconcordance_row(y: Surv, x: list[float], weights: list[float] | None) -> dict[str, float]:
+    """One row of ``survConcordance.fit``.  Its old kernels count every pair tied on time
+    as ``tied.time`` and report the Cox-model standard deviation of ``C - D``; that is
+    ``concordancefit(reverse = TRUE)`` without timefix, with ``tied.y + tied.xy`` and
+    ``2 * npair * sqrt(cvar)``."""
+
+    fit: Any = concordancefit(y, x, weights=weights, reverse=True, timefix=False)
+    count = fit.count
+    concordant, discordant, tied_x = count["concordant"], count["discordant"], count["tied.x"]
+    npair = concordant + discordant + tied_x
+    std = 0.0 if concordant + discordant == 0 else 2.0 * npair * math.sqrt(fit.cvar)
+    return dict(
+        zip(
+            _SURVCONCORDANCE_NAMES,
+            (concordant, discordant, tied_x, count["tied.y"] + count["tied.xy"], std),
+            strict=True,
+        )
+    )
+
+
+def _survconcordance_strata(
+    y: Surv,
+    x: list[float],
+    weights: list[float] | None,
+    codes: Sequence[int | None],
+    levels: Sequence[str],
+) -> dict[str, dict[str, float]]:
+    """``survConcordance.fit`` with strata: one row per non-empty level, in level order."""
+
+    rows_of: dict[int, list[int]] = {}
+    for row, code in enumerate(codes):
+        if code is not None:
+            rows_of.setdefault(code, []).append(row)
+    return {
+        levels[code]: _survconcordance_row(
+            y.subset(rows),
+            [x[row] for row in rows],
+            None if weights is None else [weights[row] for row in rows],
+        )
+        for code, rows in sorted(rows_of.items())
+    }
+
+
+def _survconcordance_frame(
+    formula: str, data: Any, weights: Any, subset: Any, na_action: str | None
+) -> _ModelFrame:
+    """``survConcordance``'s model frame: a numeric response is read as ``Surv(y)``."""
+
+    lhs, _sep, rhs = formula.partition("~")
+    if not _is_surv_response(lhs.strip()):
+        formula = f"Surv({lhs.strip()}) ~ {rhs.strip()}"
+    frame = _model_frame(formula, data, subset=subset, na_action=na_action, weights=weights)
+    if frame.terms.offsets:
+        raise ValueError("Offset terms not allowed")
+    if not frame.names:
+        raise ValueError("the formula needs at least one predictor")
+    if len(frame.names) > 1:
+        raise ValueError("Only one predictor variable allowed")
+    return frame
+
+
 def survConcordance(
     formula: Any,
     data: Any | None = None,
@@ -567,8 +630,9 @@ def survConcordance(
     subset: Any | None = None,
     na_action: Any | None = "fail",
     **kwargs: Any,
-) -> ConcordanceResult:
-    """Deprecated: ``concordance(formula, data, reverse=TRUE)``."""
+) -> SurvConcordanceResult:
+    """Deprecated R ``survConcordance``: the concordance of a single predictor with
+    ``survConcordance.fit``'s counts and standard error."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
     if kwargs:
@@ -576,8 +640,28 @@ def survConcordance(
     warnings.warn(
         "survConcordance is deprecated; use concordance instead", DeprecationWarning, stacklevel=2
     )
-    return concordance(
-        formula, data=data, weights=weights, subset=subset, na_action=na_action, reverse=True
+    if not isinstance(formula, str):
+        raise TypeError("a formula argument is required")
+    frame = _survconcordance_frame(formula, data, weights, subset, na_action)
+    x = [row[0] for row in frame.x]
+    stats: dict[str, float] | dict[str, dict[str, float]]
+    if frame.strata is None:
+        stats = _survconcordance_row(frame.y, x, frame.weights)
+        rows = [stats]
+    else:
+        stats = _survconcordance_strata(
+            frame.y, x, frame.weights, frame.strata, frame.strata_levels
+        )
+        rows = list(stats.values())
+    total = {name: sum(row[name] for row in rows) for name in _SURVCONCORDANCE_NAMES}
+    npair = total["concordant"] + total["discordant"] + total["tied.risk"]
+    if npair == 0:  # no comparable pairs: R's 0/0
+        npair = math.nan
+    return SurvConcordanceResult(
+        concordance=(total["concordant"] + total["tied.risk"] / 2.0) / npair,
+        stats=stats,
+        n=frame.n,
+        std_err=total["std(c-d)"] / (2.0 * npair),
     )
 
 
@@ -586,9 +670,10 @@ def survConcordance_fit(
     x: Any,
     strata: Any | None = None,
     weight: Any | None = None,
-) -> dict[str, float]:
-    """Deprecated ``survConcordance.fit``: the ``concordancefit`` counts as
-    ``concordant``/``discordant``/``tied.risk``/``tied.time``/``std(c-d)``."""
+) -> dict[str, float] | dict[str, dict[str, float]]:
+    """Deprecated R ``survConcordance.fit``: ``concordant``, ``discordant``, ``tied.risk``,
+    ``tied.time`` and ``std(c-d)``, per stratum level (in factor order) when ``strata`` is
+    given."""
 
     warnings.warn(
         "survConcordance.fit is deprecated; use concordancefit instead",
@@ -597,15 +682,12 @@ def survConcordance_fit(
     )
     if not isinstance(y, Surv):
         raise TypeError("y must be a Surv object")
-    result = concordancefit(y, x, strata=strata, weights=weight, reverse=True)
-    rows = result.count if isinstance(result.count, list) else [result.count]
-    totals = {name: sum(row[name] for row in rows) for name in _COUNT_NAMES}
-    npair = totals["concordant"] + totals["discordant"] + totals["tied.x"]
-    std = math.sqrt(result.var) if isinstance(result.var, float) else math.nan
-    return {
-        "concordant": totals["concordant"],
-        "discordant": totals["discordant"],
-        "tied.risk": totals["tied.x"],
-        "tied.time": totals["tied.y"],
-        "std(c-d)": 2.0 * std * npair,
-    }
+    n = len(y)
+    values = _float_vector(x, "x")
+    weights = _optional_float_vector(weight, "weight", n)
+    if strata is None:
+        return _survconcordance_row(y, values, weights)
+    codes, levels = _factor(strata, "strata")  # R's as.factor(strata)
+    if len(codes) != n:
+        raise ValueError("y and strata are not the same length")
+    return _survconcordance_strata(y, values, weights, codes, levels)
