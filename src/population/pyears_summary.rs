@@ -6,7 +6,7 @@
 
 use super::pyears::PyearsResult;
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::statistical::gamma_inverse_cdf;
+use crate::validation::cipoisson::{CipoissonMethod, cipoisson_one};
 use pyo3::prelude::*;
 
 /// The logical switches of `summary.pyears`.
@@ -141,19 +141,6 @@ fn pytot(x: &[f64], dims: &[usize], na: bool) -> (Vec<f64>, Vec<usize>) {
     (out, new_dims)
 }
 
-/// R's `cipoisson(k, time, p, method = "exact")`: the gamma-quantile
-/// limits of a Poisson count `k` observed over `time` (`R/cipoisson.R`).
-fn cipoisson_exact(k: f64, time: f64, p: f64) -> (f64, f64) {
-    let alpha = (1.0 - p) / 2.0;
-    let lower = if k == 0.0 {
-        0.0
-    } else {
-        gamma_inverse_cdf(alpha, k)
-    };
-    let upper = gamma_inverse_cdf(1.0 - alpha, k + 1.0);
-    (lower / time, upper / time)
-}
-
 /// R's `summary.pyears` on a [`PyearsResult`]; `tcut` says whether any
 /// term was a `tcut`, in which case totals of `n` are `NA`.
 pub fn summary_pyears(
@@ -219,11 +206,14 @@ pub fn summary_pyears(
     let ratio = |num: &[f64], den: &[f64]| -> Vec<f64> {
         num.iter().zip(den).map(|(a, b)| a / b).collect()
     };
+    // `cipoisson(k, time, p = conf.level) * scale`: an empty cell (`time`
+    // of 0) has missing limits.
     let limits = |num: &[f64], den: &[f64], scale: f64| -> (Vec<f64>, Vec<f64>) {
         num.iter()
             .zip(den)
             .map(|(&k, &time)| {
-                let (lower, upper) = cipoisson_exact(k, time, options.conf_level);
+                let (lower, upper) =
+                    cipoisson_one(k, time, options.conf_level, CipoissonMethod::Exact);
                 (lower * scale, upper * scale)
             })
             .unzip()
@@ -263,12 +253,35 @@ pub fn summary_pyears(
     })
 }
 
-/// Python entry point of [`summary_pyears`].
+/// Python entry point of [`summary_pyears`]: the tables of a `pyears`
+/// result as column-major cells over `dims` (empty for a single cell).
 #[pyfunction(name = "summary_pyears")]
-#[pyo3(signature = (result, tcut=false, totals=false, rate=false, ci_r=false, rr=true, ci_rr=false, conf_level=0.95, scale=1.0))]
+#[pyo3(signature = (
+    pyears,
+    n,
+    event=None,
+    expected=None,
+    dims=Vec::new(),
+    offtable=0.0,
+    observations=0,
+    tcut=false,
+    totals=false,
+    rate=false,
+    ci_r=false,
+    rr=true,
+    ci_rr=false,
+    conf_level=0.95,
+    scale=1.0,
+))]
 #[allow(clippy::too_many_arguments)]
 pub fn summary_pyears_py(
-    result: &PyearsResult,
+    pyears: Vec<f64>,
+    n: Vec<f64>,
+    event: Option<Vec<f64>>,
+    expected: Option<Vec<f64>>,
+    dims: Vec<usize>,
+    offtable: f64,
+    observations: usize,
     tcut: bool,
     totals: bool,
     rate: bool,
@@ -278,8 +291,17 @@ pub fn summary_pyears_py(
     conf_level: f64,
     scale: f64,
 ) -> PyResult<PyearsSummary> {
+    let result = PyearsResult {
+        pyears,
+        n,
+        event,
+        expected,
+        offtable,
+        dims,
+        observations,
+    };
     Ok(summary_pyears(
-        result,
+        &result,
         tcut,
         PyearsSummaryOptions {
             totals,
@@ -368,6 +390,100 @@ mod tests {
         assert_eq!(summary.total_pyears, 30.0);
         assert_eq!(summary.offtable, 0.5);
         assert_eq!(summary.observations, 7);
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)]
+    fn empty_cells_have_missing_rates_and_limits() {
+        // R: p <- pyears(Surv(time, status) ~ g, rmap = list(age, sex, year),
+        // ratetable = survexp.us, scale = 365.25) with g's third level empty;
+        // summary(p, rate = TRUE, ci.r = TRUE, ci.rr = TRUE, totals = TRUE,
+        // scale = 1000) prints "." and ". - ." for it.
+        let pyears = PyearsResult {
+            pyears: vec![2.8747433264887063, 2.1765913757700206, 0.0],
+            n: vec![3.0, 3.0, 0.0],
+            event: Some(vec![2.0, 1.0, 0.0]),
+            expected: Some(vec![0.17216054085712138, 0.066775795966720508, 0.0]),
+            offtable: 0.0,
+            dims: vec![3],
+            observations: 6,
+        };
+        let summary = summary_pyears(
+            &pyears,
+            false,
+            PyearsSummaryOptions {
+                totals: true,
+                rate: true,
+                ci_r: true,
+                ci_rr: true,
+                scale: 1000.0,
+                ..PyearsSummaryOptions::default()
+            },
+        )
+        .unwrap();
+        let close = |actual: &[f64], expected: &[f64]| {
+            for (a, e) in actual.iter().zip(expected) {
+                assert!(
+                    (a.is_nan() && e.is_nan()) || ((a - e) / e).abs() < 1e-14,
+                    "{actual:?} != {expected:?}"
+                );
+            }
+        };
+        close(
+            &summary.rate.unwrap(),
+            &[
+                695.71428571428567,
+                459.43396226415092,
+                f64::NAN,
+                593.90243902439033,
+            ],
+        );
+        close(
+            &summary.ci_r_lower.unwrap(),
+            &[
+                84.254227607793538,
+                11.631860838065263,
+                f64::NAN,
+                122.47696091469837,
+            ],
+        );
+        close(
+            &summary.ci_r_upper.unwrap(),
+            &[
+                2513.1592101296915,
+                2559.8021994219284,
+                f64::NAN,
+                1735.6349532376066,
+            ],
+        );
+        close(
+            &summary.rr.unwrap(),
+            &[
+                11.617063875628912,
+                14.975486035364918,
+                f64::NAN,
+                12.555645741785098,
+            ],
+        );
+        close(
+            &summary.ci_rr_lower.unwrap(),
+            &[
+                1.4068803300576185,
+                0.37914647991478378,
+                f64::NAN,
+                2.5892760017984355,
+            ],
+        );
+        close(
+            &summary.ci_rr_upper.unwrap(),
+            &[
+                41.964829058708844,
+                83.43806779503872,
+                f64::NAN,
+                36.692924928392451,
+            ],
+        );
+        assert_eq!(summary.n, vec![3.0, 3.0, 0.0, 6.0]);
     }
 
     #[test]

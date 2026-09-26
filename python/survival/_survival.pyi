@@ -13148,7 +13148,13 @@ def subgroup_analysis(
     subgroup_labels: Sequence[str],
 ) -> SubgroupAnalysisResult: ...
 def summary_pyears(
-    result: PyearsResult,
+    pyears: Sequence[float],
+    n: Sequence[float],
+    event: Sequence[float] | None = None,
+    expected: Sequence[float] | None = None,
+    dims: Sequence[int] = ...,
+    offtable: float = 0.0,
+    observations: int = 0,
     tcut: bool = False,
     totals: bool = False,
     rate: bool = False,

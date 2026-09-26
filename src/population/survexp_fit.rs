@@ -3,7 +3,7 @@
 //! `survexp` calls once the model frame has been matched to the table.
 
 use super::match_ratetable::align_us_year_axis;
-use super::pystep::{PystepTable, pystep};
+use super::pystep::{PystepTable, pystep_cell};
 use super::ratetable::RateTable;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
@@ -26,6 +26,14 @@ struct Pyears3bSubjects<'a> {
 }
 
 /// `pyears3b(death, efac, edims, ecut, expect, grpx, x, y, times, ngrp)`.
+///
+/// The C code calls `pystep` for every step, searching the cutpoints again
+/// even when the subject is still in the same cell of the table, and
+/// evaluates both `exp(-cumhaz)` and `exp(-(cumhaz + hazard))` for every
+/// output interval.  Here each subject keeps its cell's rate and the
+/// cutpoints ending that cell (`pystep_cell`), so the cutpoints are searched
+/// once per cell entered while every step still has `pystep`'s length, and
+/// carries `exp(-cumhaz)` from one interval to the next.
 fn pyears3b(
     conditional: bool,
     table: &PystepTable<'_>,
@@ -46,12 +54,19 @@ fn pyears3b(
     let mut wvec = Array2::<f64>::zeros((ntime, n_groups));
     let mut nsurv = Array2::<usize>::zeros((ntime, n_groups));
     let mut data2 = vec![0.0; edim];
+    let mut limits = vec![0.0; edim];
 
     for i in 0..n {
-        let mut cumhaz: f64 = 0.0;
+        // `data2` is the subject's current position in the expected table,
+        // `cell_rate` the hazard of its cell, `limits` the cutpoints ending
+        // that cell and `cell_left` the time until the first of them.
         for (j, value) in data2.iter_mut().enumerate() {
             *value = positions[[i, j]];
         }
+        let mut cell_rate = 0.0;
+        let mut cell_left = 0.0;
+        let mut cumhaz: f64 = 0.0;
+        let mut survival = 1.0;
         let mut timeleft = y[i];
         let g = group[i];
         let mut time = 0.0;
@@ -62,24 +77,26 @@ fn pyears3b(
             }
             let thiscell = (output_time - time).min(timeleft);
 
-            // Each call to pystep moves up to the next boundary of the
-            // expected table; `data2` is the current position in it.
             let mut etime = thiscell;
             let mut hazard = 0.0;
             while etime > 0.0 {
-                let step = pystep(table, &data2, etime);
-                let first = rates[step.index.unwrap_or(0)];
-                hazard += if step.weight < 1.0 {
-                    step.time * (step.weight * first + (1.0 - step.weight) * rates[step.index2])
-                } else {
-                    step.time * first
-                };
-                for (k, value) in data2.iter_mut().enumerate() {
-                    if table.factors[k] != 1 {
-                        *value += step.time;
+                if cell_left <= 0.0 {
+                    let cell = pystep_cell(table, &data2, &mut limits);
+                    cell_rate = rates[cell.index.unwrap_or(0)];
+                    cell_left = cell.time;
+                }
+                let dt = etime.min(cell_left);
+                hazard += dt * cell_rate;
+                // `cell_left` is measured from the new position, as `pystep`
+                // would measure it.
+                cell_left = f64::INFINITY;
+                for ((value, &limit), &factor) in data2.iter_mut().zip(&limits).zip(table.factors) {
+                    if factor != 1 {
+                        *value += dt;
+                        cell_left = cell_left.min(limit - *value);
                     }
                 }
-                etime -= step.time;
+                etime -= dt;
             }
             if output_time == 0.0 {
                 wvec[[j, g]] = 1.0;
@@ -88,8 +105,11 @@ fn pyears3b(
                 esurv[[j, g]] += hazard * thiscell;
                 wvec[[j, g]] += thiscell;
             } else {
-                esurv[[j, g]] += (-(cumhaz + hazard)).exp() * thiscell;
-                wvec[[j, g]] += (-cumhaz).exp() * thiscell;
+                // `survival` is exp(-cumhaz) at the start of the interval.
+                let next = (-(cumhaz + hazard)).exp();
+                esurv[[j, g]] += next * thiscell;
+                wvec[[j, g]] += survival * thiscell;
+                survival = next;
             }
             nsurv[[j, g]] += 1;
             cumhaz += hazard;
@@ -200,6 +220,7 @@ pub fn survexp_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::population::pystep::pystep;
     use crate::population::ratetable::DimType;
     use crate::population::ratetable_data::survexp_us_table;
 
@@ -280,6 +301,76 @@ mod tests {
         .unwrap();
         assert_eq!(fit.surv[[0, 0]], 1.0);
         assert!((fit.surv[[1, 0]] - (-0.1f64).exp()).abs() < 1e-14);
+    }
+
+    /// Each interval's (hazard, length) as `pyears3b.c` accumulates them,
+    /// with a `pystep` call at every step.
+    fn pyears3b_c_hazards(
+        table: &PystepTable<'_>,
+        rates: &[f64],
+        start: &[f64],
+        y: f64,
+        times: &[f64],
+    ) -> Vec<(f64, f64)> {
+        let mut data2 = start.to_vec();
+        let (mut time, mut timeleft) = (0.0, y);
+        let mut intervals = Vec::new();
+        for &output_time in times {
+            if timeleft <= 0.0 {
+                break;
+            }
+            let thiscell = (output_time - time).min(timeleft);
+            let (mut etime, mut hazard) = (thiscell, 0.0);
+            while etime > 0.0 {
+                let step = pystep(table, &data2, etime);
+                hazard += step.time * rates[step.index.unwrap()];
+                for (k, value) in data2.iter_mut().enumerate() {
+                    if table.factors[k] != 1 {
+                        *value += step.time;
+                    }
+                }
+                etime -= step.time;
+            }
+            intervals.push((hazard, thiscell));
+            time += thiscell;
+            timeleft -= thiscell;
+        }
+        intervals
+    }
+
+    #[test]
+    fn cached_cells_take_the_c_codes_steps_exactly() {
+        let ratetable = survexp_us_table();
+        let factors = ratetable.factor_flags();
+        let cuts = ratetable.cut_slices();
+        let table = PystepTable {
+            factors: &factors,
+            dims: &ratetable.dims,
+            cuts: &cuts,
+            edge: true,
+        };
+        // Output intervals that end inside the yearly age and calendar cells.
+        let times: Vec<f64> = (1..=400).map(|k| k as f64 * 29.7).collect();
+        let positions = ndarray::arr2(&[
+            [-400.25, 1.0, -3652.5],
+            [12345.678, 2.0, 1234.5],
+            [21000.1, 1.0, 7305.3],
+            [36524.9, 2.0, 11322.75],
+        ]);
+        let y = [11000.3, 6000.0, 9999.99, 11880.0];
+        let subjects = Pyears3bSubjects {
+            group: &[0, 1, 2, 3],
+            positions: &positions,
+            y: &y,
+        };
+        let fit = pyears3b(true, &table, &ratetable.rates, &subjects, &times, 4);
+        for (g, start) in positions.rows().into_iter().enumerate() {
+            let intervals =
+                pyears3b_c_hazards(&table, &ratetable.rates, &start.to_vec(), y[g], &times);
+            for (j, (hazard, thiscell)) in intervals.into_iter().enumerate() {
+                assert_eq!(fit.surv[[j, g]], (-(hazard * thiscell) / thiscell).exp());
+            }
+        }
     }
 
     #[test]

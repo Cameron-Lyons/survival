@@ -261,10 +261,12 @@ fn sorted_unique(values: &[f64]) -> Vec<f64> {
 
 /// Python entry point of [`survexp`]: `positions` is `match_ratetable(...).r`,
 /// `group` zero-based curve numbers, `method` one of R's choices or `None`.
+/// The kernel runs with the GIL released.
 #[pyfunction(name = "survexp")]
 #[pyo3(signature = (ratetable, positions, y=None, group=None, times=None, method=None, cohort=true, conditional=false, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn survexp_py(
+    py: Python<'_>,
     ratetable: &RateTable,
     positions: Vec<Vec<f64>>,
     y: Option<Vec<f64>>,
@@ -277,19 +279,17 @@ pub fn survexp_py(
 ) -> PyResult<SurvExpResult> {
     let positions = rows_to_matrix(&positions, positions.len(), ratetable.ndim(), "positions")?;
     let method = method.map(SurvexpMethod::parse).transpose()?;
-    Ok(survexp(
-        ratetable,
-        SurvexpInput {
-            positions: &positions,
-            y: y.as_deref(),
-            group: group.as_deref(),
-            times: times.as_deref(),
-            method,
-            cohort,
-            conditional,
-            scale,
-        },
-    )?)
+    let input = SurvexpInput {
+        positions: &positions,
+        y: y.as_deref(),
+        group: group.as_deref(),
+        times: times.as_deref(),
+        method,
+        cohort,
+        conditional,
+        scale,
+    };
+    Ok(py.detach(|| survexp(ratetable, input))?)
 }
 
 #[cfg(test)]

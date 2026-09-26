@@ -1,5 +1,5 @@
 use crate::constants::{DEFAULT_CONCORDANCE, LCG64_INCREMENT, LCG64_MULTIPLIER, TIME_EPSILON};
-use crate::internal::dist::{lgammafn, pchisq, pgamma, pnorm, pt, qgamma, qnorm, qt};
+use crate::internal::dist::{lgammafn, pchisq, pgamma, pnorm, pt, qnorm, qt};
 
 #[inline]
 pub(crate) fn sample_normal(rng: &mut crate::internal::rng::Rng) -> f64 {
@@ -209,19 +209,6 @@ pub(crate) fn two_sided_normal_quantile(alpha: f64) -> Option<f64> {
     z.is_finite().then_some(z)
 }
 
-/// Gamma quantile with unit scale (R's `qgamma(p, a)`); `p <= 0` gives 0
-/// and `p >= 1` gives `+Inf`.
-#[inline]
-pub(crate) fn gamma_inverse_cdf(p: f64, a: f64) -> f64 {
-    if p <= 0.0 {
-        return 0.0;
-    }
-    if p >= 1.0 {
-        return f64::INFINITY;
-    }
-    qgamma(p, a, 1.0, true, false)
-}
-
 /// Chi-squared survival function (R's `pchisq(x, df, lower.tail = FALSE)`),
 /// evaluated directly in the upper tail; 1 for `x <= 0` or `df == 0`.
 #[inline]
@@ -279,6 +266,7 @@ pub(crate) fn lower_incomplete_gamma(a: f64, x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal::dist::qgamma;
 
     #[test]
     fn concordance_index_with_horizon_follows_r_reverse_concordance() {
@@ -406,11 +394,11 @@ mod tests {
     #[allow(clippy::excessive_precision)]
     fn test_gamma_helpers() {
         // R: qgamma(0.475, 5), qgamma(0.525, 6), pgamma(4.5, 5)
-        assert!((gamma_inverse_cdf(0.475, 5.0) - 4.5375048990088311).abs() < 1e-14);
-        assert!((gamma_inverse_cdf(0.525, 6.0) - 5.8200445519969533).abs() < 1e-14);
+        assert!((qgamma(0.475, 5.0, 1.0, true, false) - 4.5375048990088311).abs() < 1e-14);
+        assert!((qgamma(0.525, 6.0, 1.0, true, false) - 5.8200445519969533).abs() < 1e-14);
         assert!((lower_incomplete_gamma(5.0, 4.5) - 0.46789642362528439).abs() < 1e-15);
-        assert_eq!(gamma_inverse_cdf(0.0, 5.0), 0.0);
-        assert_eq!(gamma_inverse_cdf(1.0, 5.0), f64::INFINITY);
+        assert_eq!(qgamma(0.0, 5.0, 1.0, true, false), 0.0);
+        assert_eq!(qgamma(1.0, 5.0, 1.0, true, false), f64::INFINITY);
         assert_eq!(lower_incomplete_gamma(5.0, 0.0), 0.0);
         assert_eq!(lower_incomplete_gamma(0.0, 1.0), 0.0);
         assert_eq!(lower_incomplete_gamma(5.0, -1.0), 0.0);

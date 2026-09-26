@@ -11,16 +11,20 @@ from __future__ import annotations
 
 import math
 import warnings
+from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date as _Date
 from datetime import datetime as _DateTime
+from datetime import timedelta as _TimeDelta
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
     _as_character,
     _factor,
+    _factor_levels,
+    _finite_float,
     _float_vector,
     _is_missing_value,
     _match_string_arg,
@@ -89,17 +93,44 @@ def is_ratetable(x: Any, verbose: bool = False) -> bool | list[str]:
     return ["wrong class"] if verbose else False
 
 
+_EPOCH_ORDINAL = _Date(1970, 1, 1).toordinal()
+_ONE_DAY = _TimeDelta(days=1)
+
+
+def _is_numpy_scalar(value: Any, name: str) -> bool:
+    value_type = type(value)
+    return value_type.__module__ == "numpy" and value_type.__name__ == name
+
+
+def _day_count(value: Any) -> float:
+    """A number as ``match.ratetable`` ``unclass``es it: a time difference counts days."""
+
+    if type(value) is float or type(value) is int:
+        return float(value)
+    if isinstance(value, _TimeDelta):
+        return value / _ONE_DAY
+    if _is_missing_value(value):
+        return math.nan
+    if _is_numpy_scalar(value, "timedelta64"):
+        return float(value / type(value)(1, "D"))
+    return float(value)
+
+
 def _ratetable_day(value: Any) -> float:
     """``ratetableDate`` of one value: dates become days since 1970-01-01, numbers pass."""
 
+    # pandas' NaT is a date instance, so only a plain date skips the missing check
+    if type(value) is _Date:
+        return float(value.toordinal() - _EPOCH_ORDINAL)
     if _is_missing_value(value):
         return math.nan
-    if isinstance(value, _DateTime | _Date):
-        return _core.ratetable_date(value.year, value.month, value.day)
+    if isinstance(value, _Date):
+        return float(value.toordinal() - _EPOCH_ORDINAL)
+    if _is_numpy_scalar(value, "datetime64"):
+        return float(value.astype("datetime64[D]").astype("int64"))
     if isinstance(value, str):
-        parsed = _Date.fromisoformat(value[:10])
-        return _core.ratetable_date(parsed.year, parsed.month, parsed.day)
-    return float(value)
+        return float(_Date.fromisoformat(value[:10]).toordinal() - _EPOCH_ORDINAL)
+    return _day_count(value)
 
 
 def ratetableDate(x: Any) -> float | list[float]:
@@ -158,19 +189,44 @@ def _mapped_columns(
     return columns
 
 
+def _is_date_column(values: Sequence[Any]) -> bool:
+    """``match.ratetable``'s ``datecheck``: the column holds dates or date-times."""
+
+    first = next((value for value in values if not _is_missing_value(value)), None)
+    return isinstance(first, _Date) or _is_numpy_scalar(first, "datetime64")
+
+
 def _rate_positions(mf: ModelFrame, ratetable: RateTable) -> list[list[float]]:
-    """R's ``match.ratetable(rdata, ratetable)$R`` for the model frame's rate variables."""
+    """R's ``match.ratetable(rdata, ratetable)$R`` for the model frame's rate variables.
+
+    Labels go to the kernel as strings.  As in R, dates are an error in a factor or
+    continuous dimension (type 1 or 2) and become days since 1970-01-01 in a date
+    dimension (type 3 or 4); time differences (R's ``difftime``) count days.
+    """
 
     names = list(ratetable.dimid)
-    columns: list[Any] = []
-    for name in names:
-        values = mf.extra[name]
-        if all(isinstance(value, str) or _is_missing_value(value) for value in values) and any(
-            isinstance(value, str) for value in values
+    types = ratetable.type_codes()
+    values = [mf.extra[name] for name in names]
+    misplaced = [
+        name
+        for name, code, column in zip(names, types, values, strict=True)
+        if code < 3 and _is_date_column(column)
+    ]
+    if misplaced:
+        raise ValueError(
+            "Data has a date type variable, but the reference ratetable is not a date "
+            "variable: " + " ".join(misplaced)
+        )
+    columns: list[list[str] | list[float]] = []
+    for code, column in zip(types, values, strict=True):
+        if all(isinstance(value, str) or _is_missing_value(value) for value in column) and any(
+            isinstance(value, str) for value in column
         ):
-            columns.append([str(value) for value in values])
+            columns.append([str(value) for value in column])
+        elif code > 2:
+            columns.append([_ratetable_day(value) for value in column])
         else:
-            columns.append([_ratetable_day(value) for value in values])
+            columns.append([_day_count(value) for value in column])
     return _core.match_ratetable(ratetable, names, columns).r
 
 
@@ -260,14 +316,34 @@ def _cut_term(mf: ModelFrame, text: str, data: Any) -> _PyearsTerm:
 
     arguments = _formula_response_parts(text[4:-1])
     x = _arithmetic_expression_values(mf.data, arguments[0], mf.n)
-    breaks = _r_vector_literal(arguments[1], data)
+    breaks = sorted(_r_vector_literal(arguments[1], data))
     codes: list[float] = []
     for value in x:
-        position = next(
-            (k for k in range(1, len(breaks)) if breaks[k - 1] < value <= breaks[k]), None
-        )
-        codes.append(math.nan if position is None else float(position))
+        # breaks[k - 1] < value <= breaks[k]; outside (breaks[0], breaks[-1]] is NA
+        k = bisect_left(breaks, value)
+        codes.append(float(k) if 0 < k < len(breaks) else math.nan)
     return _PyearsTerm(text, 1, codes, _cut_labels(breaks), [])
+
+
+def _factor_call_term(mf: ModelFrame, term: _CovariateTerm, label: str, data: Any) -> _PyearsTerm:
+    """A ``factor(x)`` or ``as.factor(x)`` formula term.  model.frame evaluates the call
+    on the whole *data* before ``subset`` and ``na.action`` remove rows, so the levels
+    are the whole column's: every declared one for ``as.factor``, those in use for
+    ``factor``."""
+
+    whole = _column_source(data, term.column)
+    levels = _factor_levels(whole, label)
+    if term.categorical_wrapper == "factor":
+        used = {
+            value for value in _materialize_labels(whole, label) if not _is_missing_value(value)
+        }
+        levels = [level for level in levels if level in used]
+    index = {level: code + 1.0 for code, level in enumerate(levels)}
+    codes = [
+        math.nan if _is_missing_value(value) else index[value]
+        for value in _column(mf.data, term.column)
+    ]
+    return _PyearsTerm(label, 1, codes, [_as_character(level) for level in levels], [])
 
 
 def _pyears_term(mf: ModelFrame, term: _CovariateTerm, data: Any) -> _PyearsTerm:
@@ -278,12 +354,20 @@ def _pyears_term(mf: ModelFrame, term: _CovariateTerm, data: Any) -> _PyearsTerm
             if term.call.startswith("tcut(")
             else _cut_term(mf, term.call, data)
         )
+    if term.categorical_wrapper is not None:
+        return _factor_call_term(mf, term, label, data)
     source = _column_source(mf.data, term.column) if term.arithmetic is None else None
     if isinstance(source, TcutResult):
         return _PyearsTerm(
             label, 0, list(source.values), list(source.labels), list(source.cutpoints)
         )
-    codes_raw, levels = _factor(_term_values(mf.data, term, mf.n), label)
+    # pyears' as.factor keeps every declared level of a factor column, empty or not
+    values = (
+        source
+        if source is not None and term.transform is None
+        else _term_values(mf.data, term, mf.n)
+    )
+    codes_raw, levels = _factor(values, label)
     return _PyearsTerm(
         label, 1, [math.nan if c is None else c + 1.0 for c in codes_raw], levels, []
     )
@@ -332,43 +416,50 @@ def _pyears_followup(mf: ModelFrame) -> tuple[list[float], list[float] | None, l
     return list(response.time), None if response.start is None else list(response.start), event
 
 
-def _reshape(values: Sequence[float] | None, dims: Sequence[int]) -> Any:
-    """R's array over ``dims`` (column-major cells) as a row-major nested list."""
+def _row_major(cells: Sequence[Any], dims: Sequence[int]) -> Any:
+    """R's array over ``dims`` (column-major ``cells``) as a row-major nested list."""
 
-    if values is None:
-        return None
     if not dims:
-        return float(values[0])
-    if len(dims) == 1:
-        return [float(value) for value in values]
+        return cells[0]
     strides = [1]
     for extent in dims[:-1]:
         strides.append(strides[-1] * extent)
 
     def build(prefix: int, depth: int) -> Any:
         if depth == len(dims):
-            return float(values[prefix])
+            return cells[prefix]
         return [build(prefix + k * strides[depth], depth + 1) for k in range(dims[depth])]
 
     return build(0, 0)
 
 
+def _reshape(values: Sequence[float] | None, dims: Sequence[int]) -> Any:
+    """:func:`_row_major` of a numeric table, ``None`` passing through."""
+
+    return None if values is None else _row_major([float(value) for value in values], dims)
+
+
 def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[Any]]:
     """R's ``data.frame = TRUE`` layout: one row per cell with person-years."""
 
-    cells = list(range(len(result.pyears)))
-    if terms:
-        cells = [cell for cell in cells if result.pyears[cell] > 0.0]
+    # each getter copies the whole table out of the kernel result: read it once
+    tables = {"pyears": result.pyears, "n": result.n}
+    if result.expected is not None:
+        tables["expected"] = result.expected
+    if result.event is not None:
+        tables["event"] = result.event
+    pyears = tables["pyears"]
+    cells = (
+        [cell for cell, value in enumerate(pyears) if value > 0.0]
+        if terms
+        else list(range(len(pyears)))
+    )
     frame: dict[str, list[Any]] = {}
     for depth, term in enumerate(terms):
         stride = math.prod(len(other.levels) for other in terms[:depth])
         frame[term.label] = [term.levels[(cell // stride) % len(term.levels)] for cell in cells]
-    frame["pyears"] = [result.pyears[cell] for cell in cells]
-    frame["n"] = [result.n[cell] for cell in cells]
-    if result.expected is not None:
-        frame["expected"] = [result.expected[cell] for cell in cells]
-    if result.event is not None:
-        frame["event"] = [result.event[cell] for cell in cells]
+    for name, values in tables.items():
+        frame[name] = [values[cell] for cell in cells]
     return frame
 
 
@@ -582,6 +673,149 @@ def _flatten(values: Any, dims: Sequence[int]) -> list[float]:
 
     walk(values, 0, 0)
     return flat
+
+
+@dataclass(frozen=True)
+class PyearsSummary:
+    """The tables R's ``summary.pyears`` prints.
+
+    Each table is a row-major nested list over ``dim`` like :class:`PyearsResult`'s
+    (a scalar without terms); with ``totals`` the first two dimensions end in a
+    ``"Total"`` level, whose ``n`` is missing (``nan``) when a ``tcut`` term makes it
+    meaningless.  ``ci_r`` and ``ci_rr`` hold one ``(lower, upper)`` pair per cell
+    (R's ``cipoisson`` array).  A statistic that was not requested, or that the
+    ``pyears`` object cannot give (no events, no expected counts), is ``None``; an
+    empty cell has missing (``nan``) rates, ratios and limits.
+    """
+
+    n: Any
+    pyears: Any
+    offtable: float
+    observations: int
+    dim: list[int]
+    dimnames: dict[str, list[str]]
+    event: Any = None
+    expected: Any = None
+    rate: Any = None
+    ci_r: Any = None
+    rr: Any = None
+    ci_rr: Any = None
+
+
+def _pyears_tables(result: PyearsResult) -> dict[str, list[float]]:
+    """The column-major cells of ``pyears``, ``n`` and, when present, ``event`` and
+    ``expected``.
+
+    A ``data.frame = TRUE`` result's rows are put back into the full table, with zero
+    cells elsewhere, as ``summary.pyears`` does.
+    """
+
+    names = ("pyears", "n", "event", "expected")
+    if result.data is None:
+        arrays = {name: getattr(result, name) for name in names}
+        return {
+            name: _flatten(array, result.dim) for name, array in arrays.items() if array is not None
+        }
+    data = result.data
+    cells = [0] * len(data["pyears"])
+    stride = 1
+    for (label, levels), extent in zip(result.dimnames.items(), result.dim, strict=True):
+        position = {level: k for k, level in enumerate(levels)}
+        cells = [
+            cell + position[level] * stride for cell, level in zip(cells, data[label], strict=True)
+        ]
+        stride *= extent
+    tables: dict[str, list[float]] = {}
+    for name in names:
+        if name in data:
+            table = [0.0] * stride
+            for cell, value in zip(cells, data[name], strict=True):
+                table[cell] = float(value)
+            tables[name] = table
+    return tables
+
+
+def summary_pyears(
+    object: PyearsResult,
+    totals: bool = False,
+    rate: bool = False,
+    ci_r: bool = False,
+    rr: bool = True,
+    ci_rr: bool = False,
+    conf_level: Any = 0.95,
+    scale: Any = 1,
+    **kwargs: Any,
+) -> PyearsSummary:
+    """R's ``summary.pyears``: the tables of a ``pyears`` result, with rates and ratios.
+
+    ``rate`` is ``scale * event / pyears`` and ``rr`` the observed/expected ratio (R's
+    default ``rr = expected`` is on whenever the object has expected counts); ``ci_r``
+    and ``ci_rr`` add their exact Poisson limits at ``conf_level``, and ``totals``
+    appends the margins of the first two dimensions.  R's printing switches
+    (``header``, ``vline``, ``nastring``, ...) have no counterpart: the tables are
+    returned instead.
+    """
+
+    ci_r = _pop_dotted_keyword(kwargs, "ci.r", "ci_r", ci_r, False)
+    ci_rr = _pop_dotted_keyword(kwargs, "ci.rr", "ci_rr", ci_rr, False)
+    conf_level = _pop_dotted_keyword(kwargs, "conf.level", "conf_level", conf_level, 0.95)
+    if kwargs:
+        raise TypeError(
+            f"summary_pyears got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+        )
+    if not isinstance(object, PyearsResult):
+        raise TypeError("input must be a pyears object")
+    options = {
+        name: _normalize_bool_option(value, name.replace("_", "."))
+        for name, value in (
+            ("totals", totals),
+            ("rate", rate),
+            ("ci_r", ci_r),
+            ("rr", rr),
+            ("ci_rr", ci_rr),
+        )
+    }
+    if options["totals"] and not object.dim:
+        raise ValueError("totals need a pyears table with at least one term")
+    tables = _pyears_tables(object)
+    summary = _core.summary_pyears(
+        tables["pyears"],
+        tables["n"],
+        tables.get("event"),
+        tables.get("expected"),
+        list(object.dim),
+        float(object.offtable),
+        int(object.observations),
+        bool(object.tcut),
+        conf_level=_finite_float(conf_level, "conf.level"),
+        scale=_finite_float(scale, "scale"),
+        **options,
+    )
+    dims = list(summary.dims) if object.dim else []
+    dimnames = {label: list(levels) for label, levels in object.dimnames.items()}
+    if options["totals"]:
+        for label in list(dimnames)[:2]:
+            dimnames[label].append("Total")
+
+    def limits(lower: Sequence[float] | None, upper: Sequence[float] | None) -> Any:
+        if lower is None or upper is None:
+            return None
+        return _row_major(list(zip(lower, upper, strict=True)), dims)
+
+    return PyearsSummary(
+        n=_reshape(summary.n, dims),
+        pyears=_reshape(summary.pyears, dims),
+        offtable=float(summary.offtable),
+        observations=int(summary.observations),
+        dim=dims,
+        dimnames=dimnames,
+        event=_reshape(summary.event, dims),
+        expected=_reshape(summary.expected, dims),
+        rate=_reshape(summary.rate, dims),
+        ci_r=limits(summary.ci_r_lower, summary.ci_r_upper),
+        rr=_reshape(summary.rr, dims),
+        ci_rr=limits(summary.ci_rr_lower, summary.ci_rr_upper),
+    )
 
 
 def _finegray_frame(result: Any) -> dict[str, list[Any]]:
