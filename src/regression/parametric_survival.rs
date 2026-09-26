@@ -537,21 +537,23 @@ struct Survreg6Fit {
 
 /// `chsolve2` of the score against `imat`, or against `JJ` when `imat` is
 /// not positive definite: the Newton (or Fisher) step from `beta`, where
-/// `lik` was evaluated.
+/// `lik` was evaluated, and whether it used `JJ`.  `JJ` is the one `lik`
+/// carries, or is computed at `beta` when `lik` has none.
 fn newton_step(
     kernel: &SurvregKernel<'_>,
     beta: &[f64],
     lik: &SurvregLikelihood,
     tol_chol: f64,
-) -> Vec<f64> {
+) -> (Vec<f64>, bool) {
     let mut chol = lik.imat.clone();
-    if cholesky2(&mut chol, tol_chol) < 0 {
-        chol = kernel.jj(beta);
+    let use_jj = cholesky2(&mut chol, tol_chol) < 0;
+    if use_jj {
+        chol = lik.jj.clone().unwrap_or_else(|| kernel.jj(beta));
         cholesky2(&mut chol, tol_chol);
     }
     let mut step = lik.u.clone();
     chsolve2(&chol, &mut step);
-    step
+    (step, use_jj)
 }
 
 /// `cholesky2` + `chinv2` of the information matrix, symmetrised, as the C
@@ -581,11 +583,13 @@ fn survreg6(
     let nvar2 = kernel.nvar2();
     let mut newbeta = beta.clone();
 
-    // The initial iteration step.
-    let lik = kernel.evaluate(&beta);
+    // The initial iteration step.  Once a step has used JJ, the evaluations
+    // accumulate it next to imat until a step does not, so a fit that keeps
+    // stepping with JJ still makes one sweep per evaluation.
+    let lik = kernel.evaluate(&beta, false);
     let mut loglik = lik.loglik;
     let mut usave = lik.u.clone();
-    let step = newton_step(kernel, &beta, &lik, tol_chol);
+    let (step, mut with_jj) = newton_step(kernel, &beta, &lik, tol_chol);
     for i in 0..nvar2 {
         newbeta[i] = beta[i] + step[i];
     }
@@ -603,7 +607,7 @@ fn survreg6(
     }
 
     let mut halving = 0;
-    let mut newlik = kernel.evaluate(&newbeta);
+    let mut newlik = kernel.evaluate(&newbeta, with_jj);
     usave.clone_from(&newlik.u);
     for iter in 1..=maxiter {
         // A Newton-Raphson step gone seriously awry leaves an infinite or
@@ -651,13 +655,14 @@ fn survreg6(
             // A standard Newton-Raphson step.
             halving = 0;
             loglik = newlk;
-            let step = newton_step(kernel, &newbeta, &newlik, tol_chol);
+            let (step, used_jj) = newton_step(kernel, &newbeta, &newlik, tol_chol);
+            with_jj = used_jj;
             beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
             for (value, delta) in newbeta.iter_mut().zip(&step) {
                 *value += delta;
             }
         }
-        newlik = kernel.evaluate(&newbeta);
+        newlik = kernel.evaluate(&newbeta, with_jj);
         usave.clone_from(&newlik.u);
     }
 
@@ -668,7 +673,7 @@ fn survreg6(
         beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
         newlik.imat
     } else {
-        kernel.evaluate(&beta).imat
+        kernel.evaluate(&beta, false).imat
     };
     Ok(Survreg6Fit {
         var: invert_information(&information, tol_chol)?,
