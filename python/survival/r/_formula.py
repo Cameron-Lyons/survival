@@ -82,6 +82,19 @@ def _column(data: Any, name: str) -> list[Any]:
     return _materialize_1d(_column_source(data, name), name)
 
 
+def _as_numeric_column(data: Any, name: str) -> list[Any]:
+    """R's ``as.numeric`` of a data column: a factor's 1-based level codes (NaN where
+    missing), any other column's own values."""
+
+    source = _column_source(data, name)
+    values = _materialize_1d(source, name)
+    categories = _mstate_categories(source)
+    if categories is None:
+        return values
+    codes = {value: i + 1 for i, value in enumerate(categories)}
+    return [math.nan if _is_missing_value(value) else codes[value] for value in values]
+
+
 def _formula_name(name: str) -> tuple[str, bool]:
     name = name.strip()
     if name.startswith("`") and name.endswith("`") and len(name) >= 2:
@@ -853,6 +866,9 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
     call = _numeric_call(expression)
     if call is not None:
         function, argument = call
+        column, quoted = _formula_name(argument)
+        if function == "as.numeric" and not _unsupported_formula_name(column, quoted):
+            return _numeric_column(expression, _as_numeric_column(data, column), n)
         # a logical argument counts TRUE as 1 (R's as.numeric)
         values = _floats_or_nan(_expression_values(data, argument, n))
         return _apply_numeric_transform(values, function, argument)
@@ -860,7 +876,12 @@ def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[fl
     column, quoted = _formula_name(expression)
     if _unsupported_formula_name(column, quoted):
         raise ValueError(f"unsupported formula arithmetic term: {expression}")
-    values = _column(data, column)
+    return _numeric_column(expression, _column(data, column), n)
+
+
+def _numeric_column(expression: str, values: list[Any], n: int) -> list[float]:
+    """The column *values* an arithmetic *expression* reads, as numbers."""
+
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     try:
@@ -1894,12 +1915,10 @@ def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
         raise ValueError(f"unsupported formula term(s): {term.call}")
     if term.arithmetic is not None:
         return _expression_values(data, term.arithmetic, n)
-    values = _column(data, term.column)
     if term.transform == "as.numeric":
-        categories = _mstate_categories(_column_source(data, term.column))
-        if categories is not None:
-            codes = {value: i + 1 for i, value in enumerate(categories)}
-            values = [math.nan if _is_missing_value(value) else codes[value] for value in values]
+        values = _as_numeric_column(data, term.column)
+    else:
+        values = _column(data, term.column)
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     return values

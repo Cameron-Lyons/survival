@@ -456,6 +456,26 @@ def test_a_nan_made_by_a_transform_of_an_expression_is_missing():
     assert len(fit.na_action) == 19
 
 
+def test_as_numeric_of_a_factor_inside_an_expression_is_its_codes():
+    lung = datasets.load_lung()
+    # d$f <- factor(ifelse(sex == 1, 10, 20)); d$e <- factor(ph.ecog)
+    data = {
+        **lung,
+        "f": r._r_factor([10 if sex == 1 else 20 for sex in lung["sex"]], [10, 20]),
+        "e": r._r_factor(lung["ph.ecog"], [0, 1, 2, 3]),
+    }
+    # coxph(Surv(time, status) ~ I(as.numeric(f) + 0), d), and so on
+    for rhs, names, coefficient, n in [
+        ("I(as.numeric(f) + 0)", ["I(as.numeric(f) + 0)"], -0.53102353761950816, 228),
+        ("log(as.numeric(e))", ["log(as.numeric(e))"], 0.8180812666404994, 227),
+        ("I(as.numeric(e) == 2)", ["I(as.numeric(e) == 2)TRUE"], -0.037615768663394278, 227),
+    ]:
+        fit = r.coxph(f"Surv(time, status) ~ {rhs}", data)
+        assert list(fit.coef_names) == names
+        assert fit.coefficients == approx([coefficient], rel=1e-9)
+        assert fit.n == n
+
+
 def test_logical_terms_in_the_other_formula_functions():
     lung = datasets.load_lung()
     # survreg(Surv(time, status) ~ I(sex == 2) + as.numeric(ph.ecog > 1), lung)
