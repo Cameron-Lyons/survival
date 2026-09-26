@@ -229,7 +229,8 @@ impl CountingProcessData {
         validate_finite(&start, "start")?;
         validate_finite(&stop, "stop")?;
         validate_status_values(&event, "event")?;
-        // R's Surv(start, stop) makes an interval with stop <= start NA
+        // R's Surv(start, stop) makes an interval with stop <= start NA with
+        // a warning; this container has no NA, so it rejects the row instead.
         validate_intervals(&start, &stop)?;
 
         Ok(Self { start, stop, event })
