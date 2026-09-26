@@ -106,7 +106,8 @@ class CoxphModel:
     id_column: str | None = None
     penalized: Any | None = None
     # the model frame the fit was made from (after subset and na.action), which
-    # model.frame(fit) rebuilds when the fit did not keep it
+    # model.frame(fit) rebuilds when the fit did not keep it; the design rows are
+    # dropped, since model.frame() does not use them
     _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
@@ -650,7 +651,7 @@ def _coxph_fit_frame(
         weights_column=frame.weights_column,
         id_column=frame.id_column,
         penalized=penalized,
-        _frame=frame,
+        _frame=replace(frame, x=[]),
     )
 
 

@@ -455,3 +455,5 @@ def test_model_frame_is_rebuilt_without_model_true(ovarian):
     assert _coxph._coxph_model_frame(kept) is kept.model
     assert _coxph._coxph_model_frame(fit) == kept.model
     assert "_frame" not in repr(fit)
+    # the fit does not keep the n x p design rows for it
+    assert fit._frame.x == []
