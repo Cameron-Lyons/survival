@@ -136,6 +136,7 @@ fn validate_finegray_inputs(
             "ctime must be sorted in nondecreasing order",
         ));
     }
+    validate_finite(cprob, "cprob")?;
     if let Some(idx) = cprob.iter().position(|p| !(0.0..=1.0).contains(p)) {
         return Err(SurvivalError::invalid_input(format!(
             "cprob must contain values in [0, 1]; found {} at index {idx}",
@@ -408,6 +409,17 @@ mod tests {
                 .contains("cprob must contain values")
         );
         assert!(message(finegray(&[f64::NAN], &[1.0], &[], &[], &[true], &[])).contains("tstart"));
+        assert!(
+            message(finegray(
+                &[0.0],
+                &[1.0],
+                &[1.0],
+                &[f64::NAN],
+                &[true],
+                &[true]
+            ))
+            .contains("cprob contains non-finite value")
+        );
     }
 
     #[test]
