@@ -111,6 +111,8 @@ impl CoxPHFit {
 
 /// Martingale residuals at the linear predictors `lp` (`coxmart.c`,
 /// `agmart3.c`; the Breslow form for the exact method, as `coxmart2.c`).
+/// Right-censored rows are taken in the fit's (stratum, time) order, as
+/// `coxph.fit` hands its `sorted` rows to `coxmart`.
 pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
     let risk = risk_scores(lp);
     let strata = fit.kernel_strata();
@@ -125,6 +127,7 @@ pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
             fit.method,
         ),
         None => coxmart_rows(
+            &fit.sorted.order,
             &fit.time,
             &fit.status,
             &risk,
