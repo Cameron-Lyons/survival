@@ -112,12 +112,14 @@ _TRANSFORMS = {"log": _core.SurvregTransform.Log, "identity": _core.SurvregTrans
 class SurvregModelResult:
     """R's ``survreg`` object: the Rust ``SurvregFit`` plus the metadata R keeps on it.
 
-    The properties are R's components: ``coefficients`` are the location coefficients
+    Most properties are R's components: ``coefficients`` are the location coefficients
     (``NaN`` where singular; the full vector with the ``Log(scale)`` entries is
     ``fit.coefficients``), ``loglik`` is (intercept-only, full), ``var`` the variance of
-    every coefficient and ``naive_var`` the model-based one of a robust fit.  ``weights``,
-    ``x``, ``y``, ``model`` and ``score`` are ``None`` unless the call kept them;
-    ``na_action`` (``fit$na.action``) records the rows the ``na.action`` removed.
+    every coefficient and ``naive_var`` (R's ``naive.var``) the model-based one of a
+    robust fit.  ``weights``, ``x``, ``y``, ``model`` and ``score`` are ``None`` unless
+    the call kept them; ``na_action`` (``fit$na.action``) records the rows the
+    ``na.action`` removed.  ``n``, ``converged``, ``robust`` and ``distribution`` (the
+    resolved distribution object) are conveniences with no ``survreg`` component in R.
     """
 
     fit: _core.SurvregFit = field(repr=False)

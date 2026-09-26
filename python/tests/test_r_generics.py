@@ -74,8 +74,12 @@ def test_term_labels_of_an_aareg_fit(lung):
 def test_model_frame_of_a_formula_and_of_a_fit_without_model(lung):
     # dim(model.frame(Surv(time, status) ~ age, lung)): 228 x 2
     frame = r.model_frame("Surv(time, status) ~ age", lung)
-    assert frame.n == 228
-    assert r.model_frame("Surv(time, status) ~ age", lung, subset=list(range(10))).n == 10
+    assert list(frame) == ["time", "status", "age"]
+    assert len(frame["time"]) == 228
+    subset = r.model_frame("Surv(time, status) ~ age", lung, subset=list(range(10)))
+    assert len(subset["age"]) == 10
+    # model.frame(Surv(time, status) ~ ph.ecog, lung): 227 rows, na.omit drops one
+    assert len(r.model_frame("Surv(time, status) ~ ph.ecog", lung)["ph.ecog"]) == 227
     # model.frame(coxph(Surv(time, status) ~ age + sex, lung)): 228 rows of the response,
     # age and sex, rebuilt although the fit kept no model
     fit = r.coxph("Surv(time, status) ~ age + sex", lung)
@@ -139,6 +143,19 @@ def test_survreg_object_copies_and_reads_r_components(lung):
     assert (fit.weights, fit.score, fit.model) == (None, None, None)
     with pytest.raises(AttributeError):
         _ = fit.status  # the Rust fit's attributes are not R components
+
+
+def test_as_data_frame_rejects_mappings_that_are_not_columns(lung):
+    km = r.survfit("Surv(time, status) ~ 1", lung)
+    for mapping in ({"x": "abc"}, {"x": 1.0}, {"curve": km, "x": [1.0]}):
+        with pytest.raises(TypeError, match="requires a survival result object"):
+            r.as_data_frame(mapping)
+
+
+def test_multistate_curve_residuals_and_summary():
+    aj = r.survfit("Surv(time, status, type = 'mstate') ~ 1", _multistate())
+    assert r.model_summary(aj) == r.summary_survfit(aj)
+    assert r.residuals(aj, times=[2.5, 5.5]) == r.survfit_residuals(aj, times=[2.5, 5.5])
 
 
 def test_reprs_stay_short(lung):

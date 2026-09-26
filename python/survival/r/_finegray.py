@@ -306,7 +306,7 @@ def finegray(
     return FineGrayFrame(columns, event=response.states[enum - 1])
 
 
-def _finegray_frame(result: Any) -> dict[str, list[Any]]:
+def _finegray_frame(result: _core.FineGrayOutput) -> dict[str, list[Any]]:
     """``as_data_frame`` of a raw ``FineGrayOutput``."""
 
     return {

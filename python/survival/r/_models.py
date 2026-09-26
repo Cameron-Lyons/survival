@@ -42,6 +42,8 @@ from ._coxph import (
 )
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
 from ._finegray import _finegray_frame
+from ._formula import _column as _formula_column
+from ._formula import _formula_columns
 from ._formula import model_frame as _formula_model_frame
 from ._pyears import _pyears_result_frame, summary_pyears
 from ._surv import Surv
@@ -317,10 +319,12 @@ model_matrix.register(SurvregModelResult, model_matrix_survreg)
 
 
 @singledispatch
-def model_frame(formula: Any, data: Any | None = None, **kwargs: Any) -> Any:
-    """``model.frame``: for a formula string, the frame of ``data`` (see
+def model_frame(formula: Any, data: Any | None = None, **kwargs: Any) -> dict[str, list[Any]]:
+    """``model.frame``: the model frame of a formula string and ``data`` (see
     :func:`survival.r._formula.model_frame` for the arguments; R's ``na.action`` spelling
-    is accepted); for a fitted model, its model frame as columns.
+    is accepted) or of a fitted model, as columns: a ``Surv`` response split into
+    ``time``/``status`` (``start``/``stop``/``status`` for counting data), then the
+    formula's variables and the ``(weights)``, ``(id)``, ... arguments.
 
     A Cox model's frame is rebuilt when the fit did not keep it; the other fits need
     ``model=TRUE``.
@@ -330,10 +334,26 @@ def model_frame(formula: Any, data: Any | None = None, **kwargs: Any) -> Any:
 
 
 @model_frame.register(str)
-def _model_frame_formula(formula: str, data: Any | None = None, **kwargs: Any) -> Any:
+def _model_frame_formula(
+    formula: str, data: Any | None = None, **kwargs: Any
+) -> dict[str, list[Any]]:
     if "na.action" in kwargs:
         kwargs["na_action"] = kwargs.pop("na.action")
-    return _formula_model_frame(formula, data, **kwargs)
+    frame = _formula_model_frame(formula, data, **kwargs)
+    columns: dict[str, Any] = {}
+    response_columns: tuple[str, ...] = ()
+    if frame.response is not None:
+        columns[frame.response_name or "response"] = frame.response
+        response_columns = frame.response_columns
+    for name in _formula_columns(formula, frame.data):
+        if name not in response_columns:
+            columns[name] = _formula_column(frame.data, name)
+    for name in ("weights", "offset", "id", "cluster", "istate"):
+        values = getattr(frame, name)
+        if values is not None:
+            columns[f"({name})"] = values
+    columns.update(frame.extra)
+    return _plain_model_frame(columns)
 
 
 @model_frame.register(CoxphModel)
@@ -1006,4 +1026,11 @@ def _mapping_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
     # survSplit, finegray)
     if result and all(isinstance(curve, _SurvfitCurves) for curve in result.values()):
         return _grouped_survfit_frame(result)
-    return {str(name): list(values) for name, values in result.items()}
+    columns: dict[str, list[Any]] = {}
+    for name, values in result.items():
+        if isinstance(values, str | bytes | Mapping | _SurvfitCurves) or not hasattr(
+            values, "__iter__"
+        ):
+            raise TypeError("as_data_frame requires a survival result object")
+        columns[str(name)] = list(values)
+    return columns
