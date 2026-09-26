@@ -411,6 +411,30 @@ def test_unused_factor_levels_stay_as_aliased_columns():
     assert concordance.concordance == approx([0.437518736884181, 0.5])
 
 
+def test_yates_model_drops_unused_levels_as_lm_does():
+    # R: yates of g on lm(time ~ g), whose model.frame drops the unused level c
+    # (drop.unused.levels = TRUE); the coefficients, vcov and sigma^2 are R's
+    data = _lung_with_unused_level()
+    model = r.YatesModel(
+        "time ~ g",
+        data,
+        [347.035087719298, -83.6052631578947],
+        [[375.482060170999, -375.482060170999], [-375.482060170999, 750.964120341998]],
+        42804.9548594939,
+    )
+    result = r.yates(model, "g")
+    assert result.estimate["g"] == ["a", "b"]
+    assert result.estimate["pmm"] == approx([347.035087719298, 263.429824561404])
+    assert result.estimate["std"] == approx([19.3773594736486, 19.3773594736486])
+    assert contrast_rows(result) == [("global", pytest.approx(9.30782155679765), 1)]
+    assert result.test[0].ss == pytest.approx(398420.881578947)
+    assert_rows_close(result.mvar, [[375.482060170999, 0.0], [0.0, 375.482060170999]])
+    assert result.cmat == [[1.0, 0.0], [1.0, 1.0]]
+    assert result.cmat_names == ["(Intercept)", "gb"]
+    with pytest.raises(ValueError, match="invalid level for term g"):
+        r.yates(model, "g", levels=["a", "c"])
+
+
 def test_a_subset_keeps_the_levels_it_leaves_unused():
     # R: coxph of e = factor(ph.ecog) on lung with subset = ph.ecog < 3, which leaves
     # level 3 unused

@@ -16,8 +16,9 @@ class YatesModel:
     """Supply an external linear model to :func:`yates`.
 
     Coefficients and covariance follow the R formula's design-column order,
-    including its intercept. ``sigma2`` is the residual variance for sum-of-
-    squares tests. No model is refitted by this adapter.
+    including its intercept, with ``lm``'s factor levels: those that occur in
+    ``data`` (``drop.unused.levels = TRUE``). ``sigma2`` is the residual variance
+    for sum-of-squares tests. No model is refitted by this adapter.
     """
 
     formula: str
@@ -35,6 +36,7 @@ class YatesModel:
             _fit_formula_design(
                 frame.data, frame.spec, frame.terms, frame.n, include_intercept=True
             ),
+            drop_unused_levels=True,
         )
         beta = _float_vector(self.coefficients, "coefficients")
         names = (["(Intercept)"] if design.intercept else []) + [
