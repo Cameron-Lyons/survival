@@ -31,6 +31,7 @@ from ._coerce import (
     _normalize_positive_scale,
     _pop_dotted_keyword,
     _scalar_or_vector,
+    _warn_outside_package,
 )
 from ._formula import (
     _column,
@@ -874,6 +875,20 @@ def _storage_mode(values: Sequence[Any] | None) -> str:
 
 
 _CENSOR_VALUES = {"logical": False, "integer": 0, "double": 0.0, "character": ""}
+# R's coercion order: combining two modes gives the later one
+_STORAGE_MODES = ("logical", "integer", "double", "character")
+
+
+def _as_mode(value: Any, mode: str) -> Any:
+    """``value`` stored in an R vector of storage ``mode`` (``NA`` stays as given)."""
+
+    if _is_missing_value(value) or mode == "logical":
+        return value
+    if mode == "integer":
+        return int(value)
+    if mode == "double":
+        return float(value)
+    return _as_character(value)
 
 
 def _numeric_values(values: Sequence[Any]) -> list[float] | None:
@@ -897,9 +912,10 @@ def _numeric_values(values: Sequence[Any]) -> list[float] | None:
 class _TmergeArgument:
     """One ``name = kind(time, value)`` argument evaluated in ``data2``.
 
-    ``values`` are the update values as given (``NaN`` for a missing number),
-    ``numeric`` their float view when every value is a number and ``mode`` R's
-    storage mode of the values, which the new variable keeps.
+    ``values`` are the update values as given (``NaN`` for a missing number,
+    floats in a double vector), ``numeric`` their float view when every value is
+    a number and ``mode`` R's storage mode of the values, which the new variable
+    keeps unless a ``tdc`` default changes it.
     """
 
     name: str
@@ -939,13 +955,14 @@ def _tmerge_argument(
     numeric = None if values is None else _numeric_values(values)
     if operation.kind in {"cumtdc", "cumevent"} and values is not None and numeric is None:
         raise ValueError("invalid increment for cumtdc or cumevent")
-    if values is not None and numeric is not None:
-        values = [math.nan if _is_missing_value(value) else value for value in values]
     mode = _storage_mode(values)
+    if values is not None and numeric is not None:
+        values = (
+            numeric
+            if mode == "double"
+            else [math.nan if _is_missing_value(value) else value for value in values]
+        )
     default = control["tdcstart"] if operation.default is None else operation.default
-    if mode == "character" and not _is_missing_value(default):
-        # R's newvar[index == 0] <- default turns a numeric default into a string
-        default = _as_character(default)
     source = operation.value
     if isinstance(source, str):
         source = _column_source(data2, source)
@@ -962,23 +979,47 @@ def _tmerge_argument(
     )
 
 
+def _tdc_default(argument: _TmergeArgument) -> tuple[Any, str]:
+    """R's ``newvar[index == 0] <- default`` for a new ``tdc`` (tmerge.R): the default
+    as stored and the storage mode the variable then has.
+
+    Numeric values take ``as.numeric(default)`` and become double; logical and
+    character values take the higher of their mode and the default's.
+    """
+
+    default, mode = argument.default, argument.mode
+    if _is_missing_value(default) or (argument.numeric is None and mode != "character"):
+        return default, mode
+    if mode in {"integer", "double"}:
+        try:
+            return float(default), "double"
+        except ValueError:
+            _warn_outside_package("NAs introduced by coercion")
+            return math.nan, "double"
+    mode = max(mode, _storage_mode([default]), key=_STORAGE_MODES.index)
+    return _as_mode(default, mode), mode
+
+
 def _tdc_values(step: Any, argument: _TmergeArgument, prior: list[Any] | None) -> list[Any]:
     """R's ``tdc`` update: the value of the last update at or before each interval start."""
 
     values = argument.values
+    sources = step.source
     if prior is None:
         if values is None:
-            return [0 if source is None else 1 for source in step.source]
-        return [argument.default if source is None else values[source] for source in step.source]
+            return [0 if source is None else 1 for source in sources]
+        default, mode = _tdc_default(argument)
+        if mode != argument.mode and None in sources:
+            # R converts the whole variable only when some interval takes the default
+            values = [_as_mode(value, mode) for value in values]
+        return [default if source is None else values[source] for source in sources]
     if values is None:
         if any(not (_is_missing_value(v) or v in (0, 1, False, True)) for v in prior):
             raise ValueError(f"tdc update does not match prior variable type: {argument.name}")
-        return [
-            1 if source is not None else v for source, v in zip(step.source, prior, strict=True)
-        ]
+        return [1 if source is not None else v for source, v in zip(sources, prior, strict=True)]
     return [
         values[source] if source is not None else v
-        for source, v in zip(step.source, prior, strict=True)
+        for source, v in zip(sources, prior, strict=True)
     ]
 
 

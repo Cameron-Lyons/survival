@@ -168,6 +168,7 @@ def _tmerge_updates():
         "status": [1, 0, 1, 0, 1],
         "flag": [True, False, True, False, True],
         "ilab": [1, 2, None, 3, 4],
+        "dlab": [1.5, 2, None, 3, 4],
         "clab": ["a", "b", "a", "b", "c"],
     }
 
@@ -240,6 +241,46 @@ def test_tmerge_keeps_the_type_of_the_values_like_r():
     assert all(type(value) is float for value in frame["n"])
     assert frame.tevent == {"n": 0.0}
     assert type(frame.tevent["n"]) is float
+
+
+@pytest.mark.parametrize(
+    ("column", "init", "expected"),
+    [
+        # tdc(t, ilab, 0L) and tdc(t, ilab, TRUE): num 0 1 2 0 0 3 / num 1 1 2 1 1 3
+        ("ilab", 0, [0.0, 1.0, 2.0, 0.0, 0.0, 3.0]),
+        ("ilab", True, [1.0, 1.0, 2.0, 1.0, 1.0, 3.0]),
+        # tdc(t, dlab, 0L): num 0 1.5 2 0 0 3
+        ("dlab", 0, [0.0, 1.5, 2.0, 0.0, 0.0, 3.0]),
+        # tdc(t, flag, FALSE / 0L / 0 / "no"): logi, int, num and chr
+        ("flag", False, [False, True, False, False, True, False, False]),
+        ("flag", 0, [0, 1, 0, 0, 1, 0, 0]),
+        ("flag", 0.0, [0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        ("flag", "no", ["no", "TRUE", "FALSE", "no", "TRUE", "no", "FALSE"]),
+        # tdc(t, clab, TRUE): chr "TRUE" "a" "b" "TRUE" "a" "TRUE" "b"
+        ("clab", True, ["TRUE", "a", "b", "TRUE", "a", "TRUE", "b"]),
+    ],
+)
+def test_tmerge_tdc_default_converts_the_variable_like_r(column, init, expected):
+    frame = r.tmerge(_tmerge_base(), _tmerge_updates(), id="id", lab=r.tdc("t", column, init))
+    assert frame["lab"] == expected
+    assert [type(value) for value in frame["lab"]] == [type(value) for value in expected]
+
+
+def test_tmerge_numeric_tdc_takes_the_default_as_numeric_like_r():
+    d1, updates = _tmerge_base(), _tmerge_updates()
+    # tdc(t, ilab) with options(tdcstart = -1L): num -1 1 2 -1 -1 3
+    frame = r.tmerge(d1, updates, id="id", lab=r.tdc("t", "ilab"), options={"tdcstart": -1})
+    assert frame["lab"] == [-1.0, 1.0, 2.0, -1.0, -1.0, 3.0]
+    assert all(type(value) is float for value in frame["lab"])
+    # tdc(t, ilab, "x"): num NA 1 2 NA NA 3, warning "NAs introduced by coercion"
+    with pytest.warns(UserWarning, match="NAs introduced by coercion"):
+        frame = r.tmerge(d1, updates, id="id", lab=r.tdc("t", "ilab", "x"))
+    assert _na(frame["lab"]) == [None, 1.0, 2.0, None, None, 3.0]
+    # every interval starts at or after an update, so no row takes the default: int 4 5 6
+    updates = {"id": [1, 2, 3], "t": [0.0, 0.0, 0.0], "ilab": [4, 5, 6]}
+    frame = r.tmerge(d1, updates, id="id", lab=r.tdc("t", "ilab", 0.0))
+    assert frame["lab"] == [4, 5, 6]
+    assert all(type(value) is int for value in frame["lab"])
 
 
 # --- subject ids --------------------------------------------------------------
