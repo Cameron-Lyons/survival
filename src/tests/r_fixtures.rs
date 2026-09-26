@@ -2245,9 +2245,17 @@ fn r_fixtures_pseudo() {
                             let kind =
                                 PseudoResidualType::parse(kind).map_err(|err| err.to_string())?;
                             let values = if prefix == "pseudo" {
-                                pseudo(&data, &options, &times, kind, true)
+                                pseudo(&data, &options, &times, kind, options.stype, true)
                             } else {
-                                survfitresid(&data, &options, &times, kind, false, false)
+                                survfitresid(
+                                    &data,
+                                    &options,
+                                    &times,
+                                    kind,
+                                    options.stype,
+                                    false,
+                                    false,
+                                )
                             }
                             .map_err(|err| format!("{aspect}: {err}"))?;
                             check_pseudo_matrix(&values.values, &expected[aspect], aspect)

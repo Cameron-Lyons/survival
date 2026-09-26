@@ -684,7 +684,7 @@ def _survfitKM(
         timefix=timefix,
         reverse=reverse,
     )
-    call = SurvfitCall(frame.terms, stype, ctype, timefix, start, id=id_name)
+    call = SurvfitCall(frame.terms, stype, ctype, timefix, start, id=id_name, type=type_)
     labels = _curve_labels(engine, frame.x_levels)
     clname = frame.clname() if influence > 0 else None
     return _km_result(engine, labels, call, frame.model, se_fit, clname)
@@ -841,7 +841,7 @@ def _survfitAJ(
         time0=time0,
         timefix=timefix,
     )
-    call = SurvfitCall(frame.terms, stype, ctype, timefix, start, p0=p0, id=id_name)
+    call = SurvfitCall(frame.terms, stype, ctype, timefix, start, p0=p0, id=id_name, type=type_)
     labels = _curve_labels(engine, frame.x_levels)
     return _aj_result(engine, labels, call, frame.model, se_fit, time0=time0)
 

@@ -74,10 +74,20 @@ def _check_survfit_object(fit: Any) -> SurvfitResult | SurvfitMultiStateResult:
     return fit
 
 
+def _call_codes(fit: SurvfitResult | SurvfitMultiStateResult) -> tuple[int, int]:
+    """``Call$stype`` and ``Call$ctype`` as ``residuals.survfit`` reads them, 1 when absent.
+
+    An old-style ``type`` reaches ``survfitKM`` through ``...``, so its call has neither.
+    """
+
+    call = fit.call
+    return (1, 1) if call.type is not None else (call.stype, call.ctype)
+
+
 def _warn_approximate(fit: SurvfitResult | SurvfitMultiStateResult, type_: str) -> None:
     """``rsurvpart1``'s warning: the hazard part ignores the ctype = 2 split of tied events."""
 
-    stype, ctype = fit.call.stype, fit.call.ctype
+    stype, ctype = _call_codes(fit)
     hazard_based = type_ == "cumhaz" or (type_ == "pstate" and stype == 2)
     if isinstance(fit, SurvfitResult) and ctype == 2 and hazard_based:
         warnings.warn("code for ctype=2 not yet completed, result is approximate", stacklevel=3)
@@ -121,8 +131,8 @@ def _kernel_residuals(
         common.update(collapse=pseudo_collapse)
     if isinstance(fit, SurvfitMultiStateResult):
         istate, istate_levels = frame.istate_labels()
-        kernel = _core.survfitresid_aj if collapse is not None else _core.pseudo_aj
-        return kernel(
+        aj_kernel = _core.survfitresid_aj if collapse is not None else _core.pseudo_aj
+        return aj_kernel(
             list(y.time),
             [int(value) for value in y.event],
             list(y.states),
@@ -140,6 +150,7 @@ def _kernel_residuals(
         times,
         stype=call.stype,
         ctype=call.ctype,
+        call_stype=_call_codes(fit)[0],
         **common,
     )
 

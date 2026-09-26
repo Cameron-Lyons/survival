@@ -13015,6 +13015,7 @@ def pseudo(
     timefix: bool = True,
     collapse: bool = True,
     start_time: float | None = None,
+    call_stype: int | None = None,
 ) -> SurvfitResid: ...
 def pseudo_aj(
     time: Sequence[float],
@@ -13644,6 +13645,7 @@ def survfitresid(
     weighted: bool | None = None,
     timefix: bool = True,
     start_time: float | None = None,
+    call_stype: int | None = None,
 ) -> SurvfitResid: ...
 def survfitresid_aj(
     time: Sequence[float],

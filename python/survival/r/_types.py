@@ -728,6 +728,8 @@ class SurvfitCall:
     """The parts of R's ``fit$call`` that ``residuals.survfit`` and ``pseudo`` re-read.
 
     ``terms`` are the right-hand side term labels; ``strata(mf[terms])`` is the curve factor.
+    ``stype`` and ``ctype`` give the curve that was fitted; ``type`` is the old-style ``type``
+    argument as given, in which case R's call carries no ``stype`` or ``ctype``.
     """
 
     terms: tuple[str, ...] = ()
@@ -737,6 +739,7 @@ class SurvfitCall:
     start_time: float | None = None
     p0: list[float] | None = None
     id: str | None = None
+    type: str | None = None
 
 
 @dataclass(frozen=True)

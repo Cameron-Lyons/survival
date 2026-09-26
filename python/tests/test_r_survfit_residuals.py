@@ -335,6 +335,36 @@ def test_ctype_2_hazard_residuals_warn_as_in_r():
     _close(auc.resid[0], [-0.0144503652299554, -0.320325604480782])
 
 
+def test_old_style_type_fits_use_the_default_stype_and_ctype_as_in_r():
+    # fh <- survfit(Surv(time, status) ~ 1, aml, type = "fleming-harrington"), and the same
+    # with type = "fh2": type reaches survfitKM through ..., so residuals.survfit finds no
+    # Call$stype or Call$ctype and uses 1 for both
+    aml = survival.datasets.load_aml()
+    fh = r.survfit("Surv(time, status) ~ 1", aml, type="fleming-harrington")
+    fh2 = r.survfit("Surv(time, status) ~ 1", aml, type="fh2")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        # resid(fh, times = c(10, 20)): the Kaplan-Meier formula on the FH curve
+        pstate = r.survfit_residuals(fh, times=[10, 20])
+        auc = r.survfit_residuals(fh, times=[10, 20], type="auc")
+        values = r.pseudo(fh, times=[10, 20])
+        # resid(fh2, times = c(10, 20), type = "cumhaz"): the fit's hazard and no ctype = 2 note
+        cumhaz = r.survfit_residuals(fh2, times=[10, 20], type="cumhaz")
+        chaz_values = r.pseudo(fh2, times=[10, 20], type="cumhaz")
+        fh2_pstate = r.survfit_residuals(fh2, times=[10, 20])
+    _close(pstate.resid[0], [-0.03437862026111806, -0.0285491513533135])
+    _close(pstate.resid[1], [0.00954961673919946, -0.0285491513533135])
+    _close(auc.resid[0], [-0.0153620986438052, -0.327053280062867])
+    _close(auc.resid[1], [0.0285661383565124, -0.151269864863623])
+    _close(values[1], [1.0103494510073, 0.0])
+    _close(cumhaz.resid[1], [-0.0112852529328128, 0.0409916491134088])
+    _close(chaz_values[0], [1.1901489312253064, 1.37595658762120])
+    _close(chaz_values[1], [-0.0203773845641673, 1.36779901889482])
+    _close(fh2_pstate.resid[0], [-0.03403850121398103, -0.0282667051678323])
+    _close(fh2_pstate.resid[1], [0.00969874644331237, -0.0282667051678323])
+
+
 def test_ctype_2_multistate_residuals_do_not_warn_as_in_r():
     # R: fit <- survfit(Surv(etime, event) ~ 1, data = m[1:60, ], ctype = 2) warns when it is
     # fitted; resid(fit, times = c(24, 60), type = "cumhaz")[i, , ] and pseudo() do not, as
