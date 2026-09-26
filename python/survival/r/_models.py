@@ -15,7 +15,6 @@ from collections.abc import Mapping, Sequence
 from statistics import NormalDist
 from typing import Any
 
-from .. import _survival as _core
 from ._aareg import summary_aareg
 from ._cch import summary_cch
 from ._coerce import (
@@ -29,6 +28,7 @@ from ._coxph import CoxphModel, predict_coxph, residuals_coxph, summary_coxph
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
 from ._pyears import _finegray_frame, _pyears_result_frame
 from ._surv import Surv
+from ._survfit import _derived_survfit, _engine_of
 from ._types import (
     AaregModelResult,
     CchModelResult,
@@ -432,10 +432,6 @@ def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list
 
 # --- the R bridge's grouped view of a stratified curve set --------------------------------
 
-_PER_STRATUM_FIELDS = frozenset(
-    {"n", "n_id", "p0", "se0", "influence_pstate", "influence_surv", "influence_chaz"}
-)
-
 
 def _bare_strata_label(name: str) -> str:
     """``rx=1`` -> ``1`` and ``a=1, b=x`` -> ``1, x`` (the labels the bridge names curves by)."""
@@ -443,29 +439,19 @@ def _bare_strata_label(name: str) -> str:
     return re.sub(r"(^|, )[^=,]+=", r"\1", name)
 
 
-def _survfit_stratum(result: Any, index: int, rows: slice) -> Any:
-    """One stratum of ``result`` as its own unstratified result."""
+def _survfit_stratum(
+    result: SurvfitResult | SurvfitMultiStateResult, index: int, rows: slice
+) -> SurvfitResult | SurvfitMultiStateResult:
+    """Curve ``index`` (its ``rows``) of ``result`` as its own unstratified result."""
 
-    changes: dict[str, Any] = {"strata": None}
-    row_count = len(result.time)
+    if result.engine is not None:
+        return _derived_survfit(result, result.engine.select_curves([index]), time0=result.time0)
+    # a Turnbull fit has no engine: take the curve's rows of every per-time field
+    changes: dict[str, Any] = {"strata": None, "n": [result.n[index]]}
     for field in dataclasses.fields(result):
         value = getattr(result, field.name)
-        if field.name == "strata" or not isinstance(value, list | tuple):
-            continue
-        if field.name in _PER_STRATUM_FIELDS:
-            if field.name == "p0" and value and not isinstance(value[0], list | tuple):
-                continue
-            changes[field.name] = [value[index]] if field.name in {"n", "n_id"} else value[index]
-        elif len(value) == row_count:
-            changes[field.name] = list(value[rows])
-    counts = getattr(result, "counts", None)
-    if counts is not None:
-        changes["counts"] = _core.SurvfitCounts(
-            list(counts.n_risk[rows]),
-            list(counts.n_event[rows]),
-            list(counts.n_censor[rows]),
-            None if counts.n_enter is None else list(counts.n_enter[rows]),
-        )
+        if field.name not in changes and isinstance(value, list) and len(value) == len(result.time):
+            changes[field.name] = value[rows]
     return dataclasses.replace(result, **changes)
 
 
@@ -494,10 +480,12 @@ def _subset_survfit_multistate(
     state_indices: Any,
     keep_n_id: bool | None = None,
 ) -> SurvfitMultiStateResult:
-    """``fit[, states]``: keep the selected state columns (the transition columns go).
+    """``fit[, states]`` (``[.survfitms``): keep the selected states (0-based indices).
 
-    R keeps ``n.id`` for a stratified object and drops it otherwise (``[.survfitms``
-    reads ``x$id`` there); ``keep_n_id`` overrides that for the bridge's split curves.
+    The transition parts go unless every state is kept in its original order, which is
+    also when R records no ``oldstate``.  R keeps ``n.id`` for a stratified object and drops
+    it otherwise (``[.survfitms`` reads ``x$id`` there); ``keep_n_id`` overrides that for
+    the bridge's split curves.
     """
 
     if not isinstance(result, SurvfitMultiStateResult):
@@ -510,40 +498,14 @@ def _subset_survfit_multistate(
         raise ValueError("multi-state survfit subsetting must select at least one state")
     if any(index < 0 or index >= len(result.states) for index in indices):
         raise IndexError("multi-state survfit state index is out of bounds")
-
-    def select_columns(values: Sequence[Sequence[Any]] | None) -> list[list[float]] | None:
-        if values is None:
-            return None
-        return [[float(row[index]) for index in indices] for row in values]
-
-    def select_p0(values: Sequence[Any]) -> list[Any]:
-        if values and isinstance(values[0], list | tuple):
-            return [[float(row[index]) for index in indices] for row in values]
-        return [float(values[index]) for index in indices]
-
-    empty_transitions: list[list[float]] = [[] for _ in result.time]
+    subset = _derived_survfit(result, _engine_of(result).select_states(indices), time0=result.time0)
     if keep_n_id is None:
         keep_n_id = bool(result.strata)
+    every_state = indices == list(range(len(result.states)))
     return dataclasses.replace(
-        result,
-        n_id=result.n_id if keep_n_id else None,
-        n_risk=select_columns(result.n_risk) or [],
-        n_event=select_columns(result.n_event) or [],
-        n_censor=select_columns(result.n_censor) or [],
-        n_transition=empty_transitions,
-        pstate=select_columns(result.pstate) or [],
-        cumhaz=empty_transitions,
-        p0=select_p0(result.p0),
-        states=tuple(result.states[index] for index in indices),
-        hazard_names=(),
-        transitions=None,
-        std_err=select_columns(result.std_err),
-        std_chaz=None,
-        std_auc=select_columns(result.std_auc),
-        lower=select_columns(result.lower),
-        upper=select_columns(result.upper),
-        influence_pstate=None,
-        oldstate=result.oldstate or tuple(result.states),
+        subset,
+        n_id=subset.n_id if keep_n_id else None,
+        oldstate=None if every_state else tuple(result.states),
     )
 
 

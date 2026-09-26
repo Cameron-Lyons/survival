@@ -851,7 +851,9 @@ def _aj_result(
             f"{source + 1}:{target + 1}"
             for source, target in zip(engine.hazard_from, engine.hazard_to, strict=True)
         ],
-        transitions=_compact_transitions(engine.transitions, states),
+        transitions=_compact_transitions(engine.transitions, states)
+        if engine.transitions
+        else None,
         n_id=[int(value) for value in engine.n_id],
         type=engine.type,
         t0=engine.t0,
@@ -988,6 +990,24 @@ def _engine_of(x: Any) -> Any:
     return x.engine
 
 
+def _derived_survfit(
+    x: SurvfitResult | SurvfitMultiStateResult, engine: Any, *, time0: bool
+) -> Any:
+    """``x`` rebuilt from ``engine``, a subset or the ``survfit0`` of ``x.engine``.
+
+    The call, model frame and ``se.fit`` carry over, and so do the multi-state parts the
+    engine does not know about: a dropped ``n_id`` and the ``oldstate`` of ``fit[, states]``.
+    """
+
+    se_fit = x.std_err is not None
+    if isinstance(x, SurvfitMultiStateResult):
+        fit = _aj_result(engine, x.strata_names, x.call, x.model, se_fit, time0=time0)
+        return dataclasses.replace(
+            fit, n_id=None if x.n_id is None else fit.n_id, oldstate=x.oldstate
+        )
+    return _km_result(engine, x.strata_names, x.call, x.model, se_fit, time0=time0)
+
+
 def survfit0(x: Any, *args: Any, **kwargs: Any) -> SurvfitResult | SurvfitMultiStateResult:
     """R's ``survfit0``: add the row at the starting time ``t0`` to every curve.
 
@@ -1002,11 +1022,8 @@ def survfit0(x: Any, *args: Any, **kwargs: Any) -> SurvfitResult | SurvfitMultiS
         return x
     engine = _engine_of(x)
     if isinstance(x, SurvfitMultiStateResult):
-        fit0 = _core.survfit0_aj(engine)
-        return _aj_result(fit0, x.strata_names, x.call, x.model, x.std_err is not None, time0=True)
-    return _km_result(
-        _core.survfit0(engine), x.strata_names, x.call, x.model, x.std_err is not None, time0=True
-    )
+        return _derived_survfit(x, _core.survfit0_aj(engine), time0=True)
+    return _derived_survfit(x, _core.survfit0(engine), time0=True)
 
 
 def _rmean_option(rmean: Any, fit: SurvfitResult | SurvfitMultiStateResult) -> str:

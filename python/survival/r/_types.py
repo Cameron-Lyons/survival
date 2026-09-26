@@ -795,7 +795,8 @@ class SurvfitMultiStateResult:
     ``n_censor``, ``pstate``, ``std_err``, ``lower`` and ``upper`` are ``states``, those of
     ``n_transition``, ``cumhaz`` and ``std_chaz`` the observed transitions ``hazard_names``
     (R's ``"from:to"`` column names).  ``p0`` has one row per curve and ``transitions`` is
-    ``survcheck``'s table of observed transitions (from state x to state or censored).
+    ``survcheck``'s table of observed transitions (from state x to state or censored), which
+    ``fit[, states]`` drops.
     """
 
     n: list[int]
@@ -809,7 +810,7 @@ class SurvfitMultiStateResult:
     p0: list[list[float]]
     states: list[str]
     hazard_names: list[str]
-    transitions: NamedMatrix
+    transitions: NamedMatrix | None
     n_id: list[int]
     type: str
     t0: float

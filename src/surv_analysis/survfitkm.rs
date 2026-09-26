@@ -369,6 +369,94 @@ impl SurvfitKMResult {
             }
         })
     }
+
+    /// `fit[curves]` (`[.survfit`): the curves at the given positions of
+    /// `strata` (0-based, in the order given) as a result of their own.  A
+    /// single curve has no `strata`, like a fit without strata.
+    pub fn select_curves(&self, curves: &[usize]) -> SurvivalResult<Self> {
+        let ranges = self.curve_ranges();
+        check_curve_indices(curves, ranges.len())?;
+        let rows: Vec<usize> = curves
+            .iter()
+            .flat_map(|&curve| ranges[curve].clone())
+            .collect();
+        let pick = |values: &[f64]| select_items(values, &rows);
+        // `n` and `n_id` also count the curves start.time emptied, which were
+        // not fitted: the fitted curves are the levels with observations
+        let fitted: Vec<usize> = (0..self.n.len()).filter(|&k| self.n[k] > 0).collect();
+        let per_level = |values: &[usize]| -> Vec<usize> {
+            curves.iter().map(|&curve| values[fitted[curve]]).collect()
+        };
+        let several = curves.len() > 1;
+        Ok(Self {
+            n: per_level(&self.n),
+            time: pick(&self.time),
+            n_risk: pick(&self.n_risk),
+            n_event: pick(&self.n_event),
+            n_censor: pick(&self.n_censor),
+            n_enter: self.n_enter.as_deref().map(pick),
+            counts: self.counts.as_ref().map(|counts| SurvfitCounts {
+                n_risk: pick(&counts.n_risk),
+                n_event: pick(&counts.n_event),
+                n_censor: pick(&counts.n_censor),
+                n_enter: counts.n_enter.as_deref().map(pick),
+            }),
+            surv: pick(&self.surv),
+            std_err: self.std_err.as_deref().map(pick),
+            cumhaz: pick(&self.cumhaz),
+            std_chaz: self.std_chaz.as_deref().map(pick),
+            lower: self.lower.as_deref().map(pick),
+            upper: self.upper.as_deref().map(pick),
+            strata: several.then(|| curves.iter().map(|&curve| ranges[curve].len()).collect()),
+            strata_codes: self
+                .strata_codes
+                .as_deref()
+                .filter(|_| several)
+                .map(|codes| select_items(codes, curves)),
+            n_id: self.n_id.as_deref().map(per_level),
+            logse: self.logse,
+            conf_int: self.conf_int,
+            conf_type: self.conf_type.clone(),
+            conf_lower: self.conf_lower.clone(),
+            type_: self.type_.clone(),
+            t0: self.t0,
+            influence_surv: self
+                .influence_surv
+                .as_deref()
+                .map(|list| select_items(list, curves)),
+            influence_chaz: self
+                .influence_chaz
+                .as_deref()
+                .map(|list| select_items(list, curves)),
+        })
+    }
+}
+
+/// The error of a curve subscript outside `0..n_curves` (or an empty one).
+pub(crate) fn check_curve_indices(curves: &[usize], n_curves: usize) -> SurvivalResult<()> {
+    if curves.is_empty() {
+        return Err(SurvivalError::invalid_input("select at least one curve"));
+    }
+    match curves.iter().find(|&&curve| curve >= n_curves) {
+        Some(curve) => Err(SurvivalError::invalid_input(format!(
+            "curve {curve} is out of bounds for a fit with {n_curves} curves"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// `values[indices]`.
+pub(crate) fn select_items<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
+    indices.iter().map(|&i| values[i].clone()).collect()
+}
+
+#[pymethods]
+impl SurvfitKMResult {
+    /// `fit[curves]`: see [`SurvfitKMResult::select_curves`].
+    #[pyo3(name = "select_curves")]
+    fn py_select_curves(&self, curves: Vec<usize>) -> PyResult<Self> {
+        Ok(self.select_curves(&curves)?)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1553,6 +1641,60 @@ mod tests {
         let single = fit(own, SurvfitKMOptions::default());
         assert_eq!(&result.time[0..4], single.time.as_slice());
         assert_eq!(&result.surv[0..4], single.surv.as_slice());
+    }
+
+    #[test]
+    fn select_curves_keeps_each_curve_whole() {
+        // survfit(Surv(time, status) ~ g, influence = TRUE)[2] is the fit of
+        // group 2 alone; start.time = 3.5 empties group 1 (n = c(0, 4))
+        let data = SurvfitKMData::try_new(
+            None,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            vec![1, 1, 0, 1, 1, 0, 1],
+            None,
+            Some(vec![1, 1, 1, 2, 2, 2, 2]),
+            Some(vec![10, 11, 12, 13, 14, 15, 16]),
+            None,
+        )
+        .unwrap();
+        let options = SurvfitKMOptions {
+            influence: InfluenceRequest::Both,
+            ..Default::default()
+        };
+        let result = fit(data.clone(), options.clone());
+        let second = result.select_curves(&[1]).unwrap();
+        let mut own = data.clone();
+        own.strata = None;
+        own.time.drain(..3);
+        own.status.drain(..3);
+        own.id = Some(vec![13, 14, 15, 16]);
+        let alone = fit(own, options);
+        assert_eq!(second, alone);
+        assert_eq!(
+            second.influence_surv.as_ref().unwrap()[0].cluster,
+            vec![13, 14, 15, 16]
+        );
+        let both = result.select_curves(&[1, 0]).unwrap();
+        assert_eq!(both.strata, Some(vec![4, 3]));
+        assert_eq!(both.strata_codes, Some(vec![2, 1]));
+        assert_eq!(both.n, vec![4, 3]);
+        assert_eq!(&both.time[..4], alone.time.as_slice());
+
+        let late = fit(
+            data,
+            SurvfitKMOptions {
+                start_time: Some(3.5),
+                ..Default::default()
+            },
+        );
+        assert_eq!(late.n, vec![0, 4]);
+        let only = late.select_curves(&[0]).unwrap();
+        assert_eq!(
+            (only.n, only.n_id, only.strata),
+            (vec![4], Some(vec![4]), None)
+        );
+        assert!(late.select_curves(&[1]).is_err());
+        assert!(late.select_curves(&[]).is_err());
     }
 
     #[test]
