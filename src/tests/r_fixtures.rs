@@ -45,7 +45,7 @@ use crate::surv_analysis::{
     survdiff_one_sample, survfit0, survfit0_aj, survfitaj, survfitkm, survfitresid,
     survfitresid_aj, survmean,
 };
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Axis};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -1975,8 +1975,9 @@ fn check_aj_influence(fit: &SurvfitAJResult, expected: &Value) -> Result<(), Str
         let expected_layer = matrix(layer)?;
         let actual: Vec<Vec<f64>> = influence
             .values
-            .iter()
-            .map(|by_time| by_time.iter().map(|row| row[state]).collect())
+            .index_axis(Axis(2), state)
+            .outer_iter()
+            .map(|subject| subject.to_vec())
             .collect();
         assert_matrix(
             &actual,

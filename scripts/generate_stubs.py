@@ -448,6 +448,7 @@ _ARRAY_NEWTYPES = {
     "BoolVec": ("ArrayLike", "NDArray[np.bool_]"),
     "FloatMatrix": ("ArrayLike", "NDArray[np.float64]"),
 }
+_NUMPY_ARRAYS = {"PyReadonlyArray1", "PyReadonlyArray2", "PyArray1", "PyArray2", "PyArray3"}
 _TRANSPARENT = {"PyResult", "SurvivalResult", "Result", "Box", "Arc", "Rc", "PyClassInitializer"}
 
 
@@ -486,7 +487,7 @@ def rust_to_python(rust: str, classes: dict[str, str], ctx: str, self_name: str 
         return _SCALARS[ident]
     if ident in _ARRAY_NEWTYPES:
         return _ARRAY_NEWTYPES[ident][0 if ctx == "param" else 1]
-    if ident in {"PyReadonlyArray1", "PyReadonlyArray2", "PyArray1", "PyArray2"}:
+    if ident in _NUMPY_ARRAYS:
         dtype = {"f64": "np.float64", "f32": "np.float32", "i32": "np.int32", "i64": "np.int64"}
         elem = next((dtype[a] for a in args if a in dtype), "Any")
         return f"NDArray[{elem}]"
@@ -508,6 +509,8 @@ def rust_to_python(rust: str, classes: dict[str, str], ctx: str, self_name: str 
         return sub(args[-1])
     if ident in {"Py", "PyRef", "PyRefMut", "Bound"} and args:
         target, _ = _parse_type(args[-1])
+        if target in _NUMPY_ARRAYS:
+            return sub(args[-1])
         if target == "PyAny":
             return "Any"
         if target == "PyDict":

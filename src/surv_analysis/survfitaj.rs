@@ -10,12 +10,15 @@ use super::survfitkm::{
     check_curve_indices, ordered_subset, rows_by_curve, select_items, survflag,
 };
 use crate::error::{SurvivalError, SurvivalResult};
+#[cfg(feature = "python")]
+use crate::internal::numpy_utils::readonly_view;
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_non_negative,
 };
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// The data of a `survfit(Surv(...) ~ strata, id, istate, weights, cluster)`
 /// call with a multi-state outcome.
@@ -171,20 +174,43 @@ pub struct SurvfitAJCounts {
     pub n_enter: Option<Vec<Vec<f64>>>,
 }
 
-/// One curve's influence on `pstate`: `values[cluster][time][state]`.
+/// One curve's influence on `pstate`: `values[[cluster, time, state]]`,
+/// column-major like R's `influence.pstate` array.  The array is shared:
+/// clones of the fit and the NumPy array Python reads (a read-only view) do
+/// not copy it.
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(frozen, from_py_object)]
 pub struct SurvfitAJInfluence {
     /// R's row names `uclust`: the number (1, 2, ...) of each cluster in
     /// order of first appearance in the rows the fit uses.
     #[pyo3(get)]
     pub cluster: Vec<i64>,
-    #[pyo3(get)]
-    pub values: Vec<Vec<Vec<f64>>>,
-    /// The influence on the estimated `p0`, `[cluster][state]`, when it was
-    /// estimated and not every subject started in the same state.
-    #[pyo3(get)]
-    pub i0: Option<Vec<Vec<f64>>>,
+    pub values: Arc<Array3<f64>>,
+    /// The influence on the estimated `p0`, `[[cluster, state]]`, when it
+    /// was estimated and not every subject started in the same state.
+    pub i0: Option<Array2<f64>>,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl SurvfitAJInfluence {
+    /// The `clusters x times x states` array as a read-only NumPy array.
+    #[getter(values)]
+    fn values_array<'py>(this: &Bound<'py, Self>) -> Bound<'py, numpy::PyArray3<f64>> {
+        // SAFETY: the frozen object owns the array through its `Arc` and
+        // never changes it.
+        unsafe { readonly_view(&this.get().values, this.as_any()) }
+    }
+
+    /// The `clusters x states` matrix as a read-only NumPy array.
+    #[getter(i0)]
+    fn i0_array<'py>(this: &Bound<'py, Self>) -> Option<Bound<'py, numpy::PyArray2<f64>>> {
+        // SAFETY: the frozen object owns the matrix and never changes it.
+        this.get()
+            .i0
+            .as_ref()
+            .map(|i0| unsafe { readonly_view(i0, this.as_any()) })
+    }
 }
 
 /// A `survfitms` object.  Row-major matrices have one row per time; the
@@ -416,14 +442,16 @@ impl SurvfitAJResult {
             start_time: self.start_time,
             influence_pstate: self.influence_pstate.as_ref().map(|list| {
                 list.iter()
-                    .map(|influence| SurvfitAJInfluence {
-                        cluster: influence.cluster.clone(),
-                        values: influence
-                            .values
-                            .iter()
-                            .map(|by_time| columns(by_time))
-                            .collect(),
-                        i0: influence.i0.as_deref().map(columns),
+                    .map(|influence| {
+                        let (nid, ntime, _) = influence.values.dim();
+                        SurvfitAJInfluence {
+                            cluster: influence.cluster.clone(),
+                            values: Arc::new(Array3::from_shape_fn(
+                                (nid, ntime, states.len()).f(),
+                                |(g, t, k)| influence.values[[g, t, states[k]]],
+                            )),
+                            i0: influence.i0.as_ref().map(|i0| i0.select(Axis(1), states)),
+                        }
                     })
                     .collect()
             }),
@@ -730,7 +758,9 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
     let mut stdp = se.then(|| Array2::<f64>::zeros((ntime, nstate)));
     let mut stdc = se.then(|| Array2::<f64>::zeros((ntime, nhaz)));
     let mut stda = se.then(|| Array2::<f64>::zeros((ntime, nstate)));
-    let mut usave = (d.sefit > 1).then(|| Array3::<f64>::zeros((ngrp, ntime, nstate)));
+    // column-major like R's influence.pstate: one contiguous run of ngrp
+    // values per time and state
+    let mut usave = (d.sefit > 1).then(|| Array3::<f64>::zeros((ngrp, ntime, nstate).f()));
     // influence of pstate (U), of the AUC (UA) and of cumhaz (C); wg is
     // the weighted number at risk by cluster and state
     let mut u = Array2::<f64>::zeros((nstate, ngrp));
@@ -905,9 +935,7 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
         }
         if let Some(usave) = &mut usave {
             for j in 0..nstate {
-                for g in 0..ngrp {
-                    usave[[g, i, j]] = u[[j, g]];
-                }
+                usave.slice_mut(s![.., i, j]).assign(&u.row(j));
             }
         }
     }
@@ -1217,7 +1245,7 @@ pub fn survfitaj(
         p0: Vec<f64>,
         sd0: Option<Vec<f64>>,
         clusters: Vec<i64>,
-        i0: Option<Vec<Vec<f64>>>,
+        i0: Option<Array2<f64>>,
         fit: AJCurveFit,
     }
     let mut curves: Vec<Curve> = Vec::with_capacity(n_curves);
@@ -1273,9 +1301,9 @@ pub fn survfitaj(
         };
         // p0 per curve, from the distribution of states at t0, with its
         // (clustered, weighted) influence U0
-        let mut u0 = Array2::<f64>::zeros((nclust, nstate));
+        let mut u0 = Array2::<f64>::zeros((nclust, nstate).f());
         let mut sd0 = None;
-        let mut i0_out = None;
+        let mut has_i0 = false;
         let p00: Vec<f64> = match &p0_common {
             Some(p0) => p0.clone(),
             None => {
@@ -1335,9 +1363,7 @@ pub fn survfitaj(
                             .map(|j| u0.column(j).iter().map(|v| v * v).sum::<f64>().sqrt())
                             .collect(),
                     );
-                    if u0.iter().any(|&v| v != 0.0) {
-                        i0_out = Some(u0.outer_iter().map(|row| row.to_vec()).collect());
-                    }
+                    has_i0 = u0.iter().any(|&v| v != 0.0);
                 }
                 p00
             }
@@ -1371,7 +1397,7 @@ pub fn survfitaj(
             p0: p00,
             sd0,
             clusters,
-            i0: i0_out,
+            i0: has_i0.then_some(u0),
             fit,
         });
     }
@@ -1466,13 +1492,10 @@ pub fn survfitaj(
         if let (Some(target), Some(source)) = (&mut result.std_chaz, &fit.std_chaz) {
             target.extend(rows_to_vec(source, 0..nhaz));
         }
-        if let (Some(list), Some(matrix)) = (&mut result.influence_pstate, &fit.influence) {
+        if let (Some(list), Some(values)) = (&mut result.influence_pstate, fit.influence) {
             list.push(SurvfitAJInfluence {
                 cluster: curve.clusters,
-                values: matrix
-                    .outer_iter()
-                    .map(|by_time| by_time.outer_iter().map(|row| row.to_vec()).collect())
-                    .collect(),
+                values: Arc::new(values),
                 i0: if options.time0 { None } else { curve.i0 },
             });
         }
@@ -1711,13 +1734,15 @@ mod tests {
             )
             .unwrap();
             let influence = &fit.influence_pstate.as_ref().unwrap()[0];
+            assert!(influence.values.t().is_standard_layout(), "column-major");
             let se = fit.std_err.as_ref().unwrap();
             for (t, row) in se.iter().enumerate() {
                 for (j, &expected) in row.iter().enumerate() {
                     let norm = influence
                         .values
+                        .slice(s![.., t, j])
                         .iter()
-                        .map(|by_time| by_time[t][j] * by_time[t][j])
+                        .map(|v| v * v)
                         .sum::<f64>()
                         .sqrt();
                     assert!(close(norm, expected, 1e-10), "{norm} != {expected}");
@@ -1762,8 +1787,8 @@ mod tests {
         for (curve, expected) in influence.iter().zip(expected) {
             let i0 = curve.i0.as_ref().unwrap();
             for (k, &value) in expected.iter().enumerate() {
-                assert!(close(i0[k][0], value, 1e-12) && close(i0[k][1], -value, 1e-12));
-                assert_eq!(i0[k][2], 0.0);
+                assert!(close(i0[[k, 0]], value, 1e-12) && close(i0[[k, 1]], -value, 1e-12));
+                assert_eq!(i0[[k, 2]], 0.0);
             }
         }
         let se0 = fit.se0.as_ref().unwrap();

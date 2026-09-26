@@ -9,7 +9,9 @@ use super::survfitaj::{SurvfitAJCounts, SurvfitAJResult};
 use super::survfitkm::{SurvfitCounts, SurvfitInfluence, SurvfitKMResult};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_finite;
+use ndarray::{Array2, ShapeBuilder};
 use pyo3::prelude::*;
+use std::sync::Arc;
 
 /// `all.equal`'s tolerance, used by `survmean` and `quantile.survfit`.
 fn r_tolerance() -> f64 {
@@ -49,26 +51,33 @@ pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
         values.as_ref().map(|values| addto(values, zero, false))
     };
     let add_influence = |list: &Option<Vec<SurvfitInfluence>>| -> Option<Vec<SurvfitInfluence>> {
-        list.as_ref().map(|list| {
+        let list = list.as_ref()?;
+        let with_zero_column = |influence: &SurvfitInfluence| {
+            // column-major: the new first column is nid zeros ahead of the rest
+            let (nid, ntime) = influence.values.dim();
+            let mut values = Vec::with_capacity(nid * (ntime + 1));
+            values.resize(nid, 0.0);
+            values.extend(influence.values.t().iter());
+            SurvfitInfluence {
+                cluster: influence.cluster.clone(),
+                values: Arc::new(
+                    Array2::from_shape_vec((nid, ntime + 1).f(), values)
+                        .expect("one column of nid values per time"),
+                ),
+            }
+        };
+        Some(
             list.iter()
                 .zip(&inserts)
-                .map(|(influence, &insert)| SurvfitInfluence {
-                    cluster: influence.cluster.clone(),
-                    values: influence
-                        .values
-                        .iter()
-                        .map(|row| {
-                            let mut new_row = Vec::with_capacity(row.len() + 1);
-                            if insert {
-                                new_row.push(0.0);
-                            }
-                            new_row.extend_from_slice(row);
-                            new_row
-                        })
-                        .collect(),
+                .map(|(influence, &insert)| {
+                    if insert {
+                        with_zero_column(influence)
+                    } else {
+                        influence.clone()
+                    }
                 })
-                .collect()
-        })
+                .collect(),
+        )
     };
     SurvfitKMResult {
         n: fit.n.clone(),
