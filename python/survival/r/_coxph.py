@@ -1194,12 +1194,14 @@ def _pspline_print(
     var2: list[list[float]],
     df: float,
     history: Any,
+    digits: int = 7,
 ) -> tuple[list[dict[str, Any]], str]:
     """pspline()'s ``printfun``: the spline's linear trend (a weighted regression of
     the coefficients on the basis centres ``cbase``) and the test of the rest on
-    ``df - 1`` degrees of freedom.  ``cbase`` has a centre for every basis column but
-    the first, so as in R a pspline that keeps its intercept column fails coxph.wtest's
-    length check."""
+    ``df - 1`` degrees of freedom; theta is formatted to the ``digits`` of the caller's
+    ``options(digits)``.  ``cbase`` has a centre for every basis column but the first,
+    so as in R a pspline that keeps its intercept column fails coxph.wtest's length
+    check."""
 
     nvar = len(coef) + (0 if term.intercept else 1)
     cbase = _pspline_cbase(term.nterm, term.degree, term.boundary, nvar)
@@ -1237,7 +1239,7 @@ def _pspline_print(
             _core.pchisq(nonlinear, max(0.5, df - 1.0), lower_tail=False),
         ),
     ]
-    return rows, f"Theta= {_r_format_number(history.theta)}"
+    return rows, f"Theta= {_r_format_number(history.theta, digits)}"
 
 
 def _frailty_print(

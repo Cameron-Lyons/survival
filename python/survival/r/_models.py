@@ -61,6 +61,7 @@ from ._survreg import (
     model_term_names_survreg,
     predict_survreg,
     residuals_survreg,
+    survreg_df,
     vcov_survreg,
 )
 from ._types import (
@@ -189,7 +190,7 @@ def _nobs_survreg(fit: SurvregModelResult) -> int:
 @singledispatch
 def degrees_freedom(fit: Any) -> float:
     """The ``df`` attribute of ``logLik``: the number of estimated coefficients
-    (``sum(fit$df)`` for a penalized Cox fit, the scales included for survreg)."""
+    (``sum(fit$df)`` for a penalized fit, the scales included for survreg)."""
 
     raise _no_method("degrees_freedom")
 
@@ -202,7 +203,7 @@ def _degrees_freedom_cox(fit: CoxphModel) -> float:
 @degrees_freedom.register(SurvregModelResult)
 def _degrees_freedom_survreg(fit: SurvregModelResult) -> float:
     # logLik.survreg: sum(object$df)
-    return float(fit.fit.df)
+    return survreg_df(fit)
 
 
 @singledispatch

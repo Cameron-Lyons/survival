@@ -119,6 +119,7 @@ from ._survfit import (
     survfitkm_influence,
 )
 from ._survfit_residuals import pseudo, survfit_residuals
+from ._survpenal_print import SurvregPenalPrint, print_survreg_penal
 from ._survreg import (
     SurvregAnovaResult,
     SurvregModelResult,
@@ -216,6 +217,7 @@ __all__ = [
     "SurvfitResult",
     "SurvregAnovaResult",
     "SurvregModelResult",
+    "SurvregPenalPrint",
     "TMergeFrame",
     "TMergeOperation",
     "TcutResult",
@@ -282,6 +284,7 @@ __all__ = [
     "pspline",
     "pseudo",
     "predict",
+    "print_survreg_penal",
     "predict_terms_constant",
     "quantile_survfit",
     "psurvreg",

@@ -2018,8 +2018,6 @@ def test_anova(lung):
     assert table.resid_df == approx([225.0, 222.449658567367])
     assert table.deviance == approx([NAN, 5.71437423843645])
     assert table.p == approx([NAN, 0.0918407374421038])
-    with pytest.raises(NotImplementedError, match="anova of a single penalized survreg fit"):
-        r.anova(fit)
 
 
 @pytest.mark.parametrize(
