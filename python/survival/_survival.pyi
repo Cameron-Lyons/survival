@@ -10552,6 +10552,8 @@ class TurnbullResult:
     def conf_type(self) -> str: ...
     @property
     def curves(self) -> list[TurnbullCurve]: ...
+    @property
+    def fit(self) -> SurvfitKMResult: ...
 
 class TwoSidedCalibrationResult:
     @property
@@ -12914,6 +12916,7 @@ def quantile_survfit(
     conf_int: bool = True,
     scale: float = 1.0,
     tolerance: float | None = None,
+    start_time: float = 0.0,
 ) -> SurvfitQuantiles: ...
 def quantile_survfit_curves(
     time: Sequence[float],
@@ -13636,6 +13639,8 @@ def turnbull(
     conf_level: float = 0.95,
     conf_type: str = "log",
     timefix: bool = True,
+    se_fit: bool = True,
+    robust: bool | None = None,
 ) -> TurnbullResult: ...
 def two_sided_conformal_calibrate(
     time: Sequence[float],

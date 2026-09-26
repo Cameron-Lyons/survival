@@ -6101,6 +6101,8 @@ fn check_turnbull_case(doc: &Value, case: &Value, report: &mut Report) {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         })
         .map_err(|err| err.to_string())
     })();

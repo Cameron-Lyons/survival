@@ -1885,10 +1885,12 @@ def _survfit_curves(
     censor: bool,
     start_time: float | None = None,
     na_action: str = "na.omit",
-) -> tuple[list[Any], list[str]]:
-    """The engine curves for ``survfit.coxph`` and the name of each block (R's
-    ``names(fit$strata)``: the strata levels, the id values or the newdata row names).
-    ``na_action = "na.fail"`` refuses the newdata rows ``na.omit`` would leave out."""
+) -> tuple[list[Any], list[str], list[str] | None]:
+    """The engine curves for ``survfit.coxph``, the name of each block (R's
+    ``names(fit$strata)``: the strata levels, the id values or the newdata row names) and
+    the name of each column when every block holds a curve per newdata row (the row names,
+    R's ``colnames(fit$surv)``).  ``na_action = "na.fail"`` refuses the newdata rows
+    ``na.omit`` would leave out."""
 
     _check_interaction_margins(fit)
     engine = fit.penalized if fit.penalized is not None else fit.fit
@@ -1908,7 +1910,8 @@ def _survfit_curves(
                 RuntimeWarning,
             )
         curves = engine.survfit(**options)
-        return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+        names = [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+        return curves, names, None
     new, rows, ids = _survfit_newdata(
         fit, newdata, individual=individual, id=id, na_action=na_action
     )
@@ -1938,11 +1941,12 @@ def _survfit_curves(
             new_offset=new.offset,
             **options,
         )
-        return curves, labels if len(curves) > 1 else []
+        return curves, labels if len(curves) > 1 else [], None
     curves = engine.survfit(newdata=new.x, new_strata=new.strata, new_offset=new.offset, **options)
     if new.strata is not None:
-        return curves, _row_names(newdata, rows)
-    return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+        return curves, _row_names(newdata, rows), None
+    names = [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+    return curves, names, _row_names(newdata, rows)
 
 
 def survfit_coxph(
@@ -2003,7 +2007,7 @@ def survfit_coxph(
         raise ValueError("the id option only makes sense with new data")
     start = _start_time_value(start_time)
 
-    curves, strata_names = _survfit_curves(
+    curves, strata_names, column_names = _survfit_curves(
         fit,
         newdata,
         individual=individual_value,
@@ -2040,6 +2044,7 @@ def survfit_coxph(
         conf_int=level if conf_type_name != "none" else None,
         start_time=start,
         newdata=newdata,
+        colnames=column_names if surv and isinstance(surv[0], list) else None,
     )
 
 
