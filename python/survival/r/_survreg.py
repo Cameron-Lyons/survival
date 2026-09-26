@@ -519,9 +519,9 @@ def _refuse_penalty_terms(design: _FormulaDesign | None) -> None:
     """survreg.R stops on frailty terms and fits ridge()/pspline() through survpenal.fit."""
 
     kinds = [
-        term.penalty.kind
+        term.kind
         for term in (() if design is None else design.covariates)
-        if isinstance(term, _PenaltyDesignTerm) and term.penalty is not None
+        if isinstance(term, _PenaltyDesignTerm) and term.penalized
     ]
     if "frailty" in kinds:
         raise ValueError("survreg does not support frailty terms")

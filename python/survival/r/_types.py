@@ -130,6 +130,16 @@ class _PenaltyDesignTerm:
     nterm: int = 0
     combine: tuple[int, ...] | None = None
 
+    @property
+    def penalized(self) -> bool:
+        """False for ``pspline(penalty=FALSE)``, whose basis is an ordinary matrix term."""
+        return self.penalty is not None
+
+    @property
+    def kind(self) -> str:
+        """The penalty function: ``"ridge"``, ``"pspline"`` or ``"frailty"``."""
+        return self.penalty.kind if self.penalized else "pspline"
+
 
 _SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm | _PenaltyDesignTerm
 

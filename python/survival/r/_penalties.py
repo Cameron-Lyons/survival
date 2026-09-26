@@ -194,12 +194,10 @@ def _combine_basis(rows: Sequence[Sequence[float]], groups: Sequence[int]) -> li
 def penalty_columns(
     spec: _PenaltyDesignTerm, values: Mapping[str, Sequence[Any]]
 ) -> list[list[float]]:
-    # an unpenalized basis is pspline(penalty = FALSE)
-    kind = "pspline" if spec.penalty is None else spec.penalty.kind
-    if kind == "ridge":
+    if spec.kind == "ridge":
         return [[float(value) for value in values[column]] for column in spec.columns]
     x = values[spec.columns[0]]
-    if kind == "pspline":
+    if spec.kind == "pspline":
         basis = _core.pspline_basis(
             [float(value) for value in x], spec.nterm, spec.degree, spec.boundary
         ).basis

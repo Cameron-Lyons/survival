@@ -1500,10 +1500,7 @@ def _fit_design_term(
         if factor_order is not None:
             factors = tuple(sorted(factors, key=factor_order.__getitem__))
         fitted = tuple(_fit_single_design_term(data, factor, n, full_data) for factor in factors)
-        if any(
-            isinstance(factor, _PenaltyDesignTerm) and factor.penalty is not None
-            for factor in fitted
-        ):
+        if any(isinstance(factor, _PenaltyDesignTerm) and factor.penalized for factor in fitted):
             raise ValueError("penalty terms cannot appear in interactions")
         return _InteractionDesignTerm(fitted)
     return _fit_single_design_term(data, term, n, full_data)
