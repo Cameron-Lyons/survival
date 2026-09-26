@@ -823,8 +823,9 @@ class SurvfitMultiStateResult:
     ``n_transition``, ``cumhaz`` and ``std_chaz`` the observed transitions ``hazard_names``
     (R's ``"from:to"`` column names).  ``p0`` has one row per curve and ``transitions`` is
     ``survcheck``'s table of observed transitions (from state x to state or censored), which
-    ``fit[, states]`` drops.  The rows of each ``influence_pstate`` array are named, as in R,
-    by the clusters' numbers ``1, 2, ...`` in order of first appearance.
+    ``fit[, states]`` drops, as it drops ``n_id`` from a fit without strata.  The rows of
+    each ``influence_pstate`` array are named, as in R, by the clusters' numbers ``1, 2, ...``
+    in order of first appearance.
     """
 
     n: list[int]
@@ -839,7 +840,7 @@ class SurvfitMultiStateResult:
     states: list[str]
     hazard_names: list[str]
     transitions: NamedMatrix | None
-    n_id: list[int]
+    n_id: list[int] | None
     type: str
     t0: float
     n_enter: list[list[float]] | None = None

@@ -1028,9 +1028,33 @@ def _engine_of(x: Any) -> Any:
     return x.engine
 
 
+@overload
 def _derived_survfit(
-    x: SurvfitResult | SurvfitMultiStateResult, engine: Any, *, time0: bool
-) -> Any:
+    x: SurvfitResult, engine: _core.SurvfitKMResult, *, time0: bool
+) -> SurvfitResult: ...
+
+
+@overload
+def _derived_survfit(
+    x: SurvfitMultiStateResult, engine: _core.SurvfitAJResult, *, time0: bool
+) -> SurvfitMultiStateResult: ...
+
+
+@overload
+def _derived_survfit(
+    x: SurvfitResult | SurvfitMultiStateResult,
+    engine: _core.SurvfitKMResult | _core.SurvfitAJResult,
+    *,
+    time0: bool,
+) -> SurvfitResult | SurvfitMultiStateResult: ...
+
+
+def _derived_survfit(
+    x: SurvfitResult | SurvfitMultiStateResult,
+    engine: _core.SurvfitKMResult | _core.SurvfitAJResult,
+    *,
+    time0: bool,
+) -> SurvfitResult | SurvfitMultiStateResult:
     """``x`` rebuilt from ``engine``, a subset or the ``survfit0`` of ``x.engine``.
 
     The call, model frame and ``se.fit`` carry over, and so do the parts the engine does not
@@ -1039,14 +1063,16 @@ def _derived_survfit(
     """
 
     se_fit = x.std_err is not None
-    if isinstance(x, SurvfitMultiStateResult):
+    if isinstance(x, SurvfitMultiStateResult) and isinstance(engine, _core.SurvfitAJResult):
         fit = _aj_result(engine, x.strata_names, x.call, x.model, se_fit, time0=time0)
         return dataclasses.replace(
             fit, n_id=None if x.n_id is None else fit.n_id, oldstate=x.oldstate
         )
-    influence = x.influence_surv or x.influence_chaz
-    clname = influence[0].clname if influence else None
-    return _km_result(engine, x.strata_names, x.call, x.model, se_fit, clname, time0=time0)
+    if isinstance(x, SurvfitResult) and isinstance(engine, _core.SurvfitKMResult):
+        influence = x.influence_surv or x.influence_chaz
+        clname = influence[0].clname if influence else None
+        return _km_result(engine, x.strata_names, x.call, x.model, se_fit, clname, time0=time0)
+    raise TypeError("the engine result does not belong to this kind of survfit object")
 
 
 def survfit0(x: Any, *args: Any, **kwargs: Any) -> SurvfitResult | SurvfitMultiStateResult:
