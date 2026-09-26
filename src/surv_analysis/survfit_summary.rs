@@ -880,19 +880,22 @@ pub fn summary_survfit_py(
     }
 }
 
-/// Python binding of [`quantile_survfit`]; `probs` defaults to the
-/// quartiles.
+/// Python binding of [`quantile_survfit_from`]; `probs` defaults to the
+/// quartiles and `start_time` (R's `x$start.time`) to 0.
 #[pyfunction(name = "quantile_survfit")]
-#[pyo3(signature = (fit, probs=None, conf_int=true, scale=1.0, tolerance=None))]
+#[pyo3(signature = (fit, probs=None, conf_int=true, scale=1.0, tolerance=None, start_time=0.0))]
 pub fn quantile_survfit_py(
     fit: &SurvfitKMResult,
     probs: Option<Vec<f64>>,
     conf_int: bool,
     scale: f64,
     tolerance: Option<f64>,
+    start_time: f64,
 ) -> PyResult<SurvfitQuantiles> {
     let probs = probs.unwrap_or_else(|| vec![0.25, 0.5, 0.75]);
-    Ok(quantile_survfit(fit, &probs, conf_int, scale, tolerance)?)
+    Ok(quantile_survfit_from(
+        fit, &probs, conf_int, start_time, scale, tolerance,
+    )?)
 }
 
 #[cfg(test)]

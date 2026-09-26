@@ -192,12 +192,14 @@ def test_rmean_of_a_start_time_km_fit_is_checked_against_its_first_time():
 
 
 def test_turnbull_fits_record_neither_start_time_nor_time0():
+    # R: survfit0(fit)$time is 0 1.5 2.5 4, survfitTurnbull keeping no t0
     data = {"l": [1, 2, None, 4], "r": [3, 4, 2, None]}
     fit = r.survfit("Surv(l, r, type = 'interval2') ~ 1", data, start_time=1, time0=True)
 
     assert not hasattr(fit, "start_time")
-    assert (fit.time0, fit.t0) == (False, 1.0)
+    assert (fit.time0, fit.t0) == (False, 0.0)
     _close(fit.time, [1.5, 2.5, 4])
+    _close(r.survfit0(fit).time, [0, 1.5, 2.5, 4])
 
 
 # ---------------------------------------------------------------------------

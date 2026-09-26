@@ -9147,6 +9147,28 @@ class SurvfitInfluence:
     def values(self) -> NDArray[np.float64]: ...
 
 class SurvfitKMResult:
+    @staticmethod
+    def from_stacked(
+        time: Sequence[float],
+        n_risk: Sequence[float],
+        n_event: Sequence[float],
+        surv: Sequence[float],
+        n: Sequence[int],
+        *,
+        strata: Sequence[int] | None = None,
+        n_id: Sequence[int] | None = None,
+        n_censor: Sequence[float] | None = None,
+        std_err: Sequence[float] | None = None,
+        cumhaz: Sequence[float] | None = None,
+        std_chaz: Sequence[float] | None = None,
+        lower: Sequence[float] | None = None,
+        upper: Sequence[float] | None = None,
+        logse: bool = True,
+        conf_int: float = 0.95,
+        conf_type: str = "log",
+        type: str = "right",
+        t0: float = 0.0,
+    ) -> SurvfitKMResult: ...
     def select_curves(self, curves: Sequence[int]) -> SurvfitKMResult: ...
     @property
     def conf_int(self) -> float: ...
@@ -10530,6 +10552,8 @@ class TurnbullResult:
     def conf_type(self) -> str: ...
     @property
     def curves(self) -> list[TurnbullCurve]: ...
+    @property
+    def fit(self) -> SurvfitKMResult: ...
 
 class TwoSidedCalibrationResult:
     @property
@@ -12906,6 +12930,7 @@ def quantile_survfit(
     conf_int: bool = True,
     scale: float = 1.0,
     tolerance: float | None = None,
+    start_time: float = 0.0,
 ) -> SurvfitQuantiles: ...
 def quantile_survfit_curves(
     time: Sequence[float],
@@ -13628,6 +13653,8 @@ def turnbull(
     conf_level: float = 0.95,
     conf_type: str = "log",
     timefix: bool = True,
+    se_fit: bool = True,
+    robust: bool | None = None,
 ) -> TurnbullResult: ...
 def two_sided_conformal_calibrate(
     time: Sequence[float],

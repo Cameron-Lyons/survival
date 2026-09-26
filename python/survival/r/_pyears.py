@@ -1202,7 +1202,7 @@ def survexp(
             )
         # survexp.cfit needs a curve for every data row: a row whose rate variables
         # the Cox model's terms make missing (log(-1)) is an error, not left out
-        curves, _ = _survfit_curves(
+        curves, _, _ = _survfit_curves(
             ratetable,
             mapped,
             individual=False,

@@ -765,7 +765,8 @@ class CoxSurvfitResult:
     ``time``/``n_risk``/``n_event``/``n_censor`` are the strata blocks laid end to end
     (``strata`` maps each block's name to its length, ``n`` is the size of each);
     ``surv``, ``cumhaz``, ``std_err``, ``std_chaz``, ``lower`` and ``upper`` are vectors
-    for one curve, or ``ntime x ncurve`` matrices (one column per ``newdata`` row).
+    for one curve, or ``ntime x ncurve`` matrices (one column per ``newdata`` row, named
+    by ``colnames``, R's ``colnames(fit$surv)``).
     """
 
     n: list[int]
@@ -786,6 +787,7 @@ class CoxSurvfitResult:
     conf_int: float | None = None
     start_time: float | None = None
     newdata: Any | None = None
+    colnames: list[str] | None = None
 
     @property
     def ncurve(self) -> int:
@@ -845,10 +847,11 @@ class SurvfitResult:
     ``std_err`` is the standard error of ``log(surv)`` when ``logse`` is true and of ``surv``
     otherwise (the robust variance); ``std_chaz`` is always that of ``cumhaz``.  ``model`` is
     the model frame of the call (R re-evaluates it through ``model.frame``) and ``engine`` the
-    Rust result the summary methods work from (absent for Turnbull curves, whose ``cumhaz``
-    and ``t0`` are the values R's ``survfit0`` derives).  As in R, a ``start.time`` shows only
-    as ``t0`` and ``time0`` marks a curve that already starts with its ``t0`` row, the result
-    of ``survfit0``.
+    Rust result the summary methods work from (for Turnbull curves, whose ``cumhaz``,
+    ``std_chaz`` and ``t0`` are the values R's ``survfit0`` derives, it holds the curves as
+    fitted).  As in R, a ``start.time`` of a Kaplan-Meier fit shows only as ``t0`` and
+    ``time0`` marks a curve that already starts with its ``t0`` row, the result of
+    ``survfit0``.
     """
 
     n: list[int]
@@ -949,7 +952,7 @@ class SummarySurvfitResult:
     n_risk: list[float] | list[list[float]]
     n_event: list[float] | list[list[float]]
     n_censor: list[float] | list[list[float]]
-    surv: list[float] | None
+    surv: list[float] | list[list[float]] | None
     cumhaz: list[float] | list[list[float]]
     strata: list[str] | None
     table: NamedMatrix

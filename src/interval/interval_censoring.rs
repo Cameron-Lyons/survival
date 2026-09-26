@@ -3,9 +3,11 @@
 
 use crate::data_prep::aeq_surv;
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::statistical::erf;
+use crate::internal::dist::pnorm;
 use crate::internal::validation::{validate_finite, validate_length};
-use crate::surv_analysis::{ConfType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+use crate::surv_analysis::{
+    ConfType, StackedCurves, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm,
+};
 use pyo3::prelude::*;
 
 type DistributionFn = fn(f64, f64, f64) -> f64;
@@ -90,8 +92,7 @@ fn lognormal_cdf(t: f64, mu: f64, sigma: f64) -> f64 {
     if t <= 0.0 || sigma <= 0.0 {
         return 0.0;
     }
-    let z = (t.ln() - mu) / sigma;
-    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
+    pnorm((t.ln() - mu) / sigma, true, false)
 }
 
 fn lognormal_pdf(t: f64, mu: f64, sigma: f64) -> f64 {
@@ -377,7 +378,10 @@ impl IntervalStatus {
 
 /// Inputs of [`turnbull`]: an interval-censored response (`time1`,
 /// `time2`, `status` in R's `interval` coding; `time2` is ignored unless
-/// `status == 3`), optional case weights and grouping.
+/// `status == 3`), optional case weights and grouping.  `se_fit` and
+/// `robust` are `survfitKM`'s: `robust = None` leaves the choice to R's
+/// rule, which turns the robust variance on for a curve whose
+/// pseudo-observation weights are not all integers.
 #[derive(Debug, Clone)]
 pub struct TurnbullInput<'a> {
     pub time1: &'a [f64],
@@ -391,11 +395,16 @@ pub struct TurnbullInput<'a> {
     pub conf_type: &'a str,
     /// Apply R's `aeqSurv` near-tie rounding to the times first.
     pub timefix: bool,
+    pub se_fit: bool,
+    pub robust: Option<bool>,
 }
 
 /// One curve of [`TurnbullResult`]: the fields of the `survfit` object.
-/// The standard error is the robust (infinitesimal jackknife) one of
-/// `surv`, like R's `std.err` for a `survfitKM` fit with `robust = TRUE`.
+/// `std_err` is the one `survfitKM` reports for the final EM step, which
+/// `survfitTurnbull` keeps as it is: the standard error of `surv` under the
+/// robust (infinitesimal jackknife) variance and of `log(surv)` otherwise.
+/// `std_err` is empty without `se_fit`, and so are the limits without
+/// `se_fit` or with `conf_type = "none"`.
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct TurnbullCurve {
@@ -413,12 +422,15 @@ pub struct TurnbullCurve {
 }
 
 /// R's `survfit` object for interval-censored data (`type = "interval"`).
+/// `fit` holds the curves stacked as `survfit0`, `summary.survfit` and
+/// `quantile.survfit` read them.
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct TurnbullResult {
     pub curves: Vec<TurnbullCurve>,
     pub conf_type: String,
     pub conf_int: f64,
+    pub fit: SurvfitKMResult,
 }
 
 /// Convergence criterion of R's EM loop (`while (eps > .00005)`).
@@ -473,15 +485,16 @@ fn turnbull_jump_points(
     (jtimes, mintime)
 }
 
-/// The EM of R's `survfitTurnbull` `doit` function for one curve.
+/// The EM of R's `survfitTurnbull` `doit` function for one curve;
+/// `final_fit` holds the `survfitKM` arguments of the last EM step, the
+/// one whose standard errors and limits the curve reports.
 fn turnbull_curve(
     time1: &[f64],
     time2: &[f64],
     status: &[IntervalStatus],
     weights: &[f64],
     group: i32,
-    conf_level: f64,
-    conf_type: ConfType,
+    final_fit: &SurvfitKMOptions,
 ) -> SurvivalResult<TurnbullCurve> {
     let n = time1.len();
     let mut status = status.to_vec();
@@ -507,10 +520,7 @@ fn turnbull_curve(
         .map(|&i| i32::from(status[i] == IntervalStatus::Exact))
         .collect();
     fit_status.extend(std::iter::repeat_n(1, njump));
-    // survfitKM(..., robust = TRUE) without a cluster: every observation
-    // is its own cluster for the infinitesimal-jackknife variance.
-    let cluster: Vec<i64> = (0..fit_time.len() as i64).collect();
-    let fit_data = |fit_weights: Vec<f64>, cluster: Option<Vec<i64>>| {
+    let fit_data = |fit_weights: Vec<f64>| {
         SurvfitKMData::try_new(
             None,
             fit_time.clone(),
@@ -518,7 +528,7 @@ fn turnbull_curve(
             Some(fit_weights),
             None,
             None,
-            cluster,
+            None,
         )
     };
 
@@ -621,7 +631,7 @@ fn turnbull_curve(
         fit_weights.extend_from_slice(&wt2);
         // R's doit builds tempy without aeqSurv, so times compare exactly.
         let km = survfitkm(
-            &fit_data(fit_weights.clone(), None)?,
+            &fit_data(fit_weights.clone())?,
             &SurvfitKMOptions {
                 se_fit: false,
                 timefix: false,
@@ -647,18 +657,7 @@ fn turnbull_curve(
     let Some(fit_weights) = last_weights else {
         unreachable!("the EM runs at least once");
     };
-    // Final curve with R's robust (infinitesimal jackknife) standard
-    // errors: survfitTurnbull calls survfitKM with robust = TRUE.
-    let km = survfitkm(
-        &fit_data(fit_weights.clone(), Some(cluster))?,
-        &SurvfitKMOptions {
-            conf_int: conf_level,
-            conf_type,
-            robust: Some(true),
-            timefix: false,
-            ..SurvfitKMOptions::default()
-        },
-    )?;
+    let km = survfitkm(&fit_data(fit_weights.clone())?, final_fit)?;
     let mut curve = with_zero_weight_times(&km, &fit_time, &fit_weights);
     for (i, &t) in curve.time.iter().enumerate() {
         if t < mintime && curve.n_event[i] > 0.0 {
@@ -700,7 +699,8 @@ fn with_zero_weight_times(
     let mut unique_times = fit_time.to_vec();
     unique_times.sort_by(f64::total_cmp);
     unique_times.dedup();
-    let std_err = km.std_err_surv_scale().unwrap_or_default();
+    let has_se = km.std_err.is_some();
+    let std_err = km.std_err.clone().unwrap_or_default();
     let has_limits = km.lower.is_some() && km.upper.is_some();
     let (lower, upper) = (
         km.lower.clone().unwrap_or_default(),
@@ -715,7 +715,7 @@ fn with_zero_weight_times(
         n_event: Vec::with_capacity(n_times),
         n_censor: Vec::with_capacity(n_times),
         surv: Vec::with_capacity(n_times),
-        std_err: Vec::with_capacity(n_times),
+        std_err: Vec::with_capacity(if has_se { n_times } else { 0 }),
         lower: Vec::with_capacity(if has_limits { n_times } else { 0 }),
         upper: Vec::with_capacity(if has_limits { n_times } else { 0 }),
         iterations: 0,
@@ -728,7 +728,9 @@ fn with_zero_weight_times(
             curve.n_event.push(km.n_event[next]);
             curve.n_censor.push(km.n_censor[next]);
             curve.surv.push(km.surv[next]);
-            curve.std_err.push(std_err[next]);
+            if has_se {
+                curve.std_err.push(std_err[next]);
+            }
             if has_limits {
                 curve.lower.push(lower[next]);
                 curve.upper.push(upper[next]);
@@ -742,9 +744,11 @@ fn with_zero_weight_times(
             curve.n_event.push(0.0);
             curve.n_censor.push(0.0);
             curve.surv.push(curve.surv.last().copied().unwrap_or(1.0));
-            curve
-                .std_err
-                .push(curve.std_err.last().copied().unwrap_or(0.0));
+            if has_se {
+                curve
+                    .std_err
+                    .push(curve.std_err.last().copied().unwrap_or(0.0));
+            }
             if has_limits {
                 curve.lower.push(curve.lower.last().copied().unwrap_or(1.0));
                 curve.upper.push(curve.upper.last().copied().unwrap_or(1.0));
@@ -840,6 +844,16 @@ pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
     let mut labels: Vec<i32> = input.group.map_or_else(|| vec![1], <[i32]>::to_vec);
     labels.sort_unstable();
     labels.dedup();
+    // doit's survfitKM calls get `se.fit`, `conf.int`, `conf.type` and,
+    // through `...`, `robust`; tempy is built without aeqSurv.
+    let final_fit = SurvfitKMOptions {
+        se_fit: input.se_fit,
+        conf_int: input.conf_level,
+        conf_type,
+        robust: input.robust,
+        timefix: false,
+        ..SurvfitKMOptions::default()
+    };
     let curves = labels
         .iter()
         .map(|&label| {
@@ -852,23 +866,67 @@ pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
                 &rows.iter().map(|&i| status[i]).collect::<Vec<_>>(),
                 &rows.iter().map(|&i| weights[i]).collect::<Vec<_>>(),
                 label,
-                input.conf_level,
-                conf_type,
+                &final_fit,
             )
         })
         .collect::<SurvivalResult<Vec<_>>>()?;
+    let fit = stacked_fit(&curves, input.conf_level, conf_type, input.se_fit)?;
     Ok(TurnbullResult {
         curves,
         conf_type: conf_type.as_str().to_string(),
         conf_int: input.conf_level,
+        fit,
+    })
+}
+
+/// The curves as one `survfit` object, as `survfitTurnbull` stacks them
+/// (`strata` only for more than one curve), with what R's summaries assume
+/// of an object that has no `logse`, `cumhaz` or `t0`: `logse = TRUE`
+/// whatever variance `std_err` comes from, and the `cumhaz = -log(surv)`,
+/// `std.chaz = std.err` and `t0 = min(0, time)` that `survfit0` fills in.
+fn stacked_fit(
+    curves: &[TurnbullCurve],
+    conf_level: f64,
+    conf_type: ConfType,
+    se_fit: bool,
+) -> SurvivalResult<SurvfitKMResult> {
+    let stack = |field: fn(&TurnbullCurve) -> &Vec<f64>| -> Vec<f64> {
+        curves
+            .iter()
+            .flat_map(|curve| field(curve).iter().copied())
+            .collect()
+    };
+    let time = stack(|curve| &curve.time);
+    let std_err = se_fit.then(|| stack(|curve| &curve.std_err));
+    let with_limits = se_fit && conf_type != ConfType::None;
+    let t0 = time.iter().copied().fold(0.0, f64::min);
+    SurvfitKMResult::from_stacked(StackedCurves {
+        n_censor: Some(stack(|curve| &curve.n_censor)),
+        std_chaz: std_err.clone(),
+        std_err,
+        lower: with_limits.then(|| stack(|curve| &curve.lower)),
+        upper: with_limits.then(|| stack(|curve| &curve.upper)),
+        conf_int: conf_level,
+        conf_type: conf_type.as_str().to_string(),
+        type_: "interval".to_string(),
+        t0,
+        ..StackedCurves::new(
+            time,
+            stack(|curve| &curve.n_risk),
+            stack(|curve| &curve.n_event),
+            stack(|curve| &curve.surv),
+            (curves.len() > 1).then(|| curves.iter().map(|curve| curve.time.len()).collect()),
+            curves.iter().map(|curve| curve.n).collect(),
+        )
     })
 }
 
 /// Python entry point: `turnbull(time1, time2, status, weights=None,
-/// group=None, conf_level=0.95, conf_type="log", timefix=True)`; `status`
-/// uses R's `interval` coding (0 right, 1 exact, 2 left, 3 interval).
+/// group=None, conf_level=0.95, conf_type="log", timefix=True,
+/// se_fit=True, robust=None)`; `status` uses R's `interval` coding (0
+/// right, 1 exact, 2 left, 3 interval).
 #[pyfunction(name = "turnbull")]
-#[pyo3(signature = (time1, time2, status, weights=None, group=None, conf_level=0.95, conf_type="log", timefix=true))]
+#[pyo3(signature = (time1, time2, status, weights=None, group=None, conf_level=0.95, conf_type="log", timefix=true, se_fit=true, robust=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn turnbull_py(
     py: Python<'_>,
@@ -880,6 +938,8 @@ pub fn turnbull_py(
     conf_level: f64,
     conf_type: &str,
     timefix: bool,
+    se_fit: bool,
+    robust: Option<bool>,
 ) -> PyResult<TurnbullResult> {
     Ok(py.detach(|| {
         turnbull(&TurnbullInput {
@@ -891,6 +951,8 @@ pub fn turnbull_py(
             conf_level,
             conf_type,
             timefix,
+            se_fit,
+            robust,
         })
     })?)
 }
@@ -976,6 +1038,8 @@ mod tests {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         })
         .unwrap();
         let curve = &result.curves[0];
@@ -1011,6 +1075,8 @@ mod tests {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         })
         .unwrap();
         assert_eq!(result.curves.len(), 2);
@@ -1020,6 +1086,142 @@ mod tests {
         for (actual, expected) in result.curves[0].surv.iter().zip(expected) {
             assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
         }
+    }
+
+    /// `Surv(l, r, type = "interval2")` with l = c(1,2,3,4,5,6,2,7),
+    /// r = c(1,NA,3,6,5,8,4,NA) in the `interval` coding.
+    fn eight_rows(robust: Option<bool>) -> TurnbullResult {
+        let nan = f64::NAN;
+        turnbull(&TurnbullInput {
+            time1: &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 2.0, 7.0],
+            time2: &[nan, nan, nan, 6.0, nan, 8.0, 4.0, nan],
+            status: &[1, 0, 1, 3, 1, 3, 3, 0],
+            weights: None,
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+            se_fit: true,
+            robust,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn robust_follows_survfit_km() {
+        // R: survfit(Surv(l, r, type = "interval2") ~ 1, d, robust = ...)$std.err;
+        // the default is robust here, as the pseudo-weights are fractional
+        let robust = [
+            0.116925805875275,
+            0.116925805875275,
+            0.185546918046783,
+            0.185546918544061,
+            0.172840380546378,
+            0.172840379860608,
+            0.172840379860608,
+            0.0,
+        ];
+        for fit in [eight_rows(None), eight_rows(Some(true))] {
+            assert_close(&fit.curves[0].std_err, &robust, 1e-6, "robust std.err");
+        }
+        let plain = eight_rows(Some(false));
+        let std_err = &plain.curves[0].std_err;
+        assert_close(
+            &std_err[..7],
+            &[
+                0.133630620956212,
+                0.133630620956212,
+                0.318081270529207,
+                0.318104505140176,
+                0.592563375150846,
+                0.592613260221602,
+                0.592613260221602,
+            ],
+            1e-6,
+            "std.err of log(surv)",
+        );
+        assert_eq!(std_err[7], f64::INFINITY);
+        assert!(plain.curves[0].lower[7].is_nan());
+        assert_close(
+            &plain.curves[0].lower[..2],
+            &[0.673381936505955, 0.673381936505955],
+            1e-6,
+            "lower",
+        );
+
+        // l = c(1,2,3,5), r = c(NA,NA,3,NA): the pseudo-weights are integers,
+        // so R's default is the Greenwood variance
+        let integer = |robust| {
+            turnbull(&TurnbullInput {
+                time1: &[1.0, 2.0, 3.0, 5.0],
+                time2: &[f64::NAN; 4],
+                status: &[0, 0, 1, 0],
+                weights: None,
+                group: None,
+                conf_level: 0.95,
+                conf_type: "log",
+                timefix: true,
+                se_fit: true,
+                robust,
+            })
+            .unwrap()
+            .curves[0]
+                .std_err
+                .clone()
+        };
+        let greenwood = 0.816496580927726;
+        assert_close(
+            &integer(None),
+            &[0.0, 0.0, greenwood, greenwood],
+            1e-12,
+            "default",
+        );
+        let jackknife = 0.272165526975909;
+        assert_close(
+            &integer(Some(true)),
+            &[0.0, 0.0, jackknife, jackknife],
+            1e-12,
+            "robust",
+        );
+    }
+
+    #[test]
+    fn the_stacked_fit_is_what_survfit0_and_summary_read() {
+        let result = eight_rows(None);
+        let fit = &result.fit;
+        let curve = &result.curves[0];
+        assert_eq!((fit.strata.as_ref(), fit.n.as_slice()), (None, &[8][..]));
+        assert_eq!(
+            (fit.type_.as_str(), fit.t0, fit.logse),
+            ("interval", 0.0, true)
+        );
+        assert_eq!(fit.time, curve.time);
+        assert_eq!(fit.std_err.as_ref(), Some(&curve.std_err));
+        assert_eq!(fit.std_chaz, fit.std_err);
+        let cumhaz: Vec<f64> = curve.surv.iter().map(|s| -s.ln()).collect();
+        assert_eq!(fit.cumhaz, cumhaz);
+
+        let (time1, time2, status) = synthetic_interval();
+        let group = vec![1, 2, 1, 2, 1, 2, 1, 2, 1, 2];
+        let grouped = turnbull(&TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &status,
+            weights: None,
+            group: Some(&group),
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: true,
+            se_fit: false,
+            robust: None,
+        })
+        .unwrap();
+        let sizes: Vec<usize> = grouped.curves.iter().map(|c| c.time.len()).collect();
+        assert_eq!(grouped.fit.strata, Some(sizes));
+        assert_eq!(grouped.fit.n, vec![5, 5]);
+        assert!(grouped.curves.iter().all(|c| c.std_err.is_empty()));
+        assert!(grouped.fit.std_err.is_none() && grouped.fit.std_chaz.is_none());
+        assert!(grouped.fit.lower.is_none() && grouped.fit.upper.is_none());
     }
 
     fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64, what: &str) {
@@ -1052,6 +1254,8 @@ mod tests {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         })
         .unwrap();
         let curve = &result.curves[0];
@@ -1137,6 +1341,8 @@ mod tests {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         })
         .unwrap();
         let curve = &result.curves[0];
@@ -1217,6 +1423,8 @@ mod tests {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         });
         assert!(bad_code.is_err());
         let reversed = turnbull(&TurnbullInput {
@@ -1228,6 +1436,8 @@ mod tests {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         });
         assert!(reversed.is_err());
     }

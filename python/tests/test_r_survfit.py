@@ -444,9 +444,19 @@ def test_survfit_interval_censored_uses_turnbull():
     assert fit.strata is None
     _close(fit.time, [1.5, 2.5, 4.0])
     _close(fit.surv, [0.625, 0.25, 0.25])
-    assert fit.engine is None
-    with pytest.raises(NotImplementedError, match="interval-censored"):
-        r.survfit0(fit)
+    # R: survfit0, quantile and summary of the same fit
+    fit0 = r.survfit0(fit)
+    _close(fit0.time, [0.0, 1.5, 2.5, 4.0])
+    _close(fit0.surv, [1.0, 0.625, 0.25, 0.25])
+    _close(fit0.std_err, [0.0, 0.288956906389171, 0.229639663385923, 0.229639663385923])
+    quantiles = r.quantile_survfit(fit)
+    assert quantiles.quantile == [[1.5, 2.5, 3.25]]
+    assert quantiles.lower == [[1.5, 1.5, 2.5]]
+    assert all(math.isnan(value) for value in quantiles.upper[0])
+    _close(r.summary_survfit(fit, times=3).surv, [0.25])
+    table = r.summary_survfit(fit).table.values[0]
+    _close(table[:8], [4, 4, 4, 3, 2.5, 0.484122918275927, 2.5, 1.5])
+    assert math.isnan(table[8])
 
 
 # ---------------------------------------------------------------------------

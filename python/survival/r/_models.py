@@ -451,19 +451,11 @@ def _bare_strata_label(name: str) -> str:
 
 
 def _survfit_stratum(
-    result: SurvfitResult | SurvfitMultiStateResult, index: int, rows: slice
+    result: SurvfitResult | SurvfitMultiStateResult, index: int
 ) -> SurvfitResult | SurvfitMultiStateResult:
-    """Curve ``index`` (its ``rows``) of ``result`` as its own unstratified result."""
+    """Curve ``index`` of ``result`` as its own unstratified result."""
 
-    if result.engine is not None:
-        return _derived_survfit(result, result.engine.select_curves([index]), time0=result.time0)
-    # a Turnbull fit has no engine: take the curve's rows of every per-time field
-    changes: dict[str, Any] = {"strata": None, "n": [result.n[index]]}
-    for field in dataclasses.fields(result):
-        value = getattr(result, field.name)
-        if field.name not in changes and isinstance(value, list) and len(value) == len(result.time):
-            changes[field.name] = value[rows]
-    return dataclasses.replace(result, **changes)
+    return _derived_survfit(result, _engine_of(result).select_curves([index]), time0=result.time0)
 
 
 def _survfit_strata_curves(result: Any) -> Any:
@@ -476,14 +468,10 @@ def _survfit_strata_curves(result: Any) -> Any:
 
     if not isinstance(result, SurvfitResult | SurvfitMultiStateResult) or not result.strata:
         return result
-    curves: dict[str, Any] = {}
-    start = 0
-    for index, (name, count) in enumerate(result.strata.items()):
-        curves[_bare_strata_label(name)] = _survfit_stratum(
-            result, index, slice(start, start + count)
-        )
-        start += count
-    return curves
+    return {
+        _bare_strata_label(name): _survfit_stratum(result, index)
+        for index, name in enumerate(result.strata)
+    }
 
 
 def _subset_survfit_multistate(

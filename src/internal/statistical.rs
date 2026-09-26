@@ -16,12 +16,6 @@ pub(crate) fn probit(p: f64) -> f64 {
     normal_inverse_cdf(p)
 }
 
-/// Error function, `erf(x) = 2 pnorm(x sqrt 2) - 1`.
-#[inline]
-pub(crate) fn erf(x: f64) -> f64 {
-    crate::internal::dist::erf(x)
-}
-
 /// Complementary error function, `erfc(x) = 2 pnorm(x sqrt 2, lower = FALSE)`.
 #[inline]
 pub(crate) fn erfc(x: f64) -> f64 {
@@ -356,6 +350,7 @@ mod tests {
     #[test]
     #[allow(clippy::excessive_precision)]
     fn erf_helpers_match_reference_values() {
+        use crate::internal::dist::erf;
         // R: 2 * pnorm(x * sqrt(2)) - 1 and 2 * pnorm(x * sqrt(2), lower = FALSE),
         // erf(3) against its true value 0.99997790950300141456...; erf(1e-8) is
         // compared with 2/sqrt(pi) * 1e-8, which R's own expression cannot
