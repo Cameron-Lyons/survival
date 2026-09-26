@@ -185,6 +185,26 @@ def test_formula_without_variables_keeps_the_row_count(lung):
     assert expected.n_risk == [134.0] * 3
 
 
+def test_pyears_breaks_named_by_a_column_are_not_subset():
+    # R evaluates tcut(age, brk) on the whole data frame before subset and na.omit
+    data = {
+        "time": [100, 400, 900, 300, 200],
+        "status": [1, 0, 1, 1, 0],
+        "age": [60 * 365.25, 70 * 365.25, 65 * 365.25, 80 * 365.25, 50 * 365.25],
+        "sex": [1, 2, 1, None, 2],
+        "brk": [0, 55 * 365.25, 65 * 365.25, 75 * 365.25, 100 * 365.25],
+    }
+    # pyears(Surv(time, status) ~ sex + tcut(age, brk), d, scale = 1)
+    table = r.pyears("Surv(time, status) ~ sex + tcut(age, brk)", data, scale=1)
+    assert table.pyears == [[0.0, 100.0, 900.0, 0.0], [200.0, 0.0, 400.0, 0.0]]
+    # pyears(Surv(time, status) ~ tcut(age, brk), d, scale = 1, subset = 1:3)
+    table = r.pyears("Surv(time, status) ~ tcut(age, brk)", data, scale=1, subset=[0, 1, 2])
+    assert table.pyears == [0.0, 100.0, 1300.0, 0.0]
+    # pyears(Surv(time, status) ~ cut(age, brk), d, scale = 1, subset = 1:3)
+    table = r.pyears("Surv(time, status) ~ cut(age, brk)", data, scale=1, subset=[0, 1, 2])
+    assert table.pyears == [0.0, 1000.0, 400.0, 0.0]
+
+
 def test_polars_frames_with_missing_values_and_subset(lung):
     pl = pytest.importorskip("polars")
     frame = pl.DataFrame(lung)
