@@ -383,7 +383,7 @@ def test_signif_rounds_halfway_cases_like_r():
 
 def _summary_row(summary: dict[str, Any], name: str) -> list[float]:
     row = next(row for row in summary["coefficients"] if row["name"] == name)
-    return [row["value"], row["se"], row["z"], row["p"]]
+    return [row["coef"], row["se"], row["z"], row["p"]]
 
 
 def test_summary(f_ps, f_strata, f_fixed, lung):
@@ -420,7 +420,7 @@ def test_summary(f_ps, f_strata, f_fixed, lung):
     robust = r.model_summary(r.survreg(S + "ridge(age, sex, theta = 1)", lung, robust=True))
     row = robust["coefficients"][1]
     assert row["name"] == "ridge(age)"
-    assert [row["value"], row["se"], row["naive_se"], row["z"], row["p"]] == approx(
+    assert [row["coef"], row["se"], row["naive_se"], row["z"], row["p"]] == approx(
         [-0.0122117247372104, 0.00733358364618504, 0.00694129170709535, -1.66517835295477,
          0.0958771783686467]
     )  # fmt: skip

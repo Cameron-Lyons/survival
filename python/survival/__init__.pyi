@@ -269,9 +269,6 @@ from .r import (
     survexp as survexp,
 )
 from .r import (
-    survexp_individual as survexp_individual,
-)
-from .r import (
     survexp_mn as survexp_mn,
 )
 from .r import (
@@ -291,12 +288,6 @@ from .r import (
 )
 from .r import (
     survfit_residuals as survfit_residuals,
-)
-from .r import (
-    survfitkm_counting_influence as survfitkm_counting_influence,
-)
-from .r import (
-    survfitkm_influence as survfitkm_influence,
 )
 from .r import (
     survobrien as survobrien,

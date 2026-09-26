@@ -1426,10 +1426,8 @@ def model_summary_survreg(fit: SurvregModelResult, correlation: Any = False) -> 
         row: dict[str, float | str] = {
             "name": names[idx],
             "coef": value,
-            "value": value,
             "se": standard_error,
             "naive_se": naive_standard_error,
-            "statistic": statistic,
             "z": statistic,
             "p": _normal_two_sided_p_value(statistic),
         }

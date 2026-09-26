@@ -92,7 +92,6 @@ from ._pyears import (
     ratetableDate,
     summary_pyears,
     survexp,
-    survexp_individual,
     survexp_mn,
     survexp_us,
     survexp_usr,
@@ -110,14 +109,11 @@ from ._surv import (
 from ._survdiff import survdiff
 from ._survfit import (
     aggregate_survfit,
-    aggregate_survfit_result,
     quantile_survfit,
     summary_survfit,
     survfit,
     survfit0,
     survfit_confint,
-    survfitkm_counting_influence,
-    survfitkm_influence,
 )
 from ._survfit_residuals import pseudo, survfit_residuals
 from ._survpenal_print import SurvregPenalPrint, print_survreg_penal
@@ -239,7 +235,6 @@ __all__ = [
     "basehaz",
     "anova",
     "aggregate_survfit",
-    "aggregate_survfit_result",
     "brier",
     "bcloglog",
     "coef",
@@ -310,7 +305,6 @@ __all__ = [
     "survcondense",
     "survcheck",
     "survexp",
-    "survexp_individual",
     "survexp_mn",
     "survobrien",
     "survexp_us",
@@ -321,8 +315,6 @@ __all__ = [
     "survfit0",
     "survfit_confint",
     "survfit_residuals",
-    "survfitkm_counting_influence",
-    "survfitkm_influence",
     "survSplit",
     "survreg",
     "survreg_control",

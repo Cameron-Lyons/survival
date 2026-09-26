@@ -11,7 +11,6 @@ from __future__ import annotations
 import math
 import warnings
 
-import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
@@ -594,8 +593,6 @@ def test_aggregate_survfit_averages_the_data_margin():
     _close(grouped.surv[0], [0.9, 0.7])
     named = r.aggregate_survfit(curves, by={"g": ["x", "y", "y"]}, FUN="median")
     _close(named.surv[1], [0.8, 0.5])
-    bridge = r.aggregate_survfit_result(curves, groups=[1, 2, 2])
-    assert bridge.surv == r.aggregate_survfit(curves, by=[1, 2, 2]).surv
     with pytest.raises(ValueError, match="arguments must have the same length"):
         r.aggregate_survfit(curves, by=[1, 2])
     with pytest.raises(ValueError, match="does not have a 'data' margin"):
@@ -617,26 +614,6 @@ def test_survfit_confint_matches_r():
         r.survfit_confint([0.9], [0.1], conf_type="none")
     with pytest.raises(ValueError, match="confidence intervals must be between 0 and 1"):
         r.survfit_confint([0.9], [0.1], conf_type="log", conf_int=2)
-
-
-def test_survfitkm_influence_helpers_return_cluster_by_time_matrices():
-    data = _toy_data()
-    cluster = [1, 1, 2, 2, 3, 3, 4, 4]
-    influence = r.survfitkm_influence(data["time"], data["status"], cluster=cluster)
-    fit = r.survfit("Surv(time, status) ~ 1", data, cluster=cluster, influence=True)
-
-    np.testing.assert_array_equal(influence.influence_surv, fit.influence_surv[0].values)
-    assert len(influence.influence_chaz) == 4
-    counting = _counting_data()
-    with_curve = r.survfitkm_counting_influence(
-        counting["start"],
-        counting["stop"],
-        counting["status"],
-        cluster=counting["id"],
-        curve_time=[1.0],
-        curve_estimate=[1.0],
-    )
-    assert len(with_curve.influence_surv) == 4
 
 
 def test_survfit_dispatches_cox_fits_to_the_cox_module():

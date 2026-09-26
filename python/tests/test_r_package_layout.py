@@ -48,7 +48,7 @@ def test_r_bridge_exports_core_survival_entry_points():
 
     assert {
         "Surv",
-        "Surv2data",
+        "Surv2",
         "aareg",
         "aeqSurv",
         "agexact.fit",

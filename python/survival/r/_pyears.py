@@ -1272,16 +1272,3 @@ def survexp(
     if method_value.startswith("individual"):
         return [row[0] for row in result.surv]
     return _survexp_result(result, levels, mf.n)
-
-
-def survexp_individual(
-    time: Any,
-    age: Any,
-    year: Any,
-    ratetable: Any | None = None,
-    sex: Any | None = None,
-) -> list[float]:
-    """Per-subject expected survival (``survexp(..., cohort = FALSE)``) from vectors."""
-
-    values = survexp(time=time, age=age, year=year, sex=sex, ratetable=ratetable, cohort=False)
-    return [float(value) for value in values]
