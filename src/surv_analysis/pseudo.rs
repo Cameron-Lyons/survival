@@ -8,7 +8,7 @@
 //! curve, `dS(t) / dw_i`; the pseudo value is `n * S(t) - (n - 1) *
 //! S_{-i}(t)`, which the IJ approximates as `S(t) + n * dS(t) / dw_i`.
 
-use super::survfit_summary::{RmeanOption, summary_survfit_times, survfit0, survmean};
+use super::survfit_summary::{RmeanOption, summary_survfit_times, survfit0_with, survmean};
 use super::survfitaj::{
     AJPrepared, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, aj_prepare, survfitaj,
 };
@@ -516,7 +516,7 @@ pub fn pseudo(
                 .collect()
         }
         ResidualType::Auc => {
-            let fit0 = survfit0(&fit);
+            let fit0 = survfit0_with(&fit, false);
             let mut yhat = Vec::with_capacity(times.len());
             for &t in times {
                 let table = survmean(&fit0, 1.0, RmeanOption::At(t))?;

@@ -485,6 +485,30 @@ pub(crate) fn extract_optional_vec_f64(
     obj.map(extract_vec_f64).transpose()
 }
 
+/// A read-only NumPy view of `array` whose base object is `owner`: how a
+/// `#[pyclass]` getter hands Python a large array the class holds without
+/// copying it.  NumPy refuses to make the view writeable again, since it
+/// does not own the data.
+///
+/// # Safety
+///
+/// `array` must be owned by `owner` (directly or through an `Arc` it
+/// holds), and must not be mutated or reallocated while `owner` is alive;
+/// a `frozen` class that never hands out `&mut` access to it guarantees
+/// both.
+#[cfg(feature = "python")]
+pub(crate) unsafe fn readonly_view<'py, D: ndarray::Dimension>(
+    array: &ndarray::Array<f64, D>,
+    owner: &pyo3::Bound<'py, pyo3::PyAny>,
+) -> pyo3::Bound<'py, numpy::PyArray<f64, D>> {
+    use numpy::{PyArray, PyArrayMethods};
+    // SAFETY: the caller guarantees that `owner`, which becomes the view's
+    // base object, keeps `array` alive and unchanged for the view's lifetime.
+    let view = unsafe { PyArray::borrow_from_array(array, owner.clone()) };
+    view.readwrite().make_nonwriteable();
+    view
+}
+
 #[cfg(not(feature = "python"))]
 fn unavailable<T>(what: &str) -> pyo3::PyResult<T> {
     Err(pyo3::exceptions::PyTypeError::new_err(format!(

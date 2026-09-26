@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import warnings
 
+import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
@@ -343,8 +344,7 @@ def test_survfit_influence_returns_one_matrix_per_curve():
     assert fit.logse is False
     assert len(fit.influence_surv) == 2
     assert len(fit.influence_chaz) == 2
-    assert len(fit.influence_surv[0].values) == 4
-    assert len(fit.influence_surv[0].values[0]) == 4
+    assert fit.influence_surv[0].values.shape == (4, 4)
     only_chaz = r.survfit("Surv(time, status) ~ 1", data, influence=2)
     assert only_chaz.influence_surv is None
     assert only_chaz.influence_chaz is not None
@@ -615,7 +615,7 @@ def test_survfitkm_influence_helpers_return_cluster_by_time_matrices():
     influence = r.survfitkm_influence(data["time"], data["status"], cluster=cluster)
     fit = r.survfit("Surv(time, status) ~ 1", data, cluster=cluster, influence=True)
 
-    assert influence.influence_surv == fit.influence_surv[0].values
+    np.testing.assert_array_equal(influence.influence_surv, fit.influence_surv[0].values)
     assert len(influence.influence_chaz) == 4
     counting = _counting_data()
     with_curve = r.survfitkm_counting_influence(

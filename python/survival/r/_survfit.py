@@ -69,7 +69,9 @@ from ._types import (
 )
 
 if TYPE_CHECKING:
+    import numpy as np
     from _typeshed import DataclassInstance
+    from numpy.typing import NDArray
 
 _CONF_TYPES = ("log", "log-log", "plain", "none", "logit", "arcsin")
 _CONF_LOWER = ("usual", "peto", "modified")
@@ -1172,7 +1174,8 @@ def summary_survfit(
             states=object.states,
             n_transition=rows.n_transition,
         )
-    table = _core.survmean(_core.survfit0(engine), scale, rmean_option)
+    # survmean's table of survfit0(fit), which R's summary reads, is that of the fit itself
+    table = _core.survmean(engine, scale, rmean_option)
     if times is None:
         rows = _core.summary_survfit(engine, censored=censored)
     else:
@@ -1420,8 +1423,8 @@ def survfit_confint(
 class SurvfitKMInfluence:
     """The per-cluster influence on ``surv`` and on ``cumhaz`` (rows clusters, columns times)."""
 
-    influence_surv: list[list[float]]
-    influence_chaz: list[list[float]]
+    influence_surv: NDArray[np.float64]
+    influence_chaz: NDArray[np.float64]
 
 
 def _influence_matrices(engine: _core.SurvfitKMResult) -> SurvfitKMInfluence:

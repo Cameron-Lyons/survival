@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any
 from .. import _survival as _core
 
 if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
     from ._surv import Surv
 
 
@@ -798,7 +801,7 @@ class SurvfitInfluenceMatrix:
     Like ``survfitKM``, which names the rows ``clname[clusterid]``, it holds the engine's
     ``survival.surv_analysis.SurvfitInfluence`` (0-based cluster codes) and ``clname``, the
     levels every curve of the fit shares, or ``None`` when the engine's labels are already
-    the observation numbers.  The Rust matrix becomes Python lists only when it is read.
+    the observation numbers.  ``values`` is a read-only NumPy view of the engine's matrix.
     """
 
     influence: _core.SurvfitInfluence
@@ -810,7 +813,7 @@ class SurvfitInfluenceMatrix:
         return codes if self.clname is None else [self.clname[code] for code in codes]
 
     @property
-    def values(self) -> list[list[float]]:
+    def values(self) -> NDArray[np.float64]:
         return self.influence.values
 
 

@@ -11,14 +11,17 @@
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::error::{SurvivalError, SurvivalResult};
+#[cfg(feature = "python")]
+use crate::internal::numpy_utils::readonly_view;
 use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
     validate_non_negative,
 };
-use ndarray::Array2;
+use ndarray::{Array2, ShapeBuilder};
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 mod robust;
 
@@ -254,18 +257,33 @@ impl SurvfitCounts {
     }
 }
 
-/// One curve's influence matrix: `values[k][t]` is the influence of cluster
-/// `cluster[k]` on the estimate at the curve's `t`-th time.  The labels are
-/// R's row names `clname`: the `cluster` (else `id`) value of the cluster,
-/// or the observation number 1, 2, ... when the observations are the
-/// clusters.
+/// One curve's influence matrix: `values[[k, t]]` is the influence of
+/// cluster `cluster[k]` on the estimate at the curve's `t`-th time.  The
+/// labels are R's row names `clname`: the `cluster` (else `id`) value of the
+/// cluster, or the observation number 1, 2, ... when the observations are
+/// the clusters.
+///
+/// The matrix is column-major, one contiguous column per time as
+/// `survfitkm.c` writes it (R's layout), and shared: clones of the fit and
+/// the NumPy array Python reads (a read-only view) do not copy it.
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(frozen, from_py_object)]
 pub struct SurvfitInfluence {
     #[pyo3(get)]
     pub cluster: Vec<i64>,
-    #[pyo3(get)]
-    pub values: Vec<Vec<f64>>,
+    pub values: Arc<Array2<f64>>,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl SurvfitInfluence {
+    /// The `clusters x times` matrix as a read-only NumPy array.
+    #[getter(values)]
+    fn values_array<'py>(this: &Bound<'py, Self>) -> Bound<'py, numpy::PyArray2<f64>> {
+        // SAFETY: the frozen object owns the matrix through its `Arc` and
+        // never changes it.
+        unsafe { readonly_view(&this.get().values, this.as_any()) }
+    }
 }
 
 /// A `survfit` object for single-endpoint survival, curves stacked one
@@ -371,6 +389,16 @@ impl SurvfitKMResult {
                 se.clone()
             }
         })
+    }
+
+    /// The fit without its influence matrices, for the summaries, which
+    /// never read them (the matrices are shared, so none is copied).
+    pub fn clone_without_influence(&self) -> Self {
+        Self {
+            influence_surv: None,
+            influence_chaz: None,
+            ..self.clone()
+        }
     }
 
     /// `fit[curves]` (`[.survfit`): the curves at the given positions of
@@ -510,7 +538,7 @@ struct CurveFit {
     cumhaz: Vec<f64>,
     std_surv: Vec<f64>,
     std_chaz: Vec<f64>,
-    /// `nid x ntime`, when requested.
+    /// `nid x ntime`, column-major, when requested.
     influence_surv: Option<Array2<f64>>,
     influence_chaz: Option<Array2<f64>>,
 }
@@ -707,8 +735,10 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
             options.influence.survival() && options.stype == SurvType::KaplanMeier;
         let want_chaz_matrix = options.influence.cumhaz()
             || (options.influence.survival() && options.stype == SurvType::ExpCumhaz);
-        let mut imat1 = want_surv_matrix.then(|| Array2::zeros((nid, ntime)));
-        let mut imat2 = want_chaz_matrix.then(|| Array2::zeros((nid, ntime)));
+        // one column of nid values per time, appended as the C code writes
+        // them (*imat1++)
+        let mut imat1 = want_surv_matrix.then(|| Vec::with_capacity(nid * ntime));
+        let mut imat2 = want_chaz_matrix.then(|| Vec::with_capacity(nid * ntime));
         let mut gcount = vec![0i64; nid];
         let mut gwt = vec![0.0; nid];
         let mut inf1 = vec![0.0; nid]; // survival influence
@@ -812,14 +842,18 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 }
             }
             if let Some(imat1) = &mut imat1 {
-                imat1.column_mut(i).assign(&ndarray::aview1(&inf1));
+                imat1.extend_from_slice(&inf1);
             }
             if let Some(imat2) = &mut imat2 {
-                imat2.column_mut(i).assign(&ndarray::aview1(&inf2));
+                imat2.extend_from_slice(&inf2);
             }
         }
-        influence_surv = imat1;
-        influence_chaz = imat2;
+        let column_major = |values: Vec<f64>| {
+            Array2::from_shape_vec((nid, ntime).f(), values)
+                .expect("one column of nid values per time")
+        };
+        influence_surv = imat1.map(column_major);
+        influence_chaz = imat2.map(column_major);
     }
 
     CurveFit {
@@ -1224,7 +1258,7 @@ pub fn survfitkm(
     let mut strata_codes = Vec::with_capacity(fits.len());
     let mut influence_surv = influence.survival().then(Vec::new);
     let mut influence_chaz = influence.cumhaz().then(Vec::new);
-    for (curve, fit, mut curve_clusters) in fits {
+    for (curve, mut fit, curve_clusters) in fits {
         strata_rows.push(fit.time.len());
         strata_codes.push(strata_levels[curve]);
         result.time.extend_from_slice(&fit.time);
@@ -1250,41 +1284,34 @@ pub fn survfitkm(
         if let Some(std_chaz) = &mut result.std_chaz {
             std_chaz.extend_from_slice(&fit.std_chaz);
         }
-        let to_rows = |matrix: &Array2<f64>| -> Vec<Vec<f64>> {
-            matrix.outer_iter().map(|row| row.to_vec()).collect()
-        };
-        if let Some(list) = &mut influence_surv {
-            let values = match (&fit.influence_surv, &fit.influence_chaz) {
-                (Some(matrix), _) => to_rows(matrix),
-                // stype = 2: an obs that moves the cumulative hazard up
-                // moves S down, influence.surv = -influence.chaz * S(t)
-                (None, Some(matrix)) => matrix
-                    .outer_iter()
-                    .map(|row| {
-                        row.iter()
-                            .zip(&fit.surv)
-                            .map(|(value, surv)| -value * surv)
-                            .collect()
-                    })
-                    .collect(),
-                (None, None) => Vec::new(),
+        let (surv_matrix, chaz_matrix) =
+            match (fit.influence_surv.take(), fit.influence_chaz.take()) {
+                (None, Some(chaz)) if influence.survival() => {
+                    // stype = 2: an obs that moves the cumulative hazard up
+                    // moves S down, influence.surv = -influence.chaz * S(t),
+                    // formed in the hazard's buffer unless that is returned too
+                    let (mut surv, chaz) = if influence.cumhaz() {
+                        (chaz.clone(), Some(chaz))
+                    } else {
+                        (chaz, None)
+                    };
+                    for (mut column, &s) in surv.columns_mut().into_iter().zip(&fit.surv) {
+                        column *= -s;
+                    }
+                    (Some(surv), chaz)
+                }
+                matrices => matrices,
             };
-            list.push(SurvfitInfluence {
-                cluster: if influence_chaz.is_some() {
-                    curve_clusters.clone()
-                } else {
-                    std::mem::take(&mut curve_clusters)
-                },
-                values,
-            });
-        }
-        if let Some(list) = &mut influence_chaz
-            && let Some(matrix) = &fit.influence_chaz
-        {
-            list.push(SurvfitInfluence {
-                cluster: curve_clusters,
-                values: to_rows(matrix),
-            });
+        for (list, matrix) in [
+            (&mut influence_surv, surv_matrix),
+            (&mut influence_chaz, chaz_matrix),
+        ] {
+            if let (Some(list), Some(matrix)) = (list, matrix) {
+                list.push(SurvfitInfluence {
+                    cluster: curve_clusters.clone(),
+                    values: Arc::new(matrix),
+                });
+            }
         }
     }
     result.counts = counts;
@@ -1602,18 +1629,20 @@ mod tests {
         assert!(!result.logse);
         let influence = &result.influence_surv.as_ref().unwrap()[0];
         assert_eq!(influence.cluster, vec![1, 2, 3, 4]);
+        assert_eq!(influence.values.dim(), (4, 8));
+        assert!(influence.values.t().is_standard_layout(), "column-major");
         assert_vec_approx(
-            &influence.values[0],
+            &influence.values.row(0).to_vec(),
             &[0.0, 0.0, 0.0, 0.0625, -0.09375, -0.09375, -0.046875, 0.0],
             1e-12,
         );
         assert_vec_approx(
-            &influence.values[1],
+            &influence.values.row(1).to_vec(),
             &[0.0, 0.0, 0.0, -0.1875, -0.09375, -0.09375, -0.046875, 0.0],
             1e-12,
         );
         assert_vec_approx(
-            &influence.values[3],
+            &influence.values.row(3).to_vec(),
             &[0.0, 0.0, 0.0, 0.0625, 0.09375, 0.09375, 0.1875, 0.0],
             1e-12,
         );
@@ -1814,12 +1843,8 @@ mod tests {
             let surv = &result.influence_surv.as_ref().unwrap()[0];
             let chaz = &result.influence_chaz.as_ref().unwrap()[0];
             assert_eq!(surv.cluster, vec![1, 2, 3]);
-            let column_norm = |matrix: &[Vec<f64>], col: usize| -> f64 {
-                matrix
-                    .iter()
-                    .map(|row| row[col] * row[col])
-                    .sum::<f64>()
-                    .sqrt()
+            let column_norm = |matrix: &Array2<f64>, col: usize| -> f64 {
+                matrix.column(col).iter().map(|v| v * v).sum::<f64>().sqrt()
             };
             let std_chaz = result.std_chaz.as_ref().unwrap();
             for (col, expected) in std_chaz.iter().enumerate() {
@@ -1831,11 +1856,22 @@ mod tests {
                     assert!((column_norm(&surv.values, col) - expected).abs() < 1e-12);
                 }
             } else {
-                for (row, chaz_row) in surv.values.iter().zip(&chaz.values) {
-                    for (col, value) in row.iter().enumerate() {
-                        assert!((value + chaz_row[col] * result.surv[col]).abs() < 1e-12);
-                    }
+                for ((k, col), value) in surv.values.indexed_iter() {
+                    let chaz_value = chaz.values[[k, col]];
+                    assert!((value + chaz_value * result.surv[col]).abs() < 1e-12);
                 }
+                // influence = 1 alone forms the same matrix in the hazard's buffer
+                let alone = fit(
+                    data.clone(),
+                    SurvfitKMOptions {
+                        stype,
+                        ctype,
+                        influence: InfluenceRequest::Survival,
+                        ..Default::default()
+                    },
+                );
+                assert!(alone.influence_chaz.is_none());
+                assert_eq!(alone.influence_surv.as_ref().unwrap()[0], *surv);
             }
         }
     }
