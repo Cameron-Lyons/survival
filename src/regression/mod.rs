@@ -42,7 +42,9 @@ pub(crate) mod survreg_distributions;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
-pub use aareg_fit_module::{AaregFitResult, aareg_fit};
+pub use aareg_fit_module::{
+    AaregData, AaregFitResult, AaregOptions, AaregTest, aareg_fit, aareg_fit_py,
+};
 pub use agexact::{AgexactFit, AgexactOptions, agexact_fit, agexact_py};
 pub use blogit::LinkFunctionParams;
 pub use cause_specific_cox_module::{

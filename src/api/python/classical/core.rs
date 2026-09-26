@@ -34,7 +34,7 @@ fn pspline_basis_py(
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(aareg_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(aareg_fit_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;
     m.add_function(wrap_pyfunction!(coxph_fit, m)?)?;

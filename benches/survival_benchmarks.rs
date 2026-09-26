@@ -3,8 +3,8 @@ use survival::concordance::{ConcordanceOptions, concordancefit};
 use survival::core::SurvResponse;
 use survival::data_types::SurvivalData;
 use survival::regression::{
-    CoxPHFit, SurvregControl, SurvregData, SurvregDistribution, aareg_fit, agexact_py,
-    cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg_fit,
+    AaregData, AaregOptions, CoxPHFit, SurvregControl, SurvregData, SurvregDistribution, aareg_fit,
+    agexact_py, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg_fit,
 };
 use survival::surv_analysis::{
     self, PseudoResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
@@ -209,22 +209,21 @@ mod aareg_bench {
         let inputs = inputs(n, 4);
         bencher.with_inputs(|| inputs.clone()).bench_local_values(
             |(stop, status, covariates, weights)| {
+                let data = AaregData {
+                    stop,
+                    status,
+                    covariates,
+                    start: None,
+                    weights: Some(weights),
+                    cluster: None,
+                    test_cluster: None,
+                };
+                let options = AaregOptions {
+                    nmin: Some(12),
+                    ..AaregOptions::default()
+                };
                 black_box(
-                    aareg_fit(
-                        stop,
-                        status,
-                        covariates,
-                        None,
-                        Some(weights),
-                        None,
-                        1e-7,
-                        Some(12),
-                        false,
-                        None,
-                        "aalen".to_string(),
-                        None,
-                    )
-                    .expect("benchmark Aalen inputs should be full rank"),
+                    aareg_fit(&data, &options).expect("benchmark Aalen inputs should be full rank"),
                 )
             },
         );
@@ -236,22 +235,23 @@ mod aareg_bench {
         bencher.with_inputs(|| inputs.clone()).bench_local_values(
             |(stop, status, covariates, weights)| {
                 let clusters = (0..n).map(|idx| (idx % 50) as i32).collect();
+                let data = AaregData {
+                    stop,
+                    status,
+                    covariates,
+                    start: None,
+                    weights: Some(weights),
+                    cluster: Some(clusters),
+                    test_cluster: None,
+                };
+                let options = AaregOptions {
+                    nmin: Some(9),
+                    dfbeta: true,
+                    ..AaregOptions::default()
+                };
                 black_box(
-                    aareg_fit(
-                        stop,
-                        status,
-                        covariates,
-                        None,
-                        Some(weights),
-                        Some(clusters),
-                        1e-7,
-                        Some(9),
-                        true,
-                        None,
-                        "aalen".to_string(),
-                        None,
-                    )
-                    .expect("benchmark Aalen influence inputs should be full rank"),
+                    aareg_fit(&data, &options)
+                        .expect("benchmark Aalen influence inputs should be full rank"),
                 )
             },
         );
