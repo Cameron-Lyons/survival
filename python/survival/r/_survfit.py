@@ -28,7 +28,6 @@ from ._coerce import (
     _is_missing_value,
     _label_levels,
     _match_string_arg,
-    _materialize_1d,
     _materialize_labels,
     _mstate_categories,
     _mstate_event_label,
@@ -1602,13 +1601,6 @@ def _aggregate_coxms(
     )
 
 
-def aggregate_survfit_result(result: _Survfit, groups: Any | None = None) -> _Survfit:
-    """The R bridge's entry point: ``result`` is a survfit object and ``groups`` the integer
-    codes the bridge built from ``by``."""
-
-    return aggregate_survfit(result, by=groups)
-
-
 def survfit_confint(
     p: Any,
     se: Any,
@@ -1649,92 +1641,4 @@ def survfit_confint(
         conf_int=_finite_float(conf_int, "conf.int"),
         selow=None if selow is None else recycled(selow, "selow"),
         ulimit=_logical(ulimit, "ulimit must be TRUE/FALSE"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# The influence matrices the R bridge's survfitKM asks for
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SurvfitKMInfluence:
-    """The per-cluster influence on ``surv`` and on ``cumhaz`` (rows clusters, columns times)."""
-
-    influence_surv: NDArray[np.float64]
-    influence_chaz: NDArray[np.float64]
-
-
-def _influence_matrices(engine: _core.SurvfitKMResult) -> SurvfitKMInfluence:
-    surv = engine.influence_surv
-    chaz = engine.influence_chaz
-    if surv is None or chaz is None:
-        raise RuntimeError("the engine did not return the influence matrices")
-    return SurvfitKMInfluence(surv[0].values, chaz[0].values)
-
-
-def survfitkm_influence(
-    time: Any,
-    status: Any,
-    cluster: Any,
-    weights: Any | None = None,
-    stype: int = 1,
-    ctype: int = 1,
-    conf_level: float = 0.95,
-    conf_type: str = "log",
-) -> SurvfitKMInfluence:
-    """``survfitKM(..., influence = 3)`` for right-censored data: the influence matrices."""
-
-    return _influence_matrices(
-        _core.survfitkm(
-            _float_vector(time, "time"),
-            [int(value) for value in _materialize_1d(status, "status")],
-            weights=None if weights is None else _float_vector(weights, "weights"),
-            cluster=_encode_labels(_materialize_labels(cluster, "cluster"), "cluster"),
-            stype=stype,
-            ctype=ctype,
-            conf_int=conf_level,
-            conf_type=conf_type,
-            robust=True,
-            influence=3,
-        )
-    )
-
-
-def survfitkm_counting_influence(
-    start: Any,
-    stop: Any,
-    status: Any,
-    cluster: Any,
-    weights: Any | None = None,
-    stype: int = 1,
-    ctype: int = 1,
-    conf_level: float = 0.95,
-    conf_type: str = "log",
-    **kwargs: Any,
-) -> SurvfitKMInfluence:
-    """``survfitKM(..., influence = 3)`` for counting-process data: the influence matrices.
-
-    The bridge also passes the curve it already holds (``curve_time``, ``curve_estimate``);
-    the engine recomputes it, so those two are accepted and ignored.
-    """
-
-    kwargs.pop("curve_time", None)
-    kwargs.pop("curve_estimate", None)
-    if kwargs:
-        raise TypeError(f"unexpected argument(s): {', '.join(sorted(kwargs))}")
-    return _influence_matrices(
-        _core.survfitkm(
-            _float_vector(stop, "stop"),
-            [int(value) for value in _materialize_1d(status, "status")],
-            start=_float_vector(start, "start"),
-            weights=None if weights is None else _float_vector(weights, "weights"),
-            cluster=_encode_labels(_materialize_labels(cluster, "cluster"), "cluster"),
-            stype=stype,
-            ctype=ctype,
-            conf_int=conf_level,
-            conf_type=conf_type,
-            robust=True,
-            influence=3,
-        )
     )

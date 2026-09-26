@@ -80,7 +80,7 @@ def test_prentice_matches_r(ccoh_data):
     summary = r.model_summary(fit)
     assert summary["coefficient_columns"] == ["Value", "SE", "Z", "p"]
     row = summary["coefficients"][0]
-    assert [row[k] for k in ("value", "se", "z", "p")] == approx(
+    assert [row[k] for k in ("coef", "se", "z", "p")] == approx(
         [0.734570842045653, 0.168496197244282, 4.35956926066816, 1.30318703686072e-05], rel=1e-6
     )
     assert summary["coefficients"][3]["p"] == 0.0  # R: 2*(1-pnorm(Z)) underflows to 0

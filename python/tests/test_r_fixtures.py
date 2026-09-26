@@ -823,7 +823,7 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
             "robust se": ("robust_se", RTOL_VAR),
             "z": ("z", RTOL_VAR),
             "Pr(>|z|)": ("p", RTOL_VAR),
-            "Value": ("value", RTOL_COEF),
+            "Value": ("coef", RTOL_COEF),
             "SE": ("se", RTOL_VAR),
             "Z": ("z", RTOL_VAR),
             "p": ("p", RTOL_VAR),

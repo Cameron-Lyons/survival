@@ -111,10 +111,10 @@ def test_survcheck_reports_problem_rows_of_the_original_data():
         r.survcheck(r.Surv([1, 2], [1, 0]), id=[1, None], na_action="na.fail")
 
 
-def test_survcheck_accepts_the_coded_response_the_r_bridge_builds():
+def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
     # the multi-state example above with the states coded as the bridge does:
     # state_names = c("A", "B", "C"), status/istate = match(label, state_names)
-    codes = r.survcheck(
+    codes = r._survcheck_codes(
         id=[1, 1, 2, 2, 3],
         time1=[0, 1, 0, 2, 0],
         time2=[1, 2, 1, 3, 4],
@@ -127,7 +127,7 @@ def test_survcheck_accepts_the_coded_response_the_r_bridge_builds():
     assert codes.n_transitions == 4
 
     # without istate the current state codes are 0 for istate0, k for the k-th state
-    no_istate = r.survcheck(
+    no_istate = r._survcheck_codes(
         id=[1, 1, 2, 2, 3],
         time1=[0, 1, 0, 2, 0],
         time2=[1, 2, 1, 3, 4],
@@ -135,13 +135,11 @@ def test_survcheck_accepts_the_coded_response_the_r_bridge_builds():
     )
     assert no_istate.current_states == [0, 1, 0, 1, 0]
     assert no_istate.n_transitions == 4
-    overlap = r.survcheck(id=[1, 1], time1=[0, 0.5], time2=[1, 2], status=[0, 1])
+    overlap = r._survcheck_codes(id=[1, 1], time1=[0, 0.5], time2=[1, 2], status=[0, 1])
     assert overlap.overlap_rows == [1]
 
     with pytest.raises(ValueError, match="a formula argument is required"):
-        r.survcheck(id=[1, 2], time2=[1, 2])
-    with pytest.raises(ValueError, match="only used when no formula"):
-        r.survcheck(r.Surv([1, 2], [1, 0]), id=[1, 2], status=[1, 0])
+        r.survcheck(id=[1, 2])
 
 
 # --- survobrien --------------------------------------------------------------

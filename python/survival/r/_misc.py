@@ -601,12 +601,12 @@ def _survcheck_problem(
 
 
 def _survcheck_codes(
-    id: Any, time1: Any, time2: Any, status: Any, istate: Any | None
+    id: Any, time2: Any, status: Any, time1: Any | None = None, istate: Any | None = None
 ) -> SurvCheckCodes:
-    """The response given as integer codes, the way the R bridge calls ``survcheck`` after
-    evaluating the model frame in R: ``id`` as ``match(id, unique(id))``, ``status`` as ``0``
-    (censored) or the code of the target state and ``istate`` as codes of the same states.
-    The states are only known by their codes, so they are named after them.
+    """``survcheck``'s kernel for a response given as integer codes, the R bridge's entry
+    point after it evaluates the model frame in R: ``id`` as ``match(id, unique(id))``,
+    ``status`` as ``0`` (censored) or the code of the target state and ``istate`` as codes of
+    the same states.  The states are only known by their codes, so they are named after them.
     """
 
     status_codes = _int_vector(status, "status")
@@ -646,29 +646,17 @@ def survcheck(
     istate: Any | None = None,
     istate0: str = "(s0)",
     timefix: bool = True,
-    *,
-    time1: Any | None = None,
-    time2: Any | None = None,
-    status: Any | None = None,
-) -> SurvCheckResult | SurvCheckCodes:
+) -> SurvCheckResult:
     """Consistency checks of (multi-state) survival data, like R's ``survcheck``.
 
     ``formula`` is ``Surv(...) ~ ...`` evaluated in ``data`` (or a ``Surv`` object); ``id`` and
     ``istate`` are column names of ``data`` or vectors.  Problem rows are reported as 1-based
     row numbers of ``data`` after ``subset``, as R does (of the counting-process rows for
     ``Surv2`` timeline data, which is converted first).
-
-    The R bridge evaluates the model frame itself and passes the response as integer codes
-    (``id``, ``time1``, ``time2``, ``status`` and optionally ``istate``) without a formula; that
-    form returns the row-level ``SurvCheckCodes``.
     """
 
     if formula is _MISSING:
-        if time2 is None or status is None or id is None:
-            raise ValueError("a formula argument is required")
-        return _survcheck_codes(id, time1, time2, status, istate)
-    if time1 is not None or time2 is not None or status is not None:
-        raise ValueError("time1, time2 and status are only used when no formula is given")
+        raise ValueError("a formula argument is required")
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
     extras = {"id": id, "istate": istate}

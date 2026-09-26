@@ -227,7 +227,7 @@ def summary_cch(fit: CchModelResult) -> dict[str, Any]:
         se = math.sqrt(fit.var[idx][idx])
         z = abs(coef / se) if se > 0.0 else math.nan
         p = 2.0 * (1.0 - 0.5 * math.erfc(-z / math.sqrt(2.0)))  # R: 2*(1-pnorm(Z))
-        rows.append({"name": name, "coef": coef, "value": coef, "se": se, "z": z, "p": p})
+        rows.append({"name": name, "coef": coef, "se": se, "z": z, "p": p})
     return {
         "model_type": "cch",
         "method": fit.method,
