@@ -13,6 +13,7 @@ Rust fit behind the result (``coefficients``, ``var``, ``means``, ``loglik``, ``
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -1006,15 +1007,17 @@ def _brier_model_predictions(
     else:
         rows, strata, offsets = _newdata_design(fit, newdata, n)
     curves = engine.survfit(newdata=rows, new_strata=strata, new_offset=offsets, se_fit=False)
-    # one curve per stratum with the rows as columns, or one per row for stratified fits
-    per_subject: list[list[float]] = []
+    # one curve per stratum with the rows as columns, or one per row for stratified fits; each
+    # getter converts the whole curve, so it is read once
+    phat: list[list[float]] = [[] for _ in times]
     for curve in curves:
-        width = len(curve.surv[0]) if curve.surv else 0
-        per_subject.extend(
-            _core.step_values_at(list(curve.time), [row[j] for row in curve.surv], times, 1.0)
-            for j in range(width)
-        )
-    return [[1.0 - subject[i] for subject in per_subject] for i in range(len(times))]
+        curve_times, surv = list(curve.time), curve.surv
+        width = len(surv[0]) if surv else 0
+        for row, at in zip(phat, times, strict=True):
+            # the last step at or before `at`; the curves are 1 before their first time
+            index = bisect.bisect_right(curve_times, at)
+            row.extend([1.0 - value for value in surv[index - 1]] if index else [0.0] * width)
+    return phat
 
 
 def brier(
@@ -1086,7 +1089,7 @@ def brier(
         brier=result.brier,
         times=result.times,
         p0=result.p0,
-        phat=result.phat,
+        phat=phat,
         eff_n=result.eff_n,
     )
 
