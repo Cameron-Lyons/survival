@@ -23,7 +23,7 @@ use crate::internal::step::rank_average;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxpenal::CoxpenalFit;
 use crate::regression::coxph::{CoxPHFit, default_assign, validate_assign};
-use ndarray::{Array2, s};
+use ndarray::{Array2, Axis, s};
 #[cfg(feature = "python")]
 use pyo3::Borrowed;
 #[cfg(feature = "python")]
@@ -387,16 +387,6 @@ fn zph_test(chisq: f64, df: f64) -> CoxZphTest {
     }
 }
 
-fn submatrix(matrix: &Array2<f64>, rows: &[usize], cols: &[usize]) -> Array2<f64> {
-    let mut out = Array2::zeros((rows.len(), cols.len()));
-    for (i, &r) in rows.iter().enumerate() {
-        for (j, &c) in cols.iter().enumerate() {
-            out[(i, j)] = matrix[(r, c)];
-        }
-    }
-    out
-}
-
 /// `cox.zph(fit, transform, terms, singledf, global)` (`global_test` is
 /// R's `global`) for a `coxph` or a penalized fit.  `assign` lists the
 /// columns of each term (default: one term per coefficient); it is ignored
@@ -502,7 +492,7 @@ pub fn cox_zph<'a>(
             .copied()
             .chain(columns.iter().map(|&j| j + nvar))
             .collect();
-        let imat = submatrix(&imatr, &kk, &kk);
+        let imat = imatr.select(Axis(0), &kk).select(Axis(1), &kk);
         let test = if singledf && columns.len() > 1 {
             let inverse = LuDecomposition::decompose(&imat)?.inverse()?;
             let offset = nvar;
@@ -593,7 +583,7 @@ pub fn cox_zph<'a>(
         sresid = sresid.dot(&temp);
         vmean = temp.t().dot(&vmean).dot(&temp);
         let firsts: Vec<usize> = assign.iter().map(|columns| columns[0]).collect();
-        used_terms = submatrix(&used, &(0..used.nrows()).collect::<Vec<_>>(), &firsts);
+        used_terms = used.select(Axis(1), &firsts);
     }
     let ncol = sresid.ncols();
 
@@ -611,7 +601,7 @@ pub fn cox_zph<'a>(
         if k.is_empty() || rows.is_empty() {
             continue;
         }
-        let vk = submatrix(&vmean, &k, &k);
+        let vk = vmean.select(Axis(0), &k).select(Axis(1), &k);
         if k.len() == 1 {
             for &g in &rows {
                 y[(g, k[0])] = sresid[(g, k[0])] / vk[(0, 0)];
