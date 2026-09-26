@@ -32,6 +32,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _r_factor,
     _scalar_or_vector,
+    _start_time_value,
     _strata_level_sort_key,
     _strata_value_label,
     _subset_indices,
@@ -43,7 +44,6 @@ from ._formula import (
     _column,
     _column_source,
     _covariate_term_name,
-    _cox_survfit_model_frame,
     _formula_columns,
     _formula_response_spec,
     _parse_formula,
@@ -431,20 +431,6 @@ def _influence_level(influence: Any) -> int:
     raise ValueError("influence argument must be numeric or logical")
 
 
-def _start_time_value(start_time: Any | None) -> float | None:
-    if start_time is None:
-        return None
-    if isinstance(start_time, bool | str):
-        raise ValueError("start.time must be a single numeric value")
-    try:
-        value = float(start_time)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("start.time must be a single numeric value") from exc
-    if not math.isfinite(value):
-        raise ValueError("start.time must be a single numeric value")
-    return value
-
-
 # ---------------------------------------------------------------------------
 # survfit
 # ---------------------------------------------------------------------------
@@ -481,20 +467,21 @@ def survfit(
     type: str | None = None,
     reverse: Any = False,
     censor: Any = True,
+    individual: Any | None = None,
     **kwargs: Any,
 ) -> SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult:
     """R's ``survfit``: Kaplan-Meier / Fleming-Harrington, Aalen-Johansen or Turnbull curves.
 
     ``response`` is a formula string (``"Surv(time, status) ~ sex"``) evaluated in ``data``, a
     ``Surv`` object (``group`` gives the curves), or a fitted Cox model (``survfit.coxph``, with
-    ``newdata`` and ``censor``).  The other arguments are those of ``survfit.formula`` and of
-    the engine it dispatches to; the R spellings ``se.fit``, ``conf.int``, ``conf.type``,
-    ``conf.lower``, ``start.time`` and ``na.action`` are accepted as keywords.  ``stype`` and
-    ``ctype`` default per method as in R (1/1 for ``survfit.formula``, 2 and the tie method
-    for ``survfit.coxph``).  ``reverse``
-    estimates the censoring distribution (the engine's option).  The model frame is kept on
-    the result for ``residuals.survfit`` / ``pseudo`` whatever ``model`` says, as R re-reads
-    it through ``model.frame``.
+    ``newdata``, ``censor`` and ``individual``).  The other arguments are those of
+    ``survfit.formula`` and of the engine it dispatches to; the R spellings ``se.fit``,
+    ``conf.int``, ``conf.type``, ``conf.lower``, ``start.time`` and ``na.action`` are accepted
+    as keywords.  ``stype`` and ``ctype`` default per method as in R (1/1 for
+    ``survfit.formula``, 2 and the tie method for ``survfit.coxph``).  ``reverse`` estimates
+    the censoring distribution (the engine's option).  The model frame is kept on the result
+    for ``residuals.survfit`` / ``pseudo`` whatever ``model`` says, as R re-reads it through
+    ``model.frame``.
     """
 
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, True)
@@ -509,22 +496,27 @@ def survfit(
     if isinstance(response, ClogitModel):
         raise ValueError("predicted survival curves are not defined for a clogit model")
     if isinstance(response, CoxphModel):
+        # survfit.coxph takes model= into its ``...``: it keeps no model frame
+        _logical(model, "model must be TRUE/FALSE")
         # survfit.coxph's second argument is newdata, so survfit(fit, frame) is R's spelling
-        return _survfit_coxph(
+        return survfit_coxph(
             response,
             data if newdata is None else newdata,
             se_fit=se_fit,
             conf_int=conf_int,
-            conf_type=conf_type,
-            start_time=start_time,
-            censor=censor,
-            model=model,
-            stype=2 if stype is None else stype,
+            individual=individual,
+            stype=stype,
             ctype=ctype,
+            conf_type=conf_type,
+            censor=censor,
+            start_time=start_time,
             id=id,
+            type=type,
         )
     if newdata is not None:
         raise ValueError("newdata is only used with a fitted Cox model")
+    if individual is not None:
+        raise ValueError("individual is only used with a fitted Cox model")
     if type is not None and (stype is not None or ctype is not None):
         raise ValueError(
             "cannot have both an old-style 'type' argument and the stype/ctype arguments "
@@ -593,39 +585,6 @@ def survfit(
         time0=time0,
         **common,
     )
-
-
-def _survfit_coxph(
-    fit: Any,
-    newdata: Any | None,
-    *,
-    se_fit: Any,
-    conf_int: Any,
-    conf_type: Any,
-    start_time: Any | None,
-    censor: Any,
-    model: Any,
-    stype: Any,
-    ctype: Any,
-    id: Any | None,
-) -> CoxSurvfitResult:
-    """``survfit.coxph``: the Cox module owns the curves, this is only the dispatch."""
-
-    result = survfit_coxph(
-        fit,
-        newdata,
-        se_fit=se_fit,
-        conf_int=conf_int,
-        conf_type=conf_type,
-        censor=censor,
-        start_time=_start_time_value(start_time),
-        stype=stype,
-        ctype=ctype,
-        id=id,
-    )
-    if _logical(model, "model must be TRUE/FALSE") and hasattr(result, "model"):
-        return dataclasses.replace(result, model=_cox_survfit_model_frame(fit, newdata))
-    return result
 
 
 # ---------------------------------------------------------------------------

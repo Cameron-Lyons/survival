@@ -561,8 +561,10 @@ def test_survfit_coxph_matches_r(fit):
     )
     with pytest.raises(ValueError, match="stype must be 1 or 2"):
         r.survfit(fit, stype=3)
-    with pytest.raises(NotImplementedError, match="start.time"):
-        r.survfit(fit, start_time=100)
+    later = r.survfit(fit, start_time=400)
+    assert (later.n, later.time[:3], later.start_time) == ([18], [421.0, 431.0, 448.0], 400.0)
+    assert later.surv[:3] == approx([1.0, 0.938478074087395, 0.938478074087395])
+    assert later.std_err[:3] == approx([0.0, 0.0638850782003953, 0.0638850782003953])
 
 
 def test_survfit_strata_and_newdata_blocks(strata_fit):

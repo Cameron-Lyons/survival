@@ -1926,16 +1926,6 @@ def _formula_model_frame(
     return frame
 
 
-def _cox_survfit_model_frame(fit: Any, newdata: Any | None) -> dict[str, Any]:
-    frame: dict[str, Any] = {"fit": fit}
-    model = getattr(fit, "model", None)
-    if model is not None:
-        frame["model"] = model
-    if newdata is not None:
-        frame["newdata"] = newdata
-    return frame
-
-
 def _formula_design_row_count(data: Any, design: _FormulaDesign) -> int:
     columns = _formula_design_columns(design)
     if columns:

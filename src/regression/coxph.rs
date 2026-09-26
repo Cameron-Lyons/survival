@@ -473,6 +473,9 @@ pub struct SurvfitOptions {
     pub se_fit: bool,
     /// `censor = FALSE` drops the rows without an event.
     pub censor: bool,
+    /// `start.time`: the curves are built from the rows whose stop time is
+    /// at or after it; the risk scores stay those of the whole fit.
+    pub start_time: Option<f64>,
 }
 
 impl Default for SurvfitOptions {
@@ -482,6 +485,7 @@ impl Default for SurvfitOptions {
             ctype: None,
             se_fit: true,
             censor: true,
+            start_time: None,
         }
     }
 }
@@ -902,12 +906,23 @@ impl CoxPHFit {
     /// order, with `survfit.coxph`'s `risk = exp(X %*% beta + offset -
     /// xcenter)`: the risks relative to a subject at the means and the mean
     /// offset, so a large offset neither overflows nor rounds the baseline
-    /// survival to 1.
+    /// survival to 1.  `coxsurv.fit` uses `survtype` for the variance too.
+    ///
+    /// `start_time` keeps only the rows whose stop time is at or after it
+    /// (`survfit.coxph`'s `keep <- Y[, ncol(Y) - 1] >= start.time`); a
+    /// stratum it empties keeps an empty curve.
     fn compute_curves(
         &self,
         survtype: CoxSurvType,
-        vartype: CoxSurvType,
+        start_time: Option<f64>,
     ) -> SurvivalResult<Vec<AgsurvCurve>> {
+        if let Some(t0) = start_time
+            && !(0..self.n).any(|i| self.status[i] == 1 && self.time[i] >= t0)
+        {
+            return Err(SurvivalError::invalid_input(
+                "start.time argument has removed all endpoints",
+            ));
+        }
         let offset_mean = self.offset_mean();
         let risk: Vec<f64> = self
             .linear_predictors
@@ -927,7 +942,18 @@ impl CoxPHFit {
             .bounds
             .iter()
             .map(|&(start, end)| {
-                agsurv_rows(&data, &self.sorted.order[start..end], survtype, vartype)
+                let rows = &self.sorted.order[start..end];
+                match start_time {
+                    None => agsurv_rows(&data, rows, survtype, survtype),
+                    Some(t0) => {
+                        let kept: Vec<usize> = rows
+                            .iter()
+                            .copied()
+                            .filter(|&i| self.time[i] >= t0)
+                            .collect();
+                        agsurv_rows(&data, &kept, survtype, survtype)
+                    }
+                }
             })
             .collect()
     }
@@ -937,17 +963,21 @@ impl CoxPHFit {
         if let Some(curves) = self.curves.get() {
             return Ok(curves);
         }
-        let survtype = self.default_survtype();
-        let curves = self.compute_curves(survtype, survtype)?;
+        let curves = self.compute_curves(self.default_survtype(), None)?;
         Ok(self.curves.get_or_init(|| curves))
     }
 
-    /// The curves of one hazard type: the cached ones for the fit's own.
-    fn curves_for(&self, survtype: CoxSurvType) -> SurvivalResult<Cow<'_, [AgsurvCurve]>> {
-        if survtype == self.default_survtype() {
+    /// The curves of one hazard type from the rows kept by `start_time`:
+    /// the cached ones for the fit's own type and every row.
+    fn curves_for(
+        &self,
+        survtype: CoxSurvType,
+        start_time: Option<f64>,
+    ) -> SurvivalResult<Cow<'_, [AgsurvCurve]>> {
+        if survtype == self.default_survtype() && start_time.is_none() {
             Ok(Cow::Borrowed(self.baseline_curves()?))
         } else {
-            Ok(Cow::Owned(self.compute_curves(survtype, survtype)?))
+            Ok(Cow::Owned(self.compute_curves(survtype, start_time)?))
         }
     }
 
@@ -1043,7 +1073,7 @@ impl CoxPHFit {
         if let Some(newdata) = newdata {
             self.check_newdata(newdata)?;
         }
-        let curves = self.curves_for(survtype)?;
+        let curves = self.curves_for(survtype, options.start_time)?;
         let (x2c, risk2) = match newdata {
             Some(newdata) => self.centered_newdata(newdata),
             // the curve at the means and the mean offset
@@ -1105,7 +1135,7 @@ impl CoxPHFit {
             1
         });
         let survtype = CoxSurvType::from_stype_ctype(options.stype, ctype)?;
-        let curves = self.curves_for(survtype)?;
+        let curves = self.curves_for(survtype, options.start_time)?;
         let (x2c, risk2) = self.centered_newdata(newdata);
         let varmat = options.se_fit.then_some(&self.var);
         let mut ids: Vec<i32> = Vec::new();
@@ -1571,7 +1601,8 @@ impl CoxPHFit {
     }
 }
 
-fn newdata_from_python(
+/// A `CoxNewData` from the binding arguments; `None` without `x`.
+pub(crate) fn newdata_from_python(
     fit: &CoxPHFit,
     x: Option<Vec<Vec<f64>>>,
     strata: Option<Vec<i32>>,
@@ -1679,8 +1710,8 @@ impl CoxPHFit {
         Ok(self.predict_terms(newdata.as_ref(), se_fit, reference, &assign)?)
     }
 
-    /// `survfit(fit, newdata, stype, ctype, se.fit, censor)`.
-    #[pyo3(name = "survfit", signature = (newdata = None, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true))]
+    /// `survfit(fit, newdata, stype, ctype, se.fit, censor, start.time)`.
+    #[pyo3(name = "survfit", signature = (newdata = None, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true, start_time = None))]
     #[allow(clippy::too_many_arguments)]
     fn survfit_py(
         &self,
@@ -1691,6 +1722,7 @@ impl CoxPHFit {
         ctype: Option<u8>,
         se_fit: bool,
         censor: bool,
+        start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
         let newdata = newdata_from_python(self, newdata, new_strata, new_offset, None, None)?;
         Ok(self.survfit(
@@ -1700,6 +1732,7 @@ impl CoxPHFit {
                 ctype,
                 se_fit,
                 censor,
+                start_time,
             },
         )?)
     }
@@ -1776,7 +1809,7 @@ impl CoxPHFit {
     }
 
     /// `survfit(fit, newdata, id)` for time-dependent new data.
-    #[pyo3(name = "survfit_individual", signature = (newdata, new_entry, new_time, id, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true))]
+    #[pyo3(name = "survfit_individual", signature = (newdata, new_entry, new_time, id, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true, start_time = None))]
     #[allow(clippy::too_many_arguments)]
     fn survfit_individual_py(
         &self,
@@ -1790,6 +1823,7 @@ impl CoxPHFit {
         ctype: Option<u8>,
         se_fit: bool,
         censor: bool,
+        start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
         let newdata = newdata_from_python(
             self,
@@ -1808,6 +1842,7 @@ impl CoxPHFit {
                 ctype,
                 se_fit,
                 censor,
+                start_time,
             },
         )?)
     }
@@ -2067,6 +2102,115 @@ mod tests {
         assert_eq!(basehaz.strata.as_ref().unwrap().len(), basehaz.time.len());
         let total: f64 = fit.residuals.iter().sum();
         assert!(total.abs() < 1e-10);
+    }
+
+    /// `survfit(coxph(Surv(time, status) ~ x + strata(g), d), start.time =
+    /// 15)` in R 3.8-12 (`d` from `set.seed(1)`, `x = rnorm(20)`): the rows
+    /// before 15 leave, stratum 1 keeps an empty curve with `n = 0`, and the
+    /// risk scores stay those of the whole fit.
+    #[test]
+    fn start_time_drops_the_earlier_rows_and_keeps_an_emptied_stratum() {
+        let time: Vec<f64> = (1..=10).chain(21..=30).map(f64::from).collect();
+        let status = [1, 0, 1, 1, 0].repeat(4);
+        let strata: Vec<i32> = [1; 10].into_iter().chain([2; 10]).collect();
+        let x = [
+            -0.626_453_810_742_332_4,
+            0.183_643_324_222_082_24,
+            -0.835_628_612_410_047_2,
+            1.595_280_802_137_791_6,
+            0.329_507_771_815_360_5,
+            -0.820_468_384_118_015_3,
+            0.487_429_052_428_485_3,
+            0.738_324_705_129_217_3,
+            0.575_781_351_653_492_3,
+            -0.305_388_387_156_356,
+            1.511_781_168_450_848,
+            0.389_843_236_411_431_1,
+            -0.621_240_580_541_803_8,
+            -2.214_699_887_177_5,
+            1.124_930_918_143_108_2,
+            -0.044_933_609_015_230_85,
+            -0.016_190_263_098_946_087,
+            0.943_836_210_685_299_2,
+            0.821_221_195_098_088_6,
+            0.593_901_321_217_508_8,
+        ];
+        let data = CoxphData::try_new(
+            time,
+            None,
+            status,
+            Array2::from_shape_vec((20, 1), x.to_vec()).unwrap(),
+            None,
+            Some(strata),
+            None,
+        )
+        .unwrap();
+        let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
+        let after = |start_time| SurvfitOptions {
+            start_time: Some(start_time),
+            ..SurvfitOptions::default()
+        };
+        let curves = fit.survfit(None, after(15.0)).unwrap();
+        assert_eq!(curves.len(), 2);
+        assert_eq!((curves[0].stratum, curves[0].n), (1, 0));
+        assert!(curves[0].time.is_empty() && curves[0].surv.is_empty());
+        assert_eq!(curves[1].n, 10);
+        let times: Vec<f64> = (21..=30).map(f64::from).collect();
+        assert_eq!(curves[1].time, times);
+        let surv = [
+            0.911_703_185_270_467,
+            0.911_703_185_270_467,
+            0.818_916_920_480_482,
+            0.721_769_214_450_701,
+            0.721_769_214_450_701,
+            0.579_122_152_428_905,
+            0.579_122_152_428_905,
+            0.378_441_860_225_577,
+            0.203_946_105_189_285,
+            0.203_946_105_189_285,
+        ];
+        let std_err = [
+            0.093_842_646_361_357,
+            0.093_842_646_361_357,
+            0.147_738_856_126_131,
+            0.202_627_188_554_77,
+            0.202_627_188_554_77,
+            0.295_853_546_336_666,
+            0.295_853_546_336_666,
+            0.516_581_455_410_216,
+            0.819_221_646_496_032,
+            0.819_221_646_496_032,
+        ];
+        let se = curves[1].std_err.as_ref().unwrap();
+        for g in 0..10 {
+            assert!((curves[1].surv[g][0] - surv[g]).abs() < 1e-12 * surv[g]);
+            assert!((se[g][0] - std_err[g]).abs() < 1e-12 * std_err[g]);
+        }
+        // the cached curves of the whole fit are left alone
+        assert_eq!(
+            fit.survfit(None, SurvfitOptions::default()).unwrap()[0].n,
+            10
+        );
+
+        let kp = fit
+            .survfit(
+                None,
+                SurvfitOptions {
+                    stype: 1,
+                    ..after(15.0)
+                },
+            )
+            .unwrap();
+        assert!((kp[1].surv[9][0] - 0.139_802_086_569_338).abs() < 1e-12);
+
+        // the last row, at 30, is censored
+        let error = fit.survfit(None, after(30.0)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("start.time argument has removed all endpoints"),
+            "{error}"
+        );
     }
 
     /// `coxph()` fits at the centred offset and adds the mean back, so

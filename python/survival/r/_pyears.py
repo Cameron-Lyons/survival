@@ -1003,6 +1003,8 @@ def survexp(
             return (
                 hazard if method_value == "individual.h" else [math.exp(-value) for value in hazard]
             )
+        # survexp.cfit needs a curve for every data row: a row whose rate variables
+        # the Cox model's terms make missing (log(-1)) is an error, not left out
         curves, _ = _survfit_curves(
             ratetable,
             mapped,
@@ -1012,6 +1014,7 @@ def survexp(
             ctype=2 if ratetable.method == "efron" else 1,
             se_fit=False,
             censor=False,
+            na_action="na.fail",
         )
         groups, levels = _survexp_groups(mf)
         result = _core.survexp_cox(

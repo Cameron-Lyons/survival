@@ -12,14 +12,16 @@ import math
 import numbers
 import sys
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from itertools import chain
 from statistics import NormalDist
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _as_character,
     _as_matrix_rows,
     _as_rows,
     _coerce_array_like,
@@ -42,6 +44,7 @@ from ._coerce import (
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
     _r_format_number,
+    _start_time_value,
     _subset_optional_sequence,
     _warn_outside_package,
 )
@@ -52,6 +55,7 @@ from ._fit import (
     _model_frame,
     _ModelFrame,
     _NewData,
+    _newdata_columns,
     _newdata_frame,
     _pad_rows,
     _rowsum_excluded,
@@ -60,10 +64,13 @@ from ._fit import (
 from ._formula import (
     _column,
     _column_or_values,
+    _data_rows,
     _design_rows_from_spec,
     _formula_data_rows,
+    _formula_design_row_count,
     _response_arg_columns,
 )
+from ._names import _make_unique
 from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
@@ -78,6 +85,8 @@ from ._types import (
     _DesignTerm,
     _FormulaDesign,
     _FormulaTerms,
+    _InteractionTerm,
+    _ModelCovariateTerm,
     _PenaltyDesignTerm,
 )
 
@@ -1727,35 +1736,141 @@ def residuals_coxph(
 # ---------------------------------------------------------------------------
 
 
-def _curve_columns(values: list[list[float]]) -> Any:
-    """A curve block as R stores it: a vector for one curve, ``ntime x ncurve`` rows otherwise."""
+# survfit.coxph's old-style ``type`` values and the stype and ctype each stands for
+_SURVFIT_TYPES = (
+    "kalbfleisch-prentice",
+    "aalen",
+    "efron",
+    "kaplan-meier",
+    "breslow",
+    "fleming-harrington",
+    "greenwood",
+    "tsiatis",
+    "exact",
+)
+_SURVFIT_TYPE_STYPE = (1, 2, 2, 1, 2, 2, 2, 2, 2)
+_SURVFIT_TYPE_CTYPE = (1, 1, 2, 1, 1, 2, 1, 1, 1)
 
-    if values and len(values[0]) == 1:
-        return [row[0] for row in values]
-    return [list(row) for row in values]
+
+def _survfit_types(fit: CoxphModel, type_: Any, stype: Any, ctype: Any) -> tuple[int, int]:
+    """``survfit.coxph``'s ``stype`` and ``ctype``: those of the old-style ``type`` when
+    neither is given, else stype 2 and the ctype of the fit's ties (2 for Efron)."""
+
+    if type_ is not None:
+        if stype is not None or ctype is not None:
+            _warn_outside_package("type argument ignored", RuntimeWarning)
+        else:
+            choices = ", ".join(f'"{name}"' for name in _SURVFIT_TYPES)
+            matched = _match_string_arg(
+                type_, "type", _SURVFIT_TYPES, f"'type' should be one of {choices}"
+            )
+            index = _SURVFIT_TYPES.index(matched)
+            stype = _SURVFIT_TYPE_STYPE[index]
+            if stype != 1:
+                ctype = _SURVFIT_TYPE_CTYPE[index]
+    if ctype is None:
+        ctype_value = 2 if fit.method == "efron" else 1
+    else:
+        ctype_value = _integer_scalar(ctype, "ctype")
+        if ctype_value not in (1, 2):
+            raise ValueError("ctype must be 1 or 2")
+    stype_value = 2 if stype is None else _integer_scalar(stype, "stype")
+    if stype_value not in (1, 2):
+        raise ValueError("stype must be 1 or 2")
+    return stype_value, ctype_value
+
+
+def _check_interaction_margins(fit: CoxphModel) -> None:
+    """``survfit.coxph`` refuses a model with an interaction whose lower-order terms are
+    not all in it (a 2 in ``attr(Terms, "factors")``); strata terms do not count."""
+
+    terms = [
+        frozenset(term.term.factors)
+        if isinstance(term.term, _InteractionTerm)
+        else frozenset([term.term])
+        for term in fit.terms.model_terms
+        if isinstance(term, _ModelCovariateTerm)
+    ]
+    present = set(terms)
+    if any(len(term) > 1 and any(term - {v} not in present for v in term) for term in terms):
+        raise ValueError(
+            "not able to create a curve for models that contain an interaction without "
+            "the lower order effect"
+        )
+
+
+def _curve_block(curves: list[Any], name: str) -> Any:
+    """One matrix of the curves (``surv``, ``cumhaz`` or ``std_err``) as R stores it: the
+    curves' rows end to end, ``ntime x ncurve`` rows, or a vector for one column."""
+
+    rows = [row for curve in curves for row in getattr(curve, name)]
+    if rows and len(rows[0]) == 1:
+        return [row[0] for row in rows]
+    return rows
 
 
 def _confidence_limits(surv: Any, std_err: Any, conf_type: str, conf_int: float) -> tuple[Any, Any]:
-    if surv and isinstance(surv[0], list):
-        columns = list(zip(*surv, strict=True))
-        se_columns = list(zip(*std_err, strict=True))
-        bands = [
-            _core.survfit_confint(list(p), list(se), True, conf_type, conf_int)
-            for p, se in zip(columns, se_columns, strict=True)
-        ]
-        lower = [list(row) for row in zip(*(band.lower for band in bands), strict=True)]
-        upper = [list(row) for row in zip(*(band.upper for band in bands), strict=True)]
-        return lower, upper
-    band = _core.survfit_confint(list(surv), list(std_err), True, conf_type, conf_int)
-    return list(band.lower), list(band.upper)
+    """``survfit_confint`` on the whole ``surv`` matrix at once, as R calls it (it works
+    elementwise), with the limits cut back into rows."""
+
+    if not (surv and isinstance(surv[0], list)):
+        band = _core.survfit_confint(surv, std_err, True, conf_type, conf_int)
+        return band.lower, band.upper
+    width = len(surv[0])
+    band = _core.survfit_confint(
+        list(chain.from_iterable(surv)),
+        list(chain.from_iterable(std_err)),
+        True,
+        conf_type,
+        conf_int,
+    )
+    lower, upper = band.lower, band.upper
+    starts = range(0, len(lower), width)
+    return [lower[i : i + width] for i in starts], [upper[i : i + width] for i in starts]
 
 
-def _survfit_id_codes(newdata: Any, id: Any, n: int) -> list[int]:
-    labels = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
-    if len(labels) != n:
-        raise ValueError("id must have one value per newdata row")
-    index = {label: idx for idx, label in enumerate(_label_levels(labels, "id"))}
-    return [index[label] for label in labels]
+def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
+    """R's ``row.names`` of ``data`` at the 0-based ``rows``: a data frame's own index
+    labels when they can be R row names (none missing, no two alike under
+    ``as.character``), else the 1-based row numbers (R's automatic row names, which is
+    also what ``rbind`` gives two data frames that have them)."""
+
+    index = None if isinstance(data, Mapping) else getattr(data, "index", None)
+    if index is not None and not (
+        type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
+    ):
+        labels = [_as_character(label) for label in index]
+        if len(set(labels)) == len(labels) and not any(map(_is_missing_value, index)):
+            return [labels[row] for row in rows]
+    return [str(row + 1) for row in rows]
+
+
+def _survfit_newdata(
+    fit: CoxphModel, newdata: Any, *, individual: bool, id: Any | None, na_action: str
+) -> tuple[_NewData, list[int], list[Any] | None]:
+    """R's ``model.frame(Terms2, newdata, id = id, na.action = na.omit)`` (``na_action``):
+    the newdata pieces at the rows without a missing value in a variable the curves read
+    (the ``id`` included), those rows (0-based, for the curve names) and their ``id``."""
+
+    n = _formula_design_row_count(newdata, fit.design)
+    rows = list(range(n))
+    ids = None
+    if id is not None:
+        ids = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
+        if len(ids) != n:
+            raise ValueError("id must have one value per newdata row")
+        rows = [row for row in rows if not _is_missing_value(ids[row])]
+        if len(rows) < n:
+            newdata = _data_rows(newdata, _newdata_columns(newdata), rows, n)
+    new = _prediction_newdata(
+        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action=na_action
+    )
+    if new.missing:
+        dropped = set(new.missing)
+        rows = [row for position, row in enumerate(rows) if position not in dropped]
+    if not rows:
+        raise ValueError("all rows of newdata have missing values")
+    return new, rows, None if ids is None else [ids[row] for row in rows]
 
 
 def _survfit_curves(
@@ -1768,24 +1883,34 @@ def _survfit_curves(
     ctype: int,
     se_fit: bool,
     censor: bool,
+    start_time: float | None = None,
+    na_action: str = "na.omit",
 ) -> tuple[list[Any], list[str]]:
     """The engine curves for ``survfit.coxph`` and the name of each block (R's
-    ``names(fit$strata)``: the strata levels, or the newdata row numbers)."""
+    ``names(fit$strata)``: the strata levels, the id values or the newdata row names).
+    ``na_action = "na.fail"`` refuses the newdata rows ``na.omit`` would leave out."""
 
+    _check_interaction_margins(fit)
     engine = fit.penalized if fit.penalized is not None else fit.fit
+    options: dict[str, Any] = {
+        "stype": stype,
+        "ctype": ctype,
+        "se_fit": se_fit,
+        "censor": censor,
+        "start_time": start_time,
+    }
     if newdata is None:
         if any(":" in name for name in fit.assign):
-            warnings.warn(
+            _warn_outside_package(
                 "the model contains interactions; the default curve based on columm means "
                 "of the X matrix is almost certainly not useful. Consider adding a newdata "
                 "argument.",
                 RuntimeWarning,
-                stacklevel=3,
             )
-        curves = engine.survfit(stype=stype, ctype=ctype, se_fit=se_fit, censor=censor)
+        curves = engine.survfit(**options)
         return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
-    new = _prediction_newdata(
-        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action="fail"
+    new, rows, ids = _survfit_newdata(
+        fit, newdata, individual=individual, id=id, na_action=na_action
     )
     if individual:
         if new.y is None:
@@ -1794,30 +1919,29 @@ def _survfit_curves(
             raise ValueError("Survival type of newdata does not match the fitted model")
         if new.y.start is None:
             raise ValueError("Individual=TRUE is only valid for counting process data")
+        if ids is None:  # individual = TRUE: one subject
+            codes, labels = [0] * new.n, []
+        else:
+            # coxsurv.fit's curves are the unique ids in order of first appearance, named
+            # by as.character; make.unique keeps apart distinct ids that print alike
+            # (0.1 + 0.2 and 0.3), whose repeated names R keeps but a dict cannot
+            levels = _label_levels(ids, "id")
+            index = {label: code for code, label in enumerate(levels)}
+            codes = [index[label] for label in ids]
+            labels = _make_unique([_as_character(label) for label in levels])
         curves = engine.survfit_individual(
             new.x,
             list(new.y.start),
             list(new.y.time),
-            _survfit_id_codes(newdata, id, new.n) if id is not None else [0] * new.n,
+            codes,
             new_strata=new.strata,
             new_offset=new.offset,
-            stype=stype,
-            ctype=ctype,
-            se_fit=se_fit,
-            censor=censor,
+            **options,
         )
-        return curves, [str(idx + 1) for idx in range(len(curves))] if len(curves) > 1 else []
-    curves = engine.survfit(
-        newdata=new.x,
-        new_strata=new.strata,
-        new_offset=new.offset,
-        stype=stype,
-        ctype=ctype,
-        se_fit=se_fit,
-        censor=censor,
-    )
+        return curves, labels if len(curves) > 1 else []
+    curves = engine.survfit(newdata=new.x, new_strata=new.strata, new_offset=new.offset, **options)
     if new.strata is not None:
-        return curves, [str(idx + 1) for idx in range(len(curves))]
+        return curves, _row_names(newdata, rows)
     return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
 
 
@@ -1827,21 +1951,26 @@ def survfit_coxph(
     *,
     se_fit: Any = True,
     conf_int: Any = 0.95,
-    individual: Any = False,
-    stype: Any = 2,
+    individual: Any | None = None,
+    stype: Any | None = None,
     ctype: Any | None = None,
     conf_type: str = "log",
     censor: Any = True,
     start_time: Any | None = None,
     id: Any | None = None,
+    type: str | None = None,
     **kwargs: Any,
 ) -> CoxSurvfitResult:
     """R's ``survfit.coxph``: predicted survival curves from a Cox model.
 
     Without ``newdata`` the curve is for the average covariate (``fit$means``); with
     ``newdata`` there is one curve per row (per row in its own stratum when the
-    strata variables are present, otherwise every stratum for every row).  ``id``
-    (with counting-process ``newdata``) gives one time-dependent curve per subject.
+    strata variables are present, otherwise every stratum for every row), and rows
+    with a missing value are left out (R's ``na.omit``).  ``id`` (with
+    counting-process ``newdata``) gives one time-dependent curve per subject.
+    ``stype``/``ctype`` default to 2 and the tie method; the old-style ``type``
+    (``"kalbfleisch-prentice"``, ``"aalen"``, ``"efron"``, ...) sets them when neither is
+    given.  ``start_time`` builds the curves from the rows still at risk at that time.
     """
 
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
@@ -1854,18 +1983,8 @@ def survfit_coxph(
         raise ValueError("predicted survival curves are not defined for a clogit model")
     if fit.tt:
         raise ValueError("The survfit function can not process coxph models with a tt term")
-    if start_time is not None:
-        raise NotImplementedError("survfit(start.time=) is not available for Cox models")
+    stype_value, ctype_value = _survfit_types(fit, type, stype, ctype)
     include_se = _normalize_bool_option(se_fit, "se_fit")
-    stype_value = _integer_scalar(stype, "stype")
-    if stype_value not in (1, 2):
-        raise ValueError("stype must be 1 or 2")
-    if ctype is None:
-        ctype_value = 2 if fit.method == "efron" else 1
-    else:
-        ctype_value = _integer_scalar(ctype, "ctype")
-        if ctype_value not in (1, 2):
-            raise ValueError("ctype must be 1 or 2")
     conf_type_name = "none"
     if include_se:
         conf_type_name = _match_string_arg(
@@ -1876,9 +1995,13 @@ def survfit_coxph(
         )
     level = _normalize_conf_level(conf_int, "conf_int")
     censor_value = _normalize_bool_option(censor, "censor")
-    individual_value = _normalize_bool_option(individual, "individual") or id is not None
+    individual_value = id is not None
+    if individual is not None:
+        _warn_outside_package("the `id' option supersedes `individual'", RuntimeWarning)
+        individual_value = _normalize_bool_option(individual, "individual") or individual_value
     if individual_value and newdata is None:
         raise ValueError("the id option only makes sense with new data")
+    start = _start_time_value(start_time)
 
     curves, strata_names = _survfit_curves(
         fit,
@@ -1889,24 +2012,21 @@ def survfit_coxph(
         ctype=ctype_value,
         se_fit=include_se,
         censor=censor_value,
+        start_time=start,
     )
-    surv_rows = [row for curve in curves for row in curve.surv]
-    cumhaz_rows = [row for curve in curves for row in curve.cumhaz]
-    std_rows = [row for curve in curves for row in (curve.std_err or [])] if include_se else []
-    surv = _curve_columns(surv_rows)
-    cumhaz = _curve_columns(cumhaz_rows)
-    std_err = _curve_columns(std_rows) if include_se else None
+    surv = _curve_block(curves, "surv")
+    std_err = _curve_block(curves, "std_err") if include_se else None
     lower = upper = None
     if include_se and conf_type_name != "none":
         lower, upper = _confidence_limits(surv, std_err, conf_type_name, level)
     return CoxSurvfitResult(
-        n=[int(curve.n) for curve in curves],
-        time=[float(t) for curve in curves for t in curve.time],
-        n_risk=[float(v) for curve in curves for v in curve.n_risk],
-        n_event=[float(v) for curve in curves for v in curve.n_event],
-        n_censor=[float(v) for curve in curves for v in curve.n_censor],
+        n=[curve.n for curve in curves],
+        time=[t for curve in curves for t in curve.time],
+        n_risk=[v for curve in curves for v in curve.n_risk],
+        n_event=[v for curve in curves for v in curve.n_event],
+        n_censor=[v for curve in curves for v in curve.n_censor],
         surv=surv,
-        cumhaz=cumhaz,
+        cumhaz=_curve_block(curves, "cumhaz"),
         type=fit.y.type,
         strata={name: len(curve.time) for name, curve in zip(strata_names, curves, strict=True)}
         if strata_names
@@ -1918,6 +2038,7 @@ def survfit_coxph(
         logse=True,
         conf_type=conf_type_name,
         conf_int=level if conf_type_name != "none" else None,
+        start_time=start,
         newdata=newdata,
     )
 

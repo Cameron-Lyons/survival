@@ -114,6 +114,22 @@ def _finite_float(value: Any, name: str) -> float:
     return result
 
 
+def _start_time_value(start_time: Any | None) -> float | None:
+    """The ``start.time`` argument of the survfit methods: ``None`` or one finite number."""
+
+    if start_time is None:
+        return None
+    if isinstance(start_time, bool | str):
+        raise ValueError("start.time must be a single numeric value")
+    try:
+        value = float(start_time)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("start.time must be a single numeric value") from exc
+    if not math.isfinite(value):
+        raise ValueError("start.time must be a single numeric value")
+    return value
+
+
 def _int_vector(values: Any, name: str) -> list[int]:
     return [int(value) for value in _materialize_1d(values, name)]
 
