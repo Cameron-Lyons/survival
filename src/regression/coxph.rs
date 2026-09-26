@@ -1171,14 +1171,31 @@ impl CoxPHFit {
         sums
     }
 
+    /// Whether `predict.coxph` reads back the training design and offset
+    /// (its `use.x` branch): for `se.fit`, for a stratified fit centred
+    /// within strata, or for `reference = "zero"` with non-zero means.
+    fn uses_training_x(&self, se_fit: bool, reference: PredictReference) -> bool {
+        se_fit
+            || (self.strata.is_some() && reference == PredictReference::Strata)
+            || (reference == PredictReference::Zero && self.means.iter().any(|&m| m != 0.0))
+    }
+
     /// The design rows `predict.coxph` uses for `lp`, `risk` and `terms`:
-    /// centred per the reference, plus the centred offset.
+    /// centred per the reference, plus the offset.  With `training_offset`
+    /// the offset is centred at the mean training offset, as R's `offset -
+    /// mean(offset)` does in its `use.x` branch; otherwise the training
+    /// offset is 0 and a new offset is used as it is.
     fn prediction_rows(
         &self,
         newdata: Option<&CoxNewData>,
         reference: PredictReference,
+        training_offset: bool,
     ) -> SurvivalResult<(Array2<f64>, Vec<f64>)> {
-        let offset_mean = self.offset.iter().sum::<f64>() / self.n as f64;
+        let offset_mean = if training_offset {
+            self.offset.iter().sum::<f64>() / self.n as f64
+        } else {
+            0.0
+        };
         let has_strata = self.strata.is_some();
         let (mut newx, offset, stratum_index): (Array2<f64>, Vec<f64>, Vec<usize>) = match newdata {
             None => (
@@ -1232,18 +1249,14 @@ impl CoxPHFit {
         se_fit: bool,
         reference: PredictReference,
     ) -> SurvivalResult<CoxPrediction> {
-        let has_strata = self.strata.is_some();
-        let use_x = newdata.is_some()
-            || se_fit
-            || (has_strata && reference == PredictReference::Strata)
-            || (reference == PredictReference::Zero && self.means.iter().any(|&m| m != 0.0));
-        if !use_x {
+        let training_x = self.uses_training_x(se_fit, reference);
+        if newdata.is_none() && !training_x {
             return Ok(CoxPrediction {
                 fit: self.linear_predictors.clone(),
                 se_fit: None,
             });
         }
-        let (newx, offset) = self.prediction_rows(newdata, reference)?;
+        let (newx, offset) = self.prediction_rows(newdata, reference, training_x)?;
         let coef = self.coefficients_or_zero();
         let fit: Vec<f64> = newx
             .outer_iter()
@@ -1282,7 +1295,7 @@ impl CoxPHFit {
         assign: &[Vec<usize>],
     ) -> SurvivalResult<CoxTermsPrediction> {
         validate_assign(assign, self.nvar())?;
-        let (newx, _) = self.prediction_rows(newdata, reference)?;
+        let (newx, _) = self.prediction_rows(newdata, reference, true)?;
         let coef = self.coefficients_or_zero();
         let nterms = assign.len();
         let mut fit = vec![vec![0.0; nterms]; newx.nrows()];
@@ -2045,6 +2058,34 @@ mod tests {
             .unwrap();
         assert_eq!(terms.fit.len(), 8);
         assert!((terms.constant - center).abs() < 1e-12);
+    }
+
+    #[test]
+    fn newdata_offset_is_centred_only_in_the_use_x_branch() {
+        let offset = vec![0.0, 1.0, 0.0, 2.0, 1.0, 0.0, 1.0, 2.0];
+        let data = CoxphData {
+            offset: Some(offset.clone()),
+            ..lung_like_data()
+        };
+        let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
+        let newdata =
+            CoxNewData::try_new(fit.x.clone(), None, Some(offset.clone()), None, None).unwrap();
+        // predict.coxph without se.fit: newx %*% beta + newoffset, so the
+        // training rows give back the linear predictors
+        let plain = fit
+            .predict_lp(Some(&newdata), false, PredictReference::Sample)
+            .unwrap();
+        for (p, lp) in plain.fit.iter().zip(&fit.linear_predictors) {
+            assert!((p - lp).abs() < 1e-12);
+        }
+        // with se.fit the offset is centred at mean(offset)
+        let with_se = fit
+            .predict_lp(Some(&newdata), true, PredictReference::Sample)
+            .unwrap();
+        let offset_mean = offset.iter().sum::<f64>() / offset.len() as f64;
+        for (p, lp) in with_se.fit.iter().zip(&fit.linear_predictors) {
+            assert!((p - (lp - offset_mean)).abs() < 1e-12);
+        }
     }
 
     #[test]

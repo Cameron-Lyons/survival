@@ -1039,7 +1039,8 @@ def _check_anova(result: Any, expected: Mapping[str, Any], nested: bool = False)
 def _check_cox_residual(fit: Any, kind: str, expected: Any) -> None:
     actual = r.residuals(fit, type=kind)
     if kind in ("schoenfeld", "scaledsch"):
-        expected = expected["values"]
+        assert_close(actual.time, expected["time"], rtol=RTOL_COEF, path=f"residuals.{kind}.time")
+        actual, expected = actual.values, expected["values"]
     if expected and isinstance(expected[0], list):
         if actual and not isinstance(actual[0], list):
             actual = [[value] for value in actual]

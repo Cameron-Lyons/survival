@@ -18,6 +18,7 @@ from ._concordance import concordance, concordancefit, survConcordance, survConc
 from ._coxph import (
     ClogitModel,
     CoxphModel,
+    CoxSchoenfeldResiduals,
     anova,
     basehaz,
     clogit,
@@ -187,6 +188,7 @@ __all__ = [
     "CoxBaseHazardResult",
     "CoxPHDetailResult",
     "CoxPHWTestResult",
+    "CoxSchoenfeldResiduals",
     "CoxSurvfitResult",
     "CoxZPHResult",
     "CoxphModel",

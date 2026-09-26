@@ -1521,9 +1521,7 @@ def predict_coxph(
         if predict_type == "risk":
             pred = [math.exp(value) for value in pred]
     elif predict_type == "terms":
-        rows, se_rows = _predict_terms(fit, new, include_se, reference_name)
-        pred = [[row[idx] for idx in selected] for row in rows]
-        se = None if se_rows is None else [[row[idx] for idx in selected] for row in se_rows]
+        pred, se = _predict_terms(fit, new, include_se, reference_name, selected)
     else:
         result = fit.fit.predict(
             predict_type,
@@ -1575,32 +1573,42 @@ def _frailty_prediction(
 
 
 def _predict_terms(
-    fit: CoxphModel, new: _NewData | None, se_fit: bool, reference: str
+    fit: CoxphModel, new: _NewData | None, se_fit: bool, reference: str, selected: list[int]
 ) -> tuple[list[list[float]], list[list[float]] | None]:
-    """The ``terms`` predictions of every model term.  As in predict.coxph.penal, a
-    sparse frailty's column holds the subjects' frailties (with standard errors
-    ``sqrt(fvar)``), and 0 for new data."""
+    """The ``terms`` predictions of the ``selected`` model terms (positions among
+    :func:`_model_terms`).  As in predict.coxph.penal, a sparse frailty's column holds
+    the subjects' frailties (with standard errors ``sqrt(fvar)``), and 0 for new
+    data."""
 
+    active = _active_assign(fit)
+    position = _sparse_term(fit)
+    # the engine's terms are the model terms without the sparse one
+    engine_terms = [
+        idx if position is None or idx < position else idx - 1
+        for idx in selected
+        if idx != position
+    ]
     result = fit.fit.predict_terms(
         newdata=None if new is None else new.x,
         new_strata=None if new is None else new.strata,
         new_offset=None if new is None else new.offset,
         se_fit=se_fit,
         reference=reference,
-        assign=_active_assign(fit),
+        assign=[active[idx] for idx in engine_terms],
     )
-    rows = [list(row) for row in result.fit]
-    se_rows = None if result.se_fit is None else [list(row) for row in result.se_fit]
-    position = _sparse_term(fit)
-    if position is not None:
+    rows, se_rows = result.fit, result.se_fit
+    # the frailty column goes in at each place the selection names it, left to right
+    columns = [column for column, idx in enumerate(selected) if idx == position]
+    if columns:
         penalized = fit.penalized
         for i, row in enumerate(rows):
             group = penalized.frail_index[i] if new is None else None
-            row.insert(position, 0.0 if group is None else penalized.frail[group])
-            if se_rows is not None:
-                se_rows[i].insert(
-                    position, 0.0 if group is None else math.sqrt(penalized.fvar[group])
-                )
+            value = 0.0 if group is None else penalized.frail[group]
+            se = 0.0 if group is None else math.sqrt(penalized.fvar[group])
+            for column in columns:
+                row.insert(column, value)
+                if se_rows is not None:
+                    se_rows[i].insert(column, se)
     return rows, se_rows
 
 
@@ -1654,6 +1662,34 @@ def _drop_single_column(rows: list[list[float]], nvar: int) -> Any:
     return [row[0] for row in rows] if nvar == 1 else rows
 
 
+@dataclass(frozen=True)
+class CoxSchoenfeldResiduals:
+    """``residuals(fit, type = "schoenfeld" | "scaledsch")``: one row of ``values`` per
+    death (a vector for a one-variable model, as in R), labelled as R labels the matrix:
+    ``time`` holds the death times (its row names), ``colnames`` the coefficient names,
+    and ``strata`` the deaths per stratum in level order (``attr(, "strata")``, R's
+    ``table(strata[deaths])``), ``None`` for an unstratified fit."""
+
+    values: Any = field(repr=False)
+    time: list[float] = field(repr=False)
+    strata: dict[str, int] | None
+    colnames: list[str]
+
+
+def _schoenfeld_result(fit: CoxphModel, residuals: Any) -> CoxSchoenfeldResiduals:
+    strata: dict[str, int] | None = None
+    if residuals.strata is not None and fit.strata_levels:
+        strata = dict.fromkeys(fit.strata_levels, 0)
+        for code in residuals.strata:
+            strata[fit.strata_levels[code]] += 1
+    return CoxSchoenfeldResiduals(
+        values=_drop_single_column(residuals.residuals, fit.nvar),
+        time=residuals.time,
+        strata=strata,
+        colnames=list(fit.coef_names),
+    )
+
+
 def residuals_coxph(
     fit: CoxphModel,
     *,
@@ -1664,10 +1700,11 @@ def residuals_coxph(
 ) -> Any:
     """R's ``residuals.coxph``.
 
-    Score, Schoenfeld and dfbeta residuals are matrices (one row per observation
-    or event) that drop to a vector for a one-variable model, as in R.  A
-    ``na.exclude`` fit's residuals are NaN at the rows it removed (``naresid``), and
-    a ``collapse`` vector then covers those rows too.
+    Score and dfbeta residuals are matrices (one row per observation) that drop to a
+    vector for a one-variable model, as in R; Schoenfeld residuals come as a
+    :class:`CoxSchoenfeldResiduals`, one row per death.  A ``na.exclude`` fit's
+    residuals other than Schoenfeld's are NaN at the rows it removed (``naresid``),
+    and a ``collapse`` vector then covers those rows too.
     """
 
     if kwargs:
@@ -1697,7 +1734,7 @@ def residuals_coxph(
             if otype == "schoenfeld"
             else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
         )
-        return _drop_single_column([list(row) for row in residuals.residuals], nvar)
+        return _schoenfeld_result(fit, residuals)
     # naresid comes before the collapse: the engine sums the fit's rows, and a group
     # holding a row na.exclude removed sums to NA
     padded_codes = codes if excluded and collapse is not True else None

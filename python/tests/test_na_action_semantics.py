@@ -443,7 +443,7 @@ def test_coxph_na_exclude_pads_residuals_and_predictions(cox_exclude):
         ],
     )
     # Schoenfeld residuals are per event, never padded
-    assert len(r.residuals(cox_exclude, type="schoenfeld")) == 164
+    assert len(r.residuals(cox_exclude, type="schoenfeld").values) == 164
 
 
 def test_coxph_na_exclude_collapses_after_padding(cox_exclude):

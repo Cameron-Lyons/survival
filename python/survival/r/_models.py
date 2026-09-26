@@ -34,6 +34,8 @@ from ._coxph import (
     CoxphModel,
     _coxph_df,
     _coxph_model_frame,
+    _has_strata,
+    _prediction_newdata,
     _term_labels,
     _terms_selection,
     predict_coxph,
@@ -300,19 +302,37 @@ def _model_weights_fit(
 
 
 @singledispatch
-def model_matrix(fit: Any) -> dict[str, Any]:
+def model_matrix(fit: Any, data: Any | None = None) -> dict[str, Any]:
     """``model.matrix(fit)``: the design matrix, its column names and ``assign``."""
 
     raise _no_method("model_matrix")
 
 
 @model_matrix.register(CoxphModel)
-def _model_matrix_cox(fit: CoxphModel) -> dict[str, Any]:
+def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any]:
+    """R's ``model.matrix.coxph``: the fit's design, or with ``data`` the design of
+    those rows (``model.frame(Terms, data)``, whose default ``na.omit`` leaves out
+    the incomplete ones).  ``assign`` numbers each column's term by its position in
+    the model's term labels, which count ``strata()`` terms (the columns keep R's
+    numbering "wrt the original model matrix") but not ``cluster()``; ``strata`` is
+    ``attr(X, "strata")``, each row's stratum, ``None`` for an unstratified fit."""
+
     assign = [0] * len(fit.coef_names)
-    for term_idx, columns in enumerate(fit.assign.values(), start=1):
+    for term_idx, columns in zip(fit.design.term_assignments, fit.assign.values(), strict=True):
         for col in columns:
             assign[col] = term_idx
-    return {"data": fit.x, "columns": list(fit.coef_names), "assign": assign}
+    if data is None:
+        rows, strata = fit.x, fit.strata
+    else:
+        new = _prediction_newdata(
+            fit, data, need_strata=_has_strata(fit), need_response=False, na_action="na.omit"
+        )
+        rows, strata = new.x, None
+        if _has_strata(fit):
+            if new.strata is None:
+                raise ValueError("data must contain the strata variable(s) of the model")
+            strata = [fit.strata_levels[code] for code in new.strata]
+    return {"data": rows, "columns": list(fit.coef_names), "assign": assign, "strata": strata}
 
 
 model_matrix.register(SurvregModelResult, model_matrix_survreg)
@@ -440,10 +460,19 @@ _predict.register(CoxphModel, predict_coxph)
 _predict.register(SurvregModelResult, predict_survreg)
 
 
+@singledispatch
 def fitted(fit: Any, **kwargs: Any) -> Any:
-    """``fitted``: ``predict`` on the training data."""
+    """``fitted``: ``predict`` on the training data; for a Cox model R's
+    ``fitted.coxph``, the fit's linear predictors."""
 
     return predict(fit, None, **kwargs)
+
+
+@fitted.register(CoxphModel)
+def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
+    # fitted.coxph(object, ...) is object$linear.predictors: centred at the overall
+    # means, not padded by naresid, other arguments ignored
+    return fit.linear_predictors
 
 
 @singledispatch

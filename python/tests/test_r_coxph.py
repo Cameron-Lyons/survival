@@ -477,12 +477,12 @@ def test_residual_types_match_r(fit):
         ],
         rel=1e-6,
     )
-    schoenfeld = r.residuals(fit, type="schoenfeld")
+    schoenfeld = r.residuals(fit, type="schoenfeld").values
     assert len(schoenfeld) == 12
     assert schoenfeld[:2] == approx(
         [[2.53760917080791, -0.133071598306384], [5.26306163081291, -0.162634638101886]]
     )
-    assert r.residuals(fit, type="scaledsch")[:2] == approx(
+    assert r.residuals(fit, type="scaledsch").values[:2] == approx(
         [[0.204673860321303, -1.29886912474649], [0.272655444767498, -1.28697466616326]],
         rel=1e-6,
     )
