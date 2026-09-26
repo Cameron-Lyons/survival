@@ -209,8 +209,11 @@ class SurvregModelResult:
         return int(self.fit.df)
 
     @property
-    def df_residual(self) -> float:
-        """``fit$df.residual``: ``n - sum(df)`` (``NaN`` where R has ``NA``)."""
+    def df_residual(self) -> int | float:
+        """``fit$df.residual``: ``n - sum(df)``, fractional for a penalized fit (``NaN``
+        where R has ``NA``)."""
+        if self.penalized is None:
+            return int(self.fit.df_residual)
         return float(self.fit.df_residual)
 
     @property
@@ -731,7 +734,9 @@ def survreg(
     if penalized_terms:
         # survpenal.fit warns about nothing: its inner-loop warning is never reached
         penalized, assign2_labels = fit_penalized(
-            frame,
+            frame.assign,
+            frame.term_labels,
+            frame.strata_term,
             penalized_terms,
             data_value,
             distribution,
@@ -785,6 +790,15 @@ def survreg(
 
 def _estimated_scale_count(model: Any) -> int:
     return len(model.coefficients) - len(model.means)
+
+
+def survreg_df(fit: SurvregModelResult) -> int | float:
+    """``sum(fit$df)``: the number of coefficients, the estimated scales included, or the
+    fractional total of a penalized fit."""
+
+    if fit.penalized is None:
+        return int(fit.fit.df)
+    return float(fit.fit.df)
 
 
 def _location_names(fit: SurvregModelResult, complete: bool = True) -> list[str]:
@@ -858,6 +872,8 @@ def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
         ),
         "loglik": loglik,
         "chi": 2.0 * (loglik[1] - loglik[0]),
+        # print.summary.survreg's df: sum(x$df) - x$idf
+        "chi_df": survreg_df(fit) - fit.idf,
         "iter": fit.iter,
         "idf": fit.idf,
     }
@@ -1077,26 +1093,42 @@ def residuals_survreg(
 
 
 def _refit_terms(fit: SurvregModelResult, keep: int) -> Any:
-    """``update(fit, ~ . - <dropped terms>)``: refit with the first ``keep`` terms."""
+    """``update(fit, ~ . - <dropped terms>)``: refit with the first ``keep`` terms, through
+    survpenal.fit while a ``ridge()`` or ``pspline()`` term remains.  The stored penalty
+    objects and basis columns are what ``update`` rebuilds from the same data."""
 
     model = fit.fit
     columns = [column for column, term in enumerate(fit.assign) if term <= keep]
+    strata_term = fit.strata_term if fit.strata_term <= keep else 0
     fixed_scale = model.scale[0] if _estimated_scale_count(model) == 0 else 0.0
-    return _core.survreg_fit(
-        _core.SurvregData(
-            model.time,
-            model.status,
-            [[row[column] for column in columns] for row in model.covariates],
-            time2=model.time2,
-            weights=model.weights,
-            offset=model.offset,
-            strata=model.strata if 0 < fit.strata_term <= keep else None,
-            cluster=model.cluster,
-        ),
-        model.distribution,
-        scale=fixed_scale,
-        control=fit.control,
+    data = _core.SurvregData(
+        model.time,
+        model.status,
+        [[row[column] for column in columns] for row in model.covariates],
+        time2=model.time2,
+        weights=model.weights,
+        offset=model.offset,
+        strata=model.strata if strata_term else None,
+        cluster=model.cluster,
     )
+    penalized_terms = [
+        (term_index, term) for term_index, term in penalty_terms(fit.design) if term_index <= keep
+    ]
+    if penalized_terms:
+        refit, _ = fit_penalized(
+            [fit.assign[column] for column in columns],
+            fit.term_labels[:keep],
+            strata_term,
+            penalized_terms,
+            data,
+            model.distribution,
+            init=None,
+            scale=fixed_scale,
+            control=fit.control,
+            robust=None,
+        )
+        return refit.survreg
+    return _core.survreg_fit(data, model.distribution, scale=fixed_scale, control=fit.control)
 
 
 def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:
@@ -1114,9 +1146,6 @@ def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:
 
 
 def _anova_single(fit: SurvregModelResult, with_test: bool) -> SurvregAnovaResult:
-    if fit.is_penalized:
-        # anova.survreg refits each prefix of the terms with its penalties
-        raise NotImplementedError("anova of a single penalized survreg fit is not implemented")
     model = fit.fit
     labels = list(fit.term_labels)
     loglik = [0.0] * (len(labels) + 1)

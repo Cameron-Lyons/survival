@@ -1,19 +1,16 @@
 """The penalty branch of R's ``survreg`` (``survreg.R:203-229``): ``ridge()`` and
 ``pspline()`` terms are fitted by ``survpenal.fit``, whose port is the Rust
 ``survpenal_fit``; this module finds the penalised terms of the design and lays out R's
-``assign``/``pcols`` for it.
+``assign``/``pcols`` for it.  The fit's print method is in ``_survpenal_print``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .. import _survival as _core
 from ._types import _FormulaDesign, _PenaltyDesignTerm
-
-if TYPE_CHECKING:
-    from ._survreg import _SurvregFrame
 
 
 def _term_index(design: _FormulaDesign, position: int) -> int:
@@ -38,25 +35,31 @@ def penalty_terms(design: _FormulaDesign | None) -> list[tuple[int, _PenaltyDesi
     ]
 
 
-def assign_list(frame: _SurvregFrame) -> tuple[list[str], list[list[int]]]:
+def assign_list(
+    assign: Sequence[int], term_labels: Sequence[str], strata_term: int
+) -> tuple[list[str], list[list[int]]]:
     """R's ``attrassign(X, newTerms)``: the labels of ``(Intercept)`` and of every
-    non-strata term, with the 0-based design columns of each, in column order."""
+    non-strata term, with the 0-based design columns of each, in column order.  ``assign``
+    is ``attr(X, "assign")`` per column and ``strata_term`` the 1-based strata term (0
+    for none)."""
 
     labels: list[str] = []
     columns: list[list[int]] = []
-    if 0 in frame.assign:
+    if 0 in assign:
         labels.append("(Intercept)")
-        columns.append([j for j, term in enumerate(frame.assign) if term == 0])
-    for term_index, label in enumerate(frame.term_labels, start=1):
-        term_columns = [j for j, term in enumerate(frame.assign) if term == term_index]
-        if term_index != frame.strata_term and term_columns:
+        columns.append([j for j, term in enumerate(assign) if term == 0])
+    for term_index, label in enumerate(term_labels, start=1):
+        term_columns = [j for j, term in enumerate(assign) if term == term_index]
+        if term_index != strata_term and term_columns:
             labels.append(label)
             columns.append(term_columns)
     return labels, columns
 
 
 def fit_penalized(
-    frame: _SurvregFrame,
+    assign: Sequence[int],
+    term_labels: Sequence[str],
+    strata_term: int,
     terms: Sequence[tuple[int, _PenaltyDesignTerm]],
     data: Any,
     distribution: Any,
@@ -66,13 +69,14 @@ def fit_penalized(
     control: Any,
     robust: bool | None,
 ) -> tuple[Any, tuple[str, ...]]:
-    """``survpenal.fit`` on the frame's ``SurvregData`` for the ``penalty_terms`` of
-    its design: the ``SurvpenalFit`` and the labels of its ``assign2`` terms (``"sigma"``
-    last when the scale is estimated)."""
+    """``survpenal.fit`` on a ``SurvregData`` whose design columns are laid out by
+    ``assign`` (see :func:`assign_list`), for its ``penalty_terms``: the ``SurvpenalFit``
+    and the labels of its ``assign2`` terms (``"sigma"`` last when the scale is
+    estimated)."""
 
-    labels, columns = assign_list(frame)
+    labels, columns = assign_list(assign, term_labels, strata_term)
     pcols = [
-        [j for j, assigned in enumerate(frame.assign) if assigned == term_index]
+        [j for j, assigned in enumerate(assign) if assigned == term_index]
         for term_index, _ in terms
     ]
     fit = _core.survpenal_fit(
