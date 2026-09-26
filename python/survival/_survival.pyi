@@ -9173,35 +9173,6 @@ class SurvfitKMResult:
     @property
     def upper(self) -> list[float] | None: ...
 
-class SurvfitMatrixResult:
-    def __init__(
-        self,
-        time: Sequence[float],
-        surv: Sequence[Sequence[float]],
-        cumhaz: Sequence[Sequence[float]],
-        std_err: Sequence[Sequence[float]] | None = None,
-        n_risk: Sequence[float] = ...,
-        n_event: Sequence[float] = ...,
-        n_states: int = 1,
-    ) -> None: ...
-    def __repr__(self) -> str: ...
-    def get_cumhaz_at_state(self, state: int) -> list[float]: ...
-    def get_surv_at_state(self, state: int) -> list[float]: ...
-    @property
-    def cumhaz(self) -> list[list[float]]: ...
-    @property
-    def n_event(self) -> list[float]: ...
-    @property
-    def n_risk(self) -> list[float]: ...
-    @property
-    def n_states(self) -> int: ...
-    @property
-    def std_err(self) -> list[list[float]] | None: ...
-    @property
-    def surv(self) -> list[list[float]]: ...
-    @property
-    def time(self) -> list[float]: ...
-
 class SurvfitQuantiles:
     @property
     def lower(self) -> list[list[float]] | None: ...
@@ -10923,22 +10894,6 @@ def agscore3(
     strata: Sequence[int] | None = None,
     ties: str = "efron",
 ) -> list[list[float]]: ...
-def agsurv4(
-    ndeath: Sequence[int],
-    risk: Sequence[float],
-    wt: Sequence[float],
-    sn: int,
-    denom: Sequence[float],
-) -> list[float]: ...
-def agsurv5(
-    n: int,
-    nvar: int,
-    dd: Sequence[int],
-    x1: Sequence[float],
-    x2: Sequence[float],
-    xsum: Sequence[float],
-    xsum2: Sequence[float],
-) -> dict[str, Any]: ...
 def analyze_local_global(
     shap_values: Sequence[Sequence[Sequence[float]]],
     feature_values: Sequence[float],
@@ -10990,14 +10945,6 @@ def assess_model_robustness(
     n_perturbations: int = 100,
     seed: int | None = None,
 ) -> RobustnessResult: ...
-def basehaz(
-    time: Sequence[float],
-    status: Sequence[int],
-    linear_predictors: Sequence[float],
-    centered: bool,
-    entry_times: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-) -> tuple[list[float], list[float]]: ...
 def batch_predict_survival(
     x: Sequence[Sequence[float]],
     coefficients: Sequence[float],
@@ -11271,13 +11218,6 @@ def compute_all_pairwise_interactions(
     feature_indices: Sequence[int] | None = None,
     n_grid: int = 20,
 ) -> list[FriedmanHResult]: ...
-def compute_baseline_survival_steps(
-    ndeath: Sequence[int],
-    risk: Sequence[float],
-    wt: Sequence[float],
-    sn: int,
-    denom: Sequence[float],
-) -> list[float]: ...
 def compute_cv_score(fold_scores: Sequence[float], metric: str) -> CrossValidatedScore: ...
 def compute_dice(
     covariates: Sequence[Sequence[float]],
@@ -11363,15 +11303,6 @@ def compute_survival_ice(
     n_grid: int = 50,
     sample_size: int | None = None,
 ) -> list[ICEResult]: ...
-def compute_tied_baseline_summaries(
-    n: int,
-    nvar: int,
-    dd: Sequence[int],
-    x1: Sequence[float],
-    x2: Sequence[float],
-    xsum: Sequence[float],
-    xsum2: Sequence[float],
-) -> dict[str, Any]: ...
 def compute_time_varying_ale(
     covariates: Sequence[Sequence[float]],
     predictions: Sequence[Sequence[float]],
@@ -11411,14 +11342,6 @@ def concordancefit_counting(
     keepstrata: int = 10,
     std_err: bool = True,
 ) -> ConcordanceFit: ...
-def condition_cox_survfit_curves(
-    times: Sequence[float],
-    cumhaz: Sequence[Sequence[float]],
-    t0: float,
-    include_time0: bool,
-    filter_start_time: bool,
-    time_epsilon: float,
-) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
 def conditional_reliability(
     time: Sequence[float],
     surv: Sequence[float],
@@ -11525,20 +11448,6 @@ def covariate_shift_conformal_survival(
     weight_trim: float | None = None,
 ) -> CovariateShiftConformalResult: ...
 def cox_callback(which: int, coef: ArrayLike, fexpr: Any) -> CoxPenaltyTerms: ...
-def cox_expected_baseline_by_stratum(
-    time: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    beta: Sequence[float],
-    weights: Sequence[float],
-    strata: Sequence[int],
-    offset: Sequence[float],
-    means: Sequence[float],
-    entry_times: Sequence[float] | None = None,
-    method: str | None = None,
-) -> tuple[
-    list[int], list[list[float]], list[list[float]], list[list[float]], list[list[list[float]]]
-]: ...
 def cox_survfit_baseline(
     y: Any,
     x: Any,
@@ -11547,15 +11456,6 @@ def cox_survfit_baseline(
     survtype: int,
     vartype: int,
 ) -> dict[str, Any]: ...
-def cox_survfit_from_baseline(
-    base_times: Sequence[float],
-    base_hazards: Sequence[float],
-    linear_predictors: Sequence[float],
-    center: float = 0.0,
-    base_strata: Sequence[int] | None = None,
-    curve_strata: Sequence[int] | None = None,
-    requested_times: Sequence[float] | None = None,
-) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
 def cox_zph(
     fit: CoxPHFit | CoxpenalFit,
     transform: str | Sequence[float] | None = None,
@@ -13235,12 +13135,6 @@ def statefig(
     column: bool = False,
     coordinates: Sequence[Sequence[float]] | None = None,
 ) -> StateFigResult: ...
-def step_matrix_values_at(
-    times: Sequence[float],
-    values: Sequence[Sequence[float]],
-    requested_times: Sequence[float],
-    initial: float,
-) -> list[list[float]]: ...
 def step_values_at(
     times: Sequence[float],
     values: Sequence[float],
@@ -13368,27 +13262,6 @@ def survfit_confint(
     selow: Sequence[float] | None = None,
     ulimit: bool = True,
 ) -> ConfidenceBands: ...
-def survfit_from_cumhaz(
-    time: Sequence[float],
-    cumhaz: Sequence[float],
-    n_risk: Sequence[float] | None = None,
-    n_event: Sequence[float] | None = None,
-) -> SurvfitMatrixResult: ...
-def survfit_from_hazard(
-    time: Sequence[float],
-    hazard: Sequence[float],
-    n_risk: Sequence[float] | None = None,
-    n_event: Sequence[float] | None = None,
-) -> SurvfitMatrixResult: ...
-def survfit_from_matrix(
-    time: Sequence[float],
-    hazard_matrix: Sequence[Sequence[float]],
-) -> SurvfitMatrixResult: ...
-def survfit_multistate(
-    time: Sequence[float],
-    transition_hazards: Sequence[Sequence[Sequence[float]]],
-    initial_state: int,
-) -> SurvfitMatrixResult: ...
 def survfitaj(
     time: Sequence[float],
     state: Sequence[int],

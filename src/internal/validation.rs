@@ -310,9 +310,6 @@ pub(crate) fn validate_binary_f64(slice: &[f64], name: &str) -> Result<(), Valid
 
 /// Values must be non-decreasing. `NaN` compares false and therefore passes;
 /// pair with [`validate_finite`] when the data may contain `NaN`.
-// Canonical helper for routines that require pre-sorted times (survfit,
-// pyears); callers currently open-code the check and are expected to migrate.
-#[allow(dead_code)]
 pub(crate) fn validate_sorted(slice: &[f64], name: &str) -> Result<(), ValidationError> {
     for (index, pair) in slice.windows(2).enumerate() {
         if pair[1] < pair[0] {

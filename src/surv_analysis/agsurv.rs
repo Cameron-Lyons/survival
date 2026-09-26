@@ -8,20 +8,26 @@
 //! means `xbar` that carry the coefficient uncertainty, and (for the
 //! Kalbfleisch-Prentice estimate) the per-time survival increments.
 //! [`agsurv_rows`] does the same for a subset of rows (a stratum of a fit)
-//! without copying the data; [`coxsurv_fit`] runs it per stratum and
-//! [`expand_curve`] / [`individual_curve`] turn a stratum's pieces into
-//! curves for new covariate rows (`survfit(fit, newdata)`), including the
-//! standard error `sqrt(cumsum(varhaz) + dt' V dt) * risk2` on the
-//! cumulative-hazard scale.
+//! without copying the data, and [`expand_curve`] / [`individual_curve`]
+//! turn a stratum's pieces into curves for new covariate rows
+//! (`survfit(fit, newdata)`), including the standard error
+//! `sqrt(cumsum(varhaz) + dt' V dt) * risk2` on the cumulative-hazard scale.
 //!
-//! Everything here is plain Rust returning [`SurvivalResult`]; the Python
-//! surface lives on `regression::coxph::CoxPHFit`, and the legacy
-//! `cox_survfit_baseline` / `basehaz` / `cox_expected_baseline_by_stratum`
-//! bindings are thin views of the same curves.
+//! The kernels are plain Rust returning [`SurvivalResult`]; the Python
+//! surface of a fitted model lives on `regression::coxph::CoxPHFit`.  Two
+//! low-level bindings remain here: [`cox_survfit_baseline`], `agsurv()` of
+//! one stratum for the R bridge's `coxsurv.fit`, and [`step_values_at`],
+//! which reads a curve at given times.
 
-use crate::core::strata_order::stratum_groups;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{extract_matrix_f64, extract_vec_f64};
+use crate::internal::validation::{
+    validate_binary_f64, validate_finite, validate_length, validate_non_empty,
+    validate_non_negative, validate_positive, validate_sorted,
+};
 use ndarray::{Array1, Array2, ArrayView2};
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 /// R's `survtype` / `vartype` codes: `1` Kalbfleisch-Prentice, `2` Breslow
 /// (Nelson-Aalen hazard), `3` Efron.
@@ -171,7 +177,7 @@ fn sorted_unique(values: impl Iterator<Item = f64>) -> Vec<f64> {
 /// each unique time.  `risk` and `weights` are those of the deaths in time
 /// order; `denom` is the weighted risk sum at each time.  A single death
 /// solves the estimating equation in closed form, tied deaths by bisection.
-pub(crate) fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[f64]) -> Vec<f64> {
+fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[f64]) -> Vec<f64> {
     let mut km = vec![1.0; ndeath.len()];
     let mut j = 0;
     for (i, &deaths) in ndeath.iter().enumerate() {
@@ -201,13 +207,13 @@ pub(crate) fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[
 /// Port of `src/agsurv5.c`: the Efron hazard sums.  For `d` tied deaths at
 /// a time, `sum1 = mean_k 1/(nrisk - k/d erisk)`, `sum2` the same with the
 /// square, and `xbar` the matching weighted covariate means.
-pub(crate) struct Agsurv5 {
-    pub sum1: Vec<f64>,
-    pub sum2: Vec<f64>,
-    pub xbar: Array2<f64>,
+struct Agsurv5 {
+    sum1: Vec<f64>,
+    sum2: Vec<f64>,
+    xbar: Array2<f64>,
 }
 
-pub(crate) fn agsurv5(
+fn agsurv5(
     ndeath: &[usize],
     nrisk: &[f64],
     erisk: &[f64],
@@ -663,44 +669,21 @@ pub fn individual_curve(
     })
 }
 
-/// Runs [`agsurv`] once per stratum (`coxsurv.fit`'s first loop).  `strata`
-/// are stratum codes; the curves come back in ascending code order together
-/// with the codes.
-pub fn coxsurv_fit(
-    data: &AgsurvData<'_>,
-    strata: Option<&[i32]>,
-    survtype: CoxSurvType,
-    vartype: CoxSurvType,
-) -> SurvivalResult<(Vec<i32>, Vec<AgsurvCurve>)> {
-    data.validate()?;
-    let n = data.stop.len();
-    let Some(strata) = strata else {
-        return Ok((vec![0], vec![agsurv(data, survtype, vartype)?]));
-    };
-    if strata.len() != n {
-        return Err(SurvivalError::invalid_input(format!(
-            "strata has {} rows but stop has {n}",
-            strata.len()
-        )));
-    }
-    let groups = stratum_groups(strata);
-    let codes = groups.iter().map(|(code, _)| *code).collect();
-    let curves = groups
-        .iter()
-        .map(|(_, rows)| agsurv_rows(data, rows, survtype, vartype))
-        .collect::<SurvivalResult<Vec<_>>>()?;
-    Ok((codes, curves))
-}
-
 /// Cumulative hazard of a curve just after `t`: `c(0, cumhaz)[findInterval(t, time) + 1]`.
 pub fn cumhaz_at(curve: &AgsurvCurve, t: f64) -> f64 {
-    step_at(&curve.time, &curve.cumhaz, t)
+    step_at(&curve.time, &curve.cumhaz, t, 0.0)
 }
 
-/// Value of a right-continuous step function (`c(0, values)[findInterval(t, times) + 1]`).
-pub fn step_at(times: &[f64], values: &[f64], t: f64) -> f64 {
+/// Value at `t` of the right-continuous step function that is `initial`
+/// before the first of the sorted `times` and `values[i]` from `times[i]`
+/// on: `c(initial, values)[findInterval(t, times) + 1]`.
+pub fn step_at(times: &[f64], values: &[f64], t: f64, initial: f64) -> f64 {
     let index = times.partition_point(|&time| time <= t);
-    if index == 0 { 0.0 } else { values[index - 1] }
+    if index == 0 {
+        initial
+    } else {
+        values[index - 1]
+    }
 }
 
 /// Cumulative sums of `varhaz` and of the rows of `xbar`, the two
@@ -740,6 +723,151 @@ pub fn cum_xbar_at(curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64) ->
     } else {
         integrated.cum_xbar.row(index - 1).to_owned()
     }
+}
+
+/// `agsurv(y, x, wt, risk, survtype, vartype)` on all rows as one stratum.
+/// `y` has 2 or 3 columns ending in a 0/1 status (with start < stop), `x`
+/// one row per observation; the weights must be finite and non-negative and
+/// the risks finite and positive.
+fn baseline_curve(
+    y: &[Vec<f64>],
+    x: &[Vec<f64>],
+    weights: &[f64],
+    risk: &[f64],
+    survtype: i32,
+    vartype: i32,
+) -> SurvivalResult<AgsurvCurve> {
+    validate_non_empty(y, "y")?;
+    let n = y.len();
+    let ycols = y[0].len();
+    if ycols != 2 && ycols != 3 {
+        return Err(SurvivalError::invalid_input("y must have 2 or 3 columns"));
+    }
+    for (i, row) in y.iter().enumerate() {
+        let name = format!("y row {i}");
+        validate_length(ycols, row.len(), &name)?;
+        validate_finite(row, &name)?;
+    }
+    let start: Option<Vec<f64>> = (ycols == 3).then(|| y.iter().map(|row| row[0]).collect());
+    let stop: Vec<f64> = y.iter().map(|row| row[ycols - 2]).collect();
+    let status: Vec<f64> = y.iter().map(|row| row[ycols - 1]).collect();
+    validate_binary_f64(&status, "y status")?;
+    if let Some(i) = start
+        .as_deref()
+        .and_then(|start| (0..n).find(|&i| start[i] >= stop[i]))
+    {
+        return Err(SurvivalError::invalid_input(format!(
+            "y start must be less than stop at row {i}"
+        )));
+    }
+    validate_length(n, x.len(), "x")?;
+    let nvar = x[0].len();
+    for (i, row) in x.iter().enumerate() {
+        let name = format!("x row {i}");
+        validate_length(nvar, row.len(), &name)?;
+        validate_finite(row, &name)?;
+    }
+    validate_length(n, weights.len(), "weights")?;
+    validate_finite(weights, "weights")?;
+    validate_non_negative(weights, "weights")?;
+    validate_length(n, risk.len(), "risk")?;
+    validate_finite(risk, "risk")?;
+    validate_positive(risk, "risk")?;
+    let code = |name: &str, code: i32| {
+        CoxSurvType::from_code(code)
+            .ok_or_else(|| SurvivalError::invalid_input(format!("{name} must be 1, 2, or 3")))
+    };
+    let survtype = code("survtype", survtype)?;
+    let vartype = code("vartype", vartype)?;
+
+    let status: Vec<i32> = status.iter().map(|&value| value as i32).collect();
+    let x = Array2::from_shape_fn((n, nvar), |(i, k)| x[i][k]);
+    let curve = agsurv(
+        &AgsurvData {
+            start: start.as_deref(),
+            stop: &stop,
+            status: &status,
+            x: x.view(),
+            means: None,
+            weights,
+            risk,
+        },
+        survtype,
+        vartype,
+    )?;
+    // Zero weights are allowed here (coxph rejects them), but a risk set of
+    // zero total weight (0/0 in agsurv) has no hazard.
+    if let Some(g) = curve.hazard.iter().position(|h| h.is_nan()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "risk-set denominator must be positive at time {}",
+            curve.time[g]
+        )));
+    }
+    Ok(curve)
+}
+
+/// `agsurv(y, x, wt, risk, survtype, vartype)` for one stratum, as
+/// `coxsurv.fit` calls it: the unique times with their weighted counts, the
+/// hazard, cumulative hazard and hazard variance increments, the number of
+/// deaths, the `xbar` rows and (survtype 1) the Kalbfleisch-Prentice
+/// increments.
+#[pyfunction]
+pub fn cox_survfit_baseline(
+    y: &Bound<'_, PyAny>,
+    x: &Bound<'_, PyAny>,
+    weights: &Bound<'_, PyAny>,
+    risk: &Bound<'_, PyAny>,
+    survtype: i32,
+    vartype: i32,
+) -> PyResult<Py<PyDict>> {
+    let curve = baseline_curve(
+        &extract_matrix_f64(y)?,
+        &extract_matrix_f64(x)?,
+        &extract_vec_f64(weights)?,
+        &extract_vec_f64(risk)?,
+        survtype,
+        vartype,
+    )?;
+    Python::attach(|py| {
+        let dict = PyDict::new(py);
+        dict.set_item("n", curve.n)?;
+        dict.set_item("time", curve.time)?;
+        dict.set_item("n_event", curve.n_event)?;
+        dict.set_item("n_risk", curve.n_risk)?;
+        dict.set_item("n_censor", curve.n_censor)?;
+        dict.set_item("hazard", curve.hazard)?;
+        dict.set_item("cumhaz", curve.cumhaz)?;
+        dict.set_item("varhaz", curve.varhaz)?;
+        dict.set_item("ndeath", curve.ndeath)?;
+        let xbar: Vec<Vec<f64>> = curve.xbar.outer_iter().map(|row| row.to_vec()).collect();
+        dict.set_item("xbar", xbar)?;
+        if let Some(surv) = curve.surv {
+            dict.set_item("surv", surv)?;
+        }
+        Ok(dict.into())
+    })
+}
+
+/// [`step_at`] at each of `requested_times`, the way `summary.survfit(fit,
+/// times, extend = TRUE)` reads a curve (`initial` is the value before the
+/// first time).
+#[pyfunction]
+pub fn step_values_at(
+    times: Vec<f64>,
+    values: Vec<f64>,
+    requested_times: Vec<f64>,
+    initial: f64,
+) -> PyResult<Vec<f64>> {
+    validate_length(times.len(), values.len(), "values")?;
+    validate_finite(&times, "times")?;
+    validate_sorted(&times, "times")?;
+    validate_finite(&values, "values")?;
+    validate_finite(&requested_times, "requested_times")?;
+    validate_finite(&[initial], "initial")?;
+    Ok(requested_times
+        .iter()
+        .map(|&t| step_at(&times, &values, t, initial))
+        .collect())
 }
 
 #[cfg(test)]
@@ -900,32 +1028,82 @@ mod tests {
     }
 
     #[test]
-    fn strata_are_split_in_code_order() {
-        let stop = [1.0, 2.0, 3.0, 4.0];
-        let status = [1, 1, 1, 0];
-        let x = arr2(&[[0.0], [1.0], [2.0], [3.0]]);
-        let weights = [1.0; 4];
-        let risk = [1.0; 4];
-        let data = AgsurvData {
-            start: None,
-            stop: &stop,
-            status: &status,
-            x: x.view(),
-            means: None,
-            weights: &weights,
-            risk: &risk,
-        };
-        let (codes, curves) = coxsurv_fit(
-            &data,
-            Some(&[2, 1, 2, 1]),
-            CoxSurvType::Breslow,
-            CoxSurvType::Breslow,
+    fn step_functions_are_right_continuous() {
+        let times = [1.0, 3.0, 5.0];
+        let values = [10.0, 30.0, 50.0];
+        let read = |t| step_at(&times, &values, t, -1.0);
+        assert_eq!(
+            [read(0.5), read(1.0), read(4.0), read(6.0)],
+            [-1.0, 10.0, 30.0, 50.0]
+        );
+        assert_eq!(
+            step_values_at(times.to_vec(), values.to_vec(), vec![6.0, 0.5, 3.0], 1.0).unwrap(),
+            vec![50.0, 1.0, 30.0]
+        );
+        assert!(step_values_at(vec![3.0, 1.0], vec![1.0, 2.0], vec![2.0], 0.0).is_err());
+        assert!(step_values_at(vec![1.0], vec![1.0, 2.0], vec![2.0], 0.0).is_err());
+        assert!(step_values_at(vec![1.0], vec![1.0], vec![f64::NAN], 0.0).is_err());
+    }
+
+    #[test]
+    fn baseline_binding_matches_weighted_risk_sets() {
+        let curve = baseline_curve(
+            &[
+                vec![1.0, 1.0],
+                vec![2.0, 1.0],
+                vec![2.0, 0.0],
+                vec![3.0, 1.0],
+            ],
+            &[vec![0.0], vec![1.0], vec![2.0], vec![3.0]],
+            &[1.0, 2.0, 1.0, 1.0],
+            &[1.0, 2.0, 1.0, 0.5],
+            2,
+            2,
         )
         .unwrap();
-        assert_eq!(codes, vec![1, 2]);
-        assert_eq!(curves[0].time, vec![2.0, 4.0]);
-        assert_eq!(curves[1].time, vec![1.0, 3.0]);
-        assert_eq!(cumhaz_at(&curves[1], 0.5), 0.0);
-        assert_close(cumhaz_at(&curves[1], 3.5), 1.5);
+        assert_eq!(curve.time, vec![1.0, 2.0, 3.0]);
+        assert_eq!(curve.n_event, vec![1.0, 2.0, 1.0]);
+        assert_eq!(curve.n_censor, vec![0.0, 1.0, 0.0]);
+        assert_eq!(curve.n_risk, vec![5.0, 4.0, 1.0]);
+        assert_close(curve.hazard[0], 1.0 / 6.5);
+        assert_close(curve.hazard[1], 2.0 / 5.5);
+        assert_close(curve.hazard[2], 2.0);
+        assert_close(curve.xbar[(0, 0)], 7.5 / 6.5_f64.powi(2));
+
+        let counting = baseline_curve(
+            &[
+                vec![0.0, 2.0, 1.0],
+                vec![1.0, 3.0, 1.0],
+                vec![2.0, 4.0, 0.0],
+            ],
+            &[vec![0.0], vec![1.0], vec![2.0]],
+            &[1.0; 3],
+            &[1.0, 2.0, 4.0],
+            3,
+            3,
+        )
+        .unwrap();
+        assert_eq!(counting.n_risk, vec![2.0, 2.0, 1.0]);
+        assert_close(counting.hazard[0], 1.0 / 3.0);
+        assert_close(counting.hazard[1], 1.0 / 6.0);
+        assert_eq!(counting.hazard[2], 0.0);
+    }
+
+    #[test]
+    fn baseline_binding_rejects_invalid_inputs() {
+        let message = |y: &[Vec<f64>], weights: &[f64], survtype: i32| {
+            baseline_curve(y, &[vec![0.0]], weights, &[1.0], survtype, 2)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(
+            message(&[vec![1.0, 1.0, 0.0]], &[1.0], 2).contains("start must be less than stop")
+        );
+        assert!(message(&[vec![1.0, 2.0]], &[1.0], 2).contains("y status values must be 0 or 1"));
+        assert!(message(&[vec![1.0, 1.0]], &[1.0], 4).contains("survtype must be 1, 2, or 3"));
+        assert!(message(&[vec![1.0, 1.0]], &[-1.0], 2).contains("weights contains negative"));
+        assert!(
+            message(&[vec![1.0, 1.0]], &[0.0], 2).contains("risk-set denominator must be positive")
+        );
     }
 }
