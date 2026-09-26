@@ -43,7 +43,7 @@ use crate::regression::coxph_wtest::wald_statistic;
 use crate::regression::penalized::df::{DfInput, TermDf, coxpenal_df};
 use crate::regression::penalized::terms::{
     Composer, PenaltyCallback, build_term_states, closest_saved, drop_sparse_column, histories,
-    penalty_shape, update_controls, validate_terms,
+    model_terms, penalty_shape, update_controls, validate_terms,
 };
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -852,32 +852,12 @@ pub fn coxpenal_fit(
         .into());
     }
     let x = matrix_from_rows(&x, "x")?;
-    if penalties.len() != pcols.len() {
-        return Err(SurvivalError::invalid_input("Invalid pcols or pattr arg").into());
-    }
-    let assign = assign.unwrap_or_else(|| {
-        let mut terms: Vec<Vec<usize>> = pcols.clone();
-        for column in 0..x.ncols() {
-            if !pcols.iter().any(|group| group.contains(&column)) {
-                terms.push(vec![column]);
-            }
-        }
-        terms.sort_by_key(|columns| columns.first().copied());
-        terms
-    });
-    let terms = assign
-        .into_iter()
-        .map(|columns| {
-            let penalty = pcols
-                .iter()
-                .position(|group| *group == columns)
-                .map(|k| penalties[k].term.clone());
-            ModelTerm { columns, penalty }
-        })
-        .collect::<Vec<_>>();
-    if terms.iter().filter(|term| term.penalty.is_some()).count() != penalties.len() {
-        return Err(SurvivalError::invalid_input("pcols and assign arguments disagree").into());
-    }
+    let terms = model_terms(
+        x.ncols(),
+        penalties.into_iter().map(|penalty| penalty.term).collect(),
+        pcols,
+        assign,
+    )?;
     let data = CoxpenalData::try_new(
         CoxphData::try_new(time, entry, status, x, weights, strata, offset)?,
         terms,

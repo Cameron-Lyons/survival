@@ -7,7 +7,8 @@
 //! `cch`.  [`TieMethod`] is the one tie-handling enum of the crate, shared
 //! by the fitters and every kernel.
 //! Penalised Cox models (R's `coxpenal.fit`: `ridge()`, `pspline()` and
-//! `frailty()` terms) live in `coxpenal`, on the penalty machinery of
+//! `frailty()` terms) live in `coxpenal` and penalised parametric models
+//! (`survpenal.fit`) in `survpenal`, both on the penalty machinery of
 //! `penalized`.
 
 #[path = "aareg_fit.rs"]
@@ -40,6 +41,7 @@ pub(crate) mod parametric_survival;
 pub(crate) mod penalized;
 pub(crate) mod recurrent_events;
 pub(crate) mod spline_hazard;
+pub(crate) mod survpenal;
 pub(crate) mod survreg_distributions;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
@@ -122,6 +124,9 @@ pub use spline_hazard::{
     FlexibleParametricResult, HazardSplineResult, RestrictedCubicSplineResult, SplineConfig,
     flexible_parametric_model, predict_hazard_spline, restricted_cubic_spline,
 };
+#[cfg(feature = "python")]
+pub use survpenal::survpenal_fit_from_state;
+pub use survpenal::{SurvpenalData, SurvpenalFit, SurvpenalOptions, survpenal_fit};
 pub use survreg_distributions::{
     SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg, qsurvreg, rsurvreg,
     survreg_dtest,

@@ -25,6 +25,47 @@ pub struct ModelTerm {
     pub penalty: Option<PenaltyTerm>,
 }
 
+/// The model terms of a design with `ncol` columns from R's `pcols`
+/// (the columns of each penalised term), `pattr` (their penalties) and
+/// `assign` (the columns of every term; by default the penalised groups
+/// plus one term per remaining column, in column order).
+pub(crate) fn model_terms(
+    ncol: usize,
+    penalties: Vec<PenaltyTerm>,
+    pcols: Vec<Vec<usize>>,
+    assign: Option<Vec<Vec<usize>>>,
+) -> SurvivalResult<Vec<ModelTerm>> {
+    if penalties.len() != pcols.len() {
+        return Err(SurvivalError::invalid_input("Invalid pcols or pattr arg"));
+    }
+    let assign = assign.unwrap_or_else(|| {
+        let mut terms: Vec<Vec<usize>> = pcols.clone();
+        for column in 0..ncol {
+            if !pcols.iter().any(|group| group.contains(&column)) {
+                terms.push(vec![column]);
+            }
+        }
+        terms.sort_by_key(|columns| columns.first().copied());
+        terms
+    });
+    let terms = assign
+        .into_iter()
+        .map(|columns| {
+            let penalty = pcols
+                .iter()
+                .position(|group| *group == columns)
+                .map(|k| penalties[k].clone());
+            ModelTerm { columns, penalty }
+        })
+        .collect::<Vec<_>>();
+    if terms.iter().filter(|term| term.penalty.is_some()).count() != penalties.len() {
+        return Err(SurvivalError::invalid_input(
+            "pcols and assign arguments disagree",
+        ));
+    }
+    Ok(terms)
+}
+
 /// The checks of the model terms against a design with `ncol` columns:
 /// every column belongs to exactly one term, at least one term is
 /// penalised, and there is at most one sparse term, of a single column.
