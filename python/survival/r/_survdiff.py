@@ -58,7 +58,7 @@ def _formula_inputs(
 
     if subset is not None:
         data, _aligned = _subset_formula_inputs(formula, data, subset)
-    data, _aligned = _apply_formula_na_action(formula, data, na_action)
+    data, _aligned, _removed = _apply_formula_na_action(formula, data, na_action)
     y, terms = _parse_formula(formula, data)
     n = len(y)
     if terms.clusters:

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from itertools import combinations, compress, product
 from operator import ge
 from typing import Any
 
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _coerce_array_like,
     _finite_float,
     _is_missing_value,
@@ -37,6 +38,7 @@ from ._surv import (
 from ._types import (
     _MISSING,
     ModelFrame,
+    NaAction,
     StrataFactor,
     _CachedFormulaTerms,
     _CategoricalDesignTerm,
@@ -789,23 +791,16 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
-def _formula_data_rows(
-    formula: str,
+def _data_rows(
     data: Any,
+    columns: Sequence[str],
     rows: list[int],
     n: int,
     read: Mapping[str, list[Any]] | None = None,
 ) -> _FormulaRows:
-    """``data[rows, ]`` restricted to the variables *formula* uses.
+    """``data[rows, columns]``, the columns in *data*'s order; factor columns keep their
+    levels.  *read* holds columns the caller already materialised from *data*."""
 
-    R's ``model.frame`` evaluates only the formula's variables, so ``subset`` and
-    ``na.action`` never copy the other columns of *data* (nor require them to be
-    row-aligned).  The columns keep *data*'s order, so a ``.`` expands to the same
-    terms afterwards, and factor columns keep their levels.  *read* holds columns
-    the caller already materialised from *data*.
-    """
-
-    columns = _formula_columns(formula, data)
     names = _data_column_names(data)
     if names is not None:
         used = set(columns)
@@ -821,6 +816,24 @@ def _formula_data_rows(
         categories = _mstate_categories(source)
         frame[name] = kept if categories is None else _RFactorVector(kept, categories)
     return _FormulaRows(frame, len(rows))
+
+
+def _formula_data_rows(
+    formula: str,
+    data: Any,
+    rows: list[int],
+    n: int,
+    read: Mapping[str, list[Any]] | None = None,
+) -> _FormulaRows:
+    """``data[rows, ]`` restricted to the variables *formula* uses.
+
+    R's ``model.frame`` evaluates only the formula's variables, so ``subset`` and
+    ``na.action`` never copy the other columns of *data* (nor require them to be
+    row-aligned).  The columns keep *data*'s order, so a ``.`` expands to the same
+    terms afterwards.
+    """
+
+    return _data_rows(data, _formula_columns(formula, data), rows, n, read)
 
 
 def _subset_formula_inputs(
@@ -873,11 +886,19 @@ def _apply_formula_na_action(
     na_action: str | None,
     *,
     exclude_columns: Sequence[str] = (),
+    missing_rows: Iterable[int] = (),
     **row_aligned: Any,
-) -> tuple[Any, dict[str, Any]]:
+) -> tuple[Any, dict[str, Any], list[int]]:
+    """``na.action`` on the formula's variables and the row-aligned arguments together:
+    the data and arguments at the kept rows, and the 0-based rows it removed.
+
+    ``exclude_columns`` are not scanned; ``missing_rows`` are rows the caller found
+    missing otherwise (``is.na`` of an interval-censored response).
+    """
+
     action = _normalize_na_action(na_action)
     if action == "pass":
-        return data, row_aligned
+        return data, row_aligned, []
 
     excluded = set(exclude_columns)
     read = {
@@ -893,14 +914,24 @@ def _apply_formula_na_action(
         ],
         n,
     )
+    missing.update(missing_rows)
     missing.update(_backwards_interval_rows(formula, read, n))
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
-        return data, row_aligned
+        return data, row_aligned, []
     filtered = {
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
-    return _formula_data_rows(formula, data, keep, n, read), filtered
+    return _formula_data_rows(formula, data, keep, n, read), filtered, sorted(missing)
+
+
+def _na_action_record(na_action: str | None, removed: Sequence[int]) -> NaAction | None:
+    """R's ``attr(mf, "na.action")`` for the 0-based rows an ``na.action`` removed
+    (none, ``NULL`` in R, when it removed nothing)."""
+
+    if not removed:
+        return None
+    return NaAction(tuple(row + 1 for row in removed), _normalize_na_action(na_action))
 
 
 def _data_column_names(data: Any) -> list[Any] | None:
@@ -1865,7 +1896,7 @@ def model_frame(
     data: Any,
     *,
     subset: Any | None = None,
-    na_action: str | None = None,
+    na_action: str | None = _DEFAULT_NA_ACTION,
     weights: Any | None = None,
     offset: Any | None = None,
     id: Any | None = None,
@@ -1878,10 +1909,10 @@ def model_frame(
     The extra arguments may be column names of *data* or row-aligned vectors, as
     R evaluates ``weights = wt`` in the data; ``extra`` names further such
     columns (``pyears``' ``rmap`` variables).  ``subset`` (a mask or row indices)
-    and then ``na_action`` (``"na.pass"``, ``"na.omit"``, ``"na.fail"``; R's
-    ``model.frame`` default is ``na.omit``, each caller passes its own default) are
-    applied to the formula's variables and the arguments together, after which the
-    response and the terms are evaluated.
+    and then ``na_action`` (``"na.omit"``, R's default, ``"na.exclude"``,
+    ``"na.pass"``, ``"na.fail"``, or ``None`` for none) are applied to the formula's
+    variables and the arguments together, after which the response and the terms
+    are evaluated.
     """
 
     if not isinstance(formula, str):
@@ -1905,7 +1936,7 @@ def model_frame(
         arguments[name] = _column_or_values(data, extra[name], name)
     if subset is not None:
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
-    data, arguments = _apply_formula_na_action(formula, data, action, **arguments)
+    data, arguments, removed = _apply_formula_na_action(formula, data, action, **arguments)
 
     spec = _response_spec(formula)
     n = _data_row_count(data, formula)
@@ -1951,7 +1982,7 @@ def model_frame(
         id=aligned["id"],
         cluster=aligned["cluster"],
         istate=aligned["istate"],
-        na_action=action,
+        na_action=_na_action_record(action, removed),
         extra={name: aligned[name] or [] for name in extra_names},
     )
 

@@ -563,7 +563,7 @@ def _model_frame(
         missing = _missing_rows(frame, len(kept))
         if missing and action == "fail":
             raise ValueError("missing values in object")
-        if missing and action == "omit":
+        if missing and action in {"omit", "exclude"}:
             rows = [idx for idx in range(len(kept)) if idx not in missing]
             omitted.extend(kept[idx] for idx in missing)
             kept = [kept[idx] for idx in rows]
@@ -822,7 +822,7 @@ def survobrien(
         raise ValueError("a data argument is required to evaluate the formula")
     if subset is not None:
         data, _aligned = _subset_formula_inputs(formula, data, subset)
-    data, _aligned = _apply_formula_na_action(formula, data, na_action)
+    data, _aligned, _removed = _apply_formula_na_action(formula, data, na_action)
     response, terms = _parse_formula(formula, data)
     n = len(response)
     if response.type not in {"right", "counting"}:

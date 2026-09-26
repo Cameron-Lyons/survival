@@ -355,6 +355,20 @@ class _SurvResponseSpec:
 
 
 @dataclass(frozen=True)
+class NaAction:
+    """R's ``na.action`` attribute of a model frame (a fit's ``fit$na.action``): the
+    1-based rows ``na.omit`` or ``na.exclude`` removed, and which of the two did (R's
+    class, ``"omit"`` or ``"exclude"``).  The ``residuals`` and ``predict`` methods pad
+    an ``"exclude"`` fit's values back to every row, with NaN at these (``naresid``)."""
+
+    rows: tuple[int, ...]
+    kind: str
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+
+@dataclass(frozen=True)
 class ModelFrame:
     """R's ``model.frame`` for a survival formula.
 
@@ -362,7 +376,8 @@ class ModelFrame:
     a mapping of the formula's variables at the kept rows; ``response`` is the ``Surv``
     response (``y`` a plain numeric response such as ``time ~ 1``, or both ``None`` for
     ``~ x``); the R-style extra arguments (``weights``, ``offset``, ``id``, ``cluster``,
-    ``istate``) are row aligned with it.
+    ``istate``) are row aligned with it.  ``na_action`` records the rows the
+    ``na.action`` removed (``None`` when it removed none).
     """
 
     formula: str
@@ -377,7 +392,7 @@ class ModelFrame:
     id: list[Any] | None = None
     cluster: list[Any] | None = None
     istate: list[Any] | None = None
-    na_action: str = "pass"
+    na_action: NaAction | None = None
     extra: dict[str, list[Any]] = field(default_factory=dict)
 
     @property

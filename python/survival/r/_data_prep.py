@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _as_character,
     _categories,
     _finite_float,
@@ -590,7 +591,7 @@ def rttright(
     data: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = None,
+    na_action: str | None = _DEFAULT_NA_ACTION,
     times: Any | None = None,
     id: Any | None = None,
     timefix: bool = True,
@@ -603,7 +604,7 @@ def rttright(
     per requested ``times`` value (R's matrix) when several times are given.
     """
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, None)
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     response = kwargs.pop("response", None)
     warn_offset = kwargs.pop("_warn_offset", True)
     if kwargs:

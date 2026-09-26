@@ -149,7 +149,16 @@ def _quantile_vector(values: Any, name: str) -> list[float]:
         return _float_vector(values, name)
 
 
+# R's getOption("na.action"), the na.action of every model function that does not
+# name its own
+_DEFAULT_NA_ACTION = "na.omit"
+
+
 def _normalize_na_action(na_action: str | None) -> str:
+    """``"fail"``, ``"omit"``, ``"exclude"`` or ``"pass"`` for an R na.action name;
+    ``None`` is R's ``na.action = NULL``, which applies none.  ``exclude`` drops rows
+    exactly as ``omit`` does; ``naresid``/``napredict`` pad them back as ``NA``."""
+
     if na_action is None:
         return "pass"
     if not isinstance(na_action, str):
@@ -160,8 +169,8 @@ def _normalize_na_action(na_action: str | None) -> str:
         "na_fail": "fail",
         "omit": "omit",
         "na_omit": "omit",
-        "exclude": "omit",
-        "na_exclude": "omit",
+        "exclude": "exclude",
+        "na_exclude": "exclude",
         "pass": "pass",
         "na_pass": "pass",
     }
@@ -284,19 +293,6 @@ def _subset_optional_sequence(
     if values is None:
         return None
     return _subset_sequence(values, indices, name)
-
-
-def _subset_data(data: Any, indices: list[int]) -> Any:
-    if isinstance(data, Mapping):
-        return {key: _subset_sequence(value, indices, str(key)) for key, value in data.items()}
-    if hasattr(data, "iloc"):
-        return data.iloc[indices]
-    if hasattr(data, "take"):
-        try:
-            return data.take(indices)
-        except TypeError:
-            pass
-    raise TypeError("subset with formula data requires a mapping or tabular object")
 
 
 def _as_rows(values: Any, name: str) -> list[list[float]]:

@@ -19,6 +19,7 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _as_matrix_rows,
     _as_rows,
     _coerce_array_like,
@@ -36,23 +37,33 @@ from ._coerce import (
     _normalize_bool_option,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
+    _normalize_na_action,
     _normalize_numeric_sequence_or_none,
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
     _r_format_number,
-    _subset_data,
+    _subset_optional_sequence,
     _warn_outside_package,
 )
 from ._data_prep import aeqSurv
 from ._fit import (
     _design_names_and_assign,
+    _excluded_rows,
     _model_frame,
     _ModelFrame,
     _NewData,
     _newdata_frame,
+    _pad_rows,
+    _rowsum_excluded,
     _tt_terms,
 )
-from ._formula import _column, _column_or_values, _design_rows_from_spec, _response_arg_columns
+from ._formula import (
+    _column,
+    _column_or_values,
+    _design_rows_from_spec,
+    _formula_data_rows,
+    _response_arg_columns,
+)
 from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
@@ -61,6 +72,7 @@ from ._types import (
     CoxPHWTestResult,
     CoxSurvfitResult,
     CoxZPHResult,
+    NaAction,
     PredictResult,
     _CovariateTerm,
     _DesignTerm,
@@ -87,7 +99,8 @@ class CoxphModel:
     The numeric components (``coefficients``, ``var``, ``loglik``, ``residuals``,
     ...) are read through from :class:`survival._survival.CoxPHFit`; ``formula``,
     ``design``, ``assign``, ``coef_names``, ``y``, ``strata_levels`` and ``id`` are
-    what ``predict``/``survfit``/``residuals`` need to rebuild the model frame.
+    what ``predict``/``survfit``/``residuals`` need to rebuild the model frame, and
+    ``na_action`` (``fit$na.action``) the rows the ``na.action`` removed.
     """
 
     fit: _core.CoxPHFit
@@ -109,6 +122,7 @@ class CoxphModel:
     weights_column: str | None = None
     id_column: str | None = None
     penalized: Any | None = None
+    na_action: NaAction | None = None
     # the model frame the fit was made from (after subset and na.action), which
     # model.frame(fit) rebuilds when the fit did not keep it; the design rows are
     # dropped, since model.frame() does not use them
@@ -365,7 +379,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     new_time = [time for time, size in zip(counts.time, nrisk, strict=True) for _ in range(size)]
     new_y = Surv(new_time, [int(value) for value in counts.status])
     riskset = [group for group, size in enumerate(nrisk) for _ in range(size)]
-    data = _subset_data(frame.data, tindex)
+    data = _formula_data_rows(frame.formula, frame.data, tindex, frame.n)
     weights = None if frame.weights is None else [frame.weights[idx] for idx in tindex]
     transformed: dict[_CovariateTerm, list[float]] = {}
     for term, function in zip(tt_terms, _tt_functions(tt, len(tt_terms)), strict=True):
@@ -697,6 +711,7 @@ def _coxph_fit_frame(
         weights_column=frame.weights_column,
         id_column=frame.id_column,
         penalized=penalized,
+        na_action=frame.na_action,
         _frame=replace(frame, x=[]),
     )
 
@@ -820,7 +835,7 @@ def coxph(
     *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     init: Any | None = None,
     control: Any | None = None,
     ties: str | None = None,
@@ -857,7 +872,7 @@ def coxph(
     """
 
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
     # the R bridge evaluates weights= / id= itself and names the columns they came from
     weights_column = kwargs.pop("_weights_column", None)
@@ -942,13 +957,13 @@ def clogit(
     *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     method: str = "exact",
     **kwargs: Any,
 ) -> ClogitModel:
     """Conditional logistic regression as a stratified Cox model (R's ``clogit``)."""
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     if not isinstance(formula, str):
         raise TypeError("A formula argument is required")
     response, separator, rhs = formula.partition("~")
@@ -970,12 +985,12 @@ def clogit(
                 "weights ignored: not possible for the exact method", RuntimeWarning, stacklevel=2
             )
             weights = None
-    columns = _response_arg_columns(response)
-    if not columns:
+    if not _response_arg_columns(response):
         raise ValueError("clogit response must name a column of data")
-    n = len(_column(data, columns[0]))
+    # R's Surv(1 + 0*case, case): a constant time as long as the response after
+    # subset and na.action
     fit = coxph(
-        f"Surv(rep(1, {n}), {response}) ~ {rhs.strip()}",
+        f"Surv(rep(1, length({response})), {response}) ~ {rhs.strip()}",
         data=data,
         weights=weights,
         subset=subset,
@@ -1062,6 +1077,7 @@ def summary_coxph(
         "n": fit.n,
         "nevent": fit.nevent,
         "n_event": fit.nevent,
+        "na_action": fit.na_action,
         "loglik": loglik[1],
         "null_loglik": loglik[0],
         "df": df,
@@ -1264,6 +1280,7 @@ def summary_coxph_penal(
         "n": fit.n,
         "nevent": fit.nevent,
         "n_event": fit.nevent,
+        "na_action": fit.na_action,
         "loglik": fit.loglik[1],
         "null_loglik": fit.loglik[0],
         "iter": fit.iter,
@@ -1360,7 +1377,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
 
 
 def _prediction_newdata(
-    fit: CoxphModel, newdata: Any, *, need_strata: bool, need_response: bool
+    fit: CoxphModel, newdata: Any, *, need_strata: bool, need_response: bool, na_action: str
 ) -> _NewData:
     return _newdata_frame(
         fit.design,
@@ -1369,6 +1386,7 @@ def _prediction_newdata(
         newdata,
         need_strata=need_strata,
         need_response=need_response,
+        na_action=na_action,
     )
 
 
@@ -1418,6 +1436,7 @@ def predict_coxph(
     *,
     type: str = "lp",
     se_fit: Any = False,
+    na_action: str | None = "na.pass",
     terms: Any | None = None,
     collapse: Any | None = None,
     reference: str | None = None,
@@ -1426,10 +1445,14 @@ def predict_coxph(
     """R's ``predict.coxph``: ``lp``, ``risk``, ``expected``, ``terms`` or ``survival``.
 
     Returns the predictions (a list, or one row per observation for ``terms``), or a
-    :class:`PredictResult` of predictions and standard errors when ``se_fit``.
+    :class:`PredictResult` of predictions and standard errors when ``se_fit``.  Without
+    ``newdata`` a ``na.exclude`` fit's predictions are NaN at the rows it removed
+    (``napredict``); ``na_action`` applies to ``newdata``, whose incomplete rows are NaN
+    (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).
     """
 
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
         raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
     if fit.tt:
@@ -1453,11 +1476,19 @@ def predict_coxph(
     if predict_type in {"expected", "survival"}:
         reference_name = "sample"
 
+    action = _normalize_na_action(na_action)
     new: _NewData | None = None
     if newdata is not None:
         need_response = predict_type in {"expected", "survival"}
+        # predict.coxph keeps the strata in Terms2 only when the prediction uses them
+        need_strata = _has_strata(fit) and (
+            include_se
+            or predict_type in {"terms", "expected", "survival"}
+            or reference_name == "strata"
+            or (reference_name == "zero" and any(value != 0.0 for value in fit.means))
+        )
         new = _prediction_newdata(
-            fit, newdata, need_strata=_has_strata(fit), need_response=need_response
+            fit, newdata, need_strata=need_strata, need_response=need_response, na_action=action
         )
         if (
             _has_strata(fit)
@@ -1474,7 +1505,11 @@ def predict_coxph(
     se: Any
     if predict_type == "terms":
         selected = _terms_selection(terms, _term_labels(fit))
-    if predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign:
+    if new is not None and new.n == 0:  # no complete newdata row
+        pred, se = [], ([] if include_se else None)
+    elif (
+        predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign
+    ):
         pred, se = _frailty_prediction(fit, new, include_se)
         if predict_type == "risk":
             pred = [math.exp(value) for value in pred]
@@ -1496,6 +1531,20 @@ def predict_coxph(
             reference=reference_name,
         )
         pred, se = list(result.fit), (None if result.se_fit is None else list(result.se_fit))
+
+    # napredict: NaN at the rows na.exclude removed from the fit, or at the incomplete
+    # newdata rows, which na.pass carries through to NA predictions
+    if new is None:
+        gaps = _excluded_rows(fit.na_action)
+    else:
+        gaps = [] if action == "omit" else list(new.missing)
+        if new.missing and action == "omit" and collapse is not None and collapse is not False:
+            missing = set(new.missing)
+            kept = [row for row in range(new.n + len(missing)) if row not in missing]
+            collapse = _subset_optional_sequence(collapse, kept, "collapse")
+    width = len(selected) if predict_type == "terms" else None
+    pred = _pad_rows(pred, gaps, width)
+    se = None if se is None else _pad_rows(se, gaps, width)
 
     if collapse is not None and collapse is not False:
         pred = _rowsum(pred, collapse)
@@ -1574,8 +1623,9 @@ _RESIDUAL_TYPES = (
 )
 
 
-def _collapse_codes(fit: CoxphModel, collapse: Any) -> list[int] | None:
-    """The engine's ``collapse`` groups: ``TRUE`` means the cluster (or id)."""
+def _collapse_codes(fit: CoxphModel, collapse: Any, n: int) -> list[int] | None:
+    """The groups of R's ``rowsum(rr, collapse)``: ``TRUE`` means the fit's cluster
+    (or id), and a vector must have the ``n`` rows of the residuals."""
 
     if collapse is None or collapse is False:
         return None
@@ -1586,7 +1636,7 @@ def _collapse_codes(fit: CoxphModel, collapse: Any) -> list[int] | None:
         labels = list(labels)
     else:
         labels = _materialize_labels(collapse, "collapse")
-        if len(labels) != len(fit.residuals):
+        if len(labels) != n:
             raise ValueError("Wrong length for 'collapse'")
     order = sorted(_label_levels(labels, "collapse"), key=lambda v: (isinstance(v, str), v))
     index = {label: idx for idx, label in enumerate(order)}
@@ -1608,7 +1658,9 @@ def residuals_coxph(
     """R's ``residuals.coxph``.
 
     Score, Schoenfeld and dfbeta residuals are matrices (one row per observation
-    or event) that drop to a vector for a one-variable model, as in R.
+    or event) that drop to a vector for a one-variable model, as in R.  A
+    ``na.exclude`` fit's residuals are NaN at the rows it removed (``naresid``), and
+    a ``collapse`` vector then covers those rows too.
     """
 
     if kwargs:
@@ -1626,34 +1678,50 @@ def residuals_coxph(
         raise ValueError(f"'{otype}' residuals are not defined for a null model")
     if fit.method == "exact" and otype in {"score", "schoenfeld", "scaledsch", "dfbeta", "dfbetas"}:
         raise ValueError(f"{otype} residuals are not available for the exact method")
-    codes = _collapse_codes(fit, collapse)
+    excluded = _excluded_rows(fit.na_action)
+    codes = _collapse_codes(fit, collapse, len(fit.residuals) + len(excluded))
     engine = fit.fit
     nvar = fit.nvar
+    if otype in {"schoenfeld", "scaledsch"}:
+        if codes is not None:
+            raise ValueError("collapse is not defined for Schoenfeld residuals")
+        residuals = (
+            engine.schoenfeld_residuals(weighted=weighted_value)
+            if otype == "schoenfeld"
+            else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
+        )
+        return _drop_single_column([list(row) for row in residuals.residuals], nvar)
+    # naresid comes before the collapse: the engine sums the fit's rows, and a group
+    # holding a row na.exclude removed sums to NA
+    padded_codes = codes if excluded and collapse is not True else None
+    fit_codes = codes
+    if padded_codes is not None:
+        gaps = set(excluded)
+        fit_codes = [code for row, code in enumerate(padded_codes) if row not in gaps]
+    values: list[Any]
     if otype == "martingale":
-        return list(engine.martingale_residuals(weighted=weighted_value, collapse=codes))
-    if otype == "deviance":
-        return list(engine.deviance_residuals(weighted=weighted_value, collapse=codes))
-    if otype == "score":
-        return _drop_single_column(
-            engine.score_residuals(weighted=weighted_value, collapse=codes), nvar
-        )
-    if otype == "dfbeta":
-        return _drop_single_column(engine.dfbeta(weighted=weighted_value, collapse=codes), nvar)
-    if otype == "dfbetas":
-        return _drop_single_column(engine.dfbetas(weighted=weighted_value, collapse=codes), nvar)
-    if otype == "partial":
+        values = list(engine.martingale_residuals(weighted=weighted_value, collapse=fit_codes))
+    elif otype == "deviance":
+        values = list(engine.deviance_residuals(weighted=weighted_value, collapse=fit_codes))
+    elif otype == "partial":
         rows = engine.partial_residuals(
-            assign=_active_assign(fit), weighted=weighted_value, collapse=codes
+            assign=_active_assign(fit), weighted=weighted_value, collapse=fit_codes
         )
-        return [list(row) for row in rows]
-    if codes is not None:
-        raise ValueError("collapse is not defined for Schoenfeld residuals")
-    residuals = (
-        engine.schoenfeld_residuals(weighted=weighted_value)
-        if otype == "schoenfeld"
-        else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
-    )
-    return _drop_single_column([list(row) for row in residuals.residuals], nvar)
+        values = [list(row) for row in rows]
+    else:
+        method = {
+            "score": engine.score_residuals,
+            "dfbeta": engine.dfbeta,
+            "dfbetas": engine.dfbetas,
+        }[otype]
+        values = [list(row) for row in method(weighted=weighted_value, collapse=fit_codes)]
+    if codes is None:
+        values = _pad_rows(values, excluded)
+    elif padded_codes is not None:
+        values = _rowsum_excluded(values, padded_codes, excluded)
+    if otype in {"martingale", "deviance", "partial"}:
+        return values
+    return _drop_single_column(values, nvar)
 
 
 # ---------------------------------------------------------------------------
@@ -1718,7 +1786,9 @@ def _survfit_curves(
             )
         curves = engine.survfit(stype=stype, ctype=ctype, se_fit=se_fit, censor=censor)
         return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
-    new = _prediction_newdata(fit, newdata, need_strata=_has_strata(fit), need_response=individual)
+    new = _prediction_newdata(
+        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action="fail"
+    )
     if individual:
         if new.y is None:
             raise ValueError("newdata must contain the response variables when id is given")

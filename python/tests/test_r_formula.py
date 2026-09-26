@@ -185,7 +185,7 @@ def test_model_frame_applies_subset_then_na_action():
     assert extra.extra["race"] == ["white"] * 7
     with pytest.raises(ValueError, match="a data argument is required"):
         r_formula.model_frame("Surv(time, status) ~ 1", None)
-    with pytest.raises(ValueError, match="must have the same length as the response"):
+    with pytest.raises(ValueError, match="weights must have length 8"):
         r_formula.model_frame("Surv(time, status) ~ 1", data, weights=[1.0, 2.0])
 
 

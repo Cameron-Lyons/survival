@@ -183,15 +183,10 @@ def _kwargs(
     data: Mapping[str, Any],
     *,
     drop: Sequence[str] = (),
-    na_omit: bool = True,
 ) -> dict:
-    """Translate R call arguments into Python keyword arguments.
+    """Translate R call arguments into Python keyword arguments."""
 
-    R's model functions drop rows with missing values (``na.action = na.omit``)
-    by default, so ``na_action="omit"`` is passed unless the case says otherwise.
-    """
-
-    out: dict[str, Any] = {"na_action": "omit"} if na_omit else {}
+    out: dict[str, Any] = {}
     for name, value in args.items():
         if name in drop:
             continue
@@ -1020,7 +1015,7 @@ class CoxphHandler(TopicHandler):
 
     def _check_anova_nested(self, case):
         data = case_data(self.topic, case)
-        fits = [r.coxph(formula, data, na_action="omit") for formula in case["formulas"]]
+        fits = [r.coxph(formula, data) for formula in case["formulas"]]
         _check_anova(r.anova(*fits), case["expected"]["anova"], nested=True)
 
 
@@ -1562,15 +1557,15 @@ class ConcordanceHandler(TopicHandler):
             data = case_data(self.topic, case)
             key = aspect.split(".")[0]
             if key == "coxph":
-                cc = r.concordance(r.coxph(case["formula"], data, na_action="omit"))
+                cc = r.concordance(r.coxph(case["formula"], data))
             elif key == "coxph_timewt_S":
-                cc = r.concordance(r.coxph(case["formula"], data, na_action="omit"), timewt="S")
+                cc = r.concordance(r.coxph(case["formula"], data), timewt="S")
             elif key == "survreg":
-                cc = r.concordance(r.survreg(case["formula"], data, na_action="omit"))
+                cc = r.concordance(r.survreg(case["formula"], data))
             else:
                 cc = r.concordance(
-                    r.coxph(case["formula"], data, na_action="omit"),
-                    r.coxph("Surv(time, status) ~ age", data, na_action="omit"),
+                    r.coxph(case["formula"], data),
+                    r.coxph("Surv(time, status) ~ age", data),
                 )
             _check_concordance_result(cc, expected[key], aspect)
             return
@@ -1708,7 +1703,6 @@ class CchHandler(TopicHandler):
                 "id": args["id"],
                 "method": args["method"],
                 "cohort_size": args["cohort.size"],
-                "na_action": "omit",
             }
             if "stratum" in args:
                 kwargs["stratum"] = args["stratum"]
@@ -1761,7 +1755,7 @@ class ClogitHandler(TopicHandler):
 
         def build():
             data = case_data(self.topic, case)
-            return r.clogit(case["formula"], data, method=case["args"]["method"], na_action="omit")
+            return r.clogit(case["formula"], data, method=case["args"]["method"])
 
         fit = _cached(_fit_key("clogit", case), build)
         if aspect == "coef":
@@ -1806,7 +1800,7 @@ class FinegrayHandler(TopicHandler):
 
         def build():
             data = case_data(self.topic, case)
-            kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+            kwargs = _kwargs(case.get("args", {}), data)
             return r.finegray(_mstate_formula(case["formula"], data), data, **kwargs)
 
         frame = _cached(_fit_key("finegray", case), build)
@@ -2153,7 +2147,7 @@ class SurvcheckHandler(TopicHandler):
 
         def build():
             data = case_data(topic, case)
-            kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+            kwargs = _kwargs(case.get("args", {}), data)
             return r.survcheck(_mstate_formula(case["formula"], data), data, **kwargs)
 
         result = _cached(_fit_key("survcheck", case), build)
@@ -2292,7 +2286,7 @@ class SurvSplitHandler(TopicHandler):
 
     def check(self, case, aspect):
         data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+        kwargs = _kwargs(case.get("args", {}), data)
         frame = r.survSplit(case["formula"], data, **kwargs)
         _compare_frames(frame, case["expected"]["frame"])
 
@@ -2305,7 +2299,7 @@ class SurvcondenseHandler(TopicHandler):
 
     def check(self, case, aspect):
         data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+        kwargs = _kwargs(case.get("args", {}), data)
         frame = r.survcondense(case["formula"], data, **kwargs)
         # R names the id column after the deparsed ``id`` argument, which the
         # generator's do.call turns into the first id value ("1").
@@ -2480,7 +2474,7 @@ class RttrightHandler(TopicHandler):
     def check(self, case, aspect):
         expected = case["expected"]
         data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+        kwargs = _kwargs(case.get("args", {}), data)
         result = r.rttright(_mstate_formula(case["formula"], data), data=data, **kwargs)
         if "times" in expected and len(expected["times"]) > 1:
             assert_matrix_close(result, expected["weights"], rtol=RTOL_COEF, path="weights")
@@ -2494,7 +2488,7 @@ class RttrightHandler(TopicHandler):
 def _pyears_call(case: Mapping[str, Any]) -> Any:
     data = case_data("pyears", case)
     args = dict(case.get("args", {}))
-    kwargs = _kwargs(args, data, na_omit=False, drop=("ratetable", "rmap"))
+    kwargs = _kwargs(args, data, drop=("ratetable", "rmap"))
     if "ratetable" in args:
         kwargs["ratetable"] = _ratetable_by_name(args["ratetable"])
         kwargs["rmap"] = _rmap_arguments(args["rmap"])
@@ -2638,7 +2632,7 @@ class SurvexpHandler(TopicHandler):
             return
         args = dict(case.get("args", {}))
         data = case_data(self.topic, case)
-        kwargs = _kwargs(args, data, na_omit=False, drop=("ratetable", "rmap"))
+        kwargs = _kwargs(args, data, drop=("ratetable", "rmap"))
         kwargs["ratetable"] = _ratetable_by_name(args["ratetable"])
         kwargs["rmap"] = _rmap_arguments(args["rmap"])
         result = _cached(

@@ -21,58 +21,63 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _as_rows,
     _control_mapping,
     _encode_labels,
     _finite_float,
     _float_vector,
     _integer_scalar,
-    _keep_rows_after_na_action,
+    _is_missing_value,
     _materialize_1d,
     _materialize_labels,
     _matrix_input_column_names,
-    _missing_row_indices,
     _normalize_bool_option,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
+    _normalize_na_action,
     _normalize_optional_bool_option,
     _optional_float_vector,
     _pop_dotted_keyword,
     _quantile_vector,
     _strata_level_sort_key,
     _strata_value_label,
-    _subset_optional_sequence,
 )
 from ._fit import (
+    _excluded_rows,
     _fallback_coef_names,
     _fit_location_coef_names,
     _formula_design_for_fit,
     _formula_design_output_names,
     _location_beta,
+    _NewData,
+    _newdata_frame,
+    _pad_rows,
     _r_factor_design,
+    _rowsum_excluded,
     _unwrap_formula_fit,
 )
 from ._formula import (
     _apply_formula_na_action,
     _column,
     _column_or_values,
+    _column_source,
     _design_rows_from_spec,
     _design_term_name,
     _design_term_output_names,
     _fit_formula_design,
-    _formula_columns,
-    _formula_data_rows,
-    _formula_design_row_count,
     _formula_model_frame,
     _formula_model_term_degree,
     _formula_response_spec,
     _formula_response_values,
+    _na_action_record,
     _offset_vector,
     _parse_formula,
     _subset_formula_inputs,
 )
 from ._surv import Surv, _survreg_response_arrays, is_na_surv
 from ._types import (
+    NaAction,
     PredictResult,
     _FormulaDesign,
     _FormulaFit,
@@ -115,7 +120,8 @@ class SurvregModelResult(_FormulaFit):
     Attribute access falls through to the Rust fit (``scale``, ``linear_predictors``,
     ``icoef``, ``means``, ``df``, ``df_residual``, ``iterations``, ``converged``, ...).
     ``coefficients`` are the location coefficients as in R (``NaN`` where singular);
-    the full vector with the ``Log(scale)`` entries is ``fit.coefficients``.
+    the full vector with the ``Log(scale)`` entries is ``fit.coefficients``;
+    ``na_action`` (``fit$na.action``) records the rows the ``na.action`` removed.
     """
 
     dist: Any = "weibull"
@@ -125,6 +131,7 @@ class SurvregModelResult(_FormulaFit):
     strata_term: int = 0
     strata_columns: tuple[str, ...] = ()
     strata_levels: tuple[str, ...] = ()
+    na_action: NaAction | None = None
 
     @property
     def coefficients(self) -> list[float]:
@@ -338,6 +345,7 @@ class _SurvregFrame:
     offset: list[float] | None = None
     cluster: list[Any] | None = None
     model: dict[str, Any] | None = None
+    na_action: NaAction | None = None
 
 
 def _is_categorical(values: Sequence[Any]) -> bool:
@@ -405,30 +413,6 @@ def _term_structure(
     return tuple(assign), tuple(labels), strata_term
 
 
-def _drop_interval_missing(
-    formula: str, data: Any, na_action: str | None, **row_aligned: Any
-) -> tuple[Any, dict[str, Any]]:
-    """Apply NA handling to the constructed interval response. Missing endpoints
-    can mean censoring, and an unused ``time2`` does not make a response missing.
-    Covariates go through the shared path with response columns excluded."""
-
-    spec = _formula_response_spec(formula)
-    if spec.type not in {"interval", "interval2"}:
-        return data, row_aligned
-    response = Surv(*_formula_response_values(data, spec), type=spec.type)
-    n = len(response)
-    missing = {row for row, missing in enumerate(is_na_surv(response)) if missing}
-    missing |= _missing_row_indices(
-        [(name, values) for name, values in row_aligned.items() if values is not None], n
-    )
-    keep = _keep_rows_after_na_action(missing, n, na_action, "formula data")
-    if keep is None:
-        return data, row_aligned
-    return _formula_data_rows(formula, data, keep, n), {
-        name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
-    }
-
-
 def _formula_frame(
     formula: str,
     data: Any,
@@ -445,19 +429,25 @@ def _formula_frame(
     weights = _column_or_values(data, weights, "weights")
     offset = _column_or_values(data, offset, "offset")
     cluster = _column_or_values(data, cluster, "cluster")
+    aligned = {"weights": weights, "offset": offset, "cluster": cluster}
     if subset is not None:
-        data, aligned = _subset_formula_inputs(
-            formula, data, subset, weights=weights, offset=offset, cluster=cluster
-        )
-        weights, offset, cluster = aligned["weights"], aligned["offset"], aligned["cluster"]
-    data, aligned = _drop_interval_missing(
-        formula, data, na_action, weights=weights, offset=offset, cluster=cluster
+        data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
+    # an interval-censored response is missing where is.na(Surv) says so: a missing
+    # endpoint can be a censoring code, and an unused time2 does not count
+    response_columns: Sequence[str] = ()
+    missing_response: list[int] = []
+    if spec.type in {"interval", "interval2"}:
+        response_columns = spec.columns
+        interval = Surv(*_formula_response_values(data, spec), type=spec.type)
+        missing_response = [row for row, missing in enumerate(is_na_surv(interval)) if missing]
+    data, aligned, removed = _apply_formula_na_action(
+        formula,
+        data,
+        na_action,
+        exclude_columns=response_columns,
+        missing_rows=missing_response,
+        **aligned,
     )
-    excluded = spec.columns if spec.type in {"interval", "interval2"} else ()
-    if any(column not in excluded for column in _formula_columns(formula, data)):
-        data, aligned = _apply_formula_na_action(
-            formula, data, na_action, exclude_columns=excluded, **aligned
-        )
     weights, offset, cluster = aligned["weights"], aligned["offset"], aligned["cluster"]
     response, terms = _parse_formula(formula, data)
     n = len(response)
@@ -512,6 +502,7 @@ def _formula_frame(
         )
         if keep_model
         else None,
+        na_action=_na_action_record(na_action, removed),
     )
 
 
@@ -562,7 +553,7 @@ def survreg(
     *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     dist: Any = "weibull",
     init: Any | None = None,
     scale: Any = 0,
@@ -586,7 +577,7 @@ def survreg(
     options).
     """
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
     control = _resolve_control(control, kwargs)
     keep_model = _normalize_bool_option_with_default(model, "model", False)
@@ -608,7 +599,7 @@ def survreg(
             keep_model=keep_model,
         )
     elif isinstance(formula, Surv):
-        if subset is not None or na_action not in {None, "fail", "pass"}:
+        if subset is not None or na_action not in {None, "fail", "pass", _DEFAULT_NA_ACTION}:
             raise ValueError("subset and na_action require a formula")
         keep_x = True
         frame = _matrix_frame(formula, x, weights=weights, offset=offset, cluster=cluster)
@@ -681,6 +672,7 @@ def survreg(
         strata_term=frame.strata_term,
         strata_columns=tuple(frame.design.strata) if frame.design is not None else (),
         strata_levels=frame.strata_levels,
+        na_action=frame.na_action,
     )
 
 
@@ -749,37 +741,49 @@ def survreg_summary(fit: Any) -> dict[str, Any]:
 # --- predict.survreg -------------------------------------------------------------------------
 
 
-def _newdata_strata(fit: Any, newdata: Any, n: int) -> list[int]:
-    """``match(strata(newdata), levels(strata.keep))`` for a stratified fit."""
-
-    codes, levels = _strata_factor(newdata, fit.strata_columns, n)
-    position = {level: idx for idx, level in enumerate(fit.strata_levels)}
-    for level in levels:
-        if level not in position:
-            raise ValueError(f"newdata contains unknown strata level {level!r}")
-    return [position[levels[code]] for code in codes]
-
-
-def _newdata_inputs(
-    fit: Any, newdata: Any
-) -> tuple[list[list[float]], list[int] | None, list[float] | None]:
-    """``model.matrix(object, newframe)`` plus the per-row strata and the newdata offset."""
+def _newdata_inputs(fit: Any, newdata: Any, na_action: str) -> _NewData:
+    """``model.frame(Terms, newdata, na.action)`` and ``model.matrix(object, newframe)``:
+    the rows, strata and offset of the complete ``newdata`` rows."""
 
     design = _formula_design_for_fit(fit)
     if design is None:
+        # a fit on a design matrix: newdata's columns named like its coefficients, or a
+        # matrix
         names = getattr(fit, "coefficient_names", None)
         if names is not None and (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
             columns = [_column(newdata, name) for name in names]
-            rows = [[float(col[row]) for col in columns] for row in range(len(columns[0]))]
-            return rows, None, None
-        return _as_rows(newdata, "newdata"), None, None
+            rows = [
+                [math.nan if _is_missing_value(col[row]) else float(col[row]) for col in columns]
+                for row in range(len(columns[0]))
+            ]
+        else:
+            rows = _as_rows(newdata, "newdata")
+        missing = [row for row, values in enumerate(rows) if any(map(math.isnan, values))]
+        if missing and na_action == "fail":
+            raise ValueError("missing values in newdata")
+        gaps = set(missing)
+        return _NewData(
+            data=None,
+            x=[values for row, values in enumerate(rows) if row not in gaps],
+            strata=None,
+            offset=None,
+            y=None,
+            missing=tuple(missing),
+        )
     if not (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
         raise TypeError("newdata must be a data frame with the model's columns")
-    n = _formula_design_row_count(newdata, design)
-    rows = _design_rows_from_spec(newdata, design, n)
-    strata = _newdata_strata(fit, newdata, n) if fit.strata_levels else None
-    offset = _offset_vector(newdata, design.offsets, n) if design.offsets else None
-    return rows, strata, offset
+    # Terms keeps the strata() term, so its variables are required
+    for name in fit.strata_columns:
+        _column_source(newdata, name)
+    return _newdata_frame(
+        design,
+        fit.strata_columns,
+        fit.strata_levels,
+        newdata,
+        need_strata=bool(fit.strata_levels),
+        need_response=False,
+        na_action=na_action,
+    )
 
 
 def _term_selection(terms: Any | None, names: Sequence[str]) -> list[int] | None:
@@ -821,11 +825,15 @@ def predict_survreg(
     se_fit: bool = False,
     terms: Any | None = None,
     p: Any = (0.1, 0.9),
+    na_action: str | None = "na.pass",
 ) -> Any:
     """R's ``predict.survreg``: response, lp, terms, quantile and uquantile predictions.
 
     Vectors for lp/response (and single-``p`` quantiles), row-per-observation matrices for
-    terms and several ``p``; with ``se_fit`` a ``PredictResult(fit, se_fit)``.
+    terms and several ``p``; with ``se_fit`` a ``PredictResult(fit, se_fit)``.  Without
+    ``newdata`` a ``na.exclude`` fit's predictions are NaN at the rows it removed
+    (``naresid``); ``na_action`` applies to ``newdata``, whose incomplete rows are NaN
+    (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).
     """
 
     model = _unwrap_formula_fit(fit)
@@ -833,29 +841,47 @@ def predict_survreg(
         type, "type", ("response", "link", "lp", "linear", "terms", "quantile", "uquantile")
     )
     include_se = _normalize_bool_option(se_fit, "se.fit")
-    rows = strata = offset = None
-    if newdata is not None:
-        rows, strata, offset = _newdata_inputs(fit, newdata)
+    action = _normalize_na_action(na_action)
+    new = None if newdata is None else _newdata_inputs(fit, newdata, action)
     assign = list(fit.assign) if isinstance(fit, SurvregModelResult) else None
     term_names = [
         label
         for position, label in enumerate(getattr(fit, "term_labels", ()), start=1)
         if position != getattr(fit, "strata_term", 0)
     ]
-    result = model.predict(
-        newdata=rows,
-        predict_type=predict_type,
-        se_fit=include_se,
-        p=_quantile_vector(p, "p"),
-        offset=offset,
-        strata=strata,
-        assign=assign,
-        terms=_term_selection(terms, term_names),
-    )
+    quantiles = _quantile_vector(p, "p")
+    selection = _term_selection(terms, term_names)
+    predictions: list[list[float]] = []
+    se_values: list[list[float]] = []
+    if new is None or new.n:
+        result = model.predict(
+            newdata=None if new is None else new.x,
+            predict_type=predict_type,
+            se_fit=include_se,
+            p=quantiles,
+            offset=None if new is None else new.offset,
+            strata=None if new is None else new.strata,
+            assign=assign,
+            terms=selection,
+        )
+        predictions, se_values = result.fit, result.se_fit
+    # naresid: NaN at the rows na.exclude removed from the fit, or at the incomplete
+    # newdata rows, which na.pass carries through to NA predictions
+    if new is None:
+        gaps = _excluded_rows(getattr(fit, "na_action", None))
+    else:
+        gaps = [] if action == "omit" else list(new.missing)
+    if predict_type in {"quantile", "uquantile"}:
+        width = len(quantiles)
+    elif predict_type == "terms":
+        width = len(term_names if selection is None else selection)
+    else:
+        width = 1
     keep_matrix = predict_type == "terms"
+    fitted = _drop(_pad_rows(predictions, gaps, width), keep_matrix)
     if not include_se:
-        return _drop(result.fit, keep_matrix)
-    return PredictResult(_drop(result.fit, keep_matrix), _drop(result.se_fit, keep_matrix))
+        return fitted
+    return PredictResult(fitted, _drop(_pad_rows(se_values, gaps, width), keep_matrix))
 
 
 # --- residuals.survreg -----------------------------------------------------------------------
@@ -900,13 +926,26 @@ def residuals_survreg(
 
     model = _unwrap_formula_fit(fit)
     residual_type = _match_arg(type, "type", _RESIDUAL_TYPES)
+    # naresid comes before the collapse: the engine sums the fit's rows, and a group
+    # holding a row na.exclude removed sums to NA
+    excluded = _excluded_rows(getattr(fit, "na_action", None))
+    codes = _collapse_codes(collapse, int(model.n) + len(excluded))
+    fit_codes = codes
+    if codes is not None and excluded:
+        gaps = set(excluded)
+        fit_codes = [code for row, code in enumerate(codes) if row not in gaps]
     result = model.residuals(
         residual_type,
         rsigma=_normalize_bool_option(rsigma, "rsigma"),
-        collapse=_collapse_codes(collapse, int(model.n)),
+        collapse=fit_codes,
         weighted=_normalize_bool_option(weighted, "weighted"),
     )
-    return _drop(result.values, residual_type in {"dfbeta", "dfbetas", "matrix"})
+    values = result.values
+    if codes is None:
+        values = _pad_rows(values, excluded)
+    elif excluded:
+        values = _rowsum_excluded(values, codes, excluded)
+    return _drop(values, residual_type in {"dfbeta", "dfbetas", "matrix"})
 
 
 # --- anova.survreg ---------------------------------------------------------------------------
@@ -1368,6 +1407,7 @@ def model_summary_survreg(fit: Any) -> dict[str, Any]:
         "df": degrees_freedom_survreg(fit),
         "n": nobs_survreg(fit),
         "robust": robust,
+        "na_action": getattr(fit, "na_action", None),
     }
     result.update(survreg_summary(fit))
     return result
