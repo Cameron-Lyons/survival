@@ -6605,13 +6605,16 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
         .collect();
     let x = Array2::from_shape_fn((rows.len(), columns.len()), |(r, c)| columns[c][rows[r]]);
     let data = CoxpenalData::try_new(
-        pick(&response.time, &rows),
-        response.start.as_ref().map(|s| pick(s, &rows)),
-        pick(&response.status, &rows),
-        x,
-        None,
-        None,
-        None,
+        CoxphData::try_new(
+            pick(&response.time, &rows),
+            response.start.as_ref().map(|s| pick(s, &rows)),
+            pick(&response.status, &rows),
+            x,
+            None,
+            None,
+            None,
+        )
+        .map_err(|err| format!("coxph data: {err}"))?,
         terms,
     )
     .map_err(|err| format!("coxpenal data: {err}"))?;
