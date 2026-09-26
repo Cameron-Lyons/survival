@@ -2705,7 +2705,7 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
         "naive_var" => match (&fit.naive_var, expected["naive_var"].is_null()) {
             (None, true) => Ok(()),
             (Some(naive), false) => assert_matrix(
-                &naive.outer_iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+                &matrix_rows(naive),
                 &matrix(&expected["naive_var"])?,
                 RTOL_VAR,
                 "naive_var",
@@ -2822,7 +2822,7 @@ fn residual_matrix(
     assign: &[Vec<usize>],
 ) -> Result<Vec<Vec<f64>>, String> {
     match fit.residuals(kind, None, None, Some(assign)) {
-        Ok(Residuals::Matrix(values)) => Ok(values.outer_iter().map(|r| r.to_vec()).collect()),
+        Ok(Residuals::Matrix(values)) => Ok(matrix_rows(&values)),
         Ok(Residuals::Vector(_)) => Err("expected a residual matrix".to_string()),
         Err(err) => Err(format!("{err}")),
     }
@@ -3835,7 +3835,7 @@ fn check_residual_kernel(
                 ),
             }
             .map_err(|e| format!("score: {e}"))?;
-            let actual: Vec<Vec<f64>> = actual.outer_iter().map(|row| row.to_vec()).collect();
+            let actual = matrix_rows(&actual);
             let expected_matrix = if value.is_object() {
                 matrix(&value["values"])?
             } else {
@@ -4286,7 +4286,6 @@ fn check_survreg_distribution(key: &str, expected: &Value) -> Result<(), String>
     assert_vec(&q, &nums(&expected["q"])?, RTOL_COEF, &format!("{key}.q"))
 }
 
-/// Every case of a `survreg`-shaped topic (`survreg`, `survreg-extra`).
 /// A survreg case's fit, with the model frame, formula and design
 /// column of each term that the prediction checks rebuild designs from.
 struct SurvregCase {
@@ -4367,6 +4366,7 @@ fn survreg_fit_for_case(doc: &Value, case: &Value) -> Result<SurvregCase, String
     })
 }
 
+/// Every case of a `survreg`-shaped topic (`survreg`, `survreg-extra`).
 fn check_survreg_topic(topic: &str) {
     use crate::residuals::survreg_resid::SurvregResidType;
 
