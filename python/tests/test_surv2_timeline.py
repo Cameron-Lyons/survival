@@ -162,6 +162,29 @@ def test_coxph_applies_na_action_after_the_conversion():
     _same(curve.surv, [0.75, 0.75, 0.0])
 
 
+def test_coxph_does_not_carry_its_arguments_forward():
+    # the (weights) and (cluster) columns, and a cluster() term, which coxph.R makes its
+    # cluster argument, keep a missing value, so na.omit drops that interval
+    # d$w <- c(1,NA,1,1,3,1,2,1,1,1); d$z <- c(1,NA,3,1,2,3,1,2,3,1)
+    data = _timeline()
+    data["w"] = [1, NA, 1, 1, 3, 1, 2, 1, 1, 1]
+    data["z"] = [1, NA, 3, 1, 2, 3, 1, 2, 3, 1]
+    # coxph(Surv2(t, s) ~ x, d, id = id, weights = w)
+    fit = r.coxph("Surv2(t, s) ~ x", data, id="id", weights="w")
+    assert fit.coefficients == pytest.approx([-0.132139565424643], rel=1e-12)
+    assert fit.var[0][0] == pytest.approx(0.274951131772283, rel=1e-12)
+    assert fit.na_action.rows == (2,)
+    # coxph(Surv2(t, s) ~ x, d, id = id, cluster = z) and
+    # coxph(Surv2(t, s) ~ x + cluster(z), d, id = id)
+    for fit in (
+        r.coxph("Surv2(t, s) ~ x", data, id="id", cluster="z"),
+        r.coxph("Surv2(t, s) ~ x + cluster(z)", data, id="id"),
+    ):
+        assert fit.coefficients == pytest.approx([-0.155004981171472], rel=1e-12)
+        assert fit.var[0][0] == pytest.approx(0.0359344466438995, rel=1e-12)
+        assert fit.na_action.rows == (2,)
+
+
 def test_coxph_one_interval_per_subject_is_right_censored():
     # d1 <- data.frame(id = c(1,1,2,2,3,3), t = c(0,5,0,3,0,4), s = c(0,1,0,0,0,1),
     #                  x = c(1,NA,2,NA,NA,3))
@@ -192,6 +215,9 @@ def test_surv2_requires_an_id_and_a_timeline_fitter():
         r.coxph("Surv2(t, s) ~ x", data, id="id")
     with pytest.raises(ValueError, match="invalid value for repeated option"):
         r.coxph("Surv2(t, s, repeated = 'often') ~ x", _timeline(), id="id")
+    for kwargs in ({}, {"timeline": True}):
+        with pytest.raises((ValueError, TypeError), match="survival object|'timeline'"):
+            r.model_frame("Surv2(t, s) ~ x", _timeline(), **kwargs)
 
 
 # --- survfit and survcheck ---------------------------------------------------
@@ -241,6 +267,12 @@ def test_survcheck_converts_surv2():
 
 
 def test_istate_argument_must_agree_with_the_timeline():
+    # The intended semantics, not R's: survival 3.8-12's surv2counting compares vectors
+    # of different lengths (for a character istate, istate2[match(levels(istate),
+    # states)] with as.numeric(istate) at every input row), so R's
+    # survfit(Surv2(t, st2) ~ 1, dm, id = id, istate = cur) stops with "istate argument
+    # does not agree with initial Surv2 values" for the first cur below and accepts
+    # cur <- rep("b", 10) (times 5 7 9).
     data = _multistate()
     # the state each subject is in at the start of every row
     data["cur"] = ["a", "a", "b", "a", "b", "b", "b", "a", "a", "a"]

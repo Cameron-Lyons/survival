@@ -587,7 +587,8 @@ def _parse_formula_origin_option(value: str) -> float:
     return _finite_float(value, "origin")
 
 
-_SURV_CALLS = ("Surv(", "survival::Surv(", "Surv2(", "survival::Surv2(")
+_SURV2_CALLS = ("Surv2(", "survival::Surv2(")
+_SURV_CALLS = ("Surv(", "survival::Surv(", *_SURV2_CALLS)
 
 
 @lru_cache(maxsize=512)
@@ -597,14 +598,11 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
         raise ValueError("formula must contain '~'")
 
     lhs = lhs.strip()
-    if lhs.startswith(("Surv2(", "survival::Surv2(")) and lhs.endswith(")"):
-        return _timeline_response_spec(lhs.partition("(")[2][:-1])
-    if lhs.startswith("Surv(") and lhs.endswith(")"):
-        response_inner = lhs[5:-1]
-    elif lhs.startswith("survival::Surv(") and lhs.endswith(")"):
-        response_inner = lhs[15:-1]
-    else:
+    if not (lhs.startswith(_SURV_CALLS) and lhs.endswith(")")):
         raise ValueError("formula response must be Surv(...)")
+    response_inner = lhs.partition("(")[2][:-1]
+    if lhs.startswith(_SURV2_CALLS):
+        return _timeline_response_spec(response_inner)
 
     columns: list[str] = []
     surv_type: str | None = None
@@ -2491,6 +2489,7 @@ def _timeline_counting(
     repeated: Any | None = None,
     lvcf: bool = True,
     require_repeats: bool = False,
+    carry_clusters: bool = True,
 ) -> tuple[str, _FormulaRows, dict[str, Any]]:
     """R's ``surv2counting(mf)`` for the ``Surv2`` formula *formula* (or a ``Surv(time,
     status)`` one) on *data* after ``subset``, with the row-aligned *arguments* (vectors or
@@ -2505,6 +2504,8 @@ def _timeline_counting(
     subject gives the right-censored form), the data it reads and the arguments at its
     rows, for the caller's ``na.action``.  *repeated* overrides the response's own;
     *require_repeats* refuses data in which no subject has two rows (fromtimeline's check).
+    Without *carry_clusters* a ``cluster()`` term's variable is not carried forward either:
+    coxph.R turns that term into its ``cluster`` argument before the model frame.
     """
 
     arguments = {
@@ -2537,18 +2538,18 @@ def _timeline_counting(
         raise ValueError("id and time cannot be missing")
     _lhs, _sep, rhs = formula.partition("~")
     terms = _formula_rhs_terms(formula, data)
-    variables = _data_order(
-        data,
-        _covariate_columns(terms.covariates)
-        + terms.strata
-        + _offset_columns(terms.offsets)
-        + terms.clusters,
+    model_columns = (
+        _covariate_columns(terms.covariates) + terms.strata + _offset_columns(terms.offsets)
     )
+    variables = _data_order(data, model_columns + terms.clusters)
     sources = {name: _column_source(data, name) for name in variables}
+    carried = set(variables if carry_clusters else model_columns)
     # the variables to carry forward: those with a missing value
     masks: dict[str, list[bool]] = {}
     if lvcf:
         for name, source in sources.items():
+            if name not in carried:
+                continue
             missing = _missing_row_indices([(name, source)], n)
             if missing:
                 masks[name] = [row in missing for row in range(n)]

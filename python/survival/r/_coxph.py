@@ -929,11 +929,15 @@ def coxph(
         "istate": istate,
     }
     fit_formula = formula
-    if _timeline_response(formula):
-        # coxph.R converts timeline data (surv2counting) before its na.action
+    timeline = _timeline_response(formula)
+    if timeline:
+        # coxph.R converts timeline data (surv2counting) before its na.action; a
+        # cluster() term is by then its cluster argument, which is not carried forward
         weights_column = weights_column or (weights if isinstance(weights, str) else None)
         id_column = id_column or (id if isinstance(id, str) else None)
-        fit_formula, data, arguments = _timeline_counting(formula, data, subset, arguments)
+        fit_formula, data, arguments = _timeline_counting(
+            formula, data, subset, arguments, carry_clusters=False
+        )
         subset = None
     frame = _model_frame(
         fit_formula,
@@ -975,7 +979,7 @@ def coxph(
         tt=tt,
         keep_model=_normalize_bool_option_with_default(model, "model", False),
     )
-    if fit_formula is formula:
+    if not timeline:
         return fit
     model = None if fit.model is None else _timeline_model_frame(fit.model, formula)
     return replace(fit, formula=formula, model=model)
