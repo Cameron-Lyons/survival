@@ -109,26 +109,20 @@ impl FrailtyFamily {
     /// "gaussian", "t"))`, an exact name or an unambiguous prefix of one;
     /// anything else names a missing `frailty.<distribution>` function.
     pub fn parse(name: &str, tdf: f64) -> SurvivalResult<Self> {
-        const NAMES: [&str; 3] = ["gamma", "gaussian", "t"];
-        let exact = NAMES.iter().position(|&full| full == name);
+        let families = [Self::Gamma, Self::Gaussian, Self::T(tdf)];
+        let exact = families.into_iter().find(|family| family.r_name() == name);
         let partial = || {
-            let mut prefixed = NAMES
-                .iter()
-                .enumerate()
-                .filter(|(_, full)| !name.is_empty() && full.starts_with(name));
+            let mut prefixed = families
+                .into_iter()
+                .filter(|family| !name.is_empty() && family.r_name().starts_with(name));
             match (prefixed.next(), prefixed.next()) {
-                (Some((index, _)), None) => Some(index),
+                (Some(family), None) => Some(family),
                 _ => None,
             }
         };
-        match exact.or_else(partial) {
-            Some(0) => Ok(Self::Gamma),
-            Some(1) => Ok(Self::Gaussian),
-            Some(2) => Ok(Self::T(tdf)),
-            _ => Err(SurvivalError::invalid_input(format!(
-                "Function 'frailty.{name}' not found"
-            ))),
-        }
+        exact.or_else(partial).ok_or_else(|| {
+            SurvivalError::invalid_input(format!("Function 'frailty.{name}' not found"))
+        })
     }
 
     /// The R distribution name.
@@ -922,6 +916,10 @@ mod tests {
         ] {
             assert_eq!(FrailtyFamily::parse(name, 5.0).unwrap().r_name(), family);
         }
+        assert_eq!(
+            FrailtyFamily::parse("t", 7.0).unwrap(),
+            FrailtyFamily::T(7.0)
+        );
         // Ambiguous prefixes and other cases name a missing function, as in R.
         for name in ["g", "ga", "Gamma", "", "weibull"] {
             let message = FrailtyFamily::parse(name, 5.0).unwrap_err().to_string();
