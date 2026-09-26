@@ -87,7 +87,8 @@ fn approx_linear(x: &[f64], y: &[f64], xout: f64, rule2: bool) -> f64 {
 
 /// Port of `rsurvpart1`: residuals of one curve for the rows `rows` of the
 /// data, at the sorted `times`.  `curve` is the curve's row range in
-/// `fit`.
+/// `fit`.  `stype` picks the formula; the hazard and survival come from
+/// `fit`, whatever curve it holds.
 #[allow(clippy::too_many_arguments)]
 fn rsurvpart1(
     rows: &[usize],
@@ -323,24 +324,37 @@ fn prepare_times(times: &[f64], timefix: bool) -> SurvivalResult<Vec<f64>> {
 /// event-time index and therefore a residual of 0 at every time.  A
 /// `start_time` that removes every observation of a stratum is refused, as
 /// R refuses it.
+///
+/// `call_stype` is the `stype` that `residuals.survfit` reads from the call
+/// of the fit and hands to `rsurvpart1`.  It is `options.stype` unless the
+/// curve came from an old-style `type` argument: that call has no `stype`,
+/// so R scores the curve with the Kaplan-Meier formula whatever its
+/// estimator.  The ctype of the call only adds R's warning that the ctype = 2
+/// residuals are approximate; the hazard is always the fit's.
+#[allow(clippy::too_many_arguments)]
 pub fn survfitresid(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     times: &[f64],
     kind: ResidualType,
+    call_stype: SurvType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitResid> {
     let fit = survfitkm(data, options)?;
-    residuals_from_fit(data, options, &fit, times, kind, collapse, weighted)
+    residuals_from_fit(
+        data, options, &fit, times, kind, call_stype, collapse, weighted,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn residuals_from_fit(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     fit: &SurvfitKMResult,
     times: &[f64],
     kind: ResidualType,
+    call_stype: SurvType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitResid> {
@@ -404,7 +418,7 @@ fn residuals_from_fit(
             &data.status,
             &times,
             kind,
-            options.stype,
+            call_stype,
             fit,
             range.clone(),
         );
@@ -471,16 +485,19 @@ fn residuals_from_fit(
 /// `start_time`.  With `collapse` the rows are collapsed by id when an id
 /// repeats (and the residuals weighted, R's `weighted = collapse`); rows
 /// that a `start_time` removed from the curve keep the curve's estimate
-/// (their residual is 0, see [`survfitresid`]).
+/// (their residual is 0, see [`survfitresid`], also for `call_stype`).
 pub fn pseudo(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     times: &[f64],
     kind: ResidualType,
+    call_stype: SurvType,
     collapse: bool,
 ) -> SurvivalResult<SurvfitResid> {
     let fit = survfitkm(data, options)?;
-    let mut residuals = residuals_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
+    let mut residuals = residuals_from_fit(
+        data, options, &fit, times, kind, call_stype, collapse, collapse,
+    )?;
     // summary(fit, rmean = t) refuses a truncation point before the first
     // time of the fit (survfitKM objects carry no start.time)
     let smallest = fit.time.iter().copied().fold(f64::INFINITY, f64::min);
@@ -1355,7 +1372,7 @@ fn km_inputs(
 
 /// Python binding of [`survfitresid`].
 #[pyfunction(name = "survfitresid")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true, start_time=None))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_py(
     time: Vec<f64>,
@@ -1372,15 +1389,18 @@ pub fn survfitresid_py(
     weighted: Option<bool>,
     timefix: bool,
     start_time: Option<f64>,
+    call_stype: Option<i32>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
         time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
+    let call_stype = call_stype.map_or(Ok(options.stype), SurvType::from_code)?;
     Ok(survfitresid(
         &data,
         &options,
         &times,
         ResidualType::parse(type_)?,
+        call_stype,
         collapse,
         weighted.unwrap_or(collapse),
     )?)
@@ -1388,7 +1408,7 @@ pub fn survfitresid_py(
 
 /// Python binding of [`pseudo`].
 #[pyfunction(name = "pseudo")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true, start_time=None))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_py(
     time: Vec<f64>,
@@ -1404,15 +1424,18 @@ pub fn pseudo_py(
     timefix: bool,
     collapse: bool,
     start_time: Option<f64>,
+    call_stype: Option<i32>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
         time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
+    let call_stype = call_stype.map_or(Ok(options.stype), SurvType::from_code)?;
     Ok(pseudo(
         &data,
         &options,
         &times,
         ResidualType::parse(type_)?,
+        call_stype,
         collapse,
     )?)
 }
@@ -1441,32 +1464,81 @@ mod tests {
         // residuals(survfit(Surv(time, status) ~ 1, aml), times = c(12, 24, 48))
         let times = [12.0, 24.0, 48.0];
         let options = SurvfitKMOptions::default();
-        let resid =
-            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.values.len(), 23);
         assert_eq!(resid.times, times);
         assert!(close(resid.values[0][0], -0.0321361058601134));
         assert!(close(resid.values[0][1], -0.023764515257899));
         assert!(close(resid.values[1][0], 0.0113421550094518));
         assert!(close(resid.values[2][1], 0.0103969754253308));
-        let cumhaz =
-            survfitresid(&aml(), &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        let cumhaz = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Cumhaz,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(close(cumhaz.values[0][0], 0.0415456301161012));
         assert!(close(cumhaz.values[1][0], -0.0141723685843537));
         assert!(close(cumhaz.values[2][1], -0.0176325761968104));
-        let auc = survfitresid(&aml(), &options, &times, ResidualType::Auc, false, false).unwrap();
+        let auc = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Auc,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(close(auc.values[0][0], -0.0831758034026465));
         assert!(close(auc.values[0][2], -0.782878746961923));
         assert!(close(auc.values[2][2], 0.350661625708885));
         // pseudo(fit, times, type)
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Pstate,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert!(ps.values[0][0].abs() < 1e-12);
         assert!(close(ps.values[2][1], 0.785714285714286));
         assert!(close(ps.values[2][2], 0.119047619047619));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Cumhaz, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Cumhaz,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert!(close(ps.values[0][0], 1.24593124415048));
         assert!(close(ps.values[2][2], 1.75547476518401));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Auc,
+            options.stype,
+            true,
+        )
+        .unwrap();
         for value in &ps.values[0] {
             assert!(close(*value, 9.0));
         }
@@ -1481,10 +1553,26 @@ mod tests {
             ..Default::default()
         };
         let times = [12.0];
-        let pstate =
-            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
-        let cumhaz =
-            survfitresid(&aml(), &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        let pstate = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
+        let cumhaz = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Cumhaz,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         let fit = survfitkm(&aml(), &options).unwrap();
         let surv12 = fit.surv[fit.time.partition_point(|&t| t <= 12.0) - 1];
         for (p, h) in pstate.values.iter().zip(&cumhaz.values) {
@@ -1505,10 +1593,26 @@ mod tests {
         )
         .unwrap();
         let options = SurvfitKMOptions::default();
-        let plain =
-            survfitresid(&data, &options, &[5.0], ResidualType::Pstate, false, false).unwrap();
-        let collapsed =
-            survfitresid(&data, &options, &[5.0], ResidualType::Pstate, true, true).unwrap();
+        let plain = survfitresid(
+            &data,
+            &options,
+            &[5.0],
+            ResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
+        let collapsed = survfitresid(
+            &data,
+            &options,
+            &[5.0],
+            ResidualType::Pstate,
+            options.stype,
+            true,
+            true,
+        )
+        .unwrap();
         assert_eq!(collapsed.id, vec![1, 2, 3]);
         assert!(close(
             collapsed.values[0][0],
@@ -1518,9 +1622,28 @@ mod tests {
             collapsed.values[1][0],
             2.0 * (plain.values[2][0] + plain.values[3][0])
         ));
-        assert!(survfitresid(&data, &options, &[5.0], ResidualType::Pstate, true, false).is_err());
+        assert!(
+            survfitresid(
+                &data,
+                &options,
+                &[5.0],
+                ResidualType::Pstate,
+                options.stype,
+                true,
+                false
+            )
+            .is_err()
+        );
         // pseudo values are inflated by the number of subjects
-        let ps = pseudo(&data, &options, &[5.0], ResidualType::Pstate, true).unwrap();
+        let ps = pseudo(
+            &data,
+            &options,
+            &[5.0],
+            ResidualType::Pstate,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert_eq!(ps.values.len(), 3);
         let fit = survfitkm(&data, &options).unwrap();
         let s5 = fit.surv[fit.time.partition_point(|&t| t <= 5.0) - 1];
@@ -1537,6 +1660,7 @@ mod tests {
             &options,
             &[12.0, 24.0, 48.0],
             ResidualType::Pstate,
+            options.stype,
             true,
         )
         .unwrap();
@@ -1550,6 +1674,7 @@ mod tests {
             &options,
             &[12.0, 24.0, 48.0],
             ResidualType::Pstate,
+            options.stype,
             true,
         )
         .unwrap();
@@ -1650,35 +1775,74 @@ mod tests {
             ..Default::default()
         };
         let times = [12.0, 24.0, 48.0];
-        let resid =
-            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.values.len(), 23);
         // the observation at time 9 is not part of the curve: residual 0
         assert_eq!(resid.values[0], vec![0.0, 0.0, 0.0]);
         assert!(close(resid.values[1][0], 0.00308641975308642));
         assert!(close(resid.values[1][1], -0.03880070546737213));
         assert!(close(resid.values[3][2], -0.006823717141177459));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Pstate,
+            options.stype,
+            true,
+        )
+        .unwrap();
         // ... and its pseudo value is the estimate, inflated by fit$n = 18
         assert!(close(ps.values[0][0], 0.944444444444444));
         assert!(close(ps.values[0][2], 0.1058201058201058));
         assert!(close(ps.values[1][0], 1.0));
         assert!(ps.values[1][1].abs() < 1e-12);
         assert!(close(ps.values[3][1], -0.112244897959184));
-        let auc = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
+        let auc = pseudo(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Auc,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert!(close(auc.values[0][0], 2.0)); // the area from t0 = 10 to 12
         assert!(close(auc.values[0][1], 12.2142857142857));
         assert!(close(auc.values[2][2], 25.0714285714286));
-        let resid_auc =
-            survfitresid(&aml(), &options, &times, ResidualType::Auc, false, false).unwrap();
+        let resid_auc = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Auc,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(close(resid_auc.values[1][1], -0.511_904_761_904_762));
         assert!(close(resid_auc.values[2][2], 0.139329805996473));
         // summary(fit, rmean = 5) refuses a point before the first time
         assert!(
-            pseudo(&aml(), &options, &[5.0, 24.0], ResidualType::Auc, true)
-                .unwrap_err()
-                .to_string()
-                .contains("smallest survival")
+            pseudo(
+                &aml(),
+                &options,
+                &[5.0, 24.0],
+                ResidualType::Auc,
+                options.stype,
+                true
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("smallest survival")
         );
     }
 
@@ -1720,10 +1884,18 @@ mod tests {
                     &options,
                     &[6.0, 7.0],
                     kind,
+                    options.stype,
                     false,
                     false
                 )));
-                assert!(refused(pseudo(&data, &options, &[6.0, 7.0], kind, true)));
+                assert!(refused(pseudo(
+                    &data,
+                    &options,
+                    &[6.0, 7.0],
+                    kind,
+                    options.stype,
+                    true
+                )));
             }
         }
     }
@@ -1764,17 +1936,96 @@ mod tests {
     }
 
     #[test]
+    fn call_stype_picks_the_formula_and_the_fit_gives_the_curve() {
+        // fit <- survfit(Surv(time, status) ~ 1, aml, type = "fleming-harrington")
+        // has no stype in its call: residuals(fit, times = c(10, 20)) scores
+        // the Fleming-Harrington curve with the Kaplan-Meier formula
+        let options = SurvfitKMOptions {
+            stype: SurvType::ExpCumhaz,
+            ..Default::default()
+        };
+        let times = [10.0, 20.0];
+        let kaplan_meier = SurvType::KaplanMeier;
+        let resid = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Pstate,
+            kaplan_meier,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(close(resid.values[0][0], -0.03437862026111806));
+        assert!(close(resid.values[0][1], -0.0285491513533135));
+        assert!(close(resid.values[1][0], 0.00954961673919946));
+        let auc = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Auc,
+            kaplan_meier,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(close(auc.values[0][0], -0.0153620986438052));
+        assert!(close(auc.values[1][1], -0.151269864863623));
+        // pseudo(fit, times = c(10, 20))
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            ResidualType::Pstate,
+            kaplan_meier,
+            true,
+        )
+        .unwrap();
+        assert!(close(ps.values[1][0], 1.0103494510073));
+        // type = "fh2": the fit's ctype = 2 hazard
+        let fh2 = SurvfitKMOptions {
+            stype: SurvType::ExpCumhaz,
+            ctype: super::super::survfitkm::HazardType::FlemingHarrington,
+            ..Default::default()
+        };
+        let cumhaz = survfitresid(
+            &aml(),
+            &fh2,
+            &times,
+            ResidualType::Cumhaz,
+            kaplan_meier,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(close(cumhaz.values[1][0], -0.0112852529328128));
+        assert!(close(cumhaz.values[1][1], 0.0409916491134088));
+    }
+
+    #[test]
     fn rejects_bad_arguments() {
         assert!(ResidualType::parse("weird").is_err());
         assert_eq!(ResidualType::parse("RMST").unwrap(), ResidualType::Auc);
         let options = SurvfitKMOptions::default();
-        assert!(survfitresid(&aml(), &options, &[], ResidualType::Pstate, false, false).is_err());
+        assert!(
+            survfitresid(
+                &aml(),
+                &options,
+                &[],
+                ResidualType::Pstate,
+                options.stype,
+                false,
+                false
+            )
+            .is_err()
+        );
         assert!(
             survfitresid(
                 &aml(),
                 &options,
                 &[f64::NAN],
                 ResidualType::Pstate,
+                options.stype,
                 false,
                 false
             )

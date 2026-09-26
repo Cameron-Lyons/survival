@@ -171,7 +171,7 @@ mod pseudo_bench {
         let kind = ResidualType::parse(type_).expect("known residual type");
         bencher.bench_local(|| {
             black_box(
-                pseudo(&data, &options, &eval_times, kind, true)
+                pseudo(&data, &options, &eval_times, kind, options.stype, true)
                     .expect("benchmark pseudo-value inputs should be valid"),
             )
         });
