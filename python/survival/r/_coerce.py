@@ -7,7 +7,7 @@ import os
 import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from itertools import compress, repeat
+from itertools import compress
 from operator import index
 from typing import Any, cast
 
@@ -96,7 +96,7 @@ def _materialize_1d(values: Any, name: str) -> list[Any]:
 
 def _materialize_labels(values: Any, name: str) -> list[Any]:
     result = _coerce_array_like(values, name)
-    if any(map(isinstance, result, repeat(list))):
+    if any(isinstance(value, list) for value in result):
         raise ValueError(f"{name} must be one-dimensional")
     return result
 
@@ -238,29 +238,28 @@ def _row_has_missing(value: Any) -> bool:
     return _is_missing_value(value)
 
 
-def _numeric_ndarray(values: Any, kinds: str = "fiu") -> np.ndarray | None:
-    """*values* as a 1-D numpy array when it is an ndarray or a pandas/polars column whose
-    dtype kind is one of *kinds* (``"b"`` adds logicals), else ``None``.
+def _numeric_ndarray(values: Any) -> np.ndarray | None:
+    """*values* as a 1-D numpy array when it is a plain ndarray or a pandas/polars column
+    whose dtype kind is logical, integer or double, else ``None``.
 
-    Object, string, datetime and nullable extension columns (which ``to_numpy`` turns into
-    object arrays) and factor-like columns get ``None``: they keep the per-element paths
-    that know ``None``, ``pd.NA``, ``NaT`` and declared levels.
+    Masked arrays, object, string, datetime and nullable extension columns (which
+    ``to_numpy`` turns into object arrays) and factor-like columns get ``None``: they keep
+    the per-element paths that know masks, ``None``, ``pd.NA``, ``NaT`` and declared levels.
     """
 
     if isinstance(values, np.ndarray):
+        if isinstance(values, np.ma.MaskedArray):
+            return None
         array = values
     elif hasattr(values, "to_numpy") and hasattr(values, "dtype"):
         if _categories(values) is not None:
             return None
-        try:
-            array = values.to_numpy()
-        except Exception:
-            return None
+        array = values.to_numpy()
         if not isinstance(array, np.ndarray):
             return None
     else:
         return None
-    if array.ndim != 1 or array.dtype.kind not in kinds:
+    if array.ndim != 1 or array.dtype.kind not in "biuf":
         return None
     return array
 
@@ -268,7 +267,7 @@ def _numeric_ndarray(values: Any, kinds: str = "fiu") -> np.ndarray | None:
 def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
     missing: set[int] = set()
     for name, values in columns:
-        array = _numeric_ndarray(values, "biuf")
+        array = _numeric_ndarray(values)
         if array is not None:
             if len(array) != n:
                 raise ValueError(f"{name} must have length {n}")
@@ -590,7 +589,7 @@ def _factor_levels(values: Any, name: str = "values") -> list[Any]:
     declared = _categories(values)
     if declared is not None:
         return [level for level in declared if not _is_missing_value(level)]
-    array = _numeric_ndarray(values, "biuf")
+    array = _numeric_ndarray(values)
     if array is not None:
         return _numeric_factor(array)[1].tolist()
     try:
@@ -622,7 +621,7 @@ def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:
 def _factor(values: Any, name: str = "values") -> tuple[list[int | None], list[str]]:
     """R's ``factor(x)`` as zero-based codes (``None`` for ``NA``) and level labels."""
 
-    array = _numeric_ndarray(values, "biuf")
+    array = _numeric_ndarray(values)
     if array is not None:
         numeric_codes, numeric_levels = _numeric_factor(array)
         return numeric_codes, [_as_character(level) for level in numeric_levels.tolist()]

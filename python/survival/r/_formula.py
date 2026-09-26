@@ -20,7 +20,6 @@ from ._coerce import (
     _floats_or_nan,
     _is_missing_value,
     _keep_rows_after_na_action,
-    _label_levels,
     _materialize_1d,
     _materialize_labels,
     _missing_row_indices,
@@ -1258,7 +1257,7 @@ def _data_rows(
     index: np.ndarray | None = None
     for name in columns:
         source = _column_source(data, name)
-        array = _numeric_ndarray(source, "biuf")
+        array = _numeric_ndarray(source)
         if array is not None:
             if len(array) != n:
                 raise ValueError(f"variable lengths differ (found for '{name}')")
@@ -2138,7 +2137,6 @@ def _fit_formula_design(
 
     if full_data is None:
         full_data = data
-    strata_values = _combined_columns(data, terms.strata, n) if terms.strata else []
     factor_order = _formula_factor_order(terms.covariates)
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
     ordered_model_terms = sorted(
@@ -2184,7 +2182,6 @@ def _fit_formula_design(
         offsets=tuple(terms.offsets),
         term_assignments=tuple(term_assignments[term] for term in ordered_terms),
         strata=tuple(terms.strata),
-        strata_levels=_label_levels(strata_values, "strata") if terms.strata else (),
         intercept=include_intercept and terms.intercept,
     )
 

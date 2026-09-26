@@ -56,17 +56,21 @@ def _surv_and_warnings(time, status):
 
 
 def _inputs(values):
-    """The same column as a list, a numpy array and (when installed) pandas/polars."""
+    """The same column as a list, a numpy array, a masked array (NaN masked) and (when
+    installed) pandas, nullable pandas and polars."""
 
-    array = np.array(values, dtype=bool if isinstance(values[0], bool) else float)
+    logical = isinstance(values[0], bool)
+    array = np.array(values, dtype=bool if logical else float)
     yield list(values)
     yield array
+    yield np.ma.array(array, mask=False) if logical else np.ma.masked_invalid(array)
     try:
         import pandas as pd
     except ImportError:
         pass
     else:
         yield pd.Series(array)
+        yield pd.Series(list(values), dtype="boolean" if logical else "Float64")
     try:
         import polars as pl
     except ImportError:
@@ -112,6 +116,20 @@ def test_surv_missing_values_match_for_none_nan_and_pandas_na():
     status = pd.Series([1, 0, None], dtype="Int64")
     assert _surv_key(r.Surv(time, status)) == expected
     assert _surv_key(r.Surv(pd.Series([1.0, NAN, 3.0]), [True, False, pd.NA])) == expected
+
+
+def test_masked_entries_are_missing():
+    time = np.ma.array([1.0, 2.0, 3.0], mask=[False, True, False])
+    status = np.ma.array([1, 1, 0], mask=[False, False, True])
+    surv = r.Surv(time, status)
+    assert _surv_key(surv) == _surv_key(r.Surv([1.0, None, 3.0], [1, 1, None]))
+    assert r.is_na_surv(surv) == [False, True, True]
+    assert r_coerce._missing_row_indices([("time", time), ("status", status)], 3) == {1, 2}
+    assert r_coerce._factor(status) == ([0, 0, None], ["1"])
+    # survfit(Surv(time, status) ~ 1) with time[2] and status[3] NA: one row is left
+    fit = r.survfit("Surv(time, status) ~ 1", {"time": time, "status": status})
+    assert list(fit.n) == [1]
+    assert list(fit.time) == [1.0]
 
 
 def test_is_na_surv_marks_a_missing_entry_in_any_column():
@@ -344,3 +362,74 @@ def test_grouping_by_a_strata_term_keeps_its_level_order():
     expected = r.survexp("~ strata(g)", data=data, ratetable=fit)
     assert expected.strata == ["strata(g)=g=2", "strata(g)=g=10"]
     assert expected.surv[4] == pytest.approx([0.969944763136, 0.960538149447], rel=1e-10)
+
+
+def test_missing_strata_are_refused_when_na_action_keeps_them():
+    # coxph(Surv(time, status) ~ z + strata(g), d, na.action = na.pass) with g[3] NA fails
+    # in coxph.fit ("NAs in foreign function call")
+    d = {
+        "time": [5, 8, 3, 9, 12, 4, 7, 10],
+        "status": [1, 0, 1, 1, 0, 1, 1, 0],
+        "z": [0.5, 1.2, -0.3, 0.8, 1.9, -1.1, 0.2, 0.4],
+        "g": [1, 2, None, 1, 2, 1, 2, 1],
+    }
+    for na_action in (None, "na.pass"):
+        with pytest.raises(ValueError, match="missing values in the strata"):
+            r.coxph("Surv(time, status) ~ z + strata(g)", d, na_action=na_action)
+
+
+def test_concordance_newdata_codes_several_strata_terms_as_the_fit():
+    # v <- veteran; v$celltype <- as.character(v$celltype)
+    # fit <- coxph(Surv(time, status) ~ karno + strata(trt) + strata(celltype), v)
+    # concordance(fit, newdata = v[1:40, ])$concordance
+    veteran = _veteran()
+    veteran = veteran.assign(celltype=veteran["celltype"].astype(str))
+    fit = r.coxph("Surv(time, status) ~ karno + strata(trt) + strata(celltype)", veteran)
+    result = r.concordance(fit, newdata=veteran.iloc[:40])
+    assert result.concordance == pytest.approx(0.64745308310992, rel=1e-12)
+
+
+def _lung_sex_reversed():
+    pd = pytest.importorskip("pandas")
+    lung = pd.DataFrame(
+        {name: values for name, values in survival.datasets.load_lung().items() if name[0] != "_"}
+    )
+    lung = lung[lung["ph.ecog"].notna()][["time", "status", "age", "sex"]]
+    return lung.iloc[::-1].reset_index(drop=True)
+
+
+def test_brier_newdata_codes_strata_as_the_fit():
+    # d <- lung[!is.na(lung$ph.ecog), c("time", "status", "age", "sex")]; d <- d[nrow(d):1, ]
+    # fit <- coxph(Surv(time, status) ~ age + strata(sex), d); brier(fit, times = c(200, 400))
+    # (R's own brier() fails in summary.survfit for a stratified fit, so the reference is its
+    # body evaluated with the per-row curves of survfit(fit, newdata = d) read by hand)
+    d = _lung_sex_reversed()
+    assert d["sex"].iloc[0] == 2  # the first stratum seen is not the first level
+    fit = r.coxph("Surv(time, status) ~ age + strata(sex)", d)
+    expected = [0.207839440728107, 0.232565480891645]
+    assert r.brier(fit, times=[200, 400]).brier == pytest.approx(expected, rel=1e-10)
+    result = r.brier(fit, times=[200, 400], newdata=d, detail=True)
+    assert result.brier == pytest.approx(expected, rel=1e-10)
+    assert result.rsquared == pytest.approx([0.0396132477756355, 0.011336458026142], rel=1e-10)
+    assert result.phat[0][:3] == pytest.approx(
+        [0.193756425470508, 0.4003984810448, 0.247978372150067], rel=1e-10
+    )
+
+
+def test_finegray_splits_the_strata_in_their_level_order():
+    # d <- data.frame(time = 1:8, ev = factor(c(1, 2, 0, 1, 2, 1, 0, 1), 0:2,
+    #   c("censor", "a", "b")), g = factor(rep(c("a", "z"), 4), levels = c("z", "a")), x = 1:8)
+    # finegray(Surv(time, ev) ~ x + strata(g), data = d)
+    pd = pytest.importorskip("pandas")
+    d = pd.DataFrame(
+        {
+            "time": [1, 2, 3, 4, 5, 6, 7, 8],
+            "ev": pd.Categorical.from_codes([1, 2, 0, 1, 2, 1, 0, 1], ["censor", "a", "b"]),
+            "g": pd.Categorical(list("azazazaz"), categories=["z", "a"]),
+            "x": [1, 2, 3, 4, 5, 6, 7, 8],
+        }
+    )
+    frame = r.as_data_frame(r.finegray("Surv(time, ev) ~ x + strata(g)", data=d))
+    assert list(frame["x"]) == [2, 4, 6, 8, 1, 3, 5, 7]
+    assert list(frame["fgstop"]) == [8.0, 4.0, 6.0, 8.0, 1.0, 3.0, 7.0, 7.0]
+    assert list(frame["fgstatus"]) == [0, 1, 1, 1, 1, 0, 0, 0]

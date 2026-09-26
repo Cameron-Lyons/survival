@@ -83,7 +83,7 @@ def _ordered_named_response_arguments(named_arguments: dict[str, Any]) -> list[A
 def _time_column(values: Any, name: str, message: str) -> list[float]:
     """A numeric time column with ``NaN`` for missing values."""
 
-    array = _numeric_ndarray(values, "biuf")
+    array = _numeric_ndarray(values)
     if array is not None:
         if array.dtype.kind == "b":
             raise ValueError(message)
@@ -105,7 +105,7 @@ def _time_column(values: Any, name: str, message: str) -> list[float]:
 def _binary_status(values: Any, name: str) -> list[int | None]:
     """R's status coding for right/left/counting data: logical, 0/1 or 1/2."""
 
-    array = _numeric_ndarray(values, "biuf")
+    array = _numeric_ndarray(values)
     if array is not None:
         if array.dtype.kind == "b":
             return array.astype(np.int64).tolist()
@@ -654,7 +654,7 @@ def _is_character(values: Any) -> bool:
 
     if _is_factor_like(values):
         return True
-    if _numeric_ndarray(values, "biuf") is not None:
+    if _numeric_ndarray(values) is not None:
         return False
     return all(
         isinstance(value, str) or _is_missing_value(value)

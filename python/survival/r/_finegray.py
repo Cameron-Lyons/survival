@@ -22,9 +22,9 @@ from ._coerce import (
     _pop_dotted_keyword,
 )
 from ._data_prep import aeqSurv
-from ._formula import _column, _model_variables, model_frame
+from ._formula import _model_variables, _strata_keep, _strata_term_columns, model_frame
 from ._names import _make_names
-from ._surv import Surv, strata
+from ._surv import Surv, _complete_codes
 from ._types import FineGrayFrame, ModelFrame
 
 
@@ -134,14 +134,8 @@ def _finegray_inputs(mf: ModelFrame, timefix: bool) -> tuple[Surv, list[int], li
     if mf.terms.clusters:
         raise ValueError("a cluster() term is not valid")
     if mf.terms.strata:
-        factor = strata(
-            *[_column(mf.data, column) for column in mf.terms.strata],
-            labels=list(mf.terms.strata),
-            shortlabel=True,
-        )
-        if any(code is None for code in factor.codes):
-            raise ValueError("strata must not contain missing values")
-        istrat = [int(code) for code in factor.codes if code is not None]
+        factor = _strata_keep(mf.data, _strata_term_columns(mf.terms))
+        istrat = _complete_codes(factor, "strata must not contain missing values")
     else:
         istrat = [0] * mf.n
     weights = (

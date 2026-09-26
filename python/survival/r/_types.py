@@ -162,7 +162,6 @@ class _FormulaDesign:
     offsets: tuple[_CovariateTerm, ...]
     term_assignments: tuple[int, ...] = ()
     strata: tuple[str, ...] = ()
-    strata_levels: tuple[Any, ...] = ()
     intercept: bool = False
 
 
