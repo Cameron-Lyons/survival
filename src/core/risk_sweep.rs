@@ -109,27 +109,14 @@ impl RiskSetSums {
     }
 }
 
-/// A row of a [`RecenteredRiskSet`]: its linear predictor and case weight,
-/// and its risk score about the centre of `epoch`.
-#[derive(Debug, Clone, Copy, Default)]
-struct Member {
-    eta: f64,
-    weight: f64,
-    risk: f64,
-    epoch: u64,
-}
-
 /// The running risk set of `agfit4.c`'s likelihood evaluation, with second
 /// moments: sums of the weighted risk scores `w exp(eta - recenter)`.  The
 /// centre follows the mean linear predictor of the set, so `exp` neither
 /// overflows nor underflows the whole set away when the linear predictors
 /// are large (an offset of -750, or near-infinite coefficients).  It
 /// cancels from the likelihood, score and information as long as the
-/// deaths' own `eta` terms are shifted by it too.
-///
-/// Rows are identified by an index below the `nrow` given to
-/// [`RecenteredRiskSet::restart`]; the set remembers what each row joined
-/// with, so its risk score is computed once unless the centre moves.
+/// deaths' own `eta` terms are shifted by it too.  As in `agfit4.c`, a
+/// row's risk score is recomputed about the current centre when it leaves.
 #[derive(Debug)]
 pub(crate) struct RecenteredRiskSet {
     pub sums: RiskSetSums,
@@ -140,9 +127,6 @@ pub(crate) struct RecenteredRiskSet {
     /// Number of times the centre moved, over every evaluation
     /// (`agreg.fit`'s `info["rescale"]`).
     pub rescales: i32,
-    /// Advances whenever the centre is set.
-    epoch: u64,
-    members: Vec<Member>,
 }
 
 impl RecenteredRiskSet {
@@ -152,18 +136,13 @@ impl RecenteredRiskSet {
             etasum: 0.0,
             recenter: 0.0,
             rescales: 0,
-            epoch: 0,
-            members: Vec::new(),
         }
     }
 
-    /// Starts an evaluation of the likelihood over rows `0..nrow`: an empty
-    /// set centred at 0.
-    pub(crate) fn restart(&mut self, nrow: usize) {
+    /// Starts an evaluation of the likelihood: an empty set centred at 0.
+    pub(crate) fn restart(&mut self) {
         self.clear();
         self.recenter = 0.0;
-        self.epoch += 1;
-        self.members.resize(nrow, Member::default());
     }
 
     /// Empties the set for a new stratum; as in `agfit4.c` the centre
@@ -173,37 +152,27 @@ impl RecenteredRiskSet {
         self.etasum = 0.0;
     }
 
-    /// The weighted risk score `w exp(eta - recenter)` of a row in the set.
+    /// The weighted risk score `w exp(eta - recenter)`.
     #[inline]
-    pub(crate) fn risk(&mut self, row: usize) -> f64 {
-        let (recenter, epoch) = (self.recenter, self.epoch);
-        let member = &mut self.members[row];
-        if member.epoch != epoch {
-            member.risk = (member.eta - recenter).exp() * member.weight;
-            member.epoch = epoch;
-        }
-        member.risk
+    pub(crate) fn risk(&self, eta: f64, weight: f64) -> f64 {
+        (eta - self.recenter).exp() * weight
     }
 
     /// Adds a row.  When the mean linear predictor of the set, the row
     /// included, lies more than 200 from the centre, the centre moves to it
     /// and the sums are rescaled first; a move beyond `exp`'s range while
-    /// rows are at risk is `agfit4.c`'s overflow error.
+    /// rows are at risk is `agfit4.c`'s overflow error.  The deaths already
+    /// added at the current death time count as at risk here, whereas
+    /// `agfit4.c` holds them apart (`denom2`) and leaves them on the old
+    /// centre.
     #[inline]
-    pub(crate) fn add(
-        &mut self,
-        row: usize,
-        eta: f64,
-        weight: f64,
-        x: &[f64],
-    ) -> SurvivalResult<()> {
+    pub(crate) fn add(&mut self, eta: f64, weight: f64, x: &[f64]) -> SurvivalResult<()> {
         self.etasum += eta;
         let mean = self.etasum / (self.sums.count + 1) as f64;
         if (mean - self.recenter).abs() > 200.0 {
             let shift = mean - self.recenter;
             self.recenter = mean;
             self.rescales += 1;
-            self.epoch += 1;
             if self.sums.denom > 0.0 {
                 if shift.abs() > 709.0 {
                     return Err(SurvivalError::computation("exp overflow due to covariates"));
@@ -211,23 +180,14 @@ impl RecenteredRiskSet {
                 self.sums.rescale((-shift).exp());
             }
         }
-        let risk = (eta - self.recenter).exp() * weight;
-        self.members[row] = Member {
-            eta,
-            weight,
-            risk,
-            epoch: self.epoch,
-        };
-        self.sums.add(weight, risk, x);
+        self.sums.add(weight, self.risk(eta, weight), x);
         Ok(())
     }
 
     /// Removes a row of the set (see [`RiskSetSums::remove`]).
     #[inline]
-    pub(crate) fn remove(&mut self, row: usize, x: &[f64]) {
-        let risk = self.risk(row);
-        let Member { eta, weight, .. } = self.members[row];
-        self.sums.remove(weight, risk, x);
+    pub(crate) fn remove(&mut self, eta: f64, weight: f64, x: &[f64]) {
+        self.sums.remove(weight, self.risk(eta, weight), x);
         self.etasum = if self.sums.count == 0 {
             0.0
         } else {
@@ -518,24 +478,24 @@ mod tests {
     #[test]
     fn recentering_keeps_huge_linear_predictors_in_range() {
         let mut set = RecenteredRiskSet::new(1);
-        set.restart(2);
-        set.add(0, -750.0, 1.0, &[1.0]).unwrap();
-        set.add(1, -749.0, 2.0, &[2.0]).unwrap();
+        set.restart();
+        set.add(-750.0, 1.0, &[1.0]).unwrap();
+        set.add(-749.0, 2.0, &[2.0]).unwrap();
         assert_eq!(set.rescales, 1);
         assert_eq!(set.recenter, -750.0);
         let (e, e2) = (1.0, 2.0 * 1f64.exp());
         assert!((set.sums.denom - (e + e2)).abs() < 1e-12);
         assert!((set.sums.a[0] - (e + 2.0 * e2)).abs() < 1e-12);
-        set.remove(0, &[1.0]);
+        set.remove(-750.0, 1.0, &[1.0]);
         assert!((set.sums.denom - e2).abs() < 1e-12);
-        set.remove(1, &[2.0]);
+        set.remove(-749.0, 2.0, &[2.0]);
         assert_eq!((set.sums.count, set.sums.denom), (0, 0.0));
 
         // A centre move beyond exp's range while rows are at risk.
         let mut set = RecenteredRiskSet::new(1);
-        set.restart(2);
-        set.add(0, 0.0, 1.0, &[0.0]).unwrap();
-        let error = set.add(1, 2000.0, 1.0, &[0.0]).unwrap_err();
+        set.restart();
+        set.add(0.0, 1.0, &[0.0]).unwrap();
+        let error = set.add(2000.0, 1.0, &[0.0]).unwrap_err();
         assert!(error.to_string().contains("exp overflow due to covariates"));
     }
 }

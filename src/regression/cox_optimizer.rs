@@ -473,7 +473,7 @@ trait AgRiskSet {
     fn add(&mut self, person: usize, x: &[f64]) -> SurvivalResult<()>;
     fn remove(&mut self, person: usize, x: &[f64]);
     /// The weighted risk score of a row in the set.
-    fn risk(&mut self, person: usize) -> f64;
+    fn risk(&self, person: usize) -> f64;
     /// The constant the risk scores' linear predictors are taken from.
     fn recenter(&self) -> f64;
     fn sums(&self) -> &RiskSetSums;
@@ -500,7 +500,7 @@ impl AgRiskSet for CentredAtZero<'_> {
         self.sums.remove(self.weights[person], self.risk[person], x);
     }
 
-    fn risk(&mut self, person: usize) -> f64 {
+    fn risk(&self, person: usize) -> f64 {
         self.risk[person]
     }
 
@@ -526,16 +526,15 @@ impl AgRiskSet for Recentred<'_> {
     }
 
     fn add(&mut self, person: usize, x: &[f64]) -> SurvivalResult<()> {
-        self.set
-            .add(person, self.eta[person], self.weights[person], x)
+        self.set.add(self.eta[person], self.weights[person], x)
     }
 
     fn remove(&mut self, person: usize, x: &[f64]) {
-        self.set.remove(person, x);
+        self.set.remove(self.eta[person], self.weights[person], x);
     }
 
-    fn risk(&mut self, person: usize) -> f64 {
-        self.set.risk(person)
+    fn risk(&self, person: usize) -> f64 {
+        self.set.risk(self.eta[person], self.weights[person])
     }
 
     fn recenter(&self) -> f64 {
@@ -768,7 +767,7 @@ impl CoxData {
             };
             self.agfit4_walk(walk, &eta, centred, u, imat)
         } else {
-            risk_set.restart(eta.len());
+            risk_set.restart();
             let recentred = Recentred {
                 set: risk_set,
                 eta: &eta,
