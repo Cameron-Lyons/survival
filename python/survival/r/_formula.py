@@ -318,6 +318,12 @@ def _strip_outer_formula_parentheses(term: str) -> str:
 
 
 def _parse_formula_literal(value: str) -> Any:
+    """A constant of a ``Surv()`` response comparison, ``rep()`` or a penalty option,
+    typed for Python: a whole number written without a point or exponent is an ``int``
+    (``rep()``'s count must be one) and ``T``/``F`` are logical.  Unlike
+    :func:`_r_literal`, which formula arithmetic and vectors read constants with, a
+    value that is not a finite constant is an error."""
+
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
@@ -694,13 +700,13 @@ def _offset_columns(terms: Sequence[_CovariateTerm]) -> list[str]:
 
 
 def _arithmetic_literal(value: str) -> float | None:
-    try:
-        literal = float(value)
-    except ValueError:
-        return None
-    if not math.isfinite(literal):
-        raise ValueError("formula arithmetic literals must be finite")
-    return literal
+    """The number R's constant *value* is in arithmetic (``TRUE`` counts one), or
+    ``None`` when *value* is not a constant."""
+
+    literal = _r_literal(value)
+    if isinstance(literal, str):
+        raise ValueError(f"non-numeric argument to binary operator: {value.strip()}")
+    return None if literal is None else float(literal)
 
 
 def _is_formula_arithmetic_expression(expression: str) -> bool:
@@ -1457,7 +1463,7 @@ def _transform_argument(term: str) -> tuple[str, str] | None:
     """``(transform, argument)`` of a ``log``/``sqrt``/``exp``/``I``/``identity``/
     ``as.numeric``/``tt`` term."""
 
-    for wrapper in ("log", "sqrt", "exp", "I", "identity", "as.numeric", "tt"):
+    for wrapper in (*_NUMERIC_CALLS, "tt"):
         prefix = f"{wrapper}("
         if term.startswith(prefix) and term.endswith(")"):
             arguments = _formula_response_parts(term[len(prefix) : -1])

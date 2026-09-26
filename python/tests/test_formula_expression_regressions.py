@@ -381,15 +381,57 @@ def test_rmap_expressions_are_evaluated_in_the_data():
     assert individual == approx(
         [0.99604605679416347, 0.97843785221959145, 0.94669528682588988, 0.95697739097128665]
     )
-    # a string reading no column stays a constant
+
+
+@pytest.mark.parametrize(
+    ("race", "expected"),
+    [
+        # pyears(Surv(time, status) ~ 1, d, ratetable = survexp.usr, scale = 1,
+        #        rmap = list(race = "white", sex = sex, year = year)) with age = 60 * 365.25
+        ("white", 0.05297215667328728),
+        ('"white"', 0.05297215667328728),
+        ("'black'", 0.09204296457999922),
+    ],
+)
+def test_an_rmap_word_or_quoted_string_is_a_constant(race, expected):
     usr = r.pyears(
         "Surv(time, status) ~ 1",
         {**_cohort(), "age": [60 * 365.25] * 4},
         ratetable=r.survexp_usr(),
-        rmap={"race": "white", "sex": "sex", "year": "year"},
+        rmap={"race": race, "sex": "sex", "year": "year"},
         scale=1,
     )
-    assert usr.expected > 0
+    assert usr.expected == approx(expected)
+
+
+@pytest.mark.parametrize("age", ["60 * 365.25", "21915"])
+def test_an_rmap_expression_reading_no_column_is_evaluated(age):
+    # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us, scale = 1,
+    #        rmap = list(age = 60 * 365.25, sex = sex, year = year))
+    rmap = {"age": age, "sex": "sex", "year": "year"}
+    result = r.pyears(
+        "Surv(time, status) ~ grp", _cohort(), ratetable=r.survexp_us(), rmap=rmap, scale=1
+    )
+    assert result.expected == approx([0.039888584560963558, 0.016090412028239812])
+
+
+def test_an_rmap_expression_that_cannot_be_read_is_an_error():
+    us = r.survexp_us()
+    # R: object 'agyr' not found
+    with pytest.raises(KeyError, match="column 'agyr' not found"):
+        r.pyears(
+            "Surv(time, status) ~ grp",
+            _cohort(),
+            ratetable=us,
+            rmap={"age": "agyr * 365.25", "sex": "sex", "year": "year"},
+        )
+    with pytest.raises(ValueError, match=r"rmap age = round\(ageyr\) \* 365.25: unsupported"):
+        r.pyears(
+            "Surv(time, status) ~ grp",
+            _cohort(),
+            ratetable=us,
+            rmap={"age": "round(ageyr) * 365.25", "sex": "sex", "year": "year"},
+        )
 
 
 # --- transforms of expressions and comparisons -------------------------------------
@@ -425,6 +467,8 @@ def test_rmap_expressions_are_evaluated_in_the_data():
         ),
         # the exponent's sign is part of the number (R's label is I(age * 0.001))
         ("I(age*1e-3)", ["I(age*1e-3)"], [18.720179204551467], 228),
+        # R's constants: TRUE counts one
+        ("I(age + TRUE)", ["I(age + TRUE)"], [0.018720179204551463], 228),
         # %in% is an interaction whose variables R orders by first appearance
         (
             "age + sex %in% inst",
@@ -541,6 +585,8 @@ def test_unsupported_expressions_raise_the_formula_error():
     for rhs in ("I(sex == 2 & age > 60)", "as.numeric(!sex)", "I(age | sex)", "log(age, 2)"):
         with pytest.raises(ValueError, match="unsupported formula|requires exactly one"):
             r.coxph(f"Surv(time, status) ~ {rhs}", lung)
+    with pytest.raises(ValueError, match="non-numeric argument to binary operator"):
+        r.coxph('Surv(time, status) ~ I(age + "a")', lung)
 
 
 def test_in_operator_builds_interactions_left_to_right():

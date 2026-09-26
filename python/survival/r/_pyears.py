@@ -46,6 +46,7 @@ from ._formula import (
     _data_column_names,
     _data_row_count,
     _expression_columns,
+    _expression_values,
     _formula_columns,
     _formula_name,
     _formula_rhs_terms,
@@ -53,9 +54,11 @@ from ._formula import (
     _model_strata,
     _numeric_scalar,
     _numeric_vector,
+    _r_literal,
     _response_spec,
     _seq_length,
     _term_values,
+    _unsupported_formula_name,
     model_frame,
 )
 from ._surv import Surv
@@ -184,10 +187,12 @@ def _mapped_columns(
 ) -> dict[str, Any]:
     """``rmap``'s entries, then a same-named column for each other variable in *names*.
 
-    A string naming a column of *data* stays that column; a string reading columns is
-    an R expression of them (``ageyr * 365.25``, or ``accept_dt - birth_dt`` with the
-    dates as days since 1970-01-01), which R evaluates in the model frame; a string
-    reading none, or any other scalar, is a constant.
+    A string naming a column of *data* stays that column.  Any other string is R code:
+    an R constant (``60``, ``"white"``) or a bare word (``white``) is a constant, and an
+    expression
+    (``ageyr * 365.25``, or ``accept_dt - birth_dt`` with the dates as days since
+    1970-01-01) is evaluated in *data*, as R evaluates ``rmap`` in the model frame.
+    Any other scalar is a constant.
     """
 
     columns: dict[str, Any] = {}
@@ -197,7 +202,7 @@ def _mapped_columns(
         if str(name) not in names:
             raise ValueError(f"Variable not found in the ratetable:{name}")
         if isinstance(value, str) and value not in available:
-            value = _rmap_expression(value, data, available, n)
+            value = _rmap_value(str(name), value, data, n)
         elif not isinstance(value, str) and not hasattr(value, "__iter__"):
             value = [value] * n
         columns[str(name)] = value
@@ -206,21 +211,24 @@ def _mapped_columns(
     return columns
 
 
-def _rmap_expression(text: str, data: Any, available: set[str], n: int) -> list[Any]:
-    """The values of an ``rmap`` expression string, or the string repeated as a
-    constant when it reads no column of *data*."""
+def _rmap_value(name: str, text: str, data: Any, n: int) -> list[Any]:
+    """The values of the ``rmap`` entry *name*, a string *text* naming no column."""
 
+    literal = _r_literal(text)
+    if literal is not None:
+        return [literal] * n
+    word, quoted = _formula_name(text)
+    if not quoted and not _unsupported_formula_name(word, quoted):
+        return [text] * n
     try:
         used = _expression_columns(text)
-    except ValueError:
-        used = []
-    if available.isdisjoint(used):
-        return [text] * n
+    except ValueError as exc:
+        raise ValueError(f"rmap {name} = {text}: {exc}") from exc
     values = {}
     for column in used:
         raw = _column(data, column)
         values[column] = [_ratetable_day(value) for value in raw] if _is_date_column(raw) else raw
-    return _arithmetic_expression_values(values, text, n)
+    return _expression_values(values, text, n)
 
 
 def _is_date_column(values: Sequence[Any]) -> bool:
