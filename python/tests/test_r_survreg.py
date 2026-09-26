@@ -408,6 +408,19 @@ def test_predict_survreg_newdata_with_strata(lung):
 # --- residuals -------------------------------------------------------------------------------
 
 
+def test_residuals_default_type_follows_the_model(lung, lung_weibull):
+    # residuals.survreg defaults to "response", residuals.coxph to "martingale"
+    assert r.residuals(lung_weibull)[:3] == pytest.approx(
+        [-8.16499336963079, 116.85984881069709, 618.28099252166544]
+    )
+    assert r.residuals(lung_weibull) == r.residuals(lung_weibull, type="response")
+    cox = r.coxph("Surv(time, status) ~ age + sex", lung)
+    assert r.residuals(cox)[:3] == pytest.approx(
+        [0.00438999436025189, -0.50576202995143671, -3.12981924011021873]
+    )
+    assert r.residuals(cox) == r.residuals(cox, type="martingale")
+
+
 def test_residuals_survreg_all_types(lung_weibull):
     fit = lung_weibull
     response = r.residuals(fit, type="response")
