@@ -11,8 +11,9 @@
 use crate::core::bspline::spline_design;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::lu_inverse;
+use crate::internal::qr::LinpackQr;
 use crate::internal::validation::validate_finite;
-use ndarray::{Array2, Axis, s};
+use ndarray::{Array2, s};
 use pyo3::prelude::*;
 
 /// A natural spline basis matrix with the attributes R attaches to it.
@@ -368,14 +369,20 @@ pub(crate) fn ns(
         basis = basis.slice(s![.., 1..]).to_owned();
     }
     // basis <- t(qr.qty(qr(t(const)), t(basis)))[, -(1:2)]
-    let qr = HouseholderQr::decompose(constraint.t().to_owned());
-    let mut projected = basis.t().to_owned();
-    for mut column in projected.axis_iter_mut(Axis(1)) {
-        let mut values = column.to_vec();
+    let qr = LinpackQr::new(
+        constraint
+            .rows()
+            .into_iter()
+            .map(|row| row.to_vec())
+            .collect(),
+        constraint.ncols(),
+    );
+    for mut row in basis.rows_mut() {
+        let mut values = row.to_vec();
         qr.qty(&mut values);
-        column.assign(&ndarray::Array1::from(values));
+        row.assign(&ndarray::ArrayView1::from(&values));
     }
-    let values = projected.t().slice(s![.., 2..]).to_owned();
+    let values = basis.slice(s![.., 2..]).to_owned();
     Ok(NaturalSplineBasis { values, knots })
 }
 
@@ -434,71 +441,6 @@ fn quantile_type7(sorted: &[f64], probability: f64) -> f64 {
         (1.0 - h) * lower + h * upper
     } else {
         lower
-    }
-}
-
-/// LINPACK `dqrdc2` (no pivoting needed: the constraint matrix has full
-/// column rank) and the `qty` branch of `dqrsl`, as used by R's `qr()` and
-/// `qr.qty()`.
-struct HouseholderQr {
-    qr: Array2<f64>,
-    qraux: Vec<f64>,
-}
-
-impl HouseholderQr {
-    fn decompose(mut x: Array2<f64>) -> Self {
-        let (n, p) = x.dim();
-        let mut qraux = vec![0.0; p];
-        for l in 0..n.min(p) {
-            let nrmxl_raw: f64 = (l..n).map(|i| x[[i, l]] * x[[i, l]]).sum::<f64>().sqrt();
-            if nrmxl_raw == 0.0 {
-                continue;
-            }
-            let nrmxl = if x[[l, l]] != 0.0 {
-                nrmxl_raw.copysign(x[[l, l]])
-            } else {
-                nrmxl_raw
-            };
-            for i in l..n {
-                x[[i, l]] /= nrmxl;
-            }
-            x[[l, l]] += 1.0;
-            for j in l + 1..p {
-                let dot: f64 = (l..n).map(|i| x[[i, l]] * x[[i, j]]).sum();
-                let t = -dot / x[[l, l]];
-                for i in l..n {
-                    x[[i, j]] += t * x[[i, l]];
-                }
-            }
-            qraux[l] = x[[l, l]];
-            x[[l, l]] = -nrmxl;
-        }
-        Self { qr: x, qraux }
-    }
-
-    /// Overwrites `y` with `t(Q) %*% y`.
-    fn qty(&self, y: &mut [f64]) {
-        let (n, p) = self.qr.dim();
-        let ju = p.min(n.saturating_sub(1));
-        for j in 0..ju {
-            if self.qraux[j] == 0.0 {
-                continue;
-            }
-            let head = self.qraux[j];
-            let column = self.qr.column(j);
-            let dot: f64 = head * y[j]
-                + column
-                    .iter()
-                    .zip(y.iter())
-                    .skip(j + 1)
-                    .map(|(q, v)| q * v)
-                    .sum::<f64>();
-            let t = -dot / head;
-            y[j] += t * head;
-            for (value, q) in y.iter_mut().zip(column.iter()).skip(j + 1) {
-                *value += t * q;
-            }
-        }
     }
 }
 

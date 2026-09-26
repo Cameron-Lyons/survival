@@ -22,6 +22,8 @@ use std::collections::HashSet;
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
+use crate::internal::qr::LinpackQr;
+use crate::internal::simd::dot_product;
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 mod rng;
@@ -210,127 +212,6 @@ pub fn yates_estimable(
         .collect()
 }
 
-/// R's `qr()` (LINPACK `dqrdc2` with `tol = 1e-7`) of an `n`-row matrix
-/// given by its columns, and `qr.resid()` (`dqrsl`) against it.
-struct LinpackQr {
-    /// The Householder vector of each of the first `min(rank, n - 1)`
-    /// columns: column `j` of R's `qr$qr` from row `j` on, with `qraux[j]` in
-    /// place of its diagonal.
-    householder: Vec<Vec<f64>>,
-    rank: usize,
-}
-
-impl LinpackQr {
-    /// `dqrdc2`: Householder QR with LINPACK's limited pivoting, which moves
-    /// a column whose norm has fallen below `tol` times its original norm to
-    /// the end; `rank` counts the columns left in front.
-    fn new(mut x: Vec<Vec<f64>>, n: usize) -> Self {
-        const TOL: f64 = 1e-7;
-        let p = x.len();
-        let mut qraux: Vec<f64> = x.iter().map(|column| norm(column)).collect();
-        let mut original: Vec<f64> = qraux
-            .iter()
-            .map(|&value| if value == 0.0 { 1.0 } else { value })
-            .collect();
-        // LINPACK's 1-based `k`: one past the last non-negligible column
-        let mut k = p + 1;
-        for l in 0..n.min(p) {
-            while l + 1 < k && qraux[l] < original[l] * TOL {
-                x[l..].rotate_left(1);
-                qraux[l..].rotate_left(1);
-                original[l..].rotate_left(1);
-                k -= 1;
-            }
-            if l + 1 == n {
-                continue;
-            }
-            let (head, tail) = x.split_at_mut(l + 1);
-            let xl = &mut head[l];
-            let mut nrmxl = norm(&xl[l..]);
-            if nrmxl == 0.0 {
-                continue;
-            }
-            if xl[l] != 0.0 {
-                nrmxl = nrmxl.copysign(xl[l]);
-            }
-            let scale = 1.0 / nrmxl;
-            for value in &mut xl[l..] {
-                *value *= scale;
-            }
-            xl[l] += 1.0;
-            for (offset, xj) in tail.iter_mut().enumerate() {
-                let j = l + 1 + offset;
-                let t = -dot(&xl[l..], &xj[l..]) / xl[l];
-                for (value, h) in xj[l..].iter_mut().zip(&xl[l..]) {
-                    *value += t * h;
-                }
-                if qraux[j] != 0.0 {
-                    let tt = (1.0 - (xj[l].abs() / qraux[j]).powi(2)).max(0.0);
-                    if tt < 1e-6 {
-                        qraux[j] = norm(&xj[l + 1..]);
-                    } else {
-                        qraux[j] *= tt.sqrt();
-                    }
-                }
-            }
-            qraux[l] = xl[l];
-            xl[l] = -nrmxl;
-        }
-        let rank = (k - 1).min(n);
-        let householder = (0..rank.min(n.saturating_sub(1)))
-            .map(|j| {
-                let mut vector = x[j][j..].to_vec();
-                vector[0] = qraux[j];
-                vector
-            })
-            .collect();
-        Self { householder, rank }
-    }
-
-    /// `qr.resid()`: `y` minus its projection on the span of the first
-    /// `rank` columns (`dqrsl` computing `Q'y`, zeroing its first `rank`
-    /// entries and applying `Q`).
-    fn residual(&self, y: &[f64]) -> Vec<f64> {
-        let mut rsd = y.to_vec();
-        if self.rank == 0 {
-            return rsd;
-        }
-        if self.householder.is_empty() {
-            // one row, of full rank
-            rsd[0] = 0.0;
-            return rsd;
-        }
-        for (j, vector) in self.householder.iter().enumerate() {
-            reflect(vector, &mut rsd[j..]);
-        }
-        rsd[..self.rank].fill(0.0);
-        for (j, vector) in self.householder.iter().enumerate().rev() {
-            reflect(vector, &mut rsd[j..]);
-        }
-        rsd
-    }
-}
-
-/// Applies one Householder reflection of `dqrsl` (skipped when its
-/// `qraux` is zero) to `y`.
-fn reflect(vector: &[f64], y: &mut [f64]) {
-    if vector[0] == 0.0 {
-        return;
-    }
-    let t = -dot(vector, y) / vector[0];
-    for (value, h) in y.iter_mut().zip(vector) {
-        *value += t * h;
-    }
-}
-
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
-fn norm(a: &[f64]) -> f64 {
-    dot(a, a).sqrt()
-}
-
 /// Eigen-decomposition of a symmetric matrix by cyclic Jacobi rotations;
 /// returns the eigenvalues and the eigenvectors as columns of `v`.
 fn symmetric_eigen(matrix: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
@@ -430,7 +311,7 @@ fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
 
 /// R's `estfun`: estimates `C beta` and their variance `C V C'`.
 fn estimates(cmat: &[Vec<f64>], beta: &[f64], vmat: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
-    let estimate = cmat.iter().map(|row| dot(row, beta)).collect();
+    let estimate = cmat.iter().map(|row| dot_product(row, beta)).collect();
     let var = matrix_product(&matrix_product(cmat, vmat), &transpose(cmat));
     (estimate, var)
 }
@@ -709,13 +590,13 @@ impl Prediction {
     /// Each level's prediction averaged over its population rows (R's
     /// `rowsum(predfun(eta), index) / n1`) at coefficients `coef`.
     fn population(&self, xmatlist: &[Vec<Vec<f64>>], means: &[f64], coef: &[f64]) -> Vec<Vec<f64>> {
-        let center = dot(means, coef);
+        let center = dot_product(means, coef);
         xmatlist
             .iter()
             .map(|rows| {
                 let mut out = vec![0.0; self.width()];
                 for row in rows {
-                    self.accumulate(dot(row, coef) - center, &mut out);
+                    self.accumulate(dot_product(row, coef) - center, &mut out);
                 }
                 let n = rows.len() as f64;
                 for value in &mut out {
@@ -1151,27 +1032,6 @@ mod tests {
         let weighted = population_means(&xmatlist, Some(&[3.0, 1.0])).unwrap();
         assert!((weighted[0][1] - 2.5).abs() < 1e-12);
         assert!(YatesTest::parse("trend").is_err());
-    }
-
-    #[test]
-    fn qr_residual_matches_r() {
-        // R: X <- cbind(1, 1:4, 2 * (1:4)); q <- qr(X)
-        // q$rank = 2; qr.resid(q, c(1, 3, 2, 5)) = -0.1 0.8 -1.3 0.6
-        let qr = LinpackQr::new(
-            vec![
-                vec![1.0, 1.0, 1.0, 1.0],
-                vec![1.0, 2.0, 3.0, 4.0],
-                vec![2.0, 4.0, 6.0, 8.0],
-            ],
-            4,
-        );
-        assert_eq!(qr.rank, 2);
-        let residual = qr.residual(&[1.0, 3.0, 2.0, 5.0]);
-        for (value, expected) in residual.iter().zip([-0.1, 0.8, -1.3, 0.6]) {
-            assert!((value - expected).abs() < 1e-12, "{residual:?}");
-        }
-        let inside = qr.residual(&[3.0, 5.0, 7.0, 9.0]);
-        assert!(inside.iter().all(|value| value.abs() < 1e-12));
     }
 
     #[test]
