@@ -1031,7 +1031,14 @@ def _event_values(
     values = [censor] * n_out if prior is None else list(prior)
     for row, source, value in zip(step.event_row, step.event_source, step.event_value, strict=True):
         if argument.kind == "cumevent":
-            values[row] = int(value) if argument.mode == "integer" else value
+            if argument.numeric is not None and math.isnan(argument.numeric[source]):
+                # R's newvar[indx2[keep]] <- yinc[keep] stops on the NA that yinc != 0 puts in keep
+                raise ValueError(
+                    f"argument {argument.name} has a missing cumevent increment at an event time"
+                )
+            values[row] = (
+                int(value) if argument.mode == "integer" and not math.isnan(value) else value
+            )
         elif argument.values is None:
             values[row] = 1
         else:

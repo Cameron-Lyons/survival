@@ -283,6 +283,22 @@ def test_tmerge_numeric_tdc_takes_the_default_as_numeric_like_r():
     assert all(type(value) is int for value in frame["lab"])
 
 
+def test_tmerge_cumevent_with_a_missing_increment_like_r():
+    d1 = _tmerge_base()
+    options = {"na.rm": False}
+    # an NA increment at an event time: R stops (NAs are not allowed in subscripted assignments)
+    updates = {"id": [1, 1, 2, 3, 3], "t": [2.0, 5.0, 3.0, 4.0, 30.0], "ilab": [1, None, 2, 3, 4]}
+    with pytest.raises(ValueError, match="argument n has a missing cumevent increment"):
+        r.tmerge(d1, updates, id="id", n=r.cumevent("t", "ilab"), options=options)
+    # an NA increment before follow-up is not an event, but the later counts are NA:
+    # tstart 0 2 5 0 3 0, n int NA NA 0 3 0 0
+    updates = {"id": [1, 1, 1, 2], "t": [-1.0, 2.0, 5.0, 3.0], "ilab": [None, 1, 2, 3]}
+    frame = r.tmerge(d1, updates, id="id", n=r.cumevent("t", "ilab"), options=options)
+    assert frame["tstart"] == [0.0, 2.0, 5.0, 0.0, 3.0, 0.0]
+    assert _na(frame["n"]) == [None, None, 0, 3, 0, 0]
+    assert all(type(value) is int for value in _na(frame["n"]) if value is not None)
+
+
 # --- subject ids --------------------------------------------------------------
 
 
