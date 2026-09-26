@@ -2,12 +2,12 @@
 //! and a comparison of the restricted means of several groups built on it.
 //! The port itself is `surv_analysis::survmean`.
 
-use super::{StackedCurves, kaplan_meier, stacked_curves};
+use super::kaplan_meier;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{pchisq, pnorm, qnorm};
 use crate::internal::matrix::{cholesky2, chsolve2};
 use crate::internal::validation::validate_length;
-use crate::surv_analysis::{RmeanOption, SurvmeanTable, survmean};
+use crate::surv_analysis::{RmeanOption, StackedCurves, SurvfitKMResult, SurvmeanTable, survmean};
 use ndarray::Array2;
 use pyo3::prelude::*;
 
@@ -204,17 +204,13 @@ pub fn survmean_curves_py(
         Some(value) => RmeanOption::At(value),
         None => RmeanOption::parse(rmean)?,
     };
-    let fit = stacked_curves(&StackedCurves {
-        time: &time,
-        surv: &surv,
-        n_risk: &n_risk,
-        n_event: &n_event,
-        lower: lower.as_deref(),
-        upper: upper.as_deref(),
-        strata: strata.as_deref(),
-        n: &n,
-        n_id: n_id.as_deref(),
+    let counts = |values: Vec<f64>| values.into_iter().map(|count| count as usize).collect();
+    let fit = SurvfitKMResult::from_stacked(StackedCurves {
+        lower,
+        upper,
+        n_id: n_id.map(counts),
         t0: start_time,
+        ..StackedCurves::new(time, n_risk, n_event, surv, strata, counts(n))
     })?;
     let table = survmean(&fit, scale, option)?;
     Ok(SurvfitSummaryRow::from_table(&table))
@@ -255,18 +251,14 @@ mod tests {
         n: &[f64],
         rmean: RmeanOption,
     ) -> Vec<SurvfitSummaryRow> {
-        let fit = stacked_curves(&StackedCurves {
-            time,
-            surv,
-            n_risk,
-            n_event,
-            lower: None,
-            upper: None,
-            strata,
-            n,
-            n_id: None,
-            t0: 0.0,
-        })
+        let fit = SurvfitKMResult::from_stacked(StackedCurves::new(
+            time.to_vec(),
+            n_risk.to_vec(),
+            n_event.to_vec(),
+            surv.to_vec(),
+            strata.map(<[usize]>::to_vec),
+            n.iter().map(|&count| count as usize).collect(),
+        ))
         .unwrap();
         SurvfitSummaryRow::from_table(&survmean(&fit, 1.0, rmean).unwrap())
     }

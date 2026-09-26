@@ -70,6 +70,6 @@ pub use survfitaj_extended_module::{
     VarianceEstimator, survfitaj_extended,
 };
 pub use survfitkm::{
-    HazardType, InfluenceRequest, SurvType, SurvfitCounts, SurvfitInfluence, SurvfitKMData,
-    SurvfitKMOptions, SurvfitKMResult, survfitkm, survfitkm_py,
+    HazardType, InfluenceRequest, StackedCurves, SurvType, SurvfitCounts, SurvfitInfluence,
+    SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm, survfitkm_py,
 };

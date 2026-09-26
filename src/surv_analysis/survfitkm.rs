@@ -339,7 +339,8 @@ pub struct SurvfitKMResult {
     pub conf_type: String,
     #[pyo3(get)]
     pub conf_lower: String,
-    /// `"right"` or `"counting"`.
+    /// The survival type: `"right"` or `"counting"`, `"interval"` for a
+    /// Turnbull curve.
     #[pyo3(get, name = "type")]
     pub type_: String,
     /// The starting time of the curves.
@@ -461,6 +462,160 @@ impl SurvfitKMResult {
                 .map(|list| select_items(list, curves)),
         })
     }
+
+    /// A fit holding curves computed elsewhere (a Turnbull estimate, the
+    /// columns of a `survfit.coxph` object, a `survfit` object's vectors),
+    /// so that `survfit0`, `summary.survfit`, `survmean` and
+    /// `quantile.survfit` can read them.  The curves are checked for
+    /// matching lengths and times that do not decrease within a curve.
+    pub fn from_stacked(curves: StackedCurves) -> SurvivalResult<Self> {
+        let n_rows = curves.time.len();
+        validate_length(n_rows, curves.n_risk.len(), "n_risk")?;
+        validate_length(n_rows, curves.n_event.len(), "n_event")?;
+        validate_length(n_rows, curves.surv.len(), "surv")?;
+        let optional = [
+            (&curves.n_censor, "n_censor"),
+            (&curves.std_err, "std_err"),
+            (&curves.cumhaz, "cumhaz"),
+            (&curves.std_chaz, "std_chaz"),
+            (&curves.lower, "lower"),
+            (&curves.upper, "upper"),
+        ];
+        for (values, name) in optional {
+            if let Some(values) = values {
+                validate_length(n_rows, values.len(), name)?;
+            }
+        }
+        if curves.lower.is_some() != curves.upper.is_some() {
+            return Err(SurvivalError::invalid_input(
+                "lower and upper limits must be given together",
+            ));
+        }
+        validate_finite(&curves.time, "time")?;
+        if !curves.t0.is_finite() {
+            return Err(SurvivalError::invalid_input("start time must be finite"));
+        }
+        validate_conf_int(curves.conf_int)?;
+        let conf_type = ConfType::parse(&curves.conf_type)?;
+        let sizes = curves.strata.clone().unwrap_or_else(|| vec![n_rows]);
+        if sizes.is_empty() {
+            return Err(SurvivalError::invalid_input("no curves to summarise"));
+        }
+        validate_length(n_rows, sizes.iter().sum(), "time")?;
+        validate_length(sizes.len(), curves.n.len(), "n")?;
+        if let Some(n_id) = &curves.n_id {
+            validate_length(sizes.len(), n_id.len(), "n_id")?;
+        }
+        let mut start = 0;
+        for &size in &sizes {
+            if curves.time[start..start + size]
+                .windows(2)
+                .any(|pair| pair[1] < pair[0])
+            {
+                return Err(SurvivalError::invalid_input(
+                    "curve times must be non-decreasing",
+                ));
+            }
+            start += size;
+        }
+        // survfit0.R fills in `-log(surv)` for a curve without a hazard
+        let cumhaz = curves
+            .cumhaz
+            .unwrap_or_else(|| curves.surv.iter().map(|&s| -s.ln()).collect());
+        Ok(Self {
+            n: curves.n,
+            time: curves.time,
+            n_risk: curves.n_risk,
+            n_event: curves.n_event,
+            n_censor: curves.n_censor.unwrap_or_else(|| vec![0.0; n_rows]),
+            n_enter: None,
+            counts: None,
+            surv: curves.surv,
+            std_err: curves.std_err,
+            cumhaz,
+            std_chaz: curves.std_chaz,
+            lower: curves.lower,
+            upper: curves.upper,
+            strata_codes: curves
+                .strata
+                .as_ref()
+                .map(|sizes| (0..sizes.len() as i32).collect()),
+            strata: curves.strata,
+            n_id: curves.n_id,
+            logse: curves.logse,
+            conf_int: curves.conf_int,
+            conf_type: conf_type.as_str().to_string(),
+            conf_lower: ConfLower::Usual.as_str().to_string(),
+            type_: curves.type_,
+            t0: curves.t0,
+            influence_surv: None,
+            influence_chaz: None,
+        })
+    }
+}
+
+/// The stacked vectors of [`SurvfitKMResult::from_stacked`]: the curves
+/// one after the other, `strata` giving the rows of each (`None` for a
+/// single curve) and `n` / `n_id` R's `fit$n` / `fit$n.id`, one per curve.
+/// A missing `n_censor` is taken as zeros and a missing `cumhaz` as
+/// `-log(surv)`; `lower` and `upper` are given together or not at all.
+#[derive(Debug, Clone)]
+pub struct StackedCurves {
+    pub time: Vec<f64>,
+    pub n_risk: Vec<f64>,
+    pub n_event: Vec<f64>,
+    pub surv: Vec<f64>,
+    pub strata: Option<Vec<usize>>,
+    pub n: Vec<usize>,
+    pub n_id: Option<Vec<usize>>,
+    pub n_censor: Option<Vec<f64>>,
+    pub std_err: Option<Vec<f64>>,
+    pub cumhaz: Option<Vec<f64>>,
+    pub std_chaz: Option<Vec<f64>>,
+    pub lower: Option<Vec<f64>>,
+    pub upper: Option<Vec<f64>>,
+    /// Whether `std_err` is the standard error of `log(surv)` (R's default
+    /// for an object without `logse`) or of `surv`.
+    pub logse: bool,
+    pub conf_int: f64,
+    pub conf_type: String,
+    pub type_: String,
+    /// R's `fit$t0`, where the curves start.
+    pub t0: f64,
+}
+
+impl StackedCurves {
+    /// Curves with only the required vectors: no standard errors or limits,
+    /// `logse`, a 95% `"log"` interval, type `"right"` and `t0 = 0`.
+    pub fn new(
+        time: Vec<f64>,
+        n_risk: Vec<f64>,
+        n_event: Vec<f64>,
+        surv: Vec<f64>,
+        strata: Option<Vec<usize>>,
+        n: Vec<usize>,
+    ) -> Self {
+        Self {
+            time,
+            n_risk,
+            n_event,
+            surv,
+            strata,
+            n,
+            n_id: None,
+            n_censor: None,
+            std_err: None,
+            cumhaz: None,
+            std_chaz: None,
+            lower: None,
+            upper: None,
+            logse: true,
+            conf_int: 0.95,
+            conf_type: ConfType::Log.as_str().to_string(),
+            type_: "right".to_string(),
+            t0: 0.0,
+        }
+    }
 }
 
 /// The error of a curve subscript outside `0..n_curves` (or an empty one).
@@ -487,6 +642,56 @@ impl SurvfitKMResult {
     #[pyo3(name = "select_curves")]
     fn py_select_curves(&self, curves: Vec<usize>) -> PyResult<Self> {
         Ok(self.select_curves(&curves)?)
+    }
+
+    /// See [`SurvfitKMResult::from_stacked`]; `type` is the survival type.
+    #[staticmethod]
+    #[pyo3(name = "from_stacked", signature = (
+        time, n_risk, n_event, surv, n, *, strata=None, n_id=None, n_censor=None, std_err=None,
+        cumhaz=None, std_chaz=None, lower=None, upper=None, logse=true, conf_int=0.95,
+        conf_type="log", r#type="right", t0=0.0
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn py_from_stacked(
+        time: Vec<f64>,
+        n_risk: Vec<f64>,
+        n_event: Vec<f64>,
+        surv: Vec<f64>,
+        n: Vec<usize>,
+        strata: Option<Vec<usize>>,
+        n_id: Option<Vec<usize>>,
+        n_censor: Option<Vec<f64>>,
+        std_err: Option<Vec<f64>>,
+        cumhaz: Option<Vec<f64>>,
+        std_chaz: Option<Vec<f64>>,
+        lower: Option<Vec<f64>>,
+        upper: Option<Vec<f64>>,
+        logse: bool,
+        conf_int: f64,
+        conf_type: &str,
+        r#type: &str,
+        t0: f64,
+    ) -> PyResult<Self> {
+        Ok(Self::from_stacked(StackedCurves {
+            time,
+            n_risk,
+            n_event,
+            surv,
+            strata,
+            n,
+            n_id,
+            n_censor,
+            std_err,
+            cumhaz,
+            std_chaz,
+            lower,
+            upper,
+            logse,
+            conf_int,
+            conf_type: conf_type.to_string(),
+            type_: r#type.to_string(),
+            t0,
+        })?)
     }
 }
 
@@ -1674,6 +1879,58 @@ mod tests {
         let single = fit(own, SurvfitKMOptions::default());
         assert_eq!(&result.time[0..4], single.time.as_slice());
         assert_eq!(&result.surv[0..4], single.surv.as_slice());
+    }
+
+    #[test]
+    fn from_stacked_checks_the_curves() {
+        let base = StackedCurves::new(
+            vec![1.0, 2.0, 1.0, 3.0],
+            vec![2.0, 1.0, 4.0, 2.0],
+            vec![1.0; 4],
+            vec![0.5, 0.25, 0.75, 0.5],
+            Some(vec![2, 2]),
+            vec![2, 4],
+        );
+        let fit = SurvfitKMResult::from_stacked(base.clone()).unwrap();
+        assert_eq!(fit.curve_ranges(), vec![0..2, 2..4]);
+        assert_eq!(fit.n, vec![2, 4]);
+        assert_eq!(fit.strata_codes, Some(vec![0, 1]));
+        assert_eq!(fit.n_censor, vec![0.0; 4]);
+        let log = f64::ln;
+        assert_vec_approx(
+            &fit.cumhaz,
+            &[log(2.0), log(4.0), -log(0.75), log(2.0)],
+            1e-15,
+        );
+
+        let bad_sizes = StackedCurves {
+            strata: Some(vec![3, 2]),
+            ..base.clone()
+        };
+        assert!(SurvfitKMResult::from_stacked(bad_sizes).is_err());
+        let one_limit = StackedCurves {
+            lower: Some(vec![0.1; 4]),
+            ..base.clone()
+        };
+        assert!(SurvfitKMResult::from_stacked(one_limit).is_err());
+        let short_se = StackedCurves {
+            std_err: Some(vec![0.1; 3]),
+            ..base.clone()
+        };
+        assert!(SurvfitKMResult::from_stacked(short_se).is_err());
+        let decreasing = StackedCurves {
+            strata: None,
+            n: vec![4],
+            ..base.clone()
+        };
+        assert!(
+            SurvfitKMResult::from_stacked(decreasing)
+                .unwrap_err()
+                .to_string()
+                .contains("non-decreasing")
+        );
+        let wrong_n = StackedCurves { n: vec![4], ..base };
+        assert!(SurvfitKMResult::from_stacked(wrong_n).is_err());
     }
 
     #[test]

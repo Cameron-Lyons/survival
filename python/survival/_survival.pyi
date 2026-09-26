@@ -9147,6 +9147,28 @@ class SurvfitInfluence:
     def values(self) -> NDArray[np.float64]: ...
 
 class SurvfitKMResult:
+    @staticmethod
+    def from_stacked(
+        time: Sequence[float],
+        n_risk: Sequence[float],
+        n_event: Sequence[float],
+        surv: Sequence[float],
+        n: Sequence[int],
+        *,
+        strata: Sequence[int] | None = None,
+        n_id: Sequence[int] | None = None,
+        n_censor: Sequence[float] | None = None,
+        std_err: Sequence[float] | None = None,
+        cumhaz: Sequence[float] | None = None,
+        std_chaz: Sequence[float] | None = None,
+        lower: Sequence[float] | None = None,
+        upper: Sequence[float] | None = None,
+        logse: bool = True,
+        conf_int: float = 0.95,
+        conf_type: str = "log",
+        type: str = "right",
+        t0: float = 0.0,
+    ) -> SurvfitKMResult: ...
     def select_curves(self, curves: Sequence[int]) -> SurvfitKMResult: ...
     @property
     def conf_int(self) -> float: ...
