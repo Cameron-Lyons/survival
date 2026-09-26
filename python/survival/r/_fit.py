@@ -8,17 +8,20 @@ import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from itertools import product
+from itertools import compress, product
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _float_vector,
     _is_missing_value,
     _label_levels,
     _materialize_1d,
     _materialize_labels,
+    _missing_row_indices,
     _mstate_categories,
+    _normalize_na_action,
     _optional_float_vector,
     _strata_level_sort_key,
     _strata_value_label,
@@ -29,20 +32,25 @@ from ._formula import (
     _column_source,
     _combined_columns,
     _covariate_term_name,
+    _data_rows,
     _design_rows_from_spec,
     _design_term_name,
     _design_term_output_names,
     _fit_formula_design,
+    _formula_design_columns,
     _formula_design_row_count,
     _formula_model_frame,
     _formula_response_spec,
     _formula_response_values,
+    _made_nan_rows,
+    _na_action_record,
     _offset_vector,
     _parse_formula,
     _subset_formula_inputs,
 )
 from ._surv import Surv
 from ._types import (
+    NaAction,
     _CategoricalDesignTerm,
     _CovariateTerm,
     _cox_beta,
@@ -69,7 +77,8 @@ class _ModelFrame:
     ``x`` is the model matrix without its intercept column, ``names`` its column
     names, ``assign`` R's ``attrassign`` (term label -> 0-based columns); the
     ``strata``, ``offset``, ``weights``, ``cluster``, ``id`` and ``istate`` specials are
-    already row-aligned with ``y`` (after ``subset`` and ``na.action``).
+    already row-aligned with ``y`` (after ``subset`` and ``na.action``); ``na_action``
+    records the rows the ``na.action`` removed.
     """
 
     formula: str
@@ -92,6 +101,7 @@ class _ModelFrame:
     # expressions, so brier's newdata can re-evaluate them); None for vector arguments
     weights_column: str | None = None
     id_column: str | None = None
+    na_action: NaAction | None = None
 
     @property
     def n(self) -> int:
@@ -226,7 +236,7 @@ def _model_frame(
     data: Any,
     *,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     weights: Any | None = None,
     offset: Any | None = None,
     strata_arg: Any | None = None,
@@ -258,7 +268,7 @@ def _model_frame(
     }
     if subset is not None:
         data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
-    data, aligned = _apply_formula_na_action(formula, data, na_action, **aligned)
+    data, aligned, removed = _apply_formula_na_action(formula, data, na_action, **aligned)
 
     y, terms = _parse_formula(formula, data)
     n = len(y)
@@ -344,6 +354,7 @@ def _model_frame(
         },
         weights_column=weights if isinstance(weights, str) else None,
         id_column=id if isinstance(id, str) else None,
+        na_action=_na_action_record(na_action, removed),
     )
 
 
@@ -364,12 +375,16 @@ def _tt_terms(design: _FormulaDesign) -> list[_CovariateTerm]:
 
 @dataclass(frozen=True)
 class _NewData:
-    """``model.frame(Terms2, newdata)``: the pieces a prediction needs."""
+    """``model.frame(Terms2, newdata)``: the pieces a prediction needs, at the rows of
+    ``newdata`` without a missing value; ``missing`` lists the other rows (0-based)
+    and ``data`` holds the model's variables at the kept rows."""
 
+    data: Any
     x: list[list[float]]
     strata: list[int] | None
     offset: list[float] | None
     y: Surv | None
+    missing: tuple[int, ...] = ()
 
     @property
     def n(self) -> int:
@@ -402,27 +417,122 @@ def _newdata_frame(
     *,
     need_strata: bool,
     need_response: bool,
+    na_action: str | None,
 ) -> _NewData:
-    """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata)``).
+    """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata,
+    na.action)``).
 
     Strata columns are looked up only when ``need_strata`` (R's ``found.strata``),
     the response only when ``need_response`` (``predict(type='expected')``,
-    ``survfit(id=)``); either is ``None`` when absent from ``newdata``.
+    ``survfit(id=)``); either is ``None`` when absent from ``newdata``.  A row with a
+    missing value in one of these variables or in a covariate or offset variable (a
+    NaN that ``log``, ``sqrt`` or arithmetic made included) is left out and listed in
+    ``missing``: ``na.fail`` refuses it, and a prediction pads it back as NaN for
+    ``na.pass`` and ``na.exclude``.
     """
 
+    present = set(_newdata_columns(newdata))
+    strata_columns = list(strata_terms) if need_strata and set(strata_terms) <= present else []
+    response_columns = (
+        list(design.response.columns)
+        if need_response and set(design.response.columns) <= present
+        else []
+    )
+    columns = list(
+        dict.fromkeys([*_formula_design_columns(design), *strata_columns, *response_columns])
+    )
     n = _formula_design_row_count(newdata, design)
-    rows = _design_rows_from_spec(newdata, design, n)
-    offset = _offset_vector(newdata, list(design.offsets), n)
+    missing = _missing_row_indices([(name, _column_source(newdata, name)) for name in columns], n)
+    variables = [
+        part.term
+        for term in design.covariates
+        for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
+    ]
+    made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
+    if made:
+        # the design reads the evaluated variables at the rows that stay
+        stays = [row not in made for row in range(n) if row not in missing]
+        evaluated = {term: list(compress(values, stays)) for term, values in evaluated.items()}
+        missing.update(made)
+    if missing and _normalize_na_action(na_action) == "fail":
+        raise ValueError("missing values in newdata")
+    m = n - len(missing)
+    if missing:
+        newdata = _data_rows(newdata, columns, [row for row in range(n) if row not in missing], n)
+    rows = _design_rows_from_spec(newdata, design, m, evaluated=evaluated)
+    offset = _offset_vector(newdata, list(design.offsets), m, evaluated)
     strata_codes: list[int] | None = None
-    if need_strata and strata_terms and set(strata_terms) <= set(_newdata_columns(newdata)):
-        factor = _strata_factor({name: _column_source(newdata, name) for name in strata_terms}, n)
+    if strata_columns:
+        factor = _strata_factor({name: _column_source(newdata, name) for name in strata_columns}, m)
         level_index = {level: idx for idx, level in enumerate(strata_levels)}
         try:
             strata_codes = [level_index[factor.levels[int(code)]] for code in factor.codes]
         except KeyError as exc:
             raise ValueError("New data has a strata not found in the original model") from exc
-    y = _newdata_response(newdata, design.response) if need_response else None
-    return _NewData(x=rows, strata=strata_codes, offset=offset, y=y)
+    y = _newdata_response(newdata, design.response) if response_columns else None
+    return _NewData(
+        data=newdata,
+        x=rows,
+        strata=strata_codes,
+        offset=offset,
+        y=y,
+        missing=tuple(sorted(missing)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# naresid / napredict
+# ---------------------------------------------------------------------------
+
+
+def _na_entry(width: int | None) -> Any:
+    """``NA`` for one entry of a vector (``width`` None) or one row of a matrix."""
+
+    return math.nan if width is None else [math.nan] * width
+
+
+def _row_width(values: list[Any]) -> int | None:
+    return len(values[0]) if values and isinstance(values[0], list) else None
+
+
+def _pad_rows(values: list[Any], rows: Sequence[int], width: int | None = None) -> list[Any]:
+    """R's ``naresid.exclude``: ``values`` (a vector, or a matrix as a list of rows)
+    with NaN, or a row of NaN, inserted at the sorted 0-based ``rows`` of the result.
+    ``width`` is the column count of a matrix without rows (``None`` for a vector)."""
+
+    if not rows:
+        return values
+    if values:
+        width = _row_width(values)
+    gaps = set(rows)
+    kept = iter(values)
+    return [
+        _na_entry(width) if row in gaps else next(kept) for row in range(len(values) + len(gaps))
+    ]
+
+
+def _excluded_rows(na_action: NaAction | None) -> list[int]:
+    """The 0-based rows ``naresid``/``napredict`` give back to a fit's residuals and
+    predictions (as NA): those ``na.exclude`` removed, none for ``na.omit``."""
+
+    if na_action is None or na_action.kind != "exclude":
+        return []
+    return [row - 1 for row in na_action.rows]
+
+
+def _rowsum_excluded(values: list[Any], codes: Sequence[int], excluded: Sequence[int]) -> list[Any]:
+    """``rowsum(naresid(fit$na.action, rr), collapse)`` from ``values``, the rowsum of
+    the fit's rows: ``codes`` are the 0-based groups of every row of the padded
+    residuals, and a group with an excluded row sums to NA."""
+
+    gaps = set(excluded)
+    na_groups = {codes[row] for row in gaps}
+    fitted = sorted({code for row, code in enumerate(codes) if row not in gaps})
+    sums = dict(zip(fitted, values, strict=True))
+    width = _row_width(values)
+    return [
+        _na_entry(width) if group in na_groups else sums[group] for group in range(max(codes) + 1)
+    ]
 
 
 # ---------------------------------------------------------------------------

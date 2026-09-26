@@ -6,7 +6,8 @@ import math
 import os
 import sys
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from itertools import compress
 from operator import index
 from typing import Any
 
@@ -149,7 +150,16 @@ def _quantile_vector(values: Any, name: str) -> list[float]:
         return _float_vector(values, name)
 
 
+# R's getOption("na.action"), the na.action of every model function that does not
+# name its own
+_DEFAULT_NA_ACTION = "na.omit"
+
+
 def _normalize_na_action(na_action: str | None) -> str:
+    """``"fail"``, ``"omit"``, ``"exclude"`` or ``"pass"`` for an R na.action name;
+    ``None`` is R's ``na.action = NULL``, which applies none.  ``exclude`` drops rows
+    exactly as ``omit`` does; ``naresid``/``napredict`` pad them back as ``NA``."""
+
     if na_action is None:
         return "pass"
     if not isinstance(na_action, str):
@@ -160,8 +170,8 @@ def _normalize_na_action(na_action: str | None) -> str:
         "na_fail": "fail",
         "omit": "omit",
         "na_omit": "omit",
-        "exclude": "omit",
-        "na_exclude": "omit",
+        "exclude": "exclude",
+        "na_exclude": "exclude",
         "pass": "pass",
         "na_pass": "pass",
     }
@@ -183,6 +193,21 @@ def _is_missing_value(value: Any) -> bool:
         return False
 
 
+def _float_or_nan(value: Any) -> float:
+    """``float(value)``, with NaN for a missing value (R's ``NA``)."""
+
+    return math.nan if _is_missing_value(value) else float(value)
+
+
+def _floats_or_nan(values: Sequence[Any]) -> list[float]:
+    """:func:`_float_or_nan` of each value, as fast as ``float`` when none is missing."""
+
+    try:
+        return list(map(float, values))
+    except TypeError:
+        return list(map(_float_or_nan, values))
+
+
 def _row_has_missing(value: Any) -> bool:
     value_type = type(value)
     if value is None:
@@ -202,7 +227,11 @@ def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
         materialized = _coerce_array_like(values, name)
         if len(materialized) != n:
             raise ValueError(f"{name} must have length {n}")
-        missing.update(idx for idx, value in enumerate(materialized) if _row_has_missing(value))
+        try:
+            # a numeric column is missing only where it is NaN
+            missing.update(compress(range(n), map(math.isnan, materialized)))
+        except (TypeError, OverflowError):
+            missing.update(idx for idx, value in enumerate(materialized) if _row_has_missing(value))
     return missing
 
 
@@ -286,19 +315,6 @@ def _subset_optional_sequence(
     return _subset_sequence(values, indices, name)
 
 
-def _subset_data(data: Any, indices: list[int]) -> Any:
-    if isinstance(data, Mapping):
-        return {key: _subset_sequence(value, indices, str(key)) for key, value in data.items()}
-    if hasattr(data, "iloc"):
-        return data.iloc[indices]
-    if hasattr(data, "take"):
-        try:
-            return data.take(indices)
-        except TypeError:
-            pass
-    raise TypeError("subset with formula data requires a mapping or tabular object")
-
-
 def _as_rows(values: Any, name: str) -> list[list[float]]:
     return _as_matrix_rows(values, name, allow_empty_columns=False)
 
@@ -321,17 +337,18 @@ def _as_matrix_rows(
     name: str,
     *,
     allow_empty_columns: bool,
+    convert: Callable[[Any], float] = float,
 ) -> list[list[float]]:
     rows = _coerce_array_like(values, name)
     if not rows:
         raise ValueError(f"{name} must not be empty")
     if not isinstance(rows[0], list | tuple):
-        return [[float(value)] for value in rows]
+        return [[convert(value)] for value in rows]
 
     width = len(rows[0])
     if width == 0 and not allow_empty_columns:
         raise ValueError(f"{name} must have at least one column")
-    matrix = [[float(value) for value in row] for row in rows]
+    matrix = [[convert(value) for value in row] for row in rows]
     if any(len(row) != width for row in matrix):
         raise ValueError(f"{name} must be rectangular")
     return matrix

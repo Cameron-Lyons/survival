@@ -185,7 +185,7 @@ def test_model_frame_applies_subset_then_na_action():
     assert extra.extra["race"] == ["white"] * 7
     with pytest.raises(ValueError, match="a data argument is required"):
         r_formula.model_frame("Surv(time, status) ~ 1", None)
-    with pytest.raises(ValueError, match="must have the same length as the response"):
+    with pytest.raises(ValueError, match="weights must have length 8"):
         r_formula.model_frame("Surv(time, status) ~ 1", data, weights=[1.0, 2.0])
 
 
@@ -202,3 +202,28 @@ def test_arithmetic_responses_and_call_terms_evaluate_against_data():
     assert math.isnan(
         r_formula._numeric_response({"t": [1, None]}, r_formula._response_spec("t ~ 1"), 2)[1]
     )
+
+
+def test_formula_arithmetic_and_transforms_follow_r_ieee_results():
+    # R: a / b, a ^ b, log() and sqrt() give Inf/NaN (log and sqrt warn) instead of failing
+    data = {
+        "a": [1.0, -1.0, 1.0, 0.0, -10.0, -10.0, 0.0, -1.0, 2.0, 0.5],
+        "b": [0.0, 0.0, -0.0, 0.0, 401.0, 400.0, -1.0, 0.5, 0.5, -2000.0],
+    }
+    inf = math.inf
+    quotient = r_formula._arithmetic_expression_values(data, "a / b", 10)
+    assert quotient == pytest.approx(
+        [inf, -inf, -inf, math.nan, -0.02493765586034913, -0.025, 0.0, -2.0, 4.0, -0.00025],
+        nan_ok=True,
+    )
+    power = r_formula._arithmetic_expression_values(data, "a ^ b", 10)
+    assert power == pytest.approx(
+        [1.0, 1.0, 1.0, 1.0, -inf, inf, inf, math.nan, 1.4142135623730951, inf], nan_ok=True
+    )
+    with pytest.warns(UserWarning, match=r"NaNs produced in log\(x\)"):
+        logged = r_formula._apply_numeric_transform([1.0, 0.0, -1.0, inf], "log", "x")
+    assert logged == pytest.approx([0.0, -inf, math.nan, inf], nan_ok=True)
+    with pytest.warns(UserWarning, match=r"NaNs produced in sqrt\(x\)"):
+        root = r_formula._apply_numeric_transform([4.0, -0.0, -1.0], "sqrt", "x")
+    assert root == pytest.approx([2.0, 0.0, math.nan], nan_ok=True)
+    assert math.copysign(1.0, root[1]) == -1.0

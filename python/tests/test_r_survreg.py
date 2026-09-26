@@ -2,7 +2,7 @@
 
 Reference numbers come from R survival 3.8.11 (``survreg``, ``predict.survreg``,
 ``residuals.survreg``, ``anova.survreg``, ``summary.survreg``, ``dsurvreg``) on the bundled
-``lung`` and ``tobin`` data with ``na.action = na.omit``.
+``lung`` and ``tobin`` data (R's default ``na.action = na.omit``).
 """
 
 import math
@@ -39,7 +39,7 @@ def tobin():
 
 @pytest.fixture(scope="module")
 def lung_weibull(lung):
-    return r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit")
+    return r.survreg("Surv(time, status) ~ age + sex", data=lung)
 
 
 # --- fitting ---------------------------------------------------------------------------------
@@ -76,7 +76,7 @@ def test_survreg_weibull_matches_r_object(lung_weibull):
 
 
 def test_survreg_fixed_scale(lung):
-    fit = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", scale=1)
+    fit = r.survreg("Surv(time, status) ~ age + sex", data=lung, scale=1)
     assert r.coef(fit) == pytest.approx([6.3596715418, -0.0156187110404, 0.48093492396])
     assert fit.scale == [1.0]
     assert (fit.df, fit.df_residual, fit.idf) == (3, 225, 1)
@@ -87,27 +87,23 @@ def test_survreg_fixed_scale(lung):
 
 
 def test_survreg_exponential_and_rayleigh_fix_the_scale(lung):
-    exponential = r.survreg(
-        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="exponential"
-    )
+    exponential = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="exponential")
     assert r.coef(exponential) == pytest.approx([6.3596715418, -0.0156187110404, 0.48093492396])
     assert exponential.scale == [1.0]
     assert exponential.df == 3
     assert exponential.loglik[1] == pytest.approx(-1156.09903714)
 
     with pytest.warns(RuntimeWarning, match="Exponential has a fixed scale"):
-        ignored = r.survreg(
-            "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="exp", scale=2
-        )
+        ignored = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="exp", scale=2)
     assert r.coef(ignored) == pytest.approx(r.coef(exponential))
 
-    rayleigh = r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist="ray")
+    rayleigh = r.survreg("Surv(time, status) ~ age", data=lung, dist="ray")
     assert rayleigh.scale == [0.5]
     assert rayleigh.distribution.name == "Rayleigh"
 
 
 def test_survreg_strata_scales_and_labels(lung):
-    fit = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit")
+    fit = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung)
     assert fit.scale == pytest.approx([0.803442799135, 0.642536589059])
     assert fit.strata_levels == ("sex=1", "sex=2")
     assert fit.term_labels == ("age", "strata(sex)", "sex")
@@ -134,19 +130,17 @@ def test_survreg_strata_scales_and_labels(lung):
     assert summary["scales"] == pytest.approx(fit.scale)
 
     data = dict(lung, sexf=["m" if value == 1 else "f" for value in lung["sex"]])
-    character = r.survreg("Surv(time, status) ~ age + strata(sexf)", data=data, na_action="omit")
+    character = r.survreg("Surv(time, status) ~ age + strata(sexf)", data=data)
     assert character.strata_levels == ("f", "m")
-    mixed = r.survreg("Surv(time, status) ~ age + strata(sexf, sex)", data=data, na_action="omit")
+    mixed = r.survreg("Surv(time, status) ~ age + strata(sexf, sex)", data=data)
     assert mixed.strata_levels == ("sexf=f, sex=2", "sexf=m, sex=1")
 
     with pytest.raises(ValueError, match="not valid with multiple strata"):
-        r.survreg("Surv(time, status) ~ age + strata(sex)", data=lung, na_action="omit", scale=1)
+        r.survreg("Surv(time, status) ~ age + strata(sex)", data=lung, scale=1)
 
 
 def test_survreg_cluster_and_robust_variance(lung, lung_weibull):
-    clustered = r.survreg(
-        "Surv(time, status) ~ age + sex + cluster(inst)", data=lung, na_action="omit"
-    )
+    clustered = r.survreg("Surv(time, status) ~ age + sex + cluster(inst)", data=lung)
     assert clustered.n == 227  # one institution is missing
     assert clustered.robust
     assert clustered.var[0][0] == pytest.approx(0.172296116856)
@@ -154,12 +148,10 @@ def test_survreg_cluster_and_robust_variance(lung, lung_weibull):
     assert r.vcov(clustered) == clustered.var
     assert len(clustered.cluster) == 227
 
-    by_argument = r.survreg(
-        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", cluster=lung["inst"]
-    )
+    by_argument = r.survreg("Surv(time, status) ~ age + sex", data=lung, cluster=lung["inst"])
     _approx_matrix(by_argument.var, clustered.var)
 
-    robust = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", robust=True)
+    robust = r.survreg("Surv(time, status) ~ age + sex", data=lung, robust=True)
     assert robust.var[0][0] == pytest.approx(0.240682927222)
     assert robust.naive_var[0][0] == pytest.approx(0.231714143303)
     assert robust.cluster is None
@@ -175,7 +167,6 @@ def test_survreg_cluster_and_robust_variance(lung, lung_weibull):
     not_robust = r.survreg(
         "Surv(time, status) ~ age + sex + cluster(inst)",
         data=lung,
-        na_action="omit",
         robust=False,
     )
     assert not not_robust.robust
@@ -186,7 +177,7 @@ def test_survreg_cluster_and_robust_variance(lung, lung_weibull):
 
 def test_survreg_custom_distributions(lung, lung_weibull):
     as_list = {"name": "Mine", "dist": "extreme", "trans": "log"}
-    custom = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist=as_list)
+    custom = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist=as_list)
     assert r.coef(custom) == pytest.approx(r.coef(lung_weibull))
     assert custom.loglik == pytest.approx(lung_weibull.loglik)
     assert custom.dist.name == "Mine"
@@ -195,7 +186,7 @@ def test_survreg_custom_distributions(lung, lung_weibull):
     as_object = SurvregDistribution.custom(
         "Mine", SurvregFamily.ExtremeValue, SurvregTransform.Log, scale=1.0
     )
-    fixed = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist=as_object)
+    fixed = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist=as_object)
     assert fixed.scale == [1.0]
     assert fixed.df == 3
 
@@ -218,33 +209,27 @@ def test_survreg_custom_distributions(lung, lung_weibull):
         "custom densities are not supported; give 'dist' (a built-in name)"
     ]
     with pytest.raises(ValueError, match="trans must be 'log' or 'identity'"):
-        r.survreg(
-            "Surv(time, status) ~ age", data=lung, na_action="omit", dist={**as_list, "trans": 1}
-        )
+        r.survreg("Surv(time, status) ~ age", data=lung, dist={**as_list, "trans": 1})
     with pytest.raises(TypeError, match="Invalid distribution object"):
-        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist=3)
+        r.survreg("Surv(time, status) ~ age", data=lung, dist=3)
 
 
 def test_survreg_t_distribution_parms(lung):
-    default = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t")
+    default = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="t")
     assert default.parms == [4.0]
-    fit = r.survreg(
-        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t", parms=6
-    )
+    fit = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="t", parms=6)
     assert r.coef(fit) == pytest.approx([335.145836644, -2.70112809541, 125.475192919])
     assert fit.scale == pytest.approx([207.854020941])
     assert fit.loglik[1] == pytest.approx(-1178.82739437)
     assert fit.parms == [6.0]
-    named = r.survreg(
-        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t", parms={"df": 6}
-    )
+    named = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="t", parms={"df": 6})
     assert r.coef(named) == pytest.approx(r.coef(fit))
     assert r.model_summary(fit)["parms"] == "Student-t distribution: parmameters= 6.0"
 
     with pytest.raises(ValueError, match="Degrees of freedom must be >=3"):
-        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist="t", parms=2)
+        r.survreg("Surv(time, status) ~ age", data=lung, dist="t", parms=2)
     with pytest.raises(ValueError, match="has no optional parameters"):
-        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", parms=3)
+        r.survreg("Surv(time, status) ~ age", data=lung, parms=3)
 
 
 def test_survreg_control_and_init(lung, lung_weibull):
@@ -263,7 +248,6 @@ def test_survreg_control_and_init(lung, lung_weibull):
     at_start = r.survreg(
         "Surv(time, status) ~ age + sex",
         data=lung,
-        na_action="omit",
         init=start,
         control={"iter.max": 0},
     )
@@ -273,33 +257,25 @@ def test_survreg_control_and_init(lung, lung_weibull):
     assert at_start.iter == 0
 
     location_only = r.survreg(
-        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", init=start[:3], scale=0.9
+        "Surv(time, status) ~ age + sex", data=lung, init=start[:3], scale=0.9
     )
     assert location_only.scale == [0.9]
     with pytest.raises(ValueError, match="Wrong length for initial parameters"):
-        r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", init=[1.0])
+        r.survreg("Surv(time, status) ~ age + sex", data=lung, init=[1.0])
 
     with pytest.warns(RuntimeWarning, match="Ran out of iterations and did not converge"):
-        short = r.survreg(
-            "Surv(time, status) ~ age + sex", data=lung, na_action="omit", **{"iter.max": 2}
-        )
+        short = r.survreg("Surv(time, status) ~ age + sex", data=lung, **{"iter.max": 2})
     assert short.iter == 2
     assert not short.converged
-    via_options = r.survreg(
-        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", maxiter=30, eps=1e-9
-    )
+    via_options = r.survreg("Surv(time, status) ~ age + sex", data=lung, maxiter=30, eps=1e-9)
     assert r.coef(via_options) == pytest.approx(r.coef(lung_weibull))
     with pytest.raises(TypeError, match="unused argument"):
-        r.survreg(
-            "Surv(time, status) ~ age", data=lung, na_action="omit", control=control, maxiter=3
-        )
+        r.survreg("Surv(time, status) ~ age", data=lung, control=control, maxiter=3)
 
 
 def test_survreg_weights_offset_and_collapsed_residuals(lung):
     weights = [1, 2, 0.5, 1.5] * 57
-    weighted = r.survreg(
-        "Surv(time, status) ~ age + sex", data=lung, na_action="omit", weights=weights
-    )
+    weighted = r.survreg("Surv(time, status) ~ age + sex", data=lung, weights=weights)
     assert r.model_weights(weighted) == weights
     collapsed = r.residuals(weighted, type="dfbeta", weighted=True, collapse=lung["sex"])
     assert collapsed[0] == pytest.approx(
@@ -316,17 +292,14 @@ def test_survreg_weights_offset_and_collapsed_residuals(lung):
     with pytest.raises(ValueError, match="Wrong length for 'collapse'"):
         r.residuals(weighted, type="response", collapse=[1, 2, 3])
 
-    in_formula = r.survreg("Surv(time, status) ~ age + offset(sex)", data=lung, na_action="omit")
-    as_argument = r.survreg(
-        "Surv(time, status) ~ age", data=lung, na_action="omit", offset=lung["sex"]
-    )
+    in_formula = r.survreg("Surv(time, status) ~ age + offset(sex)", data=lung)
+    as_argument = r.survreg("Surv(time, status) ~ age", data=lung, offset=lung["sex"])
     assert r.coef(in_formula) == pytest.approx(r.coef(as_argument))
     assert in_formula.term_labels == ("age",)
     with pytest.raises(ValueError, match="only one of formula offset"):
         r.survreg(
             "Surv(time, status) ~ age + offset(sex)",
             data=lung,
-            na_action="omit",
             offset=lung["sex"],
         )
 
@@ -384,7 +357,7 @@ def test_predict_survreg_types_and_shapes(lung_weibull):
 
 
 def test_predict_survreg_newdata_with_strata(lung):
-    fit = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit")
+    fit = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung)
     quantiles = r.predict(fit, NEWDATA, type="quantile", p=[0.1, 0.5, 0.9], se_fit=True)
     _approx_matrix(
         quantiles.fit,
@@ -401,11 +374,24 @@ def test_predict_survreg_newdata_with_strata(lung):
         ],
     )
     assert r.predict(fit, NEWDATA, type="lp") == pytest.approx([6.02063808847565, 6.16707358317737])
-    with pytest.raises(ValueError, match="unknown strata level"):
+    with pytest.raises(ValueError, match="strata not found in the original model"):
         r.predict(fit, {"age": [50], "sex": [3]}, type="quantile")
 
 
 # --- residuals -------------------------------------------------------------------------------
+
+
+def test_residuals_default_type_follows_the_model(lung, lung_weibull):
+    # residuals.survreg defaults to "response", residuals.coxph to "martingale"
+    assert r.residuals(lung_weibull)[:3] == pytest.approx(
+        [-8.16499336963079, 116.85984881069709, 618.28099252166544]
+    )
+    assert r.residuals(lung_weibull) == r.residuals(lung_weibull, type="response")
+    cox = r.coxph("Surv(time, status) ~ age + sex", lung)
+    assert r.residuals(cox)[:3] == pytest.approx(
+        [0.00438999436025189, -0.50576202995143671, -3.12981924011021873]
+    )
+    assert r.residuals(cox) == r.residuals(cox, type="martingale")
 
 
 def test_residuals_survreg_all_types(lung_weibull):
@@ -463,9 +449,7 @@ def test_anova_survreg_sequential_terms(lung, lung_weibull):
     assert "Scale estimated" in table.heading
     assert _survreg.anova_survreg(lung_weibull, test="none").p is None
 
-    stratified = r.survreg(
-        "Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit"
-    )
+    stratified = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung)
     table = _survreg.anova_survreg(stratified)
     assert table.terms == ["NULL", "age", "strata(sex)", "sex"]
     assert table.deviance[1:] == pytest.approx(
@@ -476,15 +460,15 @@ def test_anova_survreg_sequential_terms(lung, lung_weibull):
         [0.0478663565063668, 0.142553971171007, 0.00136098270268315]
     )
 
-    intercept_only = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit")
+    intercept_only = r.survreg("Surv(time, status) ~ 1", data=lung)
     table = _survreg.anova_survreg(intercept_only)
     assert table.terms == ["NULL"]
     assert table.resid_df == [226]
 
 
 def test_anova_survreg_model_list(lung, lung_weibull):
-    small = r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit")
-    large = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung, na_action="omit")
+    small = r.survreg("Surv(time, status) ~ age", data=lung)
+    large = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung)
     table = _survreg.anova_survreg(small, large)
     assert table.terms == ["age", "age + strata(sex) + sex"]
     assert table.test_labels == ["", "+strata(sex)+sex"]
@@ -532,16 +516,14 @@ def test_survreg_interval2_missing_endpoints_are_censoring():
         "right": [3, 4, 2, 6, 5, None, 8, 5, 3, None],
         "g": ["a", "b", "a", "b", "a", "b", "a", "b", "a", "b"],
     }
-    fit = r.survreg('Surv(left, right, type = "interval2") ~ g', data=data, na_action="omit")
+    fit = r.survreg('Surv(left, right, type = "interval2") ~ g', data=data)
     assert fit.n == 10  # a missing endpoint is a censoring code, not a missing response
     events = list(fit.y.event)
     assert (events.count(3), events.count(2), events.count(0), events.count(1)) == (5, 2, 2, 1)
 
     with_missing = {key: [*values, None] for key, values in data.items()}
     with_missing["g"][-1] = "a"
-    dropped = r.survreg(
-        'Surv(left, right, type = "interval2") ~ g', data=with_missing, na_action="omit"
-    )
+    dropped = r.survreg('Surv(left, right, type = "interval2") ~ g', data=with_missing)
     assert dropped.n == 10
     assert r.coef(dropped) == pytest.approx(r.coef(fit))
     with pytest.raises(ValueError, match="missing values"):
@@ -549,7 +531,7 @@ def test_survreg_interval2_missing_endpoints_are_censoring():
 
 
 def test_survreg_intercept_only_and_model_pieces(lung):
-    fit = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit", model=True, x=True)
+    fit = r.survreg("Surv(time, status) ~ 1", data=lung, model=True, x=True)
     assert r.coef(fit) == pytest.approx([6.0349039102])
     assert fit.scale == pytest.approx([0.759393601108])
     assert fit.loglik == pytest.approx([-1153.85118809, -1153.85118809])
@@ -566,22 +548,22 @@ def test_survreg_intercept_only_and_model_pieces(lung):
     assert r.bic(fit) == pytest.approx(-2 * fit.loglik[1] + 2 * math.log(228))
     intervals = r.confint(fit)
     assert intervals[0]["lower"] < 6.0349039102 < intervals[0]["upper"]
-    without_y = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit", y=False)
+    without_y = r.survreg("Surv(time, status) ~ 1", data=lung, y=False)
     assert without_y.y_response is None
-    scored = r.survreg("Surv(time, status) ~ 1", data=lung, na_action="omit", score=True)
+    scored = r.survreg("Surv(time, status) ~ 1", data=lung, score=True)
     assert len(scored.score) == 2
 
 
 def test_survreg_subset_and_na_action(lung):
     men = [value == 1 for value in lung["sex"]]
-    subset = r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", subset=men)
+    subset = r.survreg("Surv(time, status) ~ age", data=lung, subset=men)
     assert subset.n == sum(men)
     with pytest.raises(ValueError, match="missing values"):
-        r.survreg("Surv(time, status) ~ age + ph.ecog", data=lung)
-    omitted = r.survreg("Surv(time, status) ~ age + ph.ecog", data=lung, **{"na.action": "omit"})
+        r.survreg("Surv(time, status) ~ age + ph.ecog", data=lung, **{"na.action": "na.fail"})
+    omitted = r.survreg("Surv(time, status) ~ age + ph.ecog", data=lung)
     assert omitted.n == 227
     named_weights = r.survreg(
-        "Surv(time, status) ~ age", data=dict(lung, w=[1.0] * 228), na_action="omit", weights="w"
+        "Surv(time, status) ~ age", data=dict(lung, w=[1.0] * 228), weights="w"
     )
     assert r.model_weights(named_weights) == [1.0] * 228
 
@@ -607,9 +589,9 @@ def test_survreg_matrix_input_uses_the_design_as_given(lung):
 
 def test_survreg_argument_errors(lung):
     with pytest.raises(ValueError, match="'dist' should be one of"):
-        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", dist="xx")
+        r.survreg("Surv(time, status) ~ age", data=lung, dist="xx")
     with pytest.raises(ValueError, match="Invalid scale value"):
-        r.survreg("Surv(time, status) ~ age", data=lung, na_action="omit", scale=-1)
+        r.survreg("Surv(time, status) ~ age", data=lung, scale=-1)
     with pytest.raises(ValueError, match="start-stop type Surv objects are not supported"):
         r.survreg(
             "Surv(start, stop, event) ~ x",
@@ -633,14 +615,11 @@ def test_survreg_argument_errors(lung):
             data={"time": [0, 1, 2, 3], "status": [1, 1, 0, 1], "x": [1, 2, 3, 4]},
         )
     with pytest.raises(ValueError, match="a formula cannot have multiple cluster terms"):
-        r.survreg(
-            "Surv(time, status) ~ age + cluster(inst) + cluster(sex)", data=lung, na_action="omit"
-        )
+        r.survreg("Surv(time, status) ~ age + cluster(inst) + cluster(sex)", data=lung)
     with pytest.warns(RuntimeWarning, match="cluster appears both"):
         r.survreg(
             "Surv(time, status) ~ age + cluster(sex)",
             data=lung,
-            na_action="omit",
             cluster=lung["sex"],
         )
 

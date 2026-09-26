@@ -67,8 +67,10 @@ def test_bool_options_accept_numpy_bools_and_reject_truthiness():
 
 
 def test_na_action_accepts_r_style_names_and_rejects_non_strings():
-    for name in ("na.omit", " na.exclude ", "omit", "exclude"):
+    for name in ("na.omit", "omit"):
         assert r_coerce._normalize_na_action(name) == "omit"
+    for name in (" na.exclude ", "exclude"):
+        assert r_coerce._normalize_na_action(name) == "exclude"
     assert r_coerce._normalize_na_action("na.fail") == "fail"
     assert r_coerce._normalize_na_action(None) == "pass"
     assert r_coerce._normalize_na_action("na.pass") == "pass"

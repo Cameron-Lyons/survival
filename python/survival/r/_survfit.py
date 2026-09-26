@@ -288,7 +288,7 @@ def _formula_model_frame(
     if set(_formula_columns(formula, data)) - exclude or any(
         v is not None for v in extras.values()
     ):
-        data, extras = _apply_formula_na_action(
+        data, extras, _removed = _apply_formula_na_action(
             formula, data, na_action, exclude_columns=exclude, **extras
         )
     response, terms = _parse_formula(formula, data)

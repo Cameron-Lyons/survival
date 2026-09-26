@@ -13,6 +13,7 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _as_matrix_rows,
     _categories,
     _factor,
@@ -22,20 +23,16 @@ from ._coerce import (
     _is_bool_like,
     _is_missing_value,
     _materialize_labels,
-    _missing_row_indices,
     _normalize_bool_option,
     _optional_float_vector,
     _pop_dotted_keyword,
     _r_factor,
 )
 from ._coxph import CoxphModel, predict_coxph
-from ._fit import _model_frame, _ModelFrame, _newdata_columns, _newdata_frame
+from ._fit import _model_frame, _ModelFrame, _newdata_frame
 from ._formula import (
     _column_source,
     _data_column_names,
-    _formula_data_rows,
-    _formula_design_columns,
-    _formula_design_row_count,
     _formula_name,
     _response_arg_columns,
     _response_arg_values,
@@ -404,32 +401,15 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
     raise TypeError("object is not an appropriate fit object")
 
 
-def _complete_newdata(fit: Any, newdata: Any, strata_columns: Sequence[str]) -> Any:
-    """``newdata`` at the rows ``model.frame(Terms, newdata)`` keeps under R's default
-    ``na.omit``: those with no response, covariate, offset or strata variable missing.
-    coxph and survreg move a ``cluster()`` term out of ``Terms``, so it is not checked."""
-
-    design = fit.design
-    present = set(_newdata_columns(newdata))
-    used = [*design.response.columns, *_formula_design_columns(design), *strata_columns]
-    n = _formula_design_row_count(newdata, design)
-    missing = _missing_row_indices(
-        [(name, _column_source(newdata, name)) for name in dict.fromkeys(used) if name in present],
-        n,
-    )
-    if not missing:
-        return newdata
-    keep = [row for row in range(n) if row not in missing]
-    return _formula_data_rows(fit.formula, newdata, keep, n)
-
-
 def _newdata_fit_data(
     fit: Any, newdata: Any, strata_columns: Sequence[str], predict: Any, cluster: Any | None
 ) -> _FitData:
-    """``cord.getdata`` with ``newdata``: its complete rows' response and strata, and the
-    fit's linear predictor on them (no case weights)."""
+    """``cord.getdata`` with ``newdata``: the response and strata of the rows
+    ``model.frame(Terms, newdata)`` keeps under R's default ``na.omit`` (no response,
+    covariate, offset or strata variable missing; coxph and survreg move a
+    ``cluster()`` term out of ``Terms``, so it is not checked), and the fit's linear
+    predictor on them (no case weights)."""
 
-    newdata = _complete_newdata(fit, newdata, strata_columns)
     new = _newdata_frame(
         fit.design,
         strata_columns,
@@ -437,12 +417,13 @@ def _newdata_fit_data(
         newdata,
         need_strata=True,
         need_response=True,
+        na_action=_DEFAULT_NA_ACTION,
     )
     if new.y is None:
         raise ValueError("newdata must contain the response variables")
     return _FitData(
         y=new.y,
-        x=predict(fit, newdata, type="lp"),
+        x=predict(fit, new.data, type="lp"),
         strata=None if new.strata is None else [fit.strata_levels[code] for code in new.strata],
         strata_levels=fit.strata_levels,
         weights=None,
@@ -544,7 +525,7 @@ def concordance(
     data: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     cluster: Any | None = None,
     ymin: Any | None = None,
     ymax: Any | None = None,
@@ -563,7 +544,7 @@ def concordance(
     for one or more ``coxph``/``survreg`` fits (their linear predictors, with
     ``reverse=TRUE`` for Cox models), or for a ``Surv`` plus ``scores``."""
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     object = _pop_dotted_keyword(kwargs, "response", "object", object, None)  # noqa: A001
     object = _pop_dotted_keyword(kwargs, "formula", "object", object, None)  # noqa: A001
     scores = _pop_dotted_keyword(kwargs, "risk_scores", "scores", scores, None)
@@ -614,7 +595,7 @@ def concordance(
         ("strata", strata is not None),
         ("scores", scores is not None),
         ("reverse", reverse is not False),
-        ("na.action", na_action != "fail"),
+        ("na.action", na_action != _DEFAULT_NA_ACTION),
     ):
         if given:
             raise TypeError(f"{name} argument is not an appropriate fit object")
@@ -669,13 +650,13 @@ def survConcordance(
     data: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: Any | None = "fail",
+    na_action: Any | None = _DEFAULT_NA_ACTION,
     **kwargs: Any,
 ) -> SurvConcordanceResult:
     """Deprecated R ``survConcordance``: the concordance of a single predictor with
     ``survConcordance.fit``'s counts and standard error."""
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     if kwargs:
         raise TypeError(f"survConcordance got unexpected argument(s): {', '.join(sorted(kwargs))}")
     warnings.warn(

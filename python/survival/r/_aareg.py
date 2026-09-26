@@ -9,6 +9,7 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _finite_float,
     _float_vector,
     _integer_scalar,
@@ -39,7 +40,7 @@ def aareg(
     *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     qrtol: Any = 1e-7,
     nmin: Any | None = None,
     dfbeta: Any = False,
@@ -53,7 +54,7 @@ def aareg(
 ) -> AaregModelResult:
     """Fit Aalen's additive regression model (R's ``aareg``)."""
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     if kwargs:
         raise TypeError(f"aareg got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
     test_name = _match_string_arg(

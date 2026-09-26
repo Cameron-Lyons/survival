@@ -271,10 +271,11 @@ def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
 
 def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
     """``predict``: see :func:`survival.r._coxph.predict_coxph` and the survreg method.
-    R's ``se.fit`` spelling is accepted."""
+    R's ``se.fit`` and ``na.action`` spellings are accepted."""
 
-    if "se.fit" in kwargs:
-        kwargs["se_fit"] = kwargs.pop("se.fit")
+    for dotted, name in (("se.fit", "se_fit"), ("na.action", "na_action")):
+        if dotted in kwargs:
+            kwargs[name] = kwargs.pop(dotted)
     if isinstance(fit, CoxphModel):
         return predict_coxph(fit, newdata, **kwargs)
     return _dispatch("predict", fit, newdata, **kwargs)
@@ -286,12 +287,16 @@ def fitted(fit: Any, **kwargs: Any) -> Any:
     return predict(fit, None, **kwargs)
 
 
-def residuals(fit: Any, *, type: str = "martingale", **kwargs: Any) -> Any:
-    """``residuals``: see :func:`survival.r._coxph.residuals_coxph` and the survreg method."""
+def residuals(fit: Any, *, type: str | None = None, **kwargs: Any) -> Any:
+    """``residuals``: see :func:`survival.r._coxph.residuals_coxph` and the survreg method;
+    without ``type`` each method uses its own default (martingale for Cox models,
+    response for survreg)."""
 
+    if type is not None:
+        kwargs["type"] = type
     if isinstance(fit, CoxphModel):
-        return residuals_coxph(fit, type=type, **kwargs)
-    return _dispatch("residuals", fit, type=type, **kwargs)
+        return residuals_coxph(fit, **kwargs)
+    return _dispatch("residuals", fit, **kwargs)
 
 
 def _coefficient_selection(parm: Any, names: list[str]) -> list[int]:
