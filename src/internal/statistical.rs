@@ -1,5 +1,5 @@
 use crate::constants::{DEFAULT_CONCORDANCE, LCG64_INCREMENT, LCG64_MULTIPLIER, TIME_EPSILON};
-use crate::internal::dist::{lgammafn, pchisq, pgamma, pnorm, pt, qnorm, qt};
+use crate::internal::dist::{lgammafn, pchisq, pgamma, pnorm, pt, qnorm};
 use crate::internal::step::step_at;
 
 #[inline]
@@ -206,22 +206,10 @@ pub(crate) fn ln_gamma(x: f64) -> f64 {
     lgammafn(x)
 }
 
-/// Student t density (R's `dt(x, df)`).
-#[inline]
-pub(crate) fn student_t_pdf(value: f64, df: f64) -> f64 {
-    crate::internal::dist::dt(value, df, false)
-}
-
 /// Student t distribution function (R's `pt(x, df)`).
 #[inline]
 pub(crate) fn student_t_cdf(value: f64, df: f64) -> f64 {
     pt(value, df, true, false)
-}
-
-/// Student t quantile (R's `qt(p, df)`); NaN outside `[0, 1]`.
-#[inline]
-pub(crate) fn student_t_inverse_cdf(probability: f64, df: f64) -> f64 {
-    qt(probability, df, true, false)
 }
 
 /// Regularized lower incomplete gamma function `P(a, x)` (R's
@@ -345,19 +333,13 @@ mod tests {
     #[test]
     #[allow(clippy::excessive_precision)]
     fn student_t_helpers_match_reference_values_and_boundaries() {
-        assert!((student_t_pdf(1.0, 5.0) - 0.21967979735098059).abs() < 1e-16);
+        use crate::internal::dist::qt;
         assert!((student_t_cdf(1.0, 5.0) - 0.81839126617543867).abs() < 1e-15);
-        assert_eq!(student_t_pdf(f64::INFINITY, 5.0), 0.0);
-        assert!(student_t_pdf(f64::NAN, 5.0).is_nan());
         assert_eq!(student_t_cdf(f64::NEG_INFINITY, 5.0), 0.0);
         assert_eq!(student_t_cdf(f64::INFINITY, 5.0), 1.0);
-        assert_eq!(student_t_inverse_cdf(0.0, 5.0), f64::NEG_INFINITY);
-        assert_eq!(student_t_inverse_cdf(1.0, 5.0), f64::INFINITY);
-        assert!(student_t_inverse_cdf(1.5, 5.0).is_nan());
-        assert!(student_t_inverse_cdf(f64::NAN, 5.0).is_nan());
 
         for probability in [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999] {
-            let quantile = student_t_inverse_cdf(probability, 5.0);
+            let quantile = qt(probability, 5.0, true, false);
             assert!((student_t_cdf(quantile, 5.0) - probability).abs() < 1e-15);
         }
     }

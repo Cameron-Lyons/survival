@@ -20,7 +20,6 @@ use crate::internal::validation::{
 };
 use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The data of a `survfit(Surv(...) ~ strata, id, istate, weights, cluster)`

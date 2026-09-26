@@ -9,7 +9,6 @@
 //! `validation` summaries all read its [`SurvfitKMResult`].
 
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
@@ -1110,7 +1109,7 @@ pub(crate) fn curve_ranges(strata: Option<&[usize]>, len: usize) -> Vec<std::ops
                 })
                 .collect()
         }
-        None => vec![0..len],
+        None => std::iter::once(0..len).collect(),
     }
 }
 
