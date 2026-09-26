@@ -232,7 +232,7 @@ def test_timefix_merges_near_tied_times(lung):
 # --- coxph.control ---------------------------------------------------------------
 
 
-def test_coxph_control_defaults_and_checks():
+def test_coxph_control_defaults_and_checks(separated):
     assert r.coxph_control() == {
         "eps": 1e-9,
         "toler.chol": pytest.approx(1.818989403545856e-12, rel=1e-15),
@@ -243,10 +243,25 @@ def test_coxph_control_defaults_and_checks():
         "survcheckallow": "gap",
     }
     assert r.coxph_control(**{"toler.inf": 1e-3, "outer.max": 5})["outer.max"] == 5
+    # as.integer() truncates
+    truncated = r.coxph_control(iter_max=2.7, outer_max=5.9)
+    assert (truncated["iter.max"], truncated["outer.max"]) == (2, 5)
+    fit, messages = _fit_quietly("Surv(t, s) ~ x + z", separated, **{"iter.max": 2.7})
+    assert messages == ["Ran out of iterations and did not converge"]
+    assert fit.iter == 3
+    assert fit.coefficients == approx([4.3477042340223733, 0.2261679508977732])
     with pytest.warns(RuntimeWarning, match="tolerance should be < eps"):
         r.coxph_control(eps=1e-12, toler_chol=1e-10)
     with pytest.raises(ValueError, match="Invalid value for iterations"):
         r.coxph_control(iter_max=-1)
+    with pytest.raises(TypeError, match="Invalid value for iterations"):
+        r.coxph_control(iter_max="20")
+    with pytest.raises(TypeError, match="invalid value for outer.max"):
+        r.coxph_control(outer_max=True)
+    with pytest.raises(TypeError, match="Invalid convergence criteria"):
+        r.coxph_control(eps="1e-9")
+    with pytest.raises(ValueError, match="invalid value for toler.chol"):
+        r.coxph_control(toler_chol=0)
     with pytest.raises(ValueError, match="The toler.inf setting must be >0"):
         r.coxph_control(toler_inf=0)
     with pytest.raises(ValueError, match="invalid value for outer.max"):

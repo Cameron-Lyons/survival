@@ -9,6 +9,7 @@ does: the model frame, argument checking, dispatch and result labelling.
 from __future__ import annotations
 
 import math
+import numbers
 import sys
 import warnings
 from collections.abc import Callable, Sequence
@@ -697,6 +698,18 @@ def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, An
 _COXPH_CONTROL_KWARGS = ("iter.max", "toler.chol", "toler.inf", "outer.max", "survcheckallow")
 
 
+def _control_number(value: Any, message: str, *, zero_ok: bool = False) -> float:
+    """coxph.control's ``if (!is.numeric(x) || x <= 0) stop(message)`` (``x < 0`` when
+    ``zero_ok``)."""
+
+    if not isinstance(value, numbers.Real) or _is_bool_like(value):
+        raise TypeError(message)
+    numeric = float(value)
+    if not (numeric >= 0.0 if zero_ok else numeric > 0.0):
+        raise ValueError(message)
+    return numeric
+
+
 def coxph_control(
     eps: Any = 1e-9,
     toler_chol: Any = _TOLER_CHOL,
@@ -709,9 +722,10 @@ def coxph_control(
 ) -> dict[str, Any]:
     """R's ``coxph.control``: the checked fitting options under R's names.
 
-    ``toler_inf`` defaults to ``sqrt(eps)``; ``toler.chol``, ``iter.max``, ``toler.inf``
-    and ``outer.max`` may also be given with their dotted names.  Warns, as R does,
-    when ``eps`` is not above ``toler_chol``.
+    ``toler_inf`` defaults to ``sqrt(eps)``; ``iter_max`` and ``outer_max`` are
+    truncated to integers; ``toler.chol``, ``iter.max``, ``toler.inf`` and
+    ``outer.max`` may also be given with their dotted names.  Warns, as R does, when
+    ``eps`` is not above ``toler_chol``.
     """
 
     toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, _TOLER_CHOL)
@@ -720,33 +734,28 @@ def coxph_control(
     outer_max = _pop_dotted_keyword(kwargs, "outer.max", "outer_max", outer_max, 10)
     if kwargs:
         raise TypeError(f"unused argument(s): {', '.join(sorted(kwargs))}")
-    iterations = _integer_scalar(iter_max, "iter.max")
-    if iterations < 0:
-        raise ValueError("Invalid value for iterations")
-    eps_value = _finite_float(eps, "eps")
-    if eps_value <= 0.0:
-        raise ValueError("Invalid convergence criteria")
-    toler_value = _finite_float(toler_chol, "toler.chol")
-    if toler_value <= 0.0:
-        raise ValueError("invalid value for toler.chol")
+    iterations = _control_number(iter_max, "Invalid value for iterations", zero_ok=True)
+    eps_value = _control_number(eps, "Invalid convergence criteria")
+    toler_value = _control_number(toler_chol, "invalid value for toler.chol")
     if eps_value <= toler_value:
         warnings.warn(
             "For numerical accuracy, tolerance should be < eps", RuntimeWarning, stacklevel=2
         )
-    inf_value = math.sqrt(eps_value) if toler_inf is None else _finite_float(toler_inf, "toler.inf")
-    if inf_value <= 0.0:
-        raise ValueError("The toler.inf setting must be >0")
+    inf_value = (
+        math.sqrt(eps_value)
+        if toler_inf is None
+        else _control_number(toler_inf, "The toler.inf setting must be >0")
+    )
     if not _is_bool_like(timefix):
         raise TypeError("timefix must be TRUE or FALSE")
-    outer = _integer_scalar(outer_max, "outer.max")
-    if outer <= 0:
-        raise ValueError("invalid value for outer.max")
+    outer = _control_number(outer_max, "invalid value for outer.max")
     return {
         "eps": eps_value,
         "toler.chol": toler_value,
-        "iter.max": iterations,
+        # as.integer() truncates
+        "iter.max": int(iterations),
         "toler.inf": inf_value,
-        "outer.max": outer,
+        "outer.max": int(outer),
         "timefix": bool(timefix),
         "survcheckallow": survcheckallow,
     }
