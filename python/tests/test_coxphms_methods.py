@@ -572,6 +572,64 @@ def test_missing_values(my_na, fna, fnax):
         r.residuals(fna, na_action="na.pass")
 
 
+def test_row_labels_are_the_data_row_names(mg):
+    # rownames(mf) after subset: row 110 is not in the subset
+    fit = r.coxph("Surv(etime, event) ~ age + sex", mg, id="id", subset=mg.age > 60)
+    labels = ["105", "106", "107", "108", "109", "111", "112", "113"]
+    score = r.residuals(fit, type="score")
+    assert score.rownames[104:112] == labels
+    assert score.values[107:109] == [
+        approx([-0.136740929898314, -0.0172980853969738, 0.379992781443072, 0.244685483640077]),
+        approx([-0.57837118095213, 0.039080335638777, 2.18975664128175, -0.0765007900994319]),
+    ]
+    lp = r.predict(fit)
+    assert lp.rownames[104:112] == labels
+    assert lp.values[107:109] == [
+        approx([0.0308751614678329, 0.634691029699386]),
+        approx([-0.00847549190912838, 0.444901211443099]),
+    ]
+
+    # a data frame's own row names, with na.exclude padding the removed rows back in
+    data = mg.iloc[:200].copy()
+    data.index = [f"r{row}" for row in range(1, 201)]
+    data.loc[["r3", "r7"], "age"] = np.nan
+    fitx = r.coxph(
+        "Surv(etime, event) ~ age + sex",
+        data,
+        id="id",
+        subset=data.etime > 30,
+        na_action="na.exclude",
+    )
+    dfbeta = r.residuals(fitx, type="dfbeta")
+    assert len(dfbeta.rownames) == 150
+    assert dfbeta.rownames[:6] == ["r3", "r4", "r7", "r9", "r10", "r12"]
+    assert np.isnan(np.array(dfbeta.values)[[0, 2]]).all()
+    assert dfbeta.values[1] == approx(
+        [-0.00015031147879791, -0.013226215657686, -0.000641767585440195, 0.0128600207681617]
+    )
+    assert r.predict(fitx).rownames[:5] == ["r4", "r9", "r10", "r12", "r16"]
+
+
+def test_factor_collapse_order(mg, fa1):
+    # rowsum(reorder = TRUE) keeps a factor's level order for the score family, the
+    # martingale residuals keep the order of first appearance (reorder = FALSE)
+    groups = cat(np.where(mg.id % 2 == 0, "b", "a"), ["b", "a"])
+    score = r.residuals(fa1, type="score", collapse=groups)
+    assert score.rownames == ["b", "a"]
+    assert score.values[0] == approx(
+        [-21.6341583674644, -2.4645497061985, -23.4854238879062, -8.60009447778224], rel=1e-7
+    )
+    dfbeta = r.residuals(fa1, type="dfbeta", collapse=groups)
+    assert dfbeta.rownames == ["b", "a"]
+    assert dfbeta.values[0] == approx(
+        [-0.0019129291221375, -0.0913664350979955, -0.000589890603698916, -0.0425493047421475],
+        rel=1e-7,
+    )
+    mart = r.residuals(fa1, collapse=groups)
+    assert mart.rownames == ["a", "b"]
+    assert mart.values[0] == approx([-3.04053112685943, -2.77524312158918], rel=1e-7)
+
+
 def test_residuals_match_the_single_transition_fits(my_na, fna):
     """residms.R: the 1:2 transition of fna is the fit of the entry:sct rows."""
 
@@ -866,6 +924,15 @@ def test_model_generics(mg, my_na, fa1, fna, fnax, fw):
     assert r.nobs(fa1) == 975
     assert r.aic(fa1) == approx(12323.4469194608)
     assert r.bic(fa1) == approx(12342.9766693448)
+    assert r.extract_aic(fa1) == approx([4, 12323.4469194608])
+    intervals = r.confint(fa1)
+    assert [entry["name"] for entry in intervals] == list(fa1.coef_names)
+    assert [entry["lower"] for entry in intervals] == approx(
+        [-4.30777306767074e-05, -0.396142588849633, 0.057345009502822, 0.26256465445591]
+    )
+    assert [entry["upper"] for entry in intervals] == approx(
+        [0.0261186680590652, 0.345868675088251, 0.0717425934859416, 0.520587639661374]
+    )
 
 
 def test_refusals(mg, fa1):

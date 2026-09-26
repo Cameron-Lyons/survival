@@ -24,6 +24,7 @@ import numpy as np
 from .. import _survival as _core
 from ._coerce import (
     _as_character,
+    _categories,
     _float_vector,
     _is_missing_value,
     _match_string_arg,
@@ -112,6 +113,8 @@ class _MsData:
     # the user strata (strata(mf[stangle$vars], shortlabel = TRUE)); -1 missing
     strata: np.ndarray | None
     strata_levels: tuple[str, ...]
+    # rownames(mf) of every row before the na.action (after subset)
+    row_labels: tuple[str, ...]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -756,6 +759,7 @@ def _means(x: np.ndarray, nocenter: Sequence[float]) -> tuple[float, ...]:
 def fit_multistate(
     frame: _ModelFrame,
     *,
+    row_labels: Sequence[str],
     formulas: _FormulaList | None,
     na_action: str | None,
     method: str,
@@ -950,6 +954,7 @@ def fit_multistate(
         phbaseline=tuple(int(p) for p in tmap.phbaseline),
         strata=user_strata,
         strata_levels=tuple(frame.strata_levels),
+        row_labels=tuple(row_labels),
     )
     strata_labels = [f"strata({', '.join(columns)})" for columns in strata_columns.values()]
     return CoxphmsModel(
@@ -1035,15 +1040,14 @@ _PREDICT_INCOMPLETE = "predict.coxphms not complete for type expected, survival 
 
 
 def _fitted_row_labels(fit: CoxphmsModel, *, padded: bool = False) -> list[str]:
-    """``rownames(model.frame(fit))``: the 1-based numbers of the rows the fit kept,
+    """``rownames(model.frame(fit))``: the data's row names of the rows the fit kept,
     or with ``padded`` of every row (``naresid.exclude`` puts the others back)."""
 
-    omitted = () if fit.na_action is None else fit.na_action.rows
-    rows = range(1, fit.n + len(omitted) + 1)
-    if padded:
-        return [str(row) for row in rows]
-    gone = set(omitted)
-    return [str(row) for row in rows if row not in gone]
+    labels = fit.ms.row_labels
+    if padded or fit.na_action is None:
+        return list(labels)
+    gone = {row - 1 for row in fit.na_action.rows}
+    return [label for row, label in enumerate(labels) if row not in gone]
 
 
 def predict_coxphms(
@@ -1131,22 +1135,35 @@ class CoxphmsSchoenfeldResiduals:
     colnames: list[str]
 
 
-def _collapse_groups(fit: CoxphmsModel, collapse: Any) -> tuple[np.ndarray, list[str]] | None:
+def _collapse_groups(
+    fit: CoxphmsModel, collapse: Any, *, by_level: bool
+) -> tuple[np.ndarray, list[str]] | None:
     """residuals.coxphms's groups: ``TRUE`` means the cluster (else the id), a vector
     has one value per row of the model frame.  They are numbered in order of first
-    appearance, R's ``factor(cluster, unique(cluster))``; the labels are their values."""
+    appearance, R's ``factor(cluster, unique(cluster))``, except that with ``by_level``
+    the groups of a factor vector follow its level order (``rowsum(reorder = TRUE)``
+    of the score family), missing values last; the labels are their values."""
 
     if collapse is None or collapse is False:
         return None
+    declared = None
     if collapse is True:
         values = list(fit.cluster if fit.cluster is not None else fit.id or ())
     else:
         values = _materialize_labels(collapse, "collapse")
         if len(values) != fit.n:
             raise ValueError("collapse vector not the same length as the model frame")
-    codes = _unique_codes(values) - 1
-    first = np.unique(codes, return_index=True)[1]
-    return codes, [_as_character(values[row]) for row in first.tolist()]
+        if by_level:
+            declared = _categories(collapse)
+    if declared is None:
+        codes = _unique_codes(values) - 1
+        first = np.unique(codes, return_index=True)[1]
+        return codes, [_as_character(values[row]) for row in first.tolist()]
+    position = {level: code for code, level in enumerate(declared)}
+    level_codes = np.array([position.get(value, len(declared)) for value in values])
+    present, codes = np.unique(level_codes, return_inverse=True)
+    labels = [*map(_as_character, declared), "NA"]
+    return codes, [labels[code] for code in present.tolist()]
 
 
 def _rowsum_codes(values: np.ndarray, codes: np.ndarray, nrow: int) -> np.ndarray:
@@ -1210,7 +1227,7 @@ def residuals_coxphms(
             colnames=colnames,
         )
 
-    groups = _collapse_groups(fit, collapse)
+    groups = _collapse_groups(fit, collapse, by_level=otype != "martingale")
     if otype == "martingale":
         hazard = fit.ms.hazard
         present = np.unique(hazard)
@@ -1254,15 +1271,13 @@ def residuals_coxphms(
 # ---------------------------------------------------------------------------
 
 
-def _zph_assign(fit: CoxphmsModel, terms: bool) -> list[tuple[str, list[int]]]:
-    """cox.zph's ``asgn`` for a multi-state fit: the 0-based coefficients of each term.
-    With ``terms`` (attrassign.R's ``expandassign``) a term is a model term within one
+def _zph_assign(fit: CoxphmsModel) -> list[tuple[str, list[int]]]:
+    """cox.zph's ``asgn`` with ``terms = TRUE`` for a multi-state fit (attrassign.R's
+    ``expandassign``): the 0-based coefficients of each term, a model term within one
     transition, named ``<term label>_<transition>``, found in column-major order of
     ``cmap``; each ``ph()`` coefficient is a term of its own, named by the coefficient
-    (R fails on those).  Without, each coefficient is a term."""
+    (R fails on those)."""
 
-    if not terms:
-        return [(name, [coef]) for coef, name in enumerate(fit.coef_names)]
     labels = {col: label for label, cols in fit.assign.items() for col in cols}
     cmap = np.asarray(fit.cmap.values, dtype=np.int64)
     nx = len(fit.ms.x_names)

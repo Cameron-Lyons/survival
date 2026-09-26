@@ -45,6 +45,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _r_format_number,
     _start_time_value,
+    _subset_indices,
     _subset_optional_sequence,
     _warn_outside_package,
 )
@@ -64,6 +65,7 @@ from ._fit import (
 from ._formula import (
     _column,
     _column_or_values,
+    _data_row_count,
     _data_rows,
     _design_rows_from_spec,
     _formula_data_rows,
@@ -960,6 +962,8 @@ def coxph(
             formula, data, subset, arguments, carry_clusters=False
         )
         subset = None
+    elif subset is not None and data is not None:
+        subset = _subset_indices(subset, _data_row_count(data, fit_formula))
     # a formula list defers its missing values until the transitions are known
     frame = _model_frame(
         fit_formula,
@@ -1001,8 +1005,11 @@ def coxph(
             raise ValueError("use strata() terms in the formula for multi-state models")
         from ._coxphms import _survcheckallow, fit_multistate
 
+        # rownames(mf) before the na.action, which the residuals and predictions carry
+        source_rows = range(_data_row_count(data, fit_formula)) if subset is None else subset
         fit: CoxphModel = fit_multistate(
             frame,
+            row_labels=_row_names(data, source_rows),
             formulas=formulas,
             na_action=na_action,
             # coxph.R: breslow when neither ties nor method was given
@@ -2269,12 +2276,12 @@ def cox_zph(
         raise TypeError("transform must be one of km, rank, identity, log, or a function")
     use_terms = _normalize_bool_option(terms, "terms")
     groups: list[tuple[str, Sequence[int]]]
-    if isinstance(fit, CoxphmsModel):
-        groups = list(_zph_assign(fit, use_terms))
-    elif use_terms:
-        groups = list(fit.assign.items())
-    else:
+    if not use_terms:
         groups = [(name, [col]) for col, name in enumerate(fit.coef_names)]
+    elif isinstance(fit, CoxphmsModel):  # narrows fit, which multistate does not
+        groups = list(_zph_assign(fit))
+    else:
+        groups = list(fit.assign.items())
     aliased = _aliased(fit)
     groups = [(name, [col for col in cols if not aliased[col]]) for name, cols in groups]
     names = [name for name, cols in groups if cols]
