@@ -441,11 +441,23 @@ pub struct CoxSurvCurve {
     pub std_err: Option<Array2<f64>>,
 }
 
+/// The Kalbfleisch-Prentice survival increments of a curve (`agsurv`'s
+/// `surv`) when `survtype` is that estimate, `None` for the others.
+fn kp_increments(curve: &AgsurvCurve, survtype: CoxSurvType) -> SurvivalResult<Option<&[f64]>> {
+    match (survtype, &curve.surv) {
+        (CoxSurvType::KalbfleischPrentice, Some(increments)) => Ok(Some(increments)),
+        (CoxSurvType::KalbfleischPrentice, None) => Err(SurvivalError::invalid_input(
+            "Kalbfleisch-Prentice curves need survival increments (build them with survtype KP)",
+        )),
+        _ => Ok(None),
+    }
+}
+
 /// Baseline survival of one stratum: `cumprod(surv)` for the
 /// Kalbfleisch-Prentice estimate, `exp(-cumhaz)` otherwise.
-fn baseline_survival(curve: &AgsurvCurve, survtype: CoxSurvType) -> Vec<f64> {
-    match (survtype, &curve.surv) {
-        (CoxSurvType::KalbfleischPrentice, Some(increments)) => {
+fn baseline_survival(curve: &AgsurvCurve, survtype: CoxSurvType) -> SurvivalResult<Vec<f64>> {
+    Ok(match kp_increments(curve, survtype)? {
+        Some(increments) => {
             let mut running = 1.0;
             increments
                 .iter()
@@ -455,8 +467,8 @@ fn baseline_survival(curve: &AgsurvCurve, survtype: CoxSurvType) -> Vec<f64> {
                 })
                 .collect()
         }
-        _ => curve.cumhaz.iter().map(|&h| (-h).exp()).collect(),
-    }
+        None => curve.cumhaz.iter().map(|&h| (-h).exp()).collect(),
+    })
 }
 
 /// `x' V x` for each row of `dt` (`rowSums((dt %*% varmat) * dt)`).
@@ -497,7 +509,7 @@ pub fn expand_curve(
         ));
     }
     let ntime = curve.time.len();
-    let base_surv = baseline_survival(curve, survtype);
+    let base_surv = baseline_survival(curve, survtype)?;
     let mut surv = Array2::zeros((ntime, m));
     let mut cumhaz = Array2::zeros((ntime, m));
     let mut std_err = varmat.map(|_| Array2::zeros((ntime, m)));
@@ -594,7 +606,8 @@ pub fn individual_curve(
                 interval.x2.len()
             )));
         }
-        let base = baseline_survival(curve, survtype);
+        // onecurve's `slist$surv[indx]^risk2[i]`
+        let increments = kp_increments(curve, survtype)?;
         for g in 0..curve.time.len() {
             let t = curve.time[g];
             if t <= interval.start || t > interval.stop {
@@ -602,15 +615,7 @@ pub fn individual_curve(
             }
             time.push(toffset + t);
             hazard.push(curve.hazard[g] * interval.risk2);
-            surv_increments.push(if survtype == CoxSurvType::KalbfleischPrentice {
-                curve
-                    .surv
-                    .as_ref()
-                    .map_or(base[g], |s| s[g])
-                    .powf(interval.risk2)
-            } else {
-                0.0
-            });
+            surv_increments.push(increments.map_or(0.0, |s| s[g].powf(interval.risk2)));
             n_event.push(curve.n_event[g]);
             n_risk.push(curve.n_risk[g]);
             n_censor.push(curve.n_censor[g]);
@@ -1025,6 +1030,52 @@ mod tests {
         // dt at t=1 for row 0: hazard * 1 - xbar.
         let dt = curve.hazard[0] * 1.0 - curve.xbar[(0, 0)];
         assert_close(std_err[(0, 0)], (curve.varhaz[0] + dt * 0.5 * dt).sqrt());
+    }
+
+    #[test]
+    fn kalbfleisch_prentice_curves_need_their_increments() {
+        let stop = [1.0, 2.0, 3.0];
+        let status = [1, 1, 0];
+        let x = arr2(&[[0.0], [1.0], [2.0]]);
+        let weights = [1.0; 3];
+        let risk = [1.0; 3];
+        let data = AgsurvData {
+            start: None,
+            stop: &stop,
+            status: &status,
+            x: x.view(),
+            means: None,
+            weights: &weights,
+            risk: &risk,
+        };
+        let kp = CoxSurvType::KalbfleischPrentice;
+        let breslow = agsurv(&data, CoxSurvType::Breslow, CoxSurvType::Breslow).unwrap();
+        let x2 = [0.5];
+        let interval = IndividualInterval {
+            start: 0.0,
+            stop: 3.0,
+            stratum: 0,
+            x2: &x2,
+            risk2: 2.0,
+        };
+        let message = "Kalbfleisch-Prentice curves need survival increments";
+        let intervals = [interval];
+        let error =
+            individual_curve(std::slice::from_ref(&breslow), kp, &intervals, None).unwrap_err();
+        assert!(error.to_string().contains(message), "{error}");
+        let x2_rows = arr2(&[[0.5]]);
+        let error = expand_curve(&breslow, kp, x2_rows.view(), &[2.0], None).unwrap_err();
+        assert!(error.to_string().contains(message), "{error}");
+
+        // with them, onecurve's running product of surv^risk2
+        let curve = agsurv(&data, kp, kp).unwrap();
+        let increments = curve.surv.clone().unwrap();
+        let stitched = individual_curve(&[curve], kp, &intervals, None).unwrap();
+        assert_close(stitched.surv[(0, 0)], increments[0].powf(2.0));
+        assert_close(
+            stitched.surv[(1, 0)],
+            (increments[0] * increments[1]).powf(2.0),
+        );
     }
 
     #[test]
