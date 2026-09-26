@@ -102,6 +102,8 @@ def test_several_fits_return_dfbeta_or_influence_as_r(cox_pair):
     both = r.concordance(*cox_pair, influence=3)
     assert both.dfbeta is None
     assert both.influence is None
+    with pytest.raises(ValueError, match="influence must be 0, 1, 2 or 3"):
+        r.concordance(*cox_pair, influence=4)
 
 
 # f3 <- coxph(Surv(time, status) ~ sex, lung)
