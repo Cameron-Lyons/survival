@@ -448,7 +448,7 @@ class AnovaRow:
     @property
     def chisq(self) -> float | None: ...
     @property
-    def df(self) -> int | None: ...
+    def df(self) -> float | None: ...
     @property
     def loglik(self) -> float: ...
     @property
@@ -10939,7 +10939,7 @@ def anderson_gill_model(
 ) -> AndersonGillResult: ...
 def anova_coxph(
     loglik: Sequence[float],
-    df: Sequence[int],
+    df: Sequence[float],
     names: Sequence[str] | None = None,
     sequential: bool = True,
     test: str | None = ...,
@@ -12625,6 +12625,7 @@ def pattern_mixture_model(
     dropout_pattern: Sequence[int],
     dropout_time: Sequence[float] | None = None,
 ) -> PatternMixtureResult: ...
+def pchisq(q: float, df: float, lower_tail: bool = True, log_p: bool = False) -> float: ...
 def permutation_importance(
     predictions: Sequence[float],
     time_points: Sequence[float],

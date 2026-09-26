@@ -17,7 +17,6 @@ from ._coerce import (
     _normalize_bool_option,
     _pop_dotted_keyword,
 )
-from ._coxph import _pchisq_upper
 from ._fit import _model_frame
 from ._types import AaregModelResult
 
@@ -218,7 +217,7 @@ def summary_aareg(
         "test_var2": test_var2,
         "chisq": chisq,
         "df": nvar - 1,
-        "p": _pchisq_upper(chisq, nvar - 1),
+        "p": _core.pchisq(chisq, nvar - 1.0, lower_tail=False),
         "n": [fit.n[0], len(set(times)), fit.n[2]],
     }
 

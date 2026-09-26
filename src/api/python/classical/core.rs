@@ -44,6 +44,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(coxcount1_py, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount2_py, m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_py, m)?)?;
+    m.add_function(wrap_pyfunction!(pchisq_py, m)?)?;
     m.add_function(wrap_pyfunction!(pspline_basis_py, m)?)?;
     m.add_function(wrap_pyfunction!(agexact_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_py, m)?)?;

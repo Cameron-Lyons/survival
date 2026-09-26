@@ -24,7 +24,15 @@ from ._coerce import (
     _normalize_bool_option_with_default,
     _normalize_conf_level,
 )
-from ._coxph import CoxphModel, predict_coxph, residuals_coxph, summary_coxph
+from ._coxph import (
+    CoxphModel,
+    _coxph_df,
+    _term_labels,
+    _terms_selection,
+    predict_coxph,
+    residuals_coxph,
+    summary_coxph,
+)
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
 from ._pyears import _finegray_frame, _pyears_result_frame
 from ._surv import Surv
@@ -108,10 +116,11 @@ def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
 
 
 def loglik(fit: Any) -> float:
-    """``logLik``: the fitted partial log-likelihood ``fit$loglik[2]``."""
+    """``logLik``: the fitted partial log-likelihood ``fit$loglik[2]`` (``loglik[1]``
+    for a null Cox model, as logLik.coxph.null)."""
 
     if isinstance(fit, CoxphModel):
-        return fit.loglik[1]
+        return fit.loglik[-1]
     return _dispatch("loglik", fit)
 
 
@@ -124,12 +133,11 @@ def nobs(fit: Any) -> int:
 
 
 def degrees_freedom(fit: Any) -> float:
-    """The ``df`` attribute of ``logLik``: the number of estimated coefficients."""
+    """The ``df`` attribute of ``logLik``: the number of estimated coefficients
+    (``sum(fit$df)`` for a penalized Cox fit)."""
 
     if isinstance(fit, CoxphModel):
-        if fit.penalized is not None:
-            return sum(fit.df)
-        return sum(1 for value in fit.coefficients if not math.isnan(value))
+        return _coxph_df(fit)
     return _dispatch("degrees_freedom", fit)
 
 
@@ -176,9 +184,7 @@ def model_term_names(fit: Any, terms: Any | None = None) -> list[str]:
     """``attr(terms(fit), 'term.labels')``, optionally the subset ``terms`` selects."""
 
     if isinstance(fit, CoxphModel):
-        from ._coxph import _terms_selection
-
-        names = list(fit.assign)
+        names = _term_labels(fit)
         return [names[idx] for idx in _terms_selection(terms, names)]
     return _dispatch("model_term_names", fit, terms)
 

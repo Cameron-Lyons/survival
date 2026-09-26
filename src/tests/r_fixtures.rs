@@ -5963,7 +5963,7 @@ fn r_fixtures_validation_extra() {
                     let rows = complete_rows(&response, &design, &[]);
                     let fit = efron_cox_fit(&response, &design, None, &rows)?;
                     loglik.push(fit.loglik[1]);
-                    df.push(design.names.len());
+                    df.push(design.names.len() as f64);
                 }
                 let names: Vec<String> = (1..=formulas.len()).map(|i| i.to_string()).collect();
                 let table = anova_coxph(&loglik, &df, &names, AnovaKind::Models, true)
@@ -5984,7 +5984,7 @@ fn r_fixtures_validation_extra() {
                 let actual_df: Vec<f64> = table
                     .rows
                     .iter()
-                    .map(|r| r.df.map_or(f64::NAN, |d| d as f64))
+                    .map(|r| r.df.unwrap_or(f64::NAN))
                     .collect();
                 assert_vec(&actual_df, &nums(&expected["df"])?, 0.0, "df")?;
                 let actual_p: Vec<f64> = table
@@ -6217,7 +6217,7 @@ fn r_fixtures_coxph_anova() {
                 .collect();
             let lhs = formula.split('~').next().ok_or("formula")?.trim();
             let mut loglik = vec![cox.fit.loglik[0]];
-            let mut df = vec![0usize];
+            let mut df = vec![0.0];
             for k in 1..terms.len() {
                 let sub_formula = format!(
                     "{lhs} ~ {}",
@@ -6232,10 +6232,10 @@ fn r_fixtures_coxph_anova() {
                 let fit =
                     cox_fit_with_ties(&response, &sub_design, weights.as_deref(), &rows, method)?;
                 loglik.push(fit.loglik[1]);
-                df.push(sub_design.names.len());
+                df.push(sub_design.names.len() as f64);
             }
             loglik.push(cox.fit.loglik[1]);
-            df.push(cox.names.len());
+            df.push(cox.names.len() as f64);
             let mut names = vec!["NULL".to_string()];
             names.extend(terms.iter().cloned());
             let table = anova_coxph(&loglik, &df, &names, AnovaKind::Sequential, true)
@@ -6270,7 +6270,7 @@ fn r_fixtures_coxph_anova() {
             let actual_df: Vec<f64> = table
                 .rows
                 .iter()
-                .map(|r| r.df.map_or(f64::NAN, |d| d as f64))
+                .map(|r| r.df.unwrap_or(f64::NAN))
                 .collect();
             assert_vec(&actual_df, &nums(&expected["df"])?, 0.0, "anova.df")?;
             let actual_p: Vec<f64> = table
