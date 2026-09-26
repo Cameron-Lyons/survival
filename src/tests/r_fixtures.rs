@@ -21,8 +21,8 @@
 //! for its removal, so the list is a strict burndown.
 #![cfg(test)]
 
-use crate::internal::matrix::matrix_rows;
-use crate::regression::cch::{CchFitResult, cch_borgan_fit, cch_fit};
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::regression::cch::{CchFitResult, cch, cch_borgan};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::cox_zph::{CoxZphTest, ZphTransform, cox_zph};
 use crate::regression::coxpenal::{
@@ -3529,8 +3529,9 @@ fn r_fixtures_cch() {
                 ));
             }
             let x: Vec<Vec<f64>> = rows.iter().map(|&i| design.rows[i].clone()).collect();
+            let x = matrix_from_rows(&x, "x").map_err(|err| format!("{err:?}"))?;
             match text(&args["stratum"]) {
-                None => cch_fit(
+                None => cch(
                     response.time.clone(),
                     response.status.clone(),
                     x,
@@ -3558,7 +3559,7 @@ fn r_fixtures_cch() {
                         .iter()
                         .map(|&v| v as usize)
                         .collect();
-                    cch_borgan_fit(
+                    cch_borgan(
                         response.time.clone(),
                         response.status.clone(),
                         x,
@@ -4331,7 +4332,14 @@ fn survreg_fit_for_case(doc: &Value, case: &Value) -> Result<SurvregCase, String
     let data = SurvregData::try_new(
         pick(&response.time, &rows),
         pick(&response.status, &rows),
-        rows.iter().map(|&i| design.rows[i].clone()).collect(),
+        matrix_from_rows(
+            &rows
+                .iter()
+                .map(|&i| design.rows[i].clone())
+                .collect::<Vec<_>>(),
+            "x",
+        )
+        .map_err(|err| format!("x: {err}"))?,
         response.time2.as_ref().map(|t| pick(t, &rows)),
         weights.as_ref().map(|w| pick(w, &rows)),
         design.offset.as_ref().map(|o| pick(o, &rows)),

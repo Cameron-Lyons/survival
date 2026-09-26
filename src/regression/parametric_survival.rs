@@ -13,7 +13,10 @@
 //! transform, the intercept-only fit, `survreg6` and the robust variance.
 
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::matrix::{cholesky2, chsolve2, symmetric_inverse_via_cholesky};
+use crate::internal::matrix::{
+    cholesky2, chsolve2, matrix_from_rows, matrix_rows, symmetric_inverse_via_cholesky,
+};
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_positive,
 };
@@ -25,7 +28,7 @@ use crate::regression::survregc1::{SurvregKernel, SurvregLikelihood};
 use crate::residuals::survreg_resid::{
     SurvregResidType, SurvregResiduals, residuals_survreg, survreg_deriv,
 };
-use ndarray::{Array2, ArrayView2, CowArray, Ix2};
+use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -122,8 +125,8 @@ pub struct SurvregData {
     pub time2: Option<Vec<f64>>,
     #[pyo3(get)]
     pub status: Vec<i32>,
-    #[pyo3(get)]
-    pub covariates: Vec<Vec<f64>>,
+    /// `n x nvar` design matrix.
+    pub covariates: Array2<f64>,
     #[pyo3(get)]
     pub weights: Option<Vec<f64>>,
     #[pyo3(get)]
@@ -140,7 +143,7 @@ impl SurvregData {
     pub fn try_new(
         time: Vec<f64>,
         status: Vec<i32>,
-        covariates: Vec<Vec<f64>>,
+        covariates: Array2<f64>,
         time2: Option<Vec<f64>>,
         weights: Option<Vec<f64>>,
         offset: Option<Vec<f64>>,
@@ -151,16 +154,19 @@ impl SurvregData {
         validate_finite(&time, "time")?;
         let n = time.len();
         validate_length(n, status.len(), "status")?;
-        validate_length(n, covariates.len(), "covariates")?;
-        let nvar = covariates[0].len();
-        if nvar == 0 {
+        validate_length(n, covariates.nrows(), "covariates")?;
+        if covariates.ncols() == 0 {
             return Err(SurvivalError::invalid_input(
                 "covariates must have at least one column (the intercept)",
             ));
         }
-        for (index, row) in covariates.iter().enumerate() {
-            validate_length(nvar, row.len(), &format!("covariates row {index}"))?;
-            validate_finite(row, &format!("covariates row {index}"))?;
+        if let Some(((row, column), value)) = covariates
+            .indexed_iter()
+            .find(|(_, value)| !value.is_finite())
+        {
+            return Err(SurvivalError::invalid_input(format!(
+                "covariates contains non-finite value {value} at row {row}, column {column}"
+            )));
         }
         for (index, &code) in status.iter().enumerate() {
             if !(0..=3).contains(&code) {
@@ -226,7 +232,7 @@ impl SurvregData {
     }
 
     pub fn nvar(&self) -> usize {
-        self.covariates[0].len()
+        self.covariates.ncols()
     }
 
     /// `max(strata)`: 1 without strata.
@@ -238,15 +244,13 @@ impl SurvregData {
     }
 
     /// The `n x nvar` design matrix.
-    pub(crate) fn design(&self) -> CowArray<'_, f64, Ix2> {
-        let n = self.n();
-        let nvar = self.nvar();
-        Array2::from_shape_fn((n, nvar), |(i, j)| self.covariates[i][j]).into()
+    pub(crate) fn design(&self) -> ArrayView2<'_, f64> {
+        self.covariates.view()
     }
 }
 
 /// A design matrix in the representation of [`SurvregFit::covariates`].
-pub(crate) fn fit_covariates(design: Array2<f64>) -> Vec<Vec<f64>> {
+pub(crate) fn fit_covariates(design: ArrayView2<'_, f64>) -> Vec<Vec<f64>> {
     design.outer_iter().map(|row| row.to_vec()).collect()
 }
 
@@ -256,18 +260,31 @@ impl SurvregData {
     #[pyo3(signature = (time, status, covariates, time2=None, weights=None, offset=None, strata=None, cluster=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        time: Vec<f64>,
-        status: Vec<i32>,
-        covariates: Vec<Vec<f64>>,
-        time2: Option<Vec<f64>>,
-        weights: Option<Vec<f64>>,
-        offset: Option<Vec<f64>>,
+        time: FloatVec,
+        status: IntVec,
+        covariates: FloatMatrix,
+        time2: Option<FloatVec>,
+        weights: Option<FloatVec>,
+        offset: Option<FloatVec>,
         strata: Option<Vec<usize>>,
         cluster: Option<Vec<usize>>,
     ) -> PyResult<Self> {
         Ok(Self::try_new(
-            time, status, covariates, time2, weights, offset, strata, cluster,
+            time.into_inner(),
+            status.into_inner(),
+            covariates.into_inner(),
+            time2.map(FloatVec::into_inner),
+            weights.map(FloatVec::into_inner),
+            offset.map(FloatVec::into_inner),
+            strata,
+            cluster,
         )?)
+    }
+
+    /// The design matrix, one list per row.
+    #[getter(covariates)]
+    fn covariates_rows(&self) -> Vec<Vec<f64>> {
+        matrix_rows(&self.covariates)
     }
 
     fn __len__(&self) -> usize {
@@ -1068,7 +1085,7 @@ pub fn survreg_fit(
         time: response.time,
         time2: response.time2,
         status: response.status,
-        covariates: fit_covariates(x_original.into_owned()),
+        covariates: fit_covariates(x_original),
         strata,
         weights: data.weights.clone(),
         offset,
@@ -1145,7 +1162,14 @@ pub(crate) fn survreg_from_codes(
         })
         .collect::<SurvivalResult<_>>()?;
     let data = SurvregData::try_new(
-        time, status, covariates, time2, weights, offsets, strata, None,
+        time,
+        status,
+        matrix_from_rows(&covariates, "covariates")?,
+        time2,
+        weights,
+        offsets,
+        strata,
+        None,
     )?;
     let defaults = SurvregControl::default();
     let control = SurvregControl {
@@ -1169,6 +1193,7 @@ pub(crate) fn survreg_from_codes(
 #[pyfunction(name = "survreg_fit")]
 #[pyo3(signature = (data, distribution, init=None, scale=0.0, control=None, robust=None))]
 pub fn survreg_fit_py(
+    py: Python<'_>,
     data: &SurvregData,
     distribution: &SurvregDistribution,
     init: Option<Vec<f64>>,
@@ -1176,14 +1201,17 @@ pub fn survreg_fit_py(
     control: Option<SurvregControl>,
     robust: Option<bool>,
 ) -> PyResult<SurvregFit> {
-    Ok(survreg_fit(
-        data,
-        distribution,
-        init.as_deref(),
-        scale,
-        &control.unwrap_or_default(),
-        robust.unwrap_or(false),
-    )?)
+    let control = control.unwrap_or_default();
+    Ok(py.detach(|| {
+        survreg_fit(
+            data,
+            distribution,
+            init.as_deref(),
+            scale,
+            &control,
+            robust.unwrap_or(false),
+        )
+    })?)
 }
 
 #[cfg(test)]
@@ -1208,7 +1236,7 @@ mod tests {
             72.3315, 74.4932, 66.4658, 53.3644, 50.3397, 56.4301, 56.9370, 59.8548, 64.1753,
             55.1781, 56.7562, 50.1096,
         ];
-        let covariates = age.iter().map(|&a| vec![1.0, a]).collect();
+        let covariates = Array2::from_shape_fn((12, 2), |(i, j)| if j == 0 { 1.0 } else { age[i] });
         SurvregData::try_new(time, status, covariates, None, None, None, None, None).unwrap()
     }
 
@@ -1271,7 +1299,7 @@ mod tests {
             SurvregData::try_new(
                 base.time.clone(),
                 base.status.clone(),
-                vec![vec![]; n],
+                Array2::zeros((n, 0)),
                 None,
                 None,
                 None,
@@ -1493,7 +1521,8 @@ mod tests {
     fn non_positive_times_are_accepted_by_untransformed_distributions() {
         let time = vec![0.0, 0.7, 1.4, 0.0, 2.0, 0.0, 3.3, 1.0];
         let status = vec![2, 1, 1, 2, 1, 2, 1, 1];
-        let covariates: Vec<Vec<f64>> = (0..8).map(|i| vec![1.0, i as f64]).collect();
+        let covariates =
+            Array2::from_shape_fn((8, 2), |(i, j)| if j == 0 { 1.0 } else { i as f64 });
         let data =
             SurvregData::try_new(time, status, covariates, None, None, None, None, None).unwrap();
         let gaussian = SurvregDistribution::from_name("gaussian", None).unwrap();
@@ -1525,7 +1554,7 @@ mod tests {
         let time = vec![0.0, 1.0, 2.0, 1.5, 3.0, 2.5];
         let time2 = vec![2.0, 3.0, 2.0, 1.5, 4.0, 2.5];
         let status = vec![3, 3, 1, 1, 3, 0];
-        let covariates = vec![vec![1.0]; 6];
+        let covariates = Array2::ones((6, 1));
         let data = SurvregData::try_new(
             time,
             status,
@@ -1612,10 +1641,10 @@ mod tests {
     #[test]
     fn redundant_columns_get_nan_coefficients() {
         let mut data = ovarian();
-        for row in data.covariates.iter_mut() {
-            let age = row[1];
-            row.push(2.0 * age);
-        }
+        let doubled_age = data.covariates.column(1).mapv(|age| 2.0 * age);
+        data.covariates
+            .push_column(doubled_age.view())
+            .expect("one value per row");
         let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
         let fit = survreg_fit(
             &data,
@@ -1639,11 +1668,7 @@ mod tests {
         let data = SurvregData::try_new(
             vec![1.0, 2.0, 3.0],
             vec![1, 1, 1],
-            vec![
-                vec![1.0, 0.5, 2.0],
-                vec![1.0, 1.5, 1.0],
-                vec![1.0, 2.5, 4.0],
-            ],
+            ndarray::array![[1.0, 0.5, 2.0], [1.0, 1.5, 1.0], [1.0, 2.5, 4.0]],
             None,
             None,
             None,
@@ -1697,7 +1722,7 @@ mod tests {
         let fit = survreg_from_codes(
             data.time.clone(),
             data.status.iter().map(|&s| f64::from(s)).collect(),
-            data.covariates.clone(),
+            matrix_rows(&data.covariates),
             None,
             None,
             None,
@@ -1716,7 +1741,7 @@ mod tests {
             survreg_from_codes(
                 data.time.clone(),
                 vec![0.5; data.n()],
-                data.covariates.clone(),
+                matrix_rows(&data.covariates),
                 None,
                 None,
                 None,

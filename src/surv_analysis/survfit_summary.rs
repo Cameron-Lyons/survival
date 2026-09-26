@@ -843,14 +843,14 @@ pub fn quantile_survfit_from(
 
 /// Python binding of [`survfit0`].
 #[pyfunction(name = "survfit0")]
-pub fn survfit0_py(fit: &SurvfitKMResult) -> SurvfitKMResult {
-    survfit0(fit)
+pub fn survfit0_py(py: Python<'_>, fit: &SurvfitKMResult) -> SurvfitKMResult {
+    py.detach(|| survfit0(fit))
 }
 
 /// Python binding of [`survfit0_aj`].
 #[pyfunction(name = "survfit0_aj")]
-pub fn survfit0_aj_py(fit: &SurvfitAJResult) -> SurvfitAJResult {
-    survfit0_aj(fit)
+pub fn survfit0_aj_py(py: Python<'_>, fit: &SurvfitAJResult) -> SurvfitAJResult {
+    py.detach(|| survfit0_aj(fit))
 }
 
 /// Python binding of [`survmean`]; `rmean` is `"none"`, `"common"`,
@@ -865,15 +865,16 @@ pub fn survmean_py(fit: &SurvfitKMResult, scale: f64, rmean: &str) -> PyResult<S
 #[pyfunction(name = "summary_survfit")]
 #[pyo3(signature = (fit, times=None, censored=false, extend=false))]
 pub fn summary_survfit_py(
+    py: Python<'_>,
     fit: &SurvfitKMResult,
     times: Option<Vec<f64>>,
     censored: bool,
     extend: bool,
 ) -> PyResult<SurvfitKMResult> {
-    match times {
-        Some(times) => Ok(summary_survfit_times(fit, &times, extend)?),
+    Ok(py.detach(|| match times {
+        Some(times) => summary_survfit_times(fit, &times, extend),
         None => Ok(summary_survfit(fit, censored)),
-    }
+    })?)
 }
 
 /// Python binding of [`quantile_survfit_from`]; `probs` defaults to the
@@ -881,6 +882,7 @@ pub fn summary_survfit_py(
 #[pyfunction(name = "quantile_survfit")]
 #[pyo3(signature = (fit, probs=None, conf_int=true, scale=1.0, tolerance=None, start_time=0.0))]
 pub fn quantile_survfit_py(
+    py: Python<'_>,
     fit: &SurvfitKMResult,
     probs: Option<Vec<f64>>,
     conf_int: bool,
@@ -889,9 +891,7 @@ pub fn quantile_survfit_py(
     start_time: f64,
 ) -> PyResult<SurvfitQuantiles> {
     let probs = probs.unwrap_or_else(|| vec![0.25, 0.5, 0.75]);
-    Ok(quantile_survfit_from(
-        fit, &probs, conf_int, start_time, scale, tolerance,
-    )?)
+    Ok(py.detach(|| quantile_survfit_from(fit, &probs, conf_int, start_time, scale, tolerance))?)
 }
 
 #[cfg(test)]

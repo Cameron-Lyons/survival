@@ -20,6 +20,7 @@ use super::survfitkm::{
 };
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::sorting::sorted_indices_by;
 use crate::internal::step::find_interval;
 use crate::internal::validation::{validate_finite, validate_non_empty};
@@ -1145,12 +1146,12 @@ pub fn pseudo_aj(
 
 #[allow(clippy::too_many_arguments)]
 fn aj_inputs(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
@@ -1160,12 +1161,12 @@ fn aj_inputs(
     timefix: bool,
 ) -> SurvivalResult<(SurvfitAJData, SurvfitAJOptions)> {
     let data = SurvfitAJData::try_new(
-        start,
-        time,
-        state,
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        state.into_inner(),
         states,
-        weights,
-        strata,
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
         id,
         istate,
         istate_levels,
@@ -1185,13 +1186,14 @@ fn aj_inputs(
 #[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_aj_py(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
@@ -1218,14 +1220,9 @@ pub fn survfitresid_aj_py(
         start_time,
         timefix,
     )?;
-    Ok(survfitresid_aj(
-        &data,
-        &options,
-        &times,
-        PseudoResidualType::parse(type_)?,
-        collapse,
-        weighted.unwrap_or(collapse),
-    )?)
+    let residual_type = PseudoResidualType::parse(type_)?;
+    let weighted = weighted.unwrap_or(collapse);
+    Ok(py.detach(|| survfitresid_aj(&data, &options, &times, residual_type, collapse, weighted))?)
 }
 
 /// Python binding of [`pseudo_aj`].
@@ -1233,13 +1230,14 @@ pub fn survfitresid_aj_py(
 #[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_aj_py(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
@@ -1265,29 +1263,32 @@ pub fn pseudo_aj_py(
         start_time,
         timefix,
     )?;
-    Ok(pseudo_aj(
-        &data,
-        &options,
-        &times,
-        PseudoResidualType::parse(type_)?,
-        collapse,
-    )?)
+    let residual_type = PseudoResidualType::parse(type_)?;
+    Ok(py.detach(|| pseudo_aj(&data, &options, &times, residual_type, collapse))?)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn km_inputs(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    time: FloatVec,
+    status: IntVec,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     stype: i32,
     ctype: i32,
     start_time: Option<f64>,
     timefix: bool,
 ) -> SurvivalResult<(SurvfitKMData, SurvfitKMOptions)> {
-    let data = SurvfitKMData::try_new(start, time, status, weights, strata, id, None)?;
+    let data = SurvfitKMData::try_new(
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        status.into_inner(),
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
+        id,
+        None,
+    )?;
     let options = SurvfitKMOptions {
         stype: SurvType::from_code(stype)?,
         ctype: super::survfitkm::HazardType::from_code(ctype)?,
@@ -1303,12 +1304,13 @@ fn km_inputs(
 #[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     type_: &str,
     stype: i32,
@@ -1323,15 +1325,19 @@ pub fn survfitresid_py(
         time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
     let call_stype = call_stype.map_or(Ok(options.stype), SurvType::from_code)?;
-    Ok(survfitresid(
-        &data,
-        &options,
-        &times,
-        PseudoResidualType::parse(type_)?,
-        call_stype,
-        collapse,
-        weighted.unwrap_or(collapse),
-    )?)
+    let residual_type = PseudoResidualType::parse(type_)?;
+    let weighted = weighted.unwrap_or(collapse);
+    Ok(py.detach(|| {
+        survfitresid(
+            &data,
+            &options,
+            &times,
+            residual_type,
+            call_stype,
+            collapse,
+            weighted,
+        )
+    })?)
 }
 
 /// Python binding of [`pseudo`].
@@ -1339,12 +1345,13 @@ pub fn survfitresid_py(
 #[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     type_: &str,
     stype: i32,
@@ -1358,14 +1365,8 @@ pub fn pseudo_py(
         time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
     let call_stype = call_stype.map_or(Ok(options.stype), SurvType::from_code)?;
-    Ok(pseudo(
-        &data,
-        &options,
-        &times,
-        PseudoResidualType::parse(type_)?,
-        call_stype,
-        collapse,
-    )?)
+    let residual_type = PseudoResidualType::parse(type_)?;
+    Ok(py.detach(|| pseudo(&data, &options, &times, residual_type, call_stype, collapse))?)
 }
 
 #[cfg(test)]

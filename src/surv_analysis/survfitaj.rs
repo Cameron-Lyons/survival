@@ -14,9 +14,9 @@ use super::survfitkm::{
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::numpy_utils::IntVec;
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
+use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_non_negative,
@@ -1559,12 +1559,13 @@ pub fn survfitaj(
 #[pyo3(signature = (time, state, states, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, se_fit=true, conf_int=0.95, conf_type="log", influence=false, start_time=None, p0=None, entry=false, time0=false, timefix=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitaj_py(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
@@ -1580,12 +1581,12 @@ pub fn survfitaj_py(
     timefix: bool,
 ) -> PyResult<SurvfitAJResult> {
     let data = SurvfitAJData::try_new(
-        start,
-        time,
-        state,
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        state.into_inner(),
         states,
-        weights,
-        strata,
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
         id,
         istate,
         istate_levels,
@@ -1602,7 +1603,7 @@ pub fn survfitaj_py(
         time0,
         timefix,
     };
-    Ok(survfitaj(&data, &options)?)
+    Ok(py.detach(|| survfitaj(&data, &options))?)
 }
 
 #[cfg(test)]

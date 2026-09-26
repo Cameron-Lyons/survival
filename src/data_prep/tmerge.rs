@@ -13,6 +13,7 @@
 use super::id_value::{IdValue, SubjectId, first_appearance_codes};
 use super::neardate::{NeardateBest, neardate};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{BoolVec, FloatVec};
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
@@ -543,15 +544,16 @@ pub fn tmerge_step<I: SubjectId>(
 #[pyo3(signature = (id, start, stop, update_id, update_time, kind, value=None, missing=None, prior=None, default=f64::NAN, delay=0.0, na_rm=true, check_ids=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn tmerge_step_py(
+    py: Python<'_>,
     id: Vec<IdValue>,
-    start: Vec<f64>,
-    stop: Vec<f64>,
+    start: FloatVec,
+    stop: FloatVec,
     update_id: Vec<IdValue>,
-    update_time: Vec<f64>,
+    update_time: FloatVec,
     kind: &str,
-    value: Option<Vec<f64>>,
-    missing: Option<Vec<bool>>,
-    prior: Option<Vec<f64>>,
+    value: Option<FloatVec>,
+    missing: Option<BoolVec>,
+    prior: Option<FloatVec>,
     default: f64,
     delay: f64,
     na_rm: bool,
@@ -578,14 +580,8 @@ pub fn tmerge_step_py(
         na_rm,
         check_ids,
     };
-    Ok(tmerge_step(
-        &base,
-        &update,
-        TmergeKind::parse(kind)?,
-        &options,
-        prior.as_deref(),
-        default,
-    )?)
+    let kind = TmergeKind::parse(kind)?;
+    Ok(py.detach(|| tmerge_step(&base, &update, kind, &options, prior.as_deref(), default))?)
 }
 
 #[cfg(test)]

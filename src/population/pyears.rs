@@ -11,6 +11,7 @@ use super::match_ratetable::align_us_year_axis;
 use super::pystep::{PystepTable, pystep};
 use super::ratetable::RateTable;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -389,8 +390,8 @@ pub fn pyears(
 }
 
 /// Python entry point of [`pyears`]: `categories_data` and
-/// `ratetable_positions` are row-major nested lists (one row per
-/// observation), the latter being `match_ratetable(...).r`.
+/// `ratetable_positions` have one row per observation, the latter being
+/// `match_ratetable(...).r`.
 #[pyfunction(name = "pyears")]
 #[pyo3(signature = (
     stop,
@@ -400,7 +401,7 @@ pub fn pyears(
     factors=Vec::new(),
     dims=Vec::new(),
     cuts=Vec::new(),
-    categories_data=Vec::new(),
+    categories_data=None,
     ratetable=None,
     ratetable_positions=None,
     expect="event",
@@ -408,27 +409,29 @@ pub fn pyears(
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn pyears_py(
-    stop: Vec<f64>,
-    start: Option<Vec<f64>>,
-    event: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
+    py: Python<'_>,
+    stop: FloatVec,
+    start: Option<FloatVec>,
+    event: Option<FloatVec>,
+    weights: Option<FloatVec>,
     factors: Vec<i32>,
     dims: Vec<usize>,
     cuts: Vec<Vec<f64>>,
-    categories_data: Vec<Vec<f64>>,
+    categories_data: Option<FloatMatrix>,
     ratetable: Option<&RateTable>,
-    ratetable_positions: Option<Vec<Vec<f64>>>,
+    ratetable_positions: Option<FloatMatrix>,
     expect: &str,
     scale: f64,
 ) -> PyResult<PyearsResult> {
     let n = stop.len();
-    let followup = PyearsFollowup { start, stop, event };
-    // Without categories the default empty `categories_data` stands for n
-    // rows of nothing.
-    let data = if factors.is_empty() && categories_data.is_empty() {
-        Array2::zeros((n, 0))
-    } else {
-        rows_to_matrix(&categories_data, n, factors.len(), "categories_data")?
+    let followup = PyearsFollowup {
+        start: start.map(FloatVec::into_inner),
+        stop: stop.into_inner(),
+        event: event.map(FloatVec::into_inner),
+    };
+    let data = match categories_data {
+        Some(data) => data.into_shape(n, factors.len(), "categories_data")?,
+        None => Array2::zeros((n, 0)),
     };
     let categories = PyearsCategories {
         data,
@@ -438,7 +441,7 @@ pub fn pyears_py(
     };
     let ratetable = match (ratetable, ratetable_positions) {
         (Some(table), Some(positions)) => Some(PyearsRatetable {
-            positions: rows_to_matrix(&positions, n, table.ndim(), "ratetable_positions")?,
+            positions: positions.into_shape(n, table.ndim(), "ratetable_positions")?,
             table,
         }),
         (None, None) => None,
@@ -449,35 +452,17 @@ pub fn pyears_py(
             .into());
         }
     };
-    Ok(pyears(
-        &followup,
-        weights.as_deref(),
-        &categories,
-        ratetable,
-        PyearsExpect::parse(expect)?,
-        scale,
-    )?)
-}
-
-/// Assemble a row-major nested list into an `n x ncols` matrix.
-pub(crate) fn rows_to_matrix(
-    rows: &[Vec<f64>],
-    n: usize,
-    ncols: usize,
-    name: &str,
-) -> SurvivalResult<Array2<f64>> {
-    if rows.len() != n || rows.iter().any(|row| row.len() != ncols) {
-        return Err(SurvivalError::invalid_input(format!(
-            "{name} must be {n} x {ncols}"
-        )));
-    }
-    let mut matrix = Array2::<f64>::zeros((n, ncols));
-    for (i, row) in rows.iter().enumerate() {
-        for (j, &value) in row.iter().enumerate() {
-            matrix[[i, j]] = value;
-        }
-    }
-    Ok(matrix)
+    let expect = PyearsExpect::parse(expect)?;
+    Ok(py.detach(|| {
+        pyears(
+            &followup,
+            weights.as_deref(),
+            &categories,
+            ratetable,
+            expect,
+            scale,
+        )
+    })?)
 }
 
 #[cfg(test)]

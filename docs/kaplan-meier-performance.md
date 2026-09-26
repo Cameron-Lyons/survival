@@ -22,10 +22,10 @@ standard errors and confidence bands with that calculation across ties, strata,
 reverse curves, zero weights, and both survival and hazard estimators. The
 existing R-generated differential fixtures also exercise the public APIs.
 
-The Python bindings for `survfitkm` and `nelson_aalen` copy array inputs into
-owned Rust buffers before releasing the GIL. Lists, NumPy arrays with arbitrary
-strides, and pandas/polars columns use the shared checked converters. No Python
-objects or borrowed NumPy buffers are accessed while the fit runs detached.
+The Python bindings for `survfitkm` and `nelson_aalen` follow the crate's GIL
+policy (see "Releasing the GIL" in `docs/repo-layout.md`): array inputs are
+copied into owned Rust buffers by the shared checked converters, and the fit
+runs with the GIL released.
 
 ## Local benchmark
 

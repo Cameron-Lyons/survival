@@ -16,7 +16,7 @@ use std::ops::Deref;
 
 use ndarray::Array2;
 
-use crate::error::SurvivalResult;
+use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{ValidationError, validate_matrix_shape};
 
 /// One-dimensional `float64` input.
@@ -126,6 +126,22 @@ impl FloatMatrix {
 
     pub fn into_inner(self) -> Array2<f64> {
         self.0
+    }
+
+    /// The array, checked to be `nrow x ncol`; an empty input (`[]`) stands
+    /// for zero rows of any width.
+    pub fn into_shape(self, nrow: usize, ncol: usize, name: &str) -> SurvivalResult<Array2<f64>> {
+        if self.0.dim() == (nrow, ncol) {
+            Ok(self.0)
+        } else if nrow == 0 && self.0.is_empty() {
+            Ok(Array2::zeros((0, ncol)))
+        } else {
+            Err(SurvivalError::invalid_input(format!(
+                "{name} must be {nrow} x {ncol}, got {} x {}",
+                self.nrow(),
+                self.ncol()
+            )))
+        }
     }
 
     /// The row-major entries; never fails because of the layout invariant.
@@ -468,16 +484,6 @@ pub(crate) fn extract_vec_i32(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyRes
     obj.extract::<IntVec>().map(IntVec::into_inner)
 }
 
-/// Extracts a matrix as rows from any 2-D array-like; prefer a
-/// [`FloatMatrix`] parameter, which keeps the data in an `Array2`.
-#[cfg(feature = "python")]
-pub(crate) fn extract_matrix_f64(
-    obj: &pyo3::Bound<'_, pyo3::PyAny>,
-) -> pyo3::PyResult<Vec<Vec<f64>>> {
-    obj.extract::<FloatMatrix>()
-        .map(|matrix: FloatMatrix| matrix.to_rows())
-}
-
 #[cfg(feature = "python")]
 pub(crate) fn extract_optional_vec_f64(
     obj: Option<&pyo3::Bound<'_, pyo3::PyAny>>,
@@ -527,13 +533,6 @@ pub(crate) fn extract_vec_i32(_obj: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyRe
 }
 
 #[cfg(not(feature = "python"))]
-pub(crate) fn extract_matrix_f64(
-    _obj: &pyo3::Bound<'_, pyo3::PyAny>,
-) -> pyo3::PyResult<Vec<Vec<f64>>> {
-    unavailable("matrix-like")
-}
-
-#[cfg(not(feature = "python"))]
 pub(crate) fn extract_optional_vec_f64(
     _obj: Option<&pyo3::Bound<'_, pyo3::PyAny>>,
 ) -> pyo3::PyResult<Option<Vec<f64>>> {
@@ -554,6 +553,12 @@ mod tests {
 
         let err = FloatMatrix::from_rows(vec![vec![1.0, 2.0], vec![3.0]]).unwrap_err();
         assert_eq!(err.to_string(), "row 1 length mismatch: expected 2, got 1");
+
+        assert_eq!(matrix.clone().into_shape(2, 2, "x").unwrap().dim(), (2, 2));
+        let err = matrix.into_shape(2, 3, "x").unwrap_err();
+        assert_eq!(err.to_string(), "x must be 2 x 3, got 2 x 2");
+        let empty = FloatMatrix::from_rows(Vec::new()).unwrap();
+        assert_eq!(empty.into_shape(0, 3, "x").unwrap().dim(), (0, 3));
 
         let flat = FloatMatrix::from_flat(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3).unwrap();
         assert_eq!(*flat, array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
@@ -748,11 +753,6 @@ mod python_tests {
             assert_eq!(extract_vec_f64(&arr).unwrap(), [1.0, 2.0]);
             assert_eq!(extract_vec_i32(&arr).unwrap(), [1, 2]);
             assert_eq!(extract_optional_vec_f64(None).unwrap(), None);
-            let m = eval(py, "np.asfortranarray([[1.0, 2.0], [3.0, 4.0]])");
-            assert_eq!(
-                extract_matrix_f64(&m).unwrap(),
-                vec![vec![1.0, 2.0], vec![3.0, 4.0]]
-            );
         });
     }
 }

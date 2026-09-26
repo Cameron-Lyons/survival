@@ -32,7 +32,8 @@ pub use crate::regression::penalized::{
 use self::kernel::{InnerFit, Kernel, KernelData};
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::internal::matrix::matrix_rows;
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{
@@ -751,27 +752,25 @@ impl CoxpenalFit {
     #[allow(clippy::too_many_arguments)]
     fn survfit_py(
         &self,
-        newdata: Option<Vec<Vec<f64>>>,
-        new_strata: Option<Vec<i32>>,
-        new_offset: Option<Vec<f64>>,
+        py: Python<'_>,
+        newdata: Option<FloatMatrix>,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
         stype: u8,
         ctype: Option<u8>,
         se_fit: bool,
         censor: bool,
         start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
-        let newdata =
-            newdata_from_python(&self.coxph, newdata, new_strata, new_offset, None, None)?;
-        Ok(self.survfit(
-            newdata.as_ref(),
-            SurvfitOptions {
-                stype,
-                ctype,
-                se_fit,
-                censor,
-                start_time,
-            },
-        )?)
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
+        let options = SurvfitOptions {
+            stype,
+            ctype,
+            se_fit,
+            censor,
+            start_time,
+        };
+        Ok(py.detach(|| self.survfit(newdata.as_ref(), options))?)
     }
 
     /// `survfit(fit, newdata, id)` for time-dependent new data.
@@ -779,12 +778,13 @@ impl CoxpenalFit {
     #[allow(clippy::too_many_arguments)]
     fn survfit_individual_py(
         &self,
-        newdata: Vec<Vec<f64>>,
-        new_entry: Vec<f64>,
-        new_time: Vec<f64>,
-        id: Vec<i32>,
-        new_strata: Option<Vec<i32>>,
-        new_offset: Option<Vec<f64>>,
+        py: Python<'_>,
+        newdata: FloatMatrix,
+        new_entry: FloatVec,
+        new_time: FloatVec,
+        id: IntVec,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
         stype: u8,
         ctype: Option<u8>,
         se_fit: bool,
@@ -792,7 +792,6 @@ impl CoxpenalFit {
         start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
         let newdata = newdata_from_python(
-            &self.coxph,
             Some(newdata),
             new_strata,
             new_offset,
@@ -800,17 +799,14 @@ impl CoxpenalFit {
             Some(new_entry),
         )?
         .expect("newdata was supplied");
-        Ok(self.survfit_individual(
-            &newdata,
-            &id,
-            SurvfitOptions {
-                stype,
-                ctype,
-                se_fit,
-                censor,
-                start_time,
-            },
-        )?)
+        let options = SurvfitOptions {
+            stype,
+            ctype,
+            se_fit,
+            censor,
+            start_time,
+        };
+        Ok(py.detach(|| self.survfit_individual(&newdata, &id, options))?)
     }
 }
 
@@ -824,16 +820,17 @@ impl CoxpenalFit {
 #[pyo3(signature = (time, status, x, penalties, pcols, assign=None, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, outer_max=None, eps=None, toler_chol=None, nocenter=None, cluster=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxpenal_fit(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    x: Vec<Vec<f64>>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
+    x: FloatMatrix,
     penalties: Vec<CoxPenalty>,
     pcols: Vec<Vec<usize>>,
     assign: Option<Vec<Vec<usize>>>,
-    entry: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
-    weights: Option<Vec<f64>>,
-    offset: Option<Vec<f64>>,
+    entry: Option<FloatVec>,
+    strata: Option<IntVec>,
+    weights: Option<FloatVec>,
+    offset: Option<FloatVec>,
     method: &str,
     init: Option<Vec<f64>>,
     iter_max: Option<usize>,
@@ -841,17 +838,17 @@ pub fn coxpenal_fit(
     eps: Option<f64>,
     toler_chol: Option<f64>,
     nocenter: Option<Vec<f64>>,
-    cluster: Option<Vec<i32>>,
+    cluster: Option<IntVec>,
 ) -> PyResult<CoxpenalFit> {
-    if x.len() != time.len() {
+    if x.nrow() != time.len() {
         return Err(SurvivalError::invalid_input(format!(
             "x has {} rows but time has {}",
-            x.len(),
+            x.nrow(),
             time.len()
         ))
         .into());
     }
-    let x = matrix_from_rows(&x, "x")?;
+    let x = x.into_inner();
     let terms = model_terms(
         x.ncols(),
         penalties.into_iter().map(|penalty| penalty.term).collect(),
@@ -859,7 +856,15 @@ pub fn coxpenal_fit(
         assign,
     )?;
     let data = CoxpenalData::try_new(
-        CoxphData::try_new(time, entry, status, x, weights, strata, offset)?,
+        CoxphData::try_new(
+            time.into_inner(),
+            entry.map(FloatVec::into_inner),
+            status.into_inner(),
+            x,
+            weights.map(FloatVec::into_inner),
+            strata.map(IntVec::into_inner),
+            offset.map(FloatVec::into_inner),
+        )?,
         terms,
     )?;
     let defaults = CoxpenalOptions::default();
@@ -871,9 +876,10 @@ pub fn coxpenal_fit(
         eps: eps.unwrap_or(defaults.eps),
         toler_chol: toler_chol.unwrap_or(defaults.toler_chol),
         nocenter: nocenter.or(defaults.nocenter),
-        cluster,
+        cluster: cluster.map(IntVec::into_inner),
     };
-    Ok(CoxpenalFit::fit(data, options)?)
+    // A callback penalty re-attaches to call into Python (`penalized::penalty`).
+    Ok(py.detach(move || CoxpenalFit::fit(data, options))?)
 }
 
 #[cfg(test)]

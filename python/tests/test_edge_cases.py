@@ -269,7 +269,7 @@ def test_coxph_fit_validates_shapes_and_values():
         survival.regression.coxph_fit([1.0, 2.0], [1], [[1.0], [2.0]])
     with pytest.raises(ValueError, match="x has 1 rows"):
         survival.regression.coxph_fit([1.0, 2.0], [1, 0], [[1.0]])
-    with pytest.raises(ValueError, match="x must be rectangular"):
+    with pytest.raises(ValueError, match="row 1 length mismatch"):
         survival.regression.coxph_fit([1.0, 2.0], [1, 0], [[1.0, 2.0], [3.0]])
     with pytest.raises(ValueError, match="time contains non-finite"):
         survival.regression.coxph_fit([1.0, float("inf")], [1, 0], [[1.0], [2.0]])

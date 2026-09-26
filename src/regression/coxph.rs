@@ -20,7 +20,8 @@ use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERAN
 use crate::core::SurvResponse;
 use crate::core::strata_order::{order_within_strata, validate_intervals};
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::internal::matrix::matrix_rows;
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::step::step_at;
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
@@ -1587,12 +1588,11 @@ fn finish_curve(
 
 /// A `CoxNewData` from the binding arguments; `None` without `x`.
 pub(crate) fn newdata_from_python(
-    fit: &CoxPHFit,
-    x: Option<Vec<Vec<f64>>>,
-    strata: Option<Vec<i32>>,
-    offset: Option<Vec<f64>>,
-    time: Option<Vec<f64>>,
-    entry: Option<Vec<f64>>,
+    x: Option<FloatMatrix>,
+    strata: Option<IntVec>,
+    offset: Option<FloatVec>,
+    time: Option<FloatVec>,
+    entry: Option<FloatVec>,
 ) -> SurvivalResult<Option<CoxNewData>> {
     let Some(x) = x else {
         if strata.is_some() || offset.is_some() || time.is_some() || entry.is_some() {
@@ -1602,12 +1602,13 @@ pub(crate) fn newdata_from_python(
         }
         return Ok(None);
     };
-    let x = if x.is_empty() {
-        Array2::zeros((0, fit.nvar()))
-    } else {
-        matrix_from_rows(&x, "newdata")?
-    };
-    Ok(Some(CoxNewData::try_new(x, strata, offset, time, entry)?))
+    Ok(Some(CoxNewData::try_new(
+        x.into_inner(),
+        strata.map(IntVec::into_inner),
+        offset.map(FloatVec::into_inner),
+        time.map(FloatVec::into_inner),
+        entry.map(FloatVec::into_inner),
+    )?))
 }
 
 #[pymethods]
@@ -1655,23 +1656,24 @@ impl CoxPHFit {
     #[allow(clippy::too_many_arguments)]
     fn predict(
         &self,
+        py: Python<'_>,
         r#type: &str,
-        newdata: Option<Vec<Vec<f64>>>,
-        new_strata: Option<Vec<i32>>,
-        new_offset: Option<Vec<f64>>,
-        new_time: Option<Vec<f64>>,
-        new_entry: Option<Vec<f64>>,
+        newdata: Option<FloatMatrix>,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
+        new_time: Option<FloatVec>,
+        new_entry: Option<FloatVec>,
         se_fit: bool,
         reference: &str,
     ) -> PyResult<CoxPrediction> {
-        let newdata =
-            newdata_from_python(self, newdata, new_strata, new_offset, new_time, new_entry)?;
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, new_time, new_entry)?;
         let reference = PredictReference::parse(reference)?;
+        let newdata = newdata.as_ref();
         Ok(match r#type {
-            "lp" => self.predict_lp(newdata.as_ref(), se_fit, reference)?,
-            "risk" => self.predict_risk(newdata.as_ref(), se_fit, reference)?,
-            "expected" => self.predict_expected(newdata.as_ref(), se_fit)?,
-            "survival" => self.predict_survival(newdata.as_ref(), se_fit)?,
+            "lp" => py.detach(|| self.predict_lp(newdata, se_fit, reference))?,
+            "risk" => py.detach(|| self.predict_risk(newdata, se_fit, reference))?,
+            "expected" => py.detach(|| self.predict_expected(newdata, se_fit))?,
+            "survival" => py.detach(|| self.predict_survival(newdata, se_fit))?,
             other => {
                 return Err(SurvivalError::invalid_input(format!(
                     "type must be 'lp', 'risk', 'expected' or 'survival', got '{other}'; use predict_terms for 'terms'"
@@ -1687,17 +1689,18 @@ impl CoxPHFit {
     #[allow(clippy::too_many_arguments)]
     fn predict_terms_py(
         &self,
-        newdata: Option<Vec<Vec<f64>>>,
-        new_strata: Option<Vec<i32>>,
-        new_offset: Option<Vec<f64>>,
+        py: Python<'_>,
+        newdata: Option<FloatMatrix>,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
         se_fit: bool,
         reference: &str,
         assign: Option<Vec<Vec<usize>>>,
     ) -> PyResult<CoxTermsPrediction> {
-        let newdata = newdata_from_python(self, newdata, new_strata, new_offset, None, None)?;
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
         let reference = PredictReference::parse(reference)?;
         let assign = assign.unwrap_or_else(|| default_assign(self.nvar()));
-        Ok(self.predict_terms(newdata.as_ref(), se_fit, reference, &assign)?)
+        Ok(py.detach(|| self.predict_terms(newdata.as_ref(), se_fit, reference, &assign))?)
     }
 
     /// `survfit(fit, newdata, stype, ctype, se.fit, censor, start.time)`.
@@ -1705,26 +1708,25 @@ impl CoxPHFit {
     #[allow(clippy::too_many_arguments)]
     fn survfit_py(
         &self,
-        newdata: Option<Vec<Vec<f64>>>,
-        new_strata: Option<Vec<i32>>,
-        new_offset: Option<Vec<f64>>,
+        py: Python<'_>,
+        newdata: Option<FloatMatrix>,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
         stype: u8,
         ctype: Option<u8>,
         se_fit: bool,
         censor: bool,
         start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
-        let newdata = newdata_from_python(self, newdata, new_strata, new_offset, None, None)?;
-        Ok(self.survfit(
-            newdata.as_ref(),
-            SurvfitOptions {
-                stype,
-                ctype,
-                se_fit,
-                censor,
-                start_time,
-            },
-        )?)
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
+        let options = SurvfitOptions {
+            stype,
+            ctype,
+            se_fit,
+            censor,
+            start_time,
+        };
+        Ok(py.detach(|| self.survfit(newdata.as_ref(), options))?)
     }
 
     /// `residuals(fit, type = "martingale", weighted, collapse)`.
@@ -1732,7 +1734,7 @@ impl CoxPHFit {
     fn martingale_residuals_py(
         &self,
         weighted: bool,
-        collapse: Option<Vec<i32>>,
+        collapse: Option<IntVec>,
     ) -> PyResult<Vec<f64>> {
         Ok(self.martingale_residuals(weighted, collapse.as_deref())?)
     }
@@ -1742,7 +1744,7 @@ impl CoxPHFit {
     fn deviance_residuals_py(
         &self,
         weighted: bool,
-        collapse: Option<Vec<i32>>,
+        collapse: Option<IntVec>,
     ) -> PyResult<Vec<f64>> {
         Ok(self.deviance_residuals(weighted, collapse.as_deref())?)
     }
@@ -1751,36 +1753,56 @@ impl CoxPHFit {
     #[pyo3(name = "score_residuals", signature = (weighted = false, collapse = None))]
     fn score_residuals_py(
         &self,
+        py: Python<'_>,
         weighted: bool,
-        collapse: Option<Vec<i32>>,
+        collapse: Option<IntVec>,
     ) -> PyResult<Vec<Vec<f64>>> {
-        Ok(matrix_rows(
-            &self.score_residuals(weighted, collapse.as_deref())?,
-        ))
+        let residuals = py.detach(|| self.score_residuals(weighted, collapse.as_deref()))?;
+        Ok(matrix_rows(&residuals))
     }
 
     /// `residuals(fit, type = "dfbeta", weighted, collapse)`.
     #[pyo3(name = "dfbeta", signature = (weighted = true, collapse = None))]
-    fn dfbeta_py(&self, weighted: bool, collapse: Option<Vec<i32>>) -> PyResult<Vec<Vec<f64>>> {
-        Ok(matrix_rows(&self.dfbeta(weighted, collapse.as_deref())?))
+    fn dfbeta_py(
+        &self,
+        py: Python<'_>,
+        weighted: bool,
+        collapse: Option<IntVec>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        let dfbeta = py.detach(|| self.dfbeta(weighted, collapse.as_deref()))?;
+        Ok(matrix_rows(&dfbeta))
     }
 
     /// `residuals(fit, type = "dfbetas", weighted, collapse)`.
     #[pyo3(name = "dfbetas", signature = (weighted = true, collapse = None))]
-    fn dfbetas_py(&self, weighted: bool, collapse: Option<Vec<i32>>) -> PyResult<Vec<Vec<f64>>> {
-        Ok(matrix_rows(&self.dfbetas(weighted, collapse.as_deref())?))
+    fn dfbetas_py(
+        &self,
+        py: Python<'_>,
+        weighted: bool,
+        collapse: Option<IntVec>,
+    ) -> PyResult<Vec<Vec<f64>>> {
+        let dfbetas = py.detach(|| self.dfbetas(weighted, collapse.as_deref()))?;
+        Ok(matrix_rows(&dfbetas))
     }
 
     /// `residuals(fit, type = "schoenfeld", weighted)`.
     #[pyo3(name = "schoenfeld_residuals", signature = (weighted = false))]
-    fn schoenfeld_residuals_py(&self, weighted: bool) -> PyResult<SchoenfeldResiduals> {
-        Ok(self.schoenfeld_residuals(weighted)?)
+    fn schoenfeld_residuals_py(
+        &self,
+        py: Python<'_>,
+        weighted: bool,
+    ) -> PyResult<SchoenfeldResiduals> {
+        Ok(py.detach(|| self.schoenfeld_residuals(weighted))?)
     }
 
     /// `residuals(fit, type = "scaledsch", weighted)`.
     #[pyo3(name = "scaled_schoenfeld_residuals", signature = (weighted = false))]
-    fn scaled_schoenfeld_residuals_py(&self, weighted: bool) -> PyResult<SchoenfeldResiduals> {
-        Ok(self.scaled_schoenfeld_residuals(weighted)?)
+    fn scaled_schoenfeld_residuals_py(
+        &self,
+        py: Python<'_>,
+        weighted: bool,
+    ) -> PyResult<SchoenfeldResiduals> {
+        Ok(py.detach(|| self.scaled_schoenfeld_residuals(weighted))?)
     }
 
     /// `residuals(fit, type = "partial", weighted, collapse)`; `assign`
@@ -1788,16 +1810,15 @@ impl CoxPHFit {
     #[pyo3(name = "partial_residuals", signature = (assign = None, weighted = false, collapse = None))]
     fn partial_residuals_py(
         &self,
+        py: Python<'_>,
         assign: Option<Vec<Vec<usize>>>,
         weighted: bool,
-        collapse: Option<Vec<i32>>,
+        collapse: Option<IntVec>,
     ) -> PyResult<Vec<Vec<f64>>> {
         let assign = assign.unwrap_or_else(|| default_assign(self.nvar()));
-        Ok(matrix_rows(&self.partial_residuals(
-            &assign,
-            weighted,
-            collapse.as_deref(),
-        )?))
+        let residuals =
+            py.detach(|| self.partial_residuals(&assign, weighted, collapse.as_deref()))?;
+        Ok(matrix_rows(&residuals))
     }
 
     /// `survfit(fit, newdata, id)` for time-dependent new data.
@@ -1805,12 +1826,13 @@ impl CoxPHFit {
     #[allow(clippy::too_many_arguments)]
     fn survfit_individual_py(
         &self,
-        newdata: Vec<Vec<f64>>,
-        new_entry: Vec<f64>,
-        new_time: Vec<f64>,
-        id: Vec<i32>,
-        new_strata: Option<Vec<i32>>,
-        new_offset: Option<Vec<f64>>,
+        py: Python<'_>,
+        newdata: FloatMatrix,
+        new_entry: FloatVec,
+        new_time: FloatVec,
+        id: IntVec,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
         stype: u8,
         ctype: Option<u8>,
         se_fit: bool,
@@ -1818,7 +1840,6 @@ impl CoxPHFit {
         start_time: Option<f64>,
     ) -> PyResult<Vec<CoxSurvfitCurve>> {
         let newdata = newdata_from_python(
-            self,
             Some(newdata),
             new_strata,
             new_offset,
@@ -1826,17 +1847,14 @@ impl CoxPHFit {
             Some(new_entry),
         )?
         .expect("newdata was supplied");
-        Ok(self.survfit_individual(
-            &newdata,
-            &id,
-            SurvfitOptions {
-                stype,
-                ctype,
-                se_fit,
-                censor,
-                start_time,
-            },
-        )?)
+        let options = SurvfitOptions {
+            stype,
+            ctype,
+            se_fit,
+            censor,
+            start_time,
+        };
+        Ok(py.detach(|| self.survfit_individual(&newdata, &id, options))?)
     }
 }
 
@@ -1850,32 +1868,40 @@ impl CoxPHFit {
 #[pyo3(signature = (time, status, x, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None, cluster=None, robust=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn coxph_fit(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    x: Vec<Vec<f64>>,
-    entry: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
-    weights: Option<Vec<f64>>,
-    offset: Option<Vec<f64>>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
+    x: FloatMatrix,
+    entry: Option<FloatVec>,
+    strata: Option<IntVec>,
+    weights: Option<FloatVec>,
+    offset: Option<FloatVec>,
     method: &str,
     init: Option<Vec<f64>>,
     iter_max: Option<usize>,
     eps: Option<f64>,
     toler_chol: Option<f64>,
     nocenter: Option<Vec<f64>>,
-    cluster: Option<Vec<i32>>,
+    cluster: Option<IntVec>,
     robust: Option<bool>,
 ) -> PyResult<CoxPHFit> {
-    if x.len() != time.len() {
+    if x.nrow() != time.len() {
         return Err(SurvivalError::invalid_input(format!(
             "x has {} rows but time has {}",
-            x.len(),
+            x.nrow(),
             time.len()
         ))
         .into());
     }
-    let x = matrix_from_rows(&x, "x")?;
-    let data = CoxphData::try_new(time, entry, status, x, weights, strata, offset)?;
+    let data = CoxphData::try_new(
+        time.into_inner(),
+        entry.map(FloatVec::into_inner),
+        status.into_inner(),
+        x.into_inner(),
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
+        offset.map(FloatVec::into_inner),
+    )?;
     let defaults = CoxphOptions::default();
     let options = CoxphOptions {
         method: TieMethod::parse(Some(method))?,
@@ -1884,10 +1910,10 @@ pub fn coxph_fit(
         eps: eps.unwrap_or(defaults.eps),
         toler_chol: toler_chol.unwrap_or(defaults.toler_chol),
         nocenter: nocenter.or(defaults.nocenter),
-        cluster,
+        cluster: cluster.map(IntVec::into_inner),
         robust,
     };
-    Ok(CoxPHFit::fit(data, options)?)
+    Ok(py.detach(move || CoxPHFit::fit(data, options))?)
 }
 
 #[cfg(test)]

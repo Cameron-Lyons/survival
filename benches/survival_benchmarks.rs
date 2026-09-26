@@ -1,10 +1,13 @@
+use ndarray::Array2;
 use std::hint::black_box;
+use survival::SurvivalResult;
 use survival::concordance::{ConcordanceOptions, concordancefit};
 use survival::core::SurvResponse;
 use survival::data_types::SurvivalData;
 use survival::regression::{
-    AaregData, AaregOptions, CoxPHFit, SurvregControl, SurvregData, SurvregDistribution, aareg_fit,
-    agexact_py, cch_borgan_fit, cch_fit, coxph_fit, finegray, survreg_fit,
+    AaregData, AaregOptions, AgexactFit, AgexactOptions, CchFitResult, CoxPHFit, CoxphData,
+    CoxphOptions, SurvregControl, SurvregData, SurvregDistribution, TieMethod, aareg_fit,
+    agexact_fit, cch, cch_borgan, finegray, survreg_fit,
 };
 use survival::surv_analysis::{
     self, PseudoResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
@@ -47,6 +50,124 @@ fn generate_covariates(n: usize, p: usize) -> Vec<Vec<f64>> {
                 .collect()
         })
         .collect()
+}
+
+fn rows_matrix(rows: &[Vec<f64>]) -> Array2<f64> {
+    let ncol = rows.first().map_or(0, Vec::len);
+    Array2::from_shape_vec((rows.len(), ncol), rows.concat()).expect("rectangular rows")
+}
+
+/// `coxph_fit` on the kernel side of the Python binding.
+#[allow(clippy::too_many_arguments)]
+fn coxph_fit(
+    time: Vec<f64>,
+    status: Vec<i32>,
+    x: Vec<Vec<f64>>,
+    entry: Option<Vec<f64>>,
+    strata: Option<Vec<i32>>,
+    weights: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
+    method: &str,
+    init: Option<Vec<f64>>,
+    iter_max: Option<usize>,
+    eps: Option<f64>,
+    toler_chol: Option<f64>,
+    nocenter: Option<Vec<f64>>,
+    cluster: Option<Vec<i32>>,
+    robust: Option<bool>,
+) -> SurvivalResult<CoxPHFit> {
+    let data = CoxphData::try_new(
+        time,
+        entry,
+        status,
+        rows_matrix(&x),
+        weights,
+        strata,
+        offset,
+    )?;
+    let defaults = CoxphOptions::default();
+    let options = CoxphOptions {
+        method: TieMethod::parse(Some(method))?,
+        init,
+        iter_max: iter_max.unwrap_or(defaults.iter_max),
+        eps: eps.unwrap_or(defaults.eps),
+        toler_chol: toler_chol.unwrap_or(defaults.toler_chol),
+        nocenter: nocenter.or(defaults.nocenter),
+        cluster,
+        robust,
+    };
+    CoxPHFit::fit(data, options)
+}
+
+/// `agexact` on the kernel side of the Python binding.
+fn agexact(
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    event: Vec<i32>,
+    x: Vec<Vec<f64>>,
+    iter_max: usize,
+) -> SurvivalResult<AgexactFit> {
+    let data = CoxphData::try_new(stop, Some(start), event, rows_matrix(&x), None, None, None)?;
+    let options = AgexactOptions {
+        init: None,
+        iter_max,
+        eps: 1e-9,
+        toler_chol: 1e-9,
+        nocenter: None,
+    };
+    agexact_fit(data, &options)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cch_fit(
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    subcohort: Vec<i32>,
+    id: Vec<i64>,
+    cohort_size: usize,
+    start: Option<Vec<f64>>,
+    method: &str,
+    robust: bool,
+) -> SurvivalResult<CchFitResult> {
+    let covariates = rows_matrix(&covariates);
+    cch(
+        stop,
+        status,
+        covariates,
+        subcohort,
+        id,
+        cohort_size,
+        start,
+        method,
+        robust,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cch_borgan_fit(
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    covariates: Vec<Vec<f64>>,
+    subcohort: Vec<i32>,
+    id: Vec<i64>,
+    stratum: Vec<usize>,
+    cohort_sizes: Vec<usize>,
+    start: Option<Vec<f64>>,
+    method: &str,
+) -> SurvivalResult<CchFitResult> {
+    let covariates = rows_matrix(&covariates);
+    cch_borgan(
+        stop,
+        status,
+        covariates,
+        subcohort,
+        id,
+        stratum,
+        cohort_sizes,
+        start,
+        method,
+    )
 }
 
 fn generate_tied_regression_data(n: usize, p: usize) -> (Vec<f64>, Vec<i32>, Vec<Vec<f64>>) {
@@ -196,12 +317,12 @@ mod pseudo_bench {
 mod aareg_bench {
     use super::*;
 
-    type AaregInputs = (Vec<f64>, Vec<i32>, Vec<Vec<f64>>, Vec<f64>);
+    type AaregInputs = (Vec<f64>, Vec<i32>, Array2<f64>, Vec<f64>);
 
     fn inputs(n: usize, p: usize) -> AaregInputs {
         let (stop, status, covariates) = generate_tied_regression_data(n, p);
         let weights = generate_case_weights(n);
-        (stop, status, covariates, weights)
+        (stop, status, rows_matrix(&covariates), weights)
     }
 
     #[divan::bench(args = [100, 1000, 10000])]
@@ -518,9 +639,6 @@ mod exact_counting_process_cox {
 
     #[divan::bench(args = [1000, 2000, 4000])]
     fn untied_scaling(bencher: divan::Bencher, n: usize) {
-        #[cfg(feature = "python")]
-        pyo3::Python::initialize();
-
         let start = vec![0.0; n];
         let stop: Vec<f64> = (1..=n).map(|value| value as f64).collect();
         let event = vec![1; n];
@@ -531,29 +649,14 @@ mod exact_counting_process_cox {
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_py(
-                        start,
-                        stop,
-                        event,
-                        x,
-                        None,
-                        None,
-                        None,
-                        Some(0),
-                        Some(1e-9),
-                        Some(1e-9),
-                        None,
-                    )
-                    .expect("untied exact counting-process benchmark should succeed"),
+                    agexact(start, stop, event, x, 0)
+                        .expect("untied exact counting-process benchmark should succeed"),
                 )
             });
     }
 
     #[divan::bench]
     fn tied_24_of_12(bencher: divan::Bencher) {
-        #[cfg(feature = "python")]
-        pyo3::Python::initialize();
-
         const N: usize = 24;
         const DEATHS: usize = 12;
         let start = vec![0.0; N];
@@ -566,20 +669,8 @@ mod exact_counting_process_cox {
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_py(
-                        start,
-                        stop,
-                        event,
-                        x,
-                        None,
-                        None,
-                        None,
-                        Some(0),
-                        Some(1e-9),
-                        Some(1e-9),
-                        None,
-                    )
-                    .expect("benchmark exact counting-process fit should succeed"),
+                    agexact(start, stop, event, x, 0)
+                        .expect("benchmark exact counting-process fit should succeed"),
                 )
             });
     }
@@ -1132,6 +1223,7 @@ mod survreg_bench {
             iter_max: 30,
             rel_tolerance: 1e-7,
             toler_chol: 1e-9,
+            ..SurvregControl::default()
         };
         bencher.bench_local(|| {
             let fit = survreg_fit(black_box(data), &distribution, None, 0.0, &control, false)
@@ -1143,6 +1235,7 @@ mod survreg_bench {
     #[divan::bench(args = [100, 1000, 5000])]
     fn survreg_weibull(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates) = generate_tied_regression_data(n, 3);
+        let covariates = rows_matrix(&covariates);
         let data = SurvregData::try_new(time, status, covariates, None, None, None, None, None)
             .expect("benchmark survreg data is valid");
         bench_fit(bencher, &data, "weibull");
@@ -1158,7 +1251,7 @@ mod survreg_bench {
         let data = SurvregData::try_new(
             time,
             status,
-            covariates,
+            rows_matrix(&covariates),
             None,
             Some(generate_case_weights(n)),
             None,

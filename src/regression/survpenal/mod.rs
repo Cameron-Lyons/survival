@@ -434,7 +434,7 @@ impl SurvpenalFit {
             time: response.time,
             time2: response.time2,
             status: response.status,
-            covariates: fit_covariates(xx),
+            covariates: fit_covariates(xx.view()),
             strata,
             weights: survreg_data.weights.clone(),
             offset,

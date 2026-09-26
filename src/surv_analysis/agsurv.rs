@@ -20,15 +20,15 @@
 //! which reads a curve at given times.
 
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::numpy_utils::{extract_matrix_f64, extract_vec_f64};
+use crate::internal::matrix::matrix_rows;
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
 use crate::internal::step::{find_interval, sort_unique, step_at};
 use crate::internal::validation::{
-    validate_binary_f64, validate_finite, validate_length, validate_non_empty,
-    validate_non_negative, validate_positive, validate_sorted,
+    ValidationError, validate_binary_f64, validate_finite, validate_length, validate_non_negative,
+    validate_positive, validate_sorted,
 };
 use ndarray::{Array1, Array2, ArrayView2};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 /// R's `survtype` / `vartype` codes: `1` Kalbfleisch-Prentice, `2` Breslow
 /// (Nelson-Aalen hazard), `3` Efron.
@@ -113,32 +113,52 @@ impl AgsurvData<'_> {
 }
 
 /// The pieces of one stratum's curve (R's `agsurv()` list).
+#[pyclass(module = "survival._survival", skip_from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgsurvCurve {
     /// Number of observations in the stratum.
+    #[pyo3(get)]
     pub n: usize,
     /// Sorted unique stop times (events and censorings).
+    #[pyo3(get)]
     pub time: Vec<f64>,
     /// Weighted number of events at each time.
+    #[pyo3(get)]
     pub n_event: Vec<f64>,
     /// Weighted number at risk at each time.
+    #[pyo3(get)]
     pub n_risk: Vec<f64>,
     /// Weighted number censored at each time.
+    #[pyo3(get)]
     pub n_censor: Vec<f64>,
     /// Hazard increment at each time.
+    #[pyo3(get)]
     pub hazard: Vec<f64>,
     /// Cumulative hazard.
+    #[pyo3(get)]
     pub cumhaz: Vec<f64>,
     /// Increment of the variance of the cumulative hazard at each time,
     /// the part that would remain if the coefficients were known.
+    #[pyo3(get)]
     pub varhaz: Vec<f64>,
     /// Unweighted number of deaths at each time.
+    #[pyo3(get)]
     pub ndeath: Vec<usize>,
     /// `ntime x nvar`: (weighted mean covariate of those at risk) times the
     /// hazard increment, the second part of the variance.
     pub xbar: Array2<f64>,
     /// Kalbfleisch-Prentice survival increments (`survtype == 1` only).
+    #[pyo3(get)]
     pub surv: Option<Vec<f64>>,
+}
+
+#[pymethods]
+impl AgsurvCurve {
+    /// `xbar`, one list per time.
+    #[getter(xbar)]
+    fn xbar_rows(&self) -> Vec<Vec<f64>> {
+        matrix_rows(&self.xbar)
+    }
 }
 
 /// `rev(cumsum(rev(x)))`: sum from the last element back to each position.
@@ -713,27 +733,31 @@ pub fn cum_xbar_at(curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64) ->
 /// one row per observation; the weights must be finite and non-negative and
 /// the risks finite and positive.
 fn baseline_curve(
-    y: &[Vec<f64>],
-    x: &[Vec<f64>],
+    y: ArrayView2<'_, f64>,
+    x: ArrayView2<'_, f64>,
     weights: &[f64],
     risk: &[f64],
     survtype: i32,
     vartype: i32,
 ) -> SurvivalResult<AgsurvCurve> {
-    validate_non_empty(y, "y")?;
-    let n = y.len();
-    let ycols = y[0].len();
+    let (n, ycols) = y.dim();
+    if n == 0 {
+        return Err(ValidationError::Empty {
+            name: "y".to_string(),
+        }
+        .into());
+    }
     if ycols != 2 && ycols != 3 {
         return Err(SurvivalError::invalid_input("y must have 2 or 3 columns"));
     }
-    for (i, row) in y.iter().enumerate() {
-        let name = format!("y row {i}");
-        validate_length(ycols, row.len(), &name)?;
-        validate_finite(row, &name)?;
+    if let Some(((i, _), value)) = y.indexed_iter().find(|(_, value)| !value.is_finite()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "y row {i} contains non-finite value {value}"
+        )));
     }
-    let start: Option<Vec<f64>> = (ycols == 3).then(|| y.iter().map(|row| row[0]).collect());
-    let stop: Vec<f64> = y.iter().map(|row| row[ycols - 2]).collect();
-    let status: Vec<f64> = y.iter().map(|row| row[ycols - 1]).collect();
+    let start: Option<Vec<f64>> = (ycols == 3).then(|| y.column(0).to_vec());
+    let stop: Vec<f64> = y.column(ycols - 2).to_vec();
+    let status: Vec<f64> = y.column(ycols - 1).to_vec();
     validate_binary_f64(&status, "y status")?;
     if let Some(i) = start
         .as_deref()
@@ -743,12 +767,11 @@ fn baseline_curve(
             "y start must be less than stop at row {i}"
         )));
     }
-    validate_length(n, x.len(), "x")?;
-    let nvar = x[0].len();
-    for (i, row) in x.iter().enumerate() {
-        let name = format!("x row {i}");
-        validate_length(nvar, row.len(), &name)?;
-        validate_finite(row, &name)?;
+    validate_length(n, x.nrows(), "x")?;
+    if let Some(((i, _), value)) = x.indexed_iter().find(|(_, value)| !value.is_finite()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "x row {i} contains non-finite value {value}"
+        )));
     }
     validate_length(n, weights.len(), "weights")?;
     validate_finite(weights, "weights")?;
@@ -764,13 +787,12 @@ fn baseline_curve(
     let vartype = code("vartype", vartype)?;
 
     let status: Vec<i32> = status.iter().map(|&value| value as i32).collect();
-    let x = Array2::from_shape_fn((n, nvar), |(i, k)| x[i][k]);
     let curve = agsurv(
         &AgsurvData {
             start: start.as_deref(),
             stop: &stop,
             status: &status,
-            x: x.view(),
+            x,
             means: None,
             weights,
             risk,
@@ -796,39 +818,15 @@ fn baseline_curve(
 /// increments.
 #[pyfunction]
 pub fn cox_survfit_baseline(
-    y: &Bound<'_, PyAny>,
-    x: &Bound<'_, PyAny>,
-    weights: &Bound<'_, PyAny>,
-    risk: &Bound<'_, PyAny>,
+    py: Python<'_>,
+    y: FloatMatrix,
+    x: FloatMatrix,
+    weights: FloatVec,
+    risk: FloatVec,
     survtype: i32,
     vartype: i32,
-) -> PyResult<Py<PyDict>> {
-    let curve = baseline_curve(
-        &extract_matrix_f64(y)?,
-        &extract_matrix_f64(x)?,
-        &extract_vec_f64(weights)?,
-        &extract_vec_f64(risk)?,
-        survtype,
-        vartype,
-    )?;
-    Python::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("n", curve.n)?;
-        dict.set_item("time", curve.time)?;
-        dict.set_item("n_event", curve.n_event)?;
-        dict.set_item("n_risk", curve.n_risk)?;
-        dict.set_item("n_censor", curve.n_censor)?;
-        dict.set_item("hazard", curve.hazard)?;
-        dict.set_item("cumhaz", curve.cumhaz)?;
-        dict.set_item("varhaz", curve.varhaz)?;
-        dict.set_item("ndeath", curve.ndeath)?;
-        let xbar: Vec<Vec<f64>> = curve.xbar.outer_iter().map(|row| row.to_vec()).collect();
-        dict.set_item("xbar", xbar)?;
-        if let Some(surv) = curve.surv {
-            dict.set_item("surv", surv)?;
-        }
-        Ok(dict.into())
-    })
+) -> PyResult<AgsurvCurve> {
+    Ok(py.detach(|| baseline_curve(y.view(), x.view(), &weights, &risk, survtype, vartype))?)
 }
 
 /// [`step_at`] at each of `requested_times`, the way `summary.survfit(fit,
@@ -1104,13 +1102,8 @@ mod tests {
     #[test]
     fn baseline_binding_matches_weighted_risk_sets() {
         let curve = baseline_curve(
-            &[
-                vec![1.0, 1.0],
-                vec![2.0, 1.0],
-                vec![2.0, 0.0],
-                vec![3.0, 1.0],
-            ],
-            &[vec![0.0], vec![1.0], vec![2.0], vec![3.0]],
+            arr2(&[[1.0, 1.0], [2.0, 1.0], [2.0, 0.0], [3.0, 1.0]]).view(),
+            arr2(&[[0.0], [1.0], [2.0], [3.0]]).view(),
             &[1.0, 2.0, 1.0, 1.0],
             &[1.0, 2.0, 1.0, 0.5],
             2,
@@ -1128,12 +1121,8 @@ mod tests {
         assert_close(curve.xbar[(0, 0)], 7.5 / 6.5_f64.powi(2));
 
         let counting = baseline_curve(
-            &[
-                vec![0.0, 2.0, 1.0],
-                vec![1.0, 3.0, 1.0],
-                vec![2.0, 4.0, 0.0],
-            ],
-            &[vec![0.0], vec![1.0], vec![2.0]],
+            arr2(&[[0.0, 2.0, 1.0], [1.0, 3.0, 1.0], [2.0, 4.0, 0.0]]).view(),
+            arr2(&[[0.0], [1.0], [2.0]]).view(),
             &[1.0; 3],
             &[1.0, 2.0, 4.0],
             3,
@@ -1148,21 +1137,17 @@ mod tests {
 
     #[test]
     fn baseline_binding_rejects_invalid_inputs() {
-        let message = |y: &[Vec<f64>], weights: &[f64], survtype: i32| {
-            baseline_curve(y, &[vec![0.0]], weights, &[1.0], survtype, 2)
+        let message = |y: &[f64], weights: &[f64], survtype: i32| {
+            let y = ArrayView2::from_shape((1, y.len()), y).unwrap();
+            baseline_curve(y, arr2(&[[0.0]]).view(), weights, &[1.0], survtype, 2)
                 .unwrap_err()
                 .to_string()
         };
-        assert!(
-            message(&[vec![1.0, 1.0, 0.0]], &[1.0], 2).contains("start must be less than stop")
-        );
-        assert!(
-            message(&[vec![1.0, 2.0]], &[1.0], 2).contains("y status must contain only 0/1 values")
-        );
-        assert!(message(&[vec![1.0, 1.0]], &[1.0], 4).contains("survtype must be 1, 2, or 3"));
-        assert!(message(&[vec![1.0, 1.0]], &[-1.0], 2).contains("weights contains negative"));
-        assert!(
-            message(&[vec![1.0, 1.0]], &[0.0], 2).contains("risk-set denominator must be positive")
-        );
+        assert!(message(&[1.0, 1.0, 0.0], &[1.0], 2).contains("start must be less than stop"));
+        assert!(message(&[1.0, 2.0], &[1.0], 2).contains("y status must contain only 0/1 values"));
+        assert!(message(&[1.0, 1.0], &[1.0], 4).contains("survtype must be 1, 2, or 3"));
+        assert!(message(&[1.0, 1.0], &[-1.0], 2).contains("weights contains negative"));
+        assert!(message(&[1.0, 1.0], &[0.0], 2).contains("risk-set denominator must be positive"));
+        assert!(message(&[1.0], &[1.0], 2).contains("y must have 2 or 3 columns"));
     }
 }

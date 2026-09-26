@@ -41,11 +41,12 @@ fn concordance_options(
 #[pyo3(signature = (survival, x, weights=None, strata=None, cluster=None, timewt="n", ymin=None, ymax=None, influence=0, ranks=false, reverse=false, timefix=true, keepstrata=10, std_err=true))]
 #[allow(clippy::too_many_arguments)]
 fn concordancefit_py(
+    py: Python<'_>,
     survival: &SurvivalData,
     x: &CovariateMatrix,
     weights: Option<&Weights>,
-    strata: Option<Vec<i32>>,
-    cluster: Option<Vec<i32>>,
+    strata: Option<IntVec>,
+    cluster: Option<IntVec>,
     timewt: &str,
     ymin: Option<f64>,
     ymax: Option<f64>,
@@ -59,14 +60,17 @@ fn concordancefit_py(
     let options = concordance_options(
         timewt, ymin, ymax, influence, ranks, reverse, timefix, keepstrata, std_err,
     )?;
-    Ok(concordancefit(
-        SurvResponse::Right(survival),
-        covariate_view(x)?,
-        weights.map(|w| w.values.as_slice()),
-        strata.as_deref(),
-        cluster.as_deref(),
-        &options,
-    )?)
+    let x = covariate_view(x)?;
+    Ok(py.detach(|| {
+        concordancefit(
+            SurvResponse::Right(survival),
+            x,
+            weights.map(|w| w.values.as_slice()),
+            strata.as_deref(),
+            cluster.as_deref(),
+            &options,
+        )
+    })?)
 }
 
 /// R's `concordancefit` for (start, stop] data.
@@ -74,11 +78,12 @@ fn concordancefit_py(
 #[pyo3(signature = (counting, x, weights=None, strata=None, cluster=None, timewt="n", ymin=None, ymax=None, influence=0, ranks=false, reverse=false, timefix=true, keepstrata=10, std_err=true))]
 #[allow(clippy::too_many_arguments)]
 fn concordancefit_counting_py(
+    py: Python<'_>,
     counting: &CountingProcessData,
     x: &CovariateMatrix,
     weights: Option<&Weights>,
-    strata: Option<Vec<i32>>,
-    cluster: Option<Vec<i32>>,
+    strata: Option<IntVec>,
+    cluster: Option<IntVec>,
     timewt: &str,
     ymin: Option<f64>,
     ymax: Option<f64>,
@@ -92,35 +97,43 @@ fn concordancefit_counting_py(
     let options = concordance_options(
         timewt, ymin, ymax, influence, ranks, reverse, timefix, keepstrata, std_err,
     )?;
-    Ok(concordancefit(
-        SurvResponse::Counting(counting),
-        covariate_view(x)?,
-        weights.map(|w| w.values.as_slice()),
-        strata.as_deref(),
-        cluster.as_deref(),
-        &options,
-    )?)
+    let x = covariate_view(x)?;
+    Ok(py.detach(|| {
+        concordancefit(
+            SurvResponse::Counting(counting),
+            x,
+            weights.map(|w| w.values.as_slice()),
+            strata.as_deref(),
+            cluster.as_deref(),
+            &options,
+        )
+    })?)
 }
 
 /// `coxscore2`: score residuals (`n x p`) of a right-censored Cox model.
 #[pyfunction(name = "coxscore2")]
 #[pyo3(signature = (survival, covariates, score, weights=None, strata=None, ties="efron"))]
 fn coxscore2_py(
+    py: Python<'_>,
     survival: &SurvivalData,
     covariates: &CovariateMatrix,
-    score: Vec<f64>,
+    score: FloatVec,
     weights: Option<&Weights>,
-    strata: Option<Vec<i32>>,
+    strata: Option<IntVec>,
     ties: &str,
 ) -> PyResult<Vec<Vec<f64>>> {
-    let resid = crate::scoring::coxscore2(
-        survival,
-        covariate_view(covariates)?,
-        &score,
-        weights.map(|w| w.values.as_slice()),
-        strata.as_deref(),
-        kernel_ties(ties)?,
-    )?;
+    let covariates = covariate_view(covariates)?;
+    let ties = kernel_ties(ties)?;
+    let resid = py.detach(|| {
+        crate::scoring::coxscore2(
+            survival,
+            covariates,
+            &score,
+            weights.map(|w| w.values.as_slice()),
+            strata.as_deref(),
+            ties,
+        )
+    })?;
     Ok(resid.outer_iter().map(|row| row.to_vec()).collect())
 }
 
@@ -128,21 +141,26 @@ fn coxscore2_py(
 #[pyfunction(name = "agscore3")]
 #[pyo3(signature = (counting, covariates, score, weights=None, strata=None, ties="efron"))]
 fn agscore3_py(
+    py: Python<'_>,
     counting: &CountingProcessData,
     covariates: &CovariateMatrix,
-    score: Vec<f64>,
+    score: FloatVec,
     weights: Option<&Weights>,
-    strata: Option<Vec<i32>>,
+    strata: Option<IntVec>,
     ties: &str,
 ) -> PyResult<Vec<Vec<f64>>> {
-    let resid = crate::scoring::agscore3(
-        counting,
-        covariate_view(covariates)?,
-        &score,
-        weights.map(|w| w.values.as_slice()),
-        strata.as_deref(),
-        kernel_ties(ties)?,
-    )?;
+    let covariates = covariate_view(covariates)?;
+    let ties = kernel_ties(ties)?;
+    let resid = py.detach(|| {
+        crate::scoring::agscore3(
+            counting,
+            covariates,
+            &score,
+            weights.map(|w| w.values.as_slice()),
+            strata.as_deref(),
+            ties,
+        )
+    })?;
     Ok(resid.outer_iter().map(|row| row.to_vec()).collect())
 }
 
@@ -150,42 +168,52 @@ fn agscore3_py(
 #[pyfunction(name = "schoenfeld_residuals")]
 #[pyo3(signature = (survival, covariates, score, weights=None, strata=None, ties="efron"))]
 fn schoenfeld_residuals_py(
+    py: Python<'_>,
     survival: &SurvivalData,
     covariates: &CovariateMatrix,
-    score: Vec<f64>,
+    score: FloatVec,
     weights: Option<&Weights>,
-    strata: Option<Vec<i32>>,
+    strata: Option<IntVec>,
     ties: &str,
 ) -> PyResult<CoxschoResiduals> {
-    Ok(crate::core::schoenfeld_residuals(
-        SurvResponse::Right(survival),
-        covariate_view(covariates)?,
-        &score,
-        weights.map(|w| w.values.as_slice()),
-        strata.as_deref(),
-        kernel_ties(ties)?,
-    )?)
+    let covariates = covariate_view(covariates)?;
+    let ties = kernel_ties(ties)?;
+    Ok(py.detach(|| {
+        crate::core::schoenfeld_residuals(
+            SurvResponse::Right(survival),
+            covariates,
+            &score,
+            weights.map(|w| w.values.as_slice()),
+            strata.as_deref(),
+            ties,
+        )
+    })?)
 }
 
 /// `coxscho`: Schoenfeld residuals of a Cox model on (start, stop] data.
 #[pyfunction(name = "schoenfeld_residuals_counting")]
 #[pyo3(signature = (counting, covariates, score, weights=None, strata=None, ties="efron"))]
 fn schoenfeld_residuals_counting_py(
+    py: Python<'_>,
     counting: &CountingProcessData,
     covariates: &CovariateMatrix,
-    score: Vec<f64>,
+    score: FloatVec,
     weights: Option<&Weights>,
-    strata: Option<Vec<i32>>,
+    strata: Option<IntVec>,
     ties: &str,
 ) -> PyResult<CoxschoResiduals> {
-    Ok(crate::core::schoenfeld_residuals(
-        SurvResponse::Counting(counting),
-        covariate_view(covariates)?,
-        &score,
-        weights.map(|w| w.values.as_slice()),
-        strata.as_deref(),
-        kernel_ties(ties)?,
-    )?)
+    let covariates = covariate_view(covariates)?;
+    let ties = kernel_ties(ties)?;
+    Ok(py.detach(|| {
+        crate::core::schoenfeld_residuals(
+            SurvResponse::Counting(counting),
+            covariates,
+            &score,
+            weights.map(|w| w.values.as_slice()),
+            strata.as_deref(),
+            ties,
+        )
+    })?)
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

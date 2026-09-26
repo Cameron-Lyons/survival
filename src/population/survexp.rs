@@ -3,10 +3,10 @@
 //! and matched to the table with `match_ratetable`.  A Cox model used as a
 //! rate table (`survexp.cfit`) is not handled here.
 
-use super::pyears::rows_to_matrix;
 use super::ratetable::RateTable;
 use super::survexp_fit::survexp_fit;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
 use crate::internal::step::sort_unique;
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use ndarray::Array2;
@@ -261,8 +261,8 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
 pub fn survexp_py(
     py: Python<'_>,
     ratetable: &RateTable,
-    positions: Vec<Vec<f64>>,
-    y: Option<Vec<f64>>,
+    positions: FloatMatrix,
+    y: Option<FloatVec>,
     group: Option<Vec<usize>>,
     times: Option<Vec<f64>>,
     method: Option<&str>,
@@ -270,7 +270,8 @@ pub fn survexp_py(
     conditional: bool,
     scale: f64,
 ) -> PyResult<SurvExpResult> {
-    let positions = rows_to_matrix(&positions, positions.len(), ratetable.ndim(), "positions")?;
+    let n = positions.nrow();
+    let positions = positions.into_shape(n, ratetable.ndim(), "positions")?;
     let method = method.map(SurvexpMethod::parse).transpose()?;
     let input = SurvexpInput {
         positions: &positions,
