@@ -355,8 +355,8 @@ stored training predictions and residuals retain the fitted numeric values.
 As in R, an aliased coefficient makes ordinary `newdata` predictions missing;
 term predictions retain contributions from other terms. AFT `newdata` predictions
 omit formula offsets, while training predictions retain them; the native
-`fit.predict(...)` method still accepts explicit offsets. `vcov(complete=False)`
-retains estimated scale parameters when the model has no aliases.
+`fit.predict(...)` method still accepts explicit offsets. As in R, `vcov(complete=False)`
+drops the aliased coefficients and keeps the estimated scale parameters.
 The AFT optimizer uses an ordered LDL factorization for its observed-information
 Newton steps, with a score-product fallback when needed. It honors R's
 [`survreg` pivot tolerance](https://github.com/cran/survival/blob/3.8-11/src/cholesky3.c),

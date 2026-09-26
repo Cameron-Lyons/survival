@@ -687,44 +687,66 @@ def _estimated_scale_count(model: Any) -> int:
     return len(model.coefficients) - len(model.means)
 
 
-def survreg_scale_names(fit: Any) -> list[str]:
-    """Names of the ``Log(scale)`` coefficients: ``survreg.fit`` repeats ``Log(scale)``."""
+def _location_names(fit: Any, complete: bool = True) -> list[str]:
+    """``names(coef(fit, complete))``: without ``complete`` the aliased (``NA``)
+    coefficients are left out."""
 
-    return ["Log(scale)"] * _estimated_scale_count(_unwrap_formula_fit(fit))
+    beta = _location_beta(fit)
+    names = _fit_location_coef_names(fit, len(beta))
+    if complete:
+        return names
+    return [name for name, value in zip(names, beta, strict=True) if not math.isnan(value)]
+
+
+def _scale_labels(fit: Any, stratum_template: str) -> list[str]:
+    """The labels of the estimated scales: ``Log(scale)`` for a single scale; for a scale
+    per stratum, ``stratum_template`` filled with each stratum (``names(fit$scale)``)."""
+
+    scales = _estimated_scale_count(_unwrap_formula_fit(fit))
+    if scales > 1:
+        return [stratum_template.format(level) for level in fit.strata_levels]
+    return ["Log(scale)"] * scales
 
 
 def survreg_summary_names(fit: Any) -> list[str]:
-    """Row names of ``summary.survreg``'s table: the scale rows carry the strata labels."""
+    """Row names of ``summary.survreg``'s table: a stratum's scale row is named by the
+    stratum."""
 
-    model = _unwrap_formula_fit(fit)
-    names = _fit_location_coef_names(fit, len(model.means))
-    scales = _estimated_scale_count(model)
-    levels = getattr(fit, "strata_levels", ())
-    if scales > 1 and len(levels) == scales:
-        return names + list(levels)
-    return names + ["Log(scale)"] * scales
+    return _location_names(fit) + _scale_labels(fit, "{}")
+
+
+def survreg_vcov_names(fit: Any, complete: bool = True) -> list[str]:
+    """``dimnames(vcov(fit, complete))``: the location names (the aliased ones left out
+    without ``complete``), then ``Log(scale)``, or ``Log(scale[<stratum>])`` per stratum."""
+
+    return _location_names(fit, complete) + _scale_labels(fit, "Log(scale[{}])")
 
 
 def survreg_vcov(fit: Any, complete: bool = True) -> list[list[float]]:
-    """``fit$var``; the location block only when ``complete`` is false."""
+    """R's ``vcov.survreg``: ``fit$var``; without ``complete`` the rows and columns of the
+    aliased location coefficients are dropped and the ``Log(scale)`` rows kept."""
 
     model = _unwrap_formula_fit(fit)
     variance = [[float(value) for value in row] for row in model.variance_matrix]
     if complete:
         return variance
     nvar = len(model.means)
-    return [row[:nvar] for row in variance[:nvar]]
+    keep = [
+        idx for idx, value in enumerate(model.coefficients) if idx >= nvar or not math.isnan(value)
+    ]
+    return [[variance[row][column] for column in keep] for row in keep]
 
 
-def survreg_summary(fit: Any) -> dict[str, Any]:
+def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
     """The pieces of ``summary.survreg`` that are not the coefficient table."""
 
-    model = _unwrap_formula_fit(fit)
+    model = fit.fit
     distribution = model.distribution
     parms = list(distribution.parms)
+    loglik = fit.loglik
     summary: dict[str, Any] = {
         "location_coefficients": _location_beta(model),
-        "location_coefficient_names": _fit_location_coef_names(fit, len(model.means)),
+        "location_coefficient_names": _location_names(fit),
         "scale": model.scale[0] if len(model.scale) == 1 else list(model.scale),
         "scales": list(model.scale),
         "distribution": distribution.name,
@@ -733,7 +755,8 @@ def survreg_summary(fit: Any) -> dict[str, Any]:
             if parms
             else f"{distribution.name} distribution"
         ),
-        "chi": 2.0 * (model.log_likelihood - model.intercept_only_log_likelihood),
+        "loglik": loglik,
+        "chi": 2.0 * (loglik[1] - loglik[0]),
         "iter": int(model.iterations),
         "idf": 1 + _estimated_scale_count(model),
     }
@@ -978,18 +1001,16 @@ def _refit_terms(fit: SurvregModelResult, keep: int) -> Any:
 
 
 def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:
-    """``stat.anova(test="Chisq")``: ``pchisq(dev, |df|, lower=FALSE)``, NA otherwise."""
+    """``stat.anova(test="Chisq")``: ``pchisq(dev * sign(df), |df|, lower=FALSE)``, NA at a
+    zero df or a negative statistic (``pchisq`` carries a NaN deviance or df through)."""
 
     p_values = []
     for value, degrees in zip(deviance, df, strict=True):
-        if math.isnan(value) or math.isnan(degrees) or degrees == 0:
-            p_values.append(math.nan)
-            continue
         statistic = value * math.copysign(1.0, degrees)
-        if statistic < 0.0:
+        if degrees == 0 or statistic < 0.0:
             p_values.append(math.nan)
         else:
-            p_values.append(float(_core.lrt_test(statistic / 2.0, 0.0, int(abs(degrees))).p_value))
+            p_values.append(_core.pchisq(statistic, abs(degrees), lower_tail=False))
     return p_values
 
 
@@ -1146,7 +1167,13 @@ def rsurvreg(
     parms: Any | None = None,
     seed: int | None = None,
 ) -> list[float]:
-    """Random draws from the ``survreg`` distributions (R's ``rsurvreg``; ``seed`` is ours)."""
+    """Random draws from the ``survreg`` distributions (R's ``rsurvreg``,
+    ``qsurvreg(runif(n), ...)``).
+
+    ``seed=s`` draws R's uniforms, so the result equals R's ``set.seed(s);
+    rsurvreg(n, ...)``; without a seed the uniforms come from a clock-seeded generator
+    whose stream is not R's.
+    """
 
     count = _integer_scalar(n, "n")
     if count < 0:
@@ -1188,18 +1215,19 @@ def coef_survreg(fit: Any) -> list[float]:
 
 
 def coef_names_survreg(fit: Any, *, complete: Any | None = None) -> list[str]:
-    """``names(coef(fit))``; ``complete`` appends the ``Log(scale)`` rows."""
+    """``names(coef(fit))``; ``complete=False`` drops the aliased coefficients, as
+    ``coef(fit, complete=FALSE)``, and ``complete=True`` gives ``vcov(fit)``'s names,
+    the ``Log(scale)`` rows appended."""
 
-    names = _fit_location_coef_names(fit, len(_location_beta(fit)))
     if complete is None:
-        return names
+        return _location_names(fit)
     if _normalize_bool_option(complete, "complete"):
-        names.extend(survreg_scale_names(fit))
-    return names
+        return survreg_vcov_names(fit)
+    return _location_names(fit, complete=False)
 
 
 def vcov_survreg(fit: Any, *, complete: Any = True) -> list[list[float]]:
-    """``vcov.survreg``: ``fit$var``, or its location block."""
+    """``vcov.survreg``: ``fit$var``, less the aliased coefficients without ``complete``."""
 
     return survreg_vcov(fit, _normalize_bool_option_with_default(complete, "complete", True))
 
@@ -1212,7 +1240,7 @@ def confint_survreg(
     z = NormalDist().inv_cdf(1.0 - (1.0 - _normalize_conf_level(level, "level")) / 2.0)
     names = coef_names_survreg(fit)
     coefficients = coef_survreg(fit)
-    variance = survreg_vcov(fit, False)
+    variance = survreg_vcov(fit)  # the location block leads fit$var
     from ._models import _coefficient_selection
 
     return [
@@ -1364,21 +1392,26 @@ def model_frame_survreg(fit: Any) -> dict[str, list[Any]]:
     return columns
 
 
-def model_summary_survreg(fit: Any) -> dict[str, Any]:
-    """``summary.survreg``: the coefficient table plus the fit's scalar pieces."""
+def model_summary_survreg(fit: Any, correlation: Any = False) -> dict[str, Any]:
+    """``summary.survreg``: the coefficient table, the pieces of the fit R copies
+    (``loglik`` as (intercept-only, full), ``var``, ``scale``, ...) and, with
+    ``correlation``, the correlation matrix of the coefficients that are not ``NA``
+    (its rows follow theirs in ``coefficient_names``)."""
 
     model = _unwrap_formula_fit(fit)
     coefficients = [float(value) for value in model.coefficients]
     names = survreg_summary_names(fit)
-    variance = survreg_vcov(fit, True)
+    variance = survreg_vcov(fit)
     naive_variance = model.naive_variance_matrix
     robust = naive_variance is not None
     if naive_variance is None:
         naive_variance = variance
 
     rows: list[dict[str, float | str]] = []
+    standard_errors = []
     for idx, value in enumerate(coefficients):
         standard_error = math.sqrt(max(float(variance[idx][idx]), 0.0))
+        standard_errors.append(standard_error)
         naive_standard_error = math.sqrt(max(float(naive_variance[idx][idx]), 0.0))
         if math.isnan(value):
             statistic = math.nan
@@ -1402,11 +1435,20 @@ def model_summary_survreg(fit: Any) -> dict[str, Any]:
             row["robust_se"] = standard_error
         rows.append(row)
 
+    correl = None
+    if _normalize_bool_option(correlation, "correlation"):
+        # diag(1/stds) %*% var[!nas, !nas] %*% diag(1/stds)
+        keep = [idx for idx, value in enumerate(coefficients) if not math.isnan(value)]
+        correl = [
+            [variance[i][j] / (standard_errors[i] * standard_errors[j]) for j in keep] for i in keep
+        ]
+
     result: dict[str, Any] = {
         "model_type": "survreg",
         "coefficients": rows,
         "coefficient_names": names,
-        "loglik": loglik_survreg(fit),
+        "var": variance,
+        "correlation": correl,
         "df": degrees_freedom_survreg(fit),
         "n": nobs_survreg(fit),
         "robust": robust,

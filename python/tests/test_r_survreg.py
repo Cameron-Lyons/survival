@@ -57,7 +57,7 @@ def test_survreg_weibull_matches_r_object(lung_weibull):
     assert (r.degrees_freedom(fit), r.df_residual(fit), r.nobs(fit)) == (4, 224, 228)
     assert fit.var[0][0] == pytest.approx(0.231714143303)
     assert r.vcov(fit) == fit.var
-    assert len(r.vcov(fit, complete=False)) == 3
+    assert r.vcov(fit, complete=False) == fit.var  # nothing aliased: R keeps Log(scale)
     assert r.coef_names(fit) == ["(Intercept)", "age", "sex"]
     assert r.coef_names(fit, complete=True) == ["(Intercept)", "age", "sex", "Log(scale)"]
     assert fit.icoef == pytest.approx([6.0349039102, math.log(0.759393601108)])
@@ -113,8 +113,8 @@ def test_survreg_strata_scales_and_labels(lung):
         "(Intercept)",
         "age",
         "sex",
-        "Log(scale)",
-        "Log(scale)",
+        "Log(scale[sex=1])",
+        "Log(scale[sex=2])",
     ]
     assert fit.df == 5
     assert fit.df_residual == 223
@@ -638,7 +638,9 @@ def test_model_summary_survreg_structure(lung_weibull):
     assert summary["distribution"] == "Weibull"
     assert summary["parms"] == "Weibull distribution"
     assert (summary["df"], summary["n"], summary["iter"], summary["idf"]) == (4, 228, 5, 2)
-    assert summary["loglik"] == pytest.approx(-1147.05443143)
+    assert summary["loglik"] == pytest.approx([-1153.85118809, -1147.05443143])
+    assert summary["var"] == lung_weibull.var
+    assert summary["correlation"] is None
     assert summary["chi"] == pytest.approx(2 * (-1147.05443143 + 1153.85118809))
     assert summary["robust"] is False
     rows = summary["coefficients"]
