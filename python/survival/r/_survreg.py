@@ -15,6 +15,7 @@ import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from operator import index
 from statistics import NormalDist
 from typing import Any
@@ -611,6 +612,8 @@ def survreg(
         raise ValueError("start-stop type Surv objects are not supported")
     if response.type in {"mright", "mcounting"}:
         raise ValueError("multi-state survival is not supported")
+    if not all(map(math.isfinite, chain.from_iterable(frame.x))):
+        raise ValueError("data contains an infinite predictor")
 
     distribution = _resolve_distribution(dist, parms)
     if distribution.scale is not None and scale_value != 0.0:

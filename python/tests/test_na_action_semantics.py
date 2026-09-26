@@ -195,6 +195,13 @@ def test_a_nan_made_by_a_transform_is_missing_at_fit_time(lung):
         r.coxph("Surv(time, status) ~ log(wt.loss)", data)
     with pytest.raises(ValueError, match="data contains an infinite predictor"):
         r.coxph("Surv(time, status) ~ I(wt.loss/ph.ecog)", data)
+    with (
+        pytest.warns(UserWarning, match="NaNs produced"),
+        pytest.raises(ValueError, match="data contains an infinite predictor"),
+    ):
+        r.survreg("Surv(time, status) ~ log(wt.loss)", data)
+    with pytest.raises(ValueError, match="data contains an infinite predictor"):
+        r.survreg("Surv(time, status) ~ I(wt.loss/ph.ecog)", data)
     # d is 0 where wt.loss is, so wt.loss/d is 0/0 there
     wt_loss = _shifted(data["wt.loss"], 0)
     data["d"] = [None if value is None else float(value != 0) for value in wt_loss]
