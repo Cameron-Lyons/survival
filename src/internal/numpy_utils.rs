@@ -128,13 +128,13 @@ impl FloatMatrix {
         self.0
     }
 
-    /// The array, checked to be `nrow x ncol`; an empty input (`[]`) stands
-    /// for zero rows of any width.
+    /// The array, checked to be `nrow x ncol`.  An empty input (`[]`) stands
+    /// for zero rows of any width, or for any number of rows of zero width.
     pub fn into_shape(self, nrow: usize, ncol: usize, name: &str) -> SurvivalResult<Array2<f64>> {
         if self.0.dim() == (nrow, ncol) {
             Ok(self.0)
-        } else if nrow == 0 && self.0.is_empty() {
-            Ok(Array2::zeros((0, ncol)))
+        } else if (nrow == 0 && self.0.is_empty()) || (ncol == 0 && self.0.nrows() == 0) {
+            Ok(Array2::zeros((nrow, ncol)))
         } else {
             Err(SurvivalError::invalid_input(format!(
                 "{name} must be {nrow} x {ncol}, got {} x {}",
@@ -558,7 +558,8 @@ mod tests {
         let err = matrix.into_shape(2, 3, "x").unwrap_err();
         assert_eq!(err.to_string(), "x must be 2 x 3, got 2 x 2");
         let empty = FloatMatrix::from_rows(Vec::new()).unwrap();
-        assert_eq!(empty.into_shape(0, 3, "x").unwrap().dim(), (0, 3));
+        assert_eq!(empty.clone().into_shape(0, 3, "x").unwrap().dim(), (0, 3));
+        assert_eq!(empty.into_shape(4, 0, "x").unwrap().dim(), (4, 0));
 
         let flat = FloatMatrix::from_flat(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3).unwrap();
         assert_eq!(*flat, array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);

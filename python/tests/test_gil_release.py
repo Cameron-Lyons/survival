@@ -8,6 +8,7 @@ arrays of any layout without a ``.tolist()``, and gives the same fit as nested l
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -72,6 +73,7 @@ def _assert_detaches(call: Callable[[], object]) -> None:
     assert share > 0.1, f"the thread ran for {share:.1%} of a {elapsed:.3f} s call"
 
 
+@pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs four cores to overlap four fits")
 def test_cox_fits_on_four_threads_overlap():
     time_, status, x = _cox_data(100_000)
     regression.coxph_fit(time_, status, x)
@@ -95,6 +97,7 @@ def test_heavy_kernels_release_the_gil():
     design = np.column_stack([np.ones(len(time_)), x])
     survreg_data = regression.SurvregData(time_ + 0.01, status, design)
     weibull = regression.SurvregDistribution("weibull")
+    survreg = regression.survreg_fit(survreg_data, weibull)
     right = core.SurvivalData(time_, status)
     predictor = core.CovariateMatrix(x[:, 0], len(time_), 1)
     group = (x[:, 0] > 0).astype(np.int32)
@@ -107,6 +110,8 @@ def test_heavy_kernels_release_the_gil():
         "CoxPHFit.survfit": lambda: fit.survfit(x[:5]),
         "cox_zph": lambda: regression.cox_zph(fit),
         "survreg_fit": lambda: regression.survreg_fit(survreg_data, weibull),
+        "SurvregFit.predict": lambda: survreg.predict(design, "quantile", se_fit=True),
+        "SurvregFit.residuals": lambda: survreg.residuals("dfbeta"),
         "concordancefit": lambda: core.concordancefit(right, predictor),
         "survdiff": lambda: sa.survdiff(time_, status, group),
         "survfitaj": lambda: sa.survfitaj(aj_time, states, ["censor", "a", "b"]),
@@ -138,12 +143,18 @@ def test_numpy_and_list_inputs_give_identical_cox_fits():
     assert from_numpy.x == x.tolist()
 
 
-def test_numpy_and_list_inputs_give_identical_survreg_fits():
+@pytest.mark.parametrize("layout", ["fortran", "strided"])
+def test_numpy_and_list_inputs_give_identical_survreg_fits(layout):
     time_, status, x = _cox_data(200)
     design = np.column_stack([np.ones(200), x])
+    if layout == "fortran":
+        array = np.asfortranarray(design)
+    else:
+        array = np.column_stack([design, x])[:, :3]
+    assert not array.flags.c_contiguous
     weibull = regression.SurvregDistribution("weibull")
     from_numpy = regression.survreg_fit(
-        regression.SurvregData(time_ + 0.01, status, design[:, ::1]), weibull
+        regression.SurvregData(time_ + 0.01, status, array), weibull
     )
     from_lists = regression.survreg_fit(
         regression.SurvregData((time_ + 0.01).tolist(), status.tolist(), design.tolist()),
@@ -152,31 +163,63 @@ def test_numpy_and_list_inputs_give_identical_survreg_fits():
     assert from_numpy.coefficients == from_lists.coefficients
     assert from_numpy.variance_matrix == from_lists.variance_matrix
     assert from_numpy.covariates == design.tolist()
-    assert regression.SurvregData(time_, status, design).covariates == design.tolist()
+    assert regression.SurvregData(time_, status, array).covariates == design.tolist()
+
+    new = array[:7]
+    for kind in ("response", "quantile", "terms"):
+        numpy_pred = from_numpy.predict(new, kind, se_fit=True)
+        list_pred = from_lists.predict(new.tolist(), kind, se_fit=True)
+        assert numpy_pred.fit == list_pred.fit
+        assert numpy_pred.se_fit == list_pred.se_fit
+    assert from_numpy.predict(np.empty((0, 3)), "lp").fit == []
+    assert from_numpy.predict([], "lp").fit == []
+    with pytest.raises(ValueError, match="newdata must be 2 x 3, got 2 x 2"):
+        from_numpy.predict(x[:2])
 
 
 def test_numpy_and_list_inputs_give_identical_pyears():
+    n = 300
+    rng = np.random.default_rng(3)
+    stop = rng.uniform(30, 3650, size=n)
+    event = (rng.uniform(size=n) < 0.3).astype(float)
+    group = 1.0 + (rng.uniform(size=n) < 0.5)
+    age = rng.uniform(40, 70, size=n) * 365.25
+    year = rng.uniform(10957, 12949, size=n)
     us = population.survexp_us()
-    positions = population.match_ratetable(
-        us, ["age", "sex", "year"], [[18262.5, 21915.0], [1.0, 2.0], [10957.0, 12949.0]]
-    ).r
+    positions = np.array(
+        population.match_ratetable(us, ["age", "sex", "year"], [age, group, year]).r
+    )
     kwargs = {"factors": [1], "dims": [2], "cuts": [[]], "ratetable": us, "scale": 365.25}
     from_numpy = population.pyears(
-        np.array([365.25, 1826.25]),
-        event=np.array([1.0, 0.0]),
-        categories_data=np.array([[1.0], [2.0]]),
-        ratetable_positions=np.array(positions),
+        stop,
+        event=event,
+        categories_data=group[:, None],
+        ratetable_positions=np.asfortranarray(positions),
         **kwargs,
     )
     from_lists = population.pyears(
-        [365.25, 1826.25],
-        event=[1.0, 0.0],
-        categories_data=[[1.0], [2.0]],
-        ratetable_positions=positions,
+        stop.tolist(),
+        event=event.tolist(),
+        categories_data=[[g] for g in group.tolist()],
+        ratetable_positions=positions.tolist(),
         **kwargs,
     )
     assert from_numpy.pyears == from_lists.pyears
     assert from_numpy.expected == from_lists.expected
+
+
+def test_pyears_reads_an_empty_categories_matrix_as_no_categories():
+    stop = [365.25, 1826.25, 730.5]
+    without = population.pyears(stop, event=[1.0, 0.0, 1.0])
+    for empty in ([], np.empty((0, 0)), np.empty((3, 0))):
+        result = population.pyears(stop, event=[1.0, 0.0, 1.0], categories_data=empty)
+        assert result.pyears == without.pyears
+        assert result.event == without.event
+
+
+def test_ragged_nested_lists_are_rejected_at_the_boundary():
+    with pytest.raises(ValueError, match="row 1 length mismatch"):
+        sa.aggregate_survfit(surv=[[0.9, 0.8], [0.7]])
 
 
 def test_numpy_and_list_inputs_give_identical_concordance():

@@ -461,7 +461,7 @@ def test_survreg_fit_predictions_match_r():
         fit.predict(predict_type="bogus")
     with pytest.raises(ValueError, match="probabilities between 0 and 1"):
         fit.predict(newdata=newdata, predict_type="quantile", p=[1.5])
-    with pytest.raises(ValueError, match="newdata row 0 length mismatch"):
+    with pytest.raises(ValueError, match="newdata must be 1 x 2, got 1 x 1"):
         fit.predict(newdata=[[1.0]], predict_type="lp")
 
 

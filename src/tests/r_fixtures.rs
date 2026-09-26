@@ -4518,7 +4518,14 @@ fn check_survreg_topic(topic: &str) {
             report.record(
                 name,
                 "x",
-                (|| assert_matrix(&fit.covariates, &matrix(&x["values"])?, RTOL_COEF, "x"))(),
+                (|| {
+                    assert_matrix(
+                        &matrix_rows(&fit.covariates),
+                        &matrix(&x["values"])?,
+                        RTOL_COEF,
+                        "x",
+                    )
+                })(),
             );
         }
         if let Some(residuals) = expected["residuals"].as_object() {
@@ -4583,6 +4590,7 @@ fn check_survreg_topic(topic: &str) {
                 }
                 let n_new = new_frame.nrow();
                 let rows = design.rows.split_off(design.rows.len() - n_new);
+                let rows = matrix_from_rows(&rows, "newdata").map_err(|err| err.to_string())?;
                 let strata = design.strata.map(|s| {
                     s[s.len() - n_new..]
                         .iter()
@@ -4604,7 +4612,7 @@ fn check_survreg_topic(topic: &str) {
                         .map_err(Clone::clone)
                         .and_then(|(rows, strata, offset)| {
                             let newdata = SurvregNewdata {
-                                covariates: rows,
+                                covariates: rows.view(),
                                 offset: offset.as_deref(),
                                 strata: strata.as_deref(),
                             };

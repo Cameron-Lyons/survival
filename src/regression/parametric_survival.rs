@@ -249,11 +249,6 @@ impl SurvregData {
     }
 }
 
-/// A design matrix in the representation of [`SurvregFit::covariates`].
-pub(crate) fn fit_covariates(design: ArrayView2<'_, f64>) -> Vec<Vec<f64>> {
-    design.outer_iter().map(|row| row.to_vec()).collect()
-}
-
 #[pymethods]
 impl SurvregData {
     #[new]
@@ -360,8 +355,7 @@ pub struct SurvregFit {
     #[pyo3(get)]
     pub status: Vec<i32>,
     /// `x`: the design matrix.
-    #[pyo3(get)]
-    pub covariates: Vec<Vec<f64>>,
+    pub covariates: Array2<f64>,
     /// Zero-based stratum of every observation.
     #[pyo3(get)]
     pub strata: Vec<usize>,
@@ -381,7 +375,7 @@ pub struct SurvregFit {
 impl SurvregFit {
     /// Number of location coefficients (columns of the design matrix).
     pub fn nvar(&self) -> usize {
-        self.covariates[0].len()
+        self.covariates.ncols()
     }
 
     /// Number of strata (scales).
@@ -391,7 +385,7 @@ impl SurvregFit {
 
     /// Whether the design starts with R's `(Intercept)` column of ones.
     pub fn has_intercept(&self) -> bool {
-        self.covariates.iter().all(|row| row[0] == 1.0)
+        self.covariates.column(0).iter().all(|&v| v == 1.0)
     }
 
     /// `predict.survreg`; see [`predict_survreg`].
@@ -435,36 +429,46 @@ impl SurvregFit {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn predict_py(
         &self,
-        newdata: Option<Vec<Vec<f64>>>,
+        py: Python<'_>,
+        newdata: Option<FloatMatrix>,
         predict_type: &str,
         se_fit: bool,
-        p: Option<Vec<f64>>,
-        offset: Option<Vec<f64>>,
+        p: Option<FloatVec>,
+        offset: Option<FloatVec>,
         strata: Option<Vec<usize>>,
         assign: Option<Vec<usize>>,
         terms: Option<Vec<usize>>,
     ) -> PyResult<SurvregPrediction> {
         let predict_type = SurvregPredictType::parse(predict_type)?;
-        let p = p.unwrap_or_else(|| vec![0.1, 0.9]);
-        let newdata = newdata.as_ref().map(|covariates| SurvregNewdata {
-            covariates,
-            offset: offset.as_deref(),
-            strata: strata.as_deref(),
-        });
+        let p = p.map_or_else(|| vec![0.1, 0.9], FloatVec::into_inner);
+        let offset = offset.map(FloatVec::into_inner);
         if newdata.is_none() && (offset.is_some() || strata.is_some()) {
             return Err(SurvivalError::invalid_input(
                 "offset and strata describe newdata; supply newdata as well",
             )
             .into());
         }
-        Ok(self.predict(
-            newdata.as_ref(),
-            predict_type,
-            se_fit,
-            &p,
-            assign.as_deref(),
-            terms.as_deref(),
-        )?)
+        let newdata = newdata
+            .map(|x| {
+                let nrow = x.nrow();
+                x.into_shape(nrow, self.nvar(), "newdata")
+            })
+            .transpose()?;
+        Ok(py.detach(|| {
+            let newdata = newdata.as_ref().map(|covariates| SurvregNewdata {
+                covariates: covariates.view(),
+                offset: offset.as_deref(),
+                strata: strata.as_deref(),
+            });
+            self.predict(
+                newdata.as_ref(),
+                predict_type,
+                se_fit,
+                &p,
+                assign.as_deref(),
+                terms.as_deref(),
+            )
+        })?)
     }
 
     /// `residuals(object, type, rsigma, collapse, weighted)`.
@@ -472,13 +476,20 @@ impl SurvregFit {
     #[pyo3(signature = (residual_type="response", rsigma=true, collapse=None, weighted=false))]
     pub(crate) fn residuals_py(
         &self,
+        py: Python<'_>,
         residual_type: &str,
         rsigma: bool,
         collapse: Option<Vec<usize>>,
         weighted: bool,
     ) -> PyResult<SurvregResiduals> {
         let residual_type = SurvregResidType::parse(residual_type)?;
-        Ok(self.residuals(residual_type, rsigma, collapse.as_deref(), weighted)?)
+        Ok(py.detach(|| self.residuals(residual_type, rsigma, collapse.as_deref(), weighted))?)
+    }
+
+    /// `x`: the design matrix, one list per row.
+    #[getter(covariates)]
+    fn covariates_rows(&self) -> Vec<Vec<f64>> {
+        matrix_rows(&self.covariates)
     }
 
     fn __repr__(&self) -> String {
@@ -1085,7 +1096,7 @@ pub fn survreg_fit(
         time: response.time,
         time2: response.time2,
         status: response.status,
-        covariates: fit_covariates(x_original),
+        covariates: x_original.to_owned(),
         strata,
         weights: data.weights.clone(),
         offset,
@@ -1335,10 +1346,10 @@ mod tests {
         assert!(fit.score.iter().all(|s| s.abs() < 1e-6));
         // The linear predictor reproduces x %*% coef on the original scale.
         for (i, lp) in fit.linear_predictors.iter().enumerate() {
-            let expected = fit.coefficients[0] + fit.coefficients[1] * fit.covariates[i][1];
+            let expected = fit.coefficients[0] + fit.coefficients[1] * fit.covariates[[i, 1]];
             assert_close(*lp, expected, 1e-10);
         }
-        let mean_age = fit.covariates.iter().map(|row| row[1]).sum::<f64>() / 12.0;
+        let mean_age = fit.covariates.column(1).sum() / 12.0;
         assert_close(fit.means[1], mean_age, 1e-12);
     }
 

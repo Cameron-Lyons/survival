@@ -15,6 +15,7 @@ use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_distributions::SurvregDistribution;
+use ndarray::ArrayView1;
 use pyo3::prelude::*;
 
 /// The `type` argument of `residuals.survreg`.
@@ -192,7 +193,7 @@ fn quadratic_form(score: &[f64], matrix: &[Vec<f64>]) -> f64 {
 /// A per-observation score row with the `Log(scale)` block appended in the
 /// observation's stratum column when `rsigma`.
 fn score_row(
-    x: &[f64],
+    x: ArrayView1<'_, f64>,
     eta_part: f64,
     scale_part: f64,
     stratum: usize,
@@ -296,7 +297,7 @@ pub fn residuals_survreg(
                     (0..n)
                         .map(|i| {
                             let score = score_row(
-                                &fit.covariates[i],
+                                fit.covariates.row(i),
                                 deriv[i][1],
                                 deriv[i][3],
                                 fit.strata[i],
@@ -315,7 +316,7 @@ pub fn residuals_survreg(
                 SurvregResidType::Ldresp => (0..n)
                     .map(|i| {
                         let score = score_row(
-                            &fit.covariates[i],
+                            fit.covariates.row(i),
                             deriv[i][2] * sigma(i),
                             deriv[i][5] * sigma(i),
                             fit.strata[i],
@@ -328,7 +329,7 @@ pub fn residuals_survreg(
                 SurvregResidType::Ldshape => (0..n)
                     .map(|i| {
                         let score = score_row(
-                            &fit.covariates[i],
+                            fit.covariates.row(i),
                             deriv[i][5],
                             deriv[i][4],
                             fit.strata[i],
@@ -457,9 +458,9 @@ mod tests {
 
     #[test]
     fn score_rows_place_the_scale_term_in_the_stratum_column() {
-        let row = score_row(&[1.0, 4.0], 2.0, 5.0, 1, 3, true);
+        let row = score_row(ArrayView1::from(&[1.0, 4.0]), 2.0, 5.0, 1, 3, true);
         assert_eq!(row, vec![2.0, 8.0, 0.0, 5.0, 0.0]);
-        let row = score_row(&[1.0, 4.0], 2.0, 5.0, 1, 3, false);
+        let row = score_row(ArrayView1::from(&[1.0, 4.0]), 2.0, 5.0, 1, 3, false);
         assert_eq!(row, vec![2.0, 8.0]);
     }
 

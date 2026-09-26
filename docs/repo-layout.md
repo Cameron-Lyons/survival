@@ -112,8 +112,11 @@ The closure may capture owned buffers and `&` references to `#[pyclass]`
 values (none is `unsendable`, so they are `Sync`), never a `Bound`, a `PyRef`
 or a borrowed NumPy view. Code that must call back into Python from a detached
 kernel re-attaches with `Python::attach` (the `coxpenal` callback penalty).
-Every heavy core kernel follows this rule, so fits on several Python threads
-run in parallel; `python/tests/test_gil_release.py` checks it.
+The core fit, prediction and residual bindings follow this rule, so fits on
+several Python threads run in parallel; `python/tests/test_gil_release.py`
+checks it. Two things still run attached: `survmean`, and building the
+nested-list results of methods such as `CoxPHFit.dfbeta`, which bounds how far
+those calls overlap.
 
 ## Python Layout
 

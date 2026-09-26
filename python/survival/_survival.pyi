@@ -9592,11 +9592,11 @@ class SurvpenalFit:
     def __repr__(self) -> str: ...
     def predict(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
+        newdata: ArrayLike | None = None,
         predict_type: str = "response",
         se_fit: bool = False,
-        p: Sequence[float] | None = None,
-        offset: Sequence[float] | None = None,
+        p: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
         strata: Sequence[int] | None = None,
         assign: Sequence[int] | None = None,
         terms: Sequence[int] | None = None,
@@ -9744,11 +9744,11 @@ class SurvregFit:
     def __repr__(self) -> str: ...
     def predict(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
+        newdata: ArrayLike | None = None,
         predict_type: str = "response",
         se_fit: bool = False,
-        p: Sequence[float] | None = None,
-        offset: Sequence[float] | None = None,
+        p: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
         strata: Sequence[int] | None = None,
         assign: Sequence[int] | None = None,
         terms: Sequence[int] | None = None,
