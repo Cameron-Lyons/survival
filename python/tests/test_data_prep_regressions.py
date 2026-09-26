@@ -190,6 +190,29 @@ def test_tmerge_evaluates_arguments_in_data2_like_r(arguments, message):
         r.tmerge(_tmerge_base(), _tmerge_updates(), id="id", **events)
 
 
+def test_tmerge_reads_a_bytes_argument_as_a_column_name():
+    frame = r.tmerge(_tmerge_base(), _tmerge_updates(), id="id", ev=r.event(b"t", b"status"))
+    assert frame["ev"] == [1, 0, 0, 1, 0, 0, 0]
+    with pytest.raises(ValueError, match="object 'stauts' not found"):
+        r.tmerge(_tmerge_base(), _tmerge_updates(), id="id", ev=r.event("t", b"stauts"))
+
+
+def test_tmerge_all_missing_values_are_logical_like_r():
+    d1 = _tmerge_base()
+    options = {"na.rm": False}
+    # u$na <- c(NA, NA) is logical: event(t, na) censors at FALSE, logi NA FALSE NA FALSE FALSE
+    updates = {"id": [1, 2], "t": [2.0, 3.0], "na": [None, None], "nan": [math.nan] * 2}
+    frame = r.tmerge(d1, updates, id="id", ev=r.event("t", "na"), options=options)
+    assert _na(frame["ev"]) == [None, False, None, False, False]
+    assert all(type(value) is bool for value in _na(frame["ev"]) if value is not None)
+    assert frame.tevent == {"ev": False}
+    # u$nan <- c(NaN, NaN) is double: num NaN 0 NaN 0 0, censor 0
+    frame = r.tmerge(d1, updates, id="id", ev=r.event("t", "nan"), options=options)
+    assert _na(frame["ev"]) == [None, 0.0, None, 0.0, 0.0]
+    assert frame.tevent == {"ev": 0.0}
+    assert type(frame.tevent["ev"]) is float
+
+
 def test_tmerge_recycles_only_tstart():
     base = {"id": [1, 2, 3], "futime": [10.0, 20.0, 15.0]}
     # tmerge(d, d, id = id, tstop = 10): tstop and id must be the same length

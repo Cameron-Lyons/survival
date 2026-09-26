@@ -799,6 +799,8 @@ def _tmerge_vector(
     ``tstart`` recycles a single value (``recycle``).
     """
 
+    if isinstance(value, bytes):
+        value = value.decode()
     if isinstance(value, str):
         if value not in (_data_column_names(data2) or []):
             raise ValueError(f"object '{value}' not found in data2")
@@ -857,7 +859,8 @@ def _first_call_frame(
 def _storage_mode(values: Sequence[Any] | None) -> str:
     """R's storage mode of an update vector: logical, integer, double or character.
 
-    Without values the updates are R's ``1L``.
+    Without values the updates are R's ``1L``. Missing values alone are R's bare
+    ``NA`` (logical) unless they are ``NaN``, which R stores as double.
     """
 
     if values is None:
@@ -866,7 +869,7 @@ def _storage_mode(values: Sequence[Any] | None) -> str:
     if any(isinstance(value, str) for value in observed):
         return "character"
     if not observed:
-        return "double"
+        return "double" if any(isinstance(value, numbers.Real) for value in values) else "logical"
     if all(_is_bool_like(value) for value in observed):
         return "logical"
     if all(isinstance(value, numbers.Integral) for value in observed):
