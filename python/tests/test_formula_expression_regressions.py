@@ -616,6 +616,26 @@ def test_logical_terms_in_the_other_formula_functions():
         ("ridge(age, ph.ecog, theta = 1/2)", [0.0112690971661902, 0.4420717290071376]),
         ("age + frailty(inst, theta = 1/2)", [0.0210228272407693]),
         ('age + frailty(inst, method = c("aic"), init = c(0.2, 2))', [0.018636025573109897]),
+        # numbers written with c() of length one are scalars too
+        (
+            "age + pspline(age, df = c(4))",
+            [0.067666457835177427, 0.131779192133189921, 0.270569230531364835],
+        ),
+        (
+            "age + pspline(age, df = c(4)*1)",
+            [0.067666457835177427, 0.131779192133189921, 0.270569230531364835],
+        ),
+        (
+            "pspline(age, nterm = c(5))",
+            [1.0309500657126351, 2.1077463357752886, 2.0965560881620697],
+        ),
+        ("age + frailty(inst, theta = c(1))", [0.021336109900468091]),
+        ("age + frailty(inst, sparse = c(TRUE))", [0.018635754829922666]),
+        (
+            "age + frailty(inst, sparse = c(FALSE), theta = c(1))",
+            [0.021336016400823440, 0.079604624607619828, 0.433014524798580047],
+        ),
+        ("ridge(age, ph.ecog, theta = c(1))", [0.01125685353502714, 0.44066761990605691]),
     ],
 )
 def test_penalty_options_are_r_values(rhs, coefficients):
@@ -623,11 +643,12 @@ def test_penalty_options_are_r_values(rhs, coefficients):
     assert fit.coefficients[: len(coefficients)] == approx(coefficients, rel=1e-9)
 
 
-def test_a_penalty_vector_written_with_c_stays_a_vector():
-    # coxph(Surv(time, status) ~ age + frailty(inst, init = c(0.5)), lung) fails in R's
+@pytest.mark.parametrize("init", ["c(0.5)", "0.5"])
+def test_a_single_frailty_init_is_refused(init):
+    # coxph(Surv(time, status) ~ age + frailty(inst, init = 0.5), lung) fails in R's
     # frailty.controlaic (missing value where TRUE/FALSE needed)
     with pytest.raises(ValueError, match="frailty init must hold two starting values"):
-        r.coxph("Surv(time, status) ~ age + frailty(inst, init = c(0.5))", datasets.load_lung())
+        r.coxph(f"Surv(time, status) ~ age + frailty(inst, init = {init})", datasets.load_lung())
 
 
 def test_a_comparison_in_surv_is_not_a_variable_name():
