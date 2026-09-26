@@ -10,6 +10,7 @@ from operator import ge
 from typing import Any
 
 from ._coerce import (
+    _coerce_array_like,
     _finite_float,
     _is_missing_value,
     _keep_rows_after_na_action,
@@ -19,10 +20,10 @@ from ._coerce import (
     _missing_row_indices,
     _mstate_categories,
     _normalize_na_action,
+    _RFactorVector,
     _strata_value_label,
     _subset_indices,
     _subset_optional_sequence,
-    _subset_sequence,
     _warn_outside_package,
 )
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
@@ -788,13 +789,20 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
-def _formula_data_rows(formula: str, data: Any, rows: list[int], n: int) -> _FormulaRows:
+def _formula_data_rows(
+    formula: str,
+    data: Any,
+    rows: list[int],
+    n: int,
+    read: Mapping[str, list[Any]] | None = None,
+) -> _FormulaRows:
     """``data[rows, ]`` restricted to the variables *formula* uses.
 
     R's ``model.frame`` evaluates only the formula's variables, so ``subset`` and
     ``na.action`` never copy the other columns of *data* (nor require them to be
     row-aligned).  The columns keep *data*'s order, so a ``.`` expands to the same
-    terms afterwards, and factor columns keep their levels.
+    terms afterwards, and factor columns keep their levels.  *read* holds columns
+    the caller already materialised from *data*.
     """
 
     columns = _formula_columns(formula, data)
@@ -802,12 +810,16 @@ def _formula_data_rows(formula: str, data: Any, rows: list[int], n: int) -> _For
     if names is not None:
         used = set(columns)
         columns = [name for name in names if name in used]
+    read = {} if read is None else read
     frame: dict[str, Any] = {}
     for name in columns:
-        values = _column_source(data, name)
+        source = _column_source(data, name)
+        values = read[name] if name in read else _coerce_array_like(source, name)
         if len(values) != n:
             raise ValueError(f"variable lengths differ (found for '{name}')")
-        frame[name] = _subset_sequence(values, rows, name)
+        kept = [values[row] for row in rows]
+        categories = _mstate_categories(source)
+        frame[name] = kept if categories is None else _RFactorVector(kept, categories)
     return _FormulaRows(frame, len(rows))
 
 
@@ -868,23 +880,27 @@ def _apply_formula_na_action(
         return data, row_aligned
 
     excluded = set(exclude_columns)
-    columns = [column for column in _formula_columns(formula, data) if column not in excluded]
+    read = {
+        column: _column(data, column)
+        for column in _formula_columns(formula, data)
+        if column not in excluded
+    }
     n = _data_row_count(data, formula)
     missing = _missing_row_indices(
         [
-            *[(column, _column(data, column)) for column in columns],
+            *read.items(),
             *((name, values) for name, values in row_aligned.items() if values is not None),
         ],
         n,
     )
-    missing.update(_backwards_interval_rows(formula, data, n))
+    missing.update(_backwards_interval_rows(formula, read, n))
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
         return data, row_aligned
     filtered = {
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
-    return _formula_data_rows(formula, data, keep, n), filtered
+    return _formula_data_rows(formula, data, keep, n, read), filtered
 
 
 def _data_column_names(data: Any) -> list[Any] | None:
