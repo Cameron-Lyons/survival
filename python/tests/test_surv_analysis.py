@@ -654,7 +654,7 @@ def test_anova_coxph_and_hypothesis_tests_match_r():
     time, status, _, fit = _lung40_cox()
     loglik = [-108.52888024552935, -108.47379191989565, -108.44296072448500]
 
-    anova = survival.validation.anova_coxph(loglik, [0, 1, 2], names=["NULL", "age", "sex"])
+    anova = survival.validation.anova_coxph(loglik, [0.0, 1.0, 2.0], names=["NULL", "age", "sex"])
     # anova(coxph(Surv(time, status) ~ age + sex))
     assert isinstance(anova, survival.validation.AnovaCoxphResult)
     assert anova.test == "Chisq"
@@ -664,7 +664,7 @@ def test_anova_coxph_and_hypothesis_tests_match_r():
     assert [row.chisq for row in anova.rows[1:]] == pytest.approx(
         [0.110176651267408943, 0.061662390821282997]
     )
-    assert [row.df for row in anova.rows[1:]] == [1, 1]
+    assert [row.df for row in anova.rows[1:]] == [1.0, 1.0]
     assert [row.p_value for row in anova.rows[1:]] == pytest.approx(
         [0.739943110443081253, 0.803887498076046536]
     )

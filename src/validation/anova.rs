@@ -5,7 +5,10 @@
 //! nested models).  Refitting the intermediate models of a single-model
 //! table needs the design's term assignment and the Cox fitter, so the
 //! caller supplies the log-likelihoods and degrees of freedom of every
-//! model in order; this module produces R's table shape from them.
+//! model in order; this module produces R's table shape from them.  The
+//! degrees of freedom are real numbers: a penalized fit counts `sum(fit$df)`,
+//! so a step can be fractional or, in a single-model table, negative (its
+//! p-value is then `NaN`, as `pchisq` gives in R).
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
@@ -30,7 +33,7 @@ pub struct AnovaRow {
     pub name: String,
     pub loglik: f64,
     pub chisq: Option<f64>,
-    pub df: Option<usize>,
+    pub df: Option<f64>,
     /// `Pr(>|Chi|)`; absent for the first row and when `test` is off.
     pub p_value: Option<f64>,
 }
@@ -45,10 +48,11 @@ pub struct AnovaCoxphResult {
 }
 
 /// Build the analysis-of-deviance table from the models' final partial
-/// log-likelihoods and their numbers of (non-`NA`) coefficients.
+/// log-likelihoods and their degrees of freedom (`sum(fit$df)` for a
+/// penalized fit, else the number of non-`NA` coefficients).
 pub fn anova_coxph(
     loglik: &[f64],
-    df: &[usize],
+    df: &[f64],
     names: &[String],
     kind: AnovaKind,
     test: bool,
@@ -60,15 +64,12 @@ pub fn anova_coxph(
             "anova needs at least one model",
         ));
     }
-    if let Some((index, _)) = loglik.iter().enumerate().find(|(_, v)| !v.is_finite()) {
-        return Err(SurvivalError::invalid_input(format!(
-            "loglik[{index}] must be finite"
-        )));
-    }
-    if kind == AnovaKind::Sequential && df.windows(2).any(|pair| pair[1] < pair[0]) {
-        return Err(SurvivalError::invalid_input(
-            "sequential models must not lose degrees of freedom",
-        ));
+    for (name, values) in [("loglik", loglik), ("df", df)] {
+        if let Some(index) = values.iter().position(|v| !v.is_finite()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "{name}[{index}] must be finite"
+            )));
+        }
     }
     let rows = (0..loglik.len())
         .map(|i| {
@@ -78,13 +79,11 @@ pub fn anova_coxph(
                 let delta = 2.0 * (loglik[i] - loglik[i - 1]);
                 match kind {
                     AnovaKind::Sequential => (Some(delta), Some(df[i] - df[i - 1])),
-                    AnovaKind::Models => (Some(delta.abs()), Some(df[i].abs_diff(df[i - 1]))),
+                    AnovaKind::Models => (Some(delta.abs()), Some((df[i] - df[i - 1]).abs())),
                 }
             };
             let p_value = match (test, chisq, df_step) {
-                (true, Some(chisq), Some(df_step)) => {
-                    Some(pchisq(chisq, df_step as f64, false, false))
-                }
+                (true, Some(chisq), Some(df_step)) => Some(pchisq(chisq, df_step, false, false)),
                 _ => None,
             };
             AnovaRow {
@@ -108,7 +107,7 @@ pub fn anova_coxph(
 #[pyo3(signature = (loglik, df, names=None, sequential=true, test=Some("Chisq")))]
 pub fn anova_coxph_py(
     loglik: Vec<f64>,
-    df: Vec<usize>,
+    df: Vec<f64>,
     names: Option<Vec<String>>,
     sequential: bool,
     test: Option<&str>,
@@ -152,7 +151,7 @@ mod tests {
     fn sequential_table_matches_r_lung_age_sex() {
         let result = anova_coxph(
             &[-749.9146, -747.7942, -742.8531],
-            &[0, 1, 2],
+            &[0.0, 1.0, 2.0],
             &names(&["NULL", "age", "sex"]),
             AnovaKind::Sequential,
             true,
@@ -162,7 +161,7 @@ mod tests {
         assert_eq!(result.rows[0].chisq, None);
         assert_eq!(result.rows[0].p_value, None);
         assert!((result.rows[1].chisq.unwrap() - 4.2408).abs() < 1e-3);
-        assert_eq!(result.rows[1].df, Some(1));
+        assert_eq!(result.rows[1].df, Some(1.0));
         assert!((result.rows[1].p_value.unwrap() - 0.039461).abs() < 1e-4);
         assert!((result.rows[2].chisq.unwrap() - 9.8822).abs() < 1e-3);
         assert!((result.rows[2].p_value.unwrap() - 0.001669).abs() < 1e-5);
@@ -172,21 +171,21 @@ mod tests {
     fn model_list_uses_absolute_differences() {
         let result = anova_coxph(
             &[-742.8531, -747.7942],
-            &[2, 1],
+            &[2.0, 1.0],
             &names(&["1", "2"]),
             AnovaKind::Models,
             true,
         )
         .unwrap();
         assert!((result.rows[1].chisq.unwrap() - 9.8822).abs() < 1e-3);
-        assert_eq!(result.rows[1].df, Some(1));
+        assert_eq!(result.rows[1].df, Some(1.0));
     }
 
     #[test]
     fn zero_df_steps_follow_pchisq_with_zero_df() {
         let result = anova_coxph(
             &[-10.0, -10.0, -9.5],
-            &[1, 1, 1],
+            &[1.0, 1.0, 1.0],
             &names(&["1", "2", "3"]),
             AnovaKind::Models,
             true,
@@ -200,7 +199,7 @@ mod tests {
     fn test_off_drops_p_values_and_inputs_are_validated() {
         let result = anova_coxph(
             &[-10.0, -9.0],
-            &[0, 1],
+            &[0.0, 1.0],
             &names(&["NULL", "x"]),
             AnovaKind::Sequential,
             false,
@@ -213,12 +212,54 @@ mod tests {
         assert!(
             anova_coxph(
                 &[f64::NAN, 1.0],
-                &[0, 1],
+                &[0.0, 1.0],
                 &names(&["a", "b"]),
                 AnovaKind::Sequential,
                 true
             )
             .is_err()
         );
+        assert!(
+            anova_coxph(
+                &[-10.0, -9.0],
+                &[0.0, f64::INFINITY],
+                &names(&["a", "b"]),
+                AnovaKind::Sequential,
+                true
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn penalized_df_are_fractional_and_may_decrease() {
+        // anova(coxph(Surv(time, status) ~ pspline(age, df=4) + sex, lung)): the
+        // pspline basis is refitted unpenalized (12 df), the full model counts
+        // sum(fit$df), so the sex row has negative Df and a NaN p-value
+        let result = anova_coxph(
+            &[-749.9098013903947, -743.0529439580274, -741.0266343140879],
+            &[0.0, 12.0, 5.08864312775353],
+            &names(&["NULL", "pspline(age, df=4)", "sex"]),
+            AnovaKind::Sequential,
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.rows[1].df, Some(12.0));
+        assert!((result.rows[1].p_value.unwrap() - 0.3193623229517895).abs() < 1e-12);
+        assert!((result.rows[2].df.unwrap() + 6.91135687224647).abs() < 1e-12);
+        assert!((result.rows[2].chisq.unwrap() - 4.052619287878997).abs() < 1e-9);
+        assert!(result.rows[2].p_value.unwrap().is_nan());
+
+        // anova(coxph(~ age + sex), coxph(~ pspline(age, df=4) + sex)) on lung
+        let result = anova_coxph(
+            &[-742.8482457837704, -741.0266343140879],
+            &[2.0, 5.08864312775353],
+            &names(&["1", "2"]),
+            AnovaKind::Models,
+            true,
+        )
+        .unwrap();
+        assert!((result.rows[1].df.unwrap() - 3.08864312775353).abs() < 1e-12);
+        assert!((result.rows[1].p_value.unwrap() - 0.31611266250077846).abs() < 1e-12);
     }
 }

@@ -948,48 +948,6 @@ def clogit(
 # ---------------------------------------------------------------------------
 
 
-def _pchisq_upper(statistic: float, df: int) -> float:
-    """``pchisq(x, df, lower.tail=FALSE)``: the regularised upper incomplete gamma
-    function Q(df/2, x/2) (series / Lentz continued fraction; no Python binding of
-    R's pchisq exists yet)."""
-
-    if math.isnan(statistic) or df <= 0:
-        return math.nan
-    if statistic <= 0.0:
-        return 1.0
-    if math.isinf(statistic):
-        return 0.0
-    a, x = df / 2.0, statistic / 2.0
-    log_prefactor = -x + a * math.log(x) - math.lgamma(a)
-    if x < a + 1.0:
-        term = 1.0 / a
-        total = term
-        for k in range(1, 1000):
-            term *= x / (a + k)
-            total += term
-            if abs(term) < abs(total) * 1e-16:
-                break
-        return max(0.0, 1.0 - math.exp(log_prefactor) * total)
-    tiny = 1e-300
-    b = x + 1.0 - a
-    c = 1.0 / tiny
-    d = 1.0 / b
-    h = d
-    for k in range(1, 1000):
-        an = -k * (k - a)
-        b += 2.0
-        d = an * d + b
-        d = tiny if abs(d) < tiny else d
-        c = b + an / c
-        c = tiny if abs(c) < tiny else c
-        d = 1.0 / d
-        delta = d * c
-        h *= delta
-        if abs(delta - 1.0) < 1e-16:
-            break
-    return math.exp(log_prefactor) * h
-
-
 def _coefficient_table(
     fit: CoxphModel, scale: float
 ) -> tuple[list[str], list[dict[str, float | str]]]:
@@ -1006,7 +964,7 @@ def _coefficient_table(
             "exp_coef": math.exp(value) if not math.isnan(value) else math.nan,
             "se": se[idx],
             "z": z,
-            "p": _pchisq_upper(z * z, 1) if not math.isnan(z) else math.nan,
+            "p": _core.pchisq(z * z, 1.0, lower_tail=False),
         }
         if naive is not None:
             row["naive_se"] = math.sqrt(naive[idx][idx])
@@ -1046,8 +1004,12 @@ def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> An
         "coefficient_names": list(fit.coef_names),
         "coefficient_columns": columns,
         "coefficients": rows,
-        "logtest": {"test": logtest, "df": df, "pvalue": _pchisq_upper(logtest, df)},
-        "sctest": {"test": score, "df": df, "pvalue": _pchisq_upper(score, df)},
+        "logtest": {
+            "test": logtest,
+            "df": df,
+            "pvalue": _core.pchisq(logtest, df, lower_tail=False),
+        },
+        "sctest": {"test": score, "df": df, "pvalue": _core.pchisq(score, df, lower_tail=False)},
         "score_test": score,
         "rsq": {
             "rsq": 1.0 - math.exp(-logtest / fit.n),
@@ -1075,12 +1037,16 @@ def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> An
         ]
     wald = fit.wald_test
     if wald is not None:
-        result["waldtest"] = {"test": round(wald, 2), "df": df, "pvalue": _pchisq_upper(wald, df)}
+        result["waldtest"] = {
+            "test": round(wald, 2),
+            "df": df,
+            "pvalue": _core.pchisq(wald, df, lower_tail=False),
+        }
     if fit.rscore is not None:
         result["robscore"] = {
             "test": fit.rscore,
             "df": df,
-            "pvalue": _pchisq_upper(fit.rscore, df),
+            "pvalue": _core.pchisq(fit.rscore, df, lower_tail=False),
         }
     return result
 
