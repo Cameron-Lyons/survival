@@ -2,8 +2,8 @@
 //!
 //! Port of R survival `R/cipoisson.R`: the exact (gamma quantile) and
 //! Anscombe limits, vectorised over `k`, `time` and `p` with R's recycling
-//! rule.  A non-positive `time` yields `NaN` limits (R returns `NA`; the
-//! `summary.pyears` code calls this with `time = 0`).
+//! rule.  A missing `k` or a missing or non-positive `time` yields `NaN`
+//! limits (R returns `NA`; `summary.pyears` calls this with `time = 0`).
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{qgamma, qnorm};
@@ -48,6 +48,33 @@ fn recycled(values: &[f64], length: usize, name: &str) -> SurvivalResult<Vec<f64
     Ok((0..length).map(|i| values[i % values.len()]).collect())
 }
 
+/// The limits of one Poisson count `k` observed over `time` at confidence
+/// level `p`: `NaN` for a missing `k` or a missing or non-positive `time`.
+pub(crate) fn cipoisson_one(k: f64, time: f64, p: f64, method: CipoissonMethod) -> (f64, f64) {
+    if k.is_nan() || time.is_nan() || time <= 0.0 {
+        return (f64::NAN, f64::NAN);
+    }
+    let alpha = (1.0 - p) / 2.0;
+    let (lower, upper) = match method {
+        CipoissonMethod::Exact => {
+            let lower = if k == 0.0 {
+                0.0
+            } else {
+                qgamma(alpha, k, 1.0, true, false)
+            };
+            (lower, qgamma(1.0 - alpha, k + 1.0, 1.0, true, false))
+        }
+        CipoissonMethod::Anscombe => {
+            let z = qnorm(alpha, true, false);
+            (
+                ((k - 1.0 / 8.0).sqrt() + z / 2.0).powi(2),
+                ((k + 7.0 / 8.0).sqrt() - z / 2.0).powi(2),
+            )
+        }
+    };
+    (lower / time, upper / time)
+}
+
 /// Confidence limits for Poisson counts `k` observed over `time`, at
 /// confidence level `p` (R `cipoisson(k, time, p, method)`).
 pub fn cipoisson(
@@ -61,7 +88,7 @@ pub fn cipoisson(
     let time = recycled(time, n, "time")?;
     let p = recycled(p, n, "p")?;
     for (index, &count) in k.iter().enumerate() {
-        if count.is_nan() || count < 0.0 {
+        if count < 0.0 {
             return Err(SurvivalError::invalid_input(format!(
                 "k[{index}] must be a non-negative count"
             )));
@@ -76,35 +103,9 @@ pub fn cipoisson(
             )));
         }
     }
-    let mut lower = Vec::with_capacity(n);
-    let mut upper = Vec::with_capacity(n);
-    for i in 0..n {
-        let alpha = (1.0 - p[i]) / 2.0;
-        let (low, high) = match method {
-            CipoissonMethod::Exact => {
-                let low = if k[i] == 0.0 {
-                    0.0
-                } else {
-                    qgamma(alpha, k[i], 1.0, true, false)
-                };
-                (low, qgamma(1.0 - alpha, k[i] + 1.0, 1.0, true, false))
-            }
-            CipoissonMethod::Anscombe => {
-                let z = qnorm(alpha, true, false);
-                (
-                    ((k[i] - 1.0 / 8.0).sqrt() + z / 2.0).powi(2),
-                    ((k[i] + 7.0 / 8.0).sqrt() - z / 2.0).powi(2),
-                )
-            }
-        };
-        if time[i].is_nan() || time[i] <= 0.0 {
-            lower.push(f64::NAN);
-            upper.push(f64::NAN);
-        } else {
-            lower.push(low / time[i]);
-            upper.push(high / time[i]);
-        }
-    }
+    let (lower, upper) = (0..n)
+        .map(|i| cipoisson_one(k[i], time[i], p[i], method))
+        .unzip();
     Ok(CipoissonResult { lower, upper })
 }
 
@@ -168,6 +169,27 @@ mod tests {
         assert_eq!(result.lower[0], 0.0);
         assert!(result.lower[1].is_nan() && result.upper[1].is_nan());
         assert_close(result.lower[2], 12.21652, 1e-4);
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)]
+    fn a_missing_count_gives_a_missing_row() {
+        // R: cipoisson(c(1, NA, 3), 2)
+        let result = cipoisson(
+            &[1.0, f64::NAN, 3.0],
+            &[2.0],
+            &[0.95],
+            CipoissonMethod::Exact,
+        )
+        .unwrap();
+        assert_close(result.lower[0], 0.012658903992144949, 1e-15);
+        assert_close(result.upper[0], 2.7858216954694495, 1e-14);
+        assert!(result.lower[1].is_nan() && result.upper[1].is_nan());
+        assert_close(result.lower[2], 0.30933606144780079, 1e-15);
+        assert_close(result.upper[2], 4.3836365348711617, 1e-14);
+        // R: cipoisson(0, 0)
+        let (lower, upper) = cipoisson_one(0.0, 0.0, 0.95, CipoissonMethod::Exact);
+        assert!(lower.is_nan() && upper.is_nan());
     }
 
     #[test]

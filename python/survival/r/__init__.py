@@ -82,9 +82,11 @@ from ._models import (
     vcov,
 )
 from ._pyears import (
+    PyearsSummary,
     is_ratetable,
     pyears,
     ratetableDate,
+    summary_pyears,
     survexp,
     survexp_individual,
     survexp_mn,
@@ -191,6 +193,7 @@ __all__ = [
     "PredictResult",
     "PsplineResult",
     "PyearsResult",
+    "PyearsSummary",
     "RateTable",
     "StateFigResult",
     "StrataFactor",
@@ -295,6 +298,7 @@ __all__ = [
     "survobrien",
     "survexp_us",
     "survexp_usr",
+    "summary_pyears",
     "summary_survfit",
     "survfit",
     "survfit0",

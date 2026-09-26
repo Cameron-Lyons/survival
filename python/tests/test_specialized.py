@@ -597,9 +597,22 @@ def test_pyears_and_summary_match_r():
     assert by_age.expected is None
     assert by_age.dims == [2, 2]
 
-    summary = population.summary_pyears(result, rate=True, ci_r=True, rr=True, ci_rr=True)
+    summary = population.summary_pyears(
+        result.pyears,
+        result.n,
+        result.event,
+        result.expected,
+        result.dims,
+        result.offtable,
+        result.observations,
+        rate=True,
+        ci_r=True,
+        rr=True,
+        ci_rr=True,
+    )
     # R: summary of the pyears object with rate, ci.r, rr and ci.rr
     assert isinstance(summary, population.PyearsSummary)
+    assert (summary.dims, summary.observations) == ([2], 2)
     assert summary.rate == pytest.approx([1.0, 0.0])
     assert summary.ci_r_lower == pytest.approx([0.025317807984289897, 0.0])
     assert summary.ci_r_upper == pytest.approx([5.57164339093889893, 0.73777589082278705])
@@ -608,6 +621,18 @@ def test_pyears_and_summary_match_r():
     assert summary.ci_rr_upper == pytest.approx([986.165972975141131, 88.346788595595811])
     assert summary.total_events == pytest.approx(1.0)
     assert summary.total_pyears == pytest.approx(6.0)
+
+    # R: summary(by_age, rate = TRUE, ci.r = TRUE): the empty cells print ". - ."
+    by_age_summary = population.summary_pyears(
+        by_age.pyears, by_age.n, by_age.event, dims=by_age.dims, tcut=True, rate=True, ci_r=True
+    )
+    assert by_age_summary.ci_r_lower == pytest.approx(
+        [0.025317807984289897, math.nan, math.nan, 0.0], nan_ok=True
+    )
+    assert by_age_summary.ci_r_upper == pytest.approx(
+        [5.57164339093889893, math.nan, math.nan, 0.73777589082278705], nan_ok=True
+    )
+    assert by_age_summary.rr is None
 
     with pytest.raises(ValueError, match="categories_data must be"):
         population.pyears([1.0, 2.0], factors=[1], dims=[2], cuts=[[]], categories_data=[[1.0]])

@@ -10,6 +10,7 @@ import math
 import pytest
 
 from .helpers import setup_survival_import
+from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r_api
@@ -86,3 +87,173 @@ def test_survexp_cohort_methods_follow_each_subject_across_rate_cells(method, ma
     assert [row[0] for row in result.surv] == approx(male, rel=1e-13)
     assert [row[1] for row in result.surv] == approx(female, rel=1e-13)
     assert result.n_risk == [[138, 90], [86, 71], [35, 30], [7, 6], [2, 0]]
+
+
+TCUT = 'tcut(age, c(0, 65, 120) * 365.25, labels = c("young", "old"))'
+
+
+def _cohort():
+    # d2 <- data.frame(time, status, g = factor(g, levels = c("a", "b", "c")), age, sex,
+    #                  entry = as.Date(...))
+    return {
+        "time": [100, 250, 400, 30, 700, 365],
+        "status": [1, 0, 1, 0, 1, 0],
+        "g": RFactor(["a", "a", "b", "b", "a", "b"], ["a", "b", "c"]),
+        "age": [value * 365.25 for value in (60, 65, 70, 55, 80, 75)],
+        "sex": ["male", "female", "male", "female", "male", "female"],
+        "entry": [
+            datetime.date(2000, 1, 1),
+            datetime.date(2001, 6, 1),
+            datetime.date(1999, 3, 15),
+            datetime.date(2002, 2, 2),
+            datetime.date(1998, 7, 4),
+            datetime.date(2000, 10, 10),
+        ],
+    }
+
+
+_COHORT_RMAP = {"age": "age", "sex": "sex", "year": "entry"}
+
+
+def _by_group(data_frame=False):
+    # pyears(Surv(time, status) ~ g, d2, rmap = list(age = age, sex = sex, year = entry),
+    #        ratetable = survexp.us, scale = 365.25)
+    return r.pyears(
+        "Surv(time, status) ~ g",
+        _cohort(),
+        rmap=_COHORT_RMAP,
+        ratetable=r.survexp_us(),
+        data_frame=data_frame,
+    )
+
+
+def test_cipoisson_gives_a_missing_row_for_a_missing_count():
+    # R gives NA limits for cipoisson(c(1, NA, 3), 2) row 2 and for cipoisson(0, 0)
+    limits = r.cipoisson([1, None, 3], 2)
+    assert limits[0] == approx((0.012658903992144949, 2.7858216954694495))
+    assert all(math.isnan(value) for value in limits[1])
+    assert limits[2] == approx((0.30933606144780079, 4.3836365348711617))
+    assert all(math.isnan(value) for value in r.cipoisson(0, 0))
+    with pytest.raises(ValueError, match="non-negative count"):
+        r.cipoisson([-1], 2)
+
+
+def test_summary_pyears_gives_empty_cells_missing_rates_and_limits():
+    result = _by_group()
+    assert result.pyears == approx([2.8747433264887063, 2.1765913757700206, 0.0])
+    assert result.expected == approx([0.17216054085712138, 0.066775795966720508, 0.0])
+
+    # summary(p, rate = TRUE, ci.r = TRUE, rr = TRUE, ci.rr = TRUE, totals = TRUE,
+    #         scale = 1000): the empty level c prints "." and ". - ."
+    summary = r.summary_pyears(
+        result, rate=True, totals=True, scale=1000, **{"ci.r": True, "ci.rr": True}
+    )
+    assert isinstance(summary, r.PyearsSummary)
+    assert summary.dim == [4]
+    assert summary.dimnames == {"g": ["a", "b", "c", "Total"]}
+    assert summary.n == [3, 3, 0, 6]
+    assert summary.event == [2, 1, 0, 3]
+    assert summary.pyears == approx(
+        [2.8747433264887063, 2.1765913757700206, 0.0, 5.0513347022587265]
+    )
+    assert summary.expected == approx(
+        [0.17216054085712138, 0.066775795966720508, 0.0, 0.23893633682384188]
+    )
+    assert summary.rate == approx([695.71428571428567, 459.43396226415092, NAN, 593.90243902439033])
+    assert summary.ci_r == pairs(
+        [
+            (84.254227607793538, 2513.1592101296915),
+            (11.631860838065263, 2559.8021994219284),
+            (NAN, NAN),
+            (122.47696091469837, 1735.6349532376066),
+        ]
+    )
+    assert summary.rr == approx([11.617063875628912, 14.975486035364918, NAN, 12.555645741785098])
+    assert summary.ci_rr == pairs(
+        [
+            (1.4068803300576185, 41.964829058708844),
+            (0.37914647991478378, 83.43806779503872),
+            (NAN, NAN),
+            (2.5892760017984355, 36.692924928392451),
+        ]
+    )
+    assert (summary.offtable, summary.observations) == (0.0, 6)
+
+    # data.frame = TRUE keeps the non-empty cells; summary() restores the full table
+    restored = r.summary_pyears(
+        _by_group(data_frame=True), rate=True, ci_r=True, ci_rr=True, totals=True, scale=1000
+    )
+    assert restored.dimnames == summary.dimnames
+    assert restored.rate == approx(summary.rate)
+    assert restored.ci_rr == pairs(summary.ci_rr)
+
+    # the defaults: no rates, rr on because the result has expected counts
+    plain = r.summary_pyears(result)
+    assert plain.rate is None
+    assert plain.ci_r is None
+    assert plain.ci_rr is None
+    assert plain.rr == approx([11.617063875628912, 14.975486035364918, NAN])
+
+
+def test_summary_pyears_totals_of_tcut_tables_follow_r():
+    cohort = _cohort()
+    # p2 <- pyears(Surv(time, status) ~ g + tcut(...), d2, scale = 365.25)
+    # summary(p2, rate = TRUE, ci.r = TRUE, totals = TRUE)
+    summary = r.summary_pyears(
+        r.pyears(f"Surv(time, status) ~ g + {TCUT}", cohort), rate=True, ci_r=True, totals=True
+    )
+    assert summary.dim == [4, 3]
+    assert list(summary.dimnames.values()) == [["a", "b", "c", "Total"], ["young", "old", "Total"]]
+    # a tcut term makes the totals of n meaningless
+    assert summary.n[0][:2] == [1, 2]
+    assert math.isnan(summary.n[0][2])
+    assert all(math.isnan(value) for value in summary.n[3])
+    assert summary.event == [[1, 1, 2], [0, 1, 1], [0, 0, 0], [1, 2, 3]]
+    assert summary.pyears[3] == approx(
+        [0.35592060232717315, 4.6954140999315541, 5.0513347022587274]
+    )
+    assert summary.rate[0] == approx([3.6525000000000003, 0.3844736842105263, 0.69571428571428562])
+    assert summary.rate[2] == approx([NAN, NAN, NAN])
+    assert summary.ci_r[0][0] == approx((0.09247329366261886, 20.350427485404328))
+    assert summary.ci_r[1][0] == approx((0.0, 44.912107353837165))
+    assert summary.ci_r[3][2] == approx((0.12247696091469835, 1.7356349532376061))
+    assert summary.ci_r[2][1] == approx((NAN, NAN))
+    assert summary.rr is None
+
+    # p3 adds sex: the totals are margins of the first two dimensions in every slab
+    three = r.summary_pyears(
+        r.pyears(f"Surv(time, status) ~ g + sex + {TCUT}", cohort), totals=True
+    )
+    assert three.dim == [4, 3, 2]
+    assert three.dimnames["sex"] == ["female", "male", "Total"]
+    young = [[row[0] for row in block] for block in three.pyears]
+    assert young == [
+        approx([0.0, 0.27378507871321012, 0.27378507871321012]),
+        approx([0.082135523613963035, 0.0, 0.082135523613963035]),
+        approx([0.0, 0.0, 0.0]),
+        approx([0.082135523613963035, 0.27378507871321012, 0.35592060232717315]),
+    ]
+    assert three.pyears[3][2][1] == pytest.approx(4.6954140999315532, rel=1e-12)
+    assert [[row[1] for row in block] for block in three.event] == [
+        [0, 1, 1],
+        [0, 1, 1],
+        [0, 0, 0],
+        [0, 2, 2],
+    ]
+
+
+def test_summary_pyears_rejects_what_r_rejects():
+    result = _by_group()
+    with pytest.raises(TypeError, match="pyears object"):
+        r.summary_pyears(result.pyears)
+    with pytest.raises(ValueError, match="conf.level"):
+        r.summary_pyears(result, conf_level=1.0)
+    with pytest.raises(ValueError, match="scale"):
+        r.summary_pyears(result, scale=0)
+    # summary(pyears(Surv(time, status) ~ 1, d2), totals = TRUE) fails in R too
+    with pytest.raises(ValueError, match="at least one term"):
+        r.summary_pyears(r.pyears("Surv(time, status) ~ 1", _cohort()), totals=True)
+    single = r.summary_pyears(r.pyears("Surv(time, status) ~ 1", _cohort()), rate=True)
+    assert single.dim == []
+    assert single.n == 6.0
+    assert single.rate == pytest.approx(3 / 5.0513347022587274, rel=1e-12)
