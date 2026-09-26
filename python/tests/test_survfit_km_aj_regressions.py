@@ -270,3 +270,31 @@ def test_an_id_on_two_clusters_warns():
             id="id",
             cluster="cl",
         )
+
+
+@pytest.mark.parametrize(
+    ("formula", "kwargs", "message"),
+    [
+        ("Surv(t2, e) ~ offset(o)", {}, "Offset term ignored"),
+        ("Surv(t2, e) ~ cluster(cl)", {}, "use of cluster() in a formula is deprecated"),
+        ("Surv(t2, e) ~ 1", {"cluster": "cl", "robust": False}, "cluster specified with"),
+        ("Surv(t2, e) ~ 1", {"influence": True, "robust": False}, "implies influence=FALSE"),
+        ("Surv(t1, t2, st) ~ 1", {"id": "id", "stype": 2}, "only stype=1, ctype=1"),
+        ("Surv(t1, t2, st) ~ 1", {"id": "id", "conf_lower": "peto"}, "conf.lower is ignored"),
+        ("Surv(t1, t2, st) ~ 1", {"id": "id", "cluster": "cl"}, "on more than one cluster"),
+    ],
+)
+def test_survfit_warnings_point_at_the_caller(formula, kwargs, message):
+    data = {
+        "id": [1, 1, 2, 2, 3, 3],
+        "cl": ["x", "y", "x", "x", "y", "y"],
+        "t1": [0, 1, 0, 3, 0, 5],
+        "t2": [1, 2, 3, 4, 5, 6],
+        "e": [1, 0, 1, 1, 0, 1],
+        "st": r._r_factor(["cens", "a", "cens", "b", "cens", "a"], ["cens", "a", "b"]),
+        "o": [0.5] * 6,
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        r.survfit(formula, data, **kwargs)
+    assert [w.filename for w in caught if message in str(w.message)] == [__file__]

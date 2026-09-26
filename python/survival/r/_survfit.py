@@ -293,11 +293,11 @@ def _formula_model_frame(
             "use of cluster() in a formula is deprecated; use the 'cluster' argument to the "
             "survfit function",
             DeprecationWarning,
-            stacklevel=4,
+            stacklevel=3,
         )
         extras["cluster"] = _column_source(data, cluster_terms[0].column)
     if terms.offsets:
-        warnings.warn("Offset term ignored", stacklevel=4)
+        warnings.warn("Offset term ignored", stacklevel=3)
 
     columns: dict[str, Any] = {}
     for model_term in terms.model_terms:
@@ -650,9 +650,9 @@ def _survfitKM(
     if robust is not None:
         robust = _logical(robust, "robust must be TRUE/FALSE")
         if frame.cluster is not None and not robust:
-            warnings.warn("cluster specified with robust=FALSE, cluster ignored", stacklevel=4)
+            warnings.warn("cluster specified with robust=FALSE, cluster ignored", stacklevel=3)
         if influence > 0 and not robust:
-            warnings.warn("robust=FALSE implies influence=FALSE", stacklevel=4)
+            warnings.warn("robust=FALSE implies influence=FALSE", stacklevel=3)
     start = _start_time_value(start_time)
     engine = _core.survfitkm(
         list(frame.y.time),
@@ -793,10 +793,10 @@ def _survfitAJ(
 
     stype, ctype = _survfit_type_codes(type_, stype, ctype)
     if stype != 1 or ctype != 1:
-        warnings.warn("only stype=1, ctype=1 implimented for multi-state data", stacklevel=4)
+        warnings.warn("only stype=1, ctype=1 implimented for multi-state data", stacklevel=3)
     conf_int, conf_type, conf_lower = _conf_arguments(conf_int, conf_type, conf_lower)
     if conf_lower != "usual":
-        warnings.warn("conf.lower is ignored for multi-state data", stacklevel=4)
+        warnings.warn("conf.lower is ignored for multi-state data", stacklevel=3)
     se_fit = _logical(se_fit, "se.fit must be TRUE/FALSE")
     if robust is not None and not _logical(robust, "robust must be TRUE/FALSE"):
         raise ValueError("multi-state survfit supports only a robust variance")
@@ -815,7 +815,7 @@ def _survfitAJ(
             cluster_of.setdefault(subject, cluster) != cluster
             for subject, cluster in zip(frame.id, frame.cluster, strict=True)
         ):
-            warnings.warn("an id value appears on more than one cluster", stacklevel=4)
+            warnings.warn("an id value appears on more than one cluster", stacklevel=3)
     engine = _core.survfitaj(
         list(frame.y.time),
         [int(value) for value in frame.y.event],
