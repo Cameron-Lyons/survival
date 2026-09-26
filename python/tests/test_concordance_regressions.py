@@ -304,26 +304,30 @@ def test_survconcordance_fit_rows_per_stratum_weights_and_counting_data(lung):
     assert counting == approx(_row([2600, 1918, 1, 16, 335.637929153228]))
     assert weighted_formula.concordance == approx(0.545029578291279)
     assert weighted_formula.std_err == approx(0.0232302472499708)
+    # R's docount segfaults on a short x; its unstratified path has concordancefit's check
+    with pytest.raises(ValueError, match="x and y are not the same length"):
+        r.survConcordance_fit(y, lung["age"][:6], lung["sex"])
 
 
 # --- the fit-object path -----------------------------------------------------------------
 
 
 # fit <- coxph(Surv(time, status) ~ age, lung)
-# concordance(fit, weights = lung$wt.loss)   # and reverse, data, strata, subset, scores
+# concordance(fit, weights = lung$wt.loss)   # and reverse, data, strata, subset, scores, na.action
 @pytest.mark.parametrize(
-    ("argument", "value"),
+    ("argument", "value", "r_name"),
     [
-        ("weights", [1.0] * 228),
-        ("reverse", True),
-        ("data", {}),
-        ("strata", [1] * 228),
-        ("subset", [1, 2]),
-        ("scores", [1.0] * 228),
+        ("weights", [1.0] * 228, "weights"),
+        ("reverse", True, "reverse"),
+        ("data", {}, "data"),
+        ("strata", [1] * 228, "strata"),
+        ("subset", [1, 2], "subset"),
+        ("scores", [1.0] * 228, "scores"),
+        ("na_action", "omit", "na.action"),
     ],
 )
-def test_fit_path_rejects_arguments_r_reads_as_fits(cox_pair, argument, value):
-    with pytest.raises(TypeError, match=f"^{argument} argument is not an appropriate fit object"):
+def test_fit_path_rejects_arguments_r_reads_as_fits(cox_pair, argument, value, r_name):
+    with pytest.raises(TypeError, match=f"^{r_name} argument is not an appropriate fit object"):
         r.concordance(cox_pair[1], **{argument: value})
 
 
@@ -339,6 +343,35 @@ def test_survreg_fit_scored_on_newdata(lung):
     assert result.concordance == approx(0.616066323613493)
     assert result.var == approx(0.00131655993065353)
     assert counts([result.count]) == [[3197, 1979, 71, 7, 0]]
+
+
+# first <- lung[1:100, ]; second <- lung[101:228, ]   (second has 8 missing wt.loss)
+# sf <- survreg(Surv(time, status) ~ age + wt.loss + strata(sex), first)
+# cf <- coxph(Surv(time, status) ~ age + wt.loss + strata(sex), first)
+# for (f in list(sf, cf)) print(concordance(f, newdata = second)[c("concordance", "var", "n")])
+# second$sex[5] <- NA
+# concordance(coxph(Surv(time, status) ~ age + strata(sex), first), newdata = second)
+def test_newdata_rows_with_a_missing_variable_are_omitted(lung):
+    first = {key: values[:100] for key, values in lung.items()}
+    second = {key: values[100:] for key, values in lung.items()}
+    formula = "Surv(time, status) ~ age + wt.loss + strata(sex)"
+    survreg_fit = r.survreg(formula, first, na_action="omit")
+    scored = r.concordance(survreg_fit, newdata=second)
+    assert scored.n == 120
+    assert scored.concordance == approx(0.520668425681618)
+    assert scored.var == approx(0.0017251965750011)
+    assert counts(scored.count) == [[891, 857, 0, 4, 0], [293, 233, 0, 1, 0]]
+    cox = r.concordance(r.coxph(formula, first, na_action="omit"), newdata=second)
+    assert cox.n == 120
+    assert cox.concordance == approx(0.523306948109059)
+    assert cox.var == approx(0.00170260624238661)
+    missing_stratum = {**second, "sex": [*second["sex"][:4], None, *second["sex"][5:]]}
+    stratified = r.concordance(
+        r.coxph("Surv(time, status) ~ age + strata(sex)", first), newdata=missing_stratum
+    )
+    assert stratified.n == 127
+    assert stratified.concordance == approx(0.520597127739985)
+    assert stratified.var == approx(0.00149110080316185)
 
 
 # concordance(time ~ age, lung, timewt = "I"): R forces timewt = "n" for a non-Surv response
@@ -371,3 +404,26 @@ def test_non_surv_responses_follow_concordance_formula(lung):
     assert counts([two_level.count]) == [[5095, 6948, 377, 13073, 385]]
     with pytest.raises(ValueError, match="orderable factor"):
         r.concordance("f3 ~ age", {**lung, "f3": RFactor(ecog, [0, 1, 2, 3])}, na_action="omit")
+
+
+# concordance(I(status == 2) ~ age, lung); concordance(status == 2 ~ age, lung)
+# concordance(I(status == 2) ~ ., lung[, c("status", "age")])   # "." leaves status out
+# concordance(factor(sex) ~ age, lung); concordance(factor(ph.ecog) ~ age, lung)   # error
+# lung$ch <- ifelse(lung$sex == 1, "a", "b"); concordance(ch ~ age, lung)   # error
+def test_response_expressions_follow_concordance_formula(lung):
+    for formula in ("I(status == 2) ~ age", "status == 2 ~ age"):
+        logical = r.concordance(formula, lung)
+        assert logical.concordance == approx(0.583020683020683)
+        assert counts([logical.count]) == [[5902, 4176, 317, 15038, 445]]
+        assert logical.var == approx(0.00177228912803445)
+        assert logical.formula == formula
+    dot = r.concordance("I(status == 2) ~ .", {"status": lung["status"], "age": lung["age"]})
+    assert dot.concordance == approx(0.583020683020683)
+    two_level = r.concordance("factor(sex) ~ age", lung)
+    assert two_level.concordance == approx(0.425402576489533)
+    assert two_level.var == approx(0.00148742218191791)
+    with pytest.raises(ValueError, match="orderable factor"):
+        r.concordance("factor(ph.ecog) ~ age", lung, na_action="omit")
+    character = {**lung, "ch": ["a" if sex == 1 else "b" for sex in lung["sex"]]}
+    with pytest.raises(ValueError, match="orderable factor"):
+        r.concordance("ch ~ age", character)

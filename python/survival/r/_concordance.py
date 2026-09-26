@@ -22,14 +22,24 @@ from ._coerce import (
     _is_bool_like,
     _is_missing_value,
     _materialize_labels,
+    _missing_row_indices,
     _normalize_bool_option,
     _optional_float_vector,
     _pop_dotted_keyword,
     _r_factor,
 )
 from ._coxph import CoxphModel, predict_coxph
-from ._fit import _model_frame, _ModelFrame, _newdata_frame
-from ._formula import _column_source, _data_column_names, _formula_name
+from ._fit import _model_frame, _ModelFrame, _newdata_columns, _newdata_frame
+from ._formula import (
+    _column_source,
+    _data_column_names,
+    _formula_data_rows,
+    _formula_design_columns,
+    _formula_design_row_count,
+    _formula_name,
+    _response_arg_columns,
+    _response_arg_values,
+)
 from ._surv import Surv
 from ._survreg import SurvregModelResult, predict_survreg
 from ._types import ConcordanceResult, SurvConcordanceResult
@@ -38,6 +48,10 @@ _TIMEWT_CHOICES = ("n", "S", "S/G", "n/G2", "I")
 _COUNT_NAMES = ("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
 _RANK_NAMES = ("time", "rank", "timewt", "casewt")
 _SURVCONCORDANCE_NAMES = ("concordant", "discordant", "tied.risk", "tied.time", "std(c-d)")
+_RESPONSE_ERROR = (
+    "left hand side of the formula must be a numeric vector, survival object, "
+    "or an orderable factor"
+)
 
 
 def _timewt_name(timewt: Any) -> str:
@@ -248,34 +262,62 @@ def _is_surv_response(lhs: str) -> bool:
     return lhs.startswith(("Surv(", "survival::Surv("))
 
 
-def _orderable_response(data: Any, lhs: str) -> Any:
-    """``data`` with a logical, ordered or two-level factor response column replaced by
-    R's ``as.numeric`` of it (``concordance.formula``); any other response is left to
-    ``Surv``, which reads numeric vectors and rejects the rest."""
+def _is_ordered(column: Any) -> bool:
+    ordered = getattr(column, "ordered", None)
+    if ordered is None:
+        ordered = getattr(getattr(column, "dtype", None), "ordered", False)
+    return bool(ordered)
 
-    name, _quoted = _formula_name(lhs)
+
+def _orderable_response(data: Any, lhs: str) -> tuple[Any, str]:
+    """R's ``concordance.formula`` for a response that is not ``Surv(...)``: ``data`` and
+    a left-hand side naming a numeric response.
+
+    A numeric response is kept.  A logical response, or an ordered or two-level factor
+    (a factor column, or ``factor(x)``), becomes R's ``as.numeric`` of it; any other
+    response is R's error.  A coerced expression goes in the column ``(response)``, and
+    the columns it reads are dropped so that a ``.`` leaves them out, as R's does.
+    """
+
     columns = _data_column_names(data)
-    if columns is None or name not in columns:
-        return data
-    column = _column_source(data, name)
-    declared = _categories(column)
-    if declared is not None:
-        ordered = getattr(column, "ordered", None)
-        if ordered is None:
-            ordered = getattr(getattr(column, "dtype", None), "ordered", False)
-        if not ordered and len(declared) != 2:
-            raise ValueError(
-                "left hand side of the formula must be a numeric vector, survival object, "
-                "or an orderable factor"
-            )
-        codes = [None if code is None else code + 1.0 for code in _factor(column, name)[0]]
+    if columns is None:
+        return data, lhs
+    name, _quoted = _formula_name(lhs)
+    source = _column_source(data, name) if name in columns else _response_arg_values(data, lhs)
+    if _categories(source) is not None or lhs.startswith(("factor(", "as.factor(")):
+        codes, levels = _factor(source, name)  # R's as.factor: declared or sorted levels
+        if not _is_ordered(source) and len(levels) != 2:
+            raise ValueError(_RESPONSE_ERROR)
+        values = [None if code is None else code + 1.0 for code in codes]
     else:
-        values = _materialize_labels(column, name)
-        present = [value for value in values if not _is_missing_value(value)]
-        if not present or not all(_is_bool_like(value) for value in present):
-            return data
-        codes = [None if _is_missing_value(value) else float(value) for value in values]
-    return {**{key: _column_source(data, key) for key in columns}, name: codes}
+        labels = _materialize_labels(source, name)
+        present = [label for label in labels if not _is_missing_value(label)]
+        if any(isinstance(label, str) for label in present):
+            raise ValueError(_RESPONSE_ERROR)
+        if not present or not all(_is_bool_like(label) for label in present):
+            return data, lhs
+        values = [None if _is_missing_value(label) else float(label) for label in labels]
+    if name in columns:
+        return {**{key: _column_source(data, key) for key in columns}, name: values}, lhs
+    reads = set(_response_arg_columns(lhs))
+    kept = {key: _column_source(data, key) for key in columns if key not in reads}
+    return {**kept, "(response)": values}, "`(response)`"
+
+
+def _concordance_frame(formula: str, data: Any, **arguments: Any) -> _ModelFrame:
+    """The model frame of ``concordance.formula`` and ``survConcordance``: a numeric
+    response is read as ``Surv(y)``; offsets are not allowed and at least one predictor
+    is needed."""
+
+    lhs, sep, rhs = formula.partition("~")
+    if sep and not _is_surv_response(lhs.strip()):
+        formula = f"Surv({lhs.strip()}) ~ {rhs.strip()}"
+    frame = _model_frame(formula, data, **arguments)
+    if frame.terms.offsets:
+        raise ValueError("Offset terms not allowed")
+    if not frame.names:
+        raise ValueError("the formula needs at least one predictor")
+    return frame
 
 
 def _concordance_formula(
@@ -294,19 +336,15 @@ def _concordance_formula(
     factor) is read as ``Surv(as.numeric(y))`` with ``timewt = "n"``.
     """
 
-    lhs, _sep, rhs = formula.partition("~")
-    lhs = lhs.strip()
-    if not _is_surv_response(lhs):
-        data = _orderable_response(data, lhs)
-        formula = f"Surv({lhs}) ~ {rhs.strip()}"
+    frame_formula = formula
+    lhs, sep, rhs = formula.partition("~")
+    if sep and not _is_surv_response(lhs.strip()):
+        data, response = _orderable_response(data, lhs.strip())
+        frame_formula = f"{response} ~ {rhs.strip()}"
         options = {**options, "timewt": "n"}
-    frame = _model_frame(
-        formula, data, subset=subset, na_action=na_action, weights=weights, cluster=cluster
+    frame = _concordance_frame(
+        frame_formula, data, subset=subset, na_action=na_action, weights=weights, cluster=cluster
     )
-    if frame.terms.offsets:
-        raise ValueError("Offset terms not allowed")
-    if not frame.names:
-        raise ValueError("the formula needs at least one predictor")
     return concordancefit(
         frame.y,
         frame.x,
@@ -366,12 +404,32 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
     raise TypeError("object is not an appropriate fit object")
 
 
+def _complete_newdata(fit: Any, newdata: Any, strata_columns: Sequence[str]) -> Any:
+    """``newdata`` at the rows ``model.frame(Terms, newdata)`` keeps under R's default
+    ``na.omit``: those with no response, covariate, offset or strata variable missing.
+    coxph and survreg move a ``cluster()`` term out of ``Terms``, so it is not checked."""
+
+    design = fit.design
+    present = set(_newdata_columns(newdata))
+    used = [*design.response.columns, *_formula_design_columns(design), *strata_columns]
+    n = _formula_design_row_count(newdata, design)
+    missing = _missing_row_indices(
+        [(name, _column_source(newdata, name)) for name in dict.fromkeys(used) if name in present],
+        n,
+    )
+    if not missing:
+        return newdata
+    keep = [row for row in range(n) if row not in missing]
+    return _formula_data_rows(fit.formula, newdata, keep, n)
+
+
 def _newdata_fit_data(
     fit: Any, newdata: Any, strata_columns: Sequence[str], predict: Any, cluster: Any | None
 ) -> _FitData:
-    """``cord.getdata`` with ``newdata``: its response and strata, and the fit's linear
-    predictor on it (no case weights)."""
+    """``cord.getdata`` with ``newdata``: its complete rows' response and strata, and the
+    fit's linear predictor on them (no case weights)."""
 
+    newdata = _complete_newdata(fit, newdata, strata_columns)
     new = _newdata_frame(
         fit.design,
         strata_columns,
@@ -446,6 +504,7 @@ def _concordance_fits(
             )
         if other.weights != first.weights:
             raise ValueError("all models must have the same weight vector")
+    # checked here as well as in concordancefit, before it is remapped
     influence = _integer_scalar(options["influence"], "influence")
     if influence not in (0, 1, 2, 3):
         raise ValueError("influence must be 0, 1, 2 or 3")
@@ -605,24 +664,6 @@ def _survconcordance_strata(
     }
 
 
-def _survconcordance_frame(
-    formula: str, data: Any, weights: Any, subset: Any, na_action: str | None
-) -> _ModelFrame:
-    """``survConcordance``'s model frame: a numeric response is read as ``Surv(y)``."""
-
-    lhs, _sep, rhs = formula.partition("~")
-    if not _is_surv_response(lhs.strip()):
-        formula = f"Surv({lhs.strip()}) ~ {rhs.strip()}"
-    frame = _model_frame(formula, data, subset=subset, na_action=na_action, weights=weights)
-    if frame.terms.offsets:
-        raise ValueError("Offset terms not allowed")
-    if not frame.names:
-        raise ValueError("the formula needs at least one predictor")
-    if len(frame.names) > 1:
-        raise ValueError("Only one predictor variable allowed")
-    return frame
-
-
 def survConcordance(
     formula: Any,
     data: Any | None = None,
@@ -642,7 +683,9 @@ def survConcordance(
     )
     if not isinstance(formula, str):
         raise TypeError("a formula argument is required")
-    frame = _survconcordance_frame(formula, data, weights, subset, na_action)
+    frame = _concordance_frame(formula, data, subset=subset, na_action=na_action, weights=weights)
+    if len(frame.names) > 1:
+        raise ValueError("Only one predictor variable allowed")
     x = [row[0] for row in frame.x]
     stats: dict[str, float] | dict[str, dict[str, float]]
     if frame.strata is None:
@@ -684,6 +727,8 @@ def survConcordance_fit(
         raise TypeError("y must be a Surv object")
     n = len(y)
     values = _float_vector(x, "x")
+    if len(values) != n:
+        raise ValueError("x and y are not the same length")
     weights = _optional_float_vector(weight, "weight", n)
     if strata is None:
         return _survconcordance_row(y, values, weights)
