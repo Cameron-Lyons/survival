@@ -105,7 +105,7 @@ def _boundary_estimator(name):
 def reject_backend_work(monkeypatch):
     for symbol in (
         "coxph_fit",
-        "survreg",
+        "survreg_fit",
         "concordance_index",
         "Activation",
         "GradientBoostSurvivalConfig",

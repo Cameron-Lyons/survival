@@ -422,18 +422,6 @@ def test_survreg_fit_matches_r():
     assert max(abs(value) for value in fit.score) < 1e-8
 
 
-def test_survreg_fit_low_level_wrapper_matches_survreg_fit():
-    legacy = regression.survreg(
-        time=_AFT_TIME,
-        status=[float(value) for value in _AFT_STATUS],
-        covariates=_AFT_DESIGN,
-        distribution="weibull",
-    )
-    fit = _aft_fit()
-    assert legacy.coefficients == pytest.approx(fit.coefficients)
-    assert legacy.log_likelihood == pytest.approx(fit.log_likelihood)
-
-
 def test_survreg_fit_predictions_match_r():
     fit = _aft_fit()
     newdata = [[1.0, 0.25], [1.0, 0.75]]

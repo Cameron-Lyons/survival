@@ -46,7 +46,6 @@ __all__ = bind_names(
         "SurvregPredictType",
         "SurvregResidType",
         "SurvregFit",
-        "survreg",
         "survreg_fit",
         "survreg_dtest",
         "dsurvreg",

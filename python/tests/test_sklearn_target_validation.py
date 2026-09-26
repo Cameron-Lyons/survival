@@ -83,7 +83,7 @@ def test_fit_rejects_invalid_status_before_training(monkeypatch, name, invalid_s
     x, y = _data(dtype)
     y[0, 1] = invalid_status
     monkeypatch.setattr(survival._survival, "coxph_fit", _unexpected_work)
-    monkeypatch.setattr(survival._survival, "survreg", _unexpected_work)
+    monkeypatch.setattr(survival._survival, "survreg_fit", _unexpected_work)
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -120,7 +120,7 @@ MALFORMED_TARGETS = (
 def test_fit_rejects_malformed_target_before_training(monkeypatch, name, y, message):
     x, _ = _data()
     monkeypatch.setattr(survival._survival, "coxph_fit", _unexpected_work)
-    monkeypatch.setattr(survival._survival, "survreg", _unexpected_work)
+    monkeypatch.setattr(survival._survival, "survreg_fit", _unexpected_work)
 
     with pytest.raises(ValueError, match=message):
         _estimator(name).fit(x, y)
@@ -143,7 +143,7 @@ def test_fit_rejects_invalid_time_before_training(monkeypatch, name, invalid_tim
     x, y = _data(object if isinstance(invalid_time, complex) else np.float64)
     y[0, 0] = invalid_time
     monkeypatch.setattr(survival._survival, "coxph_fit", _unexpected_work)
-    monkeypatch.setattr(survival._survival, "survreg", _unexpected_work)
+    monkeypatch.setattr(survival._survival, "survreg_fit", _unexpected_work)
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -239,7 +239,7 @@ def test_fit_rejects_masked_target_before_training(monkeypatch, name, masked_col
     y.mask[0, masked_column] = True
     original = y.copy()
     monkeypatch.setattr(survival._survival, "coxph_fit", _unexpected_work)
-    monkeypatch.setattr(survival._survival, "survreg", _unexpected_work)
+    monkeypatch.setattr(survival._survival, "survreg_fit", _unexpected_work)
 
     with pytest.raises(ValueError, match="mask"):
         _estimator(name).fit(x, y)

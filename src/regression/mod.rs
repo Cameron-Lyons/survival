@@ -107,7 +107,7 @@ pub use longitudinal_survival::{
     longitudinal_dynamic_pred, time_varying_cox,
 };
 pub use parametric_survival::{
-    SurvregControl, SurvregData, SurvregFit, survreg, survreg_fit, survreg_fit_py,
+    SurvregControl, SurvregData, SurvregFit, survreg_fit, survreg_fit_py,
 };
 pub use recurrent_events::{
     AndersonGillResult, NegativeBinomialFrailtyConfig, NegativeBinomialFrailtyResult, PWPConfig,

@@ -13378,22 +13378,6 @@ def survobrien(
     start: Sequence[float] | None = None,
     strata: Sequence[int] | None = None,
 ) -> SurvObrienExpansion: ...
-def survreg(
-    time: Sequence[float],
-    status: Sequence[float],
-    covariates: Sequence[Sequence[float]],
-    weights: Sequence[float] | None = None,
-    offsets: Sequence[float] | None = None,
-    initial_beta: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
-    distribution: str | None = None,
-    max_iter: int | None = None,
-    eps: float | None = None,
-    tol_chol: float | None = None,
-    time2: Sequence[float] | None = None,
-    fixed_scale: float | None = None,
-    distribution_parameter: float | None = None,
-) -> SurvregFit: ...
 def survreg_dtest(distribution: SurvregDistribution) -> list[str]: ...
 def survreg_fit(
     data: SurvregData,

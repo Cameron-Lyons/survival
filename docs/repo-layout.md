@@ -158,7 +158,7 @@ Preferred usage is module-oriented:
 from survival import datasets, regression, validation
 
 lung = datasets.load_lung()
-fit = regression.survreg(...)
+fit = regression.survreg_fit(...)
 rmst = validation.rmst(...)
 ```
 

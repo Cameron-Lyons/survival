@@ -12,6 +12,14 @@ AFTEstimator = sklearn_compat.AFTEstimator
 StreamingAFTEstimator = sklearn_compat.StreamingAFTEstimator
 
 
+def _survreg(time, status, covariates, distribution):
+    return _surv.survreg_fit(
+        _surv.SurvregData(time, [int(value) for value in status], covariates),
+        _surv.SurvregDistribution(distribution),
+        control=_surv.SurvregControl(iter_max=100),
+    )
+
+
 class TestSurvreg:
     def test_survreg_weibull_uncensored(self):
         np.random.seed(42)
@@ -20,15 +28,9 @@ class TestSurvreg:
         true_beta = np.array([1.0, 0.5, -0.3])
         log_time = X @ true_beta + 0.5 * np.random.randn(n)
         time = np.exp(log_time)
-        status = np.ones(n, dtype=np.float64)
+        status = np.ones(n)
 
-        result = _surv.survreg(
-            time=time.tolist(),
-            status=status.tolist(),
-            covariates=X.tolist(),
-            distribution="weibull",
-            max_iter=100,
-        )
+        result = _survreg(time.tolist(), status, X.tolist(), "weibull")
 
         assert len(result.coefficients) == 4
         assert result.log_likelihood < 0
@@ -43,15 +45,9 @@ class TestSurvreg:
         time = np.exp(log_time)
         censor_time = np.random.exponential(3, n)
         observed_time = np.minimum(time, censor_time)
-        status = (time <= censor_time).astype(np.float64)
+        status = time <= censor_time
 
-        result = _surv.survreg(
-            time=observed_time.tolist(),
-            status=status.tolist(),
-            covariates=X.tolist(),
-            distribution="weibull",
-            max_iter=100,
-        )
+        result = _survreg(observed_time.tolist(), status, X.tolist(), "weibull")
 
         assert len(result.coefficients) == 4
         assert result.log_likelihood < 0
@@ -64,15 +60,9 @@ class TestSurvreg:
         true_beta = np.array([2.0, 0.3, -0.5])
         log_time = X @ true_beta + 0.8 * np.random.randn(n)
         time = np.exp(log_time)
-        status = np.ones(n, dtype=np.float64)
+        status = np.ones(n)
 
-        result = _surv.survreg(
-            time=time.tolist(),
-            status=status.tolist(),
-            covariates=X.tolist(),
-            distribution="lognormal",
-            max_iter=100,
-        )
+        result = _survreg(time.tolist(), status, X.tolist(), "lognormal")
 
         assert len(result.coefficients) == 4
         assert np.isfinite(result.log_likelihood)
@@ -85,31 +75,19 @@ class TestSurvreg:
         u = np.random.uniform(0, 1, n)
         log_time = X @ true_beta + 0.6 * np.log(u / (1 - u))
         time = np.exp(log_time)
-        status = np.ones(n, dtype=np.float64)
+        status = np.ones(n)
 
-        result = _surv.survreg(
-            time=time.tolist(),
-            status=status.tolist(),
-            covariates=X.tolist(),
-            distribution="loglogistic",
-            max_iter=100,
-        )
+        result = _survreg(time.tolist(), status, X.tolist(), "loglogistic")
 
         assert len(result.coefficients) == 3
         assert np.isfinite(result.log_likelihood)
 
     def test_survreg_small_sample_matches_r(self):
         time = [1.0, 2.0, 3.0, 4.0, 5.0]
-        status = [1.0, 1.0, 1.0, 1.0, 1.0]
+        status = [1, 1, 1, 1, 1]
         X = [[1.0], [1.0], [1.0], [1.0], [1.0]]
 
-        result = _surv.survreg(
-            time=time,
-            status=status,
-            covariates=X,
-            distribution="weibull",
-            max_iter=100,
-        )
+        result = _survreg(time, status, X, "weibull")
 
         # survreg(Surv(1:5, rep(1, 5)) ~ 1): (Intercept), Log(scale), scale, loglik
         assert isinstance(result, _surv.SurvregFit)
