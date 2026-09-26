@@ -1071,8 +1071,9 @@ def _rmean_option(rmean: Any, fit: SurvfitResult | SurvfitMultiStateResult) -> s
             rmean, "rmean", ("none", "common", "individual"), "Invalid value for rmean option"
         )
     value = _finite_float(rmean, "rmean")
-    smallest = fit.start_time if fit.start_time is not None else min(fit.time)
-    if value < smallest:
+    # only a survfitms object records its start.time
+    start_time = fit.start_time if isinstance(fit, SurvfitMultiStateResult) else None
+    if value < (min(fit.time) if start_time is None else start_time):
         raise ValueError("Truncation point for the mean time in state is < smallest survival")
     return repr(value)
 

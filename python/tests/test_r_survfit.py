@@ -279,7 +279,7 @@ def test_survfit_start_time_conditions_the_curves():
 
     # survfitKM records start.time only as t0 (fit$start.time is NULL in R)
     assert fit.t0 == 2.0
-    assert fit.start_time is None
+    assert not hasattr(fit, "start_time")
     assert fit.call.start_time == 2.0
     assert fit.n == [3, 4]
     assert fit.strata == {"group=A": 3, "group=B": 4}

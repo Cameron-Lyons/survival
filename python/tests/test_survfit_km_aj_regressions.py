@@ -182,7 +182,7 @@ def test_rmean_of_a_start_time_km_fit_is_checked_against_its_first_time():
     # f <- survfit(Surv(time, status) ~ 1, lung, start.time = 100): f$start.time is NULL
     fit = r.survfit("Surv(time, status) ~ 1", survival.datasets.load_lung(), start_time=100)
 
-    assert fit.start_time is None
+    assert not hasattr(fit, "start_time")
     assert fit.t0 == 100.0
     with pytest.raises(ValueError, match="Truncation point for the mean time in state"):
         r.summary_survfit(fit, rmean=100.5)
@@ -195,7 +195,8 @@ def test_turnbull_fits_record_neither_start_time_nor_time0():
     data = {"l": [1, 2, None, 4], "r": [3, 4, 2, None]}
     fit = r.survfit("Surv(l, r, type = 'interval2') ~ 1", data, start_time=1, time0=True)
 
-    assert (fit.start_time, fit.time0, fit.t0) == (None, False, 1.0)
+    assert not hasattr(fit, "start_time")
+    assert (fit.time0, fit.t0) == (False, 1.0)
     _close(fit.time, [1.5, 2.5, 4])
 
 

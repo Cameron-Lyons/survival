@@ -762,8 +762,8 @@ class SurvfitResult:
     the model frame of the call (R re-evaluates it through ``model.frame``) and ``engine`` the
     Rust result the summary methods work from (absent for Turnbull curves, whose ``cumhaz``
     and ``t0`` are the values R's ``survfit0`` derives).  As in R, a ``start.time`` shows only
-    as ``t0`` (``start_time`` stays unset) and ``time0`` marks a curve that already starts
-    with its ``t0`` row, the result of ``survfit0``.
+    as ``t0`` and ``time0`` marks a curve that already starts with its ``t0`` row, the result
+    of ``survfit0``.
     """
 
     n: list[int]
@@ -789,7 +789,6 @@ class SurvfitResult:
     conf_lower: str | None = None
     influence_surv: list[SurvfitInfluence] | None = None
     influence_chaz: list[SurvfitInfluence] | None = None
-    start_time: float | None = None
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
     model: dict[str, Any] | None = None
