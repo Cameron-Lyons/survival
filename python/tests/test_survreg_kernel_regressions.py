@@ -65,15 +65,14 @@ def test_dpqr_distribution_names_are_case_folded_but_not_partially_matched():
         r.rsurvreg(2, 0, 1, "exp", seed=1)
 
 
-def test_t_fits_are_unchanged(lung):
+def test_t_fits_are_unchanged(lung, t_fit):
     # R's survreg(Surv(time, status) ~ age + sex, lung, dist = "t") to all the digits this
     # port computes: taking both t tails from one pt() call must not move the fit.
-    fit = r.survreg("Surv(time, status) ~ age + sex", data=lung, na_action="omit", dist="t")
-    assert fit.fit.coefficients == pytest.approx(
+    assert t_fit.fit.coefficients == pytest.approx(
         [307.34358133147515, -2.4707923357292465, 128.58458914302994, 5.279364620574666],
         rel=1e-12,
     )
-    assert fit.fit.log_likelihood == pytest.approx(-1179.86538713346, rel=1e-12)
+    assert t_fit.fit.log_likelihood == pytest.approx(-1179.86538713346, rel=1e-12)
 
     # survreg(Surv(log(time), status) ~ age + ph.ecog + strata(sex), lung, dist = "t",
     #         parms = 8)
