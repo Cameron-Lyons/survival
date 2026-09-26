@@ -630,6 +630,37 @@ def test_factor_collapse_order(mg, fa1):
     assert mart.values[0] == approx([-3.04053112685943, -2.77524312158918], rel=1e-7)
 
 
+def test_float_nan_collapse_is_one_group(mg, fa1):
+    # every NaN is the one NA group: first appearance for the martingale residuals
+    # (rowsum reorder = FALSE), last for the score family (reorder = TRUE; R stops
+    # setting the dimnames, these are rowsum of its uncollapsed residuals)
+    groups = np.where(mg.age > 80, np.nan, np.where(mg.age > 65, 2.0, 1.0))
+    mart = r.residuals(fa1, collapse=groups)
+    assert mart.rownames == ["NA", "2", "1"]
+    assert np.array(mart.values) == approx(
+        np.array(
+            [
+                [-5.67650761817205, -0.515043233079189],
+                [8.32416808823040, -7.527160473458616],
+                [-2.64766047005825, 8.042203706537451],
+            ]
+        ),
+        rel=1e-7,
+    )
+    score = r.residuals(fa1, type="score", collapse=groups)
+    assert score.rownames == ["2", "1", "NA"]
+    assert score.values[2] == approx(
+        [-104.0702976461104, 0.438724712596853, 117.958744855621, 4.334202335681919], rel=1e-7
+    )
+    dfbeta = r.residuals(fa1, type="dfbeta", collapse=groups)
+    assert dfbeta.rownames == ["2", "1", "NA"]
+    assert dfbeta.values[0] == approx(
+        [0.000925214850531943, 0.0329620542102347, 0.00302156521495219, -0.0144291037913763],
+        rel=1e-7,
+    )
+    assert len(r.residuals(fa1, type="dfbetas", collapse=groups).rownames) == 3
+
+
 def test_residuals_match_the_single_transition_fits(my_na, fna):
     """residms.R: the 1:2 transition of fna is the fit of the entry:sct rows."""
 

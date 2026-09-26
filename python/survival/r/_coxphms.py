@@ -1141,8 +1141,9 @@ def _collapse_groups(
     """residuals.coxphms's groups: ``TRUE`` means the cluster (else the id), a vector
     has one value per row of the model frame.  They are numbered in order of first
     appearance, R's ``factor(cluster, unique(cluster))``, except that with ``by_level``
-    the groups of a factor vector follow its level order (``rowsum(reorder = TRUE)``
-    of the score family), missing values last; the labels are their values."""
+    (``rowsum(reorder = TRUE)`` of the score family) the groups of a factor vector
+    follow its level order and the missing values' group goes last.  All missing
+    values form one group labelled ``"NA"``; the other labels are the values."""
 
     if collapse is None or collapse is False:
         return None
@@ -1156,9 +1157,17 @@ def _collapse_groups(
         if by_level:
             declared = _categories(collapse)
     if declared is None:
-        codes = _unique_codes(values) - 1
+        # every missing value is the one NA group (NaNs never compare equal)
+        missing = [_is_missing_value(value) for value in values]
+        keys = [None if miss else value for value, miss in zip(values, missing, strict=True)]
+        codes = _unique_codes(keys) - 1
         first = np.unique(codes, return_index=True)[1]
-        return codes, [_as_character(values[row]) for row in first.tolist()]
+        labels = [_as_character(values[row]) for row in first.tolist()]
+        if by_level and any(missing):
+            na_code = codes[missing.index(True)]
+            codes = np.where(codes == na_code, len(labels) - 1, codes - (codes > na_code))
+            labels.append(labels.pop(int(na_code)))
+        return codes, labels
     position = {level: code for code, level in enumerate(declared)}
     level_codes = np.array([position.get(value, len(declared)) for value in values])
     present, codes = np.unique(level_codes, return_inverse=True)
