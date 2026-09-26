@@ -641,7 +641,7 @@ impl CoxPHFit {
         let sorted = SortedRows::new(results.order, data.strata.as_deref());
         // As in `coxph()`, the cluster enters the concordance whenever it was
         // given, even when the variance is not robust.
-        let concordance = linear_predictor_concordance(
+        let concordance = fit_concordance(
             &data.time,
             data.entry.as_deref(),
             &data.status,
@@ -802,7 +802,7 @@ impl CoxPHFit {
     ) -> SurvivalResult<Self> {
         let n = data.n();
         let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
-        let concordance = linear_predictor_concordance(
+        let concordance = fit_concordance(
             &data.time,
             data.entry.as_deref(),
             &data.status,
@@ -1461,7 +1461,7 @@ impl CoxPHFit {
 /// `coxph()`'s concordance step: `concordancefit(Y, lp, strata, weights,
 /// cluster, reverse = TRUE, timefix = FALSE)` on the fitted linear
 /// predictors.
-fn linear_predictor_concordance(
+fn fit_concordance(
     time: &[f64],
     entry: Option<&[f64]>,
     status: &[i32],
@@ -1477,6 +1477,23 @@ fn linear_predictor_concordance(
         timefix: false,
         ..ConcordanceOptions::default()
     };
+    linear_predictor_concordance(time, entry, status, x, weights, strata, cluster, &options)
+}
+
+/// `concordancefit(Y, x, strata, weights, cluster)` on the response of a
+/// Cox model's data, `x` holding the linear predictors of one or more fits
+/// to those data: the concordance step of `coxph()` and `concordance.coxph`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn linear_predictor_concordance(
+    time: &[f64],
+    entry: Option<&[f64]>,
+    status: &[i32],
+    x: ArrayView2<'_, f64>,
+    weights: &[f64],
+    strata: Option<&[i32]>,
+    cluster: Option<&[i32]>,
+    options: &ConcordanceOptions,
+) -> SurvivalResult<ConcordanceFit> {
     match entry {
         Some(entry) => {
             let data = CountingProcessData {
@@ -1490,7 +1507,7 @@ fn linear_predictor_concordance(
                 Some(weights),
                 strata,
                 cluster,
-                &options,
+                options,
             )
         }
         None => {
@@ -1504,7 +1521,7 @@ fn linear_predictor_concordance(
                 Some(weights),
                 strata,
                 cluster,
-                &options,
+                options,
             )
         }
     }

@@ -4972,35 +4972,17 @@ fn fitted_concordance(
     timewt: crate::concordance::TimeWeight,
     cluster: Option<&[i32]>,
 ) -> Result<crate::concordance::ConcordanceFit, String> {
-    use crate::concordance::{ConcordanceOptions, concordancefit};
-    use crate::core::SurvResponse;
-    let options = ConcordanceOptions {
+    let options = crate::concordance::ConcordanceOptions {
         timewt,
         reverse: true,
-        ..ConcordanceOptions::default()
+        ..crate::concordance::ConcordanceOptions::default()
     };
-    let right;
-    let counting;
-    let response = match &fit.entry {
-        Some(entry) => {
-            counting = crate::data_types::CountingProcessData::try_new(
-                entry.clone(),
-                fit.time.clone(),
-                fit.status.clone(),
-            )
-            .map_err(|err| err.to_string())?;
-            SurvResponse::Counting(&counting)
-        }
-        None => {
-            right = crate::data_types::SurvivalData::try_new(fit.time.clone(), fit.status.clone())
-                .map_err(|err| err.to_string())?;
-            SurvResponse::Right(&right)
-        }
-    };
-    concordancefit(
-        response,
+    crate::regression::coxph::linear_predictor_concordance(
+        &fit.time,
+        fit.entry.as_deref(),
+        &fit.status,
         x,
-        Some(&fit.weights),
+        &fit.weights,
         fit.strata.as_deref(),
         cluster,
         &options,
