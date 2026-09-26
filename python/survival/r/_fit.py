@@ -153,7 +153,10 @@ def _r_factor_design(data: Any, design: _FormulaDesign) -> _FormulaDesign:
     def relevel(term: _SingleDesignTerm) -> _SingleDesignTerm:
         if not isinstance(term, _CategoricalDesignTerm):
             return term
-        return replace(term, levels=_r_levels(_column_source(data, term.term.column), term.levels))
+        # a logical expression (I(sex == 2)) has no column to declare levels
+        column = term.term.column
+        source = None if term.term.arithmetic is not None else _column_source(data, column)
+        return replace(term, levels=_r_levels(source, term.levels))
 
     covariates: list[_DesignTerm] = []
     for term in design.covariates:

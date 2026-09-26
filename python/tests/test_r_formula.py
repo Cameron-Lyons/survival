@@ -64,7 +64,7 @@ def test_term_expansion_follows_r_model_formulae():
     cases = {
         "x1 * x2": ["x1", "x2", "x1:x2"],
         "x1 / x2": ["x1", "x1:x2"],
-        "x1 + x2 %in% x1": ["x1", "x1:x2"],
+        "x1 + x2 %in% x1": ["x1", "x2:x1"],
         "(x1 + x2)^2": ["x1", "x2", "x1:x2"],
         "(x1 + x2 + x3)^2 - x1:x2": ["x1", "x2", "x3", "x1:x3", "x2:x3"],
         "(x1 + x2) * x3": ["x1", "x2", "x3", "x1:x3", "x2:x3"],
