@@ -26,7 +26,7 @@
 use crate::concordance::kernels::{
     FastKm, SweepInput, SweepOutput, btree, concordance_sweep, fastkm,
 };
-use crate::core::strata_order::{SurvResponse, stratum_groups, validate_intervals};
+use crate::core::strata_order::{SurvResponse, rowsum, stratum_groups, validate_intervals};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_negative,
@@ -370,7 +370,7 @@ pub fn concordancefit(
             }
         }
         let df = match cluster {
-            Some(cluster) => rowsum(&df, cluster),
+            Some(cluster) => rowsum(df.view(), cluster),
             None => df,
         };
         var = Some(
@@ -607,21 +607,6 @@ fn append_ranks(
             table.casewt.push(resid[2]);
         }
     }
-}
-
-/// R's `rowsum(x, group)`: column sums within each group, groups in
-/// ascending label order.
-fn rowsum(values: &Array2<f64>, group: &[i32]) -> Array2<f64> {
-    let groups = stratum_groups(group);
-    let mut out = Array2::zeros((groups.len(), values.ncols()));
-    for (g, (_, rows)) in groups.iter().enumerate() {
-        for &row in rows {
-            for column in 0..values.ncols() {
-                out[[g, column]] += values[[row, column]];
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

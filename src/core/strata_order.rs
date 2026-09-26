@@ -11,6 +11,7 @@
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
+use ndarray::{Array2, ArrayView2};
 use std::cmp::Ordering;
 
 /// The outcome of a Cox-type routine: a right-censored or a (start, stop]
@@ -103,6 +104,20 @@ pub(crate) fn stratum_groups(strata: &[i32]) -> Vec<(i32, Vec<usize>)> {
     groups
 }
 
+/// R's `rowsum(x, group)` (`reorder = TRUE`): the column sums of the rows
+/// of each group, one row per group in ascending label order.  Rows are
+/// added in input order, as R does.
+pub(crate) fn rowsum(values: ArrayView2<'_, f64>, group: &[i32]) -> Array2<f64> {
+    let groups = stratum_groups(group);
+    let mut sums = Array2::zeros((groups.len(), values.ncols()));
+    for (mut sum, (_, rows)) in sums.outer_iter_mut().zip(&groups) {
+        for &row in rows {
+            sum += &values.row(row);
+        }
+    }
+    sums
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +169,14 @@ mod tests {
                 (5, vec![0, 3])
             ]
         );
+    }
+
+    #[test]
+    fn rowsum_sums_rows_by_ascending_label() {
+        // R: rowsum(matrix(1:8, 4), c(2, 1, 2, 5))
+        let values = ndarray::array![[1.0, 5.0], [2.0, 6.0], [3.0, 7.0], [4.0, 8.0]];
+        let sums = rowsum(values.view(), &[2, 1, 2, 5]);
+        assert_eq!(sums, ndarray::array![[2.0, 6.0], [4.0, 12.0], [4.0, 8.0]]);
+        assert_eq!(rowsum(Array2::zeros((0, 2)).view(), &[]).dim(), (0, 2));
     }
 }

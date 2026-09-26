@@ -39,6 +39,7 @@ use self::kernel::{InnerFit, Kernel, KernelData, PenaltyCallback, PenaltyShape};
 use self::penalty::Pparm;
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{
@@ -61,38 +62,22 @@ pub struct ModelTerm {
     pub penalty: Option<PenaltyTerm>,
 }
 
-/// Validated inputs of a penalised Cox fit.  `x` holds every design column,
-/// including the single column of group codes of a sparse frailty term.
+/// Validated inputs of a penalised Cox fit.  `cox.x` holds every design
+/// column, including the single column of group codes of a sparse frailty
+/// term.
 #[derive(Debug, Clone)]
 pub struct CoxpenalData {
-    pub time: Vec<f64>,
-    pub entry: Option<Vec<f64>>,
-    pub status: Vec<i32>,
-    pub x: Array2<f64>,
-    pub weights: Option<Vec<f64>>,
-    pub strata: Option<Vec<i32>>,
-    pub offset: Option<Vec<f64>>,
+    pub cox: CoxphData,
     /// The model terms in formula order; every column belongs to exactly
     /// one term and at least one term is penalised.
     pub terms: Vec<ModelTerm>,
 }
 
 impl CoxpenalData {
-    #[allow(clippy::too_many_arguments)]
-    pub fn try_new(
-        time: Vec<f64>,
-        entry: Option<Vec<f64>>,
-        status: Vec<i32>,
-        x: Array2<f64>,
-        weights: Option<Vec<f64>>,
-        strata: Option<Vec<i32>>,
-        offset: Option<Vec<f64>>,
-        terms: Vec<ModelTerm>,
-    ) -> SurvivalResult<Self> {
+    pub fn try_new(cox: CoxphData, terms: Vec<ModelTerm>) -> SurvivalResult<Self> {
         // coxpenal.fit is reached only for data with events
-        let base = CoxphData::try_new(time, entry, status, x, weights, strata, offset)?;
-        base.check_fit_input()?;
-        let ncol = base.x.ncols();
+        cox.check_fit_input()?;
+        let ncol = cox.x.ncols();
         let mut owner = vec![None; ncol];
         for (t, term) in terms.iter().enumerate() {
             if term.columns.is_empty() {
@@ -135,20 +120,7 @@ impl CoxpenalData {
                 "Sparse term must be single column",
             ));
         }
-        Ok(Self {
-            time: base.time,
-            entry: base.entry,
-            status: base.status,
-            x: base.x,
-            weights: base.weights,
-            strata: base.strata,
-            offset: base.offset,
-            terms,
-        })
-    }
-
-    pub fn n(&self) -> usize {
-        self.time.len()
+        Ok(Self { cox, terms })
     }
 }
 
@@ -279,7 +251,7 @@ pub struct CoxpenalFit {
 /// A penalised term with its fit-time state: `pparm`, `cfun`, the current
 /// `theta` and the search state.
 struct TermState<'a> {
-    /// Position in `data.terms`.
+    /// Position in the data's `terms`.
     index: usize,
     term: &'a PenaltyTerm,
     /// Columns in the dense design (empty for the sparse term).
@@ -492,6 +464,10 @@ impl CoxpenalFit {
     /// `coxpenal.fit` at the centred offset, followed by the `coxph()`
     /// post-processing.
     pub fn fit(data: CoxpenalData, options: CoxpenalOptions) -> SurvivalResult<Self> {
+        let CoxpenalData {
+            cox: data,
+            terms: model_terms,
+        } = data;
         if options.method == TieMethod::Exact {
             return Err(SurvivalError::invalid_input(
                 "penalised Cox models support ties = 'breslow' or 'efron' only",
@@ -509,8 +485,7 @@ impl CoxpenalFit {
         let eps2 = options.eps.sqrt();
 
         // pterms: 0 ordinary, 1 penalised, 2 sparse.
-        let pterms: Vec<u8> = data
-            .terms
+        let pterms: Vec<u8> = model_terms
             .iter()
             .map(|term| match &term.penalty {
                 None => 0,
@@ -522,8 +497,7 @@ impl CoxpenalFit {
         let shape = PenaltyShape {
             sparse: sparse_term.is_some(),
             dense: pterms.contains(&1),
-            full_imat: !data
-                .terms
+            full_imat: !model_terms
                 .iter()
                 .filter_map(|term| term.penalty.as_ref())
                 .filter(|penalty| !penalty.is_sparse())
@@ -531,13 +505,12 @@ impl CoxpenalFit {
         };
 
         // Remove the sparse term's column from the design.
-        let fcol = sparse_term.map(|t| data.terms[t].columns[0]);
+        let fcol = sparse_term.map(|t| model_terms[t].columns[0]);
         let (xx, assign2, frailx, nfrail) = match fcol {
             Some(fcol) => {
                 let keep: Vec<usize> = (0..ncol).filter(|&c| c != fcol).collect();
                 let xx = Array2::from_shape_fn((n, ncol - 1), |(i, j)| data.x[(i, keep[j])]);
-                let assign2: Vec<Vec<usize>> = data
-                    .terms
+                let assign2: Vec<Vec<usize>> = model_terms
                     .iter()
                     .map(|term| {
                         term.columns
@@ -560,7 +533,10 @@ impl CoxpenalFit {
             }
             None => (
                 data.x.clone(),
-                data.terms.iter().map(|term| term.columns.clone()).collect(),
+                model_terms
+                    .iter()
+                    .map(|term| term.columns.clone())
+                    .collect(),
                 None,
                 0,
             ),
@@ -585,7 +561,7 @@ impl CoxpenalFit {
 
         // The penalised terms: pparm, cfun and the first theta.
         let mut terms = Vec::new();
-        for (index, term) in data.terms.iter().enumerate() {
+        for (index, term) in model_terms.iter().enumerate() {
             let Some(penalty) = &term.penalty else {
                 continue;
             };
@@ -861,15 +837,7 @@ impl CoxpenalFit {
         // The dense part as a Cox model, with coxph()'s concordance of the
         // final linear predictors.
         let coxph = CoxPHFit::from_fitted(
-            CoxphData {
-                time: data.time,
-                entry: data.entry,
-                status: data.status,
-                x: xx,
-                weights: data.weights,
-                strata: data.strata,
-                offset: data.offset,
-            },
+            CoxphData { x: xx, ..data },
             FittedCox {
                 method: options.method,
                 coefficients,
@@ -974,24 +942,6 @@ impl CoxpenalFit {
         self.check_newdata_allowed()?;
         self.curve_source().survfit_individual(newdata, id, options)
     }
-}
-
-fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
-    matrix.outer_iter().map(|row| row.to_vec()).collect()
-}
-
-fn matrix_from_rows(rows: &[Vec<f64>], name: &str) -> SurvivalResult<Array2<f64>> {
-    let ncols = rows.first().map_or(0, Vec::len);
-    if rows.iter().any(|row| row.len() != ncols) {
-        return Err(SurvivalError::invalid_input(format!(
-            "{name} must be rectangular"
-        )));
-    }
-    Array2::from_shape_vec(
-        (rows.len(), ncols),
-        rows.iter().flatten().copied().collect(),
-    )
-    .map_err(|err| SurvivalError::invalid_input(err.to_string()))
 }
 
 /// A penalty term for [`coxpenal_fit`]: `ridge()`, `pspline()`, `frailty()`
@@ -1340,7 +1290,10 @@ pub fn coxpenal_fit(
     if terms.iter().filter(|term| term.penalty.is_some()).count() != penalties.len() {
         return Err(SurvivalError::invalid_input("pcols and assign arguments disagree").into());
     }
-    let data = CoxpenalData::try_new(time, entry, status, x, weights, strata, offset, terms)?;
+    let data = CoxpenalData::try_new(
+        CoxphData::try_new(time, entry, status, x, weights, strata, offset)?,
+        terms,
+    )?;
     let defaults = CoxpenalOptions::default();
     let options = CoxpenalOptions {
         method: TieMethod::parse(Some(method))?,
@@ -1374,7 +1327,11 @@ mod tests {
 
     fn fit_terms(terms: Vec<ModelTerm>, options: CoxpenalOptions) -> CoxpenalFit {
         let (time, status, x) = kidney_like();
-        let data = CoxpenalData::try_new(time, None, status, x, None, None, None, terms).unwrap();
+        let data = CoxpenalData::try_new(
+            CoxphData::try_new(time, None, status, x, None, None, None).unwrap(),
+            terms,
+        )
+        .unwrap();
         CoxpenalFit::fit(data, options).unwrap()
     }
 
@@ -1396,13 +1353,16 @@ mod tests {
         )
         .unwrap();
         let data = CoxpenalData::try_new(
-            time,
-            None,
-            status,
-            x.slice(ndarray::s![.., ..1]).to_owned(),
-            None,
-            None,
-            None,
+            CoxphData::try_new(
+                time,
+                None,
+                status,
+                x.slice(ndarray::s![.., ..1]).to_owned(),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
             vec![ModelTerm {
                 columns: vec![0],
                 penalty: Some(PenaltyTerm::ridge(Some(1e-10), None, 0.1, false, None).unwrap()),
@@ -1513,13 +1473,16 @@ mod tests {
             )
             .unwrap();
             let data = CoxpenalData::try_new(
-                time.clone(),
-                entry,
-                status.clone(),
-                x.clone(),
-                weights,
-                strata,
-                None,
+                CoxphData::try_new(
+                    time.clone(),
+                    entry,
+                    status.clone(),
+                    x.clone(),
+                    weights,
+                    strata,
+                    None,
+                )
+                .unwrap(),
                 vec![ModelTerm {
                     columns: vec![0],
                     penalty: Some(PenaltyTerm::ridge(Some(1e-12), None, 0.1, false, None).unwrap()),
@@ -1539,13 +1502,16 @@ mod tests {
     fn a_frailty_alone_is_a_null_model_with_random_effects() {
         let (time, status, x) = kidney_like();
         let data = CoxpenalData::try_new(
-            time,
-            None,
-            status,
-            x.slice(ndarray::s![.., 1..]).to_owned(),
-            None,
-            None,
-            None,
+            CoxphData::try_new(
+                time,
+                None,
+                status,
+                x.slice(ndarray::s![.., 1..]).to_owned(),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
             vec![ModelTerm {
                 columns: vec![0],
                 penalty: Some(
@@ -1622,13 +1588,16 @@ mod tests {
         };
         let make = |terms: Vec<ModelTerm>| {
             CoxpenalData::try_new(
-                time.clone(),
-                None,
-                status.clone(),
-                x.clone(),
-                None,
-                None,
-                None,
+                CoxphData::try_new(
+                    time.clone(),
+                    None,
+                    status.clone(),
+                    x.clone(),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap(),
                 terms,
             )
         };

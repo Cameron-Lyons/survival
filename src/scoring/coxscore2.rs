@@ -110,6 +110,8 @@ pub(crate) fn coxscore2_sorted(
     let mut a = vec![0.0; nvar];
     let mut a2 = vec![0.0; nvar];
     let mut xhaz = vec![0.0; nvar];
+    let mut mh2 = vec![0.0; nvar];
+    let mut mh3 = vec![0.0; nvar];
     let mut denom = 0.0;
     let mut cumhaz = 0.0;
     let mut stratastart = n - 1;
@@ -169,21 +171,32 @@ pub(crate) fn coxscore2_sorted(
             } else {
                 // Efron: the deaths are charged ahead for the part of the
                 // hazard increment they should not receive at the end of
-                // the stratum.
+                // the stratum.  coxscore2.c adds, for each death k,
+                // sum_dd (x_k - xbar_dd) (1/deaths + score_k hazard_dd
+                // downwt_dd); the sums over dd are accumulated first
+                // (mh1, mh2, mh3, as agscore3.c does) so the deaths are
+                // visited once.
                 meanwt /= deaths;
+                let mut mh1 = 0.0;
+                mh2.fill(0.0);
+                mh3.fill(0.0);
                 for dd in 0..deaths as usize {
                     let downwt = dd as f64 / deaths;
                     let temp = denom - downwt * e_denom;
                     let hazard = meanwt / temp;
                     cumhaz += hazard;
+                    mh1 += hazard * downwt;
                     for j in 0..nvar {
                         let xbar = (a[j] - downwt * a2[j]) / temp;
                         xhaz[j] += xbar * hazard;
-                        for k in death_rows() {
-                            let temp2 = covar[[k, j]] - xbar;
-                            resid[[k, j]] += temp2 / deaths;
-                            resid[[k, j]] += temp2 * score[k] * hazard * downwt;
-                        }
+                        mh2[j] += xbar * hazard * downwt;
+                        mh3[j] += xbar / deaths;
+                    }
+                }
+                for k in death_rows() {
+                    for j in 0..nvar {
+                        resid[[k, j]] +=
+                            (covar[[k, j]] - mh3[j]) + score[k] * (covar[[k, j]] * mh1 - mh2[j]);
                     }
                 }
             }
@@ -302,6 +315,50 @@ mod tests {
             }
             let total: f64 = resid.column(j).sum();
             assert!((total - u).abs() < 1e-12, "column {j}: {total} != {u}");
+        }
+    }
+
+    #[test]
+    fn efron_ties_match_r_with_weights() {
+        // R: coxph(Surv(time, status) ~ x1 + x2, weights = w, ties = "efron",
+        //    init = c(0.3, -0.2), iter.max = 0); residuals(fit, type = "score").
+        // Tie groups of 3 and 2 deaths, each with a censored row.
+        let time = vec![2.0, 2.0, 2.0, 2.0, 3.0, 5.0, 5.0, 5.0, 7.0, 8.0];
+        let status = vec![1, 1, 0, 1, 1, 1, 0, 1, 1, 0];
+        let x1: [f64; 10] = [0.5, -1.2, 0.3, 1.1, -0.4, 0.8, 1.5, -0.7, 0.2, -1.0];
+        let x2 = [1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+        let weights = [1.0, 2.0, 1.5, 0.5, 1.0, 1.0, 2.0, 1.0, 0.8, 1.2];
+        let covar = Array2::from_shape_fn((10, 2), |(i, j)| if j == 0 { x1[i] } else { x2[i] });
+        let score: Vec<f64> = (0..10).map(|i| (0.3 * x1[i] - 0.2 * x2[i]).exp()).collect();
+        let resid = coxscore2(
+            &survival(time, status),
+            covar.view(),
+            &score,
+            Some(&weights),
+            None,
+            TieMethod::Efron,
+        )
+        .unwrap();
+        let expected = [
+            [0.12880443708929956, 0.2991707894699495],
+            [-1.297937692648438, -0.5245704049725539],
+            [0.011135712838710593, -0.11674529985902629],
+            [0.5697089245772788, 0.2832545990082292],
+            [-0.5456835256343971, -0.3112239236232024],
+            [-0.16583014045179723, -0.11155647160376048],
+            [-1.0949377353459728, -0.3712761645748478],
+            [-0.6387207314797603, -0.3339168631913795],
+            [0.5338335395247131, -0.25137507956271266],
+            [0.9725493803037063, -0.1753784419751265],
+        ];
+        for (row, expected) in expected.iter().enumerate() {
+            for (j, &value) in expected.iter().enumerate() {
+                assert!(
+                    (resid[[row, j]] - value).abs() < 1e-13,
+                    "[{row}, {j}]: {} != {value}",
+                    resid[[row, j]]
+                );
+            }
         }
     }
 

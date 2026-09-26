@@ -8,9 +8,9 @@
 //! through [`CoxPHFit`].
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{CoxPHFit, CoxphData, CoxphOptions};
-use crate::regression::coxph_diagnostics::{ResidualType, Residuals};
 use ndarray::Array2;
 use pyo3::prelude::*;
 use std::collections::HashSet;
@@ -123,18 +123,6 @@ pub struct CchFitResult {
     /// point estimate, as R does (`fit$coefficients <- fit1$coefficients`).
     #[pyo3(get)]
     pub fit: CoxPHFit,
-}
-
-fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
-    matrix.outer_iter().map(|row| row.to_vec()).collect()
-}
-
-fn matrix_from_rows(rows: &[Vec<f64>], ncols: usize) -> Array2<f64> {
-    Array2::from_shape_vec(
-        (rows.len(), ncols),
-        rows.iter().flatten().copied().collect(),
-    )
-    .expect("rectangular rows")
 }
 
 fn validate_cch_inputs(
@@ -328,12 +316,11 @@ struct CoxInput {
 /// `coxph(Surv(start, stop, status) ~ x + offset, weights, init, iter.max)`
 /// with `coxph`'s defaults (Efron ties, `nocenter = c(-1, 0, 1)`).
 fn fit_cox(input: CoxInput, init: Option<Vec<f64>>, iter_max: usize) -> SurvivalResult<CoxPHFit> {
-    let nvar = input.x.first().map_or(0, Vec::len);
     let data = CoxphData::try_new(
         input.stop,
         Some(input.start),
         input.status,
-        matrix_from_rows(&input.x, nvar),
+        matrix_from_rows(&input.x, "x")?,
         input.weights,
         None,
         Some(input.offset),
@@ -345,18 +332,6 @@ fn fit_cox(input: CoxInput, init: Option<Vec<f64>>, iter_max: usize) -> Survival
         ..CoxphOptions::default()
     };
     CoxPHFit::fit(data, options)
-}
-
-fn residual_matrix(
-    fit: &CoxPHFit,
-    kind: ResidualType,
-    weighted: bool,
-    collapse: Option<&[i32]>,
-) -> SurvivalResult<Array2<f64>> {
-    match fit.residuals(kind, Some(weighted), collapse, None)? {
-        Residuals::Matrix(values) => Ok(values),
-        Residuals::Vector(_) => unreachable!("dfbeta and score residuals are matrices"),
-    }
 }
 
 struct CchComputation {
@@ -442,7 +417,7 @@ fn augmented_fit(
         initial_coefficients.clone(),
         if prentice { 35 } else { 20 },
     )?;
-    let dfbeta = residual_matrix(&fit, ResidualType::Dfbeta, true, None)?;
+    let dfbeta = fit.dfbeta(true, None)?;
     let phase2_rows = dfbeta
         .slice(ndarray::s![case_indices.len().., ..])
         .to_owned();
@@ -507,7 +482,7 @@ fn lin_ying_fit(
         None,
         20,
     )?;
-    let dfbeta = residual_matrix(&fit, ResidualType::Dfbeta, true, None)?;
+    let dfbeta = fit.dfbeta(true, None)?;
     let noncase_rows: Vec<usize> = (0..stop.len()).filter(|&i| status[i] == 0).collect();
     let mut db0 = Array2::zeros((noncase_rows.len(), dfbeta.ncols()));
     for (position, &row) in noncase_rows.iter().enumerate() {
@@ -734,7 +709,7 @@ fn borgan_fit(
     }
 
     let fit = fit_cox(input, None, 25)?;
-    let score_rows = residual_matrix(&fit, ResidualType::Score, false, None)?;
+    let score_rows = fit.score_residuals(false, None)?;
     let phase2_rows: Vec<usize> = match method {
         BorganMethod::I => (phase2_start..score_rows.nrows()).collect(),
         BorganMethod::II => (0..observed_n).filter(|&i| status[i] == 0).collect(),
@@ -768,7 +743,7 @@ fn borgan_fit(
             i32::try_from(rank).map_err(|_| SurvivalError::invalid_input("too many ids"))
         })
         .collect::<SurvivalResult<Vec<i32>>>()?;
-    let sc = residual_matrix(&fit, ResidualType::Score, true, Some(&id_rank))?;
+    let sc = fit.score_residuals(true, Some(&id_rank))?;
     Ok(BorganComputation {
         computation: CchComputation {
             fit,

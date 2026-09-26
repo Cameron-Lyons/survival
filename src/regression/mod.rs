@@ -42,8 +42,10 @@ pub(crate) mod survreg_distributions;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
-pub use aareg_fit_module::{AaregFitResult, aareg_fit};
-pub use agexact::{AgexactData, AgexactFit, AgexactOptions, agexact_fit, agexact_py};
+pub use aareg_fit_module::{
+    AaregData, AaregFitResult, AaregOptions, AaregTest, aareg_fit, aareg_fit_py,
+};
+pub use agexact::{AgexactFit, AgexactOptions, agexact_fit, agexact_py};
 pub use blogit::LinkFunctionParams;
 pub use cause_specific_cox_module::{
     CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
@@ -66,7 +68,7 @@ pub use coxph::{
     CoxphOptions, PredictReference, SurvfitOptions, coxph_fit,
 };
 pub use coxph_detail::{CoxphDetail, coxph_detail, coxph_detail_py};
-pub use coxph_diagnostics::{ResidualType, Residuals, SchoenfeldResiduals};
+pub use coxph_diagnostics::{CoxResidualType, Residuals, SchoenfeldResiduals};
 pub use coxph_wtest::{CoxphWtest, coxph_wtest_py, wald_tests};
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,

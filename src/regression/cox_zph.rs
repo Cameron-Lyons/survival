@@ -946,13 +946,7 @@ mod tests {
     fn ridge_fit() -> CoxpenalFit {
         let x = Array2::from_shape_fn((10, 2), |(row, col)| [X1, X2][col][row]);
         let data = CoxpenalData::try_new(
-            TIME.to_vec(),
-            None,
-            STATUS.to_vec(),
-            x,
-            None,
-            None,
-            None,
+            CoxphData::try_new(TIME.to_vec(), None, STATUS.to_vec(), x, None, None, None).unwrap(),
             vec![ModelTerm {
                 columns: vec![0, 1],
                 penalty: Some(PenaltyTerm::ridge(Some(1.0), None, 1e-5, false, None).unwrap()),
@@ -1029,13 +1023,7 @@ mod tests {
             })
             .collect();
         let data = CoxpenalData::try_new(
-            TIME.to_vec(),
-            None,
-            STATUS.to_vec(),
-            x,
-            None,
-            None,
-            None,
+            CoxphData::try_new(TIME.to_vec(), None, STATUS.to_vec(), x, None, None, None).unwrap(),
             terms,
         )
         .unwrap();

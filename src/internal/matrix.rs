@@ -84,6 +84,27 @@ fn require_finite(matrix: &Array2<f64>, context: &str) -> SurvivalResult<()> {
     Ok(())
 }
 
+/// The rows of a matrix, the nested-list layout of the Python bindings.
+pub(crate) fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
+    matrix.outer_iter().map(|row| row.to_vec()).collect()
+}
+
+/// A matrix from rows of one length; `name` labels the error for ragged
+/// rows.  No rows give a `0 x 0` matrix.
+pub(crate) fn matrix_from_rows(rows: &[Vec<f64>], name: &str) -> SurvivalResult<Array2<f64>> {
+    let ncols = rows.first().map_or(0, Vec::len);
+    if rows.iter().any(|row| row.len() != ncols) {
+        return Err(SurvivalError::invalid_input(format!(
+            "{name} must be rectangular"
+        )));
+    }
+    Array2::from_shape_vec(
+        (rows.len(), ncols),
+        rows.iter().flatten().copied().collect(),
+    )
+    .map_err(|err| SurvivalError::invalid_input(err.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Generalised Cholesky (R survival: cholesky2.c / chsolve2.c / chinv2.c)
 // ---------------------------------------------------------------------------
@@ -475,8 +496,7 @@ pub(crate) fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     }
     let flat: Vec<f64> = mat.iter().flatten().copied().collect();
     let matrix = Array2::from_shape_vec((n, n), flat).ok()?;
-    let inverse = matrix_inverse(&matrix)?;
-    Some(inverse.outer_iter().map(|row| row.to_vec()).collect())
+    Some(matrix_rows(&matrix_inverse(&matrix)?))
 }
 
 /// Always-successful inverse of a flattened row-major `n x n` information or
@@ -848,6 +868,17 @@ mod tests {
         assert!(invert_matrix(&[]).is_none());
         assert!(invert_matrix(&[vec![1.0, 2.0], vec![3.0]]).is_none());
         assert!(invert_matrix(&[vec![1.0, 2.0], vec![2.0, 4.0]]).is_none());
+    }
+
+    #[test]
+    fn row_conversions_round_trip_and_reject_ragged_rows() {
+        let rows = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let matrix = matrix_from_rows(&rows, "x").unwrap();
+        assert_eq!(matrix, arr2(&[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]));
+        assert_eq!(matrix_rows(&matrix), rows);
+        assert_eq!(matrix_from_rows(&[], "x").unwrap().dim(), (0, 0));
+        let err = matrix_from_rows(&[vec![1.0, 2.0], vec![3.0]], "x").unwrap_err();
+        assert!(err.to_string().contains("x must be rectangular"));
     }
 
     #[test]

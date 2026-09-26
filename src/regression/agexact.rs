@@ -4,14 +4,16 @@
 //! The computation is the Newton-Raphson engine of `cox_optimizer` with
 //! `TieMethod::Exact` and entry times; this module keeps the C routine's
 //! calling convention (per-column centring, no case weights) as a typed
-//! function and its Python binding.  `coxph_fit(method = "exact", entry =
+//! function on a [`CoxphData`] and its Python binding.  `coxph_fit(method = "exact", entry =
 //! ...)` reaches the same engine and adds the `coxph` post-processing.
 
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
-use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
+use crate::error::SurvivalResult;
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
-use ndarray::{Array1, Array2};
+use crate::regression::coxph::{CoxphData, nocenter_columns};
+use ndarray::Array1;
 use pyo3::prelude::*;
 
 /// What `agexact.c` returns.
@@ -41,18 +43,6 @@ pub struct AgexactFit {
     pub iter: usize,
 }
 
-/// Inputs of [`agexact_fit`], in any row order.
-#[derive(Debug, Clone)]
-pub struct AgexactData {
-    pub start: Vec<f64>,
-    pub stop: Vec<f64>,
-    pub event: Vec<i32>,
-    pub x: Array2<f64>,
-    pub offset: Option<Vec<f64>>,
-    /// Stratum codes.
-    pub strata: Option<Vec<i32>>,
-}
-
 /// Fitting controls of [`agexact_fit`] (`coxph.control` plus `init` and
 /// `nocenter`).
 #[derive(Debug, Clone)]
@@ -78,68 +68,40 @@ impl Default for AgexactOptions {
     }
 }
 
-/// Port of `agexact.fit` (without the residuals, which `CoxPHFit` provides).
-pub fn agexact_fit(data: &AgexactData, options: &AgexactOptions) -> SurvivalResult<AgexactFit> {
-    let n = data.stop.len();
+/// Port of `agexact.fit` (without the residuals, which `CoxPHFit` provides)
+/// on the data of a Cox fit, rows in any order.  Without entry times every
+/// interval starts at 0, as in R.
+pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<AgexactFit> {
+    let n = data.n();
     let nvar = data.x.ncols();
-    if n == 0 {
-        return Err(SurvivalError::invalid_input(
-            "No (non-missing) observations",
-        ));
-    }
-    validate_length(n, data.start.len(), "start")?;
-    validate_length(n, data.event.len(), "event")?;
-    validate_length(n, data.x.nrows(), "x")?;
-    validate_finite(&data.start, "start")?;
-    validate_finite(&data.stop, "stop")?;
-    validate_binary_i32(&data.event, "event")?;
-    if let Some(index) = (0..n).find(|&i| data.start[i] >= data.stop[i]) {
-        return Err(SurvivalError::invalid_input(format!(
-            "Stop time must be > start time (row {index})"
-        )));
-    }
-    if let Some(value) = data.x.iter().find(|value| !value.is_finite()) {
-        return Err(SurvivalError::invalid_input(format!(
-            "x contains non-finite value {value}"
-        )));
-    }
-    if let Some(offset) = &data.offset {
-        validate_length(n, offset.len(), "offset")?;
-        validate_finite(offset, "offset")?;
-    }
-    if let Some(strata) = &data.strata {
-        validate_length(n, strata.len(), "strata")?;
-    }
+    data.check_fit_input()?;
     if let Some(init) = &options.init {
         validate_finite(init, "init")?;
     }
-    let doscale: Vec<bool> = (0..nvar)
-        .map(|col| {
-            !options.nocenter.as_ref().is_some_and(|values| {
-                data.x
-                    .column(col)
-                    .iter()
-                    .all(|value| values.contains(value))
-            })
-        })
+    let doscale = nocenter_columns(&data.x, options.nocenter.as_deref())
+        .into_iter()
+        .map(|skip| !skip)
         .collect();
     let mut builder = CoxFitBuilder::new(
-        Array1::from_vec(data.stop.clone()),
-        Array1::from_vec(data.event.clone()),
-        data.x.clone(),
+        Array1::from_vec(data.time),
+        Array1::from_vec(data.status),
+        data.x,
     )
-    .entry_times(Array1::from_vec(data.start.clone()))
+    .entry_times(Array1::from_vec(data.entry.unwrap_or_else(|| vec![0.0; n])))
     .method(TieMethod::Exact)
     .max_iter(options.iter_max)
     .eps(options.eps)
     .toler(options.toler_chol)
     .doscale(doscale)
     .initial_beta(options.init.clone().unwrap_or_else(|| vec![0.0; nvar]));
-    if let Some(offset) = &data.offset {
-        builder = builder.offset(Array1::from_vec(offset.clone()));
+    if let Some(offset) = data.offset {
+        builder = builder.offset(Array1::from_vec(offset));
     }
-    if let Some(strata) = &data.strata {
-        builder = builder.strata(Array1::from_vec(strata.clone()));
+    if let Some(strata) = data.strata {
+        builder = builder.strata(Array1::from_vec(strata));
+    }
+    if let Some(weights) = data.weights {
+        builder = builder.weights(Array1::from_vec(weights));
     }
     let mut engine = builder.build()?;
     engine.fit()?;
@@ -148,7 +110,7 @@ pub fn agexact_fit(data: &AgexactData, options: &AgexactOptions) -> SurvivalResu
         coefficients: results.coefficients,
         means: results.means,
         u: results.score,
-        var: results.var.outer_iter().map(|row| row.to_vec()).collect(),
+        var: matrix_rows(&results.var),
         loglik: results.loglik,
         sctest: results.sctest,
         flag: results.flag,
@@ -173,15 +135,8 @@ pub fn agexact_py(
     toler_chol: Option<f64>,
     nocenter: Option<Vec<f64>>,
 ) -> PyResult<AgexactFit> {
-    let ncols = x.first().map_or(0, Vec::len);
-    if x.len() != stop.len() || x.iter().any(|row| row.len() != ncols) {
-        return Err(SurvivalError::invalid_input(
-            "x must have one rectangular row per observation",
-        )
-        .into());
-    }
-    let x = Array2::from_shape_vec((x.len(), ncols), x.into_iter().flatten().collect())
-        .map_err(|err| SurvivalError::invalid_input(err.to_string()))?;
+    let x = matrix_from_rows(&x, "x")?;
+    let data = CoxphData::try_new(stop, Some(start), event, x, None, strata, offset)?;
     let defaults = AgexactOptions::default();
     let options = AgexactOptions {
         init,
@@ -190,28 +145,30 @@ pub fn agexact_py(
         toler_chol: toler_chol.unwrap_or(defaults.toler_chol),
         nocenter,
     };
-    Ok(agexact_fit(
-        &AgexactData {
-            start,
-            stop,
-            event,
-            x,
-            offset,
-            strata,
-        },
-        &options,
-    )?)
+    Ok(agexact_fit(data, &options)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndarray::Array2;
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
             (actual - expected).abs() < tolerance,
             "expected {expected:.16e}, got {actual:.16e}"
         );
+    }
+
+    fn counting(
+        start: Vec<f64>,
+        stop: Vec<f64>,
+        event: Vec<i32>,
+        x: Array2<f64>,
+        offset: Option<Vec<f64>>,
+        strata: Option<Vec<i32>>,
+    ) -> CoxphData {
+        CoxphData::try_new(stop, Some(start), event, x, None, strata, offset).unwrap()
     }
 
     fn matrix(rows: usize, values: Vec<f64>) -> Array2<f64> {
@@ -227,21 +184,21 @@ mod tests {
         }
     }
 
-    fn tied_data(offset: Vec<f64>) -> AgexactData {
-        AgexactData {
-            start: vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.5, 2.0, 2.5, 3.0],
-            stop: vec![2.0, 3.0, 3.0, 3.0, 4.0, 4.5, 5.0, 5.0, 5.0, 6.0],
-            event: vec![1, 1, 1, 0, 0, 1, 1, 1, 0, 1],
-            x: matrix(
+    fn tied_data(offset: Vec<f64>) -> CoxphData {
+        counting(
+            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.5, 2.0, 2.5, 3.0],
+            vec![2.0, 3.0, 3.0, 3.0, 4.0, 4.5, 5.0, 5.0, 5.0, 6.0],
+            vec![1, 1, 1, 0, 0, 1, 1, 1, 0, 1],
+            matrix(
                 10,
                 vec![
                     -0.8, 0.3, 1.1, -0.2, 0.7, 1.4, -1.0, 0.5, 1.0, -0.4, 0.2, 1.3, -0.5, 0.8,
                     -1.1, 0.4, 1.2, -0.7, 0.6, 1.0,
                 ],
             ),
-            offset: Some(offset),
-            strata: None,
-        }
+            Some(offset),
+            None,
+        )
     }
 
     fn options(iter_max: usize, init: Option<Vec<f64>>) -> AgexactOptions {
@@ -255,29 +212,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_length_mismatches() {
-        let data = AgexactData {
-            start: vec![0.0],
-            stop: vec![1.0, 2.0],
-            event: vec![1, 0],
-            x: matrix(2, vec![1.0, 2.0]),
-            offset: None,
-            strata: None,
-        };
-        assert!(agexact_fit(&data, &AgexactOptions::default()).is_err());
+    fn rejects_case_weights_and_wrong_init_length() {
+        // agexact.fit: "Case weights are not supported for the exact method",
+        // "Wrong length for inital values".
+        let mut data = tied_data(vec![0.0; 10]);
+        data.weights = Some(vec![2.0; 10]);
+        let err = agexact_fit(data, &AgexactOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("Case weights are not supported"));
+        let err = agexact_fit(tied_data(vec![0.0; 10]), &options(20, Some(vec![0.1]))).unwrap_err();
+        assert!(err.to_string().contains("Wrong length for inital values"));
     }
 
     #[test]
     fn exact_counting_process_fit_matches_reference() {
-        let data = AgexactData {
-            start: vec![0.0; 6],
-            stop: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            event: vec![1, 0, 1, 1, 0, 1],
-            x: matrix(6, vec![0.2, 1.1, -0.4, 0.8, 1.5, -0.2]),
-            offset: None,
-            strata: None,
-        };
-        let result = agexact_fit(&data, &options(20, None)).unwrap();
+        let data = counting(
+            vec![0.0; 6],
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![1, 0, 1, 1, 0, 1],
+            matrix(6, vec![0.2, 1.1, -0.4, 0.8, 1.5, -0.2]),
+            None,
+            None,
+        );
+        let result = agexact_fit(data, &options(20, None)).unwrap();
         assert_close(result.coefficients[0], -0.716_230_334_1, 1e-9);
         assert_close(result.loglik[0], -4.276_666_119, 1e-9);
         assert_close(result.loglik[1], -3.923_517_065_7, 1e-9);
@@ -292,7 +248,7 @@ mod tests {
     fn tied_exact_fit_matches_reference() {
         // R: coxph(Surv(start, stop, event) ~ x, ties = "exact",
         //          control = coxph.control(eps = 1e-9, toler.chol = 1e-9))
-        let result = agexact_fit(&tied_data(vec![0.0; 10]), &options(20, None)).unwrap();
+        let result = agexact_fit(tied_data(vec![0.0; 10]), &options(20, None)).unwrap();
         for (actual, expected) in result
             .coefficients
             .iter()
@@ -316,22 +272,22 @@ mod tests {
 
     #[test]
     fn stratified_exact_fit_matches_reference() {
-        let data = AgexactData {
-            start: vec![0.0, 0.2, 0.5, 1.0, 1.2, 2.0, 0.0, 0.1, 0.4, 0.8, 1.5, 2.2],
-            stop: vec![1.5, 2.5, 3.0, 3.0, 4.5, 5.5, 1.0, 2.0, 2.8, 3.8, 4.2, 5.0],
-            event: vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
-            x: matrix(
+        let data = counting(
+            vec![0.0, 0.2, 0.5, 1.0, 1.2, 2.0, 0.0, 0.1, 0.4, 0.8, 1.5, 2.2],
+            vec![1.5, 2.5, 3.0, 3.0, 4.5, 5.5, 1.0, 2.0, 2.8, 3.8, 4.2, 5.0],
+            vec![1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1],
+            matrix(
                 12,
                 vec![
                     -0.7, 0.4, 1.2, -0.1, 0.8, 1.5, 0.5, -1.1, 0.9, 1.3, -0.4, 0.2, 1.0, -0.5, 0.3,
                     1.4, -0.8, 0.6, -1.2, 0.7, 1.1, -0.2, 0.5, 1.6,
                 ],
             ),
-            offset: None,
-            strata: Some(vec![0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]),
-        };
+            None,
+            Some(vec![0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]),
+        );
         // R: coxph(Surv(start, stop, event) ~ x + strata(s), ties = "exact")
-        let result = agexact_fit(&data, &options(20, None)).unwrap();
+        let result = agexact_fit(data, &options(20, None)).unwrap();
         for (actual, expected) in result
             .coefficients
             .iter()
@@ -363,7 +319,7 @@ mod tests {
     #[test]
     fn zero_iteration_fit_preserves_initial_coefficients() {
         let offset = vec![0.1, -0.2, 0.05, 0.3, -0.1, 0.15, -0.25, 0.2, -0.05, 0.1];
-        let result = agexact_fit(&tied_data(offset), &options(0, Some(vec![0.25, -0.15]))).unwrap();
+        let result = agexact_fit(tied_data(offset), &options(0, Some(vec![0.25, -0.15]))).unwrap();
         assert_eq!(result.coefficients, vec![0.25, -0.15]);
         assert_eq!(result.iter, 0);
         assert_eq!(result.flag, 0);
@@ -381,7 +337,7 @@ mod tests {
     #[test]
     fn one_iteration_from_nonzero_initial_values_matches_reference() {
         let offset = vec![0.1, -0.2, 0.05, 0.3, -0.1, 0.15, -0.25, 0.2, -0.05, 0.1];
-        let result = agexact_fit(&tied_data(offset), &options(1, Some(vec![0.25, -0.15]))).unwrap();
+        let result = agexact_fit(tied_data(offset), &options(1, Some(vec![0.25, -0.15]))).unwrap();
         // R: as above with iter.max = 1
         for (actual, expected) in result
             .coefficients
@@ -408,15 +364,15 @@ mod tests {
 
     #[test]
     fn delayed_entry_exact_fit_avoids_risk_sum_cancellation() {
-        let data = AgexactData {
-            start: vec![0.0, 0.0, 1.0],
-            stop: vec![1.0, 2.0, 2.0],
-            event: vec![1, 0, 0],
-            x: matrix(3, vec![0.0, 0.0, 100.0]),
-            offset: None,
-            strata: None,
-        };
-        let result = agexact_fit(&data, &options(0, Some(vec![1.0]))).unwrap();
+        let data = counting(
+            vec![0.0, 0.0, 1.0],
+            vec![1.0, 2.0, 2.0],
+            vec![1, 0, 0],
+            matrix(3, vec![0.0, 0.0, 100.0]),
+            None,
+            None,
+        );
+        let result = agexact_fit(data, &options(0, Some(vec![1.0]))).unwrap();
         assert_close(result.loglik[0], -std::f64::consts::LN_2, 1e-12);
         assert_eq!(result.loglik[0], result.loglik[1]);
         assert_eq!(result.u, vec![0.0]);
@@ -427,18 +383,18 @@ mod tests {
 
     #[test]
     fn complete_tied_risk_set_has_zero_conditional_information() {
-        let data = AgexactData {
-            start: vec![0.0; 3],
-            stop: vec![1.0; 3],
-            event: vec![1; 3],
-            x: matrix(
+        let data = counting(
+            vec![0.0; 3],
+            vec![1.0; 3],
+            vec![1; 3],
+            matrix(
                 3,
                 (0..3).map(|v| ((v as f64 - 0.37).powi(2)) / 7.0).collect(),
             ),
-            offset: None,
-            strata: None,
-        };
-        let result = agexact_fit(&data, &options(0, Some(vec![0.7]))).unwrap();
+            None,
+            None,
+        );
+        let result = agexact_fit(data, &options(0, Some(vec![0.7]))).unwrap();
         assert_eq!(result.loglik, [0.0, 0.0]);
         assert_eq!(result.u, vec![0.0]);
         assert_eq!(result.var, vec![vec![0.0]]);
@@ -448,11 +404,11 @@ mod tests {
 
     #[test]
     fn step_halving_uses_the_exact_policy() {
-        let data = AgexactData {
-            start: vec![0.0, 0.0, 0.0, 2.0, 6.0, 5.0, 8.0, 1.0, 5.0, 10.0],
-            stop: vec![1.0, 2.0, 2.0, 6.0, 7.0, 7.0, 10.0, 10.0, 11.0, 11.0],
-            event: vec![1, 1, 0, 0, 0, 0, 1, 0, 1, 1],
-            x: matrix(
+        let data = counting(
+            vec![0.0, 0.0, 0.0, 2.0, 6.0, 5.0, 8.0, 1.0, 5.0, 10.0],
+            vec![1.0, 2.0, 2.0, 6.0, 7.0, 7.0, 10.0, 10.0, 11.0, 11.0],
+            vec![1, 1, 0, 0, 0, 0, 1, 0, 1, 1],
+            matrix(
                 10,
                 vec![
                     -0.794_901_757_722_206_4,
@@ -467,7 +423,7 @@ mod tests {
                     0.251_309_986_747_342,
                 ],
             ),
-            offset: Some(vec![
+            Some(vec![
                 0.321_143_620_716_472_3,
                 -0.170_347_621_201_529_4,
                 0.275_770_030_571_546_9,
@@ -479,9 +435,9 @@ mod tests {
                 0.496_755_599_155_065,
                 0.170_148_434_302_88,
             ]),
-            strata: None,
-        };
-        let result = agexact_fit(&data, &options(40, Some(vec![5.853_544_164_651_22]))).unwrap();
+            None,
+        );
+        let result = agexact_fit(data, &options(40, Some(vec![5.853_544_164_651_22]))).unwrap();
         assert_close(result.coefficients[0], 4.633_619_571_940_176, 1e-9);
         assert_close(result.loglik[0], -2.034_562_528_770_813, 1e-9);
         assert_close(result.loglik[1], -2.030_219_922_496_827_6, 1e-9);
@@ -492,11 +448,11 @@ mod tests {
 
     #[test]
     fn nonconverged_exact_fit_returns_final_trial_state() {
-        let data = AgexactData {
-            start: vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 3.0],
-            stop: vec![1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 5.0],
-            event: vec![1, 0, 0, 0, 0, 1, 0],
-            x: matrix(
+        let data = counting(
+            vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 3.0],
+            vec![1.0, 1.0, 1.0, 3.0, 3.0, 4.0, 5.0],
+            vec![1, 0, 0, 0, 0, 1, 0],
+            matrix(
                 7,
                 vec![
                     -0.106_275_907_728_014_89,
@@ -508,7 +464,7 @@ mod tests {
                     0.189_703_669_111_627_2,
                 ],
             ),
-            offset: Some(vec![
+            Some(vec![
                 1.488_417_295_240_173_7,
                 -0.376_803_280_793_356_45,
                 -0.310_856_512_288_097_7,
@@ -517,9 +473,9 @@ mod tests {
                 0.427_128_664_347_841_25,
                 -0.159_616_115_770_802_56,
             ]),
-            strata: None,
-        };
-        let result = agexact_fit(&data, &options(20, Some(vec![0.708_344_326_291_033_2]))).unwrap();
+            None,
+        );
+        let result = agexact_fit(data, &options(20, Some(vec![0.708_344_326_291_033_2]))).unwrap();
         assert_close(result.coefficients[0], 36.550_680_230_661_33, 5e-7);
         assert_close(result.loglik[0], -0.266_892_412_518_194_4, 1e-12);
         assert_close(result.loglik[1], -2.564_007_672_845_036_7e-9, 1e-12);
@@ -532,17 +488,17 @@ mod tests {
     fn large_tied_risk_set_uses_dynamic_programming() {
         let n = 64;
         let deaths = 32;
-        let data = AgexactData {
-            start: vec![0.0; n],
-            stop: vec![1.0; n],
-            event: (0..n).map(|person| i32::from(person < deaths)).collect(),
-            x: matrix(n, (0..n).map(|value| value as f64).collect()),
-            offset: None,
-            strata: None,
-        };
+        let data = counting(
+            vec![0.0; n],
+            vec![1.0; n],
+            (0..n).map(|person| i32::from(person < deaths)).collect(),
+            matrix(n, (0..n).map(|value| value as f64).collect()),
+            None,
+            None,
+        );
         let mut options = options(0, None);
         options.nocenter = Some((0..n).map(|value| value as f64).collect());
-        let result = agexact_fit(&data, &options).unwrap();
+        let result = agexact_fit(data, &options).unwrap();
         assert_close(result.loglik[0], -42.052_280_570_411_12, 1e-10);
         assert_close(result.u[0], -512.0, 1e-10);
         assert_close(result.var[0][0], 3.0 / 16_640.0, 1e-15);
