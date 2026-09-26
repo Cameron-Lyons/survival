@@ -258,7 +258,8 @@ class CchModelResult:
     def sc(self) -> list[list[float]] | None:
         """The Borgan estimators' weighted score residuals collapsed by id, one row per id."""
 
-        return None if self.fit.sc is None else [list(row) for row in self.fit.sc]
+        sc = self.fit.sc
+        return None if sc is None else [list(row) for row in sc]
 
     @property
     def method(self) -> str:
