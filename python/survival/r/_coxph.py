@@ -1846,11 +1846,11 @@ def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
 
 
 def _survfit_newdata(
-    fit: CoxphModel, newdata: Any, *, individual: bool, id: Any | None
+    fit: CoxphModel, newdata: Any, *, individual: bool, id: Any | None, na_action: str
 ) -> tuple[_NewData, list[int], list[Any] | None]:
-    """R's ``model.frame(Terms2, newdata, id = id, na.action = na.omit)``: the newdata
-    pieces at the rows without a missing value in a variable the curves read (the
-    ``id`` included), those rows (0-based, for the curve names) and their ``id``."""
+    """R's ``model.frame(Terms2, newdata, id = id, na.action = na.omit)`` (``na_action``):
+    the newdata pieces at the rows without a missing value in a variable the curves read
+    (the ``id`` included), those rows (0-based, for the curve names) and their ``id``."""
 
     n = _formula_design_row_count(newdata, fit.design)
     rows = list(range(n))
@@ -1863,7 +1863,7 @@ def _survfit_newdata(
         if len(rows) < n:
             newdata = _data_rows(newdata, _newdata_columns(newdata), rows, n)
     new = _prediction_newdata(
-        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action="na.omit"
+        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action=na_action
     )
     if new.missing:
         dropped = set(new.missing)
@@ -1884,9 +1884,11 @@ def _survfit_curves(
     se_fit: bool,
     censor: bool,
     start_time: float | None = None,
+    na_action: str = "na.omit",
 ) -> tuple[list[Any], list[str]]:
     """The engine curves for ``survfit.coxph`` and the name of each block (R's
-    ``names(fit$strata)``: the strata levels, the id values or the newdata row names)."""
+    ``names(fit$strata)``: the strata levels, the id values or the newdata row names).
+    ``na_action = "na.fail"`` refuses the newdata rows ``na.omit`` would leave out."""
 
     _check_interaction_margins(fit)
     engine = fit.penalized if fit.penalized is not None else fit.fit
@@ -1907,7 +1909,9 @@ def _survfit_curves(
             )
         curves = engine.survfit(**options)
         return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
-    new, rows, ids = _survfit_newdata(fit, newdata, individual=individual, id=id)
+    new, rows, ids = _survfit_newdata(
+        fit, newdata, individual=individual, id=id, na_action=na_action
+    )
     if individual:
         if new.y is None:
             raise ValueError("newdata must contain the response variables when id is given")

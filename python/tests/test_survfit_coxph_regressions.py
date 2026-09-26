@@ -343,6 +343,18 @@ def test_newdata_rows_missing_a_strata_offset_or_transformed_value(lung):
     assert curve.surv[0] == approx([0.995858312428209, 0.995026804966051])
 
 
+def test_survexp_refuses_a_row_the_cox_terms_make_missing(lung):
+    # R: survexp(~ 1, d, ratetable = coxph(Surv(time, status) ~ log(age) + sex, lung)) with
+    # d$age[1] = -1 stops ("non-conformable arguments"): survexp.cfit needs a curve per row
+    logged = r.coxph("Surv(time, status) ~ log(age) + sex", lung)
+    data = {**lung, "age": [-1, *lung["age"][1:]]}
+    with (
+        pytest.warns(UserWarning, match="NaNs produced"),
+        pytest.raises(ValueError, match="missing values in newdata"),
+    ):
+        r.survexp("~ 1", data, ratetable=logged)
+
+
 # ---------------------------------------------------------------------------
 # curve names
 # ---------------------------------------------------------------------------
