@@ -10859,7 +10859,7 @@ def aareg_fit(
     nmin: int | None = None,
     dfbeta: bool = False,
     taper: Sequence[float] | None = None,
-    test: str = ...,
+    test: str = "aalen",
     test_cluster: Sequence[int] | None = None,
 ) -> AaregFitResult: ...
 def active_learning_selection(
