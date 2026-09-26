@@ -320,7 +320,9 @@ fn prepare_times(times: &[f64], timefix: bool) -> SurvivalResult<Vec<f64>> {
 /// A `start_time` in the options drops observations from the curve but
 /// not from the residuals: R hands the whole model frame to `rsurvpart1`,
 /// where a row that ends before the first event time of the curve has no
-/// event-time index and therefore a residual of 0 at every time.
+/// event-time index and therefore a residual of 0 at every time.  A
+/// `start_time` that removes every observation of a stratum is refused, as
+/// R refuses it.
 pub fn survfitresid(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
@@ -363,6 +365,14 @@ fn residuals_from_fit(
         })
         .collect();
     let ranges = fit.curve_ranges();
+    // residuals.survfit scores the rows of the k-th level with fit[k]: a curve
+    // that start.time emptied is not fitted, which leaves more levels than
+    // curves and `[.survfit` stops ("strata k not matched")
+    if ranges.len() != strata_levels.len() {
+        return Err(SurvivalError::invalid_input(
+            "start.time has removed all the observations from at least one curve",
+        ));
+    }
     let collapse = collapse
         && data.id.as_ref().is_some_and(|id| {
             let mut unique = id.clone();
@@ -1670,6 +1680,52 @@ mod tests {
                 .to_string()
                 .contains("smallest survival")
         );
+    }
+
+    #[test]
+    fn start_time_that_empties_a_stratum_is_refused() {
+        // d <- data.frame(t = c(1:8, 5:7, 9), e = c(1,1,0,1, 0,1,1,0, 1,0,1,1),
+        //                 g = rep(1:3, each = 4))
+        // fit <- survfit(Surv(t, e) ~ g, d, start.time = 5) has n = 0 4 4 and
+        // residuals(fit, times = c(6, 7)) and pseudo() stop: "strata 3 not
+        // matched"; on d[1:8, ] (n = 0 4) "strata 2 not matched"
+        let time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 5.0, 6.0, 7.0, 9.0];
+        let status = [1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1];
+        let strata = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
+        let options = SurvfitKMOptions {
+            start_time: Some(5.0),
+            ..Default::default()
+        };
+        let refused = |result: SurvivalResult<SurvfitResid>| {
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("start.time has removed all the observations from at least one curve")
+        };
+        for (rows, n) in [(12, vec![0, 4, 4]), (8, vec![0, 4])] {
+            let data = SurvfitKMData::try_new(
+                None,
+                time[..rows].to_vec(),
+                status[..rows].to_vec(),
+                None,
+                Some(strata[..rows].to_vec()),
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(survfitkm(&data, &options).unwrap().n, n);
+            for kind in [ResidualType::Pstate, ResidualType::Auc] {
+                assert!(refused(survfitresid(
+                    &data,
+                    &options,
+                    &[6.0, 7.0],
+                    kind,
+                    false,
+                    false
+                )));
+                assert!(refused(pseudo(&data, &options, &[6.0, 7.0], kind, true)));
+            }
+        }
     }
 
     #[test]

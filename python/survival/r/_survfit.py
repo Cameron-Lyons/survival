@@ -355,9 +355,11 @@ def _survfit_data_from_fit(fit: SurvfitResult | SurvfitMultiStateResult) -> _Sur
         raise ValueError("the model frame of the survfit object has no Surv response")
     columns = {name: model[name] for name in fit.call.terms}
     extras: dict[str, Any] = {name: model.get(f"({name})") for name in _SPECIALS}
-    data = _survfit_data(
-        model[response_name], response_name, columns, extras, fit.strata_names or None
-    )
+    data = _survfit_data(model[response_name], response_name, columns, extras)
+    # residuals.survfit scores the rows of the k-th curve level with fit[k]; a curve that
+    # start.time emptied is not in the fit and `[.survfit` stops ("strata k not matched")
+    if 0 in fit.n:
+        raise ValueError("start.time has removed all the observations from at least one curve")
     if len(fit.strata_names or ["1"]) != data.n_curves:
         raise ValueError("the model frame does not match the curves of the fit")
     return data

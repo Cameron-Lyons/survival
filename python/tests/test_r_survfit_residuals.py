@@ -263,6 +263,30 @@ def test_residuals_and_pseudo_of_a_start_time_fit_match_r():
     _close(group_values[12], [0.875, 0.291666666666667])
 
 
+@pytest.mark.parametrize("groups", [3, 2])
+def test_residuals_and_pseudo_refuse_a_curve_that_start_time_emptied(groups):
+    # R: d <- data.frame(t = c(1:8, 5:7, 9), e = c(1,1,0,1, 0,1,1,0, 1,0,1,1),
+    # g = rep(1:3, each = 4)); fit <- survfit(Surv(t, e) ~ g, d, start.time = 5) has
+    # n = c(0, 4, 4), and residuals(fit, times = c(6, 7)) and pseudo(fit, times = c(6, 7))
+    # stop with "strata 3 not matched"; on d[1:8, ] (n = c(0, 4)) "strata 2 not matched"
+    rows = 4 * groups
+    data = {
+        "t": [1, 2, 3, 4, 5, 6, 7, 8, 5, 6, 7, 9][:rows],
+        "e": [1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1][:rows],
+        "g": [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3][:rows],
+    }
+    fit = r.survfit("Surv(t, e) ~ g", data, start_time=5)
+    assert fit.n == [0, 4, 4][:groups]
+    emptied = "start.time has removed all the observations from at least one curve"
+
+    with pytest.raises(ValueError, match=emptied):
+        r.survfit_residuals(fit, times=[6, 7])
+    with pytest.raises(ValueError, match=emptied):
+        r.pseudo(fit, times=[6, 7])
+    with pytest.raises(ValueError, match=emptied):
+        r.pseudo(fit, times=[6, 7], type="rmst")
+
+
 def test_multistate_residuals_and_pseudo_of_a_start_time_fit_match_r():
     # R: fit <- survfit(Surv(etime, event) ~ 1, data = m[1:60, ], start.time = 12), then
     # resid(fit, times = c(24, 60))[i, , ] and pseudo(fit, times = c(24, 60))[i, , ]
