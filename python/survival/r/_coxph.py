@@ -1526,7 +1526,14 @@ def cox_zph(
     global_test: Any = True,
     **kwargs: Any,
 ) -> CoxZPHResult:
-    """R's ``cox.zph``: test the proportional hazards assumption of a Cox model."""
+    """R's ``cox.zph``: test the proportional hazards assumption of a Cox model.
+
+    ``transform`` is ``"km"``, ``"rank"``, ``"identity"``, ``"log"`` or a function
+    of the (stop) times, which receives them as a list; the result is labelled
+    by the function's name, or ``"user"`` for an anonymous one.  For a penalized
+    fit the penalty enters the information matrix and the degrees of freedom are
+    ``fit$df``, as in R.
+    """
 
     global_test = _pop_dotted_keyword(kwargs, "global", "global_test", global_test, True)
     if kwargs:
@@ -1537,11 +1544,18 @@ def cox_zph(
         raise ValueError("there are no score residuals for a Null model")
     if fit.tt:
         raise ValueError("function not defined for models with tt() terms")
-    if not isinstance(transform, str):
-        raise TypeError("transform must be one of km, rank, identity, log")
-    transform_name = _match_string_arg(
-        transform, "transform", ("km", "rank", "identity", "log"), "Unrecognized transform"
-    )
+    transform_arg: str | list[float]
+    if isinstance(transform, str):
+        transform_name = _match_string_arg(
+            transform, "transform", ("km", "rank", "identity", "log"), "Unrecognized transform"
+        )
+        transform_arg = transform_name
+    elif callable(transform):
+        name = getattr(transform, "__name__", "")
+        transform_name = name if name.isidentifier() else "user"
+        transform_arg = [float(value) for value in transform(list(fit.y.time))]
+    else:
+        raise TypeError("transform must be one of km, rank, identity, log, or a function")
     use_terms = _normalize_bool_option(terms, "terms")
     aliased = _aliased(fit)
     if use_terms:
@@ -1552,15 +1566,15 @@ def cox_zph(
         names = [name for name, alias in zip(fit.coef_names, aliased, strict=True) if not alias]
         assign = [[col] for col, alias in enumerate(aliased) if not alias]
     result = _core.cox_zph(
-        fit.fit,
-        transform=transform_name,
+        fit.penalized if fit.penalized is not None else fit.fit,
+        transform=transform_arg,
         terms=use_terms,
         singledf=_normalize_bool_option(singledf, "singledf"),
         global_test=_normalize_bool_option(global_test, "global"),
         assign=assign,
     )
-    table: list[dict[str, float | int | str]] = [
-        {"name": name, "chisq": float(row.chisq), "df": int(row.df), "p": float(row.p)}
+    table: list[dict[str, float | str]] = [
+        {"name": name, "chisq": float(row.chisq), "df": float(row.df), "p": float(row.p)}
         for name, row in zip(names, result.table, strict=True)
     ]
     if result.global_test is not None:
@@ -1568,7 +1582,7 @@ def cox_zph(
             {
                 "name": "GLOBAL",
                 "chisq": float(result.global_test.chisq),
-                "df": int(result.global_test.df),
+                "df": float(result.global_test.df),
                 "p": float(result.global_test.p),
             }
         )
@@ -1581,7 +1595,7 @@ def cox_zph(
         time=list(result.time),
         y=[list(row) for row in result.y],
         var=[list(row) for row in result.var],
-        transform=result.transform,
+        transform=transform_name,
         names=list(names),
         strata=strata,
     )

@@ -279,10 +279,13 @@ pub(crate) fn symmetric_inverse_via_cholesky(
 
 /// `P A = L U` with partial (row) pivoting, stored row-major. Unlike the
 /// Cholesky routines above this applies to any square matrix, and singular
-/// systems are reported rather than patched: a pivot with absolute value at
-/// most `max|a_ij| * GAUSSIAN_ELIMINATION_TOL` is an error naming the column
-/// (this is the analogue of R's `solve()` "system is computationally
-/// singular").
+/// systems are reported rather than patched, by the rule of R's `solve()`
+/// (`La_solve`: LAPACK `dgesv`, then `dgecon`): an exactly zero pivot is an
+/// error naming its column ("exactly singular"), and so is a matrix whose
+/// reciprocal condition number in the 1-norm, `1 / (||A||_1 ||A^-1||_1)`, is
+/// below `.Machine$double.eps` ("computationally singular", reporting the
+/// number).  `dgecon` estimates `||A^-1||_1`; the systems solved here are
+/// small, so it is computed exactly.
 #[derive(Debug, Clone)]
 pub(crate) struct LuDecomposition {
     factors: Vec<f64>,
@@ -305,14 +308,10 @@ impl LuDecomposition {
         }
 
         let mut factors: Vec<f64> = matrix.iter().copied().collect();
-        let scale = factors.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
-        if scale == 0.0 {
-            return Err(SurvivalError::singular_columns(
-                Self::CONTEXT,
-                (0..n).collect(),
-            ));
-        }
-        let pivot_tolerance = scale * GAUSSIAN_ELIMINATION_TOL;
+        // LAPACK's `dlange("1")`: the largest absolute column sum.
+        let anorm = (0..n)
+            .map(|col| (0..n).map(|row| factors[row * n + col].abs()).sum::<f64>())
+            .fold(0.0, f64::max);
         let mut swaps = Vec::with_capacity(n);
 
         for pivot_col in 0..n {
@@ -325,7 +324,7 @@ impl LuDecomposition {
                     pivot_row = row;
                 }
             }
-            if !pivot_abs.is_finite() || pivot_abs <= pivot_tolerance {
+            if pivot_abs == 0.0 || !pivot_abs.is_finite() {
                 return Err(SurvivalError::singular_columns(
                     Self::CONTEXT,
                     vec![pivot_col],
@@ -348,13 +347,65 @@ impl LuDecomposition {
                 let row_start = row * n;
                 let pivot_start = pivot_col * n;
                 for col in (pivot_col + 1)..n {
-                    factors[row_start + col] =
-                        (-multiplier).mul_add(factors[pivot_start + col], factors[row_start + col]);
+                    factors[row_start + col] -= multiplier * factors[pivot_start + col];
                 }
             }
         }
 
-        Ok(Self { factors, swaps, n })
+        let lu = Self { factors, swaps, n };
+        let rcond = lu.reciprocal_condition(anorm);
+        if rcond < f64::EPSILON {
+            return Err(SurvivalError::singular(format!(
+                "{} (reciprocal condition number = {rcond:.5e})",
+                Self::CONTEXT
+            )));
+        }
+        Ok(lu)
+    }
+
+    /// `1 / (||A||_1 ||A^-1||_1)`: the inverse's largest absolute column
+    /// sum, one substitution per unit vector (zero when it overflows).
+    fn reciprocal_condition(&self, anorm: f64) -> f64 {
+        let mut inverse_norm = 0.0_f64;
+        let mut column = vec![0.0; self.n];
+        for unit in 0..self.n {
+            column.fill(0.0);
+            column[unit] = 1.0;
+            self.substitute(&mut column);
+            let norm: f64 = column.iter().map(|value| value.abs()).sum();
+            if norm.is_nan() {
+                return 0.0;
+            }
+            inverse_norm = inverse_norm.max(norm);
+        }
+        1.0 / (anorm * inverse_norm)
+    }
+
+    /// Overwrites `rhs` with `A^-1 rhs`: the row swaps, then forward
+    /// substitution with the unit lower triangle and back substitution with
+    /// the upper one.
+    fn substitute(&self, rhs: &mut [f64]) {
+        for (row, &swap_row) in self.swaps.iter().enumerate() {
+            if row != swap_row {
+                rhs.swap(row, swap_row);
+            }
+        }
+        for row in 0..self.n {
+            let row_start = row * self.n;
+            let mut value = rhs[row];
+            for (col, &known_value) in rhs.iter().take(row).enumerate() {
+                value -= self.factors[row_start + col] * known_value;
+            }
+            rhs[row] = value;
+        }
+        for row in (0..self.n).rev() {
+            let row_start = row * self.n;
+            let mut value = rhs[row];
+            for (col, &known_value) in rhs.iter().enumerate().skip(row + 1) {
+                value -= self.factors[row_start + col] * known_value;
+            }
+            rhs[row] = value / self.factors[row_start + row];
+        }
     }
 
     /// Solves `A x = rhs`.
@@ -378,30 +429,7 @@ impl LuDecomposition {
         }
 
         let mut solution = rhs.to_vec();
-        for (row, &swap_row) in self.swaps.iter().enumerate() {
-            if row != swap_row {
-                solution.swap(row, swap_row);
-            }
-        }
-
-        for row in 0..self.n {
-            let row_start = row * self.n;
-            let mut value = solution[row];
-            for (col, &known_value) in solution.iter().take(row).enumerate() {
-                value = (-self.factors[row_start + col]).mul_add(known_value, value);
-            }
-            solution[row] = value;
-        }
-
-        for row in (0..self.n).rev() {
-            let row_start = row * self.n;
-            let mut value = solution[row];
-            for (col, &known_value) in solution.iter().enumerate().skip(row + 1) {
-                value = (-self.factors[row_start + col]).mul_add(known_value, value);
-            }
-            solution[row] = value / self.factors[row_start + row];
-        }
-
+        self.substitute(&mut solution);
         if solution.iter().any(|value| !value.is_finite()) {
             return Err(SurvivalError::computation(format!(
                 "{}: solution overflowed to a non-finite value",
@@ -726,6 +754,8 @@ mod tests {
         assert_eq!(empty.inverse().unwrap().dim(), (0, 0));
     }
 
+    // R: solve(matrix(c(1, 2, 2, 4), 2)) -> "Lapack routine dgesv: system is
+    // exactly singular: U[2,2] = 0"; solve(matrix(0, 2, 2)) -> U[1,1] = 0.
     #[test]
     fn lu_decomposition_reports_singular_column() {
         let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
@@ -734,7 +764,7 @@ mod tests {
             other => panic!("expected singular error, got {other:?}"),
         }
         match LuDecomposition::decompose(&Array2::zeros((2, 2))) {
-            Err(SurvivalError::Singular { columns, .. }) => assert_eq!(columns, vec![0, 1]),
+            Err(SurvivalError::Singular { columns, .. }) => assert_eq!(columns, vec![0]),
             other => panic!("expected singular error, got {other:?}"),
         }
         assert!(matches!(
@@ -742,6 +772,41 @@ mod tests {
             Err(SurvivalError::Singular { .. })
         ));
         assert!(matrix_inverse(&singular).is_none());
+    }
+
+    // R's solve() accepts a matrix whose reciprocal condition number is at
+    // least .Machine$double.eps, however small its pivots:
+    //   solve(diag(c(1, 1e-13)))                   -> diag(c(1, 1e13))
+    //   solve(matrix(c(1, 1, 1, 1 + 1e-15), 2))    -> [900719925474100.2 -900719925474099.2;
+    //                                                  -900719925474099.2 900719925474099.2]
+    //   solve(matrix(c(1, 1, 1, 1 + 4e-16), 2))    -> computationally singular:
+    //                                                 reciprocal condition number = 1.11022e-16
+    //   solve(diag(c(1, 1e-17)))                   -> reciprocal condition number = 1e-17
+    #[test]
+    fn lu_decomposition_uses_r_condition_number_rule() {
+        let inverse = lu_inverse(&arr2(&[[1.0, 0.0], [0.0, 1e-13]])).unwrap();
+        assert_matrix_close(&inverse, &arr2(&[[1.0, 0.0], [0.0, 1e13]]), 1.0);
+        let inverse = lu_inverse(&arr2(&[[1.0, 1.0], [1.0, 1.0 + 1e-15]])).unwrap();
+        let expected = arr2(&[
+            [900719925474100.2, -900719925474099.2],
+            [-900719925474099.2, 900719925474099.2],
+        ]);
+        assert_matrix_close(&inverse, &expected, 0.5);
+        for (singular, rcond) in [
+            (arr2(&[[1.0, 1.0], [1.0, 1.0 + 4e-16]]), "1.11022e-16"),
+            (arr2(&[[1.0, 0.0], [0.0, 1e-17]]), "1.00000e-17"),
+        ] {
+            match LuDecomposition::decompose(&singular) {
+                Err(SurvivalError::Singular { context, columns }) => {
+                    assert!(columns.is_empty());
+                    assert_eq!(
+                        context,
+                        format!("LU factorisation (reciprocal condition number = {rcond})")
+                    );
+                }
+                other => panic!("expected singular error, got {other:?}"),
+            }
+        }
     }
 
     #[test]

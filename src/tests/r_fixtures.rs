@@ -2962,7 +2962,7 @@ fn check_detail(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(), Str
 fn check_zph(cox: &CoxCase, expected: &Value, transform: &str, terms: bool) -> Result<(), String> {
     let zph = cox_zph(
         &cox.fit,
-        ZphTransform::parse(transform).map_err(|err| format!("{err}"))?,
+        &ZphTransform::parse(transform).map_err(|err| format!("{err}"))?,
         terms,
         false,
         true,
@@ -2983,7 +2983,7 @@ fn check_zph(cox: &CoxCase, expected: &Value, transform: &str, terms: bool) -> R
     }
     for (row, expected) in rows.iter().zip(&table) {
         assert_scalar(row.chisq, expected[0], RTOL_VAR, "table.chisq")?;
-        assert_scalar(row.df as f64, expected[1], 0.0, "table.df")?;
+        assert_scalar(row.df, expected[1], 0.0, "table.df")?;
         assert_scalar(row.p, expected[2], RTOL_VAR, "table.p")?;
     }
     assert_vec(&zph.time, &nums(&expected["time"])?, RTOL_COEF, "time")?;

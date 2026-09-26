@@ -2673,7 +2673,7 @@ class CoxZphTest:
     @property
     def chisq(self) -> float: ...
     @property
-    def df(self) -> int: ...
+    def df(self) -> float: ...
     @property
     def p(self) -> float: ...
 
@@ -11743,8 +11743,8 @@ def cox_survfit_from_baseline(
     requested_times: Sequence[float] | None = None,
 ) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
 def cox_zph(
-    fit: CoxPHFit,
-    transform: str = "km",
+    fit: CoxPHFit | CoxpenalFit,
+    transform: str | Sequence[float] | None = None,
     terms: bool = True,
     singledf: bool = False,
     global_test: bool = True,
