@@ -242,8 +242,9 @@ class CoxphModel:
         return values if any(value != 0.0 for value in values) else None
 
     @property
-    def strata(self) -> list[str] | None:
-        """``fit$strata``: the stratum label of every row, ``None`` when unstratified."""
+    def strata(self) -> list[str | None] | None:
+        """``fit$strata``: the stratum label of every row, ``None`` when unstratified
+        (a multi-state fit to a formula list may keep a row without one)."""
 
         codes = self.fit.strata
         if codes is None or not self.strata_levels:
@@ -766,7 +767,7 @@ def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, An
 
 
 # the coxph.control formals coxph() can only receive through **kwargs
-_COXPH_CONTROL_KWARGS = ("iter.max", "toler.chol", "toler.inf", "outer.max", "survcheckallow")
+_COXPH_CONTROL_KWARGS = ("iter.max", "toler.chol", "toler.inf", "outer.max")
 
 
 def _control_number(value: Any, message: str, *, zero_ok: bool = False) -> float:
@@ -807,7 +808,8 @@ def coxph_control(
     ``toler_inf`` defaults to ``sqrt(eps)``; ``iter_max`` and ``outer_max`` are
     truncated to integers; ``toler.chol``, ``iter.max``, ``toler.inf`` and
     ``outer.max`` may also be given with their dotted names.  Warns, as R does, when
-    ``eps`` is not above ``toler_chol``.
+    ``eps`` is not above ``toler_chol``.  ``survcheckallow`` names the survcheck flags
+    (``overlap``, ``gap``, ``jump``, ``teleport``) a multi-state fit lets through.
     """
 
     toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, _TOLER_CHOL)
@@ -829,6 +831,9 @@ def coxph_control(
     if not _is_bool_like(timefix):
         raise TypeError("timefix must be TRUE or FALSE")
     outer = _control_integer(outer_max, "invalid value for outer.max")
+    from ._coxphms import _survcheckallow
+
+    _survcheckallow(survcheckallow)
     return {
         "eps": eps_value,
         "toler.chol": toler_value,
@@ -841,7 +846,7 @@ def coxph_control(
 
 
 def coxph(
-    formula: str | Surv | None = None,
+    formula: str | Surv | list[str] | tuple[str, ...] | None = None,
     data: Any | None = None,
     *,
     weights: Any | None = None,
@@ -870,6 +875,7 @@ def coxph(
     toler_inf: Any | None = None,
     outer_max: Any | None = None,
     timefix: Any | None = None,
+    survcheckallow: Any | None = None,
     **kwargs: Any,
 ) -> CoxphModel:
     """Fit a Cox proportional hazards model (R's ``coxph``).
@@ -879,7 +885,15 @@ def coxph(
     ``weights``/``offset``/``strata``/``cluster``/``id`` arguments given as vectors
     or as column names of ``data``.  As in R, the :func:`coxph_control` options
     (``eps``, ``toler_chol``, ``iter_max``, ``toler_inf``, ``outer_max``, ``timefix``,
-    dotted or not) are used when no ``control`` is given, and ignored otherwise.
+    ``survcheckallow``, dotted or not) are used when no ``control`` is given, and
+    ignored otherwise.
+
+    A multi-state response (``Surv(time, state)`` or ``Surv(start, stop, state)`` with a
+    factor ``state``) fits R's multi-state model, a :class:`CoxphmsModel`; it needs
+    ``id``, and ``istate`` gives the state each row starts in.  ``formula`` may then be
+    R's list of formulas (a list of strings): the first with the response and the
+    default covariates, then lines ``from:to ~ covariates / options`` (options
+    ``common`` and ``shared``), whose state names ``statedata`` may extend.
     """
 
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
@@ -898,6 +912,7 @@ def coxph(
             ("toler_inf", toler_inf),
             ("outer_max", outer_max),
             ("timefix", timefix),
+            ("survcheckallow", survcheckallow),
         )
         if value is not None
     }
@@ -906,7 +921,13 @@ def coxph(
         raise ValueError(f"Argument {', '.join(sorted(kwargs))} not matched")
     if formula is None:
         raise TypeError("a formula argument is required")
-    if isinstance(formula, Surv):
+    formulas = None
+    if isinstance(formula, list | tuple):
+        from ._coxphms import _formula_list
+
+        formulas = _formula_list(formula, statedata)
+        formula = formulas.master
+    elif isinstance(formula, Surv):
         # coxph(<Surv>, x = <design>): the R bridge's matrix interface, as survreg has
         formula, data = _surv_design_formula(formula, x)
         x = False
@@ -939,17 +960,19 @@ def coxph(
             formula, data, subset, arguments, carry_clusters=False
         )
         subset = None
+    # a formula list defers its missing values until the transitions are known
     frame = _model_frame(
         fit_formula,
         data,
         subset=subset,
-        na_action=na_action,
+        na_action=na_action if formulas is None else "na.pass",
         weights=arguments["weights"],
         offset=arguments["offset"],
         strata_arg=arguments["strata"],
         cluster=arguments["cluster"],
         id=arguments["id"],
         istate=arguments["istate"],
+        deferred_na=formulas is not None,
     )
     if weights_column is not None or id_column is not None:
         frame = replace(
@@ -957,28 +980,42 @@ def coxph(
             weights_column=frame.weights_column or weights_column,
             id_column=frame.id_column or id_column,
         )
+    fit_options: dict[str, Any] = {
+        "init": init,
+        "iter_max": options["iter.max"],
+        "eps": options["eps"],
+        "toler_chol": options["toler.chol"],
+        "toler_inf": options["toler.inf"],
+        "timefix": options["timefix"],
+        "robust": _normalize_optional_bool_option(robust, "robust"),
+        "singular_ok": _normalize_bool_option_with_default(singular_ok, "singular_ok", True),
+        "nocenter": []
+        if nocenter is None
+        else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
+        "keep_model": _normalize_bool_option_with_default(model, "model", False),
+    }
     # istate/statedata only matter for a multi-state response (R keeps istate in the
     # model frame of an ordinary fit)
     if frame.y.type in {"mright", "mcounting"}:
-        raise NotImplementedError("multi-state coxph models are not implemented")
-    fit = _coxph_fit_frame(
-        frame,
-        method=method_name,
-        init=init,
-        iter_max=options["iter.max"],
-        eps=options["eps"],
-        toler_chol=options["toler.chol"],
-        toler_inf=options["toler.inf"],
-        outer_max=options["outer.max"],
-        timefix=options["timefix"],
-        robust=_normalize_optional_bool_option(robust, "robust"),
-        singular_ok=_normalize_bool_option_with_default(singular_ok, "singular_ok", True),
-        nocenter=[]
-        if nocenter is None
-        else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
-        tt=tt,
-        keep_model=_normalize_bool_option_with_default(model, "model", False),
-    )
+        if strata is not None:
+            raise ValueError("use strata() terms in the formula for multi-state models")
+        from ._coxphms import _survcheckallow, fit_multistate
+
+        fit: CoxphModel = fit_multistate(
+            frame,
+            formulas=formulas,
+            na_action=na_action,
+            # coxph.R: breslow when neither ties nor method was given
+            method="breslow" if ties is None and method is None else method_name,
+            survcheckallow=_survcheckallow(options["survcheckallow"]),
+            **fit_options,
+        )
+    elif formulas is not None:
+        raise ValueError("formula is a list but the response is not multi-state")
+    else:
+        fit = _coxph_fit_frame(
+            frame, method=method_name, outer_max=options["outer.max"], tt=tt, **fit_options
+        )
     if not timeline:
         return fit
     model = None if fit.model is None else _timeline_model_frame(fit.model, formula)
@@ -1141,6 +1178,12 @@ def summary_coxph(
             [float(row["se"]) for row in rows],
             conf_int,
         )
+    from ._coxphms import CoxphmsModel
+
+    if isinstance(fit, CoxphmsModel):
+        # summary.coxph adds the multi-state maps
+        result["cmap"] = fit.cmap
+        result["states"] = list(fit.states)
     wald = fit.wald_test
     if wald is not None:
         result["waldtest"] = {
@@ -1485,6 +1528,9 @@ def predict_coxph(
     (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).
     """
 
+    from ._coxphms import _refuse_multistate
+
+    _refuse_multistate(fit, "predict")
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
@@ -1642,6 +1688,9 @@ def _predict_terms(
 def predict_terms_constant(fit: CoxphModel) -> float:
     """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``."""
 
+    from ._coxphms import _refuse_multistate
+
+    _refuse_multistate(fit, "predict_terms_constant")
     return sum(
         coefficient * mean
         for coefficient, mean in zip(fit.coefficients, fit.means, strict=True)
@@ -1734,6 +1783,9 @@ def residuals_coxph(
     and a ``collapse`` vector then covers those rows too.
     """
 
+    from ._coxphms import _refuse_multistate
+
+    _refuse_multistate(fit, "residuals")
     if kwargs:
         raise TypeError(
             f"residuals got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
@@ -2041,6 +2093,9 @@ def survfit_coxph(
     given.  ``start_time`` builds the curves from the rows still at risk at that time.
     """
 
+    from ._coxphms import _refuse_multistate
+
+    _refuse_multistate(fit, "survfit")
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
     conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, True)
@@ -2115,10 +2170,14 @@ def survfit_coxph(
 def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBaseHazardResult:
     """R's ``basehaz``: the cumulative hazard of ``survfit(fit)`` as a data frame."""
 
+    from ._coxphms import CoxphmsModel
+
     if not isinstance(fit, CoxphModel):
         raise TypeError("must be a coxph object")
     if isinstance(fit, ClogitModel):
         raise ValueError("predicted survival curves are not defined for a clogit model")
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError("the basehaz function is not implemented for multi-state models")
     sfit = survfit_coxph(fit, newdata, se_fit=False)
     hazard: Any = sfit.cumhaz
     if newdata is None and not _normalize_bool_option(centered, "centered"):
@@ -2155,8 +2214,11 @@ def cox_zph(
     global_test = _pop_dotted_keyword(kwargs, "global", "global_test", global_test, True)
     if kwargs:
         raise TypeError(f"cox_zph got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    from ._coxphms import _refuse_multistate
+
     if not isinstance(fit, CoxphModel):
         raise TypeError("argument must be the result of a coxph fit")
+    _refuse_multistate(fit, "cox_zph")
     if not fit.coef_names:
         raise ValueError("there are no score residuals for a Null model")
     if fit.tt:
@@ -2232,8 +2294,11 @@ def _detail_response(fit: CoxphModel) -> list[list[float]]:
 def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHDetailResult:
     """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood."""
 
+    from ._coxphms import _refuse_multistate
+
     if not isinstance(fit, CoxphModel):
         raise TypeError("coxph_detail requires a fitted coxph model")
+    _refuse_multistate(fit, "coxph_detail")
     if fit.method not in {"breslow", "efron"}:
         raise ValueError(f"Detailed output is not available for the {fit.method} method")
     order_name = _match_string_arg(
@@ -2410,8 +2475,12 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
         if not isinstance(fits[0], SurvregModelResult):
             raise TypeError("anova requires fitted coxph or survreg models")
         return anova_survreg(*fits, test=test)
+    from ._coxphms import _refuse_multistate
+
     if any(not isinstance(fit, CoxphModel) for fit in fits):
         raise TypeError("All arguments must be Cox models")
+    for fit in fits:
+        _refuse_multistate(fit, "anova")
     test_name = _anova_test_name(test)
     if len(fits) == 1:
         return _anova_single(fits[0], test_name)

@@ -2073,8 +2073,13 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
 
 
 def _categorical_levels(values: list[Any], column: str) -> tuple[Any, ...]:
+    """The distinct values of a categorical term in order of appearance; a missing
+    value is not a level (R's ``factor()``)."""
+
     labels: dict[Any, None] = {}
     for value in values:
+        if _is_missing_value(value):
+            continue
         try:
             labels.setdefault(value, None)
         except TypeError as exc:
@@ -2263,13 +2268,21 @@ def _single_design_columns(
 
     values = _term_raw_values(data, spec.term, n)
     levels = spec.levels
-    for value in values:
+    # model.matrix of an na.pass frame: a missing value is NA in every column
+    missing: list[int] = []
+    for row, value in enumerate(values):
         if all(value != level for level in levels):
-            raise ValueError(
-                f"newdata column {spec.term.column!r} contains unknown level {value!r}"
-            )
+            if not _is_missing_value(value):
+                raise ValueError(
+                    f"newdata column {spec.term.column!r} contains unknown level {value!r}"
+                )
+            missing.append(row)
     encoded_levels = levels if spec.full else levels[1:]
-    return [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
+    columns = [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
+    for column in columns:
+        for row in missing:
+            column[row] = math.nan
+    return columns
 
 
 def _design_term_columns(

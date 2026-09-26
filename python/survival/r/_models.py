@@ -43,6 +43,7 @@ from ._coxph import (
     summary_coxph,
 )
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
+from ._coxphms import CoxphmsModel, _not_yet, coef_coxphms, vcov_coxphms
 from ._finegray import _finegray_frame
 from ._formula import _column as _formula_column
 from ._formula import _formula_columns
@@ -90,20 +91,29 @@ def _no_method(generic: str) -> TypeError:
 
 
 @singledispatch
-def coef(fit: Any) -> Any:
+def coef(fit: Any, *, matrix: Any = False) -> Any:
     """``coef``: ``fit$coefficients`` (``NaN`` marks an aliased coefficient, like R's
-    ``NA``; a survreg fit's location coefficients), or a concordance's estimate."""
+    ``NA``; a survreg fit's location coefficients), or a concordance's estimate.
+    ``matrix`` is ``coef.coxphms``'s: a multi-state fit's coefficients laid out like its
+    ``cmap``; other fits ignore it."""
 
     raise _no_method("coef")
 
 
 @coef.register(CoxphModel | CchModelResult | SurvregModelResult)
-def _coef_fit(fit: CoxphModel | CchModelResult | SurvregModelResult) -> list[float]:
+def _coef_fit(
+    fit: CoxphModel | CchModelResult | SurvregModelResult, *, matrix: Any = False
+) -> list[float]:
     return fit.coefficients
 
 
+@coef.register(CoxphmsModel)
+def _coef_coxphms(fit: CoxphmsModel, *, matrix: Any = False) -> Any:
+    return coef_coxphms(fit, matrix=_normalize_bool_option_with_default(matrix, "matrix", False))
+
+
 @coef.register(ConcordanceResult)
-def _coef_concordance(fit: ConcordanceResult) -> Any:
+def _coef_concordance(fit: ConcordanceResult, *, matrix: Any = False) -> Any:
     # coef.concordance
     return fit.concordance
 
@@ -128,15 +138,19 @@ coef_names.register(SurvregModelResult, coef_names_survreg)
 
 
 @singledispatch
-def vcov(fit: Any, *, complete: Any = True) -> Any:
+def vcov(fit: Any, *, complete: Any = True, matrix: Any = False) -> Any:
     """``vcov``: the robust variance when the fit used one, else the model-based one;
-    a concordance's variance."""
+    a concordance's variance.  ``matrix`` is ``vcov.coxphms``'s: a multi-state fit's
+    variance per transition (see :func:`survival.r._coxphms.vcov_coxphms`); other fits
+    ignore it."""
 
     raise _no_method("vcov")
 
 
 @vcov.register(CoxphModel | CchModelResult)
-def _vcov_cox(fit: CoxphModel | CchModelResult, *, complete: Any = True) -> list[list[float]]:
+def _vcov_cox(
+    fit: CoxphModel | CchModelResult, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]]:
     include = _normalize_bool_option_with_default(complete, "complete", True)
     var = fit.var
     if include:
@@ -145,11 +159,22 @@ def _vcov_cox(fit: CoxphModel | CchModelResult, *, complete: Any = True) -> list
     return [[var[i][j] for j in keep] for i in keep]
 
 
-vcov.register(SurvregModelResult, vcov_survreg)
+@vcov.register(CoxphmsModel)
+def _vcov_coxphms(fit: CoxphmsModel, *, complete: Any = True, matrix: Any = False) -> Any:
+    return vcov_coxphms(
+        fit,
+        complete=_normalize_bool_option_with_default(complete, "complete", True),
+        matrix=_normalize_bool_option_with_default(matrix, "matrix", False),
+    )
+
+
+@vcov.register(SurvregModelResult)
+def _vcov_survreg(fit: SurvregModelResult, *, complete: Any = True, matrix: Any = False) -> Any:
+    return vcov_survreg(fit, complete=complete)
 
 
 @vcov.register(ConcordanceResult)
-def _vcov_concordance(fit: ConcordanceResult, *, complete: Any = True) -> Any:
+def _vcov_concordance(fit: ConcordanceResult, *, complete: Any = True, matrix: Any = False) -> Any:
     # vcov.concordance(object, ...): complete is one of the ignored arguments
     return fit.var
 
@@ -284,6 +309,11 @@ def _model_term_names_aareg(fit: AaregModelResult, terms: Any | None = None) -> 
     return [names[idx] for idx in _terms_selection(terms, names)]
 
 
+@model_term_names.register(CoxphmsModel)
+def _model_term_names_coxphms(fit: CoxphmsModel, terms: Any | None = None) -> list[str]:
+    raise _not_yet("model_term_names")
+
+
 model_term_names.register(SurvregModelResult, model_term_names_survreg)
 
 
@@ -299,6 +329,11 @@ def _model_weights_fit(
     fit: CoxphModel | AaregModelResult | SurvregModelResult,
 ) -> list[float] | None:
     return None if fit.weights is None else list(fit.weights)
+
+
+@model_weights.register(CoxphmsModel)
+def _model_weights_coxphms(fit: CoxphmsModel) -> list[float] | None:
+    raise _not_yet("model_weights")
 
 
 @singledispatch
@@ -333,6 +368,11 @@ def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any
                 raise ValueError("data must contain the strata variable(s) of the model")
             strata = [fit.strata_levels[code] for code in new.strata]
     return {"data": rows, "columns": list(fit.coef_names), "assign": assign, "strata": strata}
+
+
+@model_matrix.register(CoxphmsModel)
+def _model_matrix_coxphms(fit: CoxphmsModel, data: Any | None = None) -> dict[str, Any]:
+    raise _not_yet("model_matrix")
 
 
 model_matrix.register(SurvregModelResult, model_matrix_survreg)
@@ -475,6 +515,11 @@ def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
     # fitted.coxph(object, ...) is object$linear.predictors: centred at the overall
     # means, not padded by naresid, other arguments ignored
     return fit.linear_predictors
+
+
+@fitted.register(CoxphmsModel)
+def _fitted_coxphms(fit: CoxphmsModel, **_kwargs: Any) -> list[float]:
+    raise _not_yet("fitted")
 
 
 @singledispatch

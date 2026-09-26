@@ -151,6 +151,19 @@ def _mstate_categories(values: Any) -> Any | None:
     return _categories(values)
 
 
+def _r_factor_levels(values: Sequence[Any]) -> list[Any]:
+    """The levels ``as.factor`` gives ``values``: R factor levels when present, else sorted."""
+
+    categories = _mstate_categories(values)
+    present = {value for value in values if not _is_missing_value(value)}
+    if categories is not None:
+        return [level for level in _materialize_1d(categories, "levels") if level in present]
+    try:
+        return sorted(present)
+    except TypeError:
+        return sorted(present, key=str)
+
+
 def _optional_float_vector(values: Any | None, name: str, n: int) -> list[float] | None:
     if values is None:
         return None

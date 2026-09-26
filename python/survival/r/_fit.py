@@ -14,12 +14,14 @@ from typing import Any
 from ._coerce import (
     _DEFAULT_NA_ACTION,
     _float_vector,
+    _floats_or_nan,
     _materialize_1d,
     _materialize_labels,
     _missing_row_indices,
     _mstate_categories,
     _normalize_na_action,
     _optional_float_vector,
+    _rows_of,
     _strata_level_sort_key,
     _strata_value_label,
 )
@@ -33,6 +35,7 @@ from ._formula import (
     _design_rows_from_spec,
     _design_term_name,
     _fit_formula_design,
+    _formula_data_rows,
     _formula_design_columns,
     _formula_design_row_count,
     _formula_model_frame,
@@ -92,7 +95,8 @@ class _ModelFrame:
     weights: list[float] | None
     cluster: list[Any] | None
     id: list[Any] | None
-    istate: list[Any] | None
+    # a factor keeps its levels (survcheck's states come from them)
+    istate: Sequence[Any] | None
     extra: dict[str, list[Any]] = field(default_factory=dict)
     # the column names the weights= / id= arguments referred to (R keeps the call's
     # expressions, so brier's newdata can re-evaluate them); None for vector arguments
@@ -124,10 +128,33 @@ class _ModelFrame:
             istate=self.istate,
         )
 
-    def strata_labels(self) -> list[str] | None:
+    def strata_labels(self) -> list[str | None] | None:
         if self.strata is None:
             return None
-        return [self.strata_levels[code] for code in self.strata]
+        return [None if code < 0 else self.strata_levels[code] for code in self.strata]
+
+    def take(self, rows: Sequence[int]) -> _ModelFrame:
+        """The frame at the 0-based *rows* (R's ``mf[rows, ]``), every row-aligned
+        piece subset together."""
+
+        def pick(values: Sequence[Any] | None) -> Any:
+            if values is None:
+                return None
+            return _rows_of(values, [values[row] for row in rows])
+
+        return replace(
+            self,
+            data=_formula_data_rows(self.formula, self.data, list(rows), self.n),
+            y=self.y.subset(rows),
+            x=pick(self.x) if self.x else self.x,
+            strata=pick(self.strata),
+            offset=pick(self.offset),
+            weights=pick(self.weights),
+            cluster=pick(self.cluster),
+            id=pick(self.id),
+            istate=pick(self.istate),
+            extra={name: pick(values) for name, values in self.extra.items()},
+        )
 
 
 def _model_frame_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
@@ -218,12 +245,16 @@ def _model_frame(
     id: Any | None = None,
     istate: Any | None = None,
     extra: Mapping[str, Any] | None = None,
+    deferred_na: bool = False,
 ) -> _ModelFrame:
     """Evaluate a survival formula on ``data`` the way ``model.frame`` does.
 
     Vector arguments may name a column of ``data``; ``subset`` and ``na.action`` are
     applied to the formula's variables and to every vector argument together (``extra``
     carries any further row-aligned vectors, e.g. ``cch``'s ``subcoh``).
+    ``deferred_na`` (with ``na_action="pass"``) leaves the missing values for the caller
+    to drop, as coxph.R does for a formula list: a missing stratum has code -1 and a
+    missing weight stays NaN.
     """
 
     if not isinstance(formula, str):
@@ -261,7 +292,10 @@ def _model_frame(
     if factor is not None:
         if len(factor.codes) != n:
             raise ValueError("strata columns must have the same length as the Surv response")
-        strata_codes = _complete_codes(factor, "missing values in the strata")
+        if deferred_na:
+            strata_codes = [-1 if code is None else code for code in factor.codes]
+        else:
+            strata_codes = _complete_codes(factor, "missing values in the strata")
         strata_levels = tuple(factor.levels)
 
     offset_values = _offset_vector(data, terms.offsets, n) if terms.offsets else None
@@ -294,13 +328,20 @@ def _model_frame(
             raise ValueError("id must have the same length as the Surv response")
     istate_values = aligned["istate"]
     if istate_values is not None:
-        istate_values = _materialize_labels(istate_values, "istate")
+        istate_values = _rows_of(istate_values, _materialize_labels(istate_values, "istate"))
         if len(istate_values) != n:
             raise ValueError("istate must have the same length as the Surv response")
 
-    weight_values = _optional_float_vector(aligned["weights"], "weights", n)
-    if weight_values is not None and not all(math.isfinite(value) for value in weight_values):
-        raise ValueError("weights must be finite")
+    if deferred_na and aligned["weights"] is not None:
+        weight_values = _floats_or_nan(_materialize_1d(aligned["weights"], "weights"))
+        if len(weight_values) != n:
+            raise ValueError(f"weights must have length {n}")
+        if any(math.isinf(value) for value in weight_values):
+            raise ValueError("weights must be finite")
+    else:
+        weight_values = _optional_float_vector(aligned["weights"], "weights", n)
+        if weight_values is not None and not all(map(math.isfinite, weight_values)):
+            raise ValueError("weights must be finite")
 
     design = _r_factor_design(
         data,

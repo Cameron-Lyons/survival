@@ -942,11 +942,12 @@ class SummarySurvfitResult:
 
 @dataclass(frozen=True)
 class NamedMatrix:
-    """An R matrix with dimnames: ``summary(fit)$table``, ``fit$transitions``."""
+    """An R matrix with dimnames: ``summary(fit)$table``, ``fit$transitions``, a
+    multi-state fit's ``cmap``."""
 
     rownames: list[str] | None
     colnames: list[str]
-    values: list[list[float]]
+    values: list[list[float]] | list[list[int]]
 
 
 @dataclass(frozen=True)

@@ -229,13 +229,22 @@ def test_coxph_formula_terms(ovarian):
     # istate is only a multi-state matter; an ordinary fit keeps it in the model frame
     with_istate = r.coxph("Surv(futime, fustat) ~ age", ovarian, istate="rx", model=True)
     assert "(istate)" in with_istate.model
+    # a factor status is a multi-state response, which needs an id
     mstate = {
-        "time": [1.0, 2.0, 3.0, 4.0],
-        "status": r._coerce._RFactorVector(["a", "censor", "b", "a"], ["censor", "a", "b"]),
-        "trt": [0, 1, 0, 1],
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": r._coerce._RFactorVector(
+            ["a", "censor", "b", "a", "b", "censor"], ["censor", "a", "b"]
+        ),
+        "trt": [0, 1, 0, 1, 1, 0],
+        "id": [1, 2, 3, 4, 5, 6],
     }
-    with pytest.raises(NotImplementedError, match="multi-state"):
+    with pytest.raises(ValueError, match="an id statement is required for multi-state models"):
         r.coxph("Surv(time, status) ~ trt", mstate)
+    multistate = r.coxph("Surv(time, status) ~ trt", mstate, id="id")
+    assert isinstance(multistate, r.CoxphmsModel)
+    assert multistate.coef_names == ("trt_1:2", "trt_1:3")
+    assert multistate.coefficients == approx([-0.346573590279973, 0.0])
+    assert multistate.loglik == approx([-4.969813299576, -4.94080100438703])
 
 
 def test_coxph_time_transform(ovarian):
