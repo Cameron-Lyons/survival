@@ -3,15 +3,18 @@
 //! checks of `survcheck2` (`R/survcheck.R`, `src/multicheck.c`) it relies
 //! on, and its C kernel `survfitaj` (`src/survfitaj.c`).
 
-use super::survfit_aj_summary::{AJMeanTable, summary_survfit_aj, survmean_aj};
+use super::survfit_aj_summary::{
+    AJMeanTable, summary_rows, summary_survfit_aj, survmean_aj, survmean_coxms,
+};
 use super::survfit_confint::{ConfType, survfit_confint, validate_conf_int};
-use super::survfit_summary::RmeanOption;
+use super::survfit_summary::{RmeanOption, survfit0_aj_rows};
 use super::survfitkm::{
     check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
 };
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::IntVec;
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
 use crate::internal::sorting::ordered_subset;
@@ -476,6 +479,67 @@ impl SurvfitAJResult {
         let option = RmeanOption::parse(rmean)?;
         py.detach(|| survmean_aj(self, scale, option))
             .map_err(Into::into)
+    }
+
+    /// For each row of `survfit0_aj(self)`, the 0-based row of `self` it
+    /// copies, or `-1 - s` for the row at `t0` inserted into curve `s`.
+    fn survfit0_rows(&self) -> IntVec {
+        IntVec(
+            survfit0_aj_rows(self)
+                .into_iter()
+                .map(|row| row as i32)
+                .collect(),
+        )
+    }
+
+    /// The rows whose `pstate` and `cumhaz` `summary(self, times, censored,
+    /// extend)` reports, encoded as in `survfit0_rows`.
+    #[pyo3(signature=(times=None, censored=false, extend=false))]
+    fn summary_rows(
+        &self,
+        times: Option<Vec<f64>>,
+        censored: bool,
+        extend: bool,
+    ) -> PyResult<IntVec> {
+        let rows = summary_rows(self, times.as_deref(), censored, extend)?;
+        Ok(IntVec(rows.into_iter().map(|row| row as i32).collect()))
+    }
+
+    /// `survmean2`'s table for curves on this fit's time grid and counts
+    /// with a newdata dimension (`survfit.coxphms`): `pstate` is `(ntime,
+    /// ndata, nstate)` and `p0` has a row per curve.  The rows run over the
+    /// curves fastest, then the newdata rows, then the states.  The table is
+    /// one pass over `pstate`, read in place.
+    #[cfg(feature = "python")]
+    #[pyo3(signature=(pstate, p0, scale=1.0, rmean="common"))]
+    fn mean_table_data(
+        &self,
+        pstate: numpy::PyReadonlyArray3<'_, f64>,
+        p0: Vec<Vec<f64>>,
+        scale: f64,
+        rmean: &str,
+    ) -> PyResult<AJMeanTable> {
+        let option = RmeanOption::parse(rmean)?;
+        let pstate = pstate.as_array();
+        let (ntime, ndata, nstate) = pstate.dim();
+        if ntime != self.time.len() || nstate != self.states.len() {
+            return Err(SurvivalError::invalid_input(
+                "pstate must be (ntime, ndata, nstate) on this fit's times and states",
+            )
+            .into());
+        }
+        if p0.len() != self.n_curves() || p0.iter().any(|row| row.len() != nstate) {
+            return Err(SurvivalError::invalid_input("p0 needs a row per curve").into());
+        }
+        survmean_coxms(
+            self,
+            ndata,
+            |i, j, state| pstate[(i, j, state)],
+            &p0,
+            scale,
+            option,
+        )
+        .map_err(Into::into)
     }
 
     /// `fit[curves, ]`: see [`SurvfitAJResult::select_curves`].

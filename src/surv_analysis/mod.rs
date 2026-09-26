@@ -15,6 +15,7 @@ pub(crate) mod semi_markov;
 pub(crate) mod statefig;
 pub(crate) mod survfit_aj_summary;
 pub(crate) mod survfit_confint;
+pub(crate) mod survfit_coxphms;
 pub(crate) mod survfit_summary;
 pub(crate) mod survfitaj;
 #[path = "survfitaj_extended.rs"]
@@ -56,6 +57,8 @@ pub use survfit_aj_summary::{AJMeanTable, summary_survfit_aj, survmean_aj};
 pub use survfit_confint::{
     ConfLower, ConfType, ConfidenceBands, survfit_confint, survfit_confint_py,
 };
+#[cfg(feature = "python")]
+pub use survfit_coxphms::coxphms_curves;
 pub use survfit_summary::{
     RmeanOption, SurvfitQuantiles, SurvmeanTable, quantile_survfit, quantile_survfit_from,
     quantile_survfit_py, summary_survfit, summary_survfit_py, summary_survfit_times, survfit0,

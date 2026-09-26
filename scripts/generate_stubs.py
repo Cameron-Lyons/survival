@@ -448,7 +448,14 @@ _ARRAY_NEWTYPES = {
     "BoolVec": ("ArrayLike", "NDArray[np.bool_]"),
     "FloatMatrix": ("ArrayLike", "NDArray[np.float64]"),
 }
-_NUMPY_ARRAYS = {"PyReadonlyArray1", "PyReadonlyArray2", "PyArray1", "PyArray2", "PyArray3"}
+_NUMPY_ARRAYS = {
+    "PyReadonlyArray1",
+    "PyReadonlyArray2",
+    "PyReadonlyArray3",
+    "PyArray1",
+    "PyArray2",
+    "PyArray3",
+}
 _TRANSPARENT = {"PyResult", "SurvivalResult", "Result", "Box", "Arc", "Rc", "PyClassInitializer"}
 
 

@@ -1259,8 +1259,6 @@ def test_array_columns_and_pickle(mg, mg_fit):
 
 
 def test_methods_not_yet_ported_refuse(mg, mg_fit):
-    with pytest.raises(NotImplementedError, match="multi-state coxph fits yet"):
-        r.survfit(mg_fit)
     refused = [
         (lambda fit: r.basehaz(fit), "the basehaz function is not implemented for multi-state"),
         (lambda fit: r.yates(fit, "sex"), "multi-state coxph not yet supported"),
