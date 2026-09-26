@@ -217,9 +217,7 @@ def concordancefit(
     weight_values = _optional_float_vector(weights, "weights", n)
     if weight_values is not None and len(weight_values) != n:
         raise ValueError("y and weights are not the same length")
-    influence_value = _integer_scalar(influence, "influence")
-    if influence_value not in (0, 1, 2, 3):
-        raise ValueError("influence must be 0, 1, 2 or 3")
+    influence_value = _influence_option(influence)
     if isinstance(keepstrata, bool):
         keep = 10**9 if keepstrata else 0
     else:
@@ -250,6 +248,13 @@ def concordancefit(
             _core.CountingProcessData(list(y.start), list(y.time), list(y.event)), matrix, **common
         )
     return _result(cfit, names, levels, _formula)
+
+
+def _influence_option(value: Any) -> int:
+    influence = _integer_scalar(value, "influence")
+    if influence not in (0, 1, 2, 3):
+        raise ValueError("influence must be 0, 1, 2 or 3")
+    return influence
 
 
 def _is_matrix(x: Any) -> bool:
@@ -504,10 +509,7 @@ def _concordance_fits(
             )
         if other.weights != first.weights:
             raise ValueError("all models must have the same weight vector")
-    # checked here as well as in concordancefit, before it is remapped
-    influence = _integer_scalar(options["influence"], "influence")
-    if influence not in (0, 1, 2, 3):
-        raise ValueError("influence must be 0, 1, 2 or 3")
+    influence = _influence_option(options["influence"])
     options["influence"] = 3 if influence == 2 else 1
     # each fit has one predictor: scalar concordance/cvar, a dfbeta vector
     results: list[Any] = [_fit_concordance(d, options) for d in data]
