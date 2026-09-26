@@ -1156,7 +1156,9 @@ def _rmean_option(
         )
     value = _finite_float(rmean, "rmean")
     # survfitms and survfitcox objects record their start.time, survfitKM ones do not
-    start_time = getattr(fit, "start_time", None)
+    start_time = (
+        fit.start_time if isinstance(fit, SurvfitMultiStateResult | CoxSurvfitResult) else None
+    )
     if value < (min(fit.time) if start_time is None else start_time):
         raise ValueError("Truncation point for the mean time in state is < smallest survival")
     return repr(value)
