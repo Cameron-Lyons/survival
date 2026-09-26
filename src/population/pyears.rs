@@ -264,15 +264,11 @@ fn pyears1(
                     let mut hazard: f64 = 0.0;
                     let mut temp = 0.0;
                     while etime > 0.0 {
+                        // A rate table extends past its edges, so every step
+                        // has a cell.
                         let expected_step = pystep(table, &data2, etime);
                         let et2 = expected_step.time;
-                        let first = rates[expected_step.index.unwrap_or(0)];
-                        let lambda = if expected_step.weight < 1.0 {
-                            expected_step.weight * first
-                                + (1.0 - expected_step.weight) * rates[expected_step.index2]
-                        } else {
-                            first
-                        };
+                        let lambda = rates[expected_step.index.unwrap_or(0)];
                         if method == PyearsExpect::Pyears {
                             // (1 - exp(-lambda t)) / lambda, whose limit at
                             // lambda = 0 is t (the C code divides by zero).

@@ -26,6 +26,12 @@ struct Pyears3bSubjects<'a> {
 }
 
 /// `pyears3b(death, efac, edims, ecut, expect, grpx, x, y, times, ngrp)`.
+///
+/// The C code restarts `pystep` for every output interval and evaluates
+/// both `exp(-cumhaz)` and `exp(-(cumhaz + hazard))` there.  Here each
+/// subject keeps the rate of its current cell of the table and the time left
+/// in that cell, so `pystep` runs once per cell entered, and carries
+/// `exp(-cumhaz)` from one interval to the next.
 fn pyears3b(
     conditional: bool,
     table: &PystepTable<'_>,
@@ -48,10 +54,16 @@ fn pyears3b(
     let mut data2 = vec![0.0; edim];
 
     for i in 0..n {
-        let mut cumhaz: f64 = 0.0;
+        // `data2` is the subject's current position in the expected table,
+        // `cell_rate` the hazard of that cell and `cell_left` the time until
+        // the next cutpoint.
         for (j, value) in data2.iter_mut().enumerate() {
             *value = positions[[i, j]];
         }
+        let mut cell_rate = 0.0;
+        let mut cell_left = 0.0;
+        let mut cumhaz: f64 = 0.0;
+        let mut survival = 1.0;
         let mut timeleft = y[i];
         let g = group[i];
         let mut time = 0.0;
@@ -62,24 +74,24 @@ fn pyears3b(
             }
             let thiscell = (output_time - time).min(timeleft);
 
-            // Each call to pystep moves up to the next boundary of the
-            // expected table; `data2` is the current position in it.
             let mut etime = thiscell;
             let mut hazard = 0.0;
             while etime > 0.0 {
-                let step = pystep(table, &data2, etime);
-                let first = rates[step.index.unwrap_or(0)];
-                hazard += if step.weight < 1.0 {
-                    step.time * (step.weight * first + (1.0 - step.weight) * rates[step.index2])
-                } else {
-                    step.time * first
-                };
+                if cell_left <= 0.0 {
+                    // A rate table extends past its edges, so every step has a cell.
+                    let step = pystep(table, &data2, f64::INFINITY);
+                    cell_rate = rates[step.index.unwrap_or(0)];
+                    cell_left = step.time;
+                }
+                let dt = etime.min(cell_left);
+                hazard += dt * cell_rate;
                 for (k, value) in data2.iter_mut().enumerate() {
                     if table.factors[k] != 1 {
-                        *value += step.time;
+                        *value += dt;
                     }
                 }
-                etime -= step.time;
+                cell_left -= dt;
+                etime -= dt;
             }
             if output_time == 0.0 {
                 wvec[[j, g]] = 1.0;
@@ -88,8 +100,11 @@ fn pyears3b(
                 esurv[[j, g]] += hazard * thiscell;
                 wvec[[j, g]] += thiscell;
             } else {
-                esurv[[j, g]] += (-(cumhaz + hazard)).exp() * thiscell;
-                wvec[[j, g]] += (-cumhaz).exp() * thiscell;
+                // `survival` is exp(-cumhaz) at the start of the interval.
+                let next = (-(cumhaz + hazard)).exp();
+                esurv[[j, g]] += next * thiscell;
+                wvec[[j, g]] += survival * thiscell;
+                survival = next;
             }
             nsurv[[j, g]] += 1;
             cumhaz += hazard;

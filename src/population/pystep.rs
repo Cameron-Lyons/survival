@@ -9,20 +9,17 @@ pub struct PystepResult {
     pub time: f64,
     /// Linear (column-major) index of the cell, `None` when off table.
     pub index: Option<usize>,
-    /// Second index for the linear interpolation of old-style US tables.
-    pub index2: usize,
-    /// Weight of `index` in that interpolation (1 without interpolation).
-    pub weight: f64,
 }
 
 /// One dimension of the table as `pystep` sees it.
 ///
-/// `factors[i]` is 1 for a factor dimension, 0 for a continuous one and
-/// `>= 2` for the interpolated calendar-year axis of old US tables (with
-/// `1 + (factors[i] - 1) * dims[i]` cutpoints).  For `edge == false` the
-/// cutpoints of a continuous dimension hold one extra upper limit
-/// (`dims[i] + 1` values) and time outside them is reported off table; for
-/// `edge == true` the table extends infinitely at both ends.
+/// `factors[i]` is 1 for a factor dimension and 0 for a continuous one, R's
+/// `rfac` for a table with a `type` attribute (`RateTable::factor_flags`);
+/// the C code's interpolation of the `rfac > 1` year axis of old-style
+/// tables is not ported.  For `edge == false` the cutpoints of a continuous
+/// dimension hold one extra upper limit (`dims[i] + 1` values) and time
+/// outside them is reported off table; for `edge == true` the table extends
+/// infinitely at both ends.
 pub struct PystepTable<'a> {
     pub factors: &'a [i32],
     pub dims: &'a [usize],
@@ -32,24 +29,17 @@ pub struct PystepTable<'a> {
 
 /// `pystep(nc, index, index2, wt, data, fac, dims, cuts, step, edge)`.
 pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult {
-    let mut index = 0isize;
-    let mut index2 = 0isize;
-    let mut stride = 1isize;
-    let mut weight = 1.0;
+    let mut index = 0usize;
+    let mut stride = 1usize;
     let mut shortfall = 0.0;
     let mut max_time = step;
 
     for (i, (&factor, &dim)) in table.factors.iter().zip(table.dims).enumerate() {
         if factor == 1 {
-            index += (data[i] as isize - 1) * stride;
+            index += (data[i] as usize - 1) * stride;
         } else {
             let cuts = table.cuts[i];
-            let cut_count = if factor > 1 {
-                1 + (factor as usize - 1) * dim
-            } else {
-                dim
-            };
-            let mut j = cuts[..cut_count].partition_point(|&cut| data[i] >= cut);
+            let mut j = cuts[..dim].partition_point(|&cut| data[i] >= cut);
 
             if j == 0 {
                 // Less than the first cutpoint.
@@ -58,7 +48,7 @@ pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult 
                     shortfall = temp.min(step);
                 }
                 max_time = max_time.min(temp);
-            } else if j == cut_count {
+            } else if j == dim {
                 // Beyond the last cutpoint.
                 if !table.edge {
                     let temp = cuts[j] - data[i];
@@ -68,35 +58,25 @@ pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult 
                         max_time = max_time.min(temp);
                     }
                 }
-                j = if factor > 1 { dim - 1 } else { j - 1 };
+                j -= 1;
             } else {
                 max_time = max_time.min(cuts[j] - data[i]);
                 j -= 1;
-                if factor > 1 {
-                    weight = 1.0 - (j % factor as usize) as f64 / factor as f64;
-                    j /= factor as usize;
-                    index2 = stride;
-                }
             }
-            index += j as isize * stride;
+            index += j * stride;
         }
-        stride *= dim as isize;
+        stride *= dim;
     }
 
-    index2 += index;
     if shortfall == 0.0 {
         PystepResult {
             time: max_time,
-            index: Some(index as usize),
-            index2: index2 as usize,
-            weight,
+            index: Some(index),
         }
     } else {
         PystepResult {
             time: shortfall,
             index: None,
-            index2: index2 as usize,
-            weight,
         }
     }
 }
@@ -127,9 +107,7 @@ mod tests {
             result,
             PystepResult {
                 time: 0.75,
-                index: Some(0),
-                index2: 0,
-                weight: 1.0
+                index: Some(0)
             }
         );
     }
@@ -155,21 +133,5 @@ mod tests {
         assert_eq!((below.time, below.index), (5.0, Some(3)));
         let above = pystep(&open, &[25.0, 1.0], 100.0);
         assert_eq!((above.time, above.index), (100.0, Some(2)));
-    }
-
-    #[test]
-    fn interpolates_old_style_us_year_axes() {
-        // Two decades, interpolated in 10 steps: 21 cutpoints.
-        let year_cuts: Vec<f64> = (0..21).map(|i| i as f64 * 365.25).collect();
-        let cuts: [&[f64]; 1] = [&year_cuts];
-        let result = pystep(
-            &table(&[10], &[2], &cuts, true),
-            &[3.0 * 365.25 + 1.0],
-            5000.0,
-        );
-        assert_eq!(result.index, Some(0));
-        assert_eq!(result.index2, 1);
-        assert!((result.weight - 0.7).abs() < 1e-12);
-        assert!((result.time - (365.25 - 1.0)).abs() < 1e-9);
     }
 }
