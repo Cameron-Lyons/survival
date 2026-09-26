@@ -1982,6 +1982,46 @@ def test_init_of_the_wrong_length_is_refused(lung):
         r.survreg("Surv(time, status) ~ ridge(age, sex, theta = 1)", lung, init=[6, 0])
 
 
+def test_one_column_ridge_with_a_fixed_scale(lung):
+    # Deviation: R fails with "non-conformable arguments", because survpenal.fit.R's
+    # diag(coxlist2$second) of a 1x1 penalty is an identity matrix; the references are R
+    # with an nrow = nvar2 argument added to that diag call
+    fit = _survreg("Surv(time, status) ~ ridge(age, theta = 1) - 1", lung, dist="exponential")
+    assert fit.coefficients == approx([1.47552336015464])
+    assert fit.df == approx([0.99987772454592])
+    assert fit.loglik == approx([-1162.33817578747, -15407.4149267348])
+    assert fit.iter == [1, 2]
+    assert fit.penalty == approx([0.0, 89.6205724002142])
+    assert fit.var[0][0] == approx(1.48523014159824e-06)
+    assert fit.var2[0][0] == approx(1.48504853440827e-06)
+    assert fit.df_residual == approx(227.000122275454)
+    assert fit.linear_predictors[:3] == approx(
+        [109.188728651443, 100.335588490516, 82.6293081686599]
+    )
+
+
+def test_a_frailty_column_name_is_not_a_frailty_term(lung):
+    # Deviation: R refuses any model whose column names contain "frailty"
+    data = dict(lung)
+    data["frailty_score"] = data["sex"]
+    fit = _survreg("Surv(time, status) ~ ridge(age, frailty_score, theta = 1)", data)
+    _check(fit, _R["ridge_theta"])
+    fit = _survreg("Surv(time, status) ~ pspline(age, df = 3) + frailty_score", data)
+    _check(fit, _R["pspline_sex"])
+
+
+def test_anova(lung):
+    fit = _survreg("Surv(time, status) ~ pspline(age, df = 3) + sex", lung)
+    # anova(survreg(Surv(time, status) ~ sex, lung), fit)
+    table = r.anova(_survreg("Surv(time, status) ~ sex", lung), fit)
+    assert table.df == approx([NAN, 2.55034143263268])
+    assert table.resid_df == approx([225.0, 222.449658567367])
+    assert table.deviance == approx([NAN, 5.71437423843645])
+    assert table.p == approx([NAN, 0.0918407374421038])
+    with pytest.raises(NotImplementedError, match="anova of a single penalized survreg fit"):
+        r.anova(fit)
+
+
 @pytest.mark.parametrize(
     ("rhs", "message"),
     [
@@ -2063,8 +2103,13 @@ def _check_typed(fit, ref, rel=1e-9, var_rel=1e-9):
     var = fit.var
     assert [var[i][i] for i in range(len(var))] == approx(ref["var_diag"], var_rel)
     assert fit.linear_predictors[:5] == approx(ref["lp"], rel)
-    assert fit.history[0].theta == approx(ref["theta"], rel)
-    assert fit.history[0].done is ref["done"]
+    history = fit.history[0]
+    assert history.theta == approx(ref["theta"], rel)
+    assert history.done is ref["done"]
+    if "history_rows" in ref:
+        assert len(history.history) == ref["history_rows"]
+        assert history.history[0] == approx(ref["history_first"], rel)
+        assert history.history[-1] == approx(ref["history_last"], rel)
     if "frail" in ref:
         assert len(fit.frail) == ref["ngroups"]
         assert fit.frail[:3] == approx(ref["frail"], rel)
@@ -2080,6 +2125,9 @@ def test_typed_sparse_gamma_frailty(lung2):
     assert fit.inner_failures == []
     assert fit.pterms == [0, 0, 2]
     assert fit.history[0].c_loglik is not None
+    # Deviation: the means are those of the dense columns; survreg.R's apply(X, 2, mean)
+    # would include the group codes of inst
+    assert fit.survreg.means == approx([1.0, 62.4185022026432])
     assert len(fit.score) == 18 + 3
     with pytest.raises(ValueError, match="^Predictions not available for sparse models$"):
         fit.predict()
@@ -2125,6 +2173,10 @@ def test_typed_dense_gamma_frailty(lung2):
     assert fit.coefficients[:2] == approx(ref["coefficients"][:2], 1e-5)
     assert fit.df == approx(ref["df"], 1e-5)
     assert fit.history[0].theta == approx(ref["theta"], 1e-5)
+    history = fit.history[0].history
+    assert len(history) == ref["history_rows"]
+    assert history[0] == approx(ref["history_first"])
+    assert history[-1] == approx(ref["history_last"])
 
 
 def test_typed_sparse_t_frailty(lung2):
@@ -2187,9 +2239,7 @@ def test_typed_assign_disagreement_is_refused(lung2):
 def test_coxph_aliased_single_column_penalty_has_nan_df(lung):
     # coxph(Surv(time, status) ~ ridge(age, theta = 1) + sex + sex2, lung): coxph.wtest's
     # scalar branch divides by the zero variance of the aliased column
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        fit = r.coxph("Surv(time, status) ~ ridge(age, theta = 1) + sex + sex2", lung)
+    fit = r.coxph("Surv(time, status) ~ ridge(age, theta = 1) + sex + sex2", lung)
     assert fit.penalized.df == approx([0.993048408410425, 0.999979022873949, NAN])
     assert fit.coefficients == approx([0.0169268123153531, -0.513337125968361, NAN])
     assert fit.loglik[1] == approx(-742.848328358474)

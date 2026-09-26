@@ -1114,6 +1114,9 @@ def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:
 
 
 def _anova_single(fit: SurvregModelResult, with_test: bool) -> SurvregAnovaResult:
+    if fit.is_penalized:
+        # anova.survreg refits each prefix of the terms with its penalties
+        raise NotImplementedError("anova of a single penalized survreg fit is not implemented")
     model = fit.fit
     labels = list(fit.term_labels)
     loglik = [0.0] * (len(labels) + 1)
