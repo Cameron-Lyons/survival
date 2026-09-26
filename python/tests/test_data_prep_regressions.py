@@ -54,7 +54,6 @@ def test_survcondense_reads_the_kernel_start_times_once(monkeypatch):
         r_data_prep._core,
         "survcondense",
         lambda *args: Counting(kernel(*args)),
-        raising=False,
     )
     data = {
         "id": [1, 1, 1, 2, 2, 3],
