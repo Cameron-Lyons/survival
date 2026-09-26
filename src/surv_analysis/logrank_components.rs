@@ -11,6 +11,7 @@ use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
+use crate::internal::step::find_interval;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
 };
@@ -114,7 +115,7 @@ struct LeftContinuousKM<'a> {
 
 impl LeftContinuousKM<'_> {
     fn at(&self, t: f64) -> f64 {
-        match self.time.partition_point(|&x| x < t) {
+        match find_interval(self.time, t, true) {
             0 => 1.0,
             k => self.surv[k - 1],
         }
