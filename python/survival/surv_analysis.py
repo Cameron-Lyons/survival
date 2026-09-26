@@ -55,6 +55,7 @@ __all__ = bind_names(
         "SurvfitAJResult",
         "survfitaj",
         "survfit0_aj",
+        "coxphms_curves",
         "AalenJohansenExtendedConfig",
         "AalenJohansenExtendedResult",
         "TransitionMatrix",

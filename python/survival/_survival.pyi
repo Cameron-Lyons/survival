@@ -9040,6 +9040,13 @@ class SurvfitAJResult:
         scale: float = 1.0,
         rmean: str = "common",
     ) -> tuple[list[list[float]], list[float], list[str]]: ...
+    def mean_table_data(
+        self,
+        pstate: NDArray[np.float64],
+        p0: Sequence[Sequence[float]],
+        scale: float = 1.0,
+        rmean: str = "common",
+    ) -> tuple[list[list[float]], list[float], list[str]]: ...
     def select_curves(self, curves: Sequence[int]) -> SurvfitAJResult: ...
     def select_states(self, states: Sequence[int]) -> SurvfitAJResult: ...
     def summary(
@@ -9048,6 +9055,13 @@ class SurvfitAJResult:
         censored: bool = False,
         extend: bool = False,
     ) -> SurvfitAJResult: ...
+    def summary_rows(
+        self,
+        times: Sequence[float] | None = None,
+        censored: bool = False,
+        extend: bool = False,
+    ) -> NDArray[np.int32]: ...
+    def survfit0_rows(self) -> NDArray[np.int32]: ...
     @property
     def conf_int(self) -> float: ...
     @property
@@ -11640,6 +11654,35 @@ def coxph_fit(
     cluster: Sequence[int] | None = None,
     robust: bool | None = None,
 ) -> CoxPHFit: ...
+def coxphms_curves(
+    time: ArrayLike,
+    endpoint: ArrayLike,
+    istate: ArrayLike,
+    x: ArrayLike,
+    cmap: ArrayLike,
+    cmap_nrow: int,
+    baseline: ArrayLike,
+    trans_from: ArrayLike,
+    trans_to: ArrayLike,
+    id: ArrayLike,
+    states: Sequence[str],
+    beta: ArrayLike,
+    means: ArrayLike,
+    newx: ArrayLike,
+    stype: int,
+    ctype: int,
+    entry: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    strata_terms: Sequence[ArrayLike] | None = None,
+    strata_use: ArrayLike | None = None,
+    share_scale: ArrayLike | None = None,
+    newoffset: ArrayLike | None = None,
+    start_time: float | None = None,
+    p0: Sequence[float] | None = None,
+    time0: bool = False,
+) -> tuple[SurvfitAJResult, NDArray[np.float64], NDArray[np.float64]]: ...
 def coxphms_fit(
     time: ArrayLike,
     endpoint: ArrayLike,

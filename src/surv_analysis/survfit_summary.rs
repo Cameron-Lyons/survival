@@ -132,29 +132,37 @@ pub(crate) fn survfit0_with(fit: &SurvfitKMResult, keep_influence: bool) -> Surv
     }
 }
 
+/// The rows of `survfit0_aj(fit)`: the 0-based row of `fit` each one
+/// copies, or `-1 - s` for the row at `t0` inserted into curve `s` (every
+/// curve that does not already start there).
+pub(crate) fn survfit0_aj_rows(fit: &SurvfitAJResult) -> Vec<i64> {
+    let mut rows = Vec::with_capacity(fit.time.len() + fit.n_curves());
+    for (curve, range) in fit.curve_ranges().into_iter().enumerate() {
+        if range.is_empty() || fit.time[range.start] != fit.t0 {
+            rows.push(-1 - curve as i64);
+        }
+        rows.extend(range.map(|i| i as i64));
+    }
+    rows
+}
+
 /// `survfit0` for a multi-state curve: the inserted row carries `p0`,
 /// zero hazards and, as R has it for `survfitms` objects, zero standard
 /// errors and confidence limits.  The influence matrices are left alone.
 pub fn survfit0_aj(fit: &SurvfitAJResult) -> SurvfitAJResult {
     let t0 = fit.t0;
-    let ranges = fit.curve_ranges();
-    let inserts: Vec<bool> = ranges
-        .iter()
-        .map(|range| range.is_empty() || fit.time[range.start] != t0)
-        .collect();
-    if inserts.iter().all(|&insert| !insert) {
+    let rows = survfit0_aj_rows(fit);
+    if rows.len() == fit.time.len() {
         return fit.clone();
     }
-    let n_new = fit.time.len() + inserts.iter().filter(|&&insert| insert).count();
+    let ranges = fit.curve_ranges();
     let addrows = |values: &[Vec<f64>], row: &dyn Fn(usize) -> Vec<f64>| -> Vec<Vec<f64>> {
-        let mut out = Vec::with_capacity(n_new);
-        for (curve, (range, &insert)) in ranges.iter().zip(&inserts).enumerate() {
-            if insert {
-                out.push(row(curve));
-            }
-            out.extend(values[range.clone()].iter().cloned());
-        }
-        out
+        rows.iter()
+            .map(|&r| match usize::try_from(r) {
+                Ok(r) => values[r].clone(),
+                Err(_) => row((-1 - r) as usize),
+            })
+            .collect()
     };
     let nstate = fit.states.len();
     let nhaz = fit.hazard_from.len();
@@ -171,13 +179,10 @@ pub fn survfit0_aj(fit: &SurvfitAJResult) -> SurvfitAJResult {
     let add_option = |values: &Option<Vec<Vec<f64>>>, row: &dyn Fn(usize) -> Vec<f64>| {
         values.as_ref().map(|values| addrows(values, row))
     };
-    let mut time = Vec::with_capacity(n_new);
-    for (range, &insert) in ranges.iter().zip(&inserts) {
-        if insert {
-            time.push(t0);
-        }
-        time.extend_from_slice(&fit.time[range.clone()]);
-    }
+    let time: Vec<f64> = rows
+        .iter()
+        .map(|&r| usize::try_from(r).map_or(t0, |r| fit.time[r]))
+        .collect();
     SurvfitAJResult {
         n: fit.n.clone(),
         time,
@@ -209,11 +214,11 @@ pub fn survfit0_aj(fit: &SurvfitAJResult) -> SurvfitAJResult {
         upper: add_option(&fit.upper, &zeros_state),
         p0: fit.p0.clone(),
         strata: fit.strata.as_ref().map(|strata| {
-            strata
-                .iter()
-                .zip(&inserts)
-                .map(|(&count, &insert)| count + usize::from(insert))
-                .collect()
+            let mut sizes = strata.clone();
+            for &r in rows.iter().filter(|&&r| r < 0) {
+                sizes[(-1 - r) as usize] += 1;
+            }
+            sizes
         }),
         strata_codes: fit.strata_codes.clone(),
         n_id: fit.n_id.clone(),

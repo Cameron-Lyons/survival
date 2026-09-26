@@ -1,5 +1,6 @@
 pub(crate) mod cox_risk;
 pub(crate) mod dist;
+pub(crate) mod expm;
 pub(crate) mod fenwick;
 pub(crate) mod match_arg;
 pub(crate) mod matrix;

@@ -506,7 +506,7 @@ fn check_init(init: &[f64], x: &Array2<f64>, offset: Option<&[f64]>) -> Survival
     Ok(())
 }
 
-fn to_index(values: IntVec, name: &str) -> SurvivalResult<Vec<usize>> {
+pub(crate) fn to_index(values: IntVec, name: &str) -> SurvivalResult<Vec<usize>> {
     values
         .iter()
         .map(|&value| {
@@ -525,6 +525,52 @@ fn column_major(values: IntVec, nrow: usize, name: &str) -> SurvivalResult<Array
     }
     Array2::from_shape_vec((nrow, ncol).f(), values.into_inner())
         .map_err(|err| SurvivalError::invalid_input(err.to_string()))
+}
+
+/// The transition maps of a model with `nx` columns of X, as the bindings
+/// receive them: `cmap` flat and column-major with `cmap_nrow` rows,
+/// `baseline` (`smap[1, ]`), the 1-based states of each transition, and
+/// `strata_use` (`smap[-1, ]`, flat and column-major) for `nterm` strata
+/// terms.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ms_design(
+    nx: usize,
+    cmap: IntVec,
+    cmap_nrow: usize,
+    baseline: IntVec,
+    trans_from: IntVec,
+    trans_to: IntVec,
+    strata_use: Option<IntVec>,
+    nterm: usize,
+) -> SurvivalResult<MsDesign> {
+    let cmap = column_major(cmap, cmap_nrow, "cmap")?;
+    let strata_use = match strata_use {
+        Some(values) if nterm > 0 => {
+            column_major(values, nterm, "strata_use")?.mapv(|value| value != 0)
+        }
+        _ => Array2::from_elem((0, cmap.ncols()), false),
+    };
+    let design = MsDesign {
+        nx,
+        baseline: baseline.into_inner(),
+        strata_use,
+        from: to_index(trans_from, "trans_from")?,
+        to: to_index(trans_to, "trans_to")?,
+        cmap,
+    };
+    for (len, name) in [
+        (design.baseline.len(), "baseline"),
+        (design.from.len(), "trans_from"),
+        (design.to.len(), "trans_to"),
+    ] {
+        validate_length(design.ntrans(), len, name)?;
+    }
+    if design.cmap.nrows() < design.nx {
+        return Err(SurvivalError::invalid_input(
+            "cmap needs a row per column of x",
+        ));
+    }
+    Ok(design)
 }
 
 /// The fit of `coxph()` for a multi-state response, from the unstacked data
@@ -581,36 +627,21 @@ pub fn coxphms_fit(
     Option<IntVec>,
     Option<FloatVec>,
 )> {
-    let cmap = column_major(cmap, cmap_nrow, "cmap")?;
     let strata_terms: Vec<Vec<i32>> = strata_terms
         .unwrap_or_default()
         .into_iter()
         .map(IntVec::into_inner)
         .collect();
-    let strata_use = match strata_use {
-        Some(values) if !strata_terms.is_empty() => {
-            column_major(values, strata_terms.len(), "strata_use")?.mapv(|value| value != 0)
-        }
-        _ => Array2::from_elem((0, cmap.ncols()), false),
-    };
-    let design = MsDesign {
-        nx: x.ncol(),
-        baseline: baseline.into_inner(),
-        strata_use,
-        from: to_index(trans_from, "trans_from")?,
-        to: to_index(trans_to, "trans_to")?,
+    let design = ms_design(
+        x.ncol(),
         cmap,
-    };
-    for (len, name) in [
-        (design.baseline.len(), "baseline"),
-        (design.from.len(), "trans_from"),
-        (design.to.len(), "trans_to"),
-    ] {
-        validate_length(design.ntrans(), len, name).map_err(SurvivalError::from)?;
-    }
-    if design.cmap.nrows() < design.nx {
-        return Err(SurvivalError::invalid_input("cmap needs a row per column of x").into());
-    }
+        cmap_nrow,
+        baseline,
+        trans_from,
+        trans_to,
+        strata_use,
+        strata_terms.len(),
+    )?;
     let data = MsData {
         time: time.into_inner(),
         entry: entry.map(FloatVec::into_inner),
