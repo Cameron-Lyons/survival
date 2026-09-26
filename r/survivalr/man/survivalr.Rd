@@ -3,7 +3,6 @@
 \alias{survivalr-package}
 \alias{Surv}
 \alias{Surv2}
-\alias{Surv2data}
 \alias{aareg}
 \alias{[.aareg}
 \alias{labels.aareg}
@@ -110,6 +109,7 @@
 \alias{concordancefit}
 \alias{survConcordance}
 \alias{survConcordance.fit}
+\alias{print.survConcordance}
 \alias{cox.zph}
 \alias{cox_zph}
 \alias{coxph.detail}
@@ -411,8 +411,6 @@ Surv2(time, event, repeated = FALSE)
 
 \method{tail}{Surv2}(x, ...)
 
-Surv2data(formula, data, subset, id)
-
 aareg(formula, data, weights, subset, na.action, qrtol = 1e-07,
   nmin, dfbeta = FALSE, taper = 1,
   test = c("aalen", "variance", "nrisk"), cluster,
@@ -513,16 +511,16 @@ untangle.specials(tt, special, order = 1)
 survfit(formula, ...)
 
 \method{survfit}{formula}(formula, data = NULL, ..., subset = NULL,
-  na.action = "fail")
+  na.action = NULL)
 
 \method{survfit}{character}(formula, data = NULL, ..., subset = NULL,
-  na.action = "fail")
+  na.action = NULL)
 
 \method{survfit}{Surv}(formula, ..., group = NULL, subset = NULL,
-  na.action = "fail")
+  na.action = NULL)
 
 \method{survfit}{survival_py_surv}(formula, ..., group = NULL, subset = NULL,
-  na.action = "fail")
+  na.action = NULL)
 
 \method{survfit}{survival_py_coxph}(formula, newdata = NULL, ..., se.fit = TRUE)
 
@@ -647,7 +645,7 @@ survSplit(formula, data, subset, na.action = na.pass, cut,
 survcondense(formula, data, subset, weights, na.action = na.pass,
   id, start = "tstart", end = "tstop", event = "event")
 
-survdiff(formula, data = NULL, subset = NULL, na.action = "fail",
+survdiff(formula, data = NULL, subset = NULL, na.action = NULL,
   rho = 0, timefix = TRUE, ..., group = NULL)
 
 survexp(formula, data, weights, subset, na.action, rmap, times,
@@ -710,7 +708,7 @@ statefig(layout, connect, margin = 0.03, box = TRUE, cex = 1,
 
 strata(..., na.group = FALSE, shortlabel, sep = ", ")
 
-coxph(formula, data = NULL, ..., subset = NULL, na.action = "fail")
+coxph(formula, data = NULL, ..., subset = NULL, na.action = NULL)
 
 coxph.control(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   iter.max = 20, toler.inf = sqrt(eps), outer.max = 10,
@@ -725,7 +723,7 @@ agexact.fit(x, y, strata, offset, init, control, weights, method,
 agreg.fit(x, y, strata, offset, init, control, weights, method,
   rownames, resid = TRUE, nocenter = NULL)
 
-survreg(formula, data = NULL, ..., subset = NULL, na.action = "fail")
+survreg(formula, data = NULL, ..., subset = NULL, na.action = NULL)
 
 dsurvreg(x, mean, scale = 1, distribution = "weibull", parms)
 
@@ -757,7 +755,7 @@ brier(fit, times, newdata, ties = TRUE, detail = FALSE,
 concordance(object, ..., formula)
 
 \method{concordance}{default}(object, data = NULL, ..., scores = NULL, risk.scores = NULL,
-  weights = NULL, cluster = NULL, subset = NULL, na.action = "fail")
+  weights = NULL, cluster = NULL, subset = NULL, na.action = NULL)
 
 \method{concordance}{survival_py_model}(object, ..., newdata, cluster, ymin,
   ymax, timewt = c("n", "S", "S/G", "n/G2", "I"), influence = 0,
@@ -771,6 +769,8 @@ concordancefit(y, x, strata, weights, ymin = NULL, ymax = NULL,
 survConcordance(formula, data, weights, subset, na.action)
 
 survConcordance.fit(y, x, strata, weight)
+
+\method{print}{survConcordance}(x, ...)
 
 cox.zph(fit, transform = "km", terms = TRUE, singledf = FALSE,
   global = TRUE, ...)
@@ -882,7 +882,7 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 \method{predict}{survival_py_model}(object, newdata = NULL, ..., type = NULL,
   se.fit = FALSE)
 
-\method{residuals}{survival_py_model}(object, ..., type = "martingale")
+\method{residuals}{survival_py_model}(object, ..., type = NULL)
 
 \method{anova}{survival_py_model}(object, ..., test = "Chisq")
 
@@ -1004,7 +1004,7 @@ methods and sampling-stratified I.Borgan and II.Borgan methods are supported.}
 \code{aareg} risk-set fitting and influence diagnostics.}
 \item{id}{Optional generated row identifier column for \code{survSplit}, or
 subject identifiers for \code{survcondense}, \code{survcheck}, timeline
-converters, \code{Surv2data}, native \code{cch}, native \code{tmerge}, and
+converters, native \code{cch}, native \code{tmerge}, and
 low-level \code{survfitKM}.}
 \item{istate}{Optional initial state vector for \code{survcheck} and
 timeline converters.}
@@ -1027,7 +1027,10 @@ bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{data, newdata}{Optional data frames or Python-compatible data objects.}
 \item{subset}{Optional row subset.}
 \item{na.action}{Missing-data policy, either a string or one of the common
-\pkg{stats} NA action functions.}
+\pkg{stats} NA action functions; \code{NULL} uses
+\code{getOption("na.action")}, as \code{model.frame} does. With
+\code{na.exclude}, residuals and predictions are padded with \code{NA} at the
+dropped rows.}
 \item{na.rm}{Logical flag controlling whether missing \code{Surv} rows are
 removed before computing survival quantiles.}
 \item{group}{Optional group vector for direct \code{survdiff} and
