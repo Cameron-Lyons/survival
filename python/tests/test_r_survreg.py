@@ -549,7 +549,7 @@ def test_survreg_intercept_only_and_model_pieces(lung):
     intervals = r.confint(fit)
     assert intervals[0]["lower"] < 6.0349039102 < intervals[0]["upper"]
     without_y = r.survreg("Surv(time, status) ~ 1", data=lung, y=False)
-    assert without_y.y_response is None
+    assert without_y.y is None
     scored = r.survreg("Surv(time, status) ~ 1", data=lung, score=True)
     assert len(scored.score) == 2
 

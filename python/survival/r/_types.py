@@ -167,78 +167,6 @@ class _FormulaDesign:
 
 
 @dataclass(frozen=True)
-class _FormulaFit:
-    """Transitional survreg wrapper (still built by ``_survreg.survreg``).
-
-    Cox fits no longer use it: they are ``survival.r._coxph.CoxphModel`` objects.  This
-    class goes away once ``_survreg``/``_misc`` move to their typed wrapper.
-    """
-
-    fit: Any
-    design: _FormulaDesign | None
-    formula: str | None = None
-    coefficient_names: tuple[str, ...] | None = None
-    case_weights: list[float] | None = None
-    case_weight_column: str | None = None
-    robust_variance: list[list[float]] | None = None
-    naive_variance: list[list[float]] | None = None
-    cluster: list[Any] | None = None
-    id_values: list[Any] | None = None
-    id_column: str | None = None
-    x_matrix: list[list[float]] | None = None
-    y_response: Surv | None = None
-    model_frame: dict[str, Any] | None = None
-    score_values: list[float] | None = None
-    conditional_logistic: bool = False
-    n_observations: int | None = None
-
-    def __getattr__(self, name: str) -> Any:
-        if name == "id" and self.id_values is not None:
-            return self.id_values
-        if name == "x" and self.x_matrix is not None:
-            return self.x_matrix
-        if name == "y" and self.y_response is not None:
-            return self.y_response
-        if name == "model" and self.model_frame is not None:
-            return self.model_frame
-        if name == "weights" and self.case_weights is not None:
-            return self.case_weights
-        if name == "score" and self.score_values is not None:
-            return self.score_values
-        if name == "n" and self.n_observations is not None:
-            return self.n_observations
-        return getattr(self.fit, name)
-
-    @property
-    def information_matrix(self) -> list[list[float]]:
-        if self.robust_variance is not None:
-            return self.robust_variance
-        matrix = getattr(self.fit, "information_matrix", None)
-        if matrix is not None:
-            return matrix
-        matrix = getattr(self.fit, "variance_matrix", None)
-        if matrix is not None:
-            return matrix
-        raise AttributeError("wrapped fit does not expose a variance matrix")
-
-    @property
-    def variance_matrix(self) -> list[list[float]]:
-        return self.information_matrix
-
-    @property
-    def naive_information_matrix(self) -> list[list[float]] | None:
-        return self.naive_variance
-
-    @property
-    def naive_var(self) -> list[list[float]] | None:
-        return self.naive_variance
-
-    @property
-    def robust(self) -> bool:
-        return self.robust_variance is not None
-
-
-@dataclass(frozen=True)
 class CchModelResult:
     """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps.
 
@@ -311,6 +239,8 @@ class AaregModelResult:
     model: dict[str, Any] | None = None
     x: list[list[float]] | None = None
     y: Surv | None = None
+    # attr(terms, "term.labels"): the formula's terms, which labels.aareg returns
+    term_labels: tuple[str, ...] = ()
 
     @property
     def nrisk(self) -> list[float]:
@@ -666,13 +596,13 @@ class CoxZPHResult:
     ``df`` is a float: a penalized fit's terms have fractional degrees of freedom."""
 
     table: list[dict[str, float | str]]
-    x: list[float]
-    time: list[float]
-    y: list[list[float]]
-    var: list[list[float]]
+    x: list[float] = field(repr=False)
+    time: list[float] = field(repr=False)
+    y: list[list[float]] = field(repr=False)
+    var: list[list[float]] = field(repr=False)
     transform: str
     names: list[str]
-    strata: list[Any] | None = None
+    strata: list[Any] | None = field(default=None, repr=False)
 
     def subset(
         self, indices: Sequence[int], table_indices: Sequence[int] | None = None
@@ -770,23 +700,23 @@ class CoxSurvfitResult:
     """
 
     n: list[int]
-    time: list[float]
-    n_risk: list[float]
-    n_event: list[float]
-    n_censor: list[float]
-    surv: list[float] | list[list[float]]
-    cumhaz: list[float] | list[list[float]]
+    time: list[float] = field(repr=False)
+    n_risk: list[float] = field(repr=False)
+    n_event: list[float] = field(repr=False)
+    n_censor: list[float] = field(repr=False)
+    surv: list[float] | list[list[float]] = field(repr=False)
+    cumhaz: list[float] | list[list[float]] = field(repr=False)
     type: str
     strata: dict[str, int] | None = None
-    std_err: list[float] | list[list[float]] | None = None
-    std_chaz: list[float] | list[list[float]] | None = None
-    lower: list[float] | list[list[float]] | None = None
-    upper: list[float] | list[list[float]] | None = None
+    std_err: list[float] | list[list[float]] | None = field(default=None, repr=False)
+    std_chaz: list[float] | list[list[float]] | None = field(default=None, repr=False)
+    lower: list[float] | list[list[float]] | None = field(default=None, repr=False)
+    upper: list[float] | list[list[float]] | None = field(default=None, repr=False)
     logse: bool = True
     conf_type: str = "none"
     conf_int: float | None = None
     start_time: float | None = None
-    newdata: Any | None = None
+    newdata: Any | None = field(default=None, repr=False)
     colnames: list[str] | None = None
 
     @property
@@ -855,31 +785,31 @@ class SurvfitResult:
     """
 
     n: list[int]
-    time: list[float]
-    n_risk: list[float]
-    n_event: list[float]
-    n_censor: list[float]
-    surv: list[float]
-    cumhaz: list[float]
+    time: list[float] = field(repr=False)
+    n_risk: list[float] = field(repr=False)
+    n_event: list[float] = field(repr=False)
+    n_censor: list[float] = field(repr=False)
+    surv: list[float] = field(repr=False)
+    cumhaz: list[float] = field(repr=False)
     type: str
     t0: float
-    n_enter: list[float] | None = None
-    counts: _core.SurvfitCounts | None = None
-    std_err: list[float] | None = None
-    std_chaz: list[float] | None = None
-    lower: list[float] | None = None
-    upper: list[float] | None = None
+    n_enter: list[float] | None = field(default=None, repr=False)
+    counts: _core.SurvfitCounts | None = field(default=None, repr=False)
+    std_err: list[float] | None = field(default=None, repr=False)
+    std_chaz: list[float] | None = field(default=None, repr=False)
+    lower: list[float] | None = field(default=None, repr=False)
+    upper: list[float] | None = field(default=None, repr=False)
     strata: dict[str, int] | None = None
     n_id: list[int] | None = None
     logse: bool | None = None
     conf_int: float | None = None
     conf_type: str | None = None
     conf_lower: str | None = None
-    influence_surv: list[SurvfitInfluenceMatrix] | None = None
-    influence_chaz: list[SurvfitInfluenceMatrix] | None = None
+    influence_surv: list[SurvfitInfluenceMatrix] | None = field(default=None, repr=False)
+    influence_chaz: list[SurvfitInfluenceMatrix] | None = field(default=None, repr=False)
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
-    model: dict[str, Any] | None = None
+    model: dict[str, Any] | None = field(default=None, repr=False)
     engine: _core.SurvfitKMResult | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -904,37 +834,37 @@ class SurvfitMultiStateResult:
     """
 
     n: list[int]
-    time: list[float]
-    n_risk: list[list[float]]
-    n_event: list[list[float]]
-    n_censor: list[list[float]]
-    n_transition: list[list[float]]
-    pstate: list[list[float]]
-    cumhaz: list[list[float]]
-    p0: list[list[float]]
+    time: list[float] = field(repr=False)
+    n_risk: list[list[float]] = field(repr=False)
+    n_event: list[list[float]] = field(repr=False)
+    n_censor: list[list[float]] = field(repr=False)
+    n_transition: list[list[float]] = field(repr=False)
+    pstate: list[list[float]] = field(repr=False)
+    cumhaz: list[list[float]] = field(repr=False)
+    p0: list[list[float]] = field(repr=False)
     states: list[str]
     hazard_names: list[str]
     transitions: NamedMatrix | None
     n_id: list[int] | None
     type: str
     t0: float
-    n_enter: list[list[float]] | None = None
-    counts: _core.SurvfitAJCounts | None = None
-    std_err: list[list[float]] | None = None
-    std_chaz: list[list[float]] | None = None
-    std_auc: list[list[float]] | None = None
-    se0: list[list[float]] | None = None
-    lower: list[list[float]] | None = None
-    upper: list[list[float]] | None = None
+    n_enter: list[list[float]] | None = field(default=None, repr=False)
+    counts: _core.SurvfitAJCounts | None = field(default=None, repr=False)
+    std_err: list[list[float]] | None = field(default=None, repr=False)
+    std_chaz: list[list[float]] | None = field(default=None, repr=False)
+    std_auc: list[list[float]] | None = field(default=None, repr=False)
+    se0: list[list[float]] | None = field(default=None, repr=False)
+    lower: list[list[float]] | None = field(default=None, repr=False)
+    upper: list[list[float]] | None = field(default=None, repr=False)
     strata: dict[str, int] | None = None
     logse: bool | None = None
     conf_int: float | None = None
     conf_type: str | None = None
-    influence_pstate: list[_core.SurvfitAJInfluence] | None = None
+    influence_pstate: list[_core.SurvfitAJInfluence] | None = field(default=None, repr=False)
     start_time: float | None = None
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
-    model: dict[str, Any] | None = None
+    model: dict[str, Any] | None = field(default=None, repr=False)
     engine: _core.SurvfitAJResult | None = field(default=None, repr=False, compare=False)
     # the states before `fit[, states]` selected some (R's oldstate)
     oldstate: tuple[str, ...] | None = None
@@ -1029,18 +959,6 @@ class SurvDiffResult:
 
 
 SurvfitConfidenceIntervalResult = _core.ConfidenceBands
-# R has one ``survfit`` class for Kaplan-Meier and Turnbull curves; the old name stays for callers.
-TurnbullSurvfitResult = SurvfitResult
-
-
-def _cox_beta(fit: Any) -> list[float]:
-    coefficients = getattr(fit, "coefficients", None)
-    if coefficients is None:
-        raise TypeError("model does not expose fitted coefficients")
-    values = list(coefficients)
-    if values and isinstance(values[0], list | tuple):
-        return [float(value) for value in values[0]]
-    return [float(value) for value in values]
 
 
 # ---------------------------------------------------------------------------

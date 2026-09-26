@@ -82,8 +82,10 @@ def test_model_frame_matrix_and_terms(ovarian, fit):
     assert r.model_weights(fit) is None
     weighted = r.coxph("Surv(futime, fustat) ~ age", ovarian, weights=[1, 2] * 13)
     assert r.model_weights(weighted) == [1.0, 2.0] * 13
-    with pytest.raises(TypeError, match="model=TRUE"):
-        r.model_frame(fit)
+    # model.frame(fit) rebuilds the frame of a fit made without model=TRUE
+    assert r.model_frame(fit) == r.model_frame(
+        r.coxph("Surv(futime, fustat) ~ age + factor(rx)", ovarian, model=True)
+    )
     frame = r.model_frame(
         r.coxph("Surv(futime, fustat) ~ age + strata(rx)", ovarian, model=True, weights=[1, 2] * 13)
     )

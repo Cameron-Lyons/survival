@@ -75,7 +75,7 @@ def test_pyears_data_frame_layout_and_plain_response():
     assert plain.event is None
     assert plain.dim == []
     assert plain.dimnames == {}
-    assert r.as_data_frame(plain)["group"] == ["(all)"]
+    assert r.as_data_frame(plain) == {"pyears": [plain.pyears], "n": [4.0]}
 
 
 def test_pyears_expected_events_from_a_rate_table():
