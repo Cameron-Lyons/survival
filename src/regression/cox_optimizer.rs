@@ -714,7 +714,6 @@ impl CoxData {
                 risk_set.clear();
             }
             let time = self.time[person - 1];
-            tied.clear();
             // Tied times do not cross strata.
             loop {
                 person -= 1;
@@ -733,6 +732,7 @@ impl CoxData {
             }
             if tied.count > 0 {
                 loglik += death_time_update(self.efron, &risk_set, &tied, u, imat);
+                tied.clear();
             }
         }
         loglik

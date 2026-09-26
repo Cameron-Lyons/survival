@@ -87,15 +87,18 @@ impl RiskSetSums {
     #[inline]
     fn accumulate(&mut self, risk: f64, x: &[f64]) {
         self.denom += risk;
+        if self.cmat.is_empty() {
+            for (a, &xi) in self.a.iter_mut().zip(x) {
+                *a += risk * xi;
+            }
+            return;
+        }
         let nvar = x.len();
-        let second_moments = !self.cmat.is_empty();
         for (i, (a, &xi)) in self.a.iter_mut().zip(x).enumerate() {
             let risk_xi = risk * xi;
             *a += risk_xi;
-            if second_moments {
-                for (c, &xj) in self.cmat[i * nvar..=i * nvar + i].iter_mut().zip(x) {
-                    *c += risk_xi * xj;
-                }
+            for (c, &xj) in self.cmat[i * nvar..i * nvar + i + 1].iter_mut().zip(x) {
+                *c += risk_xi * xj;
             }
         }
     }
