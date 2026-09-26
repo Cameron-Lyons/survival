@@ -509,10 +509,22 @@ def test_logical_terms_in_the_other_formula_functions():
     )
 
 
-def test_a_penalty_term_reads_its_first_unnamed_argument():
-    # coxph(Surv(time, status) ~ pspline(df = 4, age), lung)
-    fit = r.coxph("Surv(time, status) ~ pspline(df = 4, age)", datasets.load_lung())
-    assert fit.coefficients[:2] == approx([0.376920844214556, 0.754403211878295], rel=1e-9)
+@pytest.mark.parametrize(
+    ("rhs", "coefficients"),
+    [
+        # coxph(Surv(time, status) ~ pspline(df = 4, age), lung): the variable is the
+        # first unnamed argument
+        ("pspline(df = 4, age)", [0.376920844214556, 0.754403211878295]),
+        # computed options are R's length-one vectors
+        ("pspline(age, df = 2*2)", [0.376920844214556, 0.754403211878295]),
+        ("ridge(age, ph.ecog, theta = 1/2)", [0.0112690971661902, 0.4420717290071376]),
+        ("age + frailty(inst, theta = 1/2)", [0.0210228272407693]),
+        ('age + frailty(inst, method = c("aic"), init = c(0.2, 2))', [0.018636025573109897]),
+    ],
+)
+def test_penalty_options_are_r_values(rhs, coefficients):
+    fit = r.coxph(f"Surv(time, status) ~ {rhs}", datasets.load_lung())
+    assert fit.coefficients[: len(coefficients)] == approx(coefficients, rel=1e-9)
 
 
 def test_a_comparison_in_surv_is_not_a_variable_name():
