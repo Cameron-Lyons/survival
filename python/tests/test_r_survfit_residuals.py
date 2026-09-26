@@ -333,3 +333,23 @@ def test_ctype_2_hazard_residuals_warn_as_in_r():
         auc = r.survfit_residuals(fit, times=[10, 20], type="auc")
     _close(pstate.resid[0], [-0.03383694481615816, -0.0279289068323845])
     _close(auc.resid[0], [-0.0144503652299554, -0.320325604480782])
+
+
+def test_ctype_2_multistate_residuals_do_not_warn_as_in_r():
+    # R: fit <- survfit(Surv(etime, event) ~ 1, data = m[1:60, ], ctype = 2) warns when it is
+    # fitted; resid(fit, times = c(24, 60), type = "cumhaz")[i, , ] and pseudo() do not, as
+    # rsurvpart2 has no ctype = 2 note
+    with pytest.warns(UserWarning, match="only stype=1, ctype=1 implimented"):
+        fit = r.survfit("Surv(etime, event) ~ 1", _mgus2_competing_risks(), ctype=2)
+    assert fit.call.ctype == 2
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cumhaz = r.survfit_residuals(fit, times=[24, 60], type="cumhaz")
+        values = r.pseudo(fit, times=[24, 60], type="cumhaz")
+    assert cumhaz.columns == ["1:2", "1:3"]
+    _close(cumhaz.resid[0][0], [0.0, -0.000657462195923734])
+    _close(cumhaz.resid[0][1], [-0.00584982827687762, 0.017003969646703351])
+    _close(cumhaz.resid[4][1], [0.016406408876622, 0.016406408876622])
+    _close(values[0][0], [0.0, -0.0138067061143984])
+    _close(values[0][1], [-0.0463993606159998, 1.644065459258075])
