@@ -189,6 +189,20 @@ def test_summary_is_the_same_with_and_without_influence():
         np.testing.assert_allclose(with_influence.table.values, without.table.values, rtol=1e-12)
 
 
+def test_summary_rows_leave_the_influence_matrices_out():
+    # R's summary object carries the fit's matrices (survfit0's with times) along unchanged,
+    # though they do not line up with its rows; the summary rows here have none
+    engine = r.survfit("Surv(time, status) ~ g", _groups(), influence=True).engine
+    for rows in (
+        sa.summary_survfit(engine),
+        sa.summary_survfit(engine, censored=True),
+        sa.summary_survfit(engine, times=[2, 5]),
+    ):
+        assert rows.influence_surv is None
+        assert rows.influence_chaz is None
+    assert len(engine.influence_surv) == 2
+
+
 @pytest.mark.parametrize("rmean", ["none", "common", "individual", "4.5"])
 @pytest.mark.parametrize("start_time", [None, 1.5])
 def test_survmean_of_the_fit_equals_that_of_its_survfit0(rmean, start_time):
