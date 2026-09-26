@@ -159,3 +159,56 @@ def test_survobrien_leaves_asis_terms_alone():
     )
     with pytest.raises(ValueError, match="No continuous variables to modify"):
         r.survobrien("Surv(time, status) ~ I(z) + factor(w)", data=data)
+
+
+# --- cch ---------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def nwtco_case_cohort():
+    """``?cch``'s case-cohort sample of ``nwtco`` with the ids permuted:
+    ``d$rid <- ((0:(n - 1)) * 389) %% n + 1`` and ``d$cid <- paste0("p", d$rid)``."""
+
+    nwtco = datasets.load_nwtco()
+    keep = [
+        i
+        for i, (rel, sub) in enumerate(zip(nwtco["rel"], nwtco["in.subcohort"], strict=True))
+        if rel == 1 or sub == 1
+    ]
+    n = len(keep)
+    stage_labels = {1: "I", 2: "II", 3: "III", 4: "IV"}
+    histol_labels = {1: "FH", 2: "UH"}
+    rid = [(i * 389) % n + 1 for i in range(n)]
+    return {
+        "seqno": [nwtco["seqno"][i] for i in keep],
+        "edrel": [nwtco["edrel"][i] for i in keep],
+        "rel": [int(nwtco["rel"][i]) for i in keep],
+        "subcohort": [int(nwtco["in.subcohort"][i]) for i in keep],
+        "stage": [stage_labels[int(nwtco["stage"][i])] for i in keep],
+        "histol": [histol_labels[int(nwtco["histol"][i])] for i in keep],
+        "age": [nwtco["age"][i] / 12 for i in keep],
+        "instit": [int(nwtco["instit"][i]) for i in keep],
+        "rid": rid,
+        "cid": [f"p{value}" for value in rid],
+    }
+
+
+def test_cch_prentice_fit_carries_the_point_estimate(nwtco_case_cohort):
+    # R's Prentice sets fit$coefficients <- fit1$coefficients on the augmented-data fit
+    fit = r.cch(
+        "Surv(edrel, rel) ~ stage + histol + age",
+        nwtco_case_cohort,
+        subcoh="subcohort",
+        id="seqno",
+        cohort_size=4028,
+    )
+    assert fit.coefficients == approx(
+        [
+            0.734570842045653,
+            0.597083557948202,
+            1.38413196899809,
+            1.49806307262597,
+            0.0432678728347779,
+        ]
+    )
+    assert list(fit.fit.fit.coefficients) == fit.coefficients

@@ -117,8 +117,9 @@ pub struct CchFitResult {
     /// Borgan's weighted score residuals collapsed by `id` (`sc`).
     #[pyo3(get)]
     pub sc: Option<Vec<Vec<f64>>>,
-    /// The Cox fit the estimator is built on (Prentice: the augmented
-    /// data set; its coefficients are replaced by `coefficients`).
+    /// The Cox fit the estimator is built on.  For Prentice it is the fit
+    /// to the augmented data set with its coefficients replaced by the
+    /// point estimate, as R does (`fit$coefficients <- fit1$coefficients`).
     #[pyo3(get)]
     pub fit: CoxPHFit,
 }
@@ -359,7 +360,6 @@ fn residual_matrix(
 
 struct CchComputation {
     fit: CoxPHFit,
-    coefficients: Vec<f64>,
     phase2var: Array2<f64>,
     naive_var: Array2<f64>,
     var: Array2<f64>,
@@ -436,7 +436,7 @@ fn augmented_fit(
         input.start.push(start[idx]);
         input.offset.push(0.0);
     }
-    let fit = fit_cox(
+    let mut fit = fit_cox(
         input,
         initial_coefficients.clone(),
         if prentice { 35 } else { 20 },
@@ -448,10 +448,11 @@ fn augmented_fit(
     let phase2_scale = 1.0 - subcohort_indices.len() as f64 / cohort_size as f64;
     let phase2var = phase2_rows.t().dot(&phase2_rows) * phase2_scale;
     let naive_var = &fit.var + &phase2var;
-    let coefficients = initial_coefficients.unwrap_or_else(|| fit.coefficients.clone());
+    if let Some(coefficients) = initial_coefficients {
+        fit.coefficients = coefficients;
+    }
     Ok(CchComputation {
         fit,
-        coefficients,
         phase2var,
         var: naive_var.clone(),
         naive_var,
@@ -530,10 +531,8 @@ fn lin_ying_fit(
     } else {
         naive_var.clone()
     };
-    let coefficients = fit.coefficients.clone();
     Ok(CchComputation {
         fit,
-        coefficients,
         phase2var,
         naive_var,
         var,
@@ -759,11 +758,9 @@ fn borgan_fit(
     // input record.
     let id: Vec<i32> = source_indices.iter().map(|&idx| idx as i32).collect();
     let sc = residual_matrix(&fit, ResidualType::Score, true, Some(&id))?;
-    let coefficients = fit.coefficients.clone();
     Ok(BorganComputation {
         computation: CchComputation {
             fit,
-            coefficients,
             phase2var: phase_two.variance,
             var: naive_var.clone(),
             naive_var,
@@ -787,7 +784,7 @@ struct CchMetadata {
 
 fn finish(computation: CchComputation, metadata: CchMetadata) -> CchFitResult {
     CchFitResult {
-        coefficients: computation.coefficients,
+        coefficients: computation.fit.coefficients.clone(),
         var: matrix_rows(&computation.var),
         naive_var: matrix_rows(&computation.naive_var),
         phase2var: matrix_rows(&computation.phase2var),
@@ -1086,6 +1083,8 @@ mod tests {
             .expect("R parity fit should succeed");
             assert_close(&result.coefficients, &expected_coefficients);
             assert_matrix_close(&result.var, &expected_variance);
+            // R's Prentice sets fit$coefficients <- fit1$coefficients
+            assert_close(&result.fit.coefficients, &expected_coefficients);
         }
     }
 
