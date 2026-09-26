@@ -56,9 +56,9 @@ pub use cause_specific_cox_module::{
 };
 pub use cch::{CchFitResult, cch_borgan_fit, cch_fit};
 pub use cox_optimizer::TieMethod;
-pub use cox_zph::{
-    CoxZph, CoxZphTest, ZphPenalty, ZphTransform, ZphTransformArg, cox_zph, cox_zph_py,
-};
+#[cfg(feature = "python")]
+pub use cox_zph::cox_zph_py;
+pub use cox_zph::{CoxZph, CoxZphTest, ZphFit, ZphTransform, cox_zph};
 #[cfg(feature = "python")]
 pub use coxpenal::CallbackPenalty;
 pub use coxpenal::{

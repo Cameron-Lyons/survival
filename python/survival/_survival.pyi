@@ -11741,13 +11741,12 @@ def cox_survfit_from_baseline(
     requested_times: Sequence[float] | None = None,
 ) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
 def cox_zph(
-    fit: CoxPHFit,
-    transform: str | Sequence[float] = "km",
+    fit: CoxPHFit | CoxpenalFit,
+    transform: str | Sequence[float] | None = None,
     terms: bool = True,
     singledf: bool = False,
     global_test: bool = True,
     assign: Sequence[Sequence[int]] | None = None,
-    penalized: CoxpenalFit | None = None,
 ) -> CoxZph: ...
 def coxcount1(survival: SurvivalData, strata: Sequence[int] | None = None) -> CoxCountOutput: ...
 def coxcount2(

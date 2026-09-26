@@ -1566,13 +1566,12 @@ def cox_zph(
         names = [name for name, alias in zip(fit.coef_names, aliased, strict=True) if not alias]
         assign = [[col] for col, alias in enumerate(aliased) if not alias]
     result = _core.cox_zph(
-        fit.fit,
+        fit.penalized if fit.penalized is not None else fit.fit,
         transform=transform_arg,
         terms=use_terms,
         singledf=_normalize_bool_option(singledf, "singledf"),
         global_test=_normalize_bool_option(global_test, "global"),
         assign=assign,
-        penalized=fit.penalized,
     )
     table: list[dict[str, float | str]] = [
         {"name": name, "chisq": float(row.chisq), "df": float(row.df), "p": float(row.p)}

@@ -2967,7 +2967,6 @@ fn check_zph(cox: &CoxCase, expected: &Value, transform: &str, terms: bool) -> R
         false,
         true,
         Some(&cox.assign),
-        None,
     )
     .map_err(|err| format!("{err}"))?;
     let table = matrix(&expected["table"]["values"])?;
