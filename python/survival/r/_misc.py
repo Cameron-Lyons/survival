@@ -43,11 +43,11 @@ from ._coerce import (
 from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
-    _arithmetic_expression_columns,
     _column,
     _column_or_values,
     _column_source,
     _combined_columns,
+    _covariate_term_columns,
     _covariate_term_name,
     _design_rows_from_spec,
     _design_term_output_names,
@@ -754,14 +754,36 @@ def survcheck(
 # ---------------------------------------------------------------------------
 
 
+def _make_unique(names: Sequence[str]) -> list[str]:
+    """R's ``make.unique``: a repeated name becomes ``name.1``, ``name.2``, ... skipping any
+    name already in *names* or given out earlier."""
+
+    taken = set(names)
+    seen: set[str] = set()
+    counts: dict[str, int] = {}
+    out: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+            continue
+        count = counts.get(name, 1)
+        while f"{name}.{count}" in taken:
+            count += 1
+        unique = f"{name}.{count}"
+        taken.add(unique)
+        counts[name] = count + 1
+        out.append(unique)
+    return out
+
+
 def _survobrien_columns(
     data: Any, covariates: Sequence[Any], n: int
 ) -> tuple[list[str], list[tuple[str, list[float]]]]:
-    """Split the model terms into the ones R leaves alone (``keepers <- factors | protected``)
-    and the continuous ones it transforms.
+    """Split the model terms into the ones R leaves alone (``keepers <- factors | protected``:
+    factors, non-numeric terms and ``I()`` (AsIs) terms) and the continuous ones it transforms.
 
-    A kept term contributes the data columns it references (R's ``all.vars``): the column of a
-    factor or of a non-numeric term, the variables of an ``I()`` (AsIs) expression.
+    A kept term contributes every data column it references (R's ``all.vars``), once per term.
     """
 
     keepers: list[str] = []
@@ -769,21 +791,14 @@ def _survobrien_columns(
     for term in covariates:
         if isinstance(term, _InteractionTerm):
             raise ValueError("This function cannot deal with iteraction terms")
-        if term.transform == "I":
-            keepers.extend(
-                [term.column]
-                if term.arithmetic is None
-                else _arithmetic_expression_columns(term.arithmetic)
-            )
-            continue
         numeric = None
-        if not term.categorical:
+        if term.transform != "I" and not term.categorical:
             try:
                 numeric = [float(value) for value in _term_values(data, term, n)]
             except (TypeError, ValueError):
                 numeric = None
         if numeric is None:
-            keepers.append(term.column)
+            keepers.extend(_covariate_term_columns(term))
         else:
             continuous.append((_covariate_term_name(term), numeric))
     if not continuous:
@@ -795,19 +810,19 @@ def _survobrien_transformed(
     transform: Callable[..., Any] | None,
     continuous: list[tuple[str, list[float]]],
     expansion: Any,
-) -> dict[str, list[float]]:
+) -> list[tuple[str, list[float]]]:
     """The transformed columns: the Rust logit-rank default, or ``transform`` applied to the
     values of every risk set (R's ``lapply(indx, function(x) transform(z[x]))``)."""
 
     if transform is None:
-        return {
-            name: list(column)
+        return [
+            (name, list(column))
             for (name, _values), column in zip(continuous, expansion.transformed, strict=True)
-        }
+        ]
     blocks: dict[int, list[int]] = {}
     for position, block in enumerate(expansion.strata):
         blocks.setdefault(block, []).append(position)
-    out: dict[str, list[float]] = {}
+    out: list[tuple[str, list[float]]] = []
     for name, values in continuous:
         column = [0.0] * len(expansion.row)
         for positions in blocks.values():
@@ -820,7 +835,7 @@ def _survobrien_transformed(
                 raise ValueError("Transform function must be 1 to 1")
             for position, value in zip(positions, result, strict=True):
                 column[position] = value
-        out[name] = column
+        out.append((name, column))
     return out
 
 
@@ -836,7 +851,8 @@ def survobrien(
     Returns the expanded data frame (a mapping of columns): the response, the untransformed
     variables of the factor and ``I()`` terms, the ``strata`` and ``cluster`` columns (or
     ``.id.``, the source row), the transformed continuous variables and the risk-set number
-    ``.strata.``.  String columns count as factors.
+    ``.strata.``.  A repeated name is made unique as in R (``z``, ``z.1``, ...).  String
+    columns count as factors.
     """
 
     if (
@@ -869,20 +885,23 @@ def survobrien(
         strata=strata_codes,
     )
     rows = list(expansion.row)
-    frame: dict[str, list[Any]] = {}
+    columns: list[tuple[str, list[Any]]] = []
     if expansion.start is not None:
-        frame["start"] = list(expansion.start)
-        frame["stop"] = list(expansion.time)
+        columns += [("start", list(expansion.start)), ("stop", list(expansion.time))]
     else:
-        frame["time"] = list(expansion.time)
-    frame["status"] = list(expansion.status)
-    for name in [*keepers, *terms.strata, *terms.clusters]:
-        frame[name] = list(_subset_sequence(_column(data, name), rows, name))
+        columns.append(("time", list(expansion.time)))
+    columns.append(("status", list(expansion.status)))
+    columns += [
+        (name, list(_subset_sequence(_column(data, name), rows, name)))
+        for name in [*keepers, *terms.strata, *terms.clusters]
+    ]
     if not terms.clusters:
-        frame[".id."] = [row + 1 for row in rows]
-    frame.update(_survobrien_transformed(transform, continuous, expansion))
-    frame[".strata."] = list(expansion.strata)
-    return frame
+        columns.append((".id.", [row + 1 for row in rows]))
+    columns += _survobrien_transformed(transform, continuous, expansion)
+    columns.append((".strata.", list(expansion.strata)))
+    # data.frame()'s check.names makes the column names unique
+    names = _make_unique([name for name, _values in columns])
+    return {name: values for name, (_label, values) in zip(names, columns, strict=True)}
 
 
 # ---------------------------------------------------------------------------

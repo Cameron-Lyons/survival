@@ -91,6 +91,43 @@ def test_survcheck_numbers_problem_rows_of_the_data_before_na_omit():
 
 # --- survobrien --------------------------------------------------------------
 
+OBRIEN_DATA = {
+    "time": [1, 2, 3, 4, 5],
+    "status": [1, 0, 1, 1, 1],
+    "x": [0.1, 0.4, 0.2, 0.8, 0.5],
+    "z": [2, 7, 1, 3, 5],
+    "w": [1, 2, 1, 2, 2],
+}
+# the columns of OBRIEN_DATA over the 11 rows of its four risk sets
+OBRIEN_Z = [2, 7, 1, 3, 5, 1, 3, 5, 3, 5, 5]
+OBRIEN_W = [1, 2, 1, 2, 2, 1, 2, 2, 2, 2, 2]
+X_LOGITS = [
+    -2.19722457733621912,
+    0.0,
+    -0.84729786038720356,
+    2.19722457733621956,
+    0.84729786038720345,
+    -1.6094379124341005,
+    1.60943791243410073,
+    0.0,
+    1.09861228866810978,
+    -1.09861228866810978,
+    0.0,
+]
+Z_LOGITS = [
+    -0.84729786038720356,
+    2.19722457733621956,
+    -2.19722457733621912,
+    0.0,
+    0.84729786038720345,
+    -1.6094379124341005,
+    0.0,
+    1.60943791243410073,
+    -1.09861228866810978,
+    1.09861228866810978,
+    0.0,
+]
+
 
 def test_survobrien_leaves_asis_terms_alone():
     # R's ?survobrien example: survobrien(Surv(futime, fustat) ~ age + factor(rx) + I(ecog.ps),
@@ -109,57 +146,78 @@ def test_survobrien_leaves_asis_terms_alone():
     )
     assert frame[".strata."][-3:] == [12, 12, 12]
 
-    data = {
-        "time": [1, 2, 3, 4, 5],
-        "status": [1, 0, 1, 1, 1],
-        "x": [0.1, 0.4, 0.2, 0.8, 0.5],
-        "z": [2, 7, 1, 3, 5],
-        "w": [1, 2, 1, 2, 2],
-    }
-    x_logits = [
-        -2.19722457733621912,
-        0.0,
-        -0.84729786038720356,
-        2.19722457733621956,
-        0.84729786038720345,
-        -1.6094379124341005,
-        1.60943791243410073,
-        0.0,
-        1.09861228866810978,
-        -1.09861228866810978,
-        0.0,
-    ]
-    asis = r.survobrien("Surv(time, status) ~ x + I(z)", data=data)
+    asis = r.survobrien("Surv(time, status) ~ x + I(z)", data=OBRIEN_DATA)
     assert list(asis) == ["time", "status", "z", ".id.", "x", ".strata."]
-    assert asis["z"] == [2, 7, 1, 3, 5, 1, 3, 5, 3, 5, 5]
-    assert asis["x"] == approx(x_logits)
+    assert asis["z"] == OBRIEN_Z
+    assert asis["x"] == approx(X_LOGITS)
 
-    # an I() expression keeps the variables it references (R: all.vars)
-    expression = r.survobrien("Surv(time, status) ~ x + I(z^2) + I(z * w)", data=data)
-    assert list(expression) == ["time", "status", "z", "w", ".id.", "x", ".strata."]
-    assert expression["z"] == asis["z"]
-    assert expression["w"] == [1, 2, 1, 2, 2, 1, 2, 2, 2, 2, 2]
-    assert expression["x"] == approx(x_logits)
+    # a kept term keeps every variable it references (R: all.vars), once per term
+    expression = r.survobrien("Surv(time, status) ~ x + I(z^2) + I(z * w)", data=OBRIEN_DATA)
+    assert list(expression) == ["time", "status", "z", "z.1", "w", ".id.", "x", ".strata."]
+    assert expression["z"] == expression["z.1"] == OBRIEN_Z
+    assert expression["w"] == OBRIEN_W
+    assert expression["x"] == approx(X_LOGITS)
+    cut = r.survobrien("Surv(time, status) ~ x + cut(z * w, 3)", data=OBRIEN_DATA)
+    assert list(cut) == ["time", "status", "z", "w", ".id.", "x", ".strata."]
+    assert (cut["z"], cut["w"]) == (OBRIEN_Z, OBRIEN_W)
 
     # identity() does not protect a term
-    identity = r.survobrien("Surv(time, status) ~ x + identity(z)", data=data)
-    assert identity["identity(z)"] == approx(
+    identity = r.survobrien("Surv(time, status) ~ x + identity(z)", data=OBRIEN_DATA)
+    assert identity["identity(z)"] == approx(Z_LOGITS)
+    with pytest.raises(ValueError, match="No continuous variables to modify"):
+        r.survobrien("Surv(time, status) ~ I(z) + factor(w)", data=OBRIEN_DATA)
+
+
+def test_survobrien_makes_repeated_column_names_unique():
+    # R: survobrien(Surv(time, status) ~ z + I(z^2), data = d), whose data.frame() names the
+    # transformed z "z.1" beside the raw z of the I() term
+    square = r.survobrien("Surv(time, status) ~ z + I(z^2)", data=OBRIEN_DATA)
+    assert list(square) == ["time", "status", "z", ".id.", "z.1", ".strata."]
+    assert square["z"] == OBRIEN_Z
+    assert square["z.1"] == approx(Z_LOGITS)
+
+    # R: the same with the formula factor(w) + w
+    factor = r.survobrien("Surv(time, status) ~ factor(w) + w", data=OBRIEN_DATA)
+    assert list(factor) == ["time", "status", "w", ".id.", "w.1", ".strata."]
+    assert factor["w"] == OBRIEN_W
+    assert factor["w.1"] == approx(
         [
-            -0.84729786038720356,
-            2.19722457733621956,
-            -2.19722457733621912,
-            0.0,
+            -1.38629436111989057,
+            0.84729786038720345,
+            -1.38629436111989057,
+            0.84729786038720345,
             0.84729786038720345,
             -1.6094379124341005,
+            0.69314718055994529,
+            0.69314718055994529,
             0.0,
-            1.60943791243410073,
-            -1.09861228866810978,
-            1.09861228866810978,
+            0.0,
             0.0,
         ]
     )
-    with pytest.raises(ValueError, match="No continuous variables to modify"):
-        r.survobrien("Surv(time, status) ~ I(z) + factor(w)", data=data)
+
+    # R: ~ z + I(z^2) + z.1 with a data column z.1, a name make.unique then skips
+    taken = r.survobrien(
+        "Surv(time, status) ~ z + I(z^2) + z.1", data={**OBRIEN_DATA, "z.1": [9, 8, 7, 6, 5]}
+    )
+    assert list(taken) == ["time", "status", "z", ".id.", "z.2", "z.1", ".strata."]
+    assert taken["z"] == OBRIEN_Z
+    assert taken["z.2"] == approx(Z_LOGITS)
+    assert taken["z.1"] == approx(
+        [
+            2.19722457733621956,
+            0.84729786038720345,
+            0.0,
+            -0.84729786038720356,
+            -2.19722457733621912,
+            1.60943791243410073,
+            0.0,
+            -1.6094379124341005,
+            1.09861228866810978,
+            -1.09861228866810978,
+            0.0,
+        ]
+    )
 
 
 # --- cch ---------------------------------------------------------------------
