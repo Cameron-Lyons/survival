@@ -72,13 +72,13 @@ from ._formula import (
     _subset_formula_inputs,
 )
 from ._surv import Surv, _complete_codes, _survreg_response_arrays, is_na_surv
+from ._survpenal import fit_penalized, penalty_terms
 from ._types import (
     NaAction,
     PredictResult,
     _FormulaDesign,
     _ModelCovariateTerm,
     _ModelStrataTerm,
-    _PenaltyDesignTerm,
 )
 
 SurvregDistribution = _core.SurvregDistribution
@@ -120,6 +120,11 @@ class SurvregModelResult:
     the call kept them; ``na_action`` (``fit$na.action``) records the rows the
     ``na.action`` removed.  ``n``, ``converged``, ``robust`` and ``distribution`` (the
     resolved distribution object) are conveniences with no ``survreg`` component in R.
+
+    A model with ``ridge()`` or ``pspline()`` terms is R's ``survreg.penal`` object:
+    ``penalized`` holds the ``SurvpenalFit`` (``fit`` is its ``survreg``), and ``df``,
+    ``iter``, ``var2``, ``penalty``, ``pterms``, ``assign2`` and ``history`` are its
+    components.
     """
 
     fit: _core.SurvregFit = field(repr=False)
@@ -140,6 +145,13 @@ class SurvregModelResult:
     strata_terms: tuple[tuple[str, ...], ...] = field(default=(), repr=False)
     strata_levels: tuple[str, ...] = ()
     na_action: NaAction | None = field(default=None, repr=False)
+    penalized: Any | None = field(default=None, repr=False)
+    assign2_labels: tuple[str, ...] = field(default=(), repr=False)
+
+    @property
+    def is_penalized(self) -> bool:
+        """R's ``inherits(fit, "survreg.penal")``."""
+        return self.penalized is not None
 
     @property
     def coefficients(self) -> list[float]:
@@ -166,7 +178,10 @@ class SurvregModelResult:
         return [float(self.fit.intercept_only_log_likelihood), float(self.fit.log_likelihood)]
 
     @property
-    def iter(self) -> int:
+    def iter(self) -> int | list[int]:
+        """``fit$iter``: the iterations, or (outer, total inner) for a penalized fit."""
+        if self.penalized is not None:
+            return list(self.penalized.iter)
         return int(self.fit.iterations)
 
     @property
@@ -186,13 +201,62 @@ class SurvregModelResult:
         return 1 + _estimated_scale_count(self.fit)
 
     @property
-    def df(self) -> int:
-        """``fit$df``: the number of coefficients, the estimated scales included."""
+    def df(self) -> int | list[float]:
+        """``fit$df``: the number of coefficients, the estimated scales included, or the
+        degrees of freedom of every term of ``assign2`` for a penalized fit."""
+        if self.penalized is not None:
+            return list(self.penalized.df)
         return int(self.fit.df)
 
     @property
-    def df_residual(self) -> int:
-        return int(self.fit.df_residual)
+    def df_residual(self) -> float:
+        """``fit$df.residual``: ``n - sum(df)`` (``NaN`` where R has ``NA``)."""
+        return float(self.fit.df_residual)
+
+    @property
+    def var2(self) -> list[list[float]] | None:
+        """``fit$var2`` of a penalized fit: the sandwich ``H^-1 I H^-1``."""
+        return None if self.penalized is None else self.penalized.var2
+
+    @property
+    def penalty(self) -> list[float] | None:
+        """``fit$penalty`` of a penalized fit: ``c(0, P)``."""
+        return None if self.penalized is None else list(self.penalized.penalty)
+
+    @property
+    def inner_failures(self) -> list[int]:
+        """The outer iterations of a penalized fit whose inner loop did not converge."""
+        return [] if self.penalized is None else list(self.penalized.inner_failures)
+
+    @property
+    def pterms(self) -> dict[str, int] | None:
+        """``fit$pterms``: 0 for an ordinary term, 1 for a penalized one."""
+        if self.penalized is None:
+            return None
+        return dict(zip(self.assign2_labels, self.penalized.pterms, strict=False))
+
+    @property
+    def assign2(self) -> dict[str, list[int]] | None:
+        """``fit$assign2``: the 0-based coefficients of every term, ``sigma`` last."""
+        if self.penalized is None:
+            return None
+        return dict(zip(self.assign2_labels, self.penalized.assign2, strict=True))
+
+    @property
+    def history(self) -> dict[str, Any] | None:
+        """``fit$history``: the ``PenaltyHistory`` of every penalized term."""
+        if self.penalized is None:
+            return None
+        return {self.assign2_labels[entry.term]: entry for entry in self.penalized.history}
+
+    @property
+    def frail(self) -> None:
+        """``fit$frail``: survreg() refuses sparse frailty terms, so always ``None``."""
+        return None
+
+    @property
+    def fvar(self) -> None:
+        return None
 
     @property
     def means(self) -> list[float]:
@@ -219,7 +283,7 @@ class SurvregAnovaResult:
     terms: list[str]
     df: list[float]
     deviance: list[float]
-    resid_df: list[int]
+    resid_df: list[float]
     loglik: list[float]
     p: list[float] | None
     heading: list[str]
@@ -340,7 +404,8 @@ def survreg_control(
     **dotted: Any,
 ) -> Any:
     """R's ``survreg.control`` (``max_iter``/``eps``/``tol_chol`` are accepted aliases);
-    ``debug`` and ``outer.max`` are accepted and unused as in R."""
+    ``outer.max`` bounds the outer iterations of a penalized fit and must be at least 1
+    (R does not check it), ``debug`` is accepted and unused as in R."""
 
     for alias in ("rel.tolerance", "eps"):
         rel_tolerance = _pop_dotted_keyword(dotted, alias, "rel_tolerance", rel_tolerance, 1e-9)
@@ -348,16 +413,20 @@ def survreg_control(
         toler_chol = _pop_dotted_keyword(dotted, alias, "toler_chol", toler_chol, 1e-10)
     for alias in ("iter.max", "max_iter"):
         iter_max = _pop_dotted_keyword(dotted, alias, "iter_max", iter_max, None)
-    _pop_dotted_keyword(dotted, "outer.max", "outer_max", outer_max, 10)
+    outer_max = _pop_dotted_keyword(dotted, "outer.max", "outer_max", outer_max, 10)
     if dotted:
         raise TypeError(f"unused argument(s): {', '.join(sorted(dotted))}")
     iterations = _integer_scalar(maxiter if iter_max is None else iter_max, "iter.max")
     if iterations < 0:
         raise ValueError("iter.max must be non-negative")
+    outer = _integer_scalar(outer_max, "outer.max")
+    if outer < 1:
+        raise ValueError("invalid value for outer.max")
     return _core.SurvregControl(
         iter_max=iterations,
         rel_tolerance=_finite_float(rel_tolerance, "rel.tolerance"),
         toler_chol=_finite_float(toler_chol, "toler.chol"),
+        outer_max=outer,
     )
 
 
@@ -530,20 +599,6 @@ def _design_output_names(design: _FormulaDesign) -> list[str]:
     return names
 
 
-def _refuse_penalty_terms(design: _FormulaDesign | None) -> None:
-    """survreg.R stops on frailty terms and fits ridge()/pspline() through survpenal.fit."""
-
-    kinds = [
-        term.kind
-        for term in (() if design is None else design.covariates)
-        if isinstance(term, _PenaltyDesignTerm) and term.penalized
-    ]
-    if "frailty" in kinds:
-        raise ValueError("survreg does not support frailty terms")
-    if kinds:
-        raise NotImplementedError("penalized survreg (survpenal.fit) is not implemented")
-
-
 def _matrix_frame(
     response: Surv, x: Any, *, weights: Any | None, offset: Any | None, cluster: Any | None
 ) -> _SurvregFrame:
@@ -650,7 +705,9 @@ def survreg(
     if scale_value > 0.0 and frame.strata is not None and len(frame.strata_levels) > 1:
         raise ValueError("The scale argument is not valid with multiple strata")
 
-    _refuse_penalty_terms(frame.design)
+    penalized_terms = penalty_terms(frame.design)
+    if any(term.kind == "frailty" for _, term in penalized_terms):
+        raise ValueError("survreg does not support frailty terms")
 
     time, status, time2 = _survreg_response_arrays(response)
     cluster_codes = (  # as.numeric(as.factor(cluster)); unused when robust = FALSE
@@ -658,25 +715,45 @@ def survreg(
         if frame.cluster is not None and robust_value is not False
         else None
     )
-    fit = _core.survreg_fit(
-        _core.SurvregData(
-            time,
-            [int(code) for code in status],
-            frame.x,
-            time2=time2,
-            weights=frame.weights,
-            offset=frame.offset,
-            strata=frame.strata,
-            cluster=cluster_codes,
-        ),
-        distribution,
-        init=_float_vector(init, "init") if init is not None else None,
-        scale=scale_value,
-        control=control,
-        robust=robust_value,
+    data_value = _core.SurvregData(
+        time,
+        [int(code) for code in status],
+        frame.x,
+        time2=time2,
+        weights=frame.weights,
+        offset=frame.offset,
+        strata=frame.strata,
+        cluster=cluster_codes,
     )
-    if control.iter_max > 1 and not fit.converged:
-        warnings.warn("Ran out of iterations and did not converge", RuntimeWarning, stacklevel=2)
+    init_value = _float_vector(init, "init") if init is not None else None
+    penalized = None
+    assign2_labels: tuple[str, ...] = ()
+    if penalized_terms:
+        # survpenal.fit warns about nothing: its inner-loop warning is never reached
+        penalized, assign2_labels = fit_penalized(
+            frame,
+            penalized_terms,
+            data_value,
+            distribution,
+            init=init_value,
+            scale=scale_value,
+            control=control,
+            robust=robust_value,
+        )
+        fit = penalized.survreg
+    else:
+        fit = _core.survreg_fit(
+            data_value,
+            distribution,
+            init=init_value,
+            scale=scale_value,
+            control=control,
+            robust=robust_value,
+        )
+        if control.iter_max > 1 and not fit.converged:
+            warnings.warn(
+                "Ran out of iterations and did not converge", RuntimeWarning, stacklevel=2
+            )
 
     return SurvregModelResult(
         fit=fit,
@@ -690,13 +767,16 @@ def survreg(
         x=frame.x if keep_x else None,
         y=response if keep_y else None,
         model=frame.model,
-        score=list(fit.score) if keep_score else None,
+        # fit$u of a penalized fit, frailties included
+        score=list(fit.score if penalized is None else penalized.score) if keep_score else None,
         assign=frame.assign,
         term_labels=frame.term_labels,
         strata_term=frame.strata_term,
         strata_terms=frame.strata_terms,
         strata_levels=frame.strata_levels,
         na_action=frame.na_action,
+        penalized=penalized,
+        assign2_labels=assign2_labels,
     )
 
 
@@ -1037,14 +1117,14 @@ def _anova_single(fit: SurvregModelResult, with_test: bool) -> SurvregAnovaResul
     model = fit.fit
     labels = list(fit.term_labels)
     loglik = [0.0] * (len(labels) + 1)
-    resid_df = [0] * (len(labels) + 1)
+    resid_df = [0.0] * (len(labels) + 1)
     loglik[-1] = -2.0 * float(model.log_likelihood)
-    resid_df[-1] = int(model.df_residual)
+    resid_df[-1] = model.df_residual
     for keep in range(len(labels) - 1, -1, -1):
         refit = _refit_terms(fit, keep)
         loglik[keep] = -2.0 * float(refit.log_likelihood)
-        resid_df[keep] = int(refit.df_residual)
-    df = [math.nan] + [float(resid_df[k - 1] - resid_df[k]) for k in range(1, len(loglik))]
+        resid_df[keep] = refit.df_residual
+    df = [math.nan] + [resid_df[k - 1] - resid_df[k] for k in range(1, len(loglik))]
     deviance = [math.nan] + [loglik[k - 1] - loglik[k] for k in range(1, len(loglik))]
     heading = [
         "Analysis of Deviance Table",
@@ -1091,11 +1171,11 @@ def _anova_list(fits: Sequence[SurvregModelResult], with_test: bool) -> SurvregA
     fits = [fit for fit, same in zip(fits, keep, strict=True) if same]
     if len(fits) == 1:
         raise ValueError("The first model has a different response from the rest")
-    resid_df = [int(fit.fit.df_residual) for fit in fits]
+    resid_df = [fit.fit.df_residual for fit in fits]
     loglik = [-2.0 * float(fit.fit.log_likelihood) for fit in fits]
     labels = [list(fit.term_labels) for fit in fits]
     tests = [""] + [_diff_term(labels[i - 1], labels[i], i + 1) for i in range(1, len(fits))]
-    df = [math.nan] + [float(resid_df[i - 1] - resid_df[i]) for i in range(1, len(fits))]
+    df = [math.nan] + [resid_df[i - 1] - resid_df[i] for i in range(1, len(fits))]
     deviance = [math.nan] + [loglik[i - 1] - loglik[i] for i in range(1, len(fits))]
     return SurvregAnovaResult(
         terms=[fit.formula.partition("~")[2].strip() if fit.formula else "" for fit in fits],

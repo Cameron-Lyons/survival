@@ -201,23 +201,24 @@ def _degrees_freedom_cox(fit: CoxphModel) -> float:
 
 @degrees_freedom.register(SurvregModelResult)
 def _degrees_freedom_survreg(fit: SurvregModelResult) -> float:
-    return fit.df
+    # logLik.survreg: sum(object$df)
+    return float(fit.fit.df)
 
 
 @singledispatch
-def df_residual(fit: Any) -> int:
+def df_residual(fit: Any) -> float:
     """``df.residual`` (survreg only)."""
 
     raise _no_method("df_residual")
 
 
 @df_residual.register(CoxphModel)
-def _df_residual_cox(fit: CoxphModel) -> int:
+def _df_residual_cox(fit: CoxphModel) -> float:
     raise TypeError("df_residual is only defined for fitted survreg models")
 
 
 @df_residual.register(SurvregModelResult)
-def _df_residual_survreg(fit: SurvregModelResult) -> int:
+def _df_residual_survreg(fit: SurvregModelResult) -> float:
     return fit.df_residual
 
 

@@ -1,5 +1,5 @@
 """Hooks between Python and Rust: R's ``coxpenal.fit`` penalty callback and the pickle
-reconstructor of the native result classes."""
+reconstructors of the native result classes."""
 
 import warnings
 from collections.abc import Callable, Mapping
@@ -11,6 +11,7 @@ __all__ = bind_names(
     globals(),
     [
         "CoxPenaltyTerms",
+        "_survpenal_fit_from_state",
         "_unpickle",
         "cox_callback",
     ],
