@@ -286,6 +286,21 @@ def test_an_na_inside_response_arithmetic_is_missing(lung):
             fitter("Surv(time, status) ~ I(wt.loss/10)", lung, na_action="na.pass")
 
 
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "Surv(time, status) ~ ph.ecog",
+        "Surv(time, status) ~ ph.ecog + strata(sex)",
+        "Surv(time, status) ~ log(ph.karno)",
+    ],
+)
+def test_na_pass_keeps_a_numeric_variable_with_a_missing_value_numeric(lung, formula):
+    # the NA reaches the design matrix rather than making ph.ecog a factor
+    for fitter in (r.coxph, r.survreg):
+        with pytest.raises(ValueError, match="data contains an infinite predictor"):
+            fitter(formula, lung, na_action="na.pass")
+
+
 def test_predict_counts_a_nan_made_by_a_transform_as_missing(lung):
     root = r.coxph("Surv(time, status) ~ sqrt(age)", lung)
     with pytest.warns(UserWarning, match=r"NaNs produced in sqrt\(age\)"):

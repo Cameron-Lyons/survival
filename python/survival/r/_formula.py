@@ -1505,7 +1505,7 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
 
 def _numeric_term_values(values: list[Any], term: _CovariateTerm) -> list[float]:
     try:
-        numeric = [float(value) for value in values]
+        numeric = _floats_or_nan(values)
     except (TypeError, ValueError) as exc:
         if term.transform is not None:
             raise ValueError(
