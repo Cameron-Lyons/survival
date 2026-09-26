@@ -213,13 +213,10 @@ pub(crate) fn cv_cox(
             if let Some(sorted_weights) = sorted_weights {
                 builder = builder.weights(Array1::from_vec(sorted_weights));
             }
-            let beta = match builder.build() {
-                Ok(mut fit) => match fit.fit() {
-                    Ok(()) => fit.results().coefficients,
-                    Err(_) => vec![0.0; nvar],
-                },
-                Err(_) => vec![0.0; nvar],
-            };
+            let beta = builder
+                .build()
+                .and_then(|mut fit| fit.fit().map(|()| fit.results().coefficients))
+                .unwrap_or_else(|_| vec![0.0; nvar]);
             let linear_predictor: Vec<f64> = test_indices
                 .iter()
                 .map(|&orig_idx| {
