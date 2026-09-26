@@ -1,5 +1,6 @@
 """survfit.coxph regressions against R 4.5.3 with survival 3.8-12.
 
+The old-style ``type`` picks R's curve, ``individual`` is accepted with R's warning,
 ``start.time`` builds the curves from the rows still at risk at that time, and penalized
 fits give ``id`` curves.
 """
@@ -75,6 +76,73 @@ def _strata_data():
         "g": [1] * 10 + [2] * 10,
         "x": x,
     }
+
+
+# ---------------------------------------------------------------------------
+# type= and individual=
+# ---------------------------------------------------------------------------
+
+_KP = [0.995814008586017, 0.983222465461149, 0.979007485657402]
+_BRESLOW = [0.995820708869676, 0.983347601004328, 0.97914552919369]
+_EFRON = [0.995820708869676, 0.983268756915752, 0.979067022024147]
+
+
+@pytest.mark.parametrize(
+    ("type_", "surv", "std_err"),
+    [
+        ("kalbfleisch-prentice", _KP, [0.00419811047562559, 0.00845113015015369]),
+        ("kaplan-meier", _KP, [0.00419811047562559, 0.00845113015015369]),
+        ("aalen", _BRESLOW, [0.00418931561111944, 0.00840665195863542]),
+        ("breslow", _BRESLOW, [0.00418931561111944, 0.00840665195863542]),
+        ("tsiatis", _BRESLOW, [0.00418931561111944, 0.00840665195863542]),
+        ("efron", _EFRON, [0.00418931561111945, 0.0084465844413705]),
+        ("fleming-harrington", _EFRON, [0.00418931561111945, 0.0084465844413705]),
+    ],
+)
+def test_type_picks_rs_curve(lung_fit, type_, surv, std_err):
+    # survfit(coxph(Surv(time, status) ~ age + sex, lung), type = type_)
+    curve = r.survfit(lung_fit, type=type_)
+    assert curve.surv[:3] == approx(surv)
+    assert curve.std_err[:2] == approx(std_err)
+    assert lung_fit.survfit(type=type_).surv[:3] == approx(surv)
+
+
+def test_type_with_stype_or_ctype_is_ignored_with_rs_warning(lung_fit):
+    with pytest.warns(RuntimeWarning, match="type argument ignored") as caught:
+        kp = r.survfit(lung_fit, type="aalen", stype=1)
+    assert caught[0].filename == __file__
+    assert kp.surv[:3] == approx(_KP)
+    with pytest.warns(RuntimeWarning, match="type argument ignored"):
+        breslow = r.survfit(lung_fit, type="kalbfleisch-prentice", ctype=1)
+    assert breslow.surv[:3] == approx(_BRESLOW)
+    with pytest.raises(ValueError, match="'type' should be one of"):
+        r.survfit(lung_fit, type="bogus")
+    assert r.survfit(lung_fit, type="kap").surv[:3] == approx(_KP)
+
+
+def test_type_sets_ctype_of_a_breslow_fit(lung):
+    fit = r.coxph("Surv(time, status) ~ age + sex", lung, ties="breslow")
+    assert r.survfit(fit).surv[:3] == approx(
+        [0.995820158292352, 0.98334540329276, 0.979142823072368]
+    )
+    assert r.survfit(fit, type="efron").surv[:3] == approx(
+        [0.995820158292352, 0.983266590080477, 0.979064346688677]
+    )
+
+
+def test_individual_is_accepted_with_rs_warning(lung_fit, heart_fit):
+    newdata = {"age": [60], "sex": [1]}
+    with pytest.warns(RuntimeWarning, match="the `id' option supersedes `individual'"):
+        curve = r.survfit(lung_fit, newdata, individual=False)
+    assert curve.surv[:3] == approx([0.995093079780872, 0.980377439641655, 0.975458714919046])
+    # survfit(fit, newdata = nd[3:4, ], individual = TRUE): one subject, no names
+    subject = {key: values[2:] for key, values in _heart_newdata().items()}
+    with pytest.warns(RuntimeWarning, match="supersedes"):
+        curve = r.survfit(heart_fit, subject, individual=True)
+    assert curve.strata is None
+    assert curve.surv[:3] == approx([0.988905694053077, 0.955601757977624, 0.922368969354276])
+    with pytest.raises(ValueError, match="individual is only used with a fitted Cox model"):
+        r.survfit("Surv(time, status) ~ 1", datasets.load_lung(), individual=True)
 
 
 # ---------------------------------------------------------------------------

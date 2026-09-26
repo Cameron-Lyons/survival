@@ -1728,6 +1728,50 @@ def residuals_coxph(
 # ---------------------------------------------------------------------------
 
 
+# survfit.coxph's old-style ``type`` values and the stype and ctype each stands for
+_SURVFIT_TYPES = (
+    "kalbfleisch-prentice",
+    "aalen",
+    "efron",
+    "kaplan-meier",
+    "breslow",
+    "fleming-harrington",
+    "greenwood",
+    "tsiatis",
+    "exact",
+)
+_SURVFIT_TYPE_STYPE = (1, 2, 2, 1, 2, 2, 2, 2, 2)
+_SURVFIT_TYPE_CTYPE = (1, 1, 2, 1, 1, 2, 1, 1, 1)
+
+
+def _survfit_types(fit: CoxphModel, type_: Any, stype: Any, ctype: Any) -> tuple[int, int]:
+    """``survfit.coxph``'s ``stype`` and ``ctype``: those of the old-style ``type`` when
+    neither is given, else stype 2 and the ctype of the fit's ties (2 for Efron)."""
+
+    if type_ is not None:
+        if stype is not None or ctype is not None:
+            _warn_outside_package("type argument ignored", RuntimeWarning)
+        else:
+            choices = ", ".join(f'"{name}"' for name in _SURVFIT_TYPES)
+            matched = _match_string_arg(
+                type_, "type", _SURVFIT_TYPES, f"'type' should be one of {choices}"
+            )
+            index = _SURVFIT_TYPES.index(matched)
+            stype = _SURVFIT_TYPE_STYPE[index]
+            if stype != 1:
+                ctype = _SURVFIT_TYPE_CTYPE[index]
+    if ctype is None:
+        ctype_value = 2 if fit.method == "efron" else 1
+    else:
+        ctype_value = _integer_scalar(ctype, "ctype")
+        if ctype_value not in (1, 2):
+            raise ValueError("ctype must be 1 or 2")
+    stype_value = 2 if stype is None else _integer_scalar(stype, "stype")
+    if stype_value not in (1, 2):
+        raise ValueError("stype must be 1 or 2")
+    return stype_value, ctype_value
+
+
 def _curve_columns(values: list[list[float]]) -> Any:
     """A curve block as R stores it: a vector for one curve, ``ntime x ncurve`` rows otherwise."""
 
@@ -1825,13 +1869,14 @@ def survfit_coxph(
     *,
     se_fit: Any = True,
     conf_int: Any = 0.95,
-    individual: Any = False,
-    stype: Any = 2,
+    individual: Any | None = None,
+    stype: Any | None = None,
     ctype: Any | None = None,
     conf_type: str = "log",
     censor: Any = True,
     start_time: Any | None = None,
     id: Any | None = None,
+    type: str | None = None,
     **kwargs: Any,
 ) -> CoxSurvfitResult:
     """R's ``survfit.coxph``: predicted survival curves from a Cox model.
@@ -1840,7 +1885,9 @@ def survfit_coxph(
     ``newdata`` there is one curve per row (per row in its own stratum when the
     strata variables are present, otherwise every stratum for every row).  ``id``
     (with counting-process ``newdata``) gives one time-dependent curve per subject.
-    ``start_time`` builds the curves from the rows still at risk at that time.
+    ``stype``/``ctype`` default to 2 and the tie method; the old-style ``type``
+    (``"kalbfleisch-prentice"``, ``"aalen"``, ``"efron"``, ...) sets them when neither is
+    given.  ``start_time`` builds the curves from the rows still at risk at that time.
     """
 
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
@@ -1853,16 +1900,8 @@ def survfit_coxph(
         raise ValueError("predicted survival curves are not defined for a clogit model")
     if fit.tt:
         raise ValueError("The survfit function can not process coxph models with a tt term")
+    stype_value, ctype_value = _survfit_types(fit, type, stype, ctype)
     include_se = _normalize_bool_option(se_fit, "se_fit")
-    stype_value = _integer_scalar(stype, "stype")
-    if stype_value not in (1, 2):
-        raise ValueError("stype must be 1 or 2")
-    if ctype is None:
-        ctype_value = 2 if fit.method == "efron" else 1
-    else:
-        ctype_value = _integer_scalar(ctype, "ctype")
-        if ctype_value not in (1, 2):
-            raise ValueError("ctype must be 1 or 2")
     conf_type_name = "none"
     if include_se:
         conf_type_name = _match_string_arg(
@@ -1873,7 +1912,10 @@ def survfit_coxph(
         )
     level = _normalize_conf_level(conf_int, "conf_int")
     censor_value = _normalize_bool_option(censor, "censor")
-    individual_value = _normalize_bool_option(individual, "individual") or id is not None
+    individual_value = id is not None
+    if individual is not None:
+        _warn_outside_package("the `id' option supersedes `individual'", RuntimeWarning)
+        individual_value = _normalize_bool_option(individual, "individual") or individual_value
     if individual_value and newdata is None:
         raise ValueError("the id option only makes sense with new data")
     start = _start_time_value(start_time)
