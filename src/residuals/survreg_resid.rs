@@ -8,8 +8,10 @@
 //! `survreg.fit` uses the same derivatives (its `derfun`) for its starting
 //! values.
 
+use crate::core::strata_order::rowsum;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::match_arg::match_arg;
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_distributions::SurvregDistribution;
@@ -210,18 +212,13 @@ fn score_row(
 /// increasing order of their code.
 fn collapse_rows(rows: Vec<Vec<f64>>, collapse: &[usize]) -> SurvivalResult<Vec<Vec<f64>>> {
     validate_length(rows.len(), collapse.len(), "collapse")?;
-    let mut groups: Vec<usize> = collapse.to_vec();
-    groups.sort_unstable();
-    groups.dedup();
-    let width = rows.first().map_or(0, Vec::len);
-    let mut out = vec![vec![0.0; width]; groups.len()];
-    for (row, &group) in rows.iter().zip(collapse) {
-        let target = groups.binary_search(&group).expect("group was collected");
-        for (sum, value) in out[target].iter_mut().zip(row) {
-            *sum += value;
-        }
-    }
-    Ok(out)
+    let codes = collapse
+        .iter()
+        .map(|&code| i32::try_from(code))
+        .collect::<Result<Vec<i32>, _>>()
+        .map_err(|_| SurvivalError::invalid_input("collapse codes must fit in 32 bits"))?;
+    let rows = matrix_from_rows(&rows, "residuals")?;
+    Ok(matrix_rows(&rowsum(rows.view(), &codes)))
 }
 
 /// `residuals.survreg(object, type, rsigma, collapse, weighted)`.

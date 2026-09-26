@@ -14,6 +14,7 @@
 //! `residuals.coxph` does (`order(strata, time, -status)`).
 
 use crate::core::coxscho::coxscho;
+use crate::core::strata_order::rowsum;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_from_rows;
 use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
@@ -197,18 +198,6 @@ pub(crate) fn schoenfeld_residuals(
     })
 }
 
-/// Sorted unique cluster codes and each row's position among them.
-fn cluster_groups(collapse: &[i32]) -> (usize, Vec<usize>) {
-    let mut codes = collapse.to_vec();
-    codes.sort_unstable();
-    codes.dedup();
-    let positions = collapse
-        .iter()
-        .map(|code| codes.binary_search(code).expect("code is present"))
-        .collect();
-    (codes.len(), positions)
-}
-
 /// `residuals.coxph`'s finishing steps for a matrix: multiply the rows by
 /// the case weights (`weighted`) and sum them by cluster (`collapse`,
 /// `rowsum` in ascending code order).
@@ -223,17 +212,10 @@ pub(crate) fn collapse_rows(
             row.mapv_inplace(|value| value * weights[i]);
         }
     }
-    let Some(collapse) = collapse else {
-        return weighted;
-    };
-    let (ngroups, positions) = cluster_groups(collapse);
-    let mut collapsed = Array2::zeros((ngroups, rows.ncols()));
-    for (i, row) in weighted.outer_iter().enumerate() {
-        for (j, &value) in row.iter().enumerate() {
-            collapsed[(positions[i], j)] += value;
-        }
+    match collapse {
+        Some(collapse) => rowsum(weighted.view(), collapse),
+        None => weighted,
     }
-    collapsed
 }
 
 fn collapse_vector(values: &[f64], weights: Option<&[f64]>, collapse: Option<&[i32]>) -> Vec<f64> {
