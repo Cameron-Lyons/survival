@@ -175,6 +175,8 @@ pub struct SurvfitAJCounts {
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SurvfitAJInfluence {
+    /// R's row names `uclust`: the number (1, 2, ...) of each cluster in
+    /// order of first appearance in the rows the fit uses.
     #[pyo3(get)]
     pub cluster: Vec<i64>,
     #[pyo3(get)]
@@ -1038,7 +1040,6 @@ pub fn survfitaj(
     let n_all = data.time.len();
     let counting = data.start.is_some();
     let has_id = data.id.is_some();
-    let has_cluster = data.cluster.is_some();
     let AJPrepared {
         start,
         time,
@@ -1107,22 +1108,15 @@ pub fn survfitaj(
     let x: Vec<usize> = rows.iter().map(|&i| x_all[i]).collect();
     let id: Vec<usize> = rows.iter().map(|&i| id_codes[i]).collect();
 
-    // cluster: the explicit cluster, else the id, else each observation
+    // cluster: the explicit cluster, else the id, else each observation,
+    // numbered in order of first appearance
     let influence = options.influence && options.se_fit;
-    let (cluster, cluster_labels): (Vec<usize>, Vec<i64>) = if has_cluster {
-        let subset: Vec<i64> = rows
-            .iter()
-            .map(|&i| data.cluster.as_ref().expect("has cluster")[i])
-            .collect();
-        codes_by_first_appearance(&subset)
-    } else if has_id {
-        let subset: Vec<i64> = rows
-            .iter()
-            .map(|&i| data.id.as_ref().expect("has id")[i])
-            .collect();
-        codes_by_first_appearance(&subset)
-    } else {
-        ((0..n).collect(), (0..n as i64).collect())
+    let cluster: Vec<usize> = match data.cluster.as_ref().or(data.id.as_ref()) {
+        Some(labels) => {
+            let subset: Vec<i64> = rows.iter().map(|&i| labels[i]).collect();
+            codes_by_first_appearance(&subset).0
+        }
+        None => (0..n).collect(),
     };
 
     // does everyone start in the same state?
@@ -1267,10 +1261,8 @@ pub fn survfitaj(
             c2[i] = code;
         }
         let nclust = unique.len();
-        let clusters: Vec<i64> = unique
-            .iter()
-            .map(|&code| cluster_labels[code as usize])
-            .collect();
+        // R names the influence rows `uclust`: the clusters' numbers
+        let clusters: Vec<i64> = unique.iter().map(|&code| code + 1).collect();
         let n_id = {
             let mut ids: Vec<usize> = keep.iter().map(|&i| id[i]).collect();
             ids.sort_unstable();
@@ -1801,6 +1793,9 @@ mod tests {
             second.influence_pstate.unwrap(),
             vec![fit.influence_pstate.as_ref().unwrap()[1].clone()]
         );
+        // R numbers the clusters (here the rows) by first appearance in the data
+        let clusters = &fit.influence_pstate.as_ref().unwrap()[1].cluster;
+        assert_eq!(clusters, &(1..=8).map(|k| 2 * k).collect::<Vec<i64>>());
         let swapped = fit.select_curves(&[1, 0]).unwrap();
         assert_eq!(swapped.strata_codes, Some(vec![1, 0]));
         assert!(fit.select_curves(&[2]).is_err());

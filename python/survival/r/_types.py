@@ -740,6 +740,19 @@ class SurvfitCall:
 
 
 @dataclass(frozen=True)
+class SurvfitInfluence:
+    """One curve's ``influence.surv`` or ``influence.chaz`` matrix of a ``survfit`` object.
+
+    ``values[k]`` is the influence of cluster ``cluster[k]`` at each time of the curve;
+    ``cluster`` holds R's row names: the ``cluster`` (else ``id``) values, in order of first
+    appearance, or the observation numbers ``1..n`` when the observations are the clusters.
+    """
+
+    cluster: list[Any]
+    values: list[list[float]]
+
+
+@dataclass(frozen=True)
 class SurvfitResult:
     """R's ``survfit`` object for a single-endpoint curve (``survfitKM`` / ``survfitTurnbull``).
 
@@ -774,8 +787,8 @@ class SurvfitResult:
     conf_int: float | None = None
     conf_type: str | None = None
     conf_lower: str | None = None
-    influence_surv: list[_core.SurvfitInfluence] | None = None
-    influence_chaz: list[_core.SurvfitInfluence] | None = None
+    influence_surv: list[SurvfitInfluence] | None = None
+    influence_chaz: list[SurvfitInfluence] | None = None
     start_time: float | None = None
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
@@ -798,7 +811,8 @@ class SurvfitMultiStateResult:
     ``n_transition``, ``cumhaz`` and ``std_chaz`` the observed transitions ``hazard_names``
     (R's ``"from:to"`` column names).  ``p0`` has one row per curve and ``transitions`` is
     ``survcheck``'s table of observed transitions (from state x to state or censored), which
-    ``fit[, states]`` drops.
+    ``fit[, states]`` drops.  The rows of each ``influence_pstate`` array are named, as in R,
+    by the clusters' numbers ``1, 2, ...`` in order of first appearance.
     """
 
     n: list[int]

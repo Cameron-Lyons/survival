@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import pytest
 
@@ -282,3 +283,29 @@ def test_multistate_residuals_and_pseudo_of_a_start_time_fit_match_r():
     _close(values[0][0], [1.115736961451247, 0.21048935703313554])
     _close(values[0][2], [-0.115736961451247, 0.78271359081266911])
     _close(values[4][2], [0.700929705215419, 0.78271359081266878])
+
+
+def test_ctype_2_hazard_residuals_warn_as_in_r():
+    # residuals(survfit(Surv(time, status) ~ 1, aml, ctype = 2), times = c(10, 20), type)
+    aml = survival.datasets.load_aml()
+    fit = r.survfit("Surv(time, status) ~ 1", aml, ctype=2)
+    approximate = "code for ctype=2 not yet completed, result is approximate"
+
+    with pytest.warns(UserWarning, match=approximate):
+        cumhaz = r.survfit_residuals(fit, times=[10, 20], type="cumhaz")
+    _close(cumhaz.resid[1], [-0.0112852529328128, 0.0409916491134088])
+    with pytest.warns(UserWarning, match=approximate):
+        values = r.pseudo(fit, times=[10, 20], type="cumhaz")
+    _close(values[0], [1.1901489312253064, 1.37595658762120])
+    exp_cumhaz = r.survfit("Surv(time, status) ~ 1", aml, ctype=2, stype=2)
+    with pytest.warns(UserWarning, match=approximate):
+        pstate = r.survfit_residuals(exp_cumhaz, times=[10, 20])
+    _close(pstate.resid[0], [-0.03255074101112063, -0.0270312195408266])
+
+    # the Kaplan-Meier survival and the AUC use no hazard: no warning
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pstate = r.survfit_residuals(fit, times=[10, 20])
+        auc = r.survfit_residuals(fit, times=[10, 20], type="auc")
+    _close(pstate.resid[0], [-0.03383694481615816, -0.0279289068323845])
+    _close(auc.resid[0], [-0.0144503652299554, -0.320325604480782])

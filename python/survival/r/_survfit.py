@@ -23,6 +23,7 @@ from ._coerce import (
     _float_vector,
     _is_bool_like,
     _is_missing_value,
+    _label_levels,
     _match_string_arg,
     _materialize_1d,
     _materialize_labels,
@@ -56,6 +57,7 @@ from ._types import (
     NamedMatrix,
     SummarySurvfitResult,
     SurvfitCall,
+    SurvfitInfluence,
     SurvfitMultiStateResult,
     SurvfitQuantileResult,
     SurvfitResult,
@@ -699,6 +701,26 @@ def _strata_table(
     return {label: int(size) for label, size in zip(labels, engine.strata, strict=True) if size > 0}
 
 
+def _influence_with_labels(
+    influence: list[_core.SurvfitInfluence] | None, model: dict[str, Any] | None
+) -> list[SurvfitInfluence] | None:
+    """The engine's influence matrices with R's row names ``clname``.
+
+    The engine labels a cluster by the code it was given (the cluster, else the id, as
+    ``factor(x, unique(x))`` codes) or by the observation number when there is neither.
+    """
+
+    if influence is None:
+        return None
+    values = None if model is None else model.get("(cluster)", model.get("(id)"))
+    levels = None if values is None else _label_levels(list(values), "cluster")
+
+    def rownames(codes: list[int]) -> list[Any]:
+        return list(codes) if levels is None else [levels[code] for code in codes]
+
+    return [SurvfitInfluence(rownames(curve.cluster), curve.values) for curve in influence]
+
+
 def _km_result(
     engine: _core.SurvfitKMResult,
     labels: Sequence[str],
@@ -732,8 +754,8 @@ def _km_result(
         conf_int=engine.conf_int if se_fit else None,
         conf_type=engine.conf_type if se_fit else None,
         conf_lower=engine.conf_lower if se_fit and engine.conf_lower != "usual" else None,
-        influence_surv=engine.influence_surv,
-        influence_chaz=engine.influence_chaz,
+        influence_surv=_influence_with_labels(engine.influence_surv, model),
+        influence_chaz=_influence_with_labels(engine.influence_chaz, model),
         time0=time0,
         call=call,
         model=model,
@@ -784,6 +806,14 @@ def _survfitAJ(
             raise ValueError("p0 must be a numeric vector that adds to 1")
     istate, istate_levels = frame.istate_labels()
     start = _start_time_value(start_time)
+    if frame.id is not None and frame.cluster is not None:
+        # R's Ctwoclust check: every id should lie within a single cluster
+        cluster_of: dict[Any, Any] = {}
+        if any(
+            cluster_of.setdefault(subject, cluster) != cluster
+            for subject, cluster in zip(frame.id, frame.cluster, strict=True)
+        ):
+            warnings.warn("an id value appears on more than one cluster", stacklevel=4)
     engine = _core.survfitaj(
         list(frame.y.time),
         [int(value) for value in frame.y.event],

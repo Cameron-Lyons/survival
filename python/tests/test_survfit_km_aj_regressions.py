@@ -1,12 +1,14 @@
 """survfit (Kaplan-Meier / Aalen-Johansen) regressions against R 4.5.3 with survival 3.8-12.
 
 Curves derived from a fit (a stratum, ``fit[, states]``, ``survfit0``) are rebuilt from the
-engine and KM fits keep R's ``time0``/``start.time`` semantics.
+engine, KM fits keep R's ``time0``/``start.time`` semantics, and influence rows carry R's
+row names.
 """
 
 from __future__ import annotations
 
 import math
+import warnings
 
 import pytest
 
@@ -41,6 +43,17 @@ def _two_groups():
 def _three_states():
     events = ["censor", "a", "b", "a", "b", "censor", "a", "b"]
     return {**_two_groups(), "e": r._r_factor(events, ["censor", "a", "b"])}
+
+
+def _labelled():
+    return {
+        "time": [1, 2, 3, 4, 5, 6],
+        "status": [1, 0, 1, 1, 0, 1],
+        "e": r._r_factor(["censor", "a", "b", "a", "censor", "b"], ["censor", "a", "b"]),
+        "cl": ["z", "z", "q", "q", "m", "m"],
+        "id": [101, 102, 203, 204, 305, 309],
+        "g": [1, 2, 1, 2, 1, 2],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -184,3 +197,75 @@ def test_turnbull_fits_record_neither_start_time_nor_time0():
 
     assert (fit.start_time, fit.time0, fit.t0) == (None, False, 1.0)
     _close(fit.time, [1.5, 2.5, 4])
+
+
+# ---------------------------------------------------------------------------
+# influence row names and survfitAJ's cluster warning
+# ---------------------------------------------------------------------------
+
+
+def test_km_influence_rows_are_named_by_cluster_id_or_row_number():
+    data = _labelled()
+
+    fit = r.survfit("Surv(time, status) ~ 1", data, cluster="cl", influence=True)
+    assert isinstance(fit.influence_surv[0], r.SurvfitInfluence)
+    assert fit.influence_surv[0].cluster == ["z", "q", "m"]
+    assert fit.influence_chaz[0].cluster == ["z", "q", "m"]
+    _close(
+        fit.influence_surv[0].values[0],
+        [-1 / 9, -1 / 9, -0.0833333333333333, -1 / 18, -1 / 18, 0],
+        1e-12,
+    )
+    assert r.survfit0(fit).influence_surv[0].cluster == ["z", "q", "m"]
+    by_id = r.survfit("Surv(time, status) ~ 1", data, id="id", influence=True)
+    assert by_id.influence_surv[0].cluster == [101, 102, 203, 204, 305, 309]
+    late = r.survfit("Surv(time, status) ~ 1", data, id="id", influence=True, start_time=3)
+    assert late.influence_surv[0].cluster == [203, 204, 305, 309]
+    by_row = r.survfit("Surv(time, status) ~ 1", data, influence=True, start_time=2)
+    assert by_row.influence_surv[0].cluster == [1, 2, 3, 4, 5]
+    by_group = r.survfit("Surv(time, status) ~ g", data, id="id", influence=1)
+    assert [curve.cluster for curve in by_group.influence_surv] == [
+        [101, 203, 305],
+        [102, 204, 309],
+    ]
+    assert _survfit_strata_curves(by_group)["2"].influence_surv[0].cluster == [102, 204, 309]
+
+
+def test_aj_influence_rows_are_numbered_as_in_r():
+    # dimnames(fit$influence.pstate)[[1]]: survfitAJ names the rows by the cluster numbers
+    data = _labelled()
+
+    def rows(formula, **kwargs):
+        fit = r.survfit(formula, data, influence=True, **kwargs)
+        return [curve.cluster for curve in fit.influence_pstate]
+
+    assert rows("Surv(time, e) ~ 1", cluster="cl") == [[1, 2, 3]]
+    assert rows("Surv(time, e) ~ 1", id="id") == [[1, 2, 3, 4, 5, 6]]
+    assert rows("Surv(time, e) ~ 1", start_time=2) == [[1, 2, 3, 4, 5]]
+    assert rows("Surv(time, e) ~ 1", id="id", start_time=3) == [[1, 2, 3, 4]]
+    assert rows("Surv(time, e) ~ g") == [[1, 3, 5], [2, 4, 6]]
+    assert rows("Surv(time, e) ~ g", cluster="cl") == [[1, 2, 3], [1, 2, 3]]
+
+
+def test_an_id_on_two_clusters_warns():
+    events = r._r_factor(["cens", "a", "cens", "b", "cens", "a"], ["cens", "a", "b"])
+    data = {
+        "id": [1, 1, 2, 2, 3, 3],
+        "cl": ["x", "y", "x", "x", "y", "y"],
+        "t1": [0, 1, 0, 3, 0, 5],
+        "t2": [1, 2, 3, 4, 5, 6],
+        "st": events,
+    }
+    # subject 1 lies in clusters x and y; R's Ctwoclust misses it (survfitAJ passes it
+    # the 1-based order(id)), the intended check does not
+    with pytest.warns(UserWarning, match="an id value appears on more than one cluster"):
+        fit = r.survfit("Surv(t1, t2, st) ~ 1", data, id="id", cluster="cl")
+    _close_rows(fit.pstate, [[2 / 3, 1 / 3, 0], [1 / 3, 1 / 3, 1 / 3], [0, 2 / 3, 1 / 3]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r.survfit(
+            "Surv(t1, t2, st) ~ 1",
+            {**data, "cl": ["x", "x", "y", "y", "z", "z"]},
+            id="id",
+            cluster="cl",
+        )

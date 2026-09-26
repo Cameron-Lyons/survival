@@ -255,7 +255,10 @@ impl SurvfitCounts {
 }
 
 /// One curve's influence matrix: `values[k][t]` is the influence of cluster
-/// `cluster[k]` on the estimate at the curve's `t`-th time.
+/// `cluster[k]` on the estimate at the curve's `t`-th time.  The labels are
+/// R's row names `clname`: the `cluster` (else `id`) value of the cluster,
+/// or the observation number 1, 2, ... when the observations are the
+/// clusters.
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SurvfitInfluence {
@@ -1072,7 +1075,8 @@ pub fn survfitkm(
         None => {
             if influence != InfluenceRequest::None {
                 if !(has_cluster || has_id) {
-                    cluster_source = Some((0..n as i64).collect());
+                    // cluster <- seq_along(x), which also names the rows
+                    cluster_source = Some((1..=n as i64).collect());
                 }
                 true
             } else {
@@ -1087,7 +1091,7 @@ pub fn survfitkm(
             }
         }
     };
-    // (cluster code per row, cluster labels); None = no robust variance
+    // (cluster code per row, R's clname); None = no robust variance
     let cluster: Option<(Vec<usize>, Vec<i64>)> = if let Some(source) = &cluster_source {
         // R warns "cluster specified with robust=FALSE, cluster ignored"
         robust.then(|| codes_by_first_appearance(source))
@@ -1096,7 +1100,7 @@ pub fn survfitkm(
             let subset: Vec<i64> = rows.iter().map(|&i| id[i]).collect();
             Some(codes_by_first_appearance(&subset))
         } else if !counting || !has_robust {
-            Some(((0..n).collect(), (0..n as i64).collect()))
+            Some(((0..n).collect(), (1..=n as i64).collect()))
         } else {
             return Err(SurvivalError::invalid_input(
                 "id or cluster option required",
