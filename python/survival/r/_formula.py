@@ -1639,6 +1639,10 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
 
     term_name, quoted = _formula_name(term)
     if _unsupported_formula_name(term_name, quoted):
+        # a bare comparison (age > 60) is a logical term in R, coded like I(age > 60)
+        if _top_level_comparison(term) is not None:
+            _expression_columns(term)
+            return _CovariateTerm(term, categorical=True, arithmetic=term)
         raise ValueError(f"unsupported formula term(s): {term_name}")
     return _CovariateTerm(term_name)
 
@@ -1969,6 +1973,15 @@ def _split_terms_cached(
 
 
 def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
+    # R's comparisons bind looser than + and -, so ~ age > 60 + sex is the single
+    # term age > (60 + sex); refuse the mixed form rather than fit another model
+    if len(_formula_tokens(rhs)) > 1 and any(
+        rhs.startswith(op, idx) for idx, _char in _top_level(rhs) for op in ("==", "!=", "<", ">")
+    ):
+        raise ValueError(
+            "a comparison in a formula with other terms must be wrapped in I(), "
+            "e.g. ~ I(age > 60) + sex"
+        )
     dot_key = None if dot_terms is None else tuple(dot_terms)
     return _materialize_formula_terms(_split_terms_cached(rhs, dot_key))
 

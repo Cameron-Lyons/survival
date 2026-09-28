@@ -225,3 +225,22 @@ def test_formula_arithmetic_and_transforms_follow_r_ieee_results():
         root = r_formula._apply_numeric_transform([4.0, -0.0, -1.0], "sqrt", "x")
     assert root == pytest.approx([2.0, 0.0, math.nan], nan_ok=True)
     assert math.copysign(1.0, root[1]) == -1.0
+
+
+def test_a_bare_comparison_is_a_logical_term_like_r():
+    lung = survival.datasets.load_lung()
+    cox = survival.r.coxph("Surv(time, status) ~ age > 60", lung)
+    # R: coef(coxph(Surv(time, status) ~ age > 60, lung))
+    assert survival.r.coef(cox) == pytest.approx([0.21615449288090741], rel=1e-8)
+    aft = survival.r.survreg("Surv(time, status) ~ ph.karno >= 80", lung)
+    # R: coef(survreg(Surv(time, status) ~ ph.karno >= 80, lung))
+    assert survival.r.coef(aft) == pytest.approx(
+        [5.79599489682293534, 0.32884103311911272], rel=1e-8
+    )
+
+
+def test_a_comparison_mixed_with_other_terms_needs_i():
+    # R parses ~ age > 60 + sex as the single term age > (60 + sex)
+    lung = survival.datasets.load_lung()
+    with pytest.raises(ValueError, match="wrapped in I"):
+        survival.r.coxph("Surv(time, status) ~ age > 60 + sex", lung)
