@@ -98,84 +98,6 @@ class AalenJohansenExtendedResult:
     @property
     def variance(self) -> list[list[list[float]]]: ...
 
-class AaregConfidenceInterval:
-    @property
-    def lower_bound(self) -> float: ...
-    @lower_bound.setter
-    def lower_bound(self, value: float) -> None: ...
-    @property
-    def upper_bound(self) -> float: ...
-    @upper_bound.setter
-    def upper_bound(self, value: float) -> None: ...
-
-class AaregDiagnostics:
-    @property
-    def additional_measures(self) -> list[float] | None: ...
-    @additional_measures.setter
-    def additional_measures(self, value: list[float] | None) -> None: ...
-    @property
-    def cooks_distance(self) -> list[float] | None: ...
-    @cooks_distance.setter
-    def cooks_distance(self, value: list[float] | None) -> None: ...
-    @property
-    def deviance_residuals(self) -> list[float] | None: ...
-    @deviance_residuals.setter
-    def deviance_residuals(self, value: list[float] | None) -> None: ...
-    @property
-    def dfbetas(self) -> list[float] | None: ...
-    @dfbetas.setter
-    def dfbetas(self, value: list[float] | None) -> None: ...
-    @property
-    def leverage(self) -> list[float] | None: ...
-    @leverage.setter
-    def leverage(self, value: list[float] | None) -> None: ...
-    @property
-    def martingale_residuals(self) -> list[float] | None: ...
-    @martingale_residuals.setter
-    def martingale_residuals(self, value: list[float] | None) -> None: ...
-    @property
-    def schoenfeld_residuals(self) -> list[float] | None: ...
-    @schoenfeld_residuals.setter
-    def schoenfeld_residuals(self, value: list[float] | None) -> None: ...
-    @property
-    def score_residuals(self) -> list[float] | None: ...
-    @score_residuals.setter
-    def score_residuals(self, value: list[float] | None) -> None: ...
-
-class AaregFitDetails:
-    @property
-    def change_in_objective(self) -> float | None: ...
-    @change_in_objective.setter
-    def change_in_objective(self, value: float | None) -> None: ...
-    @property
-    def converged(self) -> bool: ...
-    @converged.setter
-    def converged(self, value: bool) -> None: ...
-    @property
-    def convergence_threshold(self) -> float: ...
-    @convergence_threshold.setter
-    def convergence_threshold(self, value: float) -> None: ...
-    @property
-    def final_objective_value(self) -> float: ...
-    @final_objective_value.setter
-    def final_objective_value(self, value: float) -> None: ...
-    @property
-    def iterations(self) -> int: ...
-    @iterations.setter
-    def iterations(self, value: int) -> None: ...
-    @property
-    def max_iterations(self) -> int | None: ...
-    @max_iterations.setter
-    def max_iterations(self, value: int | None) -> None: ...
-    @property
-    def optimization_method(self) -> str | None: ...
-    @optimization_method.setter
-    def optimization_method(self, value: str | None) -> None: ...
-    @property
-    def warnings(self) -> list[str]: ...
-    @warnings.setter
-    def warnings(self, value: list[str]) -> None: ...
-
 class AaregFitResult:
     def __repr__(self) -> str: ...
     @property
@@ -198,113 +120,6 @@ class AaregFitResult:
     def time_weights(self) -> list[list[float]]: ...
     @property
     def times(self) -> list[float]: ...
-
-class AaregOptions:
-    def __init__(
-        self,
-        formula: str,
-        data: Sequence[Sequence[float]],
-        variable_names: Sequence[str],
-        max_iter: int = 100,
-    ) -> None: ...
-    @property
-    def cluster(self) -> dict[str, int] | None: ...
-    @cluster.setter
-    def cluster(self, value: dict[str, int] | None) -> None: ...
-    @property
-    def data(self) -> list[list[float]]: ...
-    @data.setter
-    def data(self, value: list[list[float]]) -> None: ...
-    @property
-    def dfbeta(self) -> bool: ...
-    @dfbeta.setter
-    def dfbeta(self, value: bool) -> None: ...
-    @property
-    def formula(self) -> str: ...
-    @formula.setter
-    def formula(self, value: str) -> None: ...
-    @property
-    def max_iter(self) -> int: ...
-    @max_iter.setter
-    def max_iter(self, value: int) -> None: ...
-    @property
-    def model(self) -> bool: ...
-    @model.setter
-    def model(self, value: bool) -> None: ...
-    @property
-    def na_action(self) -> str | None: ...
-    @na_action.setter
-    def na_action(self, value: str | None) -> None: ...
-    @property
-    def nmin(self) -> int | None: ...
-    @nmin.setter
-    def nmin(self, value: int | None) -> None: ...
-    @property
-    def qrtol(self) -> float: ...
-    @qrtol.setter
-    def qrtol(self, value: float) -> None: ...
-    @property
-    def subset(self) -> list[int] | None: ...
-    @subset.setter
-    def subset(self, value: list[int] | None) -> None: ...
-    @property
-    def taper(self) -> float: ...
-    @taper.setter
-    def taper(self, value: float) -> None: ...
-    @property
-    def test(self) -> list[str]: ...
-    @test.setter
-    def test(self, value: list[str]) -> None: ...
-    @property
-    def variable_names(self) -> list[str]: ...
-    @variable_names.setter
-    def variable_names(self, value: list[str]) -> None: ...
-    @property
-    def weights(self) -> list[float] | None: ...
-    @weights.setter
-    def weights(self, value: list[float] | None) -> None: ...
-    @property
-    def x(self) -> bool: ...
-    @x.setter
-    def x(self, value: bool) -> None: ...
-    @property
-    def y(self) -> bool: ...
-    @y.setter
-    def y(self, value: bool) -> None: ...
-
-class AaregResult:
-    @property
-    def coefficients(self) -> list[float]: ...
-    @coefficients.setter
-    def coefficients(self, value: list[float]) -> None: ...
-    @property
-    def confidence_intervals(self) -> list[AaregConfidenceInterval]: ...
-    @confidence_intervals.setter
-    def confidence_intervals(self, value: list[AaregConfidenceInterval]) -> None: ...
-    @property
-    def diagnostics(self) -> AaregDiagnostics | None: ...
-    @diagnostics.setter
-    def diagnostics(self, value: AaregDiagnostics | None) -> None: ...
-    @property
-    def fit_details(self) -> AaregFitDetails | None: ...
-    @fit_details.setter
-    def fit_details(self, value: AaregFitDetails | None) -> None: ...
-    @property
-    def goodness_of_fit(self) -> float: ...
-    @goodness_of_fit.setter
-    def goodness_of_fit(self, value: float) -> None: ...
-    @property
-    def p_values(self) -> list[float]: ...
-    @p_values.setter
-    def p_values(self, value: list[float]) -> None: ...
-    @property
-    def residuals(self) -> list[float] | None: ...
-    @residuals.setter
-    def residuals(self, value: list[float] | None) -> None: ...
-    @property
-    def standard_errors(self) -> list[float]: ...
-    @standard_errors.setter
-    def standard_errors(self, value: list[float]) -> None: ...
 
 class AccrualResult:
     def __init__(
@@ -526,8 +341,6 @@ class AdversarialExample:
 
 class AeqSurvResult:
     @property
-    def changed(self) -> list[int]: ...
-    @property
     def time(self) -> list[float]: ...
     @property
     def time2(self) -> list[float] | None: ...
@@ -572,6 +385,30 @@ class AggregationMethod:
     def __init__(self, name: str) -> None: ...
     def __int__(self) -> int: ...
     def __repr__(self) -> str: ...
+
+class AgsurvCurve:
+    @property
+    def cumhaz(self) -> list[float]: ...
+    @property
+    def hazard(self) -> list[float]: ...
+    @property
+    def n(self) -> int: ...
+    @property
+    def n_censor(self) -> list[float]: ...
+    @property
+    def n_event(self) -> list[float]: ...
+    @property
+    def n_risk(self) -> list[float]: ...
+    @property
+    def ndeath(self) -> list[int]: ...
+    @property
+    def surv(self) -> list[float] | None: ...
+    @property
+    def time(self) -> list[float]: ...
+    @property
+    def varhaz(self) -> list[float]: ...
+    @property
+    def xbar(self) -> list[list[float]]: ...
 
 class AllChangepointsResult:
     def __repr__(self) -> str: ...
@@ -633,7 +470,7 @@ class AnovaRow:
     @property
     def chisq(self) -> float | None: ...
     @property
-    def df(self) -> int | None: ...
+    def df(self) -> float | None: ...
     @property
     def loglik(self) -> float: ...
     @property
@@ -2363,46 +2200,46 @@ class CoxPHFit:
     def deviance_residuals(
         self,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[float]: ...
     def dfbeta(
         self,
         weighted: bool = True,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def dfbetas(
         self,
         weighted: bool = True,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def hazard_ratios(self) -> list[float]: ...
     def martingale_residuals(
         self,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[float]: ...
     def partial_residuals(
         self,
         assign: Sequence[Sequence[int]] | None = None,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def predict(
         self,
         type: str = "lp",
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
-        new_time: Sequence[float] | None = None,
-        new_entry: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
+        new_time: ArrayLike | None = None,
+        new_entry: ArrayLike | None = None,
         se_fit: bool = False,
         reference: str = "strata",
     ) -> CoxPrediction: ...
     def predict_terms(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         se_fit: bool = False,
         reference: str = "sample",
         assign: Sequence[Sequence[int]] | None = None,
@@ -2412,30 +2249,32 @@ class CoxPHFit:
     def score_residuals(
         self,
         weighted: bool = False,
-        collapse: Sequence[int] | None = None,
+        collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
     def survfit(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         stype: int = 2,
         ctype: int | None = None,
         se_fit: bool = True,
         censor: bool = True,
+        start_time: float | None = None,
     ) -> list[CoxSurvfitCurve]: ...
     def survfit_individual(
         self,
-        newdata: Sequence[Sequence[float]],
-        new_entry: Sequence[float],
-        new_time: Sequence[float],
-        id: Sequence[int],
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike,
+        new_entry: ArrayLike,
+        new_time: ArrayLike,
+        id: ArrayLike,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         stype: int = 2,
         ctype: int | None = None,
         se_fit: bool = True,
         censor: bool = True,
+        start_time: float | None = None,
     ) -> list[CoxSurvfitCurve]: ...
     @property
     def cluster(self) -> list[int] | None: ...
@@ -2449,6 +2288,8 @@ class CoxPHFit:
     def first(self) -> list[float]: ...
     @property
     def flag(self) -> int: ...
+    @property
+    def info(self) -> list[int] | None: ...
     @property
     def iter(self) -> int: ...
     @property
@@ -2506,6 +2347,7 @@ class CoxPenalty:
         tdf: float = 5.0,
         caic: bool = False,
         init: Sequence[float] | None = None,
+        n: int | None = None,
     ) -> CoxPenalty: ...
     @staticmethod
     def pspline(
@@ -2522,9 +2364,12 @@ class CoxPenalty:
         df: float | None = None,
         eps: float = 0.1,
         scale: bool = True,
+        scale_values: Sequence[float] | None = None,
     ) -> CoxPenalty: ...
     @property
     def diag(self) -> bool: ...
+    @property
+    def distribution(self) -> str | None: ...
     @property
     def kind(self) -> str: ...
     @property
@@ -2671,7 +2516,7 @@ class CoxZphTest:
     @property
     def chisq(self) -> float: ...
     @property
-    def df(self) -> int: ...
+    def df(self) -> float: ...
     @property
     def p(self) -> float: ...
 
@@ -2679,13 +2524,28 @@ class CoxpenalFit:
     def basehaz(self, centered: bool = True) -> Basehaz: ...
     def survfit(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
-        new_strata: Sequence[int] | None = None,
-        new_offset: Sequence[float] | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
         stype: int = 2,
         ctype: int | None = None,
         se_fit: bool = True,
         censor: bool = True,
+        start_time: float | None = None,
+    ) -> list[CoxSurvfitCurve]: ...
+    def survfit_individual(
+        self,
+        newdata: ArrayLike,
+        new_entry: ArrayLike,
+        new_time: ArrayLike,
+        id: ArrayLike,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
+        stype: int = 2,
+        ctype: int | None = None,
+        se_fit: bool = True,
+        censor: bool = True,
+        start_time: float | None = None,
     ) -> list[CoxSurvfitCurve]: ...
     @property
     def assign2(self) -> list[list[int]]: ...
@@ -9182,9 +9042,9 @@ class SurvfitAJInfluence:
     @property
     def cluster(self) -> list[int]: ...
     @property
-    def i0(self) -> list[list[float]] | None: ...
+    def i0(self) -> NDArray[np.float64] | None: ...
     @property
-    def values(self) -> list[list[list[float]]]: ...
+    def values(self) -> NDArray[np.float64]: ...
 
 class SurvfitAJResid:
     @property
@@ -9204,12 +9064,28 @@ class SurvfitAJResult:
         scale: float = 1.0,
         rmean: str = "common",
     ) -> tuple[list[list[float]], list[float], list[str]]: ...
+    def mean_table_data(
+        self,
+        pstate: NDArray[np.float64],
+        p0: Sequence[Sequence[float]],
+        scale: float = 1.0,
+        rmean: str = "common",
+    ) -> tuple[list[list[float]], list[float], list[str]]: ...
+    def select_curves(self, curves: Sequence[int]) -> SurvfitAJResult: ...
+    def select_states(self, states: Sequence[int]) -> SurvfitAJResult: ...
     def summary(
         self,
         times: Sequence[float] | None = None,
         censored: bool = False,
         extend: bool = False,
     ) -> SurvfitAJResult: ...
+    def summary_rows(
+        self,
+        times: Sequence[float] | None = None,
+        censored: bool = False,
+        extend: bool = False,
+    ) -> NDArray[np.int32]: ...
+    def survfit0_rows(self) -> NDArray[np.int32]: ...
     @property
     def conf_int(self) -> float: ...
     @property
@@ -9304,9 +9180,32 @@ class SurvfitInfluence:
     @property
     def cluster(self) -> list[int]: ...
     @property
-    def values(self) -> list[list[float]]: ...
+    def values(self) -> NDArray[np.float64]: ...
 
 class SurvfitKMResult:
+    @staticmethod
+    def from_stacked(
+        time: Sequence[float],
+        n_risk: Sequence[float],
+        n_event: Sequence[float],
+        surv: Sequence[float],
+        n: Sequence[int],
+        *,
+        strata: Sequence[int] | None = None,
+        n_id: Sequence[int] | None = None,
+        n_censor: Sequence[float] | None = None,
+        std_err: Sequence[float] | None = None,
+        cumhaz: Sequence[float] | None = None,
+        std_chaz: Sequence[float] | None = None,
+        lower: Sequence[float] | None = None,
+        upper: Sequence[float] | None = None,
+        logse: bool = True,
+        conf_int: float = 0.95,
+        conf_type: str = "log",
+        type: str = "right",
+        t0: float = 0.0,
+    ) -> SurvfitKMResult: ...
+    def select_curves(self, curves: Sequence[int]) -> SurvfitKMResult: ...
     @property
     def conf_int(self) -> float: ...
     @property
@@ -9355,35 +9254,6 @@ class SurvfitKMResult:
     def type(self) -> str: ...
     @property
     def upper(self) -> list[float] | None: ...
-
-class SurvfitMatrixResult:
-    def __init__(
-        self,
-        time: Sequence[float],
-        surv: Sequence[Sequence[float]],
-        cumhaz: Sequence[Sequence[float]],
-        std_err: Sequence[Sequence[float]] | None = None,
-        n_risk: Sequence[float] = ...,
-        n_event: Sequence[float] = ...,
-        n_states: int = 1,
-    ) -> None: ...
-    def __repr__(self) -> str: ...
-    def get_cumhaz_at_state(self, state: int) -> list[float]: ...
-    def get_surv_at_state(self, state: int) -> list[float]: ...
-    @property
-    def cumhaz(self) -> list[list[float]]: ...
-    @property
-    def n_event(self) -> list[float]: ...
-    @property
-    def n_risk(self) -> list[float]: ...
-    @property
-    def n_states(self) -> int: ...
-    @property
-    def std_err(self) -> list[list[float]] | None: ...
-    @property
-    def surv(self) -> list[list[float]]: ...
-    @property
-    def time(self) -> list[float]: ...
 
 class SurvfitQuantiles:
     @property
@@ -9718,17 +9588,87 @@ class SurvmeanTable:
     @property
     def upper(self) -> list[float] | None: ...
 
+class SurvpenalFit:
+    def __repr__(self) -> str: ...
+    def predict(
+        self,
+        newdata: ArrayLike | None = None,
+        predict_type: str = "response",
+        se_fit: bool = False,
+        p: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
+        strata: Sequence[int] | None = None,
+        assign: Sequence[int] | None = None,
+        terms: Sequence[int] | None = None,
+    ) -> SurvregPrediction: ...
+    def residuals(
+        self,
+        residual_type: str = "response",
+        rsigma: bool = True,
+        collapse: Sequence[int] | None = None,
+        weighted: bool = False,
+    ) -> SurvregResiduals: ...
+    @property
+    def assign2(self) -> list[list[int]]: ...
+    @property
+    def coefficients(self) -> list[float]: ...
+    @property
+    def df(self) -> list[float]: ...
+    @property
+    def df_residual(self) -> float: ...
+    @property
+    def frail(self) -> list[float] | None: ...
+    @property
+    def frail_index(self) -> list[int] | None: ...
+    @property
+    def fvar(self) -> list[float] | None: ...
+    @property
+    def history(self) -> list[PenaltyHistory]: ...
+    @property
+    def icoef(self) -> list[float]: ...
+    @property
+    def idf(self) -> int: ...
+    @property
+    def inner_failures(self) -> list[int]: ...
+    @property
+    def iter(self) -> list[int]: ...
+    @property
+    def linear_predictors(self) -> list[float]: ...
+    @property
+    def loglik(self) -> list[float]: ...
+    @property
+    def n_eff(self) -> float: ...
+    @property
+    def penalty(self) -> list[float]: ...
+    @property
+    def pterms(self) -> list[int]: ...
+    @property
+    def scale(self) -> list[float]: ...
+    @property
+    def score(self) -> list[float]: ...
+    @property
+    def survreg(self) -> SurvregFit: ...
+    @property
+    def var(self) -> list[list[float]]: ...
+    @property
+    def var2(self) -> list[list[float]]: ...
+
 class SurvregControl:
     def __init__(
         self,
         iter_max: int = 30,
         rel_tolerance: float = 1e-09,
         toler_chol: float = 1e-10,
+        outer_max: int = 10,
     ) -> None: ...
     @property
     def iter_max(self) -> int: ...
     @iter_max.setter
     def iter_max(self, value: int) -> None: ...
+    @property
+    def outer_max(self) -> int: ...
+    @outer_max.setter
+    def outer_max(self, value: int) -> None: ...
     @property
     def rel_tolerance(self) -> float: ...
     @rel_tolerance.setter
@@ -9741,12 +9681,12 @@ class SurvregControl:
 class SurvregData:
     def __init__(
         self,
-        time: Sequence[float],
-        status: Sequence[int],
-        covariates: Sequence[Sequence[float]],
-        time2: Sequence[float] | None = None,
-        weights: Sequence[float] | None = None,
-        offset: Sequence[float] | None = None,
+        time: ArrayLike,
+        status: ArrayLike,
+        covariates: ArrayLike,
+        time2: ArrayLike | None = None,
+        weights: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
         strata: Sequence[int] | None = None,
         cluster: Sequence[int] | None = None,
     ) -> None: ...
@@ -9804,11 +9744,11 @@ class SurvregFit:
     def __repr__(self) -> str: ...
     def predict(
         self,
-        newdata: Sequence[Sequence[float]] | None = None,
+        newdata: ArrayLike | None = None,
         predict_type: str = "response",
         se_fit: bool = False,
-        p: Sequence[float] | None = None,
-        offset: Sequence[float] | None = None,
+        p: ArrayLike | None = None,
+        offset: ArrayLike | None = None,
         strata: Sequence[int] | None = None,
         assign: Sequence[int] | None = None,
         terms: Sequence[int] | None = None,
@@ -9829,9 +9769,9 @@ class SurvregFit:
     @property
     def covariates(self) -> list[list[float]]: ...
     @property
-    def df(self) -> int: ...
+    def df(self) -> float: ...
     @property
-    def df_residual(self) -> int: ...
+    def df_residual(self) -> float: ...
     @property
     def distribution(self) -> SurvregDistribution: ...
     @property
@@ -10718,6 +10658,8 @@ class TurnbullResult:
     def conf_type(self) -> str: ...
     @property
     def curves(self) -> list[TurnbullCurve]: ...
+    @property
+    def fit(self) -> SurvfitKMResult: ...
 
 class TwoSidedCalibrationResult:
     @property
@@ -11014,11 +10956,23 @@ class YatesContrast:
     @property
     def chisq(self) -> float: ...
     @property
-    def df(self) -> int: ...
+    def df(self) -> int | None: ...
     @property
     def name(self) -> str: ...
     @property
     def ss(self) -> float | None: ...
+
+class YatesCurves:
+    @property
+    def cumhaz(self) -> list[list[float]]: ...
+    @property
+    def lower(self) -> list[list[float]]: ...
+    @property
+    def std_err(self) -> list[list[float]]: ...
+    @property
+    def surv(self) -> list[list[float]]: ...
+    @property
+    def upper(self) -> list[list[float]]: ...
 
 class YatesEstimate:
     @property
@@ -11034,22 +10988,25 @@ class YatesResult:
     @property
     def mvar(self) -> list[list[float]]: ...
     @property
+    def summary(self) -> YatesCurves | None: ...
+    @property
     def test(self) -> list[YatesContrast]: ...
 
-def aareg(options: AaregOptions) -> AaregResult: ...
+def _survpenal_fit_from_state(state: bytes) -> SurvpenalFit: ...
+def _unpickle(cls: Any, state: Any) -> Any: ...
 def aareg_fit(
-    stop: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    cluster: Sequence[int] | None = None,
+    stop: ArrayLike,
+    status: ArrayLike,
+    covariates: ArrayLike,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    cluster: ArrayLike | None = None,
     qrtol: float = 1e-07,
     nmin: int | None = None,
     dfbeta: bool = False,
     taper: Sequence[float] | None = None,
-    test: str = ...,
-    test_cluster: Sequence[int] | None = None,
+    test: str = "aalen",
+    test_cluster: ArrayLike | None = None,
 ) -> AaregFitResult: ...
 def active_learning_selection(
     covariates: Sequence[Sequence[float]],
@@ -11075,12 +11032,12 @@ def aeq_surv(
     tolerance: float | None = None,
 ) -> AeqSurvResult: ...
 def agexact(
-    start: Sequence[float],
-    stop: Sequence[float],
-    event: Sequence[int],
-    x: Sequence[Sequence[float]],
-    offset: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike,
+    stop: ArrayLike,
+    event: ArrayLike,
+    x: ArrayLike,
+    offset: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     init: Sequence[float] | None = None,
     iter_max: int | None = None,
     eps: float | None = None,
@@ -11088,7 +11045,7 @@ def agexact(
     nocenter: Sequence[float] | None = None,
 ) -> AgexactFit: ...
 def aggregate_survfit(
-    surv: Sequence[Sequence[float]] | None = None,
+    surv: ArrayLike | None = None,
     pstate: Sequence[Sequence[Sequence[float]]] | None = None,
     by: Sequence[GroupingFactor] | None = None,
     fun: str = "mean",
@@ -11102,27 +11059,11 @@ def agmart(input: AndersenGillInput, ties: str = "efron") -> list[float]: ...
 def agscore3(
     counting: CountingProcessData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> list[list[float]]: ...
-def agsurv4(
-    ndeath: Sequence[int],
-    risk: Sequence[float],
-    wt: Sequence[float],
-    sn: int,
-    denom: Sequence[float],
-) -> list[float]: ...
-def agsurv5(
-    n: int,
-    nvar: int,
-    dd: Sequence[int],
-    x1: Sequence[float],
-    x2: Sequence[float],
-    xsum: Sequence[float],
-    xsum2: Sequence[float],
-) -> dict[str, Any]: ...
 def analyze_local_global(
     shap_values: Sequence[Sequence[Sequence[float]]],
     feature_values: Sequence[float],
@@ -11161,7 +11102,7 @@ def anderson_gill_model(
 ) -> AndersonGillResult: ...
 def anova_coxph(
     loglik: Sequence[float],
-    df: Sequence[int],
+    df: Sequence[float],
     names: Sequence[str] | None = None,
     sequential: bool = True,
     test: str | None = ...,
@@ -11174,14 +11115,6 @@ def assess_model_robustness(
     n_perturbations: int = 100,
     seed: int | None = None,
 ) -> RobustnessResult: ...
-def basehaz(
-    time: Sequence[float],
-    status: Sequence[int],
-    linear_predictors: Sequence[float],
-    centered: bool,
-    entry_times: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-) -> tuple[list[float], list[float]]: ...
 def batch_predict_survival(
     x: Sequence[Sequence[float]],
     coefficients: Sequence[float],
@@ -11361,24 +11294,24 @@ def cause_specific_cox_all(
     tol: float = 1e-09,
 ) -> list[CauseSpecificCoxResult]: ...
 def cch_borgan_fit(
-    stop: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    subcohort: Sequence[int],
+    stop: ArrayLike,
+    status: ArrayLike,
+    covariates: ArrayLike,
+    subcohort: ArrayLike,
     id: Sequence[int],
     stratum: Sequence[int],
     cohort_sizes: Sequence[int],
-    start: Sequence[float] | None = None,
+    start: ArrayLike | None = None,
     method: str = "I.Borgan",
 ) -> CchFitResult: ...
 def cch_fit(
-    stop: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    subcohort: Sequence[int],
+    stop: ArrayLike,
+    status: ArrayLike,
+    covariates: ArrayLike,
+    subcohort: ArrayLike,
     id: Sequence[int],
     cohort_size: int,
-    start: Sequence[float] | None = None,
+    start: ArrayLike | None = None,
     method: str = "Prentice",
     robust: bool = False,
 ) -> CchFitResult: ...
@@ -11455,13 +11388,6 @@ def compute_all_pairwise_interactions(
     feature_indices: Sequence[int] | None = None,
     n_grid: int = 20,
 ) -> list[FriedmanHResult]: ...
-def compute_baseline_survival_steps(
-    ndeath: Sequence[int],
-    risk: Sequence[float],
-    wt: Sequence[float],
-    sn: int,
-    denom: Sequence[float],
-) -> list[float]: ...
 def compute_cv_score(fold_scores: Sequence[float], metric: str) -> CrossValidatedScore: ...
 def compute_dice(
     covariates: Sequence[Sequence[float]],
@@ -11547,15 +11473,6 @@ def compute_survival_ice(
     n_grid: int = 50,
     sample_size: int | None = None,
 ) -> list[ICEResult]: ...
-def compute_tied_baseline_summaries(
-    n: int,
-    nvar: int,
-    dd: Sequence[int],
-    x1: Sequence[float],
-    x2: Sequence[float],
-    xsum: Sequence[float],
-    xsum2: Sequence[float],
-) -> dict[str, Any]: ...
 def compute_time_varying_ale(
     covariates: Sequence[Sequence[float]],
     predictions: Sequence[Sequence[float]],
@@ -11567,8 +11484,8 @@ def concordancefit(
     survival: SurvivalData,
     x: CovariateMatrix,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
-    cluster: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
+    cluster: ArrayLike | None = None,
     timewt: str = "n",
     ymin: float | None = None,
     ymax: float | None = None,
@@ -11583,8 +11500,8 @@ def concordancefit_counting(
     counting: CountingProcessData,
     x: CovariateMatrix,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
-    cluster: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
+    cluster: ArrayLike | None = None,
     timewt: str = "n",
     ymin: float | None = None,
     ymax: float | None = None,
@@ -11595,14 +11512,6 @@ def concordancefit_counting(
     keepstrata: int = 10,
     std_err: bool = True,
 ) -> ConcordanceFit: ...
-def condition_cox_survfit_curves(
-    times: Sequence[float],
-    cumhaz: Sequence[Sequence[float]],
-    t0: float,
-    include_time0: bool,
-    filter_start_time: bool,
-    time_epsilon: float,
-) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
 def conditional_reliability(
     time: Sequence[float],
     surv: Sequence[float],
@@ -11709,40 +11618,17 @@ def covariate_shift_conformal_survival(
     weight_trim: float | None = None,
 ) -> CovariateShiftConformalResult: ...
 def cox_callback(which: int, coef: ArrayLike, fexpr: Any) -> CoxPenaltyTerms: ...
-def cox_expected_baseline_by_stratum(
-    time: Sequence[float],
-    status: Sequence[int],
-    covariates: Sequence[Sequence[float]],
-    beta: Sequence[float],
-    weights: Sequence[float],
-    strata: Sequence[int],
-    offset: Sequence[float],
-    means: Sequence[float],
-    entry_times: Sequence[float] | None = None,
-    method: str | None = None,
-) -> tuple[
-    list[int], list[list[float]], list[list[float]], list[list[float]], list[list[list[float]]]
-]: ...
 def cox_survfit_baseline(
-    y: Any,
-    x: Any,
-    weights: Any,
-    risk: Any,
+    y: ArrayLike,
+    x: ArrayLike,
+    weights: ArrayLike,
+    risk: ArrayLike,
     survtype: int,
     vartype: int,
-) -> dict[str, Any]: ...
-def cox_survfit_from_baseline(
-    base_times: Sequence[float],
-    base_hazards: Sequence[float],
-    linear_predictors: Sequence[float],
-    center: float = 0.0,
-    base_strata: Sequence[int] | None = None,
-    curve_strata: Sequence[int] | None = None,
-    requested_times: Sequence[float] | None = None,
-) -> tuple[list[float], list[list[float]], list[list[float]]]: ...
+) -> AgsurvCurve: ...
 def cox_zph(
-    fit: CoxPHFit,
-    transform: str = "km",
+    fit: CoxPHFit | CoxpenalFit,
+    transform: str | Sequence[float] | None = None,
     terms: bool = True,
     singledf: bool = False,
     global_test: bool = True,
@@ -11755,16 +11641,16 @@ def coxcount2(
 ) -> CoxCountOutput: ...
 def coxmart(input: CoxMartInput, ties: str = "efron") -> list[float]: ...
 def coxpenal_fit(
-    time: Sequence[float],
-    status: Sequence[int],
-    x: Sequence[Sequence[float]],
+    time: ArrayLike,
+    status: ArrayLike,
+    x: ArrayLike,
     penalties: Sequence[CoxPenalty],
     pcols: Sequence[Sequence[int]],
     assign: Sequence[Sequence[int]] | None = None,
-    entry: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
-    weights: Sequence[float] | None = None,
-    offset: Sequence[float] | None = None,
+    entry: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
     method: str = "efron",
     init: Sequence[float] | None = None,
     iter_max: int | None = None,
@@ -11772,23 +11658,24 @@ def coxpenal_fit(
     eps: float | None = None,
     toler_chol: float | None = None,
     nocenter: Sequence[float] | None = None,
+    cluster: ArrayLike | None = None,
 ) -> CoxpenalFit: ...
 def coxph_detail(fit: CoxPHFit, riskmat: bool = False) -> CoxphDetail: ...
 def coxph_fit(
-    time: Sequence[float],
-    status: Sequence[int],
-    x: Sequence[Sequence[float]],
-    entry: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
-    weights: Sequence[float] | None = None,
-    offset: Sequence[float] | None = None,
+    time: ArrayLike,
+    status: ArrayLike,
+    x: ArrayLike,
+    entry: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
     method: str = "efron",
     init: Sequence[float] | None = None,
     iter_max: int | None = None,
     eps: float | None = None,
     toler_chol: float | None = None,
     nocenter: Sequence[float] | None = None,
-    cluster: Sequence[int] | None = None,
+    cluster: ArrayLike | None = None,
     robust: bool | None = None,
 ) -> CoxPHFit: ...
 def coxph_wtest(
@@ -11796,12 +11683,75 @@ def coxph_wtest(
     b: Sequence[Sequence[float]],
     toler_chol: float = 1e-09,
 ) -> CoxphWtest: ...
+def coxphms_curves(
+    time: ArrayLike,
+    endpoint: ArrayLike,
+    istate: ArrayLike,
+    x: ArrayLike,
+    cmap: ArrayLike,
+    cmap_nrow: int,
+    baseline: ArrayLike,
+    trans_from: ArrayLike,
+    trans_to: ArrayLike,
+    id: ArrayLike,
+    states: Sequence[str],
+    beta: ArrayLike,
+    means: ArrayLike,
+    newx: ArrayLike,
+    stype: int,
+    ctype: int,
+    entry: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    strata_terms: Sequence[ArrayLike] | None = None,
+    strata_use: ArrayLike | None = None,
+    share_scale: ArrayLike | None = None,
+    newoffset: ArrayLike | None = None,
+    start_time: float | None = None,
+    p0: Sequence[float] | None = None,
+    time0: bool = False,
+) -> tuple[SurvfitAJResult, NDArray[np.float64], NDArray[np.float64]]: ...
+def coxphms_fit(
+    time: ArrayLike,
+    endpoint: ArrayLike,
+    istate: ArrayLike,
+    x: ArrayLike,
+    cmap: ArrayLike,
+    cmap_nrow: int,
+    baseline: ArrayLike,
+    trans_from: ArrayLike,
+    trans_to: ArrayLike,
+    id: ArrayLike,
+    x_assign: ArrayLike,
+    entry: ArrayLike | None = None,
+    strata_terms: Sequence[ArrayLike] | None = None,
+    strata_use: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
+    cluster: ArrayLike | None = None,
+    method: str = "breslow",
+    init: Sequence[float] | None = None,
+    iter_max: int | None = None,
+    eps: float | None = None,
+    toler_chol: float | None = None,
+    nocenter: Sequence[float] | None = None,
+    robust: bool | None = None,
+) -> tuple[
+    CoxPHFit,
+    NDArray[np.int32],
+    NDArray[np.int32],
+    NDArray[np.int32],
+    NDArray[np.int32],
+    NDArray[np.int32] | None,
+    NDArray[np.float64] | None,
+]: ...
 def coxscore2(
     survival: SurvivalData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> list[list[float]]: ...
 def cqr_conformal_survival(
@@ -12183,12 +12133,12 @@ def federated_cox(
     seed: int | None = None,
 ) -> FederatedSurvivalResult: ...
 def finegray(
-    tstart: Sequence[float],
-    tstop: Sequence[float],
-    ctime: Sequence[float],
-    cprob: Sequence[float],
-    extend: Sequence[bool],
-    keep: Sequence[bool],
+    tstart: ArrayLike,
+    tstop: ArrayLike,
+    ctime: ArrayLike,
+    cprob: ArrayLike,
+    extend: ArrayLike,
+    keep: ArrayLike,
 ) -> FineGrayOutput: ...
 def finegray_regression(
     time: Sequence[float],
@@ -12856,14 +12806,6 @@ def non_mixture_cure_model(
     covariates: Sequence[float],
     config: NonMixtureCureConfig,
 ) -> NonMixtureCureResult: ...
-def norisk(
-    time1: Sequence[float],
-    time2: Sequence[float],
-    status: Sequence[int],
-    sort1: Sequence[int],
-    sort2: Sequence[int],
-    strata: Sequence[int],
-) -> list[int]: ...
 def nostutter(
     id: Sequence[int | float | str],
     state: Sequence[int | float | str | None],
@@ -12909,6 +12851,7 @@ def pattern_mixture_model(
     dropout_pattern: Sequence[int],
     dropout_time: Sequence[float] | None = None,
 ) -> PatternMixtureResult: ...
+def pchisq(q: float, df: float, lower_tail: bool = True, log_p: bool = False) -> float: ...
 def permutation_importance(
     predictions: Sequence[float],
     time_points: Sequence[float],
@@ -12997,27 +12940,29 @@ def prune_survival_model(
     sparsity_target: float = 0.5,
 ) -> PruningResult: ...
 def pseudo(
-    time: Sequence[float],
-    status: Sequence[int],
+    time: ArrayLike,
+    status: ArrayLike,
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     type_: str = "pstate",
     stype: int = 1,
     ctype: int = 1,
     timefix: bool = True,
     collapse: bool = True,
+    start_time: float | None = None,
+    call_stype: int | None = None,
 ) -> SurvfitResid: ...
 def pseudo_aj(
-    time: Sequence[float],
-    state: Sequence[int],
+    time: ArrayLike,
+    state: ArrayLike,
     states: Sequence[str],
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     istate: Sequence[str] | None = None,
     istate_levels: Sequence[str] | None = None,
@@ -13026,6 +12971,7 @@ def pseudo_aj(
     type_: str = "pstate",
     timefix: bool = True,
     collapse: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitAJResid: ...
 def pseudo_gee_regression(
     pseudo_values: Sequence[Sequence[float]],
@@ -13069,16 +13015,16 @@ def pwp_model(
     config: PWPConfig,
 ) -> PWPResult: ...
 def pyears(
-    stop: Sequence[float],
-    start: Sequence[float] | None = None,
-    event: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
+    stop: ArrayLike,
+    start: ArrayLike | None = None,
+    event: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
     factors: Sequence[int] = ...,
     dims: Sequence[int] = ...,
     cuts: Sequence[Sequence[float]] = ...,
-    categories_data: Sequence[Sequence[float]] = ...,
+    categories_data: ArrayLike | None = None,
     ratetable: RateTable | None = None,
-    ratetable_positions: Sequence[Sequence[float]] | None = None,
+    ratetable_positions: ArrayLike | None = None,
     expect: str = "event",
     scale: float = 365.25,
 ) -> PyearsResult: ...
@@ -13155,6 +13101,7 @@ def quantile_survfit(
     conf_int: bool = True,
     scale: float = 1.0,
     tolerance: float | None = None,
+    start_time: float = 0.0,
 ) -> SurvfitQuantiles: ...
 def quantile_survfit_curves(
     time: Sequence[float],
@@ -13313,17 +13260,17 @@ def sample_size_survival_freedman(
 def schoenfeld_residuals(
     survival: SurvivalData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> CoxschoResiduals: ...
 def schoenfeld_residuals_counting(
     counting: CountingProcessData,
     covariates: CovariateMatrix,
-    score: Sequence[float],
+    score: ArrayLike,
     weights: Weights | None = None,
-    strata: Sequence[int] | None = None,
+    strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> CoxschoResiduals: ...
 def score_test(score: Sequence[float], information: Sequence[Sequence[float]]) -> TestResult: ...
@@ -13419,12 +13366,6 @@ def statefig(
     column: bool = False,
     coordinates: Sequence[Sequence[float]] | None = None,
 ) -> StateFigResult: ...
-def step_matrix_values_at(
-    times: Sequence[float],
-    values: Sequence[Sequence[float]],
-    requested_times: Sequence[float],
-    initial: float,
-) -> list[list[float]]: ...
 def step_values_at(
     times: Sequence[float],
     values: Sequence[float],
@@ -13446,7 +13387,13 @@ def subgroup_analysis(
     subgroup_labels: Sequence[str],
 ) -> SubgroupAnalysisResult: ...
 def summary_pyears(
-    result: PyearsResult,
+    pyears: Sequence[float],
+    n: Sequence[float],
+    event: Sequence[float] | None = None,
+    expected: Sequence[float] | None = None,
+    dims: Sequence[int] = ...,
+    offtable: float = 0.0,
+    observations: int = 0,
     tcut: bool = False,
     totals: bool = False,
     rate: bool = False,
@@ -13506,23 +13453,23 @@ def survcondense(
     row_code: Sequence[int],
 ) -> SurvcondenseResult: ...
 def survdiff(
-    time: Sequence[float],
-    status: Sequence[int],
-    group: Sequence[int],
-    start: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    time: ArrayLike,
+    status: ArrayLike,
+    group: ArrayLike,
+    start: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     rho: float = 0.0,
     timefix: bool = True,
 ) -> SurvDiffResult: ...
 def survdiff_one_sample(
-    status: Sequence[int],
-    expected: Sequence[float],
+    status: ArrayLike,
+    expected: ArrayLike,
     rho: float = 0.0,
 ) -> SurvDiffResult: ...
 def survexp(
     ratetable: RateTable,
-    positions: Sequence[Sequence[float]],
-    y: Sequence[float] | None = None,
+    positions: ArrayLike,
+    y: ArrayLike | None = None,
     group: Sequence[int] | None = None,
     times: Sequence[float] | None = None,
     method: str | None = None,
@@ -13552,34 +13499,13 @@ def survfit_confint(
     selow: Sequence[float] | None = None,
     ulimit: bool = True,
 ) -> ConfidenceBands: ...
-def survfit_from_cumhaz(
-    time: Sequence[float],
-    cumhaz: Sequence[float],
-    n_risk: Sequence[float] | None = None,
-    n_event: Sequence[float] | None = None,
-) -> SurvfitMatrixResult: ...
-def survfit_from_hazard(
-    time: Sequence[float],
-    hazard: Sequence[float],
-    n_risk: Sequence[float] | None = None,
-    n_event: Sequence[float] | None = None,
-) -> SurvfitMatrixResult: ...
-def survfit_from_matrix(
-    time: Sequence[float],
-    hazard_matrix: Sequence[Sequence[float]],
-) -> SurvfitMatrixResult: ...
-def survfit_multistate(
-    time: Sequence[float],
-    transition_hazards: Sequence[Sequence[Sequence[float]]],
-    initial_state: int,
-) -> SurvfitMatrixResult: ...
 def survfitaj(
-    time: Sequence[float],
-    state: Sequence[int],
+    time: ArrayLike,
+    state: ArrayLike,
     states: Sequence[str],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     istate: Sequence[str] | None = None,
     istate_levels: Sequence[str] | None = None,
@@ -13623,12 +13549,12 @@ def survfitkm(
     reverse: bool = False,
 ) -> SurvfitKMResult: ...
 def survfitresid(
-    time: Sequence[float],
-    status: Sequence[int],
+    time: ArrayLike,
+    status: ArrayLike,
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     type_: str = "pstate",
     stype: int = 1,
@@ -13636,15 +13562,17 @@ def survfitresid(
     collapse: bool = False,
     weighted: bool | None = None,
     timefix: bool = True,
+    start_time: float | None = None,
+    call_stype: int | None = None,
 ) -> SurvfitResid: ...
 def survfitresid_aj(
-    time: Sequence[float],
-    state: Sequence[int],
+    time: ArrayLike,
+    state: ArrayLike,
     states: Sequence[str],
     times: Sequence[float],
-    start: Sequence[float] | None = None,
-    weights: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    start: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
     id: Sequence[int] | None = None,
     istate: Sequence[str] | None = None,
     istate_levels: Sequence[str] | None = None,
@@ -13654,6 +13582,7 @@ def survfitresid_aj(
     collapse: bool = False,
     weighted: bool | None = None,
     timefix: bool = True,
+    start_time: float | None = None,
 ) -> SurvfitAJResid: ...
 def survival_at_times(
     time: Sequence[float],
@@ -13697,22 +13626,17 @@ def survobrien(
     start: Sequence[float] | None = None,
     strata: Sequence[int] | None = None,
 ) -> SurvObrienExpansion: ...
-def survreg(
-    time: Sequence[float],
-    status: Sequence[float],
-    covariates: Sequence[Sequence[float]],
-    weights: Sequence[float] | None = None,
-    offsets: Sequence[float] | None = None,
-    initial_beta: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
-    distribution: str | None = None,
-    max_iter: int | None = None,
-    eps: float | None = None,
-    tol_chol: float | None = None,
-    time2: Sequence[float] | None = None,
-    fixed_scale: float | None = None,
-    distribution_parameter: float | None = None,
-) -> SurvregFit: ...
+def survpenal_fit(
+    data: SurvregData,
+    distribution: SurvregDistribution,
+    penalties: Sequence[CoxPenalty],
+    pcols: Sequence[Sequence[int]],
+    assign: Sequence[Sequence[int]] | None = None,
+    init: Sequence[float] | None = None,
+    scale: float = 0.0,
+    control: SurvregControl | None = None,
+    robust: bool | None = None,
+) -> SurvpenalFit: ...
 def survreg_dtest(distribution: SurvregDistribution) -> list[str]: ...
 def survreg_fit(
     data: SurvregData,
@@ -13849,14 +13773,14 @@ def tipping_point_analysis(
 ) -> float | None: ...
 def tmerge_step(
     id: Sequence[int | float | str],
-    start: Sequence[float],
-    stop: Sequence[float],
+    start: ArrayLike,
+    stop: ArrayLike,
     update_id: Sequence[int | float | str],
-    update_time: Sequence[float],
+    update_time: ArrayLike,
     kind: str,
-    value: Sequence[float] | None = None,
-    missing: Sequence[bool] | None = None,
-    prior: Sequence[float] | None = None,
+    value: ArrayLike | None = None,
+    missing: ArrayLike | None = None,
+    prior: ArrayLike | None = None,
     default: float = ...,
     delay: float = 0.0,
     na_rm: bool = True,
@@ -13911,6 +13835,8 @@ def turnbull(
     conf_level: float = 0.95,
     conf_type: str = "log",
     timefix: bool = True,
+    se_fit: bool = True,
+    robust: bool | None = None,
 ) -> TurnbullResult: ...
 def two_sided_conformal_calibrate(
     time: Sequence[float],
@@ -13972,6 +13898,11 @@ def yates(
     estimable: Sequence[bool] | None = None,
     test: str = "global",
 ) -> YatesResult: ...
+def yates_estimable(
+    xmatlist: Sequence[Sequence[Sequence[float]]],
+    x: Sequence[Sequence[float]],
+    intercept: bool = False,
+) -> list[bool]: ...
 def yates_population_means(
     xmatlist: Sequence[Sequence[Sequence[float]]],
     weights: Sequence[float] | None = None,
@@ -13981,6 +13912,22 @@ def yates_risk(
     beta: Sequence[float],
     vmat: Sequence[Sequence[float]],
     means: Sequence[float],
+    estimable: Sequence[bool] | None = None,
+    nsim: int = 200,
+    seed: int = 0,
+    test: str = "global",
+    term: str | None = None,
+) -> YatesResult: ...
+def yates_survival(
+    xmatlist: Sequence[Sequence[Sequence[float]]],
+    beta: Sequence[float],
+    vmat: Sequence[Sequence[float]],
+    means: Sequence[float],
+    time: Sequence[float],
+    cumhaz: Sequence[float],
+    rmean: float,
+    conf_int: float = 0.95,
+    estimable: Sequence[bool] | None = None,
     nsim: int = 200,
     seed: int = 0,
     test: str = "global",

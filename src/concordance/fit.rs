@@ -7,23 +7,34 @@
 //! predictor column is one `concordance_sweep` (`kernels.rs`)
 //! over the data ordered by decreasing time.
 //!
-//! Two R behaviours are not reproduced: the time-shift trick R uses to fold
-//! more than ten strata into one sweep (`timewt = "n"`/`"I"` only) is a
-//! speed optimisation with identical results, so the strata are always
-//! looped over; and with several predictors and strata R stops with an
-//! error, whereas here the counts are pooled over strata per predictor, as
-//! for a single predictor.
+//! Strata are always looped over.  With more than ten strata that are not
+//! kept (`keepstrata`) and `timewt = "n"` or `"I"`, R instead shifts each
+//! stratum into its own time interval and makes one sweep over the merged
+//! data.  The shifted intervals do not overlap, so every risk set is still
+//! the stratum's own; what changes is docount's rule that fewer than two
+//! events means `timewt = "n"`, which R then applies to the total event
+//! count.  The loop applies it the same way, which reproduces R's merged
+//! results.  Two artefacts of the shift are not copied: the ranks report the
+//! real event times, and `ymax` is compared with the real times (R compares
+//! it with the shifted ones, so a `ymax` below the largest time gives every
+//! stratum after the first time weight zero).
+//!
+//! With several predictors and strata R stops with an error unless it merges
+//! the strata; here the counts are always pooled over strata per predictor,
+//! as R's merged sweep does.
 
 use crate::concordance::kernels::{
     FastKm, SweepInput, SweepOutput, btree, concordance_sweep, fastkm,
 };
-use crate::core::strata_order::{SurvResponse, stratum_groups, validate_intervals};
+use crate::core::strata_order::{SurvResponse, rowsum, stratum_groups, validate_intervals};
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_negative,
 };
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// R's `timewt` argument: the weight given to each event time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,8 +106,8 @@ impl Default for ConcordanceOptions {
 }
 
 /// The five pair counts of one predictor (or one stratum).
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConcordanceCounts {
     #[pyo3(get)]
     pub concordant: f64,
@@ -128,8 +139,8 @@ impl ConcordanceCounts {
 
 /// R's `ranks` data frame: one row per event whose time weight is positive,
 /// in ascending time order.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConcordanceRanks {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -145,8 +156,8 @@ pub struct ConcordanceRanks {
 
 /// The `concordance` object.  Vectors indexed by predictor column have
 /// length one for a single predictor.
-#[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConcordanceFit {
     /// Concordance per predictor column.
     #[pyo3(get)]
@@ -180,6 +191,8 @@ pub struct ConcordanceFit {
     #[pyo3(get)]
     pub ranks: Option<Vec<ConcordanceRanks>>,
 }
+
+crate::internal::pickle::picklable!(ConcordanceCounts, ConcordanceRanks, ConcordanceFit);
 
 struct SurvTimes {
     start: Option<Vec<f64>>,
@@ -270,6 +283,10 @@ pub fn concordancefit(
     let groups = stratum_groups(strata);
     let nstrat = groups.len();
     let keepstrata = nstrat <= options.keepstrata && nvar == 1 && nstrat > 1;
+    // The strata R merges into one time-shifted sweep (see the module header).
+    let merged =
+        matches!(options.timewt, TimeWeight::N | TimeWeight::I) && nstrat > 10 && !keepstrata;
+    let merged_events = merged.then(|| times.status.iter().filter(|&&s| s == 1).count());
 
     // One sweep per stratum and predictor.
     let mut per_stratum: Vec<Vec<SweepOutput>> = Vec::with_capacity(nstrat);
@@ -278,7 +295,16 @@ pub fn concordancefit(
         let mut per_x = Vec::with_capacity(nvar);
         for column in 0..nvar {
             let risk: Vec<f64> = rows.iter().map(|&i| x[[i, column]]).collect();
-            let sweep = docount(&times, rows, &risk, weights, options, std_err, ranks)?;
+            let sweep = docount(
+                &times,
+                rows,
+                &risk,
+                weights,
+                options,
+                merged_events,
+                std_err,
+                ranks,
+            )?;
             if ranks {
                 append_ranks(&mut rank_tables[column], &times, rows, &sweep);
             }
@@ -348,7 +374,7 @@ pub fn concordancefit(
             }
         }
         let df = match cluster {
-            Some(cluster) => rowsum(&df, cluster),
+            Some(cluster) => rowsum(df.view(), cluster),
             None => df,
         };
         var = Some(
@@ -414,21 +440,20 @@ pub fn concordancefit(
 /// `aeqSurv`: bin times that differ by less than `sqrt(.Machine$double.eps)`
 /// (absolutely or relative to the mean absolute time).
 fn timefix(times: &mut SurvTimes) -> SurvivalResult<()> {
-    let fixed = crate::data_prep::aeq_surv(&times.stop, times.start.as_deref(), None)?;
-    if let (Some(start), Some(fixed_start)) = (&mut times.start, fixed.time2) {
-        start.copy_from_slice(&fixed_start);
-    }
-    times.stop = fixed.time;
+    (times.start, times.stop) = aeq_counting(times.start.as_deref(), &times.stop)?;
     Ok(())
 }
 
-/// R's `docount`: one predictor within one stratum.
+/// R's `docount`: one predictor within one stratum.  `merged_events` is the
+/// total event count when R would have merged the strata into one sweep.
+#[allow(clippy::too_many_arguments)]
 fn docount(
     times: &SurvTimes,
     rows: &[usize],
     risk: &[f64],
     weights: &[f64],
     options: &ConcordanceOptions,
+    merged_events: Option<usize>,
     std_err: bool,
     ranks: bool,
 ) -> SurvivalResult<SweepOutput> {
@@ -449,8 +474,9 @@ fn docount(
             resid: Vec::new(),
         });
     }
-    // With a single event every time weighting is the same.
-    let timeopt = if nevent < 2 {
+    // With a single event every time weighting is the same; R counts the
+    // events of its merged sweep.
+    let timeopt = if merged_events.unwrap_or(nevent) < 2 {
         TimeWeight::N
     } else {
         options.timewt
@@ -581,21 +607,6 @@ fn append_ranks(
             table.casewt.push(resid[2]);
         }
     }
-}
-
-/// R's `rowsum(x, group)`: column sums within each group, groups in
-/// ascending label order.
-fn rowsum(values: &Array2<f64>, group: &[i32]) -> Array2<f64> {
-    let groups = stratum_groups(group);
-    let mut out = Array2::zeros((groups.len(), values.ncols()));
-    for (g, (_, rows)) in groups.iter().enumerate() {
-        for &row in rows {
-            for column in 0..values.ncols() {
-                out[[g, column]] += values[[row, column]];
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -805,6 +816,100 @@ mod tests {
         assert!(collapsed.count_strata.is_none());
         assert_counts(&collapsed.count[0], [5.0, 3.0, 1.0, 1.0, 0.0]);
         assert_eq!(collapsed.var, out.var);
+    }
+
+    /// Twelve strata of five rows; strata 2, 5, 8 and 11 have one event.
+    fn twelve_strata() -> (SurvivalData, Vec<f64>, Vec<i32>) {
+        let time = [
+            17.6, 80.9, 39.1, 33.4, 60.6, 60.8, 13.3, 30.2, 58.2, 63.5, 51.7, 51.0, 53.9, 56.2,
+            86.9, 83.1, 12.0, 70.7, 89.9, 28.7, 23.6, 2.5, 13.8, 10.2, 24.5, 79.3, 60.4, 91.1,
+            56.5, 75.8, 38.5, 38.0, 17.9, 45.9, 26.6, 34.3, 89.1, 21.0, 58.3, 21.6, 28.9, 78.8,
+            18.1, 57.5, 42.5, 27.5, 5.7, 11.2, 32.1, 80.3, 23.7, 22.1, 87.8, 99.3, 84.6, 91.1,
+            47.7, 23.2, 13.7, 28.7,
+        ];
+        let status = [
+            1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 1,
+            0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0,
+            1, 0,
+        ];
+        let x = vec![
+            0.9, 0.85, 0.73, 0.74, -0.35, 0.71, 1.3, 0.04, -0.98, 0.79, 0.79, -0.31, 1.7, -0.79,
+            0.35, -2.27, -0.16, 1.13, -0.46, -0.9, 0.73, -0.81, 0.27, -1.74, -1.41, -0.45, -1.04,
+            1.36, 0.92, -0.79, 0.57, 0.92, 0.26, 0.35, 1.17, -0.48, -0.42, 0.96, -1.29, 0.19,
+            -0.03, 0.47, 1.02, 0.27, 0.23, 0.75, 1.22, 0.38, -0.99, -0.16, 1.74, -0.35, 0.69, 1.22,
+            0.79, -0.01, 0.22, -0.89, 0.44, -0.89,
+        ];
+        let strata = (1..=12).flat_map(|s| [s; 5]).collect();
+        (right(&time, &status), x, strata)
+    }
+
+    #[test]
+    fn more_than_ten_strata_apply_the_single_event_rule_to_the_total_as_r_merges() {
+        // R: concordancefit(Surv(time, status), x, strata, timewt = "I") on
+        // the data above; R merges the 12 strata into one time-shifted sweep.
+        let (data, x, strata) = twelve_strata();
+        let fit_with = |x: ArrayView2<'_, f64>, keepstrata: usize| {
+            concordancefit(
+                SurvResponse::Right(&data),
+                x,
+                None,
+                Some(&strata),
+                None,
+                &ConcordanceOptions {
+                    timewt: TimeWeight::I,
+                    keepstrata,
+                    ..ConcordanceOptions::default()
+                },
+            )
+            .unwrap()
+        };
+        let merged = fit_with(column(&x).view(), 10);
+        assert_close(merged.concordance[0], 0.42081949058693247);
+        assert_close(merged.var.as_ref().unwrap()[0][0], 0.013547863894429264);
+        assert_close(merged.cvar.as_ref().unwrap()[0], 0.025316129696876);
+        assert_counts(
+            &merged.count[0],
+            [6.3333333333333339, 8.7166666666666668, 0.0, 0.0, 0.0],
+        );
+        // Kept strata are not merged: each single-event stratum uses "n".
+        let kept = fit_with(column(&x).view(), usize::MAX);
+        assert_close(kept.concordance[0], 0.38200339558573854);
+        assert_close(kept.var.as_ref().unwrap()[0][0], 0.01578023129065367);
+
+        // Several predictors: R merges and pools; the second column is time %% 7.
+        let mut two = Array2::zeros((60, 2));
+        for (i, time) in data.time.iter().enumerate() {
+            two[[i, 0]] = x[i];
+            two[[i, 1]] = time % 7.0;
+        }
+        let pooled = fit_with(two.view(), 10);
+        assert_close(pooled.concordance[0], 0.42081949058693247);
+        assert_close(pooled.concordance[1], 0.449612403100775);
+        let var = pooled.var.as_ref().unwrap();
+        assert_close(var[0][0], 0.013547863894429264);
+        assert_close(var[0][1], -0.000178919511911112);
+        assert_close(var[1][1], 0.014723119736335109);
+        assert_close(pooled.cvar.as_ref().unwrap()[1], 0.0254044289430212);
+
+        // A single event in total: R's merged sweep falls back to "n".
+        let mut status = data.status.clone();
+        status.iter_mut().for_each(|s| *s = 0);
+        status[2] = 1;
+        let single = right(&data.time, &status);
+        let out = concordancefit(
+            SurvResponse::Right(&single),
+            column(&x).view(),
+            None,
+            Some(&strata),
+            None,
+            &ConcordanceOptions {
+                timewt: TimeWeight::I,
+                ..ConcordanceOptions::default()
+            },
+        )
+        .unwrap();
+        assert_counts(&out.count[0], [1.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_close(out.var.as_ref().unwrap()[0][0], 0.125);
     }
 
     #[test]

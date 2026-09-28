@@ -8,13 +8,21 @@
 //! curve, `dS(t) / dw_i`; the pseudo value is `n * S(t) - (n - 1) *
 //! S_{-i}(t)`, which the IJ approximates as `S(t) + n * dS(t) / dw_i`.
 
-use super::survfit_summary::{RmeanOption, summary_survfit_times, survfit0, survmean};
+use super::survfit_aj_summary::{summary_survfit_aj, time_in_state};
+use super::survfit_summary::{
+    RmeanOption, summary_survfit_times, survfit0_aj, survfit0_with, survmean,
+};
 use super::survfitaj::{
     AJPrepared, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, aj_prepare, survfitaj,
 };
-use super::survfitkm::{SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm};
+use super::survfitkm::{
+    SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm,
+};
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::sorting::sorted_indices_by;
+use crate::internal::step::find_interval;
 use crate::internal::validation::{validate_finite, validate_non_empty};
 use ndarray::{Array2, Array3};
 use pyo3::prelude::*;
@@ -22,7 +30,7 @@ use pyo3::prelude::*;
 /// The `type` argument of `residuals.survfit` / `pseudo`, after R's
 /// aliases (`survival`, `chaz`, `rmst`, `rmts`, `sojourn`) are folded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ResidualType {
+pub enum PseudoResidualType {
     /// Probability in state: the survival curve.
     #[default]
     Pstate,
@@ -32,7 +40,7 @@ pub enum ResidualType {
     Auc,
 }
 
-impl ResidualType {
+impl PseudoResidualType {
     pub fn parse(value: &str) -> SurvivalResult<Self> {
         match value.to_ascii_lowercase().as_str() {
             "pstate" | "survival" => Ok(Self::Pstate),
@@ -62,11 +70,6 @@ pub struct SurvfitResid {
     pub values: Vec<Vec<f64>>,
 }
 
-/// `findInterval(t, dtime)`: the number of event times `<= t`.
-fn find_interval(dtime: &[f64], t: f64) -> usize {
-    dtime.partition_point(|&x| x <= t)
-}
-
 /// R's `approx(x, y, xout)` (linear, `yleft = 0`); `x` increasing.
 fn approx_linear(x: &[f64], y: &[f64], xout: f64, rule2: bool) -> f64 {
     let n = x.len();
@@ -87,7 +90,8 @@ fn approx_linear(x: &[f64], y: &[f64], xout: f64, rule2: bool) -> f64 {
 
 /// Port of `rsurvpart1`: residuals of one curve for the rows `rows` of the
 /// data, at the sorted `times`.  `curve` is the curve's row range in
-/// `fit`.
+/// `fit`.  `stype` picks the formula; the hazard and survival come from
+/// `fit`, whatever curve it holds.
 #[allow(clippy::too_many_arguments)]
 fn rsurvpart1(
     rows: &[usize],
@@ -95,7 +99,7 @@ fn rsurvpart1(
     stop: &[f64],
     status: &[i32],
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     stype: SurvType,
     fit: &SurvfitKMResult,
     curve: std::ops::Range<usize>,
@@ -119,14 +123,17 @@ fn rsurvpart1(
     }
     // tindex = largest event time <= reporting time, yindex the same for
     // each row's end time, sindex for its entry time
-    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let tindex: Vec<usize> = times
+        .iter()
+        .map(|&t| find_interval(&dtime, t, false))
+        .collect();
     let yindex: Vec<usize> = rows
         .iter()
-        .map(|&r| find_interval(&dtime, stop[r]))
+        .map(|&r| find_interval(&dtime, stop[r], false))
         .collect();
     let sindex: Option<Vec<usize>> = start.map(|start| {
         rows.iter()
-            .map(|&r| find_interval(&dtime, start[r]))
+            .map(|&r| find_interval(&dtime, start[r], false))
             .collect()
     });
     // the dN term applies to all reporting times at or after a death
@@ -159,8 +166,8 @@ fn rsurvpart1(
     };
     let mut resid = vec![vec![0.0; ntime]; n];
     match kind {
-        ResidualType::Cumhaz | ResidualType::Pstate
-            if kind == ResidualType::Cumhaz || stype == SurvType::ExpCumhaz =>
+        PseudoResidualType::Cumhaz | PseudoResidualType::Pstate
+            if kind == PseudoResidualType::Cumhaz || stype == SurvType::ExpCumhaz =>
         {
             // the hazard is the primary thing; for stype = 2 the survival
             // is exp(-cumhaz) with derivative -S(t) * d(cumhaz)
@@ -183,14 +190,14 @@ fn rsurvpart1(
                         Some(s) => term1 + hsum[s] - term2,
                         None => term1 - term2,
                     };
-                    if kind == ResidualType::Pstate {
+                    if kind == PseudoResidualType::Pstate {
                         value = -value * surv_table[tindex[j]];
                     }
                     resid[row][j] = value;
                 }
             }
         }
-        ResidualType::Pstate => {
+        PseudoResidualType::Pstate => {
             // avoid a 0/0 issue when S(t) = 0 and hazard = 1
             let temp: Vec<f64> = hazard
                 .iter()
@@ -224,7 +231,7 @@ fn rsurvpart1(
                 }
             }
         }
-        ResidualType::Auc => {
+        PseudoResidualType::Auc => {
             // see survfit:AUC in the methods document
             let t0 = if dtime[0] > 0.0 {
                 0.0
@@ -290,7 +297,7 @@ fn rsurvpart1(
                 }
             }
         }
-        ResidualType::Cumhaz => unreachable!("handled by the first arm"),
+        PseudoResidualType::Cumhaz => unreachable!("handled by the first arm"),
     }
     resid
 }
@@ -320,49 +327,56 @@ fn prepare_times(times: &[f64], timefix: bool) -> SurvivalResult<Vec<f64>> {
 /// A `start_time` in the options drops observations from the curve but
 /// not from the residuals: R hands the whole model frame to `rsurvpart1`,
 /// where a row that ends before the first event time of the curve has no
-/// event-time index and therefore a residual of 0 at every time.
+/// event-time index and therefore a residual of 0 at every time.  A
+/// `start_time` that removes every observation of a stratum is refused, as
+/// R refuses it.
+///
+/// `call_stype` is the `stype` that `residuals.survfit` reads from the call
+/// of the fit and hands to `rsurvpart1`.  It is `options.stype` unless the
+/// curve came from an old-style `type` argument: that call has no `stype`,
+/// so R scores the curve with the Kaplan-Meier formula whatever its
+/// estimator.  The ctype of the call only adds R's warning that the ctype = 2
+/// residuals are approximate; the hazard is always the fit's.
+#[allow(clippy::too_many_arguments)]
 pub fn survfitresid(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
+    call_stype: SurvType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitResid> {
     let fit = survfitkm(data, options)?;
-    residuals_from_fit(data, options, &fit, times, kind, collapse, weighted)
+    residuals_from_fit(
+        data, options, &fit, times, kind, call_stype, collapse, weighted,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn residuals_from_fit(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     fit: &SurvfitKMResult,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
+    call_stype: SurvType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitResid> {
     let times = prepare_times(times, options.timefix)?;
     let n = data.time.len();
     // the rows of each curve, in data order
-    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
-        || vec![0],
-        |strata| {
-            let mut levels = strata.clone();
-            levels.sort_unstable();
-            levels.dedup();
-            levels
-        },
-    );
-    let curve_of: Vec<usize> = (0..n)
-        .map(|i| match &data.strata {
-            Some(strata) => strata_levels
-                .binary_search(&strata[i])
-                .expect("strata codes come from the data"),
-            None => 0,
-        })
-        .collect();
+    let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), n);
     let ranges = fit.curve_ranges();
+    // residuals.survfit scores the rows of the k-th level with fit[k]: a curve
+    // that start.time emptied is not fitted, which leaves more levels than
+    // curves and `[.survfit` stops ("strata k not matched")
+    if ranges.len() != strata_levels.len() {
+        return Err(SurvivalError::invalid_input(
+            "start.time has removed all the observations from at least one curve",
+        ));
+    }
     let collapse = collapse
         && data.id.as_ref().is_some_and(|id| {
             let mut unique = id.clone();
@@ -376,8 +390,7 @@ fn residuals_from_fit(
         ));
     }
     let (start, stop) = if options.timefix {
-        let fixed = crate::data_prep::aeq_surv(&data.time, data.start.as_deref(), None)?;
-        (fixed.time2, fixed.time)
+        aeq_counting(data.start.as_deref(), &data.time)?
     } else {
         (data.start.clone(), data.time.clone())
     };
@@ -394,7 +407,7 @@ fn residuals_from_fit(
             &data.status,
             &times,
             kind,
-            options.stype,
+            call_stype,
             fit,
             range.clone(),
         );
@@ -461,20 +474,23 @@ fn residuals_from_fit(
 /// `start_time`.  With `collapse` the rows are collapsed by id when an id
 /// repeats (and the residuals weighted, R's `weighted = collapse`); rows
 /// that a `start_time` removed from the curve keep the curve's estimate
-/// (their residual is 0, see [`survfitresid`]).
+/// (their residual is 0, see [`survfitresid`], also for `call_stype`).
 pub fn pseudo(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
+    call_stype: SurvType,
     collapse: bool,
 ) -> SurvivalResult<SurvfitResid> {
     let fit = survfitkm(data, options)?;
-    let mut residuals = residuals_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
+    let mut residuals = residuals_from_fit(
+        data, options, &fit, times, kind, call_stype, collapse, collapse,
+    )?;
     // summary(fit, rmean = t) refuses a truncation point before the first
     // time of the fit (survfitKM objects carry no start.time)
     let smallest = fit.time.iter().copied().fold(f64::INFINITY, f64::min);
-    if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
+    if kind == PseudoResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
         return Err(SurvivalError::invalid_input(
             "Truncation point for the mean time in state is < smallest survival",
         ));
@@ -490,7 +506,7 @@ pub fn pseudo(
     let n_curves = fit.n_curves();
     // yhat[time][curve]
     let yhat: Vec<Vec<f64>> = match kind {
-        ResidualType::Pstate | ResidualType::Cumhaz => {
+        PseudoResidualType::Pstate | PseudoResidualType::Cumhaz => {
             let summary = summary_survfit_times(&fit, times, true)?;
             let ranges = summary.curve_ranges();
             (0..times.len())
@@ -498,15 +514,15 @@ pub fn pseudo(
                     ranges
                         .iter()
                         .map(|range| match kind {
-                            ResidualType::Pstate => summary.surv[range.start + j],
+                            PseudoResidualType::Pstate => summary.surv[range.start + j],
                             _ => summary.cumhaz[range.start + j],
                         })
                         .collect()
                 })
                 .collect()
         }
-        ResidualType::Auc => {
-            let fit0 = survfit0(&fit);
+        PseudoResidualType::Auc => {
+            let fit0 = survfit0_with(&fit, false);
             let mut yhat = Vec::with_capacity(times.len());
             for &t in times {
                 let table = survmean(&fit0, 1.0, RmeanOption::At(t))?;
@@ -806,14 +822,17 @@ fn rsurvpart2_cumhaz(
         let value = fit.n_risk[events[e]][state];
         if value == 0.0 { 1.0 } else { value }
     };
-    let tindex: Vec<usize> = times.iter().map(|&t| find_interval(&dtime, t)).collect();
+    let tindex: Vec<usize> = times
+        .iter()
+        .map(|&t| find_interval(&dtime, t, false))
+        .collect();
     let yindex: Vec<usize> = rows
         .iter()
-        .map(|&r| find_interval(&dtime, etime[r]))
+        .map(|&r| find_interval(&dtime, etime[r], false))
         .collect();
     let sindex: Option<Vec<usize>> = entry.map(|entry| {
         rows.iter()
-            .map(|&r| find_interval(&dtime, entry[r]))
+            .map(|&r| find_interval(&dtime, entry[r], false))
             .collect()
     });
     for k in 0..nhaz {
@@ -865,7 +884,7 @@ pub fn survfitresid_aj(
     data: &SurvfitAJData,
     options: &SurvfitAJOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
@@ -878,7 +897,7 @@ fn residuals_aj_from_fit(
     options: &SurvfitAJOptions,
     fit: &SurvfitAJResult,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     collapse: bool,
     weighted: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
@@ -892,23 +911,7 @@ fn residuals_aj_from_fit(
         check,
     } = aj_prepare(data, options.timefix)?;
     let nstate = fit.states.len();
-    let strata_levels: Vec<i32> = data.strata.as_ref().map_or_else(
-        || vec![0],
-        |strata| {
-            let mut levels = strata.clone();
-            levels.sort_unstable();
-            levels.dedup();
-            levels
-        },
-    );
-    let curve_of: Vec<usize> = (0..n)
-        .map(|i| match &data.strata {
-            Some(strata) => strata_levels
-                .binary_search(&strata[i])
-                .expect("strata codes come from the data"),
-            None => 0,
-        })
-        .collect();
+    let (_, curve_of) = strata_index(data.strata.as_deref(), n);
     let cluster: Vec<i64> = match (&data.cluster, &data.id) {
         (Some(cluster), _) => cluster.clone(),
         (None, Some(id)) => id.clone(),
@@ -926,7 +929,7 @@ fn residuals_aj_from_fit(
         ));
     }
     let ncol = match kind {
-        ResidualType::Cumhaz => fit.hazard_from.len(),
+        PseudoResidualType::Cumhaz => fit.hazard_from.len(),
         _ => nstate,
     };
     let mut resid = vec![vec![vec![0.0; times.len()]; ncol]; n];
@@ -937,7 +940,7 @@ fn residuals_aj_from_fit(
             continue;
         }
         let values: Vec<Vec<Vec<f64>>> = match kind {
-            ResidualType::Cumhaz => rsurvpart2_cumhaz(
+            PseudoResidualType::Cumhaz => rsurvpart2_cumhaz(
                 &rows,
                 start.as_deref(),
                 &time,
@@ -947,7 +950,7 @@ fn residuals_aj_from_fit(
                 fit,
                 range.clone(),
             ),
-            ResidualType::Pstate | ResidualType::Auc => {
+            PseudoResidualType::Pstate | PseudoResidualType::Auc => {
                 let p0 = &fit.p0[curve];
                 // initial leverage when p0 was estimated and the initial
                 // states vary; unweighted, as rsurvpart2 has it
@@ -988,10 +991,10 @@ fn residuals_aj_from_fit(
                     i0: &inf0,
                     otime: &times,
                     starttime: fit.t0,
-                    doauc: kind == ResidualType::Auc,
+                    doauc: kind == PseudoResidualType::Auc,
                 });
                 let source = match kind {
-                    ResidualType::Auc => infa.expect("auc requested"),
+                    PseudoResidualType::Auc => infa.expect("auc requested"),
                     _ => infp,
                 };
                 (0..rows.len())
@@ -1008,7 +1011,7 @@ fn residuals_aj_from_fit(
         }
     }
     let columns: Vec<String> = match kind {
-        ResidualType::Cumhaz => fit
+        PseudoResidualType::Cumhaz => fit
             .hazard_from
             .iter()
             .zip(&fit.hazard_to)
@@ -1073,110 +1076,63 @@ fn residuals_aj_from_fit(
     })
 }
 
-/// `summary(fit, times = , extend = TRUE)$pstate` / `$cumhaz` of one curve
-/// at `t`: the row of `survfit0(fit)` at the largest time `<= t`, its first
-/// row (`p0` / 0, or the curve's own first row when it starts at `t0`)
-/// before that.
-fn aj_value_at(
-    fit: &SurvfitAJResult,
-    curve: usize,
-    range: &std::ops::Range<usize>,
-    t: f64,
-    cumhaz: bool,
-) -> Vec<f64> {
-    let count = fit.time[range.clone()].partition_point(|&x| x <= t);
-    if count == 0 {
-        let starts_at_t0 = !range.is_empty() && fit.time[range.start] == fit.t0;
-        match (cumhaz, starts_at_t0) {
-            (true, true) => fit.cumhaz[range.start].clone(),
-            (true, false) => vec![0.0; fit.hazard_from.len()],
-            (false, true) => fit.pstate[range.start].clone(),
-            (false, false) => fit.p0[curve].clone(),
-        }
-    } else if cumhaz {
-        fit.cumhaz[range.start + count - 1].clone()
-    } else {
-        fit.pstate[range.start + count - 1].clone()
-    }
-}
-
-/// `survmean2`'s mean time in state up to `maxtime`: the area under each
-/// state's probability from `t0`.
-fn aj_mean_time_in_state(
-    fit: &SurvfitAJResult,
-    curve: usize,
-    range: &std::ops::Range<usize>,
-    maxtime: f64,
-) -> Vec<f64> {
-    let nstate = fit.states.len();
-    // the survfit0 rows: (t0, p0) unless the curve already starts at t0
-    let mut tt = Vec::with_capacity(range.len() + 1);
-    let mut rows: Vec<&Vec<f64>> = Vec::with_capacity(range.len() + 1);
-    if range.is_empty() || fit.time[range.start] != fit.t0 {
-        tt.push(fit.t0);
-        rows.push(&fit.p0[curve]);
-    }
-    for i in range.clone() {
-        tt.push(fit.time[i]);
-        rows.push(&fit.pstate[i]);
-    }
-    let mut out = vec![0.0; nstate];
-    for (k, &t) in tt.iter().enumerate() {
-        if t >= maxtime {
-            break;
-        }
-        let next = tt
-            .get(k + 1)
-            .copied()
-            .filter(|&next| next < maxtime)
-            .unwrap_or(maxtime);
-        for j in 0..nstate {
-            out[j] += (next - t) * rows[k][j];
-        }
-    }
-    out
-}
-
 /// Port of `pseudo` for multi-state curves: `pstate(t) + n * residual`
 /// with `n` the number of subjects of the curve.
 pub fn pseudo_aj(
     data: &SurvfitAJData,
     options: &SurvfitAJOptions,
     times: &[f64],
-    kind: ResidualType,
+    kind: PseudoResidualType,
     collapse: bool,
 ) -> SurvivalResult<SurvfitAJResid> {
     let fit = survfitaj(data, options)?;
     let mut residuals =
         residuals_aj_from_fit(data, options, &fit, times, kind, collapse, collapse)?;
-    let ranges = fit.curve_ranges();
     // summary(fit, rmean = t) checks the truncation point against the
     // start.time when the fit has one (survfitAJ keeps it), the smallest
     // time otherwise
     let smallest = options
         .start_time
         .unwrap_or_else(|| fit.time.iter().copied().fold(f64::INFINITY, f64::min));
-    if kind == ResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
+    if kind == PseudoResidualType::Auc && residuals.times.iter().any(|&t| t < smallest) {
         return Err(SurvivalError::invalid_input(
             "Truncation point for the mean time in state is < smallest survival",
         ));
     }
-    // yhat[curve][time][column]
-    let yhat: Vec<Vec<Vec<f64>>> = ranges
-        .iter()
-        .enumerate()
-        .map(|(curve, range)| {
-            residuals
-                .times
-                .iter()
-                .map(|&t| match kind {
-                    ResidualType::Pstate => aj_value_at(&fit, curve, range, t, false),
-                    ResidualType::Cumhaz => aj_value_at(&fit, curve, range, t, true),
-                    ResidualType::Auc => aj_mean_time_in_state(&fit, curve, range, t),
+    // yhat[curve][time][column]: summary(fit, times, extend = TRUE) for
+    // pstate and cumhaz, survmean2's area of survfit0(fit) for the AUC
+    let yhat: Vec<Vec<Vec<f64>>> = match kind {
+        PseudoResidualType::Pstate | PseudoResidualType::Cumhaz => {
+            let summary = summary_survfit_aj(&fit, Some(&residuals.times), false, true)?;
+            let values = match kind {
+                PseudoResidualType::Cumhaz => &summary.cumhaz,
+                _ => &summary.pstate,
+            };
+            summary
+                .curve_ranges()
+                .into_iter()
+                .map(|range| values[range].to_vec())
+                .collect()
+        }
+        PseudoResidualType::Auc => {
+            let fit0 = survfit0_aj(&fit);
+            let nstate = fit0.states.len();
+            fit0.curve_ranges()
+                .into_iter()
+                .map(|range| {
+                    residuals
+                        .times
+                        .iter()
+                        .map(|&t| {
+                            (0..nstate)
+                                .map(|state| time_in_state(&fit0, range.clone(), t, state))
+                                .collect()
+                        })
+                        .collect()
                 })
                 .collect()
-        })
-        .collect();
+        }
+    };
     for (by_col, &curve) in residuals.values.iter_mut().zip(&residuals.curve) {
         let nn = fit.n_id[curve] as f64;
         for (k, col) in by_col.iter_mut().enumerate() {
@@ -1190,26 +1146,27 @@ pub fn pseudo_aj(
 
 #[allow(clippy::too_many_arguments)]
 fn aj_inputs(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
     cluster: Option<Vec<i64>>,
     p0: Option<Vec<f64>>,
+    start_time: Option<f64>,
     timefix: bool,
 ) -> SurvivalResult<(SurvfitAJData, SurvfitAJOptions)> {
     let data = SurvfitAJData::try_new(
-        start,
-        time,
-        state,
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        state.into_inner(),
         states,
-        weights,
-        strata,
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
         id,
         istate,
         istate_levels,
@@ -1217,6 +1174,7 @@ fn aj_inputs(
     )?;
     let options = SurvfitAJOptions {
         p0,
+        start_time,
         timefix,
         ..Default::default()
     };
@@ -1225,16 +1183,17 @@ fn aj_inputs(
 
 /// Python binding of [`survfitresid_aj`].
 #[pyfunction(name = "survfitresid_aj")]
-#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true))]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_aj_py(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
@@ -1244,6 +1203,7 @@ pub fn survfitresid_aj_py(
     collapse: bool,
     weighted: Option<bool>,
     timefix: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitAJResid> {
     let (data, options) = aj_inputs(
         time,
@@ -1257,30 +1217,27 @@ pub fn survfitresid_aj_py(
         istate_levels,
         cluster,
         p0,
+        start_time,
         timefix,
     )?;
-    Ok(survfitresid_aj(
-        &data,
-        &options,
-        &times,
-        ResidualType::parse(type_)?,
-        collapse,
-        weighted.unwrap_or(collapse),
-    )?)
+    let residual_type = PseudoResidualType::parse(type_)?;
+    let weighted = weighted.unwrap_or(collapse);
+    Ok(py.detach(|| survfitresid_aj(&data, &options, &times, residual_type, collapse, weighted))?)
 }
 
 /// Python binding of [`pseudo_aj`].
 #[pyfunction(name = "pseudo_aj")]
-#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true))]
+#[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_aj_py(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
@@ -1289,6 +1246,7 @@ pub fn pseudo_aj_py(
     type_: &str,
     timefix: bool,
     collapse: bool,
+    start_time: Option<f64>,
 ) -> PyResult<SurvfitAJResid> {
     let (data, options) = aj_inputs(
         time,
@@ -1302,33 +1260,39 @@ pub fn pseudo_aj_py(
         istate_levels,
         cluster,
         p0,
+        start_time,
         timefix,
     )?;
-    Ok(pseudo_aj(
-        &data,
-        &options,
-        &times,
-        ResidualType::parse(type_)?,
-        collapse,
-    )?)
+    let residual_type = PseudoResidualType::parse(type_)?;
+    Ok(py.detach(|| pseudo_aj(&data, &options, &times, residual_type, collapse))?)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn km_inputs(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    time: FloatVec,
+    status: IntVec,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     stype: i32,
     ctype: i32,
+    start_time: Option<f64>,
     timefix: bool,
 ) -> SurvivalResult<(SurvfitKMData, SurvfitKMOptions)> {
-    let data = SurvfitKMData::try_new(start, time, status, weights, strata, id, None)?;
+    let data = SurvfitKMData::try_new(
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        status.into_inner(),
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
+        id,
+        None,
+    )?;
     let options = SurvfitKMOptions {
         stype: SurvType::from_code(stype)?,
         ctype: super::survfitkm::HazardType::from_code(ctype)?,
+        start_time,
         timefix,
         ..Default::default()
     };
@@ -1337,15 +1301,16 @@ fn km_inputs(
 
 /// Python binding of [`survfitresid`].
 #[pyfunction(name = "survfitresid")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitresid_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     type_: &str,
     stype: i32,
@@ -1353,48 +1318,55 @@ pub fn survfitresid_py(
     collapse: bool,
     weighted: Option<bool>,
     timefix: bool,
+    start_time: Option<f64>,
+    call_stype: Option<i32>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
-        time, status, start, weights, strata, id, stype, ctype, timefix,
+        time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
-    Ok(survfitresid(
-        &data,
-        &options,
-        &times,
-        ResidualType::parse(type_)?,
-        collapse,
-        weighted.unwrap_or(collapse),
-    )?)
+    let call_stype = call_stype.map_or(Ok(options.stype), SurvType::from_code)?;
+    let residual_type = PseudoResidualType::parse(type_)?;
+    let weighted = weighted.unwrap_or(collapse);
+    Ok(py.detach(|| {
+        survfitresid(
+            &data,
+            &options,
+            &times,
+            residual_type,
+            call_stype,
+            collapse,
+            weighted,
+        )
+    })?)
 }
 
 /// Python binding of [`pseudo`].
 #[pyfunction(name = "pseudo")]
-#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true))]
+#[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pseudo_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
     times: Vec<f64>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     type_: &str,
     stype: i32,
     ctype: i32,
     timefix: bool,
     collapse: bool,
+    start_time: Option<f64>,
+    call_stype: Option<i32>,
 ) -> PyResult<SurvfitResid> {
     let (data, options) = km_inputs(
-        time, status, start, weights, strata, id, stype, ctype, timefix,
+        time, status, start, weights, strata, id, stype, ctype, start_time, timefix,
     )?;
-    Ok(pseudo(
-        &data,
-        &options,
-        &times,
-        ResidualType::parse(type_)?,
-        collapse,
-    )?)
+    let call_stype = call_stype.map_or(Ok(options.stype), SurvType::from_code)?;
+    let residual_type = PseudoResidualType::parse(type_)?;
+    Ok(py.detach(|| pseudo(&data, &options, &times, residual_type, call_stype, collapse))?)
 }
 
 #[cfg(test)]
@@ -1421,32 +1393,81 @@ mod tests {
         // residuals(survfit(Surv(time, status) ~ 1, aml), times = c(12, 24, 48))
         let times = [12.0, 24.0, 48.0];
         let options = SurvfitKMOptions::default();
-        let resid =
-            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.values.len(), 23);
         assert_eq!(resid.times, times);
         assert!(close(resid.values[0][0], -0.0321361058601134));
         assert!(close(resid.values[0][1], -0.023764515257899));
         assert!(close(resid.values[1][0], 0.0113421550094518));
         assert!(close(resid.values[2][1], 0.0103969754253308));
-        let cumhaz =
-            survfitresid(&aml(), &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        let cumhaz = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Cumhaz,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(close(cumhaz.values[0][0], 0.0415456301161012));
         assert!(close(cumhaz.values[1][0], -0.0141723685843537));
         assert!(close(cumhaz.values[2][1], -0.0176325761968104));
-        let auc = survfitresid(&aml(), &options, &times, ResidualType::Auc, false, false).unwrap();
+        let auc = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Auc,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(close(auc.values[0][0], -0.0831758034026465));
         assert!(close(auc.values[0][2], -0.782878746961923));
         assert!(close(auc.values[2][2], 0.350661625708885));
         // pseudo(fit, times, type)
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert!(ps.values[0][0].abs() < 1e-12);
         assert!(close(ps.values[2][1], 0.785714285714286));
         assert!(close(ps.values[2][2], 0.119047619047619));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Cumhaz, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Cumhaz,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert!(close(ps.values[0][0], 1.24593124415048));
         assert!(close(ps.values[2][2], 1.75547476518401));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Auc,
+            options.stype,
+            true,
+        )
+        .unwrap();
         for value in &ps.values[0] {
             assert!(close(*value, 9.0));
         }
@@ -1461,10 +1482,26 @@ mod tests {
             ..Default::default()
         };
         let times = [12.0];
-        let pstate =
-            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
-        let cumhaz =
-            survfitresid(&aml(), &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        let pstate = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
+        let cumhaz = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Cumhaz,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         let fit = survfitkm(&aml(), &options).unwrap();
         let surv12 = fit.surv[fit.time.partition_point(|&t| t <= 12.0) - 1];
         for (p, h) in pstate.values.iter().zip(&cumhaz.values) {
@@ -1485,10 +1522,26 @@ mod tests {
         )
         .unwrap();
         let options = SurvfitKMOptions::default();
-        let plain =
-            survfitresid(&data, &options, &[5.0], ResidualType::Pstate, false, false).unwrap();
-        let collapsed =
-            survfitresid(&data, &options, &[5.0], ResidualType::Pstate, true, true).unwrap();
+        let plain = survfitresid(
+            &data,
+            &options,
+            &[5.0],
+            PseudoResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
+        let collapsed = survfitresid(
+            &data,
+            &options,
+            &[5.0],
+            PseudoResidualType::Pstate,
+            options.stype,
+            true,
+            true,
+        )
+        .unwrap();
         assert_eq!(collapsed.id, vec![1, 2, 3]);
         assert!(close(
             collapsed.values[0][0],
@@ -1498,9 +1551,28 @@ mod tests {
             collapsed.values[1][0],
             2.0 * (plain.values[2][0] + plain.values[3][0])
         ));
-        assert!(survfitresid(&data, &options, &[5.0], ResidualType::Pstate, true, false).is_err());
+        assert!(
+            survfitresid(
+                &data,
+                &options,
+                &[5.0],
+                PseudoResidualType::Pstate,
+                options.stype,
+                true,
+                false
+            )
+            .is_err()
+        );
         // pseudo values are inflated by the number of subjects
-        let ps = pseudo(&data, &options, &[5.0], ResidualType::Pstate, true).unwrap();
+        let ps = pseudo(
+            &data,
+            &options,
+            &[5.0],
+            PseudoResidualType::Pstate,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert_eq!(ps.values.len(), 3);
         let fit = survfitkm(&data, &options).unwrap();
         let s5 = fit.surv[fit.time.partition_point(|&t| t <= 5.0) - 1];
@@ -1516,7 +1588,8 @@ mod tests {
             &data,
             &options,
             &[12.0, 24.0, 48.0],
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
+            options.stype,
             true,
         )
         .unwrap();
@@ -1529,7 +1602,8 @@ mod tests {
             &second,
             &options,
             &[12.0, 24.0, 48.0],
-            ResidualType::Pstate,
+            PseudoResidualType::Pstate,
+            options.stype,
             true,
         )
         .unwrap();
@@ -1578,8 +1652,15 @@ mod tests {
         let data = ties_mstate();
         let options = SurvfitAJOptions::default();
         let times = [2.0, 5.0, 8.0];
-        let resid =
-            survfitresid_aj(&data, &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid_aj(
+            &data,
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.columns, vec!["(s0)", "a", "b"]);
         assert_eq!(resid.values.len(), 16);
         let fit = survfitaj(&data, &options).unwrap();
@@ -1600,13 +1681,13 @@ mod tests {
             );
         }
         // pseudo values average to the estimate
-        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo_aj(&data, &options, &times, PseudoResidualType::Pstate, true).unwrap();
         for j in 0..3 {
             let mean = ps.values.iter().map(|by_col| by_col[j][0]).sum::<f64>() / 16.0;
             assert!(close(mean, fit.pstate[row_at_2][j]));
         }
         // cumulative hazard and sojourn residuals sum to zero over subjects
-        for kind in [ResidualType::Cumhaz, ResidualType::Auc] {
+        for kind in [PseudoResidualType::Cumhaz, PseudoResidualType::Auc] {
             let resid = survfitresid_aj(&data, &options, &times, kind, false, false).unwrap();
             let ncol = resid.columns.len();
             for k in 0..ncol {
@@ -1616,8 +1697,15 @@ mod tests {
                 }
             }
         }
-        let cumhaz =
-            survfitresid_aj(&data, &options, &times, ResidualType::Cumhaz, false, false).unwrap();
+        let cumhaz = survfitresid_aj(
+            &data,
+            &options,
+            &times,
+            PseudoResidualType::Cumhaz,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(cumhaz.columns, vec!["1:2", "1:3"]);
     }
 
@@ -1630,36 +1718,129 @@ mod tests {
             ..Default::default()
         };
         let times = [12.0, 24.0, 48.0];
-        let resid =
-            survfitresid(&aml(), &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.values.len(), 23);
         // the observation at time 9 is not part of the curve: residual 0
         assert_eq!(resid.values[0], vec![0.0, 0.0, 0.0]);
         assert!(close(resid.values[1][0], 0.00308641975308642));
         assert!(close(resid.values[1][1], -0.03880070546737213));
         assert!(close(resid.values[3][2], -0.006823717141177459));
-        let ps = pseudo(&aml(), &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            options.stype,
+            true,
+        )
+        .unwrap();
         // ... and its pseudo value is the estimate, inflated by fit$n = 18
         assert!(close(ps.values[0][0], 0.944444444444444));
         assert!(close(ps.values[0][2], 0.1058201058201058));
         assert!(close(ps.values[1][0], 1.0));
         assert!(ps.values[1][1].abs() < 1e-12);
         assert!(close(ps.values[3][1], -0.112244897959184));
-        let auc = pseudo(&aml(), &options, &times, ResidualType::Auc, true).unwrap();
+        let auc = pseudo(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Auc,
+            options.stype,
+            true,
+        )
+        .unwrap();
         assert!(close(auc.values[0][0], 2.0)); // the area from t0 = 10 to 12
         assert!(close(auc.values[0][1], 12.2142857142857));
         assert!(close(auc.values[2][2], 25.0714285714286));
-        let resid_auc =
-            survfitresid(&aml(), &options, &times, ResidualType::Auc, false, false).unwrap();
+        let resid_auc = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Auc,
+            options.stype,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(close(resid_auc.values[1][1], -0.511_904_761_904_762));
         assert!(close(resid_auc.values[2][2], 0.139329805996473));
         // summary(fit, rmean = 5) refuses a point before the first time
         assert!(
-            pseudo(&aml(), &options, &[5.0, 24.0], ResidualType::Auc, true)
+            pseudo(
+                &aml(),
+                &options,
+                &[5.0, 24.0],
+                PseudoResidualType::Auc,
+                options.stype,
+                true
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("smallest survival")
+        );
+    }
+
+    #[test]
+    fn start_time_that_empties_a_stratum_is_refused() {
+        // d <- data.frame(t = c(1:8, 5:7, 9), e = c(1,1,0,1, 0,1,1,0, 1,0,1,1),
+        //                 g = rep(1:3, each = 4))
+        // fit <- survfit(Surv(t, e) ~ g, d, start.time = 5) has n = 0 4 4 and
+        // residuals(fit, times = c(6, 7)) and pseudo() stop: "strata 3 not
+        // matched"; on d[1:8, ] (n = 0 4) "strata 2 not matched"
+        let time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 5.0, 6.0, 7.0, 9.0];
+        let status = [1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1];
+        let strata = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
+        let options = SurvfitKMOptions {
+            start_time: Some(5.0),
+            ..Default::default()
+        };
+        let refused = |result: SurvivalResult<SurvfitResid>| {
+            result
                 .unwrap_err()
                 .to_string()
-                .contains("smallest survival")
-        );
+                .contains("start.time has removed all the observations from at least one curve")
+        };
+        for (rows, n) in [(12, vec![0, 4, 4]), (8, vec![0, 4])] {
+            let data = SurvfitKMData::try_new(
+                None,
+                time[..rows].to_vec(),
+                status[..rows].to_vec(),
+                None,
+                Some(strata[..rows].to_vec()),
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(survfitkm(&data, &options).unwrap().n, n);
+            for kind in [PseudoResidualType::Pstate, PseudoResidualType::Auc] {
+                assert!(refused(survfitresid(
+                    &data,
+                    &options,
+                    &[6.0, 7.0],
+                    kind,
+                    options.stype,
+                    false,
+                    false
+                )));
+                assert!(refused(pseudo(
+                    &data,
+                    &options,
+                    &[6.0, 7.0],
+                    kind,
+                    options.stype,
+                    true
+                )));
+            }
+        }
     }
 
     #[test]
@@ -1672,25 +1853,32 @@ mod tests {
             ..Default::default()
         };
         let times = [2.0, 5.0, 8.0];
-        let resid =
-            survfitresid_aj(&data, &options, &times, ResidualType::Pstate, false, false).unwrap();
+        let resid = survfitresid_aj(
+            &data,
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(resid.values.len(), 16);
         // values[row][state][time]: the rows before the start take part
         assert!(close(resid.values[0][0][1], -0.03312800480769231));
         assert!(close(resid.values[0][1][1], 0.04965444711538462));
         assert!(close(resid.values[1][2][1], 0.045_973_557_692_307_7));
         assert!(close(resid.values[2][1][1], -0.00262920673076923));
-        let ps = pseudo_aj(&data, &options, &times, ResidualType::Pstate, true).unwrap();
+        let ps = pseudo_aj(&data, &options, &times, PseudoResidualType::Pstate, true).unwrap();
         assert!(close(ps.values[0][0][1], 0.175105168269231));
         assert!(close(ps.values[0][1][1], 0.808_969_350_961_538_4));
         assert!(close(ps.values[2][2][1], 0.2034254807692308));
-        let auc = pseudo_aj(&data, &options, &times, ResidualType::Auc, true).unwrap();
+        let auc = pseudo_aj(&data, &options, &times, PseudoResidualType::Auc, true).unwrap();
         assert!(close(auc.values[0][0][2], 0.350116436298077));
         assert!(close(auc.values[0][1][2], 5.621_788_611_778_847));
         assert!(close(auc.values[2][2][2], 1.1062199519230769));
         // the truncation point is checked against the start.time
         assert!(
-            pseudo_aj(&data, &options, &[1.5, 5.0], ResidualType::Auc, true)
+            pseudo_aj(&data, &options, &[1.5, 5.0], PseudoResidualType::Auc, true)
                 .unwrap_err()
                 .to_string()
                 .contains("smallest survival")
@@ -1698,17 +1886,99 @@ mod tests {
     }
 
     #[test]
+    fn call_stype_picks_the_formula_and_the_fit_gives_the_curve() {
+        // fit <- survfit(Surv(time, status) ~ 1, aml, type = "fleming-harrington")
+        // has no stype in its call: residuals(fit, times = c(10, 20)) scores
+        // the Fleming-Harrington curve with the Kaplan-Meier formula
+        let options = SurvfitKMOptions {
+            stype: SurvType::ExpCumhaz,
+            ..Default::default()
+        };
+        let times = [10.0, 20.0];
+        let kaplan_meier = SurvType::KaplanMeier;
+        let resid = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            kaplan_meier,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(close(resid.values[0][0], -0.03437862026111806));
+        assert!(close(resid.values[0][1], -0.0285491513533135));
+        assert!(close(resid.values[1][0], 0.00954961673919946));
+        let auc = survfitresid(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Auc,
+            kaplan_meier,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(close(auc.values[0][0], -0.0153620986438052));
+        assert!(close(auc.values[1][1], -0.151269864863623));
+        // pseudo(fit, times = c(10, 20))
+        let ps = pseudo(
+            &aml(),
+            &options,
+            &times,
+            PseudoResidualType::Pstate,
+            kaplan_meier,
+            true,
+        )
+        .unwrap();
+        assert!(close(ps.values[1][0], 1.0103494510073));
+        // type = "fh2": the fit's ctype = 2 hazard
+        let fh2 = SurvfitKMOptions {
+            stype: SurvType::ExpCumhaz,
+            ctype: super::super::survfitkm::HazardType::FlemingHarrington,
+            ..Default::default()
+        };
+        let cumhaz = survfitresid(
+            &aml(),
+            &fh2,
+            &times,
+            PseudoResidualType::Cumhaz,
+            kaplan_meier,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(close(cumhaz.values[1][0], -0.0112852529328128));
+        assert!(close(cumhaz.values[1][1], 0.0409916491134088));
+    }
+
+    #[test]
     fn rejects_bad_arguments() {
-        assert!(ResidualType::parse("weird").is_err());
-        assert_eq!(ResidualType::parse("RMST").unwrap(), ResidualType::Auc);
+        assert!(PseudoResidualType::parse("weird").is_err());
+        assert_eq!(
+            PseudoResidualType::parse("RMST").unwrap(),
+            PseudoResidualType::Auc
+        );
         let options = SurvfitKMOptions::default();
-        assert!(survfitresid(&aml(), &options, &[], ResidualType::Pstate, false, false).is_err());
+        assert!(
+            survfitresid(
+                &aml(),
+                &options,
+                &[],
+                PseudoResidualType::Pstate,
+                options.stype,
+                false,
+                false
+            )
+            .is_err()
+        );
         assert!(
             survfitresid(
                 &aml(),
                 &options,
                 &[f64::NAN],
-                ResidualType::Pstate,
+                PseudoResidualType::Pstate,
+                options.stype,
                 false,
                 false
             )

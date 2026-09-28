@@ -6,12 +6,15 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from operator import index
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .. import _survival as _core
 
 if TYPE_CHECKING:
-    from ._surv import Surv
+    import numpy as np
+    from numpy.typing import NDArray
+
+    from ._surv import Surv, Surv2
 
 
 # _core class re-exports.
@@ -112,7 +115,12 @@ class _CategoricalDesignTerm:
 
 @dataclass(frozen=True)
 class _PenaltyDesignTerm:
-    """A fitted penalty basis, including the state needed to transform new data."""
+    """A fitted penalty basis, including the state needed to transform new data.
+
+    ``nterm``, ``degree``, ``boundary``, ``intercept`` and ``combine`` (the group of every
+    basis column when pspline's ``combine`` sums them) describe a pspline basis, whose
+    ``penalty`` is ``None`` for ``pspline(penalty=FALSE)``; ``levels`` are a frailty's groups.
+    """
 
     term: _CovariateTerm
     columns: tuple[str, ...]
@@ -122,6 +130,18 @@ class _PenaltyDesignTerm:
     boundary: tuple[float, float] | None = None
     levels: tuple[Any, ...] = ()
     intercept: bool = False
+    nterm: int = 0
+    combine: tuple[int, ...] | None = None
+
+    @property
+    def penalized(self) -> bool:
+        """False for ``pspline(penalty=FALSE)``, whose basis is an ordinary matrix term."""
+        return self.penalty is not None
+
+    @property
+    def kind(self) -> str:
+        """The penalty function: ``"ridge"``, ``"pspline"`` or ``"frailty"``."""
+        return self.penalty.kind if self.penalized else "pspline"
 
 
 _SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm | _PenaltyDesignTerm
@@ -142,85 +162,16 @@ class _FormulaDesign:
     offsets: tuple[_CovariateTerm, ...]
     term_assignments: tuple[int, ...] = ()
     strata: tuple[str, ...] = ()
-    strata_levels: tuple[Any, ...] = ()
     intercept: bool = False
 
 
 @dataclass(frozen=True)
-class _FormulaFit:
-    """Transitional survreg wrapper (still built by ``_survreg.survreg``).
-
-    Cox fits no longer use it: they are ``survival.r._coxph.CoxphModel`` objects.  This
-    class goes away once ``_survreg``/``_misc`` move to their typed wrapper.
-    """
-
-    fit: Any
-    design: _FormulaDesign | None
-    formula: str | None = None
-    coefficient_names: tuple[str, ...] | None = None
-    case_weights: list[float] | None = None
-    case_weight_column: str | None = None
-    robust_variance: list[list[float]] | None = None
-    naive_variance: list[list[float]] | None = None
-    cluster: list[Any] | None = None
-    id_values: list[Any] | None = None
-    id_column: str | None = None
-    x_matrix: list[list[float]] | None = None
-    y_response: Surv | None = None
-    model_frame: dict[str, Any] | None = None
-    score_values: list[float] | None = None
-    conditional_logistic: bool = False
-    n_observations: int | None = None
-
-    def __getattr__(self, name: str) -> Any:
-        if name == "id" and self.id_values is not None:
-            return self.id_values
-        if name == "x" and self.x_matrix is not None:
-            return self.x_matrix
-        if name == "y" and self.y_response is not None:
-            return self.y_response
-        if name == "model" and self.model_frame is not None:
-            return self.model_frame
-        if name == "weights" and self.case_weights is not None:
-            return self.case_weights
-        if name == "score" and self.score_values is not None:
-            return self.score_values
-        if name == "n" and self.n_observations is not None:
-            return self.n_observations
-        return getattr(self.fit, name)
-
-    @property
-    def information_matrix(self) -> list[list[float]]:
-        if self.robust_variance is not None:
-            return self.robust_variance
-        matrix = getattr(self.fit, "information_matrix", None)
-        if matrix is not None:
-            return matrix
-        matrix = getattr(self.fit, "variance_matrix", None)
-        if matrix is not None:
-            return matrix
-        raise AttributeError("wrapped fit does not expose a variance matrix")
-
-    @property
-    def variance_matrix(self) -> list[list[float]]:
-        return self.information_matrix
-
-    @property
-    def naive_information_matrix(self) -> list[list[float]] | None:
-        return self.naive_variance
-
-    @property
-    def naive_var(self) -> list[list[float]] | None:
-        return self.naive_variance
-
-    @property
-    def robust(self) -> bool:
-        return self.robust_variance is not None
-
-
-@dataclass(frozen=True)
 class CchModelResult:
-    """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps."""
+    """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps.
+
+    ``sc_ids`` are the ids of the rows of the Borgan estimators' ``sc`` (R's rownames), in
+    R's ``rowsum`` order: numbers ascending, factor ids in level order, other labels sorted.
+    """
 
     fit: _core.CchFitResult
     formula: str
@@ -232,6 +183,7 @@ class CchModelResult:
     stratum: tuple[Any, ...] | None
     cohort_size: tuple[int, ...]
     subcohort_size: tuple[int, ...]
+    sc_ids: tuple[Any, ...] | None
 
     @property
     def coefficients(self) -> list[float]:
@@ -248,6 +200,13 @@ class CchModelResult:
     @property
     def phase2var(self) -> list[list[float]]:
         return [list(row) for row in self.fit.phase2var]
+
+    @property
+    def sc(self) -> list[list[float]] | None:
+        """The Borgan estimators' weighted score residuals collapsed by id, one row per id."""
+
+        sc = self.fit.sc
+        return None if sc is None else [list(row) for row in sc]
 
     @property
     def method(self) -> str:
@@ -279,6 +238,8 @@ class AaregModelResult:
     model: dict[str, Any] | None = None
     x: list[list[float]] | None = None
     y: Surv | None = None
+    # attr(terms, "term.labels"): the formula's terms, which labels.aareg returns
+    term_labels: tuple[str, ...] = ()
 
     @property
     def nrisk(self) -> list[float]:
@@ -306,7 +267,8 @@ class _SurvResponseSpec:
     """The left-hand side of a formula: a ``Surv(...)`` call, or a plain numeric response.
 
     ``surv`` is ``False`` for a formula such as ``time ~ 1`` (``pyears``, ``survexp``),
-    whose single argument is the follow-up expression.
+    whose single argument is the follow-up expression.  ``timeline`` marks a
+    ``Surv2(time, event)`` response, whose ``repeated`` option it keeps.
     """
 
     arguments: tuple[str, ...]
@@ -314,29 +276,49 @@ class _SurvResponseSpec:
     type: str | None
     origin: float = 0.0
     surv: bool = True
+    timeline: bool = False
+    repeated: bool | str = False
 
     @property
     def name(self) -> str:
         """R's name of the response column in the model frame."""
 
-        return f"Surv({', '.join(self.arguments)})" if self.surv else self.arguments[0]
+        if not self.surv:
+            return self.arguments[0]
+        return f"{'Surv2' if self.timeline else 'Surv'}({', '.join(self.arguments)})"
+
+
+@dataclass(frozen=True)
+class NaAction:
+    """R's ``na.action`` attribute of a model frame (a fit's ``fit$na.action``): the
+    1-based rows ``na.omit`` or ``na.exclude`` removed, and which of the two did (R's
+    class, ``"omit"`` or ``"exclude"``).  The ``residuals`` and ``predict`` methods pad
+    an ``"exclude"`` fit's values back to every row, with NaN at these (``naresid``)."""
+
+    rows: tuple[int, ...]
+    kind: str
+
+    def __len__(self) -> int:
+        return len(self.rows)
 
 
 @dataclass(frozen=True)
 class ModelFrame:
     """R's ``model.frame`` for a survival formula.
 
-    ``data`` is the caller's data after ``subset`` and the ``na.action``; ``response``
-    is the ``Surv`` response (``y`` a plain numeric response such as ``time ~ 1``, or
-    both ``None`` for ``~ x``); the R-style extra arguments (``weights``, ``offset``,
-    ``id``, ``cluster``, ``istate``) are row aligned with it.
+    ``data`` is the caller's data or, when ``subset`` or the ``na.action`` removed rows,
+    a mapping of the formula's variables at the kept rows; ``response`` is the ``Surv``
+    (or ``Surv2``) response (``y`` a plain numeric response such as ``time ~ 1``, or both
+    ``None`` for ``~ x``); the R-style extra arguments (``weights``, ``offset``, ``id``,
+    ``cluster``, ``istate``) are row aligned with it.  ``na_action`` records the rows the
+    ``na.action`` removed (``None`` when it removed none).
     """
 
     formula: str
     data: Any
     n: int
     spec: _SurvResponseSpec | None
-    response: Surv | None
+    response: Surv | Surv2 | None
     y: list[float] | None
     terms: _FormulaTerms
     weights: list[Any] | None = None
@@ -344,7 +326,7 @@ class ModelFrame:
     id: list[Any] | None = None
     cluster: list[Any] | None = None
     istate: list[Any] | None = None
-    na_action: str = "pass"
+    na_action: NaAction | None = None
     extra: dict[str, list[Any]] = field(default_factory=dict)
 
     @property
@@ -370,7 +352,11 @@ class ConcordanceResult:
     predictor and vectors/matrices for several, exactly as ``concordancefit`` returns
     them; ``count`` is one named row of ``concordant``/``discordant``/``tied.x``/
     ``tied.y``/``tied.xy`` (a list of rows when several predictors or kept strata),
-    and ``names`` labels those rows (predictor names or stratum levels).
+    and ``names`` labels those rows (predictor names or stratum levels).  With a
+    cluster, ``dfbeta`` has one row per cluster in sorted cluster order.  ``ranks`` is
+    R's data frame as the columns ``time``/``rank``/``timewt``/``casewt`` (a list of
+    such tables for several predictors; for several fits one table led by a ``fit``
+    column, as ``cord.work`` stacks them).
     """
 
     concordance: float | list[float]
@@ -381,7 +367,7 @@ class ConcordanceResult:
     cvar: float | list[float] | None = None
     dfbeta: list[float] | list[list[float]] | None = None
     influence: list[list[float]] | list[list[list[float]]] | None = None
-    ranks: list[dict[str, float]] | list[list[dict[str, float]]] | None = None
+    ranks: dict[str, list[Any]] | list[dict[str, list[float]]] | None = None
     formula: str | None = None
 
     @property
@@ -393,6 +379,22 @@ class ConcordanceResult:
         if isinstance(self.var, list):
             return [math.sqrt(self.var[idx][idx]) for idx in range(len(self.var))]
         return math.sqrt(self.var)
+
+
+@dataclass(frozen=True)
+class SurvConcordanceResult:
+    """R's deprecated ``survConcordance`` object.
+
+    ``stats`` is ``survConcordance.fit``'s row of ``concordant``/``discordant``/
+    ``tied.risk``/``tied.time``/``std(c-d)``, or one such row per stratum keyed by its
+    level; ``std_err`` is R's ``std.err``, the summed ``std(c-d)`` over twice the number
+    of comparable pairs.
+    """
+
+    concordance: float
+    stats: dict[str, float] | dict[str, dict[str, float]]
+    n: int
+    std_err: float
 
 
 @dataclass(frozen=True)
@@ -425,24 +427,6 @@ class StrataFactor:
 
     def __len__(self) -> int:
         return len(self.codes)
-
-
-@dataclass(frozen=True)
-class Surv2Data:
-    """Counting-process rows built from a ``Surv2`` timeline (R's ``surv2counting``).
-
-    ``row`` is the zero-based input row each interval starts from; ``type`` is the
-    ``Surv`` type of the ``(start, stop, status)`` response; ``istate`` holds the
-    state codes each interval starts in when the timeline records initial states.
-    """
-
-    row: list[int]
-    start: list[float]
-    stop: list[float]
-    status: list[int | None]
-    istate: list[int] | None
-    states: list[str]
-    type: str
 
 
 @dataclass(frozen=True)
@@ -494,7 +478,8 @@ class PyearsResult:
     ``pyears``, ``n``, ``event`` and ``expected`` are the R arrays as row-major
     nested lists over ``dim`` (a flat list for one dimension, a scalar list for no
     grouping); ``dimnames`` maps each term label to its level labels, in formula
-    order.  ``data`` is the ``data.frame = TRUE`` layout instead.
+    order.  ``data`` is the ``data.frame = TRUE`` layout instead.  ``na_action``
+    records the rows the ``na.action`` removed (``None`` when it removed none).
     """
 
     pyears: Any
@@ -507,6 +492,7 @@ class PyearsResult:
     event: Any = None
     expected: Any = None
     data: dict[str, list[Any]] | None = None
+    na_action: NaAction | None = None
 
     @property
     def group(self) -> list[str]:
@@ -592,16 +578,17 @@ class TMergeFrame(Mapping[str, list[Any]]):
 class CoxZPHResult:
     """R's ``cox.zph`` object: ``table`` rows (``name``, ``chisq``, ``df``, ``p``), the
     transformed times ``x``, the death times ``time``, the scaled Schoenfeld residual
-    matrix ``y`` (one column per term, named by ``names``) and its variance ``var``."""
+    matrix ``y`` (one column per term, named by ``names``) and its variance ``var``.
+    ``df`` is a float: a penalized fit's terms have fractional degrees of freedom."""
 
-    table: list[dict[str, float | int | str]]
-    x: list[float]
-    time: list[float]
-    y: list[list[float]]
-    var: list[list[float]]
+    table: list[dict[str, float | str]]
+    x: list[float] = field(repr=False)
+    time: list[float] = field(repr=False)
+    y: list[list[float]] = field(repr=False)
+    var: list[list[float]] = field(repr=False)
     transform: str
     names: list[str]
-    strata: list[Any] | None = None
+    strata: list[Any] | None = field(default=None, repr=False)
 
     def subset(
         self, indices: Sequence[int], table_indices: Sequence[int] | None = None
@@ -694,27 +681,29 @@ class CoxSurvfitResult:
     ``time``/``n_risk``/``n_event``/``n_censor`` are the strata blocks laid end to end
     (``strata`` maps each block's name to its length, ``n`` is the size of each);
     ``surv``, ``cumhaz``, ``std_err``, ``std_chaz``, ``lower`` and ``upper`` are vectors
-    for one curve, or ``ntime x ncurve`` matrices (one column per ``newdata`` row).
+    for one curve, or ``ntime x ncurve`` matrices (one column per ``newdata`` row, named
+    by ``colnames``, R's ``colnames(fit$surv)``).
     """
 
     n: list[int]
-    time: list[float]
-    n_risk: list[float]
-    n_event: list[float]
-    n_censor: list[float]
-    surv: list[float] | list[list[float]]
-    cumhaz: list[float] | list[list[float]]
+    time: list[float] = field(repr=False)
+    n_risk: list[float] = field(repr=False)
+    n_event: list[float] = field(repr=False)
+    n_censor: list[float] = field(repr=False)
+    surv: list[float] | list[list[float]] = field(repr=False)
+    cumhaz: list[float] | list[list[float]] = field(repr=False)
     type: str
     strata: dict[str, int] | None = None
-    std_err: list[float] | list[list[float]] | None = None
-    std_chaz: list[float] | list[list[float]] | None = None
-    lower: list[float] | list[list[float]] | None = None
-    upper: list[float] | list[list[float]] | None = None
+    std_err: list[float] | list[list[float]] | None = field(default=None, repr=False)
+    std_chaz: list[float] | list[list[float]] | None = field(default=None, repr=False)
+    lower: list[float] | list[list[float]] | None = field(default=None, repr=False)
+    upper: list[float] | list[list[float]] | None = field(default=None, repr=False)
     logse: bool = True
     conf_type: str = "none"
     conf_int: float | None = None
     start_time: float | None = None
-    newdata: Any | None = None
+    newdata: Any | None = field(default=None, repr=False)
+    colnames: list[str] | None = None
 
     @property
     def ncurve(self) -> int:
@@ -726,6 +715,8 @@ class SurvfitCall:
     """The parts of R's ``fit$call`` that ``residuals.survfit`` and ``pseudo`` re-read.
 
     ``terms`` are the right-hand side term labels; ``strata(mf[terms])`` is the curve factor.
+    ``stype`` and ``ctype`` give the curve that was fitted; ``type`` is the old-style ``type``
+    argument as given, in which case R's call carries no ``stype`` or ``ctype``.
     """
 
     terms: tuple[str, ...] = ()
@@ -735,6 +726,56 @@ class SurvfitCall:
     start_time: float | None = None
     p0: list[float] | None = None
     id: str | None = None
+    type: str | None = None
+
+
+class _EngineInfluence(NamedTuple):
+    """Pickled in place of influence matrices that are views of the ``engine``'s own.
+
+    ``pickle`` and ``copy`` would otherwise store each matrix twice, once in the fit's
+    list and once in the encoded engine, and a restored fit would hold two copies;
+    ``__setstate__`` takes the matrices from the restored engine instead (and names the
+    rows of a Kaplan-Meier curve's matrices by ``clname``, as ``_km_result`` does).
+    """
+
+    clname: Sequence[Any] | None
+
+
+def _views_of_engine(mine: Sequence[Any] | None, engines: Sequence[Any] | None) -> bool:
+    """Whether each influence matrix of ``mine`` is a view of the engine curve's matrix."""
+
+    if not mine or engines is None or len(mine) != len(engines):
+        return False
+    return all(
+        curve.values.__array_interface__ == engine.values.__array_interface__
+        for curve, engine in zip(mine, engines, strict=True)
+    )
+
+
+@dataclass(frozen=True)
+class SurvfitInfluenceMatrix:
+    """One curve's ``influence.surv`` or ``influence.chaz`` matrix of a ``survfit`` object.
+
+    ``values[k]`` is the influence of cluster ``cluster[k]`` at each time of the curve;
+    ``cluster`` holds R's row names: the ``cluster`` (else ``id``) values, in order of first
+    appearance, or the observation numbers ``1..n`` when the observations are the clusters.
+    Like ``survfitKM``, which names the rows ``clname[clusterid]``, it holds the engine's
+    ``survival.surv_analysis.SurvfitInfluence`` (0-based cluster codes) and ``clname``, the
+    levels every curve of the fit shares, or ``None`` when the engine's labels are already
+    the observation numbers.  ``values`` is a read-only NumPy view of the engine's matrix.
+    """
+
+    influence: _core.SurvfitInfluence
+    clname: Sequence[Any] | None = field(default=None, repr=False)
+
+    @property
+    def cluster(self) -> list[Any]:
+        codes = self.influence.cluster
+        return codes if self.clname is None else [self.clname[code] for code in codes]
+
+    @property
+    def values(self) -> NDArray[np.float64]:
+        return self.influence.values
 
 
 @dataclass(frozen=True)
@@ -745,37 +786,39 @@ class SurvfitResult:
     ``std_err`` is the standard error of ``log(surv)`` when ``logse`` is true and of ``surv``
     otherwise (the robust variance); ``std_chaz`` is always that of ``cumhaz``.  ``model`` is
     the model frame of the call (R re-evaluates it through ``model.frame``) and ``engine`` the
-    Rust result the summary methods work from (absent for Turnbull curves, whose ``cumhaz``
-    and ``t0`` are the values R's ``survfit0`` derives).
+    Rust result the summary methods work from (for Turnbull curves, whose ``cumhaz``,
+    ``std_chaz`` and ``t0`` are the values R's ``survfit0`` derives, it holds the curves as
+    fitted).  As in R, a ``start.time`` of a Kaplan-Meier fit shows only as ``t0`` and
+    ``time0`` marks a curve that already starts with its ``t0`` row, the result of
+    ``survfit0``.
     """
 
     n: list[int]
-    time: list[float]
-    n_risk: list[float]
-    n_event: list[float]
-    n_censor: list[float]
-    surv: list[float]
-    cumhaz: list[float]
+    time: list[float] = field(repr=False)
+    n_risk: list[float] = field(repr=False)
+    n_event: list[float] = field(repr=False)
+    n_censor: list[float] = field(repr=False)
+    surv: list[float] = field(repr=False)
+    cumhaz: list[float] = field(repr=False)
     type: str
     t0: float
-    n_enter: list[float] | None = None
-    counts: _core.SurvfitCounts | None = None
-    std_err: list[float] | None = None
-    std_chaz: list[float] | None = None
-    lower: list[float] | None = None
-    upper: list[float] | None = None
+    n_enter: list[float] | None = field(default=None, repr=False)
+    counts: _core.SurvfitCounts | None = field(default=None, repr=False)
+    std_err: list[float] | None = field(default=None, repr=False)
+    std_chaz: list[float] | None = field(default=None, repr=False)
+    lower: list[float] | None = field(default=None, repr=False)
+    upper: list[float] | None = field(default=None, repr=False)
     strata: dict[str, int] | None = None
     n_id: list[int] | None = None
     logse: bool | None = None
     conf_int: float | None = None
     conf_type: str | None = None
     conf_lower: str | None = None
-    influence_surv: list[_core.SurvfitInfluence] | None = None
-    influence_chaz: list[_core.SurvfitInfluence] | None = None
-    start_time: float | None = None
+    influence_surv: list[SurvfitInfluenceMatrix] | None = field(default=None, repr=False)
+    influence_chaz: list[SurvfitInfluenceMatrix] | None = field(default=None, repr=False)
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
-    model: dict[str, Any] | None = None
+    model: dict[str, Any] | None = field(default=None, repr=False)
     engine: _core.SurvfitKMResult | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -783,6 +826,26 @@ class SurvfitResult:
         """The curve labels (``names(fit$strata)``), ``[]`` for a single unnamed curve."""
 
         return list(self.strata) if self.strata else []
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        for name in ("influence_surv", "influence_chaz"):
+            matrices = state[name]
+            if _views_of_engine(
+                [matrix.influence for matrix in matrices or ()], getattr(self.engine, name, None)
+            ) and all(matrix.clname is matrices[0].clname for matrix in matrices):
+                state[name] = _EngineInfluence(matrices[0].clname)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        for name in ("influence_surv", "influence_chaz"):
+            if isinstance(state[name], _EngineInfluence):
+                clname = state[name].clname
+                state[name] = [
+                    SurvfitInfluenceMatrix(curve, clname)
+                    for curve in getattr(state["engine"], name)
+                ]
+        self.__dict__.update(state)
 
 
 @dataclass(frozen=True)
@@ -793,41 +856,44 @@ class SurvfitMultiStateResult:
     ``n_censor``, ``pstate``, ``std_err``, ``lower`` and ``upper`` are ``states``, those of
     ``n_transition``, ``cumhaz`` and ``std_chaz`` the observed transitions ``hazard_names``
     (R's ``"from:to"`` column names).  ``p0`` has one row per curve and ``transitions`` is
-    ``survcheck``'s table of observed transitions (from state x to state or censored).
+    ``survcheck``'s table of observed transitions (from state x to state or censored), which
+    ``fit[, states]`` drops, as it drops ``n_id`` from a fit without strata.  The rows of
+    each ``influence_pstate`` array are named, as in R, by the clusters' numbers ``1, 2, ...``
+    in order of first appearance.
     """
 
     n: list[int]
-    time: list[float]
-    n_risk: list[list[float]]
-    n_event: list[list[float]]
-    n_censor: list[list[float]]
-    n_transition: list[list[float]]
-    pstate: list[list[float]]
-    cumhaz: list[list[float]]
-    p0: list[list[float]]
+    time: list[float] = field(repr=False)
+    n_risk: list[list[float]] = field(repr=False)
+    n_event: list[list[float]] = field(repr=False)
+    n_censor: list[list[float]] = field(repr=False)
+    n_transition: list[list[float]] = field(repr=False)
+    pstate: list[list[float]] = field(repr=False)
+    cumhaz: list[list[float]] = field(repr=False)
+    p0: list[list[float]] = field(repr=False)
     states: list[str]
     hazard_names: list[str]
-    transitions: NamedMatrix
-    n_id: list[int]
+    transitions: NamedMatrix | None
+    n_id: list[int] | None
     type: str
     t0: float
-    n_enter: list[list[float]] | None = None
-    counts: _core.SurvfitAJCounts | None = None
-    std_err: list[list[float]] | None = None
-    std_chaz: list[list[float]] | None = None
-    std_auc: list[list[float]] | None = None
-    se0: list[list[float]] | None = None
-    lower: list[list[float]] | None = None
-    upper: list[list[float]] | None = None
+    n_enter: list[list[float]] | None = field(default=None, repr=False)
+    counts: _core.SurvfitAJCounts | None = field(default=None, repr=False)
+    std_err: list[list[float]] | None = field(default=None, repr=False)
+    std_chaz: list[list[float]] | None = field(default=None, repr=False)
+    std_auc: list[list[float]] | None = field(default=None, repr=False)
+    se0: list[list[float]] | None = field(default=None, repr=False)
+    lower: list[list[float]] | None = field(default=None, repr=False)
+    upper: list[list[float]] | None = field(default=None, repr=False)
     strata: dict[str, int] | None = None
     logse: bool | None = None
     conf_int: float | None = None
     conf_type: str | None = None
-    influence_pstate: list[_core.SurvfitAJInfluence] | None = None
+    influence_pstate: list[_core.SurvfitAJInfluence] | None = field(default=None, repr=False)
     start_time: float | None = None
     time0: bool = False
     call: SurvfitCall = field(default_factory=SurvfitCall)
-    model: dict[str, Any] | None = None
+    model: dict[str, Any] | None = field(default=None, repr=False)
     engine: _core.SurvfitAJResult | None = field(default=None, repr=False, compare=False)
     # the states before `fit[, states]` selected some (R's oldstate)
     oldstate: tuple[str, ...] | None = None
@@ -835,6 +901,93 @@ class SurvfitMultiStateResult:
     @property
     def strata_names(self) -> list[str]:
         return list(self.strata) if self.strata else []
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        if _views_of_engine(self.influence_pstate, getattr(self.engine, "influence_pstate", None)):
+            state["influence_pstate"] = _EngineInfluence(None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        if isinstance(state["influence_pstate"], _EngineInfluence):
+            state["influence_pstate"] = state["engine"].influence_pstate
+        self.__dict__.update(state)
+
+
+@dataclass(frozen=True)
+class CoxSurvfitMultiStateResult:
+    """R's ``survfit.coxphms`` object (class ``c("survfitcoxms", "survfitms",
+    "survfit")``): probability-in-state curves predicted from a multi-state Cox model.
+
+    ``pstate[t, i, s]`` is the probability of state ``states[s]`` at ``time[t]`` for
+    newdata row ``i``, and ``cumhaz[t, i, k]`` the cumulative hazard of transition
+    ``cumhaz_names[k]`` (every transition of the model).  The counts (``n_risk``,
+    ``n_event``, ``n_censor``: time x state; ``n_transition``: time x the observed
+    transitions of ``transitions``) are the Aalen-Johansen ones of the data, as are
+    ``n``, ``n_id`` and ``p0`` (one entry or row per stratum).  Strata stack their
+    times, ``strata`` giving each block's length.  ``newdata`` holds the rows the curves
+    are for (or the group labels after ``aggregate``).  ``engine`` holds the counts and
+    time grid; it is dropped by a stratum or state subset, as is ``cumhaz`` by a state
+    subset (``oldstate`` then records the original states).
+    """
+
+    n: list[int]
+    time: list[float] = field(repr=False)
+    n_risk: list[list[float]] = field(repr=False)
+    n_event: list[list[float]] = field(repr=False)
+    n_censor: list[list[float]] = field(repr=False)
+    n_transition: list[list[float]] | None = field(repr=False)
+    n_id: list[int]
+    pstate: NDArray[np.float64] = field(repr=False, compare=False)
+    cumhaz: NDArray[np.float64] | None = field(repr=False, compare=False)
+    cumhaz_names: list[str]
+    p0: list[list[float]] = field(repr=False)
+    states: list[str]
+    transitions: NamedMatrix | None
+    type: str
+    t0: float
+    start_time: float | None
+    strata: dict[str, int] | None
+    newdata: dict[str, list[Any]] | None = field(repr=False)
+    stype: int = 2
+    ctype: int = 1
+    time0: bool = False
+    oldstate: tuple[str, ...] | None = None
+    engine: _core.SurvfitAJResult | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def strata_names(self) -> list[str]:
+        return list(self.strata) if self.strata else []
+
+    @property
+    def dim(self) -> dict[str, int]:
+        """R's ``dim(fit)``: the strata (when stratified), newdata rows and states."""
+
+        dims = {"strata": len(self.strata)} if self.strata else {}
+        dims["data"] = int(self.pstate.shape[1])
+        dims["states"] = len(self.states)
+        return dims
+
+
+@dataclass(frozen=True)
+class SummarySurvfitCoxmsResult:
+    """R's ``summary.survfitms`` of a :class:`CoxSurvfitMultiStateResult`: the curves at
+    their event times (or at ``times``), ``pstate``/``cumhaz`` arrays of shape (time,
+    newdata row, state/transition), and ``survmean2``'s table (one row per stratum,
+    newdata row and state, the stratum varying fastest)."""
+
+    time: list[float]
+    n_risk: list[list[float]]
+    n_event: list[list[float]]
+    n_censor: list[list[float]]
+    n_transition: list[list[float]] | None
+    pstate: NDArray[np.float64] = field(repr=False, compare=False)
+    cumhaz: NDArray[np.float64] | None = field(repr=False, compare=False)
+    strata: list[str] | None
+    table: NamedMatrix
+    rmean_endtime: list[float] | None
+    states: list[str]
+    newdata: dict[str, list[Any]] | None = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -845,7 +998,7 @@ class SummarySurvfitResult:
     n_risk: list[float] | list[list[float]]
     n_event: list[float] | list[list[float]]
     n_censor: list[float] | list[list[float]]
-    surv: list[float] | None
+    surv: list[float] | list[list[float]] | None
     cumhaz: list[float] | list[list[float]]
     strata: list[str] | None
     table: NamedMatrix
@@ -865,11 +1018,12 @@ class SummarySurvfitResult:
 
 @dataclass(frozen=True)
 class NamedMatrix:
-    """An R matrix with dimnames: ``summary(fit)$table``, ``fit$transitions``."""
+    """An R matrix with dimnames: ``summary(fit)$table``, ``fit$transitions``, a
+    multi-state fit's ``cmap``."""
 
     rownames: list[str] | None
     colnames: list[str]
-    values: list[list[float]]
+    values: list[list[float]] | list[list[int]]
 
 
 @dataclass(frozen=True)
@@ -922,18 +1076,6 @@ class SurvDiffResult:
 
 
 SurvfitConfidenceIntervalResult = _core.ConfidenceBands
-# R has one ``survfit`` class for Kaplan-Meier and Turnbull curves; the old name stays for callers.
-TurnbullSurvfitResult = SurvfitResult
-
-
-def _cox_beta(fit: Any) -> list[float]:
-    coefficients = getattr(fit, "coefficients", None)
-    if coefficients is None:
-        raise TypeError("model does not expose fitted coefficients")
-    values = list(coefficients)
-    if values and isinstance(values[0], list | tuple):
-        return [float(value) for value in values[0]]
-    return [float(value) for value in values]
 
 
 # ---------------------------------------------------------------------------
@@ -1035,11 +1177,16 @@ class StateFigResult:
 
 @dataclass(frozen=True)
 class YatesResult:
-    """R's ``yates`` object (population marginal means on the linear predictor scale).
+    """R's ``yates`` object (population marginal means).
 
     ``estimate`` is R's data frame: one column per tested variable listing its levels, then
-    ``pmm`` and ``std``.  ``test`` rows carry R's row names (``global``, ``1 vs 2``, ...).
-    ``cmat`` is the population-averaged design over the coefficient columns ``cmat_names``.
+    ``pmm`` and ``std`` (``pmm`` is NaN for a level the fit cannot estimate).  ``test`` rows
+    carry R's row names (``global``, ``1 vs 2``, ...; ``chisq`` NaN and ``df`` None for R's
+    NA).  ``cmat`` is the population-averaged design over the coefficient columns
+    ``cmat_names`` (empty for a simulated prediction or when no level is estimable).
+    ``summary`` holds the simulated curves of ``predict="survival"``: the baseline
+    ``survfit`` object with one column of ``surv``, ``cumhaz``, ``std_err``, ``lower`` and
+    ``upper`` per level.
     """
 
     estimate: dict[str, list[Any]]
@@ -1047,6 +1194,7 @@ class YatesResult:
     mvar: list[list[float]]
     cmat: list[list[float]]
     cmat_names: list[str]
+    summary: CoxSurvfitResult | None = None
 
 
 @dataclass(frozen=True)

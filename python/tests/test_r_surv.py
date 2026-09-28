@@ -203,29 +203,6 @@ def test_surv2_codes_states_and_repeated_option():
         r.Surv2([1, 2, 3], [1, 0])
 
 
-def test_surv2data_builds_counting_rows_and_initial_states():
-    # a two-subject multi-state timeline, rows deliberately out of order
-    result = r.Surv2data(
-        time=[0, 5, 9, 0, 3],
-        status=[1, 2, 0, 1, 2],
-        states=["well", "ill"],
-        id=[1, 1, 1, 2, 2],
-    )
-    assert result.type == "mcounting"
-    assert result.row == [0, 1, 3]
-    assert result.start == [0.0, 5.0, 0.0]
-    assert result.stop == [5.0, 9.0, 3.0]
-    assert result.status == [2, 0, 2]
-    assert result.istate == [1, 2, 1]
-    assert result.states == ["well", "ill"]
-    single = r.Surv2data(time=[0, 5, 0, 3], status=[0, 1, 0, 0], id=[1, 1, 2, 2])
-    assert single.type == "right"
-    assert single.istate is None
-    with pytest.raises(ValueError, match="id and time cannot be missing"):
-        r.Surv2data(time=[0, None], status=[0, 1], id=[1, 1])
-    assert r.fromtimeline([0, 5], [0, 1], id=[1, 1]).stop == [5.0]
-
-
 def test_totimeline_expands_counting_rows_like_r_draft():
     result = r.totimeline(
         [0, 3, 0],

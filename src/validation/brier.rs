@@ -8,8 +8,9 @@
 //! distribution and the weighting are computed here.  The Python entry
 //! point lives in `pybridge::brier`.
 
-use crate::data_prep::aeq_surv;
+use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::step::step_at;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::surv_analysis::{HazardType, SurvType, SurvfitKMData, SurvfitKMOptions, survfitkm};
 use pyo3::prelude::*;
@@ -31,8 +32,9 @@ pub struct BrierInput<'a> {
     /// null curve, is chosen by the caller since `phat` must match).
     pub times: &'a [f64],
     /// Model predicted probability of an event by each evaluation time:
-    /// `phat[i][j]` for time `i`, subject `j` (R's `p1`).
-    pub phat: &'a [Vec<f64>],
+    /// `phat[i][j]` for time `i`, subject `j` (R's `p1`); it becomes the
+    /// result's `phat`.
+    pub phat: Vec<Vec<f64>>,
     /// Move censorings just after tied events before estimating the
     /// censoring distribution (R `ties`).
     pub ties: bool,
@@ -57,13 +59,6 @@ pub struct BrierResult {
     pub phat: Vec<Vec<f64>>,
     /// Effective sample size `1 / sum(w^2)` at each time.
     pub eff_n: Vec<f64>,
-}
-
-/// Value of a right-continuous step function at `at`: `1` before the
-/// first step (`summary.survfit(extend = TRUE)` before any event).
-fn step_value_at(times: &[f64], values: &[f64], at: f64) -> f64 {
-    let index = times.partition_point(|&time| time <= at);
-    if index == 0 { 1.0 } else { values[index - 1] }
 }
 
 /// `survfit(Surv(time, status) ~ 1, weights, se.fit = FALSE)`: the
@@ -130,19 +125,13 @@ fn validate(input: &BrierInput<'_>) -> SurvivalResult<()> {
 
 /// Brier score, its null-model counterpart and the resulting R-squared at
 /// each evaluation time.
-pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
-    validate(input)?;
+pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
+    validate(&input)?;
     let n = input.time.len();
-    let (start, time): (Option<Vec<f64>>, Vec<f64>) = match (input.timefix, input.start) {
-        (false, start) => (start.map(<[f64]>::to_vec), input.time.to_vec()),
-        (true, None) => (None, aeq_surv(input.time, None, None)?.time),
-        (true, Some(start)) => {
-            let fixed = aeq_surv(start, Some(input.time), None)?;
-            let stop = fixed
-                .time2
-                .ok_or_else(|| SurvivalError::computation("aeqSurv dropped the stop times"))?;
-            (Some(fixed.time), stop)
-        }
+    let (start, time) = if input.timefix {
+        aeq_counting(input.start, input.time)?
+    } else {
+        (input.start.map(<[f64]>::to_vec), input.time.to_vec())
     };
     let status: Vec<f64> = input.status.iter().map(|&s| f64::from(s)).collect();
     let weights: Vec<f64> = input.weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
@@ -158,7 +147,7 @@ pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
     let p0: Vec<f64> = input
         .times
         .iter()
-        .map(|&at| 1.0 - step_value_at(&null_time, &null_surv, at))
+        .map(|&at| 1.0 - step_at(&null_time, &null_surv, at, 1.0))
         .collect();
 
     // Censoring distribution, with censorings nudged past tied events.
@@ -193,7 +182,7 @@ pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
             let weight = if dtime < at && status[j] == 0.0 {
                 0.0
             } else {
-                case_weight[j] / step_value_at(&censor_time, &censor_surv, dtime.min(at))
+                case_weight[j] / step_at(&censor_time, &censor_surv, dtime.min(at), 1.0)
             };
             let (b0, b1) = if dtime > at {
                 (p0[i] * p0[i], input.phat[i][j] * input.phat[i][j])
@@ -233,7 +222,7 @@ pub fn brier(input: &BrierInput<'_>) -> SurvivalResult<BrierResult> {
         brier,
         rsquared,
         p0,
-        phat: input.phat.to_vec(),
+        phat: input.phat,
         eff_n,
     })
 }
@@ -246,14 +235,13 @@ mod tests {
     fn matches_a_hand_calculation() {
         // Two subjects, no censoring: the censoring curve stays at 1 and the
         // weights are the normalised case weights.
-        let phat = vec![vec![0.2, 0.6]];
-        let result = brier(&BrierInput {
+        let result = brier(BrierInput {
             start: None,
             time: &[1.0, 3.0],
             status: &[1, 1],
             weights: None,
             times: &[2.0],
-            phat: &phat,
+            phat: vec![vec![0.2, 0.6]],
             ties: true,
             efron: false,
             timefix: true,
@@ -273,14 +261,13 @@ mod tests {
     fn censoring_weights_follow_the_ipcw_rule() {
         // Subject 2 censored at 2 (shifted to 2.5) gets weight zero at time
         // 3; the others are reweighted by the censoring survival.
-        let phat = vec![vec![0.3, 0.3, 0.3]];
-        let result = brier(&BrierInput {
+        let result = brier(BrierInput {
             start: None,
             time: &[1.0, 2.0, 4.0],
             status: &[1, 0, 1],
             weights: None,
             times: &[3.0],
-            phat: &phat,
+            phat: vec![vec![0.3; 3]],
             ties: true,
             efron: false,
             timefix: true,
@@ -296,26 +283,25 @@ mod tests {
 
     #[test]
     fn efron_null_model_uses_the_corrected_hazard() {
-        let phat = vec![vec![0.5; 3]];
-        let km = brier(&BrierInput {
+        let km = brier(BrierInput {
             start: None,
             time: &[1.0, 1.0, 2.0],
             status: &[1, 1, 0],
             weights: None,
             times: &[1.5],
-            phat: &phat,
+            phat: vec![vec![0.5; 3]],
             ties: true,
             efron: false,
             timefix: true,
         })
         .unwrap();
-        let efron = brier(&BrierInput {
+        let efron = brier(BrierInput {
             start: None,
             time: &[1.0, 1.0, 2.0],
             status: &[1, 1, 0],
             weights: None,
             times: &[1.5],
-            phat: &phat,
+            phat: vec![vec![0.5; 3]],
             ties: true,
             efron: true,
             timefix: true,
@@ -328,13 +314,13 @@ mod tests {
 
     #[test]
     fn shapes_are_validated() {
-        let bad = brier(&BrierInput {
+        let bad = brier(BrierInput {
             start: None,
             time: &[1.0, 2.0],
             status: &[1, 0],
             weights: None,
             times: &[1.0, 2.0],
-            phat: &[vec![0.1, 0.2], vec![0.3]],
+            phat: vec![vec![0.1, 0.2], vec![0.3]],
             ties: true,
             efron: false,
             timefix: true,

@@ -1,19 +1,23 @@
-"""``Surv``/``Surv2`` responses, ``strata``, and the timeline conversions.
+"""``Surv``/``Surv2`` responses, ``strata``/``cluster``, and the timeline conversions.
 
-Ports of ``R/Surv.R``, ``R/Surv2.R``, ``R/strata.R`` and the data side of
-``R/fromtimeline.R``: the Python layer builds the response columns the way R's
+Ports of ``R/Surv.R``, ``R/Surv2.R``, ``R/strata.R``, ``R/cluster.R`` and ``totimeline``
+of ``R/fromtimeline.R``: the Python layer builds the response columns the way R's
 ``Surv`` does (status coding, ``origin``, the ``interval2`` to ``interval``
-conversion, multi-state factors) and hands every kernel (``strata``,
-``surv2counting``, ``totimeline``) R's inputs.
+conversion, multi-state factors) and hands every kernel (``strata``, ``totimeline``)
+R's inputs.  The ``Surv2`` formulas of the model functions and ``fromtimeline`` are
+converted in :mod:`survival.r._formula`.
 """
 
 from __future__ import annotations
 
+import copy
 import math
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar, cast
+
+import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
@@ -31,10 +35,11 @@ from ._coerce import (
     _materialize_labels,
     _missing_row_indices,
     _normalize_na_action,
+    _numeric_ndarray,
     _r_format_numbers,
     _subset_sequence,
 )
-from ._types import _MISSING, StrataFactor, Surv2Data, Timeline
+from ._types import _MISSING, StrataFactor, Timeline
 
 # ---------------------------------------------------------------------------
 # Surv
@@ -79,6 +84,11 @@ def _ordered_named_response_arguments(named_arguments: dict[str, Any]) -> list[A
 def _time_column(values: Any, name: str, message: str) -> list[float]:
     """A numeric time column with ``NaN`` for missing values."""
 
+    array = _numeric_ndarray(values)
+    if array is not None:
+        if array.dtype.kind == "b":
+            raise ValueError(message)
+        return array.astype(np.float64).tolist()
     result: list[float] = []
     for value in _materialize_1d(values, name):
         if _is_missing_value(value):
@@ -96,6 +106,23 @@ def _time_column(values: Any, name: str, message: str) -> list[float]:
 def _binary_status(values: Any, name: str) -> list[int | None]:
     """R's status coding for right/left/counting data: logical, 0/1 or 1/2."""
 
+    array = _numeric_ndarray(values)
+    if array is not None:
+        if array.dtype.kind == "b":
+            return array.astype(np.int64).tolist()
+        coded = array.astype(np.float64)
+        present = ~np.isnan(coded)
+        if present.any() and coded[present].max() == 2.0:
+            coded = coded - 1.0
+        valid = (coded == 0.0) | (coded == 1.0)
+        codes: list[int | None] = np.where(valid, coded, 0.0).astype(np.int64).tolist()
+        if valid.all():
+            return codes
+        for row in np.flatnonzero(~valid).tolist():
+            codes[row] = None
+        if (present & ~valid).any():
+            warnings.warn("Invalid status value, converted to NA", stacklevel=3)
+        return codes
     raw = _materialize_1d(values, name)
     if all(_is_bool_like(value) or _is_missing_value(value) for value in raw):
         return [None if _is_missing_value(value) else int(bool(value)) for value in raw]
@@ -264,9 +291,10 @@ class Surv:
             if len(status) != nn:
                 raise ValueError("Time and status are different lengths")
             time2 = _interval_time2(time, args[1], status)
-        if start is not None:
-            start = [value - origin for value in start]
-        time = [value - origin for value in time]
+        if origin:
+            if start is not None:
+                start = [value - origin for value in start]
+            time = [value - origin for value in time]
         if time2 is not None:
             time2 = [
                 value - origin if code == 3 else 1.0
@@ -417,20 +445,24 @@ def is_surv(value: Any) -> bool:
     return isinstance(value, Surv)
 
 
+def _missing_rows(x: Surv | Surv2) -> np.ndarray:
+    """``is.na(x)`` as a boolean array: a missing entry in any column of the response."""
+
+    columns = (x.time, x.status) if isinstance(x, Surv2) else (x.start, x.time, x.time2, x.event)
+    missing = np.zeros(len(x), dtype=bool)
+    for column in columns:
+        if column is not None:
+            # float() of None is NaN here, so the status column's NA shows too
+            missing |= np.isnan(np.array(column, dtype=np.float64))
+    return missing
+
+
 def is_na_surv(x: Any) -> list[bool]:
     """R's ``is.na.Surv``/``is.na.Surv2``: rows with a missing entry in any column."""
 
-    if isinstance(x, Surv2):
-        return [
-            math.isnan(time) or status is None
-            for time, status in zip(x.time, x.status, strict=True)
-        ]
-    if not isinstance(x, Surv):
+    if not isinstance(x, Surv | Surv2):
         raise TypeError("argument is not a Surv object")
-    return [
-        any(value is None or (isinstance(value, float) and math.isnan(value)) for value in row)
-        for row in x.as_matrix()
-    ]
+    return _missing_rows(x).tolist()
 
 
 def _pad(labels: list[str]) -> list[str]:
@@ -510,11 +542,10 @@ def _apply_surv_na_action(
     action = _normalize_na_action(na_action)
     if action == "pass":
         return response, row_aligned
-    columns: list[tuple[str, Any]] = [("response", response.as_matrix())]
-    columns.extend((name, values) for name, values in row_aligned.items() if values is not None)
-    keep = _keep_rows_after_na_action(
-        _missing_row_indices(columns, len(response)), len(response), action, context
-    )
+    columns = [(name, values) for name, values in row_aligned.items() if values is not None]
+    missing = _missing_row_indices(columns, len(response))
+    missing.update(np.flatnonzero(_missing_rows(response)).tolist())
+    keep = _keep_rows_after_na_action(missing, len(response), action, context)
     if keep is None:
         return response, row_aligned
     filtered = {
@@ -550,7 +581,7 @@ def _survreg_response_arrays(
 
 
 # ---------------------------------------------------------------------------
-# strata
+# strata and cluster
 # ---------------------------------------------------------------------------
 
 
@@ -606,38 +637,87 @@ def strata(
         raise TypeError("sep must be a string")
     columns, names = _strata_arguments(variables)
     nterms = len(columns)
-    named = names is not None
+    if shortlabel is None and names is not None:
+        shortlabel = False
     if labels is not None:
         names = [str(label) for label in _materialize_1d(labels, "labels")]
         if len(names) != nterms:
             raise ValueError("labels must have one entry per strata variable")
-    if shortlabel is None:
-        shortlabel = not named and all(
-            _is_factor_like(column)
-            or all(
-                isinstance(value, str) or _is_missing_value(value)
-                for value in _materialize_labels(column, "strata")
-            )
-            for column in columns
-        )
     if names is None:
         names = [f"v{idx + 1}" for idx in range(nterms)]
-    lengths = {len(_materialize_labels(column, "strata")) for column in columns}
-    if len(lengths) > 1:
-        raise ValueError("all arguments must be the same length")
-    codes: list[list[int | None]] = []
-    levels: list[list[str]] = []
-    for column in columns:
-        column_codes, column_levels = _factor(column, "strata")
-        codes.append(column_codes)
-        levels.append(column_levels)
-    result = _core.strata(names, levels, codes, na_group, shortlabel, sep)
-    return StrataFactor(
-        codes=list(result.codes),
-        levels=list(result.levels),
-        labels=[None if code is None else result.levels[code] for code in result.codes],
-        counts=list(result.counts),
+    return _strata(
+        list(zip(names, columns, strict=True)), shortlabel=shortlabel, na_group=na_group, sep=sep
     )
+
+
+def _is_character(values: Any) -> bool:
+    """``is.character(x) | is.factor(x)``, with missing values allowed."""
+
+    if _is_factor_like(values):
+        return True
+    if _numeric_ndarray(values) is not None:
+        return False
+    return all(
+        isinstance(value, str) or _is_missing_value(value)
+        for value in _materialize_labels(values, "strata")
+    )
+
+
+def _strata(
+    columns: Sequence[tuple[str, Any]],
+    *,
+    shortlabel: bool | None = None,
+    na_group: bool = False,
+    sep: str = ", ",
+) -> StrataFactor:
+    """R's ``strata()`` (R/strata.R) of the named *columns*, each coded as ``factor()``
+    codes it (a factor keeps its declared levels, unused ones included, which the
+    ``format()`` padding of the labels counts).
+
+    ``shortlabel=None`` is R's default: bare levels when every column is character or
+    a factor.
+    """
+
+    names = [name for name, _values in columns]
+    coded = [_factor(values, "strata") for _name, values in columns]
+    if len({len(codes) for codes, _levels in coded}) > 1:
+        raise ValueError("all arguments must be the same length")
+    if shortlabel is None:
+        shortlabel = all(_is_character(values) for _name, values in columns)
+    result = _core.strata(
+        names,
+        [levels for _codes, levels in coded],
+        [codes for codes, _levels in coded],
+        na_group,
+        shortlabel,
+        sep,
+    )
+    codes = result.codes
+    levels = result.levels
+    return StrataFactor(
+        codes=codes,
+        levels=levels,
+        labels=[None if code is None else levels[code] for code in codes],
+        counts=result.counts,
+    )
+
+
+def _complete_codes(factor: StrataFactor, message: str) -> list[int]:
+    """The codes of *factor*, which a model needs without ``NA`` (*message* otherwise)."""
+
+    if None in factor.codes:
+        raise ValueError(message)
+    return cast(list[int], factor.codes)
+
+
+_T = TypeVar("_T")
+
+
+def cluster(x: _T) -> _T:
+    """R's ``cluster`` (R/cluster.R): the identity.  Its meaning comes from the model
+    formula, where ``cluster(id)`` names the groups of a robust variance."""
+
+    return x
 
 
 # ---------------------------------------------------------------------------
@@ -679,76 +759,23 @@ class Surv2:
     def __len__(self) -> int:
         return len(self.time)
 
+    def replace_times(self, *, time: Sequence[float]) -> Surv2:
+        """The same response with its time column replaced (``aeqSurv``)."""
+
+        result = copy.copy(self)
+        object.__setattr__(result, "time", tuple(time))
+        return result
+
 
 def _repeated_option(repeated: Any) -> str:
+    """R's ``repeated`` option (``FALSE``, ``TRUE`` or ``"first"``) as the
+    ``surv2counting`` kernel spells it."""
+
     if isinstance(repeated, str) and repeated.lower() == "first":
         return "first"
     if _is_bool_like(repeated):
         return "true" if repeated else "false"
     raise ValueError("invalid value for repeated option")
-
-
-def Surv2data(
-    time: Any,
-    status: Any,
-    *,
-    states: Any | None = None,
-    repeated: Any = False,
-    id: Any,
-) -> Surv2Data:
-    """The data side of R's ``surv2counting``: timeline rows to counting-process rows.
-
-    ``status`` holds R's integer codes (0 censored, otherwise the state number) and
-    ``states`` the state names of a multi-state timeline; the result's ``row`` gives
-    the input row each interval starts from.
-    """
-
-    time_values = _time_column(time, "time", "Time variable is not numeric")
-    status_values: list[int | None] = []
-    for value in _materialize_1d(status, "status"):
-        if _is_missing_value(value):
-            status_values.append(None)
-            continue
-        numeric = float(value)
-        if not math.isfinite(numeric) or not numeric.is_integer():
-            raise ValueError("Surv2 status values must be integer codes")
-        status_values.append(int(numeric))
-    id_values = _materialize_labels(id, "id")
-    if len(status_values) != len(time_values) or len(id_values) != len(time_values):
-        raise ValueError("id statement is required")
-    if any(_is_missing_value(value) for value in id_values) or any(
-        math.isnan(value) for value in time_values
-    ):
-        raise ValueError("id and time cannot be missing")
-    state_names = (
-        [] if states is None else [str(value) for value in _materialize_1d(states, "states")]
-    )
-    result = _core.surv2counting(
-        id_values, time_values, status_values, bool(state_names), _repeated_option(repeated)
-    )
-    kind = "counting" if result.counting else "right"
-    return Surv2Data(
-        row=list(result.row),
-        start=list(result.tstart),
-        stop=list(result.tstop),
-        status=list(result.status),
-        istate=None if result.istate is None else list(result.istate),
-        states=state_names,
-        type=f"m{kind}" if state_names else kind,
-    )
-
-
-def fromtimeline(
-    time: Any,
-    status: Any,
-    *,
-    id: Any,
-    states: Any | None = None,
-    repeated: Any = False,
-) -> Surv2Data:
-    """R's ``fromtimeline`` data side: :func:`Surv2data` under its exported name."""
-
-    return Surv2data(time, status, states=states, repeated=repeated, id=id)
 
 
 def totimeline(

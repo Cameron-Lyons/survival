@@ -70,10 +70,14 @@ def test_typed_inputs_validate_and_expose_their_fields():
         core.SurvivalData([1.0], [1, 0])
     with pytest.raises(ValueError, match="non-finite"):
         core.SurvivalData([float("nan")], [1])
-    with pytest.raises(ValueError, match="status values must be 0 or 1"):
+    with pytest.raises(ValueError, match="status must contain only 0/1 values"):
         core.coxcount1(core.SurvivalData([1.0], [2]))
-    with pytest.raises(ValueError, match="stop 1 is before start 2"):
-        core.coxcount2(core.CountingProcessData([2.0], [1.0], [1]))
+    # R: Surv(c(0, 0, 2, 0), c(1, 2, 2, 3), c(1, 1, 1, 0)) warns "Stop time
+    # must be > start time, NA created" for the zero-length third interval
+    with pytest.raises(ValueError, match=r"Stop time must be > start time \(row 0: 2 >= 1\)"):
+        core.CountingProcessData([2.0], [1.0], [1])
+    with pytest.raises(ValueError, match=r"Stop time must be > start time \(row 2: 2 >= 2\)"):
+        core.CountingProcessData([0.0, 0.0, 2.0, 0.0], [1.0, 2.0, 2.0, 3.0], [1, 1, 1, 0])
     with pytest.raises(ValueError, match="non-finite"):
         core.CovariateMatrix([1.0, float("nan")], 2, 1)
 
@@ -309,15 +313,3 @@ def test_pspline_basis_matches_r_spline_des():
     )
     assert result.basis[9][1:] == pytest.approx([0, 0, 0, 1 / 6, 0.66666666666666663, 1 / 6])
     assert all(sum(row) == pytest.approx(1.0) for row in result.basis)
-
-
-def test_norisk_validates_public_inputs():
-    with pytest.raises(ValueError, match="strata values must be strictly increasing"):
-        survival.surv_analysis.norisk(
-            [0.0, 1.0, 2.0],
-            [1.0, 2.0, 3.0],
-            [1, 0, 1],
-            [0, 1, 2],
-            [0, 1, 2],
-            [2, 1],
-        )

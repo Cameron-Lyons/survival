@@ -8,7 +8,6 @@ times) and the per-stratum split (the ``finegray`` kernel).
 from __future__ import annotations
 
 import math
-import re
 import warnings
 from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
@@ -23,8 +22,9 @@ from ._coerce import (
     _pop_dotted_keyword,
 )
 from ._data_prep import aeqSurv
-from ._formula import _column, _model_variables, model_frame
-from ._surv import Surv, strata
+from ._formula import _model_variables, _strata_keep, _strata_term_columns, model_frame
+from ._names import _make_names
+from ._surv import Surv, _complete_codes
 from ._types import FineGrayFrame, ModelFrame
 
 
@@ -49,16 +49,13 @@ def _censoring_curves(
         se_fit=False,
         timefix=False,
     )
-    counts = fit.strata or [len(fit.time)]
+    times, survs, events = fit.time, fit.surv, fit.n_event
     curves: list[_CensoringCurve] = []
     offset = 0
-    for count in counts:
-        rows = range(offset, offset + count)
+    for count in fit.strata or [len(times)]:
+        rows = [row for row in range(offset, offset + count) if events[row] > 0]
         curves.append(
-            _CensoringCurve(
-                time=[fit.time[row] for row in rows if fit.n_event[row] > 0],
-                surv=[fit.surv[row] for row in rows if fit.n_event[row] > 0],
-            )
+            _CensoringCurve(time=[times[row] for row in rows], surv=[survs[row] for row in rows])
         )
         offset += count
     return curves
@@ -102,35 +99,6 @@ def _subject_layout(
     return first, last, delay
 
 
-def _make_names(value: str) -> str:
-    """R's ``make.names`` for one name."""
-
-    name = re.sub(r"[^A-Za-z0-9._]", ".", value)
-    if not name or not (name[0].isalpha() or (name[0] == "." and not name[1:2].isdigit())):
-        name = f"X{name}"
-    reserved = {
-        "if",
-        "else",
-        "repeat",
-        "while",
-        "function",
-        "for",
-        "next",
-        "break",
-        "TRUE",
-        "FALSE",
-        "NULL",
-        "Inf",
-        "NaN",
-        "NA",
-        "NA_integer_",
-        "NA_real_",
-        "NA_character_",
-        "NA_complex_",
-    }
-    return f"{name}." if name in reserved else name
-
-
 def _etype_index(states: Sequence[str], etype: Any) -> int:
     """R's ``match(etype, states)[1]`` (one-based) with its checks and warning."""
 
@@ -166,14 +134,8 @@ def _finegray_inputs(mf: ModelFrame, timefix: bool) -> tuple[Surv, list[int], li
     if mf.terms.clusters:
         raise ValueError("a cluster() term is not valid")
     if mf.terms.strata:
-        factor = strata(
-            *[_column(mf.data, column) for column in mf.terms.strata],
-            labels=list(mf.terms.strata),
-            shortlabel=True,
-        )
-        if any(code is None for code in factor.codes):
-            raise ValueError("strata must not contain missing values")
-        istrat = [int(code) for code in factor.codes if code is not None]
+        factor = _strata_keep(mf.data, _strata_term_columns(mf.terms))
+        istrat = _complete_codes(factor, "strata must not contain missing values")
     else:
         istrat = [0] * mf.n
     weights = (
@@ -336,3 +298,15 @@ def finegray(
     if not columns[output_names[0]]:
         raise ValueError("selected endpoint has no events")
     return FineGrayFrame(columns, event=response.states[enum - 1])
+
+
+def _finegray_frame(result: _core.FineGrayOutput) -> dict[str, list[Any]]:
+    """``as_data_frame`` of a raw ``FineGrayOutput``."""
+
+    return {
+        "row": [int(value) for value in result.row],
+        "start": [float(value) for value in result.start],
+        "end": [float(value) for value in result.end],
+        "wt": [float(value) for value in result.wt],
+        "add": [int(value) for value in result.add],
+    }

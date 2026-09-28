@@ -229,13 +229,22 @@ def test_coxph_formula_terms(ovarian):
     # istate is only a multi-state matter; an ordinary fit keeps it in the model frame
     with_istate = r.coxph("Surv(futime, fustat) ~ age", ovarian, istate="rx", model=True)
     assert "(istate)" in with_istate.model
+    # a factor status is a multi-state response, which needs an id
     mstate = {
-        "time": [1.0, 2.0, 3.0, 4.0],
-        "status": r._coerce._RFactorVector(["a", "censor", "b", "a"], ["censor", "a", "b"]),
-        "trt": [0, 1, 0, 1],
+        "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "status": r._coerce._RFactorVector(
+            ["a", "censor", "b", "a", "b", "censor"], ["censor", "a", "b"]
+        ),
+        "trt": [0, 1, 0, 1, 1, 0],
+        "id": [1, 2, 3, 4, 5, 6],
     }
-    with pytest.raises(NotImplementedError, match="multi-state"):
+    with pytest.raises(ValueError, match="an id statement is required for multi-state models"):
         r.coxph("Surv(time, status) ~ trt", mstate)
+    multistate = r.coxph("Surv(time, status) ~ trt", mstate, id="id")
+    assert isinstance(multistate, r.CoxphmsModel)
+    assert multistate.coef_names == ("trt_1:2", "trt_1:3")
+    assert multistate.coefficients == approx([-0.346573590279973, 0.0])
+    assert multistate.loglik == approx([-4.969813299576, -4.94080100438703])
 
 
 def test_coxph_time_transform(ovarian):
@@ -477,12 +486,12 @@ def test_residual_types_match_r(fit):
         ],
         rel=1e-6,
     )
-    schoenfeld = r.residuals(fit, type="schoenfeld")
+    schoenfeld = r.residuals(fit, type="schoenfeld").values
     assert len(schoenfeld) == 12
     assert schoenfeld[:2] == approx(
         [[2.53760917080791, -0.133071598306384], [5.26306163081291, -0.162634638101886]]
     )
-    assert r.residuals(fit, type="scaledsch")[:2] == approx(
+    assert r.residuals(fit, type="scaledsch").values[:2] == approx(
         [[0.204673860321303, -1.29886912474649], [0.272655444767498, -1.28697466616326]],
         rel=1e-6,
     )
@@ -561,8 +570,10 @@ def test_survfit_coxph_matches_r(fit):
     )
     with pytest.raises(ValueError, match="stype must be 1 or 2"):
         r.survfit(fit, stype=3)
-    with pytest.raises(NotImplementedError, match="start.time"):
-        r.survfit(fit, start_time=100)
+    later = r.survfit(fit, start_time=400)
+    assert (later.n, later.time[:3], later.start_time) == ([18], [421.0, 431.0, 448.0], 400.0)
+    assert later.surv[:3] == approx([1.0, 0.938478074087395, 0.938478074087395])
+    assert later.std_err[:3] == approx([0.0, 0.0638850782003953, 0.0638850782003953])
 
 
 def test_survfit_strata_and_newdata_blocks(strata_fit):

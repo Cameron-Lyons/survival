@@ -9,17 +9,15 @@ from __future__ import annotations
 
 from . import r as _r
 from .r import *  # noqa: F403
-from .r import (  # noqa: F401
-    ConcordanceResult,
-    predict_terms_constant,
-)
 from .r._coerce import _r_factor  # noqa: F401
 from .r._coxph import _cox_fit_diagnostic_messages  # noqa: F401
-from .r._misc import _frailty_encoding  # noqa: F401
+from .r._misc import _frailty_encoding, _survcheck_codes  # noqa: F401
 from .r._models import (  # noqa: F401
+    _subset_coxms_curves,
     _subset_survfit_multistate,
     _survfit_multistate_structure,
     _survfit_strata_curves,
 )
+from .r._survreg import survreg_vcov_names as _survreg_vcov_names  # noqa: F401
 
 __all__ = _r.__all__

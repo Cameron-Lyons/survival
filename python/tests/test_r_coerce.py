@@ -1,4 +1,4 @@
-"""The shared coercion helpers: R's ``as.character``/``format``/``factor`` and the timefix path."""
+"""The shared coercion helpers: R's ``as.character``/``format``/``factor``."""
 
 import importlib
 import math
@@ -67,8 +67,10 @@ def test_bool_options_accept_numpy_bools_and_reject_truthiness():
 
 
 def test_na_action_accepts_r_style_names_and_rejects_non_strings():
-    for name in ("na.omit", " na.exclude ", "omit", "exclude"):
+    for name in ("na.omit", "omit"):
         assert r_coerce._normalize_na_action(name) == "omit"
+    for name in (" na.exclude ", "exclude"):
+        assert r_coerce._normalize_na_action(name) == "exclude"
     assert r_coerce._normalize_na_action("na.fail") == "fail"
     assert r_coerce._normalize_na_action(None) == "pass"
     assert r_coerce._normalize_na_action("na.pass") == "pass"
@@ -129,16 +131,3 @@ def test_factor_levels_follow_r_sort_order_and_declared_categories():
     assert (codes, labels) == ([1, None, 0, 1], ["1", "2"])
     with pytest.raises(ValueError, match="outside the declared categories"):
         r_coerce._factor(r_coerce._RFactorVector(["q"], ["a"]))
-
-
-def test_timefix_helpers_route_through_aeq_surv():
-    assert r_coerce._aeq_times([1, 1 + 1e-14, 2]) == ([1.0, 1.0, 2.0],)
-    start, stop = r_coerce._aeq_times([0, 1e-14, 1], [1, 1 + 1e-14, 2])
-    assert (start, stop) == ([0.0, 0.0, 1.0], [1.0, 1.0, 2.0])
-    assert r_coerce._survdiff_timefix_values([1, 1 + 1e-14], True) == [1.0, 1.0]
-    assert r_coerce._survdiff_timefix_values([1, 1 + 1e-14], False) == [1, 1 + 1e-14]
-    assert r_coerce._timefix_vectors([0, 1e-14], [1, 2]) == ([0.0, 0.0], [1.0, 2.0])
-    with pytest.raises(ValueError, match="effective length 0"):
-        r_coerce._aeq_times([0, 1], [1, 1 + 1e-14])
-    with pytest.raises(ValueError, match="one or two time columns"):
-        r_coerce._aeq_times([1], [2], [3])

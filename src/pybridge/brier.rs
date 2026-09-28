@@ -24,13 +24,13 @@ pub(crate) fn brier_py(
     start: Option<Vec<f64>>,
 ) -> PyResult<BrierResult> {
     Ok(py.detach(|| {
-        brier(&BrierInput {
+        brier(BrierInput {
             start: start.as_deref(),
             time: &time,
             status: &status,
             weights: weights.as_deref(),
             times: &times,
-            phat: &phat,
+            phat,
             ties,
             efron,
             timefix,

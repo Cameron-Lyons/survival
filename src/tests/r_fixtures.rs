@@ -21,7 +21,8 @@
 //! for its removal, so the list is a strict burndown.
 #![cfg(test)]
 
-use crate::regression::cch::{CchFitResult, cch_borgan_fit, cch_fit};
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::regression::cch::{CchFitResult, cch, cch_borgan};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::cox_zph::{CoxZphTest, ZphTransform, cox_zph};
 use crate::regression::coxpenal::{
@@ -32,20 +33,19 @@ use crate::regression::coxph::{
     PredictReference, SurvfitOptions,
 };
 use crate::regression::coxph_detail::coxph_detail;
-use crate::regression::coxph_diagnostics::{ResidualType, Residuals};
+use crate::regression::coxph_diagnostics::{CoxResidualType, Residuals};
 use crate::regression::coxph_wtest::coxph_wtest_py;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_predict::SurvregNewdata;
 use crate::surv_analysis::{
     AggregateFun, AggregateGroups, ConfLower, ConfType, GroupingFactor, HazardType,
-    InfluenceRequest, ResidualType as PseudoResidualType, RmeanOption, SurvDiffResult, SurvType,
-    SurvdiffData, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, SurvfitKMData,
-    SurvfitKMOptions, SurvfitKMResult, SurvfitQuantiles, SurvmeanTable, aggregate_survfit, pseudo,
-    pseudo_aj, quantile_survfit, summary_survfit, summary_survfit_times, survdiff,
-    survdiff_one_sample, survfit0, survfit0_aj, survfitaj, survfitkm, survfitresid,
-    survfitresid_aj, survmean,
+    InfluenceRequest, PseudoResidualType, RmeanOption, SurvDiffResult, SurvType, SurvdiffData,
+    SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, SurvfitKMData, SurvfitKMOptions,
+    SurvfitKMResult, SurvfitQuantiles, SurvmeanTable, aggregate_survfit, pseudo, pseudo_aj,
+    quantile_survfit, summary_survfit, summary_survfit_times, survdiff, survdiff_one_sample,
+    survfit0, survfit0_aj, survfitaj, survfitkm, survfitresid, survfitresid_aj, survmean,
 };
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Axis};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -61,14 +61,6 @@ const RTOL_VAR: f64 = 1e-6;
 /// Burndown list: `topic/case/aspect` (or `topic/case` for every aspect of a
 /// case) -> reason.  A listed entry that passes fails the run.
 const KNOWN_FAILURES: &[(&str, &str)] = &[
-    (
-        "concordance/coxph_survreg_fits/both.concordance",
-        "missing feature: concordance of several fits at once (the joint variance)",
-    ),
-    (
-        "concordance/coxph_survreg_fits/survreg.concordance",
-        "missing feature: concordance of a survreg fit",
-    ),
     (
         "coxph/lung_age_sex_cluster_inst/concordance",
         "mismatch: tied linear predictors decided by floating-point noise: cvar[0]: 0.00069155 != 0.00069155",
@@ -1975,8 +1967,9 @@ fn check_aj_influence(fit: &SurvfitAJResult, expected: &Value) -> Result<(), Str
         let expected_layer = matrix(layer)?;
         let actual: Vec<Vec<f64>> = influence
             .values
-            .iter()
-            .map(|by_time| by_time.iter().map(|row| row[state]).collect())
+            .index_axis(Axis(2), state)
+            .outer_iter()
+            .map(|subject| subject.to_vec())
             .collect();
         assert_matrix(
             &actual,
@@ -2245,9 +2238,17 @@ fn r_fixtures_pseudo() {
                             let kind =
                                 PseudoResidualType::parse(kind).map_err(|err| err.to_string())?;
                             let values = if prefix == "pseudo" {
-                                pseudo(&data, &options, &times, kind, true)
+                                pseudo(&data, &options, &times, kind, options.stype, true)
                             } else {
-                                survfitresid(&data, &options, &times, kind, false, false)
+                                survfitresid(
+                                    &data,
+                                    &options,
+                                    &times,
+                                    kind,
+                                    options.stype,
+                                    false,
+                                    false,
+                                )
                             }
                             .map_err(|err| format!("{aspect}: {err}"))?;
                             check_pseudo_matrix(&values.values, &expected[aspect], aspect)
@@ -2695,11 +2696,16 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             }
             Ok(())
         }
-        "var" => assert_matrix(&fit.var_rows(), &matrix(&expected["var"])?, RTOL_VAR, "var"),
+        "var" => assert_matrix(
+            &matrix_rows(&fit.var),
+            &matrix(&expected["var"])?,
+            RTOL_VAR,
+            "var",
+        ),
         "naive_var" => match (&fit.naive_var, expected["naive_var"].is_null()) {
             (None, true) => Ok(()),
             (Some(naive), false) => assert_matrix(
-                &naive.outer_iter().map(|r| r.to_vec()).collect::<Vec<_>>(),
+                &matrix_rows(naive),
                 &matrix(&expected["naive_var"])?,
                 RTOL_VAR,
                 "naive_var",
@@ -2762,7 +2768,9 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             if is_r_error(expected) {
                 return Ok(());
             }
-            let actual = residual_vector(fit, ResidualType::Deviance)?;
+            let actual = fit
+                .deviance_residuals(false, None)
+                .map_err(|err| format!("{err}"))?;
             assert_vec(&actual, &nums(expected)?, RTOL_COEF, "deviance")
         }
         "concordance" => {
@@ -2775,17 +2783,21 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
             if cox.cluster_from_id {
                 let unclustered =
                     linear_predictor_concordance(fit, crate::concordance::TimeWeight::N, None)?;
-                return check_fitted_concordance(&unclustered, expected);
+                return check_fitted_concordance(&unclustered, &[], expected);
             }
-            check_fitted_concordance(&fit.concordance, expected)
+            check_fitted_concordance(&fit.concordance, &[], expected)
         }
         "wtest" => {
             let expected = &expected["wtest"];
             if is_r_error(expected) || expected.is_null() {
                 return Ok(());
             }
-            let wtest = coxph_wtest_py(fit.var_rows(), vec![fit.coefficients_or_zero()], 1e-9)
-                .map_err(|err| format!("{err:?}"))?;
+            let wtest = coxph_wtest_py(
+                matrix_rows(&fit.var),
+                vec![fit.coefficients_or_zero()],
+                1e-9,
+            )
+            .map_err(|err| format!("{err:?}"))?;
             let expected_test = match num(&expected["test"]) {
                 Ok(value) => value,
                 Err(_) => matrix(&expected["test"])?[0][0],
@@ -2804,27 +2816,13 @@ fn check_cox_aspect(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(),
     }
 }
 
-impl CoxPHFit {
-    fn var_rows(&self) -> Vec<Vec<f64>> {
-        self.var.outer_iter().map(|row| row.to_vec()).collect()
-    }
-}
-
-fn residual_vector(fit: &CoxPHFit, kind: ResidualType) -> Result<Vec<f64>, String> {
-    match fit.residuals(kind, None, None, None) {
-        Ok(Residuals::Vector(values)) => Ok(values),
-        Ok(Residuals::Matrix(_)) => Err("expected a residual vector".to_string()),
-        Err(err) => Err(format!("{err}")),
-    }
-}
-
 fn residual_matrix(
     fit: &CoxPHFit,
-    kind: ResidualType,
+    kind: CoxResidualType,
     assign: &[Vec<usize>],
 ) -> Result<Vec<Vec<f64>>, String> {
     match fit.residuals(kind, None, None, Some(assign)) {
-        Ok(Residuals::Matrix(values)) => Ok(values.outer_iter().map(|r| r.to_vec()).collect()),
+        Ok(Residuals::Matrix(values)) => Ok(matrix_rows(&values)),
         Ok(Residuals::Vector(_)) => Err("expected a residual matrix".to_string()),
         Err(err) => Err(format!("{err}")),
     }
@@ -2962,7 +2960,7 @@ fn check_detail(cox: &CoxCase, expected: &Value, aspect: &str) -> Result<(), Str
 fn check_zph(cox: &CoxCase, expected: &Value, transform: &str, terms: bool) -> Result<(), String> {
     let zph = cox_zph(
         &cox.fit,
-        ZphTransform::parse(transform).map_err(|err| format!("{err}"))?,
+        &ZphTransform::parse(transform).map_err(|err| format!("{err}"))?,
         terms,
         false,
         true,
@@ -2983,7 +2981,7 @@ fn check_zph(cox: &CoxCase, expected: &Value, transform: &str, terms: bool) -> R
     }
     for (row, expected) in rows.iter().zip(&table) {
         assert_scalar(row.chisq, expected[0], RTOL_VAR, "table.chisq")?;
-        assert_scalar(row.df as f64, expected[1], 0.0, "table.df")?;
+        assert_scalar(row.df, expected[1], 0.0, "table.df")?;
         assert_scalar(row.p, expected[2], RTOL_VAR, "table.p")?;
     }
     assert_vec(&zph.time, &nums(&expected["time"])?, RTOL_COEF, "time")?;
@@ -3017,7 +3015,7 @@ fn r_fixtures_coxph_diagnostics() {
                 Err(message) => Err(message.clone()),
                 Ok(cox) => (|| {
                     let residual_type =
-                        ResidualType::parse(kind).map_err(|err| format!("{err}"))?;
+                        CoxResidualType::parse(kind).map_err(|err| format!("{err}"))?;
                     let actual = residual_matrix(&cox.fit, residual_type, &cox.assign)?;
                     let expected_matrix = if value.is_object() {
                         matrix(&value["values"])?
@@ -3531,8 +3529,9 @@ fn r_fixtures_cch() {
                 ));
             }
             let x: Vec<Vec<f64>> = rows.iter().map(|&i| design.rows[i].clone()).collect();
+            let x = matrix_from_rows(&x, "x").map_err(|err| format!("{err:?}"))?;
             match text(&args["stratum"]) {
-                None => cch_fit(
+                None => cch(
                     response.time.clone(),
                     response.status.clone(),
                     x,
@@ -3560,7 +3559,7 @@ fn r_fixtures_cch() {
                         .iter()
                         .map(|&v| v as usize)
                         .collect();
-                    cch_borgan_fit(
+                    cch_borgan(
                         response.time.clone(),
                         response.status.clone(),
                         x,
@@ -3837,7 +3836,7 @@ fn check_residual_kernel(
                 ),
             }
             .map_err(|e| format!("score: {e}"))?;
-            let actual: Vec<Vec<f64>> = actual.outer_iter().map(|row| row.to_vec()).collect();
+            let actual = matrix_rows(&actual);
             let expected_matrix = if value.is_object() {
                 matrix(&value["values"])?
             } else {
@@ -4288,10 +4287,95 @@ fn check_survreg_distribution(key: &str, expected: &Value) -> Result<(), String>
     assert_vec(&q, &nums(&expected["q"])?, RTOL_COEF, &format!("{key}.q"))
 }
 
-/// Every case of a `survreg`-shaped topic (`survreg`, `survreg-extra`).
-fn check_survreg_topic(topic: &str) {
+/// A survreg case's fit, with the model frame, formula and design
+/// column of each term that the prediction checks rebuild designs from.
+struct SurvregCase {
+    fit: SurvregFit,
+    frame: Frame,
+    formula: String,
+    assign: Vec<usize>,
+}
+
+/// `survreg(formula, data, weights, dist, parms, init, scale, control,
+/// robust)` for a fixture case.
+fn survreg_fit_for_case(doc: &Value, case: &Value) -> Result<SurvregCase, String> {
     use crate::regression::parametric_survival::{SurvregControl, SurvregData, survreg_fit};
     use crate::regression::survreg_distributions::SurvregDistribution;
+
+    let args = &case["args"];
+    let frame = case_frame(doc, case)?;
+    let formula = text(&case["formula"]).ok_or("no formula")?;
+    let response = survreg_response(formula, &frame)?;
+    // R's survreg fits an intercept (the kernel takes the design
+    // matrix as given), so add the column of ones R would.
+    let mut design = design(formula, &frame)?;
+    if formula_has_intercept(formula) {
+        design = design.with_intercept();
+    }
+    let weights = arg_nums(case, "weights");
+    let rows: Vec<usize> = (0..response.time.len())
+        .filter(|&i| {
+            response.time[i].is_finite()
+                && design.rows[i].iter().all(|v| v.is_finite())
+                && design.strata.as_ref().is_none_or(|s| s[i] >= 0)
+                && design.offset.as_ref().is_none_or(|o| o[i].is_finite())
+                && weights.as_ref().is_none_or(|w| w[i].is_finite())
+        })
+        .collect();
+    let strata = design.strata.as_ref().map(|s| {
+        pick(s, &rows)
+            .into_iter()
+            .map(|code| code as usize)
+            .collect::<Vec<usize>>()
+    });
+    let cluster = survreg_cluster_codes(formula, &frame)?.map(|codes| pick(&codes, &rows));
+    let data = SurvregData::try_new(
+        pick(&response.time, &rows),
+        pick(&response.status, &rows),
+        matrix_from_rows(
+            &rows
+                .iter()
+                .map(|&i| design.rows[i].clone())
+                .collect::<Vec<_>>(),
+            "x",
+        )
+        .map_err(|err| format!("x: {err}"))?,
+        response.time2.as_ref().map(|t| pick(t, &rows)),
+        weights.as_ref().map(|w| pick(w, &rows)),
+        design.offset.as_ref().map(|o| pick(o, &rows)),
+        strata,
+        cluster,
+    )
+    .map_err(|err| format!("SurvregData: {err}"))?;
+    let parms = arg_nums(case, "parms");
+    let distribution =
+        SurvregDistribution::from_name(text(&args["dist"]).unwrap_or("weibull"), parms.as_deref())
+            .map_err(|err| format!("distribution: {err}"))?;
+    let init = arg_nums(case, "init");
+    let scale = args["scale"].as_f64().unwrap_or(0.0);
+    let mut control = SurvregControl::default();
+    if let Some(iter_max) = args["control"]["iter.max"].as_u64() {
+        control.iter_max = iter_max as usize;
+    }
+    let fit = survreg_fit(
+        &data,
+        &distribution,
+        init.as_deref(),
+        scale,
+        &control,
+        is_true(&args["robust"]),
+    )
+    .map_err(|err| format!("survreg: {err}"))?;
+    Ok(SurvregCase {
+        fit,
+        assign: design_assign(formula, &design.names),
+        frame,
+        formula: formula.to_string(),
+    })
+}
+
+/// Every case of a `survreg`-shaped topic (`survreg`, `survreg-extra`).
+fn check_survreg_topic(topic: &str) {
     use crate::residuals::survreg_resid::SurvregResidType;
 
     let doc = load_topic(topic);
@@ -4309,70 +4393,12 @@ fn check_survreg_topic(topic: &str) {
             }
             continue;
         }
-        let args = &case["args"];
-        let context = (|| -> Result<_, String> {
-            let frame = case_frame(&doc, case)?;
-            let formula = text(&case["formula"]).ok_or("no formula")?;
-            let response = survreg_response(formula, &frame)?;
-            // R's survreg fits an intercept (the kernel takes the design
-            // matrix as given), so add the column of ones R would.
-            let mut design = design(formula, &frame)?;
-            if formula_has_intercept(formula) {
-                design = design.with_intercept();
-            }
-            let weights = arg_nums(case, "weights");
-            let rows: Vec<usize> = (0..response.time.len())
-                .filter(|&i| {
-                    response.time[i].is_finite()
-                        && design.rows[i].iter().all(|v| v.is_finite())
-                        && design.strata.as_ref().is_none_or(|s| s[i] >= 0)
-                        && design.offset.as_ref().is_none_or(|o| o[i].is_finite())
-                        && weights.as_ref().is_none_or(|w| w[i].is_finite())
-                })
-                .collect();
-            let strata = design.strata.as_ref().map(|s| {
-                pick(s, &rows)
-                    .into_iter()
-                    .map(|code| code as usize)
-                    .collect::<Vec<usize>>()
-            });
-            let cluster = survreg_cluster_codes(formula, &frame)?.map(|codes| pick(&codes, &rows));
-            let data = SurvregData::try_new(
-                pick(&response.time, &rows),
-                pick(&response.status, &rows),
-                rows.iter().map(|&i| design.rows[i].clone()).collect(),
-                response.time2.as_ref().map(|t| pick(t, &rows)),
-                weights.as_ref().map(|w| pick(w, &rows)),
-                design.offset.as_ref().map(|o| pick(o, &rows)),
-                strata,
-                cluster,
-            )
-            .map_err(|err| format!("SurvregData: {err}"))?;
-            let parms = arg_nums(case, "parms");
-            let distribution = SurvregDistribution::from_name(
-                text(&args["dist"]).unwrap_or("weibull"),
-                parms.as_deref(),
-            )
-            .map_err(|err| format!("distribution: {err}"))?;
-            let init = arg_nums(case, "init");
-            let scale = args["scale"].as_f64().unwrap_or(0.0);
-            let mut control = SurvregControl::default();
-            if let Some(iter_max) = args["control"]["iter.max"].as_u64() {
-                control.iter_max = iter_max as usize;
-            }
-            let fit = survreg_fit(
-                &data,
-                &distribution,
-                init.as_deref(),
-                scale,
-                &control,
-                is_true(&args["robust"]),
-            )
-            .map_err(|err| format!("survreg: {err}"))?;
-            let assign = design_assign(formula, &design.names);
-            Ok((fit, frame, formula.to_string(), assign))
-        })();
-        let (fit, frame, formula, assign) = match context {
+        let SurvregCase {
+            fit,
+            frame,
+            formula,
+            assign,
+        } = match survreg_fit_for_case(&doc, case) {
             Err(message) => {
                 for aspect in ["coef", "scale", "loglik", "var", "linear_predictors"] {
                     report.record(name, aspect, Err(message.clone()));
@@ -4450,14 +4476,14 @@ fn check_survreg_topic(topic: &str) {
         report.record(
             name,
             "df",
-            (|| assert_scalar(fit.df as f64, num(&expected["df"])?, 0.0, "df"))(),
+            (|| assert_scalar(fit.df, num(&expected["df"])?, 0.0, "df"))(),
         );
         report.record(
             name,
             "df_residual",
             (|| {
                 assert_scalar(
-                    fit.df_residual as f64,
+                    fit.df_residual,
                     num(&expected["df_residual"])?,
                     0.0,
                     "df_residual",
@@ -4492,7 +4518,14 @@ fn check_survreg_topic(topic: &str) {
             report.record(
                 name,
                 "x",
-                (|| assert_matrix(&fit.covariates, &matrix(&x["values"])?, RTOL_COEF, "x"))(),
+                (|| {
+                    assert_matrix(
+                        &matrix_rows(&fit.covariates),
+                        &matrix(&x["values"])?,
+                        RTOL_COEF,
+                        "x",
+                    )
+                })(),
             );
         }
         if let Some(residuals) = expected["residuals"].as_object() {
@@ -4557,6 +4590,7 @@ fn check_survreg_topic(topic: &str) {
                 }
                 let n_new = new_frame.nrow();
                 let rows = design.rows.split_off(design.rows.len() - n_new);
+                let rows = matrix_from_rows(&rows, "newdata").map_err(|err| err.to_string())?;
                 let strata = design.strata.map(|s| {
                     s[s.len() - n_new..]
                         .iter()
@@ -4578,7 +4612,7 @@ fn check_survreg_topic(topic: &str) {
                         .map_err(Clone::clone)
                         .and_then(|(rows, strata, offset)| {
                             let newdata = SurvregNewdata {
-                                covariates: rows,
+                                covariates: rows.view(),
                                 offset: offset.as_deref(),
                                 strata: strata.as_deref(),
                             };
@@ -4860,7 +4894,9 @@ fn r_fixtures_concordance() {
             for (fit, expected) in expected.as_object().expect("fit results") {
                 let result = match (&cox, fit.as_str()) {
                     (Err(err), _) => Err(err.clone()),
-                    (Ok(cox), "coxph") => check_fitted_concordance(&cox.fit.concordance, expected),
+                    (Ok(cox), "coxph") => {
+                        check_fitted_concordance(&cox.fit.concordance, &[], expected)
+                    }
                     (Ok(cox), "coxph_timewt_S") => {
                         // concordance(fit, timewt = "S"): concordancefit on the
                         // linear predictors with the fit's data.
@@ -4869,10 +4905,35 @@ fn r_fixtures_concordance() {
                             crate::concordance::TimeWeight::S,
                             cox.fit.cluster.as_deref(),
                         )
-                        .and_then(|fit| check_fitted_concordance(&fit, expected))
+                        .and_then(|fit| check_fitted_concordance(&fit, &[], expected))
                     }
-                    (Ok(_), "survreg") => unsupported("concordance of a survreg fit"),
-                    (Ok(_), other) => unsupported(format!("concordance of several fits ({other})")),
+                    (Ok(_), "survreg") => survreg_fit_for_case(&doc, case)
+                        .and_then(|survreg| survreg_concordance(&survreg.fit))
+                        .and_then(|fit| check_fitted_concordance(&fit, &[], expected)),
+                    (Ok(cox), "both") => {
+                        // concordance(cfit, cfit2), cfit2 the fit on age
+                        // alone: concordancefit on cbind(lp1, lp2) with
+                        // reverse = TRUE (no weights, strata or cluster).
+                        let mut age_only = case.clone();
+                        age_only["formula"] = Value::from("Surv(time, status) ~ age");
+                        cox_fit_for_case(&doc, &age_only)
+                            .and_then(|cox2| {
+                                let lp = Array2::from_shape_fn((cox.fit.n, 2), |(i, j)| {
+                                    [&cox.fit, &cox2.fit][j].linear_predictors[i]
+                                });
+                                fitted_concordance(
+                                    &cox.fit,
+                                    lp.view(),
+                                    crate::concordance::TimeWeight::N,
+                                    None,
+                                )
+                            })
+                            .and_then(|fit| {
+                                let names = ["cfit".to_string(), "cfit2".to_string()];
+                                check_fitted_concordance(&fit, &names, expected)
+                            })
+                    }
+                    (Ok(_), other) => unsupported(format!("concordance of {other}")),
                 };
                 report.record(name, &format!("{fit}.concordance"), result);
             }
@@ -4893,13 +4954,15 @@ fn r_fixtures_concordance() {
     report.finish();
 }
 
-/// Every aspect of a fitted model's `concordance()` object.
+/// Every aspect of a fitted model's `concordance()` object; `fit_names`
+/// are the row names of a per-fit `count` matrix.
 fn check_fitted_concordance(
     fit: &crate::concordance::ConcordanceFit,
+    fit_names: &[String],
     expected: &Value,
 ) -> Result<(), String> {
     for aspect in CONCORDANCE_ASPECTS {
-        check_concordance_fit(fit, &[], expected, aspect)?;
+        check_concordance_fit(fit, fit_names, expected, aspect)?;
     }
     Ok(())
 }
@@ -4911,40 +4974,58 @@ fn linear_predictor_concordance(
     timewt: crate::concordance::TimeWeight,
     cluster: Option<&[i32]>,
 ) -> Result<crate::concordance::ConcordanceFit, String> {
-    use crate::concordance::{ConcordanceOptions, concordancefit};
-    use crate::core::SurvResponse;
-    let x = ndarray::Array2::from_shape_vec((fit.n, 1), fit.linear_predictors.clone())
+    let x = Array2::from_shape_vec((fit.n, 1), fit.linear_predictors.clone())
         .map_err(|err| err.to_string())?;
-    let options = ConcordanceOptions {
+    fitted_concordance(fit, x.view(), timewt, cluster)
+}
+
+/// `concordancefit(y, x, strata, weights, cluster, reverse = TRUE, timewt)`
+/// on the data of a Cox fit: `x` holds the linear predictors of one or
+/// more fits to those data.
+fn fitted_concordance(
+    fit: &CoxPHFit,
+    x: ndarray::ArrayView2<'_, f64>,
+    timewt: crate::concordance::TimeWeight,
+    cluster: Option<&[i32]>,
+) -> Result<crate::concordance::ConcordanceFit, String> {
+    let options = crate::concordance::ConcordanceOptions {
         timewt,
         reverse: true,
-        ..ConcordanceOptions::default()
+        ..crate::concordance::ConcordanceOptions::default()
     };
-    let right;
-    let counting;
-    let response = match &fit.entry {
-        Some(entry) => {
-            counting = crate::data_types::CountingProcessData::try_new(
-                entry.clone(),
-                fit.time.clone(),
-                fit.status.clone(),
-            )
-            .map_err(|err| err.to_string())?;
-            SurvResponse::Counting(&counting)
-        }
-        None => {
-            right = crate::data_types::SurvivalData::try_new(fit.time.clone(), fit.status.clone())
-                .map_err(|err| err.to_string())?;
-            SurvResponse::Right(&right)
-        }
-    };
-    concordancefit(
-        response,
-        x.view(),
-        Some(&fit.weights),
+    crate::regression::coxph::linear_predictor_concordance(
+        &fit.time,
+        fit.entry.as_deref(),
+        &fit.status,
+        x,
+        &fit.weights,
         fit.strata.as_deref(),
         cluster,
         &options,
+    )
+    .map_err(|err| format!("concordancefit: {err}"))
+}
+
+/// `concordance.survreg` for a right-censored fit: `concordancefit(y, lp,
+/// weights, reverse = FALSE)`, a longer predicted time going with a longer
+/// survival.
+fn survreg_concordance(fit: &SurvregFit) -> Result<crate::concordance::ConcordanceFit, String> {
+    use crate::concordance::{ConcordanceOptions, concordancefit};
+    use crate::core::SurvResponse;
+    if fit.time2.is_some() {
+        return unsupported("harness: concordance of an interval-censored survreg fit");
+    }
+    let response = crate::data_types::SurvivalData::try_new(fit.time.clone(), fit.status.clone())
+        .map_err(|err| err.to_string())?;
+    let x = Array2::from_shape_vec((fit.n, 1), fit.linear_predictors.clone())
+        .map_err(|err| err.to_string())?;
+    concordancefit(
+        SurvResponse::Right(&response),
+        x.view(),
+        fit.weights.as_deref(),
+        None,
+        None,
+        &ConcordanceOptions::default(),
     )
     .map_err(|err| format!("concordancefit: {err}"))
 }
@@ -5643,7 +5724,7 @@ fn check_yates_case(doc: &Value, case: &Value, report: &mut Report) {
                         let actual: Vec<Vec<f64>> = result
                             .test
                             .iter()
-                            .map(|t| vec![t.chisq, t.df as f64])
+                            .map(|t| vec![t.chisq, t.df.map_or(f64::NAN, |df| df as f64)])
                             .collect();
                         assert_matrix(&actual, &table, RTOL_VAR, "test")
                     }
@@ -5773,13 +5854,13 @@ fn r_fixtures_royston_brier() {
                                 .collect()
                         })
                         .collect();
-                    let result = brier(&BrierInput {
+                    let result = brier(BrierInput {
                         start: None,
                         time: &fit.time,
                         status: &fit.status,
                         weights: None,
                         times: &times,
-                        phat: &phat,
+                        phat,
                         ties: aspect != "brier_ties_false",
                         efron: false,
                         timefix: true,
@@ -5962,7 +6043,7 @@ fn r_fixtures_validation_extra() {
                     let rows = complete_rows(&response, &design, &[]);
                     let fit = efron_cox_fit(&response, &design, None, &rows)?;
                     loglik.push(fit.loglik[1]);
-                    df.push(design.names.len());
+                    df.push(design.names.len() as f64);
                 }
                 let names: Vec<String> = (1..=formulas.len()).map(|i| i.to_string()).collect();
                 let table = anova_coxph(&loglik, &df, &names, AnovaKind::Models, true)
@@ -5983,7 +6064,7 @@ fn r_fixtures_validation_extra() {
                 let actual_df: Vec<f64> = table
                     .rows
                     .iter()
-                    .map(|r| r.df.map_or(f64::NAN, |d| d as f64))
+                    .map(|r| r.df.unwrap_or(f64::NAN))
                     .collect();
                 assert_vec(&actual_df, &nums(&expected["df"])?, 0.0, "df")?;
                 let actual_p: Vec<f64> = table
@@ -6092,6 +6173,8 @@ fn check_turnbull_case(doc: &Value, case: &Value, report: &mut Report) {
             conf_level: 0.95,
             conf_type: "log",
             timefix: true,
+            se_fit: true,
+            robust: None,
         })
         .map_err(|err| err.to_string())
     })();
@@ -6216,7 +6299,7 @@ fn r_fixtures_coxph_anova() {
                 .collect();
             let lhs = formula.split('~').next().ok_or("formula")?.trim();
             let mut loglik = vec![cox.fit.loglik[0]];
-            let mut df = vec![0usize];
+            let mut df = vec![0.0];
             for k in 1..terms.len() {
                 let sub_formula = format!(
                     "{lhs} ~ {}",
@@ -6231,10 +6314,10 @@ fn r_fixtures_coxph_anova() {
                 let fit =
                     cox_fit_with_ties(&response, &sub_design, weights.as_deref(), &rows, method)?;
                 loglik.push(fit.loglik[1]);
-                df.push(sub_design.names.len());
+                df.push(sub_design.names.len() as f64);
             }
             loglik.push(cox.fit.loglik[1]);
-            df.push(cox.names.len());
+            df.push(cox.names.len() as f64);
             let mut names = vec!["NULL".to_string()];
             names.extend(terms.iter().cloned());
             let table = anova_coxph(&loglik, &df, &names, AnovaKind::Sequential, true)
@@ -6269,7 +6352,7 @@ fn r_fixtures_coxph_anova() {
             let actual_df: Vec<f64> = table
                 .rows
                 .iter()
-                .map(|r| r.df.map_or(f64::NAN, |d| d as f64))
+                .map(|r| r.df.unwrap_or(f64::NAN))
                 .collect();
             assert_vec(&actual_df, &nums(&expected["df"])?, 0.0, "anova.df")?;
             let actual_p: Vec<f64> = table
@@ -6411,11 +6494,6 @@ fn cox_fit_with_ties(
     CoxPHFit::fit(data, options).map_err(|err| format!("coxph: {err}"))
 }
 
-/// Rows of a square `ndarray` matrix.
-fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
-    matrix.rows().into_iter().map(|row| row.to_vec()).collect()
-}
-
 // ---------------------------------------------------------------------------
 // coxph_penalized (key: coxpenal)
 // ---------------------------------------------------------------------------
@@ -6470,8 +6548,6 @@ struct PenalCase {
     fit: CoxpenalFit,
     /// R's coefficient names (the sparse frailty has none).
     names: Vec<String>,
-    rows: Vec<usize>,
-    response: Response,
 }
 
 fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
@@ -6515,6 +6591,7 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
                     penal_arg_f64(&call, "df")?,
                     penal_arg_f64(&call, "eps")?.unwrap_or(0.1),
                     scale,
+                    None,
                 )
                 .map_err(|err| format!("ridge: {err}"))?
             }
@@ -6578,6 +6655,7 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
                     call.named.get("method").map(String::as_str),
                     call.named.get("caic").is_some_and(|v| v == "TRUE"),
                     None,
+                    None,
                 )
                 .map_err(|err| format!("frailty: {err}"))?
             }
@@ -6597,13 +6675,16 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
         .collect();
     let x = Array2::from_shape_fn((rows.len(), columns.len()), |(r, c)| columns[c][rows[r]]);
     let data = CoxpenalData::try_new(
-        pick(&response.time, &rows),
-        response.start.as_ref().map(|s| pick(s, &rows)),
-        pick(&response.status, &rows),
-        x,
-        None,
-        None,
-        None,
+        CoxphData::try_new(
+            pick(&response.time, &rows),
+            response.start.as_ref().map(|s| pick(s, &rows)),
+            pick(&response.status, &rows),
+            x,
+            None,
+            None,
+            None,
+        )
+        .map_err(|err| format!("coxph data: {err}"))?,
         terms,
     )
     .map_err(|err| format!("coxpenal data: {err}"))?;
@@ -6613,12 +6694,7 @@ fn penal_fit_for_case(doc: &Value, case: &Value) -> Result<PenalCase, String> {
         ..CoxpenalOptions::default()
     };
     let fit = CoxpenalFit::fit(data, options).map_err(|err| format!("coxpenal: {err}"))?;
-    Ok(PenalCase {
-        fit,
-        names,
-        rows,
-        response,
-    })
+    Ok(PenalCase { fit, names })
 }
 
 const PENAL_ASPECTS: &[&str] = &[
@@ -6671,7 +6747,7 @@ fn check_penal_aspect(case: &PenalCase, expected: &Value, aspect: &str) -> Resul
             Ok(())
         }
         "var" => assert_matrix(
-            &coxph.var_rows(),
+            &matrix_rows(&coxph.var),
             &matrix(&expected["var"])?,
             RTOL_VAR,
             "var",
@@ -6795,84 +6871,17 @@ fn check_penal_aspect(case: &PenalCase, expected: &Value, aspect: &str) -> Resul
             if is_r_error(expected) {
                 return Ok(());
             }
-            let actual = residual_vector(coxph, ResidualType::Deviance)?;
+            let actual = coxph
+                .deviance_residuals(false, None)
+                .map_err(|err| format!("{err}"))?;
             assert_vec(&actual, &nums(expected)?, RTOL_COEF, "deviance")
         }
         "concordance" => {
-            use crate::concordance::{ConcordanceOptions, concordancefit};
-            use crate::core::SurvResponse;
             let expected = &expected["concordance"];
             if is_r_error(expected) {
                 return Ok(());
             }
-            let lp = Array2::from_shape_vec((coxph.n, 1), coxph.linear_predictors.clone())
-                .map_err(|err| err.to_string())?;
-            let options = ConcordanceOptions {
-                reverse: true,
-                timefix: false,
-                ..ConcordanceOptions::default()
-            };
-            let time = pick(&case.response.time, &case.rows);
-            let status = pick(&case.response.status, &case.rows);
-            let concordance = match &case.response.start {
-                Some(start) => {
-                    let data = crate::data_types::CountingProcessData::try_new(
-                        pick(start, &case.rows),
-                        time,
-                        status,
-                    )
-                    .map_err(|err| err.to_string())?;
-                    concordancefit(
-                        SurvResponse::Counting(&data),
-                        lp.view(),
-                        None,
-                        None,
-                        None,
-                        &options,
-                    )
-                }
-                None => {
-                    let data = crate::data_types::SurvivalData::try_new(time, status)
-                        .map_err(|err| err.to_string())?;
-                    concordancefit(
-                        SurvResponse::Right(&data),
-                        lp.view(),
-                        None,
-                        None,
-                        None,
-                        &options,
-                    )
-                }
-            }
-            .map_err(|err| format!("concordancefit: {err}"))?;
-            assert_vec(
-                &concordance.concordance,
-                &nums(&expected["concordance"])?,
-                RTOL_COEF,
-                "concordance",
-            )?;
-            let names =
-                serde_json::json!(["concordant", "discordant", "tied.x", "tied.y", "tied.xy"]);
-            let count = &concordance.count[0];
-            assert_vec(
-                &[
-                    count.concordant,
-                    count.discordant,
-                    count.tied_x,
-                    count.tied_y,
-                    count.tied_xy,
-                ],
-                &named_values(&expected["count"], &names)?,
-                1e-12,
-                "concordance.count",
-            )?;
-            let var = concordance.var.as_ref().ok_or("concordance var is None")?;
-            assert_vec(
-                &[var[0][0]],
-                &nums(&expected["var"])?,
-                RTOL_VAR,
-                "concordance.var",
-            )
+            check_fitted_concordance(&coxph.concordance, &[], expected)
         }
         "predict_lp" => {
             let expected = &expected["predict_lp"];

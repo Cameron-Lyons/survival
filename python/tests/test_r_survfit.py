@@ -277,8 +277,9 @@ def test_survfit_weights_report_unweighted_counts_and_robust_se():
 def test_survfit_start_time_conditions_the_curves():
     fit = r.survfit("Surv(time, status) ~ group", _toy_data(), start_time=2)
 
+    # survfitKM records start.time only as t0 (fit$start.time is NULL in R)
     assert fit.t0 == 2.0
-    assert fit.start_time == 2.0
+    assert not hasattr(fit, "start_time")
     assert fit.call.start_time == 2.0
     assert fit.n == [3, 4]
     assert fit.strata == {"group=A": 3, "group=B": 4}
@@ -342,8 +343,7 @@ def test_survfit_influence_returns_one_matrix_per_curve():
     assert fit.logse is False
     assert len(fit.influence_surv) == 2
     assert len(fit.influence_chaz) == 2
-    assert len(fit.influence_surv[0].values) == 4
-    assert len(fit.influence_surv[0].values[0]) == 4
+    assert fit.influence_surv[0].values.shape == (4, 4)
     only_chaz = r.survfit("Surv(time, status) ~ 1", data, influence=2)
     assert only_chaz.influence_surv is None
     assert only_chaz.influence_chaz is not None
@@ -370,10 +370,12 @@ def test_survfit_subset_and_na_action_follow_r_model_frame():
     assert len(subset.model["group"]) == 5
 
 
-def test_survfit_time0_is_accepted_and_recorded():
+def test_survfit_time0_is_accepted_and_ignored_by_survfitkm():
+    # survfitKM takes time0 but never uses it, so survfit0 still adds the time 0 row
     fit = r.survfit("Surv(time, status) ~ 1", _toy_data(), time0=True)
-    assert fit.time0 is True
-    assert r.survfit0(fit) is fit
+    assert fit.time0 is False
+    assert fit.time[0] == 1.0
+    assert r.survfit0(fit).time[0] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -441,9 +443,19 @@ def test_survfit_interval_censored_uses_turnbull():
     assert fit.strata is None
     _close(fit.time, [1.5, 2.5, 4.0])
     _close(fit.surv, [0.625, 0.25, 0.25])
-    assert fit.engine is None
-    with pytest.raises(NotImplementedError, match="interval-censored"):
-        r.survfit0(fit)
+    # R: survfit0, quantile and summary of the same fit
+    fit0 = r.survfit0(fit)
+    _close(fit0.time, [0.0, 1.5, 2.5, 4.0])
+    _close(fit0.surv, [1.0, 0.625, 0.25, 0.25])
+    _close(fit0.std_err, [0.0, 0.288956906389171, 0.229639663385923, 0.229639663385923])
+    quantiles = r.quantile_survfit(fit)
+    assert quantiles.quantile == [[1.5, 2.5, 3.25]]
+    assert quantiles.lower == [[1.5, 1.5, 2.5]]
+    assert all(math.isnan(value) for value in quantiles.upper[0])
+    _close(r.summary_survfit(fit, times=3).surv, [0.25])
+    table = r.summary_survfit(fit).table.values[0]
+    _close(table[:8], [4, 4, 4, 3, 2.5, 0.484122918275927, 2.5, 1.5])
+    assert math.isnan(table[8])
 
 
 # ---------------------------------------------------------------------------
@@ -581,8 +593,6 @@ def test_aggregate_survfit_averages_the_data_margin():
     _close(grouped.surv[0], [0.9, 0.7])
     named = r.aggregate_survfit(curves, by={"g": ["x", "y", "y"]}, FUN="median")
     _close(named.surv[1], [0.8, 0.5])
-    bridge = r.aggregate_survfit_result(curves, groups=[1, 2, 2])
-    assert bridge.surv == r.aggregate_survfit(curves, by=[1, 2, 2]).surv
     with pytest.raises(ValueError, match="arguments must have the same length"):
         r.aggregate_survfit(curves, by=[1, 2])
     with pytest.raises(ValueError, match="does not have a 'data' margin"):
@@ -604,26 +614,6 @@ def test_survfit_confint_matches_r():
         r.survfit_confint([0.9], [0.1], conf_type="none")
     with pytest.raises(ValueError, match="confidence intervals must be between 0 and 1"):
         r.survfit_confint([0.9], [0.1], conf_type="log", conf_int=2)
-
-
-def test_survfitkm_influence_helpers_return_cluster_by_time_matrices():
-    data = _toy_data()
-    cluster = [1, 1, 2, 2, 3, 3, 4, 4]
-    influence = r.survfitkm_influence(data["time"], data["status"], cluster=cluster)
-    fit = r.survfit("Surv(time, status) ~ 1", data, cluster=cluster, influence=True)
-
-    assert influence.influence_surv == fit.influence_surv[0].values
-    assert len(influence.influence_chaz) == 4
-    counting = _counting_data()
-    with_curve = r.survfitkm_counting_influence(
-        counting["start"],
-        counting["stop"],
-        counting["status"],
-        cluster=counting["id"],
-        curve_time=[1.0],
-        curve_estimate=[1.0],
-    )
-    assert len(with_curve.influence_surv) == 4
 
 
 def test_survfit_dispatches_cox_fits_to_the_cox_module():

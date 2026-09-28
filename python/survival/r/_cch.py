@@ -17,7 +17,9 @@ from ._coerce import (
     _normalize_bool_option_with_default,
     _pop_dotted_keyword,
 )
-from ._fit import _model_frame, _strata_factor
+from ._fit import _model_frame, _r_levels
+from ._formula import _column_source
+from ._surv import _complete_codes, _strata
 from ._types import CchModelResult
 
 _METHODS = {
@@ -143,21 +145,25 @@ def cch(
     if not frame.names:
         raise ValueError("cch formula must contain at least one covariate")
     id_values = list(frame.id or [])
-    if len(_label_levels(id_values, "id")) != len(id_values):
+    id_levels = _label_levels(id_values, "id")
+    if len(id_levels) != len(id_values):
         raise ValueError("Multiple records per id not allowed")
     subcohort = _subcohort_indicator(frame.extra["subcoh"])
     outside = sum(1 for sub, event in zip(subcohort, y.event, strict=True) if not sub and not event)
     if outside:
         raise ValueError(f"{outside} censored observations not in subcohort")
-    id_codes = list(range(len(id_values)))
+    # the Borgan score rows are collapsed by id in R's rowsum order (sort(unique(id)))
+    sorted_ids = _r_levels(_column_source(data, id) if isinstance(id, str) else id, id_levels)
+    id_rank = {value: rank for rank, value in enumerate(sorted_ids)}
+    id_codes = [id_rank[value] for value in id_values]
     start = None if y.start is None else list(y.start)
     status = [int(value) for value in y.event]
     stratum_labels: tuple[Any, ...] | None = None
     if stratified:
-        factor = _strata_factor({"stratum": frame.extra["stratum"]}, frame.n, shortlabel=True)
+        factor = _strata([("stratum", frame.extra["stratum"])], shortlabel=True)
         stratum_labels = tuple(frame.extra["stratum"])
         levels = list(factor.levels)
-        codes = [int(code) for code in factor.codes]
+        codes = _complete_codes(factor, "missing values in the stratum")
         sizes = _stratified_cohort_sizes(cohort_size, levels)
         counts = list(factor.counts)
         if len(id_values) > sum(sizes):
@@ -209,6 +215,7 @@ def cch(
         stratum=stratum_labels,
         cohort_size=cohort_sizes,
         subcohort_size=subcohort_size,
+        sc_ids=sorted_ids if stratified else None,
     )
 
 
@@ -220,7 +227,7 @@ def summary_cch(fit: CchModelResult) -> dict[str, Any]:
         se = math.sqrt(fit.var[idx][idx])
         z = abs(coef / se) if se > 0.0 else math.nan
         p = 2.0 * (1.0 - 0.5 * math.erfc(-z / math.sqrt(2.0)))  # R: 2*(1-pnorm(Z))
-        rows.append({"name": name, "coef": coef, "value": coef, "se": se, "z": z, "p": p})
+        rows.append({"name": name, "coef": coef, "se": se, "z": z, "p": p})
     return {
         "model_type": "cch",
         "method": fit.method,

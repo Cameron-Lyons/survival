@@ -2,10 +2,12 @@
 //! `R/predict.survreg.R` from the CRAN `survival` package.
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::match_arg::match_arg;
 use crate::internal::validation::{
     ProbabilityBounds, validate_finite, validate_length, validate_probability,
 };
 use crate::regression::parametric_survival::SurvregFit;
+use ndarray::{ArrayView1, ArrayView2};
 use pyo3::prelude::*;
 
 /// The `type` argument of `predict.survreg` (`link`/`linear` are `lp`).
@@ -25,6 +27,7 @@ pub enum SurvregPredictType {
 }
 
 impl SurvregPredictType {
+    /// The `type` choices of `predict.survreg`, in R's order.
     const CHOICES: [(&'static str, Self); 7] = [
         ("response", Self::Response),
         ("link", Self::Lp),
@@ -35,29 +38,11 @@ impl SurvregPredictType {
         ("uquantile", Self::Uquantile),
     ];
 
-    /// `match.arg(type)`: an exact name or a unique prefix.
+    /// `match.arg(type)`: an exact name or a unique prefix (see
+    /// `match_arg`).
     pub fn parse(name: &str) -> SurvivalResult<Self> {
-        let key = name.trim().to_lowercase();
-        if let Some((_, kind)) = Self::CHOICES.iter().find(|(choice, _)| *choice == key) {
-            return Ok(*kind);
-        }
-        let mut matches: Vec<Self> = Self::CHOICES
-            .iter()
-            .filter(|(choice, _)| !key.is_empty() && choice.starts_with(key.as_str()))
-            .map(|(_, kind)| *kind)
-            .collect();
-        matches.dedup();
-        match matches.as_slice() {
-            [kind] => Ok(*kind),
-            _ => Err(SurvivalError::invalid_input(format!(
-                "prediction type '{name}' should be one of {}",
-                Self::CHOICES
-                    .iter()
-                    .map(|(choice, _)| format!("\"{choice}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
-        }
+        let index = match_arg(name, &Self::CHOICES.map(|(choice, _)| choice))?;
+        Ok(Self::CHOICES[index].1)
     }
 }
 
@@ -100,14 +85,14 @@ impl SurvregPrediction {
 /// offset disagree with its training predictions; that is not reproduced.)
 #[derive(Debug, Clone, Copy)]
 pub struct SurvregNewdata<'a> {
-    pub covariates: &'a [Vec<f64>],
+    pub covariates: ArrayView2<'a, f64>,
     pub offset: Option<&'a [f64]>,
     pub strata: Option<&'a [usize]>,
 }
 
 /// The rows a prediction is evaluated on: the training design or `newdata`.
 struct PredictionRows<'a> {
-    x: &'a [Vec<f64>],
+    x: ArrayView2<'a, f64>,
     /// `x %*% coef + offset`, what `predict.survreg` calls `pred` before any
     /// transform.
     eta: Vec<f64>,
@@ -116,21 +101,27 @@ struct PredictionRows<'a> {
 
 fn prediction_rows<'a>(
     fit: &'a SurvregFit,
-    newdata: Option<&SurvregNewdata<'a>>,
+    newdata: Option<&'a SurvregNewdata<'_>>,
 ) -> SurvivalResult<PredictionRows<'a>> {
     let nvar = fit.nvar();
     let coef = &fit.coefficients[..nvar];
     let Some(newdata) = newdata else {
         return Ok(PredictionRows {
-            x: &fit.covariates,
+            x: fit.covariates.view(),
             eta: fit.linear_predictors.clone(),
             strata: fit.strata.clone(),
         });
     };
-    let n = newdata.covariates.len();
-    for (index, row) in newdata.covariates.iter().enumerate() {
-        validate_length(nvar, row.len(), &format!("newdata row {index}"))?;
-        validate_finite(row, &format!("newdata row {index}"))?;
+    let n = newdata.covariates.nrows();
+    validate_length(nvar, newdata.covariates.ncols(), "newdata columns")?;
+    if let Some(((row, column), value)) = newdata
+        .covariates
+        .indexed_iter()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(SurvivalError::invalid_input(format!(
+            "newdata contains non-finite value {value} at row {row}, column {column}"
+        )));
     }
     if let Some(offset) = newdata.offset {
         validate_length(n, offset.len(), "offset")?;
@@ -156,7 +147,7 @@ fn prediction_rows<'a>(
     };
     let eta = newdata
         .covariates
-        .iter()
+        .outer_iter()
         .enumerate()
         .map(|(i, row)| {
             let lp: f64 = row.iter().zip(coef).map(|(x, b)| x * b).sum();
@@ -164,14 +155,14 @@ fn prediction_rows<'a>(
         })
         .collect();
     Ok(PredictionRows {
-        x: newdata.covariates,
+        x: newdata.covariates.view(),
         eta,
         strata,
     })
 }
 
 /// `x_i' V x_i` for the leading block of the variance matrix.
-fn quadratic(x: &[f64], variance: &[Vec<f64>]) -> f64 {
+fn quadratic(x: ArrayView1<'_, f64>, variance: &[Vec<f64>]) -> f64 {
     x.iter()
         .enumerate()
         .map(|(j, xj)| {
@@ -212,7 +203,7 @@ pub fn predict_survreg(
             let mut pred = rows.eta;
             let mut se = se_fit.then(|| {
                 rows.x
-                    .iter()
+                    .outer_iter()
                     .map(|x| quadratic(x, variance).sqrt())
                     .collect::<Vec<f64>>()
             });
@@ -246,7 +237,7 @@ pub fn predict_survreg(
                 .collect();
             let mut se = se_fit.then(|| {
                 rows.x
-                    .iter()
+                    .outer_iter()
                     .zip(&rows.strata)
                     .map(|(x, &stratum)| {
                         if fixed_scale {
@@ -260,7 +251,7 @@ pub fn predict_survreg(
                                     let mut temp = x.to_vec();
                                     temp.resize(nvar + nstrata, 0.0);
                                     temp[nvar + stratum] = q * scale;
-                                    quadratic(&temp, variance).sqrt()
+                                    quadratic(ArrayView1::from(&temp), variance).sqrt()
                                 })
                                 .collect()
                         }
@@ -324,7 +315,7 @@ pub fn predict_survreg(
             // Centre x at the training means when the model has an intercept.
             let centered: Vec<Vec<f64>> = rows
                 .x
-                .iter()
+                .outer_iter()
                 .map(|x| {
                     x.iter()
                         .zip(&fit.means)
@@ -394,14 +385,10 @@ mod tests {
             SurvregPredictType::parse("uq").unwrap(),
             SurvregPredictType::Uquantile
         );
-        assert_eq!(
-            SurvregPredictType::parse("Response").unwrap(),
-            SurvregPredictType::Response
-        );
-        assert_eq!(
-            SurvregPredictType::parse("l").unwrap(),
-            SurvregPredictType::Lp
-        );
+        // match.arg is case sensitive, and "l" is a prefix of "link",
+        // "lp" and "linear" although all three mean the linear predictor.
+        assert!(SurvregPredictType::parse("Response").is_err());
+        assert!(SurvregPredictType::parse("l").is_err());
         assert!(SurvregPredictType::parse("").is_err());
         assert!(SurvregPredictType::parse("mystery").is_err());
     }
@@ -411,6 +398,6 @@ mod tests {
         let variance = vec![vec![2.0, 0.5], vec![0.5, 1.0]];
         let x = [1.0, 3.0];
         // 1*2*1 + 2*(1*0.5*3) + 3*1*3
-        assert!((quadratic(&x, &variance) - 14.0).abs() < 1e-12);
+        assert!((quadratic(ArrayView1::from(&x), &variance) - 14.0).abs() < 1e-12);
     }
 }

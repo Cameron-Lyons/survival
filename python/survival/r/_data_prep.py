@@ -10,13 +10,15 @@ the arguments, call the kernel and label the result.
 from __future__ import annotations
 
 import math
+import numbers
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _as_character,
     _categories,
     _finite_float,
@@ -30,6 +32,7 @@ from ._coerce import (
     _normalize_positive_scale,
     _pop_dotted_keyword,
     _scalar_or_vector,
+    _warn_outside_package,
 )
 from ._formula import (
     _column,
@@ -40,11 +43,12 @@ from ._formula import (
     _model_strata,
     _model_variables,
     _response_spec,
+    _timeline_counting,
     _unsupported_formula_name,
     model_frame,
 )
 from ._surv import Surv, Surv2
-from ._types import ModelFrame, TcutResult, TMergeFrame, TMergeOperation
+from ._types import ModelFrame, TcutResult, TMergeFrame, TMergeOperation, _SurvResponseSpec
 
 # ---------------------------------------------------------------------------
 # tcut, neardate, lvcf, nostutter
@@ -194,8 +198,11 @@ def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> list[An
 # ---------------------------------------------------------------------------
 
 
-def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:
-    """R's ``aeqSurv``: snap near-tied times of a ``Surv`` object."""
+_SurvT = TypeVar("_SurvT", Surv, Surv2)
+
+
+def aeqSurv(x: _SurvT, tolerance: Any | None = None) -> _SurvT:
+    """R's ``aeqSurv``: snap near-tied times of a ``Surv`` or ``Surv2`` object."""
 
     if tolerance is not None:
         try:
@@ -208,6 +215,8 @@ def aeqSurv(x: Any, tolerance: Any | None = None) -> Surv:
             return x
     else:
         tolerance_value = None
+    if isinstance(x, Surv2):
+        return x.replace_times(time=_core.aeq_surv(list(x.time), None, tolerance_value).time)
     if not isinstance(x, Surv):
         raise TypeError("argument is not a Surv object")
     if x.start is not None:
@@ -247,17 +256,17 @@ def _surv_argument_names(mf: ModelFrame) -> tuple[str | None, str | None, str | 
     return names[0], None, None
 
 
-def _status_labels(states: Sequence[str], status: Sequence[Any]) -> list[Any]:
-    """R's ``factor(status, 0:length(states), labels = c("censor", states))``."""
+def _status_labels(states: Sequence[str], status: Sequence[float | int | None]) -> list[Any]:
+    """R's ``factor(status, 0:length(states), labels = c("censor", states))``.
 
-    labels = ["censor", *states] if states else None
-    result: list[Any] = []
-    for value in status:
-        if _is_missing_value(value):
-            result.append(None)
-        else:
-            result.append(labels[int(value)] if labels else int(value))
-    return result
+    ``status`` holds the integer codes, with ``None`` or ``NaN`` (the kernels'
+    missing value) for ``NA``.
+    """
+
+    if not states:
+        return [None if code is None or code != code else int(code) for code in status]
+    labels = ["censor", *states]
+    return [None if code is None or code != code else labels[int(code)] for code in status]
 
 
 def _cut_points(cut: Any) -> list[float]:
@@ -274,7 +283,7 @@ def _output_name(value: Any, name: str) -> str:
 
 
 def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> dict[str, list[Any]]:
-    return {name: [values[row] for row in rows] for name, values in columns.items()}
+    return {name: list(map(values.__getitem__, rows)) for name, values in columns.items()}
 
 
 def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
@@ -293,6 +302,23 @@ def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
     if len({len(values) for values in columns.values()}) > 1:
         raise ValueError(f"{name} columns must have equal lengths")
     return columns
+
+
+def _old_style_formula(data: Any, start: Any, end: Any, event: Any) -> str:
+    """The formula of R's old-style ``survSplit`` call: ``Surv([start, ]end, event) ~ .``."""
+
+    if end is None or event is None:
+        raise ValueError("either a formula or the end and event arguments are required")
+    names = _data_column_names(data) or []
+    if not (isinstance(event, str) and event in names):
+        raise ValueError("'event' must be a variable name in the data set")
+    if not (isinstance(end, str) and end in names):
+        raise ValueError("'end' must be a variable name in the data set")
+    start = "tstart" if start is None else start
+    if not isinstance(start, str):
+        raise ValueError("'start' must be a variable name")
+    columns = [start, end, event] if start in names else [end, event]
+    return f"Surv({', '.join(f'`{name}`' for name in columns)}) ~ ."
 
 
 def _split_kernel(response: Any, cut: list[float], zero: float, timefix: bool, id: Any) -> Any:
@@ -334,10 +360,14 @@ def survSplit(
 ) -> dict[str, list[Any]]:
     """R's ``survSplit``: split survival records at the ``cut`` times.
 
-    ``formula`` is ``Surv(...) ~ terms``; a ``Surv`` (or ``Surv2``) object may be
-    given as ``response`` with ``data`` holding the covariates instead (R's old-style
-    call).  ``id`` names the subject column to add for ``(time, status)`` data, or is
-    the subject vector of ``Surv2`` timeline data.
+    ``formula`` is ``Surv(...) ~ terms`` or, for timeline data, ``Surv2(...) ~ terms``,
+    whose cut rows are inserted into the timeline.  R's old-style call gives no formula
+    (or the data frame in its place) and names the ``end`` and ``event`` columns
+    instead, splitting ``Surv([start, ]end, event) ~ .``.  ``id`` names the
+    subject column to add for ``(time, status)`` data, or gives the subjects (a vector
+    or a column name) of ``Surv2`` timeline data.  A ``Surv`` (or ``Surv2``) object may
+    also be given as ``response`` (or ``formula``) with ``data`` holding the covariates,
+    one row per observation.
     """
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
@@ -355,7 +385,13 @@ def survSplit(
         return _survsplit_object(
             response, data, cut_values, zero_value, timefix, id, start, end, event, episode, added
         )
-    if not isinstance(formula, str):
+    if formula is None or _data_column_names(formula) is not None:
+        if data is None:
+            if formula is None:
+                raise ValueError("a data frame is required")
+            data = formula
+        formula = _old_style_formula(data, start, end, event)
+    elif not isinstance(formula, str):
         raise ValueError("either a formula or the end and event arguments are required")
     if data is None:
         raise ValueError("a data argument is required")
@@ -364,30 +400,47 @@ def survSplit(
     added_id = False
     if idname is not None and idname not in names:
         spec = _response_spec(formula)
-        if spec is not None and spec.surv and len(spec.arguments) == 2:
+        if spec is not None and spec.surv and not spec.timeline and len(spec.arguments) == 2:
             n = _data_row_count(data, formula)
             data = {str(name): _column_source(data, str(name)) for name in names}
             data[idname] = list(range(1, n + 1))
             added_id = True
-    mf = model_frame(formula, data, subset=subset, na_action=na_action, id=None if idname else id)
+    # a character id names a data column, which the model frame subsets with the rows
+    id_column = idname if added_id or idname in names else None
+    mf = model_frame(
+        formula,
+        data,
+        subset=subset,
+        na_action=na_action,
+        id=id if idname is None else id_column,
+        timeline=True,
+    )
     # R only invents the id column for right-censored (time, status) data
     if added_id and (mf.response is None or mf.response.type != "right"):
         data = {name: values for name, values in data.items() if name != idname}
         added_id = False
-    split = _split_kernel(mf.response, cut_values, zero_value, timefix, None)
-    rows = list(split.row)
-    right_dot = formula.partition("~")[2].strip() == "." and mf.n == len(
-        next(iter(_data_columns(data, "data").values()), [])
-    )
-    if right_dot:
+    # a Surv2 timeline keeps its (time, event) form: cut rows are inserted into it
+    timeline = isinstance(mf.response, Surv2)
+    split = _split_kernel(mf.response, cut_values, zero_value, timefix, mf.id if timeline else None)
+    rows = split.row
+    # R's rightdot: with ``~ .`` and no rows dropped the data itself is split, so
+    # every column keeps its place
+    if formula.partition("~")[2].strip() == "." and mf.n == _data_row_count(data):
         newdata = _split_frame(_data_columns(data, "data"), rows)
     else:
         newdata = _split_frame(dict(_model_variables(mf)), rows)
-        if idname is not None and (added_id or idname in names):
-            newdata[idname] = [_column(mf.data, idname)[row] for row in rows]
+        if timeline:
+            newdata["(id)"] = [mf.id[row] for row in rows]
+        elif idname is not None and (added_id or idname in names):
+            newdata[idname] = [mf.id[row] for row in rows]
     states = () if mf.response is None else mf.response.states
     time_name, time2_name, event_name = _surv_argument_names(mf)
-    if mf.response is None or mf.response.ncol == 2:
+    if timeline:
+        # the Surv2 arguments that are variable names name the columns, whatever
+        # start and event say
+        start = time_name or start or "tstart"
+        event = time2_name or event or "event"
+    elif mf.response is None or mf.response.ncol == 2:
         end = end or time_name or "tstop"
         event = event or time2_name or event_name or "event"
         start = start or "tstart"
@@ -395,14 +448,11 @@ def survSplit(
         end = end or time2_name or "tstop"
         event = event or event_name or "event"
         start = start or time_name or "tstart"
-    newdata[_output_name(start, "start")] = list(split.start)
-    newdata[_output_name(end, "end")] = list(split.end)
+    newdata[_output_name(start, "start")] = split.start
+    if not timeline:
+        newdata[_output_name(end, "end")] = split.end
     newdata[_output_name(event, "event")] = _status_labels(states, split.status)
-    if episode is not None:
-        newdata[_output_name(episode, "episode")] = [value + 1 for value in split.interval]
-    if added is not None:
-        newdata[_output_name(added, "added")] = list(split.censor)
-    return newdata
+    return _split_extras(newdata, split, episode, added)
 
 
 def _survsplit_object(
@@ -422,22 +472,108 @@ def _survsplit_object(
 
     split = _split_kernel(response, cut, zero, timefix, id)
     two_columns = isinstance(response, Surv2) or response.start is None
-    rows = list(split.row)
+    rows = split.row
     columns = {} if data is None else _data_columns(data, "data")
     if columns and len(next(iter(columns.values()))) != len(response):
         raise ValueError("data must have one row per response observation")
     newdata = _split_frame(columns, rows)
     if isinstance(id, str) and two_columns and id not in newdata:
         newdata[id] = [row + 1 for row in rows]
-    newdata[_output_name(start or "tstart", "start")] = list(split.start)
+    newdata[_output_name(start or "tstart", "start")] = split.start
     if not isinstance(response, Surv2):
-        newdata[_output_name(end or "tstop", "end")] = list(split.end)
+        newdata[_output_name(end or "tstop", "end")] = split.end
     newdata[_output_name(event or "event", "event")] = _status_labels(response.states, split.status)
+    return _split_extras(newdata, split, episode, added)
+
+
+def _split_extras(
+    newdata: dict[str, list[Any]], split: Any, episode: str | None, added: str | None
+) -> dict[str, list[Any]]:
+    """survSplit's optional ``episode`` (interval number) and ``added`` (inserted row) columns."""
+
     if episode is not None:
         newdata[_output_name(episode, "episode")] = [value + 1 for value in split.interval]
     if added is not None:
-        newdata[_output_name(added, "added")] = list(split.censor)
+        newdata[_output_name(added, "added")] = split.censor
     return newdata
+
+
+# ---------------------------------------------------------------------------
+# fromtimeline
+# ---------------------------------------------------------------------------
+
+
+def fromtimeline(
+    formula: str,
+    data: Any,
+    subset: Any | None = None,
+    id: Any | None = None,
+    repeated: Any = False,
+    lvcf: Any = True,
+    yname: Any | None = None,
+) -> dict[str, list[Any]]:
+    """R's ``fromtimeline`` (R/fromtimeline.R): timeline data as counting-process data.
+
+    ``formula`` is ``Surv2(time, event) ~ terms`` (or ``Surv(time, event) ~ terms``) and
+    ``id`` (a column name or a vector) gives the subjects, whose consecutive rows become
+    intervals as :func:`coxph` makes them; with ``lvcf`` a missing variable takes the
+    subject's last value.  The result holds the model variables, ``istate`` when every
+    subject starts in a state, and the response columns: named ``yname`` or, by default,
+    after the response's arguments (``t1``, ``t2`` and ``s`` for ``Surv2(t, s)``).
+    """
+
+    if not isinstance(formula, str):
+        raise ValueError("a formula argument is required")
+    if data is None:
+        raise ValueError("the data argument is required")
+    if id is None:
+        raise ValueError("the id argument is required")
+    spec = _response_spec(formula)
+    if spec is None or not spec.surv:
+        raise ValueError("response must be a survival object")
+    counting_formula, rows, arguments = _timeline_counting(
+        formula,
+        data,
+        subset,
+        {"id": id},
+        repeated=repeated,
+        lvcf=_normalize_bool_option(lvcf, "lvcf"),
+        require_repeats=True,
+    )
+    mf = model_frame(counting_formula, rows, na_action=None)
+    new = {name: _materialize_1d(values, name) for name, values in _model_variables(mf)}
+    if arguments.get("istate") is not None:
+        new["(istate)" if "istate" in new else "istate"] = list(arguments["istate"])
+    response = cast(Surv, mf.response)
+    counting = response.start is not None
+    status = _status_labels(response.states, response.event)
+    times = [list(response.start), list(response.time)] if counting else [list(response.time)]
+    taken = {spec.name, *new}
+    if yname is None:
+        names = _timeline_response_names(spec, counting)
+        names = [f"_{name}_" if name in taken else name for name in names]
+    else:
+        names = [str(name) for name in _scalar_or_vector(yname, "yname")]
+        if any(name in taken for name in names):
+            raise ValueError("element of yname conflicts with an existing name in the data")
+        if len(names) != 3 and (counting or len(names) != 2):
+            raise ValueError("wrong length for yname")
+        if not counting:
+            names = [names[0], names[-1]]
+    return {**new, **dict(zip(names, [*times, status], strict=True))}
+
+
+def _timeline_response_names(spec: _SurvResponseSpec, counting: bool) -> list[str]:
+    """fromtimeline's default response names: ``tstart``, ``tstop`` and ``status``, or
+    the response's time argument (with 1 and 2 appended for intervals) and its event
+    argument when they are variable names."""
+
+    time_name, event_name = (_surv_argument_name(argument) for argument in spec.arguments[:2])
+    if counting:
+        names = [f"{time_name}1", f"{time_name}2"] if time_name else ["tstart", "tstop"]
+    else:
+        names = [time_name or "tstart"]
+    return [*names, event_name or "status"]
 
 
 # ---------------------------------------------------------------------------
@@ -446,12 +582,16 @@ def _survsplit_object(
 
 
 def _row_codes(columns: Sequence[Sequence[Any]]) -> list[int]:
-    """One code per row for the combination of values across *columns* (``NA`` matches ``NA``)."""
+    """One code per row for the combination of values across *columns*.
+
+    Values are compared as R's ``==`` does, so ``0.3`` and ``0.1 + 0.2`` differ;
+    ``NA`` matches ``NA``.
+    """
 
     codes: dict[tuple[Any, ...], int] = {}
     result: list[int] = []
     for row in zip(*columns, strict=True):
-        key = tuple("NA" if _is_missing_value(value) else _as_character(value) for value in row)
+        key = tuple(None if _is_missing_value(value) else value for value in row)
         result.append(codes.setdefault(key, len(codes)))
     return result
 
@@ -505,6 +645,7 @@ def survcondense(
         mf.id, list(response.start or ()), list(response.time), _row_codes(comparison)
     )
     keep = list(condensed.keep)
+    new_start = condensed.start
     output: dict[str, list[Any]] = {}
     for name, values in variables:
         output.setdefault(name, [values[row] for row in keep])
@@ -514,9 +655,7 @@ def survcondense(
     id_column = id_name or (id if isinstance(id, str) else "id")
     output.setdefault(str(id_column), [mf.id[row] for row in keep])
     time_name, time2_name, event_name = _surv_argument_names(mf)
-    output[_output_name(start or time_name or "tstart", "start")] = [
-        condensed.start[row] for row in keep
-    ]
+    output[_output_name(start or time_name or "tstart", "start")] = [new_start[row] for row in keep]
     output[_output_name(end or time2_name or "tstop", "end")] = [response.time[row] for row in keep]
     output[_output_name(event or event_name or "event", "event")] = _status_labels(
         response.states, [response.event[row] for row in keep]
@@ -551,7 +690,7 @@ def rttright(
     data: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = None,
+    na_action: str | None = _DEFAULT_NA_ACTION,
     times: Any | None = None,
     id: Any | None = None,
     timefix: bool = True,
@@ -564,7 +703,7 @@ def rttright(
     per requested ``times`` value (R's matrix) when several times are given.
     """
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, None)
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     response = kwargs.pop("response", None)
     warn_offset = kwargs.pop("_warn_offset", True)
     if kwargs:
@@ -745,19 +884,33 @@ def _tmerge_retained(
     )
 
 
-def _tmerge_vector(value: Any, data2: Any, n2: int, name: str) -> list[Any]:
-    """Evaluate a ``tmerge`` argument in ``data2``: a column name, a scalar or a vector."""
+def _tmerge_vector(
+    value: Any,
+    data2: Any,
+    n2: int,
+    name: str,
+    *,
+    recycle: bool = False,
+    mismatch: str | None = None,
+) -> list[Any]:
+    """Evaluate a ``tmerge`` argument in ``data2``, as R does: a string names a column.
 
-    if isinstance(value, str) and value in (_data_column_names(data2) or []):
+    The values must line up with ``id`` (the ``mismatch`` error otherwise); only
+    ``tstart`` recycles a single value (``recycle``).
+    """
+
+    if isinstance(value, bytes):
+        value = value.decode()
+    if isinstance(value, str):
+        if value not in (_data_column_names(data2) or []):
+            raise ValueError(f"object '{value}' not found in data2")
         values = _column(data2, value)
-    elif isinstance(value, str | bytes) or not hasattr(value, "__iter__"):
-        values = [value] * n2
     else:
-        values = _materialize_1d(value, name)
-        if len(values) == 1 and n2 != 1:
+        values = _materialize_1d(value, name) if hasattr(value, "__iter__") else [value]
+        if recycle and len(values) == 1:
             values = values * n2
     if len(values) != n2:
-        raise ValueError(f"argument {name} is not the same length as id")
+        raise ValueError(mismatch or f"argument {name} is not the same length as id")
     return values
 
 
@@ -803,19 +956,42 @@ def _first_call_frame(
     return newdata
 
 
-def _censor_value(values: Sequence[Any], declared: Sequence[Any] | None) -> Any:
-    """R's ``tcens`` for a new event variable: the type's censoring value."""
+def _storage_mode(values: Sequence[Any] | None) -> str:
+    """R's storage mode of an update vector: logical, integer, double or character.
 
-    if declared:
-        return declared[0]
-    sample = next((value for value in values if not _is_missing_value(value)), 0)
-    if _is_bool_like(sample):
-        return False
-    if isinstance(sample, str):
-        return ""
-    if isinstance(sample, float):
-        return 0.0
-    return 0
+    Without values the updates are R's ``1L``. Missing values alone are R's bare
+    ``NA`` (logical) unless they are ``NaN``, which R stores as double.
+    """
+
+    if values is None:
+        return "integer"
+    observed = [value for value in values if not _is_missing_value(value)]
+    if any(isinstance(value, str) for value in observed):
+        return "character"
+    if not observed:
+        return "double" if any(isinstance(value, numbers.Real) for value in values) else "logical"
+    if all(_is_bool_like(value) for value in observed):
+        return "logical"
+    if all(isinstance(value, numbers.Integral) for value in observed):
+        return "integer"
+    return "double"
+
+
+_CENSOR_VALUES = {"logical": False, "integer": 0, "double": 0.0, "character": ""}
+# R's coercion order: combining two modes gives the later one
+_STORAGE_MODES = ("logical", "integer", "double", "character")
+
+
+def _as_mode(value: Any, mode: str) -> Any:
+    """``value`` stored in an R vector of storage ``mode`` (``NA`` stays as given)."""
+
+    if _is_missing_value(value) or mode == "logical":
+        return value
+    if mode == "integer":
+        return int(value)
+    if mode == "double":
+        return float(value)
+    return _as_character(value)
 
 
 def _numeric_values(values: Sequence[Any]) -> list[float] | None:
@@ -839,8 +1015,10 @@ def _numeric_values(values: Sequence[Any]) -> list[float] | None:
 class _TmergeArgument:
     """One ``name = kind(time, value)`` argument evaluated in ``data2``.
 
-    ``values`` are the update values (numeric ones as floats with ``NaN`` for
-    ``NA``), ``numeric`` their float view when every value is a number.
+    ``values`` are the update values as given (``NaN`` for a missing number,
+    floats in a double vector), ``numeric`` their float view when every value is
+    a number and ``mode`` R's storage mode of the values, which the new variable
+    keeps unless a ``tdc`` default changes it.
     """
 
     name: str
@@ -848,6 +1026,7 @@ class _TmergeArgument:
     time: list[float]
     values: list[Any] | None
     numeric: list[float] | None
+    mode: str
     default: Any
     censor: Any
     levels: list[Any] | None
@@ -855,6 +1034,20 @@ class _TmergeArgument:
     @property
     def missing(self) -> list[bool] | None:
         return None if self.values is None else [_is_missing_value(v) for v in self.values]
+
+    def censor_value(self) -> Any:
+        """R's ``tcens`` for a new event variable: the censoring value of its type.
+
+        A factor censors at its first level; ``cumevent`` sums logical events as numbers.
+        """
+
+        if self.censor is not None:
+            return self.censor
+        if self.levels:
+            return self.levels[0]
+        if self.kind == "cumevent" and self.mode == "logical":
+            return _CENSOR_VALUES["double"]
+        return _CENSOR_VALUES[self.mode]
 
 
 def _tmerge_argument(
@@ -865,39 +1058,71 @@ def _tmerge_argument(
     numeric = None if values is None else _numeric_values(values)
     if operation.kind in {"cumtdc", "cumevent"} and values is not None and numeric is None:
         raise ValueError("invalid increment for cumtdc or cumevent")
+    mode = _storage_mode(values)
+    if values is not None and numeric is not None:
+        values = (
+            numeric
+            if mode == "double"
+            else [math.nan if _is_missing_value(value) else value for value in values]
+        )
     default = control["tdcstart"] if operation.default is None else operation.default
     source = operation.value
-    if isinstance(source, str) and source in (_data_column_names(data2) or []):
+    if isinstance(source, str):
         source = _column_source(data2, source)
     return _TmergeArgument(
         name=name,
         kind=operation.kind,
         time=time,
-        values=numeric if numeric is not None else values,
+        values=values,
         numeric=numeric,
+        mode=mode,
         default=default,
         censor=operation.censor,
         levels=None if source is None else _categories(source),
     )
 
 
+def _tdc_default(argument: _TmergeArgument) -> tuple[Any, str]:
+    """R's ``newvar[index == 0] <- default`` for a new ``tdc`` (tmerge.R): the default
+    as stored and the storage mode the variable then has.
+
+    Numeric values take ``as.numeric(default)`` and become double; logical and
+    character values take the higher of their mode and the default's.
+    """
+
+    default, mode = argument.default, argument.mode
+    if _is_missing_value(default) or (argument.numeric is None and mode != "character"):
+        return default, mode
+    if mode in {"integer", "double"}:
+        try:
+            return float(default), "double"
+        except ValueError:
+            _warn_outside_package("NAs introduced by coercion")
+            return math.nan, "double"
+    mode = max(mode, _storage_mode([default]), key=_STORAGE_MODES.index)
+    return _as_mode(default, mode), mode
+
+
 def _tdc_values(step: Any, argument: _TmergeArgument, prior: list[Any] | None) -> list[Any]:
     """R's ``tdc`` update: the value of the last update at or before each interval start."""
 
     values = argument.values
+    sources = step.source
     if prior is None:
         if values is None:
-            return [0 if source is None else 1 for source in step.source]
-        return [argument.default if source is None else values[source] for source in step.source]
+            return [0 if source is None else 1 for source in sources]
+        default, mode = _tdc_default(argument)
+        if mode != argument.mode and None in sources:
+            # R converts the whole variable only when some interval takes the default
+            values = [_as_mode(value, mode) for value in values]
+        return [default if source is None else values[source] for source in sources]
     if values is None:
         if any(not (_is_missing_value(v) or v in (0, 1, False, True)) for v in prior):
             raise ValueError(f"tdc update does not match prior variable type: {argument.name}")
-        return [
-            1 if source is not None else v for source, v in zip(step.source, prior, strict=True)
-        ]
+        return [1 if source is not None else v for source, v in zip(sources, prior, strict=True)]
     return [
         values[source] if source is not None else v
-        for source, v in zip(step.source, prior, strict=True)
+        for source, v in zip(sources, prior, strict=True)
     ]
 
 
@@ -909,7 +1134,14 @@ def _event_values(
     values = [censor] * n_out if prior is None else list(prior)
     for row, source, value in zip(step.event_row, step.event_source, step.event_value, strict=True):
         if argument.kind == "cumevent":
-            values[row] = value
+            if argument.numeric is not None and math.isnan(argument.numeric[source]):
+                # R's newvar[indx2[keep]] <- yinc[keep] stops on the NA that yinc != 0 puts in keep
+                raise ValueError(
+                    f"argument {argument.name} has a missing cumevent increment at an event time"
+                )
+            values[row] = (
+                int(value) if argument.mode == "integer" and not math.isnan(value) else value
+            )
         elif argument.values is None:
             values[row] = 1
         else:
@@ -985,11 +1217,7 @@ def _apply_tmerge_argument(
             tdcvar.append(name)
     else:
         if name not in tevent:
-            tevent[name] = (
-                _censor_value([1] if argument.values is None else argument.values, argument.levels)
-                if argument.censor is None
-                else argument.censor
-            )
+            tevent[name] = argument.censor_value()
         expanded[name] = _event_values(step, argument, prior_expanded, tevent[name], len(rows))
     newdata.clear()
     newdata.update(expanded)
@@ -1003,7 +1231,7 @@ def _tmerge_first_call(
     id2: list[Any],
     tstart: Any | None,
     tstop: Any | None,
-    first_operation: TMergeOperation | None,
+    first: tuple[str, TMergeOperation] | None,
     control: Mapping[str, Any],
 ) -> dict[str, list[Any]]:
     """R's first ``tmerge`` call: ``data1`` with the ``(tstart, tstop]`` range of each subject.
@@ -1034,9 +1262,10 @@ def _tmerge_first_call(
         raise ValueError("setting the range, and data1 has id values not in data2")
     n2 = len(id2)
     if tstop is None:
-        if first_operation is None or first_operation.kind != "event":
+        if first is None or first[1].kind != "event":
             raise ValueError("neither a tstop argument nor an initial event argument was found")
-        times = _numeric_or_nan(_tmerge_vector(first_operation.time, data2, n2, "tstop"), "tstop")
+        name, operation = first
+        times = _numeric_or_nan(_tmerge_vector(operation.time, data2, n2, name), "tstop")
         seen: dict[str, int] = {}
         for row, value in enumerate(id2):
             seen.setdefault(_as_character(value), row)
@@ -1044,11 +1273,26 @@ def _tmerge_first_call(
         range_stop = [times[row] for row in seen.values()]
     else:
         range_ids = id2
-        range_stop = _numeric_or_nan(_tmerge_vector(tstop, data2, n2, "tstop"), "tstop")
+        range_stop = _numeric_or_nan(
+            _tmerge_vector(
+                tstop, data2, n2, "tstop", mismatch="tstop and id must be the same length"
+            ),
+            "tstop",
+        )
     start_values = (
         None
         if tstart is None
-        else _numeric_or_nan(_tmerge_vector(tstart, data2, len(range_ids), "tstart"), "tstart")
+        else _numeric_or_nan(
+            _tmerge_vector(
+                tstart,
+                data2,
+                len(range_ids),
+                "tstart",
+                recycle=True,
+                mismatch="tstart and id must be the same length",
+            ),
+            "tstart",
+        )
     )
     return _first_call_frame(columns1, base_ids, range_ids, start_values, range_stop, control)
 
@@ -1106,7 +1350,7 @@ def tmerge(
 
     if first_call:
         newdata = _tmerge_first_call(
-            data1, data2, id, id2, tstart, tstop, next(iter(parsed.values()), None), control
+            data1, data2, id, id2, tstart, tstop, next(iter(parsed.items()), None), control
         )
     else:
         if tstart is not None or tstop is not None:

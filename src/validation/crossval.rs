@@ -213,13 +213,10 @@ pub(crate) fn cv_cox(
             if let Some(sorted_weights) = sorted_weights {
                 builder = builder.weights(Array1::from_vec(sorted_weights));
             }
-            let beta = match builder.build() {
-                Ok(mut fit) => {
-                    fit.fit();
-                    fit.results().coefficients
-                }
-                Err(_) => vec![0.0; nvar],
-            };
+            let beta = builder
+                .build()
+                .and_then(|mut fit| fit.fit().map(|()| fit.results().coefficients))
+                .unwrap_or_else(|_| vec![0.0; nvar]);
             let linear_predictor: Vec<f64> = test_indices
                 .iter()
                 .map(|&orig_idx| {
@@ -347,7 +344,7 @@ pub(crate) fn cv_survreg(
     distribution: &str,
     config: &CVConfig,
 ) -> Result<CVResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::parametric_survival::survreg;
+    use crate::regression::parametric_survival::survreg_from_codes;
     let n = time.len();
     let nvar = covariates.nrows();
     let folds = create_folds(n, config.n_folds, config.shuffle, config.seed);
@@ -364,7 +361,7 @@ pub(crate) fn cv_survreg(
             let train_time: Vec<f64> = train_indices.iter().map(|&i| time[i]).collect();
             let train_status: Vec<f64> = train_indices.iter().map(|&i| status[i]).collect();
             let train_covariates = covariate_rows_for_indices(covariates, nvar, &train_indices);
-            let fit_result = survreg(
+            let fit_result = survreg_from_codes(
                 train_time,
                 train_status,
                 train_covariates,
@@ -384,7 +381,7 @@ pub(crate) fn cv_survreg(
             let test_time: Vec<f64> = test_indices.iter().map(|&i| time[i]).collect();
             let test_status: Vec<f64> = test_indices.iter().map(|&i| status[i]).collect();
             let test_covariates = covariate_rows_for_indices(covariates, nvar, test_indices);
-            let test_fit = survreg(
+            let test_fit = survreg_from_codes(
                 test_time,
                 test_status,
                 test_covariates,
@@ -627,7 +624,7 @@ mod tests {
             validate_time_status_i32(&[1.0, 2.0], &[1, 2])
                 .expect_err("non-binary status should fail")
                 .to_string()
-                .contains("status values must be 0 or 1")
+                .contains("status must contain only 0/1 values")
         );
         assert!(
             validate_covariates(&[vec![0.1], vec![0.2, 0.3]], 2)

@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+import os
+import sys
+import warnings
+from collections.abc import Callable, Mapping, Sequence
+from itertools import compress
 from operator import index
-from typing import Any
+from typing import Any, cast
+
+import numpy as np
 
 from .. import _survival as _core
 
-_EXP_CLAMP_MIN = -745.0
-_EXP_CLAMP_MAX = 709.0
-_SURVFIT_TIME_EPSILON = 1e-9
-_VARIANCE_SCALE_FLOOR = 1e-12
-_COX_DFBETAS_SCALE_FLOOR = 1e-10
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
+_PACKAGE_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
 
 
 def _coerce_mapping_rows(values: Mapping[Any, Any], name: str) -> list[list[Any]]:
@@ -44,6 +46,8 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
         raise ValueError(f"{name} is required")
     if isinstance(values, Mapping):
         return _coerce_mapping_rows(values, name)
+    if isinstance(values, _core.TcutResult):
+        return list(values.values)
     if hasattr(values, "to_list"):
         values = values.to_list()
     elif hasattr(values, "to_numpy"):
@@ -111,6 +115,22 @@ def _finite_float(value: Any, name: str) -> float:
     return result
 
 
+def _start_time_value(start_time: Any | None) -> float | None:
+    """The ``start.time`` argument of the survfit methods: ``None`` or one finite number."""
+
+    if start_time is None:
+        return None
+    if isinstance(start_time, bool | str):
+        raise ValueError("start.time must be a single numeric value")
+    try:
+        value = float(start_time)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("start.time must be a single numeric value") from exc
+    if not math.isfinite(value):
+        raise ValueError("start.time must be a single numeric value")
+    return value
+
+
 def _int_vector(values: Any, name: str) -> list[int]:
     return [int(value) for value in _materialize_1d(values, name)]
 
@@ -131,6 +151,19 @@ def _mstate_categories(values: Any) -> Any | None:
     return _categories(values)
 
 
+def _r_factor_levels(values: Sequence[Any]) -> list[Any]:
+    """The levels ``as.factor`` gives ``values``: R factor levels when present, else sorted."""
+
+    categories = _mstate_categories(values)
+    present = {value for value in values if not _is_missing_value(value)}
+    if categories is not None:
+        return [level for level in _materialize_1d(categories, "levels") if level in present]
+    try:
+        return sorted(present)
+    except TypeError:
+        return sorted(present, key=str)
+
+
 def _optional_float_vector(values: Any | None, name: str, n: int) -> list[float] | None:
     if values is None:
         return None
@@ -147,7 +180,16 @@ def _quantile_vector(values: Any, name: str) -> list[float]:
         return _float_vector(values, name)
 
 
+# R's getOption("na.action"), the na.action of every model function that does not
+# name its own
+_DEFAULT_NA_ACTION = "na.omit"
+
+
 def _normalize_na_action(na_action: str | None) -> str:
+    """``"fail"``, ``"omit"``, ``"exclude"`` or ``"pass"`` for an R na.action name;
+    ``None`` is R's ``na.action = NULL``, which applies none.  ``exclude`` drops rows
+    exactly as ``omit`` does; ``naresid``/``napredict`` pad them back as ``NA``."""
+
     if na_action is None:
         return "pass"
     if not isinstance(na_action, str):
@@ -158,8 +200,8 @@ def _normalize_na_action(na_action: str | None) -> str:
         "na_fail": "fail",
         "omit": "omit",
         "na_omit": "omit",
-        "exclude": "omit",
-        "na_exclude": "omit",
+        "exclude": "exclude",
+        "na_exclude": "exclude",
         "pass": "pass",
         "na_pass": "pass",
     }
@@ -181,6 +223,21 @@ def _is_missing_value(value: Any) -> bool:
         return False
 
 
+def _float_or_nan(value: Any) -> float:
+    """``float(value)``, with NaN for a missing value (R's ``NA``)."""
+
+    return math.nan if _is_missing_value(value) else float(value)
+
+
+def _floats_or_nan(values: Sequence[Any]) -> list[float]:
+    """:func:`_float_or_nan` of each value, as fast as ``float`` when none is missing."""
+
+    try:
+        return list(map(float, values))
+    except TypeError:
+        return list(map(_float_or_nan, values))
+
+
 def _row_has_missing(value: Any) -> bool:
     value_type = type(value)
     if value is None:
@@ -194,13 +251,50 @@ def _row_has_missing(value: Any) -> bool:
     return _is_missing_value(value)
 
 
+def _numeric_ndarray(values: Any) -> np.ndarray | None:
+    """*values* as a 1-D numpy array when it is a plain ndarray or a pandas/polars column
+    whose dtype kind is logical, integer or double, else ``None``.
+
+    Masked arrays, object, string, datetime and nullable extension columns (which
+    ``to_numpy`` turns into object arrays) and factor-like columns get ``None``: they keep
+    the per-element paths that know masks, ``None``, ``pd.NA``, ``NaT`` and declared levels.
+    """
+
+    if isinstance(values, np.ndarray):
+        if isinstance(values, np.ma.MaskedArray):
+            return None
+        array = values
+    elif hasattr(values, "to_numpy") and hasattr(values, "dtype"):
+        if _categories(values) is not None:
+            return None
+        array = values.to_numpy()
+        if not isinstance(array, np.ndarray):
+            return None
+    else:
+        return None
+    if array.ndim != 1 or array.dtype.kind not in "biuf":
+        return None
+    return array
+
+
 def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
     missing: set[int] = set()
     for name, values in columns:
+        array = _numeric_ndarray(values)
+        if array is not None:
+            if len(array) != n:
+                raise ValueError(f"{name} must have length {n}")
+            if array.dtype.kind == "f":
+                missing.update(np.flatnonzero(np.isnan(array)).tolist())
+            continue
         materialized = _coerce_array_like(values, name)
         if len(materialized) != n:
             raise ValueError(f"{name} must have length {n}")
-        missing.update(idx for idx, value in enumerate(materialized) if _row_has_missing(value))
+        try:
+            # a numeric column is missing only where it is NaN
+            missing.update(compress(range(n), map(math.isnan, materialized)))
+        except (TypeError, OverflowError):
+            missing.update(idx for idx, value in enumerate(materialized) if _row_has_missing(value))
     return missing
 
 
@@ -216,6 +310,22 @@ def _keep_rows_after_na_action(
     if action == "fail":
         raise ValueError(f"missing values in {context}")
     return [idx for idx in range(n) if idx not in missing]
+
+
+def _warn_outside_package(message: str, category: type[Warning] = UserWarning) -> None:
+    """``warnings.warn(message, category)`` reported at the first caller outside this
+    package.
+
+    Shared helpers run at a different depth under each public function, so no fixed
+    ``stacklevel`` fits them all (``skip_file_prefixes`` needs Python 3.12).
+    """
+
+    frame = sys._getframe(1)
+    level = 2
+    while frame.f_back is not None and frame.f_code.co_filename.startswith(_PACKAGE_PREFIX):
+        frame = frame.f_back
+        level += 1
+    warnings.warn(message, category, stacklevel=level)
 
 
 def _is_bool_like(value: Any) -> bool:
@@ -247,15 +357,22 @@ def _subset_indices(subset: Any, n: int) -> list[int]:
     return indices
 
 
+def _rows_of(source: Any, kept: list[Any]) -> Any:
+    """``source[rows]`` from the values at the kept rows, with what R's ``[`` methods
+    keep: a factor's levels, and a ``tcut``'s cutpoints and labels (``[.tcut``)."""
+
+    if isinstance(source, _core.TcutResult):
+        # scale 1 keeps the already scaled values and cutpoints
+        return _core.tcut(kept, list(source.cutpoints), list(source.labels), 1.0)
+    categories = _mstate_categories(source)
+    return kept if categories is None else _RFactorVector(kept, categories)
+
+
 def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
     materialized = _coerce_array_like(values, name)
     if indices and max(indices) >= len(materialized):
         raise ValueError(f"{name} must have enough rows for subset")
-    subsetted = [materialized[idx] for idx in indices]
-    categories = _mstate_categories(values)
-    if categories is not None:
-        return _RFactorVector(subsetted, categories)
-    return subsetted
+    return _rows_of(values, [materialized[idx] for idx in indices])
 
 
 def _subset_optional_sequence(
@@ -266,19 +383,6 @@ def _subset_optional_sequence(
     if values is None:
         return None
     return _subset_sequence(values, indices, name)
-
-
-def _subset_data(data: Any, indices: list[int]) -> Any:
-    if isinstance(data, Mapping):
-        return {key: _subset_sequence(value, indices, str(key)) for key, value in data.items()}
-    if hasattr(data, "iloc"):
-        return data.iloc[indices]
-    if hasattr(data, "take"):
-        try:
-            return data.take(indices)
-        except TypeError:
-            pass
-    raise TypeError("subset with formula data requires a mapping or tabular object")
 
 
 def _as_rows(values: Any, name: str) -> list[list[float]]:
@@ -303,17 +407,18 @@ def _as_matrix_rows(
     name: str,
     *,
     allow_empty_columns: bool,
+    convert: Callable[[Any], float] = float,
 ) -> list[list[float]]:
     rows = _coerce_array_like(values, name)
     if not rows:
         raise ValueError(f"{name} must not be empty")
     if not isinstance(rows[0], list | tuple):
-        return [[float(value)] for value in rows]
+        return [[convert(value)] for value in rows]
 
     width = len(rows[0])
     if width == 0 and not allow_empty_columns:
         raise ValueError(f"{name} must have at least one column")
-    matrix = [[float(value) for value in row] for row in rows]
+    matrix = [[convert(value) for value in row] for row in rows]
     if any(len(row) != width for row in matrix):
         raise ValueError(f"{name} must be rectangular")
     return matrix
@@ -329,38 +434,9 @@ def _label_levels(values: list[Any], name: str) -> tuple[Any, ...]:
     return tuple(labels)
 
 
-def _encode_groups(
-    group: Any,
-    n: int,
-    *,
-    levels: Sequence[Any] | None = None,
-) -> list[int]:
-    values = _materialize_labels(group, "group")
-    if len(values) != n:
-        raise ValueError("group must have the same length as the Surv response")
-    if levels is not None:
-        return _encode_labels_with_levels(values, levels, "group")
-    return _encode_labels(values, "group")
-
-
 def _encode_labels(values: list[Any], name: str) -> list[int]:
     labels = {value: idx for idx, value in enumerate(_label_levels(values, name))}
     return [labels[value] for value in values]
-
-
-def _encode_labels_with_levels(
-    values: list[Any],
-    levels: Sequence[Any],
-    name: str,
-) -> list[int]:
-    try:
-        labels = {value: idx for idx, value in enumerate(levels)}
-    except TypeError as exc:
-        raise TypeError(f"{name} contains unhashable labels") from exc
-    try:
-        return [labels[value] for value in values]
-    except KeyError as exc:
-        raise ValueError(f"{name} contains a value outside the supplied levels") from exc
 
 
 def _cox_tie_method(method: str | None, ties: str | None) -> str:
@@ -511,9 +587,9 @@ def _r_sort_key(value: Any) -> tuple[Any, ...]:
         numeric = float(value)
     except (TypeError, ValueError):
         return (1, str(value))
-    if math.isfinite(numeric):
-        return (0, numeric)
-    return (1, str(value))
+    if math.isnan(numeric):
+        return (1, str(value))
+    return (0, numeric)
 
 
 def _factor_levels(values: Any, name: str = "values") -> list[Any]:
@@ -526,31 +602,50 @@ def _factor_levels(values: Any, name: str = "values") -> list[Any]:
     declared = _categories(values)
     if declared is not None:
         return [level for level in declared if not _is_missing_value(level)]
-    unique: dict[Any, None] = {}
-    for value in _materialize_labels(values, name):
-        if _is_missing_value(value):
-            continue
-        try:
-            unique.setdefault(value, None)
-        except TypeError as exc:
-            raise TypeError(f"{name} contains unhashable labels") from exc
-    return sorted(unique, key=_r_sort_key)
+    array = _numeric_ndarray(values)
+    if array is not None:
+        return _numeric_factor(array)[1].tolist()
+    try:
+        unique = dict.fromkeys(_materialize_labels(values, name))
+    except TypeError as exc:
+        raise TypeError(f"{name} contains unhashable labels") from exc
+    return sorted((value for value in unique if not _is_missing_value(value)), key=_r_sort_key)
+
+
+def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:
+    """``factor(x)`` of a numeric or logical array: codes (``None`` where NaN) and the
+    sorted distinct values, which is R's ``sort(unique(x))`` level order."""
+
+    present = ~np.isnan(array) if array.dtype.kind == "f" else None
+    observed = array if present is None else array[present]
+    levels, inverse = np.unique(observed, return_inverse=True)
+    if levels.dtype.kind == "f":
+        levels = levels + 0.0  # -0 and 0 are one level, labelled "0"
+    if present is None or present.all():
+        return inverse.tolist(), levels
+    full = np.zeros(len(array), dtype=np.int64)
+    full[present] = inverse
+    codes = cast(list[int | None], full.tolist())
+    for row in np.flatnonzero(~present).tolist():
+        codes[row] = None
+    return codes, levels
 
 
 def _factor(values: Any, name: str = "values") -> tuple[list[int | None], list[str]]:
     """R's ``factor(x)`` as zero-based codes (``None`` for ``NA``) and level labels."""
 
+    array = _numeric_ndarray(values)
+    if array is not None:
+        numeric_codes, numeric_levels = _numeric_factor(array)
+        return numeric_codes, [_as_character(level) for level in numeric_levels.tolist()]
     levels = _factor_levels(values, name)
     index = {level: code for code, level in enumerate(levels)}
-    codes: list[int | None] = []
-    for value in _materialize_labels(values, name):
-        if _is_missing_value(value):
-            codes.append(None)
-            continue
-        try:
-            codes.append(index[value])
-        except KeyError as exc:
-            raise ValueError(f"{name} contains a value outside the declared categories") from exc
+    materialized = _materialize_labels(values, name)
+    codes: list[int | None] = list(map(index.get, materialized))
+    if None in codes:
+        for value, code in zip(materialized, codes, strict=True):
+            if code is None and not _is_missing_value(value):
+                raise ValueError(f"{name} contains a value outside the declared categories")
     return codes, [_as_character(level) for level in levels]
 
 
@@ -559,7 +654,6 @@ def _factor(values: Any, name: str = "values") -> tuple[list[int | None], list[s
 _strata_value_label = _as_character
 _strata_level_sort_key = _r_sort_key
 _mstate_event_label = _as_character
-_survdiff_r_level_sort_key = _r_sort_key
 
 
 def _normalize_positive_scale(value: Any) -> float:
@@ -608,6 +702,27 @@ def _normalize_conf_level(conf_level: Any, name: str = "conf_level") -> float:
     if not math.isfinite(value) or not 0.0 < value < 1.0:
         raise ValueError(f"{name} must be between 0 and 1")
     return value
+
+
+def _coefficient_selection(parm: Any, names: list[str]) -> list[int]:
+    """``confint``'s ``parm``: coefficient names or 1-based positions, as 0-based indices
+    (every coefficient when ``None``)."""
+
+    if parm is None:
+        return list(range(len(names)))
+    values = [parm] if isinstance(parm, str | int) else list(_materialize_1d(parm, "parm"))
+    indices: list[int] = []
+    for value in values:
+        if isinstance(value, str):
+            if value not in names:
+                raise ValueError(f"unknown coefficient name {value!r}")
+            indices.append(names.index(value))
+        else:
+            idx = _integer_scalar(value, "parm") - 1
+            if idx < 0 or idx >= len(names):
+                raise IndexError("parm index out of range")
+            indices.append(idx)
+    return indices
 
 
 def _pop_dotted_keyword(
@@ -674,134 +789,3 @@ def _control_mapping(control: Any | None, name: str) -> dict[str, Any]:
         return {str(key): value for key, value in items}
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{name} must be a mapping") from exc
-
-
-def _pop_control_alias(
-    control: dict[str, Any],
-    aliases: tuple[str, ...],
-    canonical: str,
-    current: Any,
-    default: Any,
-) -> tuple[Any, str | None]:
-    present = [alias for alias in aliases if alias in control]
-    if not present:
-        return current, None
-    first = present[0]
-    value = control.pop(first)
-    for alias in present[1:]:
-        other = control.pop(alias)
-        if other != value:
-            raise ValueError(f"use only one of control.{first} or control.{alias}")
-    if current != default:
-        raise ValueError(f"use only one of {canonical} or control.{first}")
-    return value, first
-
-
-def _pop_finite_control_value(
-    control: dict[str, Any],
-    aliases: tuple[str, ...],
-    *,
-    positive: bool,
-) -> float | None:
-    present = [alias for alias in aliases if alias in control]
-    if not present:
-        return None
-    first = present[0]
-    value = control.pop(first)
-    for alias in present[1:]:
-        other = control.pop(alias)
-        if other != value:
-            raise ValueError(f"use only one of control.{first} or control.{alias}")
-    numeric = _finite_float(value, f"control.{first}")
-    if positive and numeric <= 0.0:
-        raise ValueError(f"control.{first} must be positive")
-    return numeric
-
-
-def _reject_unknown_control_options(control: dict[str, Any], function_name: str) -> None:
-    if control:
-        unexpected = ", ".join(sorted(control))
-        raise ValueError(f"{function_name} control has unsupported option(s): {unexpected}")
-
-
-def _apply_coxph_control(
-    control: Any | None,
-    max_iter: int,
-    eps: float | None,
-    toler: float | None,
-) -> tuple[int, float | None, float | None, bool]:
-    values = _control_mapping(control, "coxph control")
-    if not values:
-        return max_iter, eps, toler, True
-
-    max_iter_value, name = _pop_control_alias(
-        values,
-        ("iter.max", "iter_max", "max_iter"),
-        "max_iter",
-        max_iter,
-        20,
-    )
-    if name is not None:
-        max_iter = _integer_scalar(max_iter_value, f"control.{name}")
-
-    eps_value, name = _pop_control_alias(values, ("eps",), "eps", eps, None)
-    if name is not None:
-        eps = _finite_float(eps_value, f"control.{name}")
-
-    toler_value, name = _pop_control_alias(
-        values,
-        ("toler.chol", "toler_chol", "tol_chol", "toler"),
-        "toler",
-        toler,
-        None,
-    )
-    if name is not None:
-        toler = _finite_float(toler_value, f"control.{name}")
-
-    timefix_value, name = _pop_control_alias(
-        values,
-        ("timefix", "time.fix", "time_fix"),
-        "timefix",
-        True,
-        True,
-    )
-    fix_time = _normalize_bool_option(timefix_value, f"control.{name}") if name else True
-
-    _pop_finite_control_value(values, ("toler.inf", "toler_inf"), positive=True)
-    _pop_finite_control_value(values, ("outer.max", "outer_max"), positive=True)
-    _reject_unknown_control_options(values, "coxph")
-    return max_iter, eps, toler, fix_time
-
-
-def _aeq_times(
-    *columns: Sequence[float], tolerance: float | None = None
-) -> tuple[list[float], ...]:
-    """R's ``aeqSurv`` on one or two time columns (``time``, or ``start``/``stop``).
-
-    This is the package's only timefix path: the Rust ``aeq_surv`` kernel snaps
-    near-tied times exactly as R does, and raises R's "an interval has effective
-    length 0" error when a ``(start, stop]`` interval collapses.
-    """
-
-    if len(columns) not in {1, 2}:
-        raise ValueError("_aeq_times takes one or two time columns")
-    first = [float(value) for value in columns[0]]
-    if len(columns) == 1:
-        return (list(_core.aeq_surv(first, None, tolerance).time),)
-    second = [float(value) for value in columns[1]]
-    result = _core.aeq_surv(first, second, tolerance)
-    return list(result.time), list(result.time2 or [])
-
-
-def _survdiff_timefix_values(times: list[float], timefix: bool) -> list[float]:
-    """Alias of :func:`_aeq_times` for one column (kept for the modules that import it)."""
-
-    if not timefix:
-        return times
-    return _aeq_times(times)[0]
-
-
-def _timefix_vectors(*vectors: list[float]) -> tuple[list[float], ...]:
-    """Alias of :func:`_aeq_times` (kept for the modules that import it)."""
-
-    return _aeq_times(*vectors)

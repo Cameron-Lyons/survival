@@ -134,12 +134,7 @@ def load_dataset(name: str) -> dict[str, list[Any]]:
     for candidate in candidates:
         loader = getattr(module, candidate, None)
         if loader is not None:
-            raw = loader()
-            columns = {
-                key: list(value)
-                for key, value in raw.items()
-                if not (isinstance(key, str) and key.startswith("_"))
-            }
+            columns = loader()
             # CSV-backed loaders cannot carry R's factor attributes. Restore
             # the dataset schema recorded by the generator before fitting.
             schema = next(

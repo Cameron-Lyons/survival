@@ -27,11 +27,17 @@ iteraction = "iteraction"    # yates.R: "cannot deal with iteraction terms"
 implimented = "implimented"  # survfit: "only stype=1, ctype=1 implimented"
 columm = "columm"            # survfit.coxph: "the default curve based on columm means"
 argments = "argments"        # "all additional argments must have a name"
+coverge = "coverge"          # coxpenal.fit: "Inner loop failed to coverge for iterations"
 rcall = "rcall"              # pyears' rate-table call expansion
 alph = "alph"                # nmath pgamma's shape parameter
 infp = "infp"                # survfit residual kernels
 yhat = "yhat"                # survfit residual kernels
 arange = "arange"            # numpy.arange, in the binding tests
+writeable = "writeable"      # numpy's ndarray.flags.writeable
+gam = "gam"                  # frailty(method = "gam") abbreviation matching
+objet = "objet"              # [.survfitms: "... for a survfit objet with both data and state dimesions"
+dimesions = "dimesions"      # the same R message
+stauts = "stauts"            # tmerge test reproducing R's "object 'stauts' not found"
 
 [files]
 extend-exclude = [

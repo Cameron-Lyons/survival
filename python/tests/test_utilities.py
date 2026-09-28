@@ -106,7 +106,6 @@ def test_aeq_surv_folds_near_ties_like_r():
     assert result.time == pytest.approx([1.0, 1.0, 2.0, 2.9999999999999])
     assert result.time[0] == result.time[1]
     assert result.time2 is None
-    assert result.changed == [1]
 
     two_column = data_prep.aeq_surv([0.0, 0.0, 1.0], [1.0, 1.0 + 1e-12, 2.0])
     assert two_column.time == pytest.approx([0.0, 0.0, 1.0])

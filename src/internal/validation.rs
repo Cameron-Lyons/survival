@@ -91,7 +91,7 @@ impl fmt::Display for ValidationError {
             ),
             Self::NonBinary { name, index, value } => write!(
                 f,
-                "{name} values must be 0 or 1; {name} must contain only 0/1 values; got {value} at index {index}"
+                "{name} must contain only 0/1 values; got {value} at index {index}"
             ),
             Self::OutOfRange {
                 name,
@@ -310,9 +310,6 @@ pub(crate) fn validate_binary_f64(slice: &[f64], name: &str) -> Result<(), Valid
 
 /// Values must be non-decreasing. `NaN` compares false and therefore passes;
 /// pair with [`validate_finite`] when the data may contain `NaN`.
-// Canonical helper for routines that require pre-sorted times (survfit,
-// pyears); callers currently open-code the check and are expected to migrate.
-#[allow(dead_code)]
 pub(crate) fn validate_sorted(slice: &[f64], name: &str) -> Result<(), ValidationError> {
     for (index, pair) in slice.windows(2).enumerate() {
         if pair[1] < pair[0] {
@@ -339,50 +336,6 @@ pub(crate) fn validate_matrix_shape(
             n_cols,
             got: values.len(),
         });
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PermutationIndexError {
-    Negative { position: usize, value: i32 },
-    OutOfBounds { position: usize, value: String },
-    Duplicate { position: usize, value: usize },
-}
-
-fn mark_permutation_index(
-    seen: &mut [bool],
-    position: usize,
-    zero_based_value: usize,
-    display_value: usize,
-) -> Result<(), PermutationIndexError> {
-    if zero_based_value >= seen.len() {
-        return Err(PermutationIndexError::OutOfBounds {
-            position,
-            value: display_value.to_string(),
-        });
-    }
-    if seen[zero_based_value] {
-        return Err(PermutationIndexError::Duplicate {
-            position,
-            value: display_value,
-        });
-    }
-    seen[zero_based_value] = true;
-    Ok(())
-}
-
-pub(crate) fn validate_zero_based_i32_permutation(
-    values: &[i32],
-    n: usize,
-) -> Result<(), PermutationIndexError> {
-    let mut seen = vec![false; n];
-    for (position, &value) in values.iter().enumerate() {
-        if value < 0 {
-            return Err(PermutationIndexError::Negative { position, value });
-        }
-        let value = value as usize;
-        mark_permutation_index(&mut seen, position, value, value)?;
     }
     Ok(())
 }
@@ -554,10 +507,9 @@ mod tests {
                 value: "2".to_string(),
             }
         );
-        assert!(err.to_string().contains("status values must be 0 or 1"));
-        assert!(
-            err.to_string()
-                .contains("status must contain only 0/1 values")
+        assert_eq!(
+            err.to_string(),
+            "status must contain only 0/1 values; got 2 at index 1"
         );
 
         assert!(validate_binary_f64(&[0.0, 1.0], "status").is_ok());
@@ -602,30 +554,5 @@ mod tests {
         }
         .into();
         assert!(err.to_string().contains("time cannot be empty"));
-    }
-
-    #[test]
-    fn zero_based_i32_permutation_rejects_invalid_indices() {
-        assert!(validate_zero_based_i32_permutation(&[2, 0, 1], 3).is_ok());
-
-        let negative = validate_zero_based_i32_permutation(&[0, -1, 1], 3)
-            .expect_err("negative index should fail");
-        assert_eq!(
-            negative,
-            PermutationIndexError::Negative {
-                position: 1,
-                value: -1,
-            }
-        );
-
-        let out_of_bounds = validate_zero_based_i32_permutation(&[0, 3, 1], 3)
-            .expect_err("out-of-bounds index should fail");
-        assert_eq!(
-            out_of_bounds,
-            PermutationIndexError::OutOfBounds {
-                position: 1,
-                value: "3".to_string(),
-            }
-        );
     }
 }

@@ -22,8 +22,11 @@ pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f6
     validate_binary_i32(&input.survival.status, "status")?;
     let weights = input.weights_or_unit_cow();
     let strata = input.strata_or_default_cow();
+    let time = &input.survival.time;
+    let order = order_within_strata(&strata, |a, b| time[a].total_cmp(&time[b]));
     Ok(coxmart_rows(
-        &input.survival.time,
+        &order,
+        time,
         &input.survival.status,
         &input.score,
         &weights,
@@ -32,10 +35,11 @@ pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f6
     ))
 }
 
-/// `coxph.fit`'s residual step on validated, unsorted rows: sort with
-/// `order(strata, time)`, run [`coxmart_sorted`] and restore the input
-/// order.
+/// `coxph.fit`'s residual step on validated rows in input order: gather
+/// them in `order`, the `order(strata, time)` permutation (`coxph.fit`'s
+/// `sorted`), run [`coxmart_sorted`] and restore the input order.
 pub(crate) fn coxmart_rows(
+    order: &[usize],
     time: &[f64],
     status: &[i32],
     score: &[f64],
@@ -43,7 +47,6 @@ pub(crate) fn coxmart_rows(
     strata: &[i32],
     method: TieMethod,
 ) -> Vec<f64> {
-    let order = order_within_strata(strata, |a, b| time[a].total_cmp(&time[b]));
     let sorted_time: Vec<f64> = order.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = order.iter().map(|&i| status[i]).collect();
     let sorted_score: Vec<f64> = order.iter().map(|&i| score[i]).collect();

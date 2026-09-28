@@ -1,8 +1,6 @@
 use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(agsurv4, m)?)?;
-    m.add_function(wrap_pyfunction!(agsurv5, m)?)?;
     m.add_function(wrap_pyfunction!(cox_survfit_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_py, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_confint_py, m)?)?;
@@ -12,13 +10,15 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(summary_survfit_py, m)?)?;
     m.add_function(wrap_pyfunction!(quantile_survfit_py, m)?)?;
     m.add_function(wrap_pyfunction!(survfitaj_py, m)?)?;
+    m.add_function(wrap_pyfunction!(coxphms_curves, m)?)?;
     m.add_function(wrap_pyfunction!(survdiff_py, m)?)?;
     m.add_function(wrap_pyfunction!(survdiff_one_sample_py, m)?)?;
-    m.add_function(wrap_pyfunction!(finegray, m)?)?;
+    m.add_function(wrap_pyfunction!(finegray_py, m)?)?;
     m.add_function(wrap_pyfunction!(finegray_regression, m)?)?;
     m.add_function(wrap_pyfunction!(competing_risks_cif, m)?)?;
-    m.add_function(wrap_pyfunction!(survreg, m)?)?;
     m.add_function(wrap_pyfunction!(survreg_fit_py, m)?)?;
+    m.add_function(wrap_pyfunction!(survpenal_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(survpenal_fit_from_state, m)?)?;
     m.add_function(wrap_pyfunction!(survreg_dtest, m)?)?;
     m.add_function(wrap_pyfunction!(dsurvreg, m)?)?;
     m.add_function(wrap_pyfunction!(psurvreg, m)?)?;
@@ -51,7 +51,9 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(royston_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_risk_py, m)?)?;
+    m.add_function(wrap_pyfunction!(yates_survival_py, m)?)?;
     m.add_function(wrap_pyfunction!(population_means_py, m)?)?;
+    m.add_function(wrap_pyfunction!(yates_estimable_py, m)?)?;
     m.add_function(wrap_pyfunction!(uno_c_index, m)?)?;
     m.add_function(wrap_pyfunction!(compare_uno_c_indices, m)?)?;
     m.add_function(wrap_pyfunction!(c_index_decomposition, m)?)?;
@@ -83,21 +85,14 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         crate::reliability::core::mean_residual_life,
         m
     )?)?;
-    m.add_function(wrap_pyfunction!(survfit_from_hazard, m)?)?;
-    m.add_function(wrap_pyfunction!(survfit_from_cumhaz, m)?)?;
-    m.add_function(wrap_pyfunction!(survfit_from_matrix, m)?)?;
-    m.add_function(wrap_pyfunction!(survfit_multistate, m)?)?;
-    m.add_function(wrap_pyfunction!(condition_cox_survfit_curves, m)?)?;
     m.add_function(wrap_pyfunction!(step_values_at, m)?)?;
-    m.add_function(wrap_pyfunction!(step_matrix_values_at, m)?)?;
-    m.add_function(wrap_pyfunction!(cox_survfit_from_baseline, m)?)?;
-    m.add_function(wrap_pyfunction!(basehaz, m)?)?;
     m.add_function(wrap_pyfunction!(statefig_py, m)?)?;
 
     register_classes!(
         m,
         GEEConfig,
         GEEResult,
+        AgsurvCurve,
         SurvfitKMResult,
         SurvfitCounts,
         SurvfitInfluence,
@@ -113,6 +108,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         FineGrayResult,
         CompetingRisksCIF,
         SurvregFit,
+        SurvpenalFit,
         SurvregData,
         SurvregControl,
         SurvregDistribution,
@@ -154,6 +150,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         YatesResult,
         YatesEstimate,
         YatesContrast,
+        YatesCurves,
         UnoCIndexResult,
         ConcordanceComparisonResult,
         CIndexDecompositionResult,
@@ -168,7 +165,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         CipoissonResult,
         ReliabilityResult,
         ReliabilityScale,
-        SurvfitMatrixResult,
     );
 
     Ok(())

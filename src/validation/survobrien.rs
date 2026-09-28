@@ -8,7 +8,9 @@
 //! keeper columns, cluster terms) belongs to the caller: it passes the
 //! continuous columns and copies its keeper columns with [`SurvObrienExpansion::row`].
 
+use crate::core::strata_order::validate_intervals;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::step::rank_average;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use pyo3::prelude::*;
 
@@ -46,22 +48,7 @@ pub struct SurvObrienExpansion {
 /// O'Brien's default transform: logits of the mid-rank percentiles.
 fn logit_rank_transform(values: &[f64]) -> Vec<f64> {
     let n = values.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
-    let mut ranks = vec![0.0; n];
-    let mut start = 0;
-    while start < n {
-        let mut end = start + 1;
-        while end < n && values[order[end]] == values[order[start]] {
-            end += 1;
-        }
-        let average_rank = ((start + 1) + end) as f64 / 2.0;
-        for &idx in &order[start..end] {
-            ranks[idx] = average_rank;
-        }
-        start = end;
-    }
-    ranks
+    rank_average(values)
         .iter()
         .map(|&rank| {
             let percentile = (rank - 0.5) / n as f64;
@@ -83,11 +70,7 @@ fn validate(input: &SurvObrienInput<'_>) -> SurvivalResult<()> {
     if let Some(start) = input.start {
         validate_length(n, start.len(), "start")?;
         validate_finite(start, "start")?;
-        if let Some(index) = (0..n).find(|&i| start[i] >= input.time[i]) {
-            return Err(SurvivalError::invalid_input(format!(
-                "Stop time must be > start time (row {index})"
-            )));
-        }
+        validate_intervals(start, input.time)?;
     }
     if let Some(strata) = input.strata {
         validate_length(n, strata.len(), "strata")?;

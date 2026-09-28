@@ -9,20 +9,17 @@ pub struct PystepResult {
     pub time: f64,
     /// Linear (column-major) index of the cell, `None` when off table.
     pub index: Option<usize>,
-    /// Second index for the linear interpolation of old-style US tables.
-    pub index2: usize,
-    /// Weight of `index` in that interpolation (1 without interpolation).
-    pub weight: f64,
 }
 
 /// One dimension of the table as `pystep` sees it.
 ///
-/// `factors[i]` is 1 for a factor dimension, 0 for a continuous one and
-/// `>= 2` for the interpolated calendar-year axis of old US tables (with
-/// `1 + (factors[i] - 1) * dims[i]` cutpoints).  For `edge == false` the
-/// cutpoints of a continuous dimension hold one extra upper limit
-/// (`dims[i] + 1` values) and time outside them is reported off table; for
-/// `edge == true` the table extends infinitely at both ends.
+/// `factors[i]` is 1 for a factor dimension and 0 for a continuous one, R's
+/// `rfac` for a table with a `type` attribute (`RateTable::factor_flags`);
+/// the C code's interpolation of the `rfac > 1` year axis of old-style
+/// tables is not ported.  For `edge == false` the cutpoints of a continuous
+/// dimension hold one extra upper limit (`dims[i] + 1` values) and time
+/// outside them is reported off table; for `edge == true` the table extends
+/// infinitely at both ends.
 pub struct PystepTable<'a> {
     pub factors: &'a [i32],
     pub dims: &'a [usize],
@@ -30,26 +27,21 @@ pub struct PystepTable<'a> {
     pub edge: bool,
 }
 
-/// `pystep(nc, index, index2, wt, data, fac, dims, cuts, step, edge)`.
+/// `pystep(nc, index, index2, wt, data, fac, dims, cuts, step, edge)` without
+/// the `index2` and `wt` outputs of the old-style year interpolation: the time
+/// until the next cutpoint (at most `step`) and the cell it is spent in.
 pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult {
-    let mut index = 0isize;
-    let mut index2 = 0isize;
-    let mut stride = 1isize;
-    let mut weight = 1.0;
+    let mut index = 0usize;
+    let mut stride = 1usize;
     let mut shortfall = 0.0;
     let mut max_time = step;
 
     for (i, (&factor, &dim)) in table.factors.iter().zip(table.dims).enumerate() {
         if factor == 1 {
-            index += (data[i] as isize - 1) * stride;
+            index += (data[i] as usize - 1) * stride;
         } else {
             let cuts = table.cuts[i];
-            let cut_count = if factor > 1 {
-                1 + (factor as usize - 1) * dim
-            } else {
-                dim
-            };
-            let mut j = cuts[..cut_count].partition_point(|&cut| data[i] >= cut);
+            let mut j = cuts[..dim].partition_point(|&cut| data[i] >= cut);
 
             if j == 0 {
                 // Less than the first cutpoint.
@@ -58,7 +50,7 @@ pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult 
                     shortfall = temp.min(step);
                 }
                 max_time = max_time.min(temp);
-            } else if j == cut_count {
+            } else if j == dim {
                 // Beyond the last cutpoint.
                 if !table.edge {
                     let temp = cuts[j] - data[i];
@@ -68,36 +60,59 @@ pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult 
                         max_time = max_time.min(temp);
                     }
                 }
-                j = if factor > 1 { dim - 1 } else { j - 1 };
+                j -= 1;
             } else {
                 max_time = max_time.min(cuts[j] - data[i]);
                 j -= 1;
-                if factor > 1 {
-                    weight = 1.0 - (j % factor as usize) as f64 / factor as f64;
-                    j /= factor as usize;
-                    index2 = stride;
-                }
             }
-            index += j as isize * stride;
+            index += j * stride;
         }
-        stride *= dim as isize;
+        stride *= dim;
     }
 
-    index2 += index;
     if shortfall == 0.0 {
         PystepResult {
             time: max_time,
-            index: Some(index as usize),
-            index2: index2 as usize,
-            weight,
+            index: Some(index),
         }
     } else {
         PystepResult {
             time: shortfall,
             index: None,
-            index2: index2 as usize,
-            weight,
         }
+    }
+}
+
+/// `pystep(table, data, f64::INFINITY)` for an `edge == true` table, also
+/// giving the cutpoint that ends the cell along each dimension in `limits`
+/// (`INFINITY` past the last cutpoint and for a factor).  While every
+/// `data[i] < limits[i]` the cell is unchanged and `pystep`'s time is the
+/// least `limits[i] - data[i]`, so a subject moving through the cell needs no
+/// new search of the cutpoints.
+pub fn pystep_cell(table: &PystepTable<'_>, data: &[f64], limits: &mut [f64]) -> PystepResult {
+    debug_assert!(table.edge);
+    let mut index = 0usize;
+    let mut stride = 1usize;
+    let mut max_time = f64::INFINITY;
+
+    for (i, (&factor, &dim)) in table.factors.iter().zip(table.dims).enumerate() {
+        limits[i] = f64::INFINITY;
+        if factor == 1 {
+            index += (data[i] as usize - 1) * stride;
+        } else {
+            let cuts = table.cuts[i];
+            let j = cuts[..dim].partition_point(|&cut| data[i] >= cut);
+            if j < dim {
+                limits[i] = cuts[j];
+                max_time = max_time.min(cuts[j] - data[i]);
+            }
+            index += j.saturating_sub(1) * stride;
+        }
+        stride *= dim;
+    }
+    PystepResult {
+        time: max_time,
+        index: Some(index),
     }
 }
 
@@ -127,9 +142,7 @@ mod tests {
             result,
             PystepResult {
                 time: 0.75,
-                index: Some(0),
-                index2: 0,
-                weight: 1.0
+                index: Some(0)
             }
         );
     }
@@ -158,18 +171,31 @@ mod tests {
     }
 
     #[test]
-    fn interpolates_old_style_us_year_axes() {
-        // Two decades, interpolated in 10 steps: 21 cutpoints.
-        let year_cuts: Vec<f64> = (0..21).map(|i| i as f64 * 365.25).collect();
-        let cuts: [&[f64]; 1] = [&year_cuts];
-        let result = pystep(
-            &table(&[10], &[2], &cuts, true),
-            &[3.0 * 365.25 + 1.0],
-            5000.0,
-        );
-        assert_eq!(result.index, Some(0));
-        assert_eq!(result.index2, 1);
-        assert!((result.weight - 0.7).abs() < 1e-12);
-        assert!((result.time - (365.25 - 1.0)).abs() < 1e-9);
+    fn cell_limits_give_pysteps_step_anywhere_in_the_cell() {
+        let cuts: [&[f64]; 3] = [&[0.0, 10.0, 20.0], &[], &[-3.0, 4.5]];
+        let open = table(&[0, 1, 0], &[3, 2, 2], &cuts, true);
+        let mut limits = [0.0; 3];
+        let time_to_limits = |limits: &[f64], data: &[f64]| {
+            (0..3).fold(f64::INFINITY, |t, i| t.min(limits[i] - data[i]))
+        };
+        for data in [
+            [-5.0, 2.0, -7.0],
+            [0.0, 1.0, 4.5],
+            [12.5, 2.0, 0.1],
+            [19.9, 1.0, 4.4],
+            [25.0, 2.0, -3.0],
+        ] {
+            let cell = pystep_cell(&open, &data, &mut limits);
+            assert_eq!(cell, pystep(&open, &data, f64::INFINITY));
+            assert_eq!(cell.time, time_to_limits(&limits, &data));
+            for step in [0.05, 1.0, 100.0] {
+                let moved = [data[0] + step, data[1], data[2] + step];
+                if (0..3).all(|i| moved[i] < limits[i]) {
+                    let expected = pystep(&open, &moved, f64::INFINITY);
+                    assert_eq!(expected.index, cell.index);
+                    assert_eq!(expected.time, time_to_limits(&limits, &moved));
+                }
+            }
+        }
     }
 }

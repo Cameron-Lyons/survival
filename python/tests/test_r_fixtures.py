@@ -183,15 +183,10 @@ def _kwargs(
     data: Mapping[str, Any],
     *,
     drop: Sequence[str] = (),
-    na_omit: bool = True,
 ) -> dict:
-    """Translate R call arguments into Python keyword arguments.
+    """Translate R call arguments into Python keyword arguments."""
 
-    R's model functions drop rows with missing values (``na.action = na.omit``)
-    by default, so ``na_action="omit"`` is passed unless the case says otherwise.
-    """
-
-    out: dict[str, Any] = {"na_action": "omit"} if na_omit else {}
+    out: dict[str, Any] = {}
     for name, value in args.items():
         if name in drop:
             continue
@@ -828,7 +823,7 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
             "robust se": ("robust_se", RTOL_VAR),
             "z": ("z", RTOL_VAR),
             "Pr(>|z|)": ("p", RTOL_VAR),
-            "Value": ("value", RTOL_COEF),
+            "Value": ("coef", RTOL_COEF),
             "SE": ("se", RTOL_VAR),
             "Z": ("z", RTOL_VAR),
             "p": ("p", RTOL_VAR),
@@ -1020,7 +1015,7 @@ class CoxphHandler(TopicHandler):
 
     def _check_anova_nested(self, case):
         data = case_data(self.topic, case)
-        fits = [r.coxph(formula, data, na_action="omit") for formula in case["formulas"]]
+        fits = [r.coxph(formula, data) for formula in case["formulas"]]
         _check_anova(r.anova(*fits), case["expected"]["anova"], nested=True)
 
 
@@ -1044,7 +1039,8 @@ def _check_anova(result: Any, expected: Mapping[str, Any], nested: bool = False)
 def _check_cox_residual(fit: Any, kind: str, expected: Any) -> None:
     actual = r.residuals(fit, type=kind)
     if kind in ("schoenfeld", "scaledsch"):
-        expected = expected["values"]
+        assert_close(actual.time, expected["time"], rtol=RTOL_COEF, path=f"residuals.{kind}.time")
+        actual, expected = actual.values, expected["values"]
     if expected and isinstance(expected[0], list):
         if actual and not isinstance(actual[0], list):
             actual = [[value] for value in actual]
@@ -1418,7 +1414,7 @@ class SurvregHandler(TopicHandler):
                 path="loglik",
             )
         elif aspect == "iter":
-            assert_exact(_attr(fit, "iterations"), expected["iter"], path="iter")
+            assert_exact(_attr(fit, "iter"), expected["iter"], path="iter")
         elif aspect == "df":
             assert_exact(r.degrees_freedom(fit), expected["df"], path="df")
         elif aspect == "df_residual":
@@ -1562,15 +1558,15 @@ class ConcordanceHandler(TopicHandler):
             data = case_data(self.topic, case)
             key = aspect.split(".")[0]
             if key == "coxph":
-                cc = r.concordance(r.coxph(case["formula"], data, na_action="omit"))
+                cc = r.concordance(r.coxph(case["formula"], data))
             elif key == "coxph_timewt_S":
-                cc = r.concordance(r.coxph(case["formula"], data, na_action="omit"), timewt="S")
+                cc = r.concordance(r.coxph(case["formula"], data), timewt="S")
             elif key == "survreg":
-                cc = r.concordance(r.survreg(case["formula"], data, na_action="omit"))
+                cc = r.concordance(r.survreg(case["formula"], data))
             else:
                 cc = r.concordance(
-                    r.coxph(case["formula"], data, na_action="omit"),
-                    r.coxph("Surv(time, status) ~ age", data, na_action="omit"),
+                    r.coxph(case["formula"], data),
+                    r.coxph("Surv(time, status) ~ age", data),
                 )
             _check_concordance_result(cc, expected[key], aspect)
             return
@@ -1708,7 +1704,6 @@ class CchHandler(TopicHandler):
                 "id": args["id"],
                 "method": args["method"],
                 "cohort_size": args["cohort.size"],
-                "na_action": "omit",
             }
             if "stratum" in args:
                 kwargs["stratum"] = args["stratum"]
@@ -1761,7 +1756,7 @@ class ClogitHandler(TopicHandler):
 
         def build():
             data = case_data(self.topic, case)
-            return r.clogit(case["formula"], data, method=case["args"]["method"], na_action="omit")
+            return r.clogit(case["formula"], data, method=case["args"]["method"])
 
         fit = _cached(_fit_key("clogit", case), build)
         if aspect == "coef":
@@ -1806,7 +1801,7 @@ class FinegrayHandler(TopicHandler):
 
         def build():
             data = case_data(self.topic, case)
-            kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+            kwargs = _kwargs(case.get("args", {}), data)
             return r.finegray(_mstate_formula(case["formula"], data), data, **kwargs)
 
         frame = _cached(_fit_key("finegray", case), build)
@@ -1888,7 +1883,6 @@ class YatesHandler(TopicHandler):
         args = dict(case.get("args", {}))
         term = args.pop("term")
         expected = case["expected"]
-        # yates reads the model frame of the fit (R re-evaluates the call; Python keeps it)
         if case.get("fit", "coxph") == "lm":
             # lm belongs to R's stats package. Fit its least-squares reference
             # independently, then exercise survival's generic model adapter.
@@ -1911,7 +1905,7 @@ class YatesHandler(TopicHandler):
             fit = r.YatesModel(case["formula"], data, beta.tolist(), variance.tolist(), sigma2)
             assert np.allclose(_design_rows_from_spec(data, fit.design, len(y)), x)
         else:
-            fit = _coxph_fit(topic, {**case, "args": {"model": True}})
+            fit = _coxph_fit(topic, {**case, "args": {}})
         if args.get("predict") == "risk":
             args["options"] = {"seed": 20240601}  # generator's set.seed()
 
@@ -1943,7 +1937,9 @@ class YatesHandler(TopicHandler):
         elif aspect == "test":
             table = expected["test"]
             assert_exact([row.name for row in result.test], table["rownames"], path="test.names")
-            actual = [[row.chisq, float(row.df)] for row in result.test]
+            actual = [
+                [row.chisq, math.nan if row.df is None else float(row.df)] for row in result.test
+            ]
             values = [row[:2] for row in table["values"]]
             assert_matrix_close(actual, values, rtol=RTOL_VAR, path="test")
         elif aspect == "mvar":
@@ -2153,7 +2149,7 @@ class SurvcheckHandler(TopicHandler):
 
         def build():
             data = case_data(topic, case)
-            kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+            kwargs = _kwargs(case.get("args", {}), data)
             return r.survcheck(_mstate_formula(case["formula"], data), data, **kwargs)
 
         result = _cached(_fit_key("survcheck", case), build)
@@ -2292,7 +2288,7 @@ class SurvSplitHandler(TopicHandler):
 
     def check(self, case, aspect):
         data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+        kwargs = _kwargs(case.get("args", {}), data)
         frame = r.survSplit(case["formula"], data, **kwargs)
         _compare_frames(frame, case["expected"]["frame"])
 
@@ -2305,7 +2301,7 @@ class SurvcondenseHandler(TopicHandler):
 
     def check(self, case, aspect):
         data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+        kwargs = _kwargs(case.get("args", {}), data)
         frame = r.survcondense(case["formula"], data, **kwargs)
         # R names the id column after the deparsed ``id`` argument, which the
         # generator's do.call turns into the first id value ("1").
@@ -2480,7 +2476,7 @@ class RttrightHandler(TopicHandler):
     def check(self, case, aspect):
         expected = case["expected"]
         data = case_data(self.topic, case)
-        kwargs = _kwargs(case.get("args", {}), data, na_omit=False)
+        kwargs = _kwargs(case.get("args", {}), data)
         result = r.rttright(_mstate_formula(case["formula"], data), data=data, **kwargs)
         if "times" in expected and len(expected["times"]) > 1:
             assert_matrix_close(result, expected["weights"], rtol=RTOL_COEF, path="weights")
@@ -2494,7 +2490,7 @@ class RttrightHandler(TopicHandler):
 def _pyears_call(case: Mapping[str, Any]) -> Any:
     data = case_data("pyears", case)
     args = dict(case.get("args", {}))
-    kwargs = _kwargs(args, data, na_omit=False, drop=("ratetable", "rmap"))
+    kwargs = _kwargs(args, data, drop=("ratetable", "rmap"))
     if "ratetable" in args:
         kwargs["ratetable"] = _ratetable_by_name(args["ratetable"])
         kwargs["rmap"] = _rmap_arguments(args["rmap"])
@@ -2638,7 +2634,7 @@ class SurvexpHandler(TopicHandler):
             return
         args = dict(case.get("args", {}))
         data = case_data(self.topic, case)
-        kwargs = _kwargs(args, data, na_omit=False, drop=("ratetable", "rmap"))
+        kwargs = _kwargs(args, data, drop=("ratetable", "rmap"))
         kwargs["ratetable"] = _ratetable_by_name(args["ratetable"])
         kwargs["rmap"] = _rmap_arguments(args["rmap"])
         result = _cached(

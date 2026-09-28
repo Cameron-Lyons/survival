@@ -3,10 +3,11 @@
 //! and matched to the table with `match_ratetable`.  A Cox model used as a
 //! rate table (`survexp.cfit`) is not handled here.
 
-use super::pyears::rows_to_matrix;
 use super::ratetable::RateTable;
 use super::survexp_fit::survexp_fit;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
+use crate::internal::step::sort_unique;
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use ndarray::Array2;
 use pyo3::prelude::*;
@@ -190,14 +191,13 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
         }
         (None, Some(times)) => {
             let max_time = times.iter().copied().fold(0.0, f64::max);
-            (sorted_unique(times), vec![max_time; n])
+            (sort_unique(times.iter().copied()), vec![max_time; n])
         }
-        (Some(y), None) => (sorted_unique(y), y.to_vec()),
+        (Some(y), None) => (sort_unique(y.iter().copied()), y.to_vec()),
         (Some(y), Some(times)) => {
             let max_time = times.iter().copied().fold(0.0, f64::max);
-            let mut all = times.to_vec();
-            all.extend(y.iter().copied().filter(|&t| t < max_time));
-            (sorted_unique(&all), y.to_vec())
+            let early = y.iter().copied().filter(|&t| t < max_time);
+            (sort_unique(times.iter().copied().chain(early)), y.to_vec())
         }
     };
     let fit = survexp_fit(
@@ -252,22 +252,17 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
     })
 }
 
-fn sorted_unique(values: &[f64]) -> Vec<f64> {
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    sorted.dedup();
-    sorted
-}
-
 /// Python entry point of [`survexp`]: `positions` is `match_ratetable(...).r`,
 /// `group` zero-based curve numbers, `method` one of R's choices or `None`.
+/// The kernel runs with the GIL released.
 #[pyfunction(name = "survexp")]
 #[pyo3(signature = (ratetable, positions, y=None, group=None, times=None, method=None, cohort=true, conditional=false, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn survexp_py(
+    py: Python<'_>,
     ratetable: &RateTable,
-    positions: Vec<Vec<f64>>,
-    y: Option<Vec<f64>>,
+    positions: FloatMatrix,
+    y: Option<FloatVec>,
     group: Option<Vec<usize>>,
     times: Option<Vec<f64>>,
     method: Option<&str>,
@@ -275,21 +270,20 @@ pub fn survexp_py(
     conditional: bool,
     scale: f64,
 ) -> PyResult<SurvExpResult> {
-    let positions = rows_to_matrix(&positions, positions.len(), ratetable.ndim(), "positions")?;
+    let n = positions.nrow();
+    let positions = positions.into_shape(n, ratetable.ndim(), "positions")?;
     let method = method.map(SurvexpMethod::parse).transpose()?;
-    Ok(survexp(
-        ratetable,
-        SurvexpInput {
-            positions: &positions,
-            y: y.as_deref(),
-            group: group.as_deref(),
-            times: times.as_deref(),
-            method,
-            cohort,
-            conditional,
-            scale,
-        },
-    )?)
+    let input = SurvexpInput {
+        positions: &positions,
+        y: y.as_deref(),
+        group: group.as_deref(),
+        times: times.as_deref(),
+        method,
+        cohort,
+        conditional,
+        scale,
+    };
+    Ok(py.detach(|| survexp(ratetable, input))?)
 }
 
 #[cfg(test)]

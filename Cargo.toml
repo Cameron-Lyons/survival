@@ -22,20 +22,20 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pyo3 = { version = "0.29.0", optional = true }
 numpy = { version = "0.29.0", optional = true }
-ndarray = "0.17.2"
+ndarray = { version = "0.17.2", features = ["serde"] }
 rayon = "1.12.0"
 burn = { version = "0.21.0", default-features = false, features = ["autodiff", "ndarray"], optional = true }
 survival-pyo3-macros-shim = { version = "0.1.0", path = "survival-pyo3-macros-shim" }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+bincode = { version = "2.0.1", default-features = false, features = ["std", "serde"], optional = true }
 
 [features]
 default = []
-python = ["dep:numpy", "dep:pyo3", "dep:pyo3-build-config"]
+python = ["dep:bincode", "dep:numpy", "dep:pyo3", "dep:pyo3-build-config"]
 ml = ["dep:burn"]
-cuda = []
 extension-module = ["python", "pyo3/extension-module"]
 
 [dev-dependencies]
-serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["float_roundtrip"] }
 divan = "0.1.21"
 

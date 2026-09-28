@@ -198,7 +198,7 @@ fn canonical_survreg_bootstrap_distribution(distribution: &str) -> Option<&'stat
         "weibull" => Some("weibull"),
         "exponential" => Some("exponential"),
         "rayleigh" => Some("rayleigh"),
-        "extreme" | "extreme_value" | "extremevalue" => Some("extreme_value"),
+        "extreme" | "extreme_value" | "extremevalue" => Some("extreme"),
         "gaussian" | "normal" => Some("gaussian"),
         "logistic" => Some("logistic"),
         "lognormal" | "log_normal" | "loggaussian" | "log_gaussian" => Some("lognormal"),
@@ -246,7 +246,7 @@ pub(crate) fn bootstrap_cox(
         original_builder = original_builder.weights(Array1::from_vec(weights));
     }
     let mut original_fit = original_builder.build()?;
-    original_fit.fit();
+    original_fit.fit()?;
     let original_beta = original_fit.results().coefficients;
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
     let bootstrap_coefs: Vec<Vec<f64>> = (0..config.n_bootstrap)
@@ -289,7 +289,7 @@ pub(crate) fn bootstrap_cox(
             }
             match builder.build() {
                 Ok(mut fit) => {
-                    fit.fit();
+                    fit.fit().ok()?;
                     Some(fit.results().coefficients)
                 }
                 Err(_) => None,
@@ -395,7 +395,7 @@ pub(crate) fn bootstrap_survreg(
     distribution: &str,
     config: &BootstrapConfig,
 ) -> Result<BootstrapResult, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::regression::parametric_survival::survreg;
+    use crate::regression::parametric_survival::survreg_from_codes;
     let n = time.len();
     let nvar = covariates.nrows();
     let cov_vecs: Vec<Vec<f64>> = (0..n)
@@ -405,7 +405,7 @@ pub(crate) fn bootstrap_survreg(
         std::io::Error::new(std::io::ErrorKind::InvalidInput, SURVREG_DISTRIBUTION_ERROR)
     })?;
 
-    let original = survreg(
+    let original = survreg_from_codes(
         time.to_vec(),
         status.to_vec(),
         cov_vecs.clone(),
@@ -430,7 +430,7 @@ pub(crate) fn bootstrap_survreg(
             let boot_status: Vec<f64> = indices.iter().map(|&i| status[i]).collect();
             let boot_covariates: Vec<Vec<f64>> =
                 indices.iter().map(|&i| cov_vecs[i].clone()).collect();
-            match survreg(
+            match survreg_from_codes(
                 boot_time,
                 boot_status,
                 boot_covariates,

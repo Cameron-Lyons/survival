@@ -8,8 +8,11 @@
 use super::survfitaj::{SurvfitAJCounts, SurvfitAJResult};
 use super::survfitkm::{SurvfitCounts, SurvfitInfluence, SurvfitKMResult};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::step::find_interval;
 use crate::internal::validation::validate_finite;
+use ndarray::{Array2, ShapeBuilder};
 use pyo3::prelude::*;
+use std::sync::Arc;
 
 /// `all.equal`'s tolerance, used by `survmean` and `quantile.survfit`.
 fn r_tolerance() -> f64 {
@@ -18,8 +21,17 @@ fn r_tolerance() -> f64 {
 
 /// Port of `survfit0`: insert a row at the starting time `t0` with `surv =
 /// 1`, `cumhaz = 0`, zero counts and zero standard errors into every curve
-/// that does not already start there.  Influence matrices get a zero column.
+/// that does not already start there.  The influence matrices of those
+/// curves get a zero column; R adds one to every curve's matrix once any
+/// curve gets a row, leaving a curve already at `t0` with one column more
+/// than it has times.
 pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
+    survfit0_with(fit, true)
+}
+
+/// [`survfit0`], leaving out the influence matrices unless
+/// `keep_influence`: the summaries built on it never read them.
+pub(crate) fn survfit0_with(fit: &SurvfitKMResult, keep_influence: bool) -> SurvfitKMResult {
     let t0 = fit.t0;
     let ranges = fit.curve_ranges();
     let inserts: Vec<bool> = ranges
@@ -27,7 +39,11 @@ pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
         .map(|range| range.is_empty() || fit.time[range.start] != t0)
         .collect();
     if inserts.iter().all(|&insert| !insert) {
-        return fit.clone();
+        return if keep_influence {
+            fit.clone()
+        } else {
+            fit.clone_without_influence()
+        };
     }
     let n_new: usize = fit.time.len() + inserts.iter().filter(|&&insert| insert).count();
     // build the stacked vectors with the extra rows
@@ -49,26 +65,33 @@ pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
         values.as_ref().map(|values| addto(values, zero, false))
     };
     let add_influence = |list: &Option<Vec<SurvfitInfluence>>| -> Option<Vec<SurvfitInfluence>> {
-        list.as_ref().map(|list| {
+        let list = list.as_ref().filter(|_| keep_influence)?;
+        let with_zero_column = |influence: &SurvfitInfluence| {
+            // column-major: the new first column is nid zeros ahead of the rest
+            let (nid, ntime) = influence.values.dim();
+            let mut values = Vec::with_capacity(nid * (ntime + 1));
+            values.resize(nid, 0.0);
+            values.extend(influence.values.t().iter());
+            SurvfitInfluence {
+                cluster: influence.cluster.clone(),
+                values: Arc::new(
+                    Array2::from_shape_vec((nid, ntime + 1).f(), values)
+                        .expect("one column of nid values per time"),
+                ),
+            }
+        };
+        Some(
             list.iter()
                 .zip(&inserts)
-                .map(|(influence, &insert)| SurvfitInfluence {
-                    cluster: influence.cluster.clone(),
-                    values: influence
-                        .values
-                        .iter()
-                        .map(|row| {
-                            let mut new_row = Vec::with_capacity(row.len() + 1);
-                            if insert {
-                                new_row.push(0.0);
-                            }
-                            new_row.extend_from_slice(row);
-                            new_row
-                        })
-                        .collect(),
+                .map(|(influence, &insert)| {
+                    if insert {
+                        with_zero_column(influence)
+                    } else {
+                        influence.clone()
+                    }
                 })
-                .collect()
-        })
+                .collect(),
+        )
     };
     SurvfitKMResult {
         n: fit.n.clone(),
@@ -109,29 +132,37 @@ pub fn survfit0(fit: &SurvfitKMResult) -> SurvfitKMResult {
     }
 }
 
+/// The rows of `survfit0_aj(fit)`: the 0-based row of `fit` each one
+/// copies, or `-1 - s` for the row at `t0` inserted into curve `s` (every
+/// curve that does not already start there).
+pub(crate) fn survfit0_aj_rows(fit: &SurvfitAJResult) -> Vec<i64> {
+    let mut rows = Vec::with_capacity(fit.time.len() + fit.n_curves());
+    for (curve, range) in fit.curve_ranges().into_iter().enumerate() {
+        if range.is_empty() || fit.time[range.start] != fit.t0 {
+            rows.push(-1 - curve as i64);
+        }
+        rows.extend(range.map(|i| i as i64));
+    }
+    rows
+}
+
 /// `survfit0` for a multi-state curve: the inserted row carries `p0`,
 /// zero hazards and, as R has it for `survfitms` objects, zero standard
 /// errors and confidence limits.  The influence matrices are left alone.
 pub fn survfit0_aj(fit: &SurvfitAJResult) -> SurvfitAJResult {
     let t0 = fit.t0;
-    let ranges = fit.curve_ranges();
-    let inserts: Vec<bool> = ranges
-        .iter()
-        .map(|range| range.is_empty() || fit.time[range.start] != t0)
-        .collect();
-    if inserts.iter().all(|&insert| !insert) {
+    let rows = survfit0_aj_rows(fit);
+    if rows.len() == fit.time.len() {
         return fit.clone();
     }
-    let n_new = fit.time.len() + inserts.iter().filter(|&&insert| insert).count();
+    let ranges = fit.curve_ranges();
     let addrows = |values: &[Vec<f64>], row: &dyn Fn(usize) -> Vec<f64>| -> Vec<Vec<f64>> {
-        let mut out = Vec::with_capacity(n_new);
-        for (curve, (range, &insert)) in ranges.iter().zip(&inserts).enumerate() {
-            if insert {
-                out.push(row(curve));
-            }
-            out.extend(values[range.clone()].iter().cloned());
-        }
-        out
+        rows.iter()
+            .map(|&r| match usize::try_from(r) {
+                Ok(r) => values[r].clone(),
+                Err(_) => row((-1 - r) as usize),
+            })
+            .collect()
     };
     let nstate = fit.states.len();
     let nhaz = fit.hazard_from.len();
@@ -148,13 +179,10 @@ pub fn survfit0_aj(fit: &SurvfitAJResult) -> SurvfitAJResult {
     let add_option = |values: &Option<Vec<Vec<f64>>>, row: &dyn Fn(usize) -> Vec<f64>| {
         values.as_ref().map(|values| addrows(values, row))
     };
-    let mut time = Vec::with_capacity(n_new);
-    for (range, &insert) in ranges.iter().zip(&inserts) {
-        if insert {
-            time.push(t0);
-        }
-        time.extend_from_slice(&fit.time[range.clone()]);
-    }
+    let time: Vec<f64> = rows
+        .iter()
+        .map(|&r| usize::try_from(r).map_or(t0, |r| fit.time[r]))
+        .collect();
     SurvfitAJResult {
         n: fit.n.clone(),
         time,
@@ -186,11 +214,11 @@ pub fn survfit0_aj(fit: &SurvfitAJResult) -> SurvfitAJResult {
         upper: add_option(&fit.upper, &zeros_state),
         p0: fit.p0.clone(),
         strata: fit.strata.as_ref().map(|strata| {
-            strata
-                .iter()
-                .zip(&inserts)
-                .map(|(&count, &insert)| count + usize::from(insert))
-                .collect()
+            let mut sizes = strata.clone();
+            for &r in rows.iter().filter(|&&r| r < 0) {
+                sizes[(-1 - r) as usize] += 1;
+            }
+            sizes
         }),
         strata_codes: fit.strata_codes.clone(),
         n_id: fit.n_id.clone(),
@@ -453,22 +481,14 @@ pub fn survmean(
     Ok(table)
 }
 
-/// `findInterval(t, times)`: the number of `times` that are `<= t`
-/// (`left_open`: `< t`).  `times` must be sorted.
-fn find_interval(times: &[f64], t: f64, left_open: bool) -> usize {
-    if left_open {
-        times.partition_point(|&x| x < t)
-    } else {
-        times.partition_point(|&x| x <= t)
-    }
-}
-
 /// `summary.survfit` without a `times` argument: `censored = FALSE` keeps
 /// only the rows with events, accumulating the censoring and entry counts
 /// in between into the next kept row; `censored = TRUE` is the fit itself.
 /// Either way `std_err` is put on the survival scale (`logse = false`).
+/// The influence matrices are left out: R's summary object carries the
+/// fit's matrices along unchanged, and they do not line up with its rows.
 pub fn summary_survfit(fit: &SurvfitKMResult, censored: bool) -> SurvfitKMResult {
-    let mut out = fit.clone();
+    let mut out = fit.clone_without_influence();
     if !censored {
         let ranges = fit.curve_ranges();
         let keep: Vec<usize> = (0..fit.time.len())
@@ -515,8 +535,6 @@ pub fn summary_survfit(fit: &SurvfitKMResult, censored: bool) -> SurvfitKMResult
             .strata
             .as_ref()
             .map(|_| kept_ranges.iter().map(ExactSizeIterator::len).collect());
-        out.influence_surv = None;
-        out.influence_chaz = None;
     }
     out.std_err = out.std_err_surv_scale();
     out.logse = false;
@@ -528,7 +546,8 @@ pub fn summary_survfit(fit: &SurvfitKMResult, censored: bool) -> SurvfitKMResult
 /// a curve's last time are dropped from that curve (R errors when nothing
 /// is left).  Counts between the requested times are summed when the
 /// times increase (`dosum`); otherwise they are looked up.  `std_err` is
-/// on the survival scale.
+/// on the survival scale.  As in [`summary_survfit`], the influence
+/// matrices are left out (R carries those of `survfit0(fit)` along).
 pub fn summary_survfit_times(
     fit: &SurvfitKMResult,
     times: &[f64],
@@ -539,9 +558,10 @@ pub fn summary_survfit_times(
     }
     validate_finite(times, "times")?;
     let dosum = times.windows(2).all(|pair| pair[1] > pair[0]);
-    let fit0 = survfit0(fit);
+    let fit0 = survfit0_with(fit, false);
     let ranges = fit0.curve_ranges();
     let mut out = SurvfitKMResult {
+        n: fit0.n.clone(),
         time: Vec::new(),
         n_risk: Vec::new(),
         n_event: Vec::new(),
@@ -555,10 +575,16 @@ pub fn summary_survfit_times(
         lower: fit0.lower.as_ref().map(|_| Vec::new()),
         upper: fit0.upper.as_ref().map(|_| Vec::new()),
         strata: fit0.strata.as_ref().map(|_| Vec::new()),
+        strata_codes: fit0.strata_codes.clone(),
+        n_id: fit0.n_id.clone(),
+        logse: false,
+        conf_int: fit0.conf_int,
+        conf_type: fit0.conf_type.clone(),
+        conf_lower: fit0.conf_lower.clone(),
+        type_: fit0.type_.clone(),
+        t0: fit0.t0,
         influence_surv: None,
         influence_chaz: None,
-        logse: false,
-        ..fit0.clone()
     };
     for range in &ranges {
         let curve_time = &fit0.time[range.clone()];
@@ -817,14 +843,14 @@ pub fn quantile_survfit_from(
 
 /// Python binding of [`survfit0`].
 #[pyfunction(name = "survfit0")]
-pub fn survfit0_py(fit: &SurvfitKMResult) -> SurvfitKMResult {
-    survfit0(fit)
+pub fn survfit0_py(py: Python<'_>, fit: &SurvfitKMResult) -> SurvfitKMResult {
+    py.detach(|| survfit0(fit))
 }
 
 /// Python binding of [`survfit0_aj`].
 #[pyfunction(name = "survfit0_aj")]
-pub fn survfit0_aj_py(fit: &SurvfitAJResult) -> SurvfitAJResult {
-    survfit0_aj(fit)
+pub fn survfit0_aj_py(py: Python<'_>, fit: &SurvfitAJResult) -> SurvfitAJResult {
+    py.detach(|| survfit0_aj(fit))
 }
 
 /// Python binding of [`survmean`]; `rmean` is `"none"`, `"common"`,
@@ -839,36 +865,42 @@ pub fn survmean_py(fit: &SurvfitKMResult, scale: f64, rmean: &str) -> PyResult<S
 #[pyfunction(name = "summary_survfit")]
 #[pyo3(signature = (fit, times=None, censored=false, extend=false))]
 pub fn summary_survfit_py(
+    py: Python<'_>,
     fit: &SurvfitKMResult,
     times: Option<Vec<f64>>,
     censored: bool,
     extend: bool,
 ) -> PyResult<SurvfitKMResult> {
-    match times {
-        Some(times) => Ok(summary_survfit_times(fit, &times, extend)?),
+    Ok(py.detach(|| match times {
+        Some(times) => summary_survfit_times(fit, &times, extend),
         None => Ok(summary_survfit(fit, censored)),
-    }
+    })?)
 }
 
-/// Python binding of [`quantile_survfit`]; `probs` defaults to the
-/// quartiles.
+/// Python binding of [`quantile_survfit_from`]; `probs` defaults to the
+/// quartiles and `start_time` (R's `x$start.time`) to 0.
 #[pyfunction(name = "quantile_survfit")]
-#[pyo3(signature = (fit, probs=None, conf_int=true, scale=1.0, tolerance=None))]
+#[pyo3(signature = (fit, probs=None, conf_int=true, scale=1.0, tolerance=None, start_time=0.0))]
 pub fn quantile_survfit_py(
+    py: Python<'_>,
     fit: &SurvfitKMResult,
     probs: Option<Vec<f64>>,
     conf_int: bool,
     scale: f64,
     tolerance: Option<f64>,
+    start_time: f64,
 ) -> PyResult<SurvfitQuantiles> {
     let probs = probs.unwrap_or_else(|| vec![0.25, 0.5, 0.75]);
-    Ok(quantile_survfit(fit, &probs, conf_int, scale, tolerance)?)
+    Ok(py.detach(|| quantile_survfit_from(fit, &probs, conf_int, start_time, scale, tolerance))?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surv_analysis::survfitkm::{SurvfitKMData, SurvfitKMOptions, survfitkm};
+    use crate::surv_analysis::survfitkm::{
+        InfluenceRequest, SurvfitKMData, SurvfitKMOptions, survfitkm,
+    };
+    use ndarray::array;
 
     fn aml_maintained() -> SurvfitKMResult {
         let time = vec![
@@ -919,6 +951,81 @@ mod tests {
         let again = survfit0(&fit0);
         assert_eq!(again.time, fit0.time);
         assert_eq!(again.strata, fit0.strata);
+    }
+
+    #[test]
+    fn survfit0_adds_a_zero_influence_column_where_it_adds_a_row() {
+        // R: f <- survfit(Surv(time, status) ~ g, influence = TRUE, start.time = 2),
+        // where g = 1 starts at 2 and g = 2 at 3
+        let fit = survfitkm(
+            &SurvfitKMData::try_new(
+                None,
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                vec![1, 1, 1, 0, 1, 1, 0, 1],
+                None,
+                Some(vec![1, 1, 2, 2, 1, 2, 1, 2]),
+                None,
+                None,
+            )
+            .unwrap(),
+            &SurvfitKMOptions {
+                start_time: Some(2.0),
+                influence: InfluenceRequest::Both,
+                ..SurvfitKMOptions::default()
+            },
+        )
+        .unwrap();
+        let fit0 = survfit0(&fit);
+        assert_eq!(fit0.strata, Some(vec![3, 5]));
+        let surv = fit.influence_surv.as_ref().unwrap();
+        let chaz = fit.influence_chaz.as_ref().unwrap();
+        let surv0 = fit0.influence_surv.as_ref().unwrap();
+        let chaz0 = fit0.influence_chaz.as_ref().unwrap();
+        // g = 1 gets no row and keeps its matrix, shared (R also gives it the
+        // zero column)
+        assert!(Arc::ptr_eq(&surv0[0].values, &surv[0].values));
+        assert!(Arc::ptr_eq(&chaz0[0].values, &chaz[0].values));
+        // survfit0(f)$influence.surv[[2]] and influence.chaz[[2]]
+        let expected_surv = array![
+            [0.0, -6.0, -6.0, -3.0, 0.0],
+            [0.0, 2.0, 2.0, 1.0, 0.0],
+            [0.0, 2.0, 2.0, -5.0, 0.0],
+            [0.0, 2.0, 2.0, 7.0, 0.0],
+        ] / 32.0;
+        let expected_chaz = array![
+            [0.0, 3.0, 3.0, 3.0, 3.0],
+            [0.0, -1.0, -1.0, -1.0, -1.0],
+            [0.0, -1.0, -1.0, 3.0, 3.0],
+            [0.0, -1.0, -1.0, -5.0, -5.0],
+        ] / 16.0;
+        for (values, expected) in [
+            (&surv0[1].values, expected_surv),
+            (&chaz0[1].values, expected_chaz),
+        ] {
+            assert_eq!(values.dim(), (4, 5));
+            assert!(values.t().is_standard_layout()); // column-major, as R
+            assert!(
+                values
+                    .iter()
+                    .zip(&expected)
+                    .all(|(&a, &b)| close(a, b, 1e-12))
+            );
+        }
+        // every curve of fit0 starts at t0: survfit0 shares all its matrices
+        let again = survfit0(&fit0);
+        let again_surv = again.influence_surv.as_ref().unwrap();
+        assert!(
+            again_surv
+                .iter()
+                .zip(surv0)
+                .all(|(a, b)| Arc::ptr_eq(&a.values, &b.values))
+        );
+        // the summaries' survfit0 leaves them out, whether it adds rows or not
+        for fit in [&fit, &fit0] {
+            let bare = survfit0_with(fit, false);
+            assert!(bare.influence_surv.is_none() && bare.influence_chaz.is_none());
+            assert_eq!(bare.time, survfit0(fit).time);
+        }
     }
 
     #[test]

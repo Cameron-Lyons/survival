@@ -8,10 +8,14 @@
 //! `survreg.fit` uses the same derivatives (its `derfun`) for its starting
 //! values.
 
+use crate::core::strata_order::rowsum;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::match_arg::match_arg;
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_distributions::SurvregDistribution;
+use ndarray::ArrayView1;
 use pyo3::prelude::*;
 
 /// The `type` argument of `residuals.survreg`.
@@ -38,6 +42,7 @@ pub enum SurvregResidType {
 }
 
 impl SurvregResidType {
+    /// The `type` choices of `residuals.survreg`, in R's order.
     const CHOICES: [(&'static str, Self); 9] = [
         ("response", Self::Response),
         ("deviance", Self::Deviance),
@@ -50,28 +55,11 @@ impl SurvregResidType {
         ("matrix", Self::Matrix),
     ];
 
-    /// `match.arg(type)`: an exact name or a unique prefix.
+    /// `match.arg(type)`: an exact name or a unique prefix (see
+    /// `match_arg`).
     pub fn parse(name: &str) -> SurvivalResult<Self> {
-        let key = name.trim().to_lowercase();
-        if let Some((_, kind)) = Self::CHOICES.iter().find(|(choice, _)| *choice == key) {
-            return Ok(*kind);
-        }
-        let matches: Vec<Self> = Self::CHOICES
-            .iter()
-            .filter(|(choice, _)| !key.is_empty() && choice.starts_with(key.as_str()))
-            .map(|(_, kind)| *kind)
-            .collect();
-        match matches.as_slice() {
-            [kind] => Ok(*kind),
-            _ => Err(SurvivalError::invalid_input(format!(
-                "residual type '{name}' should be one of {}",
-                Self::CHOICES
-                    .iter()
-                    .map(|(choice, _)| format!("\"{choice}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
-        }
+        let index = match_arg(name, &Self::CHOICES.map(|(choice, _)| choice))?;
+        Ok(Self::CHOICES[index].1)
     }
 
     /// Whether R returns a matrix (one row per observation) for this type.
@@ -205,7 +193,7 @@ fn quadratic_form(score: &[f64], matrix: &[Vec<f64>]) -> f64 {
 /// A per-observation score row with the `Log(scale)` block appended in the
 /// observation's stratum column when `rsigma`.
 fn score_row(
-    x: &[f64],
+    x: ArrayView1<'_, f64>,
     eta_part: f64,
     scale_part: f64,
     stratum: usize,
@@ -225,18 +213,13 @@ fn score_row(
 /// increasing order of their code.
 fn collapse_rows(rows: Vec<Vec<f64>>, collapse: &[usize]) -> SurvivalResult<Vec<Vec<f64>>> {
     validate_length(rows.len(), collapse.len(), "collapse")?;
-    let mut groups: Vec<usize> = collapse.to_vec();
-    groups.sort_unstable();
-    groups.dedup();
-    let width = rows.first().map_or(0, Vec::len);
-    let mut out = vec![vec![0.0; width]; groups.len()];
-    for (row, &group) in rows.iter().zip(collapse) {
-        let target = groups.binary_search(&group).expect("group was collected");
-        for (sum, value) in out[target].iter_mut().zip(row) {
-            *sum += value;
-        }
-    }
-    Ok(out)
+    let codes = collapse
+        .iter()
+        .map(|&code| i32::try_from(code))
+        .collect::<Result<Vec<i32>, _>>()
+        .map_err(|_| SurvivalError::invalid_input("collapse codes must fit in 32 bits"))?;
+    let rows = matrix_from_rows(&rows, "residuals")?;
+    Ok(matrix_rows(&rowsum(rows.view(), &codes)))
 }
 
 /// `residuals.survreg(object, type, rsigma, collapse, weighted)`.
@@ -314,7 +297,7 @@ pub fn residuals_survreg(
                     (0..n)
                         .map(|i| {
                             let score = score_row(
-                                &fit.covariates[i],
+                                fit.covariates.row(i),
                                 deriv[i][1],
                                 deriv[i][3],
                                 fit.strata[i],
@@ -333,7 +316,7 @@ pub fn residuals_survreg(
                 SurvregResidType::Ldresp => (0..n)
                     .map(|i| {
                         let score = score_row(
-                            &fit.covariates[i],
+                            fit.covariates.row(i),
                             deriv[i][2] * sigma(i),
                             deriv[i][5] * sigma(i),
                             fit.strata[i],
@@ -346,7 +329,7 @@ pub fn residuals_survreg(
                 SurvregResidType::Ldshape => (0..n)
                     .map(|i| {
                         let score = score_row(
-                            &fit.covariates[i],
+                            fit.covariates.row(i),
                             deriv[i][5],
                             deriv[i][4],
                             fit.strata[i],
@@ -403,10 +386,7 @@ mod tests {
             SurvregResidType::parse("dev").unwrap(),
             SurvregResidType::Deviance
         );
-        assert_eq!(
-            SurvregResidType::parse("Matrix").unwrap(),
-            SurvregResidType::Matrix
-        );
+        assert!(SurvregResidType::parse("Matrix").is_err());
         assert!(SurvregResidType::parse("ld").is_err());
         assert!(SurvregResidType::parse("").is_err());
         assert!(SurvregResidType::parse("dfb").is_err());
@@ -478,9 +458,9 @@ mod tests {
 
     #[test]
     fn score_rows_place_the_scale_term_in_the_stratum_column() {
-        let row = score_row(&[1.0, 4.0], 2.0, 5.0, 1, 3, true);
+        let row = score_row(ArrayView1::from(&[1.0, 4.0]), 2.0, 5.0, 1, 3, true);
         assert_eq!(row, vec![2.0, 8.0, 0.0, 5.0, 0.0]);
-        let row = score_row(&[1.0, 4.0], 2.0, 5.0, 1, 3, false);
+        let row = score_row(ArrayView1::from(&[1.0, 4.0]), 2.0, 5.0, 1, 3, false);
         assert_eq!(row, vec![2.0, 8.0]);
     }
 

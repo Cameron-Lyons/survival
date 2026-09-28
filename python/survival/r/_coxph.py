@@ -9,23 +9,28 @@ does: the model frame, argument checking, dispatch and result labelling.
 from __future__ import annotations
 
 import math
+import numbers
 import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from itertools import chain
 from statistics import NormalDist
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
-    _apply_coxph_control,
+    _DEFAULT_NA_ACTION,
+    _as_character,
     _as_matrix_rows,
     _as_rows,
     _coerce_array_like,
+    _control_mapping,
     _cox_tie_method,
     _finite_float,
     _float_vector,
     _integer_scalar,
+    _is_bool_like,
     _is_missing_value,
     _label_levels,
     _match_string_arg,
@@ -34,36 +39,68 @@ from ._coerce import (
     _normalize_bool_option,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
+    _normalize_na_action,
     _normalize_numeric_sequence_or_none,
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
-    _subset_data,
+    _r_format_number,
+    _start_time_value,
+    _subset_indices,
+    _subset_optional_sequence,
+    _warn_outside_package,
 )
+from ._data_prep import aeqSurv
 from ._fit import (
     _design_names_and_assign,
+    _excluded_rows,
     _model_frame,
     _ModelFrame,
     _NewData,
+    _newdata_columns,
     _newdata_frame,
+    _pad_rows,
+    _rowsum_excluded,
     _tt_terms,
 )
-from ._formula import _column, _column_or_values, _design_rows_from_spec, _response_arg_columns
+from ._formula import (
+    _column,
+    _column_or_values,
+    _data_row_count,
+    _data_rows,
+    _design_rows_from_spec,
+    _formula_data_rows,
+    _formula_design_row_count,
+    _response_arg_columns,
+    _strata_term_columns,
+    _timeline_counting,
+    _timeline_model_frame,
+    _timeline_response,
+)
+from ._names import _make_unique
+from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
     CoxBaseHazardResult,
     CoxPHDetailResult,
     CoxPHWTestResult,
+    CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
     CoxZPHResult,
+    NaAction,
     PredictResult,
     _CovariateTerm,
+    _DesignTerm,
     _FormulaDesign,
     _FormulaTerms,
+    _InteractionTerm,
+    _ModelCovariateTerm,
     _PenaltyDesignTerm,
 )
 
 _TIE_METHOD_NAMES = ("breslow", "efron", "exact")
 _LOG_DOUBLE_MAX = math.log(sys.float_info.max)
+# coxph.control's default toler.chol, .Machine$double.eps ^ .75
+_TOLER_CHOL = sys.float_info.epsilon**0.75
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +115,8 @@ class CoxphModel:
     The numeric components (``coefficients``, ``var``, ``loglik``, ``residuals``,
     ...) are read through from :class:`survival._survival.CoxPHFit`; ``formula``,
     ``design``, ``assign``, ``coef_names``, ``y``, ``strata_levels`` and ``id`` are
-    what ``predict``/``survfit``/``residuals`` need to rebuild the model frame.
+    what ``predict``/``survfit``/``residuals`` need to rebuild the model frame, and
+    ``na_action`` (``fit$na.action``) the rows the ``na.action`` removed.
     """
 
     fit: _core.CoxPHFit
@@ -99,10 +137,12 @@ class CoxphModel:
     # the columns the call's weights= / id= named, for re-evaluation on newdata
     weights_column: str | None = None
     id_column: str | None = None
-    # R's coxph returns a skeleton fit when the data has no events: NA
-    # coefficients, a zero variance, loglik c(0, 0) and no iterations.
-    no_events: bool = False
     penalized: Any | None = None
+    na_action: NaAction | None = None
+    # the model frame the fit was made from (after subset and na.action), which
+    # model.frame(fit) rebuilds when the fit did not keep it; the design rows are
+    # dropped, since model.frame() does not use them
+    _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
         if self.penalized is not None and name in {
@@ -119,8 +159,6 @@ class CoxphModel:
 
     @property
     def coefficients(self) -> list[float]:
-        if self.no_events:
-            return [math.nan] * len(self.coef_names)
         return [float(value) for value in self.fit.coefficients]
 
     @property
@@ -138,10 +176,11 @@ class CoxphModel:
 
     @property
     def loglik(self) -> list[float]:
-        """``fit$loglik``: null and fitted values (one value for a null model, as R)."""
+        """``fit$loglik``: null and fitted values (one value for a null model, as R;
+        a penalized fit without coefficients, a frailty alone, keeps both)."""
 
         values = list(self.fit.loglik)
-        return values if self.coef_names else values[:1]
+        return values if self.coef_names or self.penalized is not None else values[:1]
 
     @property
     def score(self) -> float | None:
@@ -155,7 +194,7 @@ class CoxphModel:
     def wald_test(self) -> float | None:
         if not self.coef_names:
             return None
-        return 0.0 if self.no_events else float(self.fit.wald_test)
+        return float(self.fit.wald_test)
 
     @property
     def iter(self) -> int | list[int] | None:
@@ -163,7 +202,7 @@ class CoxphModel:
             return list(self.penalized.iter)
         if not self.coef_names:
             return None
-        return 0 if self.no_events else int(self.fit.iter)
+        return int(self.fit.iter)
 
     @property
     def linear_predictors(self) -> list[float]:
@@ -206,8 +245,9 @@ class CoxphModel:
         return values if any(value != 0.0 for value in values) else None
 
     @property
-    def strata(self) -> list[str] | None:
-        """``fit$strata``: the stratum label of every row, ``None`` when unstratified."""
+    def strata(self) -> list[str | None] | None:
+        """``fit$strata``: the stratum label of every row, ``None`` when unstratified
+        (a multi-state fit to a formula list may keep a row without one)."""
 
         codes = self.fit.strata
         if codes is None or not self.strata_levels:
@@ -220,8 +260,10 @@ class CoxphModel:
     def survfit(self, newdata: Any | None = None, **kwargs: Any) -> CoxSurvfitResult:
         return survfit_coxph(self, newdata, **kwargs)
 
-    def summary(self, conf_int: float = 0.95, scale: float = 1.0) -> dict[str, Any]:
-        return summary_coxph(self, conf_int=conf_int, scale=scale)
+    def summary(
+        self, conf_int: float = 0.95, scale: float = 1.0, terms: bool = False
+    ) -> dict[str, Any]:
+        return summary_coxph(self, conf_int=conf_int, scale=scale, terms=terms)
 
 
 @dataclass(frozen=True)
@@ -244,20 +286,44 @@ def _active_assign(fit: CoxphModel) -> list[list[int]]:
     return [[col for col in cols if not aliased[col]] for cols in fit.assign.values()]
 
 
+def _fit_frame(fit: CoxphModel) -> _ModelFrame:
+    if fit._frame is None:
+        raise TypeError("the fit keeps no model frame")
+    return fit._frame
+
+
+def _model_terms(fit: CoxphModel) -> list[tuple[str, _DesignTerm]]:
+    """The model's covariate terms, labelled (R's ``names(fit$pterms)``): those of
+    ``fit.assign`` plus a sparse frailty, which has no coefficients."""
+
+    frame = _fit_frame(fit)
+    return list(zip(frame.assign, frame.design.covariates, strict=True))
+
+
+def _term_labels(fit: CoxphModel) -> list[str]:
+    return [label for label, _term in _model_terms(fit)]
+
+
+def _sparse_term(fit: CoxphModel) -> int | None:
+    """The position among :func:`_model_terms` of a sparse penalized term."""
+
+    if fit.penalized is None or 2 not in fit.penalized.pterms:
+        return None
+    return list(fit.penalized.pterms).index(2)
+
+
+def _coxph_df(fit: CoxphModel) -> float:
+    """The model degrees of freedom of R's summary, anova and logLik methods:
+    ``sum(fit$df)`` for a penalized fit, else the number of non-NA coefficients."""
+
+    if fit.penalized is not None:
+        return float(sum(fit.penalized.df))
+    return sum(1 for value in fit.coefficients if not math.isnan(value))
+
+
 # ---------------------------------------------------------------------------
 # coxph
 # ---------------------------------------------------------------------------
-
-
-def _aeq_surv(y: Surv) -> Surv:
-    """``aeqSurv``: snap times that are equal up to floating-point noise together."""
-
-    if y.start is None:
-        fixed = _core.aeq_surv(list(y.time))
-        return Surv(list(fixed.time), list(y.event), type=y.type)
-    fixed = _core.aeq_surv(list(y.start), list(y.time))
-    time2 = fixed.time2 if fixed.time2 is not None else list(y.time)
-    return Surv(list(fixed.time), list(time2), list(y.event), type=y.type)
 
 
 def _obrien_time_transform(
@@ -330,7 +396,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     new_time = [time for time, size in zip(counts.time, nrisk, strict=True) for _ in range(size)]
     new_y = Surv(new_time, [int(value) for value in counts.status])
     riskset = [group for group, size in enumerate(nrisk) for _ in range(size)]
-    data = _subset_data(frame.data, tindex)
+    data = _formula_data_rows(frame.formula, frame.data, tindex, frame.n)
     weights = None if frame.weights is None else [frame.weights[idx] for idx in tindex]
     transformed: dict[_CovariateTerm, list[float]] = {}
     for term, function in zip(tt_terms, _tt_functions(tt, len(tt_terms)), strict=True):
@@ -342,9 +408,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
             raise ValueError("the tt function must return one value per expanded row")
     return _CoxData(
         y=new_y,
-        x=_design_rows_from_spec(
-            data, frame.design, len(tindex), time_transform_values=transformed
-        ),
+        x=_design_rows_from_spec(data, frame.design, len(tindex), evaluated=transformed),
         strata=riskset,
         weights=weights,
         offset=None if frame.offset is None else [frame.offset[idx] for idx in tindex],
@@ -354,6 +418,9 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
 
 
 def _check_init(init: Any, x: list[list[float]], offset: list[float] | None) -> list[float]:
+    """coxph.R's check of ``init``: ``exp(X %*% init - sum(colMeans(X) * init) + offset)``
+    at the centred offset must neither overflow nor underflow everywhere."""
+
     values = _float_vector(init, "init")
     nvar = len(x[0]) if x else 0
     if len(values) != nvar:
@@ -361,11 +428,12 @@ def _check_init(init: Any, x: list[list[float]], offset: list[float] | None) -> 
     n = len(x)
     means = [sum(row[col] for row in x) / n for col in range(nvar)] if n else []
     center = sum(mean * value for mean, value in zip(means, values, strict=True))
+    offset_mean = sum(offset) / n if offset is not None else 0.0
     risks = []
     for idx, row in enumerate(x):
         eta = sum(a * b for a, b in zip(row, values, strict=True)) - center
         if offset is not None:
-            eta += offset[idx]
+            eta += offset[idx] - offset_mean
         try:
             risks.append(math.exp(eta))
         except OverflowError:
@@ -401,27 +469,10 @@ def _cluster_codes(values: Sequence[Any]) -> list[int]:
     return [codes[value] for value in values]
 
 
-def _fit_concordance(
-    fit: _core.CoxPHFit, data: _CoxData, cluster: list[int] | None
-) -> dict[str, float]:
-    """``fit$concordance``: counts, C and its se from ``concordancefit(reverse=TRUE)``."""
+def _concordance_summary(cfit: Any) -> dict[str, float]:
+    """``fit$concordance``: the summed counts, C and its se of the fit's
+    ``concordancefit(reverse=TRUE)`` (NA C and se for data without events)."""
 
-    y = data.y
-    x = _core.CovariateMatrix(list(fit.linear_predictors), len(y), 1)
-    weights = None if data.weights is None else _core.Weights(list(data.weights))
-    kwargs: dict[str, Any] = {
-        "weights": weights,
-        "strata": data.strata,
-        "cluster": cluster,
-        "reverse": True,
-        "timefix": False,
-    }
-    if y.start is None:
-        cfit = _core.concordancefit(_core.SurvivalData(list(y.time), list(y.event)), x, **kwargs)
-    else:
-        cfit = _core.concordancefit_counting(
-            _core.CountingProcessData(list(y.start), list(y.time), list(y.event)), x, **kwargs
-        )
     counts = cfit.count
     variance = cfit.var[0][0] if cfit.var is not None else math.nan
     return {
@@ -438,11 +489,16 @@ def _fit_concordance(
 def _cox_fit_diagnostic_messages(
     fit: Any, iter_max: int, eps: float | None, toler_inf: float | None
 ) -> list[str]:
-    """R's ``coxph.fit`` convergence warnings for an engine fit (also the R bridge's).
+    """The convergence warnings of R's Cox fitters for an engine fit (also the R bridge's).
 
-    ``infs = |u %*% var|``: after the iterations ran out the fit may be infinite; a
-    converged fit whose score still moves a coefficient by more than ``toler.inf``
-    of its size converged before that variable did.
+    ``infs = |u %*% imat|``, with the fitter's model-based variance (the naive one of a
+    robust fit): after the iterations ran out the fit may be infinite; a converged fit
+    whose score still moves a coefficient by more than ``toler.inf`` of its size
+    converged before that variable did.  ``coxph.fit`` (right-censored
+    Breslow/Efron) also flags a non-finite score; ``agreg.fit`` ((start, stop]
+    Breslow/Efron) flags a non-finite score or ``infs > toler.inf * (1 + |coef|)``
+    without the ``eps`` floor and stops on an overflowed fit; ``coxexact.fit`` and
+    ``agexact.fit`` keep only the ``eps`` and ``toler.inf`` tests.
     """
 
     coef = list(fit.coefficients)
@@ -452,30 +508,50 @@ def _cox_fit_diagnostic_messages(
     eps_value = 1e-9 if eps is None else float(eps)
     toler = math.sqrt(eps_value) if toler_inf is None else float(toler_inf)
     u = list(fit.first)
-    var = fit.var
-    infs = [
-        abs(sum(u[i] * var[i][j] for i in range(nvar)) if var else math.nan) for j in range(nvar)
-    ]
-    messages: list[str] = []
-    if fit.flag == 1000:
-        messages.append("Ran out of iterations and did not converge")
-        if max(fit.linear_predictors, default=0.0) > 500 or any(
-            not math.isfinite(value) for value in infs
-        ):
-            messages.append("one or more coefficients may be infinite")
-        return messages
-    which = [
-        j + 1
-        for j in range(nvar)
-        if not math.isfinite(u[j]) or (infs[j] > eps_value and infs[j] > toler * abs(coef[j]))
-    ]
-    if which:
-        messages.append(
-            "Loglik converged before variable "
-            + ",".join(str(index) for index in which)
-            + "; coefficient may be infinite. "
-        )
-    return messages
+    var = fit.var if fit.naive_var is None else fit.naive_var
+    infs = [abs(sum(u[i] * var[i][j] for i in range(nvar))) for j in range(nvar)]
+    info = fit.info
+    if info is not None:  # agreg.fit
+        # the fitter's coefficients, before an aliased one is marked NA
+        raw = [0.0 if math.isnan(b) and var[j][j] == 0.0 else b for j, b in enumerate(coef)]
+        if not all(math.isfinite(value) for value in [*raw, *(v for row in var for v in row)]):
+            raise ValueError(
+                "routine failed due to numeric overflow."
+                "This should never happen.  Please contact the author."
+            )
+        if info[3] > 0:
+            return ["Ran out of iterations and did not converge"]
+        which = [
+            j + 1
+            for j in range(nvar)
+            if not math.isfinite(u[j]) or infs[j] > toler * (1.0 + abs(raw[j]))
+        ]
+        suffix = "; beta may be infinite. "
+    elif _TIE_METHOD_NAMES[int(fit.method)] == "exact":  # coxexact.fit, agexact.fit
+        if fit.flag == 1000:
+            return ["Ran out of iterations and did not converge"]
+        which = [
+            j + 1 for j in range(nvar) if infs[j] > eps_value and infs[j] > toler * abs(coef[j])
+        ]
+        suffix = "; beta may be infinite. "
+    else:  # coxph.fit
+        if fit.flag == 1000:
+            messages = ["Ran out of iterations and did not converge"]
+            # coxph.fit's lp is at coxph()'s centred offset
+            offset = list(fit.offset)
+            lp_max = max(fit.linear_predictors) - sum(offset) / len(offset)
+            if lp_max > 500 or any(not math.isfinite(value) for value in infs):
+                messages.append("one or more coefficients may be infinite")
+            return messages
+        which = [
+            j + 1
+            for j in range(nvar)
+            if not math.isfinite(u[j]) or (infs[j] > eps_value and infs[j] > toler * abs(coef[j]))
+        ]
+        suffix = "; coefficient may be infinite. "
+    if not which:
+        return []
+    return ["Loglik converged before variable " + ",".join(map(str, which)) + suffix]
 
 
 def _coxph_fit_frame(
@@ -492,14 +568,15 @@ def _coxph_fit_frame(
     nocenter: list[float] | None,
     tt: Any,
     keep_model: bool,
+    toler_inf: float | None = None,
     outer_max: int | None = None,
 ) -> CoxphModel:
-    """coxph.R after the model frame: timefix, tt(), robust/cluster, the fit, the
-    Wald test and concordance."""
+    """coxph.R after the model frame: timefix, tt(), robust/cluster, the fit (or the
+    fit of data without events), the convergence warnings and the concordance."""
 
     if frame.y.type not in {"right", "counting"}:
         raise ValueError(f'Cox model doesn\'t support "{frame.y.type}" survival data')
-    y = _aeq_surv(frame.y) if timefix else frame.y
+    y = aeqSurv(frame.y) if timefix else frame.y
     tt_terms = _tt_terms(frame.design)
     if tt_terms:
         if keep_model:
@@ -515,8 +592,6 @@ def _coxph_fit_frame(
             cluster=frame.cluster,
             id=frame.id,
         )
-    if any(not math.isfinite(value) for row in data.x for value in row):
-        raise ValueError("data contains an infinite predictor")
     if data.offset is not None and any(
         not math.isfinite(value) or value > _LOG_DOUBLE_MAX for value in data.offset
     ):
@@ -525,11 +600,14 @@ def _coxph_fit_frame(
     has_cluster = data.cluster is not None
     use_robust = _robust_default(data, has_cluster) if robust is None else robust
     cluster: list[int] | None = None
-    if has_cluster and not use_robust:
-        warnings.warn(
-            "cluster specified with robust=FALSE, cluster ignored", RuntimeWarning, stacklevel=3
-        )
-    elif has_cluster:
+    if has_cluster:
+        if not use_robust:
+            # coxph() still hands the cluster to the concordance
+            warnings.warn(
+                "cluster specified with robust=FALSE, cluster ignored",
+                RuntimeWarning,
+                stacklevel=3,
+            )
         cluster = _cluster_codes(data.cluster or [])
     elif use_robust and data.id is not None:
         cluster = _cluster_codes(data.id)
@@ -538,14 +616,21 @@ def _coxph_fit_frame(
             cluster = list(range(len(data.y)))
         else:
             raise ValueError("one of cluster or id is needed")
-    init_values = None if init is None else _check_init(init, data.x, data.offset)
+    # without events coxph() returns before checking the predictors or init and
+    # before fitting anything, penalized terms included
     no_events = not any(int(value) for value in data.y.event)
-    if no_events:
-        # R returns the fit without iterating (coefficients NA, variance 0)
-        iter_max = 0
-    penalized_terms = [
-        term for term in frame.design.covariates if isinstance(term, _PenaltyDesignTerm)
-    ]
+    if not no_events and any(not math.isfinite(value) for row in data.x for value in row):
+        raise ValueError("data contains an infinite predictor")
+    init_values = None if init is None or no_events else _check_init(init, data.x, data.offset)
+    penalized_terms = (
+        []
+        if no_events
+        else [
+            term
+            for term in frame.design.covariates
+            if isinstance(term, _PenaltyDesignTerm) and term.penalized
+        ]
+    )
     penalized = None
     if penalized_terms:
         if use_robust:
@@ -573,12 +658,13 @@ def _coxph_fit_frame(
             eps=eps,
             toler_chol=toler_chol,
             nocenter=nocenter,
+            cluster=cluster,
         )
         fit = penalized.coxph
         dense = [
             i
             for i, term in enumerate(frame.design.covariates)
-            if not (isinstance(term, _PenaltyDesignTerm) and term.penalty.sparse)
+            if not (isinstance(term, _PenaltyDesignTerm) and term.penalized and term.penalty.sparse)
         ]
         design = replace(
             frame.design,
@@ -605,16 +691,24 @@ def _coxph_fit_frame(
             robust=use_robust,
         )
         design, names, assign = frame.design, frame.names, frame.assign
-    aliased = [idx for idx, value in enumerate(fit.coefficients) if math.isnan(value)]
-    if aliased and not singular_ok:
-        columns = " ".join(str(idx + 1) for idx in aliased)
-        raise ValueError(f"X matrix deemed to be singular; variable {columns}")
-    if penalized is None:
-        for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, None):
-            warnings.warn(message, RuntimeWarning, stacklevel=3)
+    if not no_events:
+        aliased = [idx for idx, value in enumerate(fit.coefficients) if math.isnan(value)]
+        if aliased and not singular_ok:
+            columns = " ".join(str(idx + 1) for idx in aliased)
+            raise ValueError(f"X matrix deemed to be singular; variable {columns}")
+        if penalized is None:
+            for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, toler_inf):
+                warnings.warn(message, RuntimeWarning, stacklevel=3)
+        elif iter_max > 1 and penalized.inner_failures:
+            # coxpenal.fit's warning, R's spelling kept
+            warnings.warn(
+                "Inner loop failed to coverge for iterations "
+                + " ".join(map(str, penalized.inner_failures)),
+                RuntimeWarning,
+                stacklevel=3,
+            )
     return CoxphModel(
         fit=fit,
-        no_events=no_events,
         formula=frame.formula,
         design=design,
         terms=frame.terms,
@@ -622,7 +716,7 @@ def _coxph_fit_frame(
         assign=dict(assign),
         y=y,
         strata_levels=frame.strata_levels,
-        concordance=_fit_concordance(fit, data, cluster),
+        concordance=_concordance_summary(fit.concordance),
         n=frame.n,
         timefix=timefix,
         tt=bool(tt_terms),
@@ -632,7 +726,18 @@ def _coxph_fit_frame(
         weights_column=frame.weights_column,
         id_column=frame.id_column,
         penalized=penalized,
+        na_action=frame.na_action,
+        _frame=replace(frame, x=[]),
     )
+
+
+def _coxph_model_frame(fit: CoxphModel) -> dict[str, Any]:
+    """R's ``model.frame(fit)`` for a Cox model: ``fit$model`` when the fit kept it
+    (``model=TRUE``), else the model frame rebuilt from the data it was fitted to."""
+
+    if fit.model is not None:
+        return fit.model
+    return _timeline_model_frame(_fit_frame(fit).model_frame(), fit.formula)
 
 
 def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, Any]]:
@@ -664,13 +769,92 @@ def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, An
     return f"{surv} ~ {' + '.join(names)}", data
 
 
+# the coxph.control formals coxph() can only receive through **kwargs
+_COXPH_CONTROL_KWARGS = ("iter.max", "toler.chol", "toler.inf", "outer.max")
+
+
+def _control_number(value: Any, message: str, *, zero_ok: bool = False) -> float:
+    """coxph.control's ``if (!is.numeric(x) || x <= 0) stop(message)`` (``x < 0`` when
+    ``zero_ok``)."""
+
+    if not isinstance(value, numbers.Real) or _is_bool_like(value):
+        raise TypeError(message)
+    numeric = float(value)
+    if not (numeric >= 0.0 if zero_ok else numeric > 0.0):
+        raise ValueError(message)
+    return numeric
+
+
+def _control_integer(value: Any, message: str, *, zero_ok: bool = False) -> int:
+    """A checked coxph.control option through ``as.integer()``: truncated, and refused
+    with the option's message where as.integer gives ``NA`` (outside R's integer
+    range)."""
+
+    numeric = _control_number(value, message, zero_ok=zero_ok)
+    if numeric >= 2.0**31:
+        raise ValueError(message)
+    return int(numeric)
+
+
+def coxph_control(
+    eps: Any = 1e-9,
+    toler_chol: Any = _TOLER_CHOL,
+    iter_max: Any = 20,
+    toler_inf: Any | None = None,
+    outer_max: Any = 10,
+    timefix: Any = True,
+    survcheckallow: Any = "gap",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """R's ``coxph.control``: the checked fitting options under R's names.
+
+    ``toler_inf`` defaults to ``sqrt(eps)``; ``iter_max`` and ``outer_max`` are
+    truncated to integers; ``toler.chol``, ``iter.max``, ``toler.inf`` and
+    ``outer.max`` may also be given with their dotted names.  Warns, as R does, when
+    ``eps`` is not above ``toler_chol``.  ``survcheckallow`` names the survcheck flags
+    (``overlap``, ``gap``, ``jump``, ``teleport``) a multi-state fit lets through.
+    """
+
+    toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, _TOLER_CHOL)
+    iter_max = _pop_dotted_keyword(kwargs, "iter.max", "iter_max", iter_max, 20)
+    toler_inf = _pop_dotted_keyword(kwargs, "toler.inf", "toler_inf", toler_inf, None)
+    outer_max = _pop_dotted_keyword(kwargs, "outer.max", "outer_max", outer_max, 10)
+    if kwargs:
+        raise TypeError(f"unused argument(s): {', '.join(sorted(kwargs))}")
+    iterations = _control_integer(iter_max, "Invalid value for iterations", zero_ok=True)
+    eps_value = _control_number(eps, "Invalid convergence criteria")
+    toler_value = _control_number(toler_chol, "invalid value for toler.chol")
+    if eps_value <= toler_value:
+        _warn_outside_package("For numerical accuracy, tolerance should be < eps", RuntimeWarning)
+    inf_value = (
+        math.sqrt(eps_value)
+        if toler_inf is None
+        else _control_number(toler_inf, "The toler.inf setting must be >0")
+    )
+    if not _is_bool_like(timefix):
+        raise TypeError("timefix must be TRUE or FALSE")
+    outer = _control_integer(outer_max, "invalid value for outer.max")
+    from ._coxphms import _survcheckallow
+
+    _survcheckallow(survcheckallow)
+    return {
+        "eps": eps_value,
+        "toler.chol": toler_value,
+        "iter.max": iterations,
+        "toler.inf": inf_value,
+        "outer.max": outer,
+        "timefix": bool(timefix),
+        "survcheckallow": survcheckallow,
+    }
+
+
 def coxph(
-    formula: str | Surv | None = None,
+    formula: str | Surv | list[str] | tuple[str, ...] | None = None,
     data: Any | None = None,
     *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     init: Any | None = None,
     control: Any | None = None,
     ties: str | None = None,
@@ -691,7 +875,10 @@ def coxph(
     iter_max: Any | None = None,
     eps: Any | None = None,
     toler_chol: Any | None = None,
+    toler_inf: Any | None = None,
+    outer_max: Any | None = None,
     timefix: Any | None = None,
+    survcheckallow: Any | None = None,
     **kwargs: Any,
 ) -> CoxphModel:
     """Fit a Cox proportional hazards model (R's ``coxph``).
@@ -699,26 +886,51 @@ def coxph(
     ``formula`` is an R formula string with a ``Surv`` response; ``strata()``,
     ``cluster()``, ``offset()`` and ``tt()`` terms are honoured, as are the
     ``weights``/``offset``/``strata``/``cluster``/``id`` arguments given as vectors
-    or as column names of ``data``.  ``eps``/``toler_chol``/``iter_max``/``timefix``
-    are ``coxph.control`` options and may also be given through ``control``.
+    or as column names of ``data``.  As in R, the :func:`coxph_control` options
+    (``eps``, ``toler_chol``, ``iter_max``, ``toler_inf``, ``outer_max``, ``timefix``,
+    ``survcheckallow``, dotted or not) are used when no ``control`` is given, and
+    ignored otherwise.
+
+    A multi-state response (``Surv(time, state)`` or ``Surv(start, stop, state)`` with a
+    factor ``state``) fits R's multi-state model, a :class:`CoxphmsModel`; it needs
+    ``id``, and ``istate`` gives the state each row starts in.  ``formula`` may then be
+    R's list of formulas (a list of strings): the first with the response and the
+    default covariates, then lines ``from:to ~ covariates / options`` (options
+    ``common`` and ``shared``), whose state names ``statedata`` may extend.
     """
 
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
-    iter_max = _pop_dotted_keyword(kwargs, "iter.max", "iter_max", iter_max, None)
-    toler_chol = _pop_dotted_keyword(kwargs, "toler.chol", "toler_chol", toler_chol, None)
     # the R bridge evaluates weights= / id= itself and names the columns they came from
     weights_column = kwargs.pop("_weights_column", None)
     id_column = kwargs.pop("_id_column", None)
-    kwargs.pop("survcheckallow", None)
-    if isinstance(control, Mapping):
-        control = {key: value for key, value in control.items() if key != "survcheckallow"}
+    # coxph.R hands its ... to coxph.control
+    control_args = {
+        name: value
+        for name, value in (
+            ("iter_max", iter_max),
+            ("eps", eps),
+            ("toler_chol", toler_chol),
+            ("toler_inf", toler_inf),
+            ("outer_max", outer_max),
+            ("timefix", timefix),
+            ("survcheckallow", survcheckallow),
+        )
+        if value is not None
+    }
+    control_args.update({key: kwargs.pop(key) for key in _COXPH_CONTROL_KWARGS if key in kwargs})
     if kwargs:
         raise ValueError(f"Argument {', '.join(sorted(kwargs))} not matched")
     if formula is None:
         raise TypeError("a formula argument is required")
-    if isinstance(formula, Surv):
+    formulas = None
+    if isinstance(formula, list | tuple):
+        from ._coxphms import _formula_list
+
+        formulas = _formula_list(formula, statedata)
+        formula = formulas.master
+    elif isinstance(formula, Surv):
         # coxph(<Surv>, x = <design>): the R bridge's matrix interface, as survreg has
         formula, data = _surv_design_formula(formula, x)
         x = False
@@ -726,26 +938,46 @@ def coxph(
     _ = _normalize_bool_option_with_default(y, "y", True)
 
     method_name = _cox_tie_method(method, ties)
-    max_iter = 20 if iter_max is None else _integer_scalar(iter_max, "iter_max")
-    eps_value = None if eps is None else _finite_float(eps, "eps")
-    toler_value = None if toler_chol is None else _finite_float(toler_chol, "toler_chol")
-    max_iter, eps_value, toler_value, fix_time = _apply_coxph_control(
-        control, max_iter, eps_value, toler_value
+    options = (
+        coxph_control(**control_args)
+        if control is None
+        else coxph_control(**_control_mapping(control, "control"))
     )
-    if timefix is not None:
-        fix_time = _normalize_bool_option(timefix, "timefix")
 
+    arguments = {
+        "weights": weights,
+        "offset": offset,
+        "strata": strata,
+        "cluster": cluster,
+        "id": id,
+        "istate": istate,
+    }
+    fit_formula = formula
+    timeline = _timeline_response(formula)
+    if timeline:
+        # coxph.R converts timeline data (surv2counting) before its na.action; a
+        # cluster() term is by then its cluster argument, which is not carried forward
+        weights_column = weights_column or (weights if isinstance(weights, str) else None)
+        id_column = id_column or (id if isinstance(id, str) else None)
+        fit_formula, data, arguments = _timeline_counting(
+            formula, data, subset, arguments, carry_clusters=False
+        )
+        subset = None
+    elif subset is not None and data is not None:
+        subset = _subset_indices(subset, _data_row_count(data, fit_formula))
+    # a formula list defers its missing values until the transitions are known
     frame = _model_frame(
-        formula,
+        fit_formula,
         data,
         subset=subset,
-        na_action=na_action,
-        weights=weights,
-        offset=offset,
-        strata_arg=strata,
-        cluster=cluster,
-        id=id,
-        istate=istate,
+        na_action=na_action if formulas is None else "na.pass",
+        weights=arguments["weights"],
+        offset=arguments["offset"],
+        strata_arg=arguments["strata"],
+        cluster=arguments["cluster"],
+        id=arguments["id"],
+        istate=arguments["istate"],
+        deferred_na=formulas is not None,
     )
     if weights_column is not None or id_column is not None:
         frame = replace(
@@ -753,31 +985,49 @@ def coxph(
             weights_column=frame.weights_column or weights_column,
             id_column=frame.id_column or id_column,
         )
+    fit_options: dict[str, Any] = {
+        "init": init,
+        "iter_max": options["iter.max"],
+        "eps": options["eps"],
+        "toler_chol": options["toler.chol"],
+        "toler_inf": options["toler.inf"],
+        "timefix": options["timefix"],
+        "robust": _normalize_optional_bool_option(robust, "robust"),
+        "singular_ok": _normalize_bool_option_with_default(singular_ok, "singular_ok", True),
+        "nocenter": []
+        if nocenter is None
+        else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
+        "keep_model": _normalize_bool_option_with_default(model, "model", False),
+    }
     # istate/statedata only matter for a multi-state response (R keeps istate in the
     # model frame of an ordinary fit)
     if frame.y.type in {"mright", "mcounting"}:
-        raise NotImplementedError("multi-state coxph models are not implemented")
-    return _coxph_fit_frame(
-        frame,
-        method=method_name,
-        init=init,
-        iter_max=max_iter,
-        eps=eps_value,
-        toler_chol=toler_value,
-        timefix=fix_time,
-        robust=_normalize_optional_bool_option(robust, "robust"),
-        singular_ok=_normalize_bool_option_with_default(singular_ok, "singular_ok", True),
-        nocenter=[]
-        if nocenter is None
-        else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
-        tt=tt,
-        keep_model=_normalize_bool_option_with_default(model, "model", False),
-        outer_max=(
-            control.get("outer.max", control.get("outer_max"))
-            if isinstance(control, Mapping)
-            else None
-        ),
-    )
+        if strata is not None:
+            raise ValueError("use strata() terms in the formula for multi-state models")
+        from ._coxphms import _survcheckallow, fit_multistate
+
+        # rownames(mf) before the na.action, which the residuals and predictions carry
+        source_rows = range(_data_row_count(data, fit_formula)) if subset is None else subset
+        fit: CoxphModel = fit_multistate(
+            frame,
+            row_labels=_row_names(data, source_rows),
+            formulas=formulas,
+            na_action=na_action,
+            # coxph.R: breslow when neither ties nor method was given
+            method="breslow" if ties is None and method is None else method_name,
+            survcheckallow=_survcheckallow(options["survcheckallow"]),
+            **fit_options,
+        )
+    elif formulas is not None:
+        raise ValueError("formula is a list but the response is not multi-state")
+    else:
+        fit = _coxph_fit_frame(
+            frame, method=method_name, outer_max=options["outer.max"], tt=tt, **fit_options
+        )
+    if not timeline:
+        return fit
+    model = None if fit.model is None else _timeline_model_frame(fit.model, formula)
+    return replace(fit, formula=formula, model=model)
 
 
 def clogit(
@@ -786,13 +1036,13 @@ def clogit(
     *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     method: str = "exact",
     **kwargs: Any,
 ) -> ClogitModel:
     """Conditional logistic regression as a stratified Cox model (R's ``clogit``)."""
 
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     if not isinstance(formula, str):
         raise TypeError("A formula argument is required")
     response, separator, rhs = formula.partition("~")
@@ -814,12 +1064,12 @@ def clogit(
                 "weights ignored: not possible for the exact method", RuntimeWarning, stacklevel=2
             )
             weights = None
-    columns = _response_arg_columns(response)
-    if not columns:
+    if not _response_arg_columns(response):
         raise ValueError("clogit response must name a column of data")
-    n = len(_column(data, columns[0]))
+    # R's Surv(1 + 0*case, case): a constant time as long as the response after
+    # subset and na.action
     fit = coxph(
-        f"Surv(rep(1, {n}), {response}) ~ {rhs.strip()}",
+        f"Surv(rep(1, length({response})), {response}) ~ {rhs.strip()}",
         data=data,
         weights=weights,
         subset=subset,
@@ -831,50 +1081,8 @@ def clogit(
 
 
 # ---------------------------------------------------------------------------
-# summary.coxph / coxph.wtest
+# summary.coxph / summary.coxph.penal / coxph.wtest
 # ---------------------------------------------------------------------------
-
-
-def _pchisq_upper(statistic: float, df: int) -> float:
-    """``pchisq(x, df, lower.tail=FALSE)``: the regularised upper incomplete gamma
-    function Q(df/2, x/2) (series / Lentz continued fraction; no Python binding of
-    R's pchisq exists yet)."""
-
-    if math.isnan(statistic) or df <= 0:
-        return math.nan
-    if statistic <= 0.0:
-        return 1.0
-    if math.isinf(statistic):
-        return 0.0
-    a, x = df / 2.0, statistic / 2.0
-    log_prefactor = -x + a * math.log(x) - math.lgamma(a)
-    if x < a + 1.0:
-        term = 1.0 / a
-        total = term
-        for k in range(1, 1000):
-            term *= x / (a + k)
-            total += term
-            if abs(term) < abs(total) * 1e-16:
-                break
-        return max(0.0, 1.0 - math.exp(log_prefactor) * total)
-    tiny = 1e-300
-    b = x + 1.0 - a
-    c = 1.0 / tiny
-    d = 1.0 / b
-    h = d
-    for k in range(1, 1000):
-        an = -k * (k - a)
-        b += 2.0
-        d = an * d + b
-        d = tiny if abs(d) < tiny else d
-        c = b + an / c
-        c = tiny if abs(c) < tiny else c
-        d = 1.0 / d
-        delta = d * c
-        h *= delta
-        if abs(delta - 1.0) < 1e-16:
-            break
-    return math.exp(log_prefactor) * h
 
 
 def _coefficient_table(
@@ -893,7 +1101,7 @@ def _coefficient_table(
             "exp_coef": math.exp(value) if not math.isnan(value) else math.nan,
             "se": se[idx],
             "z": z,
-            "p": _pchisq_upper(z * z, 1) if not math.isnan(z) else math.nan,
+            "p": _core.pchisq(z * z, 1.0, lower_tail=False),
         }
         if naive is not None:
             row["naive_se"] = math.sqrt(naive[idx][idx])
@@ -905,19 +1113,40 @@ def _coefficient_table(
     return columns, rows
 
 
-def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> Any:
-    """R's ``summary.coxph`` as a dict keyed like the R list (the fit itself for a null
-    model, as R returns the object unchanged)."""
+def _conf_int_rows(
+    names: Sequence[str], beta: Sequence[float], se: Sequence[float], conf_int: Any
+) -> list[dict[str, Any]]:
+    """The ``conf.int`` table of the summaries: ``exp(coef)``, ``exp(-coef)`` and the
+    limits, from the scaled coefficients and standard errors."""
 
+    level = _normalize_conf_level(conf_int, "conf_int")
+    z = NormalDist().inv_cdf((1.0 + level) / 2.0)
+    return [
+        {
+            "name": name,
+            "exp(coef)": math.exp(b),
+            "exp(-coef)": math.exp(-b),
+            "lower": math.exp(b - z * error),
+            "upper": math.exp(b + z * error),
+        }
+        for name, b, error in zip(names, beta, se, strict=True)
+    ]
+
+
+def summary_coxph(
+    fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0, terms: Any = False
+) -> Any:
+    """R's ``summary.coxph`` as a dict keyed like the R list (the fit itself for a null
+    model, as R returns the object unchanged); a penalized fit dispatches to
+    :func:`summary_coxph_penal`, the only method that reads ``terms``."""
+
+    if fit.penalized is not None:
+        return summary_coxph_penal(fit, conf_int=conf_int, scale=scale, terms=terms)
     scale_value = _finite_float(scale, "scale")
     beta = fit.coefficients
     if not beta:
         return fit
-    df = (
-        sum(fit.df)
-        if fit.penalized is not None
-        else sum(1 for value in beta if not math.isnan(value))
-    )
+    df = _coxph_df(fit)
     loglik = fit.loglik
     score = fit.score if fit.score is not None else math.nan
     logtest = -2.0 * (loglik[0] - loglik[1])
@@ -926,49 +1155,236 @@ def summary_coxph(fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0) -> An
         "model_type": "coxph",
         "n": fit.n,
         "nevent": fit.nevent,
-        "n_event": fit.nevent,
+        "na_action": fit.na_action,
         "loglik": loglik[1],
         "null_loglik": loglik[0],
         "df": df,
         "coefficient_names": list(fit.coef_names),
         "coefficient_columns": columns,
         "coefficients": rows,
-        "logtest": {"test": logtest, "df": df, "pvalue": _pchisq_upper(logtest, df)},
-        "sctest": {"test": score, "df": df, "pvalue": _pchisq_upper(score, df)},
-        "score_test": score,
+        "logtest": {
+            "test": logtest,
+            "df": df,
+            "pvalue": _core.pchisq(logtest, df, lower_tail=False),
+        },
+        "sctest": {"test": score, "df": df, "pvalue": _core.pchisq(score, df, lower_tail=False)},
         "rsq": {
             "rsq": 1.0 - math.exp(-logtest / fit.n),
             "maxrsq": 1.0 - math.exp(2.0 * loglik[0] / fit.n),
         },
         "used_robust": fit.robust,
-        "robust": fit.robust,
         "method": fit.method,
         "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
     }
     if conf_int:
-        level = _normalize_conf_level(conf_int, "conf_int")
-        z = NormalDist().inv_cdf((1.0 + level) / 2.0)
-        result["conf_int"] = [
-            {
-                "name": name,
-                "exp(coef)": math.exp(b),
-                "exp(-coef)": math.exp(-b),
-                "lower": math.exp(b - z * float(row["se"])),
-                "upper": math.exp(b + z * float(row["se"])),
-            }
-            for name, b, row in zip(
-                fit.coef_names, [v * scale_value for v in beta], rows, strict=True
-            )
-        ]
+        result["conf_int"] = _conf_int_rows(
+            fit.coef_names,
+            [value * scale_value for value in beta],
+            [float(row["se"]) for row in rows],
+            conf_int,
+        )
+    from ._coxphms import CoxphmsModel
+
+    if isinstance(fit, CoxphmsModel):
+        # summary.coxph adds the multi-state maps
+        result["cmap"] = fit.cmap
+        result["states"] = list(fit.states)
     wald = fit.wald_test
     if wald is not None:
-        result["waldtest"] = {"test": round(wald, 2), "df": df, "pvalue": _pchisq_upper(wald, df)}
+        result["waldtest"] = {
+            "test": round(wald, 2),
+            "df": df,
+            "pvalue": _core.pchisq(wald, df, lower_tail=False),
+        }
     if fit.rscore is not None:
         result["robscore"] = {
             "test": fit.rscore,
             "df": df,
-            "pvalue": _pchisq_upper(fit.rscore, df),
+            "pvalue": _core.pchisq(fit.rscore, df, lower_tail=False),
         }
+    return result
+
+
+def _penal_row(
+    name: str, coef: float, se: float, se2: float, chisq: float, df: float, p: float
+) -> dict[str, Any]:
+    return {"name": name, "coef": coef, "se": se, "se2": se2, "chisq": chisq, "df": df, "p": p}
+
+
+def _wald_row(name: str, coef: float, var: float, var2: float) -> dict[str, Any]:
+    """A coefficient's row of summary.coxph.penal: ``Chisq = coef^2 / var`` on 1 df."""
+
+    chisq = coef * coef / var if var > 0.0 else math.nan
+    return _penal_row(
+        name,
+        coef,
+        math.sqrt(var),
+        math.sqrt(var2),
+        chisq,
+        1.0,
+        _core.pchisq(chisq, 1.0, lower_tail=False),
+    )
+
+
+def _block(matrix: list[list[float]], index: Sequence[int]) -> list[list[float]]:
+    return [[matrix[i][j] for j in index] for i in index]
+
+
+def _quadratic_form(x: Sequence[float], matrix: list[list[float]]) -> float:
+    return sum(a * row[j] * x[j] for a, row in zip(x, matrix, strict=True) for j in range(len(x)))
+
+
+def _pspline_print(
+    label: str,
+    term: _PenaltyDesignTerm,
+    coef: list[float],
+    var: list[list[float]],
+    var2: list[list[float]],
+    df: float,
+    history: Any,
+    digits: int = 7,
+) -> tuple[list[dict[str, Any]], str]:
+    """pspline()'s ``printfun``: the spline's linear trend (a weighted regression of
+    the coefficients on the basis centres ``cbase``) and the test of the rest on
+    ``df - 1`` degrees of freedom; theta is formatted to the ``digits`` of the caller's
+    ``options(digits)``.  ``cbase`` has a centre for every basis column but the first,
+    so as in R a pspline that keeps its intercept column fails coxph.wtest's length
+    check."""
+
+    nvar = len(coef) + (0 if term.intercept else 1)
+    cbase = _pspline_cbase(term.nterm, term.degree, term.boundary, nvar)
+    test1 = coxph_wtest(var, coef).test[0]
+    # xmat = cbind(1, cbase) and xsig = V X, for V a g-inverse of var
+    xmat = [[1.0, centre] for centre in cbase]
+    xsig = coxph_wtest(var, xmat).solve
+    # the slope's weights: the second row of [X' V X]^- X' V
+    xvx = [
+        [sum(x[a] * v[b] for x, v in zip(xmat, xsig, strict=True)) for b in (0, 1)] for a in (0, 1)
+    ]
+    cmat = coxph_wtest(xvx, [list(row) for row in zip(*xsig, strict=True)]).solve[1]
+    linear = sum(c * b for c, b in zip(cmat, coef, strict=True))
+    lvar1 = _quadratic_form(cmat, var)
+    test2 = linear * linear / lvar1 if lvar1 > 0.0 else math.nan
+    nonlinear = test1 - test2
+    rows = [
+        _penal_row(
+            f"{label}, linear",
+            linear,
+            math.sqrt(lvar1),
+            math.sqrt(_quadratic_form(cmat, var2)),
+            test2,
+            1.0,
+            _core.pchisq(test2, 1.0, lower_tail=False),
+        ),
+        # max(.5, df - 1) stops silly p-values for a chisq of 0 on 0 df
+        _penal_row(
+            f"{label}, nonlin",
+            math.nan,
+            math.nan,
+            math.nan,
+            nonlinear,
+            df - 1.0,
+            _core.pchisq(nonlinear, max(0.5, df - 1.0), lower_tail=False),
+        ),
+    ]
+    return rows, f"Theta= {_r_format_number(history.theta, digits)}"
+
+
+def _frailty_print(
+    label: str, term: _PenaltyDesignTerm, test: float, df: float, history: Any
+) -> tuple[dict[str, Any], str]:
+    """The frailty distributions' ``printfun``: the Wald test of the random effects on
+    the term's df, and the variance of the random effect."""
+
+    theta = history.history[-1][0] if history.history else history.theta
+    text = f"Variance of random effect= {_r_format_number(theta)}"
+    if term.penalty.distribution == "gamma":
+        text += f"   I-likelihood = {_r_format_number(round(history.c_loglik, 1), 10)}"
+    # max(df, .5) stops silly p-values
+    p = _core.pchisq(test, max(df, 0.5), lower_tail=False)
+    return _penal_row(label, math.nan, math.nan, math.nan, test, df, p), text
+
+
+def summary_coxph_penal(
+    fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0, terms: Any = False
+) -> dict[str, Any]:
+    """R's ``summary.coxph.penal`` as a dict keyed like the R list.
+
+    ``coefficients`` has one row per term with columns ``coef``, ``se(coef)``,
+    ``se2`` (from the sandwich variance ``var2``), ``Chisq``, ``DF`` and ``p``: a
+    pspline gives its linear and nonlinear parts, a frailty the Wald test of its
+    random effects on the term's df (``print2`` holds their theta), and any other
+    coefficient a Wald test on 1 df; ``terms`` makes a multi-column unpenalized
+    term one row.  There is no score, Wald or R-squared test.
+    """
+
+    penalized = fit.penalized
+    if penalized is None:
+        raise TypeError("summary_coxph_penal requires a penalized Cox fit")
+    scale_value = _finite_float(scale, "scale")
+    term_tests = _normalize_bool_option(terms, "terms")
+    beta = fit.coefficients
+    if not beta and penalized.frail is None:
+        raise ValueError("Penalized summary function can't be used for a null model")
+    var, var2 = fit.var, fit.var2
+    histories = {history.term: history for history in penalized.history}
+    rows: list[dict[str, Any]] = []
+    print2: list[str] = []
+    for i, (label, term) in enumerate(_model_terms(fit)):
+        columns, df = penalized.assign2[i], penalized.df[i]
+        penalty = term.kind if isinstance(term, _PenaltyDesignTerm) and term.penalized else None
+        coef = [] if penalized.pterms[i] == 2 else [beta[col] for col in columns]
+        if penalty == "pspline":
+            spline_rows, text = _pspline_print(
+                label, term, coef, _block(var, columns), _block(var2, columns), df, histories[i]
+            )
+            rows.extend(spline_rows)
+            print2.append(text)
+        elif penalty == "frailty":
+            if penalized.pterms[i] == 2:
+                test = sum(b * b / v for b, v in zip(penalized.frail, penalized.fvar, strict=True))
+            else:
+                test = coxph_wtest(_block(var, columns), coef).test[0]
+            row, text = _frailty_print(label, term, test, df, histories[i])
+            rows.append(row)
+            print2.append(text)
+        elif term_tests and len(columns) > 1:
+            test = coxph_wtest(_block(var, columns), coef).test[0]
+            p = _core.pchisq(test, 1.0, lower_tail=False)
+            rows.append(_penal_row(label, math.nan, math.nan, math.nan, test, df, p))
+        else:
+            rows.extend(
+                _wald_row(fit.coef_names[col], beta[col], var[col][col], var2[col][col])
+                for col in columns
+            )
+    logtest = -2.0 * (fit.loglik[0] - fit.loglik[1])
+    df_total = _coxph_df(fit)
+    result: dict[str, Any] = {
+        "model_type": "coxph.penal",
+        "n": fit.n,
+        "nevent": fit.nevent,
+        "na_action": fit.na_action,
+        "loglik": fit.loglik[1],
+        "null_loglik": fit.loglik[0],
+        "iter": fit.iter,
+        "df": list(penalized.df),
+        "coefficient_columns": ["coef", "se(coef)", "se2", "Chisq", "DF", "p"],
+        "coefficients": rows,
+        "print2": print2,
+        "logtest": {
+            "test": logtest,
+            "df": df_total,
+            "pvalue": _core.pchisq(logtest, df_total, lower_tail=False),
+        },
+        "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
+    }
+    if conf_int and beta:
+        result["conf_int"] = _conf_int_rows(
+            fit.coef_names,
+            [value * scale_value for value in beta],
+            [math.sqrt(var[idx][idx]) * scale_value for idx in range(len(beta))],
+            conf_int,
+        )
     return result
 
 
@@ -1044,15 +1460,16 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
 
 
 def _prediction_newdata(
-    fit: CoxphModel, newdata: Any, *, need_strata: bool, need_response: bool
+    fit: CoxphModel, newdata: Any, *, need_strata: bool, need_response: bool, na_action: str
 ) -> _NewData:
     return _newdata_frame(
         fit.design,
-        fit.terms.strata,
+        _strata_term_columns(fit.terms),
         fit.strata_levels,
         newdata,
         need_strata=need_strata,
         need_response=need_response,
+        na_action=na_action,
     )
 
 
@@ -1102,6 +1519,7 @@ def predict_coxph(
     *,
     type: str = "lp",
     se_fit: Any = False,
+    na_action: str | None = "na.pass",
     terms: Any | None = None,
     collapse: Any | None = None,
     reference: str | None = None,
@@ -1110,12 +1528,30 @@ def predict_coxph(
     """R's ``predict.coxph``: ``lp``, ``risk``, ``expected``, ``terms`` or ``survival``.
 
     Returns the predictions (a list, or one row per observation for ``terms``), or a
-    :class:`PredictResult` of predictions and standard errors when ``se_fit``.
+    :class:`PredictResult` of predictions and standard errors when ``se_fit``.  Without
+    ``newdata`` a ``na.exclude`` fit's predictions are NaN at the rows it removed
+    (``napredict``); ``na_action`` applies to ``newdata``, whose incomplete rows are NaN
+    (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).  A
+    multi-state fit's predictions are :func:`survival.r._coxphms.predict_coxphms`'s.
     """
 
+    from ._coxphms import CoxphmsModel, predict_coxphms
+
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
         raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    if isinstance(fit, CoxphmsModel):
+        return predict_coxphms(
+            fit,
+            newdata,
+            type=type,
+            se_fit=se_fit,
+            na_action=na_action,
+            terms=terms,
+            collapse=collapse,
+            reference=reference,
+        )
     if fit.tt:
         raise ValueError("function not defined for models with tt() terms")
     predict_type = _match_string_arg(
@@ -1137,11 +1573,19 @@ def predict_coxph(
     if predict_type in {"expected", "survival"}:
         reference_name = "sample"
 
+    action = _normalize_na_action(na_action)
     new: _NewData | None = None
     if newdata is not None:
         need_response = predict_type in {"expected", "survival"}
+        # predict.coxph keeps the strata in Terms2 only when the prediction uses them
+        need_strata = _has_strata(fit) and (
+            include_se
+            or predict_type in {"terms", "expected", "survival"}
+            or reference_name == "strata"
+            or (reference_name == "zero" and any(value != 0.0 for value in fit.means))
+        )
         new = _prediction_newdata(
-            fit, newdata, need_strata=_has_strata(fit), need_response=need_response
+            fit, newdata, need_strata=need_strata, need_response=need_response, na_action=action
         )
         if (
             _has_strata(fit)
@@ -1154,22 +1598,20 @@ def predict_coxph(
         if need_response and new.y is not None and new.y.type != fit.y.type:
             raise ValueError("New data has a different survival type than the model")
 
+    pred: Any
+    se: Any
     if predict_type == "terms":
-        selected = _terms_selection(terms, list(fit.assign))
-        result = fit.fit.predict_terms(
-            newdata=None if new is None else new.x,
-            new_strata=None if new is None else new.strata,
-            new_offset=None if new is None else new.offset,
-            se_fit=include_se,
-            reference=reference_name,
-            assign=_active_assign(fit),
-        )
-        pred: Any = [[row[idx] for idx in selected] for row in result.fit]
-        se: Any = (
-            None
-            if result.se_fit is None
-            else [[row[idx] for idx in selected] for row in result.se_fit]
-        )
+        selected = _terms_selection(terms, _term_labels(fit))
+    if new is not None and new.n == 0:  # no complete newdata row
+        pred, se = [], ([] if include_se else None)
+    elif (
+        predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign
+    ):
+        pred, se = _frailty_prediction(fit, new, include_se)
+        if predict_type == "risk":
+            pred = [math.exp(value) for value in pred]
+    elif predict_type == "terms":
+        pred, se = _predict_terms(fit, new, include_se, reference_name, selected)
     else:
         result = fit.fit.predict(
             predict_type,
@@ -1185,6 +1627,20 @@ def predict_coxph(
         )
         pred, se = list(result.fit), (None if result.se_fit is None else list(result.se_fit))
 
+    # napredict: NaN at the rows na.exclude removed from the fit, or at the incomplete
+    # newdata rows, which na.pass carries through to NA predictions
+    if new is None:
+        gaps = _excluded_rows(fit.na_action)
+    else:
+        gaps = [] if action == "omit" else list(new.missing)
+        if new.missing and action == "omit" and collapse is not None and collapse is not False:
+            missing = set(new.missing)
+            kept = [row for row in range(new.n + len(missing)) if row not in missing]
+            collapse = _subset_optional_sequence(collapse, kept, "collapse")
+    width = len(selected) if predict_type == "terms" else None
+    pred = _pad_rows(pred, gaps, width)
+    se = None if se is None else _pad_rows(se, gaps, width)
+
     if collapse is not None and collapse is not False:
         pred = _rowsum(pred, collapse)
         if se is not None:
@@ -1192,9 +1648,68 @@ def predict_coxph(
     return PredictResult(pred, se) if include_se else pred
 
 
-def predict_terms_constant(fit: CoxphModel) -> float:
-    """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``."""
+def _frailty_prediction(
+    fit: CoxphModel, new: _NewData | None, se_fit: bool
+) -> tuple[list[float], list[float] | None]:
+    """predict.coxph.penal for a model of a sparse frailty alone: the linear predictor
+    (for types lp, risk and terms), with the frailties' standard errors ``sqrt(fvar)``
+    (not rescaled for the risk, as in R), and 0 for new data."""
 
+    if new is not None:
+        return [0.0] * new.n, [0.0] * new.n if se_fit else None
+    penalized = fit.penalized
+    se = [math.sqrt(penalized.fvar[group]) for group in penalized.frail_index]
+    return fit.linear_predictors, se if se_fit else None
+
+
+def _predict_terms(
+    fit: CoxphModel, new: _NewData | None, se_fit: bool, reference: str, selected: list[int]
+) -> tuple[list[list[float]], list[list[float]] | None]:
+    """The ``terms`` predictions of the ``selected`` model terms (positions among
+    :func:`_model_terms`).  As in predict.coxph.penal, a sparse frailty's column holds
+    the subjects' frailties (with standard errors ``sqrt(fvar)``), and 0 for new
+    data."""
+
+    active = _active_assign(fit)
+    position = _sparse_term(fit)
+    # the engine's terms are the model terms without the sparse one
+    engine_terms = [
+        idx if position is None or idx < position else idx - 1
+        for idx in selected
+        if idx != position
+    ]
+    result = fit.fit.predict_terms(
+        newdata=None if new is None else new.x,
+        new_strata=None if new is None else new.strata,
+        new_offset=None if new is None else new.offset,
+        se_fit=se_fit,
+        reference=reference,
+        assign=[active[idx] for idx in engine_terms],
+    )
+    rows, se_rows = result.fit, result.se_fit
+    # the frailty column goes in at each place the selection names it, left to right
+    columns = [column for column, idx in enumerate(selected) if idx == position]
+    if columns:
+        penalized = fit.penalized
+        for i, row in enumerate(rows):
+            group = penalized.frail_index[i] if new is None else None
+            value = 0.0 if group is None else penalized.frail[group]
+            se = 0.0 if group is None else math.sqrt(penalized.fvar[group])
+            for column in columns:
+                row.insert(column, value)
+                if se_rows is not None:
+                    se_rows[i].insert(column, se)
+    return rows, se_rows
+
+
+def predict_terms_constant(fit: CoxphModel) -> float:
+    """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``.  A
+    multi-state fit has no terms prediction (predict.coxphms)."""
+
+    from ._coxphms import _PREDICT_INCOMPLETE, CoxphmsModel
+
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError(_PREDICT_INCOMPLETE)
     return sum(
         coefficient * mean
         for coefficient, mean in zip(fit.coefficients, fit.means, strict=True)
@@ -1218,8 +1733,9 @@ _RESIDUAL_TYPES = (
 )
 
 
-def _collapse_codes(fit: CoxphModel, collapse: Any) -> list[int] | None:
-    """The engine's ``collapse`` groups: ``TRUE`` means the cluster (or id)."""
+def _collapse_codes(fit: CoxphModel, collapse: Any, n: int) -> list[int] | None:
+    """The groups of R's ``rowsum(rr, collapse)``: ``TRUE`` means the fit's cluster
+    (or id), and a vector must have the ``n`` rows of the residuals."""
 
     if collapse is None or collapse is False:
         return None
@@ -1230,7 +1746,7 @@ def _collapse_codes(fit: CoxphModel, collapse: Any) -> list[int] | None:
         labels = list(labels)
     else:
         labels = _materialize_labels(collapse, "collapse")
-        if len(labels) != len(fit.residuals):
+        if len(labels) != n:
             raise ValueError("Wrong length for 'collapse'")
     order = sorted(_label_levels(labels, "collapse"), key=lambda v: (isinstance(v, str), v))
     index = {label: idx for idx, label in enumerate(order)}
@@ -1239,6 +1755,34 @@ def _collapse_codes(fit: CoxphModel, collapse: Any) -> list[int] | None:
 
 def _drop_single_column(rows: list[list[float]], nvar: int) -> Any:
     return [row[0] for row in rows] if nvar == 1 else rows
+
+
+@dataclass(frozen=True)
+class CoxSchoenfeldResiduals:
+    """``residuals(fit, type = "schoenfeld" | "scaledsch")``: one row of ``values`` per
+    death (a vector for a one-variable model, as in R), labelled as R labels the matrix:
+    ``time`` holds the death times (its row names), ``colnames`` the coefficient names,
+    and ``strata`` the deaths per stratum in level order (``attr(, "strata")``, R's
+    ``table(strata[deaths])``), ``None`` for an unstratified fit."""
+
+    values: Any = field(repr=False)
+    time: list[float] = field(repr=False)
+    strata: dict[str, int] | None
+    colnames: list[str]
+
+
+def _schoenfeld_result(fit: CoxphModel, residuals: Any) -> CoxSchoenfeldResiduals:
+    strata: dict[str, int] | None = None
+    if residuals.strata is not None and fit.strata_levels:
+        strata = dict.fromkeys(fit.strata_levels, 0)
+        for code in residuals.strata:
+            strata[fit.strata_levels[code]] += 1
+    return CoxSchoenfeldResiduals(
+        values=_drop_single_column(residuals.residuals, fit.nvar),
+        time=residuals.time,
+        strata=strata,
+        colnames=list(fit.coef_names),
+    )
 
 
 def residuals_coxph(
@@ -1251,10 +1795,29 @@ def residuals_coxph(
 ) -> Any:
     """R's ``residuals.coxph``.
 
-    Score, Schoenfeld and dfbeta residuals are matrices (one row per observation
-    or event) that drop to a vector for a one-variable model, as in R.
+    Score and dfbeta residuals are matrices (one row per observation) that drop to a
+    vector for a one-variable model, as in R; Schoenfeld residuals come as a
+    :class:`CoxSchoenfeldResiduals`, one row per death.  A ``na.exclude`` fit's
+    residuals other than Schoenfeld's are NaN at the rows it removed (``naresid``),
+    and a ``collapse`` vector then covers those rows too.  A multi-state fit's
+    residuals are :func:`survival.r._coxphms.residuals_coxphms`'s, which also takes
+    ``na_action``.
     """
 
+    from ._coxphms import CoxphmsModel, residuals_coxphms
+
+    if isinstance(fit, CoxphmsModel):
+        # residuals.coxphms's na.action overrides the kind of the fit's na.action
+        na_action = _pop_dotted_keyword(
+            kwargs, "na.action", "na_action", kwargs.pop("na_action", None), None
+        )
+        if kwargs:
+            raise TypeError(
+                f"residuals got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+            )
+        return residuals_coxphms(
+            fit, type=type, collapse=collapse, weighted=weighted, na_action=na_action
+        )
     if kwargs:
         raise TypeError(
             f"residuals got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
@@ -1265,36 +1828,55 @@ def residuals_coxph(
     weighted_value = _normalize_optional_bool_option(weighted, "weighted")
     if weighted_value is None:
         weighted_value = otype in {"dfbeta", "dfbetas"}
+    # residuals.coxph.null
+    if not fit.coef_names and fit.penalized is None and otype not in {"martingale", "deviance"}:
+        raise ValueError(f"'{otype}' residuals are not defined for a null model")
     if fit.method == "exact" and otype in {"score", "schoenfeld", "scaledsch", "dfbeta", "dfbetas"}:
         raise ValueError(f"{otype} residuals are not available for the exact method")
-    codes = _collapse_codes(fit, collapse)
+    excluded = _excluded_rows(fit.na_action)
+    codes = _collapse_codes(fit, collapse, len(fit.residuals) + len(excluded))
     engine = fit.fit
     nvar = fit.nvar
+    if otype in {"schoenfeld", "scaledsch"}:
+        if codes is not None:
+            raise ValueError("collapse is not defined for Schoenfeld residuals")
+        residuals = (
+            engine.schoenfeld_residuals(weighted=weighted_value)
+            if otype == "schoenfeld"
+            else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
+        )
+        return _schoenfeld_result(fit, residuals)
+    # naresid comes before the collapse: the engine sums the fit's rows, and a group
+    # holding a row na.exclude removed sums to NA
+    padded_codes = codes if excluded and collapse is not True else None
+    fit_codes = codes
+    if padded_codes is not None:
+        gaps = set(excluded)
+        fit_codes = [code for row, code in enumerate(padded_codes) if row not in gaps]
+    values: list[Any]
     if otype == "martingale":
-        return list(engine.martingale_residuals(weighted=weighted_value, collapse=codes))
-    if otype == "deviance":
-        return list(engine.deviance_residuals(weighted=weighted_value, collapse=codes))
-    if otype == "score":
-        return _drop_single_column(
-            engine.score_residuals(weighted=weighted_value, collapse=codes), nvar
-        )
-    if otype == "dfbeta":
-        return _drop_single_column(engine.dfbeta(weighted=weighted_value, collapse=codes), nvar)
-    if otype == "dfbetas":
-        return _drop_single_column(engine.dfbetas(weighted=weighted_value, collapse=codes), nvar)
-    if otype == "partial":
+        values = list(engine.martingale_residuals(weighted=weighted_value, collapse=fit_codes))
+    elif otype == "deviance":
+        values = list(engine.deviance_residuals(weighted=weighted_value, collapse=fit_codes))
+    elif otype == "partial":
         rows = engine.partial_residuals(
-            assign=_active_assign(fit), weighted=weighted_value, collapse=codes
+            assign=_active_assign(fit), weighted=weighted_value, collapse=fit_codes
         )
-        return [list(row) for row in rows]
-    if codes is not None:
-        raise ValueError("collapse is not defined for Schoenfeld residuals")
-    residuals = (
-        engine.schoenfeld_residuals(weighted=weighted_value)
-        if otype == "schoenfeld"
-        else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
-    )
-    return _drop_single_column([list(row) for row in residuals.residuals], nvar)
+        values = [list(row) for row in rows]
+    else:
+        method = {
+            "score": engine.score_residuals,
+            "dfbeta": engine.dfbeta,
+            "dfbetas": engine.dfbetas,
+        }[otype]
+        values = [list(row) for row in method(weighted=weighted_value, collapse=fit_codes)]
+    if codes is None:
+        values = _pad_rows(values, excluded)
+    elif padded_codes is not None:
+        values = _rowsum_excluded(values, padded_codes, excluded)
+    if otype in {"martingale", "deviance", "partial"}:
+        return values
+    return _drop_single_column(values, nvar)
 
 
 # ---------------------------------------------------------------------------
@@ -1302,35 +1884,141 @@ def residuals_coxph(
 # ---------------------------------------------------------------------------
 
 
-def _curve_columns(values: list[list[float]]) -> Any:
-    """A curve block as R stores it: a vector for one curve, ``ntime x ncurve`` rows otherwise."""
+# survfit.coxph's old-style ``type`` values and the stype and ctype each stands for
+_SURVFIT_TYPES = (
+    "kalbfleisch-prentice",
+    "aalen",
+    "efron",
+    "kaplan-meier",
+    "breslow",
+    "fleming-harrington",
+    "greenwood",
+    "tsiatis",
+    "exact",
+)
+_SURVFIT_TYPE_STYPE = (1, 2, 2, 1, 2, 2, 2, 2, 2)
+_SURVFIT_TYPE_CTYPE = (1, 1, 2, 1, 1, 2, 1, 1, 1)
 
-    if values and len(values[0]) == 1:
-        return [row[0] for row in values]
-    return [list(row) for row in values]
+
+def _survfit_types(fit: CoxphModel, type_: Any, stype: Any, ctype: Any) -> tuple[int, int]:
+    """``survfit.coxph``'s ``stype`` and ``ctype``: those of the old-style ``type`` when
+    neither is given, else stype 2 and the ctype of the fit's ties (2 for Efron)."""
+
+    if type_ is not None:
+        if stype is not None or ctype is not None:
+            _warn_outside_package("type argument ignored", RuntimeWarning)
+        else:
+            choices = ", ".join(f'"{name}"' for name in _SURVFIT_TYPES)
+            matched = _match_string_arg(
+                type_, "type", _SURVFIT_TYPES, f"'type' should be one of {choices}"
+            )
+            index = _SURVFIT_TYPES.index(matched)
+            stype = _SURVFIT_TYPE_STYPE[index]
+            if stype != 1:
+                ctype = _SURVFIT_TYPE_CTYPE[index]
+    if ctype is None:
+        ctype_value = 2 if fit.method == "efron" else 1
+    else:
+        ctype_value = _integer_scalar(ctype, "ctype")
+        if ctype_value not in (1, 2):
+            raise ValueError("ctype must be 1 or 2")
+    stype_value = 2 if stype is None else _integer_scalar(stype, "stype")
+    if stype_value not in (1, 2):
+        raise ValueError("stype must be 1 or 2")
+    return stype_value, ctype_value
+
+
+def _check_interaction_margins(fit: CoxphModel) -> None:
+    """``survfit.coxph`` refuses a model with an interaction whose lower-order terms are
+    not all in it (a 2 in ``attr(Terms, "factors")``); strata terms do not count."""
+
+    terms = [
+        frozenset(term.term.factors)
+        if isinstance(term.term, _InteractionTerm)
+        else frozenset([term.term])
+        for term in fit.terms.model_terms
+        if isinstance(term, _ModelCovariateTerm)
+    ]
+    present = set(terms)
+    if any(len(term) > 1 and any(term - {v} not in present for v in term) for term in terms):
+        raise ValueError(
+            "not able to create a curve for models that contain an interaction without "
+            "the lower order effect"
+        )
+
+
+def _curve_block(curves: list[Any], name: str) -> Any:
+    """One matrix of the curves (``surv``, ``cumhaz`` or ``std_err``) as R stores it: the
+    curves' rows end to end, ``ntime x ncurve`` rows, or a vector for one column."""
+
+    rows = [row for curve in curves for row in getattr(curve, name)]
+    if rows and len(rows[0]) == 1:
+        return [row[0] for row in rows]
+    return rows
 
 
 def _confidence_limits(surv: Any, std_err: Any, conf_type: str, conf_int: float) -> tuple[Any, Any]:
-    if surv and isinstance(surv[0], list):
-        columns = list(zip(*surv, strict=True))
-        se_columns = list(zip(*std_err, strict=True))
-        bands = [
-            _core.survfit_confint(list(p), list(se), True, conf_type, conf_int)
-            for p, se in zip(columns, se_columns, strict=True)
-        ]
-        lower = [list(row) for row in zip(*(band.lower for band in bands), strict=True)]
-        upper = [list(row) for row in zip(*(band.upper for band in bands), strict=True)]
-        return lower, upper
-    band = _core.survfit_confint(list(surv), list(std_err), True, conf_type, conf_int)
-    return list(band.lower), list(band.upper)
+    """``survfit_confint`` on the whole ``surv`` matrix at once, as R calls it (it works
+    elementwise), with the limits cut back into rows."""
+
+    if not (surv and isinstance(surv[0], list)):
+        band = _core.survfit_confint(surv, std_err, True, conf_type, conf_int)
+        return band.lower, band.upper
+    width = len(surv[0])
+    band = _core.survfit_confint(
+        list(chain.from_iterable(surv)),
+        list(chain.from_iterable(std_err)),
+        True,
+        conf_type,
+        conf_int,
+    )
+    lower, upper = band.lower, band.upper
+    starts = range(0, len(lower), width)
+    return [lower[i : i + width] for i in starts], [upper[i : i + width] for i in starts]
 
 
-def _survfit_id_codes(newdata: Any, id: Any, n: int) -> list[int]:
-    labels = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
-    if len(labels) != n:
-        raise ValueError("id must have one value per newdata row")
-    index = {label: idx for idx, label in enumerate(_label_levels(labels, "id"))}
-    return [index[label] for label in labels]
+def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
+    """R's ``row.names`` of ``data`` at the 0-based ``rows``: a data frame's own index
+    labels when they can be R row names (none missing, no two alike under
+    ``as.character``), else the 1-based row numbers (R's automatic row names, which is
+    also what ``rbind`` gives two data frames that have them)."""
+
+    index = None if isinstance(data, Mapping) else getattr(data, "index", None)
+    if index is not None and not (
+        type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
+    ):
+        labels = [_as_character(label) for label in index]
+        if len(set(labels)) == len(labels) and not any(map(_is_missing_value, index)):
+            return [labels[row] for row in rows]
+    return [str(row + 1) for row in rows]
+
+
+def _survfit_newdata(
+    fit: CoxphModel, newdata: Any, *, individual: bool, id: Any | None, na_action: str
+) -> tuple[_NewData, list[int], list[Any] | None]:
+    """R's ``model.frame(Terms2, newdata, id = id, na.action = na.omit)`` (``na_action``):
+    the newdata pieces at the rows without a missing value in a variable the curves read
+    (the ``id`` included), those rows (0-based, for the curve names) and their ``id``."""
+
+    n = _formula_design_row_count(newdata, fit.design)
+    rows = list(range(n))
+    ids = None
+    if id is not None:
+        ids = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
+        if len(ids) != n:
+            raise ValueError("id must have one value per newdata row")
+        rows = [row for row in rows if not _is_missing_value(ids[row])]
+        if len(rows) < n:
+            newdata = _data_rows(newdata, _newdata_columns(newdata), rows, n)
+    new = _prediction_newdata(
+        fit, newdata, need_strata=_has_strata(fit), need_response=individual, na_action=na_action
+    )
+    if new.missing:
+        dropped = set(new.missing)
+        rows = [row for position, row in enumerate(rows) if position not in dropped]
+    if not rows:
+        raise ValueError("all rows of newdata have missing values")
+    return new, rows, None if ids is None else [ids[row] for row in rows]
 
 
 def _survfit_curves(
@@ -1343,23 +2031,38 @@ def _survfit_curves(
     ctype: int,
     se_fit: bool,
     censor: bool,
-) -> tuple[list[Any], list[str]]:
-    """The engine curves for ``survfit.coxph`` and the name of each block (R's
-    ``names(fit$strata)``: the strata levels, or the newdata row numbers)."""
+    start_time: float | None = None,
+    na_action: str = "na.omit",
+) -> tuple[list[Any], list[str], list[str] | None]:
+    """The engine curves for ``survfit.coxph``, the name of each block (R's
+    ``names(fit$strata)``: the strata levels, the id values or the newdata row names) and
+    the name of each column when every block holds a curve per newdata row (the row names,
+    R's ``colnames(fit$surv)``).  ``na_action = "na.fail"`` refuses the newdata rows
+    ``na.omit`` would leave out."""
 
+    _check_interaction_margins(fit)
     engine = fit.penalized if fit.penalized is not None else fit.fit
+    options: dict[str, Any] = {
+        "stype": stype,
+        "ctype": ctype,
+        "se_fit": se_fit,
+        "censor": censor,
+        "start_time": start_time,
+    }
     if newdata is None:
         if any(":" in name for name in fit.assign):
-            warnings.warn(
+            _warn_outside_package(
                 "the model contains interactions; the default curve based on columm means "
                 "of the X matrix is almost certainly not useful. Consider adding a newdata "
                 "argument.",
                 RuntimeWarning,
-                stacklevel=3,
             )
-        curves = engine.survfit(stype=stype, ctype=ctype, se_fit=se_fit, censor=censor)
-        return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
-    new = _prediction_newdata(fit, newdata, need_strata=_has_strata(fit), need_response=individual)
+        curves = engine.survfit(**options)
+        names = [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+        return curves, names, None
+    new, rows, ids = _survfit_newdata(
+        fit, newdata, individual=individual, id=id, na_action=na_action
+    )
     if individual:
         if new.y is None:
             raise ValueError("newdata must contain the response variables when id is given")
@@ -1367,59 +2070,86 @@ def _survfit_curves(
             raise ValueError("Survival type of newdata does not match the fitted model")
         if new.y.start is None:
             raise ValueError("Individual=TRUE is only valid for counting process data")
+        if ids is None:  # individual = TRUE: one subject
+            codes, labels = [0] * new.n, []
+        else:
+            # coxsurv.fit's curves are the unique ids in order of first appearance, named
+            # by as.character; make.unique keeps apart distinct ids that print alike
+            # (0.1 + 0.2 and 0.3), whose repeated names R keeps but a dict cannot
+            levels = _label_levels(ids, "id")
+            index = {label: code for code, label in enumerate(levels)}
+            codes = [index[label] for label in ids]
+            labels = _make_unique([_as_character(label) for label in levels])
         curves = engine.survfit_individual(
             new.x,
             list(new.y.start),
             list(new.y.time),
-            _survfit_id_codes(newdata, id, new.n) if id is not None else [0] * new.n,
+            codes,
             new_strata=new.strata,
             new_offset=new.offset,
-            stype=stype,
-            ctype=ctype,
-            se_fit=se_fit,
-            censor=censor,
+            **options,
         )
-        return curves, [str(idx + 1) for idx in range(len(curves))] if len(curves) > 1 else []
-    curves = engine.survfit(
-        newdata=new.x,
-        new_strata=new.strata,
-        new_offset=new.offset,
-        stype=stype,
-        ctype=ctype,
-        se_fit=se_fit,
-        censor=censor,
-    )
+        return curves, labels if len(curves) > 1 else [], None
+    curves = engine.survfit(newdata=new.x, new_strata=new.strata, new_offset=new.offset, **options)
     if new.strata is not None:
-        return curves, [str(idx + 1) for idx in range(len(curves))]
-    return curves, [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+        return curves, _row_names(newdata, rows), None
+    names = [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
+    return curves, names, _row_names(newdata, rows)
 
 
 def survfit_coxph(
     fit: CoxphModel,
     newdata: Any | None = None,
     *,
-    se_fit: Any = True,
+    se_fit: Any | None = None,
     conf_int: Any = 0.95,
-    individual: Any = False,
-    stype: Any = 2,
+    individual: Any | None = None,
+    stype: Any | None = None,
     ctype: Any | None = None,
     conf_type: str = "log",
     censor: Any = True,
     start_time: Any | None = None,
     id: Any | None = None,
+    type: str | None = None,
     **kwargs: Any,
-) -> CoxSurvfitResult:
+) -> CoxSurvfitResult | CoxSurvfitMultiStateResult:
     """R's ``survfit.coxph``: predicted survival curves from a Cox model.
 
     Without ``newdata`` the curve is for the average covariate (``fit$means``); with
     ``newdata`` there is one curve per row (per row in its own stratum when the
-    strata variables are present, otherwise every stratum for every row).  ``id``
-    (with counting-process ``newdata``) gives one time-dependent curve per subject.
+    strata variables are present, otherwise every stratum for every row), and rows
+    with a missing value are left out (R's ``na.omit``).  ``id`` (with
+    counting-process ``newdata``) gives one time-dependent curve per subject.
+    ``stype``/``ctype`` default to 2 and the tie method; the old-style ``type``
+    (``"kalbfleisch-prentice"``, ``"aalen"``, ``"efron"``, ...) sets them when neither is
+    given.  ``start_time`` builds the curves from the rows still at risk at that time.
+    ``se_fit`` defaults to true.  A multi-state fit goes to
+    :func:`survival.r._coxphms.survfit_coxphms`, with the further keywords of that method.
     """
 
+    from ._coxphms import CoxphmsModel, survfit_coxphms
+
+    if isinstance(fit, CoxphmsModel):
+        if se_fit is not None:
+            kwargs["se_fit"] = se_fit
+        return survfit_coxphms(
+            fit,
+            newdata,
+            conf_int=conf_int,
+            individual=False if individual is None else individual,
+            stype=stype,
+            ctype=ctype,
+            conf_type=conf_type,
+            censor=censor,
+            start_time=start_time,
+            id=id,
+            type=type,
+            **kwargs,
+        )
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
     conf_type = _pop_dotted_keyword(kwargs, "conf.type", "conf_type", conf_type, "log")
-    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, True)
+    se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, None)
+    se_fit = True if se_fit is None else se_fit
     start_time = _pop_dotted_keyword(kwargs, "start.time", "start_time", start_time, None)
     if kwargs:
         raise TypeError(f"survfit got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
@@ -1427,18 +2157,8 @@ def survfit_coxph(
         raise ValueError("predicted survival curves are not defined for a clogit model")
     if fit.tt:
         raise ValueError("The survfit function can not process coxph models with a tt term")
-    if start_time is not None:
-        raise NotImplementedError("survfit(start.time=) is not available for Cox models")
+    stype_value, ctype_value = _survfit_types(fit, type, stype, ctype)
     include_se = _normalize_bool_option(se_fit, "se_fit")
-    stype_value = _integer_scalar(stype, "stype")
-    if stype_value not in (1, 2):
-        raise ValueError("stype must be 1 or 2")
-    if ctype is None:
-        ctype_value = 2 if fit.method == "efron" else 1
-    else:
-        ctype_value = _integer_scalar(ctype, "ctype")
-        if ctype_value not in (1, 2):
-            raise ValueError("ctype must be 1 or 2")
     conf_type_name = "none"
     if include_se:
         conf_type_name = _match_string_arg(
@@ -1449,11 +2169,15 @@ def survfit_coxph(
         )
     level = _normalize_conf_level(conf_int, "conf_int")
     censor_value = _normalize_bool_option(censor, "censor")
-    individual_value = _normalize_bool_option(individual, "individual") or id is not None
+    individual_value = id is not None
+    if individual is not None:
+        _warn_outside_package("the `id' option supersedes `individual'", RuntimeWarning)
+        individual_value = _normalize_bool_option(individual, "individual") or individual_value
     if individual_value and newdata is None:
         raise ValueError("the id option only makes sense with new data")
+    start = _start_time_value(start_time)
 
-    curves, strata_names = _survfit_curves(
+    curves, strata_names, column_names = _survfit_curves(
         fit,
         newdata,
         individual=individual_value,
@@ -1462,24 +2186,21 @@ def survfit_coxph(
         ctype=ctype_value,
         se_fit=include_se,
         censor=censor_value,
+        start_time=start,
     )
-    surv_rows = [row for curve in curves for row in curve.surv]
-    cumhaz_rows = [row for curve in curves for row in curve.cumhaz]
-    std_rows = [row for curve in curves for row in (curve.std_err or [])] if include_se else []
-    surv = _curve_columns(surv_rows)
-    cumhaz = _curve_columns(cumhaz_rows)
-    std_err = _curve_columns(std_rows) if include_se else None
+    surv = _curve_block(curves, "surv")
+    std_err = _curve_block(curves, "std_err") if include_se else None
     lower = upper = None
     if include_se and conf_type_name != "none":
         lower, upper = _confidence_limits(surv, std_err, conf_type_name, level)
     return CoxSurvfitResult(
-        n=[int(curve.n) for curve in curves],
-        time=[float(t) for curve in curves for t in curve.time],
-        n_risk=[float(v) for curve in curves for v in curve.n_risk],
-        n_event=[float(v) for curve in curves for v in curve.n_event],
-        n_censor=[float(v) for curve in curves for v in curve.n_censor],
+        n=[curve.n for curve in curves],
+        time=[t for curve in curves for t in curve.time],
+        n_risk=[v for curve in curves for v in curve.n_risk],
+        n_event=[v for curve in curves for v in curve.n_event],
+        n_censor=[v for curve in curves for v in curve.n_censor],
         surv=surv,
-        cumhaz=cumhaz,
+        cumhaz=_curve_block(curves, "cumhaz"),
         type=fit.y.type,
         strata={name: len(curve.time) for name, curve in zip(strata_names, curves, strict=True)}
         if strata_names
@@ -1491,17 +2212,23 @@ def survfit_coxph(
         logse=True,
         conf_type=conf_type_name,
         conf_int=level if conf_type_name != "none" else None,
+        start_time=start,
         newdata=newdata,
+        colnames=column_names if surv and isinstance(surv[0], list) else None,
     )
 
 
 def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBaseHazardResult:
     """R's ``basehaz``: the cumulative hazard of ``survfit(fit)`` as a data frame."""
 
+    from ._coxphms import CoxphmsModel
+
     if not isinstance(fit, CoxphModel):
         raise TypeError("must be a coxph object")
     if isinstance(fit, ClogitModel):
         raise ValueError("predicted survival curves are not defined for a clogit model")
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError("the basehaz function is not implemented for multi-state models")
     sfit = survfit_coxph(fit, newdata, se_fit=False)
     hazard: Any = sfit.cumhaz
     if newdata is None and not _normalize_bool_option(centered, "centered"):
@@ -1526,41 +2253,67 @@ def cox_zph(
     global_test: Any = True,
     **kwargs: Any,
 ) -> CoxZPHResult:
-    """R's ``cox.zph``: test the proportional hazards assumption of a Cox model."""
+    """R's ``cox.zph``: test the proportional hazards assumption of a Cox model.
+
+    ``transform`` is ``"km"``, ``"rank"``, ``"identity"``, ``"log"`` or a function
+    of the (stop) times, which receives them as a list; the result is labelled
+    by the function's name, or ``"user"`` for an anonymous one.  For a penalized
+    fit the penalty enters the information matrix and the degrees of freedom are
+    ``fit$df``, as in R.
+
+    A multi-state fit is tested on its stacked data (coxph.getdata stacks it), with
+    one term per model term and transition; its ``strata`` are the stacked strata
+    ``"1"``, ``"2"``, ...  Unlike R, this works for models with ``strata()`` terms or
+    ``ph()`` coefficients.
+    """
 
     global_test = _pop_dotted_keyword(kwargs, "global", "global_test", global_test, True)
     if kwargs:
         raise TypeError(f"cox_zph got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    from ._coxphms import CoxphmsModel, _stacked_strata_labels, _zph_assign
+
     if not isinstance(fit, CoxphModel):
         raise TypeError("argument must be the result of a coxph fit")
+    multistate = isinstance(fit, CoxphmsModel)
     if not fit.coef_names:
         raise ValueError("there are no score residuals for a Null model")
     if fit.tt:
         raise ValueError("function not defined for models with tt() terms")
-    if not isinstance(transform, str):
-        raise TypeError("transform must be one of km, rank, identity, log")
-    transform_name = _match_string_arg(
-        transform, "transform", ("km", "rank", "identity", "log"), "Unrecognized transform"
-    )
-    use_terms = _normalize_bool_option(terms, "terms")
-    aliased = _aliased(fit)
-    if use_terms:
-        assign = [[col for col in cols if not aliased[col]] for cols in fit.assign.values()]
-        names = [name for name, cols in zip(fit.assign, assign, strict=True) if cols]
-        assign = [cols for cols in assign if cols]
+    transform_arg: str | list[float]
+    if isinstance(transform, str):
+        transform_name = _match_string_arg(
+            transform, "transform", ("km", "rank", "identity", "log"), "Unrecognized transform"
+        )
+        transform_arg = transform_name
+    elif callable(transform):
+        name = getattr(transform, "__name__", "")
+        transform_name = name if name.isidentifier() else "user"
+        times = fit.fit.time if multistate else fit.y.time
+        transform_arg = [float(value) for value in transform(list(times))]
     else:
-        names = [name for name, alias in zip(fit.coef_names, aliased, strict=True) if not alias]
-        assign = [[col] for col, alias in enumerate(aliased) if not alias]
+        raise TypeError("transform must be one of km, rank, identity, log, or a function")
+    use_terms = _normalize_bool_option(terms, "terms")
+    groups: list[tuple[str, Sequence[int]]]
+    if not use_terms:
+        groups = [(name, [col]) for col, name in enumerate(fit.coef_names)]
+    elif isinstance(fit, CoxphmsModel):  # narrows fit, which multistate does not
+        groups = list(_zph_assign(fit))
+    else:
+        groups = list(fit.assign.items())
+    aliased = _aliased(fit)
+    groups = [(name, [col for col in cols if not aliased[col]]) for name, cols in groups]
+    names = [name for name, cols in groups if cols]
+    assign = [list(cols) for _name, cols in groups if cols]
     result = _core.cox_zph(
-        fit.fit,
-        transform=transform_name,
+        fit.penalized if fit.penalized is not None else fit.fit,
+        transform=transform_arg,
         terms=use_terms,
         singledf=_normalize_bool_option(singledf, "singledf"),
         global_test=_normalize_bool_option(global_test, "global"),
         assign=assign,
     )
-    table: list[dict[str, float | int | str]] = [
-        {"name": name, "chisq": float(row.chisq), "df": int(row.df), "p": float(row.p)}
+    table: list[dict[str, float | str]] = [
+        {"name": name, "chisq": float(row.chisq), "df": float(row.df), "p": float(row.p)}
         for name, row in zip(names, result.table, strict=True)
     ]
     if result.global_test is not None:
@@ -1568,12 +2321,14 @@ def cox_zph(
             {
                 "name": "GLOBAL",
                 "chisq": float(result.global_test.chisq),
-                "df": int(result.global_test.df),
+                "df": float(result.global_test.df),
                 "p": float(result.global_test.p),
             }
         )
     strata = None
-    if result.strata is not None and fit.strata_levels:
+    if result.strata is not None and multistate:
+        strata = _stacked_strata_labels(result.strata)
+    elif result.strata is not None and fit.strata_levels:
         strata = [fit.strata_levels[int(code)] for code in result.strata]
     return CoxZPHResult(
         table=table,
@@ -1581,28 +2336,38 @@ def cox_zph(
         time=list(result.time),
         y=[list(row) for row in result.y],
         var=[list(row) for row in result.var],
-        transform=result.transform,
+        transform=transform_name,
         names=list(names),
         strata=strata,
     )
 
 
-def _detail_response(fit: CoxphModel) -> list[list[float]]:
+def _detail_response(
+    start: Sequence[float] | None, time: Sequence[float], status: Sequence[Any]
+) -> list[list[float]]:
     """``coxph.detail``'s ``y``: always in (start, stop, status) form."""
 
-    y = fit.y
-    if y.start is not None:
-        return [[s, t, float(e)] for s, t, e in zip(y.start, y.time, y.event, strict=True)]
-    mintime = min(y.time) if y.time else 0.0
-    start = 2 * mintime - 1 if mintime < 0 else -1.0
-    return [[start, t, float(e)] for t, e in zip(y.time, y.event, strict=True)]
+    if start is not None:
+        return [[s, t, float(e)] for s, t, e in zip(start, time, status, strict=True)]
+    mintime = min(time) if time else 0.0
+    begin = 2 * mintime - 1 if mintime < 0 else -1.0
+    return [[begin, t, float(e)] for t, e in zip(time, status, strict=True)]
 
 
 def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHDetailResult:
-    """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood."""
+    """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood.
+
+    A multi-state fit is described on its stacked data (coxph.getdata stacks it): ``x``
+    and ``y`` have one row per stacked row, and ``strata`` counts the times of each
+    stacked stratum ``"1"``, ``"2"``, ...  Unlike R, this works for models with
+    ``strata()`` terms.
+    """
+
+    from ._coxphms import CoxphmsModel, _stacked_strata_labels
 
     if not isinstance(fit, CoxphModel):
         raise TypeError("coxph_detail requires a fitted coxph model")
+    multistate = isinstance(fit, CoxphmsModel)
     if fit.method not in {"breslow", "efron"}:
         raise ValueError(f"Detailed output is not available for the {fit.method} method")
     order_name = _match_string_arg(
@@ -1610,18 +2375,27 @@ def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHD
     )
     include_riskmat = _normalize_bool_option(riskmat, "riskmat")
     detail = _core.coxph_detail(fit.fit, riskmat=include_riskmat)
-    y = _detail_response(fit)
-    x = fit.x
+    if multistate:
+        engine = fit.fit
+        y = _detail_response(engine.entry, engine.time, engine.status)
+        x = [list(row) for row in engine.x]
+    else:
+        y = _detail_response(fit.y.start, fit.y.time, fit.y.event)
+        x = fit.x
     n = len(y)
     strata_codes = fit.fit.strata or [0] * n
     order = sorted(range(n), key=lambda idx: (strata_codes[idx], y[idx][1], -y[idx][2]))
     weights = list(fit.fit.weights)
     weighted = any(value != 1.0 for value in weights)
     strata_table: dict[str, int] | None = None
-    if detail.strata is not None and fit.strata_levels:
+    if detail.strata is not None and (multistate or fit.strata_levels):
+        labels = (
+            _stacked_strata_labels(detail.strata)
+            if multistate
+            else [fit.strata_levels[int(code)] for code in detail.strata]
+        )
         strata_table = {}
-        for code in detail.strata:
-            label = fit.strata_levels[int(code)]
+        for label in labels:
             strata_table[label] = strata_table.get(label, 0) + 1
     risk_rows = None if detail.riskmat is None else [list(row) for row in detail.riskmat]
     if order_name == "time":
@@ -1663,16 +2437,33 @@ def _anova_test_name(test: Any) -> str | None:
     raise ValueError("test must be 'Chisq' or None")
 
 
-def _nested_frame(fit: CoxphModel, columns: Sequence[int]) -> _ModelFrame:
-    """The reduced model frame anova.coxph refits: ``Y ~ X[, columns] + strata + offset``."""
+def _model_matrix_by_term(fit: CoxphModel) -> list[tuple[list[str], list[list[float]]]]:
+    """``model.matrix(fit)`` split by term: each term's column names and columns.  A
+    penalized term enters with its basis columns, a sparse frailty with its group
+    codes (``as.numeric(factor(x))``), which is how R's model matrix holds them."""
 
-    names = [fit.coef_names[col] for col in columns]
+    x = fit.x
+    blocks = [
+        ([fit.coef_names[col] for col in cols], [[row[col] for row in x] for col in cols])
+        for cols in fit.assign.values()
+    ]
+    position = _sparse_term(fit)
+    if position is not None:
+        codes = [float(group + 1) for group in fit.penalized.frail_index]
+        blocks.insert(position, ([_term_labels(fit)[position]], [codes]))
+    return blocks
+
+
+def _nested_frame(fit: CoxphModel, names: list[str], columns: list[list[float]]) -> _ModelFrame:
+    """The reduced model anova.coxph refits, ``Y ~ X[, assign <= k] + strata + offset``:
+    plain numeric columns, so every term is refitted unpenalized."""
+
     return _ModelFrame(
         formula=fit.formula,
         data=None,
         y=fit.y,
-        x=[[row[col] for col in columns] for row in fit.x],
-        design=fit.design,
+        x=[list(row) for row in zip(*columns, strict=True)],
+        design=replace(fit.design, covariates=(), term_assignments=()),
         terms=fit.terms,
         names=names,
         assign={name: (idx,) for idx, name in enumerate(names)},
@@ -1687,16 +2478,22 @@ def _nested_frame(fit: CoxphModel, columns: Sequence[int]) -> _ModelFrame:
 
 
 def _anova_single(fit: CoxphModel, test: str | None) -> Any:
+    """anova.coxph for one model.  As in R, where anova.coxph.penal is not registered,
+    the leading terms of a penalized model are refitted unpenalized and the full model
+    counts ``sum(fit$df)``, so a step's Df can be fractional or negative."""
+
     if fit.rscore is not None:
         raise ValueError("Can't do anova tables with robust variances")
-    aliased = _aliased(fit)
-    term_names = list(fit.assign)
+    blocks = _model_matrix_by_term(fit)
     logliks = [fit.loglik[0]]
-    dfs = [0]
-    for term_idx in range(len(term_names) - 1):
-        columns = [col for name in term_names[: term_idx + 1] for col in fit.assign[name]]
+    dfs = [0.0]
+    for k in range(1, len(blocks)):
         nested = _coxph_fit_frame(
-            _nested_frame(fit, columns),
+            _nested_frame(
+                fit,
+                [name for names, _ in blocks[:k] for name in names],
+                [column for _, columns in blocks[:k] for column in columns],
+            ),
             method=fit.method,
             init=None,
             iter_max=20,
@@ -1710,11 +2507,11 @@ def _anova_single(fit: CoxphModel, test: str | None) -> Any:
             keep_model=False,
         )
         logliks.append(nested.loglik[1])
-        dfs.append(sum(1 for value in nested.coefficients if not math.isnan(value)))
-    if term_names:
+        dfs.append(_coxph_df(nested))
+    if blocks:
         logliks.append(fit.loglik[1])
-        dfs.append(sum(1 for value in aliased if not value))
-    return _core.anova_coxph(logliks, dfs, ["NULL", *term_names], sequential=True, test=test)
+        dfs.append(_coxph_df(fit))
+    return _core.anova_coxph(logliks, dfs, ["NULL", *_term_labels(fit)], sequential=True, test=test)
 
 
 def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
@@ -1738,7 +2535,7 @@ def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
     if len(fits) == 1:
         return _anova_single(fits[0], test)
     logliks = [fit.loglik[-1] for fit in fits]
-    dfs = [sum(1 for value in fit.coefficients if not math.isnan(value)) for fit in fits]
+    dfs = [_coxph_df(fit) for fit in fits]
     return _core.anova_coxph(logliks, dfs, None, sequential=False, test=test)
 
 
@@ -1750,6 +2547,11 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
         fits = tuple(fits[0])
     if not fits:
         raise TypeError("anova requires at least one fitted model")
+    from ._coxphms import CoxphmsModel
+
+    if any(isinstance(fit, CoxphmsModel) for fit in fits):
+        # anova.coxphms (reached through anova.coxph) stops here
+        raise NotImplementedError("anova not yet available for multistate")
     if not isinstance(fits[0], CoxphModel):
         from ._survreg import SurvregModelResult, anova_survreg
 

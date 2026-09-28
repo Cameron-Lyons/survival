@@ -934,7 +934,7 @@ mod tests {
             km_plot_data(vec![1.0], vec![2], 0.95, None)
                 .expect_err("non-binary event should fail")
                 .to_string()
-                .contains("event values must be 0 or 1")
+                .contains("event must contain only 0/1 values")
         );
         assert!(
             km_plot_data(vec![1.0], vec![1], 1.0, None)
@@ -1011,7 +1011,7 @@ mod tests {
             roc_plot_data(vec![0.5], vec![2])
                 .expect_err("non-binary label should fail")
                 .to_string()
-                .contains("labels values must be 0 or 1")
+                .contains("labels must contain only 0/1 values")
         );
     }
 

@@ -1,9 +1,12 @@
 """Model generics (``coef``, ``vcov``, ``predict``, ``residuals``, ``model_summary``,
-``as_data_frame``, ...): R-style S3 dispatch on the fitted object.
+``model_frame``, ``as_data_frame``, ...): R's S3 generics as
+:func:`functools.singledispatch` functions.
 
-Cox, clogit, cch and aareg fits dispatch here; survreg fits go to the matching
-``*_survreg`` function of :mod:`survival.r._survreg` (``predict_survreg``,
-``residuals_survreg``, ``summary_survreg``, ...).
+Each generic registers R's methods for the classes that have one (coxph and clogit,
+cch, aareg, survreg, concordance, survfit, pyears); any other object raises
+``TypeError``.  The survreg methods are the ``*_survreg`` functions of
+:mod:`survival.r._survreg` (``predict_survreg``, ``residuals_survreg``,
+``model_summary_survreg``, ...).
 """
 
 from __future__ import annotations
@@ -12,61 +15,79 @@ import dataclasses
 import math
 import re
 from collections.abc import Mapping, Sequence
+from functools import singledispatch
 from statistics import NormalDist
 from typing import Any
+
+import numpy as np
 
 from .. import _survival as _core
 from ._aareg import summary_aareg
 from ._cch import summary_cch
 from ._coerce import (
+    _coefficient_selection,
     _integer_scalar,
     _materialize_1d,
     _materialize_labels,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
 )
-from ._coxph import CoxphModel, predict_coxph, residuals_coxph, summary_coxph
+from ._coxph import (
+    CoxphModel,
+    _coxph_df,
+    _coxph_model_frame,
+    _has_strata,
+    _prediction_newdata,
+    _term_labels,
+    _terms_selection,
+    predict_coxph,
+    residuals_coxph,
+    summary_coxph,
+)
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
-from ._pyears import _finegray_frame, _pyears_result_frame
+from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
+from ._finegray import _finegray_frame
+from ._formula import _column as _formula_column
+from ._formula import _formula_columns
+from ._formula import model_frame as _formula_model_frame
+from ._pyears import _pyears_result_frame, summary_pyears
 from ._surv import Surv
+from ._survfit import _derived_survfit, _engine_of, summary_survfit
+from ._survfit_residuals import survfit_residuals
+from ._survreg import (
+    SurvregAnovaResult,
+    SurvregModelResult,
+    coef_names_survreg,
+    confint_survreg,
+    model_matrix_survreg,
+    model_summary_survreg,
+    model_term_names_survreg,
+    predict_survreg,
+    residuals_survreg,
+    survreg_df,
+    vcov_survreg,
+)
 from ._types import (
     AaregModelResult,
     CchModelResult,
     ConcordanceResult,
     CoxBaseHazardResult,
     CoxPHDetailResult,
+    CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
     CoxZPHResult,
-    FineGrayFrame,
-    FineGrayOutput,
     PyearsResult,
+    SummarySurvfitCoxmsResult,
     SurvDiffResult,
     SurvfitMultiStateResult,
     SurvfitResult,
 )
 
-# ---------------------------------------------------------------------------
-# dispatch
-# ---------------------------------------------------------------------------
+_SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
 
 
-def _survreg_method(generic: str) -> Any:
-    """``<generic>.survreg``: the survreg method of a generic, from ``_survreg``."""
-
-    from . import _survreg
-
-    method = getattr(_survreg, f"{generic}_survreg", None)
-    if method is None:
-        raise TypeError(f"{generic} requires a fitted coxph or survreg model")
-    return method
-
-
-def _dispatch(generic: str, fit: Any, *args: Any, **kwargs: Any) -> Any:
-    from ._survreg import SurvregModelResult
-
-    if not isinstance(fit, SurvregModelResult):
-        raise TypeError(f"{generic} requires a fitted coxph or survreg model")
-    return _survreg_method(generic)(fit, *args, **kwargs)
+def _no_method(generic: str) -> TypeError:
+    return TypeError(f"{generic} requires a fitted coxph or survreg model")
 
 
 # ---------------------------------------------------------------------------
@@ -74,71 +95,161 @@ def _dispatch(generic: str, fit: Any, *args: Any, **kwargs: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def coef(fit: Any) -> list[float]:
-    """``fit$coefficients`` (``NaN`` marks an aliased Cox coefficient, like R's ``NA``)."""
+@singledispatch
+def coef(fit: Any, *, matrix: Any = False) -> Any:
+    """``coef``: ``fit$coefficients`` (``NaN`` marks an aliased coefficient, like R's
+    ``NA``; a survreg fit's location coefficients), or a concordance's estimate.
+    ``matrix`` is ``coef.coxphms``'s: a multi-state fit's coefficients laid out like its
+    ``cmap``; other fits ignore it."""
 
-    if isinstance(fit, CoxphModel | CchModelResult):
-        return fit.coefficients
-    return _dispatch("coef", fit)
+    raise _no_method("coef")
 
 
+@coef.register(CoxphModel | CchModelResult | SurvregModelResult)
+def _coef_fit(
+    fit: CoxphModel | CchModelResult | SurvregModelResult, *, matrix: Any = False
+) -> list[float]:
+    return fit.coefficients
+
+
+@coef.register(CoxphmsModel)
+def _coef_coxphms(fit: CoxphmsModel, *, matrix: Any = False) -> Any:
+    return coef_coxphms(fit, matrix=_normalize_bool_option_with_default(matrix, "matrix", False))
+
+
+@coef.register(ConcordanceResult)
+def _coef_concordance(fit: ConcordanceResult, *, matrix: Any = False) -> Any:
+    # coef.concordance
+    return fit.concordance
+
+
+@singledispatch
 def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
-    """``names(coef(fit))``; ``complete=False`` drops aliased Cox coefficients."""
+    """``names(coef(fit))``; ``complete=False`` drops aliased coefficients."""
 
-    if isinstance(fit, CoxphModel | CchModelResult):
-        include = _normalize_bool_option_with_default(complete, "complete", True)
-        names = list(fit.coef_names)
-        if include:
-            return names
-        return [name for name, b in zip(names, fit.coefficients, strict=True) if not math.isnan(b)]
-    return _dispatch("coef_names", fit, complete=complete)
+    raise _no_method("coef_names")
 
 
-def vcov(fit: Any, *, complete: Any = True) -> list[list[float]]:
-    """``vcov``: the robust variance when the fit used one, else the model-based one."""
-
-    if isinstance(fit, CoxphModel | CchModelResult):
-        include = _normalize_bool_option_with_default(complete, "complete", True)
-        var = fit.var
-        if include:
-            return var
-        keep = [i for i, b in enumerate(fit.coefficients) if not math.isnan(b)]
-        return [[var[i][j] for j in keep] for i in keep]
-    return _dispatch("vcov", fit, complete=complete)
+@coef_names.register(CoxphModel | CchModelResult)
+def _coef_names_cox(fit: CoxphModel | CchModelResult, *, complete: Any | None = None) -> list[str]:
+    include = _normalize_bool_option_with_default(complete, "complete", True)
+    names = list(fit.coef_names)
+    if include:
+        return names
+    return [name for name, b in zip(names, fit.coefficients, strict=True) if not math.isnan(b)]
 
 
+coef_names.register(SurvregModelResult, coef_names_survreg)
+
+
+@singledispatch
+def vcov(fit: Any, *, complete: Any = True, matrix: Any = False) -> Any:
+    """``vcov``: the robust variance when the fit used one, else the model-based one;
+    a concordance's variance.  ``matrix`` is ``vcov.coxphms``'s: a multi-state fit's
+    variance per transition (see :func:`survival.r._coxphms.vcov_coxphms`); other fits
+    ignore it."""
+
+    raise _no_method("vcov")
+
+
+@vcov.register(CoxphModel | CchModelResult)
+def _vcov_cox(
+    fit: CoxphModel | CchModelResult, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]]:
+    include = _normalize_bool_option_with_default(complete, "complete", True)
+    var = fit.var
+    if include:
+        return var
+    keep = [i for i, b in enumerate(fit.coefficients) if not math.isnan(b)]
+    return [[var[i][j] for j in keep] for i in keep]
+
+
+@vcov.register(CoxphmsModel)
+def _vcov_coxphms(fit: CoxphmsModel, *, complete: Any = True, matrix: Any = False) -> Any:
+    return vcov_coxphms(
+        fit,
+        complete=_normalize_bool_option_with_default(complete, "complete", True),
+        matrix=_normalize_bool_option_with_default(matrix, "matrix", False),
+    )
+
+
+@vcov.register(SurvregModelResult)
+def _vcov_survreg(fit: SurvregModelResult, *, complete: Any = True, matrix: Any = False) -> Any:
+    return vcov_survreg(fit, complete=complete)
+
+
+@vcov.register(ConcordanceResult)
+def _vcov_concordance(fit: ConcordanceResult, *, complete: Any = True, matrix: Any = False) -> Any:
+    # vcov.concordance(object, ...): complete is one of the ignored arguments
+    return fit.var
+
+
+@singledispatch
 def loglik(fit: Any) -> float:
-    """``logLik``: the fitted partial log-likelihood ``fit$loglik[2]``."""
+    """``logLik``: the fitted log-likelihood ``fit$loglik[2]`` (``loglik[1]`` for a null
+    Cox model, as logLik.coxph.null)."""
 
-    if isinstance(fit, CoxphModel):
-        return fit.loglik[1]
-    return _dispatch("loglik", fit)
+    raise _no_method("loglik")
 
 
+@loglik.register(CoxphModel | SurvregModelResult)
+def _loglik_fit(fit: CoxphModel | SurvregModelResult) -> float:
+    return fit.loglik[-1]
+
+
+@singledispatch
 def nobs(fit: Any) -> int:
-    """``nobs``: the number of events for a Cox model (the ``nobs`` attribute of its logLik)."""
+    """``nobs``: the number of events for a Cox model (the ``nobs`` attribute of its
+    logLik), the number of observations for survreg."""
 
-    if isinstance(fit, CoxphModel):
-        return fit.nevent
-    return _dispatch("nobs", fit)
+    raise _no_method("nobs")
 
 
+@nobs.register(CoxphModel)
+def _nobs_cox(fit: CoxphModel) -> int:
+    return fit.nevent
+
+
+@nobs.register(SurvregModelResult)
+def _nobs_survreg(fit: SurvregModelResult) -> int:
+    # nobs.survreg: length(fit$linear.predictors)
+    return fit.n
+
+
+@singledispatch
 def degrees_freedom(fit: Any) -> float:
-    """The ``df`` attribute of ``logLik``: the number of estimated coefficients."""
+    """The ``df`` attribute of ``logLik``: the number of estimated coefficients
+    (``sum(fit$df)`` for a penalized fit, the scales included for survreg)."""
 
-    if isinstance(fit, CoxphModel):
-        if fit.penalized is not None:
-            return sum(fit.df)
-        return sum(1 for value in fit.coefficients if not math.isnan(value))
-    return _dispatch("degrees_freedom", fit)
+    raise _no_method("degrees_freedom")
 
 
-def df_residual(fit: Any) -> int:
+@degrees_freedom.register(CoxphModel)
+def _degrees_freedom_cox(fit: CoxphModel) -> float:
+    return _coxph_df(fit)
+
+
+@degrees_freedom.register(SurvregModelResult)
+def _degrees_freedom_survreg(fit: SurvregModelResult) -> float:
+    # logLik.survreg: sum(object$df)
+    return survreg_df(fit)
+
+
+@singledispatch
+def df_residual(fit: Any) -> float:
     """``df.residual`` (survreg only)."""
 
-    if isinstance(fit, CoxphModel):
-        raise TypeError("df_residual is only defined for fitted survreg models")
-    return _dispatch("df_residual", fit)
+    raise _no_method("df_residual")
+
+
+@df_residual.register(CoxphModel)
+def _df_residual_cox(fit: CoxphModel) -> float:
+    raise TypeError("df_residual is only defined for fitted survreg models")
+
+
+@df_residual.register(SurvregModelResult)
+def _df_residual_survreg(fit: SurvregModelResult) -> float:
+    return fit.df_residual
 
 
 def aic(fit: Any, *, k: Any = 2.0) -> float:
@@ -161,66 +272,169 @@ def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
     return [float(degrees_freedom(fit)), aic(fit, k=k)]
 
 
+# ---------------------------------------------------------------------------
+# formula, terms, weights, model matrix and frame
+# ---------------------------------------------------------------------------
+
+_FormulaFits = CoxphModel | CchModelResult | AaregModelResult | SurvregModelResult
+
+
+@singledispatch
 def model_formula(fit: Any) -> str:
     """``formula(fit)``."""
 
-    if isinstance(fit, CoxphModel | CchModelResult | AaregModelResult):
-        formula = fit.formula
-        if formula is None:
-            raise TypeError("model_formula requires a formula-based fitted model")
-        return formula
-    return _dispatch("model_formula", fit)
+    raise _no_method("model_formula")
 
 
+@model_formula.register(_FormulaFits)
+def _model_formula_fit(fit: _FormulaFits) -> str:
+    formula = fit.formula
+    if formula is None:
+        raise TypeError("model_formula requires a formula-based fitted model")
+    return formula
+
+
+@singledispatch
 def model_term_names(fit: Any, terms: Any | None = None) -> list[str]:
-    """``attr(terms(fit), 'term.labels')``, optionally the subset ``terms`` selects."""
+    """``labels(fit)``: ``attr(terms(fit), 'term.labels')``, optionally the subset
+    ``terms`` selects."""
 
-    if isinstance(fit, CoxphModel):
-        from ._coxph import _terms_selection
-
-        names = list(fit.assign)
-        return [names[idx] for idx in _terms_selection(terms, names)]
-    return _dispatch("model_term_names", fit, terms)
+    raise _no_method("model_term_names")
 
 
+@model_term_names.register(CoxphModel)
+def _model_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> list[str]:
+    names = _term_labels(fit)
+    return [names[idx] for idx in _terms_selection(terms, names)]
+
+
+@model_term_names.register(AaregModelResult)
+def _model_term_names_aareg(fit: AaregModelResult, terms: Any | None = None) -> list[str]:
+    # labels.aareg
+    names = list(fit.term_labels)
+    return [names[idx] for idx in _terms_selection(terms, names)]
+
+
+model_term_names.register(SurvregModelResult, model_term_names_survreg)
+
+
+@singledispatch
 def model_weights(fit: Any) -> list[float] | None:
     """``weights(fit)``: the case weights, ``None`` when none were given."""
 
-    if isinstance(fit, CoxphModel):
-        return fit.weights
-    if isinstance(fit, AaregModelResult):
-        return None if fit.weights is None else list(fit.weights)
-    return _dispatch("model_weights", fit)
+    raise _no_method("model_weights")
 
 
-def model_matrix(fit: Any) -> dict[str, Any]:
+@model_weights.register(CoxphModel | AaregModelResult | SurvregModelResult)
+def _model_weights_fit(
+    fit: CoxphModel | AaregModelResult | SurvregModelResult,
+) -> list[float] | None:
+    return None if fit.weights is None else list(fit.weights)
+
+
+@singledispatch
+def model_matrix(fit: Any, data: Any | None = None) -> dict[str, Any]:
     """``model.matrix(fit)``: the design matrix, its column names and ``assign``."""
 
-    if isinstance(fit, CoxphModel):
-        assign = [0] * len(fit.coef_names)
-        for term_idx, columns in enumerate(fit.assign.values(), start=1):
-            for col in columns:
-                assign[col] = term_idx
-        return {"data": fit.x, "columns": list(fit.coef_names), "assign": assign}
-    return _dispatch("model_matrix", fit)
+    raise _no_method("model_matrix")
 
 
-def model_frame(fit: Any) -> dict[str, list[Any]]:
-    """``model.frame(fit)`` for a fit made with ``model=TRUE``."""
+@model_matrix.register(CoxphModel)
+def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any]:
+    """R's ``model.matrix.coxph``: the fit's design, or with ``data`` the design of
+    those rows (``model.frame(Terms, data)``, whose default ``na.omit`` leaves out
+    the incomplete ones).  ``assign`` numbers each column's term by its position in
+    the model's term labels, which count ``strata()`` terms (the columns keep R's
+    numbering "wrt the original model matrix") but not ``cluster()``; ``strata`` is
+    ``attr(X, "strata")``, each row's stratum, ``None`` for an unstratified fit.
 
-    if isinstance(fit, Mapping):
-        if not fit:
-            raise TypeError("model_frame requires a non-empty grouped survfit result")
-        return model_frame(next(iter(fit.values())))
-    if isinstance(fit, CoxphModel | AaregModelResult):
-        frame = fit.model
-        if frame is None:
-            raise TypeError("model_frame requires a fit made with model=TRUE")
-        return _plain_model_frame(frame)
-    frame = getattr(fit, "model", None)
-    if isinstance(frame, Mapping):
-        return _plain_model_frame(frame)
-    return _dispatch("model_frame", fit)
+    A multi-state fit's design is the unstacked one, a column per covariate (NaN
+    where a formula list left a covariate missing)."""
+
+    names = list(fit.ms.x_names) if isinstance(fit, CoxphmsModel) else list(fit.coef_names)
+    assign = [0] * len(names)
+    for term_idx, columns in zip(fit.design.term_assignments, fit.assign.values(), strict=True):
+        for col in columns:
+            assign[col] = term_idx
+    if data is None:
+        rows, strata = fit.x, fit.strata
+    else:
+        new = _prediction_newdata(
+            fit, data, need_strata=_has_strata(fit), need_response=False, na_action="na.omit"
+        )
+        rows, strata = new.x, None
+        if _has_strata(fit):
+            if new.strata is None:
+                raise ValueError("data must contain the strata variable(s) of the model")
+            strata = [fit.strata_levels[code] for code in new.strata]
+    return {"data": rows, "columns": names, "assign": assign, "strata": strata}
+
+
+model_matrix.register(SurvregModelResult, model_matrix_survreg)
+
+
+@singledispatch
+def model_frame(formula: Any, data: Any | None = None, **kwargs: Any) -> dict[str, list[Any]]:
+    """``model.frame``: the model frame of a formula string and ``data`` (see
+    :func:`survival.r._formula.model_frame` for the arguments; R's ``na.action`` spelling
+    is accepted) or of a fitted model, as columns: a ``Surv`` response split into
+    ``time``/``status`` (``start``/``stop``/``status`` for counting data), then the
+    formula's variables and the ``(weights)``, ``(id)``, ... arguments.
+
+    A Cox model's frame is rebuilt when the fit did not keep it; the other fits need
+    ``model=TRUE``.
+    """
+
+    raise TypeError("model_frame requires a formula or a fitted model")
+
+
+@model_frame.register(str)
+def _model_frame_formula(
+    formula: str, data: Any | None = None, **kwargs: Any
+) -> dict[str, list[Any]]:
+    if "na.action" in kwargs:
+        kwargs["na_action"] = kwargs.pop("na.action")
+    # a Surv2 response has no time/status columns here, so survSplit's timeline
+    # switch stays internal
+    frame = _formula_model_frame(formula, data, **kwargs, timeline=False)
+    columns: dict[str, Any] = {}
+    response_columns: tuple[str, ...] = ()
+    if frame.response is not None:
+        columns[frame.response_name or "response"] = frame.response
+        response_columns = frame.response_columns
+    for name in _formula_columns(formula, frame.data):
+        if name not in response_columns:
+            columns[name] = _formula_column(frame.data, name)
+    for name in ("weights", "offset", "id", "cluster", "istate"):
+        values = getattr(frame, name)
+        if values is not None:
+            columns[f"({name})"] = values
+    columns.update(frame.extra)
+    return _plain_model_frame(columns)
+
+
+@model_frame.register(CoxphModel)
+def _model_frame_cox(fit: CoxphModel) -> dict[str, list[Any]]:
+    return _plain_model_frame(_coxph_model_frame(fit))
+
+
+@model_frame.register(
+    AaregModelResult | SurvregModelResult | SurvfitResult | SurvfitMultiStateResult
+)
+def _model_frame_stored(
+    fit: AaregModelResult | SurvregModelResult | SurvfitResult | SurvfitMultiStateResult,
+) -> dict[str, list[Any]]:
+    if fit.model is None:
+        raise TypeError("model_frame requires a fit made with model=TRUE")
+    return _plain_model_frame(fit.model)
+
+
+@model_frame.register(Mapping)
+def _model_frame_grouped(fit: Mapping[Any, Any]) -> dict[str, list[Any]]:
+    # the bridge's grouped survfit curves share the model frame of the call
+    if not fit:
+        raise TypeError("model_frame requires a non-empty grouped survfit result")
+    return model_frame(next(iter(fit.values())))
 
 
 def _surv_columns(response: Surv, existing: set[str]) -> dict[str, list[Any]]:
@@ -264,55 +478,77 @@ def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
 
 
 def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
-    """``predict``: see :func:`survival.r._coxph.predict_coxph` and the survreg method.
-    R's ``se.fit`` spelling is accepted."""
+    """``predict``: see :func:`survival.r._coxph.predict_coxph` and
+    :func:`survival.r._survreg.predict_survreg`.  R's ``se.fit`` and ``na.action``
+    spellings are accepted."""
 
-    if "se.fit" in kwargs:
-        kwargs["se_fit"] = kwargs.pop("se.fit")
-    if isinstance(fit, CoxphModel):
-        return predict_coxph(fit, newdata, **kwargs)
-    return _dispatch("predict", fit, newdata, **kwargs)
+    for dotted, name in (("se.fit", "se_fit"), ("na.action", "na_action")):
+        if dotted in kwargs:
+            kwargs[name] = kwargs.pop(dotted)
+    return _predict(fit, newdata, **kwargs)
 
 
+@singledispatch
+def _predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
+    raise _no_method("predict")
+
+
+_predict.register(CoxphModel, predict_coxph)
+_predict.register(SurvregModelResult, predict_survreg)
+
+
+@singledispatch
 def fitted(fit: Any, **kwargs: Any) -> Any:
-    """``fitted``: ``predict`` on the training data."""
+    """``fitted``: ``predict`` on the training data; for a Cox model R's
+    ``fitted.coxph``, the fit's linear predictors."""
 
     return predict(fit, None, **kwargs)
 
 
-def residuals(fit: Any, *, type: str = "martingale", **kwargs: Any) -> Any:
-    """``residuals``: see :func:`survival.r._coxph.residuals_coxph` and the survreg method."""
-
-    if isinstance(fit, CoxphModel):
-        return residuals_coxph(fit, type=type, **kwargs)
-    return _dispatch("residuals", fit, type=type, **kwargs)
-
-
-def _coefficient_selection(parm: Any, names: list[str]) -> list[int]:
-    if parm is None:
-        return list(range(len(names)))
-    values = [parm] if isinstance(parm, str | int) else list(_materialize_1d(parm, "parm"))
-    indices: list[int] = []
-    for value in values:
-        if isinstance(value, str):
-            if value not in names:
-                raise ValueError(f"unknown coefficient name {value!r}")
-            indices.append(names.index(value))
-        else:
-            idx = _integer_scalar(value, "parm") - 1
-            if idx < 0 or idx >= len(names):
-                raise IndexError("parm index out of range")
-            indices.append(idx)
-    return indices
+@fitted.register(CoxphModel)
+def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
+    # fitted.coxph(object, ...) is object$linear.predictors: centred at the overall
+    # means, not padded by naresid, other arguments ignored
+    return fit.linear_predictors
 
 
+@singledispatch
+def residuals(fit: Any, **kwargs: Any) -> Any:
+    """``residuals``: see :func:`survival.r._coxph.residuals_coxph`,
+    :func:`survival.r._survreg.residuals_survreg` and
+    :func:`survival.r._survfit_residuals.survfit_residuals`; without ``type`` each
+    method uses its own default (martingale for Cox models, response for survreg,
+    pstate for survival curves)."""
+
+    raise _no_method("residuals")
+
+
+residuals.register(CoxphModel, residuals_coxph)
+residuals.register(SurvregModelResult, residuals_survreg)
+# residuals.survfit; a survfit.coxph curve gets R's "method not found" error from it
+residuals.register(_SurvfitCurves, survfit_residuals)
+
+
+@residuals.register(CoxSurvfitMultiStateResult)
+def _residuals_coxms(fit: CoxSurvfitMultiStateResult, **kwargs: Any) -> Any:
+    # R's residuals.survfit returns the Aalen-Johansen residuals of the data, which
+    # ignore the Cox model and the newdata
+    raise TypeError("residuals are not defined for multi-state Cox curves")
+
+
+@singledispatch
 def confint(
     fit: Any, parm: Any | None = None, *, level: Any = 0.95
 ) -> list[dict[str, float | str]]:
     """``confint``: normal-approximation intervals for the coefficients."""
 
-    if not isinstance(fit, CoxphModel | CchModelResult):
-        return _dispatch("confint", fit, parm, level=level)
+    raise _no_method("confint")
+
+
+@confint.register(CoxphModel | CchModelResult)
+def _confint_cox(
+    fit: CoxphModel | CchModelResult, parm: Any | None = None, *, level: Any = 0.95
+) -> list[dict[str, float | str]]:
     z = NormalDist().inv_cdf(1.0 - (1.0 - _normalize_conf_level(level, "level")) / 2.0)
     names = coef_names(fit)
     coefficients = coef(fit)
@@ -327,16 +563,28 @@ def confint(
     ]
 
 
-def model_summary(fit: Any, **kwargs: Any) -> dict[str, Any]:
-    """``summary``: R's summary list of a coxph, clogit, cch, aareg or survreg fit."""
+confint.register(SurvregModelResult, confint_survreg)
 
-    if isinstance(fit, CoxphModel):
-        return summary_coxph(fit, **kwargs)
-    if isinstance(fit, CchModelResult):
-        return summary_cch(fit)
-    if isinstance(fit, AaregModelResult):
-        return summary_aareg(fit, **kwargs)
-    return _dispatch("model_summary", fit, **kwargs)
+
+@singledispatch
+def model_summary(fit: Any, **kwargs: Any) -> Any:
+    """``summary``: R's summary of a coxph, clogit, cch, aareg or survreg fit, a survival
+    curve (``summary.survfit``) or a ``pyears`` table (``summary.pyears``)."""
+
+    raise _no_method("model_summary")
+
+
+model_summary.register(CoxphModel, summary_coxph)
+model_summary.register(AaregModelResult, summary_aareg)
+model_summary.register(SurvregModelResult, model_summary_survreg)
+model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
+model_summary.register(PyearsResult, summary_pyears)
+
+
+@model_summary.register(CchModelResult)
+def _model_summary_cch(fit: CchModelResult, **kwargs: Any) -> dict[str, Any]:
+    # summary.cch(object, ...): the further arguments are ignored
+    return summary_cch(fit)
 
 
 # ---------------------------------------------------------------------------
@@ -430,11 +678,134 @@ def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list
     return frame
 
 
-# --- the R bridge's grouped view of a stratified curve set --------------------------------
+def _summary_coxms_frame(summary: SummarySurvfitCoxmsResult) -> dict[str, list[Any]]:
+    """``summary(fit, data.frame = TRUE)`` of multi-state Cox curves
+    (summary.survfitms.R): the (time, stratum) rows vary fastest, then the newdata
+    rows, then the states; the counts repeat for every newdata row."""
 
-_PER_STRATUM_FIELDS = frozenset(
-    {"n", "n_id", "p0", "se0", "influence_pstate", "influence_surv", "influence_chaz"}
-)
+    nt, nd, ns = summary.pstate.shape
+    per_state = nd * nt
+
+    def counts(values: list[list[float]]) -> list[float]:
+        return [float(values[t][s]) for s in range(ns) for _ in range(nd) for t in range(nt)]
+
+    frame: dict[str, list[Any]] = {
+        "time": list(summary.time) * (nd * ns),
+        "n.risk": counts(summary.n_risk),
+        "n.event": counts(summary.n_event),
+        "n.censor": counts(summary.n_censor),
+        "pstate": summary.pstate.ravel(order="F").tolist(),
+    }
+    if summary.strata is not None:
+        frame["strata"] = list(summary.strata) * (nd * ns)
+    frame["state"] = [state for state in summary.states for _ in range(per_state)]
+    for name, values in (summary.newdata or {}).items():
+        frame[name] = [values[i] for _ in range(ns) for i in range(nd) for _ in range(nt)]
+    return frame
+
+
+def _coxms_curves_frame(result: CoxSurvfitMultiStateResult) -> dict[str, list[Any]]:
+    """Multi-state Cox curves as R's ``summary(fit, censored = TRUE, data.frame = TRUE)``."""
+
+    return _summary_coxms_frame(summary_survfit(result, censored=True))
+
+
+def _positions(selection: Any, count: int, labels: Sequence[str], name: str) -> list[int]:
+    """0-based positions among ``count`` items from indices or, when the items have
+    ``labels``, labels."""
+
+    positions = []
+    for value in _materialize_1d(selection, name):
+        if isinstance(value, str):
+            if value not in labels:
+                raise ValueError(f"{name} {value!r} is not one of {', '.join(labels)}")
+            positions.append(labels.index(value))
+        else:
+            position = _integer_scalar(value, name)
+            if not 0 <= position < count:
+                raise IndexError(f"{name} index {position} is out of bounds")
+            positions.append(position)
+    if not positions:
+        raise ValueError(f"select at least one {name} value")
+    return positions
+
+
+def _subset_coxms_curves(
+    result: CoxSurvfitMultiStateResult,
+    strata: Any | None = None,
+    data: Any | None = None,
+    states: Any | None = None,
+) -> CoxSurvfitMultiStateResult:
+    """``fit[strata, data, states]`` of multi-state Cox curves (``[.survfitms``):
+    each argument ``None`` (keep all) or 0-based indices, stratum labels or state names.
+
+    Strata select their time rows and their ``n``, ``n_id`` and ``p0`` rows; ``data``
+    the newdata rows.  A state subset keeps those columns of ``pstate``, ``n_risk``,
+    ``n_event`` and ``p0`` (``n_censor`` keeps its columns, as R's), drops ``cumhaz``
+    and ``n_transition`` and records ``oldstate``.  ``transitions`` is always dropped,
+    and the engine (the counts ``summary`` and ``survfit0`` need) unless every state is
+    kept.  Unlike R, ``n_id`` and every column of ``n_transition`` are kept.
+    """
+
+    names = result.strata_names
+    sizes = list(result.strata.values()) if result.strata else [len(result.time)]
+    starts = np.cumsum([0, *sizes])
+    if strata is None:
+        kept_strata = list(range(len(sizes)))
+    elif not names:
+        raise ValueError("the curves have no strata to select")
+    else:
+        kept_strata = _positions(strata, len(names), names, "strata")
+    ndata = result.pstate.shape[1]
+    kept_data = list(range(ndata)) if data is None else _positions(data, ndata, (), "data")
+    nstate = len(result.states)
+    kept_states = (
+        list(range(nstate))
+        if states is None
+        else _positions(states, nstate, result.states, "states")
+    )
+    every_stratum = kept_strata == list(range(len(sizes)))
+    every_state = kept_states == list(range(nstate))
+    rows = [row for s in kept_strata for row in range(starts[s], starts[s + 1])]
+
+    def pick(values: list[list[float]], columns: list[int] | None = None) -> list[list[float]]:
+        if columns is None:
+            return [values[row] for row in rows]
+        return [[values[row][c] for c in columns] for row in rows]
+
+    state_columns = None if every_state else kept_states
+    engine = result.engine
+    if engine is not None and not every_stratum:
+        engine = engine.select_curves(kept_strata)
+    cumhaz = None
+    if every_state and result.cumhaz is not None:
+        cumhaz = result.cumhaz[np.ix_(rows, kept_data, range(result.cumhaz.shape[2]))]
+    return dataclasses.replace(
+        result,
+        n=[result.n[s] for s in kept_strata],
+        n_id=[result.n_id[s] for s in kept_strata],
+        time=[result.time[row] for row in rows],
+        n_risk=pick(result.n_risk, state_columns),
+        n_event=pick(result.n_event, state_columns),
+        n_censor=pick(result.n_censor),
+        n_transition=None
+        if not every_state or result.n_transition is None
+        else pick(result.n_transition),
+        pstate=result.pstate[np.ix_(rows, kept_data, kept_states)],
+        cumhaz=cumhaz,
+        p0=[[result.p0[s][c] for c in kept_states] for s in kept_strata],
+        states=[result.states[c] for c in kept_states],
+        oldstate=result.oldstate if every_state else tuple(result.oldstate or result.states),
+        transitions=None,
+        strata=None if not names else {names[s]: sizes[s] for s in kept_strata},
+        newdata=None
+        if result.newdata is None
+        else {name: [values[i] for i in kept_data] for name, values in result.newdata.items()},
+        engine=engine if every_state else None,
+    )
+
+
+# --- the R bridge's grouped view of a stratified curve set --------------------------------
 
 
 def _bare_strata_label(name: str) -> str:
@@ -443,30 +814,12 @@ def _bare_strata_label(name: str) -> str:
     return re.sub(r"(^|, )[^=,]+=", r"\1", name)
 
 
-def _survfit_stratum(result: Any, index: int, rows: slice) -> Any:
-    """One stratum of ``result`` as its own unstratified result."""
+def _survfit_stratum(
+    result: SurvfitResult | SurvfitMultiStateResult, index: int
+) -> SurvfitResult | SurvfitMultiStateResult:
+    """Curve ``index`` of ``result`` as its own unstratified result."""
 
-    changes: dict[str, Any] = {"strata": None}
-    row_count = len(result.time)
-    for field in dataclasses.fields(result):
-        value = getattr(result, field.name)
-        if field.name == "strata" or not isinstance(value, list | tuple):
-            continue
-        if field.name in _PER_STRATUM_FIELDS:
-            if field.name == "p0" and value and not isinstance(value[0], list | tuple):
-                continue
-            changes[field.name] = [value[index]] if field.name in {"n", "n_id"} else value[index]
-        elif len(value) == row_count:
-            changes[field.name] = list(value[rows])
-    counts = getattr(result, "counts", None)
-    if counts is not None:
-        changes["counts"] = _core.SurvfitCounts(
-            list(counts.n_risk[rows]),
-            list(counts.n_event[rows]),
-            list(counts.n_censor[rows]),
-            None if counts.n_enter is None else list(counts.n_enter[rows]),
-        )
-    return dataclasses.replace(result, **changes)
+    return _derived_survfit(result, _engine_of(result).select_curves([index]), time0=result.time0)
 
 
 def _survfit_strata_curves(result: Any) -> Any:
@@ -479,14 +832,10 @@ def _survfit_strata_curves(result: Any) -> Any:
 
     if not isinstance(result, SurvfitResult | SurvfitMultiStateResult) or not result.strata:
         return result
-    curves: dict[str, Any] = {}
-    start = 0
-    for index, (name, count) in enumerate(result.strata.items()):
-        curves[_bare_strata_label(name)] = _survfit_stratum(
-            result, index, slice(start, start + count)
-        )
-        start += count
-    return curves
+    return {
+        _bare_strata_label(name): _survfit_stratum(result, index)
+        for index, name in enumerate(result.strata)
+    }
 
 
 def _subset_survfit_multistate(
@@ -494,10 +843,12 @@ def _subset_survfit_multistate(
     state_indices: Any,
     keep_n_id: bool | None = None,
 ) -> SurvfitMultiStateResult:
-    """``fit[, states]``: keep the selected state columns (the transition columns go).
+    """``fit[, states]`` (``[.survfitms``): keep the selected states (0-based indices).
 
-    R keeps ``n.id`` for a stratified object and drops it otherwise (``[.survfitms``
-    reads ``x$id`` there); ``keep_n_id`` overrides that for the bridge's split curves.
+    The transition parts go unless every state is kept in its original order, which is
+    also when R records no ``oldstate``.  R keeps ``n.id`` for a stratified object and drops
+    it otherwise (``[.survfitms`` reads ``x$id`` there); ``keep_n_id`` overrides that for
+    the bridge's split curves.
     """
 
     if not isinstance(result, SurvfitMultiStateResult):
@@ -510,40 +861,14 @@ def _subset_survfit_multistate(
         raise ValueError("multi-state survfit subsetting must select at least one state")
     if any(index < 0 or index >= len(result.states) for index in indices):
         raise IndexError("multi-state survfit state index is out of bounds")
-
-    def select_columns(values: Sequence[Sequence[Any]] | None) -> list[list[float]] | None:
-        if values is None:
-            return None
-        return [[float(row[index]) for index in indices] for row in values]
-
-    def select_p0(values: Sequence[Any]) -> list[Any]:
-        if values and isinstance(values[0], list | tuple):
-            return [[float(row[index]) for index in indices] for row in values]
-        return [float(values[index]) for index in indices]
-
-    empty_transitions: list[list[float]] = [[] for _ in result.time]
+    subset = _derived_survfit(result, _engine_of(result).select_states(indices), time0=result.time0)
     if keep_n_id is None:
         keep_n_id = bool(result.strata)
+    every_state = indices == list(range(len(result.states)))
     return dataclasses.replace(
-        result,
-        n_id=result.n_id if keep_n_id else None,
-        n_risk=select_columns(result.n_risk) or [],
-        n_event=select_columns(result.n_event) or [],
-        n_censor=select_columns(result.n_censor) or [],
-        n_transition=empty_transitions,
-        pstate=select_columns(result.pstate) or [],
-        cumhaz=empty_transitions,
-        p0=select_p0(result.p0),
-        states=tuple(result.states[index] for index in indices),
-        hazard_names=(),
-        transitions=None,
-        std_err=select_columns(result.std_err),
-        std_chaz=None,
-        std_auc=select_columns(result.std_auc),
-        lower=select_columns(result.lower),
-        upper=select_columns(result.upper),
-        influence_pstate=None,
-        oldstate=result.oldstate or tuple(result.states),
+        subset,
+        n_id=subset.n_id if keep_n_id else None,
+        oldstate=None if every_state else tuple(result.states),
     )
 
 
@@ -783,7 +1108,7 @@ def _cox_zph_frame(result: CoxZPHResult) -> dict[str, list[Any]]:
     return {
         "name": [str(row["name"]) for row in result.table],
         "chisq": [float(row["chisq"]) for row in result.table],
-        "df": [int(row["df"]) for row in result.table],
+        "df": [float(row["df"]) for row in result.table],
         "p": [float(row["p"]) for row in result.table],
     }
 
@@ -807,7 +1132,7 @@ def _coxph_detail_frame(result: CoxPHDetailResult) -> dict[str, list[Any]]:
     return frame
 
 
-def _anova_frame(result: Any) -> dict[str, list[Any]]:
+def _anova_frame(result: _core.AnovaCoxphResult) -> dict[str, list[Any]]:
     rows = list(result.rows)
     return {
         "model": [str(row.name) for row in rows],
@@ -857,37 +1182,45 @@ def _surv_response_frame(response: Surv) -> dict[str, list[Any]]:
     return frame
 
 
+@singledispatch
 def as_data_frame(result: Any) -> dict[str, list[Any]]:
-    """Return a plain column-oriented table for common R-style result objects."""
+    """``as.data.frame``: a result object as a plain column-oriented table."""
 
-    if isinstance(result, Surv):
-        return _surv_response_frame(result)
-    if isinstance(result, CoxSurvfitResult):
-        return _cox_survfit_frame(result)
-    if isinstance(result, CoxBaseHazardResult):
-        return _cox_basehaz_frame(result)
-    if isinstance(result, SurvfitMultiStateResult):
-        return _survfit_multistate_frame(result)
-    if isinstance(result, SurvfitResult):
-        return _survfit_frame(result)
-    if isinstance(result, CoxZPHResult):
-        return _cox_zph_frame(result)
-    if isinstance(result, CoxPHDetailResult):
-        return _coxph_detail_frame(result)
-    if isinstance(result, ConcordanceResult):
-        return _concordance_frame(result)
-    if isinstance(result, PyearsResult):
-        return _pyears_result_frame(result)
-    if isinstance(result, FineGrayFrame):
-        return {name: list(values) for name, values in result.items()}
-    if isinstance(result, FineGrayOutput):
-        return _finegray_frame(result)
-    if isinstance(result, Mapping):
-        return _grouped_survfit_frame(result)
-    if isinstance(result, SurvDiffResult):
-        return _survdiff_frame(result)
-    if hasattr(result, "rows") and hasattr(result, "test"):
-        return _anova_frame(result)
-    if hasattr(result, "frame") and hasattr(result, "heading"):  # anova.survreg
-        return result.frame()
     raise TypeError("as_data_frame requires a survival result object")
+
+
+as_data_frame.register(Surv, _surv_response_frame)
+as_data_frame.register(CoxSurvfitResult, _cox_survfit_frame)
+as_data_frame.register(CoxBaseHazardResult, _cox_basehaz_frame)
+as_data_frame.register(SurvfitMultiStateResult, _survfit_multistate_frame)
+as_data_frame.register(CoxSurvfitMultiStateResult, _coxms_curves_frame)
+as_data_frame.register(SummarySurvfitCoxmsResult, _summary_coxms_frame)
+as_data_frame.register(SurvfitResult, _survfit_frame)
+as_data_frame.register(CoxZPHResult, _cox_zph_frame)
+as_data_frame.register(CoxPHDetailResult, _coxph_detail_frame)
+as_data_frame.register(ConcordanceResult, _concordance_frame)
+as_data_frame.register(PyearsResult, _pyears_result_frame)
+as_data_frame.register(_core.FineGrayOutput, _finegray_frame)
+as_data_frame.register(SurvDiffResult, _survdiff_frame)
+as_data_frame.register(_core.AnovaCoxphResult, _anova_frame)
+
+
+@as_data_frame.register(SurvregAnovaResult)
+def _survreg_anova_frame(result: SurvregAnovaResult) -> dict[str, list[Any]]:
+    return result.frame()
+
+
+@as_data_frame.register(Mapping)
+def _mapping_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
+    # the bridge's grouped survfit curves, or a data frame held as columns (tmerge,
+    # survSplit, finegray)
+    if result and all(isinstance(curve, _SurvfitCurves) for curve in result.values()):
+        return _grouped_survfit_frame(result)
+    columns: dict[str, list[Any]] = {}
+    for name, values in result.items():
+        if isinstance(values, str | bytes | Mapping | _SurvfitCurves) or not hasattr(
+            values, "__iter__"
+        ):
+            raise TypeError("as_data_frame requires a survival result object")
+        columns[str(name)] = list(values)
+    return columns

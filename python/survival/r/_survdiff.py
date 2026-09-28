@@ -9,7 +9,6 @@ from ._coerce import (
     _finite_float,
     _is_bool_like,
     _pop_dotted_keyword,
-    _r_factor,
     _subset_indices,
     _subset_optional_sequence,
 )
@@ -19,12 +18,14 @@ from ._formula import (
     _covariate_term_name,
     _offset_vector,
     _parse_formula,
+    _strata_keep,
+    _strata_term_columns,
     _subset_formula_inputs,
     _term_values,
 )
-from ._surv import Surv, _apply_surv_na_action, _subset_surv
-from ._survfit import _curve_factor, _strata_factor, _strata_term_values
-from ._types import SurvDiffResult, _InteractionTerm, _ModelCovariateTerm, _ModelStrataTerm
+from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
+from ._survfit import _curve_factor
+from ._types import StrataFactor, SurvDiffResult, _InteractionTerm, _ModelCovariateTerm
 
 
 def _response_check(y: Surv) -> None:
@@ -36,29 +37,14 @@ def _response_check(y: Surv) -> None:
         raise ValueError("Right censored data only")
 
 
-def _strata_values(data: Any, terms: list[_ModelStrataTerm], n: int) -> Any:
-    """``strata.keep``: the ``strata()`` column, or ``strata(m[, vars], shortlabel = TRUE)``."""
-
-    columns = {
-        f"strata({', '.join(term.columns)})": _strata_term_values(data, term.columns, n)
-        for term in terms
-    }
-    if len(columns) == 1:
-        return next(iter(columns.values()))
-    factor = _strata_factor(columns, shortlabel=True)
-    return _r_factor(
-        [None if code is None else factor.levels[code] for code in factor.codes], factor.levels
-    )
-
-
 def _formula_inputs(
     formula: str, data: Any, subset: Any | None, na_action: str | None
-) -> tuple[Surv, dict[str, Any], list[str] | None, list[float] | None]:
+) -> tuple[Surv, dict[str, Any], StrataFactor | None, list[float] | None]:
     """The model frame: the response, the group columns, the strata factor and the offset."""
 
     if subset is not None:
         data, _aligned = _subset_formula_inputs(formula, data, subset)
-    data, _aligned = _apply_formula_na_action(formula, data, na_action)
+    data, _aligned, _removed = _apply_formula_na_action(formula, data, na_action)
     y, terms = _parse_formula(formula, data)
     n = len(y)
     if terms.clusters:
@@ -72,8 +58,8 @@ def _formula_inputs(
             plain = term.transform is None and term.arithmetic is None
             values = _column_source(data, term.column) if plain else _term_values(data, term, n)
             columns[_covariate_term_name(term)] = values
-    strata_terms = [term for term in terms.model_terms if isinstance(term, _ModelStrataTerm)]
-    strata = _strata_values(data, strata_terms, n) if strata_terms else None
+    strata_terms = _strata_term_columns(terms)
+    strata = _strata_keep(data, strata_terms) if strata_terms else None
     offset = _offset_vector(data, terms.offsets, n) if terms.offsets else None
     if offset is not None and (columns or strata is not None):
         raise ValueError("Cannot have both an offset and groups")
@@ -102,15 +88,15 @@ def _k_sample(
     y: Surv,
     group_codes: list[int],
     group_levels: list[str],
-    strata: Any | None,
+    strata: StrataFactor | None,
     rho: float,
     timefix: bool,
 ) -> SurvDiffResult:
-    n = len(y)
-    strata_codes = strata_levels = None
-    if strata is not None:
-        strata_codes, _labels = _curve_factor({"strata": strata}, n)
-        strata_levels = list(_strata_factor({"strata": strata}, shortlabel=True).levels)
+    strata_codes = (
+        None
+        if strata is None
+        else _complete_codes(strata, "missing values in the grouping variables")
+    )
     fit = _core.survdiff(
         list(y.time),
         [int(value) for value in y.event],
@@ -131,8 +117,8 @@ def _k_sample(
         groups=group_levels,
         strata=(
             None
-            if not stratified or strata_levels is None
-            else dict(zip(strata_levels, [int(v) for v in fit.strata], strict=True))
+            if not stratified or strata is None
+            else dict(zip(strata.levels, [int(v) for v in fit.strata], strict=True))
         ),
     )
 
@@ -181,10 +167,8 @@ def survdiff(
         _response_check(y)
         if aligned["group"] is None:
             raise ValueError("No groups to test")
-        columns = {"group": aligned["group"]}
-        codes, _labels = _curve_factor(columns, len(y))
         # a bare vector has no variable name to label its levels with
-        levels = list(_strata_factor(columns, shortlabel=True).levels)
+        codes, levels = _curve_factor({"group": aligned["group"]}, len(y), shortlabel=True)
         strata = None
     else:
         raise TypeError("The 'formula' argument is not a formula")

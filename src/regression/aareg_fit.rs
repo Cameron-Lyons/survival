@@ -1,5 +1,94 @@
-use pyo3::exceptions::PyValueError;
+//! Aalen's additive regression model: R survival's `aareg()`
+//! (`R/aareg.R`).
+//!
+//! At each event time the increments of the cumulative coefficients are
+//! the least-squares solution over the risk set; [`aareg_fit`] computes
+//! them from running risk-set sums of the covariates, with R's `taper`,
+//! `nmin` and `qrtol` rules, the test statistic of R's `test` weighting and,
+//! with `dfbeta`, the per-subject (or per-cluster) influence and the robust
+//! variance of the test.
+
+use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
+use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
+
+/// `aareg`'s `test` argument: the weighting of the coefficient increments
+/// in the test statistic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AaregTest {
+    /// R's `twt`: the number at risk over the diagonal of the inverse
+    /// risk-set covariance (the default).
+    Aalen,
+    /// The weighted covariate residuals `w (x - xbar)` of the deaths
+    /// (weights for the intercept as `aalen`).
+    Variance,
+    /// The number at risk.
+    Nrisk,
+}
+
+impl AaregTest {
+    pub fn parse(name: &str) -> SurvivalResult<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "aalen" => Ok(Self::Aalen),
+            "variance" => Ok(Self::Variance),
+            "nrisk" => Ok(Self::Nrisk),
+            _ => Err(SurvivalError::invalid_input(
+                "test must be one of aalen, variance, or nrisk",
+            )),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Aalen => "aalen",
+            Self::Variance => "variance",
+            Self::Nrisk => "nrisk",
+        }
+    }
+}
+
+/// The data of an `aareg` fit, rows in any order: `Surv(stop, status)` or
+/// `Surv(start, stop, status)`, one covariate row per observation.
+/// `cluster` and `test_cluster` are non-negative codes.
+#[derive(Debug, Clone)]
+pub struct AaregData {
+    pub stop: Vec<f64>,
+    pub status: Vec<i32>,
+    /// `n x nvar` design matrix.
+    pub covariates: Array2<f64>,
+    pub start: Option<Vec<f64>>,
+    pub weights: Option<Vec<f64>>,
+    pub cluster: Option<Vec<i32>>,
+    pub test_cluster: Option<Vec<i32>>,
+}
+
+/// The `aareg` arguments beyond the data.
+#[derive(Debug, Clone)]
+pub struct AaregOptions {
+    /// Relative pivot tolerance below which a risk-set covariance counts as
+    /// singular.
+    pub qrtol: f64,
+    /// Smallest number at risk for a time to be kept; `3 * nvar` when
+    /// absent.
+    pub nmin: Option<usize>,
+    pub dfbeta: bool,
+    /// Weights of the moving average of the risk-set covariances.
+    pub taper: Vec<f64>,
+    pub test: AaregTest,
+}
+
+impl Default for AaregOptions {
+    fn default() -> Self {
+        Self {
+            qrtol: 1e-7,
+            nmin: None,
+            dfbeta: false,
+            taper: vec![1.0],
+            test: AaregTest::Aalen,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 #[pyclass(from_py_object)]
@@ -49,70 +138,61 @@ struct RiskMoment {
     time_weight: Vec<f64>,
 }
 
-fn value_error(message: impl Into<String>) -> PyErr {
-    PyValueError::new_err(message.into())
-}
-
 fn validate_inputs(
     stop: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: Option<&[f64]>,
     weights: Option<&[f64]>,
     cluster: Option<&[i32]>,
     test_cluster: Option<&[i32]>,
-) -> PyResult<usize> {
+) -> SurvivalResult<usize> {
     let n = stop.len();
     if n == 0 {
-        return Err(value_error("stop must not be empty"));
+        return Err(SurvivalError::invalid_input("stop must not be empty"));
     }
-    if status.len() != n || covariates.len() != n {
-        return Err(value_error(
+    if status.len() != n || covariates.nrows() != n {
+        return Err(SurvivalError::invalid_input(
             "stop, status, and covariates must have the same length",
         ));
     }
-    let nvar = covariates.first().map_or(0, Vec::len);
+    let nvar = covariates.ncols();
     for (idx, &value) in stop.iter().enumerate() {
         if !value.is_finite() {
-            return Err(value_error(format!(
+            return Err(SurvivalError::invalid_input(format!(
                 "stop contains non-finite value at index {idx}"
             )));
         }
     }
     for (idx, &value) in status.iter().enumerate() {
         if value != 0 && value != 1 {
-            return Err(value_error(format!(
+            return Err(SurvivalError::invalid_input(format!(
                 "status must contain only 0 and 1; got {value} at index {idx}"
             )));
         }
     }
-    for (row_idx, row) in covariates.iter().enumerate() {
-        if row.len() != nvar {
-            return Err(value_error(format!(
-                "covariate row {row_idx} has {} columns; expected {nvar}",
-                row.len()
-            )));
-        }
-        for (column_idx, value) in row.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(value_error(format!(
-                    "covariates contains non-finite value at row {row_idx}, column {column_idx}"
-                )));
-            }
-        }
+    if let Some(((row_idx, column_idx), _)) = covariates
+        .indexed_iter()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(SurvivalError::invalid_input(format!(
+            "covariates contains non-finite value at row {row_idx}, column {column_idx}"
+        )));
     }
     if let Some(values) = start {
         if values.len() != n {
-            return Err(value_error("start must have the same length as stop"));
+            return Err(SurvivalError::invalid_input(
+                "start must have the same length as stop",
+            ));
         }
         for (idx, &value) in values.iter().enumerate() {
             if !value.is_finite() {
-                return Err(value_error(format!(
+                return Err(SurvivalError::invalid_input(format!(
                     "start contains non-finite value at index {idx}"
                 )));
             }
             if value >= stop[idx] {
-                return Err(value_error(format!(
+                return Err(SurvivalError::invalid_input(format!(
                     "start[{idx}] must be less than stop[{idx}]"
                 )));
             }
@@ -120,11 +200,13 @@ fn validate_inputs(
     }
     if let Some(values) = weights {
         if values.len() != n {
-            return Err(value_error("weights must have the same length as stop"));
+            return Err(SurvivalError::invalid_input(
+                "weights must have the same length as stop",
+            ));
         }
         for (idx, &value) in values.iter().enumerate() {
             if !value.is_finite() || value <= 0.0 {
-                return Err(value_error(format!(
+                return Err(SurvivalError::invalid_input(format!(
                     "weights must contain positive finite values; got {value} at index {idx}"
                 )));
             }
@@ -132,42 +214,50 @@ fn validate_inputs(
     }
     if let Some(values) = cluster {
         if values.len() != n {
-            return Err(value_error("cluster must have the same length as stop"));
+            return Err(SurvivalError::invalid_input(
+                "cluster must have the same length as stop",
+            ));
         }
         if let Some((idx, value)) = values.iter().enumerate().find(|(_, value)| **value < 0) {
-            return Err(value_error(format!(
+            return Err(SurvivalError::invalid_input(format!(
                 "cluster codes must be non-negative; got {value} at index {idx}"
             )));
         }
     }
     if let Some(values) = test_cluster {
         if values.len() != n {
-            return Err(value_error(
+            return Err(SurvivalError::invalid_input(
                 "test_cluster must have the same length as stop",
             ));
         }
         if let Some((idx, value)) = values.iter().enumerate().find(|(_, value)| **value < 0) {
-            return Err(value_error(format!(
+            return Err(SurvivalError::invalid_input(format!(
                 "test_cluster codes must be non-negative; got {value} at index {idx}"
             )));
         }
     }
     if !status.contains(&1) {
-        return Err(value_error("aareg requires at least one event"));
+        return Err(SurvivalError::invalid_input(
+            "aareg requires at least one event",
+        ));
     }
     Ok(nvar)
 }
 
-fn validate_fit_options(qrtol: f64, taper: &[f64]) -> PyResult<()> {
+fn validate_fit_options(qrtol: f64, taper: &[f64]) -> SurvivalResult<()> {
     if !qrtol.is_finite() || qrtol <= 0.0 {
-        return Err(value_error("qrtol must be finite and positive"));
+        return Err(SurvivalError::invalid_input(
+            "qrtol must be finite and positive",
+        ));
     }
     if taper.is_empty()
         || taper
             .iter()
             .any(|value| !value.is_finite() || *value <= 0.0)
     {
-        return Err(value_error("taper must contain positive finite values"));
+        return Err(SurvivalError::invalid_input(
+            "taper must contain positive finite values",
+        ));
     }
     Ok(())
 }
@@ -191,7 +281,7 @@ fn event_groups(stop: &[f64], status: &[i32]) -> Vec<(f64, Vec<usize>)> {
 fn update_risk_sums(
     idx: usize,
     sign: f64,
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     weights: Option<&[f64]>,
     s0: &mut f64,
     s1: &mut [f64],
@@ -199,7 +289,7 @@ fn update_risk_sums(
 ) {
     let weight = sign * weights.map_or(1.0, |values| values[idx]);
     *s0 += weight;
-    let row = &covariates[idx];
+    let row = covariates.row(idx);
     let nvar = row.len();
     for column in 0..nvar {
         s1[column] += weight * row[column];
@@ -212,7 +302,7 @@ fn update_risk_sums(
 fn risk_moments(
     stop: &[f64],
     status: &[i32],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: Option<&[f64]>,
     weights: Option<&[f64]>,
     nvar: usize,
@@ -400,7 +490,7 @@ fn prepare_retained_moments(
     nvar: usize,
     nmin: Option<usize>,
     qrtol: f64,
-) -> PyResult<usize> {
+) -> SurvivalResult<usize> {
     let threshold = nmin.unwrap_or(3 * nvar) as f64;
     let mut retained = moments
         .iter()
@@ -417,13 +507,13 @@ fn prepare_retained_moments(
         }
     }
     if retained <= 1 {
-        return Err(value_error(
+        return Err(SurvivalError::invalid_input(
             "the nmin threshold is too high; no Aalen model can be fit",
         ));
     }
     for (time_idx, moment) in moments.iter_mut().take(retained).enumerate() {
         moment.inverse = invert_matrix(&moment.covariance, nvar, qrtol).ok_or_else(|| {
-            value_error(format!(
+            SurvivalError::invalid_input(format!(
                 "risk covariance is rank deficient at event time {} (index {time_idx})",
                 moment.time
             ))
@@ -446,7 +536,7 @@ fn prepare_retained_moments(
 fn coefficient_row(
     moment: &RiskMoment,
     event_idx: usize,
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     weights: Option<&[f64]>,
 ) -> Vec<f64> {
     let nvar = moment.mean.len();
@@ -456,7 +546,7 @@ fn coefficient_row(
     }
     let rhs: Vec<f64> = (0..nvar)
         .map(|column| {
-            event_weight * (covariates[event_idx][column] - moment.mean[column]) / moment.risk
+            event_weight * (covariates[[event_idx, column]] - moment.mean[column]) / moment.risk
         })
         .collect();
     let slopes = matrix_vector_product(&moment.inverse, &rhs, nvar);
@@ -485,12 +575,12 @@ fn nested_square(values: Vec<f64>, width: usize) -> Vec<Vec<f64>> {
 fn model_test(
     moments: &[RiskMoment],
     coefficients: &[Vec<Vec<f64>>],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     weights: Option<&[f64]>,
-    test: &str,
+    test: AaregTest,
 ) -> (Vec<f64>, Vec<Vec<f64>>) {
-    let nvar = covariates.first().map_or(0, Vec::len);
-    if test == "variance" && nvar > 1 {
+    let nvar = covariates.ncols();
+    if test == AaregTest::Variance && nvar > 1 {
         let mut statistic = vec![0.0; nvar];
         let mut variance = vec![0.0; nvar * nvar];
         for (moment, group_coefficients) in moments.iter().zip(coefficients) {
@@ -498,7 +588,7 @@ fn model_test(
                 let event_weight = weights.map_or(1.0, |values| values[event_idx]);
                 let contribution: Vec<f64> = (0..nvar)
                     .map(|column| {
-                        event_weight * (covariates[event_idx][column] - moment.mean[column])
+                        event_weight * (covariates[[event_idx, column]] - moment.mean[column])
                     })
                     .collect();
                 for column in 0..nvar {
@@ -520,7 +610,7 @@ fn model_test(
                 .enumerate()
                 .map(|(column, value)| {
                     value
-                        * if test == "nrisk" {
+                        * if test == AaregTest::Nrisk {
                             moment.risk
                         } else {
                             moment.time_weight[column]
@@ -543,16 +633,16 @@ fn row_at_risk(start: Option<&[f64]>, stop: &[f64], idx: usize, time: f64) -> bo
 #[allow(clippy::too_many_arguments)]
 fn influence_values_rowwise(
     moments: &[RiskMoment],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: Option<&[f64]>,
     stop: &[f64],
     weights: Option<&[f64]>,
     cluster: Option<&[i32]>,
     test_cluster: Option<&[i32]>,
-    test: &str,
+    test: AaregTest,
 ) -> (Vec<Vec<Vec<f64>>>, Vec<Vec<f64>>) {
     let n = stop.len();
-    let nvar = covariates.first().map_or(0, Vec::len);
+    let nvar = covariates.ncols();
     let width = nvar + 1;
     let cluster_count = cluster
         .and_then(|values| values.iter().max().copied())
@@ -580,7 +670,7 @@ fn influence_values_rowwise(
         summed_slopes.fill(0.0);
         for &event_idx in &moment.events {
             let event_weight = weights.map_or(1.0, |values| values[event_idx]);
-            let event_covariates = &covariates[event_idx];
+            let event_covariates = covariates.row(event_idx);
             for column in 0..nvar {
                 event_rhs[column] =
                     event_weight * (event_covariates[column] - moment.mean[column]) / moment.risk;
@@ -593,7 +683,7 @@ fn influence_values_rowwise(
         }
 
         for row_idx in 0..n {
-            let row_covariates = &covariates[row_idx];
+            let row_covariates = covariates.row(row_idx);
             let at_risk = row_at_risk(start, stop, row_idx, moment.time);
             let event_indicator = usize::from(event_rows[row_idx]) as f64;
             let row_weight = if at_risk {
@@ -636,9 +726,9 @@ fn influence_values_rowwise(
                     row_slopes[column - 1]
                 };
                 dfbeta[cluster_idx][column][time_idx] += influence;
-                let test_value = if test == "nrisk" {
+                let test_value = if test == AaregTest::Nrisk {
                     influence * moment.risk
-                } else if test == "variance" && nvar > 1 && column > 0 {
+                } else if test == AaregTest::Variance && nvar > 1 && column > 0 {
                     residual * row_weight * (row_covariates[column - 1] - moment.mean[column - 1])
                 } else {
                     influence * moment.time_weight[column]
@@ -681,7 +771,7 @@ impl ClusterRiskSums {
         row_idx: usize,
         sign: f64,
         clusters: &[i32],
-        covariates: &[Vec<f64>],
+        covariates: ArrayView2<'_, f64>,
         weights: Option<&[f64]>,
     ) {
         let cluster_idx = clusters[row_idx] as usize;
@@ -689,7 +779,7 @@ impl ClusterRiskSums {
         self.weight[cluster_idx] += weight;
         let covariate_base = cluster_idx * self.nvar;
         let outer_base = cluster_idx * self.nvar * self.nvar;
-        let row_covariates = &covariates[row_idx];
+        let row_covariates = covariates.row(row_idx);
         for (row, &row_value) in row_covariates.iter().enumerate() {
             self.covariate[covariate_base + row] += weight * row_value;
             for (column, &column_value) in row_covariates.iter().enumerate() {
@@ -712,7 +802,7 @@ fn cluster_count(clusters: &[i32]) -> usize {
 
 fn cluster_influence_at_time(
     moment: &RiskMoment,
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     weights: Option<&[f64]>,
     clusters: &[i32],
     risk_sums: &ClusterRiskSums,
@@ -729,7 +819,7 @@ fn cluster_influence_at_time(
         event_weight[cluster_idx] += weight;
         let base = cluster_idx * nvar;
         for column in 0..nvar {
-            event_covariate[base + column] += weight * covariates[event_idx][column];
+            event_covariate[base + column] += weight * covariates[[event_idx, column]];
         }
     }
 
@@ -794,7 +884,7 @@ fn cluster_influence_at_time(
 fn update_cluster_risk_sums(
     row_idx: usize,
     sign: f64,
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     weights: Option<&[f64]>,
     clusters: &[i32],
     risk_sums: &mut ClusterRiskSums,
@@ -810,16 +900,16 @@ fn update_cluster_risk_sums(
 #[allow(clippy::too_many_arguments)]
 fn influence_values_clustered(
     moments: &[RiskMoment],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: Option<&[f64]>,
     stop: &[f64],
     weights: Option<&[f64]>,
     clusters: &[i32],
     test_cluster: Option<&[i32]>,
-    test: &str,
+    test: AaregTest,
 ) -> (Vec<Vec<Vec<f64>>>, Vec<Vec<f64>>) {
     let n = stop.len();
-    let nvar = covariates.first().map_or(0, Vec::len);
+    let nvar = covariates.ncols();
     let width = nvar + 1;
     let test_clusters = test_cluster.unwrap_or(clusters);
     let same_clusters = clusters == test_clusters;
@@ -930,9 +1020,9 @@ fn influence_values_clustered(
                 .zip(&values.dfbeta)
                 .enumerate()
             {
-                let test_value = if test == "nrisk" {
+                let test_value = if test == AaregTest::Nrisk {
                     dfbeta * moment.risk
-                } else if test == "variance" && nvar > 1 && column > 0 {
+                } else if test == AaregTest::Variance && nvar > 1 && column > 0 {
                     values.centered_score[column - 1]
                 } else {
                     dfbeta * moment.time_weight[column]
@@ -952,13 +1042,13 @@ fn influence_values_clustered(
 #[allow(clippy::too_many_arguments)]
 fn influence_values(
     moments: &[RiskMoment],
-    covariates: &[Vec<f64>],
+    covariates: ArrayView2<'_, f64>,
     start: Option<&[f64]>,
     stop: &[f64],
     weights: Option<&[f64]>,
     cluster: Option<&[i32]>,
     test_cluster: Option<&[i32]>,
-    test: &str,
+    test: AaregTest,
 ) -> (Vec<Vec<Vec<f64>>>, Vec<Vec<f64>>) {
     if let Some(clusters) = cluster {
         influence_values_clustered(
@@ -985,63 +1075,41 @@ fn influence_values(
     }
 }
 
-#[pyfunction]
-#[pyo3(signature = (
-    stop,
-    status,
-    covariates,
-    start=None,
-    weights=None,
-    cluster=None,
-    qrtol=1e-7,
-    nmin=None,
-    dfbeta=false,
-    taper=None,
-    test="aalen".to_string(),
-    test_cluster=None
-))]
-#[allow(clippy::too_many_arguments)]
-pub fn aareg_fit(
-    stop: Vec<f64>,
-    status: Vec<i32>,
-    covariates: Vec<Vec<f64>>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    cluster: Option<Vec<i32>>,
-    qrtol: f64,
-    nmin: Option<usize>,
-    dfbeta: bool,
-    taper: Option<Vec<f64>>,
-    test: String,
-    test_cluster: Option<Vec<i32>>,
-) -> PyResult<AaregFitResult> {
-    let taper = taper.unwrap_or_else(|| vec![1.0]);
+/// `aareg(formula, data, weights, qrtol, nmin, dfbeta, taper, test,
+/// cluster)` on explicit data.
+pub fn aareg_fit(data: &AaregData, options: &AaregOptions) -> SurvivalResult<AaregFitResult> {
+    let AaregData {
+        stop,
+        status,
+        covariates,
+        start,
+        weights,
+        cluster,
+        test_cluster,
+    } = data;
+    let covariates = covariates.view();
     let nvar = validate_inputs(
-        &stop,
-        &status,
-        &covariates,
+        stop,
+        status,
+        covariates,
         start.as_deref(),
         weights.as_deref(),
         cluster.as_deref(),
         test_cluster.as_deref(),
     )?;
-    validate_fit_options(qrtol, &taper)?;
-    let normalized_test = test.to_ascii_lowercase();
-    if !matches!(normalized_test.as_str(), "aalen" | "variance" | "nrisk") {
-        return Err(value_error("test must be one of aalen, variance, or nrisk"));
-    }
+    validate_fit_options(options.qrtol, &options.taper)?;
 
     let mut moments = risk_moments(
-        &stop,
-        &status,
-        &covariates,
+        stop,
+        status,
+        covariates,
         start.as_deref(),
         weights.as_deref(),
         nvar,
     );
     let total_times = moments.len();
-    taper_covariances(&mut moments, &taper, nvar);
-    let retained = prepare_retained_moments(&mut moments, nvar, nmin, qrtol)?;
+    taper_covariances(&mut moments, &options.taper, nvar);
+    let retained = prepare_retained_moments(&mut moments, nvar, options.nmin, options.qrtol)?;
     moments.truncate(retained);
 
     let grouped_coefficients: Vec<Vec<Vec<f64>>> = moments
@@ -1051,7 +1119,7 @@ pub fn aareg_fit(
                 .events
                 .iter()
                 .map(|&event_idx| {
-                    coefficient_row(moment, event_idx, &covariates, weights.as_deref())
+                    coefficient_row(moment, event_idx, covariates, weights.as_deref())
                 })
                 .collect()
         })
@@ -1059,20 +1127,20 @@ pub fn aareg_fit(
     let (test_statistic, test_variance) = model_test(
         &moments,
         &grouped_coefficients,
-        &covariates,
+        covariates,
         weights.as_deref(),
-        &normalized_test,
+        options.test,
     );
-    let (dfbeta_values, robust_test_variance) = if dfbeta {
+    let (dfbeta_values, robust_test_variance) = if options.dfbeta {
         let (values, variance) = influence_values(
             &moments,
-            &covariates,
+            covariates,
             start.as_deref(),
-            &stop,
+            stop,
             weights.as_deref(),
             cluster.as_deref(),
             test_cluster.as_deref(),
-            &normalized_test,
+            options.test,
         );
         (Some(values), Some(variance))
     } else {
@@ -1099,16 +1167,68 @@ pub fn aareg_fit(
         coefficient,
         test_statistic,
         test_variance,
-        test: normalized_test,
+        test: options.test.name().to_string(),
         time_weights,
         dfbeta: dfbeta_values,
         robust_test_variance,
     })
 }
 
+/// [`aareg_fit`] for Python; `taper` defaults to `[1]`.
+#[pyfunction(name = "aareg_fit")]
+#[pyo3(signature = (
+    stop,
+    status,
+    covariates,
+    start=None,
+    weights=None,
+    cluster=None,
+    qrtol=1e-7,
+    nmin=None,
+    dfbeta=false,
+    taper=None,
+    test="aalen",
+    test_cluster=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn aareg_fit_py(
+    py: Python<'_>,
+    stop: FloatVec,
+    status: IntVec,
+    covariates: FloatMatrix,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    cluster: Option<IntVec>,
+    qrtol: f64,
+    nmin: Option<usize>,
+    dfbeta: bool,
+    taper: Option<Vec<f64>>,
+    test: &str,
+    test_cluster: Option<IntVec>,
+) -> PyResult<AaregFitResult> {
+    let data = AaregData {
+        stop: stop.into_inner(),
+        status: status.into_inner(),
+        covariates: covariates.into_inner(),
+        start: start.map(FloatVec::into_inner),
+        weights: weights.map(FloatVec::into_inner),
+        cluster: cluster.map(IntVec::into_inner),
+        test_cluster: test_cluster.map(IntVec::into_inner),
+    };
+    let options = AaregOptions {
+        qrtol,
+        nmin,
+        dfbeta,
+        taper: taper.unwrap_or_else(|| vec![1.0]),
+        test: AaregTest::parse(test)?,
+    };
+    Ok(py.detach(|| aareg_fit(&data, &options))?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndarray::array;
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
@@ -1120,25 +1240,26 @@ mod tests {
     #[test]
     fn right_censored_fit_matches_reference_values() {
         let result = aareg_fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-            vec![1, 1, 1, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            None,
-            None,
-            None,
-            1e-7,
-            Some(1),
-            false,
-            None,
-            "aalen".to_string(),
-            None,
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+                status: vec![1, 1, 1, 1, 0, 1],
+                covariates: array![
+                    [0.0, 1.0],
+                    [1.0, 0.0],
+                    [2.0, 1.0],
+                    [1.0, 2.0],
+                    [3.0, -1.0],
+                    [-1.0, 0.0],
+                ],
+                start: None,
+                weights: None,
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1165,25 +1286,26 @@ mod tests {
     #[test]
     fn counting_weighted_fit_matches_reference_values() {
         let result = aareg_fit(
-            vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
-            vec![1, 1, 0, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
-            None,
-            1e-7,
-            Some(1),
-            false,
-            None,
-            "aalen".to_string(),
-            None,
+            &AaregData {
+                stop: vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
+                status: vec![1, 1, 0, 1, 0, 1],
+                covariates: array![
+                    [0.0, 1.0],
+                    [1.0, 0.0],
+                    [2.0, 1.0],
+                    [1.0, 2.0],
+                    [3.0, -1.0],
+                    [-1.0, 0.0],
+                ],
+                start: Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1205,25 +1327,20 @@ mod tests {
     #[test]
     fn clustered_influence_matches_reference_values() {
         let result = aareg_fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-            vec![1, 1, 1, 1, 0, 1],
-            vec![
-                vec![0.0],
-                vec![1.0],
-                vec![2.0],
-                vec![1.0],
-                vec![3.0],
-                vec![-1.0],
-            ],
-            Some(vec![0.0; 6]),
-            None,
-            Some(vec![0, 0, 1, 1, 2, 2]),
-            1e-7,
-            Some(1),
-            true,
-            None,
-            "aalen".to_string(),
-            None,
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+                status: vec![1, 1, 1, 1, 0, 1],
+                covariates: array![[0.0], [1.0], [2.0], [1.0], [3.0], [-1.0],],
+                start: Some(vec![0.0; 6]),
+                weights: None,
+                cluster: Some(vec![0, 0, 1, 1, 2, 2]),
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                dfbeta: true,
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1276,27 +1393,29 @@ mod tests {
     #[test]
     fn tapered_fit_matches_reference_values() {
         let result = aareg_fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0],
-            vec![1, 1, 1, 1, 0, 1, 1, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-                vec![0.25, 0.5],
-                vec![1.5, -0.5],
-            ],
-            None,
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0, 1.25, 0.75]),
-            None,
-            1e-7,
-            Some(1),
-            false,
-            Some(vec![1.0, 2.0, 4.0]),
-            "aalen".to_string(),
-            None,
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0],
+                status: vec![1, 1, 1, 1, 0, 1, 1, 1],
+                covariates: array![
+                    [0.0, 1.0],
+                    [1.0, 0.0],
+                    [2.0, 1.0],
+                    [1.0, 2.0],
+                    [3.0, -1.0],
+                    [-1.0, 0.0],
+                    [0.25, 0.5],
+                    [1.5, -0.5],
+                ],
+                start: None,
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0, 1.25, 0.75]),
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                taper: vec![1.0, 2.0, 4.0],
+                ..AaregOptions::default()
+            },
         )
         .expect("tapered fit should succeed");
 
@@ -1320,25 +1439,27 @@ mod tests {
     #[test]
     fn variance_test_matches_reference_values() {
         let result = aareg_fit(
-            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
-            vec![1, 1, 1, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            None,
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
-            None,
-            1e-7,
-            Some(1),
-            false,
-            None,
-            "variance".to_string(),
-            None,
+            &AaregData {
+                stop: vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+                status: vec![1, 1, 1, 1, 0, 1],
+                covariates: array![
+                    [0.0, 1.0],
+                    [1.0, 0.0],
+                    [2.0, 1.0],
+                    [1.0, 2.0],
+                    [3.0, -1.0],
+                    [-1.0, 0.0],
+                ],
+                start: None,
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                test: AaregTest::Variance,
+                ..AaregOptions::default()
+            },
         )
         .expect("variance test should succeed");
 
@@ -1360,25 +1481,28 @@ mod tests {
     #[test]
     fn distinct_test_clusters_match_counting_process_reference_order() {
         let result = aareg_fit(
-            vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
-            vec![1, 1, 0, 1, 0, 1],
-            vec![
-                vec![0.0, 1.0],
-                vec![1.0, 0.0],
-                vec![2.0, 1.0],
-                vec![1.0, 2.0],
-                vec![3.0, -1.0],
-                vec![-1.0, 0.0],
-            ],
-            Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
-            Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
-            Some(vec![0, 0, 1, 1, 2, 2]),
-            1e-7,
-            Some(1),
-            true,
-            Some(vec![1.0, 2.0]),
-            "aalen".to_string(),
-            Some(vec![0, 1, 1, 2, 2, 0]),
+            &AaregData {
+                stop: vec![1.0, 3.0, 3.0, 4.0, 4.0, 2.0],
+                status: vec![1, 1, 0, 1, 0, 1],
+                covariates: array![
+                    [0.0, 1.0],
+                    [1.0, 0.0],
+                    [2.0, 1.0],
+                    [1.0, 2.0],
+                    [3.0, -1.0],
+                    [-1.0, 0.0],
+                ],
+                start: Some(vec![0.0, 0.0, 1.0, 0.0, 2.0, 1.0]),
+                weights: Some(vec![1.0, 2.0, 0.5, 1.5, 1.0, 3.0]),
+                cluster: Some(vec![0, 0, 1, 1, 2, 2]),
+                test_cluster: Some(vec![0, 1, 1, 2, 2, 0]),
+            },
+            &AaregOptions {
+                nmin: Some(1),
+                dfbeta: true,
+                taper: vec![1.0, 2.0],
+                ..AaregOptions::default()
+            },
         )
         .expect("fit should succeed");
 
@@ -1407,17 +1531,11 @@ mod tests {
         let status: Vec<i32> = (0..n)
             .map(|row| i32::from(row % 4 != 0 && row % 9 != 0))
             .collect();
-        let covariates: Vec<Vec<f64>> = (0..n)
-            .map(|row| {
-                (0..nvar)
-                    .map(|column| {
-                        (row % (13 + column)) as f64 * 0.07
-                            + (row * (column + 3) % 17) as f64 * 0.013
-                            - column as f64 * 0.2
-                    })
-                    .collect()
-            })
-            .collect();
+        let covariates = Array2::from_shape_fn((n, nvar), |(row, column)| {
+            (row % (13 + column)) as f64 * 0.07 + (row * (column + 3) % 17) as f64 * 0.013
+                - column as f64 * 0.2
+        });
+        let covariates = covariates.view();
         let weights: Vec<f64> = (0..n).map(|row| 0.6 + (row % 7) as f64 * 0.15).collect();
         let clusters: Vec<i32> = (0..n).map(|row| (row % 11) as i32).collect();
         let test_clusters: Vec<i32> = (0..n).map(|row| (row % 7) as i32).collect();
@@ -1428,17 +1546,16 @@ mod tests {
             .collect();
 
         for start in [None, Some(counting_start.as_slice())] {
-            let mut moments =
-                risk_moments(&stop, &status, &covariates, start, Some(&weights), nvar);
+            let mut moments = risk_moments(&stop, &status, covariates, start, Some(&weights), nvar);
             let retained = prepare_retained_moments(&mut moments, nvar, Some(12), 1e-7)
                 .expect("deterministic input should retain full-rank moments");
             moments.truncate(retained);
 
-            for test in ["aalen", "variance", "nrisk"] {
+            for test in [AaregTest::Aalen, AaregTest::Variance, AaregTest::Nrisk] {
                 for test_cluster in [None, Some(test_clusters.as_slice())] {
                     let expected = influence_values_rowwise(
                         &moments,
-                        &covariates,
+                        covariates,
                         start,
                         &stop,
                         Some(&weights),
@@ -1448,7 +1565,7 @@ mod tests {
                     );
                     let actual = influence_values_clustered(
                         &moments,
-                        &covariates,
+                        covariates,
                         start,
                         &stop,
                         Some(&weights),
@@ -1467,7 +1584,7 @@ mod tests {
                                 let tolerance = 1e-9 * expected_value.abs().max(1.0);
                                 assert!(
                                     (actual_value - expected_value).abs() <= tolerance,
-                                    "{test} dfbeta mismatch: expected {expected_value}, got {actual_value}"
+                                    "{test:?} dfbeta mismatch: expected {expected_value}, got {actual_value}"
                                 );
                             }
                         }
@@ -1478,7 +1595,7 @@ mod tests {
                             let tolerance = 1e-9 * expected_value.abs().max(1.0);
                             assert!(
                                 (actual_value - expected_value).abs() <= tolerance,
-                                "{test} variance mismatch: expected {expected_value}, got {actual_value}"
+                                "{test:?} variance mismatch: expected {expected_value}, got {actual_value}"
                             );
                         }
                     }
@@ -1490,18 +1607,18 @@ mod tests {
     #[test]
     fn rejects_invalid_survival_inputs() {
         let error = aareg_fit(
-            vec![1.0],
-            vec![2],
-            vec![vec![0.0]],
-            None,
-            None,
-            None,
-            1e-7,
-            None,
-            false,
-            None,
-            "aalen".to_string(),
-            None,
+            &AaregData {
+                stop: vec![1.0],
+                status: vec![2],
+                covariates: array![[0.0]],
+                start: None,
+                weights: None,
+                cluster: None,
+                test_cluster: None,
+            },
+            &AaregOptions {
+                ..AaregOptions::default()
+            },
         )
         .expect_err("non-binary status should fail");
         assert!(

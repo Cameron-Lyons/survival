@@ -1,11 +1,16 @@
 pub(crate) mod cox_risk;
 pub(crate) mod dist;
+pub(crate) mod expm;
 pub(crate) mod fenwick;
+pub(crate) mod match_arg;
 pub(crate) mod matrix;
 pub(crate) mod numpy_utils;
+pub(crate) mod pickle;
+pub(crate) mod qr;
 pub(crate) mod rng;
 pub(crate) mod simd;
 pub(crate) mod sorting;
 pub(crate) mod statistical;
+pub(crate) mod step;
 pub mod typed_inputs;
 pub(crate) mod validation;

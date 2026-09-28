@@ -63,9 +63,12 @@ impl CensoringCurve {
     }
 }
 
-/// Kaplan-Meier estimate of the censoring distribution from rows whose
-/// censoring is shifted just after the events at the same time, as R does
-/// by adding a small `delta` to the censored times.
+/// R's `survfitKM` on `y2`, one stratum's response with each censoring
+/// moved just past the events tied with it (R adds half the smallest gap
+/// between the times) and scored as the event: the Kaplan-Meier estimate of
+/// the censoring distribution.  As in `survfitkm.c`, the weighted number at
+/// risk is accumulated backwards over the distinct `y2` stop times, less
+/// the rows that enter at or after each one.
 fn censoring_curve(
     rows: &[usize],
     start: Option<&[f64]>,
@@ -73,38 +76,56 @@ fn censoring_curve(
     censor: &[bool],
     weight: &[f64],
 ) -> CensoringCurve {
-    let mut censor_times: Vec<f64> = rows
-        .iter()
-        .filter(|&&i| censor[i])
-        .map(|&i| stop[i])
-        .collect();
-    censor_times.sort_by(|a, b| a.total_cmp(b));
-    censor_times.dedup();
-    let mut surv = Vec::with_capacity(censor_times.len());
-    let mut g = 1.0;
-    for &c in &censor_times {
-        let mut at_risk = 0.0;
-        let mut censored = 0.0;
-        for &i in rows {
-            // At risk just after the events at c: rows still open then.
-            let entered = start.is_none_or(|s| s[i] <= c);
-            let open = stop[i] > c || (stop[i] == c && censor[i]);
-            if entered && open {
-                at_risk += weight[i];
-                if stop[i] == c && censor[i] {
-                    censored += weight[i];
-                }
+    // y2's order (R's stable `order`): by stop, a censoring after the other
+    // rows tied with it.
+    let mut by_stop = rows.to_vec();
+    by_stop.sort_by(|&a, &b| stop[a].total_cmp(&stop[b]).then(censor[a].cmp(&censor[b])));
+    let entry = start.map(|s| {
+        let mut by_start = rows.to_vec();
+        by_start.sort_by(|&a, &b| s[a].total_cmp(&s[b]));
+        (s, by_start)
+    });
+    let mut next_entry = entry.as_ref().map_or(0, |(_, order)| order.len());
+    let mut at_risk = 0.0;
+    // (censoring time, weighted number at risk, weighted censorings), latest first.
+    let mut steps = Vec::new();
+    let y2_times = by_stop.chunk_by(|&a, &b| stop[a] == stop[b] && censor[a] == censor[b]);
+    for group in y2_times.rev() {
+        let (time, censored) = (stop[group[0]], censor[group[0]]);
+        let mut censored_weight = 0.0;
+        for &row in group.iter().rev() {
+            at_risk += weight[row];
+            if censored {
+                censored_weight += weight[row];
             }
         }
-        if at_risk > 0.0 {
-            g *= 1.0 - censored / at_risk;
+        if let Some((s, by_start)) = &entry {
+            // A censoring's y2 time lies just past `time`, so a row starting
+            // at `time` is already at risk then.
+            while next_entry > 0 {
+                let entered = s[by_start[next_entry - 1]];
+                if entered < time || (censored && entered == time) {
+                    break;
+                }
+                at_risk -= weight[by_start[next_entry - 1]];
+                next_entry -= 1;
+            }
         }
+        if censored {
+            steps.push((time, at_risk, censored_weight));
+        }
+    }
+    let mut g = 1.0;
+    let mut times = Vec::with_capacity(steps.len());
+    let mut surv = Vec::with_capacity(steps.len());
+    for &(time, at_risk, censored_weight) in steps.iter().rev() {
+        if censored_weight > 0.0 {
+            g *= (at_risk - censored_weight) / at_risk;
+        }
+        times.push(time);
         surv.push(g);
     }
-    CensoringCurve {
-        times: censor_times,
-        surv,
-    }
+    CensoringCurve { times, surv }
 }
 
 /// Redistribute-to-the-right weights.
@@ -137,42 +158,40 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
             "id is required for start-stop data",
         ));
     }
-    let start = match input.start {
-        Some(s) => {
-            validate_length(n, s.len(), "start")?;
-            validate_finite(s, "start")?;
-            Some(s.to_vec())
+    if let Some(s) = input.start {
+        validate_length(n, s.len(), "start")?;
+        validate_finite(s, "start")?;
+        if let Some(index) = s.iter().zip(input.time).position(|(s, t)| s >= t) {
+            return Err(SurvivalError::invalid_input(format!(
+                "Stop time must be > start time (row {index})"
+            )));
         }
-        None => None,
-    };
+    }
 
     // Near-tie fix, on both time columns together.
-    let (start, stop) = if input.timefix {
-        match &start {
-            Some(s) => {
-                let fixed = aeq_surv(s, Some(input.time), None)?;
-                (Some(fixed.time), fixed.time2.unwrap_or_default())
-            }
-            None => (None, aeq_surv(input.time, None, None)?.time),
+    let (start, stop) = match (input.start, input.timefix) {
+        (Some(s), true) => {
+            let fixed = aeq_surv(s, Some(input.time), None)?;
+            (Some(fixed.time), fixed.time2.unwrap_or_default())
         }
-    } else {
-        (start, input.time.to_vec())
+        (None, true) => (None, aeq_surv(input.time, None, None)?.time),
+        (s, false) => (s.map(<[f64]>::to_vec), input.time.to_vec()),
     };
 
     // Subject bookkeeping (counting-process data): the last row of each
     // subject, one entry time for everybody and one weight per subject.
     // With (time, status) data every row is its own subject, as in R.
-    let id_codes = match input.id {
+    let subjects = match input.id {
         Some(id) => {
             validate_length(n, id.len(), "id")?;
-            Some(first_appearance_codes(id).0)
+            let (codes, representatives) = first_appearance_codes(id);
+            Some((codes, representatives.len()))
         }
         None => None,
     };
     let mut last = vec![true; n];
-    if let Some(codes) = &id_codes {
-        let n_subjects = codes.iter().max().map_or(0, |c| c + 1);
-        let mut weight_range = vec![(f64::INFINITY, f64::NEG_INFINITY); n_subjects];
+    if let Some((codes, n_subjects)) = &subjects {
+        let mut weight_range = vec![(f64::INFINITY, f64::NEG_INFINITY); *n_subjects];
         for i in 0..n {
             let (lo, hi) = weight_range[codes[i]];
             weight_range[codes[i]] = (lo.min(casewt[i]), hi.max(casewt[i]));
@@ -182,62 +201,64 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
                 "there are subjects with multiple weights",
             ));
         }
-    }
-    if let (Some(codes), Some(s)) = (&id_codes, &start) {
-        let n_subjects = codes.iter().max().map_or(0, |c| c + 1);
-        let mut last_row = vec![usize::MAX; n_subjects];
-        let mut last_time = vec![f64::NEG_INFINITY; n_subjects];
-        let mut first_time = vec![f64::INFINITY; n_subjects];
-        for i in 0..n {
-            let code = codes[i];
-            if stop[i] > last_time[code] {
-                last_time[code] = stop[i];
-                last_row[code] = i;
+        if let Some(s) = &start {
+            let mut last_row = vec![usize::MAX; *n_subjects];
+            let mut last_time = vec![f64::NEG_INFINITY; *n_subjects];
+            let mut first_time = vec![f64::INFINITY; *n_subjects];
+            for i in 0..n {
+                let code = codes[i];
+                if stop[i] > last_time[code] {
+                    last_time[code] = stop[i];
+                    last_row[code] = i;
+                }
+                first_time[code] = first_time[code].min(s[i]);
             }
-            first_time[code] = first_time[code].min(s[i]);
-        }
-        if first_time.windows(2).any(|w| w[0] != w[1]) {
-            return Err(SurvivalError::invalid_input(
-                "function not defined for delayed entry or multistate data",
-            ));
-        }
-        last = vec![false; n];
-        for &row in &last_row {
-            last[row] = true;
+            if first_time.windows(2).any(|w| w[0] != w[1]) {
+                return Err(SurvivalError::invalid_input(
+                    "function not defined for delayed entry or multistate data",
+                ));
+            }
+            last = vec![false; n];
+            for &row in &last_row {
+                last[row] = true;
+            }
         }
     }
     let censor: Vec<bool> = (0..n).map(|i| last[i] && input.status[i] == 0).collect();
     let has_weight: Vec<bool> = (0..n).map(|i| last[i] && input.status[i] > 0).collect();
 
-    let strata: Vec<usize> = input.strata.map_or_else(|| vec![0; n], <[usize]>::to_vec);
-    let n_strata = strata.iter().max().map_or(0, |s| s + 1);
+    // The rows of each stratum, in data order.
+    let stratum_of = |i: usize| input.strata.map_or(0, |s| s[i]);
+    let n_strata = (0..n).map(stratum_of).max().map_or(0, |s| s + 1);
+    let mut stratum_rows = vec![Vec::new(); n_strata];
+    for i in 0..n {
+        stratum_rows[stratum_of(i)].push(i);
+    }
     if input.renorm {
-        for s in 0..n_strata {
+        // `counted_in` holds the last stratum that counted each subject.
+        let mut counted_in = vec![usize::MAX; subjects.as_ref().map_or(0, |(_, k)| *k)];
+        for (s, rows) in stratum_rows.iter().enumerate() {
+            if rows.is_empty() {
+                continue;
+            }
             let mut total = 0.0;
-            let mut seen = vec![false; id_codes.as_ref().map_or(0, |c| c.len())];
-            for i in 0..n {
-                if strata[i] != s {
-                    continue;
-                }
-                match &id_codes {
-                    Some(codes) => {
-                        if !seen[codes[i]] {
-                            seen[codes[i]] = true;
-                            total += casewt[i];
-                        }
+            for &i in rows {
+                // R counts a subject once per stratum.
+                if let Some((codes, _)) = &subjects {
+                    if counted_in[codes[i]] == s {
+                        continue;
                     }
-                    None => total += casewt[i],
+                    counted_in[codes[i]] = s;
                 }
+                total += casewt[i];
             }
             if total <= 0.0 {
                 return Err(SurvivalError::invalid_input(
                     "weights must have a positive sum in every stratum when renorm is true",
                 ));
             }
-            for i in 0..n {
-                if strata[i] == s {
-                    casewt[i] /= total;
-                }
+            for &i in rows {
+                casewt[i] /= total;
             }
         }
     }
@@ -245,12 +266,11 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
     let query_times: Vec<f64> = input.times.map_or_else(Vec::new, <[f64]>::to_vec);
     let n_columns = query_times.len().max(1);
     let mut weights = vec![vec![0.0; n_columns]; n];
-    for s in 0..n_strata {
-        let rows: Vec<usize> = (0..n).filter(|&i| strata[i] == s).collect();
-        let curve = censoring_curve(&rows, start.as_deref(), &stop, &censor, &casewt);
+    for rows in &stratum_rows {
+        let curve = censoring_curve(rows, start.as_deref(), &stop, &censor, &casewt);
         if input.times.is_none() {
             // A single column: the final weight of every event.
-            for &i in &rows {
+            for &i in rows {
                 if has_weight[i] {
                     weights[i][0] = casewt[i] / curve.before(stop[i]);
                 }
@@ -258,7 +278,7 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
             continue;
         }
         let gwt: Vec<f64> = query_times.iter().map(|&t| curve.before(t)).collect();
-        for &i in &rows {
+        for &i in rows {
             let g_row = curve.before(stop[i]);
             for (col, (&t, &g_col)) in query_times.iter().zip(&gwt).enumerate() {
                 weights[i][col] = if has_weight[i] {
@@ -478,8 +498,88 @@ mod tests {
         assert!(no_id.is_err());
     }
 
+    /// The censoring curve by definition: the weighted risk set rebuilt at
+    /// every censoring time (rows open just after the events at `c`).
+    fn censoring_curve_by_definition(
+        start: Option<&[f64]>,
+        stop: &[f64],
+        censor: &[bool],
+        weight: &[f64],
+    ) -> CensoringCurve {
+        let rows = 0..stop.len();
+        let mut times: Vec<f64> = rows
+            .clone()
+            .filter(|&i| censor[i])
+            .map(|i| stop[i])
+            .collect();
+        times.sort_by(f64::total_cmp);
+        times.dedup();
+        let mut g = 1.0;
+        let surv = times
+            .iter()
+            .map(|&c| {
+                let (mut at_risk, mut censored) = (0.0, 0.0);
+                for i in rows.clone() {
+                    let entered = start.is_none_or(|s| s[i] <= c);
+                    if entered && (stop[i] > c || (stop[i] == c && censor[i])) {
+                        at_risk += weight[i];
+                        if stop[i] == c && censor[i] {
+                            censored += weight[i];
+                        }
+                    }
+                }
+                if censored > 0.0 {
+                    g *= (at_risk - censored) / at_risk;
+                }
+                g
+            })
+            .collect();
+        CensoringCurve { times, surv }
+    }
+
+    #[test]
+    fn censoring_sweep_matches_the_definition() {
+        for seed in 0..256 {
+            let mut rng = crate::internal::rng::Rng::with_seed(seed);
+            let n = rng.usize(1..40);
+            let stop: Vec<f64> = (0..n).map(|_| rng.usize(1..12) as f64).collect();
+            let start: Vec<f64> = stop
+                .iter()
+                .map(|&t| rng.usize(0..t as usize) as f64)
+                .collect();
+            let censor: Vec<bool> = (0..n).map(|_| rng.bool()).collect();
+            let weight: Vec<f64> = (0..n).map(|_| rng.usize(0..4) as f64 / 2.0).collect();
+            let rows: Vec<usize> = (0..n).collect();
+            for start in [None, Some(start.as_slice())] {
+                let sweep = censoring_curve(&rows, start, &stop, &censor, &weight);
+                let expected = censoring_curve_by_definition(start, &stop, &censor, &weight);
+                assert_eq!(sweep.times, expected.times, "seed {seed}");
+                for (a, b) in sweep.surv.iter().zip(&expected.surv) {
+                    assert!((a - b).abs() < 1e-14, "seed {seed}: {a} != {b}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn rejects_bad_inputs() {
+        let reversed = rttright(RttrightInput {
+            start: Some(&[0.0, 3.0]),
+            time: &[2.0, 3.0],
+            status: &[1, 1],
+            strata: None,
+            weights: None,
+            id: Some(&[1i64, 2]),
+            times: None,
+            timefix: false,
+            renorm: true,
+        });
+        assert!(
+            reversed
+                .unwrap_err()
+                .to_string()
+                .contains("Stop time must be > start time (row 1)")
+        );
         assert!(
             rttright::<i64>(RttrightInput {
                 start: None,

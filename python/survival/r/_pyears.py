@@ -11,17 +11,23 @@ from __future__ import annotations
 
 import math
 import warnings
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date as _Date
 from datetime import datetime as _DateTime
+from datetime import timedelta as _TimeDelta
+from itertools import pairwise
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
     _as_character,
     _factor,
+    _factor_levels,
+    _finite_float,
     _float_vector,
+    _floats_or_nan,
     _is_missing_value,
     _match_string_arg,
     _materialize_1d,
@@ -33,21 +39,32 @@ from ._coerce import (
 )
 from ._formula import (
     _arithmetic_expression_values,
+    _call_arguments,
     _column,
     _column_source,
     _covariate_term_name,
     _data_column_names,
     _data_row_count,
+    _expression_columns,
+    _expression_values,
     _formula_columns,
-    _formula_response_parts,
+    _formula_name,
+    _formula_rhs_terms,
+    _literal_vector,
     _model_strata,
-    _parse_formula_literal,
+    _numeric_scalar,
+    _numeric_vector,
+    _r_literal,
+    _response_spec,
+    _seq_length,
     _term_values,
+    _unsupported_formula_name,
     model_frame,
 )
 from ._surv import Surv
 from ._types import (
     ModelFrame,
+    NaAction,
     PyearsResult,
     RateTable,
     SurvExpResult,
@@ -88,17 +105,44 @@ def is_ratetable(x: Any, verbose: bool = False) -> bool | list[str]:
     return ["wrong class"] if verbose else False
 
 
+_EPOCH_ORDINAL = _Date(1970, 1, 1).toordinal()
+_ONE_DAY = _TimeDelta(days=1)
+
+
+def _is_numpy_scalar(value: Any, name: str) -> bool:
+    value_type = type(value)
+    return value_type.__module__ == "numpy" and value_type.__name__ == name
+
+
+def _day_count(value: Any) -> float:
+    """A number as ``match.ratetable`` ``unclass``es it: a time difference counts days."""
+
+    if type(value) is float or type(value) is int:
+        return float(value)
+    if isinstance(value, _TimeDelta):
+        return value / _ONE_DAY
+    if _is_missing_value(value):
+        return math.nan
+    if _is_numpy_scalar(value, "timedelta64"):
+        return float(value / type(value)(1, "D"))
+    return float(value)
+
+
 def _ratetable_day(value: Any) -> float:
     """``ratetableDate`` of one value: dates become days since 1970-01-01, numbers pass."""
 
+    # pandas' NaT is a date instance, so only a plain date skips the missing check
+    if type(value) is _Date:
+        return float(value.toordinal() - _EPOCH_ORDINAL)
     if _is_missing_value(value):
         return math.nan
-    if isinstance(value, _DateTime | _Date):
-        return _core.ratetable_date(value.year, value.month, value.day)
+    if isinstance(value, _Date):
+        return float(value.toordinal() - _EPOCH_ORDINAL)
+    if _is_numpy_scalar(value, "datetime64"):
+        return float(value.astype("datetime64[D]").astype("int64"))
     if isinstance(value, str):
-        parsed = _Date.fromisoformat(value[:10])
-        return _core.ratetable_date(parsed.year, parsed.month, parsed.day)
-    return float(value)
+        return float(_Date.fromisoformat(value[:10]).toordinal() - _EPOCH_ORDINAL)
+    return _day_count(value)
 
 
 def ratetableDate(x: Any) -> float | list[float]:
@@ -141,15 +185,25 @@ def _rmap_columns(
 def _mapped_columns(
     rmap: Mapping[str, Any] | None, names: Sequence[str], data: Any
 ) -> dict[str, Any]:
+    """``rmap``'s entries, then a same-named column for each other variable in *names*.
+
+    A string naming a column of *data* stays that column.  An R constant (``21915``,
+    ``"white"``) is its value, and an expression reading columns of *data*
+    (``ageyr * 365.25``, or ``accept_dt - birth_dt`` with the dates as days since
+    1970-01-01) is evaluated there, as R evaluates ``rmap`` in the model frame.  Any
+    other string (a word such as ``white``, or ``1995-03-01``) is a constant label, and
+    so is any other scalar.
+    """
+
     columns: dict[str, Any] = {}
     n = _data_row_count(data)
+    available = set(_data_column_names(data) or ())
     for name, value in ({} if rmap is None else rmap).items():
         if str(name) not in names:
             raise ValueError(f"Variable not found in the ratetable:{name}")
-        is_constant = (
-            isinstance(value, str) and value not in (_data_column_names(data) or [])
-        ) or (not isinstance(value, str) and not hasattr(value, "__iter__"))
-        if is_constant:
+        if isinstance(value, str) and value not in available:
+            value = _rmap_value(str(name), value, data, n)
+        elif not isinstance(value, str) and not hasattr(value, "__iter__"):
             value = [value] * n
         columns[str(name)] = value
     for dimid in names:
@@ -157,19 +211,74 @@ def _mapped_columns(
     return columns
 
 
+def _rmap_value(name: str, text: str, data: Any, n: int) -> list[Any]:
+    """The values of the ``rmap`` entry *name*, a string *text* naming no column."""
+
+    literal = _r_literal(text)
+    sign, rest = text.strip()[:1], text.strip()[1:]
+    if literal is None and sign in {"-", "+"}:
+        # a signed R number, such as -365.25, is a constant too
+        number = _r_literal(rest)
+        if isinstance(number, float):
+            literal = -number if sign == "-" else number
+    if literal is not None:
+        return [literal] * n
+    word, quoted = _formula_name(text)
+    if not quoted and not _unsupported_formula_name(word, quoted):
+        return [text] * n
+    try:
+        used = _expression_columns(text)
+    except ValueError as exc:
+        raise ValueError(f"rmap {name} = {text}: {exc}") from exc
+    if not used:
+        # a string reading no column, such as "1995-03-01", is a label as a quoted R
+        # string is (not the arithmetic 1995 - 3 - 1)
+        return [text] * n
+    values = {}
+    for column in used:
+        raw = _column(data, column)
+        values[column] = [_ratetable_day(value) for value in raw] if _is_date_column(raw) else raw
+    return _expression_values(values, text, n)
+
+
+def _is_date_column(values: Sequence[Any]) -> bool:
+    """``match.ratetable``'s ``datecheck``: the column holds dates or date-times."""
+
+    first = next((value for value in values if not _is_missing_value(value)), None)
+    return isinstance(first, _Date) or _is_numpy_scalar(first, "datetime64")
+
+
 def _rate_positions(mf: ModelFrame, ratetable: RateTable) -> list[list[float]]:
-    """R's ``match.ratetable(rdata, ratetable)$R`` for the model frame's rate variables."""
+    """R's ``match.ratetable(rdata, ratetable)$R`` for the model frame's rate variables.
+
+    Labels go to the kernel as strings.  As in R, dates are an error in a factor or
+    continuous dimension (type 1 or 2) and become days since 1970-01-01 in a date
+    dimension (type 3 or 4); time differences (R's ``difftime``) count days.
+    """
 
     names = list(ratetable.dimid)
-    columns: list[Any] = []
-    for name in names:
-        values = mf.extra[name]
-        if all(isinstance(value, str) or _is_missing_value(value) for value in values) and any(
-            isinstance(value, str) for value in values
+    types = ratetable.type_codes()
+    values = [mf.extra[name] for name in names]
+    misplaced = [
+        name
+        for name, code, column in zip(names, types, values, strict=True)
+        if code < 3 and _is_date_column(column)
+    ]
+    if misplaced:
+        raise ValueError(
+            "Data has a date type variable, but the reference ratetable is not a date "
+            "variable: " + " ".join(misplaced)
+        )
+    columns: list[list[str] | list[float]] = []
+    for code, column in zip(types, values, strict=True):
+        if all(isinstance(value, str) or _is_missing_value(value) for value in column) and any(
+            isinstance(value, str) for value in column
         ):
-            columns.append([str(value) for value in values])
+            columns.append([str(value) for value in column])
+        elif code > 2:
+            columns.append([_ratetable_day(value) for value in column])
         else:
-            columns.append([_ratetable_day(value) for value in values])
+            columns.append([_day_count(value) for value in column])
     return _core.match_ratetable(ratetable, names, columns).r
 
 
@@ -178,6 +287,11 @@ def _ratetable_argument(ratetable: Any) -> RateTable:
         return _core.survexp_us()
     if isinstance(ratetable, RateTable):
         return ratetable
+    from ._coxphms import CoxphmsModel
+
+    if isinstance(ratetable, CoxphmsModel):
+        # pyears.R and survexp.R refuse a coxphms fit before their coxph branch
+        raise ValueError("Invalid rate table")
     if hasattr(ratetable, "coefficients") or hasattr(ratetable, "linear_predictors"):
         raise NotImplementedError("a coxph fit as the ratetable is not supported yet")
     raise ValueError("Invalid rate table")
@@ -188,40 +302,195 @@ def _ratetable_argument(ratetable: Any) -> RateTable:
 # ---------------------------------------------------------------------------
 
 
-def _r_vector_literal(expression: str, data: Any) -> list[float]:
-    """A formula-level R vector: ``c(...)``, ``c(...) * k``, ``as.Date(c(...))`` or a column."""
+def _breaks_vector(expression: str, data: Any) -> list[float]:
+    """A ``tcut()``/``cut()`` ``breaks`` argument as numbers: a literal vector,
+    ``as.Date(...)`` as days since 1970-01-01, or a column of *data* read whole (R
+    evaluates the terms before ``subset`` and ``na.action`` remove rows)."""
 
     text = expression.strip()
     if text.startswith("as.Date(") and text.endswith(")"):
-        return [_ratetable_day(value) for value in _r_string_literal(text[8:-1])]
-    if text.startswith("c(") and text.endswith(")"):
-        return [float(_parse_formula_literal(part)) for part in _formula_response_parts(text[2:-1])]
-    for operator in ("*", "/"):
-        head, sep, tail = text.rpartition(operator)
-        if sep and head.strip().endswith(")"):
-            values = _r_vector_literal(head, data)
-            factor = float(_parse_formula_literal(tail))
-            return [value * factor if operator == "*" else value / factor for value in values]
-    try:
-        return [float(_parse_formula_literal(text))]
-    except ValueError:
-        return [float(value) for value in _column(data, text)]
+        return [_ratetable_day(value) for value in _literal_vector(text[8:-1])]
+    name, quoted = _formula_name(text)
+    if quoted or name in (_data_column_names(data) or ()):
+        return _floats_or_nan(_column(data, name))
+    return _numeric_vector(_literal_vector(text))
 
 
-def _r_string_literal(text: str) -> list[str]:
-    text = text.strip()
-    if text.startswith("c(") and text.endswith(")"):
-        text = text[2:-1]
-    return [str(_parse_formula_literal(part)) for part in _formula_response_parts(text)]
+def _logical_argument(arguments: Mapping[str, str], name: str, default: bool) -> bool:
+    """A logical argument of a formula call, as R's ``if`` reads it."""
+
+    if name not in arguments:
+        return default
+    values = _literal_vector(arguments[name])
+    if len(values) != 1 or isinstance(values[0], str) or math.isnan(values[0]):
+        raise ValueError(f"'{name}' must be TRUE or FALSE")
+    return bool(values[0])
 
 
-def _cut_labels(breaks: Sequence[float]) -> list[str]:
-    """R's ``cut()`` default labels ``"(a,b]"``."""
+def _required_arguments(call: str) -> dict[str, str]:
+    arguments = _call_arguments(call)
+    for name in ("x", "breaks"):
+        if name not in arguments:
+            raise ValueError(f'argument "{name}" is missing, with no default')
+    return arguments
 
-    def label(value: float) -> str:
-        return _as_character(value) if float(value).is_integer() else f"{value:.3g}"
 
-    return [f"({label(a)},{label(b)}]" for a, b in zip(breaks[:-1], breaks[1:], strict=True)]
+def _format_break(value: float, digits: int) -> str:
+    """``formatC(0 + value, digits, width = 1)``: C's ``%g``, R's ``Inf``."""
+
+    if math.isinf(value):
+        return " Inf" if value > 0 else "-Inf"
+    return f"{0.0 + value:.{digits}g}"
+
+
+def _r_cut(
+    x: Sequence[float],
+    breaks: Sequence[float],
+    labels: Sequence[Any] | None,
+    include_lowest: bool,
+    right: bool,
+    dig_lab: int,
+) -> tuple[list[float], list[str] | None]:
+    """R's ``cut.default``: the one-based interval code of each value (NaN outside the
+    breaks) and the level labels, ``None`` for ``labels = FALSE``.
+
+    A single ``breaks`` value is the number of intervals, spread over the range of *x*
+    widened by a thousandth; default labels take the fewest digits from ``dig.lab`` up
+    that tell the breaks apart.
+    """
+
+    if len(breaks) == 1:
+        if math.isnan(breaks[0]) or breaks[0] < 2:
+            raise ValueError("invalid number of intervals")
+        count = int(breaks[0] + 1)
+        present = [value for value in x if not math.isnan(value)]
+        if not present:
+            raise ValueError("'from' must be a finite number")
+        low, high = min(present), max(present)
+        width = high - low
+        if width == 0.0:
+            width = abs(low) if low != 0.0 else 1.0
+            breaks = _seq_length(low - width / 1000, high + width / 1000, count)
+        else:
+            breaks = _seq_length(low, high, count)
+            breaks[0], breaks[-1] = low - width / 1000, high + width / 1000
+    else:
+        breaks = sorted(value for value in breaks if not math.isnan(value))
+    count = len(breaks)
+    if len(set(breaks)) < count:
+        raise ValueError("'breaks' are not unique")
+    if labels is None:
+        levels = [f"Range_{k}" for k in range(1, count)]
+        for digits in range(dig_lab, max(12, dig_lab) + 1):
+            formatted = [_format_break(value, digits) for value in breaks]
+            if all(a != b for a, b in pairwise(formatted)):
+                left, closing = ("(", "]") if right else ("[", ")")
+                levels = [f"{left}{a},{b}{closing}" for a, b in pairwise(formatted)]
+                if include_lowest and right:
+                    levels[0] = "[" + levels[0][1:]
+                elif include_lowest:
+                    levels[-1] = levels[-1][:-1] + "]"
+                break
+    elif len(labels) == 1 and labels[0] is False:
+        levels = None
+    elif len(labels) != count - 1:
+        raise ValueError("number of intervals and length of 'labels' differ")
+    else:
+        levels = [_as_character(label) for label in labels]
+    # .bincode: (b[k-1], b[k]] when right, [b[k-1], b[k]) otherwise; include.lowest
+    # closes the first (right) or last interval
+    locate = bisect_left if right else bisect_right
+    lowest, highest = breaks[0], breaks[-1]
+    codes: list[float] = []
+    for value in x:
+        if math.isnan(value) or value < lowest or value > highest:
+            codes.append(math.nan)
+            continue
+        code = locate(breaks, value)
+        if code == 0:  # the first break, left out of (b[0], b[1]]
+            code = 1 if include_lowest else 0
+        elif code == count:  # the last break, left out of [b[-2], b[-1])
+            code = count - 1 if include_lowest else 0
+        codes.append(float(code) if code else math.nan)
+    if levels is not None and len(set(levels)) < len(levels):
+        # factor() merges intervals that share a label
+        merged = list(dict.fromkeys(levels))
+        position = [merged.index(level) + 1.0 for level in levels]
+        codes = [code if math.isnan(code) else position[int(code) - 1] for code in codes]
+        levels = merged
+    return codes, levels
+
+
+@dataclass(frozen=True)
+class _CallTerm:
+    """A ``tcut()`` or ``cut()`` term evaluated on the whole data, as R's
+    ``model.frame`` evaluates it before ``subset`` and ``na.action``: the scaled times
+    of a ``tcut`` with its level labels and cutpoints, or the interval codes of a
+    ``cut`` (NaN outside the breaks: a missing value) with its labels, ``None`` for
+    ``labels = FALSE``."""
+
+    values: list[float]
+    levels: list[str] | None
+    cuts: list[float] | None = None
+
+
+def _tcut_call(call: str, data: Any, n: int) -> _CallTerm:
+    """R's ``tcut(x, breaks, labels, scale = 1)``."""
+
+    arguments = _required_arguments(call)
+    labels = (
+        [_as_character(value) for value in _literal_vector(arguments["labels"])]
+        if "labels" in arguments
+        else None
+    )
+    scale = _numeric_scalar(_literal_vector(arguments.get("scale", "1")), "scale")
+    result = _core.tcut(
+        _arithmetic_expression_values(data, arguments["x"], n),
+        _breaks_vector(arguments["breaks"], data),
+        labels,
+        scale,
+    )
+    return _CallTerm(list(result.values), list(result.labels), list(result.cutpoints))
+
+
+def _cut_call(call: str, data: Any, n: int) -> _CallTerm:
+    """R's ``cut(x, breaks, labels = NULL, include.lowest = FALSE, right = TRUE,
+    dig.lab = 3, ordered_result = FALSE)``; the order of an ordered result does not
+    change ``pyears``' table."""
+
+    arguments = _required_arguments(call)
+    labels = _literal_vector(arguments.get("labels", "NULL")) or None
+    dig_lab = _numeric_scalar(_literal_vector(arguments.get("dig.lab", "3")), "dig.lab")
+    _logical_argument(arguments, "ordered_result", False)
+    codes, levels = _r_cut(
+        _arithmetic_expression_values(data, arguments["x"], n),
+        _breaks_vector(arguments["breaks"], data),
+        labels,
+        _logical_argument(arguments, "include.lowest", False),
+        _logical_argument(arguments, "right", True),
+        int(dig_lab),
+    )
+    return _CallTerm(codes, levels)
+
+
+def _pyears_calls(formula: str, data: Any) -> dict[str, _CallTerm]:
+    """The ``tcut()`` and ``cut()`` terms of *formula*, evaluated on the whole *data*."""
+
+    terms = _formula_rhs_terms(formula, data).covariates
+    if any(isinstance(term, _InteractionTerm) for term in terms):
+        raise ValueError("Pyears cannot have interaction terms")
+    texts = [term.call for term in terms if isinstance(term, _CovariateTerm) and term.call]
+    n = _data_row_count(data, formula) if texts else 0
+    calls: dict[str, _CallTerm] = {}
+    for text in texts:
+        function = text.partition("(")[0]
+        if function == "tcut":
+            calls[text] = _tcut_call(text, data, n)
+        elif function == "cut":
+            calls[text] = _cut_call(text, data, n)
+        else:
+            raise ValueError(f"unsupported pyears term {text}")
+    return calls
 
 
 @dataclass(frozen=True)
@@ -239,62 +508,70 @@ class _PyearsTerm:
     cuts: list[float]
 
 
-def _tcut_term(mf: ModelFrame, text: str) -> _PyearsTerm:
-    """A ``tcut(x, breaks[, labels = c(...)])`` formula term."""
+def _factor_call_term(mf: ModelFrame, term: _CovariateTerm, label: str, data: Any) -> _PyearsTerm:
+    """A ``factor(x)`` or ``as.factor(x)`` formula term.  model.frame evaluates the call
+    on the whole *data* before ``subset`` and ``na.action`` remove rows, so the levels
+    are the whole column's: every declared one for ``as.factor``, those in use for
+    ``factor``."""
 
-    arguments = _formula_response_parts(text[5:-1])
-    x = _float_vector(_column(mf.data, arguments[0]), arguments[0])
-    breaks = _r_vector_literal(arguments[1], mf.data)
-    labels = None
-    for argument in arguments[2:]:
-        name, _sep, value = argument.partition("=")
-        if name.strip() == "labels":
-            labels = _r_string_literal(value)
-    cut = _core.tcut(x, breaks, labels, 1.0)
-    return _PyearsTerm(text, 0, list(cut.values), list(cut.labels), list(cut.cutpoints))
-
-
-def _cut_term(mf: ModelFrame, text: str) -> _PyearsTerm:
-    """A ``cut(x, breaks)`` formula term: R's right-closed intervals ``(a, b]``."""
-
-    arguments = _formula_response_parts(text[4:-1])
-    x = _arithmetic_expression_values(mf.data, arguments[0], mf.n)
-    breaks = _r_vector_literal(arguments[1], mf.data)
-    codes: list[float] = []
-    for value in x:
-        position = next(
-            (k for k in range(1, len(breaks)) if breaks[k - 1] < value <= breaks[k]), None
-        )
-        codes.append(math.nan if position is None else float(position))
-    return _PyearsTerm(text, 1, codes, _cut_labels(breaks), [])
+    whole = _column_source(data, term.column)
+    levels = _factor_levels(whole, label)
+    if term.categorical_wrapper == "factor":
+        used = {
+            value for value in _materialize_labels(whole, label) if not _is_missing_value(value)
+        }
+        levels = [level for level in levels if level in used]
+    index = {level: code + 1.0 for code, level in enumerate(levels)}
+    codes = [
+        math.nan if _is_missing_value(value) else index[value]
+        for value in _column(mf.data, term.column)
+    ]
+    return _PyearsTerm(label, 1, codes, [_as_character(level) for level in levels], [])
 
 
-def _pyears_term(mf: ModelFrame, term: _CovariateTerm) -> _PyearsTerm:
+def _pyears_term(
+    mf: ModelFrame, term: _CovariateTerm, data: Any, calls: Mapping[str, _CallTerm]
+) -> _PyearsTerm:
     label = _covariate_term_name(term)
     if term.call is not None:
-        return (
-            _tcut_term(mf, term.call) if term.call.startswith("tcut(") else _cut_term(mf, term.call)
-        )
+        call = calls[term.call]
+        # the model frame carries the values at the rows subset and na.action kept
+        values = _floats_or_nan(mf.extra[term.call])
+        if call.cuts is not None:
+            return _PyearsTerm(label, 0, values, call.levels or [], call.cuts)
+        if call.levels is not None:
+            return _PyearsTerm(label, 1, values, call.levels, [])
+        return _factor_term(label, values)  # cut(labels = FALSE): as.factor of the codes
+    if term.categorical_wrapper is not None:
+        return _factor_call_term(mf, term, label, data)
     source = _column_source(mf.data, term.column) if term.arithmetic is None else None
     if isinstance(source, TcutResult):
         return _PyearsTerm(
             label, 0, list(source.values), list(source.labels), list(source.cutpoints)
         )
-    codes_raw, levels = _factor(_term_values(mf.data, term, mf.n), label)
-    return _PyearsTerm(
-        label, 1, [math.nan if c is None else c + 1.0 for c in codes_raw], levels, []
-    )
+    # pyears' as.factor keeps every declared level of a factor column, empty or not
+    if source is None or term.transform is not None:
+        return _factor_term(label, _term_values(mf.data, term, mf.n))
+    return _factor_term(label, source)
 
 
-def _pyears_terms(mf: ModelFrame) -> list[_PyearsTerm]:
-    terms: list[_PyearsTerm] = []
-    for term in mf.terms.covariates:
-        if isinstance(term, _InteractionTerm):
-            raise ValueError("Pyears cannot have interaction terms")
-        terms.append(_pyears_term(mf, term))
+def _factor_term(label: str, values: Any) -> _PyearsTerm:
+    """``as.factor(values)`` as a category dimension."""
+
+    codes, levels = _factor(values, label)
+    return _PyearsTerm(label, 1, [math.nan if c is None else c + 1.0 for c in codes], levels, [])
+
+
+def _pyears_terms(mf: ModelFrame, data: Any, calls: Mapping[str, _CallTerm]) -> list[_PyearsTerm]:
+    """The category dimensions (the model frame has no interaction terms)."""
+
     for columns in mf.terms.strata:
         raise ValueError(f"unsupported pyears term strata({columns})")
-    return terms
+    return [
+        _pyears_term(mf, term, data, calls)
+        for term in mf.terms.covariates
+        if isinstance(term, _CovariateTerm)
+    ]
 
 
 def _pyears_followup(mf: ModelFrame) -> tuple[list[float], list[float] | None, list[float] | None]:
@@ -325,47 +602,67 @@ def _pyears_followup(mf: ModelFrame) -> tuple[list[float], list[float] | None, l
     return list(response.time), None if response.start is None else list(response.start), event
 
 
-def _reshape(values: Sequence[float] | None, dims: Sequence[int]) -> Any:
-    """R's array over ``dims`` (column-major cells) as a row-major nested list."""
+def _row_major(cells: Sequence[Any], dims: Sequence[int]) -> Any:
+    """R's array over ``dims`` (column-major ``cells``) as a row-major nested list."""
 
-    if values is None:
-        return None
     if not dims:
-        return float(values[0])
-    if len(dims) == 1:
-        return [float(value) for value in values]
+        return cells[0]
     strides = [1]
     for extent in dims[:-1]:
         strides.append(strides[-1] * extent)
 
     def build(prefix: int, depth: int) -> Any:
         if depth == len(dims):
-            return float(values[prefix])
+            return cells[prefix]
         return [build(prefix + k * strides[depth], depth + 1) for k in range(dims[depth])]
 
     return build(0, 0)
 
 
-def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[Any]]:
-    """R's ``data.frame = TRUE`` layout: one row per cell with person-years."""
+def _reshape(values: Sequence[float] | None, dims: Sequence[int]) -> Any:
+    """:func:`_row_major` of a numeric table, ``None`` passing through."""
 
-    cells = list(range(len(result.pyears)))
-    if terms:
-        cells = [cell for cell in cells if result.pyears[cell] > 0.0]
+    return None if values is None else _row_major([float(value) for value in values], dims)
+
+
+def _cell_frame(
+    tables: Mapping[str, Sequence[Any]], dimnames: Mapping[str, Sequence[str]]
+) -> dict[str, list[Any]]:
+    """R's ``data.frame = TRUE`` layout of the column-major ``tables``: one row per cell
+    with person-years (every cell without terms), a column per term then the tables
+    (pyears.R: ``expand.grid(dimnames)[pyears > 0, ]``)."""
+
+    pyears = tables["pyears"]
+    cells = (
+        [cell for cell, value in enumerate(pyears) if value > 0.0]
+        if dimnames
+        else list(range(len(pyears)))
+    )
     frame: dict[str, list[Any]] = {}
-    for depth, term in enumerate(terms):
-        stride = math.prod(len(other.levels) for other in terms[:depth])
-        frame[term.label] = [term.levels[(cell // stride) % len(term.levels)] for cell in cells]
-    frame["pyears"] = [result.pyears[cell] for cell in cells]
-    frame["n"] = [result.n[cell] for cell in cells]
-    if result.expected is not None:
-        frame["expected"] = [result.expected[cell] for cell in cells]
-    if result.event is not None:
-        frame["event"] = [result.event[cell] for cell in cells]
+    stride = 1
+    for label, levels in dimnames.items():
+        frame[label] = [levels[(cell // stride) % len(levels)] for cell in cells]
+        stride *= len(levels)
+    for name, values in tables.items():
+        frame[name] = [values[cell] for cell in cells]
     return frame
 
 
-def _pyears_result(result: Any, terms: Sequence[_PyearsTerm], data_frame: bool) -> PyearsResult:
+def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[Any]]:
+    """The ``data.frame = TRUE`` layout of the kernel's result."""
+
+    # each getter copies the whole table out of the kernel result: read it once
+    tables = {"pyears": result.pyears, "n": result.n}
+    if result.expected is not None:
+        tables["expected"] = result.expected
+    if result.event is not None:
+        tables["event"] = result.event
+    return _cell_frame(tables, {term.label: term.levels for term in terms})
+
+
+def _pyears_result(
+    result: Any, terms: Sequence[_PyearsTerm], data_frame: bool, na_action: NaAction | None
+) -> PyearsResult:
     dims = list(result.dims) if terms else []
     dimnames = {term.label: list(term.levels) for term in terms}
     has_tcut = any(term.factor == 0 for term in terms)
@@ -381,6 +678,7 @@ def _pyears_result(result: Any, terms: Sequence[_PyearsTerm], data_frame: bool) 
             event=None,
             expected=None,
             data=_pyears_frame(result, terms),
+            na_action=na_action,
         )
     return PyearsResult(
         pyears=_reshape(result.pyears, dims),
@@ -392,6 +690,7 @@ def _pyears_result(result: Any, terms: Sequence[_PyearsTerm], data_frame: bool) 
         dimnames=dimnames,
         event=_reshape(result.event, dims),
         expected=_reshape(result.expected, dims),
+        na_action=na_action,
     )
 
 
@@ -512,14 +811,18 @@ def pyears(
     table = None if ratetable is None and rmap is None else _ratetable_argument(ratetable)
     if rmap is not None and ratetable is None:
         raise ValueError("No rate table specified")
-    extra = None if table is None else _rmap_columns(rmap, table, data)
+    calls = _pyears_calls(formula, data)
+    # the rate variables and the tcut()/cut() values go through subset and na.action
+    # with the formula's variables, so a cut() value outside the breaks drops its row
+    extra = {} if table is None else _rmap_columns(rmap, table, data)
+    extra.update((call, term.values) for call, term in calls.items())
     mf = model_frame(
         formula, data, subset=subset, na_action=na_action or "omit", weights=weights, extra=extra
     )
     if mf.n == 0:
         raise ValueError("Data set has 0 observations")
     stop_values, start_values, event_values = _pyears_followup(mf)
-    terms = _pyears_terms(mf)
+    terms = _pyears_terms(mf, data, calls)
     result = _core.pyears(
         stop_values,
         start_values,
@@ -534,24 +837,20 @@ def pyears(
         expect_value,
         scale_value,
     )
-    return _pyears_result(result, terms, data_frame_value)
+    return _pyears_result(result, terms, data_frame_value, mf.na_action)
 
 
 def _pyears_result_frame(result: PyearsResult) -> dict[str, list[Any]]:
-    """``as_data_frame`` of a ``pyears`` result (its ``data.frame = TRUE`` layout)."""
+    """``as_data_frame`` of a ``pyears`` result: its ``data.frame = TRUE`` layout."""
 
     if result.data is not None:
         return {name: list(values) for name, values in result.data.items()}
-    cells = list(range(max(1, math.prod(result.dim))))
-    labels = result.group
-    frame: dict[str, list[Any]] = {"group": [labels[cell] for cell in cells]}
-    flat = {
+    tables = {
         name: _flatten(getattr(result, name), result.dim)
         for name in ("pyears", "n", "expected", "event")
         if getattr(result, name) is not None
     }
-    frame.update(flat)
-    return frame
+    return _cell_frame(tables, result.dimnames)
 
 
 def _flatten(values: Any, dims: Sequence[int]) -> list[float]:
@@ -577,16 +876,147 @@ def _flatten(values: Any, dims: Sequence[int]) -> list[float]:
     return flat
 
 
-def _finegray_frame(result: Any) -> dict[str, list[Any]]:
-    """``as_data_frame`` of a raw ``FineGrayOutput``."""
+@dataclass(frozen=True)
+class PyearsSummary:
+    """The tables R's ``summary.pyears`` prints.
 
-    return {
-        "row": [int(value) for value in result.row],
-        "start": [float(value) for value in result.start],
-        "end": [float(value) for value in result.end],
-        "wt": [float(value) for value in result.wt],
-        "add": [int(value) for value in result.add],
+    Each table is a row-major nested list over ``dim`` like :class:`PyearsResult`'s
+    (a scalar without terms); with ``totals`` the first two dimensions end in a
+    ``"Total"`` level, whose ``n`` is missing (``nan``) when a ``tcut`` term makes it
+    meaningless.  ``ci_r`` and ``ci_rr`` hold one ``(lower, upper)`` pair per cell
+    (R's ``cipoisson`` array).  A statistic that was not requested, or that the
+    ``pyears`` object cannot give (no events, no expected counts), is ``None``; an
+    empty cell has missing (``nan``) rates, ratios and limits.
+    """
+
+    n: Any
+    pyears: Any
+    offtable: float
+    observations: int
+    dim: list[int]
+    dimnames: dict[str, list[str]]
+    event: Any = None
+    expected: Any = None
+    rate: Any = None
+    ci_r: Any = None
+    rr: Any = None
+    ci_rr: Any = None
+
+
+def _pyears_tables(result: PyearsResult) -> dict[str, list[float]]:
+    """The column-major cells of ``pyears``, ``n`` and, when present, ``event`` and
+    ``expected``.
+
+    A ``data.frame = TRUE`` result's rows are put back into the full table, with zero
+    cells elsewhere, as ``summary.pyears`` does.
+    """
+
+    names = ("pyears", "n", "event", "expected")
+    if result.data is None:
+        arrays = {name: getattr(result, name) for name in names}
+        return {
+            name: _flatten(array, result.dim) for name, array in arrays.items() if array is not None
+        }
+    data = result.data
+    cells = [0] * len(data["pyears"])
+    stride = 1
+    for (label, levels), extent in zip(result.dimnames.items(), result.dim, strict=True):
+        position = {level: k for k, level in enumerate(levels)}
+        cells = [
+            cell + position[level] * stride for cell, level in zip(cells, data[label], strict=True)
+        ]
+        stride *= extent
+    tables: dict[str, list[float]] = {}
+    for name in names:
+        if name in data:
+            table = [0.0] * stride
+            for cell, value in zip(cells, data[name], strict=True):
+                table[cell] = float(value)
+            tables[name] = table
+    return tables
+
+
+def summary_pyears(
+    object: PyearsResult,
+    totals: bool = False,
+    rate: bool = False,
+    ci_r: bool = False,
+    rr: bool = True,
+    ci_rr: bool = False,
+    conf_level: Any = 0.95,
+    scale: Any = 1,
+    **kwargs: Any,
+) -> PyearsSummary:
+    """R's ``summary.pyears``: the tables of a ``pyears`` result, with rates and ratios.
+
+    ``rate`` is ``scale * event / pyears`` and ``rr`` the observed/expected ratio (R's
+    default ``rr = expected`` is on whenever the object has expected counts); ``ci_r``
+    and ``ci_rr`` add their exact Poisson limits at ``conf_level``, and ``totals``
+    appends the margins of the first two dimensions.  R's printing switches
+    (``header``, ``vline``, ``nastring``, ...) have no counterpart: the tables are
+    returned instead.
+    """
+
+    ci_r = _pop_dotted_keyword(kwargs, "ci.r", "ci_r", ci_r, False)
+    ci_rr = _pop_dotted_keyword(kwargs, "ci.rr", "ci_rr", ci_rr, False)
+    conf_level = _pop_dotted_keyword(kwargs, "conf.level", "conf_level", conf_level, 0.95)
+    if kwargs:
+        raise TypeError(
+            f"summary_pyears got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+        )
+    if not isinstance(object, PyearsResult):
+        raise TypeError("input must be a pyears object")
+    options = {
+        name: _normalize_bool_option(value, name.replace("_", "."))
+        for name, value in (
+            ("totals", totals),
+            ("rate", rate),
+            ("ci_r", ci_r),
+            ("rr", rr),
+            ("ci_rr", ci_rr),
+        )
     }
+    if options["totals"] and not object.dim:
+        raise ValueError("totals need a pyears table with at least one term")
+    tables = _pyears_tables(object)
+    summary = _core.summary_pyears(
+        tables["pyears"],
+        tables["n"],
+        tables.get("event"),
+        tables.get("expected"),
+        list(object.dim),
+        float(object.offtable),
+        int(object.observations),
+        bool(object.tcut),
+        conf_level=_finite_float(conf_level, "conf.level"),
+        scale=_finite_float(scale, "scale"),
+        **options,
+    )
+    dims = list(summary.dims) if object.dim else []
+    dimnames = {label: list(levels) for label, levels in object.dimnames.items()}
+    if options["totals"]:
+        for label in list(dimnames)[:2]:
+            dimnames[label].append("Total")
+
+    def limits(lower: Sequence[float] | None, upper: Sequence[float] | None) -> Any:
+        if lower is None or upper is None:
+            return None
+        return _row_major(list(zip(lower, upper, strict=True)), dims)
+
+    return PyearsSummary(
+        n=_reshape(summary.n, dims),
+        pyears=_reshape(summary.pyears, dims),
+        offtable=float(summary.offtable),
+        observations=int(summary.observations),
+        dim=dims,
+        dimnames=dimnames,
+        event=_reshape(summary.event, dims),
+        expected=_reshape(summary.expected, dims),
+        rate=_reshape(summary.rate, dims),
+        ci_r=limits(summary.ci_r_lower, summary.ci_r_upper),
+        rr=_reshape(summary.rr, dims),
+        ci_rr=limits(summary.ci_rr_lower, summary.ci_rr_upper),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -621,15 +1051,23 @@ def _survexp_response(mf: ModelFrame) -> list[float] | None:
     return values
 
 
+def _is_tcut(mf: ModelFrame, term: _CovariateTerm) -> bool:
+    """R's class check of a model-frame variable: a ``tcut()`` call, or a data column
+    holding a ``tcut``."""
+
+    name = _covariate_term_name(term)
+    return name.startswith("tcut(") or (
+        name == term.column and isinstance(_column_source(mf.data, name), TcutResult)
+    )
+
+
 def _survexp_groups(mf: ModelFrame) -> tuple[list[int] | None, list[str] | None]:
     """R's ``strata(mf[ovars])``: zero-based curve of each row and the curve labels."""
 
     if any(isinstance(term, _InteractionTerm) for term in mf.terms.covariates):
         raise ValueError("Survexp cannot have interaction terms")
-    for term in mf.terms.covariates:
-        name = _covariate_term_name(term)
-        if name.startswith("tcut("):
-            raise ValueError("Can't use tcut variables in expected survival")
+    if any(_is_tcut(mf, term) for term in mf.terms.covariates if isinstance(term, _CovariateTerm)):
+        raise ValueError("Can't use tcut variables in expected survival")
     groups = _model_strata(mf)
     if groups is None:
         return None, None
@@ -728,21 +1166,32 @@ def survexp(
     if not isinstance(formula, str):
         raise ValueError("A formula argument is required")
     from ._coxph import CoxphModel, _survfit_curves, predict_coxph
+    from ._coxphms import CoxphmsModel
 
+    if isinstance(ratetable, CoxphmsModel):
+        raise ValueError("Invalid rate table")
     if isinstance(ratetable, CoxphModel):
+        method_value = _survexp_method(
+            method, cohort, conditional, _response_spec(formula) is not None
+        )
         names = _formula_columns("~" + ratetable.formula.split("~", 1)[1], data)
+        extra = _mapped_columns(rmap, names, data)
+        if method_value.startswith("individual"):
+            # predict(type = "expected") also reads the Cox model's response: R's
+            # survexp adds the data's remaining columns to the rate variables
+            for name in _formula_columns(ratetable.formula, data):
+                extra.setdefault(name, name)
         mf = model_frame(
             formula,
             data,
             subset=subset,
             na_action=na_action or "omit",
             weights=weights,
-            extra=_mapped_columns(rmap, names, data),
+            extra=extra,
         )
         if mf.n == 0:
             raise ValueError("Data set has 0 rows")
         response = _survexp_response(mf)
-        method_value = _survexp_method(method, cohort, conditional, response is not None)
         mapped = {name: _column(mf.data, name) for name in _data_column_names(mf.data) or []}
         mapped.update(mf.extra)
         if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):
@@ -754,7 +1203,9 @@ def survexp(
             return (
                 hazard if method_value == "individual.h" else [math.exp(-value) for value in hazard]
             )
-        curves, _ = _survfit_curves(
+        # survexp.cfit needs a curve for every data row: a row whose rate variables
+        # the Cox model's terms make missing (log(-1)) is an error, not left out
+        curves, _, _ = _survfit_curves(
             ratetable,
             mapped,
             individual=False,
@@ -763,6 +1214,7 @@ def survexp(
             ctype=2 if ratetable.method == "efron" else 1,
             se_fit=False,
             censor=False,
+            na_action="na.fail",
         )
         groups, levels = _survexp_groups(mf)
         result = _core.survexp_cox(
@@ -820,16 +1272,3 @@ def survexp(
     if method_value.startswith("individual"):
         return [row[0] for row in result.surv]
     return _survexp_result(result, levels, mf.n)
-
-
-def survexp_individual(
-    time: Any,
-    age: Any,
-    year: Any,
-    ratetable: Any | None = None,
-    sex: Any | None = None,
-) -> list[float]:
-    """Per-subject expected survival (``survexp(..., cohort = FALSE)``) from vectors."""
-
-    values = survexp(time=time, age=age, year=year, sex=sex, ratetable=ratetable, cohort=False)
-    return [float(value) for value in values]

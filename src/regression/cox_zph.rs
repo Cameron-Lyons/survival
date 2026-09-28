@@ -6,27 +6,39 @@
 //! `beta(t) = beta + theta g(t)` at `theta = 0`: the kernels return the
 //! `2p` score vector `(0, sum_i g(t_i) (x_i - xbar(t_i)))`, its `2p x 2p`
 //! information, the Schoenfeld residuals and a per-stratum table of which
-//! covariates vary.  `cox.zph` then forms one test per term (`terms`),
-//! optionally a single-df test along the fitted linear predictor
-//! (`singledf`), and the global test, and returns the scaled Schoenfeld
-//! residuals `y` against the transformed times `x` for plotting.
+//! covariates vary.  For a penalized fit the penalty's second derivative is
+//! added to both diagonal blocks of the information.  `cox.zph` then forms
+//! one test per term (`terms`), optionally a single-df test along the fitted
+//! linear predictor (`singledf`), and the global test, and returns the
+//! scaled Schoenfeld residuals `y` against the transformed times `x` for
+//! plotting.
 
 use crate::core::risk_sweep::StratumSweep;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
-use crate::internal::statistical::chi2_sf;
+#[cfg(feature = "python")]
+use crate::internal::numpy_utils::FloatVec;
+use crate::internal::step::rank_average;
 use crate::regression::cox_optimizer::TieMethod;
+use crate::regression::coxpenal::CoxpenalFit;
 use crate::regression::coxph::{CoxPHFit, default_assign, validate_assign};
-use ndarray::Array2;
+use ndarray::{Array2, Axis, s};
+#[cfg(feature = "python")]
+use pyo3::Borrowed;
+#[cfg(feature = "python")]
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
 /// The time transform of `cox.zph`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ZphTransform {
     Km,
     Rank,
     Identity,
     Log,
+    /// A user function's values at each observation's (stop) time.
+    Values(Vec<f64>),
 }
 
 impl ZphTransform {
@@ -42,12 +54,81 @@ impl ZphTransform {
         }
     }
 
-    pub fn r_name(self) -> &'static str {
+    /// The result's `transform` label; R labels a function by its deparsed
+    /// expression, or `"user"` when that spans several lines.
+    pub fn r_name(&self) -> &'static str {
         match self {
             Self::Km => "km",
             Self::Rank => "rank",
             Self::Identity => "identity",
             Self::Log => "log",
+            Self::Values(_) => "user",
+        }
+    }
+}
+
+/// A transform name, or a user function's values at the stop times.
+#[cfg(feature = "python")]
+impl<'py> FromPyObject<'_, 'py> for ZphTransform {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+        match obj.extract::<String>() {
+            Ok(name) => Ok(Self::parse(&name)?),
+            Err(_) => Ok(Self::Values(obj.extract::<FloatVec>()?.into_inner())),
+        }
+    }
+}
+
+/// The fit `cox.zph` tests.  A penalized (`coxpenal.fit`) fit adds its
+/// penalty to the information and gives the tests its `fit$df`.
+#[derive(Debug, Clone, Copy)]
+pub enum ZphFit<'a> {
+    Coxph(&'a CoxPHFit),
+    Penalized(&'a CoxpenalFit),
+}
+
+impl<'a> From<&'a CoxPHFit> for ZphFit<'a> {
+    fn from(fit: &'a CoxPHFit) -> Self {
+        Self::Coxph(fit)
+    }
+}
+
+impl<'a> From<&'a CoxpenalFit> for ZphFit<'a> {
+    fn from(fit: &'a CoxpenalFit) -> Self {
+        Self::Penalized(fit)
+    }
+}
+
+/// What `cox.zph` reads from a penalized fit.
+struct ZphPenalty<'a> {
+    /// `coxlist2$second`, the dense penalties' second derivative (see
+    /// [`penalty_matrix`]).
+    second: Option<&'a [f64]>,
+    /// `fit$df`, which the tested terms read by position.
+    df: Vec<f64>,
+}
+
+impl<'a> From<&'a CoxpenalFit> for ZphPenalty<'a> {
+    fn from(fit: &'a CoxpenalFit) -> Self {
+        let sparse = fit.pterms.iter().position(|&kind| kind == 2);
+        // `fit$df` has an entry for every model term, but a sparse frailty
+        // is not tested.  R pairs the tested terms with `fit$df[ii]`, which
+        // is right when the frailty is the last term, the only order R
+        // accepts ("subscript out of bounds" otherwise); moving the
+        // frailty's entry last does the same for any order.
+        let mut df = fit.df.clone();
+        if let Some(term) = sparse.filter(|&term| term < df.len()) {
+            df[term..].rotate_left(1);
+        }
+        Self {
+            // coxpenal.fit returns coxlist2 only when there is no sparse term.
+            second: fit
+                .coxlist2
+                .as_ref()
+                .filter(|_| sparse.is_none())
+                .map(|list| list.second.as_slice()),
+            df,
         }
     }
 }
@@ -58,8 +139,9 @@ impl ZphTransform {
 pub struct CoxZphTest {
     #[pyo3(get)]
     pub chisq: f64,
+    /// Degrees of freedom; `fit$df` for a penalized fit, so fractional.
     #[pyo3(get)]
-    pub df: usize,
+    pub df: f64,
     #[pyo3(get)]
     pub p: f64,
 }
@@ -120,10 +202,7 @@ fn zph_kernel(fit: &CoxPHFit, gtime: &[f64], eta: &[f64], keep: &[usize]) -> Zph
     for (k, &column) in keep.iter().enumerate() {
         x.column_mut(k).assign(&fit.x.column(column));
     }
-    let mut u = vec![0.0; 2 * nvar];
-    let mut imat = Array2::zeros((2 * nvar, 2 * nvar));
     let mut used = Array2::zeros((nstrata, nvar));
-    let mut schoen_rows: Vec<(usize, Vec<f64>)> = Vec::new();
     for stratum in 0..nstrata {
         let (start, end) = fit.sorted.bounds[stratum];
         let rows = &fit.sorted.order[start..end];
@@ -134,6 +213,19 @@ fn zph_kernel(fit: &CoxPHFit, gtime: &[f64], eta: &[f64], keep: &[usize]) -> Zph
                 used[(stratum, j)] = ndead_stratum;
             }
         }
+    }
+    // "Recenter the X matrix to make the variance computation more stable":
+    // subtract each column's plain mean (after `used` has been filled).
+    for mut column in x.columns_mut() {
+        let mean = column.iter().sum::<f64>() / fit.n as f64;
+        column.mapv_inplace(|value| value - mean);
+    }
+    let mut u = vec![0.0; 2 * nvar];
+    let mut imat = Array2::zeros((2 * nvar, 2 * nvar));
+    let mut schoen_rows: Vec<(usize, Vec<f64>)> = Vec::new();
+    for stratum in 0..nstrata {
+        let (start, end) = fit.sorted.bounds[stratum];
+        let rows = &fit.sorted.order[start..end];
         let sweep = StratumSweep {
             stop: &fit.time,
             entry: fit.entry.as_deref(),
@@ -222,92 +314,95 @@ fn zph_kernel(fit: &CoxPHFit, gtime: &[f64], eta: &[f64], keep: &[usize]) -> Zph
 }
 
 /// Left-continuous Kaplan-Meier of the whole sample (`survfitKM` on
-/// `factor(rep(1, n))` without weights), evaluated at each row's time:
-/// `1 - S(t-)`.
-fn km_transform(fit: &CoxPHFit) -> Vec<f64> {
-    let n = fit.n;
+/// `factor(rep(1, n))` without weights, so the strata are pooled),
+/// evaluated at each row's time: `1 - S(t-)`.  One pass over the rows in
+/// time order; with (start, stop] data the risk set at `t` is
+/// `#{stop >= t} - #{entry >= t}`, as every entry precedes its stop.
+fn km_transform(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64> {
+    let n = time.len();
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| fit.time[a].total_cmp(&fit.time[b]).then(a.cmp(&b)));
-    let mut times = Vec::new();
-    let mut surv = Vec::new();
-    let mut running = 1.0;
+    order.sort_unstable_by(|&a, &b| time[a].total_cmp(&time[b]));
+    let sorted_entry = entry.map(|entry| {
+        let mut sorted = entry.to_vec();
+        sorted.sort_unstable_by(f64::total_cmp);
+        sorted
+    });
+    let mut km = vec![0.0; n];
+    let mut surv = 1.0;
     let mut position = 0;
     while position < n {
-        let t = fit.time[order[position]];
+        let t = time[order[position]];
         let mut end = position;
         let mut deaths = 0usize;
-        while end < n && fit.time[order[end]] == t {
-            deaths += usize::from(fit.status[order[end]] == 1);
+        while end < n && time[order[end]] == t {
+            km[order[end]] = 1.0 - surv;
+            deaths += usize::from(status[order[end]] == 1);
             end += 1;
         }
-        let at_risk = (0..n)
-            .filter(|&row| {
-                fit.time[row] >= t && fit.entry.as_ref().is_none_or(|entry| entry[row] < t)
-            })
-            .count();
         if deaths > 0 {
-            running *= 1.0 - deaths as f64 / at_risk as f64;
-        }
-        times.push(t);
-        surv.push(running);
-        position = end;
-    }
-    fit.time
-        .iter()
-        .map(|&t| {
-            let index = times.partition_point(|&time| time < t);
-            let before = if index == 0 { 1.0 } else { surv[index - 1] };
-            1.0 - before
-        })
-        .collect()
-}
-
-/// R's `rank()`: average ranks for ties.
-fn average_ranks(values: &[f64]) -> Vec<f64> {
-    let n = values.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
-    let mut ranks = vec![0.0; n];
-    let mut position = 0;
-    while position < n {
-        let mut end = position;
-        while end < n && values[order[end]] == values[order[position]] {
-            end += 1;
-        }
-        let average = (position + 1 + end) as f64 / 2.0;
-        for &row in &order[position..end] {
-            ranks[row] = average;
+            let not_entered = sorted_entry
+                .as_ref()
+                .map_or(0, |entry| n - entry.partition_point(|&e| e < t));
+            let nrisk = (n - position - not_entered) as f64;
+            surv *= (nrisk - deaths as f64) / nrisk;
         }
         position = end;
     }
-    ranks
+    km
 }
 
 fn solve(matrix: &Array2<f64>, rhs: &[f64]) -> SurvivalResult<Vec<f64>> {
     LuDecomposition::decompose(matrix)?.solve(rhs)
 }
 
-fn submatrix(matrix: &Array2<f64>, rows: &[usize], cols: &[usize]) -> Array2<f64> {
-    let mut out = Array2::zeros((rows.len(), cols.len()));
-    for (i, &r) in rows.iter().enumerate() {
-        for (j, &c) in cols.iter().enumerate() {
-            out[(i, j)] = matrix[(r, c)];
-        }
+/// `coxlist2$second` as the penalty matrix `tmat` over the non-aliased
+/// coefficients `keep` of the `nfull` in the fit.  It holds either all
+/// `nfull x nfull` entries (column-major) or, for diagonal penalties such as
+/// `ridge()`, the diagonal.  R reads the latter with `matrix(second, nfull)`,
+/// which recycles it into `tmat[i, j] = second[i]`; here it is the diagonal
+/// matrix it stands for.
+fn penalty_matrix(second: &[f64], keep: &[usize], nfull: usize) -> SurvivalResult<Array2<f64>> {
+    let dense = second.len() == nfull * nfull;
+    if !dense && second.len() != nfull {
+        return Err(SurvivalError::invalid_input(format!(
+            "the penalty's second derivative has {} values for {nfull} coefficients",
+            second.len()
+        )));
     }
-    out
+    Ok(Array2::from_shape_fn(
+        (keep.len(), keep.len()),
+        |(a, b)| match (keep[a], keep[b]) {
+            (i, j) if dense => second[j * nfull + i],
+            (i, j) if i == j => second[i],
+            _ => 0.0,
+        },
+    ))
+}
+
+fn zph_test(chisq: f64, df: f64) -> CoxZphTest {
+    CoxZphTest {
+        chisq,
+        df,
+        p: pchisq(chisq, df, false, false),
+    }
 }
 
 /// `cox.zph(fit, transform, terms, singledf, global)` (`global_test` is
-/// R's `global`).  `assign` lists the columns of each term (default: one
-/// term per coefficient); it is ignored with `terms = FALSE`.
-pub fn cox_zph(
-    fit: &CoxPHFit,
-    transform: ZphTransform,
+/// R's `global`) for a `coxph` or a penalized fit.  `assign` lists the
+/// columns of each term (default: one term per coefficient); it is ignored
+/// with `terms = FALSE`.
+pub fn cox_zph<'a>(
+    fit: impl Into<ZphFit<'a>>,
+    transform: &ZphTransform,
     terms: bool,
     singledf: bool,
     global_test: bool,
     assign: Option<&[Vec<usize>]>,
 ) -> SurvivalResult<CoxZph> {
+    let (fit, penalty) = match fit.into() {
+        ZphFit::Coxph(fit) => (fit, None),
+        ZphFit::Penalized(fit) => (&fit.coxph, Some(ZphPenalty::from(fit))),
+    };
     if fit.nvar() == 0 {
         return Err(SurvivalError::invalid_input(
             "there are no score residuals for a Null model",
@@ -331,6 +426,11 @@ pub fn cox_zph(
         return Err(SurvivalError::invalid_input("every coefficient is aliased"));
     }
     let coef: Vec<f64> = keep.iter().map(|&j| fit.coefficients[j]).collect();
+    let tmat = penalty
+        .as_ref()
+        .and_then(|penalty| penalty.second)
+        .map(|second| penalty_matrix(second, &keep, fit.nvar()))
+        .transpose()?;
     let assign: Vec<Vec<usize>> = assign
         .iter()
         .map(|columns| {
@@ -352,9 +452,17 @@ pub fn cox_zph(
         .collect();
     let ttimes: Vec<f64> = match transform {
         ZphTransform::Identity => fit.time.clone(),
-        ZphTransform::Rank => average_ranks(&fit.time),
+        ZphTransform::Rank => rank_average(&fit.time),
         ZphTransform::Log => fit.time.iter().map(|t| t.ln()).collect(),
-        ZphTransform::Km => km_transform(fit),
+        ZphTransform::Km => km_transform(&fit.time, fit.entry.as_deref(), &fit.status),
+        ZphTransform::Values(values) => {
+            if values.len() != fit.n || values.iter().any(|value| !value.is_finite()) {
+                return Err(SurvivalError::invalid_input(
+                    "the transform must give one finite value per observation",
+                ));
+            }
+            values.clone()
+        }
     };
     let event: Vec<bool> = fit.status.iter().map(|&s| s == 1).collect();
     let nevent = event.iter().filter(|&&e| e).count();
@@ -368,16 +476,24 @@ pub fn cox_zph(
     let gtime: Vec<f64> = ttimes.iter().map(|t| t - event_mean).collect();
 
     let kernel = zph_kernel(fit, &gtime, &eta, &keep);
+    // R's `imatr`: the information plus the penalty in both diagonal blocks.
+    let mut imatr = kernel.imat;
+    if let Some(tmat) = &tmat {
+        for block in [s![..nvar, ..nvar], s![nvar.., nvar..]] {
+            let mut view = imatr.slice_mut(block);
+            view += tmat;
+        }
+    }
     let all: Vec<usize> = (0..nvar).collect();
     let mut table = Vec::with_capacity(nterm);
-    for columns in &assign {
+    for (ii, columns) in assign.iter().enumerate() {
         let kk: Vec<usize> = all
             .iter()
             .copied()
             .chain(columns.iter().map(|&j| j + nvar))
             .collect();
-        let imat = submatrix(&kernel.imat, &kk, &kk);
-        let (chisq, df) = if singledf && columns.len() > 1 {
+        let imat = imatr.select(Axis(0), &kk).select(Axis(1), &kk);
+        let test = if singledf && columns.len() > 1 {
             let inverse = LuDecomposition::decompose(&imat)?.inverse()?;
             let offset = nvar;
             let t1: f64 = columns.iter().map(|&j| coef[j] * kernel.u[j + nvar]).sum();
@@ -387,34 +503,34 @@ pub fn cox_zph(
                     quad += coef[ja] * inverse[(offset + a, offset + b)] * coef[jb];
                 }
             }
-            (t1 * t1 * quad, 1)
+            zph_test(t1 * t1 * quad, 1.0)
         } else {
             let mut u = vec![0.0; kk.len()];
             for (position, &j) in columns.iter().enumerate() {
                 u[nvar + position] = kernel.u[j + nvar];
             }
             let solved = solve(&imat, &u)?;
-            (
-                solved.iter().zip(&u).map(|(s, u)| s * u).sum(),
-                columns.len(),
-            )
+            // R takes `fit$df[ii]` by position among the tested terms,
+            // aliased ones dropped (NA past its end).
+            let term_df = match &penalty {
+                Some(penalty) => penalty.df.get(ii).copied().unwrap_or(f64::NAN),
+                None => columns.len() as f64,
+            };
+            zph_test(solved.iter().zip(&u).map(|(s, u)| s * u).sum(), term_df)
         };
-        table.push(CoxZphTest {
-            chisq,
-            df,
-            p: chi2_sf(chisq, df),
-        });
+        table.push(test);
     }
     let global_test = if global_test {
         let mut u = vec![0.0; 2 * nvar];
         u[nvar..].copy_from_slice(&kernel.u[nvar..]);
-        let solved = solve(&kernel.imat, &u)?;
+        let solved = solve(&imatr, &u)?;
         let chisq: f64 = solved.iter().zip(&u).map(|(s, u)| s * u).sum();
-        Some(CoxZphTest {
+        Some(zph_test(
             chisq,
-            df: nvar,
-            p: chi2_sf(chisq, nvar),
-        })
+            penalty
+                .as_ref()
+                .map_or(nvar as f64, |penalty| penalty.df.iter().sum()),
+        ))
     } else {
         None
     };
@@ -450,7 +566,7 @@ pub fn cox_zph(
             } else {
                 wtmat[(i, j)]
             };
-            vmean[(i, j)] = kernel.imat[(i, j)] / weight;
+            vmean[(i, j)] = imatr[(i, j)] / weight;
         }
     }
 
@@ -467,7 +583,7 @@ pub fn cox_zph(
         sresid = sresid.dot(&temp);
         vmean = temp.t().dot(&vmean).dot(&temp);
         let firsts: Vec<usize> = assign.iter().map(|columns| columns[0]).collect();
-        used_terms = submatrix(&used, &(0..used.nrows()).collect::<Vec<_>>(), &firsts);
+        used_terms = used.select(Axis(1), &firsts);
     }
     let ncol = sresid.ncols();
 
@@ -485,7 +601,7 @@ pub fn cox_zph(
         if k.is_empty() || rows.is_empty() {
             continue;
         }
-        let vk = submatrix(&vmean, &k, &k);
+        let vk = vmean.select(Axis(0), &k).select(Axis(1), &k);
         if k.len() == 1 {
             for &g in &rows {
                 y[(g, k[0])] = sresid[(g, k[0])] / vk[(0, 0)];
@@ -536,50 +652,72 @@ pub fn cox_zph(
     })
 }
 
-/// `cox.zph(fit, transform, terms, singledf, global)`; `global_test` is
-/// R's `global` (a reserved word in Python) and `assign` lists the columns
-/// of each term.
+/// `cox.zph(fit, transform, terms, singledf, global)`; `fit` is a
+/// `CoxPHFit` or a `CoxpenalFit`, `transform` a name (default `"km"`) or a
+/// user function's values at the stop times, `global_test` is R's `global`
+/// (a reserved word in Python) and `assign` lists the columns of each term.
+#[cfg(feature = "python")]
 #[pyfunction(name = "cox_zph")]
-#[pyo3(signature = (fit, transform = "km", terms = true, singledf = false, global_test = true, assign = None))]
+#[pyo3(signature = (fit, transform = None, terms = true, singledf = false, global_test = true, assign = None))]
 pub fn cox_zph_py(
-    fit: &CoxPHFit,
-    transform: &str,
+    py: Python<'_>,
+    fit: &Bound<'_, PyAny>,
+    transform: Option<ZphTransform>,
     terms: bool,
     singledf: bool,
     global_test: bool,
     assign: Option<Vec<Vec<usize>>>,
 ) -> PyResult<CoxZph> {
-    Ok(cox_zph(
-        fit,
-        ZphTransform::parse(transform)?,
-        terms,
-        singledf,
-        global_test,
-        assign.as_deref(),
-    )?)
+    let (coxph, penalized);
+    let fit = if let Ok(fit) = fit.cast::<CoxpenalFit>() {
+        penalized = fit.borrow();
+        ZphFit::Penalized(&penalized)
+    } else {
+        coxph = fit
+            .cast::<CoxPHFit>()
+            .map_err(|_| PyTypeError::new_err("fit must be a CoxPHFit or a CoxpenalFit"))?
+            .borrow();
+        ZphFit::Coxph(&coxph)
+    };
+    let transform = transform.unwrap_or(ZphTransform::Km);
+    Ok(py.detach(|| {
+        cox_zph(
+            fit,
+            &transform,
+            terms,
+            singledf,
+            global_test,
+            assign.as_deref(),
+        )
+    })?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::regression::coxpenal::{
+        CoxpenalData, CoxpenalOptions, FrailtyFamily, ModelTerm, PenaltyTerm,
+    };
     use crate::regression::coxph::{CoxphData, CoxphOptions};
 
-    fn fitted(entry: bool, strata: bool) -> CoxPHFit {
-        let time = vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let start = vec![0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 1.0, 0.0, 3.0, 0.0];
-        let status = vec![1, 1, 1, 0, 1, 1, 0, 1, 1, 1];
-        let x = Array2::from_shape_vec(
+    const TIME: [f64; 10] = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    const START: [f64; 10] = [0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 1.0, 0.0, 3.0, 0.0];
+    const STATUS: [i32; 10] = [1, 1, 1, 0, 1, 1, 0, 1, 1, 1];
+    const X1: [f64; 10] = [0.0, 0.4, 0.8, 0.2, 1.0, 1.4, 0.6, 1.2, 1.6, 1.8];
+    const X2: [f64; 10] = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97];
+
+    /// The toy data with `shift` added to the first covariate.
+    fn fitted_shifted(entry: bool, strata: bool, shift: f64) -> CoxPHFit {
+        let x = Array2::from_shape_fn(
             (10, 2),
-            vec![
-                0.0, 0.2, 0.4, 0.16, 0.8, 0.62, 0.2, -0.07, 1.0, 0.95, 1.4, 0.61, 0.6, 0.49, 1.2,
-                0.68, 1.6, 1.24, 1.8, 0.97,
-            ],
-        )
-        .unwrap();
+            |(row, col)| {
+                if col == 0 { X1[row] + shift } else { X2[row] }
+            },
+        );
         let data = CoxphData::try_new(
-            time,
-            entry.then_some(start),
-            status,
+            TIME.to_vec(),
+            entry.then_some(START.to_vec()),
+            STATUS.to_vec(),
             x,
             None,
             strata.then_some(vec![0, 0, 0, 0, 0, 1, 1, 1, 1, 1]),
@@ -587,6 +725,36 @@ mod tests {
         )
         .unwrap();
         CoxPHFit::fit(data, CoxphOptions::default()).unwrap()
+    }
+
+    fn fitted(entry: bool, strata: bool) -> CoxPHFit {
+        fitted_shifted(entry, strata, 0.0)
+    }
+
+    fn zph(fit: &CoxPHFit, transform: &ZphTransform) -> CoxZph {
+        cox_zph(fit, transform, true, false, true, None).unwrap()
+    }
+
+    fn penalized_zph(fit: &CoxpenalFit) -> CoxZph {
+        cox_zph(fit, &ZphTransform::Km, true, false, true, None).unwrap()
+    }
+
+    fn chisqs(zph: &CoxZph) -> Vec<f64> {
+        zph.table
+            .iter()
+            .chain(&zph.global_test)
+            .map(|test| test.chisq)
+            .collect()
+    }
+
+    fn assert_rel(actual: &[f64], expected: &[f64], rtol: f64) {
+        assert_eq!(actual.len(), expected.len());
+        for (a, e) in actual.iter().zip(expected) {
+            assert!(
+                (a - e).abs() <= rtol * e.abs(),
+                "{actual:?} != {expected:?}"
+            );
+        }
     }
 
     #[test]
@@ -599,15 +767,15 @@ mod tests {
                 ZphTransform::Identity,
                 ZphTransform::Log,
             ] {
-                let zph = cox_zph(&fit, transform, true, false, true, None).unwrap();
+                let zph = zph(&fit, &transform);
                 assert_eq!(zph.table.len(), 2);
                 for test in &zph.table {
                     assert!(test.chisq >= 0.0, "{transform:?}: {}", test.chisq);
-                    assert_eq!(test.df, 1);
+                    assert_eq!(test.df, 1.0);
                     assert!((0.0..=1.0).contains(&test.p));
                 }
                 let global = zph.global_test.as_ref().unwrap();
-                assert_eq!(global.df, 2);
+                assert_eq!(global.df, 2.0);
                 assert!(global.chisq >= 0.0);
                 assert_eq!(zph.x.len(), fit.nevent);
                 assert_eq!(zph.y.len(), fit.nevent);
@@ -620,45 +788,273 @@ mod tests {
 
     #[test]
     fn km_transform_is_left_continuous() {
-        let fit = fitted(false, false);
-        let km = km_transform(&fit);
+        let km = km_transform(&TIME, None, &STATUS);
         // The first death time sees S(t-) = 1.
         assert_eq!(km[0], 0.0);
         assert!(km[1] > 0.0 && km[1] < 1.0);
         assert_eq!(km[1], km[2]);
         assert_eq!(
-            average_ranks(&[3.0, 1.0, 3.0, 2.0]),
+            rank_average(&[3.0, 1.0, 3.0, 2.0]),
             vec![3.5, 1.0, 3.5, 2.0]
         );
+    }
+
+    /// `1 - S(t-)` with the risk set counted from its definition,
+    /// `#{entry < t <= stop}`, at every distinct time.
+    fn km_transform_by_definition(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64> {
+        let mut times = time.to_vec();
+        times.sort_by(f64::total_cmp);
+        times.dedup();
+        let mut surv_before = Vec::with_capacity(times.len());
+        let mut surv = 1.0;
+        for &t in &times {
+            surv_before.push(surv);
+            let rows = 0..time.len();
+            let deaths = rows
+                .clone()
+                .filter(|&row| time[row] == t && status[row] == 1)
+                .count();
+            let nrisk = rows
+                .filter(|&row| time[row] >= t && entry.is_none_or(|entry| entry[row] < t))
+                .count() as f64;
+            if deaths > 0 {
+                surv *= (nrisk - deaths as f64) / nrisk;
+            }
+        }
+        time.iter()
+            .map(|t| 1.0 - surv_before[times.partition_point(|u| u < t)])
+            .collect()
+    }
+
+    #[test]
+    fn km_transform_counts_the_risk_set_like_its_definition() {
+        assert_eq!(
+            km_transform(&TIME, Some(&START), &STATUS),
+            km_transform_by_definition(&TIME, Some(&START), &STATUS)
+        );
+        // Heavily tied times, and entries that coincide with other rows'
+        // stops (not yet at risk there).
+        let n = 300;
+        let time: Vec<f64> = (0..n).map(|i| (1 + (i * 37) % 23) as f64).collect();
+        let entry: Vec<f64> = (0..n)
+            .map(|i| {
+                if i % 3 == 0 {
+                    0.0
+                } else {
+                    ((i * 11) % 29) as f64 % time[i]
+                }
+            })
+            .collect();
+        let status: Vec<i32> = (0..n).map(|i| i32::from(i % 4 != 1)).collect();
+        assert_eq!(
+            km_transform(&time, None, &status),
+            km_transform_by_definition(&time, None, &status)
+        );
+        assert_eq!(
+            km_transform(&time, Some(&entry), &status),
+            km_transform_by_definition(&time, Some(&entry), &status)
+        );
+    }
+
+    // R: d <- data.frame(time, start, status, x1, x2) as in `fitted_shifted`,
+    //    d$big <- d$x1 + 1e6
+    //    cox.zph(coxph(Surv(time, status) ~ big + x2, d))$table[, "chisq"]
+    //    cox.zph(coxph(Surv(start, time, status) ~ big + x2, d))$table[, "chisq"]
+    #[test]
+    fn a_large_covariate_mean_is_centred_away() {
+        let right = zph(&fitted_shifted(false, false, 1e6), &ZphTransform::Km);
+        assert_rel(
+            &chisqs(&right),
+            &[
+                0.0384689811357126,
+                0.003106708078431738,
+                0.08717811043355465,
+            ],
+            1e-8,
+        );
+        let counting = zph(&fitted_shifted(true, false, 1e6), &ZphTransform::Km);
+        assert_rel(
+            &chisqs(&counting),
+            &[0.005064211207604128, 0.3229318187886463, 0.5629667393851748],
+            1e-8,
+        );
+    }
+
+    #[test]
+    fn supplied_transform_values_feed_the_same_test() {
+        let fit = fitted(true, true);
+        let identity = zph(&fit, &ZphTransform::Identity);
+        let supplied = zph(&fit, &ZphTransform::Values(fit.time.clone()));
+        assert_eq!(chisqs(&supplied), chisqs(&identity));
+        assert_eq!(supplied.x, identity.x);
+        assert_eq!(supplied.transform, "user");
+        for bad in [vec![1.0; 3], {
+            let mut values = fit.time.clone();
+            values[4] = f64::NAN;
+            values
+        }] {
+            assert!(matches!(
+                cox_zph(&fit, &ZphTransform::Values(bad), true, false, true, None),
+                Err(SurvivalError::InvalidInput(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn penalty_matrix_reads_full_and_diagonal_second_derivatives() {
+        // column-major 3 x 3, restricted to coefficients 0 and 2
+        let full = [1.0, 2.0, 3.0, 2.0, 5.0, 6.0, 3.0, 6.0, 9.0];
+        assert_eq!(
+            penalty_matrix(&full, &[0, 2], 3).unwrap(),
+            ndarray::arr2(&[[1.0, 3.0], [3.0, 9.0]])
+        );
+        assert_eq!(
+            penalty_matrix(&[4.0, 5.0, 0.0], &[0, 1, 2], 3).unwrap(),
+            ndarray::arr2(&[[4.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 0.0]])
+        );
+        assert!(penalty_matrix(&[1.0, 2.0], &[0, 1, 2], 3).is_err());
+    }
+
+    /// `ridge(x1, x2, theta = 1)` on the toy data: one term, so `fit$df`
+    /// has one entry.
+    fn ridge_fit() -> CoxpenalFit {
+        let x = Array2::from_shape_fn((10, 2), |(row, col)| [X1, X2][col][row]);
+        let data = CoxpenalData::try_new(
+            CoxphData::try_new(TIME.to_vec(), None, STATUS.to_vec(), x, None, None, None).unwrap(),
+            vec![ModelTerm {
+                columns: vec![0, 1],
+                penalty: Some(PenaltyTerm::ridge(Some(1.0), None, 1e-5, false, None).unwrap()),
+            }],
+        )
+        .unwrap();
+        CoxpenalFit::fit(data, CoxpenalOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn penalized_df_follow_r_positional_rule() {
+        let fit = ridge_fit();
+        let joint_terms = [vec![0, 1]];
+        let by_term = cox_zph(
+            &fit,
+            &ZphTransform::Km,
+            true,
+            false,
+            true,
+            Some(&joint_terms),
+        )
+        .unwrap();
+        assert_eq!(by_term.table[0].df, fit.df[0]);
+        let global = by_term.global_test.as_ref().unwrap();
+        assert_eq!(global.df, fit.df[0]);
+        assert_eq!(global.p, pchisq(global.chisq, global.df, false, false));
+        // The penalty enters the information, so the tests change.
+        let unpenalized = cox_zph(
+            &fit.coxph,
+            &ZphTransform::Km,
+            true,
+            false,
+            true,
+            Some(&joint_terms),
+        )
+        .unwrap();
+        assert_ne!(chisqs(&by_term)[0], chisqs(&unpenalized)[0]);
+        // One row per coefficient: past the end of fit$df R reads NA.
+        let by_column = cox_zph(&fit, &ZphTransform::Km, false, false, false, None).unwrap();
+        assert_eq!(by_column.table[0].df, fit.df[0]);
+        assert!(by_column.table[1].df.is_nan() && by_column.table[1].p.is_nan());
+    }
+
+    /// `ridge(x1, theta = 1) + x2` with a sparse gamma frailty (theta 0.5)
+    /// over five pairs of the toy data as term `position`.
+    fn frailty_fit(position: usize) -> CoxpenalFit {
+        let mut columns = vec![X1, X2];
+        columns.insert(position, [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0]);
+        let x = Array2::from_shape_fn((10, 3), |(row, col)| columns[col][row]);
+        let frailty = PenaltyTerm::frailty(
+            FrailtyFamily::Gamma,
+            true,
+            Some(0.5),
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        let ridge = PenaltyTerm::ridge(Some(1.0), None, 1e-5, false, None).unwrap();
+        let x1 = usize::from(position == 0);
+        let terms = (0..3)
+            .map(|col| ModelTerm {
+                columns: vec![col],
+                penalty: if col == position {
+                    Some(frailty.clone())
+                } else if col == x1 {
+                    Some(ridge.clone())
+                } else {
+                    None
+                },
+            })
+            .collect();
+        let data = CoxpenalData::try_new(
+            CoxphData::try_new(TIME.to_vec(), None, STATUS.to_vec(), x, None, None, None).unwrap(),
+            terms,
+        )
+        .unwrap();
+        CoxpenalFit::fit(data, CoxpenalOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn a_sparse_frailty_keeps_its_df_away_from_the_tested_terms() {
+        let last = frailty_fit(2);
+        // The fit keeps the ridge's coxlist2, which R's coxpenal.fit drops
+        // beside a sparse term, so cox.zph adds no penalty.
+        assert!(last.coxlist2.is_some());
+        assert_eq!(ZphPenalty::from(&last).second, None);
+        let expected = penalized_zph(&last);
+        let df: Vec<f64> = expected.table.iter().map(|test| test.df).collect();
+        assert_eq!(df, last.df[..2]);
+        let global = expected.global_test.as_ref().unwrap();
+        assert_eq!(global.df, last.df.iter().sum::<f64>());
+        for position in [0, 1] {
+            let fit = frailty_fit(position);
+            let zph = penalized_zph(&fit);
+            let rows = zph.table.iter().chain(&zph.global_test);
+            for (row, want) in rows.zip(expected.table.iter().chain(&expected.global_test)) {
+                assert!((row.chisq - want.chisq).abs() < 1e-8, "{position}");
+                assert!((row.df - want.df).abs() < 1e-8, "{position}");
+            }
+        }
     }
 
     #[test]
     fn terms_collapse_multi_column_terms_onto_the_linear_predictor() {
         let fit = fitted(false, false);
+        let joint_terms = [vec![0, 1]];
         let joint = cox_zph(
             &fit,
-            ZphTransform::Km,
+            &ZphTransform::Km,
             true,
             false,
             true,
-            Some(&[vec![0, 1]]),
+            Some(&joint_terms),
         )
         .unwrap();
         assert_eq!(joint.table.len(), 1);
-        assert_eq!(joint.table[0].df, 2);
+        assert_eq!(joint.table[0].df, 2.0);
         assert_eq!(joint.y[0].len(), 1);
         let single = cox_zph(
             &fit,
-            ZphTransform::Km,
+            &ZphTransform::Km,
             true,
             true,
             false,
-            Some(&[vec![0, 1]]),
+            Some(&joint_terms),
         )
         .unwrap();
-        assert_eq!(single.table[0].df, 1);
+        assert_eq!(single.table[0].df, 1.0);
         assert!(single.global_test.is_none());
-        let global = cox_zph(&fit, ZphTransform::Km, true, false, true, None).unwrap();
+        let global = zph(&fit, &ZphTransform::Km);
         assert!((joint.table[0].chisq - global.global_test.unwrap().chisq).abs() < 1e-10);
     }
 }

@@ -71,6 +71,12 @@ def _imports(body: str) -> str:
 # Return-type overrides for symbols whose Rust source cannot be parsed (macro-generated).
 RETURN_OVERRIDES: dict[str, str] = {}
 
+# Parameter annotations the Rust types cannot express: a `&Bound<PyAny>` that the binding
+# casts to one of several classes, or a type with a hand-written `FromPyObject`.
+PARAM_OVERRIDES: dict[str, dict[str, str]] = {
+    "cox_zph": {"fit": "CoxPHFit | CoxpenalFit", "transform": "str | Sequence[float] | None"},
+}
+
 # Keys whose value is not a Python object we can annotate; the runtime tells us nothing.
 _SKIP_MEMBERS = {"__doc__", "__module__", "__new__", "__init__", "__hash__", "__eq__", "__ne__"}
 _DUNDER_METHODS = {
@@ -448,6 +454,14 @@ _ARRAY_NEWTYPES = {
     "BoolVec": ("ArrayLike", "NDArray[np.bool_]"),
     "FloatMatrix": ("ArrayLike", "NDArray[np.float64]"),
 }
+_NUMPY_ARRAYS = {
+    "PyReadonlyArray1",
+    "PyReadonlyArray2",
+    "PyReadonlyArray3",
+    "PyArray1",
+    "PyArray2",
+    "PyArray3",
+}
 _TRANSPARENT = {"PyResult", "SurvivalResult", "Result", "Box", "Arc", "Rc", "PyClassInitializer"}
 
 
@@ -481,12 +495,15 @@ def rust_to_python(rust: str, classes: dict[str, str], ctx: str, self_name: str 
             return "None"
         return f"tuple[{', '.join(sub(a) for a in args)}]"
     if ident == "[]":
+        # PyO3 reads a `&[u8]` argument from `bytes` only.
+        if ctx == "param" and args[0].strip() == "u8" and rust.lstrip().startswith("&"):
+            return "bytes"
         return f"list[{sub(args[0])}]"
     if ident in _SCALARS:
         return _SCALARS[ident]
     if ident in _ARRAY_NEWTYPES:
         return _ARRAY_NEWTYPES[ident][0 if ctx == "param" else 1]
-    if ident in {"PyReadonlyArray1", "PyReadonlyArray2", "PyArray1", "PyArray2"}:
+    if ident in _NUMPY_ARRAYS:
         dtype = {"f64": "np.float64", "f32": "np.float32", "i32": "np.int32", "i64": "np.int64"}
         elem = next((dtype[a] for a in args if a in dtype), "Any")
         return f"NDArray[{elem}]"
@@ -508,6 +525,8 @@ def rust_to_python(rust: str, classes: dict[str, str], ctx: str, self_name: str 
         return sub(args[-1])
     if ident in {"Py", "PyRef", "PyRefMut", "Bound"} and args:
         target, _ = _parse_type(args[-1])
+        if target in _NUMPY_ARRAYS:
+            return sub(args[-1])
         if target == "PyAny":
             return "Any"
         if target == "PyDict":
@@ -720,6 +739,8 @@ def _render_function(name, obj, rust_fn, class_names, missing_types) -> str:
     text = _text_signature(obj) or "(*args, **kwargs)"
     params = parse_text_signature(text)
     _annotate(params, rust_fn, class_names, None)
+    for param in params:
+        param.annotation = PARAM_OVERRIDES.get(name, {}).get(param.name, param.annotation)
     if name in RETURN_OVERRIDES:
         ret = RETURN_OVERRIDES[name]
     elif name.startswith("load_"):

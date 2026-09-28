@@ -7,12 +7,14 @@
 //! * `src/coxexact.c` — right-censored data, exact partial likelihood;
 //! * `src/agexact.c` — counting-process data, exact partial likelihood.
 //!
-//! The four share one iteration loop (`CoxFit::fit`) that follows the C
-//! sources' convergence and step-halving rules: `coxfit6`/`agfit4` halve
-//! ever more aggressively (`(newbeta + halving * beta) / (halving + 1)`) and
-//! accept convergence during halving with flag `-2`, while the exact fitters
-//! halve by `1/2`, never declare convergence mid-halving, and stop at
-//! `iter == maxiter` without a final step.
+//! `CoxFit::fit` follows each C source's convergence and step-halving
+//! rules.  `coxfit6` halves ever more aggressively (`(newbeta + halving *
+//! beta) / (halving + 1)`) and accepts convergence during halving with flag
+//! `-2`.  `agfit4` halves the same way but converges only after a full
+//! Newton step, and also halves when the rank of the information matrix
+//! changes or its diagonal is not finite.  The exact fitters halve by
+//! `1/2`, never declare convergence mid-halving, and stop at `iter ==
+//! maxiter` without a final step.
 //!
 //! Covariates are centred and scaled as the C code does (`doscale`), so the
 //! Newton steps are well conditioned; coefficients, the score vector and the
@@ -21,10 +23,12 @@
 //! order independent.
 
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
+use crate::core::risk_sweep::{RecenteredRiskSet, RiskSetSums, spans_a_death};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{chinv2, cholesky2, chsolve2};
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, ArrayView1};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use super::exact_ties::{ExactRiskAccumulator, exact_tied_moments};
 
@@ -34,13 +38,15 @@ use super::exact_ties::{ExactRiskAccumulator, exact_tied_moments};
 /// `Exact` behaves like `Breslow` (R's `coxmart2.c` for the exact fitters);
 /// the routines R refuses for an exact fit (score, Schoenfeld and detail
 /// output) reject it explicitly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum TieMethod {
     Breslow,
     Efron,
     Exact,
 }
+
+crate::internal::pickle::picklable!(TieMethod);
 
 impl TieMethod {
     /// Parses R's `ties` argument (case-insensitive); `None` is R's default,
@@ -102,6 +108,11 @@ pub(crate) struct CoxFitResults {
     /// while step halving, `1000` when the iteration budget ran out.
     pub flag: i32,
     pub iter: usize,
+    /// `agreg.fit`'s `info` for an `agfit4` fit: the rank of the information
+    /// matrix at the initial coefficients, the number of recentrings of the
+    /// risk scores, the number of step halvings, and 1 when the iterations
+    /// ran out.
+    pub info: Option<[i32; 4]>,
     /// Rows sorted by (stratum, time, original index); the order the
     /// residual kernels use.
     pub order: Vec<usize>,
@@ -271,7 +282,6 @@ impl CoxFitBuilder {
         let gather = |values: &Array1<f64>| Array1::from_iter(order.iter().map(|&i| values[i]));
         let time = gather(&self.time);
         let status = Array1::from_iter(order.iter().map(|&i| self.status[i]));
-        let entry_times = self.entry_times.as_ref().map(gather);
         let offset = self
             .offset
             .as_ref()
@@ -284,20 +294,32 @@ impl CoxFitBuilder {
         for (position, &row) in order.iter().enumerate() {
             covar.row_mut(position).assign(&self.covar.row(row));
         }
-        let entry_order = entry_times
-            .as_ref()
-            .map(|entry| entry_order_by_stratum(entry, &stratum_end));
+        let fitter = match (self.method, self.entry_times.as_ref().map(gather)) {
+            (TieMethod::Exact, None) => Fitter::Coxexact,
+            (TieMethod::Exact, Some(entry)) => Fitter::Agexact(entry),
+            (_, None) => Fitter::Coxfit6,
+            (_, Some(entry)) => Fitter::Agfit4 {
+                walk: AgWalk::new(
+                    entry.as_slice().expect("contiguous"),
+                    time.as_slice().expect("contiguous"),
+                    status.as_slice().expect("contiguous"),
+                    &stratum_end,
+                ),
+                risk_set: RecenteredRiskSet::new(nvar),
+            },
+        };
 
         let mut fit = CoxFit {
-            time,
-            status,
-            entry_times,
-            entry_order,
-            covar,
-            stratum_end: Array1::from_vec(stratum_end),
-            offset,
-            weights,
-            method: self.method,
+            data: CoxData {
+                time,
+                status,
+                covar,
+                stratum_end: Array1::from_vec(stratum_end),
+                offset,
+                weights,
+                efron: self.method == TieMethod::Efron,
+            },
+            fitter,
             max_iter: self.max_iter,
             eps: self.eps,
             toler: self.toler,
@@ -310,6 +332,7 @@ impl CoxFitBuilder {
             sctest: 0.0,
             flag: 0,
             iter: 0,
+            info: None,
             order,
         };
         fit.scale_center(&doscale);
@@ -317,69 +340,275 @@ impl CoxFitBuilder {
     }
 }
 
-/// Per stratum, rows ordered by decreasing entry time (ties by decreasing
-/// position), the `sort1` order of `agfit4.c`.
-fn entry_order_by_stratum(entry_times: &Array1<f64>, stratum_end: &[i32]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..entry_times.len()).collect();
-    let mut start = 0;
-    for end in 0..stratum_end.len() {
-        if stratum_end[end] != 1 {
-            continue;
-        }
-        order[start..=end].sort_by(|&lhs, &rhs| {
-            entry_times[rhs]
-                .total_cmp(&entry_times[lhs])
-                .then_with(|| rhs.cmp(&lhs))
-        });
-        start = end + 1;
-    }
-    order
+/// `agfit4.c`'s walk over (start, stop] data: per stratum, the rows at risk
+/// at one or more of its death times (`agreg.fit`'s `!ignore`, see
+/// [`spans_a_death`]) by decreasing stop time, ties in data order
+/// (`agreg.fit`'s `sort.end`), and by decreasing entry time, ties in the
+/// stop-time order.
+struct AgWalk {
+    by_stop: Vec<Joining>,
+    /// The same rows with their entry times.
+    by_entry: Vec<(f64, usize)>,
+    /// `[start, end)` of each stratum in both orders.
+    bounds: Vec<(usize, usize)>,
 }
 
-/// A Cox model ready to iterate: sorted, centred and scaled data plus the
-/// current state of the Newton iteration.
-pub(crate) struct CoxFit {
+impl AgWalk {
+    /// `entry`, `time`, `status` and `stratum_end` are in sorted row order.
+    fn new(entry: &[f64], time: &[f64], status: &[i32], stratum_end: &[i32]) -> Self {
+        let n = time.len();
+        let positions: Vec<usize> = (0..n).collect();
+        let mut by_stop = Vec::with_capacity(n);
+        let mut by_entry = Vec::with_capacity(n);
+        let mut bounds = Vec::new();
+        let mut start = 0;
+        for end in 0..n {
+            if stratum_end[end] != 1 {
+                continue;
+            }
+            let spans = spans_a_death(&positions[start..=end], time, entry, status);
+            let first = by_stop.len();
+            // Positions are sorted by (time, data row): walk the tied blocks
+            // from the last, each in position order.
+            let mut block_end = end + 1;
+            while block_end > start {
+                let mut block_start = block_end - 1;
+                while block_start > start && time[block_start - 1] == time[block_end - 1] {
+                    block_start -= 1;
+                }
+                by_stop.extend(
+                    (block_start..block_end)
+                        .filter(|&p| spans[p - start])
+                        .map(|row| Joining {
+                            row,
+                            time: time[row],
+                            death: status[row] == 1,
+                        }),
+                );
+                block_end = block_start;
+            }
+            let leaving = by_entry.len();
+            by_entry.extend(by_stop[first..].iter().map(|j| (entry[j.row], j.row)));
+            by_entry[leaving..].sort_by(|l, r| r.0.total_cmp(&l.0));
+            bounds.push((first, by_stop.len()));
+            start = end + 1;
+        }
+        Self {
+            by_stop,
+            by_entry,
+            bounds,
+        }
+    }
+}
+
+/// A row of [`AgWalk::by_stop`]: its sorted position, stop time and
+/// whether it is a death.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Joining {
+    row: usize,
+    time: f64,
+    death: bool,
+}
+
+/// The C fitter the data and tie method select.
+enum Fitter {
+    Coxfit6,
+    /// With its walk over the rows and its running risk set.
+    Agfit4 {
+        walk: AgWalk,
+        risk_set: RecenteredRiskSet,
+    },
+    Coxexact,
+    /// With the entry times, in sorted row order.
+    Agexact(Array1<f64>),
+}
+
+impl Fitter {
+    /// `agfit4`'s recentrings of the risk scores so far.
+    fn rescales(&self) -> Option<i32> {
+        match self {
+            Self::Agfit4 { risk_set, .. } => Some(risk_set.rescales),
+            _ => None,
+        }
+    }
+}
+
+/// The sorted, centred and scaled data of a Cox model: what one evaluation
+/// of the partial likelihood reads.
+struct CoxData {
     time: Array1<f64>,
     status: Array1<i32>,
-    entry_times: Option<Array1<f64>>,
-    entry_order: Option<Vec<usize>>,
     covar: Array2<f64>,
     /// `1` on the last row of each stratum (the C `strata` convention).
     stratum_end: Array1<i32>,
     offset: Array1<f64>,
     weights: Array1<f64>,
-    method: TieMethod,
+    efron: bool,
+}
+
+/// A Cox model ready to iterate: the data plus the current state of the
+/// Newton iteration.
+pub(crate) struct CoxFit {
+    data: CoxData,
+    fitter: Fitter,
     max_iter: usize,
     eps: f64,
     toler: f64,
     scale: Vec<f64>,
     means: Vec<f64>,
     beta: Vec<f64>,
+    /// Score left by the last evaluation.
     u: Vec<f64>,
+    /// Information matrix (upper triangle) left by the last evaluation.
     imat: Array2<f64>,
     loglik: [f64; 2],
     sctest: f64,
     flag: i32,
     iter: usize,
+    info: Option<[i32; 4]>,
     order: Vec<usize>,
 }
 
-fn add_risk_sums(
-    covar: &Array2<f64>,
-    person: usize,
-    risk: f64,
-    denom: &mut f64,
-    a: &mut [f64],
-    cmat: &mut Array2<f64>,
-) {
-    *denom += risk;
-    for i in 0..a.len() {
-        let risk_covar_i = risk * covar[(person, i)];
-        a[i] += risk_covar_i;
-        for j in 0..=i {
-            cmat[(i, j)] += risk_covar_i * covar[(person, j)];
+/// The running risk set `agfit4`'s walk drives; a row is named by its
+/// sorted position.
+trait AgRiskSet {
+    fn clear(&mut self);
+    fn add(&mut self, person: usize, x: &[f64]) -> SurvivalResult<()>;
+    fn remove(&mut self, person: usize, x: &[f64]);
+    /// The weighted risk score of a row in the set.
+    fn risk(&self, person: usize) -> f64;
+    /// The constant the risk scores' linear predictors are taken from.
+    fn recenter(&self) -> f64;
+    fn sums(&self) -> &RiskSetSums;
+}
+
+/// The risk set while its centre stays at zero: `w exp(eta)` per row.
+struct CentredAtZero<'a> {
+    sums: RiskSetSums,
+    risk: Vec<f64>,
+    weights: &'a Array1<f64>,
+}
+
+impl AgRiskSet for CentredAtZero<'_> {
+    fn clear(&mut self) {
+        self.sums.clear();
+    }
+
+    fn add(&mut self, person: usize, x: &[f64]) -> SurvivalResult<()> {
+        self.sums.add(self.weights[person], self.risk[person], x);
+        Ok(())
+    }
+
+    fn remove(&mut self, person: usize, x: &[f64]) {
+        self.sums.remove(self.weights[person], self.risk[person], x);
+    }
+
+    fn risk(&self, person: usize) -> f64 {
+        self.risk[person]
+    }
+
+    fn recenter(&self) -> f64 {
+        0.0
+    }
+
+    fn sums(&self) -> &RiskSetSums {
+        &self.sums
+    }
+}
+
+/// The general risk set, recentred as agfit4.c does.
+struct Recentred<'a> {
+    set: &'a mut RecenteredRiskSet,
+    eta: &'a [f64],
+    weights: &'a Array1<f64>,
+}
+
+impl AgRiskSet for Recentred<'_> {
+    fn clear(&mut self) {
+        self.set.clear();
+    }
+
+    fn add(&mut self, person: usize, x: &[f64]) -> SurvivalResult<()> {
+        self.set.add(self.eta[person], self.weights[person], x)
+    }
+
+    fn remove(&mut self, person: usize, x: &[f64]) {
+        self.set.remove(self.eta[person], self.weights[person], x);
+    }
+
+    fn risk(&self, person: usize) -> f64 {
+        self.set.risk(self.eta[person], self.weights[person])
+    }
+
+    fn recenter(&self) -> f64 {
+        self.set.recenter
+    }
+
+    fn sums(&self) -> &RiskSetSums {
+        &self.set.sums
+    }
+}
+
+/// `u += w x`.
+fn add_scaled(u: &mut [f64], w: f64, x: &[f64]) {
+    for (u, &x) in u.iter_mut().zip(x) {
+        *u += w * x;
+    }
+}
+
+/// `sum w / sum w |x|` over `rows` of a centred column, 1 for a constant
+/// column: the `coxfit6.c` and `agfit4.c` scale.
+fn mean_abs_scale(
+    weights: &Array1<f64>,
+    column: ArrayView1<'_, f64>,
+    rows: impl Iterator<Item = usize>,
+) -> f64 {
+    let (weight, abs_sum) = rows.fold((0.0, 0.0), |(weight, abs_sum), person| {
+        (
+            weight + weights[person],
+            abs_sum + weights[person] * column[person].abs(),
+        )
+    });
+    if abs_sum > 0.0 { weight / abs_sum } else { 1.0 }
+}
+
+/// One death time's Breslow or Efron contribution (`coxfit6.c`,
+/// `agfit4.c`), given the sums over its risk set, deaths included, and over
+/// its `d` tied deaths.  Efron's `j`-th term (`j = 0..d`) sees the deaths
+/// down-weighted by `j/d`.  Subtracts the risk-set means from the score,
+/// adds the information to the upper triangle of `imat` (all `cholesky2`
+/// reads) and returns the `-log(denominator)` part of the log likelihood;
+/// the deaths' own `w eta` and `w x` terms are the caller's.
+fn death_time_update(
+    efron: bool,
+    risk_set: &RiskSetSums,
+    tied: &RiskSetSums,
+    u: &mut [f64],
+    imat: &mut Array2<f64>,
+) -> f64 {
+    let nvar = u.len();
+    let ndead = tied.count;
+    let steps = if efron { ndead } else { 1 };
+    let wtave = tied.weight / steps as f64;
+    let (cmat, cmat2) = (&risk_set.cmat, &tied.cmat);
+    let imat = imat.as_slice_mut().expect("standard layout");
+    let mut loglik = 0.0;
+    for j in 0..steps {
+        let fraction = j as f64 / ndead as f64;
+        let sum = |all: f64, deaths: f64| if j == 0 { all } else { all - fraction * deaths };
+        let denom = sum(risk_set.denom, tied.denom);
+        loglik -= wtave * denom.ln();
+        for i in 0..nvar {
+            let mean = sum(risk_set.a[i], tied.a[i]) / denom;
+            u[i] -= wtave * mean;
+            for k in 0..=i {
+                let second = sum(cmat[i * nvar + k], cmat2[i * nvar + k]);
+                let first = sum(risk_set.a[k], tied.a[k]);
+                imat[k * nvar + i] += wtave * ((second - mean * first) / denom);
+            }
         }
     }
+    loglik
 }
 
 /// Adds one death time's exact-likelihood contribution given the conditional
@@ -441,94 +670,23 @@ fn add_exact_event_contribution(
     )
 }
 
-impl CoxFit {
-    /// Centres and scales the covariate columns in place the way each C
-    /// fitter does, so that the Newton iterates (and hence iteration counts
-    /// and step halving) follow R:
-    ///
-    /// * `coxfit6.c`: weighted mean, scale `sum w / sum w |x - mean|`;
-    /// * `agfit4.c`: per-stratum weighted mean, the same overall scale;
-    ///   `agreg.fit` then reports the unweighted column means;
-    /// * `coxexact.fit`: R's `scale()`, mean and standard deviation;
-    /// * `agexact.c`: mean only.
-    fn scale_center(&mut self, doscale: &[bool]) {
+impl CoxData {
+    /// The covariate row of each sorted position.
+    fn rows<'a>(&'a self) -> impl Fn(usize) -> &'a [f64] + 'a {
         let nvar = self.covar.ncols();
-        let nused = self.covar.nrows();
-        let counting = self.entry_times.is_some();
-        let exact = self.method == TieMethod::Exact;
-        let total_weight: f64 = self.weights.sum();
-        for (i, &scale_column) in doscale.iter().enumerate().take(nvar) {
-            if !scale_column {
-                self.means[i] = 0.0;
-                self.scale[i] = 1.0;
-                continue;
-            }
-            let plain_mean = self.covar.column(i).sum() / nused as f64;
-            let weighted_mean = (0..nused)
-                .map(|person| self.weights[person] * self.covar[(person, i)])
-                .sum::<f64>()
-                / total_weight;
-            if counting && !exact {
-                // agfit4.c centres within each stratum.
-                let mut start = 0;
-                for end in 0..nused {
-                    if self.stratum_end[end] != 1 {
-                        continue;
-                    }
-                    let weight: f64 = (start..=end).map(|p| self.weights[p]).sum();
-                    let mean = (start..=end)
-                        .map(|p| self.weights[p] * self.covar[(p, i)])
-                        .sum::<f64>()
-                        / weight;
-                    for p in start..=end {
-                        self.covar[(p, i)] -= mean;
-                    }
-                    start = end + 1;
-                }
-                self.means[i] = plain_mean;
-            } else {
-                let mean = if exact { plain_mean } else { weighted_mean };
-                for person in 0..nused {
-                    self.covar[(person, i)] -= mean;
-                }
-                self.means[i] = mean;
-            }
-            let scale = match (exact, counting) {
-                (true, true) => 1.0,
-                (true, false) => {
-                    let sd =
-                        (self.covar.column(i).mapv(|v| v * v).sum() / (nused as f64 - 1.0)).sqrt();
-                    if sd > 0.0 { 1.0 / sd } else { 1.0 }
-                }
-                (false, _) => {
-                    let abs_sum: f64 = (0..nused)
-                        .map(|person| self.weights[person] * self.covar[(person, i)].abs())
-                        .sum();
-                    if abs_sum > 0.0 {
-                        total_weight / abs_sum
-                    } else {
-                        1.0
-                    }
-                }
-            };
-            for person in 0..nused {
-                self.covar[(person, i)] *= scale;
-            }
-            self.scale[i] = scale;
-        }
-        for (beta, &scale) in self.beta.iter_mut().zip(&self.scale) {
-            *beta /= scale;
-        }
+        let covar = self.covar.as_slice().expect("row-major covariates");
+        move |person| &covar[person * nvar..(person + 1) * nvar]
     }
 
     fn linear_predictors(&self, beta: &[f64]) -> Vec<f64> {
+        let row = self.rows();
         (0..self.covar.nrows())
             .map(|person| {
                 self.offset[person]
                     + beta
                         .iter()
-                        .enumerate()
-                        .fold(0.0, |sum, (i, &b)| sum + b * self.covar[(person, i)])
+                        .zip(row(person))
+                        .fold(0.0, |sum, (&b, &x)| sum + b * x)
             })
             .collect()
     }
@@ -544,12 +702,136 @@ impl CoxFit {
         (eta, log_risk)
     }
 
+    /// `coxfit6_iter`: the log likelihood, score and information for
+    /// right-censored data with Breslow or Efron ties.  The risk set grows
+    /// from the largest time downwards.
+    fn coxfit6(&self, beta: &[f64], u: &mut [f64], imat: &mut Array2<f64>) -> f64 {
+        let row = self.rows();
+        let eta = self.linear_predictors(beta);
+        let mut risk_set = RiskSetSums::zeros(self.covar.ncols(), true);
+        let mut tied = risk_set.clone();
+        let mut loglik = 0.0;
+        let mut person = self.time.len();
+        while person > 0 {
+            if self.stratum_end[person - 1] == 1 {
+                risk_set.clear();
+            }
+            let time = self.time[person - 1];
+            // Tied times do not cross strata.
+            loop {
+                person -= 1;
+                let (weight, x) = (self.weights[person], row(person));
+                let risk = eta[person].exp() * weight;
+                risk_set.add(weight, risk, x);
+                if self.status[person] != 0 {
+                    tied.add(weight, risk, x);
+                    loglik += weight * eta[person];
+                    add_scaled(u, weight, x);
+                }
+                if person == 0 || self.stratum_end[person - 1] == 1 || self.time[person - 1] != time
+                {
+                    break;
+                }
+            }
+            if tied.count > 0 {
+                loglik += death_time_update(self.efron, &risk_set, &tied, u, imat);
+                tied.clear();
+            }
+        }
+        loglik
+    }
+
+    /// `agfit4.c`'s accumulation loop for (start, stop] data.  Per stratum,
+    /// one running risk set walks the death times from the largest down:
+    /// first the rows that entered at or after the death time leave, then
+    /// the rows whose stop time is at or after it join (see
+    /// [`RecenteredRiskSet`]).  agfit4.c moves the centre of the risk scores
+    /// only when the mean linear predictor of a risk set lies more than 200
+    /// from it, so while every linear predictor lies within 199 of zero the
+    /// centre stays at zero and the risk scores are computed up front.
+    fn agfit4(
+        &self,
+        beta: &[f64],
+        walk: &AgWalk,
+        risk_set: &mut RecenteredRiskSet,
+        u: &mut [f64],
+        imat: &mut Array2<f64>,
+    ) -> SurvivalResult<f64> {
+        let eta = self.linear_predictors(beta);
+        if eta.iter().all(|eta| eta.abs() < 199.0) {
+            let centred = CentredAtZero {
+                sums: RiskSetSums::zeros(self.covar.ncols(), true),
+                risk: eta
+                    .iter()
+                    .zip(self.weights.iter())
+                    .map(|(eta, weight)| eta.exp() * weight)
+                    .collect(),
+                weights: &self.weights,
+            };
+            self.agfit4_walk(walk, &eta, centred, u, imat)
+        } else {
+            risk_set.restart();
+            let recentred = Recentred {
+                set: risk_set,
+                eta: &eta,
+                weights: &self.weights,
+            };
+            self.agfit4_walk(walk, &eta, recentred, u, imat)
+        }
+    }
+
+    /// The walk of [`CoxData::agfit4`] with the running risk set `risk_set`.
+    /// The deaths' `eta` terms are taken relative to the set's centre, which
+    /// therefore cancels.
+    fn agfit4_walk(
+        &self,
+        walk: &AgWalk,
+        eta: &[f64],
+        mut risk_set: impl AgRiskSet,
+        u: &mut [f64],
+        imat: &mut Array2<f64>,
+    ) -> SurvivalResult<f64> {
+        let row = self.rows();
+        let mut tied = RiskSetSums::zeros(self.covar.ncols(), true);
+        let mut loglik = 0.0;
+        for &(start, end) in &walk.bounds {
+            risk_set.clear();
+            let (by_stop, by_entry) = (&walk.by_stop[start..end], &walk.by_entry[start..end]);
+            let (mut joined, mut left) = (0, 0);
+            // The next death time is the stop time of the first death among
+            // the rows still to join; its deaths are among the last rows to
+            // join at it.
+            while let Some(next) = by_stop[joined..].iter().position(|j| j.death) {
+                let first_death = joined + next;
+                let time = by_stop[first_death].time;
+                while left < by_entry.len() && by_entry[left].0 >= time {
+                    let person = by_entry[left].1;
+                    risk_set.remove(person, row(person));
+                    left += 1;
+                }
+                while joined < by_stop.len() && by_stop[joined].time >= time {
+                    let person = by_stop[joined].row;
+                    risk_set.add(person, row(person))?;
+                    joined += 1;
+                }
+                tied.clear();
+                for joining in by_stop[first_death..joined].iter().filter(|j| j.death) {
+                    let person = joining.row;
+                    let (weight, x) = (self.weights[person], row(person));
+                    tied.add(weight, risk_set.risk(person), x);
+                    loglik += weight * (eta[person] - risk_set.recenter());
+                    add_scaled(u, weight, x);
+                }
+                loglik += death_time_update(self.efron, risk_set.sums(), &tied, u, imat);
+            }
+        }
+        Ok(loglik)
+    }
+
     /// `coxexact.c`: exact partial likelihood for right-censored data.  The
     /// risk set grows from the largest time downwards; a single death uses
     /// the running moments, tied deaths the subset dynamic programme.
-    fn iterate_right_censored_exact(&mut self, beta: &[f64]) -> f64 {
-        self.u.fill(0.0);
-        self.imat.fill(0.0);
+    fn coxexact(&self, beta: &[f64], u: &mut [f64], imat: &mut Array2<f64>) -> f64 {
         let (linear_predictors, log_risk) = self.exact_predictors(beta);
         let mut loglik = 0.0;
         let mut stratum_start = 0usize;
@@ -585,8 +867,8 @@ impl CoxFit {
                         apply_exact_event_moments(
                             &self.covar,
                             &self.weights,
-                            &mut self.u,
-                            &mut self.imat,
+                            u,
+                            imat,
                             &death_indices,
                             &linear_predictors,
                             singleton_moments.log_denom,
@@ -597,8 +879,8 @@ impl CoxFit {
                         add_exact_event_contribution(
                             &self.covar,
                             &self.weights,
-                            &mut self.u,
-                            &mut self.imat,
+                            u,
+                            imat,
                             &death_indices,
                             &risk_indices,
                             &linear_predictors,
@@ -621,12 +903,13 @@ impl CoxFit {
     /// gathered afresh, which keeps the conditional moments exact even when
     /// risk scores span many orders of magnitude; the cost is
     /// `O(deaths * n)` per evaluation, as in R.
-    fn iterate_counting_process_exact(&mut self, beta: &[f64]) -> f64 {
-        let Some(entry_times) = self.entry_times.as_ref() else {
-            return self.iterate_right_censored_exact(beta);
-        };
-        self.u.fill(0.0);
-        self.imat.fill(0.0);
+    fn agexact(
+        &self,
+        beta: &[f64],
+        entry_times: &Array1<f64>,
+        u: &mut [f64],
+        imat: &mut Array2<f64>,
+    ) -> f64 {
         let (linear_predictors, log_risk) = self.exact_predictors(beta);
         let mut loglik = 0.0;
         let mut stratum_start = 0usize;
@@ -660,8 +943,8 @@ impl CoxFit {
                         apply_exact_event_moments(
                             &self.covar,
                             &self.weights,
-                            &mut self.u,
-                            &mut self.imat,
+                            u,
+                            imat,
                             &death_indices,
                             &linear_predictors,
                             moments.log_denom,
@@ -672,8 +955,8 @@ impl CoxFit {
                         add_exact_event_contribution(
                             &self.covar,
                             &self.weights,
-                            &mut self.u,
-                            &mut self.imat,
+                            u,
+                            imat,
                             &death_indices,
                             &risk_indices,
                             &linear_predictors,
@@ -690,282 +973,86 @@ impl CoxFit {
         }
         loglik
     }
+}
 
-    /// `coxfit6_iter`: one evaluation of the log likelihood, score and
-    /// information for right-censored data with Breslow or Efron ties.
-    fn iterate_right_censored(&mut self, beta: &[f64]) -> f64 {
-        let nvar = self.covar.ncols();
-        let nused = self.covar.nrows();
-        let method = self.method;
-        self.u.fill(0.0);
-        self.imat.fill(0.0);
-        let mut a = vec![0.0; nvar];
-        let mut a2 = vec![0.0; nvar];
-        let mut cmat = Array2::zeros((nvar, nvar));
-        let mut cmat2 = Array2::zeros((nvar, nvar));
-        let mut loglik = 0.0;
-        let mut denom = 0.0;
-        let zbeta = self.linear_predictors(beta);
-        let risk: Vec<f64> = zbeta
-            .iter()
-            .zip(self.weights.iter())
-            .map(|(&zb, &w)| zb.exp() * w)
-            .collect();
-
-        let mut person = nused as isize - 1;
-        while person >= 0 {
-            let person_idx = person as usize;
-            if self.stratum_end[person_idx] == 1 {
-                a.fill(0.0);
-                cmat.fill(0.0);
-                denom = 0.0;
-            }
-            let dtime = self.time[person_idx];
-            let mut ndead = 0;
-            let mut deadwt = 0.0;
-            let mut denom2 = 0.0;
-            while person >= 0 && self.time[person as usize] == dtime {
-                let p = person as usize;
-                if self.status[p] == 0 {
-                    add_risk_sums(&self.covar, p, risk[p], &mut denom, &mut a, &mut cmat);
-                } else {
-                    ndead += 1;
-                    deadwt += self.weights[p];
-                    loglik += self.weights[p] * zbeta[p];
-                    for i in 0..nvar {
-                        self.u[i] += self.weights[p] * self.covar[(p, i)];
-                    }
-                    add_risk_sums(&self.covar, p, risk[p], &mut denom2, &mut a2, &mut cmat2);
-                }
-                person -= 1;
-                if person >= 0 && self.stratum_end[person as usize] == 1 {
-                    break;
-                }
-            }
-            if ndead > 0 {
-                if method == TieMethod::Breslow || ndead == 1 {
-                    denom += denom2;
-                    loglik -= deadwt * denom.ln();
-                    for i in 0..nvar {
-                        a[i] += a2[i];
-                        let temp = a[i] / denom;
-                        self.u[i] -= deadwt * temp;
-                        for j in 0..=i {
-                            cmat[(i, j)] += cmat2[(i, j)];
-                            let val = deadwt * (cmat[(i, j)] - temp * a[j]) / denom;
-                            self.imat[(j, i)] += val;
-                            if i != j {
-                                self.imat[(i, j)] += val;
-                            }
-                        }
-                    }
-                } else {
-                    let death_count = ndead as f64;
-                    let risk_fraction = denom2 / death_count;
-                    let weight_average = deadwt / death_count;
-                    for _ in 0..ndead {
-                        denom += risk_fraction;
-                        loglik -= weight_average * denom.ln();
-                        for i in 0..nvar {
-                            a[i] += a2[i] / death_count;
-                            let temp = a[i] / denom;
-                            self.u[i] -= weight_average * temp;
-                            for j in 0..=i {
-                                cmat[(i, j)] += cmat2[(i, j)] / death_count;
-                                let val = weight_average * (cmat[(i, j)] - temp * a[j]) / denom;
-                                self.imat[(j, i)] += val;
-                                if i != j {
-                                    self.imat[(i, j)] += val;
-                                }
-                            }
-                        }
-                    }
-                }
-                a2.fill(0.0);
-                cmat2.fill(0.0);
-            }
-        }
-        loglik
-    }
-
-    /// `agfit4.c`'s accumulation loop for (start, stop] data: rows enter the
-    /// risk-set sums from the largest stop time downwards and the rows whose
-    /// entry time is at or after the current death time are subtracted.
-    fn iterate_counting_process(&mut self, beta: &[f64]) -> f64 {
-        let Some(entry_times) = self.entry_times.as_ref() else {
-            return self.iterate_right_censored(beta);
-        };
-        let entry_order = self
-            .entry_order
-            .as_deref()
-            .expect("entry order accompanies counting-process entry times");
-        let nvar = self.covar.ncols();
-        let nused = self.covar.nrows();
-        let method = self.method;
-        self.u.fill(0.0);
-        self.imat.fill(0.0);
-        let zbeta = self.linear_predictors(beta);
-        let risk: Vec<f64> = zbeta
-            .iter()
-            .zip(self.weights.iter())
-            .map(|(&zb, &w)| zb.exp() * w)
-            .collect();
-
-        let mut loglik = 0.0;
-        let mut stratum_start = 0usize;
-        let mut death_a = vec![0.0; nvar];
-        let mut death_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
-        let mut event_a = vec![0.0; nvar];
-        let mut event_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
-        for stratum_end in 0..nused {
-            if self.stratum_end[stratum_end] != 1 {
+impl CoxFit {
+    /// Centres and scales the covariate columns in place the way each C
+    /// fitter does, so that the Newton iterates (and hence iteration counts
+    /// and step halving) follow R:
+    ///
+    /// * `coxfit6.c`: weighted mean, scale `sum w / sum w |x - mean|`;
+    /// * `agfit4.c`: the value of the first row of its walk (its per-stratum
+    ///   mean loop subtracts inside the loop body, so only the first value
+    ///   is ever used) and the same kind of scale over the rows it walks;
+    ///   `agreg.fit` then reports the unweighted column means;
+    /// * `coxexact.fit`: R's `scale()`, mean and standard deviation;
+    /// * `agexact.c`: mean only.
+    fn scale_center(&mut self, doscale: &[bool]) {
+        let CoxData {
+            ref mut covar,
+            ref weights,
+            ..
+        } = self.data;
+        let fitter = &self.fitter;
+        let nused = covar.nrows();
+        let total_weight: f64 = weights.sum();
+        for (i, &scale_column) in doscale.iter().enumerate() {
+            if !scale_column {
+                self.means[i] = 0.0;
+                self.scale[i] = 1.0;
                 continue;
             }
-            let start_order = &entry_order[stratum_start..=stratum_end];
-            let mut stop_denom = 0.0;
-            let mut stop_a = vec![0.0; nvar];
-            let mut stop_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
-            let mut unentered_denom = 0.0;
-            let mut unentered_a = vec![0.0; nvar];
-            let mut unentered_cmat: Array2<f64> = Array2::zeros((nvar, nvar));
-            let mut stop_ptr = stratum_end as isize;
-            let mut start_ptr = 0usize;
-            let mut time_end = stratum_end;
-
-            loop {
-                let event_time = self.time[time_end];
-                while stop_ptr >= stratum_start as isize
-                    && self.time[stop_ptr as usize] >= event_time
-                {
-                    let person = stop_ptr as usize;
-                    add_risk_sums(
-                        &self.covar,
-                        person,
-                        risk[person],
-                        &mut stop_denom,
-                        &mut stop_a,
-                        &mut stop_cmat,
-                    );
-                    stop_ptr -= 1;
+            let plain_mean = covar.column(i).sum() / nused as f64;
+            let (center, mean) = match fitter {
+                Fitter::Coxfit6 => {
+                    let weighted_mean = (0..nused)
+                        .map(|person| weights[person] * covar[(person, i)])
+                        .sum::<f64>()
+                        / total_weight;
+                    (weighted_mean, weighted_mean)
                 }
-                while start_ptr < start_order.len()
-                    && entry_times[start_order[start_ptr]] >= event_time
-                {
-                    let person = start_order[start_ptr];
-                    add_risk_sums(
-                        &self.covar,
-                        person,
-                        risk[person],
-                        &mut unentered_denom,
-                        &mut unentered_a,
-                        &mut unentered_cmat,
-                    );
-                    start_ptr += 1;
+                Fitter::Agfit4 { walk, .. } => (
+                    walk.by_stop
+                        .first()
+                        .map_or(0.0, |first| covar[(first.row, i)]),
+                    plain_mean,
+                ),
+                Fitter::Coxexact | Fitter::Agexact(_) => (plain_mean, plain_mean),
+            };
+            covar.column_mut(i).mapv_inplace(|value| value - center);
+            self.means[i] = mean;
+            let column = covar.column(i);
+            let scale = match fitter {
+                Fitter::Coxfit6 => mean_abs_scale(weights, column, 0..nused),
+                Fitter::Agfit4 { walk, .. } => {
+                    mean_abs_scale(weights, column, walk.by_stop.iter().map(|j| j.row))
                 }
-
-                let mut time_start = time_end;
-                while time_start > stratum_start && self.time[time_start - 1] == event_time {
-                    time_start -= 1;
+                Fitter::Coxexact => {
+                    let sd = (column.mapv(|v| v * v).sum() / (nused as f64 - 1.0)).sqrt();
+                    if sd > 0.0 { 1.0 / sd } else { 1.0 }
                 }
-
-                let mut ndead = 0usize;
-                let mut deadwt = 0.0;
-                let mut denom2 = 0.0;
-                death_a.fill(0.0);
-                death_cmat.fill(0.0);
-                for person in time_start..=time_end {
-                    if self.status[person] == 0 {
-                        continue;
-                    }
-                    ndead += 1;
-                    deadwt += self.weights[person];
-                    loglik += self.weights[person] * zbeta[person];
-                    add_risk_sums(
-                        &self.covar,
-                        person,
-                        risk[person],
-                        &mut denom2,
-                        &mut death_a,
-                        &mut death_cmat,
-                    );
-                    for i in 0..nvar {
-                        self.u[i] += self.weights[person] * self.covar[(person, i)];
-                    }
-                }
-
-                if ndead > 0 {
-                    let denom = stop_denom - unentered_denom;
-                    for i in 0..nvar {
-                        event_a[i] = stop_a[i] - unentered_a[i];
-                        for j in 0..=i {
-                            event_cmat[(i, j)] = stop_cmat[(i, j)] - unentered_cmat[(i, j)];
-                        }
-                    }
-                    if method == TieMethod::Breslow || ndead == 1 {
-                        loglik -= deadwt * denom.ln();
-                        for i in 0..nvar {
-                            let temp = event_a[i] / denom;
-                            self.u[i] -= deadwt * temp;
-                            for j in 0..=i {
-                                let val = deadwt * (event_cmat[(i, j)] - temp * event_a[j]) / denom;
-                                self.imat[(j, i)] += val;
-                                if i != j {
-                                    self.imat[(i, j)] += val;
-                                }
-                            }
-                        }
-                    } else {
-                        let death_count = ndead as f64;
-                        let risk_fraction = denom2 / death_count;
-                        let weight_average = deadwt / death_count;
-                        let mut efron_denom = denom - denom2;
-                        for i in 0..nvar {
-                            event_a[i] -= death_a[i];
-                            for j in 0..=i {
-                                event_cmat[(i, j)] -= death_cmat[(i, j)];
-                            }
-                        }
-                        for _ in 0..ndead {
-                            efron_denom += risk_fraction;
-                            loglik -= weight_average * efron_denom.ln();
-                            for i in 0..nvar {
-                                event_a[i] += death_a[i] / death_count;
-                                let temp = event_a[i] / efron_denom;
-                                self.u[i] -= weight_average * temp;
-                                for j in 0..=i {
-                                    event_cmat[(i, j)] += death_cmat[(i, j)] / death_count;
-                                    let val = weight_average
-                                        * (event_cmat[(i, j)] - temp * event_a[j])
-                                        / efron_denom;
-                                    self.imat[(j, i)] += val;
-                                    if i != j {
-                                        self.imat[(i, j)] += val;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if time_start == stratum_start {
-                    break;
-                }
-                time_end = time_start - 1;
-            }
-            stratum_start = stratum_end + 1;
+                Fitter::Agexact(_) => 1.0,
+            };
+            covar.column_mut(i).mapv_inplace(|value| value * scale);
+            self.scale[i] = scale;
         }
-        loglik
+        for (beta, &scale) in self.beta.iter_mut().zip(&self.scale) {
+            *beta /= scale;
+        }
     }
 
     /// Evaluates the log likelihood at `beta`, leaving the score in `u` and
-    /// the information matrix in `imat`.
-    fn iterate(&mut self, beta: &[f64]) -> f64 {
-        match (self.method, self.entry_times.is_some()) {
-            (TieMethod::Exact, false) => self.iterate_right_censored_exact(beta),
-            (TieMethod::Exact, true) => self.iterate_counting_process_exact(beta),
-            (_, false) => self.iterate_right_censored(beta),
-            (_, true) => self.iterate_counting_process(beta),
-        }
+    /// the information matrix (upper triangle) in `imat`.
+    fn evaluate(&mut self, beta: &[f64]) -> SurvivalResult<f64> {
+        self.u.fill(0.0);
+        self.imat.fill(0.0);
+        let (data, u, imat) = (&self.data, &mut self.u, &mut self.imat);
+        Ok(match &mut self.fitter {
+            Fitter::Coxfit6 => data.coxfit6(beta, u, imat),
+            Fitter::Agfit4 { walk, risk_set } => data.agfit4(beta, walk, risk_set, u, imat)?,
+            Fitter::Coxexact => data.coxexact(beta, u, imat),
+            Fitter::Agexact(entry) => data.agexact(beta, entry, u, imat),
+        })
     }
 
     /// Inverts the factored information matrix and returns coefficients,
@@ -991,21 +1078,19 @@ impl CoxFit {
     }
 
     /// Runs the Newton-Raphson iteration (`coxfit6`, `agfit4`, `coxexact`,
-    /// `agexact`).  Never fails: a singular information matrix zeroes the
-    /// redundant directions (`cholesky2`/`chsolve2`) and an exhausted
-    /// iteration budget is reported through `flag == 1000`, exactly as R
-    /// does.
-    pub(crate) fn fit(&mut self) {
+    /// `agexact`).  A singular information matrix zeroes the redundant
+    /// directions (`cholesky2`/`chsolve2`) and an exhausted iteration budget
+    /// is reported through `flag == 1000`, exactly as R does; the one error
+    /// is `agfit4`'s overflow of the risk scores.
+    pub(crate) fn fit(&mut self) -> SurvivalResult<()> {
         let nvar = self.beta.len();
-        let exact = self.method == TieMethod::Exact;
-        let counting = self.entry_times.is_some();
         let beta0 = self.beta.clone();
         self.iter = 0;
-        self.loglik[0] = self.iterate(&beta0);
+        self.loglik[0] = self.evaluate(&beta0)?;
         self.loglik[1] = self.loglik[0];
         if nvar == 0 {
             self.flag = 0;
-            return;
+            return Ok(());
         }
 
         let mut a = self.u.clone();
@@ -1015,19 +1100,37 @@ impl CoxFit {
 
         if self.max_iter == 0 || !self.loglik[0].is_finite() {
             self.finish_inverse();
-            if exact && counting {
-                // agexact.c returns flag 0 when no iterations were requested.
+            // agexact.c returns flag 0 when no iterations were requested.
+            if matches!(self.fitter, Fitter::Agexact(_)) {
                 self.flag = 0;
             }
-            return;
+            self.info = self
+                .fitter
+                .rescales()
+                .map(|rescales| [self.flag, rescales, 0, 0]);
+            return Ok(());
         }
+        let newbeta = self.beta.iter().zip(&a).map(|(b, a)| b + a).collect();
+        if matches!(self.fitter, Fitter::Agfit4 { .. }) {
+            self.iterate_agfit4(newbeta, a)
+        } else {
+            self.iterate(newbeta, a)
+        }
+    }
 
-        let mut newbeta: Vec<f64> = self.beta.iter().zip(&a).map(|(b, a)| b + a).collect();
+    /// The Newton iteration of `coxfit6.c`, `coxexact.c` and `agexact.c`
+    /// from the first trial `newbeta`; `a` is scratch for the steps.
+    fn iterate(&mut self, mut newbeta: Vec<f64>, mut a: Vec<f64>) -> SurvivalResult<()> {
+        let (exact, counting) = match self.fitter {
+            Fitter::Coxexact => (true, false),
+            Fitter::Agexact(_) => (true, true),
+            _ => (false, false),
+        };
         let mut halving = 0usize;
         let mut newlk = self.loglik[1];
         for iter in 1..=self.max_iter {
             self.iter = iter;
-            newlk = self.iterate(&newbeta);
+            newlk = self.evaluate(&newbeta)?;
             self.flag = cholesky2(&mut self.imat, self.toler);
             let finite = self.state_is_finite(newlk);
             if finite
@@ -1040,7 +1143,7 @@ impl CoxFit {
                 if !exact && halving > 0 {
                     self.flag = -2;
                 }
-                return;
+                return Ok(());
             }
             if exact && iter == self.max_iter {
                 break;
@@ -1070,18 +1173,83 @@ impl CoxFit {
         // coxexact.c when only one iteration was allowed ("if maxiter = 0 or
         // 1, leave well enough alone"); otherwise coxfit6.c and coxexact.c go
         // back to the last accepted coefficients and refit the information
-        // there (coxexact.c omits the Cholesky factorisation before
-        // inverting, which is a bug this port does not copy).
+        // there (both omit the Cholesky factorisation before inverting, a bug
+        // this port does not copy).  coxfit6.c's loop counter ends one past
+        // `maxiter`.
         if exact && (counting || self.max_iter <= 1) {
             self.loglik[1] = newlk;
             self.beta.copy_from_slice(&newbeta);
         } else if self.max_iter > 1 {
             let beta = self.beta.clone();
-            self.loglik[1] = self.iterate(&beta);
+            self.loglik[1] = self.evaluate(&beta)?;
             self.flag = cholesky2(&mut self.imat, self.toler);
+        }
+        if !exact {
+            self.iter = self.max_iter + 1;
         }
         self.finish_inverse();
         self.flag = 1000;
+        Ok(())
+    }
+
+    /// `agfit4.c`'s Newton iteration from the first trial `trial`; `step` is
+    /// scratch for the steps.  A step fails when the log likelihood or a
+    /// diagonal element of the information is not finite or the rank of the
+    /// information differs from its rank at the initial coefficients; the
+    /// fit converges only after a full step, and when the iterations run
+    /// out it keeps the last trial unless that is worse than the best by
+    /// more than `eps`.
+    fn iterate_agfit4(&mut self, mut trial: Vec<f64>, mut step: Vec<f64>) -> SurvivalResult<()> {
+        let rank = self.flag;
+        let (mut halving, mut halvings) = (0, 0);
+        let mut ran_out = false;
+        let mut newlk = self.loglik[1];
+        for iter in 1..=self.max_iter {
+            self.iter = iter;
+            newlk = self.evaluate(&trial)?;
+            let infinite = self.imat.diag().iter().filter(|v| !v.is_finite()).count();
+            let rank2 = cholesky2(&mut self.imat, self.toler);
+            let fail = infinite + usize::from(!newlk.is_finite()) + rank.abs_diff(rank2) as usize;
+            if fail == 0 && halving == 0 && (1.0 - self.loglik[1] / newlk).abs() <= self.eps {
+                break;
+            }
+            if iter == self.max_iter {
+                ran_out = true;
+                if self.max_iter > 1 && (newlk - self.loglik[1]) / self.loglik[1].abs() < -self.eps
+                {
+                    trial.copy_from_slice(&self.beta);
+                    newlk = self.evaluate(&trial)?;
+                    cholesky2(&mut self.imat, self.toler);
+                }
+                break;
+            }
+            if fail > 0 || newlk < self.loglik[1] {
+                halving += 1;
+                halvings += 1;
+                let h = f64::from(halving);
+                for (new, old) in trial.iter_mut().zip(&self.beta) {
+                    *new = (old * h + *new) / (h + 1.0);
+                }
+            } else {
+                halving = 0;
+                self.loglik[1] = newlk;
+                step.copy_from_slice(&self.u);
+                chsolve2(&self.imat, &mut step);
+                self.beta.copy_from_slice(&trial);
+                for (new, s) in trial.iter_mut().zip(&step) {
+                    *new += s;
+                }
+            }
+        }
+        self.beta = trial;
+        self.loglik[1] = newlk;
+        self.finish_inverse();
+        self.flag = if ran_out { 1000 } else { rank };
+        self.info = self
+            .fitter
+            .rescales()
+            .map(|rescales| [rank, rescales, halvings, i32::from(ran_out)]);
+        Ok(())
     }
 
     pub(crate) fn results(self) -> CoxFitResults {
@@ -1094,6 +1262,7 @@ impl CoxFit {
             sctest: self.sctest,
             flag: self.flag,
             iter: self.iter,
+            info: self.info,
             order: self.order,
         }
     }
@@ -1179,7 +1348,7 @@ mod tests {
             .method(TieMethod::Efron)
             .build()
             .unwrap();
-            engine.fit();
+            engine.fit().unwrap();
             engine.results()
         };
         let unsorted = fit(&(0..8).collect::<Vec<_>>());
@@ -1202,7 +1371,7 @@ mod tests {
         .build()
         .expect("default-stratum exact fit should initialize");
 
-        fit.fit();
+        fit.fit().unwrap();
         let results = fit.results();
         assert!(results.loglik[0] < 0.0);
         assert!(results.score[0].is_finite());
@@ -1224,7 +1393,7 @@ mod tests {
             .eps(1e-5)
             .build()
             .unwrap();
-        fit.fit();
+        fit.fit().unwrap();
         let results = fit.results();
 
         let mut evaluation = CoxFitBuilder::new(time, status, covar)
@@ -1232,7 +1401,7 @@ mod tests {
             .initial_beta(results.coefficients)
             .build()
             .unwrap();
-        evaluation.fit();
+        evaluation.fit().unwrap();
         assert!((evaluation.results().loglik[0] - results.loglik[1]).abs() < 1e-12);
     }
 
@@ -1252,16 +1421,18 @@ mod tests {
             .eps(1e-12)
             .build()
             .unwrap();
-        fit.fit();
+        fit.fit().unwrap();
         let results = fit.results();
         assert_eq!(results.flag, 1000);
+        // coxfit6.c's loop counter ends one past iter.max.
+        assert_eq!(results.iter, 3);
 
         let mut evaluation = CoxFitBuilder::new(time, status, covar)
             .max_iter(0)
             .initial_beta(results.coefficients)
             .build()
             .unwrap();
-        evaluation.fit();
+        evaluation.fit().unwrap();
         let evaluated = evaluation.results();
         assert!((evaluated.loglik[0] - results.loglik[1]).abs() < 1e-12);
         for i in 0..2 {
@@ -1295,7 +1466,7 @@ mod tests {
             .max_iter(1)
             .build()
             .unwrap();
-        fit.fit();
+        fit.fit().unwrap();
         let results = fit.results();
 
         assert_eq!(results.iter, 1);
@@ -1335,7 +1506,7 @@ mod tests {
             .toler(1e-8)
             .build()
             .unwrap();
-            cox.fit();
+            cox.fit().unwrap();
             let results = cox.results();
             assert!(results.coefficients[0].is_finite());
             assert!(results.var[(0, 0)].is_finite());
@@ -1344,23 +1515,48 @@ mod tests {
     }
 
     #[test]
-    fn counting_process_entry_order_is_precomputed_per_stratum_with_index_ties() {
+    fn agfit4_walks_rows_by_decreasing_stop_and_entry_time() {
         let fit = counting_process_order_fixture();
         assert_eq!(fit.order, vec![0, 1, 2, 3, 4, 5]);
+        let Fitter::Agfit4 { walk, .. } = &fit.fitter else {
+            panic!("a counting-process Efron fit is agfit4's");
+        };
+        assert_eq!(walk.bounds, vec![(0, 3), (3, 6)]);
+        let rows = |walk: &AgWalk| walk.by_stop.iter().map(|j| j.row).collect::<Vec<_>>();
+        assert_eq!(rows(walk), vec![2, 1, 0, 5, 4, 3]);
+        // Entry ties (1.5 twice, 2.0 twice) keep the stop-time order.
         assert_eq!(
-            fit.entry_order.as_deref(),
-            Some([2, 1, 0, 5, 3, 4].as_slice())
+            walk.by_entry,
+            vec![(1.5, 2), (1.5, 1), (0.5, 0), (2.0, 5), (2.0, 3), (0.25, 4)]
         );
+
+        // A row spanning no death time is left out of both walks.
+        let fit = CoxFitBuilder::new(
+            Array1::from_vec(vec![2.0, 3.0, 2.5, 4.0]),
+            Array1::from_vec(vec![1, 0, 0, 1]),
+            Array2::from_shape_vec((4, 1), vec![0.1, 0.2, 0.3, 0.4]).unwrap(),
+        )
+        .entry_times(Array1::from_vec(vec![0.0, 2.2, 2.0, 1.0]))
+        .method(TieMethod::Breslow)
+        .build()
+        .unwrap();
+        let Fitter::Agfit4 { walk, .. } = &fit.fitter else {
+            panic!("a counting-process Breslow fit is agfit4's");
+        };
+        // Sorted positions: 0 = row 0 (2.0], 1 = row 2 (2.0, 2.5],
+        // 2 = row 1 (2.2, 3.0], 3 = row 3 (1.0, 4.0].
+        assert_eq!(rows(walk), vec![3, 0]);
+        assert_eq!(walk.by_entry, vec![(1.0, 3), (0.0, 0)]);
     }
 
     #[test]
     fn counting_process_evaluation_is_deterministic() {
         let mut fit = counting_process_order_fixture();
         let beta = [0.2, -0.15];
-        let first_loglik = fit.iterate(&beta);
+        let first_loglik = fit.evaluate(&beta).unwrap();
         let first_score = fit.u.clone();
         let first_information = fit.imat.clone();
-        let second_loglik = fit.iterate(&beta);
+        let second_loglik = fit.evaluate(&beta).unwrap();
         assert_eq!(second_loglik, first_loglik);
         assert_eq!(fit.u, first_score);
         assert_eq!(fit.imat, first_information);
@@ -1384,7 +1580,7 @@ mod tests {
             .toler(1e-12)
             .build()
             .unwrap();
-        fit.fit();
+        fit.fit().unwrap();
         let results = fit.results();
 
         assert_eq!(results.flag, 2);
@@ -1414,10 +1610,320 @@ mod tests {
         )
         .build()
         .unwrap();
-        fit.fit();
+        fit.fit().unwrap();
         let results = fit.results();
         assert!(results.coefficients.is_empty());
         assert!((results.loglik[0] - (-(3.0_f64.ln()) - 2.0_f64.ln())).abs() < 1e-12);
         assert_eq!(results.iter, 0);
+    }
+
+    /// Counting-process data of the form `(entry, time]` with two
+    /// covariates given row by row.
+    fn counting_builder(time: &[f64], entry: &[f64], status: &[i32], x: &[f64]) -> CoxFitBuilder {
+        CoxFitBuilder::new(
+            Array1::from_vec(time.to_vec()),
+            Array1::from_vec(status.to_vec()),
+            Array2::from_shape_vec((time.len(), 2), x.to_vec()).unwrap(),
+        )
+        .entry_times(Array1::from_vec(entry.to_vec()))
+    }
+
+    const CASE_1520_TIME: [f64; 11] =
+        [15.0, 4.0, 25.0, 8.0, 18.0, 6.0, 9.0, 14.0, 11.0, 64.0, 19.0];
+    const CASE_1520_ENTRY: [f64; 11] = [9.0, 2.0, 5.0, 1.0, 14.0, 3.0, 7.0, 6.0, 3.0, 39.0, 2.0];
+    const CASE_1520_STATUS: [i32; 11] = [1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1];
+    const CASE_1520_X: [f64; 22] = [
+        -3.397587783734524,
+        -1.2399609396099633,
+        -4.001456275604981,
+        -0.9612195837228918,
+        1.2485501179741572,
+        -0.36802848351666784,
+        -1.922243349085923,
+        -0.29505277170923994,
+        -0.6191833991904704,
+        -0.432759419947449,
+        0.9541844726560894,
+        3.636570321763567,
+        0.9722226187833938,
+        -1.5241526403027048,
+        -2.083451024212451,
+        1.3906982107759198,
+        -0.557594058080056,
+        1.1836246992905952,
+        -6.582305367737362,
+        2.3943458650099303,
+        0.9175209607015593,
+        -1.2770581196683075,
+    ];
+
+    fn case_1520() -> CoxFitBuilder {
+        counting_builder(
+            &CASE_1520_TIME,
+            &CASE_1520_ENTRY,
+            &CASE_1520_STATUS,
+            &CASE_1520_X,
+        )
+    }
+
+    #[test]
+    fn agfit4_keeps_full_precision_when_risk_scores_span_many_magnitudes() {
+        // R 3.8-12, agreg.fit: coxph(Surv(entry, time, status) ~ x1 + x2,
+        // init = init, timefix = FALSE).
+        let init = vec![-0.10734736591853931, 0.5817618903234776];
+        for method in [TieMethod::Efron, TieMethod::Breslow] {
+            let mut fit = case_1520()
+                .method(method)
+                .initial_beta(init.clone())
+                .build()
+                .unwrap();
+            fit.fit().unwrap();
+            let results = fit.results();
+            assert_eq!(results.iter, 7);
+            assert_eq!(results.flag, 2);
+            assert_eq!(results.info, Some([2, 0, 0, 0]));
+            for (actual, expected) in results
+                .coefficients
+                .iter()
+                .zip([-2.7295106722, 2.39104660699])
+            {
+                assert!((actual - expected).abs() < 1e-9, "{actual} vs {expected}");
+            }
+            assert!((results.loglik[0] - -6.73608164457).abs() < 1e-10);
+            assert!((results.loglik[1] - -2.02753429303).abs() < 1e-10);
+        }
+        let mut at_r = case_1520()
+            .method(TieMethod::Efron)
+            .initial_beta(vec![-2.729510672, 2.391046607])
+            .max_iter(0)
+            .build()
+            .unwrap();
+        at_r.fit().unwrap();
+        assert!((at_r.results().loglik[0] - -2.02753429303384).abs() < 1e-12);
+    }
+
+    #[test]
+    fn agfit4_recentres_the_risk_scores_so_offsets_cancel() {
+        // R 3.8-12, agreg.fit with offset 0 and -750 (init 0): the centre of
+        // the risk scores moves 9 times and the fit is the offset-free one,
+        // (-2.72951067339449, 2.39104660779831) after 8 iterations.
+        let mut fit = case_1520()
+            .method(TieMethod::Efron)
+            .offset(Array1::from_elem(11, -750.0))
+            .build()
+            .unwrap();
+        fit.fit().unwrap();
+        let results = fit.results();
+        assert_eq!(results.iter, 8);
+        assert_eq!(results.info, Some([2, 9, 0, 0]));
+        for (actual, expected) in results
+            .coefficients
+            .iter()
+            .zip([-2.72951067339457, 2.39104660779839])
+        {
+            assert!((actual - expected).abs() < 1e-11, "{actual} vs {expected}");
+        }
+        assert!((results.loglik[0] - -7.78322401633604).abs() < 1e-11);
+        assert!((results.loglik[1] - -2.02753429303382).abs() < 1e-11);
+    }
+
+    #[test]
+    fn agfit4_never_converges_while_step_halving() {
+        // R 3.8-12: the coefficients run off to infinity, iter 20,
+        // info = (2, 26, 2, 1), loglik -7.44594093298 -> -5.09e-07.
+        let time = [43.0, 7.0, 2.0, 1.0, 13.0, 3.0, 41.0, 4.0, 10.0];
+        let entry = [28.0, 6.0, 1.0, 0.0, 4.0, 0.0, 31.0, 1.0, 5.0];
+        let x = [
+            0.055792698117579004,
+            -1.7304770998879826,
+            -1.3617180976588907,
+            -0.9673886866286651,
+            0.8665565328654526,
+            0.9626229915832482,
+            0.25602914821193906,
+            -0.9861502050896039,
+            -0.3219648826811489,
+            0.2535879462914172,
+            3.191390489555803,
+            2.1186597213685254,
+            -0.6752767149783483,
+            -3.530622409131793,
+            1.538739604857286,
+            1.4570505303916683,
+            0.8826048048813887,
+            0.8028742413755462,
+        ];
+        let mut fit = counting_builder(&time, &entry, &[1; 9], &x)
+            .method(TieMethod::Efron)
+            .initial_beta(vec![-1.7291049186754255, -1.9022957381326357])
+            .build()
+            .unwrap();
+        fit.fit().unwrap();
+        let results = fit.results();
+        assert_eq!(results.iter, 20);
+        assert_eq!(results.flag, 1000);
+        assert_eq!(results.info, Some([2, 26, 2, 1]));
+        assert!((results.loglik[0] - -7.44594093298).abs() < 1e-10);
+        assert!(results.loglik[1] > -1e-5 && results.loglik[1] < 0.0);
+        assert!(results.coefficients[0] > 100.0 && results.coefficients[1] < -200.0);
+    }
+
+    #[test]
+    fn agfit4_stops_on_an_overflow_of_the_risk_scores_like_r() {
+        // R 3.8-12 stops with "exp overflow due to covariates".
+        let time = [
+            4.0, 9.0, 3.0, 18.0, 1.0, 13.0, 17.0, 3.0, 19.0, 7.0, 19.0, 16.0, 1.0, 4.0, 28.0, 2.0,
+            9.0, 9.0, 10.0, 4.0, 30.0, 2.0, 11.0, 6.0, 18.0, 2.0, 1.0, 9.0, 1.0, 7.0, 3.0, 7.0,
+            29.0, 30.0, 6.0,
+        ];
+        let entry = [
+            0.0, 3.0, 0.0, 0.0, 0.0, 6.0, 14.0, 2.0, 7.0, 3.0, 12.0, 8.0, 0.0, 2.0, 19.0, 1.0, 1.0,
+            7.0, 1.0, 0.0, 24.0, 0.0, 1.0, 3.0, 10.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 5.0, 9.0, 14.0,
+            2.0,
+        ];
+        let status = [
+            0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1,
+            1, 1, 0, 0, 1, 1,
+        ];
+        let x = [
+            3.6165533269227357,
+            -0.4879961376492757,
+            -0.07374622784398623,
+            -3.4507779043965923,
+            1.6358656834944607,
+            -0.8598919210443141,
+            -1.628034953476259,
+            3.044605832130217,
+            -0.1381907769240786,
+            -2.290022336297825,
+            -5.169547312611223,
+            -1.2426684167216626,
+            3.3797074865680248,
+            0.6998353670379976,
+            -0.9738348201398073,
+            -1.4788787564880854,
+            -1.1408907245660664,
+            -2.449214977809486,
+            2.977876199920989,
+            -0.5818949605748973,
+            0.3239725741127991,
+            4.027702794420345,
+            4.526175051724141,
+            0.4359046589960573,
+            -0.843288251132816,
+            4.678555461786062,
+            0.2663470996748524,
+            1.292766192793381,
+            2.5523899200933173,
+            -0.7906935015141873,
+            -3.443563059344763,
+            1.9884475813699718,
+            2.9034185242739685,
+            -1.4551660130081876,
+            -3.6622036738115136,
+            -2.4905286981434718,
+            -3.01730333128785,
+            1.214847903113503,
+            -3.2548423663121304,
+            1.2155411367063176,
+            3.999558195625989,
+            1.0942043157770942,
+            -3.4069257920971605,
+            -4.734540598859402,
+            -6.436541308269048,
+            0.19070655020480456,
+            0.6682351070805835,
+            3.5491378111610317,
+            0.9147200886960943,
+            -6.385859270136145,
+            -1.1551436516541982,
+            1.6647006754981148,
+            -0.22948718455017655,
+            -1.0099375772708195,
+            -0.15953077748546501,
+            -0.42787448803560046,
+            1.2554503602389138,
+            -0.04548069174472863,
+            0.7710867253472405,
+            -2.8163031265829344,
+            -2.178341021716092,
+            2.5274301278230458,
+            -0.015919602663027263,
+            -4.6923141276901745,
+            -0.018512404298677402,
+            4.250801466919925,
+            -0.8491604697861556,
+            -1.1548651559308794,
+            2.5756076923351796,
+            2.5733307079845056,
+        ];
+        for method in [TieMethod::Efron, TieMethod::Breslow] {
+            let mut fit = counting_builder(&time, &entry, &status, &x)
+                .method(method)
+                .initial_beta(vec![-7.291479784304963, 0.7249413356562676])
+                .build()
+                .unwrap();
+            let error = fit.fit().unwrap_err();
+            assert_eq!(error.to_string(), "exp overflow due to covariates");
+        }
+    }
+
+    /// survSplit-style data: subject `i` is followed in unit intervals up
+    /// to `1 + 53 i mod 97`, dies there unless `i` is a multiple of 3, and
+    /// has the time-varying covariate `z = x_i (t - 1) / 5` with
+    /// `x_i = (37 i mod 101) / 50`.
+    fn split_data() -> CoxFitBuilder {
+        let (mut time, mut entry, mut status, mut z) = (vec![], vec![], vec![], vec![]);
+        for i in 0..120 {
+            let x = ((i * 37) % 101) as f64 / 50.0;
+            let last = 1 + (i * 53) % 97;
+            for t in 1..=last {
+                entry.push(f64::from(t - 1));
+                time.push(f64::from(t));
+                status.push(i32::from(i % 3 != 0 && t == last));
+                z.push(x * f64::from(t - 1) / 5.0);
+            }
+        }
+        let n = time.len();
+        CoxFitBuilder::new(
+            Array1::from_vec(time),
+            Array1::from_vec(status),
+            Array2::from_shape_vec((n, 1), z).unwrap(),
+        )
+        .entry_times(Array1::from_vec(entry))
+    }
+
+    #[test]
+    fn agfit4_log_likelihood_of_survsplit_data_matches_r() {
+        // R 3.8-12: coxph(Surv(start, stop, status) ~ z, init = beta,
+        // iter.max = 0, timefix = FALSE)$loglik[1] on the 5769 rows.
+        let expected = [
+            (0.5, -478.751116295908, -478.888803621125),
+            (1.0, -743.829243873272, -743.94983459056),
+            (2.0, -1321.85189636427, -1321.94656960294),
+        ];
+        // An offset of -750 cancels from the likelihood but takes the walk
+        // that recentres the risk scores.
+        for (beta, efron, breslow) in expected {
+            for (method, value) in [(TieMethod::Efron, efron), (TieMethod::Breslow, breslow)] {
+                for offset in [0.0, -750.0] {
+                    let builder = split_data();
+                    let n = builder.time.len();
+                    let mut fit = builder
+                        .method(method)
+                        .initial_beta(vec![beta])
+                        .offset(Array1::from_elem(n, offset))
+                        .max_iter(0)
+                        .build()
+                        .unwrap();
+                    fit.fit().unwrap();
+                    let loglik = fit.results().loglik[0];
+                    assert!(
+                        (loglik - value).abs() < 1e-9,
+                        "{method:?} beta {beta} offset {offset}: {loglik}"
+                    );
+                }
+            }
+        }
     }
 }

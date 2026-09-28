@@ -13,10 +13,12 @@ Rust fit behind the result (``coefficients``, ``var``, ``means``, ``loglik``, ``
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
+import warnings
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .. import _survival as _core
@@ -32,34 +34,42 @@ from ._coerce import (
     _materialize_1d,
     _materialize_labels,
     _missing_row_indices,
-    _mstate_categories,
     _normalize_bool_option,
     _normalize_na_action,
+    _r_factor_levels,
     _scalar_or_vector,
     _subset_indices,
     _subset_sequence,
 )
+from ._coxph import _coxph_model_frame, _has_strata, _prediction_newdata, survfit_coxph
+from ._coxphms import CoxphmsModel
 from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
     _column,
     _column_or_values,
     _column_source,
-    _combined_columns,
+    _covariate_term_columns,
     _covariate_term_name,
     _design_rows_from_spec,
     _design_term_output_names,
     _formula_columns,
-    _offset_vector,
     _parse_formula,
+    _strata_keep,
+    _strata_term_columns,
     _subset_formula_inputs,
     _term_values,
+    _timeline_counting,
+    _timeline_response,
 )
-from ._models import coef, model_formula, model_frame, vcov
-from ._surv import Surv, _subset_surv
+from ._models import _plain_model_frame, coef, model_formula, vcov
+from ._names import _make_names_unique, _make_unique
+from ._penalties import _combine_basis, _pspline_boundary, _pspline_cbase, _pspline_combine
+from ._surv import Surv, _complete_codes, _subset_surv
 from ._types import (
     _MISSING,
     BrierResult,
+    CoxSurvfitResult,
     PsplineResult,
     StateFigResult,
     SurvCheckCodes,
@@ -119,19 +129,6 @@ def _call_column(fit: Any, name: str, newdata: Any, n: int) -> list[Any] | None:
     if len(values) != n:
         raise ValueError(f"wrong length for {name}")
     return values
-
-
-def _r_factor_levels(values: Sequence[Any]) -> list[Any]:
-    """The levels ``as.factor`` gives ``values``: R factor levels when present, else sorted."""
-
-    categories = _mstate_categories(values)
-    present = {value for value in values if not _is_missing_value(value)}
-    if categories is not None:
-        return [level for level in _materialize_1d(categories, "levels") if level in present]
-    try:
-        return sorted(present)
-    except TypeError:
-        return sorted(present, key=str)
 
 
 def _unique_in_order(values: Sequence[Any]) -> list[Any]:
@@ -322,12 +319,12 @@ def nsk(
     intercept: Any = False,
     b: Any = 0.05,
     Boundary_knots: Any = _MISSING,
-) -> Any:
+) -> _core.SplineBasisResult:
     """Natural spline basis whose coefficients are the values at the knots (R's ``nsk``).
 
     ``Boundary_knots`` is R's ``Boundary.knots``: the ``b``/``1 - b`` quantiles of ``x`` by
     default, ``True`` for the range of ``x``, ``False``/``None`` for the outer ``knots``.  Missing
-    ``x`` values give rows of ``NaN``.  Returns the Rust ``SplineBasisResult``.
+    ``x`` values give rows of ``NaN``.
     """
 
     x_values = _numeric_or_nan(x, "x")
@@ -372,25 +369,6 @@ def _pspline_method(
     if df_value > nterm_value:
         raise ValueError(f"`nterm' too small for df={df_value:g}")
     return df_value, None, nterm_value, 0.1 if eps_value is None else eps_value, "df"
-
-
-def _pspline_combine(matrix: list[list[float]], combine: Any, intercept: bool) -> list[int]:
-    """R's ``combine`` argument: add up the basis columns with equal ``combine`` codes."""
-
-    codes = _float_vector(combine, "combine")
-    if any(c != math.floor(c) or c < 0 for c in codes) or any(
-        b < a for a, b in zip(codes, codes[1:], strict=False)
-    ):
-        raise ValueError("combine must be an increasing vector of positive integers")
-    ctemp = [int(c) for c in codes] if intercept else [0, *(int(c) for c in codes)]
-    if len(ctemp) != len(matrix[0]):
-        raise ValueError("wrong length for combine")
-    groups = sorted(set(ctemp))
-    for row_idx, row in enumerate(matrix):
-        matrix[row_idx] = [
-            sum(v for v, c in zip(row, ctemp, strict=True) if c == g) for g in groups
-        ]
-    return [int(c) for c in codes]
 
 
 def _second_difference_penalty(nvar: int) -> list[list[float]]:
@@ -438,27 +416,24 @@ def pspline(
         raise ValueError("x must contain at least one non-missing value")
     if nterm_value < 3:
         raise ValueError("Too few basis functions")
-    if boundary_arg is None:
-        boundary = (min(observed), max(observed))
-    else:
-        values = _float_vector(boundary_arg, "Boundary.knots")
-        if len(values) != 2 or not values[0] < values[1]:
-            raise ValueError("Invalid values for Boundary.knots")
-        boundary = (values[0], values[1])
+    boundary = _pspline_boundary(boundary_arg, observed)
     intercept_value = _normalize_bool_option(intercept, "intercept")
     basis = _core.pspline_basis(x_values, nterm_value, _integer_scalar(degree, "degree"), boundary)
 
     matrix = [list(row) for row in basis.basis]
-    combine_codes = None if combine is None else _pspline_combine(matrix, combine, intercept_value)
+    combine_codes = None
+    if combine is not None:
+        groups = _pspline_combine(combine, len(matrix[0]), intercept_value)
+        matrix = _combine_basis(matrix, groups)
+        combine_codes = list(groups if intercept_value else groups[1:])
     nvar = len(matrix[0])
     dmat = _second_difference_penalty(nvar)
     if not intercept_value:
         matrix = [row[1:] for row in matrix]
         dmat = [row[1:] for row in dmat[1:]]
-    knots = list(basis.knots)
     return PsplineResult(
         basis=matrix,
-        knots=knots,
+        knots=list(basis.knots),
         nterm=basis.nterm,
         degree=basis.degree,
         boundary_knots=basis.boundary_knots,
@@ -468,7 +443,7 @@ def pspline(
         eps=eps_value,
         method=method_value,
         dmat=dmat,
-        cbase=[knots[idx] + (boundary[0] - knots[0]) for idx in range(1, nvar)],
+        cbase=_pspline_cbase(basis.nterm, basis.degree, boundary, nvar),
         theta=theta_value,
         combine=combine_codes,
     )
@@ -518,6 +493,7 @@ def _frailty_encoding(
 class _ModelFrame:
     response: Surv
     extras: dict[str, list[Any] | None]
+    kept: list[int]
     omitted: list[int]
 
 
@@ -553,7 +529,8 @@ def _model_frame(
     row-aligned arguments such as ``id`` and ``istate``, given as vectors or column names.
 
     ``subset`` is applied first, then ``na.action`` to the formula variables, the response and
-    the extras; ``omitted`` records the 0-based rows of the subset that ``na.omit`` dropped.
+    the extras; ``kept`` and ``omitted`` record the 0-based rows of the subset that ``na.omit``
+    kept and dropped.
     """
 
     action = _normalize_na_action(na_action)
@@ -579,7 +556,7 @@ def _model_frame(
         missing = _missing_rows(frame, len(kept))
         if missing and action == "fail":
             raise ValueError("missing values in object")
-        if missing and action == "omit":
+        if missing and action in {"omit", "exclude"}:
             rows = [idx for idx in range(len(kept)) if idx not in missing]
             omitted.extend(kept[idx] for idx in missing)
             kept = [kept[idx] for idx in rows]
@@ -592,6 +569,7 @@ def _model_frame(
             name: None if name not in frame else _materialize_labels(frame[name], name)
             for name in extras
         },
+        kept=kept,
         omitted=sorted(omitted),
     )
 
@@ -623,12 +601,12 @@ def _survcheck_problem(
 
 
 def _survcheck_codes(
-    id: Any, time1: Any, time2: Any, status: Any, istate: Any | None
+    id: Any, time2: Any, status: Any, time1: Any | None = None, istate: Any | None = None
 ) -> SurvCheckCodes:
-    """The response given as integer codes, the way the R bridge calls ``survcheck`` after
-    evaluating the model frame in R: ``id`` as ``match(id, unique(id))``, ``status`` as ``0``
-    (censored) or the code of the target state and ``istate`` as codes of the same states.
-    The states are only known by their codes, so they are named after them.
+    """``survcheck``'s kernel for a response given as integer codes, the R bridge's entry
+    point after it evaluates the model frame in R: ``id`` as ``match(id, unique(id))``,
+    ``status`` as ``0`` (censored) or the code of the target state and ``istate`` as codes of
+    the same states.  The states are only known by their codes, so they are named after them.
     """
 
     status_codes = _int_vector(status, "status")
@@ -668,31 +646,25 @@ def survcheck(
     istate: Any | None = None,
     istate0: str = "(s0)",
     timefix: bool = True,
-    *,
-    time1: Any | None = None,
-    time2: Any | None = None,
-    status: Any | None = None,
-) -> SurvCheckResult | SurvCheckCodes:
+) -> SurvCheckResult:
     """Consistency checks of (multi-state) survival data, like R's ``survcheck``.
 
     ``formula`` is ``Surv(...) ~ ...`` evaluated in ``data`` (or a ``Surv`` object); ``id`` and
     ``istate`` are column names of ``data`` or vectors.  Problem rows are reported as 1-based
-    row numbers of ``data`` after ``subset``, as R does.
-
-    The R bridge evaluates the model frame itself and passes the response as integer codes
-    (``id``, ``time1``, ``time2``, ``status`` and optionally ``istate``) without a formula; that
-    form returns the row-level ``SurvCheckCodes``.
+    row numbers of ``data`` after ``subset``, as R does (of the counting-process rows for
+    ``Surv2`` timeline data, which is converted first).
     """
 
     if formula is _MISSING:
-        if time2 is None or status is None or id is None:
-            raise ValueError("a formula argument is required")
-        return _survcheck_codes(id, time1, time2, status, istate)
-    if time1 is not None or time2 is not None or status is not None:
-        raise ValueError("time1, time2 and status are only used when no formula is given")
+        raise ValueError("a formula argument is required")
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
-    frame = _model_frame(formula, data, subset, na_action, id=id, istate=istate)
+    extras = {"id": id, "istate": istate}
+    if _timeline_response(formula):
+        # survcheck.R converts timeline data before its na.action
+        formula, data, extras = _timeline_counting(formula, data, subset, extras)
+        subset = None
+    frame = _model_frame(formula, data, subset, na_action, **extras)
     response = frame.response
     n = len(response)
     if n == 0:
@@ -724,7 +696,7 @@ def survcheck(
         timefix=timefix,
     )
     # R reports rows of the data before missing values were removed.
-    row_numbers = [idx + 1 for idx in range(n + len(frame.omitted)) if idx not in frame.omitted]
+    row_numbers = [idx + 1 for idx in frame.kept]
     return SurvCheckResult(
         states=raw.states,
         transitions=raw.transitions,
@@ -751,24 +723,26 @@ def survcheck(
 
 def _survobrien_columns(
     data: Any, covariates: Sequence[Any], n: int
-) -> tuple[list[tuple[str, list[Any]]], list[tuple[str, list[float]]]]:
-    """Split the model terms into the factor ones R leaves alone and the continuous ones it
-    transforms."""
+) -> tuple[list[str], list[tuple[str, list[float]]]]:
+    """Split the model terms into the ones R leaves alone (``keepers <- factors | protected``:
+    factors, non-numeric terms and ``I()`` (AsIs) terms) and the continuous ones it transforms.
 
-    keepers: list[tuple[str, list[Any]]] = []
+    A kept term contributes every data column it references (R's ``all.vars``), once per term.
+    """
+
+    keepers: list[str] = []
     continuous: list[tuple[str, list[float]]] = []
     for term in covariates:
         if isinstance(term, _InteractionTerm):
             raise ValueError("This function cannot deal with iteraction terms")
-        values = _term_values(data, term, n)
         numeric = None
-        if not term.categorical:
+        if term.transform != "I" and not term.categorical:
             try:
-                numeric = [float(value) for value in values]
+                numeric = [float(value) for value in _term_values(data, term, n)]
             except (TypeError, ValueError):
                 numeric = None
         if numeric is None:
-            keepers.append((term.column, values))
+            keepers.extend(_covariate_term_columns(term))
         else:
             continuous.append((_covariate_term_name(term), numeric))
     if not continuous:
@@ -780,19 +754,19 @@ def _survobrien_transformed(
     transform: Callable[..., Any] | None,
     continuous: list[tuple[str, list[float]]],
     expansion: Any,
-) -> dict[str, list[float]]:
+) -> list[tuple[str, list[float]]]:
     """The transformed columns: the Rust logit-rank default, or ``transform`` applied to the
     values of every risk set (R's ``lapply(indx, function(x) transform(z[x]))``)."""
 
     if transform is None:
-        return {
-            name: list(column)
+        return [
+            (name, list(column))
             for (name, _values), column in zip(continuous, expansion.transformed, strict=True)
-        }
+        ]
     blocks: dict[int, list[int]] = {}
     for position, block in enumerate(expansion.strata):
         blocks.setdefault(block, []).append(position)
-    out: dict[str, list[float]] = {}
+    out: list[tuple[str, list[float]]] = []
     for name, values in continuous:
         column = [0.0] * len(expansion.row)
         for positions in blocks.values():
@@ -805,7 +779,7 @@ def _survobrien_transformed(
                 raise ValueError("Transform function must be 1 to 1")
             for position, value in zip(positions, result, strict=True):
                 column[position] = value
-        out[name] = column
+        out.append((name, column))
     return out
 
 
@@ -819,8 +793,11 @@ def survobrien(
     """O'Brien's logit-rank expansion of a data set, like R's ``survobrien``.
 
     Returns the expanded data frame (a mapping of columns): the response, the untransformed
-    factor columns, the ``strata`` and ``cluster`` columns (or ``.id.``, the source row), the
-    transformed continuous variables and the risk-set number ``.strata.``.
+    variables of the factor and ``I()`` terms, the ``strata`` and ``cluster`` columns (or
+    ``.id.``, the source row), the transformed continuous variables and the risk-set number
+    ``.strata.``.  The column names are made syntactic and unique as R's ``data.frame`` does
+    (``log(z)`` becomes ``log.z.``, a repeated ``z`` becomes ``z.1``).  String columns count
+    as factors.
     """
 
     if (
@@ -832,7 +809,7 @@ def survobrien(
         raise ValueError("a data argument is required to evaluate the formula")
     if subset is not None:
         data, _aligned = _subset_formula_inputs(formula, data, subset)
-    data, _aligned = _apply_formula_na_action(formula, data, na_action)
+    data, _aligned, _removed = _apply_formula_na_action(formula, data, na_action)
     response, terms = _parse_formula(formula, data)
     n = len(response)
     if response.type not in {"right", "counting"}:
@@ -842,9 +819,9 @@ def survobrien(
     keepers, continuous = _survobrien_columns(data, terms.covariates, n)
     strata_codes = None
     if terms.strata:
-        strata_values = _combined_columns(data, terms.strata, n)
-        levels = _unique_in_order(strata_values)
-        strata_codes = [levels.index(value) for value in strata_values]
+        strata_codes = _complete_codes(
+            _strata_keep(data, _strata_term_columns(terms)), "missing values in the strata"
+        )
     expansion = _core.survobrien(
         list(response.time),
         [int(event) for event in response.event],
@@ -853,22 +830,27 @@ def survobrien(
         strata=strata_codes,
     )
     rows = list(expansion.row)
-    frame: dict[str, list[Any]] = {}
+    columns: list[tuple[str, list[Any]]] = []
     if expansion.start is not None:
-        frame["start"] = list(expansion.start)
-        frame["stop"] = list(expansion.time)
+        columns += [("start", list(expansion.start)), ("stop", list(expansion.time))]
     else:
-        frame["time"] = list(expansion.time)
-    frame["status"] = list(expansion.status)
-    for name, values in keepers:
-        frame[name] = [values[row] for row in rows]
-    for name in [*terms.strata, *terms.clusters]:
-        frame[name] = list(_subset_sequence(_column(data, name), rows, name))
+        columns.append(("time", list(expansion.time)))
+    columns.append(("status", list(expansion.status)))
+    # data[knames]: `[.data.frame` makes the names of the kept and strata variables unique
+    knames = [*keepers, *terms.strata]
+    columns += [
+        (label, list(_subset_sequence(_column(data, name), rows, name)))
+        for label, name in zip(
+            [*_make_unique(knames), *terms.clusters], [*knames, *terms.clusters], strict=True
+        )
+    ]
     if not terms.clusters:
-        frame[".id."] = [row + 1 for row in rows]
-    frame.update(_survobrien_transformed(transform, continuous, expansion))
-    frame[".strata."] = list(expansion.strata)
-    return frame
+        columns.append((".id.", [row + 1 for row in rows]))
+    columns += _survobrien_transformed(transform, continuous, expansion)
+    columns.append((".strata.", list(expansion.strata)))
+    # data.frame()'s check.names: make.names(unique = TRUE)
+    names = _make_names_unique([name for name, _values in columns])
+    return {name: values for name, (_label, values) in zip(names, columns, strict=True)}
 
 
 # ---------------------------------------------------------------------------
@@ -886,6 +868,8 @@ def royston(
     then, as in R.
     """
 
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError("not defined for multi-state models")
     engine = _coxph_engine(fit, "function defined only for coxph models")
     ties_value = _normalize_bool_option(ties, "ties")
     adjust_value = _normalize_bool_option(adjust, "adjust")
@@ -971,30 +955,24 @@ def _brier_is_simple(response: Surv, id_values: Sequence[Any] | None) -> bool:
 
 
 def _newdata_design(
-    fit: Any, newdata: Any, n: int
-) -> tuple[list[list[float]], list[int] | None, list[float]]:
-    """``model.matrix`` of the fit's terms on ``newdata`` with its strata codes and offsets."""
+    fit: Any, newdata: Any
+) -> tuple[list[list[float]], list[int] | None, list[float] | None]:
+    """``model.matrix`` of the fit's terms on ``newdata`` with its strata codes (coded as the
+    fit's ``strata.keep``) and offsets, as ``survfit.coxph(fit, newdata)`` builds them."""
 
-    design = _formula_design_for_fit(fit)
-    if design is None:
+    if _formula_design_for_fit(fit) is None:
         raise TypeError("newdata requires a model fitted from a formula")
-    rows = _design_rows_from_spec(newdata, design, n)
-    if design.intercept:
-        rows = [row[1:] for row in rows]
-    strata = None
-    if design.strata:
-        values = _combined_columns(newdata, list(design.strata), n)
-        levels = list(design.strata_levels)
-        try:
-            strata = [levels.index(value) for value in values]
-        except ValueError as exc:
-            raise ValueError("newdata contains a stratum not seen in the fit") from exc
-    offsets = _offset_vector(newdata, design.offsets, n)
-    return rows, strata, offsets if offsets is not None else [0.0] * n
+    stratified = _has_strata(fit)
+    new = _prediction_newdata(
+        fit, newdata, need_strata=stratified, need_response=False, na_action="na.fail"
+    )
+    if stratified and new.strata is None:
+        raise ValueError("New data must contain the strata variable(s) of the model")
+    return new.x, new.strata, new.offset
 
 
 def _brier_model_predictions(
-    fit: Any, engine: Any, newdata: Any | None, n: int, times: list[float]
+    fit: Any, engine: Any, newdata: Any | None, times: list[float]
 ) -> list[list[float]]:
     """``1 - summary(survfit(fit, newdata), times, extend = TRUE)$surv``: one row per time.
 
@@ -1004,17 +982,19 @@ def _brier_model_predictions(
     if newdata is None:
         rows, strata, offsets = [list(row) for row in engine.x], engine.strata, list(engine.offset)
     else:
-        rows, strata, offsets = _newdata_design(fit, newdata, n)
+        rows, strata, offsets = _newdata_design(fit, newdata)
     curves = engine.survfit(newdata=rows, new_strata=strata, new_offset=offsets, se_fit=False)
-    # one curve per stratum with the rows as columns, or one per row for stratified fits
-    per_subject: list[list[float]] = []
+    # one curve per stratum with the rows as columns, or one per row for stratified fits; each
+    # getter converts the whole curve, so it is read once
+    phat: list[list[float]] = [[] for _ in times]
     for curve in curves:
-        width = len(curve.surv[0]) if curve.surv else 0
-        per_subject.extend(
-            _core.step_values_at(list(curve.time), [row[j] for row in curve.surv], times, 1.0)
-            for j in range(width)
-        )
-    return [[1.0 - subject[i] for subject in per_subject] for i in range(len(times))]
+        curve_times, surv = list(curve.time), curve.surv
+        width = len(surv[0]) if surv else 0
+        for row, at in zip(phat, times, strict=True):
+            # the last step at or before `at`; the curves are 1 before their first time
+            index = bisect.bisect_right(curve_times, at)
+            row.extend([1.0 - value for value in surv[index - 1]] if index else [0.0] * width)
+    return phat
 
 
 def brier(
@@ -1028,6 +1008,9 @@ def brier(
 ) -> BrierResult:
     """Brier score of a Cox model with inverse-probability-of-censoring weights (R's ``brier``)."""
 
+    if isinstance(fit, CoxphmsModel):
+        # R fails later with "times contains missing or infinite values"
+        raise ValueError("brier is not defined for multi-state coxph fits")
     engine = _coxph_engine(fit, "fit must be a coxph object")
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
@@ -1067,7 +1050,7 @@ def brier(
         eval_times = [t for t, d in zip(null_curve.time, null_curve.n_event, strict=True) if d > 0]
     else:
         eval_times = _float_vector(times, "times")
-    phat = _brier_model_predictions(fit, engine, newdata, len(response), eval_times)
+    phat = _brier_model_predictions(fit, engine, newdata, eval_times)
     result = _core.brier(
         dtime,
         dstat,
@@ -1086,7 +1069,7 @@ def brier(
         brier=result.brier,
         times=result.times,
         p0=result.p0,
-        phat=result.phat,
+        phat=phat,
         eff_n=result.eff_n,
     )
 
@@ -1154,16 +1137,20 @@ def _factorial_population(
     return pdata
 
 
+def _yates_model_frame(fit: Any) -> dict[str, list[Any]]:
+    """``mframe <- fit$model; if (is.null(mframe)) mframe <- model.frame(fit)``."""
+
+    return _plain_model_frame(fit.model if isinstance(fit, YatesModel) else _coxph_model_frame(fit))
+
+
 def _yates_population(
     mframe: dict[str, list[Any]],
     design: _FormulaDesign,
     term: _YatesTerm,
-    population: Any,
+    population: str,
 ) -> dict[str, list[Any]]:
     """R's ``yates_xmat`` population rows over the adjusting variables."""
 
-    if isinstance(population, Mapping):
-        return {str(name): list(values) for name, values in population.items()}
     adjusters = [spec for spec in _design_factors(design) if spec.term.column != term.column]
     categorical = {
         spec.term.column: list(spec.levels)
@@ -1192,7 +1179,7 @@ def _yates_population(
     return out
 
 
-def _yates_weights(mframe: Mapping[str, list[Any]], population: Any) -> list[float] | None:
+def _yates_weights(mframe: Mapping[str, list[Any]], population: str) -> list[float] | None:
     """Case weights of the ``data`` population: the model weights, else equal weight per id."""
 
     if population != "data":
@@ -1214,6 +1201,98 @@ def _yates_design_names(design: _FormulaDesign) -> list[str]:
     return names
 
 
+def _columns(rows: Sequence[Sequence[float]], keep: Sequence[int]) -> list[list[float]]:
+    return [[row[idx] for idx in keep] for row in rows]
+
+
+@dataclass(frozen=True)
+class _YatesSetup:
+    """What R's ``yates_setup`` gives ``yates``: the prediction (``linear``, ``risk`` or
+    ``survival``), the seed of its simulation and, for ``survival``, the baseline curve
+    and the restricted-mean horizon ``rmean``."""
+
+    predict: str
+    seed: int = 0
+    baseline: CoxSurvfitResult | None = None
+    rmean: float = math.inf
+
+
+_COXPH_PREDICT = ["lp", "risk", "expected", "terms", "survival", "linear"]
+
+
+def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
+    """R's ``yates_setup``: ``yates_setup.coxph`` for a Cox model; ``yates_setup.default``
+    for a ``YatesModel``, which gives the linear predictor whatever ``predict`` is (``yates``
+    passes it as ``predict=``, which that method's ``type`` argument never receives, so R
+    neither checks nor warns).
+
+    ``options`` holds R's ``rmean`` for ``predict="survival"`` and the ``seed`` of R's
+    generator (``set.seed``) for the simulated predictions.
+    """
+
+    if callable(predict) or isinstance(predict, Mapping):
+        raise ValueError("user written prediction functions are not yet supported")
+    if isinstance(fit, YatesModel):
+        return _YatesSetup("linear")
+    kind = _match_string_arg(
+        # match.arg(NULL) is the first choice
+        "lp" if predict is None else predict,
+        "predict",
+        _COXPH_PREDICT,
+        "'predict' should be one of " + ", ".join(f'"{name}"' for name in _COXPH_PREDICT),
+    )
+    if kind in ("lp", "linear"):
+        return _YatesSetup("linear")
+    if kind in ("expected", "terms"):
+        raise ValueError(f"type {kind} is not supported")
+    if options is not None and not isinstance(options, Mapping):
+        raise TypeError("options must be a mapping")
+    settings = dict(options or {})
+    unknown = set(settings) - ({"seed"} if kind == "risk" else {"seed", "rmean"})
+    if unknown:
+        raise TypeError(f"unrecognized {kind} options: {', '.join(sorted(map(str, unknown)))}")
+    seed = _integer_scalar(settings.get("seed", 0), "seed")
+    if kind == "risk":
+        return _YatesSetup("risk", seed)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        baseline = survfit_coxph(fit, censor=False)
+    rmean = settings.get("rmean")
+    try:
+        rmean = max(baseline.time) if rmean is None else float(rmean)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("rmean must be numeric") from exc
+    if baseline.strata is not None:
+        raise ValueError("stratified models not yet supported")
+    return _YatesSetup("survival", seed, baseline, rmean)
+
+
+def _yates_estimable(fit: Any, design: _FormulaDesign, xmatlist: list[Any]) -> list[bool]:
+    """R's estimability check for a fit with aliased coefficients, against the unique rows
+    of ``model.matrix(fit)`` (a Cox model's with a leading column of ones)."""
+
+    if isinstance(fit, YatesModel):
+        n = len(next(iter(fit.model.values())))
+        return _core.yates_estimable(xmatlist, _design_rows_from_spec(fit.model, design, n))
+    return _core.yates_estimable(xmatlist, fit.x, intercept=design.intercept)
+
+
+def _yates_survival_summary(
+    baseline: CoxSurvfitResult, curves: _core.YatesCurves
+) -> CoxSurvfitResult:
+    """R's ``summary`` function of ``yates_setup.coxph``: the baseline curve carrying each
+    level's simulated mean survival, one column per level."""
+
+    return replace(
+        baseline,
+        surv=curves.surv,
+        cumhaz=curves.cumhaz,
+        std_err=curves.std_err,
+        lower=curves.lower,
+        upper=curves.upper,
+    )
+
+
 def yates(
     fit: Any,
     term: Any,
@@ -1227,23 +1306,26 @@ def yates(
 ) -> YatesResult:
     """Population marginal means of a term of a Cox model and their tests (R's ``yates``).
 
-    ``predict="risk"`` uses ``nsim`` coefficient draws; ``options={"seed": 0}``
-    controls its reproducible, R-compatible random stream. ``population`` is
-    ``"data"``, ``"factorial"``, ``"sas"`` or a data frame. ``YatesModel`` adapts
+    ``predict`` is the linear predictor (``"linear"``/``"lp"``), ``"risk"`` or
+    ``"survival"`` (the mean survival restricted to ``options={"rmean": ...}``, by default
+    the last time of the baseline curve, with the simulated curves in ``summary``); the
+    latter two average ``nsim`` coefficient draws, and ``options={"seed": 0}`` seeds
+    their R-compatible random stream.  ``population`` is ``"data"``, ``"factorial"``,
+    ``"sas"`` or a data frame.  With aliased coefficients, a level the fit cannot
+    estimate has an NA mean and the tests that use it are NA.  ``YatesModel`` adapts
     externally fitted linear models without refitting them.
     """
 
+    if isinstance(fit, CoxphmsModel):
+        raise ValueError("multi-state coxph not yet supported")
     external = isinstance(fit, YatesModel)
     engine = None if external else _coxph_engine(fit, "the fit does not have a terms structure")
     design = _formula_design_for_fit(fit)
     if design is None:
         raise TypeError("the fit does not have a terms structure")
+    setup = _yates_setup(fit, predict, options)
     if _match_string_arg(method, "method", ["direct", "sgtt"], "invalid method") != "direct":
         raise NotImplementedError('yates method = "sgtt" is not implemented')
-    if predict not in {"linear", "lp", "risk"}:
-        raise NotImplementedError(
-            f"yates predict = {predict!r} is not implemented (R simulates the coefficients)"
-        )
     if isinstance(population, str):
         population = _match_string_arg(
             population.lower(),
@@ -1257,52 +1339,71 @@ def yates(
     test_value = _match_string_arg(test, "test", ["global", "trend", "pairwise"], "invalid test")
 
     beta = fit.coefficients if external else coef(fit)
-    if any(math.isnan(value) for value in beta):
-        raise NotImplementedError("yates with aliased (NA) coefficients is not implemented")
+    kept = [idx for idx, value in enumerate(beta) if not math.isnan(value)]
     vmat = fit.variance if external else vcov(fit, complete=False)
-    mframe = model_frame(fit)
+    if len(vmat) > len(kept):
+        vmat = _columns([vmat[idx] for idx in kept], kept)
     yates_term = _yates_term(design, term, levels)
-    pdata = _yates_population(mframe, design, yates_term, population)
+    if isinstance(population, Mapping):
+        pdata = {str(name): list(values) for name, values in population.items()}
+        weights = None
+    else:
+        mframe = _yates_model_frame(fit)
+        pdata = _yates_population(mframe, design, yates_term, population)
+        weights = _yates_weights(mframe, population)
     n_pop = len(next(iter(pdata.values())))
     xmatlist = [
         _design_rows_from_spec({**pdata, yates_term.column: [level] * n_pop}, design, n_pop)
         for level in yates_term.levels
     ]
-    cmat = _core.yates_population_means(xmatlist, _yates_weights(mframe, population))
-    names = _yates_design_names(design)
-    if design.intercept and not external:  # Cox baseline supplies the intercept.
-        cmat = [row[1:] for row in cmat]
-        names = names[1:]
-        xmatlist = [[row[1:] for row in rows] for rows in xmatlist]
-    means = [0.0] * len(beta) if external else engine.means
-    offset = -sum(mean * value for mean, value in zip(means, beta, strict=True))
-    if predict == "risk":
-        if options is not None and not isinstance(options, Mapping):
-            raise TypeError("options must be a mapping")
-        options = dict(options or {})
-        seed = _integer_scalar(options.pop("seed", 0), "seed")
-        if options:
-            raise TypeError(f"unrecognized risk options: {', '.join(options)}")
-        result = _core.yates_risk(
-            xmatlist,
-            beta,
-            vmat,
-            means,
-            nsim=_integer_scalar(nsim, "nsim"),
-            seed=seed,
-            test=test_value,
-            term=yates_term.name,
-        )
-        names = []
-    else:
+    estimable = _yates_estimable(fit, design, xmatlist) if len(kept) < len(beta) else None
+    # the coefficient columns: a Cox model's baseline absorbs the intercept
+    first = 1 if design.intercept and not external else 0
+    columns = [first + idx for idx in kept]
+    design_names = _yates_design_names(design)
+    names = [design_names[idx] for idx in columns]
+    beta = [beta[idx] for idx in kept]
+    means = [0.0] * len(beta) if external else [engine.means[idx] for idx in kept]
+    summary = None
+    if setup.predict == "linear":
         result = _core.yates(
-            cmat,
+            _columns(_core.yates_population_means(xmatlist, weights), columns),
             beta,
             vmat,
-            offset=offset,
-            test=test_value,
+            offset=-sum(mean * value for mean, value in zip(means, beta, strict=True)),
             sigma2=fit.sigma2 if external else None,
+            estimable=estimable,
+            test=test_value,
         )
+        if not result.cmat:
+            names = []
+    else:
+        simulation = {
+            "estimable": estimable,
+            "nsim": _integer_scalar(nsim, "nsim"),
+            "seed": setup.seed,
+            "test": test_value,
+            "term": yates_term.name,
+        }
+        xmatlist = [_columns(rows, columns) for rows in xmatlist]
+        if setup.baseline is None:
+            result = _core.yates_risk(xmatlist, beta, vmat, means, **simulation)
+        else:
+            baseline = setup.baseline
+            result = _core.yates_survival(
+                xmatlist,
+                beta,
+                vmat,
+                means,
+                baseline.time,
+                baseline.cumhaz,
+                setup.rmean,
+                conf_int=baseline.conf_int,
+                **simulation,
+            )
+            if result.summary is not None:
+                summary = _yates_survival_summary(baseline, result.summary)
+        names = []
     return YatesResult(
         estimate={
             yates_term.name: list(yates_term.levels),
@@ -1313,4 +1414,5 @@ def yates(
         mvar=result.mvar,
         cmat=result.cmat,
         cmat_names=names,
+        summary=summary,
     )

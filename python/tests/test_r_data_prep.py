@@ -151,7 +151,7 @@ def test_survcondense_merges_adjacent_rows_with_equal_covariates():
 
 
 def test_rttright_matches_r_weights_and_time_matrix():
-    aml = {k: v for k, v in survival.datasets.load_aml().items() if not k.startswith("_")}
+    aml = survival.datasets.load_aml()
     first_six = {name: list(values[:6]) for name, values in aml.items()}
     # rttright(Surv(time, status) ~ 1, aml[1:6, ])
     weights = r.rttright("Surv(time, status) ~ 1", first_six)

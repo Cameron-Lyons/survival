@@ -422,18 +422,6 @@ def test_survreg_fit_matches_r():
     assert max(abs(value) for value in fit.score) < 1e-8
 
 
-def test_survreg_fit_low_level_wrapper_matches_survreg_fit():
-    legacy = regression.survreg(
-        time=_AFT_TIME,
-        status=[float(value) for value in _AFT_STATUS],
-        covariates=_AFT_DESIGN,
-        distribution="weibull",
-    )
-    fit = _aft_fit()
-    assert legacy.coefficients == pytest.approx(fit.coefficients)
-    assert legacy.log_likelihood == pytest.approx(fit.log_likelihood)
-
-
 def test_survreg_fit_predictions_match_r():
     fit = _aft_fit()
     newdata = [[1.0, 0.25], [1.0, 0.75]]
@@ -469,11 +457,11 @@ def test_survreg_fit_predictions_match_r():
         [1.5406568557700573, 1.1391801296374089]
     )
 
-    with pytest.raises(ValueError, match="prediction type 'bogus'"):
+    with pytest.raises(ValueError, match="'arg' should be one of \"response\""):
         fit.predict(predict_type="bogus")
     with pytest.raises(ValueError, match="probabilities between 0 and 1"):
         fit.predict(newdata=newdata, predict_type="quantile", p=[1.5])
-    with pytest.raises(ValueError, match="newdata row 0 length mismatch"):
+    with pytest.raises(ValueError, match="newdata must be 1 x 2, got 1 x 1"):
         fit.predict(newdata=[[1.0]], predict_type="lp")
 
 
@@ -526,7 +514,7 @@ def test_survreg_fit_residuals_match_r():
         ],
     )
 
-    with pytest.raises(ValueError, match="residual type 'bogus'"):
+    with pytest.raises(ValueError, match="'arg' should be one of \"response\""):
         fit.residuals(residual_type="bogus")
 
 
@@ -578,7 +566,7 @@ def test_survreg_distribution_helpers_match_r():
     assert exponential.name == "Exponential"
     assert exponential.scale == pytest.approx(1.0)
 
-    with pytest.raises(ValueError, match="'normal' should be one of"):
+    with pytest.raises(ValueError, match="'arg' should be one of \"extreme\""):
         regression.SurvregDistribution("normal")
 
     # dsurvreg / psurvreg / qsurvreg with R's recycling of mean and scale
@@ -706,119 +694,6 @@ def test_predict_hazard_spline_validates_public_inputs():
     )
     with pytest.raises(ValueError, match="spline_coefficients length"):
         survival.regression.predict_hazard_spline(bad_spline_coefficients, [1.0, 2.0], [0.5])
-
-
-def test_aareg_public_api():
-    options = survival.regression.AaregOptions(
-        formula="time ~ x1",
-        data=[[1.0, 2.0], [2.0, 3.0], [3.0, 4.0], [4.0, 5.0]],
-        variable_names=["time", "x1"],
-        max_iter=20,
-    )
-
-    result = survival.aareg(options)
-
-    assert len(result.coefficients) == 2
-    assert len(result.standard_errors) == 2
-    assert len(result.confidence_intervals) == 2
-    assert len(result.p_values) == 2
-    assert result.fit_details is not None
-    assert result.fit_details.iterations <= 20
-    assert result.fit_details.converged is True
-    assert len(result.residuals) == 4
-    assert math.isfinite(result.goodness_of_fit)
-
-    weighted_subset = survival.regression.AaregOptions(
-        formula="time ~ x1",
-        data=[[1.0, 2.0], [2.0, 3.0], [3.0, 4.0], [4.0, 5.0]],
-        variable_names=["time", "x1"],
-        max_iter=20,
-    )
-    weighted_subset.subset = [0, 1, 2]
-    weighted_subset.weights = [1.0, 2.0, 1.0, 99.0]
-    weighted_result = survival.aareg(weighted_subset)
-
-    assert len(weighted_result.residuals) == 3
-
-
-def test_aareg_rejects_invalid_formula():
-    options = survival.regression.AaregOptions(
-        formula="time",
-        data=[[1.0, 2.0], [2.0, 3.0]],
-        variable_names=["time", "x1"],
-        max_iter=5,
-    )
-
-    with pytest.raises(ValueError, match="Formula Error"):
-        survival.aareg(options)
-
-
-def test_aareg_validates_public_inputs():
-    with pytest.raises(ValueError, match="data cannot be empty"):
-        survival.aareg(
-            survival.regression.AaregOptions(
-                formula="time ~ x1",
-                data=[],
-                variable_names=["time", "x1"],
-            )
-        )
-
-    with pytest.raises(ValueError, match="data row 1 has 1 columns"):
-        survival.aareg(
-            survival.regression.AaregOptions(
-                formula="time ~ x1",
-                data=[[1.0, 2.0], [2.0]],
-                variable_names=["time", "x1"],
-            )
-        )
-
-    with pytest.raises(ValueError, match="variable_names length"):
-        survival.aareg(
-            survival.regression.AaregOptions(
-                formula="time ~ x1",
-                data=[[1.0, 2.0], [2.0, 3.0]],
-                variable_names=["time"],
-            )
-        )
-
-    with pytest.raises(ValueError, match="data contains non-finite"):
-        survival.aareg(
-            survival.regression.AaregOptions(
-                formula="time ~ x1",
-                data=[[1.0, float("inf")], [2.0, 3.0]],
-                variable_names=["time", "x1"],
-            )
-        )
-
-    missing = survival.regression.AaregOptions(
-        formula="time ~ x1",
-        data=[[1.0, float("nan")], [2.0, 3.0], [3.0, 4.0]],
-        variable_names=["time", "x1"],
-    )
-    with pytest.raises(ValueError, match="missing values in data"):
-        survival.aareg(missing)
-
-    missing.na_action = "Exclude"
-    excluded = survival.aareg(missing)
-    assert len(excluded.residuals) == 2
-
-    bad_weights = survival.regression.AaregOptions(
-        formula="time ~ x1",
-        data=[[1.0, 2.0], [2.0, 3.0]],
-        variable_names=["time", "x1"],
-    )
-    bad_weights.weights = [1.0, float("inf")]
-    with pytest.raises(ValueError, match="weights contains non-finite"):
-        survival.aareg(bad_weights)
-
-    bad_iter = survival.regression.AaregOptions(
-        formula="time ~ x1",
-        data=[[1.0, 2.0], [2.0, 3.0]],
-        variable_names=["time", "x1"],
-        max_iter=0,
-    )
-    with pytest.raises(ValueError, match="max_iter must be positive"):
-        survival.aareg(bad_iter)
 
 
 def test_recurrent_event_regression_validates_public_inputs():

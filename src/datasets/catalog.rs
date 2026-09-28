@@ -689,7 +689,11 @@ mod tests {
             if !fields[0].is_empty() {
                 let name = fields[0];
                 let df = frame(name);
-                assert_eq!(df.nrow, fields[1].parse::<usize>().unwrap(), "{name} nrow");
+                assert_eq!(
+                    df.nrow(),
+                    fields[1].parse::<usize>().unwrap(),
+                    "{name} nrow"
+                );
                 assert_eq!(
                     df.ncol(),
                     fields[2].parse::<usize>().unwrap(),
@@ -705,7 +709,7 @@ mod tests {
             let context = format!("{name}${col_name}");
             assert_eq!(*col_name, fields[1], "{context}: column order");
             assert_eq!(kind(column), fields[2], "{context}: column kind");
-            assert_eq!(column.len(), df.nrow, "{context}: length");
+            assert_eq!(column.len(), df.nrow(), "{context}: length");
             assert_eq!(
                 column.na_count(),
                 fields[3].parse::<usize>().unwrap(),
@@ -738,7 +742,7 @@ mod tests {
     #[test]
     fn aml_has_r_column_names_and_values() {
         let df = frame("aml");
-        assert_eq!((df.nrow, df.ncol()), (23, 3));
+        assert_eq!((df.nrow(), df.ncol()), (23, 3));
         let time = df.column("time").unwrap();
         assert_eq!((float(time, 0), float(time, 22)), (9.0, 45.0));
         assert_eq!(float(df.column("status").unwrap(), 0), 1.0);
@@ -763,7 +767,7 @@ mod tests {
     #[test]
     fn rats_is_the_300_litter_table() {
         let df = frame("rats");
-        assert_eq!((df.nrow, df.ncol()), (300, 5));
+        assert_eq!((df.nrow(), df.ncol()), (300, 5));
         assert_eq!(int(df.column("litter").unwrap(), 299), 100);
         assert_eq!(float(df.column("rx").unwrap(), 299), 0.0);
         assert_eq!(float(df.column("time").unwrap(), 299), 102.0);
@@ -775,7 +779,7 @@ mod tests {
     #[test]
     fn hoel_myeloma_rhdnase_have_r_content() {
         let hoel = frame("hoel");
-        assert_eq!((hoel.nrow, hoel.ncol()), (181, 4));
+        assert_eq!((hoel.nrow(), hoel.ncol()), (181, 4));
         assert_eq!(string(hoel.column("trt").unwrap(), 180), "Germ-free");
         assert_eq!(float(hoel.column("days").unwrap(), 180), 1019.0);
         assert_eq!(
@@ -785,13 +789,13 @@ mod tests {
         assert_eq!(int(hoel.column("id").unwrap(), 180), 181);
 
         let myeloma = frame("myeloma");
-        assert_eq!((myeloma.nrow, myeloma.ncol()), (3882, 5));
+        assert_eq!((myeloma.nrow(), myeloma.ncol()), (3882, 5));
         assert_eq!(int(myeloma.column("id").unwrap(), 3881), 3914);
         assert_eq!(int(myeloma.column("futime").unwrap(), 0), 1431);
         assert_eq!(int(myeloma.column("futime").unwrap(), 3881), 498);
 
         let rhdnase = frame("rhDNase");
-        assert_eq!((rhdnase.nrow, rhdnase.ncol()), (767, 8));
+        assert_eq!((rhdnase.nrow(), rhdnase.ncol()), (767, 8));
         assert_eq!(string(rhdnase.column("entry.dt").unwrap(), 0), "1992-03-20");
         assert_eq!(string(rhdnase.column("end.dt").unwrap(), 766), "1992-09-11");
         assert_eq!(float(rhdnase.column("fev").unwrap(), 766), 92.8);
@@ -837,7 +841,7 @@ mod tests {
     #[test]
     fn large_and_new_tables_have_r_edges() {
         let nafld2 = frame("nafld2");
-        assert_eq!((nafld2.nrow, nafld2.ncol()), (400123, 4));
+        assert_eq!((nafld2.nrow(), nafld2.ncol()), (400123, 4));
         assert_eq!(int(nafld2.column("days").unwrap(), 0), -459);
         assert_eq!(string(nafld2.column("test").unwrap(), 0), "hdl");
         assert_eq!(int(nafld2.column("id").unwrap(), 400122), 17566);
@@ -845,7 +849,7 @@ mod tests {
         assert_eq!(float(nafld2.column("value").unwrap(), 400122), 47.0);
 
         let nafld3 = frame("nafld3");
-        assert_eq!((nafld3.nrow, nafld3.ncol()), (34345, 3));
+        assert_eq!((nafld3.nrow(), nafld3.ncol()), (34345, 3));
         assert_eq!(nafld3.column("days").unwrap().na_count(), 18);
 
         let bladder1 = frame("bladder1");

@@ -9,6 +9,7 @@ from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _finite_float,
     _float_vector,
     _integer_scalar,
@@ -17,7 +18,6 @@ from ._coerce import (
     _normalize_bool_option,
     _pop_dotted_keyword,
 )
-from ._coxph import _pchisq_upper
 from ._fit import _model_frame
 from ._types import AaregModelResult
 
@@ -40,7 +40,7 @@ def aareg(
     *,
     weights: Any | None = None,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     qrtol: Any = 1e-7,
     nmin: Any | None = None,
     dfbeta: Any = False,
@@ -51,16 +51,10 @@ def aareg(
     x: Any = False,
     y: Any = False,
     **kwargs: Any,
-) -> AaregModelResult | _core.AaregResult:
-    """Fit Aalen's additive regression model (R's ``aareg``).
+) -> AaregModelResult:
+    """Fit Aalen's additive regression model (R's ``aareg``)."""
 
-    ``survival.aareg`` is also the package-level name of the engine's option-driven
-    ``aareg(AaregOptions)``; an ``AaregOptions`` first argument is handed to it.
-    """
-
-    if isinstance(formula, _core.AaregOptions):
-        return _core.aareg(formula)
-    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "fail")
+    na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     if kwargs:
         raise TypeError(f"aareg got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
     test_name = _match_string_arg(
@@ -139,6 +133,7 @@ def aareg(
         model=frame.model_frame() if _normalize_bool_option(model, "model") else None,
         x=frame.x if _normalize_bool_option(x, "x") else None,
         y=response if _normalize_bool_option(y, "y") else None,
+        term_labels=tuple(frame.assign),
     )
 
 
@@ -224,7 +219,7 @@ def summary_aareg(
         "test_var2": test_var2,
         "chisq": chisq,
         "df": nvar - 1,
-        "p": _pchisq_upper(chisq, nvar - 1),
+        "p": _core.pchisq(chisq, nvar - 1.0, lower_tail=False),
         "n": [fit.n[0], len(set(times)), fit.n[2]],
     }
 

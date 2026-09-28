@@ -3,15 +3,28 @@
 //! checks of `survcheck2` (`R/survcheck.R`, `src/multicheck.c`) it relies
 //! on, and its C kernel `survfitaj` (`src/survfitaj.c`).
 
+use super::survfit_aj_summary::{
+    AJMeanTable, summary_rows, summary_survfit_aj, survmean_aj, survmean_coxms,
+};
 use super::survfit_confint::{ConfType, survfit_confint, validate_conf_int};
-use super::survfitkm::{ordered_subset, rows_by_curve, survflag};
+use super::survfit_summary::{RmeanOption, survfit0_aj_rows};
+use super::survfitkm::{
+    check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
+};
+use crate::core::strata_order::validate_intervals;
+use crate::data_prep::{aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
+#[cfg(feature = "python")]
+use crate::internal::numpy_utils::readonly_view;
+use crate::internal::numpy_utils::{FloatVec, IntVec};
+use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_non_negative,
 };
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// The data of a `survfit(Surv(...) ~ strata, id, istate, weights, cluster)`
 /// call with a multi-state outcome.
@@ -71,11 +84,7 @@ impl SurvfitAJData {
         if let Some(start) = &start {
             validate_length(time.len(), start.len(), "start")?;
             validate_finite(start, "start")?;
-            if let Some(index) = start.iter().zip(&time).position(|(s, t)| s >= t) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "Stop time must be > start time (observation {index})"
-                )));
-            }
+            validate_intervals(start, &time)?;
         }
         if let Some(weights) = &weights {
             validate_length(time.len(), weights.len(), "weights")?;
@@ -154,8 +163,8 @@ impl Default for SurvfitAJOptions {
 
 /// Unweighted counts of a multi-state fit, reported when case weights are
 /// present.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitAJCounts {
     #[pyo3(get)]
     pub n_risk: Vec<Vec<f64>>,
@@ -167,18 +176,52 @@ pub struct SurvfitAJCounts {
     pub n_enter: Option<Vec<Vec<f64>>>,
 }
 
-/// One curve's influence on `pstate`: `values[cluster][time][state]`.
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+crate::internal::pickle::picklable!(SurvfitAJCounts);
+
+/// One curve's influence on `pstate`: `values[[cluster, time, state]]`,
+/// column-major like R's `influence.pstate` array.  The array is shared:
+/// clones of the fit and the NumPy array Python reads (a read-only view) do
+/// not copy it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", frozen, from_py_object)]
 pub struct SurvfitAJInfluence {
+    /// R's row names `uclust`: the number (1, 2, ...) of each cluster in
+    /// order of first appearance in the rows the fit uses.
     #[pyo3(get)]
     pub cluster: Vec<i64>,
-    #[pyo3(get)]
-    pub values: Vec<Vec<Vec<f64>>>,
-    /// The influence on the estimated `p0`, `[cluster][state]`, when it was
-    /// estimated and not every subject started in the same state.
-    #[pyo3(get)]
-    pub i0: Option<Vec<Vec<f64>>>,
+    #[serde(with = "crate::internal::pickle::memory_order")]
+    pub values: Arc<Array3<f64>>,
+    /// The influence on the estimated `p0`, `[[cluster, state]]`, when it
+    /// was estimated and not every subject started in the same state.
+    #[serde(with = "crate::internal::pickle::memory_order::option")]
+    pub i0: Option<Array2<f64>>,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl SurvfitAJInfluence {
+    /// Pickle and copy support (see `internal::pickle`).
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
+    /// The `clusters x times x states` array as a read-only NumPy array.
+    #[getter(values)]
+    fn values_array<'py>(this: &Bound<'py, Self>) -> Bound<'py, numpy::PyArray3<f64>> {
+        // SAFETY: the frozen object owns the array through its `Arc` and
+        // never changes it.
+        unsafe { readonly_view(&this.get().values, this.as_any()) }
+    }
+
+    /// The `clusters x states` matrix as a read-only NumPy array.
+    #[getter(i0)]
+    fn i0_array<'py>(this: &Bound<'py, Self>) -> Option<Bound<'py, numpy::PyArray2<f64>>> {
+        // SAFETY: the frozen object owns the matrix and never changes it.
+        this.get()
+            .i0
+            .as_ref()
+            .map(|i0| unsafe { readonly_view(i0, this.as_any()) })
+    }
 }
 
 /// A `survfitms` object.  Row-major matrices have one row per time; the
@@ -187,8 +230,8 @@ pub struct SurvfitAJInfluence {
 /// `n_transition`, `cumhaz`, `std_chaz` are the observed transitions
 /// `hazard_from[k] -> hazard_to[k]` (0-based state indices, R's
 /// `"from:to"` column names use 1-based ones).
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitAJResult {
     #[pyo3(get)]
     pub n: Vec<usize>,
@@ -235,7 +278,8 @@ pub struct SurvfitAJResult {
     pub n_id: Vec<usize>,
     #[pyo3(get)]
     pub states: Vec<String>,
-    /// Counts of observed transitions, `states x (states + censored)`.
+    /// Counts of observed transitions, `states x (states + censored)`;
+    /// empty once [`SurvfitAJResult::select_states`] dropped it.
     #[pyo3(get)]
     pub transitions: Vec<Vec<f64>>,
     #[pyo3(get)]
@@ -266,23 +310,248 @@ impl SurvfitAJResult {
 
     /// Row range of each curve in the stacked matrices.
     pub fn curve_ranges(&self) -> Vec<std::ops::Range<usize>> {
-        match &self.strata {
-            Some(strata) => {
-                let mut start = 0;
-                strata
-                    .iter()
-                    .map(|&count| {
-                        let range = start..start + count;
-                        start += count;
-                        range
+        curve_ranges(self.strata.as_deref(), self.time.len())
+    }
+
+    /// `fit[curves, ]` (`[.survfitms`): the curves at the given positions of
+    /// `strata` (0-based, in the order given) as a result of their own.  A
+    /// single curve has no `strata`, like a fit without strata.
+    pub fn select_curves(&self, curves: &[usize]) -> SurvivalResult<Self> {
+        let ranges = self.curve_ranges();
+        check_curve_indices(curves, ranges.len())?;
+        let rows: Vec<usize> = curves
+            .iter()
+            .flat_map(|&curve| ranges[curve].clone())
+            .collect();
+        let pick = |values: &[Vec<f64>]| select_items(values, &rows);
+        let several = curves.len() > 1;
+        Ok(Self {
+            n: select_items(&self.n, curves),
+            time: select_items(&self.time, &rows),
+            n_risk: pick(&self.n_risk),
+            n_event: pick(&self.n_event),
+            n_censor: pick(&self.n_censor),
+            n_enter: self.n_enter.as_deref().map(pick),
+            n_transition: pick(&self.n_transition),
+            counts: self.counts.as_ref().map(|counts| SurvfitAJCounts {
+                n_risk: pick(&counts.n_risk),
+                n_transition: pick(&counts.n_transition),
+                n_censor: pick(&counts.n_censor),
+                n_enter: counts.n_enter.as_deref().map(pick),
+            }),
+            pstate: pick(&self.pstate),
+            cumhaz: pick(&self.cumhaz),
+            std_err: self.std_err.as_deref().map(pick),
+            std_chaz: self.std_chaz.as_deref().map(pick),
+            std_auc: self.std_auc.as_deref().map(pick),
+            se0: self.se0.as_deref().map(|se0| select_items(se0, curves)),
+            lower: self.lower.as_deref().map(pick),
+            upper: self.upper.as_deref().map(pick),
+            p0: select_items(&self.p0, curves),
+            strata: several.then(|| curves.iter().map(|&curve| ranges[curve].len()).collect()),
+            strata_codes: self
+                .strata_codes
+                .as_deref()
+                .filter(|_| several)
+                .map(|codes| select_items(codes, curves)),
+            n_id: select_items(&self.n_id, curves),
+            states: self.states.clone(),
+            transitions: self.transitions.clone(),
+            hazard_from: self.hazard_from.clone(),
+            hazard_to: self.hazard_to.clone(),
+            logse: self.logse,
+            conf_int: self.conf_int,
+            conf_type: self.conf_type.clone(),
+            type_: self.type_.clone(),
+            t0: self.t0,
+            start_time: self.start_time,
+            influence_pstate: self
+                .influence_pstate
+                .as_deref()
+                .map(|list| select_items(list, curves)),
+        })
+    }
+
+    /// `fit[, states]` (`[.survfitms`): the columns of the given states
+    /// (0-based, in the order given) of every per-state matrix, `p0`, `se0`
+    /// and the influence.  Unless every state is kept in its original order
+    /// the per-transition parts (`n_transition`, `cumhaz`, `std_chaz`) go, as
+    /// R has no consistent way to subscript them; the `transitions` table and
+    /// the unweighted `counts` always go.
+    pub fn select_states(&self, states: &[usize]) -> SurvivalResult<Self> {
+        let nstate = self.states.len();
+        if states.is_empty() {
+            return Err(SurvivalError::invalid_input("select at least one state"));
+        }
+        if let Some(state) = states.iter().find(|&&state| state >= nstate) {
+            return Err(SurvivalError::invalid_input(format!(
+                "state {state} is out of bounds for a fit with {nstate} states"
+            )));
+        }
+        let columns = |matrix: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            matrix.iter().map(|row| select_items(row, states)).collect()
+        };
+        let every_state = states.iter().copied().eq(0..nstate);
+        let per_transition = |matrix: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            if every_state {
+                matrix.to_vec()
+            } else {
+                vec![Vec::new(); matrix.len()]
+            }
+        };
+        let (hazard_from, hazard_to) = if every_state {
+            (self.hazard_from.clone(), self.hazard_to.clone())
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        Ok(Self {
+            n: self.n.clone(),
+            time: self.time.clone(),
+            n_risk: columns(&self.n_risk),
+            n_event: columns(&self.n_event),
+            n_censor: columns(&self.n_censor),
+            n_enter: self.n_enter.as_deref().map(columns),
+            n_transition: per_transition(&self.n_transition),
+            counts: None,
+            pstate: columns(&self.pstate),
+            cumhaz: per_transition(&self.cumhaz),
+            std_err: self.std_err.as_deref().map(columns),
+            std_chaz: self.std_chaz.clone().filter(|_| every_state),
+            std_auc: self.std_auc.as_deref().map(columns),
+            se0: self.se0.as_deref().map(columns),
+            lower: self.lower.as_deref().map(columns),
+            upper: self.upper.as_deref().map(columns),
+            p0: columns(&self.p0),
+            strata: self.strata.clone(),
+            strata_codes: self.strata_codes.clone(),
+            n_id: self.n_id.clone(),
+            states: select_items(&self.states, states),
+            transitions: Vec::new(),
+            hazard_from,
+            hazard_to,
+            logse: self.logse,
+            conf_int: self.conf_int,
+            conf_type: self.conf_type.clone(),
+            type_: self.type_.clone(),
+            t0: self.t0,
+            start_time: self.start_time,
+            influence_pstate: self.influence_pstate.as_ref().map(|list| {
+                list.iter()
+                    .map(|influence| {
+                        let (nid, ntime, _) = influence.values.dim();
+                        SurvfitAJInfluence {
+                            cluster: influence.cluster.clone(),
+                            values: Arc::new(Array3::from_shape_fn(
+                                (nid, ntime, states.len()).f(),
+                                |(g, t, k)| influence.values[[g, t, states[k]]],
+                            )),
+                            i0: influence.i0.as_ref().map(|i0| i0.select(Axis(1), states)),
+                        }
                     })
                     .collect()
-            }
-            None => {
-                let whole = 0..self.time.len();
-                vec![whole]
-            }
+            }),
+        })
+    }
+}
+
+#[pymethods]
+impl SurvfitAJResult {
+    /// Pickle and copy support (see `internal::pickle`).
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
+    #[pyo3(signature=(times=None, censored=false, extend=false))]
+    fn summary(
+        &self,
+        py: Python<'_>,
+        times: Option<Vec<f64>>,
+        censored: bool,
+        extend: bool,
+    ) -> PyResult<Self> {
+        py.detach(|| summary_survfit_aj(self, times.as_deref(), censored, extend))
+            .map_err(Into::into)
+    }
+
+    #[pyo3(signature=(scale=1.0, rmean="common"))]
+    fn mean_table(&self, py: Python<'_>, scale: f64, rmean: &str) -> PyResult<AJMeanTable> {
+        let option = RmeanOption::parse(rmean)?;
+        py.detach(|| survmean_aj(self, scale, option))
+            .map_err(Into::into)
+    }
+
+    /// For each row of `survfit0_aj(self)`, the 0-based row of `self` it
+    /// copies, or `-1 - s` for the row at `t0` inserted into curve `s`.
+    fn survfit0_rows(&self) -> IntVec {
+        IntVec(
+            survfit0_aj_rows(self)
+                .into_iter()
+                .map(|row| row as i32)
+                .collect(),
+        )
+    }
+
+    /// The rows whose `pstate` and `cumhaz` `summary(self, times, censored,
+    /// extend)` reports, encoded as in `survfit0_rows`.
+    #[pyo3(signature=(times=None, censored=false, extend=false))]
+    fn summary_rows(
+        &self,
+        times: Option<Vec<f64>>,
+        censored: bool,
+        extend: bool,
+    ) -> PyResult<IntVec> {
+        let rows = summary_rows(self, times.as_deref(), censored, extend)?;
+        Ok(IntVec(rows.into_iter().map(|row| row as i32).collect()))
+    }
+
+    /// `survmean2`'s table for curves on this fit's time grid and counts
+    /// with a newdata dimension (`survfit.coxphms`): `pstate` is `(ntime,
+    /// ndata, nstate)` and `p0` has a row per curve.  The rows run over the
+    /// curves fastest, then the newdata rows, then the states.  The table is
+    /// one pass over `pstate`, read in place.
+    #[cfg(feature = "python")]
+    #[pyo3(signature=(pstate, p0, scale=1.0, rmean="common"))]
+    fn mean_table_data(
+        &self,
+        pstate: numpy::PyReadonlyArray3<'_, f64>,
+        p0: Vec<Vec<f64>>,
+        scale: f64,
+        rmean: &str,
+    ) -> PyResult<AJMeanTable> {
+        let option = RmeanOption::parse(rmean)?;
+        let pstate = pstate.as_array();
+        let (ntime, ndata, nstate) = pstate.dim();
+        if ntime != self.time.len() || nstate != self.states.len() {
+            return Err(SurvivalError::invalid_input(
+                "pstate must be (ntime, ndata, nstate) on this fit's times and states",
+            )
+            .into());
         }
+        if p0.len() != self.n_curves() || p0.iter().any(|row| row.len() != nstate) {
+            return Err(SurvivalError::invalid_input("p0 needs a row per curve").into());
+        }
+        survmean_coxms(
+            self,
+            ndata,
+            |i, j, state| pstate[(i, j, state)],
+            &p0,
+            scale,
+            option,
+        )
+        .map_err(Into::into)
+    }
+
+    /// `fit[curves, ]`: see [`SurvfitAJResult::select_curves`].
+    #[pyo3(name = "select_curves")]
+    fn py_select_curves(&self, curves: Vec<usize>) -> PyResult<Self> {
+        Ok(self.select_curves(&curves)?)
+    }
+
+    /// `fit[, states]`: see [`SurvfitAJResult::select_states`].
+    #[pyo3(name = "select_states")]
+    fn py_select_states(&self, states: Vec<usize>) -> PyResult<Self> {
+        Ok(self.select_states(&states)?)
     }
 }
 
@@ -551,7 +820,9 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
     let mut stdp = se.then(|| Array2::<f64>::zeros((ntime, nstate)));
     let mut stdc = se.then(|| Array2::<f64>::zeros((ntime, nhaz)));
     let mut stda = se.then(|| Array2::<f64>::zeros((ntime, nstate)));
-    let mut usave = (d.sefit > 1).then(|| Array3::<f64>::zeros((ngrp, ntime, nstate)));
+    // column-major like R's influence.pstate: one contiguous run of ngrp
+    // values per time and state
+    let mut usave = (d.sefit > 1).then(|| Array3::<f64>::zeros((ngrp, ntime, nstate).f()));
     // influence of pstate (U), of the AUC (UA) and of cumhaz (C); wg is
     // the weighted number at risk by cluster and state
     let mut u = Array2::<f64>::zeros((nstate, ngrp));
@@ -726,9 +997,7 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
         }
         if let Some(usave) = &mut usave {
             for j in 0..nstate {
-                for g in 0..ngrp {
-                    usave[[g, i, j]] = u[[j, g]];
-                }
+                usave.slice_mut(s![.., i, j]).assign(&u.row(j));
             }
         }
     }
@@ -752,21 +1021,6 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
 // The R-level driver
 // ---------------------------------------------------------------------------
 
-fn codes_by_first_appearance(values: &[i64]) -> (Vec<usize>, Vec<i64>) {
-    let mut levels = Vec::new();
-    let mut lookup = HashMap::new();
-    let codes = values
-        .iter()
-        .map(|&value| {
-            *lookup.entry(value).or_insert_with(|| {
-                levels.push(value);
-                levels.len() - 1
-            })
-        })
-        .collect();
-    (codes, levels)
-}
-
 fn rows_to_vec(matrix: &Array2<f64>, columns: std::ops::Range<usize>) -> Vec<Vec<f64>> {
     matrix
         .outer_iter()
@@ -789,15 +1043,15 @@ pub(crate) fn aj_prepare(data: &SurvfitAJData, timefix: bool) -> SurvivalResult<
     let n_all = data.time.len();
     let counting = data.start.is_some();
     let (start, time) = if timefix {
-        let fixed = crate::data_prep::aeq_surv(&data.time, data.start.as_deref(), None)?;
-        if let Some(fixed_start) = &fixed.time2
-            && fixed_start.iter().zip(&fixed.time).any(|(s, t)| s == t)
+        let (start, time) = aeq_counting(data.start.as_deref(), &data.time)?;
+        if let Some(start) = &start
+            && start.iter().zip(&time).any(|(s, t)| s == t)
         {
             return Err(SurvivalError::invalid_input(
                 "aeqSurv exception, an interval has effective length 0",
             ));
         }
-        (fixed.time2, fixed.time)
+        (start, time)
     } else {
         (data.start.clone(), data.time.clone())
     };
@@ -809,7 +1063,7 @@ pub(crate) fn aj_prepare(data: &SurvfitAJData, timefix: bool) -> SurvivalResult<
     let weights: Vec<f64> = data.weights.clone().unwrap_or_else(|| vec![1.0; n_all]);
     // id: a dummy value when absent
     let (id, _) = match &data.id {
-        Some(id) => codes_by_first_appearance(id),
+        Some(id) => first_appearance_codes(id),
         None => ((0..n_all).collect(), (0..n_all as i64).collect()),
     };
     // istate levels: as given, else alphabetical, else "(s0)"
@@ -861,7 +1115,6 @@ pub fn survfitaj(
     let n_all = data.time.len();
     let counting = data.start.is_some();
     let has_id = data.id.is_some();
-    let has_cluster = data.cluster.is_some();
     let AJPrepared {
         start,
         time,
@@ -883,23 +1136,7 @@ pub fn survfitaj(
         }
     }
     // curves: the strata levels come from the full data
-    let strata_levels: Vec<i32> = match &data.strata {
-        Some(strata) => {
-            let mut levels = strata.clone();
-            levels.sort_unstable();
-            levels.dedup();
-            levels
-        }
-        None => vec![0],
-    };
-    let x_all: Vec<usize> = (0..n_all)
-        .map(|i| match &data.strata {
-            Some(strata) => strata_levels
-                .binary_search(&strata[i])
-                .expect("code is a level"),
-            None => 0,
-        })
-        .collect();
+    let (strata_levels, x_all) = strata_index(data.strata.as_deref(), n_all);
     // start.time: remove rows that end before it
     let rows: Vec<usize> = match options.start_time {
         Some(start_time) => {
@@ -930,22 +1167,15 @@ pub fn survfitaj(
     let x: Vec<usize> = rows.iter().map(|&i| x_all[i]).collect();
     let id: Vec<usize> = rows.iter().map(|&i| id_codes[i]).collect();
 
-    // cluster: the explicit cluster, else the id, else each observation
+    // cluster: the explicit cluster, else the id, else each observation,
+    // numbered in order of first appearance
     let influence = options.influence && options.se_fit;
-    let (cluster, cluster_labels): (Vec<usize>, Vec<i64>) = if has_cluster {
-        let subset: Vec<i64> = rows
-            .iter()
-            .map(|&i| data.cluster.as_ref().expect("has cluster")[i])
-            .collect();
-        codes_by_first_appearance(&subset)
-    } else if has_id {
-        let subset: Vec<i64> = rows
-            .iter()
-            .map(|&i| data.id.as_ref().expect("has id")[i])
-            .collect();
-        codes_by_first_appearance(&subset)
-    } else {
-        ((0..n).collect(), (0..n as i64).collect())
+    let cluster: Vec<usize> = match data.cluster.as_ref().or(data.id.as_ref()) {
+        Some(labels) => {
+            let subset: Vec<i64> = rows.iter().map(|&i| labels[i]).collect();
+            first_appearance_codes(&subset).0
+        }
+        None => (0..n).collect(),
     };
 
     // does everyone start in the same state?
@@ -1046,17 +1276,19 @@ pub fn survfitaj(
         p0: Vec<f64>,
         sd0: Option<Vec<f64>>,
         clusters: Vec<i64>,
-        i0: Option<Vec<Vec<f64>>>,
+        i0: Option<Array2<f64>>,
         fit: AJCurveFit,
     }
     let mut curves: Vec<Curve> = Vec::with_capacity(n_curves);
     let mut c2 = vec![0usize; n];
+    // R's logical atrisk, set for one curve at a time, and its row offset
+    // n2 <- cumsum(c(0, n.per.curve))
+    let mut is_atrisk = vec![false; n];
+    let mut row_offset = 0;
     let single = n_curves == 1;
-    for ((curve, &code), keep) in strata_levels
-        .iter()
-        .enumerate()
-        .zip(rows_by_curve(&x, n_curves))
-    {
+    for (&code, keep) in strata_levels.iter().zip(rows_by_curve(&x, n_curves)) {
+        let curve_offset = row_offset;
+        row_offset += keep.len();
         if keep.is_empty() {
             continue;
         }
@@ -1084,16 +1316,14 @@ pub fn survfitaj(
             utime.into_iter().filter(|&t| t >= t0).collect()
         };
         // clusters renumbered per curve, in order of appearance
-        let subset: Vec<i64> = keep.iter().map(|&i| cluster[i] as i64).collect();
-        let (renumbered, unique) = codes_by_first_appearance(&subset);
+        let subset: Vec<usize> = keep.iter().map(|&i| cluster[i]).collect();
+        let (renumbered, unique) = first_appearance_codes(&subset);
         for (&i, code) in keep.iter().zip(renumbered) {
             c2[i] = code;
         }
         let nclust = unique.len();
-        let clusters: Vec<i64> = unique
-            .iter()
-            .map(|&code| cluster_labels[code as usize])
-            .collect();
+        // R names the influence rows `uclust`: the clusters' numbers
+        let clusters: Vec<i64> = unique.iter().map(|&code| code as i64 + 1).collect();
         let n_id = {
             let mut ids: Vec<usize> = keep.iter().map(|&i| id[i]).collect();
             ids.sort_unstable();
@@ -1102,9 +1332,9 @@ pub fn survfitaj(
         };
         // p0 per curve, from the distribution of states at t0, with its
         // (clustered, weighted) influence U0
-        let mut u0 = Array2::<f64>::zeros((nclust, nstate));
+        let mut u0 = Array2::<f64>::zeros((nclust, nstate).f());
         let mut sd0 = None;
-        let mut i0_out = None;
+        let mut has_i0 = false;
         let p00: Vec<f64> = match &p0_common {
             Some(p0) => p0.clone(),
             None => {
@@ -1143,13 +1373,12 @@ pub fn survfitaj(
                     // those are not the curve's own rows.  Kept as R does it:
                     // row offset + k contributes to the cluster of the k-th
                     // row of the curve.
-                    let offset: usize = (0..curve)
-                        .map(|earlier| x.iter().filter(|&&value| value == earlier).count())
-                        .sum();
-                    let at_risk = |row: usize| atrisk.contains(&row);
+                    for &i in &atrisk {
+                        is_atrisk[i] = true;
+                    }
                     for (k, &curve_row) in keep.iter().enumerate() {
-                        let row = offset + k;
-                        if row >= n || !at_risk(row) {
+                        let row = curve_offset + k;
+                        if !is_atrisk[row] {
                             continue;
                         }
                         for j in 0..nstate {
@@ -1157,14 +1386,15 @@ pub fn survfitaj(
                             u0[[c2[curve_row], j]] += weights[row] * (indicator - p00[j]) / wtsum;
                         }
                     }
+                    for &i in &atrisk {
+                        is_atrisk[i] = false;
+                    }
                     sd0 = Some(
                         (0..nstate)
                             .map(|j| u0.column(j).iter().map(|v| v * v).sum::<f64>().sqrt())
                             .collect(),
                     );
-                    if u0.iter().any(|&v| v != 0.0) {
-                        i0_out = Some(u0.outer_iter().map(|row| row.to_vec()).collect());
-                    }
+                    has_i0 = u0.iter().any(|&v| v != 0.0);
                 }
                 p00
             }
@@ -1198,7 +1428,7 @@ pub fn survfitaj(
             p0: p00,
             sd0,
             clusters,
-            i0: i0_out,
+            i0: has_i0.then_some(u0),
             fit,
         });
     }
@@ -1293,13 +1523,10 @@ pub fn survfitaj(
         if let (Some(target), Some(source)) = (&mut result.std_chaz, &fit.std_chaz) {
             target.extend(rows_to_vec(source, 0..nhaz));
         }
-        if let (Some(list), Some(matrix)) = (&mut result.influence_pstate, &fit.influence) {
+        if let (Some(list), Some(values)) = (&mut result.influence_pstate, fit.influence) {
             list.push(SurvfitAJInfluence {
                 cluster: curve.clusters,
-                values: matrix
-                    .outer_iter()
-                    .map(|by_time| by_time.outer_iter().map(|row| row.to_vec()).collect())
-                    .collect(),
+                values: Arc::new(values),
                 i0: if options.time0 { None } else { curve.i0 },
             });
         }
@@ -1332,12 +1559,13 @@ pub fn survfitaj(
 #[pyo3(signature = (time, state, states, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, se_fit=true, conf_int=0.95, conf_type="log", influence=false, start_time=None, p0=None, entry=false, time0=false, timefix=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn survfitaj_py(
-    time: Vec<f64>,
-    state: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    state: IntVec,
     states: Vec<String>,
-    start: Option<Vec<f64>>,
-    weights: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    start: Option<FloatVec>,
+    weights: Option<FloatVec>,
+    strata: Option<IntVec>,
     id: Option<Vec<i64>>,
     istate: Option<Vec<String>>,
     istate_levels: Option<Vec<String>>,
@@ -1353,12 +1581,12 @@ pub fn survfitaj_py(
     timefix: bool,
 ) -> PyResult<SurvfitAJResult> {
     let data = SurvfitAJData::try_new(
-        start,
-        time,
-        state,
+        start.map(FloatVec::into_inner),
+        time.into_inner(),
+        state.into_inner(),
         states,
-        weights,
-        strata,
+        weights.map(FloatVec::into_inner),
+        strata.map(IntVec::into_inner),
         id,
         istate,
         istate_levels,
@@ -1375,7 +1603,7 @@ pub fn survfitaj_py(
         time0,
         timefix,
     };
-    Ok(survfitaj(&data, &options)?)
+    Ok(py.detach(|| survfitaj(&data, &options))?)
 }
 
 #[cfg(test)]
@@ -1538,18 +1766,66 @@ mod tests {
             )
             .unwrap();
             let influence = &fit.influence_pstate.as_ref().unwrap()[0];
+            assert!(influence.values.t().is_standard_layout(), "column-major");
             let se = fit.std_err.as_ref().unwrap();
             for (t, row) in se.iter().enumerate() {
                 for (j, &expected) in row.iter().enumerate() {
                     let norm = influence
                         .values
+                        .slice(s![.., t, j])
                         .iter()
-                        .map(|by_time| by_time[t][j] * by_time[t][j])
+                        .map(|v| v * v)
                         .sum::<f64>()
                         .sqrt();
                     assert!(close(norm, expected, 1e-10), "{norm} != {expected}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn estimated_p0_influence_reads_rows_at_r_curve_offsets() {
+        // survfit(Surv(start, stop, ev) ~ g, id = id, istate = istate,
+        // influence = TRUE) with the two curves' rows interleaved: p0 is
+        // estimated at t0 = 2 and survfitAJ.R reads curve k's rows at its
+        // offset in the data, R's n2 <- cumsum(c(0, n.per.curve))
+        let istate = ["a", "b", "a", "a", "b", "b", "a", "b", "a", "b", "a", "a"];
+        let data = SurvfitAJData::try_new(
+            Some(vec![0.0; 12]),
+            vec![5.0, 3.0, 7.0, 2.0, 4.0, 6.0, 8.0, 1.0, 9.0, 3.0, 6.0, 5.0],
+            vec![1, 0, 2, 1, 0, 2, 2, 0, 1, 2, 0, 1],
+            names(&["b", "c"]),
+            None,
+            Some((0..12).map(|i| i % 2).collect()),
+            Some((1..=12).collect()),
+            Some(names(&istate)),
+            Some(names(&["a", "b", "c"])),
+            None,
+        )
+        .unwrap();
+        let options = SurvfitAJOptions {
+            influence: true,
+            ..Default::default()
+        };
+        let fit = survfitaj(&data, &options).unwrap();
+        assert_eq!(fit.t0, 2.0);
+        assert!(close(fit.p0[0][0], 5.0 / 6.0, 1e-12) && close(fit.p0[1][0], 0.4, 1e-12));
+        // fit$i0[[k]][, "a"] (column "b" is its negative) and fit$se0
+        let influence = fit.influence_pstate.as_ref().unwrap();
+        let expected = [
+            [1.0 / 36.0, 0.0, 1.0 / 36.0, 0.0, -5.0 / 36.0, 0.0],
+            [0.0, 0.0, 0.0, -0.08, 0.0, 0.12],
+        ];
+        for (curve, expected) in influence.iter().zip(expected) {
+            let i0 = curve.i0.as_ref().unwrap();
+            for (k, &value) in expected.iter().enumerate() {
+                assert!(close(i0[[k, 0]], value, 1e-12) && close(i0[[k, 1]], -value, 1e-12));
+                assert_eq!(i0[[k, 2]], 0.0);
+            }
+        }
+        let se0 = fit.se0.as_ref().unwrap();
+        for (row, expected) in se0.iter().zip([(1.0f64 / 48.0).sqrt(), 0.0208f64.sqrt()]) {
+            assert!(close(row[0], expected, 1e-12) && close(row[1], expected, 1e-12));
         }
     }
 
@@ -1595,6 +1871,96 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn select_curves_slices_each_curve() {
+        let mut data = ties_data();
+        data.strata = Some((0..16).map(|i| i % 2).collect());
+        let fit = survfitaj(
+            &data,
+            &SurvfitAJOptions {
+                influence: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rows = fit.curve_ranges()[1].clone();
+        let second = fit.select_curves(&[1]).unwrap();
+        assert_eq!(second.time, fit.time[rows.clone()]);
+        assert_eq!(second.pstate, fit.pstate[rows.clone()]);
+        assert_eq!(
+            second.std_err.as_deref(),
+            Some(&fit.std_err.as_ref().unwrap()[rows])
+        );
+        assert_eq!((second.n, second.n_id), (vec![fit.n[1]], vec![fit.n_id[1]]));
+        assert_eq!(second.p0, vec![fit.p0[1].clone()]);
+        assert_eq!((second.strata, second.strata_codes), (None, None));
+        assert_eq!(
+            second.influence_pstate.unwrap(),
+            vec![fit.influence_pstate.as_ref().unwrap()[1].clone()]
+        );
+        // R numbers the clusters (here the rows) by first appearance in the data
+        let clusters = &fit.influence_pstate.as_ref().unwrap()[1].cluster;
+        assert_eq!(clusters, &(1..=8).map(|k| 2 * k).collect::<Vec<i64>>());
+        let swapped = fit.select_curves(&[1, 0]).unwrap();
+        assert_eq!(swapped.strata_codes, Some(vec![1, 0]));
+        assert!(fit.select_curves(&[2]).is_err());
+    }
+
+    #[test]
+    fn select_states_matches_r() {
+        // e <- factor(c("censor","a","b","a","b","censor","a","b"), c("censor","a","b"))
+        // f <- survfit(Surv(1:8, e) ~ 1); f[, "a"]$pstate, $std.err
+        let data = SurvfitAJData::try_new(
+            None,
+            (1..=8).map(f64::from).collect(),
+            vec![0, 1, 2, 1, 2, 0, 1, 2],
+            names(&["a", "b"]),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let fit = survfitaj(&data, &SurvfitAJOptions::default()).unwrap();
+        assert_eq!(fit.states, names(&["(s0)", "a", "b"]));
+        let a = fit.select_states(&[1]).unwrap();
+        assert_eq!(a.states, names(&["a"]));
+        let pstate = [0.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.5, 3.5].map(|p| p / 7.0);
+        let se = [
+            0.0,
+            0.132260014253222,
+            0.132260014253222,
+            0.170746944190628,
+            0.170746944190628,
+            0.170746944190628,
+            0.208248281958761,
+            0.208248281958761,
+        ];
+        for (t, row) in a.pstate.iter().enumerate() {
+            assert!(close(row[0], pstate[t], 1e-12));
+            assert!(close(a.std_err.as_ref().unwrap()[t][0], se[t], 1e-12));
+        }
+        assert_eq!(a.p0, vec![vec![0.0]]);
+        assert!(a.n_censor.iter().all(|row| row.len() == 1));
+        // the transitions go: R has no consistent way to subscript them
+        assert!(a.hazard_from.is_empty() && a.transitions.is_empty());
+        assert!(a.cumhaz.iter().all(Vec::is_empty) && a.std_chaz.is_none());
+        let all = fit.select_states(&[0, 1, 2]).unwrap();
+        assert_eq!(
+            (&all.cumhaz, &all.hazard_from),
+            (&fit.cumhaz, &fit.hazard_from)
+        );
+        assert!(
+            fit.select_states(&[2, 1, 0])
+                .unwrap()
+                .hazard_from
+                .is_empty()
+        );
+        assert!(fit.select_states(&[3]).is_err());
     }
 
     #[test]

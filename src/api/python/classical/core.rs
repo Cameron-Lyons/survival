@@ -33,35 +33,77 @@ fn pspline_basis_py(
     )?)
 }
 
+/// Rebuilds an object pickled by its class's `__reduce__` from the class
+/// and the state `internal::pickle` encoded.
+#[pyfunction(name = "_unpickle")]
+fn unpickle(cls: &Bound<'_, pyo3::types::PyType>, state: &[u8]) -> PyResult<Py<PyAny>> {
+    use crate::internal::pickle::decode;
+    let py = cls.py();
+    macro_rules! restore {
+        ($($class:ty),+ $(,)?) => {$(
+            if cls.is(py.get_type::<$class>()) {
+                return Ok(Py::new(py, decode::<$class>(py, state)?)?.into_any());
+            }
+        )+};
+    }
+    restore!(
+        CoxPHFit,
+        crate::regression::TieMethod,
+        CoxpenalFit,
+        CoxPenalty,
+        CoxPenaltyTerms,
+        PenaltyHistory,
+        crate::concordance::ConcordanceFit,
+        crate::concordance::ConcordanceCounts,
+        crate::concordance::ConcordanceRanks,
+        SurvregFit,
+        SurvregControl,
+        SurvregDistribution,
+        SurvregFamily,
+        SurvregTransform,
+        SurvfitKMResult,
+        SurvfitCounts,
+        SurvfitInfluence,
+        SurvfitAJResult,
+        SurvfitAJCounts,
+        SurvfitAJInfluence,
+        crate::validation::AnovaRow,
+        crate::validation::AnovaCoxphResult,
+        crate::validation::YatesContrast,
+        crate::validation::SurvCheckFlags,
+        crate::validation::SurvCheckTransitions,
+        crate::validation::SurvCheckEvents,
+        crate::data_prep::TcutResult,
+        crate::core::SplineBasisResult,
+    );
+    Err(pyo3::exceptions::PyValueError::new_err(format!(
+        "_unpickle cannot restore a {}",
+        cls.name()?
+    )))
+}
+
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(aareg, m)?)?;
-    m.add_function(wrap_pyfunction!(aareg_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(aareg_fit_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;
     m.add_function(wrap_pyfunction!(coxph_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(coxphms_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxpenal_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_borgan_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount1_py, m)?)?;
     m.add_function(wrap_pyfunction!(coxcount2_py, m)?)?;
-    m.add_function(wrap_pyfunction!(norisk_py, m)?)?;
     m.add_function(wrap_pyfunction!(cipoisson_py, m)?)?;
+    m.add_function(wrap_pyfunction!(pchisq_py, m)?)?;
     m.add_function(wrap_pyfunction!(pspline_basis_py, m)?)?;
     m.add_function(wrap_pyfunction!(agexact_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_py, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_detail_py, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_baseline_survival_steps, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_tied_baseline_summaries, m)?)?;
-    m.add_function(wrap_pyfunction!(cox_expected_baseline_by_stratum, m)?)?;
+    m.add_function(wrap_pyfunction!(unpickle, m)?)?;
 
     register_classes!(
         m,
-        AaregConfidenceInterval,
-        AaregDiagnostics,
-        AaregFitDetails,
         AaregFitResult,
-        AaregOptions,
-        AaregResult,
         PsplineBasis,
         CoxCountOutput,
         CoxPHFit,

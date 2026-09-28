@@ -1,5 +1,6 @@
-"""Model validation and inference: tests (``logrank_test``, ``wald_test``, ``anova_coxph``),
-prediction metrics (``brier``, concordance variants, calibration), RMST summaries, checks."""
+"""Model validation and inference: tests (``logrank_test``, ``wald_test``, ``anova_coxph``,
+``pchisq``), prediction metrics (``brier``, concordance variants, calibration), RMST
+summaries, checks."""
 
 from ._binding_utils import bind_names
 
@@ -28,6 +29,7 @@ __all__ = bind_names(
         "time_dependent_calibration",
         "CipoissonResult",
         "cipoisson",
+        "pchisq",
         "BootstrapConformalResult",
         "CQRConformalResult",
         "CVPlusCalibrationResult",
@@ -206,10 +208,13 @@ __all__ = bind_names(
         "gonen_heller_concordance",
         "uno_c_index",
         "YatesContrast",
+        "YatesCurves",
         "YatesEstimate",
         "YatesResult",
         "yates",
+        "yates_estimable",
         "yates_risk",
+        "yates_survival",
         "yates_population_means",
     ],
 )

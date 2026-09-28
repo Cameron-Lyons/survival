@@ -8,6 +8,7 @@
 //! (`time`, `n.risk`, `strata`, ...) are unchanged and stay with the caller.
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::FloatMatrix;
 use crate::internal::validation::validate_length;
 use ndarray::{Array2, Array3};
 use pyo3::prelude::*;
@@ -316,18 +317,6 @@ pub fn aggregate_survfit(
     })
 }
 
-/// The `[time][data]` rows of `surv` as a matrix.
-fn surv_matrix(rows: &[Vec<f64>]) -> SurvivalResult<Array2<f64>> {
-    let n_data = rows.first().map_or(0, Vec::len);
-    let mut flat = Vec::with_capacity(rows.len() * n_data);
-    for (t, row) in rows.iter().enumerate() {
-        validate_length(n_data, row.len(), &format!("surv row {t}"))?;
-        flat.extend_from_slice(row);
-    }
-    Array2::from_shape_vec((rows.len(), n_data), flat)
-        .map_err(|err| SurvivalError::invalid_input(format!("surv: {err}")))
-}
-
 /// The `[time][data][state]` entries of `pstate` as an array.
 fn pstate_array(entries: &[Vec<Vec<f64>>]) -> SurvivalResult<Array3<f64>> {
     let n_data = entries.first().map_or(0, Vec::len);
@@ -352,19 +341,17 @@ fn pstate_array(entries: &[Vec<Vec<f64>>]) -> SurvivalResult<Array3<f64>> {
 #[pyfunction(name = "aggregate_survfit")]
 #[pyo3(signature = (surv=None, pstate=None, by=None, fun="mean"))]
 pub fn aggregate_survfit_py(
-    surv: Option<Vec<Vec<f64>>>,
+    py: Python<'_>,
+    surv: Option<FloatMatrix>,
     pstate: Option<Vec<Vec<Vec<f64>>>>,
     by: Option<Vec<GroupingFactor>>,
     fun: &str,
 ) -> PyResult<AggregateSurvfitResult> {
-    let surv = surv.as_deref().map(surv_matrix).transpose()?;
+    let surv = surv.map(FloatMatrix::into_inner);
     let pstate = pstate.as_deref().map(pstate_array).transpose()?;
-    Ok(aggregate_survfit(
-        surv.as_ref(),
-        pstate.as_ref(),
-        by.as_deref().unwrap_or_default(),
-        AggregateFun::parse(fun)?,
-    )?)
+    let fun = AggregateFun::parse(fun)?;
+    let by = by.unwrap_or_default();
+    Ok(py.detach(|| aggregate_survfit(surv.as_ref(), pstate.as_ref(), &by, fun))?)
 }
 
 #[cfg(test)]
@@ -545,8 +532,5 @@ mod tests {
         let err =
             aggregate_survfit(Some(&surv()), Some(&pstate), &[], AggregateFun::Mean).unwrap_err();
         assert!(err.to_string().contains("pstate data margin"));
-        let ragged =
-            aggregate_survfit_py(Some(vec![vec![0.9, 0.8], vec![0.7]]), None, None, "mean");
-        assert!(ragged.is_err());
     }
 }

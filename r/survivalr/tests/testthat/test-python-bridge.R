@@ -198,21 +198,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(surv2_response_frame[[1L]], surv2_frame_response)
   expect_s3_class(surv2_frame_response[1:2], "Surv2")
   expect_equal(attr(surv2_frame_response[1:2], "states"), attr(surv2_frame_response, "states"))
-  surv2data_probe <- data.frame(
-    id = c(1, 1, 1, 2, 2),
-    time = c(0, 2, 5, 0, 3),
-    state = factor(
-      c("entry", "ill", "death", "entry", "censor"),
-      levels = c("censor", "entry", "ill", "death")
-    ),
-    z = c("A", "A", "A", "B", "B"),
-    x = c(10, 11, 12, 20, 21)
-  )
-  bridged_surv2data_probe <- Surv2data(Surv2(time, state) ~ z + x, data = surv2data_probe, id = id)
-  expect_equal(names(bridged_surv2data_probe)[[1L]], "Surv2(time, state)")
-  expect_s3_class(bridged_surv2data_probe[[1L]], "Surv2")
-  expect_equal(nrow(bridged_surv2data_probe), 3L)
-  expect_false(any(grepl("Surv2\\(time, state\\)\\.time", capture.output(print(bridged_surv2data_probe)))))
   reference_factor_response <- survival::Surv(c(1, 2, NA), factor(c("censor", "relapse", "death")))
   expect_true(is.Surv(factor_response))
   expect_true(is.Surv(reference_factor_response))
@@ -1733,6 +1718,12 @@ test_that("R formula wrappers delegate to the Python survival package", {
     dsurvreg(1, mean = 0, distribution = "gaussian"),
     tolerance = 1e-12
   )
+  # rsurvreg draws R's runif, so set.seed() reproduces R's values
+  set.seed(1)
+  bridged_draws <- rsurvreg(3, 0, 1)
+  expect_equal(bridged_draws, c(0.30858, 0.46541, 0.85063), tolerance = 1e-5)
+  set.seed(1)
+  expect_equal(bridged_draws, survival::rsurvreg(3, 0, 1), tolerance = 1e-12)
 
   km <- survfit(Surv(time, status) ~ group, data = data)
   expect_s3_class(km, "survival_py_survfit")
@@ -3042,9 +3033,17 @@ test_that("R formula wrappers delegate to the Python survival package", {
     weights = wt,
     subset = keep
   ))
-  expect_equal(as.numeric(old_concordance$concordance), as.numeric(reference_old_concordance$concordance))
-  expect_equal(names(old_fit_stats), c("concordant", "discordant", "tied.risk", "tied.time", "std(c-d)"))
-  expect_equal(unname(old_fit_stats[["concordant"]]), unname(reference_old_fit_stats[["concordant"]]))
+  expect_s3_class(old_concordance, "survConcordance")
+  for (component in c("concordance", "stats", "n", "std.err")) {
+    expect_equal(old_concordance[[component]], reference_old_concordance[[component]])
+  }
+  expect_equal(old_fit_stats, reference_old_fit_stats)
+  expect_equal(
+    suppressWarnings(survConcordance.fit(Surv(data$time, data$status), data$x, strata = data$group)),
+    suppressWarnings(survival::survConcordance.fit(
+      survival::Surv(data$time, data$status), data$x, strata = data$group
+    ))
+  )
   expect_equal(as.numeric(old_subset_concordance$concordance), as.numeric(reference_old_subset_concordance$concordance))
   bridged_concordancefit <- concordancefit(
     Surv(data$time, data$status),
@@ -5607,11 +5606,9 @@ test_that("data-prep helpers match R survival shapes", {
       "survival::Surv(time, status) ~ x + ", wrapper, "(group) + strata(group)"
     ))
     expect_true(.survobrien_formula_python_eligible(wrapper_formula, obrien_factor_data))
-    # the keeper and the strata term both copy `group`; the bridge keeps it once
-    reference_wrapper <- reference_survobrien_strata(wrapper_formula, data = obrien_factor_data)
     expect_equal(
       survobrien(wrapper_formula, data = obrien_factor_data),
-      reference_wrapper[names(reference_wrapper) != "group.1"]
+      reference_survobrien_strata(wrapper_formula, data = obrien_factor_data)
     )
   }
   obrien_factor_row_names <- data.frame(
@@ -5900,7 +5897,7 @@ test_that("Cox bridge agrees with R survival on a small right-censored fixture",
   bridged_summary <- summary(bridged)
   reference_summary <- summary(reference)
   expect_equal(bridged_summary$n, reference_summary$n)
-  expect_equal(bridged_summary$n_event, reference_summary$nevent)
+  expect_equal(bridged_summary$nevent, reference_summary$nevent)
   expect_equal(deviance(bridged), deviance(reference))
   expect_equal(labels(bridged), attr(reference$terms, "term.labels"))
   bridged_concordance <- concordance(bridged)
@@ -6308,7 +6305,7 @@ test_that("Cox likelihood metadata counts weighted and recurrent event rows", {
   no_events_summary <- summary(no_events)
   reference_no_events_summary <- summary(reference_no_events)
   expect_equal(no_events_summary$n, nrow(right))
-  expect_equal(no_events_summary$n_event, 0L)
+  expect_equal(no_events_summary$nevent, 0L)
   for (field in c("logtest", "sctest", "waldtest")) {
     expect_equal(no_events_summary[[field]], reference_no_events_summary[[field]])
   }
@@ -6338,7 +6335,7 @@ test_that("Cox likelihood metadata counts weighted and recurrent event rows", {
   expect_equal(attr(logLik(counting), "nobs"), attr(logLik(reference_counting), "nobs"))
   expect_equal(BIC(counting), BIC(reference_counting), tolerance = 1e-12)
   expect_equal(summary(counting)$n, nrow(recurrent))
-  expect_equal(summary(counting)$n_event, sum(recurrent$status))
+  expect_equal(summary(counting)$nevent, sum(recurrent$status))
 })
 
 test_that("Cox bridge reports converged aliased coefficients like R survival", {
@@ -7671,10 +7668,10 @@ test_that("cch stratified Borgan fits match survival", {
   )
   cohort_sizes <- c(a = 40, b = 40)
 
-  compare_fit <- function(formula, method) {
+  compare_fit <- function(formula, method, fit_data = data) {
     actual <- cch(
       formula,
-      data,
+      fit_data,
       subcoh = ~subcohort,
       id = ~id,
       stratum = ~sampling,
@@ -7683,7 +7680,7 @@ test_that("cch stratified Borgan fits match survival", {
     )
     reference <- survival::cch(
       formula,
-      data,
+      fit_data,
       subcoh = ~subcohort,
       id = ~id,
       stratum = ~sampling,
@@ -7705,9 +7702,13 @@ test_that("cch stratified Borgan fits match survival", {
     expect_true(actual$stratified)
   }
 
+  # ids out of row order: sc has one row per id in sorted id order, as rowsum gives
+  shuffled <- transform(data, id = c(7L, 19L, 3L, 12L, 1L, 16L, 9L, 20L, 5L, 14L,
+                                     2L, 18L, 11L, 6L, 15L, 4L, 17L, 10L, 13L, 8L))
   for (method in c("I.Borgan", "II.Borgan")) {
     compare_fit(Surv(stop, status) ~ x + z, method)
     compare_fit(Surv(start, stop, status) ~ x + z, method)
+    compare_fit(Surv(stop, status) ~ x + z, method, fit_data = shuffled)
   }
 })
 
@@ -7931,4 +7932,124 @@ test_that("ordinary istate inputs match R model-frame semantics", {
   fit_istate_name <- grep("istate", names(bridged_fit_frame), value = TRUE)
   expect_length(fit_istate_name, 1L)
   expect_equal(as.character(bridged_fit_frame[[fit_istate_name]]), as.character(data$state))
+})
+
+test_that("bridge fits follow R's na.action, labels and multi-state methods", {
+  skip_if_not_installed("reticulate")
+  skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
+
+  lung <- survival::lung
+  # na.action defaults to getOption("na.action"): the row with a missing ph.ecog goes
+  cox <- coxph(Surv(time, status) ~ age + ph.ecog, data = lung)
+  reference_cox <- survival::coxph(survival::Surv(time, status) ~ age + ph.ecog, data = lung)
+  expect_equal(unname(coef(cox)), unname(coef(reference_cox)), tolerance = 1e-9)
+  expect_equal(length(residuals(cox)), reference_cox$n)
+  weibull <- survreg(Surv(time, status) ~ age + ph.ecog, data = lung)
+  reference_weibull <- survival::survreg(survival::Surv(time, status) ~ age + ph.ecog, data = lung)
+  expect_equal(unname(coef(weibull)), unname(coef(reference_weibull)), tolerance = 1e-6)
+  expect_equal(residuals(weibull)[1:5], unname(residuals(reference_weibull)[1:5]), tolerance = 1e-5)
+
+  # na.exclude pads residuals and predictions with NA at the dropped row
+  excluded <- coxph(Surv(time, status) ~ age + ph.ecog, data = lung, na.action = na.exclude)
+  reference_excluded <- survival::coxph(
+    survival::Surv(time, status) ~ age + ph.ecog,
+    data = lung,
+    na.action = na.exclude
+  )
+  expect_equal(residuals(excluded), unname(residuals(reference_excluded)), tolerance = 1e-9)
+  expect_equal(predict(excluded), unname(predict(reference_excluded)), tolerance = 1e-9)
+  expect_identical(which(is.na(residuals(excluded))), 14L)
+  expect_false(any(is.nan(residuals(excluded))))
+
+  # Schoenfeld residuals carry the death times and the deaths per stratum
+  stratified <- coxph(Surv(time, status) ~ age + strata(sex), data = lung)
+  reference_stratified <- survival::coxph(survival::Surv(time, status) ~ age + strata(sex), data = lung)
+  for (type in c("schoenfeld", "scaledsch")) {
+    expect_equal(
+      residuals(stratified, type = type),
+      residuals(reference_stratified, type = type),
+      tolerance = 1e-8
+    )
+  }
+  two_covariates <- coxph(Surv(time, status) ~ age + sex, data = lung)
+  expect_equal(
+    residuals(two_covariates, type = "schoenfeld"),
+    residuals(
+      survival::coxph(survival::Surv(time, status) ~ age + sex, data = lung),
+      type = "schoenfeld"
+    ),
+    tolerance = 1e-8
+  )
+  # fitted.coxph is the linear predictor centred at the overall means
+  expect_equal(fitted(stratified)[1:3], c(0.18732190, 0.09003399, -0.10454183), tolerance = 1e-7)
+
+  # vcov of a survreg fit names its scales as R does and keeps them without complete
+  scales <- survreg(Surv(time, status) ~ age + strata(sex), data = lung)
+  expect_equal(
+    vcov(scales),
+    vcov(survival::survreg(survival::Surv(time, status) ~ age + strata(sex), data = lung)),
+    tolerance = 1e-5
+  )
+  aliased_lung <- transform(lung, age2 = 2 * age)
+  aliased <- survreg(Surv(time, status) ~ age + age2 + sex, data = aliased_lung)
+  reference_aliased <- survival::survreg(
+    survival::Surv(time, status) ~ age + age2 + sex,
+    data = aliased_lung
+  )
+  expect_equal(vcov(aliased, complete = FALSE), vcov(reference_aliased, complete = FALSE), tolerance = 1e-5)
+
+  # summary.coxph.penal: one row per term, pspline split in its linear and nonlinear parts
+  penalized <- coxph(Surv(time, status) ~ pspline(age, df = 4) + sex, data = lung)
+  reference_penalized <- summary(survival::coxph(
+    survival::Surv(time, status) ~ survival::pspline(age, df = 4) + sex,
+    data = lung
+  ))
+  penalized_summary <- summary(penalized)
+  expect_equal(penalized_summary$coefficients, reference_penalized$coefficients, tolerance = 1e-6)
+  expect_equal(penalized_summary$conf.int, reference_penalized$conf.int, tolerance = 1e-6)
+  expect_equal(penalized_summary$logtest, reference_penalized$logtest, tolerance = 1e-6)
+  expect_equal(penalized_summary$iter, reference_penalized$iter)
+  expect_output(print(penalized_summary), "pspline\\(age, df = 4\\), non")
+  # a penalized survreg fit has one loglik per model and one df per term
+  penalized_aft <- survreg(Surv(time, status) ~ pspline(age, df = 3) + sex, data = lung)
+  expect_output(
+    print(summary(penalized_aft)),
+    "logLik=-1154 -1146 df=0.4901 3.0639 0.9976 0.9987 n=228",
+    fixed = TRUE
+  )
+
+  # multi-state coxph: formula lists, coef/vcov(matrix = TRUE) and the curves' dim and [
+  mgus <- survival::mgus2
+  mgus$etime <- with(mgus, ifelse(pstat == 0, futime, ptime))
+  mgus$event <- factor(
+    with(mgus, ifelse(pstat == 0, 2 * death, 1)),
+    0:2,
+    labels = c("censor", "pcm", "death")
+  )
+  multistate <- coxph(Surv(etime, event) ~ age + sex, data = mgus, id = id)
+  reference_multistate <- survival::coxph(survival::Surv(etime, event) ~ age + sex, data = mgus, id = id)
+  expect_equal(coef(multistate, matrix = TRUE), coef(reference_multistate, matrix = TRUE), tolerance = 1e-7)
+  blocks <- vcov(multistate, matrix = TRUE)
+  expect_equal(dim(blocks), c(2L, 2L, 2L))
+  expect_equal(dimnames(blocks)$transition, c("1:2", "1:3"))
+  expect_equal(unname(blocks[, , "1:3"]), unname(vcov(reference_multistate)[3:4, 3:4]), tolerance = 1e-7)
+  shared <- coxph(list(Surv(etime, event) ~ age, 1:2 ~ sex), data = mgus, id = id)
+  expect_equal(
+    coef(shared),
+    coef(survival::coxph(list(survival::Surv(etime, event) ~ age, 1:2 ~ sex), data = mgus, id = id)),
+    tolerance = 1e-7
+  )
+  newdata <- data.frame(age = c(60, 70), sex = c("F", "M"))
+  curves <- suppressWarnings(survfit(multistate, newdata = newdata))
+  reference_curves <- survival::survfit(reference_multistate, newdata = newdata)
+  expect_equal(dim(curves), dim(reference_curves))
+  expect_equal(dim(curves[1, ]), dim(reference_curves[1, ]))
+  expect_equal(dim(curves[, "pcm"]), dim(reference_curves[, "pcm"]))
+  expect_error(curves[1], "single index subscripts are not supported")
+  expect_error(curves[, "bogus"], "subscript out of bounds")
+  expect_error(curves[5, ], "subscript out of bounds")
+  curve_summary <- summary(curves, times = c(100, 200))
+  reference_summary <- summary(reference_curves, times = c(100, 200))
+  expect_equal(curve_summary$pstate, reference_summary$pstate, tolerance = 1e-7, ignore_attr = TRUE)
+  expect_equal(curve_summary$n.risk, reference_summary$n.risk)
 })

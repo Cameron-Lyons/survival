@@ -76,20 +76,47 @@ Each also implements `IntoPyObject`, so returning one (or exposing it through a
 trip; `FloatMatrix::from_flat(values, ncol)` covers flat buffers with an
 explicit column count.
 
-Migration for binding owners, one signature at a time:
+The core bindings take these types for every numeric vector and matrix input
+(`coxph_fit`, `coxpenal_fit`, `agexact`, `SurvregData`, `cch_fit`,
+`aareg_fit`, `pyears`, `survexp`, `survdiff`, `survfitkm`, `survfitaj`, the
+pseudo-value and residual kernels, `cox_survfit_baseline`, ...), so NumPy
+arrays are read in one copy instead of element by element, and nested lists
+keep working. For new bindings:
 
-1. Replace `Vec<f64>`/`Vec<i32>`/`Vec<bool>` parameters with `FloatVec`/
-   `IntVec`/`BoolVec`, and `Vec<Vec<f64>>` or flat-plus-`ncol` pairs with
-   `FloatMatrix`; call `.into_inner()` (or deref to a slice / `Array2`) where
-   the core routine is invoked. Python callers keep passing lists; NumPy and
-   DataFrame columns now work too.
-2. Replace `&Bound<PyAny>` parameters that went through `extract_vec_f64`/
-   `extract_vec_i32`/`extract_matrix_f64` with the same types; those helpers
-   now delegate to them and disappear once the last caller moves.
-3. Return `FloatVec`/`FloatMatrix` (or use them as `#[pyo3(get)]` field types)
-   for large numeric results so Python receives NumPy arrays.
-4. Do not call `Python::attach` inside a `#[pyfunction]`: it already runs
+1. Take `FloatVec`/`IntVec`/`BoolVec` for vectors and `FloatMatrix` for
+   matrices, and move `.into_inner()` into the core data type (an `Array2`
+   goes straight into, for example, `CoxphData`). `extract_vec_f64`/
+   `extract_vec_i32` remain only for `&Bound<PyAny>` arguments of beyond-R
+   code.
+2. Keep getters that Python consumers iterate by row (`CoxPHFit.x`,
+   `SurvregData.covariates`) returning lists; return `FloatVec`/`FloatMatrix`
+   where the consumer wants NumPy.
+3. Do not call `Python::attach` inside a `#[pyfunction]`: it already runs
    attached, and typed `#[pyclass]` results need no `PyDict`.
+
+### Releasing the GIL
+
+A binding whose kernel does more than O(n) work takes `py: Python<'_>`, does
+the Python-facing work attached (argument extraction, `*Data::try_new`
+validation, option parsing such as `TieMethod::parse`) and runs only the
+kernel inside `py.detach(|| ...)`, converting its `SurvivalResult` after it
+returns:
+
+```rust
+let data = CoxphData::try_new(time.into_inner(), ...)?;
+let options = CoxphOptions { method: TieMethod::parse(Some(method))?, ... };
+Ok(py.detach(move || CoxPHFit::fit(data, options))?)
+```
+
+The closure may capture owned buffers and `&` references to `#[pyclass]`
+values (none is `unsendable`, so they are `Sync`), never a `Bound`, a `PyRef`
+or a borrowed NumPy view. Code that must call back into Python from a detached
+kernel re-attaches with `Python::attach` (the `coxpenal` callback penalty).
+The core fit, prediction and residual bindings follow this rule, so fits on
+several Python threads run in parallel; `python/tests/test_gil_release.py`
+checks it. Two things still run attached: `survmean`, and building the
+nested-list results of methods such as `CoxPHFit.dfbeta`, which bounds how far
+those calls overlap.
 
 ## Python Layout
 
@@ -116,16 +143,20 @@ exactly one module):
   `python_attr`), so `survival.r_api` stays the stable import path.
 
 The `python/survival/r/` package exposes only the R-style API from
-`survival.r` itself; the implementation modules are private (underscore
-names) and layered so imports form a DAG (each module only imports from the
-ones above it):
+`survival.r` itself: R's exported functions (under Python spellings such as
+`survreg_control` and `cox_zph`) and the classes they return (`CoxphModel`,
+`SurvregModelResult`, `BrierResult`, ...). The implementation modules are
+private (underscore names) and layered so imports form a DAG (each module only
+imports from the ones above it):
 
 - `_types`: result containers and formula/design dataclasses. `reticulate`
   names R classes after each Python class's `__module__.__name__`, so any
   `inherits(x, "survival.r._types.<Class>")` guard in `r/survivalr/R/bridge.R`
   must be updated if a result class moves to another module
 - `_coerce`: input coercion, option normalisation, shared numeric helpers
-- `_surv`: `Surv`, `Surv2`, timeline conversion, `format_surv`, `strata`
+- `_names`: R's `make.names` and `make.unique` for data-frame column names
+- `_surv`: `Surv`, `Surv2`, timeline conversion, `format_surv`, `strata`,
+  `cluster`
 - `_formula`: tokenizer/parser, terms, design matrices, model-frame builders
 - `_fit`: accessors on fitted models and prediction-input helpers shared by
   `_coxph`, `_survreg`, and `_models`
@@ -141,8 +172,11 @@ ones above it):
 - `_misc`: statefig, brier, royston, yates, cipoisson, bounded links,
   survobrien, survcheck, nsk, pspline; `_aareg`; `_cch`
 
-The typed surface is declared once in `python/survival/r_api.pyi`;
-`python/survival/r/__init__.pyi` re-exports it. Tests live in
+`survival.r` has no stub: the inline annotations of its modules are the typed
+surface (the package ships `py.typed`), so a signature is changed in one place.
+`python/tests/test_public_surface.py` checks that every export resolves and
+every public function declares its return type, and CI runs mypy on
+`python/tests/typing_smoke.py`. Tests live in
 `python/tests/test_r_<module>.py` with shared builders in
 `python/tests/r_api_support.py`.
 
@@ -152,7 +186,7 @@ Preferred usage is module-oriented:
 from survival import datasets, regression, validation
 
 lung = datasets.load_lung()
-fit = regression.survreg(...)
+fit = regression.survreg_fit(...)
 rmst = validation.rmst(...)
 ```
 
@@ -207,3 +241,6 @@ The main typed entry points are:
 - `python/survival/_survival.pyi`: generated by `scripts/generate_stubs.py` from
   the built extension (structure) and the Rust sources (annotations); checked in
   CI with `--check`
+- `python/survival/r/`: the inline annotations of the R-style API, exercised by
+  `python/tests/typing_smoke.py` (mypy with `--follow-imports=silent`, so the
+  check covers the public types rather than the package internals)

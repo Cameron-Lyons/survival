@@ -1,8 +1,9 @@
 //! `quantile.survfit` (`R/quantile.survfit.R`) from stacked curve vectors.
 //! The port itself is `surv_analysis::quantile_survfit`.
 
-use super::{StackedCurves, stacked_curves};
-use crate::surv_analysis::{SurvfitQuantiles, quantile_survfit_from};
+use crate::surv_analysis::{
+    StackedCurves, SurvfitKMResult, SurvfitQuantiles, quantile_survfit_from,
+};
 use pyo3::prelude::*;
 
 /// `quantile(fit, probs, conf.int)`: one row per curve, `NaN` for a
@@ -50,17 +51,11 @@ pub fn quantile_survfit_curves_py(
     let probs = probs.unwrap_or_else(|| vec![0.25, 0.5, 0.75]);
     let zeros = vec![0.0; time.len()];
     let n_curves = strata.as_ref().map_or(1, Vec::len);
-    let fit = stacked_curves(&StackedCurves {
-        time: &time,
-        surv: &surv,
-        n_risk: &zeros,
-        n_event: &zeros,
-        lower: lower.as_deref(),
-        upper: upper.as_deref(),
-        strata: strata.as_deref(),
-        n: &vec![0.0; n_curves],
-        n_id: None,
+    let fit = SurvfitKMResult::from_stacked(StackedCurves {
+        lower,
+        upper,
         t0: start_time,
+        ..StackedCurves::new(time, zeros.clone(), zeros, surv, strata, vec![0; n_curves])
     })?;
     Ok(quantile_survfit_from(&fit, &probs, conf_int, start_time, scale, tolerance)?.into())
 }
@@ -70,20 +65,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stacked_curves_report_the_origin_for_a_zero_probability() {
+    fn stacked_quantiles_report_the_origin_for_a_zero_probability() {
         let time = [1.0, 2.0, 3.0];
         let surv = [0.6, 0.4, 0.2];
-        let fit = stacked_curves(&StackedCurves {
-            time: &time,
-            surv: &surv,
-            n_risk: &[0.0; 3],
-            n_event: &[0.0; 3],
-            lower: Some(&[0.3, 0.1, 0.05]),
-            upper: Some(&[0.9, 0.7, 0.5]),
-            strata: None,
-            n: &[0.0],
-            n_id: None,
+        let fit = SurvfitKMResult::from_stacked(StackedCurves {
+            lower: Some(vec![0.3, 0.1, 0.05]),
+            upper: Some(vec![0.9, 0.7, 0.5]),
             t0: 0.5,
+            ..StackedCurves::new(
+                time.to_vec(),
+                vec![0.0; 3],
+                vec![0.0; 3],
+                surv.to_vec(),
+                None,
+                vec![0],
+            )
         })
         .unwrap();
         let result: SurvfitCurveQuantiles =

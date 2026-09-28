@@ -1,6 +1,6 @@
 """The shared model-frame path (R's ``model.frame`` + ``model.matrix`` for a survival
-formula) used by ``coxph``, ``cch``, ``aareg`` and ``concordance``, plus the survreg
-accessors ``_survreg``/``_models`` still share."""
+formula) used by ``coxph``, ``cch``, ``aareg`` and ``concordance``, and the ``newdata``
+and ``naresid`` helpers the model methods share."""
 
 from __future__ import annotations
 
@@ -8,18 +8,20 @@ import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from itertools import product
+from itertools import compress, product
 from typing import Any
 
-from .. import _survival as _core
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _float_vector,
-    _is_missing_value,
-    _label_levels,
+    _floats_or_nan,
     _materialize_1d,
     _materialize_labels,
+    _missing_row_indices,
     _mstate_categories,
+    _normalize_na_action,
     _optional_float_vector,
+    _rows_of,
     _strata_level_sort_key,
     _strata_value_label,
 )
@@ -29,26 +31,32 @@ from ._formula import (
     _column_source,
     _combined_columns,
     _covariate_term_name,
+    _data_rows,
     _design_rows_from_spec,
     _design_term_name,
-    _design_term_output_names,
     _fit_formula_design,
+    _formula_data_rows,
+    _formula_design_columns,
     _formula_design_row_count,
     _formula_model_frame,
     _formula_response_spec,
     _formula_response_values,
+    _made_nan_rows,
+    _na_action_record,
     _offset_vector,
     _parse_formula,
+    _strata_keep,
+    _strata_term_columns,
     _subset_formula_inputs,
 )
-from ._surv import Surv
+from ._surv import Surv, _complete_codes, _strata
 from ._types import (
+    NaAction,
+    StrataFactor,
     _CategoricalDesignTerm,
     _CovariateTerm,
-    _cox_beta,
     _DesignTerm,
     _FormulaDesign,
-    _FormulaFit,
     _FormulaTerms,
     _InteractionDesignTerm,
     _NumericDesignTerm,
@@ -69,7 +77,8 @@ class _ModelFrame:
     ``x`` is the model matrix without its intercept column, ``names`` its column
     names, ``assign`` R's ``attrassign`` (term label -> 0-based columns); the
     ``strata``, ``offset``, ``weights``, ``cluster``, ``id`` and ``istate`` specials are
-    already row-aligned with ``y`` (after ``subset`` and ``na.action``).
+    already row-aligned with ``y`` (after ``subset`` and ``na.action``); ``na_action``
+    records the rows the ``na.action`` removed.
     """
 
     formula: str
@@ -86,12 +95,14 @@ class _ModelFrame:
     weights: list[float] | None
     cluster: list[Any] | None
     id: list[Any] | None
-    istate: list[Any] | None
+    # a factor keeps its levels (survcheck's states come from them)
+    istate: Sequence[Any] | None
     extra: dict[str, list[Any]] = field(default_factory=dict)
     # the column names the weights= / id= arguments referred to (R keeps the call's
     # expressions, so brier's newdata can re-evaluate them); None for vector arguments
     weights_column: str | None = None
     id_column: str | None = None
+    na_action: NaAction | None = None
 
     @property
     def n(self) -> int:
@@ -117,33 +128,72 @@ class _ModelFrame:
             istate=self.istate,
         )
 
-    def strata_labels(self) -> list[str] | None:
+    def strata_labels(self) -> list[str | None] | None:
         if self.strata is None:
             return None
-        return [self.strata_levels[code] for code in self.strata]
+        return [None if code < 0 else self.strata_levels[code] for code in self.strata]
+
+    def take(self, rows: Sequence[int]) -> _ModelFrame:
+        """The frame at the 0-based *rows* (R's ``mf[rows, ]``), every row-aligned
+        piece subset together."""
+
+        def pick(values: Sequence[Any] | None) -> Any:
+            if values is None:
+                return None
+            return _rows_of(values, [values[row] for row in rows])
+
+        return replace(
+            self,
+            data=_formula_data_rows(self.formula, self.data, list(rows), self.n),
+            y=self.y.subset(rows),
+            x=pick(self.x) if self.x else self.x,
+            strata=pick(self.strata),
+            offset=pick(self.offset),
+            weights=pick(self.weights),
+            cluster=pick(self.cluster),
+            id=pick(self.id),
+            istate=pick(self.istate),
+            extra={name: pick(values) for name, values in self.extra.items()},
+        )
 
 
-def _r_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
-    """``levels(factor(x))``: the column's own categories when it carries them
-    (a pandas Categorical / R factor), else the sorted distinct values."""
+def _model_frame_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
+    """``levels(x)`` of a model-frame variable: the column's own categories when it
+    carries them (a pandas Categorical / R factor), unused ones included, since
+    ``model.frame`` keeps them (``drop.unused.levels = FALSE``); else the sorted distinct
+    values *levels*."""
 
     categories = _mstate_categories(values)
     if categories is not None:
-        present = set(levels)
-        return tuple(
-            level for level in _materialize_1d(categories, "categories") if level in present
-        )
+        return tuple(_materialize_1d(categories, "categories"))
     return tuple(sorted(levels, key=_strata_level_sort_key))
 
 
-def _r_factor_design(data: Any, design: _FormulaDesign) -> _FormulaDesign:
+def _r_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
+    """``levels(factor(x))``: the levels of :func:`_model_frame_levels` among the distinct
+    values *levels* (``factor()`` drops the unused ones)."""
+
+    present = set(levels)
+    return tuple(level for level in _model_frame_levels(values, levels) if level in present)
+
+
+def _r_factor_design(
+    data: Any, design: _FormulaDesign, *, drop_unused_levels: bool = False
+) -> _FormulaDesign:
     """Give every categorical term R's factor level order (the formula module
-    keeps first-appearance order)."""
+    keeps first-appearance order): ``model.frame``'s levels, a factor's unused ones
+    included, or with *drop_unused_levels* only those that occur, as ``lm``'s
+    ``model.frame(drop.unused.levels = TRUE)`` has them."""
+
+    levels_of = _r_levels if drop_unused_levels else _model_frame_levels
 
     def relevel(term: _SingleDesignTerm) -> _SingleDesignTerm:
         if not isinstance(term, _CategoricalDesignTerm):
             return term
-        return replace(term, levels=_r_levels(_column_source(data, term.term.column), term.levels))
+        # a logical expression (I(sex == 2)) has no column to declare levels
+        column = term.term.column
+        source = None if term.term.arithmetic is not None else _column_source(data, column)
+        return replace(term, levels=levels_of(source, term.levels))
 
     covariates: list[_DesignTerm] = []
     for term in design.covariates:
@@ -182,51 +232,12 @@ def _design_names_and_assign(
     return names, assign
 
 
-def _factor(column: Any, name: str) -> tuple[list[str], list[int | None]]:
-    """R's ``factor(x)``: the levels (as character) and 0-based codes (None = NA)."""
-
-    values = _materialize_1d(column, name)
-    present = [value for value in values if not _is_missing_value(value)]
-    levels = _r_levels(column, _label_levels(present, name))
-    index = {level: idx for idx, level in enumerate(levels)}
-    codes = [None if _is_missing_value(value) else index[value] for value in values]
-    return [_strata_value_label(level) for level in levels], codes
-
-
-def _is_character(column: Any) -> bool:
-    """``is.character(x) | is.factor(x)``: what makes ``strata()`` drop the ``name=`` prefix."""
-
-    if _mstate_categories(column) is not None:
-        return True
-    values = _materialize_1d(column, "strata")
-    return all(isinstance(value, str) or _is_missing_value(value) for value in values)
-
-
-def _strata_factor(
-    columns: Mapping[str, Any], n: int, *, shortlabel: bool | None = None
-) -> _core.StrataResult:
-    """``strata(mf[, vars])``: R's labels (``name=level``, or the bare level when
-    every variable is character/factor) and compact codes."""
-
-    if any(len(_materialize_1d(column, name)) != n for name, column in columns.items()):
-        raise ValueError("strata columns must have the same length as the Surv response")
-    factors = [_factor(column, name) for name, column in columns.items()]
-    if shortlabel is None:
-        shortlabel = all(_is_character(column) for column in columns.values())
-    return _core.strata(
-        list(columns),
-        [levels for levels, _codes in factors],
-        [codes for _levels, codes in factors],
-        shortlabel=shortlabel,
-    )
-
-
 def _model_frame(
     formula: str,
     data: Any,
     *,
     subset: Any | None = None,
-    na_action: str | None = "fail",
+    na_action: str | None = _DEFAULT_NA_ACTION,
     weights: Any | None = None,
     offset: Any | None = None,
     strata_arg: Any | None = None,
@@ -234,20 +245,23 @@ def _model_frame(
     id: Any | None = None,
     istate: Any | None = None,
     extra: Mapping[str, Any] | None = None,
+    deferred_na: bool = False,
 ) -> _ModelFrame:
     """Evaluate a survival formula on ``data`` the way ``model.frame`` does.
 
     Vector arguments may name a column of ``data``; ``subset`` and ``na.action`` are
-    applied to the data and to every vector argument together (``extra`` carries any
-    further row-aligned vectors, e.g. ``cch``'s ``subcoh``).
+    applied to the formula's variables and to every vector argument together (``extra``
+    carries any further row-aligned vectors, e.g. ``cch``'s ``subcoh``).
+    ``deferred_na`` (with ``na_action="pass"``) leaves the missing values for the caller
+    to drop, as coxph.R does for a formula list: a missing stratum has code -1 and a
+    missing weight stays NaN.
     """
 
     if not isinstance(formula, str):
         raise TypeError("a formula argument is required")
     if data is None:
         raise ValueError("a data argument is required with a formula")
-    if isinstance(data, Mapping):  # the bundled datasets carry _nrow/_ncol metadata
-        data = {key: value for key, value in data.items() if not str(key).startswith("_")}
+    full_data = data
     aligned = {
         "weights": _column_or_values(data, weights, "weights"),
         "offset": _column_or_values(data, offset, "offset"),
@@ -259,7 +273,7 @@ def _model_frame(
     }
     if subset is not None:
         data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
-    data, aligned = _apply_formula_na_action(formula, data, na_action, **aligned)
+    data, aligned, removed = _apply_formula_na_action(formula, data, na_action, **aligned)
 
     y, terms = _parse_formula(formula, data)
     n = len(y)
@@ -268,15 +282,20 @@ def _model_frame(
 
     strata_codes: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
+    factor: StrataFactor | None = None
     if terms.strata:
         if aligned["strata"] is not None:
             raise ValueError("use only one of formula strata(...) or strata")
-        factor = _strata_factor({name: _column_source(data, name) for name in terms.strata}, n)
-        strata_codes = [int(code) for code in factor.codes]
-        strata_levels = tuple(factor.levels)
+        factor = _strata_keep(data, _strata_term_columns(terms))
     elif aligned["strata"] is not None:
-        factor = _strata_factor({"strata": _materialize_labels(aligned["strata"], "strata")}, n)
-        strata_codes = [int(code) for code in factor.codes]
+        factor = _strata([("strata", aligned["strata"])])
+    if factor is not None:
+        if len(factor.codes) != n:
+            raise ValueError("strata columns must have the same length as the Surv response")
+        if deferred_na:
+            strata_codes = [-1 if code is None else code for code in factor.codes]
+        else:
+            strata_codes = _complete_codes(factor, "missing values in the strata")
         strata_levels = tuple(factor.levels)
 
     offset_values = _offset_vector(data, terms.offsets, n) if terms.offsets else None
@@ -309,16 +328,24 @@ def _model_frame(
             raise ValueError("id must have the same length as the Surv response")
     istate_values = aligned["istate"]
     if istate_values is not None:
-        istate_values = _materialize_labels(istate_values, "istate")
+        istate_values = _rows_of(istate_values, _materialize_labels(istate_values, "istate"))
         if len(istate_values) != n:
             raise ValueError("istate must have the same length as the Surv response")
 
-    weight_values = _optional_float_vector(aligned["weights"], "weights", n)
-    if weight_values is not None and not all(math.isfinite(value) for value in weight_values):
-        raise ValueError("weights must be finite")
+    if deferred_na and aligned["weights"] is not None:
+        weight_values = _floats_or_nan(_materialize_1d(aligned["weights"], "weights"))
+        if len(weight_values) != n:
+            raise ValueError(f"weights must have length {n}")
+        if any(math.isinf(value) for value in weight_values):
+            raise ValueError("weights must be finite")
+    else:
+        weight_values = _optional_float_vector(aligned["weights"], "weights", n)
+        if weight_values is not None and not all(map(math.isfinite, weight_values)):
+            raise ValueError("weights must be finite")
 
     design = _r_factor_design(
-        data, _fit_formula_design(data, _formula_response_spec(formula), terms, n)
+        data,
+        _fit_formula_design(data, _formula_response_spec(formula), terms, n, full_data=full_data),
     )
     names, assign = _design_names_and_assign(design)
     return _ModelFrame(
@@ -344,6 +371,7 @@ def _model_frame(
         },
         weights_column=weights if isinstance(weights, str) else None,
         id_column=id if isinstance(id, str) else None,
+        na_action=_na_action_record(na_action, removed),
     )
 
 
@@ -364,12 +392,16 @@ def _tt_terms(design: _FormulaDesign) -> list[_CovariateTerm]:
 
 @dataclass(frozen=True)
 class _NewData:
-    """``model.frame(Terms2, newdata)``: the pieces a prediction needs."""
+    """``model.frame(Terms2, newdata)``: the pieces a prediction needs, at the rows of
+    ``newdata`` without a missing value; ``missing`` lists the other rows (0-based)
+    and ``data`` holds the model's variables at the kept rows."""
 
+    data: Any
     x: list[list[float]]
     strata: list[int] | None
     offset: list[float] | None
     y: Surv | None
+    missing: tuple[int, ...] = ()
 
     @property
     def n(self) -> int:
@@ -396,81 +428,140 @@ def _newdata_response(newdata: Any, spec: _SurvResponseSpec) -> Surv | None:
 
 def _newdata_frame(
     design: _FormulaDesign,
-    strata_terms: Sequence[str],
+    strata_terms: Sequence[Sequence[str]],
     strata_levels: Sequence[str],
     newdata: Any,
     *,
     need_strata: bool,
     need_response: bool,
+    na_action: str | None,
 ) -> _NewData:
-    """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata)``).
+    """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata,
+    na.action)``).
 
-    Strata columns are looked up only when ``need_strata`` (R's ``found.strata``),
+    The ``strata()`` terms (the columns of each) are looked up only when ``need_strata``
+    (R's ``found.strata``) and coded as the fit coded them (``strata.keep``);
     the response only when ``need_response`` (``predict(type='expected')``,
-    ``survfit(id=)``); either is ``None`` when absent from ``newdata``.
+    ``survfit(id=)``); either is ``None`` when absent from ``newdata``.  A row with a
+    missing value in one of these variables or in a covariate or offset variable (a
+    NaN that ``log``, ``sqrt`` or arithmetic made included) is left out and listed in
+    ``missing``: ``na.fail`` refuses it, and a prediction pads it back as NaN for
+    ``na.pass`` and ``na.exclude``.
     """
 
+    present = set(_newdata_columns(newdata))
+    strata_columns = [column for term in strata_terms for column in term]
+    if not (need_strata and set(strata_columns) <= present):
+        strata_columns = []
+    response_columns = (
+        list(design.response.columns)
+        if need_response and set(design.response.columns) <= present
+        else []
+    )
+    columns = list(
+        dict.fromkeys([*_formula_design_columns(design), *strata_columns, *response_columns])
+    )
     n = _formula_design_row_count(newdata, design)
-    rows = _design_rows_from_spec(newdata, design, n)
-    offset = _offset_vector(newdata, list(design.offsets), n)
+    missing = _missing_row_indices([(name, _column_source(newdata, name)) for name in columns], n)
+    variables = [
+        part.term
+        for term in design.covariates
+        for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
+    ]
+    made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
+    if made:
+        # the design reads the evaluated variables at the rows that stay
+        stays = [row not in made for row in range(n) if row not in missing]
+        evaluated = {term: list(compress(values, stays)) for term, values in evaluated.items()}
+        missing.update(made)
+    if missing and _normalize_na_action(na_action) == "fail":
+        raise ValueError("missing values in newdata")
+    m = n - len(missing)
+    if missing:
+        newdata = _data_rows(newdata, columns, [row for row in range(n) if row not in missing], n)
+    rows = _design_rows_from_spec(newdata, design, m, evaluated=evaluated)
+    offset = _offset_vector(newdata, list(design.offsets), m, evaluated)
     strata_codes: list[int] | None = None
-    if need_strata and strata_terms and set(strata_terms) <= set(_newdata_columns(newdata)):
-        factor = _strata_factor({name: _column_source(newdata, name) for name in strata_terms}, n)
+    if strata_columns:
+        factor = _strata_keep(newdata, strata_terms)
         level_index = {level: idx for idx, level in enumerate(strata_levels)}
         try:
-            strata_codes = [level_index[factor.levels[int(code)]] for code in factor.codes]
+            remap = [level_index[level] for level in factor.levels]
         except KeyError as exc:
             raise ValueError("New data has a strata not found in the original model") from exc
-    y = _newdata_response(newdata, design.response) if need_response else None
-    return _NewData(x=rows, strata=strata_codes, offset=offset, y=y)
+        strata_codes = [
+            remap[code] for code in _complete_codes(factor, "missing values in the strata")
+        ]
+    y = _newdata_response(newdata, design.response) if response_columns else None
+    return _NewData(
+        data=newdata,
+        x=rows,
+        strata=strata_codes,
+        offset=offset,
+        y=y,
+        missing=tuple(sorted(missing)),
+    )
 
 
 # ---------------------------------------------------------------------------
-# survreg accessors (transitional: shared with _survreg/_models until survreg moves
-# to its typed wrapper)
+# naresid / napredict
 # ---------------------------------------------------------------------------
 
 
-def _unwrap_formula_fit(fit: Any) -> Any:
-    return fit.fit if isinstance(fit, _FormulaFit) else fit
+def _na_entry(width: int | None) -> Any:
+    """``NA`` for one entry of a vector (``width`` None) or one row of a matrix."""
+
+    return math.nan if width is None else [math.nan] * width
+
+
+def _row_width(values: list[Any]) -> int | None:
+    return len(values[0]) if values and isinstance(values[0], list) else None
+
+
+def _pad_rows(values: list[Any], rows: Sequence[int], width: int | None = None) -> list[Any]:
+    """R's ``naresid.exclude``: ``values`` (a vector, or a matrix as a list of rows)
+    with NaN, or a row of NaN, inserted at the sorted 0-based ``rows`` of the result.
+    ``width`` is the column count of a matrix without rows (``None`` for a vector)."""
+
+    if not rows:
+        return values
+    if values:
+        width = _row_width(values)
+    gaps = set(rows)
+    kept = iter(values)
+    return [
+        _na_entry(width) if row in gaps else next(kept) for row in range(len(values) + len(gaps))
+    ]
+
+
+def _excluded_rows(na_action: NaAction | None) -> list[int]:
+    """The 0-based rows ``naresid``/``napredict`` give back to a fit's residuals and
+    predictions (as NA): those ``na.exclude`` removed, none for ``na.omit``."""
+
+    if na_action is None or na_action.kind != "exclude":
+        return []
+    return [row - 1 for row in na_action.rows]
+
+
+def _rowsum_excluded(values: list[Any], codes: Sequence[int], excluded: Sequence[int]) -> list[Any]:
+    """``rowsum(naresid(fit$na.action, rr), collapse)`` from ``values``, the rowsum of
+    the fit's rows: ``codes`` are the 0-based groups of every row of the padded
+    residuals, and a group with an excluded row sums to NA."""
+
+    gaps = set(excluded)
+    na_groups = {codes[row] for row in gaps}
+    fitted = sorted({code for row, code in enumerate(codes) if row not in gaps})
+    sums = dict(zip(fitted, values, strict=True))
+    width = _row_width(values)
+    return [
+        _na_entry(width) if group in na_groups else sums[group] for group in range(max(codes) + 1)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# accessors
+# ---------------------------------------------------------------------------
 
 
 def _formula_design_for_fit(fit: Any) -> _FormulaDesign | None:
     return getattr(fit, "design", None)
-
-
-def _is_survreg_fit(fit: Any) -> bool:
-    return isinstance(_unwrap_formula_fit(fit), _core.SurvregFit)
-
-
-def _location_beta(fit: Any) -> list[float]:
-    """The location coefficients: R's ``fit$coefficients`` for survreg (NaN when singular),
-    the Cox coefficients otherwise."""
-
-    model = _unwrap_formula_fit(fit)
-    if isinstance(model, _core.SurvregFit):
-        return [float(value) for value in model.coefficients[: len(model.means)]]
-    return _cox_beta(fit)
-
-
-def _fallback_coef_names(width: int) -> list[str]:
-    return [f"x{idx + 1}" for idx in range(width)]
-
-
-def _formula_design_output_names(design: _FormulaDesign) -> list[str]:
-    names = [name for term in design.covariates for name in _design_term_output_names(term)]
-    if design.intercept:
-        names.insert(0, "(Intercept)")
-    return names
-
-
-def _fit_location_coef_names(fit: Any, width: int) -> list[str]:
-    design = _formula_design_for_fit(fit)
-    if design is not None:
-        names = _formula_design_output_names(design)
-        if len(names) == width:
-            return names
-    coefficient_names = getattr(fit, "coefficient_names", None)
-    if coefficient_names is not None and len(coefficient_names) == width:
-        return list(coefficient_names)
-    return _fallback_coef_names(width)

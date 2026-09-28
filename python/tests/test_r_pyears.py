@@ -1,7 +1,6 @@
 """``pyears``, ``survexp`` and the rate-table helpers against R 4.5 / survival 3.8.11."""
 
 import datetime
-import warnings
 
 import pytest
 
@@ -76,7 +75,7 @@ def test_pyears_data_frame_layout_and_plain_response():
     assert plain.event is None
     assert plain.dim == []
     assert plain.dimnames == {}
-    assert r.as_data_frame(plain)["group"] == ["(all)"]
+    assert r.as_data_frame(plain) == {"pyears": [plain.pyears], "n": [4.0]}
 
 
 def test_pyears_expected_events_from_a_rate_table():
@@ -172,9 +171,11 @@ def test_survexp_argument_checks_follow_r():
         r.survexp("~ grp:sex", data, rmap=_RMAP, times=[1])
     with pytest.raises(ValueError, match="Can't use tcut variables in expected survival"):
         r.survexp("~ tcut(age, c(0, 100) * 365.25)", data, rmap=_RMAP, times=[1])
+    with pytest.raises(ValueError, match="Illegal response value"):
+        r.survexp("Surv(time - 50, time, status) ~ 1", data, rmap=_RMAP, times=[1])
     with (
-        pytest.raises(ValueError, match="Illegal response value"),
-        warnings.catch_warnings(action="ignore"),
+        pytest.warns(UserWarning, match="Stop time must be > start time, NA created"),
+        pytest.raises(ValueError, match="Data set has 0 rows"),
     ):
         r.survexp("Surv(time, time, status) ~ 1", data, rmap=_RMAP, times=[1])
     with pytest.warns(UserWarning, match="weights ignored"):
@@ -193,7 +194,9 @@ def test_survexp_vector_call_used_by_the_reticulate_bridge():
     )
     assert result.method == "cohort"
     assert result.n_risk == [4.0, 3.0, 2.0]
-    individual = r.survexp_individual(data["time"], data["age"], days, sex=data["sex"])
+    individual = r.survexp(
+        time=data["time"], age=data["age"], year=days, sex=data["sex"], cohort=False
+    )
     assert individual == pytest.approx([0.9960461, 0.9784402, 0.9466927, 0.9569774], rel=1e-6)
 
 

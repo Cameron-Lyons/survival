@@ -124,9 +124,10 @@ pub fn survexp_cox(
             survival[t][g] = if method == "ederer" {
                 numerator[g] / denominator[g]
             } else {
-                if denominator[g] > 0.0 {
-                    cumulative[g] += numerator[g] / denominator[g];
-                }
+                // R's `hazard %*% tmat / colSums(tmat)`: once nobody in the
+                // group is at risk this is 0/0, and the NaN carries through
+                // the cumulative sum.
+                cumulative[g] += numerator[g] / denominator[g];
                 (-cumulative[g]).exp()
             };
         }
@@ -191,4 +192,49 @@ pub fn survexp_cox_py(
         )
     })
     .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn curve(cumhaz: [[f64; 2]; 3]) -> CoxSurvfitCurve {
+        CoxSurvfitCurve {
+            stratum: 0,
+            n: 2,
+            time: vec![1.0, 2.0, 3.0],
+            n_risk: vec![2.0, 1.0, 1.0],
+            n_event: vec![1.0, 0.0, 1.0],
+            n_censor: vec![0.0, 1.0, 0.0],
+            surv: cumhaz
+                .iter()
+                .map(|row| row.iter().map(|h| (-h).exp()).collect())
+                .collect(),
+            cumhaz: cumhaz.iter().map(|row| row.to_vec()).collect(),
+            std_err: None,
+        }
+    }
+
+    #[test]
+    fn a_group_with_nobody_at_risk_turns_missing_like_r() {
+        // Subject 1 (group 0) leaves at time 1, subject 2 (group 1) stays.
+        let curves = [curve([[0.1, 0.2], [0.3, 0.4], [0.6, 0.9]])];
+        for method in ["conditional", "hakulinen"] {
+            let out = survexp_cox(
+                &curves,
+                &[0, 1],
+                &[1.0, 1.0],
+                Some(&[1.0, 3.0]),
+                None,
+                method,
+            )
+            .unwrap();
+            assert!((out.surv[0][0] - (-0.1f64).exp()).abs() < 1e-15);
+            assert!(out.surv[1][0].is_nan() && out.surv[2][0].is_nan());
+            let group1: Vec<f64> = out.surv.iter().map(|row| row[1]).collect();
+            for (value, expected) in group1.iter().zip([0.2f64, 0.4, 0.9]) {
+                assert!((value - (-expected).exp()).abs() < 1e-15, "{method}");
+            }
+        }
+    }
 }
