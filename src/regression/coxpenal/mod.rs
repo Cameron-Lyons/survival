@@ -88,7 +88,7 @@ pub struct CoxpenalOptions {
     pub outer_max: usize,
     pub eps: f64,
     pub toler_chol: f64,
-    /// As in [`CoxphOptions`]: columns whose values all lie in this set are
+    /// As in [`CoxphOptions`](crate::regression::CoxphOptions): columns whose values all lie in this set are
     /// not centred.  (R evaluates the rule on the full design and reads the
     /// flags of the dense columns by position, which misaligns them when a
     /// sparse frailty column is not the last one; this port evaluates the

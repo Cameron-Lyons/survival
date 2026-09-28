@@ -56,7 +56,7 @@ impl SurvregResidType {
     ];
 
     /// `match.arg(type)`: an exact name or a unique prefix (see
-    /// [`match_arg`]).
+    /// `match_arg`).
     pub fn parse(name: &str) -> SurvivalResult<Self> {
         let index = match_arg(name, &Self::CHOICES.map(|(choice, _)| choice))?;
         Ok(Self::CHOICES[index].1)

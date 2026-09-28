@@ -829,7 +829,7 @@ pub fn cox_survfit_baseline(
     Ok(py.detach(|| baseline_curve(y.view(), x.view(), &weights, &risk, survtype, vartype))?)
 }
 
-/// [`step_at`] at each of `requested_times`, the way `summary.survfit(fit,
+/// `step_at` at each of `requested_times`, the way `summary.survfit(fit,
 /// times, extend = TRUE)` reads a curve (`initial` is the value before the
 /// first time).
 #[pyfunction]

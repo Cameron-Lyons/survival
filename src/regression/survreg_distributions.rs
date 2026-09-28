@@ -232,7 +232,7 @@ impl SurvregDistribution {
     /// `survreg`'s lookup of a character `dist`,
     /// `survreg.distributions[[match.arg(dist, names(survreg.distributions))]]`:
     /// case sensitive, with unique prefixes such as `"exp"` accepted (see
-    /// [`match_arg`]).  `parms` are only accepted by families that define
+    /// `match_arg`).  `parms` are only accepted by families that define
     /// them, and unspecified parameters take their default (`df = 4` for
     /// `t`).
     pub fn from_name(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
