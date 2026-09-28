@@ -30,10 +30,13 @@ A high-performance survival analysis library written in Rust, with a Python API 
 - Conditional logistic regression
 - Time-splitting utilities
 
-The R-style interface supports penalized Cox formulas, interval-censored AFT
-models, multistate summaries and expected survival from Cox models. See
-[R compatibility](docs/r-compatibility.md) for examples, seeded Yates risk
-predictions, validation coverage and the documented reference differences.
+The R-style interface supports penalized Cox and AFT formulas, interval-censored
+AFT models, multi-state Cox models and their curves, multistate summaries and
+expected survival from Cox models. See [R compatibility](docs/r-compatibility.md)
+for examples, seeded Yates risk predictions, validation coverage, every known
+difference from R and the R entry points that are
+[not yet implemented](docs/r-compatibility.md#not-yet-implemented).
+Release notes are in the [changelog](CHANGELOG.md).
 
 ## Installation
 
@@ -156,23 +159,23 @@ aft_model = survreg("Surv(time, status) ~ group + age", data=data)
 
 Formula support is intentionally conservative: `+` terms, `.` expansion,
 `-` exclusions, backtick-quoted column names, categorical treatment coding,
-`factor(...)` / `as.factor(...)`, `strata(...)`, interaction terms with `:`
-or `*`, and numeric `offset(...)` terms are supported, along with one-column
-numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`, plus
-`I(...)`/`identity(...)` arithmetic with `+`, `-`, `*`, `/`, and `^`;
-time transforms should use the lower-level matrix APIs until they have
-dedicated Rust-backed support.
+`factor(...)` / `as.factor(...)`, `strata(...)`, interaction terms with `:`,
+`*` or `%in%`, and numeric `offset(...)` terms are supported, along with
+one-column numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`, plus
+`I(...)`/`identity(...)` arithmetic and comparisons, `cut(...)` and
+`tcut(...)`; formula options are read as literals and never evaluated as code.
 Formula calls also accept `subset=` as a boolean mask or zero-based row indices
-and `na_action="omit"` for row-wise missing-data omission across formula
-columns and external row-aligned arrays such as `weights`, `offset`, and
-`strata`.
+and R's `na_action`: `"na.omit"` (the default, as in R), `"na.exclude"`
+(residuals and predictions padded with NaN at the removed rows), `"na.fail"`
+and `"na.pass"`, applied across formula columns and external row-aligned
+arrays such as `weights`, `offset`, and `strata`.
 R `survobrien` formula expansion preserves factor keeper columns while applying
 the risk-set transform only to continuous terms.
 R `finegray` formulas use the same Python formula engine and Rust interval
 expansion, with sorted censoring-risk sweeps and R-compatible factor classes.
 Kaplan-Meier `survfit` calls honor `conf_level=`, R-style `conf_type=`
-choices for confidence intervals, `start_time=` for conditional curves, and
-`time0=True` to include the starting row.
+choices for confidence intervals, and `start_time=` for conditional curves;
+`survfit0(...)` adds the starting row, as in R.
 They support right-censored `Surv(time, event)` data and counting-process
 `Surv(start, stop, event)` data with delayed-entry risk sets. Direct and
 formula `Surv(...)` calls also accept R-style named aliases including `time=`,
@@ -197,7 +200,8 @@ infinitesimal jackknife; the direct time/status pseudo-value API retains its
 existing delete-one RMST calculation. Tied `ctype=2` diagnostics follow R's
 approximation and report the same limitation.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
-to produce model-based survival curves.
+to produce model-based survival curves; a multi-state Cox fit gives R's
+`survfit.coxphms` state-probability curves for each newdata row.
 The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use
 an `O(n log n)` Rust risk-set sweep for weighted, stratified, tied-event, and
 counting-process baselines, while retaining R-compatible curve and uncertainty
@@ -205,54 +209,33 @@ shapes for ordinary predictions and individual time-dependent trajectories.
 `survdiff` uses the same right-censored and delayed-entry response forms.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
-Ridge penalties are jointly optimized with the Cox partial likelihood:
+Penalty terms (`ridge`, `pspline`, `frailty`) are fitted by a port of R's
+`coxpenal.fit`, jointly with the Cox partial likelihood:
 
 ```python
 fit = coxph("Surv(time, status) ~ age + ridge(x, z, theta=2)", data=data)
-fit.df           # effective degrees of freedom for age and the joint ridge term
-fit.variance2    # sampling covariance, distinct from vcov(fit)
+fit.df           # effective degrees of freedom of each term
+fit.var2         # sampling covariance, distinct from vcov(fit)
 
 selected = coxph("Surv(time, status) ~ age + ridge(x, z, df=1)", data=data)
-selected.history # evaluated theta/df pairs and each controller's next proposal
+selected.history # the theta/df search of the outer loop
 ```
 
 `ridge(..., theta=..., scale=FALSE)` uses the supplied penalty in the original
 coefficient units. The default scaling uses each column's unweighted sample
 variance before subset or missing-row removal, as in R. Separate ridge calls
 may specify different penalties. Weights, offsets, strata, delayed entry,
-prediction, residuals, and fractional-df information criteria are supported.
-Robust covariance requests produce R's warning and use penalized covariance.
-An exact tie request follows R's penalized Breslow calculation; `fit.method`
-reports the effective method and `fit.requested_method` retains the request.
-Omitting `theta` selects the penalty by effective degrees of freedom, defaulting
-to half the number of columns in each ridge term. `ridge(..., df=..., eps=.1)`
-sets the target and its absolute tolerance. Multiple targets share each joint
-fit; `control={"outer.max": 10}` limits the outer search. The history's final
-row records the evaluated penalty, while its `theta` is R's next proposal,
-which can be NaN at full df. Its `done` flag reports whether the target was met;
-the returned df always describes the attained fit. Targets must be finite and
-between zero and the term's column count. When a full-df controller proposes
-NaN while other terms still need iterations, fitting retains its last finite
-penalty and records the proposal in history.
-If rounding makes interpolation undefined before reaching the target, the
-search bisects an available theta bracket. Extreme scales can therefore follow
-a different search path from R while retaining finite penalties and actual df.
-Ridge interactions, penalized `survreg`, penalized ANOVA, and `cox_zph` are not
-yet implemented and report explicit errors.
-The native `coxph_penalized_fit` also accepts a diagonal penalty and coefficient
-groups directly, returning the fit and `CoxPenaltyDiagnostics`. Its initial and
-final log likelihoods are unpenalized; the formula facade reports R's penalized
-initial likelihood when nonzero initial coefficients are supplied.
-The native `coxph_ridge_fit` additionally returns `CoxRidgeSelection`, including
-the evaluated penalties, proposals, histories, and outer/inner iteration counts.
-The standalone `ridge_fit` uses the same joint Efron optimizer and returns
-coefficients and standard errors in original covariate units. For
-`RidgePenalty.from_df(...)`, the constructor's theta is the search seed;
-`RidgeResult.theta` is the fitted value. Its GCV convention is
-`(-2 * log_likelihood / n_obs) / (1 - df / n_obs)^2`, using the unpenalized
-partial likelihood. `ridge_cv` uses deterministic folds and minimizes
-`-2 / n_obs * sum(loglik_full(beta_train) - loglik_train(beta_train))`, retaining
-full risk sets in the validation comparison and propagating fitting errors.
+prediction, residuals, `summary`, `anova` (fractional df), `cox_zph` and
+fractional-df information criteria are supported. A robust variance request
+warns and is ignored, as in R, and penalized fits take the `"breslow"` or
+`"efron"` ties. Omitting `theta` selects the penalty by effective degrees of
+freedom, defaulting to half the number of columns in each ridge term;
+`ridge(..., df=..., eps=.1)` sets the target and its tolerance, and
+`control={"outer.max": 10}` limits the outer search. A penalty term inside an
+interaction is refused with R's "Penalty terms cannot be in an interaction".
+`survreg` fits `ridge()` and `pspline()` terms through a port of R's
+`survpenal.fit`. The typed kernel is `survival.regression.coxpenal_fit` (R's
+`coxpenal.fit`), which takes the design with its `CoxPenalty` terms.
 Formula fits support `tt(...)` time-varying coefficient terms for right-censored
 and counting-process responses, including R's default O'Brien rank transform
 and custom `tt(x, time, riskset, weights)` callables.
@@ -270,9 +253,8 @@ covariance sweeps stay in Rust; Python performs only formula preparation and
 result labeling.
 R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
 in the bridge and pass named control lists through to the Python API.
-Native R Cox control objects, including `survcheckallow`, are accepted for
-ordinary right-censored and counting-process fits. That setting only affects
-multistate fitting in R. Starting coefficients supplied through `init=` can
+Native R Cox control objects are accepted, including `survcheckallow`, which
+selects the survcheck flags a multi-state fit tolerates. Starting coefficients supplied through `init=` can
 be a single number for a one-parameter model or a vector matching all fitted
 parameters, including estimated log scales for AFT models. Explicit R `NULL`
 values retain the default initialization regardless of argument order.
@@ -312,67 +294,50 @@ timeline = tmerge(
 )
 ```
 
-The raw `tmerge`, `tmerge2`, and `tmerge3` sweeps remain available from
-`survival.data_prep` for callers that already manage sorted numeric arrays.
+The raw per-call sweep is `survival.data_prep.tmerge_step`, for callers that
+already manage sorted numeric arrays.
 The R-style `predict(...)` and `fitted(...)` generics support Cox linear
 predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
-For `survreg` fits it supports response-scale predictions, linear predictors,
-term contributions, and quantile predictions via `type="quantile"` or
-`type="uquantile"` for the model's linear scale. Probabilities include 0 and 1,
-which return the distribution's limits. Quantiles use each row's fitted scale
-and retain Student-t degrees of freedom.
-The native `fit.predict_quantile()` method uses training strata by default;
-new covariates for a model with multiple scales require zero-based
-`strata=...` indices. Pass `transform=False` for linear-scale quantiles.
+For `survreg` fits, `predict(fit, newdata, type=...)` gives R's `"lp"`
+(`"linear"`), `"response"`, `"terms"`, `"quantile"` and `"uquantile"`
+predictions: `type="quantile"` returns response-scale quantiles at the
+probabilities `p=` (R's default `[0.1, 0.9]`), and `type="uquantile"` the same
+quantiles on the linear (log-time) scale. Probabilities include 0 and 1, which
+return the distribution's limits. Quantiles use each row's stratum scale and
+keep the Student-t degrees of freedom; `se_fit=True` adds standard errors on the
+requested scale. Formula offsets enter the linear predictor of `newdata` rows
+as well as of the training rows (R drops them for single-scale models; see
+[R compatibility](docs/r-compatibility.md#reference-differences-retained-deliberately)).
+The typed `SurvregFit.predict(...)` takes `offset=` and `strata=` for the rows
+of its `newdata`.
 `AFTEstimator.predict()` returns the fitted response-scale location, matching
 R's default prediction; `predict_median()` and `predict_quantile()` return
 actual distribution quantiles. Gaussian, logistic, extreme-value, and Student-t
-responses use the identity transform. Native prediction standard errors are
-available for training and new rows and follow the requested response scale.
-Student-t distribution helpers accept `distribution="t", parms=df` and retain
-precision near the median and in rare tails. For example,
-`qsurvreg(1e-20, distribution="t", parms=4)` returns approximately
-`-131607.4013`. Native, Python, and R bridge calls share these calculations.
-For `1000 <= df < 100000`, moderate tails use a short normal
-moment expansion. See the [derivation and validation](docs/student-t-normal-limit.md).
-Gaussian and lognormal calculations use direct lower and upper normal tails,
-preserving representable probabilities beyond eight standard deviations in
-distribution functions, censored likelihoods, and inference. Normal quantiles
-refine a rational approximation with Halley iteration in the central range and
-a log-probability Newton step in extreme tails, including subnormal probability
-inputs. The tail step uses the normal Mills ratio's
-[continued fraction](https://dlmf.nist.gov/7.9.E1). Shared inference routines use
-the upper-tail function directly to avoid reporting zero for small p-values.
+responses use the identity transform.
+The distribution functions are ports of R's nmath routines (`pnorm`, `qnorm`,
+`pt`, `qt`, ...), used by the fit, the residuals and `dsurvreg`/`psurvreg`/
+`qsurvreg`/`rsurvreg` alike; the t family takes `distribution="t", parms=df`.
+For example, `qsurvreg(1e-20, 0, distribution="t", parms=4)` returns
+`-131607.4013`, as R does.
 Gaussian, logistic, extreme-value, and Student-t AFT models accept finite real-valued
 responses, including negative values and zero, for all censoring types. Log-time
-families retain their positive-response requirement. Native and sklearn predictions
-use each family's response transformation; `predict_median` and `predict_quantile`
-return distribution quantiles. Right-censored concordance also accepts real-valued
-responses, so these models can be scored directly.
+families retain their positive-response requirement. Right-censored concordance
+also accepts real-valued responses, so these models can be scored directly.
 AFT coefficient accessors report aliased location coefficients as `NaN`, while
 stored training predictions and residuals retain the fitted numeric values.
 As in R, an aliased coefficient makes ordinary `newdata` predictions missing;
-term predictions retain contributions from other terms. AFT `newdata` predictions
-omit formula offsets, while training predictions retain them; the native
-`fit.predict(...)` method still accepts explicit offsets. As in R, `vcov(complete=False)`
-drops the aliased coefficients and keeps the estimated scale parameters.
-The AFT optimizer uses an ordered LDL factorization for its observed-information
-Newton steps, with a score-product fallback when needed. It honors R's
-[`survreg` pivot tolerance](https://github.com/cran/survival/blob/3.8-11/src/cholesky3.c),
-preserves supplied coefficients in aliased directions, and returns zero
-covariance rows and columns for discarded pivots. Each accepted factorization
-is reused for the next step and the final covariance. After the first rejected
-step, the optimizer screens shorter steps using only their likelihood and
-computes full derivatives for improving candidates. The R bridge also routes
-built-in `survreg.fit` matrix calls through this kernel,
-including fixed or stratified scales and interval-censored responses.
-AFT likelihoods and analytic derivatives share the distribution calculations used
-by residual diagnostics, with the optimizer using the true likelihood Hessian.
-Log-tail evaluation preserves very small probabilities, and interval widths are
-computed before log-time transformation to retain adjacent response endpoints.
-Zero-weight observations are omitted from likelihood evaluation; the line search
-rejects non-finite likelihoods or derivatives.
+term predictions retain contributions from other terms. As in R,
+`vcov(complete=False)` drops the aliased coefficients and keeps the estimated
+scale parameters.
+The optimizer is a port of R's `survreg6.c`, with the likelihood and its
+derivatives from `survregc1.c`: Newton-Raphson steps solved with `cholesky2` on
+the information matrix, the score outer-product matrix `JJ` when the
+information is not positive definite, and a step that backs off two thirds of
+the way to the last good point when the likelihood does not improve. Case
+weights must be positive, as in R's `survreg.fit` ("Invalid weights, must be
+>0"). The R bridge also routes built-in `survreg.fit` matrix calls through this
+kernel, including fixed or stratified scales and interval-censored responses.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
@@ -693,7 +658,6 @@ scale strata. It does not solve for the supplied locations. Intercept-only
 models require log-scales in a supplied starting vector; fixed-scale models
 require only location coefficients. The R `survreg.fit` matrix interface uses
 the same native initialization and returns R's null-fit metadata.
-Zero-weight observations do not determine starting values or working coordinates.
 
 Automatic initialization reports an error for an unusable response scale,
 constant nonbinary covariate that cannot be rescaled, or interval probability
@@ -938,46 +902,28 @@ Run Python tests:
 uv run --no-sync pytest python/tests -v
 ```
 
-The `ridge_cox` benchmarks include joint fitting, sampling covariance, and
-effective-df diagnostics. On a local Apple Silicon run with 10,000 rows, eight
-correlated covariates, weights, strata, and one Rayon thread, median times were
-2.884 ms for ordinary Cox, 2.927 ms for mixed fixed-theta ridge, and 2.903 ms for
-grouped fixed-theta ridge. Automatic selection of four df took 12.06 ms over
-four outer fits and eight total Newton iterations (50 samples per case).
-
 Smoke-test benchmarks:
 ```sh
 cargo bench -- --test
 ```
 
-The AFT benchmarks include matched weighted, stratified lognormal fits with
-full-rank and duplicated covariate columns. Five paired release runs on Apple
-Silicon with Rust 1.94 and one Rayon thread compared automatic initialization
-against the zero starts in revision `6e687b37`. Main-model iterations fell from
-8–9 to R's 4–5, but the preliminary scale fit and working regressions increased
-total fitting time by about 11–34% in six of eight cases; the other two timing
-comparisons were inconclusive. For example, the 1,000-row full-rank fit took
-444 µs versus 367 µs, and the 10,000-row duplicated-column fit took 4.842 ms
-versus 3.595 ms. These measurements include all initialization work and input
-cloning. All eight fits converged and were checked against R's coefficients,
-covariance, and likelihood. Each run used at least 50 samples and 0.25 seconds
-per case:
+The Rust benchmarks use divan; a single group runs with, for example:
 
 ```sh
-RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- \
-  survreg_bench::weighted_stratified_survreg_lognormal --sample-count 50 \
-  --sample-size 1 --min-time 0.25 --timer os
+RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- survreg_bench
 ```
 
-The `gaussian_distribution_bench` group separates central and extreme-tail
-probabilities and quantiles. In a local single-thread Apple Silicon comparison
-against main, batches of 10,000 accurate quantiles took 197.8 microseconds in
-the central range and 340.8 microseconds in the tails, versus 57.7 and 90.77
-microseconds for the previous approximation. A weighted, stratified lognormal
-AFT fit with 10,000 rows took 5.026 ms versus 4.590 ms. The fit evaluates each
-small Gaussian tail once and derives its large complement, limiting the extra
-work required for accurate probabilities. Measurements used at least 50 samples
-per case; the benchmark definitions retain these comparisons for future tuning.
+`benches/python/bench_vs_r.py` times the same synthetic data against R's
+`survival` at two separate layers: the `survival.r` formula calls against R's
+formula calls (what users pay, including model frames and the extras R
+computes), and the `survival._survival` kernels on NumPy arrays against the
+matching R entry points (`coxph.fit` plus `concordancefit`, `survfitKM`,
+`survdiff.fit`, `concordancefit`, `survreg.fit`). Each ratio compares one layer
+with the same layer in R; run it against a release build:
+
+```sh
+PYTHONPATH=python python benches/python/bench_vs_r.py --sizes 1000,10000,100000
+```
 
 Format and lint:
 ```sh
@@ -1017,18 +963,10 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 - Python 3.11+ and Rust 1.94+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 
-Fixed-theta and df-selected ridge Cox tests preserve R survival 3.8.11 outputs,
-including three documented upstream discrepancies. This implementation resets
-martingale risk calculations between strata, includes prediction offsets inside
-the exponential, and calculates counting-process interval uncertainty from the
-difference of the cumulative-hazard gradients. R 3.8.11 can report incorrect
-earlier-stratum martingales, add offsets after exponentiation for expected-event
-predictions, and subtract endpoint variances for interval standard errors. The
-fixture generator retains those original values alongside independent corrected
-references computed with R's risk-set accumulator and ordinary Cox residuals at
-the penalized coefficients; these cases are tested explicitly.
-The `model_frame` generic returns plain columns; matrix-valued ridge terms remain
-available on the retained `fit.model` object.
+Where R's own results are wrong (for example the martingale residuals of
+stratified penalized Cox fits, or the offsets of `predict.coxph`'s expected
+counts), the port returns the intended values; every such case is listed in
+[R compatibility](docs/r-compatibility.md#deliberate-fixes-of-r-defects-no-fixture).
 
 ## License
 
