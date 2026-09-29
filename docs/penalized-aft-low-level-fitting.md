@@ -29,8 +29,8 @@ compute the effective sample size used by penalty searches.
 ## Penalty and term inputs
 
 `pattr` is a sequence of native `regression.CoxPenalty` objects or `r.pspline`
-results. Native constructors support `ridge`, `pspline`, `frailty` and
-`callback`. `pcols` gives the design columns for each penalty. `assign` maps
+results. Native constructors support `ridge`, `pspline`, `frailty`,
+`callback` and `controlled`. `pcols` gives the design columns for each penalty. `assign` maps
 term names to column groups, or supplies a sequence of groups; the default
 uses the penalized groups and one term per remaining column.
 
@@ -53,6 +53,77 @@ basis or penalty callbacks. Passing a native `CoxPenalty.pspline` also fits,
 but without basis metadata its report uses ordinary coefficient rows.
 Coefficient labels come from the design or `column_names`; native penalties
 do not carry R's optional `varname` replacement attribute.
+
+## Custom penalty searches
+
+`regression.CoxPenalty.controlled(pfun, cfun, diag=True, sparse=False,
+needs_df=False)` supports an R-style penalty and an outer tuning search in
+both Cox and AFT fits. `pfun(coef, theta, neff)` returns a mapping with the
+positive `penalty`, its `first` and `second` derivatives, and a boolean `flag`.
+Set `diag=False` for a full second-derivative matrix, flattened in column-major
+order. An optional `recenter` scalar or vector is subtracted from the
+coefficients. A flagged term can omit derivatives. This differs from the
+existing `callback` constructor's C-level `coxlist` convention.
+
+`cfun(old, info)` is first called with `old=None` and `info` containing
+`iter=0` and `eps2`. After each inner fit, `info` contains `iter`, the term's
+`coef`, unpenalized `plik`, penalized `loglik`, `neff`, `df` and `trH`.
+Set `needs_df=True` to request degrees of freedom and the information trace
+during the search; otherwise they can be NaN. Cox uses the event count for
+`neff`; AFT uses its null-fit effective sample size.
+
+Every controller result must contain a finite scalar `theta`. Updates must
+also contain a boolean `done`. The returned mapping becomes `old` on the
+next call and can carry arbitrary user state. Optional numeric `history`
+rows and matching `columns`, `c_loglik` and `half` populate `PenaltyHistory`.
+Each fit creates its own state. Numerical results retain neither that opaque
+state nor the penalty functions. Reusable penalty objects can be pickled
+when their functions can be pickled.
+
+Minimal custom AFT distribution mappings normally provide `variance` for
+the standardized density. The optional `fitting_variance(scale_squared)`
+hook instead receives the null fit's squared mean scale, matching R's
+penalized fitting convention. Supplied distribution parameters follow it as
+a second argument. This hook is also available on
+`SurvregDistribution.from_callbacks` and survives distribution pickling.
+Its result must be finite; the default standardized variance must also be
+positive. R's Student-t fitting convention can yield a negative value here,
+which is preserved for compatibility.
+
+## R matrix bridge
+
+`survivalr::survpenal.fit` uses the same compact Rust fitter. It adapts R
+`pfun`, `cfun`, `cargs`, `cparm` and `pparm` to the shared controller protocol,
+including dense and sparse frailties and full spline penalty matrices.
+Original R controller histories and `printfun` closures remain in the
+returned R list. Column names, `varname` replacements, term ordering and
+one-based assignments follow R conventions. Custom distribution lists retain
+their callbacks; their `variance` function receives the null-fit scale
+argument described above. No R fitting fallback is used.
+
+The bridge preserves the shared solver's offset, aliased-prediction and
+sparse-column indexing corrections. Tests compare fixed and searching
+ridge, spline and frailty penalties against stock R, cover custom density
+and controller callbacks, and disable the reference fitter to check that
+custom searches use Rust. Interval-censored callback fits are compared with
+R's safe built-in Gaussian path. `scripts/benchmark_penalized_aft_r_bridge.R`
+checks complete result agreement before timing complete R calls.
+
+A local R 4.5.3 / survival 3.8-12 run with 20,000 rows, one warmup and seven
+measured calls per implementation produced:
+
+| Penalty | Design columns | Stock R median | Rust bridge median |
+| --- | ---: | ---: | ---: |
+| Fixed ridge | 6 | 25 ms | 25 ms |
+| Ridge df search | 6 | 38 ms | 36 ms |
+| Spline df search | 9 | 48 ms | 41 ms |
+
+These complete-call timings include R penalty/controller execution and
+conversion of inputs and results. They exclude design/penalty construction
+and garbage collection, and do not measure peak memory. Runtimes were
+similar for ridge; the spline search improved by 1.17× in this run.
+Individual measurements vary (the first fixed-ridge bridge sample was
+66 ms), so the script retains every sample along with the median.
 
 ## Results and reports
 

@@ -13,6 +13,7 @@ struct PythonCallbacks {
     deviance: Py<PyAny>,
     quantile: Py<PyAny>,
     variance: Option<Py<PyAny>>,
+    fitting_variance: Option<Py<PyAny>>,
     parm_names: Vec<String>,
 }
 
@@ -154,6 +155,28 @@ impl SurvregCallbacks for PythonCallbacks {
             Ok((center.into_inner(), loglik.into_inner()))
         })
         .map_err(|e| failure("deviance", e))
+    }
+
+    fn fitting_variance(&self, scale_squared: f64, parms: &[f64]) -> SurvivalResult<f64> {
+        let Some(callback) = &self.fitting_variance else {
+            let value = self.variance(parms)?;
+            if !value.is_finite() || value <= 0.0 {
+                return Err(SurvivalError::invalid_input(
+                    "variance callback must return a finite positive value",
+                ));
+            }
+            return Ok(value);
+        };
+        Python::attach(|py| {
+            self.call(
+                py,
+                callback,
+                vec![scale_squared.into_pyobject(py)?.into_any()],
+                parms,
+            )?
+            .extract::<f64>()
+        })
+        .map_err(|e| failure("fitting_variance", e))
     }
 
     fn variance(&self, parms: &[f64]) -> SurvivalResult<f64> {
@@ -300,7 +323,7 @@ impl SurvregDistribution {
     /// Define a custom family with vectorized NumPy callbacks. Parameters,
     /// when nonempty, are passed as a final argument (a dict when named).
     #[staticmethod]
-    #[pyo3(name = "from_callbacks", signature = (name, init, density, deviance, quantile, variance=None, transform=None, scale=None, parms=None, parm_names=None))]
+    #[pyo3(name = "from_callbacks", signature = (name, init, density, deviance, quantile, variance=None, transform=None, scale=None, parms=None, parm_names=None, fitting_variance=None))]
     #[allow(clippy::too_many_arguments)]
     fn from_callbacks_py(
         py: Python<'_>,
@@ -314,6 +337,7 @@ impl SurvregDistribution {
         scale: Option<f64>,
         parms: Option<FloatVec>,
         parm_names: Option<Vec<String>>,
+        fitting_variance: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         for (name, value) in [
             ("init", &init),
@@ -325,6 +349,9 @@ impl SurvregDistribution {
         }
         if let Some(v) = &variance {
             callable(py, v, "variance")?;
+        }
+        if let Some(v) = &fitting_variance {
+            callable(py, v, "fitting_variance")?;
         }
         let parms = parms.map(FloatVec::into_inner).unwrap_or_default();
         let parm_names = parm_names.unwrap_or_default();
@@ -349,6 +376,7 @@ impl SurvregDistribution {
                 deviance,
                 quantile,
                 variance,
+                fitting_variance,
                 parm_names,
             }),
             transform.unwrap_or(SurvregTransform::Identity),
@@ -440,6 +468,9 @@ impl SurvregDistribution {
                         })?
                         .extract()?,
                 ),
+                c.get_item("fitting_variance")?
+                    .filter(|v| !v.is_none())
+                    .map(Bound::unbind),
             )?;
             result.callbacks = rebuilt.callbacks;
         }
@@ -483,6 +514,7 @@ impl SurvregDistribution {
                 d.set_item(name, v)?;
             }
             d.set_item("variance", &c.variance)?;
+            d.set_item("fitting_variance", &c.fitting_variance)?;
             d.set_item("parm_names", &c.parm_names)?;
             Some(d)
         } else {

@@ -133,6 +133,17 @@ pub struct SurvpenalFit {
 fn neff_variance(distribution: &SurvregDistribution, scale2: f64) -> SurvivalResult<f64> {
     match distribution.family {
         SurvregFamily::T => Ok(scale2 / (scale2 - 2.0)),
+        SurvregFamily::Custom => {
+            let value = distribution
+                .custom_callbacks()?
+                .fitting_variance(scale2, &distribution.parms)?;
+            if !value.is_finite() {
+                return Err(SurvivalError::invalid_input(
+                    "fitting variance must be finite",
+                ));
+            }
+            Ok(value)
+        }
         _ => distribution.variance(),
     }
 }
@@ -316,7 +327,7 @@ impl SurvpenalFit {
             &response.status,
             eps2,
         )?;
-        let need_df = terms.iter().any(|term| term.control.needs_df());
+        let need_df = terms.iter().any(|term| term.needs_df());
         let mut composer = Composer::new(terms, nfrail, nvar, shape.full_imat, true);
 
         // The intercept-only fit gives the starting scale, the first
@@ -337,6 +348,7 @@ impl SurvpenalFit {
             fit0.beta[1..].iter().map(|v| v.exp()).sum::<f64>() / (fit0.beta.len() - 1) as f64;
         let n_eff =
             neff_variance(distribution, mean_scale * mean_scale)? * lu_inverse(&fit0.var)?[(0, 0)];
+        composer.neff = n_eff;
 
         // Starting values: frailties, dense coefficients, log(scale)s.
         let mut init = match &options.init {

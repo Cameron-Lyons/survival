@@ -266,6 +266,9 @@ pub enum PenaltyTerm {
     #[cfg(feature = "python")]
     #[serde(skip)]
     Callback(CallbackPenalty),
+    #[cfg(feature = "python")]
+    #[serde(skip)]
+    Controlled(super::callbacks::ControlledPenalty),
 }
 
 impl PenaltyTerm {
@@ -464,6 +467,8 @@ impl PenaltyTerm {
             Self::Frailty(term) => term.sparse,
             #[cfg(feature = "python")]
             Self::Callback(term) => term.sparse,
+            #[cfg(feature = "python")]
+            Self::Controlled(term) => term.sparse,
         }
     }
 
@@ -474,6 +479,8 @@ impl PenaltyTerm {
             Self::Pspline(_) => false,
             #[cfg(feature = "python")]
             Self::Callback(term) => term.diag,
+            #[cfg(feature = "python")]
+            Self::Controlled(term) => term.diag,
         }
     }
 
@@ -484,7 +491,7 @@ impl PenaltyTerm {
             Self::Pspline(_) => "pspline",
             Self::Frailty(_) => "frailty",
             #[cfg(feature = "python")]
-            Self::Callback(_) => "callback",
+            Self::Callback(_) | Self::Controlled(_) => "callback",
         }
     }
 
@@ -666,6 +673,8 @@ impl PenaltyTerm {
                     }
                 }
             }
+            #[cfg(feature = "python")]
+            Self::Controlled(_) => unreachable!("controlled penalties use fit-local term state"),
             #[cfg(feature = "python")]
             Self::Callback(term) => {
                 let terms = Python::attach(|py| {

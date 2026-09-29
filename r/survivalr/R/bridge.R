@@ -6559,12 +6559,131 @@ survfitcoxph.fit <- function(y, x, wt, x2, risk, newrisk, strata, se.fit,
   )
 }
 
+.survpenal_controller <- function(attribute, columns, x, status) {
+  if (!is.function(attribute$pfun) || !is.function(attribute$cfun)) {
+    stop("pattr must supply pfun and cfun functions", call. = FALSE)
+  }
+  requested <- attribute$cargs
+  allowed <- c("x", "coef", "plik", "loglik", "status", "neff", "df", "trH")
+  if (any(!requested %in% allowed)) {
+    stop(paste(requested[!requested %in% allowed], "not matched"), call. = FALSE)
+  }
+  sparse <- isTRUE(attribute$sparse)
+  term_x <- if (sparse) {
+    match(x[, columns], sort(unique(x[, columns])))
+  } else x[, columns, drop = TRUE]
+  state <- NULL
+  parameters <- NULL
+  controller <- function(old, info) {
+    if (info$iter == 0L) {
+      parameters <<- c(attribute$cparm, eps2 = info$eps2)
+      state <<- attribute$cfun(parameters, iter = 0L)
+    } else {
+      values <- c(list(x = term_x, status = status), info)
+      arguments <- c(list(parameters, info$iter, state), unname(values[requested]))
+      state <<- do.call(attribute$cfun, arguments)
+    }
+    # Keep R's arbitrary history and its attributes on the R side. The native
+    # fit owns its numerical controller state and passes the correct iteration.
+    .compact_null(list(theta = unname(state$theta), done = state$done))
+  }
+  penalty <- function(coef, theta, neff) {
+    arguments <- list(as.numeric(coef), theta, neff)
+    if (!is.null(attribute$pparm)) arguments <- c(arguments, list(attribute$pparm))
+    value <- do.call(attribute$pfun, arguments)
+    value$first <- if (is.null(value$first)) NULL else as.list(as.numeric(value$first))
+    value$second <- if (is.null(value$second)) NULL else as.list(as.numeric(value$second))
+    value$recenter <- if (is.null(value$recenter)) NULL else as.list(as.numeric(value$recenter))
+    value
+  }
+  list(
+    penalty = .regression_attr("CoxPenalty")$controlled(
+      penalty, controller, diag = isTRUE(attribute$diag), sparse = sparse,
+      needs_df = any(requested %in% c("df", "trH"))
+    ),
+    history = function() state,
+    printfun = attribute$printfun
+  )
+}
+
 survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
                           scale = 0, nstrat = 1, strata, pcols, pattr,
                           assign, parms = NULL) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::survpenal.fit)
-  eval.parent(call)
+  if (!is.matrix(x)) stop("Invalid X matrix ", call. = FALSE)
+  if (!is.matrix(y) || !ncol(y) %in% c(2L, 3L) || nrow(y) != nrow(x)) {
+    stop("Invalid survival response", call. = FALSE)
+  }
+  if (!length(pcols) || length(pcols) != length(pattr)) {
+    stop("Invalid pcols or pattr arg", call. = FALSE)
+  }
+  # Sort as R does before invoking user controllers or returning their history.
+  locations <- vapply(pcols, function(columns) {
+    hit <- which(vapply(assign, function(group) {
+      identical(as.numeric(columns), as.numeric(group))
+    }, logical(1)))
+    if (length(hit) != 1L) stop("pcols and assign arguments disagree", call. = FALSE)
+    hit
+  }, integer(1))
+  ordering <- order(locations)
+  pcols <- pcols[ordering]
+  pattr <- pattr[ordering]
+  controllers <- Map(function(attribute, columns) {
+    .survpenal_controller(attribute, columns, x, y[, ncol(y)])
+  }, pattr, pcols)
+  column_names <- colnames(x)
+  for (i in seq_along(pattr)) {
+    if (!is.null(pattr[[i]]$varname)) column_names[pcols[[i]]] <- pattr[[i]]$varname
+  }
+  distribution <- .survreg_fit_distribution(dist, parms)
+  assignments <- lapply(assign, function(columns) as.list(columns - 1L))
+  names(assignments) <- paste0("term", seq_along(assignments))
+  fit <- .call_r_api(
+    "survpenal_fit", x = x, y = y,
+    weights = if (missing(weights) || is.null(weights)) NULL else as.list(weights),
+    offset = if (missing(offset) || is.null(offset)) NULL else as.list(offset),
+    init = if (missing(init) || is.null(init)) NULL else as.list(unname(init)),
+    controlvals = controlvals, dist = distribution$dist, parms = distribution$parms,
+    scale = scale, nstrat = nstrat,
+    strata = if (missing(strata) || is.null(strata)) NULL else as.list(strata),
+    pcols = unname(lapply(pcols, function(columns) as.list(columns - 1L))),
+    pattr = unname(lapply(controllers, function(controller) controller$penalty)),
+    assign = assignments,
+    column_names = if (is.null(column_names)) NULL else as.list(column_names)
+  )
+  coefficients <- .as_numeric_vector(.result_field(fit, "coefficients"))
+  names(coefficients) <- unlist(.result_field(fit, "coefficient_names"), use.names = FALSE)
+  variance <- .as_numeric_matrix(.result_field(fit, "var"))
+  dimnames(variance) <- list(names(coefficients), names(coefficients))
+  pterms <- .as_numeric_vector(.result_field(fit, "pterms"))
+  names(pterms) <- names(assign)
+  assign2 <- lapply(.result_field(fit, "assign2"), function(columns) {
+    .as_numeric_vector(columns) + 1L
+  })
+  assign_names <- names(assign)
+  if (scale == 0) {
+    if (is.null(assign_names)) assign_names <- rep("", length(assign))
+    assign_names <- c(assign_names, "sigma")
+  }
+  names(assign2) <- assign_names
+  history <- lapply(controllers, function(controller) controller$history())
+  names(history) <- names(pterms[pterms > 0])
+  output <- list(coefficients = coefficients,
+                 icoef = .as_numeric_vector(.result_field(fit, "icoef")),
+                 var = variance, var2 = .as_numeric_matrix(.result_field(fit, "var2")),
+                 loglik = .as_numeric_vector(.result_field(fit, "loglik")),
+                 iter = as.integer(.as_numeric_vector(.result_field(fit, "iter"))),
+                 linear.predictors = .as_numeric_vector(.result_field(fit, "linear_predictors")))
+  frail <- .result_field(fit, "frail")
+  if (!is.null(frail)) {
+    output$frail <- .as_numeric_vector(frail)
+    output$fvar <- .as_numeric_vector(.result_field(fit, "fvar"))
+  }
+  output$df <- .as_numeric_vector(.result_field(fit, "df"))
+  if (is.null(frail)) output["df2"] <- list(NULL)
+  c(output, list(penalty = .as_numeric_vector(.result_field(fit, "penalty")),
+                 pterms = pterms, assign2 = assign2, history = history,
+                 printfun = unname(lapply(controllers, function(controller) controller$printfun)),
+                 score = .as_numeric_vector(.result_field(fit, "score"))))
 }
 
 .survreg_fit_distribution <- function(dist, parms) {
@@ -6588,7 +6707,12 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
     definition$init(as.numeric(y), as.numeric(weights), parms)
   } else NULL
   list(
-    dist = .compact_null(list(name = definition$name, density = density, init = init)),
+    dist = .compact_null(list(
+      name = definition$name, density = density, init = init,
+      fitting_variance = if (is.function(definition$variance)) function(scale_squared) {
+        definition$variance(scale_squared)
+      } else NULL
+    )),
     parms = NULL
   )
 }

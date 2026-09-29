@@ -101,6 +101,7 @@ def _fitting_distribution(dist: Any, parms: Any) -> _core.SurvregDistribution:
             _unused_distribution_component,
             _unused_distribution_component,
             variance=dist.get("variance"),
+            fitting_variance=dist.get("fitting_variance"),
             parms=_parms_vector(values),
             parm_names=list(values) if isinstance(values, Mapping) else None,
         )
