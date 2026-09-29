@@ -17,23 +17,6 @@ if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
 
 
-def _step_matrix_at(
-    step_times: NDArray[np.float64],
-    step_values: NDArray[np.float64],
-    evaluation_times: NDArray[np.float64],
-    before_first: float,
-) -> NDArray[np.float64]:
-    """Evaluate right-continuous step curves (columns of ``step_values``) at requested times."""
-    n_curves = step_values.shape[1] if step_values.ndim == 2 else 1
-    values = np.full((evaluation_times.size, n_curves), before_first, dtype=np.float64)
-    if step_times.size == 0:
-        return values
-    positions = np.searchsorted(step_times, evaluation_times, side="right") - 1
-    valid = positions >= 0
-    values[valid] = step_values[positions[valid]]
-    return values
-
-
 def _median_survival_times(
     times: NDArray[np.float64], survival: NDArray[np.float64]
 ) -> NDArray[np.float64]:
@@ -98,9 +81,9 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
         self.n_features_in_ = X.shape[1]
 
         self.model_ = _surv.coxph_fit(
-            time.tolist(),
-            status.tolist(),
-            X.tolist(),
+            time,
+            status,
+            X,
             method=self.ties,
             iter_max=self.n_iters,
         )
@@ -124,7 +107,7 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
             Predicted risk scores (higher = higher risk).
         """
         X = _check_prediction_input(self, X)
-        return np.asarray(self.model_.predict("lp", newdata=X.tolist()).fit, dtype=np.float64)
+        return np.asarray(self.model_.predict("lp", newdata=X).fit, dtype=np.float64)
 
     def predict_survival_function(
         self, X: ArrayLike, times: ArrayLike | None = None
@@ -153,11 +136,9 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
             if times is not None
             else np.asarray(self.event_times_, dtype=np.float64)
         )
-        (curve,) = self.model_.survfit(newdata=X.tolist(), se_fit=False)
-        curve_times = np.asarray(curve.time, dtype=np.float64)
-        curve_surv = np.asarray(curve.surv, dtype=np.float64).reshape(curve_times.size, -1)
-        survival = _step_matrix_at(curve_times, curve_surv, evaluation_times, 1.0).T
-        return evaluation_times, np.clip(survival, 0.0, 1.0)
+        survival = self.model_.predict_survival_at(evaluation_times, newdata=X).T
+        np.clip(survival, 0.0, 1.0, out=survival)
+        return evaluation_times, survival
 
     def predict_median_survival_time(self, X: ArrayLike) -> NDArray[np.float64]:
         """Predict median survival time for samples.

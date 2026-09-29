@@ -1,5 +1,6 @@
 //! Python entry point of the IPCW Brier score (`validation::brier`).
 
+use crate::data_types::{FloatMatrix, FloatVec, IntVec};
 use crate::validation::brier::{BrierInput, BrierResult, brier};
 use pyo3::prelude::*;
 
@@ -13,15 +14,15 @@ use pyo3::prelude::*;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn brier_py(
     py: Python<'_>,
-    time: Vec<f64>,
-    status: Vec<i32>,
-    times: Vec<f64>,
-    phat: Vec<Vec<f64>>,
-    weights: Option<Vec<f64>>,
+    time: FloatVec,
+    status: IntVec,
+    times: FloatVec,
+    phat: FloatMatrix,
+    weights: Option<FloatVec>,
     ties: bool,
     efron: bool,
     timefix: bool,
-    start: Option<Vec<f64>>,
+    start: Option<FloatVec>,
 ) -> PyResult<BrierResult> {
     Ok(py.detach(|| {
         brier(BrierInput {
@@ -30,7 +31,7 @@ pub(crate) fn brier_py(
             status: &status,
             weights: weights.as_deref(),
             times: &times,
-            phat,
+            phat: phat.outer_iter().map(|row| row.to_vec()).collect(),
             ties,
             efron,
             timefix,

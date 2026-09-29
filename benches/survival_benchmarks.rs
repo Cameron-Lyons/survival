@@ -301,10 +301,12 @@ mod logrank {
 mod brier_score {
     use super::*;
 
-    fn brier_inputs(n: usize) -> (Vec<f64>, Vec<i32>, Vec<f64>, Vec<Vec<f64>>) {
+    fn brier_inputs(n: usize, n_times: usize) -> (Vec<f64>, Vec<i32>, Vec<f64>, Vec<Vec<f64>>) {
         let (time, _, status_i32) = generate_survival_data(n);
         let max_time = time.iter().cloned().fold(0.0_f64, f64::max);
-        let times: Vec<f64> = (1..=4).map(|k| max_time * k as f64 / 5.0).collect();
+        let times: Vec<f64> = (1..=n_times)
+            .map(|k| max_time * k as f64 / (n_times + 1) as f64)
+            .collect();
         let predictions = generate_predictions(n);
         let phat: Vec<Vec<f64>> = times
             .iter()
@@ -312,7 +314,7 @@ mod brier_score {
             .map(|(k, _)| {
                 predictions
                     .iter()
-                    .map(|p| p * (k + 1) as f64 / 4.0)
+                    .map(|p| p * (k + 1) as f64 / n_times as f64)
                     .collect()
             })
             .collect();
@@ -321,7 +323,7 @@ mod brier_score {
 
     #[divan::bench(args = [100, 1000, 10000, 100000])]
     fn brier_ipcw(bencher: divan::Bencher, n: usize) {
-        let (time, status, times, phat) = brier_inputs(n);
+        let (time, status, times, phat) = brier_inputs(n, 4);
 
         bencher
             .with_inputs(|| phat.clone())
@@ -342,7 +344,7 @@ mod brier_score {
 
     #[divan::bench(args = [100, 1000, 10000, 100000])]
     fn brier_ipcw_weighted(bencher: divan::Bencher, n: usize) {
-        let (time, status, times, phat) = brier_inputs(n);
+        let (time, status, times, phat) = brier_inputs(n, 4);
         let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 5) as f64 * 0.1).collect();
 
         bencher
@@ -359,6 +361,27 @@ mod brier_score {
                     efron: false,
                     timefix: true,
                 })
+            });
+    }
+
+    #[divan::bench(args = [1000, 10000])]
+    fn brier_ipcw_many_times(bencher: divan::Bencher, n: usize) {
+        let (time, status, times, phat) = brier_inputs(n, 128);
+        bencher
+            .with_inputs(|| phat.clone())
+            .bench_local_values(|phat| {
+                brier(BrierInput {
+                    start: None,
+                    time: &time,
+                    status: &status,
+                    weights: None,
+                    times: &times,
+                    phat,
+                    ties: true,
+                    efron: false,
+                    timefix: true,
+                })
+                .expect("benchmark Brier inputs should be valid")
             });
     }
 }
@@ -580,6 +603,15 @@ mod exact_counting_process_cox {
 
 mod cox_regression {
     use super::*;
+
+    #[divan::bench(args = [100, 1000, 10000])]
+    fn coxph_survival_at_requested_times(bencher: divan::Bencher, n: usize) {
+        let fit = fitted_coxph_model(n, 3);
+        let times = [2.0, 4.0, 8.0, 12.0];
+        // Warm the baseline cache, as with repeated prediction calls.
+        fit.predict_survival_at(&times, None).unwrap();
+        bencher.bench_local(|| fit.predict_survival_at(&times, None).unwrap());
+    }
 
     #[divan::bench(args = [100, 1000, 5000])]
     fn coxph_efron(bencher: divan::Bencher, n: usize) {

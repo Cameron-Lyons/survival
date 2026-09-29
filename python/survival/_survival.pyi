@@ -2235,6 +2235,13 @@ class CoxPHFit:
         se_fit: bool = False,
         reference: str = "strata",
     ) -> CoxPrediction: ...
+    def predict_survival_at(
+        self,
+        times: ArrayLike,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
+    ) -> NDArray[np.float64]: ...
     def predict_terms(
         self,
         newdata: ArrayLike | None = None,
@@ -11218,15 +11225,15 @@ def bounded_cumulative_hazard_model(
     config: BoundedCumulativeHazardConfig,
 ) -> BoundedCumulativeHazardResult: ...
 def brier(
-    time: Sequence[float],
-    status: Sequence[int],
-    times: Sequence[float],
-    phat: Sequence[Sequence[float]],
-    weights: Sequence[float] | None = None,
+    time: ArrayLike,
+    status: ArrayLike,
+    times: ArrayLike,
+    phat: ArrayLike,
+    weights: ArrayLike | None = None,
     ties: bool = True,
     efron: bool = False,
     timefix: bool = True,
-    start: Sequence[float] | None = None,
+    start: ArrayLike | None = None,
 ) -> BrierResult: ...
 def brier_calibration(
     time: Sequence[float],

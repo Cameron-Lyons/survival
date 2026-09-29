@@ -95,6 +95,7 @@ def _boundary_estimator(name):
         predict=_unexpected_work,
         predict_risk=_unexpected_work,
         predict_survival=_unexpected_work,
+        predict_survival_at=_unexpected_work,
         predict_median_survival_time=_unexpected_work,
         unique_times=[1.0, 2.0],
     )
@@ -274,12 +275,12 @@ def test_streaming_rejects_masked_lazy_slice_without_materializing_all_rows(tmp_
         predicted_rows.append(len(newdata))
         return SimpleNamespace(fit=[0.0] * len(newdata))
 
-    def survfit_valid_rows(*, newdata, se_fit):
+    def survival_at_valid_rows(times, *, newdata):
         predicted_rows.append(len(newdata))
-        return [SimpleNamespace(time=[1.0, 2.0], surv=[[1.0] * len(newdata)] * 2)]
+        return np.ones((len(times), len(newdata)))
 
     estimator.model_.predict = predict_valid_rows
-    estimator.model_.survfit = survfit_valid_rows
+    estimator.model_.predict_survival_at = survival_at_valid_rows
 
     def run_prediction():
         if route == "predict_large_dataset":
