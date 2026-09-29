@@ -526,6 +526,15 @@ def _response_rep_count(count_expression: str, inferred_length: int | None) -> i
 
 
 def _response_arg_values(data: Any, part: str, inferred_length: int | None = None) -> Any:
+    part = part.strip()
+    for wrapper in ("I", "identity"):
+        prefix = f"{wrapper}("
+        if part.startswith(prefix) and part.endswith(")"):
+            return _response_arg_values(data, part[len(prefix) : -1], inferred_length)
+    if part.startswith(("factor(", "as.factor(")) and part.endswith(")"):
+        term = _parse_covariate_atom(part)
+        n = inferred_length if inferred_length is not None else len(_column(data, term.column))
+        return _strata_argument_values(data, term, n)
     part = _unwrap_response_identity(part)
     rep_call = _response_rep_call(part)
     if rep_call is not None:

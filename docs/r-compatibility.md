@@ -599,7 +599,8 @@ this does not show.
   keep the `+` marker. The old formatting fixture reconstructs that legacy
   metadata; the vector-operation fixtures check current labels against 3.8-12.
 - The censoring column of a transitions table is labelled "(censored)" (3.8-11)
-  where 3.8-12 prints "(<first level>)", e.g. "(censor)".
+  where 3.8-12 prints "(<first level>)", e.g. "(censor)". `print_survcheck`
+  uses the response's current censoring label in both its report table and text.
 - `rsurvreg(seed=s)` reproduces R's `set.seed(s)` stream (Mersenne-Twister,
   inversion); without a seed it draws from a clock-seeded generator, since
   there is no R session whose RNG state it could share. Seeds are R's 32-bit
@@ -1074,6 +1075,19 @@ case-cohort fits retain stratum labels. The printers reuse existing numerical
 results. See [diagnostic and test reports](diagnostic-test-reports.md) for
 formatting rules, R quirks and reference coverage.
 
+`print_pyears`, `print_survcheck` and `print_yates` provide population totals,
+transition/subject tables, problem counts and population marginal means with
+global, pairwise, trend or SAS tests. Person-years results retain built-in
+rate-table match summaries from the positions already used by the numerical
+fit. `YatesPrint` retains typed level columns and independent numeric tests;
+display padding does not become observations in `as_data_frame`. See
+[population and validation reports](population-validation-reports.md).
+
+`factor()` and `as.factor()` inside a survival response now preserve the
+categorical status and state labels. Previously the response parser stripped
+those wrappers without evaluating the conversion. Existing factor levels are
+retained by `as.factor` and unused levels dropped by `factor`, as in R.
+
 ## Compact curve reports
 
 `print_survfit` and `print_survfitms` return R's compact curve tables and formatted
@@ -1123,8 +1137,7 @@ error; none silently falls back to other behaviour.
   proportional-hazards, concordance, survival-difference reports and
   `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
   `str(summary_ratetable(...))` exposes the native rate-table text. Dedicated
-  `print.Surv`, `print.Surv2`, `print.survcheck`, `print.yates`, `print.pyears`,
-  `print.ratetable` and the sparse (frailty) branch of `print.survreg.penal`
+  `print.Surv`, `print.Surv2`, `print.ratetable` and the sparse (frailty) branch of `print.survreg.penal`
   are not ported.
 - **R operator groups**: `Surv` arithmetic, comparisons and reductions do
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all

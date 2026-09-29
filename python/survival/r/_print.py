@@ -124,7 +124,9 @@ def character_matrix_lines(
     return lines
 
 
-def format_pvalues(values: Sequence[float], digits: int) -> list[str]:
+def format_pvalues(
+    values: Sequence[float], digits: int, *, eps: float = sys.float_info.epsilon
+) -> list[str]:
     """R's vector ``format.pval``, including mixed precision and tiny values."""
     result = ["NA"] * len(values)
     groups: list[list[int]] = [[], []]
@@ -132,10 +134,14 @@ def format_pvalues(values: Sequence[float], digits: int) -> list[str]:
     for i, value in enumerate(values):
         if math.isnan(value):
             continue
-        if value < sys.float_info.epsilon:
+        if value < eps:
             zeros.append(i)
         else:
-            exponent = math.floor(math.log10(value)) if math.isfinite(value) else math.inf
+            exponent = (
+                math.floor(math.log10(value if value > 0 else 1e-50))
+                if math.isfinite(value)
+                else math.inf
+            )
             fixed = exponent >= -3 or (exponent == -4 and digits > 1)
             groups[int(fixed)].append(i)
     for group in groups:
@@ -153,7 +159,7 @@ def format_pvalues(values: Sequence[float], digits: int) -> list[str]:
             separator = "" if precision == 1 and size <= 6 else " "
         else:
             separator = "" if precision == 1 else " "
-        cell = "<" + separator + _r_format_numbers([sys.float_info.epsilon], precision)[0]
+        cell = "<" + separator + _r_format_numbers([eps], precision)[0]
         for i in zeros:
             result[i] = cell
     return result

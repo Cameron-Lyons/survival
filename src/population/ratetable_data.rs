@@ -106,7 +106,10 @@ fn parse(name: &str, text: &str) -> SurvivalResult<RateTable> {
 
 fn load(cell: &'static OnceLock<RateTable>, name: &'static str, text: &str) -> &'static RateTable {
     cell.get_or_init(|| {
-        parse(name, text).unwrap_or_else(|e| panic!("embedded rate table is malformed: {e}"))
+        let mut table =
+            parse(name, text).unwrap_or_else(|e| panic!("embedded rate table is malformed: {e}"));
+        table.source = Some(name);
+        table
     })
 }
 
@@ -209,6 +212,18 @@ mod tests {
         // 2020-01-01 is 18262 days after 1970-01-01.
         assert_eq!(*year.last().unwrap(), 18262.0);
         assert!(table.rates.iter().all(|r| *r > 0.0 && *r < 0.01));
+    }
+
+    #[test]
+    fn builtin_sources_survive_cloning_without_marking_custom_tables() {
+        for (table, name) in [
+            (survexp_us(), "survexp.us"),
+            (survexp_usr(), "survexp.usr"),
+            (survexp_mn(), "survexp.mn"),
+        ] {
+            assert_eq!(table.source, Some(name));
+        }
+        assert_eq!(parse("custom", SURVEXP_US_TSV).unwrap().source, None);
     }
 
     #[test]

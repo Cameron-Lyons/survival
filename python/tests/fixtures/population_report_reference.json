@@ -1,0 +1,1176 @@
+{
+  "r_version": "R version 4.5.3 (2026-03-11)",
+  "survival_version": "3.8.12",
+  "datasets": {
+    "lung": {
+      "inst": [3, 3, 3, 5, 1, 12, 7, 11, 1, 7, 6, 16, 11, 21, 12, 1, 22, 16, 1, 21, 11, 6, 11, 15, 12, 12, 4, 13, 13, 1, 12, 1, 7, 16, 12, 1, 22, 15, 1, 1, 5, 11, 10, 12, 7, 7, 1, 3, 13, 22, 3, 12, 21, 1, 6, 1, 5, 22, 3, 1, 22, 12, 21, 11, 3, 3, 16, 5, 22, 6, 13, 3, 5, 2, 21, 12, 1, 6, 3, 1, 4, 13, 11, 21, 16, 6, 22, 21, 13, 1, 11, 22, 5, 10, 1, 12, 3, 12, 11, 3, 1, 6, 13, 6, 13, 12, 26, 1, 21, 3, 13, 1, 10, 3, 6, 1, 3, 1, 16, 15, 22, 26, 3, 11, 1, 22, 7, 12, 16, 12, 4, 16, 6, 13, 1, 22, 12, 13, 1, 5, 21, 3, 26, 1, 11, 26, 16, 16, 12, 13, 13, 22, 5, 16, 32, null, 26, 4, 12, 1, 32, 10, 11, 6, 7, 16, 11, 21, 6, 12, 13, 2, 2, 16, 1, 13, 1, 13, 1, 7, 13, 1, 16, 32, 12, 12, 2, 3, 15, 22, 16, 16, 12, 1, 22, 12, 32, 21, 1, 32, 15, 22, 32, 3, 26, 33, 5, 13, 21, 33, 1, 6, 15, 11, 11, 11, 13, 21, 11, 2, 22, 11, 1, 1, 13, 32, 6, 22],
+      "time": [306, 455, 1010, 210, 883, 1022, 310, 361, 218, 166, 170, 654, 728, 71, 567, 144, 613, 707, 61, 88, 301, 81, 624, 371, 394, 520, 574, 118, 390, 12, 473, 26, 533, 107, 53, 122, 814, 965, 93, 731, 460, 153, 433, 145, 583, 95, 303, 519, 643, 765, 735, 189, 53, 246, 689, 65, 5, 132, 687, 345, 444, 223, 175, 60, 163, 65, 208, 821, 428, 230, 840, 305, 11, 132, 226, 426, 705, 363, 11, 176, 791, 95, 196, 167, 806, 284, 641, 147, 740, 163, 655, 239, 88, 245, 588, 30, 179, 310, 477, 166, 559, 450, 364, 107, 177, 156, 529, 11, 429, 351, 15, 181, 283, 201, 524, 13, 212, 524, 288, 363, 442, 199, 550, 54, 558, 207, 92, 60, 551, 543, 293, 202, 353, 511, 267, 511, 371, 387, 457, 337, 201, 404, 222, 62, 458, 356, 353, 163, 31, 340, 229, 444, 315, 182, 156, 329, 364, 291, 179, 376, 384, 268, 292, 142, 413, 266, 194, 320, 181, 285, 301, 348, 197, 382, 303, 296, 180, 186, 145, 269, 300, 284, 350, 272, 292, 332, 285, 259, 110, 286, 270, 81, 131, 225, 269, 225, 243, 279, 276, 135, 79, 59, 240, 202, 235, 105, 224, 239, 237, 173, 252, 221, 185, 92, 13, 222, 192, 183, 211, 175, 197, 203, 116, 188, 191, 105, 174, 177],
+      "status": [2, 2, 1, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 1, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 1, 2, 1, 2, 2, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1, 2, 2, 2, 2, 1, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 2, 1, 1, 1, 2, 1, 2, 2, 2, 2, 2, 1, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1],
+      "age": [74, 68, 56, 57, 60, 74, 68, 71, 53, 61, 57, 68, 68, 60, 57, 67, 70, 63, 56, 57, 67, 49, 50, 58, 72, 70, 60, 70, 53, 74, 69, 73, 48, 60, 61, 62, 65, 66, 74, 64, 70, 73, 59, 60, 68, 76, 74, 63, 74, 50, 72, 63, 68, 58, 59, 62, 65, 57, 58, 64, 75, 48, 73, 65, 69, 68, 67, 64, 68, 67, 63, 48, 74, 40, 53, 71, 51, 56, 81, 73, 59, 55, 42, 44, 44, 71, 62, 61, 44, 72, 63, 70, 66, 57, 69, 72, 69, 71, 64, 70, 58, 69, 56, 63, 59, 66, 54, 67, 55, 75, 69, 44, 80, 75, 54, 76, 49, 68, 66, 80, 75, 60, 69, 72, 70, 66, 50, 64, 77, 48, 59, 53, 47, 55, 67, 74, 58, 56, 54, 56, 73, 74, 76, 65, 57, 53, 71, 54, 82, 59, 70, 60, 62, 53, 55, 69, 68, 62, 63, 56, 62, 44, 69, 63, 64, 57, 60, 46, 61, 65, 61, 58, 56, 43, 53, 59, 56, 55, 53, 74, 60, 39, 66, 65, 51, 45, 72, 58, 64, 53, 72, 52, 50, 64, 71, 70, 63, 64, 52, 60, 64, 73, 63, 50, 63, 62, 55, 50, 69, 59, 60, 67, 69, 64, 65, 65, 41, 76, 70, 57, 67, 71, 76, 77, 39, 75, 66, 58],
+      "sex": [1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 2, 2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 2, 1, 2, 2, 2, 1, 1, 2, 1, 1, 2, 2, 1, 1, 1, 2, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 1, 2, 2, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 1, 2, 2, 1, 1, 2, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1, 2, 1, 2, 1, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 2, 1, 2, 2, 2, 1, 2, 2, 1, 2, 2, 1, 1, 2, 1, 1, 2, 1, 2, 2, 1, 2, 1, 1, 1, 2, 1, 2],
+      "ph.ecog": [1, 0, 0, 1, 0, 1, 2, 2, 1, 2, 1, 2, 1, null, 1, 1, 1, 2, 2, 1, 1, 0, 1, 0, 0, 1, 0, 3, 1, 2, 1, 2, 2, 2, 2, 2, 2, 1, 2, 1, 1, 2, 0, 2, 1, 2, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 2, 1, 1, 2, 1, 1, 1, 1, 2, 2, 0, 0, 1, 0, 1, 2, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 2, 0, 1, 1, 1, 0, 2, 1, 1, 1, 0, 0, 1, 1, 1, 2, 1, 1, 1, 1, 2, 0, 1, 1, 0, 1, 2, 2, 2, 2, 1, 0, 2, 1, 2, 0, 1, 1, 1, 2, 0, 1, 1, 0, 1, 0, 2, 1, 2, 1, 0, 2, 1, 2, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 2, 2, 1, 2, 1, 1, 0, 1, 2, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 2, 1, 1, 0, 0, 0, 0, 1, 0, 0, 2, 0, 1, 0, 1, 2, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 2, 0, 2, 1, 1, 0, 1, 1, 2, 1, 1, 1, 2, 2, 0, 1, 1, 1, 1, 0, 2, 1, 1],
+      "ph.karno": [90, 90, 90, 90, 100, 50, 70, 60, 70, 70, 80, 70, 90, 60, 80, 80, 90, 50, 60, 90, 80, 100, 70, 90, 90, 90, 100, 60, 80, 70, 90, 60, 60, 50, 70, 50, 70, 70, 50, 80, 80, 60, 90, 70, 60, 60, 90, 80, 90, 90, 90, 80, 90, 100, 90, 90, 100, 70, 80, 90, 70, 90, 80, 90, 80, 70, 70, 90, 100, 80, 90, 80, 70, 80, 90, 90, 100, 80, 90, 90, 100, 70, 80, 80, 80, 80, 80, 100, 90, 70, 100, 80, 90, 80, 100, 80, 80, 90, 90, 90, 100, 80, 70, 90, 50, 80, 80, 90, 100, 60, 90, 80, 80, 90, 80, 70, 70, 60, 70, 80, 90, 70, 70, 60, 90, 80, 80, 80, 80, 90, 80, 80, 100, 80, 90, 60, 80, 80, 90, 100, 70, 80, 70, 80, 80, 90, 100, 90, 100, 100, 70, 90, 90, 80, 70, 70, 90, 70, 80, 80, 90, 90, 60, 90, 80, 90, 80, 100, 90, 100, 90, 90, 90, 100, 90, 80, 60, 80, 80, 100, 100, 100, 90, 80, 90, 90, 70, 90, 80, 90, 80, 60, 90, 90, 90, 100, 80, 90, 100, 90, 90, 60, 90, 100, 100, null, 80, 60, 80, 90, 100, 80, 90, 70, 80, 90, 90, 80, 70, 80, 80, 80, 80, 80, 90, 60, 90, 80],
+      "pat.karno": [100, 90, 90, 60, 90, 80, 60, 80, 80, 70, 80, 70, 90, 70, 70, 90, 100, 70, 60, 80, 80, 70, 80, 100, 80, 80, 100, 70, 70, 50, 90, 70, 80, 60, 100, 50, 60, 90, 40, 100, 60, 70, 90, 60, 70, 60, 70, 70, 90, 100, 90, 70, 100, 90, 80, 80, 80, 60, 80, 80, 70, 80, 100, 80, 60, 50, null, 70, 80, 100, 90, 90, 100, 80, 80, 90, 80, 70, null, 70, 80, 90, 80, 90, 80, 90, 80, 90, 80, 70, 90, 100, 80, 60, 90, 60, 80, 100, 100, 70, 100, 90, 80, 70, null, 90, 100, 90, 80, 50, 70, 90, 100, 100, 100, 70, 60, 70, 60, 90, 90, 80, 80, 60, 90, 80, 60, 90, 60, 60, 80, 80, 90, 70, 70, 40, 70, 60, 90, 100, 60, 70, 70, 90, 100, 90, 80, 80, 90, 90, 60, 100, 90, 60, 30, 80, 90, 60, 70, 90, 90, 100, 70, 80, 70, 90, 60, 100, 90, 90, 100, 80, 60, 90, 80, 100, 80, 70, 90, 100, 100, 90, 100, 90, 80, 100, 90, 80, 60, 90, 90, 70, 80, 80, 90, 100, 90, 90, 80, 70, 90, 60, 100, 100, 90, 70, 90, 60, 70, 80, 90, 70, 70, 100, 90, 70, 80, 60, 30, 80, 90, 90, 80, 60, 90, 70, 100, 90],
+      "meal.cal": [1175, 1225, null, 1150, null, 513, 384, 538, 825, 271, 1025, null, null, 1225, 2600, null, 1150, 1025, 238, 1175, 1025, 1175, null, 975, null, 825, 1025, 1075, 875, 305, 1025, 388, null, 925, 1075, 1025, 513, 875, 1225, 1175, 975, 1075, 363, null, 1025, 625, 463, 1025, 1425, 1175, null, null, 1025, 1175, 1300, 725, 338, null, 1225, 1075, 438, 1300, 1025, 1025, 1125, 825, 538, 1025, 1039, 488, 1175, 538, 1175, null, 825, 1075, 1300, 1225, 731, 169, 768, 1500, 1425, 588, 1025, 1100, 1150, 1175, 588, 910, 975, null, 875, 280, null, 288, null, null, 910, null, 710, 1175, null, null, null, 875, 975, 925, 975, 925, 575, 1175, 1030, null, null, 413, 675, 1300, 613, 346, null, 675, 910, 768, 1025, 925, 1075, 993, 750, null, 925, null, 1225, null, 313, 96, null, 1075, 975, 1500, 1225, 413, 1500, 1075, 513, null, 775, 1225, 413, null, 1175, null, null, null, 1025, 713, null, 475, 538, 825, 588, 2450, 2450, 875, 413, 1075, null, 860, 730, 1025, 825, 1225, 768, 338, 1225, 1025, 1225, null, 588, 588, 975, 1225, 1025, null, 1225, 975, 463, 1300, 1025, 1225, 488, 1075, 513, 825, 1300, 1175, 825, null, 975, 1275, 488, 2200, 1025, 635, 413, null, null, 1025, null, null, 488, 413, 1075, null, null, 1025, null, 825, 131, 725, 1500, 1025, null, null, 2350, 1025, 1075, 1060],
+      "wt.loss": [null, 15, 15, 11, 0, 0, 10, 1, 16, 34, 27, 23, 5, 32, 60, 15, -5, 22, 10, null, 17, -8, 16, 13, 0, 6, -13, 20, -7, 20, -1, 20, -11, -15, 10, null, 28, 4, 24, 15, 10, 11, 27, null, 7, -24, 30, 10, 2, 4, 9, 0, 0, 7, 15, null, 5, 18, 10, -3, 8, 68, null, 0, 0, 8, 2, 3, 0, 23, -1, 29, 0, 3, 3, 19, 0, -2, 15, 30, 5, 15, 8, -1, 1, 14, 1, 4, 39, 2, -1, 23, 8, 14, 13, 7, 25, 0, 0, 10, 15, 3, 4, 0, 32, 14, -3, null, 5, 11, 10, 5, 6, 1, 15, 20, 20, 30, 24, 11, 0, 10, 0, -3, 17, 20, 13, 0, 28, 4, 52, 20, 5, 49, 6, 37, 0, null, -5, 15, -16, 38, 8, 0, 30, 2, 2, 13, 27, 0, -2, 7, 0, 4, 10, 20, 7, 27, -2, 17, 8, 2, 36, 2, 16, 3, 33, 4, 0, 0, 2, 10, 37, 6, 12, 0, -2, null, 13, 0, 5, -5, null, -1, 0, 5, 20, 8, 12, 8, 14, null, null, 33, -2, 6, 0, 4, 0, 0, 37, 5, 0, 1, 0, null, 23, -3, null, 10, -2, 23, 0, 31, 10, 18, -10, 7, 3, 11, 2, 0, 0, 3, -5, 5, 1, 0]
+    },
+    "cgd": {
+      "id": [1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 4, 5, 5, 5, 6, 7, 7, 8, 9, 9, 10, 11, 11, 12, 12, 13, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 16, 17, 17, 17, 18, 18, 19, 20, 20, 21, 22, 23, 24, 25, 25, 26, 27, 28, 29, 29, 30, 30, 31, 31, 31, 32, 33, 34, 35, 36, 36, 36, 37, 38, 39, 40, 41, 41, 41, 42, 43, 44, 44, 45, 46, 46, 47, 48, 49, 49, 49, 50, 50, 51, 52, 52, 52, 52, 53, 53, 53, 53, 53, 54, 55, 55, 56, 57, 57, 57, 57, 58, 59, 60, 61, 61, 62, 62, 62, 63, 63, 64, 64, 65, 66, 66, 67, 68, 69, 70, 70, 71, 72, 72, 73, 74, 75, 76, 77, 78, 79, 79, 80, 81, 82, 83, 84, 85, 86, 86, 87, 87, 88, 89, 90, 90, 91, 92, 93, 94, 95, 96, 97, 98, 98, 98, 98, 99, 100, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 119, 119, 119, 121, 122, 123, 123, 125, 131, 132, 132, 133, 134, 134, 135],
+      "center": ["Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "NIH", "NIH", "NIH", "Univ. of Utah", "Univ. of Utah", "Univ. of Utah", "Univ. of Utah", "NIH", "NIH", "NIH", "NIH", "NIH", "NIH", "NIH", "NIH", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "Scripps Institute", "NIH", "NIH", "NIH", "NIH", "Scripps Institute", "Scripps Institute", "NIH", "NIH", "NIH", "NIH", "NIH", "NIH", "Mt. Sinai Medical Ctr", "Mt. Sinai Medical Ctr", "Mt. Sinai Medical Ctr", "Mt. Sinai Medical Ctr", "Mt. Sinai Medical Ctr", "Univ. of Minnesota", "Scripps Institute", "Scripps Institute", "Mott Children's Hosp", "Mott Children's Hosp", "Univ. of Minnesota", "Univ. of Minnesota", "Univ. of Minnesota", "Amsterdam", "Amsterdam", "Amsterdam", "Univ. of Minnesota", "NIH", "NIH", "NIH", "Amsterdam", "Amsterdam", "Amsterdam", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Univ. of Utah", "NIH", "NIH", "NIH", "NIH", "NIH", "Texas Children's Hosp", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "NIH", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Harvard Medical Sch", "Univ. of Minnesota", "Univ. of Minnesota", "Scripps Institute", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Mott Children's Hosp", "Mott Children's Hosp", "Mott Children's Hosp", "Texas Children's Hosp", "Texas Children's Hosp", "Texas Children's Hosp", "Univ. of Minnesota", "Univ. of Minnesota", "Univ. of Zurich", "Univ. of Zurich", "NIH", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Texas Children's Hosp", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Amsterdam", "Univ. of Zurich", "Univ. of Zurich", "Texas Children's Hosp", "NIH", "Harvard Medical Sch", "Univ. of Washington", "Univ. of Zurich", "Univ. of Zurich", "Univ. of Zurich", "Texas Children's Hosp", "Amsterdam", "Univ. of Zurich", "Univ. of Zurich", "Scripps Institute", "NIH", "NIH", "NIH", "NIH", "Scripps Institute", "Texas Children's Hosp", "Texas Children's Hosp", "Texas Children's Hosp", "L.A. Children's Hosp", "Univ. of Zurich", "Univ. of Zurich", "L.A. Children's Hosp", "Univ. of Zurich", "Univ. of Zurich", "Mott Children's Hosp", "Univ. of Zurich", "Univ. of Zurich", "Univ. of Zurich", "Univ. of Zurich", "NIH", "NIH", "NIH", "L.A. Children's Hosp", "Scripps Institute", "Scripps Institute", "Univ. of Zurich", "Univ. of Minnesota", "NIH", "NIH", "Univ. of Washington", "Harvard Medical Sch", "L.A. Children's Hosp", "L.A. Children's Hosp", "Harvard Medical Sch", "Univ. of Zurich", "Univ. of Zurich", "Univ. of Zurich", "Univ. of Washington", "Univ. of Washington", "L.A. Children's Hosp", "Texas Children's Hosp", "L.A. Children's Hosp", "L.A. Children's Hosp", "L.A. Children's Hosp", "L.A. Children's Hosp", "Copenhagen", "Copenhagen", "Copenhagen", "Copenhagen", "Copenhagen", "Scripps Institute", "L.A. Children's Hosp", "L.A. Children's Hosp", "L.A. Children's Hosp", "Scripps Institute", "Scripps Institute", "Scripps Institute"],
+      "random": ["1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-07", "1989-06-08", "1989-06-23", "1989-07-08", "1989-07-08", "1989-07-08", "1989-07-10", "1989-07-10", "1989-07-10", "1989-07-10", "1989-07-14", "1989-07-14", "1989-07-14", "1989-07-14", "1989-07-14", "1989-07-20", "1989-07-20", "1989-07-20", "1989-07-21", "1989-07-21", "1989-07-21", "1989-07-21", "1989-07-21", "1989-07-21", "1989-07-27", "1989-07-27", "1989-07-27", "1989-07-27", "1989-07-27", "1989-07-28", "1989-07-28", "1989-07-28", "1989-07-29", "1989-07-29", "1989-08-06", "1989-08-12", "1989-08-12", "1989-08-12", "1989-08-19", "1989-08-19", "1989-08-19", "1989-08-19", "1989-08-19", "1989-08-19", "1989-08-20", "1989-08-21", "1989-08-25", "1989-08-25", "1989-08-25", "1989-08-25", "1989-08-25", "1989-08-25", "1989-08-25", "1989-08-27", "1989-08-27", "1989-08-27", "1989-09-01", "1989-09-02", "1989-09-02", "1989-09-02", "1989-09-07", "1989-09-07", "1989-09-07", "1989-09-07", "1989-09-07", "1989-09-07", "1989-09-07", "1989-09-07", "1989-09-08", "1989-09-09", "1989-09-09", "1989-09-09", "1989-09-09", "1989-09-09", "1989-09-10", "1989-09-11", "1989-09-11", "1989-09-11", "1989-09-11", "1989-09-11", "1989-09-11", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-14", "1989-09-15", "1989-09-17", "1989-09-17", "1989-09-17", "1989-09-18", "1989-09-18", "1989-09-18", "1989-09-18", "1989-09-18", "1989-09-18", "1989-09-21", "1989-09-21", "1989-09-21", "1989-09-22", "1989-09-22", "1989-09-22", "1989-09-22", "1989-09-22", "1989-09-23", "1989-09-23", "1989-09-25", "1989-09-25", "1989-09-25", "1989-09-25", "1989-10-08", "1989-10-09", "1989-10-15", "1989-10-15", "1989-10-15", "1989-10-15", "1989-10-15", "1989-10-19", "1989-10-19", "1989-10-20", "1989-10-20", "1989-10-23", "1989-10-23", "1989-10-26", "1989-10-26", "1989-10-26", "1989-10-27", "1989-10-30", "1989-11-02", "1989-11-02", "1989-11-02", "1989-11-03", "1989-11-03", "1989-11-03", "1989-11-03", "1989-11-03", "1989-11-03", "1989-11-04", "1989-11-04", "1989-11-06", "1989-11-09", "1989-11-09", "1989-11-13", "1989-11-16", "1989-11-16", "1989-11-17", "1989-11-23", "1989-11-23", "1989-11-23", "1989-11-23", "1989-11-24", "1989-11-25", "1989-11-25", "1989-11-27", "1989-11-27", "1989-11-27", "1989-11-30", "1989-12-01", "1989-12-03", "1989-12-03", "1989-12-04", "1989-12-04", "1989-12-11", "1989-12-11", "1989-12-14", "1989-12-15", "1989-12-15", "1989-12-15", "1989-12-18", "1989-12-18", "1989-12-22", "1989-12-22", "1989-12-24", "1989-12-24", "1989-12-24", "1989-12-24", "1989-12-25", "1989-12-25", "1989-12-25", "1989-12-25", "1989-12-25", "1989-12-25", "1989-12-25", "1989-12-25", "1989-12-28", "1989-12-29", "1989-12-29", "1989-12-29"],
+      "treat": ["rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "rIFN-g", "rIFN-g", "placebo", "rIFN-g", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "rIFN-g", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "rIFN-g", "placebo", "rIFN-g", "rIFN-g", "placebo", "rIFN-g", "rIFN-g", "placebo", "rIFN-g", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "placebo", "rIFN-g", "rIFN-g", "placebo", "placebo", "rIFN-g", "placebo", "placebo", "placebo"],
+      "sex": ["female", "female", "female", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "female", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "female", "male", "female", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "female", "female", "female", "male", "male", "female", "male", "male", "male", "male", "male", "male", "female", "male", "male", "male", "male", "male", "male", "male", "male", "male", "female", "male", "male", "male", "female", "female", "female", "female", "male", "male", "male", "male", "male", "female", "female", "female", "male", "male", "male", "male", "male", "male", "male", "male", "female", "male", "female", "female", "female", "male", "male", "male", "female", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "female", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "female", "male", "male", "male", "male", "male", "male", "female", "male", "male", "male", "male", "male", "male", "male", "male", "male", "male", "female", "male", "male", "male", "female", "female", "female", "female", "male", "female", "female", "female"],
+      "age": [12, 12, 12, 15, 15, 15, 15, 15, 15, 15, 15, 19, 12, 17, 17, 17, 44, 22, 22, 7, 27, 27, 5, 2, 2, 8, 8, 12, 1, 1, 1, 1, 1, 1, 9, 9, 9, 9, 27, 14, 14, 14, 1, 1, 11, 29, 29, 31, 7, 26, 12, 7, 7, 1, 3, 7, 5, 5, 1, 1, 5, 5, 5, 18, 13, 11, 24, 13, 13, 13, 2, 17, 35, 7, 17, 17, 17, 8, 19, 25, 25, 9, 28, 28, 17, 25, 14, 14, 14, 25, 25, 13, 20, 20, 20, 20, 5, 5, 5, 5, 5, 38, 12, 12, 22, 27, 27, 27, 27, 32, 6, 6, 9, 9, 8, 8, 8, 5, 5, 26, 26, 24, 8, 8, 9, 23, 6, 23, 23, 17, 21, 21, 6, 9, 7, 11, 14, 34, 25, 25, 2, 7, 1, 8, 10, 19, 4, 4, 19, 19, 7, 8, 11, 11, 9, 20, 34, 5, 6, 11, 5, 3, 3, 3, 3, 18, 7, 7, 1, 25, 31, 9, 24, 12, 10, 32, 26, 7, 7, 26, 11, 17, 10, 25, 21, 11, 4, 4, 4, 4, 4, 22, 17, 19, 19, 36, 37, 7, 7, 15, 6, 6, 3],
+      "height": [147, 147, 147, 159, 159, 159, 159, 159, 159, 159, 159, 171, 142, 162.5, 162.5, 162.5, 153.3, 175, 175, 111, 176, 176, 113, 93, 93, 124, 124, 144, 79, 79, 79, 79, 79, 79, 134.5, 134.5, 134.5, 134.5, 174, 143.5, 143.5, 143.5, 79, 79, 149, 175, 175, 167, 121, 153, 136.5, 120, 120, 79, 97.8, 109, 102, 102, 79, 79, 101, 101, 101, 179, 151, 136.5, 169.7, 145.2, 145.2, 145.2, 86, 180, 181.5, 116.6, 170.2, 170.2, 170.2, 125.4, 173.6, 168, 168, 140, 174, 174, 171, 172.5, 145, 145, 145, 187.5, 187.5, 139, 173, 173, 173, 173, 114.5, 114.5, 114.5, 114.5, 114.5, 152.2, 138, 138, 169, 169.5, 169.5, 169.5, 169.5, 185, 120, 105.5, 129.6, 129.6, 115, 115, 115, 97.1, 97.1, 176.8, 176.8, 177, 138, 138, 144, 170, 111.9, 122, 122, 127, 158, 158, 104.4, 122.8, 116.2, 123, 144, 182.6, 176.9, 176.9, 93.5, 119.7, 81, 121.6, 125.9, 159, 103.8, 103.8, 170, 170, 115.5, 116.8, 141.5, 141.5, 129.4, 169.8, 166.5, 112.3, 119.9, 139.2, 110.4, 91.7, 91.7, 91.7, 91.7, 166, 135, 135, 76.3, 185, 170, 131.3, 171, 166, 129, 177.9, 81.3, 119, 119, 178.5, 138.6, 156.7, 143, 185, 189, 137.5, 108.1, 98.3, 98.3, 98.3, 98.3, 163, 169, 182, 182, 167, 155, 113, 113, 178.7, 130, 130, 96],
+      "weight": [62, 62, 62, 47.5, 47.5, 47.5, 47.5, 47.5, 47.5, 47.5, 47.5, 72.7, 34, 52.7, 52.7, 52.7, 45, 59.7, 59.7, 17.4, 82.8, 82.8, 19.5, 13.2, 13.2, 25.4, 25.4, 36.9, 10.5, 10.5, 10.5, 10.5, 10.5, 10.5, 32.7, 32.7, 32.7, 32.7, 67.8, 33.4, 33.4, 33.4, 11.5, 11.5, 50.9, 73.1, 73.1, 51.8, 19.9, 46.9, 30, 23, 23, 10.6, 13, 14.7, 18, 18, 12.2, 12.2, 15.4, 15.4, 15.4, 67, 49, 31.2, 59, 36.2, 36.2, 36.2, 13.5, 68, 80, 23.3, 47.9, 47.9, 47.9, 27.7, 61.4, 68.9, 68.9, 36, 63.7, 63.7, 46.1, 50, 29, 29, 29, 74, 74, 34.8, 68.4, 68.4, 68.4, 68.4, 23, 23, 23, 23, 23, 66.7, 28.1, 28.1, 52.2, 65, 65, 65, 65, 95, 23, 19.5, 29.3, 29.3, 19, 19, 19, 15.3, 15.3, 66, 66, 78.4, 31, 31, 34.4, 49, 17.9, 31.2, 31.2, 27, 49, 49, 13.8, 20.1, 22.2, 24.3, 32.8, 94.8, 73.5, 73.5, 14.2, 21.5, 10.4, 22.4, 29.7, 46, 16.8, 16.8, 71.2, 71.2, 19.5, 20, 36, 36, 28.7, 50.1, 58.2, 20.7, 26.2, 34.9, 19.1, 14.4, 14.4, 14.4, 14.4, 58.1, 42.9, 42.9, 11.3, 58.4, 80.5, 24, 55.1, 51.9, 27.4, 63.4, 55, 20.6, 20.6, 69.3, 36.1, 36.8, 31.3, 74.6, 101.5, 40.3, 17.3, 14.4, 14.4, 14.4, 14.4, 49.1, 63.5, 63.9, 63.9, 60.8, 67.5, 20.4, 20.4, 60.5, 21.6, 21.6, 13.1],
+      "inherit": ["autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "autosomal", "autosomal", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "autosomal", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "X-linked", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "X-linked", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "autosomal", "autosomal", "autosomal", "X-linked", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "autosomal", "autosomal", "autosomal", "autosomal", "autosomal", "X-linked", "X-linked", "X-linked", "autosomal", "X-linked", "autosomal", "autosomal", "X-linked", "autosomal", "autosomal", "autosomal"],
+      "steroids": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "propylac": [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "hos.cat": ["US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:NIH", "US:NIH", "US:NIH", "US:other", "US:other", "US:other", "US:other", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:other", "US:other", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "US:other", "US:NIH", "US:NIH", "US:NIH", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:other", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "US:NIH", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "Europe:other", "Europe:other", "US:NIH", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "US:other", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:Amsterdam", "Europe:other", "Europe:other", "US:other", "US:NIH", "US:other", "US:other", "Europe:other", "Europe:other", "Europe:other", "US:other", "Europe:Amsterdam", "Europe:other", "Europe:other", "US:other", "US:NIH", "US:NIH", "US:NIH", "US:NIH", "US:other", "US:other", "US:other", "US:other", "US:other", "Europe:other", "Europe:other", "US:other", "Europe:other", "Europe:other", "US:other", "Europe:other", "Europe:other", "Europe:other", "Europe:other", "US:NIH", "US:NIH", "US:NIH", "US:other", "US:other", "US:other", "Europe:other", "US:other", "US:NIH", "US:NIH", "US:other", "US:other", "US:other", "US:other", "US:other", "Europe:other", "Europe:other", "Europe:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "Europe:other", "Europe:other", "Europe:other", "Europe:other", "Europe:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other", "US:other"],
+      "tstart": [0, 219, 373, 0, 8, 26, 152, 241, 249, 322, 350, 0, 0, 0, 246, 253, 0, 0, 292, 0, 0, 294, 0, 0, 19, 0, 373, 0, 0, 211, 260, 265, 269, 307, 0, 82, 114, 337, 0, 0, 334, 370, 0, 18, 0, 0, 280, 0, 0, 0, 0, 0, 146, 0, 0, 0, 0, 267, 0, 206, 0, 175, 280, 0, 0, 0, 0, 0, 118, 240, 0, 0, 0, 0, 0, 274, 361, 0, 0, 0, 187, 0, 0, 6, 0, 0, 0, 146, 188, 0, 304, 0, 0, 52, 65, 255, 0, 67, 248, 250, 284, 0, 0, 265, 0, 0, 91, 121, 203, 0, 0, 0, 0, 318, 0, 57, 121, 0, 226, 0, 65, 0, 0, 264, 0, 0, 0, 0, 236, 0, 0, 207, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0, 0, 113, 0, 99, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 4, 159, 213, 0, 0, 167, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 165, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 22, 169, 0, 0, 0, 168, 0, 0, 0, 120, 0, 0, 104, 0],
+      "enum": [1, 2, 3, 1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 2, 3, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 1, 1, 2, 3, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 2, 3, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 2, 3, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 2, 3, 1, 2, 1, 1, 2, 3, 4, 1, 2, 3, 4, 5, 1, 1, 2, 1, 1, 2, 3, 4, 1, 1, 1, 1, 2, 1, 2, 3, 1, 2, 1, 2, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 4, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 4, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 2, 1],
+      "tstop": [219, 373, 414, 8, 26, 152, 241, 249, 322, 350, 439, 382, 388, 246, 253, 383, 364, 292, 364, 363, 294, 349, 371, 19, 102, 373, 388, 388, 211, 260, 265, 269, 307, 363, 82, 114, 337, 367, 365, 334, 370, 382, 18, 362, 373, 280, 385, 376, 360, 306, 160, 146, 316, 316, 315, 357, 267, 360, 206, 347, 175, 280, 353, 308, 327, 329, 343, 118, 240, 251, 318, 304, 316, 335, 274, 361, 365, 336, 350, 187, 356, 339, 6, 301, 330, 300, 146, 188, 300, 304, 312, 334, 52, 65, 255, 270, 67, 248, 250, 284, 347, 293, 265, 303, 337, 91, 121, 203, 287, 293, 293, 318, 318, 359, 57, 121, 351, 226, 322, 65, 343, 269, 264, 286, 286, 273, 297, 236, 273, 273, 207, 273, 294, 303, 281, 273, 255, 269, 23, 270, 270, 276, 264, 245, 261, 270, 113, 273, 99, 306, 274, 279, 14, 278, 278, 284, 276, 265, 294, 277, 259, 4, 159, 213, 287, 263, 167, 240, 217, 271, 252, 331, 255, 271, 254, 185, 213, 165, 210, 203, 288, 269, 269, 91, 91, 192, 199, 11, 22, 169, 195, 198, 207, 168, 200, 197, 243, 120, 203, 197, 104, 227, 227],
+      "status": [1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0]
+    },
+    "checks": {
+      "id": [1, 1, 1, 2, 2, 3, 3, 4, 4],
+      "start": [0, 2, 3, 0, 4, 0, 2, 0, 4],
+      "stop": [2, 4, 6, 2, 6, 2, 5, 2, 6],
+      "event": [1, 0, 1, 1, 1, 1, 0, 1, 1],
+      "istate": ["well", "event", "event", "well", "well", "well", "well", "well", "well"]
+    },
+    "missing": {
+      "id": [1, 1, 1, 2, 2, 3, 3, 4, 4],
+      "start": [0, 2, 3, 0, 4, 0, 2, 0, 4],
+      "stop": [2, 4, 6, 2, 6, 2, 5, 2, 6],
+      "event": [1, 0, 1, 1, 1, 1, 0, 1, 1],
+      "istate": ["well", "event", "event", "well", "well", "well", "well", "well", "well"],
+      "z": [null, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    "multistate": {
+      "id": [1, 1, 2, 2, 3, 3],
+      "start": [0, 2, 0, 3, 0, 2],
+      "stop": [2, 5, 3, 6, 2, 4],
+      "event": ["eventA", "eventB", "eventA", "censor", "eventB", "censor"]
+    },
+    "censored": {
+      "time": [1, 2, 3, 4],
+      "status": [0, 0, 0, 0],
+      "id": [1, 2, 3, 4]
+    },
+    "timeline": {
+      "id": [1, 1, 1, 2, 2],
+      "time": [0, 2, 5, 0, 4],
+      "status": [0, 1, 0, 0, 1]
+    },
+    "population": {
+      "time": [100, 400, 900, 300],
+      "status": [1, 0, 1, 1],
+      "age": [21915, 25567.5, 23741.25, 29220],
+      "sex": [1, 2, 1, 2],
+      "year": ["1995-03-01", "1996-06-15", "1997-01-01", "1998-09-09"],
+      "race": ["white", "black", "white", "black"],
+      "grp": ["a", "b", "a", "b"]
+    },
+    "population_missing": {
+      "time": [100, 400, 900, 300],
+      "status": [1, 0, 1, 1],
+      "age": [21915, null, 23741.25, 29220],
+      "sex": [1, 2, 1, 2],
+      "year": ["1995-03-01", "1996-06-15", "1997-01-01", "1998-09-09"],
+      "race": ["white", "black", "white", "black"],
+      "grp": ["a", "b", "a", "b"]
+    }
+  },
+  "objects": {
+    "right": {
+      "kind": "survcheck",
+      "formula": "Surv(time,status)~1",
+      "data": "lung",
+      "arguments": {
+        "id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228]
+      }
+    },
+    "counting": {
+      "kind": "survcheck",
+      "formula": "Surv(tstart,tstop,status)~1",
+      "data": "cgd",
+      "arguments": {
+        "id": [1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 4, 5, 5, 5, 6, 7, 7, 8, 9, 9, 10, 11, 11, 12, 12, 13, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 16, 17, 17, 17, 18, 18, 19, 20, 20, 21, 22, 23, 24, 25, 25, 26, 27, 28, 29, 29, 30, 30, 31, 31, 31, 32, 33, 34, 35, 36, 36, 36, 37, 38, 39, 40, 41, 41, 41, 42, 43, 44, 44, 45, 46, 46, 47, 48, 49, 49, 49, 50, 50, 51, 52, 52, 52, 52, 53, 53, 53, 53, 53, 54, 55, 55, 56, 57, 57, 57, 57, 58, 59, 60, 61, 61, 62, 62, 62, 63, 63, 64, 64, 65, 66, 66, 67, 68, 69, 70, 70, 71, 72, 72, 73, 74, 75, 76, 77, 78, 79, 79, 80, 81, 82, 83, 84, 85, 86, 86, 87, 87, 88, 89, 90, 90, 91, 92, 93, 94, 95, 96, 97, 98, 98, 98, 98, 99, 100, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 119, 119, 119, 121, 122, 123, 123, 125, 131, 132, 132, 133, 134, 134, 135]
+      }
+    },
+    "problems": {
+      "kind": "survcheck",
+      "formula": "Surv(start,stop,event)~1",
+      "data": "checks",
+      "arguments": {
+        "id": [1, 1, 1, 2, 2, 3, 3, 4, 4],
+        "istate": ["well", "event", "event", "well", "well", "well", "well", "well", "well"]
+      }
+    },
+    "missing": {
+      "kind": "survcheck",
+      "formula": "Surv(start,stop,event)~z",
+      "data": "missing",
+      "arguments": {
+        "id": [1, 1, 1, 2, 2, 3, 3, 4, 4]
+      }
+    },
+    "multistate": {
+      "kind": "survcheck",
+      "formula": "Surv(start,stop,factor(event))~1",
+      "data": "multistate",
+      "arguments": {
+        "id": [1, 1, 2, 2, 3, 3]
+      }
+    },
+    "no_events": {
+      "kind": "survcheck",
+      "formula": "Surv(time,status)~1",
+      "data": "censored",
+      "arguments": {
+        "id": [1, 2, 3, 4]
+      }
+    },
+    "timeline": {
+      "kind": "survcheck",
+      "formula": "Surv2(time,status)~1",
+      "data": "timeline",
+      "arguments": {
+        "id": [1, 1, 1, 2, 2]
+      }
+    },
+    "plain": {
+      "kind": "pyears",
+      "formula": "time~1",
+      "data": "population",
+      "arguments": []
+    },
+    "events": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population",
+      "arguments": []
+    },
+    "cut": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp+tcut(age,c(0,65,75)*365.25)",
+      "data": "population",
+      "arguments": []
+    },
+    "weighted": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population",
+      "arguments": {
+        "weights": [0.25, 1, 1.75, 2],
+        "scale": 1
+      }
+    },
+    "frame": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population",
+      "arguments": {
+        "data.frame": true
+      }
+    },
+    "survexp.us": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population",
+      "arguments": {
+        "ratetable": "survexp.us"
+      }
+    },
+    "survexp.usr": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population",
+      "arguments": {
+        "ratetable": "survexp.usr"
+      }
+    },
+    "survexp.mn": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population",
+      "arguments": {
+        "ratetable": "survexp.mn"
+      }
+    },
+    "population_weights": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population",
+      "arguments": {
+        "ratetable": "survexp.us",
+        "weights": [0.5, 2, 0, 4]
+      }
+    },
+    "population_missing": {
+      "kind": "pyears",
+      "formula": "Surv(time,status)~grp",
+      "data": "population_missing",
+      "arguments": {
+        "ratetable": "survexp.us",
+        "data.frame": true
+      }
+    },
+    "yates_two_factors": {
+      "kind": "yates",
+      "formula": null,
+      "data": null,
+      "arguments": {
+        "reference": "two_factors"
+      }
+    },
+    "yates_pairwise": {
+      "kind": "yates",
+      "formula": null,
+      "data": null,
+      "arguments": {
+        "reference": "pairwise"
+      }
+    },
+    "yates_missing_cell": {
+      "kind": "yates",
+      "formula": null,
+      "data": null,
+      "arguments": {
+        "reference": "missing_cell"
+      }
+    },
+    "yates_sgtt": {
+      "kind": "yates",
+      "formula": null,
+      "data": null,
+      "arguments": {
+        "reference": "sgtt"
+      }
+    },
+    "yates_numeric_levels": {
+      "kind": "yates",
+      "formula": null,
+      "data": null,
+      "arguments": {
+        "reference": "numeric_levels"
+      }
+    },
+    "yates_two_numeric": {
+      "kind": "yates",
+      "formula": null,
+      "data": null,
+      "arguments": {
+        "reference": "two_numeric"
+      }
+    },
+    "yates_cox": {
+      "kind": "yates",
+      "formula": null,
+      "data": null,
+      "arguments": {
+        "reference": "cox"
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "right",
+      "object": "right",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "n": [228, 228, 165],
+        "transitions": {
+          "rows": ["(s0)", "event"],
+          "columns": ["event", "(censor)"],
+          "values": [
+            [165, 63],
+            [0, 0]
+          ]
+        },
+        "events": {
+          "rows": ["event"],
+          "columns": ["0", "1"],
+          "values": [
+            [63, 165]
+          ]
+        },
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers       Observations        Transitions", "               228                228                165", "", "Transitions table:", "       to", "from    event (censor)", "  (s0)    165       63", "  event     0        0", "", "Number of subjects with 0, 1, ... transitions to each state:", "       0   1", "event 63 165", ""]
+    },
+    {
+      "name": "counting",
+      "object": "counting",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "n": [128, 203, 76],
+        "transitions": {
+          "rows": ["(s0)", "event"],
+          "columns": ["event", "(censor)"],
+          "values": [
+            [44, 84],
+            [32, 43]
+          ]
+        },
+        "events": {
+          "rows": ["event"],
+          "columns": ["0", "1", "2", "3", "4", "5", "7"],
+          "values": [
+            [84, 27, 9, 5, 1, 1, 1]
+          ]
+        },
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers       Observations        Transitions", "               128                203                 76", "", "Transitions table:", "       to", "from    event (censor)", "  (s0)     44       84", "  event    32       43", "", "Number of subjects with 0, 1, ... transitions to each state:", "       0  1 2 3 4 5 7", "event 84 27 9 5 1 1 1", ""]
+    },
+    {
+      "name": "problems",
+      "object": "problems",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "n": [4, 9, 7],
+        "transitions": {
+          "rows": ["well", "event"],
+          "columns": ["event", "(censor)"],
+          "values": [
+            [6, 1],
+            [1, 0]
+          ]
+        },
+        "events": {
+          "rows": ["event"],
+          "columns": ["1", "2"],
+          "values": [
+            [1, 3]
+          ]
+        },
+        "flag": {
+          "overlap": 1,
+          "gap": 0,
+          "jump": 2,
+          "teleport": 1,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "overlap": {
+            "row": 3,
+            "id": 1
+          },
+          "2": null,
+          "jump": {
+            "row": [5, 9],
+            "id": [2, 4]
+          },
+          "teleport": {
+            "row": 7,
+            "id": 3
+          }
+        }
+      },
+      "lines": ["Unique identifiers       Observations        Transitions", "                 4                  9                  7", "", "Transitions table:", "       to", "from    event (censor)", "  well      6        1", "  event     1        0", "", "Number of subjects with 0, 1, ... transitions to each state:", "      1 2", "event 1 3", "", "Overlap check: 1 id (1 rows)", "Teleport check: 1 id (1 rows)", "Jump check: 2 ids (2 rows)"]
+    },
+    {
+      "name": "missing",
+      "object": "missing",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "n": [4, 8, 6],
+        "transitions": {
+          "rows": ["(s0)", "event"],
+          "columns": ["event", "(censor)"],
+          "values": [
+            [4, 0],
+            [2, 1]
+          ]
+        },
+        "events": {
+          "rows": ["event"],
+          "columns": ["1", "2"],
+          "values": [
+            [2, 2]
+          ]
+        },
+        "flag": {
+          "overlap": 1,
+          "gap": 2,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": [1],
+        "problems": {
+          "overlap": {
+            "row": 3,
+            "id": 1
+          },
+          "gap": {
+            "row": [5, 9],
+            "id": [2, 4]
+          },
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers       Observations        Transitions", "                 4                  8                  6", "1 observations removed due to missing", "", "Transitions table:", "       to", "from    event (censor)", "  (s0)      4        0", "  event     2        1", "", "Number of subjects with 0, 1, ... transitions to each state:", "      1 2", "event 2 2", "", "Overlap check: 1 id (1 rows)", "Gap check: 2 ids (2 rows)"]
+    },
+    {
+      "name": "multistate",
+      "object": "multistate",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "n": [3, 6, 4],
+        "transitions": {
+          "rows": ["(s0)", "eventA", "eventB"],
+          "columns": ["eventA", "eventB", "(censor)"],
+          "values": [
+            [2, 1, 0],
+            [0, 1, 1],
+            [0, 0, 1]
+          ]
+        },
+        "events": {
+          "rows": ["eventA", "eventB", "(any)"],
+          "columns": ["0", "1", "2"],
+          "values": [
+            [1, 2, 0],
+            [1, 2, 0],
+            [0, 2, 1]
+          ]
+        },
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers       Observations        Transitions", "                 3                  6                  4", "", "Transitions table:", "        to", "from     eventA eventB (censor)", "  (s0)        2      1        0", "  eventA      0      1        1", "  eventB      0      0        1", "", "Number of subjects with 0, 1, ... transitions to each state:", "        count", "state    0 1 2", "  eventA 1 2 0", "  eventB 1 2 0", "  (any)  0 2 1", ""]
+    },
+    {
+      "name": "no_events",
+      "object": "no_events",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "n": [4, 4, 0],
+        "transitions": {
+          "rows": ["(s0)"],
+          "columns": ["(censor)"],
+          "values": [
+            [4]
+          ]
+        },
+        "events": null,
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers       Observations        Transitions", "                 4                  4                  0", "", "Transitions table:", "      to", "from   (censor)", "  (s0)        4", ""]
+    },
+    {
+      "name": "timeline",
+      "object": "timeline",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "n": [2, 3, 2],
+        "transitions": {
+          "rows": ["(s0)", "event"],
+          "columns": ["event", "(censor)"],
+          "values": [
+            [2, 0],
+            [0, 1]
+          ]
+        },
+        "events": {
+          "rows": ["event"],
+          "columns": ["1"],
+          "values": [
+            [2]
+          ]
+        },
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers       Observations        Transitions", "                 2                  3                  2", "", "Transitions table:", "       to", "from    event (censor)", "  (s0)      2        0", "  event     0        1", "", "Number of subjects with 0, 1, ... transitions to each state:", "      1", "event 2", ""]
+    },
+    {
+      "name": "plain",
+      "object": "plain",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": 4.65434633812457,
+        "event": null,
+        "offtable": 0,
+        "observations": 4,
+        "data": null,
+        "summary": null,
+        "omit": null
+      },
+      "lines": ["Total number of person-years tabulated: 4.654346", "Total number of person-years off table: 0", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "events",
+      "object": "events",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": [2.7378507871321, 1.91649555099247],
+        "event": [2, 1],
+        "offtable": 0,
+        "observations": 4,
+        "data": null,
+        "summary": null,
+        "omit": null
+      },
+      "lines": ["Total number of events: 3", "Total number of person-years tabulated: 4.654346", "Total number of person-years off table: 0", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "cut",
+      "object": "cut",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": [
+          [0.27378507871321, 2.46406570841889],
+          [0, 1.09514031485284]
+        ],
+        "event": [
+          [1, 1],
+          [0, 0]
+        ],
+        "offtable": 0.82135523613963,
+        "observations": 4,
+        "data": null,
+        "summary": null,
+        "omit": null
+      },
+      "lines": ["Total number of events: 2", "Total number of person-years tabulated: 3.832991", "Total number of person-years off table: 0.8213552", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "weighted",
+      "object": "weighted",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": [1600, 1000],
+        "event": [2, 2],
+        "offtable": 0,
+        "observations": 4,
+        "data": null,
+        "summary": null,
+        "omit": null
+      },
+      "lines": ["Total number of events: 4", "Total number of person-years tabulated: 2600", "Total number of person-years off table: 0", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "frame",
+      "object": "frame",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": null,
+        "event": null,
+        "offtable": 0,
+        "observations": 4,
+        "data": {
+          "grp": ["a", "b"],
+          "pyears": [2.7378507871321, 1.91649555099247],
+          "n": [2, 2],
+          "event": [2, 1]
+        },
+        "summary": null,
+        "omit": null
+      },
+      "lines": ["Total number of events: 3", "Total number of person-years tabulated: 4.654346", "Total number of person-years off table: 0", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "survexp.us",
+      "object": "survexp.us",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": [2.7378507871321, 1.91649555099247],
+        "event": [2, 1],
+        "offtable": 0,
+        "observations": 4,
+        "data": null,
+        "summary": " age ranges from 60 to 80 years\n    male: 2  female: 2 \n    date of entry from 1995-03-01 to 1998-09-09 \n",
+        "omit": null
+      },
+      "lines": ["Total number of events: 3", "Total number of person-years tabulated: 4.654346", "Total number of person-years off table: 0", "Matches to the chosen rate table:", "    age ranges from 60 to 80 years", "    male: 2  female: 2", "    date of entry from 1995-03-01 to 1998-09-09", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "survexp.usr",
+      "object": "survexp.usr",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": [2.7378507871321, 1.91649555099247],
+        "event": [2, 1],
+        "offtable": 0,
+        "observations": 4,
+        "data": null,
+        "summary": " age ranges from 60 to 80 years\n    male: 2  female: 2 \n    date of entry from 1995-03-01 to 1998-09-09 \n    white: 2  black: 2 \n",
+        "omit": null
+      },
+      "lines": ["Total number of events: 3", "Total number of person-years tabulated: 4.654346", "Total number of person-years off table: 0", "Matches to the chosen rate table:", "    age ranges from 60 to 80 years", "    male: 2  female: 2", "    date of entry from 1995-03-01 to 1998-09-09", "    white: 2  black: 2", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "survexp.mn",
+      "object": "survexp.mn",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": [2.7378507871321, 1.91649555099247],
+        "event": [2, 1],
+        "offtable": 0,
+        "observations": 4,
+        "data": null,
+        "summary": " age ranges from 60 to 80 years\n  male: 2  female: 2 \n  date of entry from 1995-03-01 to 1998-09-09 \n",
+        "omit": null
+      },
+      "lines": ["Total number of events: 3", "Total number of person-years tabulated: 4.654346", "Total number of person-years off table: 0", "Matches to the chosen rate table:", "    age ranges from 60 to 80 years", "  male: 2  female: 2", "  date of entry from 1995-03-01 to 1998-09-09", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "population_weights",
+      "object": "population_weights",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": [0.136892539356605, 5.4757015742642],
+        "event": [0.5, 4],
+        "offtable": 0,
+        "observations": 4,
+        "data": null,
+        "summary": " age ranges from 60 to 80 years\n    male: 2  female: 2 \n    date of entry from 1995-03-01 to 1998-09-09 \n",
+        "omit": null
+      },
+      "lines": ["Total number of events: 4.5", "Total number of person-years tabulated: 5.612594", "Total number of person-years off table: 0", "Matches to the chosen rate table:", "    age ranges from 60 to 80 years", "    male: 2  female: 2", "    date of entry from 1995-03-01 to 1998-09-09", "Observations in the data set: 4", ""]
+    },
+    {
+      "name": "population_missing",
+      "object": "population_missing",
+      "kind": "pyears",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "pyears": null,
+        "event": null,
+        "offtable": 0,
+        "observations": 3,
+        "data": {
+          "grp": ["a", "b"],
+          "pyears": [2.7378507871321, 0.82135523613963],
+          "n": [2, 1],
+          "expected": [0.0587425025862831, 0.0439755127076421],
+          "event": [2, 1]
+        },
+        "summary": " age ranges from 60 to 80 years\n    male: 2  female: 1 \n    date of entry from 1995-03-01 to 1998-09-09 \n",
+        "omit": [2]
+      },
+      "lines": ["Total number of events: 3", "Total number of person-years tabulated: 3.559206", "Total number of person-years off table: 0", "Matches to the chosen rate table:", "    age ranges from 60 to 80 years", "    male: 2  female: 1", "    date of entry from 1995-03-01 to 1998-09-09", "Observations in the data set: 3", "  (1 observation deleted due to missingness)", ""]
+    },
+    {
+      "name": "yates_two_factors",
+      "object": "yates_two_factors",
+      "kind": "yates",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "b": ["x", "x", "x", "y", "y", "y"],
+          "pmm": [10.6425368385324, 11.2728536617421, 10.8861472631222, 10.1444188515971, 10.0360752374884, 10.9671921693767],
+          "std": [2.16469956863532, 2.16469956863531, 2.16469956863531, 2.16469956863531, 2.16469956863531, 2.16469956863531]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [0.251069118205709, 5, 9.4119269000742]
+          ]
+        }
+      },
+      "lines": [" a b    pmm    std        test  chisq df     ss     Pr", " a x 10.643 2.1647      global 0.2511  5 9.4119 0.9985", " b x 11.273 2.1647", " c x 10.886 2.1647", " a y 10.144 2.1647", " b y 10.036 2.1647", " c y 10.967 2.1647"]
+    },
+    {
+      "name": "yates_pairwise",
+      "object": "yates_pairwise",
+      "kind": "yates",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "a", "b"],
+          "b": ["x", "x", "y", "y"],
+          "pmm": [10.6425368385324, 11.2728536617421, 10.1444188515971, 10.0360752374884],
+          "std": [2.16469956863532, 2.16469956863531, 2.16469956863531, 2.16469956863531]
+        },
+        "test": {
+          "rows": ["1 vs 2", "1 vs 3", "1 vs 4", "2 vs 3", "2 vs 4", "3 vs 4"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [0.0423928427734448, 1, 1.58919719048477],
+            [0.0264751964745521, 1, 0.992486115633795],
+            [0.0392447312505311, 1, 1.47118269416321],
+            [0.135871288170471, 1, 5.09346048298786],
+            [0.163214426662206, 1, 6.11848348279763],
+            [0.00125251051456341, 1, 0.046953354872527]
+          ]
+        }
+      },
+      "lines": [" a b    pmm    std        test    chisq df       ss     Pr", " a x 10.643 2.1647      1 vs 2 0.042393  1 1.589197 0.8369", " b x 11.273 2.1647      1 vs 3 0.026475  1 0.992486 0.8707", " a y 10.144 2.1647      1 vs 4 0.039245  1 1.471183 0.8430", " b y 10.036 2.1647      2 vs 3 0.135871  1 5.093460 0.7124", "                        2 vs 4 0.163214  1 6.118483 0.6862", "                        3 vs 4 0.001253  1 0.046953 0.9718"]
+    },
+    {
+      "name": "yates_missing_cell",
+      "object": "yates_missing_cell",
+      "kind": "yates",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "b": ["x", "x", "x", "y", "y", "y"],
+          "pmm": [10.6425368385324, 11.2728536617421, 10.8861472631222, 10.1444188515971, 10.0360752374884, null],
+          "std": [2.22681047901094, 2.22681047901094, 2.22681047901094, 2.22681047901094, 2.22681047901094, null]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [null, null, null]
+          ]
+        }
+      },
+      "lines": [" a b    pmm    std        test chisq df ss Pr", " a x 10.643 2.2268      global    NA NA NA NA", " b x 11.273 2.2268", " c x 10.886 2.2268", " a y 10.144 2.2268", " b y 10.036 2.2268", " c y     NA     NA"]
+    },
+    {
+      "name": "yates_sgtt",
+      "object": "yates_sgtt",
+      "kind": "yates",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "b": ["x", "x", "x", "y", "y", "y"],
+          "pmm": [10.6425368385324, 11.2728536617421, 10.8861472631222, 10.1444188515971, 10.0360752374884, 10.9671921693767],
+          "std": [2.16469956863532, 2.16469956863531, 2.16469956863531, 2.16469956863531, 2.16469956863531, 2.16469956863531]
+        },
+        "test": {
+          "rows": ["a", "b"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [0.0606786432713125, 2, 2.27468419432353],
+            [0.0972851412915009, 1, 3.64696640049845]
+          ]
+        }
+      },
+      "lines": [" a b    pmm    std   test   chisq df     ss     Pr", " a x 10.643 2.1647      a 0.06068  2 2.2747 0.9701", " b x 11.273 2.1647      b 0.09729  1 3.6470 0.7551", " c x 10.886 2.1647", " a y 10.144 2.1647", " b y 10.036 2.1647", " c y 10.967 2.1647"]
+    },
+    {
+      "name": "yates_numeric_levels",
+      "object": "yates_numeric_levels",
+      "kind": "yates",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "z": [1, 1, 1, 3, 3, 3],
+          "pmm": [3.9274003813662, 4.18935631508309, 5.0445071815541, 12.2351797962712, 12.620892153459, 12.9953806633161],
+          "std": [1.0563789328489, 1.01978072506628, 0.992887661842994, 0.702802368020925, 0.703285426586729, 0.711792982121225]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [185.572730762781, 5, 1303.50946698117]
+          ]
+        }
+      },
+      "lines": [" a z     pmm     std        test chisq df     ss      Pr", " a 1  3.9274 1.05638      global 185.6  5 1303.5 < 1e-08", " b 1  4.1894 1.01978", " c 1  5.0445 0.99289", " a 3 12.2352 0.70280", " b 3 12.6209 0.70329", " c 3 12.9954 0.71179"]
+    },
+    {
+      "name": "yates_two_numeric",
+      "object": "yates_two_numeric",
+      "kind": "yates",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "estimate": {
+          "z": [1, 3, 1, 3],
+          "replicate": [2, 2, 4, 4],
+          "pmm": [7.50953259753646, 8.6003951719004, 16.152796284864, 17.5520726780585],
+          "std": [0.329773018119625, 0.373911912188476, 0.968883347009424, 0.406629351463397]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [1009.55689415656, 3, 1529.25533838825]
+          ]
+        }
+      },
+      "lines": [" z replicate     pmm     std        test chisq df     ss      Pr", " 1         2  7.5095 0.32977      global  1010  3 1529.3 < 1e-08", " 3         2  8.6004 0.37391", " 1         4 16.1528 0.96888", " 3         4 17.5521 0.40663"]
+    },
+    {
+      "name": "yates_cox",
+      "object": "yates_cox",
+      "kind": "yates",
+      "arguments": [],
+      "width": 80,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "b": ["x", "x", "x", "y", "y", "y"],
+          "pmm": [0, 0.843765429824224, 1.791067582053, -0.429079040581819, -1.27366889638155, -2.57576115098137],
+          "std": [0.81803941506433, 0.812234077973135, 0.74008658143925, 1.06301920553862, 1.17223143073655, 1.28121498385695]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df"],
+          "values": [
+            [25.3384146812879, 5]
+          ]
+        }
+      },
+      "lines": [" a b      pmm     std        test chisq df        Pr", " a x  0.00000 0.81804      global 25.34  5 0.0001199", " b x  0.84377 0.81223", " c x  1.79107 0.74009", " a y -0.42908 1.06302", " b y -1.27367 1.17223", " c y -2.57576 1.28121"]
+    },
+    {
+      "name": "multistate_narrow",
+      "object": "multistate",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 25,
+      "input": {
+        "n": [3, 6, 4],
+        "transitions": {
+          "rows": ["(s0)", "eventA", "eventB"],
+          "columns": ["eventA", "eventB", "(censor)"],
+          "values": [
+            [2, 1, 0],
+            [0, 1, 1],
+            [0, 0, 1]
+          ]
+        },
+        "events": {
+          "rows": ["eventA", "eventB", "(any)"],
+          "columns": ["0", "1", "2"],
+          "values": [
+            [1, 2, 0],
+            [1, 2, 0],
+            [0, 2, 1]
+          ]
+        },
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers", "                 3", "      Observations", "                 6", "       Transitions", "                 4", "", "Transitions table:", "        to", "from     eventA eventB", "  (s0)        2      1", "  eventA      0      1", "  eventB      0      0", "        to", "from     (censor)", "  (s0)          0", "  eventA        1", "  eventB        1", "", "Number of subjects with 0, 1, ... transitions to each state:", "        count", "state    0 1 2", "  eventA 1 2 0", "  eventB 1 2 0", "  (any)  0 2 1", ""]
+    },
+    {
+      "name": "right_narrow",
+      "object": "right",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 25,
+      "input": {
+        "n": [228, 228, 165],
+        "transitions": {
+          "rows": ["(s0)", "event"],
+          "columns": ["event", "(censor)"],
+          "values": [
+            [165, 63],
+            [0, 0]
+          ]
+        },
+        "events": {
+          "rows": ["event"],
+          "columns": ["0", "1"],
+          "values": [
+            [63, 165]
+          ]
+        },
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers", "               228", "      Observations", "               228", "       Transitions", "               165", "", "Transitions table:", "       to", "from    event (censor)", "  (s0)    165       63", "  event     0        0", "", "Number of subjects with 0, 1, ... transitions to each state:", "       0   1", "event 63 165", ""]
+    },
+    {
+      "name": "counting_narrow",
+      "object": "counting",
+      "kind": "survcheck",
+      "arguments": [],
+      "width": 22,
+      "input": {
+        "n": [128, 203, 76],
+        "transitions": {
+          "rows": ["(s0)", "event"],
+          "columns": ["event", "(censor)"],
+          "values": [
+            [44, 84],
+            [32, 43]
+          ]
+        },
+        "events": {
+          "rows": ["event"],
+          "columns": ["0", "1", "2", "3", "4", "5", "7"],
+          "values": [
+            [84, 27, 9, 5, 1, 1, 1]
+          ]
+        },
+        "flag": {
+          "overlap": 0,
+          "gap": 0,
+          "jump": 0,
+          "teleport": 0,
+          "duplicate": 0
+        },
+        "omit": null,
+        "problems": {
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null
+        }
+      },
+      "lines": ["Unique identifiers", "               128", "      Observations", "               203", "       Transitions", "                76", "", "Transitions table:", "       to", "from    event", "  (s0)     44", "  event    32", "       to", "from    (censor)", "  (s0)        84", "  event       43", "", "Number of subjects with 0, 1, ... transitions to each state:", "       0  1 2 3 4 5 7", "event 84 27 9 5 1 1 1", ""]
+    },
+    {
+      "name": "yates_narrow",
+      "object": "yates_two_factors",
+      "kind": "yates",
+      "arguments": [],
+      "width": 35,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "b": ["x", "x", "x", "y", "y", "y"],
+          "pmm": [10.6425368385324, 11.2728536617421, 10.8861472631222, 10.1444188515971, 10.0360752374884, 10.9671921693767],
+          "std": [2.16469956863532, 2.16469956863531, 2.16469956863531, 2.16469956863531, 2.16469956863531, 2.16469956863531]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [0.251069118205709, 5, 9.4119269000742]
+          ]
+        }
+      },
+      "lines": [" a b    pmm    std        test", " a x 10.643 2.1647      global", " b x 11.273 2.1647", " c x 10.886 2.1647", " a y 10.144 2.1647", " b y 10.036 2.1647", " c y 10.967 2.1647", "  chisq df     ss     Pr", " 0.2511  5 9.4119 0.9985", "", "", "", "", ""]
+    },
+    {
+      "name": "yates_pairwise_narrow",
+      "object": "yates_pairwise",
+      "kind": "yates",
+      "arguments": [],
+      "width": 25,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "a", "b"],
+          "b": ["x", "x", "y", "y"],
+          "pmm": [10.6425368385324, 11.2728536617421, 10.1444188515971, 10.0360752374884],
+          "std": [2.16469956863532, 2.16469956863531, 2.16469956863531, 2.16469956863531]
+        },
+        "test": {
+          "rows": ["1 vs 2", "1 vs 3", "1 vs 4", "2 vs 3", "2 vs 4", "3 vs 4"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [0.0423928427734448, 1, 1.58919719048477],
+            [0.0264751964745521, 1, 0.992486115633795],
+            [0.0392447312505311, 1, 1.47118269416321],
+            [0.135871288170471, 1, 5.09346048298786],
+            [0.163214426662206, 1, 6.11848348279763],
+            [0.00125251051456341, 1, 0.046953354872527]
+          ]
+        }
+      },
+      "lines": [" a b    pmm    std", " a x 10.643 2.1647", " b x 11.273 2.1647", " a y 10.144 2.1647", " b y 10.036 2.1647", "", "", "        test    chisq df", "      1 vs 2 0.042393  1", "      1 vs 3 0.026475  1", "      1 vs 4 0.039245  1", "      2 vs 3 0.135871  1", "      2 vs 4 0.163214  1", "      3 vs 4 0.001253  1", "       ss     Pr", " 1.589197 0.8369", " 0.992486 0.8707", " 1.471183 0.8430", " 5.093460 0.7124", " 6.118483 0.6862", " 0.046953 0.9718"]
+    },
+    {
+      "name": "yates_precision",
+      "object": "yates_cox",
+      "kind": "yates",
+      "arguments": {
+        "digits": 3,
+        "dig.tst": 2
+      },
+      "width": 40,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "b": ["x", "x", "x", "y", "y", "y"],
+          "pmm": [0, 0.843765429824224, 1.791067582053, -0.429079040581819, -1.27366889638155, -2.57576115098137],
+          "std": [0.81803941506433, 0.812234077973135, 0.74008658143925, 1.06301920553862, 1.17223143073655, 1.28121498385695]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df"],
+          "values": [
+            [25.3384146812879, 5]
+          ]
+        }
+      },
+      "lines": [" a b    pmm   std        test chisq df", " a x  0.000 0.818      global    25  5", " b x  0.844 0.812", " c x  1.791 0.740", " a y -0.429 1.063", " b y -1.274 1.172", " c y -2.576 1.281", "      Pr", " 0.00012", "", "", "", "", ""]
+    },
+    {
+      "name": "yates_threshold",
+      "object": "yates_two_numeric",
+      "kind": "yates",
+      "arguments": {
+        "eps": 0.02,
+        "dig.tst": 5
+      },
+      "width": 80,
+      "input": {
+        "estimate": {
+          "z": [1, 3, 1, 3],
+          "replicate": [2, 2, 4, 4],
+          "pmm": [7.50953259753646, 8.6003951719004, 16.152796284864, 17.5520726780585],
+          "std": [0.329773018119625, 0.373911912188476, 0.968883347009424, 0.406629351463397]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [1009.55689415656, 3, 1529.25533838825]
+          ]
+        }
+      },
+      "lines": [" z replicate     pmm     std        test  chisq df     ss     Pr", " 1         2  7.5095 0.32977      global 1009.6  3 1529.3 < 0.02", " 3         2  8.6004 0.37391", " 1         4 16.1528 0.96888", " 3         4 17.5521 0.40663"]
+    },
+    {
+      "name": "yates_zero_threshold",
+      "object": "yates_numeric_levels",
+      "kind": "yates",
+      "arguments": {
+        "eps": 0,
+        "digits": 7
+      },
+      "width": 80,
+      "input": {
+        "estimate": {
+          "a": ["a", "b", "c", "a", "b", "c"],
+          "z": [1, 1, 1, 3, 3, 3],
+          "pmm": [3.9274003813662, 4.18935631508309, 5.0445071815541, 12.2351797962712, 12.620892153459, 12.9953806633161],
+          "std": [1.0563789328489, 1.01978072506628, 0.992887661842994, 0.702802368020925, 0.703285426586729, 0.711792982121225]
+        },
+        "test": {
+          "rows": ["global"],
+          "columns": ["chisq", "df", "ss"],
+          "values": [
+            [185.572730762781, 5, 1303.50946698117]
+          ]
+        }
+      },
+      "lines": [" a z       pmm       std        test  chisq df       ss         Pr", " a 1  3.927400 1.0563789      global 185.57  5 1303.509 3.4513e-38", " b 1  4.189356 1.0197807", " c 1  5.044507 0.9928877", " a 3 12.235180 0.7028024", " b 3 12.620892 0.7032854", " c 3 12.995381 0.7117930"]
+    }
+  ]
+}

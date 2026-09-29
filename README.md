@@ -882,6 +882,12 @@ missing-row notices; stratified case-cohort and concordance tables retain
 their labels. See [diagnostic and test reports](docs/diagnostic-test-reports.md)
 for defaults, data-frame conversion and R comparisons.
 
+`r.print_pyears`, `r.print_survcheck` and `r.print_yates` report population
+totals, transition consistency checks and marginal means with their tests.
+Person-years results retain match summaries for built-in population rate
+tables. See [population and validation reports](docs/population-validation-reports.md)
+for examples, metadata and reference comparisons.
+
 ## Survival curve reports
 
 `r.print_survfit(fit)` returns a compact report of sample sizes, events and

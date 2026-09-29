@@ -558,6 +558,7 @@ class PyearsResult:
     model: dict[str, Any] | None = None
     x: list[float] | list[list[float]] | None = None
     y: Surv | list[list[float]] | None = None
+    summary: str | None = None
 
     @property
     def group(self) -> list[str]:
@@ -1120,6 +1121,17 @@ class ModelPrint:
 
     def __str__(self) -> str:
         return "\n".join(self.lines) + "\n"
+
+
+@dataclass(frozen=True)
+class YatesPrint(ModelPrint):
+    """A marginal-means report with typed level columns and numeric test tables.
+
+    ``as_data_frame`` returns independent ``estimates`` columns, without the
+    blank padding used to align estimates and tests in the displayed report.
+    """
+
+    estimates: dict[str, list[Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

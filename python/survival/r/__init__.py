@@ -96,6 +96,7 @@ from ._models import (
     residuals,
     vcov,
 )
+from ._population_print import print_pyears, print_survcheck, print_yates
 from ._pyears import (
     PyearsSummary,
     RateTableSummary,
@@ -218,12 +219,17 @@ from ._types import (
     Timeline,
     TMergeFrame,
     TMergeOperation,
+    YatesPrint,
     YatesResult,
 )
 from ._yates import yates
 from ._yates_model import YatesModel
 
 __all__ = [
+    "print_pyears",
+    "print_survcheck",
+    "print_yates",
+    "YatesPrint",
     "Surv",
     "Surv2",
     "AaregModelResult",

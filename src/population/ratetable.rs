@@ -87,6 +87,10 @@ pub struct RateTable {
     /// The hazard rates in column-major order, `dims.iter().product()` long.
     #[pyo3(get)]
     pub rates: Vec<f64>,
+    /// Built-in table name, used to retain its R match-summary convention.
+    /// Tables constructed from raw attributes have no source-specific summary.
+    #[pyo3(get)]
+    pub source: Option<&'static str>,
 }
 
 impl fmt::Display for RateTable {
@@ -236,6 +240,7 @@ impl RateTable {
             cutpoints,
             types,
             rates,
+            source: None,
         })
     }
 
