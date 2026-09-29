@@ -12,7 +12,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, overload
 
@@ -432,7 +432,11 @@ def survfit(
 
     ``response`` is a formula string (``"Surv(time, status) ~ sex"``) evaluated in ``data``, a
     ``Surv`` object (``group`` gives the curves), or a fitted Cox model (``survfit.coxph``, with
-    ``newdata``, ``censor`` and ``individual``).  The other arguments are those of
+    ``newdata``, ``censor`` and ``individual``), or a square matrix of transition
+    curves (``survfit.matrix``). Matrix cells are ordinary fitted curves or ``None``;
+    ``p0`` supplies starting probabilities, ``method="discrete"`` or ``"matexp"``
+    selects the update, and ``states=`` optionally names the states. A named ``p0``
+    dictionary also supplies state names. The other arguments are those of
     ``survfit.formula`` and of the engine it dispatches to; the R spellings ``se.fit``,
     ``conf.int``, ``conf.type``, ``conf.lower``, ``start.time`` and ``na.action`` are accepted
     as keywords.  ``stype`` and ``ctype`` default per method as in R (1/1 for
@@ -448,6 +452,22 @@ def survfit(
     conf_lower = _pop_dotted_keyword(kwargs, "conf.lower", "conf_lower", conf_lower, "usual")
     start_time = _pop_dotted_keyword(kwargs, "start.time", "start_time", start_time, None)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.omit")
+    if (isinstance(response, np.ndarray) and response.ndim == 2) or (
+        isinstance(response, list | tuple)
+        and response
+        and isinstance(response[0], list | tuple | np.ndarray)
+    ):
+        method = kwargs.pop("method", "discrete")
+        states = kwargs.pop("states", None)
+        if kwargs:
+            raise TypeError(
+                f"survfit got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+            )
+        if data is not None and p0 is not None:
+            raise TypeError("p0 was supplied both positionally and by keyword")
+        return _survfit_matrix(
+            response, data if p0 is None else p0, method, start_time, states, time0
+        )
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
         raise TypeError(f"survfit got unexpected keyword argument(s): {unexpected}")
@@ -964,6 +984,98 @@ def _cox_columns(values: Any) -> list[list[float]]:
     if _is_matrix(values):
         return [list(column) for column in zip(*values, strict=True)]
     return [list(values)]
+
+
+def _survfit_matrix(
+    matrix: Any,
+    p0: Any,
+    method: Any,
+    start_time: Any,
+    states: Any,
+    time0: Any,
+) -> SurvfitMultiStateResult:
+    """R's matrix method: Python checks types/labels; Rust joins the hazards."""
+
+    rows = list(matrix)
+    ns = len(rows)
+    if ns < 2 or any(not isinstance(row, list | tuple | np.ndarray) for row in rows):
+        raise ValueError("input must be a square matrix of survival curves")
+    if any(len(row) != ns for row in rows):
+        raise ValueError("input must be a square matrix of survival curves")
+    cells = [(i, j, rows[i][j]) for j in range(ns) for i in range(ns) if rows[i][j] is not None]
+    if len(cells) < 2:
+        raise ValueError("input must have at least 2 transitions")
+    if any(
+        isinstance(c, SurvfitMultiStateResult | CoxSurvfitMultiStateResult) for _, _, c in cells
+    ):
+        raise ValueError("multi-state curves are not a valid input")
+    if any(not isinstance(c, SurvfitResult | CoxSurvfitResult) for _, _, c in cells):
+        raise ValueError("input must be a square matrix of survival curves")
+    first = cells[0][2]
+    if any(c.__class__ is not first.__class__ for _, _, c in cells):
+        raise ValueError("all curves must be the same type")
+    is_cox = isinstance(first, CoxSurvfitResult)
+    ncolumns = first.ncurve if is_cox else 1
+    nstrata = len(first.strata) if first.strata is not None else 1
+    for _, _, c in cells:
+        if (
+            (c.ncurve if is_cox else 1) != ncolumns
+            or (len(c.strata) if c.strata is not None else 1) != nstrata
+            or (c.strata is None) != (first.strata is None)
+            or (is_cox and _is_matrix(c.surv) != _is_matrix(first.surv))
+        ):
+            raise ValueError("all curves must be of the same dimension")
+    start = _start_time_value(start_time)
+    starts = [getattr(c, "start_time", None) for _, _, c in cells]
+    if any(s is not None for s in starts):
+        if any(s != starts[0] for s in starts):
+            raise ValueError("all curves must have a consistent start.time value")
+        if start is not None and start < starts[0]:
+            warnings.warn(
+                "curves have a larger start.time than the parameter; using the curves' start.time",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        start = starts[0] if start is None else max(start, starts[0])
+    if isinstance(p0, Mapping):
+        if states is None:
+            states = [str(s) for s in p0]
+        p0 = list(p0.values())
+    names = [str(i + 1) for i in range(ns)] if states is None else list(states)
+    if len(names) != ns or any(not isinstance(s, str) for s in names):
+        raise ValueError("states must contain one name per state")
+    initial = None if p0 is None else np.asarray(p0, dtype=float)
+    if initial is not None:
+        if initial.ndim == 1:
+            initial = initial.reshape(1, -1)
+        elif initial.ndim != 2:
+            raise ValueError("p0 must be a vector or a matrix")
+        elif initial.shape[0] != ncolumns * nstrata:
+            raise ValueError("wrong number of rows for p0")
+    method = _match_arg(method, "method", ("discrete", "matexp"))
+    engines = [_cox_engines(c) if is_cox else [_engine_of(c)] for _, _, c in cells]
+    engine = _core.survfit_matrix(
+        engines,
+        [i for i, _, _ in cells],
+        [j for _, j, _ in cells],
+        names,
+        initial,
+        method,
+        start,
+    )
+    # R treats a single dimension as new1, new2, ... even when it is strata.
+    if is_cox and first.strata is not None and _is_matrix(first.surv):
+        labels = [f"{s}, new{j + 1}" for j in range(ncolumns) for s in first.strata]
+    else:
+        labels = [f"new{i + 1}" for i in range(ncolumns * nstrata)]
+    if _logical(time0, "time0 must be TRUE/FALSE"):
+        engine = _core.survfit0_aj(engine)
+    result = _aj_result(engine, labels, SurvfitCall(), None, False, time0=bool(time0))
+    return dataclasses.replace(
+        result,
+        n_id=None,
+        strata=dict(zip(labels, engine.strata, strict=True)),
+    )
 
 
 def _cox_engines(x: CoxSurvfitResult) -> list[_core.SurvfitKMResult]:

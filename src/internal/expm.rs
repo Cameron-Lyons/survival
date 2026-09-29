@@ -24,10 +24,12 @@ pub(crate) fn survexpm(a: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     if let [j] = departing[..] {
         let mut emat = Array2::eye(n);
         let e = a[(j, j)].exp();
+        // `1 - exp(rate)` loses transitions smaller than machine epsilon.
+        let departed = -a[(j, j)].exp_m1();
         emat[(j, j)] = e;
         let total: f64 = (0..n).filter(|&k| k != j).map(|k| a[(j, k)]).sum();
         for k in (0..n).filter(|&k| k != j) {
-            emat[(j, k)] = (1.0 - e) * a[(j, k)] / total;
+            emat[(j, k)] = departed * (a[(j, k)] / total);
         }
         return Ok(emat);
     }
@@ -40,7 +42,7 @@ pub(crate) fn survexpm(a: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
             emat[(i, i)] = (-a[(i, k)]).exp();
         }
         for i in (0..n).filter(|&i| i != k) {
-            emat[(i, k)] = 1.0 - emat[(i, i)];
+            emat[(i, k)] = -(-a[(i, k)]).exp_m1();
         }
         return Ok(emat);
     }
@@ -272,5 +274,27 @@ mod tests {
             survexpm(&Array2::zeros((3, 3))).unwrap(),
             Array2::<f64>::eye(3)
         );
+    }
+
+    #[test]
+    fn closed_forms_keep_tiny_transition_probabilities() {
+        for rate in [1e-20, 1e-100, 1e-300] {
+            let departing = array![
+                [-3.0 * rate, rate, 2.0 * rate],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0]
+            ];
+            let p = survexpm(&departing).unwrap();
+            assert!((p[(0, 1)] / rate - 1.0).abs() < 1e-14);
+            assert!((p[(0, 2)] / rate - 2.0).abs() < 1e-14);
+            let receiving = array![
+                [-rate, 0.0, rate],
+                [0.0, -2.0 * rate, 2.0 * rate],
+                [0.0, 0.0, 0.0]
+            ];
+            let p = survexpm(&receiving).unwrap();
+            assert!((p[(0, 2)] / rate - 1.0).abs() < 1e-14);
+            assert!((p[(1, 2)] / rate - 2.0).abs() < 1e-14);
+        }
     }
 }

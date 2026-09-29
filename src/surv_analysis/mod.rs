@@ -16,6 +16,7 @@ pub(crate) mod statefig;
 pub(crate) mod survfit_aj_summary;
 pub(crate) mod survfit_confint;
 pub(crate) mod survfit_coxphms;
+pub(crate) mod survfit_matrix;
 pub(crate) mod survfit_summary;
 pub(crate) mod survfitaj;
 #[path = "survfitaj_extended.rs"]
@@ -59,6 +60,9 @@ pub use survfit_confint::{
 };
 #[cfg(feature = "python")]
 pub use survfit_coxphms::coxphms_curves;
+pub use survfit_matrix::{
+    SurvfitMatrixMethod, SurvfitMatrixTransition, survfit_matrix, survfit_matrix_py,
+};
 pub use survfit_summary::{
     RmeanOption, SurvfitQuantiles, SurvmeanTable, quantile_survfit, quantile_survfit_from,
     quantile_survfit_py, summary_survfit, summary_survfit_py, summary_survfit_times, survfit0,

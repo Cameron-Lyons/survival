@@ -70,6 +70,7 @@ __all__ = bind_names(
         "SurvfitQuantiles",
         "SurvmeanTable",
         "survfitkm",
+        "survfit_matrix",
         "survfit0",
         "survfit_confint",
         "summary_survfit",

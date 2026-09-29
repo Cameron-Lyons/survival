@@ -209,6 +209,11 @@ approximation and report the same limitation.
 Fitted Cox models can also be passed to `survfit(...)` with optional `newdata=`
 to produce model-based survival curves; a multi-state Cox fit gives R's
 `survfit.coxphms` state-probability curves for each newdata row.
+Passing a square matrix of transition-specific KM or Cox curves to `survfit`
+also produces multistate curves, using `None` for absent transitions and
+`method="discrete"` or `"matexp"`. See
+[transition-curve matrices](docs/survfit-matrix.md) for examples, R compatibility
+details and benchmarks.
 The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use
 an `O(n log n)` Rust risk-set sweep for weighted, stratified, tied-event, and
 counting-process baselines, while retaining R-compatible curve and uncertainty
