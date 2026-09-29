@@ -375,11 +375,14 @@ def _pspline_method(
 def _second_difference_penalty(nvar: int) -> list[list[float]]:
     """R's ``t(D) %*% D`` for the second-difference matrix ``D`` of ``nvar`` coefficients."""
 
-    diff = [
-        [1.0 if j == i else -2.0 if j == i + 1 else 1.0 if j == i + 2 else 0.0 for j in range(nvar)]
-        for i in range(max(nvar - 2, 0))
-    ]
-    return [[sum(row[i] * row[j] for row in diff) for j in range(nvar)] for i in range(nvar)]
+    penalty = [[0.0] * nvar for _ in range(nvar)]
+    # Each difference row has only three nonzero entries. Accumulate its
+    # outer product directly instead of multiplying dense matrices in Python.
+    for i in range(nvar - 2):
+        for j, left in enumerate((1.0, -2.0, 1.0)):
+            for k, right in enumerate((1.0, -2.0, 1.0)):
+                penalty[i + j][i + k] += left * right
+    return penalty
 
 
 def pspline(
@@ -448,6 +451,42 @@ def pspline(
         theta=theta_value,
         combine=combine_codes,
     )
+
+
+def predict_pspline(object: PsplineResult, newx: Any = _MISSING, **_kwargs: Any) -> PsplineResult:
+    """Evaluate a P-spline at ``newx`` using its original basis settings.
+
+    Omitting ``newx`` returns ``object`` unchanged. New values use the stored
+    boundaries, degree, number of terms, intercept, and column combinations;
+    extrapolation is linear beyond the boundaries. The returned basis has
+    ``penalty=False``, as in R's ``predict.pspline``.
+    """
+
+    if not isinstance(object, PsplineResult):
+        raise TypeError("predict_pspline requires a PsplineResult")
+    if newx is _MISSING:
+        return object
+    return pspline(
+        newx,
+        nterm=object.nterm,
+        degree=object.degree,
+        boundary_knots=object.boundary_knots,
+        intercept=object.intercept,
+        combine=object.combine,
+        penalty=False,
+    )
+
+
+@_models._predict.register(PsplineResult)
+def _predict_pspline(
+    object: PsplineResult, newdata: Any | None = None, **kwargs: Any
+) -> PsplineResult:
+    newx = kwargs.pop("newx", _MISSING)
+    if newdata is not None:
+        if newx is not _MISSING:
+            raise ValueError("use only one of newdata or newx")
+        newx = newdata
+    return predict_pspline(object, newx, **kwargs)
 
 
 def _frailty_encoding(

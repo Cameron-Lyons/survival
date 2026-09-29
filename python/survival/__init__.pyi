@@ -190,6 +190,7 @@ from .r import (
 from .r import (
     lvcf as lvcf,
 )
+from .r import median as median
 from .r import (
     model_formula as model_formula,
 )
@@ -238,6 +239,7 @@ from .r import (
 from .r import (
     qsurvreg as qsurvreg,
 )
+from .r import quantile as quantile
 from .r import (
     ratetableDate as ratetableDate,
 )

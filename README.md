@@ -363,6 +363,16 @@ Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
 Cox and `survreg` models.
+`predict(pspline(x), newx)` evaluates a spline basis using the original
+boundaries, degree, intercept and column combinations, with linear
+extrapolation outside the boundaries.
+`quantile(response, probs=[0.25, 0.5, 0.75])` and `median(response)` accept
+raw `Surv` data as well as fitted survival curves. Raw responses use the
+appropriate Rust KM or Turnbull fitter and require `na_rm=True` to discard
+missing observations. Results keep one row per curve and one column per
+probability. As in R, raw-response medians include confidence bounds by
+default, while fitted-curve medians return point estimates.
+
 Common result objects can be converted to column-oriented tables with
 `as_data_frame(...)`; the experimental R bridge exposes the same path through
 `as.data.frame(...)`, `summary(...)`, and `print(...)` methods.

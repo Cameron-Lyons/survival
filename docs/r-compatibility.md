@@ -649,7 +649,10 @@ this does not show.
   columns of an unstratified newdata matrix are unnamed.
 - `quantile()` of a stratified `survfit.coxph` object with several curves has
   one row per (stratum, curve), ordered as `summary()`'s table; R returns a
-  stratum x curve x probability array.
+  stratum x curve x probability array. Quantiles and medians always return a
+  `SurvfitQuantileResult`, including single-response and single-probability
+  calls. Tolerance-induced interpolation ties use R's averaged indices
+  without emitting its "collapsing to unique x values" warning.
 - A Turnbull fit reports `cumhaz` and `std.chaz` (R's object has them only after
   `survfit0`).
 - `aggregate_survfit` without `by` keeps a data axis of length 1 (the package
@@ -698,6 +701,73 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## P-spline prediction
+
+`predict(pspline(x), newx)` and `predict_pspline(basis, newx)` evaluate the
+existing Rust basis on new values, preserving the original boundaries,
+degree, number of terms, intercept and combined columns. Values beyond the
+boundaries use linear extrapolation. The result is a `PsplineResult` with
+`penalty=False`; its matrix is in `.basis`. Omitting new values returns the
+original object. The generic accepts either `newdata` or R's `newx` keyword.
+
+The shared penalty builder accumulates the three nonzero entries in each
+second-difference row directly, replacing a cubic dense multiplication.
+It still returns the same dense matrix, requiring quadratic storage and
+initialization. In a local release run with ten prediction rows, median
+times over nine calls fell from 0.110 to 0.020 ms at 10 terms, from 33.1 to
+0.154 ms at 100 terms, and from 764 to 0.751 ms at 300 terms. Basis and penalty
+values were identical. `scripts/bench_pspline_basis.py` measures the shared
+construction path with fixed prediction boundaries.
+
+`scripts/generate_pspline_prediction_reference.R` regenerates ten R survival
+3.8-12 cases covering degrees, extrapolation, missing rows, combined columns,
+intercepts and smoothing methods, including their penalty matrices.
+
+## Response quantiles
+
+`quantile` and `median` accept raw `Surv` responses and fitted KM, Turnbull,
+and Cox survival curves. `quantile_surv`, `median_surv`, and `median_survfit`
+are the explicit method names. Raw responses use the existing Rust curve
+fitters before inversion; they reject missing rows unless `na_rm=True` and
+refuse multiple-endpoint responses as R does. `median(Surv(...))` includes
+confidence bounds by default, while `median(survfit(...))` returns point
+estimates. Both preserve the curve-by-probability result layout of
+`quantile_survfit`.
+
+The native quantile routine handles non-monotone confidence bands, duplicate
+levels, missing band entries, and tolerance-induced ties using R's sorting
+and index-averaging rules. With the default tolerance, an entirely censored
+curve returns an undefined quantile even at probability zero, matching R's
+terminal-flat rule. The common monotone path uses adjacent comparisons
+instead of a hash table and shares one interpolation buffer across the
+two tolerance shifts.
+
+`scripts/generate_surv_quantile_reference.R` regenerates the response,
+Cox/KM curve, and interpolation references from R survival 3.8-12.
+`scripts/bench_surv_quantiles.py` measures quantile evaluation with curve
+construction excluded, and can compare saved release libraries using
+`--extension`.
+
+Local release measurements on Linux x86-64 with Python 3.14.7 used the median
+of 101 calls. All 24 monotone benchmark combinations returned identical
+estimates and bounds before and after the change. Representative timings
+with confidence bounds enabled were:
+
+| Curve points | Probabilities | Repeated levels | Before (ms) | After (ms) |
+| ---: | ---: | :---: | ---: | ---: |
+| 1,000 | 3 | no | 0.043 | 0.019 |
+| 10,000 | 3 | no | 0.623 | 0.183 |
+| 100,000 | 3 | no | 7.550 | 2.072 |
+| 100,000 | 1,001 | no | 7.745 | 2.348 |
+| 1,000 | 1,001 | no | 0.118 | 0.123 |
+| 1,000 | 1,001 | yes | 0.090 | 0.101 |
+
+Across curves with and without repeated levels or confidence bounds,
+quartiles were 2.1–3.8 times faster. Dense grids on 10,000–100,000 points
+were 1.6–3.4 times faster. On 1,000-point curves, requesting 1,001
+probabilities was 4–16% slower (about 3–12 microseconds): the shared buffer
+trades additional arithmetic during searches for less allocation and copying.
+
 ## Not yet implemented
 
 These R entry points have no port. Calls that reach them raise an explicit
@@ -709,12 +779,9 @@ error; none silently falls back to other behaviour.
   `Surv`. The sparse (frailty) branch of `print.survreg.penal` is not ported.
 - **`summary.survexp`, `summary.tmerge` and `summary.ratetable`** (and their
   print methods).
-- **`median.survfit`** and `median`/`quantile` of a `Surv` object; use
-  `quantile_survfit` or the `summary_survfit` table.
-- **`predict.pspline`** as a user-facing function; prediction from a fitted
-  model reuses the training knots internally.
 - **`Surv` methods beyond subsetting**: `survival.r.Surv` supports `subset`,
-  `len`, `as_matrix`, `format_surv` and `is_na_surv`; R's `c`, `rep`, `rev`,
+  `len`, `as_matrix`, `format_surv`, `is_na_surv`, and the `median`/`quantile`
+  generics; R's `c`, `rep`, `rev`,
   `unique`, `duplicated`, `t`, `levels`, `head`/`tail`, `as.character` and the
   `Math`/`Ops`/`Summary` groups are not ported.
 - **Components accepted and ignored**: `pyears` and `survexp` accept `model`,
