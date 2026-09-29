@@ -28,6 +28,14 @@ from ._coxph import (
     coxph_detail,
     coxph_wtest,
 )
+from ._coxph_print import (
+    ModelPrint,
+    print_coxph,
+    print_coxph_null,
+    print_coxph_penal,
+    print_summary_coxph,
+    print_summary_coxph_penal,
+)
 from ._coxphms import CoxphmsModel, CoxphmsSchoenfeldResiduals, CoxphmsShare
 from ._data_prep import (
     aeqSurv,
@@ -332,6 +340,12 @@ __all__ = [
     "predict",
     "predict_pspline",
     "print_survreg_penal",
+    "ModelPrint",
+    "print_coxph",
+    "print_coxph_null",
+    "print_coxph_penal",
+    "print_summary_coxph",
+    "print_summary_coxph_penal",
     "SurvfitPrint",
     "print_survfit",
     "print_survfitms",

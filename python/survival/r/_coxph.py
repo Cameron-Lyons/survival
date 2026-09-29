@@ -1178,6 +1178,7 @@ def summary_coxph(
         "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
     }
     if conf_int:
+        result["conf_level"] = _normalize_conf_level(conf_int, "conf_int")
         result["conf_int"] = _conf_int_rows(
             fit.coef_names,
             [value * scale_value for value in beta],
@@ -1292,13 +1293,13 @@ def _pspline_print(
 
 
 def _frailty_print(
-    label: str, term: _PenaltyDesignTerm, test: float, df: float, history: Any
+    label: str, term: _PenaltyDesignTerm, test: float, df: float, history: Any, digits: int = 7
 ) -> tuple[dict[str, Any], str]:
     """The frailty distributions' ``printfun``: the Wald test of the random effects on
     the term's df, and the variance of the random effect."""
 
     theta = history.history[-1][0] if history.history else history.theta
-    text = f"Variance of random effect= {_r_format_number(theta)}"
+    text = f"Variance of random effect= {_r_format_number(theta, digits)}"
     if term.penalty.distribution == "gamma":
         text += f"   I-likelihood = {_r_format_number(round(history.c_loglik, 1), 10)}"
     # max(df, .5) stops silly p-values
@@ -1307,7 +1308,12 @@ def _frailty_print(
 
 
 def summary_coxph_penal(
-    fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0, terms: Any = False
+    fit: CoxphModel,
+    conf_int: Any = 0.95,
+    scale: Any = 1.0,
+    terms: Any = False,
+    *,
+    _print_digits: int = 7,
 ) -> dict[str, Any]:
     """R's ``summary.coxph.penal`` as a dict keyed like the R list.
 
@@ -1337,7 +1343,14 @@ def summary_coxph_penal(
         coef = [] if penalized.pterms[i] == 2 else [beta[col] for col in columns]
         if penalty == "pspline":
             spline_rows, text = _pspline_print(
-                label, term, coef, _block(var, columns), _block(var2, columns), df, histories[i]
+                label,
+                term,
+                coef,
+                _block(var, columns),
+                _block(var2, columns),
+                df,
+                histories[i],
+                _print_digits,
             )
             rows.extend(spline_rows)
             print2.append(text)
@@ -1346,7 +1359,7 @@ def summary_coxph_penal(
                 test = sum(b * b / v for b, v in zip(penalized.frail, penalized.fvar, strict=True))
             else:
                 test = coxph_wtest(_block(var, columns), coef).test[0]
-            row, text = _frailty_print(label, term, test, df, histories[i])
+            row, text = _frailty_print(label, term, test, df, histories[i], _print_digits)
             rows.append(row)
             print2.append(text)
         elif term_tests and len(columns) > 1:
@@ -1380,6 +1393,7 @@ def summary_coxph_penal(
         "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
     }
     if conf_int and beta:
+        result["conf_level"] = _normalize_conf_level(conf_int, "conf_int")
         result["conf_int"] = _conf_int_rows(
             fit.coef_names,
             [value * scale_value for value in beta],

@@ -855,6 +855,15 @@ The US, US-by-race and Minnesota population rate tables (`survexp.us`,
 `survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
 `survival.population`.
 
+## Cox model reports
+
+`r.print_coxph(fit)` returns coefficient tables and formatted text for ordinary,
+robust, penalized and multistate Cox fits. Use
+`r.print_summary_coxph(r.model_summary(fit))` for confidence intervals and
+model tests. Reports retain full-precision tables and statistics and support
+`as_data_frame`. See [Cox model reports](docs/cox-model-reports.md) for options
+and R compatibility.
+
 ## Survival curve reports
 
 `r.print_survfit(fit)` returns a compact report of sample sizes, events and

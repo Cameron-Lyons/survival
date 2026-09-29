@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add Cox model and summary reports for ordinary, robust, null, penalized and
+  multistate fits, with full-precision tables and statistics, R-style coefficient
+  formatting, confidence intervals, term tests and transition grouping.
+
 - Add detailed survival-summary and expected-survival reports with grouped
   tables, confidence columns, state probabilities and full-precision data-frame
   conversion. Preserve conditional cutoff units when formatting scaled summaries.
