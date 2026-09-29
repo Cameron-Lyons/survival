@@ -176,6 +176,7 @@ from ._survreg import (
 )
 from ._survreg_lowlevel import SurvregFitResult, survreg_fit
 from ._survreg_print import print_summary_survreg, print_survreg
+from ._terms import SpecialTerms, TermMetadata, attrassign, untangle_specials
 from ._test_print import (
     print_cch,
     print_clogit,
@@ -236,6 +237,10 @@ from ._yates import yates
 from ._yates_model import YatesModel
 
 __all__ = [
+    "TermMetadata",
+    "SpecialTerms",
+    "attrassign",
+    "untangle_specials",
     "SurvregFitResult",
     "survreg_fit",
     "SurvpenalFitResult",

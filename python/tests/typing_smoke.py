@@ -13,6 +13,9 @@ from survival import r
 def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitResult) -> None:
     cox = r.coxph("Surv(time, status) ~ age", data)
     assert_type(cox, r.CoxphModel)
+    terms = r.TermMetadata(["age"])
+    assert_type(r.attrassign(r.model_matrix(cox), terms), dict[str, list[int]])
+    assert_type(r.untangle_specials(terms, "strata"), r.SpecialTerms)
     assert_type(r.print_coxph(cox), r.ModelPrint)
     assert_type(r.print_summary_coxph(r.model_summary(cox)), r.ModelPrint)
     assert_type(r.clogit("status ~ age + strata(inst)", data), r.ClogitModel)

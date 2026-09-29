@@ -1434,10 +1434,7 @@ def confint_survreg(
 def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) -> list[str]:
     """``attr(terms(fit), 'term.labels')``, optionally the subset ``terms`` selects."""
 
-    if fit.design is not None:
-        names = [_design_term_name(term) for term in fit.design.covariates]
-    else:
-        names = list(fit.term_labels)  # a fit on a design matrix: its columns are the terms
+    names = list(fit.term_labels)
     selection = _term_selection(terms, names)
     return names if selection is None else [names[idx] for idx in selection]
 
