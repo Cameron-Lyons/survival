@@ -701,6 +701,28 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## P-spline prediction
+
+`predict(pspline(x), newx)` and `predict_pspline(basis, newx)` evaluate the
+existing Rust basis on new values, preserving the original boundaries,
+degree, number of terms, intercept and combined columns. Values beyond the
+boundaries use linear extrapolation. The result is a `PsplineResult` with
+`penalty=False`; its matrix is in `.basis`. Omitting new values returns the
+original object. The generic accepts either `newdata` or R's `newx` keyword.
+
+The shared penalty builder accumulates the three nonzero entries in each
+second-difference row directly, replacing a cubic dense multiplication.
+It still returns the same dense matrix, requiring quadratic storage and
+initialization. In a local release run with ten prediction rows, median
+times over nine calls fell from 0.110 to 0.020 ms at 10 terms, from 33.1 to
+0.154 ms at 100 terms, and from 764 to 0.751 ms at 300 terms. Basis and penalty
+values were identical. `scripts/bench_pspline_basis.py` measures the shared
+construction path with fixed prediction boundaries.
+
+`scripts/generate_pspline_prediction_reference.R` regenerates ten R survival
+3.8-12 cases covering degrees, extrapolation, missing rows, combined columns,
+intercepts and smoothing methods, including their penalty matrices.
+
 ## Response quantiles
 
 `quantile` and `median` accept raw `Surv` responses and fitted KM, Turnbull,
@@ -757,8 +779,6 @@ error; none silently falls back to other behaviour.
   `Surv`. The sparse (frailty) branch of `print.survreg.penal` is not ported.
 - **`summary.survexp`, `summary.tmerge` and `summary.ratetable`** (and their
   print methods).
-- **`predict.pspline`** as a user-facing function; prediction from a fitted
-  model reuses the training knots internally.
 - **`Surv` methods beyond subsetting**: `survival.r.Surv` supports `subset`,
   `len`, `as_matrix`, `format_surv`, `is_na_surv`, and the `median`/`quantile`
   generics; R's `c`, `rep`, `rev`,

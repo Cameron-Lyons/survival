@@ -523,7 +523,8 @@ def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
 def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
     """``predict``: see :func:`survival.r._coxph.predict_coxph` and
     :func:`survival.r._survreg.predict_survreg`.  R's ``se.fit`` and ``na.action``
-    spellings are accepted."""
+    spellings are accepted. For a ``PsplineResult``, evaluate its basis on
+    ``newdata`` (or R's ``newx``); omitting both returns the original basis."""
 
     for dotted, name in (("se.fit", "se_fit"), ("na.action", "na_action")):
         if dotted in kwargs:
@@ -533,7 +534,7 @@ def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
 
 @singledispatch
 def _predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
-    raise _no_method("predict")
+    raise TypeError("predict requires a fitted coxph or survreg model, or a PsplineResult")
 
 
 _predict.register(CoxphModel, predict_coxph)
