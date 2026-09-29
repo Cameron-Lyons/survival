@@ -22,10 +22,28 @@ mixture <- list(name = "Two normal mixture", density = density,
         mu <- sum(x * weights) / sum(weights)
         c(mu, sum(weights * (x - mu)^2) / sum(weights))
     },
-    # Required by survregDtest; these fits do not request deviance residuals.
-    deviance = function(y, scale, ...) stop("not used by this fixture"),
+    deviance = function(y, scale, ...) {
+        scale <- rep_len(scale, nrow(y))
+        status <- y[, ncol(y)]
+        center <- y[, 1]
+        loglik <- rep(0, nrow(y))
+        mode <- uniroot(function(z) density(z)[1, 4], c(-2, 3), tol=1e-12)$root
+        exact <- status == 1
+        center[exact] <- y[exact, 1] - scale[exact] * mode
+        loglik[exact] <- log(density(mode)[1, 3]) - log(scale[exact])
+        for (i in which(status == 3)) {
+            score <- function(eta) diff(-density((y[i, 1:2] - eta) / scale[i])[, 3])
+            center[i] <- uniroot(score, c(y[i, 1] - 8*scale[i], y[i, 2] + 8*scale[i]),
+                                  tol=1e-12)$root
+            z <- (y[i, 1:2] - center[i]) / scale[i]
+            d <- density(z)
+            loglik[i] <- log(if (z[1] > 0) d[1, 2] - d[2, 2] else d[2, 1] - d[1, 1])
+        }
+        list(center=center, loglik=loglik)
+    },
     quantile = function(p, ...) vapply(p, function(q)
-        uniroot(function(z) density(z)[1, 1] - q, c(-20, 20))$root, 0.0))
+        if (q == 0) -Inf else if (q == 1) Inf else
+        uniroot(function(z) density(z)[1, 1] - q, c(-20, 20), tol=1e-12)$root, 0.0))
 
 i <- 0:39
 x <- (i %% 7 - 3) / 2
@@ -69,7 +87,28 @@ cases <- lapply(c("estimated", "stratified", "fixed"), function(kind) {
                          control = list(maxit = 1000, reltol = 1e-13,
                                         ndeps = rep(1e-5, length(init))))
     stopifnot(independent$convergence == 0)
+    postfit <- function(model) list(
+        response = predict(model, type="response", se.fit=TRUE),
+        quantile = predict(model, type="quantile", p=c(.1, .5, .9), se.fit=TRUE),
+        residuals = lapply(setNames(c("response", "deviance", "working", "matrix"),
+                                   c("response", "deviance", "working", "matrix")),
+                           function(type) unname(residuals(model, type=type))))
+    transformed <- data
+    transformed$y1 <- sinh(y1)
+    transformed$y2 <- sinh(y2)
+    asinh_mixture <- c(mixture, list(trans=asinh, dtrans=function(y) 1/sqrt(1+y*y), itrans=sinh))
+    transformed_fit <- survreg(formula, transformed, weights=weights, dist=asinh_mixture,
+                               init=init, scale=scale,
+                               control=survreg.control(maxiter=50, rel.tolerance=1e-11))
+    robust_fit <- survreg(formula, no_interval, weights=weights, dist=mixture,
+                         init=init, scale=scale, cluster=rep(1:10, 4), robust=TRUE,
+                         control=survreg.control(maxiter=50, rel.tolerance=1e-11))
     list(name = kind, nstrat = nstrat,
+         postfit = postfit(fit),
+         transformed = list(loglik=transformed_fit$loglik, postfit=postfit(transformed_fit)),
+         robust_no_interval = list(parameters=unname(c(coef(robust_fit), log(robust_fit$scale))),
+                                   variance=unname(robust_fit$var),
+                                   residuals=unname(residuals(robust_fit, type="dfbeta"))),
          init = if (nstrat == 0) c(init, log(scale)) else init,
          expected = list(parameters = unname(c(coef(fit), log(fit$scale))),
                          variance = unname(fit$var), loglik = fit$loglik[2]),

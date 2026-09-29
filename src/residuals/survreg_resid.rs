@@ -14,7 +14,9 @@ use crate::internal::match_arg::match_arg;
 use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
-use crate::regression::survreg_distributions::SurvregDistribution;
+use crate::regression::survreg_distributions::{
+    SurvregDensity, SurvregDistribution, SurvregFamily,
+};
 use ndarray::ArrayView1;
 use pyo3::prelude::*;
 
@@ -114,14 +116,26 @@ pub(crate) fn survreg_deriv(
     sigma: f64,
 ) -> [f64; 6] {
     let z = (y1 - eta) / sigma;
-    let dmat = distribution.density(z);
-    let dtemp = dmat.pdf * dmat.score; // f'
+    let dmat = distribution.builtin_density(z);
     let (z2, dmat2) = if status == 3 {
         let z2 = (y2 - eta) / sigma;
-        (z2, distribution.density(z2))
+        (z2, distribution.builtin_density(z2))
     } else {
         (0.0, dmat)
     };
+    deriv_from_density(dmat, dmat2, z, z2, status, sigma)
+}
+
+fn deriv_from_density(
+    dmat: SurvregDensity,
+    dmat2: SurvregDensity,
+    z: f64,
+    z2: f64,
+    status: i32,
+    sigma: f64,
+) -> [f64; 6] {
+    let dtemp = dmat.distribution_kernel()[3];
+    let dtemp2 = dmat2.distribution_kernel()[3];
     let (tdenom, numerator_dg, numerator_ddg) = match status {
         0 => (dmat.survival, -dmat.pdf, -dtemp),
         1 => (1.0, dmat.score, dmat.curvature),
@@ -133,7 +147,7 @@ pub(crate) fn survreg_deriv(
                 dmat2.cdf - dmat.cdf
             },
             dmat2.pdf - dmat.pdf,
-            dmat2.pdf * dmat2.score - dtemp,
+            dtemp2 - dtemp,
         ),
     };
     let g = if status == 1 {
@@ -149,8 +163,8 @@ pub(crate) fn survreg_deriv(
     } else {
         (
             tdenom * (z * dmat.pdf - z2 * dmat2.pdf),
-            tdenom * (z2 * z2 * dmat2.pdf * dmat2.score - z * z * dtemp),
-            tdenom * (z2 * dmat2.pdf * dmat2.score - z * dtemp) / sigma,
+            tdenom * (z2 * z2 * dtemp2 - z * z * dtemp),
+            tdenom * (z2 * dtemp2 - z * dtemp) / sigma,
         )
     };
     [
@@ -161,6 +175,44 @@ pub(crate) fn survreg_deriv(
         dds - ds * (1.0 + ds),
         dsg - dg * (1.0 + ds),
     ]
+}
+
+/// Residual and initialization derivatives with one custom density call.
+pub(crate) fn survreg_derivatives(
+    distribution: &SurvregDistribution,
+    y1: &[f64],
+    y2: &[f64],
+    status: &[i32],
+    eta: &[f64],
+    scale: &[f64],
+) -> SurvivalResult<Vec<[f64; 6]>> {
+    if distribution.family != SurvregFamily::Custom && distribution.callbacks.is_none() {
+        return Ok((0..y1.len())
+            .map(|i| survreg_deriv(distribution, y1[i], y2[i], status[i], eta[i], scale[i]))
+            .collect());
+    }
+    let n = y1.len();
+    let mut z = Vec::with_capacity(n + status.iter().filter(|&&s| s == 3).count());
+    z.extend((0..n).map(|i| (y1[i] - eta[i]) / scale[i]));
+    z.extend(
+        (0..n)
+            .filter(|&i| status[i] == 3)
+            .map(|i| (y2[i] - eta[i]) / scale[i]),
+    );
+    let values = distribution.density_batch(&z)?;
+    let mut upper = n;
+    Ok((0..n)
+        .map(|i| {
+            let (z2, d2) = if status[i] == 3 {
+                let j = upper;
+                upper += 1;
+                (z[j], values[j])
+            } else {
+                (0.0, values[i])
+            };
+            deriv_from_density(values[i], d2, z[i], z2, status[i], scale[i])
+        })
+        .collect())
 }
 
 /// R's `sign`: zero for zero (unlike `f64::signum`), NaN for NaN.
@@ -239,7 +291,6 @@ pub fn residuals_survreg(
     let nvar = fit.nvar();
     let nstrata = fit.nstrata();
     let distribution = &fit.distribution;
-    let transform = distribution.transform;
     // If the variance wasn't estimated then it has no error.
     let rsigma = rsigma && fit.variance_matrix.len() != nvar;
     let vv = fit
@@ -253,40 +304,40 @@ pub fn residuals_survreg(
         )));
     }
 
-    let y1: Vec<f64> = fit.time.iter().map(|&t| transform.apply(t)).collect();
-    let y2: Vec<f64> = (0..n)
-        .map(|i| match &fit.time2 {
-            Some(time2) if fit.status[i] == 3 => transform.apply(time2[i]),
-            _ => y1[i],
-        })
-        .collect();
+    let (y1, y2) =
+        distribution.transformed_endpoints(&fit.time, fit.time2.as_deref(), &fit.status)?;
     let sigma = |i: usize| fit.scale[fit.strata[i]];
     let eta = &fit.linear_predictors;
 
     let rows: Vec<Vec<f64>> = match residual_type {
-        SurvregResidType::Response => (0..n)
-            .map(|i| {
-                let (center, _) = distribution.deviance(y1[i], y2[i], fit.status[i], sigma(i));
-                vec![transform.inverse(center) - transform.inverse(eta[i])]
-            })
-            .collect(),
+        SurvregResidType::Response => {
+            let scales: Vec<_> = (0..n).map(sigma).collect();
+            let (centers, _) = distribution.deviance_batch(&y1, &y2, &fit.status, &scales)?;
+            distribution
+                .inverse_values(&centers)?
+                .into_iter()
+                .zip(distribution.inverse_values(eta)?)
+                .map(|(center, fitted)| vec![center - fitted])
+                .collect()
+        }
         _ => {
-            let deriv: Vec<[f64; 6]> = (0..n)
-                .map(|i| survreg_deriv(distribution, y1[i], y2[i], fit.status[i], eta[i], sigma(i)))
-                .collect();
+            let scales: Vec<_> = (0..n).map(sigma).collect();
+            let deriv = survreg_derivatives(distribution, &y1, &y2, &fit.status, eta, &scales)?;
             let working = |i: usize| -deriv[i][1] / deriv[i][2];
             match residual_type {
-                SurvregResidType::Deviance => (0..n)
-                    .map(|i| {
-                        let (_, saturated) =
-                            distribution.deviance(y1[i], y2[i], fit.status[i], sigma(i));
-                        let rr = working(i);
-                        // The saturated log-likelihood bounds `g`, so a
-                        // negative difference is rounding noise (R would
-                        // return NaN for it).
-                        vec![r_sign(rr) * (2.0 * (saturated - deriv[i][0])).max(0.0).sqrt()]
-                    })
-                    .collect(),
+                SurvregResidType::Deviance => {
+                    let (_, saturated) =
+                        distribution.deviance_batch(&y1, &y2, &fit.status, &scales)?;
+                    (0..n)
+                        .map(|i| {
+                            let rr = working(i);
+                            // The saturated log-likelihood bounds `g`, so a
+                            // negative difference is rounding noise (R would
+                            // return NaN for it).
+                            vec![r_sign(rr) * (2.0 * (saturated[i] - deriv[i][0])).max(0.0).sqrt()]
+                        })
+                        .collect()
+                }
                 SurvregResidType::Working => (0..n).map(|i| vec![working(i)]).collect(),
                 SurvregResidType::Dfbeta | SurvregResidType::Dfbetas | SurvregResidType::Ldcase => {
                     let standardize: Vec<f64> = if residual_type == SurvregResidType::Dfbetas {

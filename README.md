@@ -311,6 +311,15 @@ already manage sorted numeric arrays.
 The R-style `predict(...)` and `fitted(...)` generics support Cox linear
 predictors, relative risk scores, term contributions, survival curves, and
 expected event counts.
+
+Custom AFT families can supply vectorized `density`, `init`, `quantile`,
+`deviance`, and `variance` callbacks, together with an optional response
+transform. Both fitters retain callbacks for predictions, residuals, robust
+variance, and Python pickle. Rust callers implement `regression::SurvregCallbacks`;
+Python callers pass a distribution dictionary or register it in
+`r.survreg_distributions`. See [AFT distribution callbacks](docs/survreg-density.md)
+for a complete example and the batch contract.
+
 For `survreg` fits, `predict(fit, newdata, type=...)` gives R's `"lp"`
 (`"linear"`), `"response"`, `"terms"`, `"quantile"` and `"uquantile"`
 predictions: `type="quantile"` returns response-scale quantiles at the

@@ -195,7 +195,6 @@ pub fn predict_survreg(
     let coef = &fit.coefficients[..nvar];
     let variance = &fit.variance_matrix;
     let fixed_scale = variance.len() == nvar;
-    let transform = fit.distribution.transform;
 
     match predict_type {
         SurvregPredictType::Lp | SurvregPredictType::Response => {
@@ -208,10 +207,11 @@ pub fn predict_survreg(
                     .collect::<Vec<f64>>()
             });
             if predict_type == SurvregPredictType::Response {
-                pred.iter_mut().for_each(|v| *v = transform.inverse(*v));
+                pred = fit.distribution.inverse_values(&pred)?;
                 if let Some(se) = se.as_mut() {
-                    for (s, &value) in se.iter_mut().zip(&pred) {
-                        *s /= transform.derivative(value);
+                    let derivatives = fit.distribution.transform_derivatives(&pred)?;
+                    for (s, d) in se.iter_mut().zip(derivatives) {
+                        *s /= d;
                     }
                 }
             }
@@ -224,7 +224,7 @@ pub fn predict_survreg(
         SurvregPredictType::Quantile | SurvregPredictType::Uquantile => {
             validate_probability(p, "p", ProbabilityBounds::Closed)?;
             let rows = prediction_rows(fit, newdata)?;
-            let qq: Vec<f64> = p.iter().map(|&p| fit.distribution.quantile(p)).collect();
+            let qq = fit.distribution.quantiles(p)?;
             let nstrata = fit.nstrata();
             let mut pred: Vec<Vec<f64>> = rows
                 .eta
@@ -259,13 +259,27 @@ pub fn predict_survreg(
                     .collect::<Vec<Vec<f64>>>()
             });
             if predict_type == SurvregPredictType::Quantile {
-                for row in pred.iter_mut() {
-                    row.iter_mut().for_each(|v| *v = transform.inverse(*v));
+                if fit.distribution.transform_callbacks.is_some() {
+                    let values: Vec<_> = pred.iter().flatten().copied().collect();
+                    let values = fit.distribution.inverse_values(&values)?;
+                    for (v, value) in pred.iter_mut().flatten().zip(values) {
+                        *v = value;
+                    }
+                } else {
+                    for v in pred.iter_mut().flatten() {
+                        *v = fit.distribution.transform.inverse(*v)?;
+                    }
                 }
                 if let Some(se) = se.as_mut() {
-                    for (se_row, pred_row) in se.iter_mut().zip(&pred) {
-                        for (s, &value) in se_row.iter_mut().zip(pred_row) {
-                            *s /= transform.derivative(value);
+                    if fit.distribution.transform_callbacks.is_some() {
+                        let values: Vec<_> = pred.iter().flatten().copied().collect();
+                        let derivatives = fit.distribution.transform_derivatives(&values)?;
+                        for (s, d) in se.iter_mut().flatten().zip(derivatives) {
+                            *s /= d;
+                        }
+                    } else {
+                        for (s, &value) in se.iter_mut().flatten().zip(pred.iter().flatten()) {
+                            *s /= fit.distribution.transform.derivative(value)?;
                         }
                     }
                 }

@@ -9719,6 +9719,13 @@ class SurvregDistribution:
     def __init__(self, name: str, parms: Sequence[float] | None = None) -> None: ...
     def __repr__(self) -> str: ...
     @staticmethod
+    def _from_callback_state(
+        state: bytes,
+        callbacks: dict[str, Any] | None,
+        transform: dict[str, Any] | None,
+    ) -> SurvregDistribution: ...
+    def cdf_values(self, q: ArrayLike, mean: ArrayLike, scale: ArrayLike) -> list[float]: ...
+    @staticmethod
     def custom(
         name: str,
         family: SurvregFamily,
@@ -9726,12 +9733,44 @@ class SurvregDistribution:
         scale: float | None = None,
         parms: Sequence[float] | None = None,
     ) -> SurvregDistribution: ...
+    def derived(
+        self,
+        name: str,
+        transform: SurvregTransform,
+        scale: float | None = None,
+    ) -> SurvregDistribution: ...
     def dtest(self) -> list[str]: ...
+    @staticmethod
+    def from_callbacks(
+        name: str,
+        init: Any,
+        density: Any,
+        deviance: Any,
+        quantile: Any,
+        variance: Any = None,
+        transform: SurvregTransform | None = None,
+        scale: float | None = None,
+        parms: ArrayLike | None = None,
+        parm_names: Sequence[str] | None = None,
+    ) -> SurvregDistribution: ...
+    def pdf_values(self, x: ArrayLike, mean: ArrayLike, scale: ArrayLike) -> list[float]: ...
+    def quantile_values(self, p: ArrayLike, mean: ArrayLike, scale: ArrayLike) -> list[float]: ...
+    def sample(
+        self,
+        n: int,
+        mean: ArrayLike,
+        scale: ArrayLike,
+        seed: int | None = None,
+    ) -> list[float]: ...
     def variance(self) -> float: ...
+    def with_parms(self, parms: ArrayLike) -> SurvregDistribution: ...
+    def with_transform(self, trans: Any, dtrans: Any, itrans: Any) -> SurvregDistribution: ...
     @property
     def family(self) -> SurvregFamily: ...
     @property
     def name(self) -> str: ...
+    @property
+    def parm_names(self) -> list[str]: ...
     @property
     def parms(self) -> list[float]: ...
     @property
@@ -9740,6 +9779,7 @@ class SurvregDistribution:
     def transform(self) -> SurvregTransform: ...
 
 class SurvregFamily:
+    Custom: SurvregFamily
     ExtremeValue: SurvregFamily
     Gaussian: SurvregFamily
     Logistic: SurvregFamily
@@ -9749,6 +9789,8 @@ class SurvregFamily:
 
 class SurvregFit:
     def __repr__(self) -> str: ...
+    @staticmethod
+    def _from_callback_state(state: bytes, distribution: SurvregDistribution) -> SurvregFit: ...
     def predict(
         self,
         newdata: ArrayLike | None = None,
@@ -9855,6 +9897,7 @@ class SurvregResiduals:
     def values(self) -> list[list[float]]: ...
 
 class SurvregTransform:
+    Custom: SurvregTransform
     Identity: SurvregTransform
     Log: SurvregTransform
     def __int__(self) -> int: ...
@@ -10999,7 +11042,10 @@ class YatesResult:
     @property
     def test(self) -> list[YatesContrast]: ...
 
-def _survpenal_fit_from_state(state: bytes) -> SurvpenalFit: ...
+def _survpenal_fit_from_state(
+    state: bytes,
+    distribution: SurvregDistribution | None = None,
+) -> SurvpenalFit: ...
 def _unpickle(cls: Any, state: Any) -> Any: ...
 def aareg_fit(
     stop: ArrayLike,

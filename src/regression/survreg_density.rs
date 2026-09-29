@@ -23,11 +23,19 @@ pub(crate) trait SurvregDensitySource: Send + Sync {
 
 impl SurvregDensitySource for SurvregDistribution {
     fn density_batch(&self, z: &[f64]) -> SurvivalResult<Vec<SurvregDensity>> {
-        Ok(z.iter().map(|&z| self.density(z)).collect())
+        if self.family == super::survreg_distributions::SurvregFamily::Custom {
+            // The likelihood checks this batch before accumulation. Avoid
+            // validating it twice through the public distribution API.
+            self.custom_callbacks()?.density(z, &self.parms)
+        } else {
+            self.density_batch(z)
+        }
     }
 
     fn builtin(&self) -> Option<&SurvregDistribution> {
-        Some(self)
+        (self.callbacks.is_none()
+            && self.family != super::survreg_distributions::SurvregFamily::Custom)
+            .then_some(self)
     }
 }
 
