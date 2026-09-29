@@ -30,6 +30,7 @@ from ._coxph import (
     coxph_detail,
     coxph_wtest,
 )
+from ._coxph_lowlevel import CoxFitResult, agexact_fit, agreg_fit, coxph_fit
 from ._coxph_print import (
     print_coxph,
     print_coxph_null,
@@ -231,6 +232,10 @@ from ._yates import yates
 from ._yates_model import YatesModel
 
 __all__ = [
+    "CoxFitResult",
+    "coxph_fit",
+    "agreg_fit",
+    "agexact_fit",
     "RateTableMatch",
     "match_ratetable",
     "print_ratetable",

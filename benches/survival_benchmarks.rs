@@ -727,6 +727,23 @@ mod exact_counting_process_cox {
 mod cox_regression {
     use super::*;
 
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn coxph_bare_without_residuals(bencher: divan::Bencher, n: usize) {
+        let (time, status, covariates) = generate_tied_regression_data(n, 4);
+        let data = CoxphData::try_new(time, None, status, covariates, None, None, None)
+            .expect("benchmark Cox data should be valid");
+        bencher.bench_local(|| {
+            black_box(
+                survival::regression::CoxphFitResult::fit(
+                    data.clone(),
+                    tight_cox_options(TieMethod::Efron),
+                    false,
+                )
+                .expect("benchmark bare Cox fit should converge"),
+            );
+        });
+    }
+
     #[divan::bench(args = [100, 1000, 10000])]
     fn coxph_survival_at_requested_times(bencher: divan::Bencher, n: usize) {
         let fit = fitted_coxph_model(n, 3);

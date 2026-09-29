@@ -48,6 +48,7 @@ fn unpickle(cls: &Bound<'_, pyo3::types::PyType>, state: &[u8]) -> PyResult<Py<P
     }
     restore!(
         CoxPHFit,
+        crate::regression::CoxphFitResult,
         crate::regression::TieMethod,
         CoxpenalFit,
         CoxPenalty,
@@ -87,6 +88,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;
     m.add_function(wrap_pyfunction!(coxph_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::regression::coxph_fit_raw, m)?)?;
     m.add_function(wrap_pyfunction!(coxphms_fit, m)?)?;
     m.add_function(wrap_pyfunction!(coxpenal_fit, m)?)?;
     m.add_function(wrap_pyfunction!(cch_fit, m)?)?;
@@ -108,6 +110,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         PsplineBasis,
         CoxCountOutput,
         CoxPHFit,
+        crate::regression::CoxphFitResult,
         CoxPenalty,
         CoxpenalFit,
         PenaltyHistory,

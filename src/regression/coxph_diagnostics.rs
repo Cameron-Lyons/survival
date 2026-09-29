@@ -87,7 +87,7 @@ pub enum Residuals {
 
 /// `exp(lp)` with `coxph.fit`'s overflow guard: near-infinite coefficients
 /// are shifted so the largest score is representable.
-fn risk_scores(lp: &[f64]) -> Vec<f64> {
+pub(crate) fn risk_scores(lp: &[f64]) -> Vec<f64> {
     let log_max = f64::MAX.ln();
     let max_lp = lp.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let shift = if max_lp > log_max {

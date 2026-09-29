@@ -488,7 +488,12 @@ def _concordance_summary(cfit: Any) -> dict[str, float]:
 
 
 def _cox_fit_diagnostic_messages(
-    fit: Any, iter_max: int, eps: float | None, toler_inf: float | None
+    fit: Any,
+    iter_max: int,
+    eps: float | None,
+    toler_inf: float | None,
+    *,
+    offset_centered: bool = True,
 ) -> list[str]:
     """The convergence warnings of R's Cox fitters for an engine fit (also the R bridge's).
 
@@ -504,12 +509,19 @@ def _cox_fit_diagnostic_messages(
 
     coef = list(fit.coefficients)
     nvar = len(coef)
-    if nvar == 0 or iter_max <= 1:
+    if iter_max <= 1:
         return []
+    if nvar == 0:
+        return (
+            ["Ran out of iterations and did not converge"]
+            if not offset_centered and int(fit.method) == 2 and fit.flag == 1000
+            else []
+        )
     eps_value = 1e-9 if eps is None else float(eps)
     toler = math.sqrt(eps_value) if toler_inf is None else float(toler_inf)
     u = list(fit.first)
-    var = fit.var if fit.naive_var is None else fit.naive_var
+    naive_var = getattr(fit, "naive_var", None)
+    var = fit.var if naive_var is None else naive_var
     infs = [abs(sum(u[i] * var[i][j] for i in range(nvar))) for j in range(nvar)]
     info = fit.info
     if info is not None:  # agreg.fit
@@ -539,8 +551,10 @@ def _cox_fit_diagnostic_messages(
         if fit.flag == 1000:
             messages = ["Ran out of iterations and did not converge"]
             # coxph.fit's lp is at coxph()'s centred offset
-            offset = list(fit.offset)
-            lp_max = max(fit.linear_predictors) - sum(offset) / len(offset)
+            lp_max = max(fit.linear_predictors)
+            if offset_centered:
+                offset = list(fit.offset)
+                lp_max -= sum(offset) / len(offset)
             if lp_max > 500 or any(not math.isfinite(value) for value in infs):
                 messages.append("one or more coefficients may be infinite")
             return messages
