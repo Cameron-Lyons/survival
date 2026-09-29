@@ -61,7 +61,6 @@ from ._misc import (
     statefig,
     survcheck,
     survobrien,
-    yates,
 )
 from ._models import (
     aic,
@@ -194,6 +193,7 @@ from ._types import (
     TMergeOperation,
     YatesResult,
 )
+from ._yates import yates
 from ._yates_model import YatesModel
 
 __all__ = [

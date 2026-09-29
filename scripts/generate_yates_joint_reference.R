@@ -27,6 +27,9 @@ add <- function(name,formula,term,levels=NULL,population="data",test="global",
         sas=unname(result$SAS),tests=unname(result$test),test_names=I(rownames(result$test)))
 }
 add("two_factors","y ~ a * b + cc","a + b")
+add("numeric_term","y ~ a * b + cc",1)
+add("numeric_terms","y ~ a * b + cc",c(1,2))
+add("numeric_terms_sgtt","y ~ a * b + cc",c(1,2),population="sas",method="sgtt")
 add("interaction_spelling","y ~ a * b + cc","a:b")
 add("crossed_spelling","y ~ a * b + cc","a*b")
 add("reverse_order","y ~ b * a + cc","b + a")

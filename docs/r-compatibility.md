@@ -729,15 +729,19 @@ contrasts; arbitrary contrast matrices are not exposed by this adapter.
 
 Joint requests such as `term="a + b"` or `term="a:b"` compare the Cartesian
 product of both variables' levels, with the first variable varying fastest.
+A scalar or vector of one-based fitted term numbers also selects variables,
+including the variables of an interaction term.
 A `levels={"a": [...], "b": [...]}` mapping supplies per-variable values;
 omitted categorical variables use their fitted levels. Direct tests compare
 all combinations jointly, or pairwise when requested. SGTT returns one type
 III test per selected main-effect variable, in the requested order.
 
-Two R 3.8-12 defects are corrected here: reversing the requested factor order
+Three R 3.8-12 defects are corrected here: reversing the requested factor order
 can apply the wrong factor levels in R, and joint nonlinear global tests
 fail when R assigns several names to a single test row. The port preserves
-the requested variable order and names a joint global test `global`.
+the requested variable order and names a joint global test `global`. Numeric
+term selection includes the last fitted term, which R accidentally rejects
+by using an exclusive upper bound.
 
 `scripts/generate_yates_sgtt_reference.R` records linear-model estimates,
 covariances, SAS matrices, and tests for additive, interaction, unbalanced,
@@ -750,6 +754,15 @@ coefficients, 15 samples) measured median times of 39 microseconds for 1,000
 rows, 0.59 milliseconds for 10,000, and 13.8 milliseconds for 100,000 on the
 development machine. Reproduce with
 `cargo bench --bench survival_benchmarks --offline -- yates_sgtt_bench --sample-count 15 --sample-size 1`.
+
+All Yates Python kernels release the GIL and accept NumPy arrays through the
+typed input converters. Nested matrices use `FloatRows`, which reads arrays
+directly into row buffers and keeps list inputs without a flatten/rebuild
+cycle. In `scripts/benchmark_yates_sgtt.py`, the 100,000-row NumPy call fell
+from 55.3 to 13.4 milliseconds (median of nine calls); list inputs measured
+18.3 milliseconds before and 17.7 after. Fortran and strided arrays measured
+13.2 and 14.2 milliseconds. These include Python argument conversion and
+result construction, unlike the native benchmark above.
 
 ## Survival response vector operations
 

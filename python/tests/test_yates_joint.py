@@ -93,6 +93,41 @@ def test_joint_risk_global_test_has_one_name():
     assert result.test[0].chisq == pytest.approx(estimate @ np.linalg.solve(variance, estimate))
 
 
+def test_numeric_selection_includes_the_last_fitted_term():
+    # R 3.8-12's numeric bound is exclusive, accidentally rejecting the last
+    # term (and every numeric selector in a one-term model).
+    case = REFERENCE["cases"][0]
+    fit = model(case)
+    expected = r.yates(fit, "a:b")
+    for selector in (4, 4.0, np.array([4]), [4, 4]):
+        actual = r.yates(fit, selector)
+        assert actual.estimate == expected.estimate
+        assert actual.mvar == expected.mvar
+    one = r.YatesModel("y ~ a", case["data"], [1, 2, 3], np.eye(3).tolist())
+    assert r.yates(one, 1).estimate == r.yates(one, "a").estimate
+
+
+@pytest.mark.parametrize("selector", [0, -1, 5, 1.5, math.inf, math.nan, [], [1, 0]])
+def test_invalid_numeric_term_selection(selector):
+    with pytest.raises(ValueError, match="term"):
+        r.yates(model(REFERENCE["cases"][0]), selector)
+
+
+@pytest.mark.parametrize("selector", [True, ["a", "b"], [1, True]])
+def test_non_numeric_term_vectors_are_rejected(selector):
+    with pytest.raises(TypeError, match="term"):
+        r.yates(model(REFERENCE["cases"][0]), selector)
+
+
+def test_numeric_term_numbers_count_strata_terms():
+    fit = r.coxph(
+        "Surv(time, status) ~ strata(trt) + celltype + karno", survival.datasets.load_veteran()
+    )
+    assert r.yates(fit, 2).estimate == r.yates(fit, "celltype").estimate
+    with pytest.raises(ValueError, match="fitted covariate term"):
+        r.yates(fit, 1)
+
+
 @pytest.mark.parametrize(
     ("term", "levels", "message"),
     [

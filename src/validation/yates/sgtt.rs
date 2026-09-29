@@ -2,6 +2,7 @@
 
 use super::{YatesContrast, estimates, quadratic_form, transpose};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::{FloatRows, FloatVec};
 use crate::internal::qr::{LinpackLeastSquares, LinpackQr};
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
@@ -156,26 +157,29 @@ pub fn yates_sgtt(input: &YatesSgttInput<'_>) -> SurvivalResult<YatesSgttResult>
 #[pyo3(signature = (x, assign, adjustment_terms, beta, vmat, coefficient_assign, test_terms, sigma2=None, include_intercept=true))]
 #[allow(clippy::too_many_arguments)]
 pub fn yates_sgtt_py(
-    x: Vec<Vec<f64>>,
+    py: Python<'_>,
+    x: FloatRows,
     assign: Vec<usize>,
     adjustment_terms: Vec<Vec<usize>>,
-    beta: Vec<f64>,
-    vmat: Vec<Vec<f64>>,
+    beta: FloatVec,
+    vmat: FloatRows,
     coefficient_assign: Vec<usize>,
     test_terms: Vec<(usize, String)>,
     sigma2: Option<f64>,
     include_intercept: bool,
 ) -> PyResult<YatesSgttResult> {
-    Ok(yates_sgtt(&YatesSgttInput {
-        x: &x,
-        assign: &assign,
-        adjustment_terms: &adjustment_terms,
-        beta: &beta,
-        vmat: &vmat,
-        coefficient_assign: &coefficient_assign,
-        test_terms: &test_terms,
-        sigma2,
-        include_intercept,
+    Ok(py.detach(|| {
+        yates_sgtt(&YatesSgttInput {
+            x: &x,
+            assign: &assign,
+            adjustment_terms: &adjustment_terms,
+            beta: &beta,
+            vmat: &vmat,
+            coefficient_assign: &coefficient_assign,
+            test_terms: &test_terms,
+            sigma2,
+            include_intercept,
+        })
     })?)
 }
 

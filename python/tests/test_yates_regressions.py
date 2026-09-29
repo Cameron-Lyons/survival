@@ -8,6 +8,7 @@ import importlib
 import math
 import warnings
 
+import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
@@ -394,6 +395,70 @@ def test_yates_simulation_validates_its_inputs():
         _core.yates_risk([[[1.0]]], [0.1], [[1.0]], [0.0], nsim=1)
     with pytest.raises(ValueError, match="estimable"):
         _core.yates_risk([[[1.0]]], [0.1], [[1.0]], [0.0], estimable=[True, False])
+
+
+@pytest.mark.parametrize("layout", ["fortran", "strided"])
+def test_yates_array_boundaries_match_nested_lists(layout):
+    def matrix(values):
+        values = np.asarray(values, dtype=float)
+        if layout == "fortran":
+            return np.asfortranarray(values)
+        return np.repeat(values, 2, axis=1)[:, ::2]
+
+    x = [matrix([[0, 1], [1, 2], [2, 1]]), matrix([[1, 1], [2, 2], [3, 1]])]
+    lists = [level.tolist() for level in x]
+    beta = np.array([0.2, -0.3])
+    variance = matrix([[0.1, 0.01], [0.01, 0.05]])
+    means = np.array([0.5, 0.1])
+    weights = np.array([1, 2, 1])
+    cmat = _core.yates_population_means(x, weights)
+    assert cmat == _core.yates_population_means(lists, weights.tolist())
+    assert _core.yates_estimable(x, x[0]) == _core.yates_estimable(lists, lists[0])
+    pairs = [
+        (
+            _core.yates(matrix(cmat), beta, variance),
+            _core.yates(cmat, beta.tolist(), variance.tolist()),
+        ),
+        (
+            _core.yates_risk(x, beta, variance, means, nsim=20, seed=7),
+            _core.yates_risk(
+                lists, beta.tolist(), variance.tolist(), means.tolist(), nsim=20, seed=7
+            ),
+        ),
+        (
+            _core.yates_survival(
+                x,
+                beta,
+                variance,
+                means,
+                np.array([0, 1, 2]),
+                np.array([0.0, 0.2, 0.5]),
+                2,
+                nsim=20,
+                seed=7,
+            ),
+            _core.yates_survival(
+                lists,
+                beta.tolist(),
+                variance.tolist(),
+                means.tolist(),
+                [0, 1, 2],
+                [0, 0.2, 0.5],
+                2,
+                nsim=20,
+                seed=7,
+            ),
+        ),
+    ]
+    for actual, expected in pairs:
+        assert actual.cmat == expected.cmat
+        assert actual.mvar == expected.mvar
+        assert [(row.pmm, row.std) for row in actual.estimate] == [
+            (row.pmm, row.std) for row in expected.estimate
+        ]
+        assert [(row.chisq, row.df) for row in actual.test] == [
+            (row.chisq, row.df) for row in expected.test
+        ]
 
 
 # --- unused factor levels ----------------------------------------------------------

@@ -13968,28 +13968,28 @@ def wlw_model(
     config: WLWConfig,
 ) -> WLWResult: ...
 def yates(
-    cmat: Sequence[Sequence[float]],
-    beta: Sequence[float],
-    vmat: Sequence[Sequence[float]],
+    cmat: ArrayLike,
+    beta: ArrayLike,
+    vmat: ArrayLike,
     offset: float = 0.0,
     sigma2: float | None = None,
     estimable: Sequence[bool] | None = None,
     test: str = "global",
 ) -> YatesResult: ...
 def yates_estimable(
-    xmatlist: Sequence[Sequence[Sequence[float]]],
-    x: Sequence[Sequence[float]],
+    xmatlist: Sequence[ArrayLike],
+    x: ArrayLike,
     intercept: bool = False,
 ) -> list[bool]: ...
 def yates_population_means(
-    xmatlist: Sequence[Sequence[Sequence[float]]],
-    weights: Sequence[float] | None = None,
+    xmatlist: Sequence[ArrayLike],
+    weights: ArrayLike | None = None,
 ) -> list[list[float]]: ...
 def yates_risk(
-    xmatlist: Sequence[Sequence[Sequence[float]]],
-    beta: Sequence[float],
-    vmat: Sequence[Sequence[float]],
-    means: Sequence[float],
+    xmatlist: Sequence[ArrayLike],
+    beta: ArrayLike,
+    vmat: ArrayLike,
+    means: ArrayLike,
     estimable: Sequence[bool] | None = None,
     nsim: int = 200,
     seed: int = 0,
@@ -13997,23 +13997,23 @@ def yates_risk(
     term: str | None = None,
 ) -> YatesResult: ...
 def yates_sgtt(
-    x: Sequence[Sequence[float]],
+    x: ArrayLike,
     assign: Sequence[int],
     adjustment_terms: Sequence[Sequence[int]],
-    beta: Sequence[float],
-    vmat: Sequence[Sequence[float]],
+    beta: ArrayLike,
+    vmat: ArrayLike,
     coefficient_assign: Sequence[int],
     test_terms: Sequence[tuple[int, str]],
     sigma2: float | None = None,
     include_intercept: bool = True,
 ) -> YatesSgttResult: ...
 def yates_survival(
-    xmatlist: Sequence[Sequence[Sequence[float]]],
-    beta: Sequence[float],
-    vmat: Sequence[Sequence[float]],
-    means: Sequence[float],
-    time: Sequence[float],
-    cumhaz: Sequence[float],
+    xmatlist: Sequence[ArrayLike],
+    beta: ArrayLike,
+    vmat: ArrayLike,
+    means: ArrayLike,
+    time: ArrayLike,
+    cumhaz: ArrayLike,
     rmean: float,
     conf_int: float = 0.95,
     estimable: Sequence[bool] | None = None,

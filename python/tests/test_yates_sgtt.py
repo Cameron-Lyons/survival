@@ -106,3 +106,38 @@ def test_native_sgtt_validates_design_and_hypothesis_shapes(field, value, messag
     arguments[field] = value
     with pytest.raises(ValueError, match=message):
         survival.validation.yates_sgtt(**arguments)
+
+
+@pytest.mark.parametrize("layout", ["contiguous", "fortran", "strided"])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32, np.int32])
+def test_sgtt_numpy_layouts_match_lists(layout, dtype):
+    x = np.array(
+        [
+            [1, 0, 1, 0, 1, 0, 0, 0, 1],
+            [1, 1, 0, 0, 1, 0, 0, 1, 0],
+            [1, 0, 1, 1, 0, 0, 1, 0, 0],
+            [1, 1, 0, 1, 0, 1, 0, 0, 0],
+        ],
+        dtype=dtype,
+    )
+    if layout == "fortran":
+        x = np.asfortranarray(x)
+    elif layout == "strided":
+        x = np.repeat(x, 2, axis=1)[:, ::2]
+    beta = np.arange(2, 6, dtype=dtype)[::-1]
+    variance = np.eye(4, dtype=dtype)
+    arguments = {
+        "assign": [0, 1, 1, 2, 2, 3, 3, 3, 3],
+        "adjustment_terms": [[3], [3], []],
+        "coefficient_assign": [0, 1, 2, 3],
+        "test_terms": [(1, "a"), (2, "b")],
+    }
+    actual = survival.validation.yates_sgtt(x=x, beta=beta, vmat=variance, **arguments)
+    expected = survival.validation.yates_sgtt(
+        x=x.tolist(), beta=beta.tolist(), vmat=variance.tolist(), **arguments
+    )
+    assert actual.sas == expected.sas
+    assert actual.columns == expected.columns
+    assert [(row.chisq, row.df) for row in actual.test] == [
+        (row.chisq, row.df) for row in expected.test
+    ]

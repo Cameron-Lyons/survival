@@ -76,7 +76,7 @@ pub use error::{SurvivalError, SurvivalResult};
 /// types that accept NumPy arrays, pandas/polars columns or plain sequences
 /// without a `.tolist()` round trip.
 pub mod data_types {
-    pub use crate::internal::numpy_utils::{BoolVec, FloatMatrix, FloatVec, IntVec};
+    pub use crate::internal::numpy_utils::{BoolVec, FloatMatrix, FloatRows, FloatVec, IntVec};
     pub use crate::internal::typed_inputs::{
         AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
         SurvivalData, Weights,
