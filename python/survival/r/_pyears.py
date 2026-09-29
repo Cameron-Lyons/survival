@@ -68,6 +68,7 @@ from ._types import (
     PyearsResult,
     RateTable,
     SurvExpResult,
+    SurvExpSummary,
     TcutResult,
     _CovariateTerm,
     _InteractionTerm,
@@ -78,6 +79,62 @@ from ._types import (
 # ---------------------------------------------------------------------------
 
 _RATETABLE_ATTRIBUTES = ("dims", "dimid", "dimnames", "cutpoints", "types")
+
+
+@dataclass(frozen=True)
+class RateTableSummary:
+    """Rate-table dimensions, canonical attributes and the native summary text."""
+
+    dimensions: dict[str, list[Any]]
+    attributes: dict[str, Any]
+    text: str
+
+    def __str__(self) -> str:
+        return self.text
+
+
+def summary_ratetable(object: RateTable, **_kwargs: Any) -> RateTableSummary:
+    """Describe each rate-table dimension and retain its canonical attributes.
+
+    The dimension table gives levels for factors and lower/upper cutpoints
+    otherwise. Date boundaries are ISO dates; numeric boundaries keep the
+    original units. ``str(result)`` is the Rust rate-table summary text.
+    """
+
+    if not isinstance(object, RateTable):
+        raise TypeError("Argument is not a rate table")
+    dims, names, labels = object.dims, object.dimid, object.dimnames
+    cuts, types = object.cutpoints, object.type_codes()
+    lower: list[Any] = []
+    upper: list[Any] = []
+    for kind, values in zip(types, cuts, strict=True):
+        bounds: list[Any] = [None, None] if not values else [values[0], values[-1]]
+        if values and kind > 2:
+            dates = (_core.days_to_date(value) for value in bounds)
+            bounds = [f"{day.year:04d}-{day.month:02d}-{day.day:02d}" for day in dates]
+        lower.append(bounds[0])
+        upper.append(bounds[1])
+    return RateTableSummary(
+        dimensions={
+            "dimension": names,
+            "type": types,
+            "categories": dims,
+            "levels": [
+                level if kind == 1 else None for kind, level in zip(types, labels, strict=True)
+            ],
+            "lower": lower,
+            "upper": upper,
+        },
+        attributes={
+            "dim": dims,
+            "dimid": names,
+            "dimnames": labels,
+            "cutpoints": cuts,
+            "type": types,
+            "class": "ratetable",
+        },
+        text=str(object),
+    )
 
 
 def is_ratetable(x: Any, verbose: bool = False) -> bool | list[str]:
@@ -1120,6 +1177,60 @@ def _survexp_result(result: Any, levels: list[str] | None, n: int) -> SurvExpRes
         n=n,
         strata=levels,
     )
+
+
+def summary_survexp(
+    object: SurvExpResult, times: Any | None = None, scale: Any = 1, **_kwargs: Any
+) -> SurvExpSummary:
+    """R's ``summary.survexp``, using the native expected-curve time selector.
+
+    Requested times are sorted, retaining duplicates and removing missing or
+    out-of-range times. Survival is taken from the previous observation and
+    risk counts from the next. ``scale`` divides output times; omitted times
+    keep every source row. Curve labels name matrix columns, as on the fit.
+    """
+
+    if not isinstance(object, SurvExpResult):
+        raise TypeError("Invalid data")
+    matrix = bool(object.surv and isinstance(object.surv[0], list))
+    surv = object.surv if matrix else [[value] for value in object.surv]
+    n_risk = object.n_risk if matrix else [[value] for value in object.n_risk]
+    requested = None if times is None else _floats_or_nan(_scalar_or_vector(times, "times"))
+    result = _core.summary_survexp(
+        object.time,
+        surv,
+        n_risk,
+        requested,
+        _numeric_scalar(_scalar_or_vector(scale, "scale"), "scale"),
+        object.method,
+    )
+    ncols = len(surv[0]) if surv else len(object.strata or [""])
+    return SurvExpSummary(
+        time=list(result.time),
+        surv=[row[0] for row in result.surv] if ncols == 1 else result.surv,
+        n_risk=[row[0] for row in result.n_risk] if ncols == 1 else result.n_risk,
+        method=result.method,
+        strata=None if object.strata is None else list(object.strata),
+    )
+
+
+def _survexp_frame(result: SurvExpResult | SurvExpSummary) -> dict[str, list[Any]]:
+    """Expected curves as one row per (curve, time)."""
+
+    matrix = bool(result.surv and isinstance(result.surv[0], list))
+    ncols = len(result.surv[0]) if matrix else len(result.strata or [""])
+    if result.strata is not None and len(result.strata) != ncols:
+        raise ValueError("curve labels must match the survival columns")
+    frame: dict[str, list[Any]] = {"time": result.time * ncols, "surv": [], "n_risk": []}
+    for col in range(ncols):
+        for name in ("surv", "n_risk"):
+            values = getattr(result, name)
+            frame[name].extend((row[col] for row in values) if matrix else values)
+    if result.strata is not None:
+        frame["strata"] = [label for label in result.strata for _ in result.time]
+    elif ncols > 1:
+        frame["curve"] = [col + 1 for col in range(ncols) for _ in result.time]
+    return frame
 
 
 def survexp(

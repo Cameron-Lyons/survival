@@ -472,6 +472,20 @@ class SurvExpResult:
 
 
 @dataclass(frozen=True)
+class SurvExpSummary:
+    """Selected expected-survival rows, with one vector or a time-by-curve matrix.
+
+    ``strata`` names the curve columns, as in :class:`SurvExpResult`.
+    """
+
+    time: list[float]
+    surv: list[float] | list[list[float]]
+    n_risk: list[float] | list[list[float]]
+    method: str
+    strata: list[str] | None = None
+
+
+@dataclass(frozen=True)
 class PyearsResult:
     """R's ``pyears`` object.
 

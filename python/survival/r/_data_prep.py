@@ -783,6 +783,21 @@ _TMERGE_COUNT_NAMES = (
 )
 
 
+def summary_tmerge(object: TMergeFrame, **_kwargs: Any) -> dict[str, list[Any]]:
+    """R's ``summary.tmerge`` count matrix as a column-oriented table.
+
+    ``term`` names each operation; the remaining columns count early, late,
+    gap, within-interval, boundary and unmatched-ID updates.
+    """
+
+    if not isinstance(object, TMergeFrame):
+        raise TypeError("summary_tmerge requires a TMergeFrame")
+    return {
+        "term": list(object.tcount),
+        **{name: [row[name] for row in object.tcount.values()] for name in _TMERGE_COUNT_NAMES},
+    }
+
+
 def tdc(time: Any, value: Any | None = None, init: Any | None = None) -> TMergeOperation:
     """A time-dependent covariate argument for :func:`tmerge`."""
 

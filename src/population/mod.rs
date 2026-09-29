@@ -12,6 +12,7 @@ pub(crate) mod ratetable_data;
 pub(crate) mod survexp;
 pub(crate) mod survexp_cox;
 pub(crate) mod survexp_fit;
+pub(crate) mod survexp_summary;
 
 pub use match_ratetable::{
     MatchRatetableResult, RatetableColumn, align_us_year_axis, match_ratetable, match_ratetable_py,
@@ -32,3 +33,4 @@ pub use ratetable_data::{
 pub use survexp::{SurvExpResult, SurvexpInput, SurvexpMethod, survexp, survexp_py};
 pub use survexp_cox::{survexp_cox, survexp_cox_py};
 pub use survexp_fit::{SurvexpFit, survexp_fit};
+pub use survexp_summary::{summary_survexp, summary_survexp_py};

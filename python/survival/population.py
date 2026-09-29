@@ -21,6 +21,7 @@ __all__ = bind_names(
         "SurvExpResult",
         "survexp",
         "survexp_cox",
+        "summary_survexp",
         "survexp_mn",
         "survexp_us",
         "survexp_usr",

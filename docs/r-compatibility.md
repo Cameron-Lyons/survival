@@ -701,6 +701,48 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## Population and merged-data summaries
+
+`summary_survexp`, `summary_ratetable`, and `summary_tmerge` are available
+through `survival.r` and the `model_summary` generic.
+
+Expected-survival summaries return a `SurvExpSummary`: a vector for one
+curve or a time-by-curve matrix otherwise. The `strata` labels name columns,
+as on `SurvExpResult`. Requested times are sorted with duplicates retained;
+missing times and values outside the observed range are dropped. Survival
+uses the preceding observation (1 before the first), and risk counts use
+the next observation. Omitted times keep the original rows. Scalar `scale`
+divides the output times, including R's zero and nonfinite arithmetic.
+Repeated source times use R's averaged interpolation indices without its
+tie-collapse warning. R call expressions and manually attached `na.action`
+attributes are not represented in these Python result containers.
+
+Rust callers use `population::summary_survexp` with a `SurvExpResult`; the
+Python native entry point accepts its time vector and row-major matrices.
+The native selector validates source shapes and time order, sorts the
+requested times when necessary, then uses a single sweep. Its selection
+work is linear in source rows plus requested rows after sorting, with output
+copying proportional to the number of selected cells. The
+`expected_survival_summary_bench` group measures sparse and dense requests
+on two-curve inputs of 1,000–100,000 rows.
+On a local Linux x86-64 release build, the median of 15 samples at 100,000
+source rows was 0.309 ms for 25 requested times and 3.80 ms for 100,000
+requested times, excluding source-curve construction. Reproduce with
+`cargo bench --bench survival_benchmarks -- expected_survival_summary_bench --sample-count 15 --sample-size 1`.
+
+`summary_ratetable` returns a `RateTableSummary` containing the canonical
+attributes, a dimension table, and native summary text available through
+`str(result)`. Factor dimensions have levels; other dimensions have bounds
+in their native units, with calendar bounds formatted as ISO dates.
+`summary_tmerge` returns a column-oriented count table with one row per
+operation. These methods return structured data without printing. Expected
+curves and summaries, rate tables and their summaries, and the merged-data
+count table all support `as_data_frame`.
+
+`scripts/generate_population_summary_reference.R` regenerates curve-selection
+edge cases, population-method examples, all three bundled rate-table
+summaries, and merged-data counts from R survival 3.8-12.
+
 ## P-spline prediction
 
 `predict(pspline(x), newx)` and `predict_pspline(basis, newx)` evaluate the
@@ -776,9 +818,8 @@ error; none silently falls back to other behaviour.
 - **R-style print and format methods**: `survival.r` returns data objects and
   `as_data_frame` tables instead of printed output. Only
   `print_survreg_penal` ports R's printed table, and `format_surv` formats a
-  `Surv`. The sparse (frailty) branch of `print.survreg.penal` is not ported.
-- **`summary.survexp`, `summary.tmerge` and `summary.ratetable`** (and their
-  print methods).
+  `Surv`; `str(summary_ratetable(...))` exposes the native rate-table text.
+  The sparse (frailty) branch of `print.survreg.penal` is not ported.
 - **`Surv` methods beyond subsetting**: `survival.r.Surv` supports `subset`,
   `len`, `as_matrix`, `format_surv`, `is_na_surv`, and the `median`/`quantile`
   generics; R's `c`, `rep`, `rev`,
