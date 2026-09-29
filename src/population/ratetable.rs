@@ -249,6 +249,11 @@ impl RateTable {
         self.dims.len()
     }
 
+    /// Match declared labels on a zero-based factor dimension to one-based positions.
+    pub fn match_levels(&self, dimension: usize, labels: &[String]) -> SurvivalResult<Vec<usize>> {
+        super::match_ratetable::match_levels(self, dimension, labels)
+    }
+
     /// Zero-based position of `label` along dimension `dim` (R's
     /// `match(label, dimnames(x)[[dim]])`).
     pub fn level(&self, dim: usize, label: &str) -> Option<usize> {
@@ -373,6 +378,12 @@ impl RateTable {
     /// R's integer type codes, one per dimension.
     fn type_codes(&self) -> Vec<i64> {
         self.types.iter().map(|t| i64::from(t.code())).collect()
+    }
+
+    /// Match all declared factor levels, including unused levels, to one-based codes.
+    #[pyo3(name = "match_levels")]
+    fn match_levels_py(&self, dimension: usize, labels: Vec<String>) -> PyResult<Vec<usize>> {
+        Ok(self.match_levels(dimension, &labels)?)
     }
 
     /// The text of R's `summary.ratetable`.

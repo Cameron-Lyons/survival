@@ -187,6 +187,13 @@ def test_yates_sgtt_releases_the_gil():
     )
 
 
+def test_rate_matching_releases_the_gil():
+    labels = [f"group{i:04d}" for i in range(1024)]
+    table = population.RateTable([1024], ["group"], [labels], [None], [1], [0.01] * 1024)
+    observations = [labels[i % 1024] for i in range(500_000)]
+    _assert_detaches(lambda: population.match_ratetable(table, ["group"], [observations]))
+
+
 @pytest.mark.parametrize("layout", ["fortran", "strided"])
 def test_numpy_and_list_inputs_give_identical_survreg_fits(layout):
     time_, status, x = _cox_data(200)

@@ -355,7 +355,7 @@ class ModelFrame:
     cluster: list[Any] | None = None
     istate: list[Any] | None = None
     na_action: NaAction | None = None
-    extra: dict[str, list[Any]] = field(default_factory=dict)
+    extra: dict[str, Sequence[Any]] = field(default_factory=dict)
 
     @property
     def response_name(self) -> str | None:

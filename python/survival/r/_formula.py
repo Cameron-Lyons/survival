@@ -2824,7 +2824,9 @@ def model_frame(
     if set(extra_names) & set(_MODEL_FRAME_ARGUMENTS):
         raise ValueError("extra columns must not be named like a model.frame argument")
     for name in extra_names:
-        arguments[name] = _column_or_values(data, extra[name], name)
+        value = extra[name]
+        # Rate-table matching validates declared levels, including unused ones.
+        arguments[name] = _column_source(data, value) if isinstance(value, str) else value
     if subset is not None:
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
     data, arguments, removed = _apply_formula_na_action(formula, data, action, **arguments)
@@ -2877,7 +2879,7 @@ def model_frame(
         cluster=aligned["cluster"],
         istate=aligned["istate"],
         na_action=_na_action_record(action, removed),
-        extra={name: aligned[name] or [] for name in extra_names},
+        extra={name: _rows_of(arguments[name], aligned[name] or []) for name in extra_names},
     )
 
 

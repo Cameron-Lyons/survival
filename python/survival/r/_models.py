@@ -53,6 +53,7 @@ from ._formula import _formula_columns
 from ._formula import model_frame as _formula_model_frame
 from ._names import _make_unique
 from ._pyears import (
+    RateTableMatch,
     RateTableSummary,
     _pyears_result_frame,
     _survexp_frame,
@@ -1336,6 +1337,11 @@ def _ratetable_print_frame(result: RateTablePrint) -> dict[str, list[Any]]:
         stride *= extent
     frame[names[-1]] = list(result.rates)
     return frame
+
+
+@as_data_frame.register(RateTableMatch)
+def _ratetable_match_frame(result: RateTableMatch) -> dict[str, list[Any]]:
+    return {name: [row[j] for row in result.r] for j, name in enumerate(result.dimid)}
 
 
 @as_data_frame.register(SurvregPenalPrint)
