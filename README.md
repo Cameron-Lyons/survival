@@ -876,6 +876,10 @@ For proportional-hazards diagnostics, use
 and two-standard-error bands over the scaled Schoenfeld residuals. Set
 `hr=True` for hazard ratios; see the [diagnostic plotting guide](docs/cox-diagnostic-plotting.md).
 
+For Aalen additive models, `plotting.plot_aareg(aalen_fit)` draws cumulative
+coefficient curves with ordinary or influence-based bands. Use
+`plotting.lines_aareg` for overlays; see the [Aalen plotting guide](docs/aalen-plotting.md).
+
 ## Scikit-learn estimators
 
 `survival.sklearn_compat` provides estimators and streaming wrappers that accept
