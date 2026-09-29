@@ -1037,6 +1037,23 @@ were 1.6–3.4 times faster. On 1,000-point curves, requesting 1,001
 probabilities was 4–16% slower (about 3–12 microseconds): the shared buffer
 trades additional arithmetic during searches for less allocation and copying.
 
+## Graphics
+
+`survival.plotting` provides optional Matplotlib rendering through the generic
+`plot`, `lines`, and `points` functions or explicit method names. It supports
+fitted survival and multistate curves, raw `Surv` plots, expected-survival
+overlays, Cox proportional-hazards diagnostics, and Aalen cumulative coefficients.
+Numerical plot data is available without Matplotlib. See
+[survival plotting](survival-plotting.md),
+[Cox diagnostics](cox-diagnostic-plotting.md), and [Aalen plotting](aalen-plotting.md)
+for arguments, deliberate graphics differences, and R coordinate checks.
+
+Direct `Surv2` graphics and raw `Surv` line/point overlays are refused with R's
+message. Fit these responses before drawing curves. Modern Cox survival results
+use the common curve renderer; R's obsolete `survfit.coxph` class has no separate
+Python representation. Matplotlib controls device layout, ticks, padding and fonts;
+the interface does not emulate base R graphics parameters.
+
 ## Not yet implemented
 
 These R entry points have no port. Calls that reach them raise an explicit
@@ -1058,18 +1075,6 @@ error; none silently falls back to other behaviour.
   `survreg_fit`, `survival.surv_analysis.survfitkm`,
   `survival.population.match_ratetable`, ...); the R bridge provides R-named
   wrappers for several of them.
-- **Other graphics**: direct `Surv`/`Surv2` response plots and `survexp` overlays
-  remain unfinished.
-  Survival-curve `plot`, `lines`, and `points` are available as
-  `survival.plotting.plot_survfit`, `lines_survfit`, and `points_survfit`, with
-  an optional Matplotlib renderer. See [plotting](survival-plotting.md) for the
-  supported curves, arguments, R coordinate checks, and deliberate graphics fixes.
-  Cox proportional-hazards diagnostic plots are available as
-  `survival.plotting.plot_cox_zph`, with a Rust natural-spline smoother and
-  32 R graphics reference cases; see [Cox diagnostic plotting](cox-diagnostic-plotting.md).
-  Aalen cumulative-coefficient plots and overlays are available through
-  `plot_aareg` and `lines_aareg`, with 37 R graphics reference cases; see
-  [Aalen plotting](aalen-plotting.md).
 
 Features R itself does not implement stay refused with R's message: anova on
 multi-state fits; `predict.coxphms` types expected, survival and terms and

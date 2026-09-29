@@ -15,7 +15,7 @@ result.axes.figure.savefig("survival.svg")
 ```
 
 `plot_survfit`, `lines_survfit`, and `points_survfit` accept Kaplan–Meier,
-Turnbull, Cox, Aalen–Johansen, transition-matrix, and multistate Cox curves.
+Turnbull, Cox, Aalen–Johansen, transition-matrix, multistate Cox, and expected-survival curves.
 The return value holds `axes`, estimate `lines`, `confidence` artists,
 censor `marks`, and numerical `data`. Functions never call `show()` or change
 the graphics backend. Pass `ax=` to use an existing subplot. Adding lines or
@@ -26,6 +26,49 @@ only NumPy and exposes arrays for another renderer: times, estimates, limits,
 event-time masks, and censor coordinates. `curve.step()` gives a compressed
 right-continuous path; `data.xend` and `data.yend` give curve endpoints.
 Preparing or editing these arrays does not mutate the fitted model.
+
+## Responses, expected survival, and method dispatch
+
+`plotting.plot`, `plotting.lines`, and `plotting.points` select the method from
+the input object. Explicit method names remain available:
+
+| Input | `plot` | `lines` | `points` |
+| --- | --- | --- | --- |
+| Raw `r.Surv` response | `plot_surv` | Refused, as in R | Refused, as in R |
+| Fitted survival curves | `plot_survfit` | `lines_survfit` | `points_survfit` |
+| `r.survexp` curves | `plot_survfit` | `lines_survexp` | `points_survfit` |
+| `r.aareg` model | `plot_aareg` | `lines_aareg` | Unsupported |
+| `r.cox_zph` diagnostics | `plot_cox_zph` | Unsupported | Unsupported |
+| `r.Surv2` response | Refused, as in R | Refused, as in R | Refused, as in R |
+
+`plot_surv` first calls the existing Rust-backed `survfit` with its defaults,
+then plots the result. It accepts right-, left-, interval-censored, counting-process
+and multistate responses when no additional fitting arguments are needed.
+Missing rows are omitted. Keywords control the plot; to change fitting options
+or supply an identifier, call `r.survfit` explicitly first.
+
+```python
+response = r.Surv(lung["time"], lung["status"])
+observed = plotting.plot(response, conf_style="band", label="Observed")
+reference = r.coxph("Surv(time, status) ~ age + sex", lung)
+expected = r.survexp("~1", lung, ratetable=reference, times=[1, 100, 300, 600, 1000])
+plotting.lines(expected, ax=observed.axes, colors="darkorange", label="Cox reference")
+observed.axes.legend()
+```
+
+Expected-survival objects retain their group names and share one time grid
+across columns. They contain no fitted standard errors or observed event/censor
+counts, so bands and automatic censor marks are absent. Explicit intervals raise
+an error; explicit marker times work. Event-only points are empty; `censor=True`
+plots every stored time, including the origin. Individual `survexp` methods return
+vectors, which are not curve objects.
+
+`lines_survexp` joins estimates with straight lines, as R does. The generic
+`lines` selects this default; explicit `lines_survfit` still draws steps.
+Override either with `drawstyle="default"`, `"steps-post"`, `"steps-pre"`, or
+`"steps-mid"`. Plotting expected survival uses steps by default. Expected
+cumulative hazard is `-log(surv)`, computed in NumPy for `fun="cumhaz"` and
+`cumhaz=True`; the latter is an extension to R's expected-survival graphics.
 
 ## Transformations and selections
 
@@ -87,8 +130,8 @@ uses the requested log probability axis and avoids applying a second logarithm
 to log state probabilities. R's multistate point method can index a time vector
 with a flattened event matrix; the port marks event times across states.
 Out-of-range NA censor marks left by R after `xmax` are omitted.
-[Cox diagnostic plots](cox-diagnostic-plotting.md) are also supported; other
-graphical methods remain unfinished.
+See also [Cox diagnostic plots](cox-diagnostic-plotting.md) and
+[Aalen coefficient plots](aalen-plotting.md).
 
 ## Validation and performance
 
@@ -97,15 +140,20 @@ plot/lines/points methods. Its 46 cases cover grouped, weighted, delayed-entry,
 conditional, interval-censored, Cox and multistate curves, confidence methods,
 tied censoring, truncation, transformations and terminal zero survival. Tests
 compare coordinates, inspect artists, and export SVG, PNG and PDF figures.
+`scripts/generate_response_plot_reference.R` adds 32 cases invoking R's response
+and expected-survival methods, including grouped population and Cox references,
+Hakulinen and conditional estimates, linear overlays, and the absence of events.
 
-Preparation does not refit models or copy observation-by-time influence matrices.
+Preparing fitted curves does not refit models or copy observation-by-time influence matrices.
 It skips confidence-array conversion when intervals are disabled. Constant runs
-are compressed for lines and shaded bands, so rendered path sizes depend on the
-number of changes rather than the number of censored observations.
+are compressed for right-continuous lines and shaded bands, so rendered path
+sizes depend on the number of changes rather than the number of censored
+observations. Other draw styles retain all coordinates to preserve their geometry.
 
 ```sh
 PYTHONPATH=python python scripts/bench_survfit_plot.py --render
 PYTHONPATH=python python examples/survival_curves.py /tmp/survival-curves.svg
+PYTHONPATH=python python examples/expected_survival.py /tmp/expected-survival.svg
 ```
 
 On Linux x86-64 with Python 3.14.7, five runs at 100,000 observation times took

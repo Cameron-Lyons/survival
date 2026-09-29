@@ -24,7 +24,8 @@ from ._plot_data import (
 from ._plot_helpers import axes as _axes
 from ._plot_helpers import panel_axes
 from ._plot_helpers import styles as _styles
-from .r._types import CoxZPHResult
+from .r._surv import Surv, Surv2
+from .r._types import AaregModelResult, CoxZPHResult, SurvExpResult
 
 __all__ = [
     "SurvivalCurve",
@@ -44,6 +45,11 @@ __all__ = [
     "aareg_plot_data",
     "plot_aareg",
     "lines_aareg",
+    "plot_surv",
+    "lines_survexp",
+    "plot",
+    "lines",
+    "points",
 ]
 
 
@@ -119,8 +125,11 @@ def _draw(
     legend: bool = True,
     xlabel: str = "Time",
     ylabel: str | None = None,
+    drawstyle: str = "steps-post",
     **line_kwargs: Any,
 ) -> SurvivalPlot:
+    if drawstyle not in {"default", "steps-post", "steps-pre", "steps-mid"}:
+        raise ValueError("drawstyle must be default, steps-post, steps-pre, or steps-mid")
     if not np.isfinite([xscale, yscale]).all() or xscale <= 0 or yscale <= 0:
         raise ValueError("xscale and yscale must be finite and positive")
     xlim, ylim = _limits(xlim, "xlim"), _limits(ylim, "ylim")
@@ -171,6 +180,7 @@ def _draw(
             "color": colors[i % len(colors)],
             "linewidth": linewidth,
             "linestyle": styles[i % len(styles)],
+            "drawstyle": "default" if drawstyle == "steps-post" else drawstyle,
             **line_kwargs,
         }
         label = style.pop("label", curve.label)
@@ -192,7 +202,7 @@ def _draw(
             lines.append(artist)
             continue
         if data.plot_estimate:
-            xx, yy = curve.step()
+            xx, yy = curve.step() if drawstyle == "steps-post" else (curve.time, curve.estimate)
             artist = ax.plot(xx / xscale, yy * yscale, label=label, **style)[0]
             lines.append(artist)
             style["color"] = artist.get_color()
@@ -203,11 +213,13 @@ def _draw(
                     (curve.lower[1:] != curve.lower[:-1]) | (curve.upper[1:] != curve.upper[:-1]),
                 ]
                 keep[-1] = True
+                if drawstyle != "steps-post":
+                    keep[:] = True
                 artist = ax.fill_between(
                     curve.time[keep] / xscale,
                     curve.lower[keep] * yscale,
                     curve.upper[keep] * yscale,
-                    step="post",
+                    step=drawstyle.removeprefix("steps-") if drawstyle != "default" else None,
                     color=style["color"],
                     alpha=0.2,
                     label="_nolegend_" if data.plot_estimate else label,
@@ -217,7 +229,7 @@ def _draw(
                     style["color"] = artist.get_facecolor()[0]
             else:
                 for bound in (curve.lower, curve.upper):
-                    xx, yy = curve.step(bound)
+                    xx, yy = curve.step(bound) if drawstyle == "steps-post" else (curve.time, bound)
                     artist = ax.plot(
                         xx / xscale,
                         yy * yscale,
@@ -310,6 +322,84 @@ def plot_survfit(fit: SurvivalFit, *, ax: Any = None, **kwargs: Any) -> Survival
     """
 
     return _draw(fit, ax=ax, **kwargs)
+
+
+def plot_surv(response: Surv, *, ax: Any = None, **kwargs: Any) -> SurvivalPlot:
+    """Fit one ungrouped curve to a raw ``Surv`` response and plot it, as R does.
+
+    Plot options are passed to ``plot_survfit``; fitting uses ``survfit`` defaults.
+    To change fitting options, fit explicitly before plotting.
+    """
+
+    if isinstance(response, Surv2):
+        raise ValueError("method not defined for a Surv2 object")
+    if not isinstance(response, Surv):
+        raise TypeError("response must be a Surv object")
+    from .r._survfit import survfit
+
+    return plot_survfit(survfit(response), ax=ax, **kwargs)
+
+
+def lines_survexp(fit: SurvExpResult, *, ax: Any = None, **kwargs: Any) -> SurvivalPlot:
+    """Overlay expected-survival curves, joining their time grid with straight lines.
+
+    Accepts the options of ``lines_survfit``; override ``drawstyle`` to draw steps.
+    No confidence intervals or observed censor counts are inferred.
+    """
+
+    if not isinstance(fit, SurvExpResult):
+        raise TypeError("fit must be returned by survival.r.survexp")
+    kwargs.setdefault("drawstyle", "default")
+    return lines_survfit(fit, ax=ax, **kwargs)
+
+
+def plot(
+    value: SurvivalFit | Surv | Surv2 | AaregModelResult | CoxZPHResult,
+    *,
+    ax: Any = None,
+    **kwargs: Any,
+) -> SurvivalPlot | AalenPlot | CoxDiagnosticPlot:
+    """Dispatch a response, survival curve, or model diagnostic to its plot method."""
+
+    if isinstance(value, Surv2):
+        raise ValueError("method not defined for a Surv2 object")
+    if isinstance(value, Surv):
+        return plot_surv(value, ax=ax, **kwargs)
+    if isinstance(value, AaregModelResult):
+        return plot_aareg(value, ax=ax, **kwargs)
+    if isinstance(value, CoxZPHResult):
+        return plot_cox_zph(value, ax=ax, **kwargs)
+    return plot_survfit(value, ax=ax, **kwargs)
+
+
+def lines(
+    value: SurvivalFit | Surv | Surv2 | AaregModelResult,
+    *,
+    ax: Any = None,
+    **kwargs: Any,
+) -> SurvivalPlot | AalenPlot:
+    """Add fitted curves to existing axes, using each model's default line method."""
+
+    if isinstance(value, Surv | Surv2):
+        raise ValueError(f"method not defined for a {type(value).__name__} object")
+    if isinstance(value, AaregModelResult):
+        return lines_aareg(value, ax=ax, **kwargs)
+    if isinstance(value, SurvExpResult):
+        return lines_survexp(value, ax=ax, **kwargs)
+    return lines_survfit(value, ax=ax, **kwargs)
+
+
+def points(
+    value: SurvivalFit | Surv | Surv2,
+    *,
+    ax: Any = None,
+    **kwargs: Any,
+) -> SurvivalPlot:
+    """Add fitted event-time estimates; raw response point methods are undefined."""
+
+    if isinstance(value, Surv | Surv2):
+        raise ValueError(f"method not defined for a {type(value).__name__} object")
+    return points_survfit(value, ax=ax, **kwargs)
 
 
 def lines_survfit(
