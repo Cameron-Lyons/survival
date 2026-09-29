@@ -1135,6 +1135,39 @@ class YatesPrint(ModelPrint):
 
 
 @dataclass(frozen=True)
+class ResponsePrint:
+    """Response labels and formatted text, with independent numeric source columns."""
+
+    data: dict[str, list[Any]]
+    labels: list[str]
+    lines: list[str]
+    displayed: int
+
+    def __str__(self) -> str:
+        return "\n".join(self.lines) + "\n"
+
+
+@dataclass(frozen=True)
+class RateTablePrint:
+    """Full-precision rates in column-major order plus bounded array display.
+
+    ``max_print`` limits text only. ``rates`` retains every cell, and
+    ``as_data_frame`` expands dimension labels in R's first-index-fastest order.
+    """
+
+    dims: list[int]
+    dimid: list[str]
+    dimnames: list[list[str]]
+    rates: list[float]
+    digits: int
+    lines: list[str]
+    displayed: int
+
+    def __str__(self) -> str:
+        return "\n".join(self.lines) + "\n"
+
+
+@dataclass(frozen=True)
 class SurvfitQuantileResult:
     """``quantile.survfit``: rows are curves, columns ``probs``; the limits when requested."""
 

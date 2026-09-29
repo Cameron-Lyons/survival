@@ -902,6 +902,11 @@ Expected curves and their summaries have `r.print_survexp` and
 `r.print_summary_survexp`. These reports also expose full-precision tables and
 support `as_data_frame`.
 
+Raw responses have `r.print_surv` and `r.print_surv2`; population rate arrays
+have `r.print_ratetable`. Their reports preserve full-precision data while
+supporting R-style wrapping and explicit display limits. See
+[response and rate-table reports](docs/response-ratetable-reports.md).
+
 ## Survival curve plots
 
 Install `survival[plot]` to render Kaplan–Meier, Cox and multistate curves:

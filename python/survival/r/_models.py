@@ -51,6 +51,7 @@ from ._finegray import _finegray_frame
 from ._formula import _column as _formula_column
 from ._formula import _formula_columns
 from ._formula import model_frame as _formula_model_frame
+from ._names import _make_unique
 from ._pyears import (
     RateTableSummary,
     _pyears_result_frame,
@@ -97,6 +98,8 @@ from ._types import (
     CoxZPHResult,
     ModelPrint,
     PyearsResult,
+    RateTablePrint,
+    ResponsePrint,
     SummarySurvfitCoxmsResult,
     SurvDiffResult,
     SurvExpResult,
@@ -1316,6 +1319,23 @@ def _model_print_frame(result: ModelPrint) -> dict[str, list[Any]]:
 @as_data_frame.register(YatesPrint)
 def _yates_print_frame(result: YatesPrint) -> dict[str, list[Any]]:
     return {name: list(values) for name, values in result.estimates.items()}
+
+
+@as_data_frame.register(ResponsePrint)
+def _response_print_frame(result: ResponsePrint) -> dict[str, list[Any]]:
+    return {name: list(values) for name, values in result.data.items()}
+
+
+@as_data_frame.register(RateTablePrint)
+def _ratetable_print_frame(result: RateTablePrint) -> dict[str, list[Any]]:
+    frame: dict[str, list[Any]] = {}
+    stride = 1
+    names = _make_unique([*result.dimid, "rate"])
+    for name, extent, levels in zip(names[:-1], result.dims, result.dimnames, strict=True):
+        frame[name] = [levels[(i // stride) % extent] for i in range(len(result.rates))]
+        stride *= extent
+    frame[names[-1]] = list(result.rates)
+    return frame
 
 
 @as_data_frame.register(SurvregPenalPrint)
