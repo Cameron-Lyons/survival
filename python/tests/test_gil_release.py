@@ -256,6 +256,33 @@ def test_ragged_nested_lists_are_rejected_at_the_boundary():
         sa.aggregate_survfit(surv=[[0.9, 0.8], [0.7]])
 
 
+def test_matrix_conversion_does_not_repeat_custom_float_coercion():
+    class Number:
+        calls = 0
+
+        def __float__(self):
+            self.calls += 1
+            return 1.0
+
+    value = Number()
+    with pytest.raises(TypeError, match="a float matrix"):
+        regression.SurvregData([1.0, 2.0], [1, 0], [[value, 1.0], ["invalid", 2.0]])
+    assert value.calls == 1
+    value.calls = 0
+    data = regression.SurvregData([1.0, 2.0], [1, 0], [[value, 2.0], [3.0, 4.0]])
+    assert data.covariates == [[1.0, 2.0], [3.0, 4.0]]
+    assert value.calls == 1
+
+
+def test_matrix_conversion_preserves_custom_row_iteration():
+    class Row(list):
+        def __iter__(self):
+            return iter([3.0, 4.0])
+
+    data = regression.SurvregData([1.0, 2.0], [1, 0], [[1.0, 2.0], Row([9.0, 8.0])])
+    assert data.covariates == [[1.0, 2.0], [3.0, 4.0]]
+
+
 def test_numpy_and_list_inputs_give_identical_concordance():
     time_, status, x = _cox_data(300)
     right = core.SurvivalData(time_, status)
