@@ -571,7 +571,9 @@ fn assert_lazy_jj_is_eager(data: &SurvpenalData, beta: &[f64]) {
     let mut lazy = BlockLikelihood::new(nf, nvar + 1);
     let mut jj_penalty = JjPenalty::default();
     let mut lazy_beta = beta.to_vec();
-    kernel.evaluate_blocks(&lazy_beta, frailty.as_ref(), false, &mut lazy);
+    kernel
+        .evaluate_blocks(&lazy_beta, frailty.as_ref(), false, &mut lazy)
+        .unwrap();
     add_penalty(
         Case::Full,
         nf,
@@ -590,11 +592,14 @@ fn assert_lazy_jj_is_eager(data: &SurvpenalData, beta: &[f64]) {
         &mut None,
         &jj_penalty,
         shape,
-    );
+    )
+    .unwrap();
 
     let mut eager = BlockLikelihood::new(nf, nvar + 1);
     let mut eager_beta = beta.to_vec();
-    kernel.evaluate_blocks(&eager_beta, frailty.as_ref(), true, &mut eager);
+    kernel
+        .evaluate_blocks(&eager_beta, frailty.as_ref(), true, &mut eager)
+        .unwrap();
     add_penalty(
         Case::Full,
         nf,
@@ -619,7 +624,10 @@ fn jj_built_for_a_fisher_step_is_the_eager_jj() {
     let beta = [3.0, 0.05, 1.0, -2.0];
     let inner = Inner::new(&data);
     let mut lik = BlockLikelihood::new(0, 4);
-    inner.kernel().evaluate_blocks(&beta, None, false, &mut lik);
+    inner
+        .kernel()
+        .evaluate_blocks(&beta, None, false, &mut lik)
+        .unwrap();
     let (mut composer, shape) = inner.composer(&data);
     let mut start = beta.to_vec();
     add_penalty(

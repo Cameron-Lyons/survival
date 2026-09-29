@@ -16,6 +16,8 @@
 //! and `residuals()` of a `survreg.penal` object come from the same code as
 //! for an unpenalised one (R's `NextMethod()`).
 
+#[cfg(test)]
+mod density_tests;
 mod kernel;
 #[cfg(test)]
 mod tests;

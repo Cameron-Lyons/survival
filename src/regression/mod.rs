@@ -45,6 +45,7 @@ pub(crate) mod penalized;
 pub(crate) mod recurrent_events;
 pub(crate) mod spline_hazard;
 pub(crate) mod survpenal;
+pub(crate) mod survreg_density;
 pub(crate) mod survreg_distributions;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;

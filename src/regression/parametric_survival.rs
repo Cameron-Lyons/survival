@@ -614,16 +614,19 @@ fn newton_step(
     beta: &[f64],
     lik: &SurvregLikelihood,
     tol_chol: f64,
-) -> (Vec<f64>, bool) {
+) -> SurvivalResult<(Vec<f64>, bool)> {
     let mut chol = lik.imat.clone();
     let use_jj = cholesky2(&mut chol, tol_chol) < 0;
     if use_jj {
-        chol = lik.jj.clone().unwrap_or_else(|| kernel.jj(beta));
+        chol = match &lik.jj {
+            Some(jj) => jj.clone(),
+            None => kernel.jj(beta)?,
+        };
         cholesky2(&mut chol, tol_chol);
     }
     let mut step = lik.u.clone();
     chsolve2(&chol, &mut step);
-    (step, use_jj)
+    Ok((step, use_jj))
 }
 
 /// `cholesky2` + `chinv2` of the information matrix, symmetrised, as the C
@@ -656,10 +659,10 @@ pub(crate) fn survreg6(
     // The initial iteration step.  Once a step has used JJ, the evaluations
     // accumulate it next to imat until a step does not, so a fit that keeps
     // stepping with JJ still makes one sweep per evaluation.
-    let lik = kernel.evaluate(&beta, false);
+    let lik = kernel.evaluate(&beta, false)?;
     let mut loglik = lik.loglik;
     let mut usave = lik.u.clone();
-    let (step, mut with_jj) = newton_step(kernel, &beta, &lik, tol_chol);
+    let (step, mut with_jj) = newton_step(kernel, &beta, &lik, tol_chol)?;
     for i in 0..nvar2 {
         newbeta[i] = beta[i] + step[i];
     }
@@ -677,7 +680,7 @@ pub(crate) fn survreg6(
     }
 
     let mut halving = 0;
-    let mut newlik = kernel.evaluate(&newbeta, with_jj);
+    let mut newlik = kernel.evaluate(&newbeta, with_jj)?;
     usave.clone_from(&newlik.u);
     for iter in 1..=maxiter {
         // A Newton-Raphson step gone seriously awry leaves an infinite or
@@ -725,14 +728,14 @@ pub(crate) fn survreg6(
             // A standard Newton-Raphson step.
             halving = 0;
             loglik = newlk;
-            let (step, used_jj) = newton_step(kernel, &newbeta, &newlik, tol_chol);
+            let (step, used_jj) = newton_step(kernel, &newbeta, &newlik, tol_chol)?;
             with_jj = used_jj;
             beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
             for (value, delta) in newbeta.iter_mut().zip(&step) {
                 *value += delta;
             }
         }
-        newlik = kernel.evaluate(&newbeta, with_jj);
+        newlik = kernel.evaluate(&newbeta, with_jj)?;
         usave.clone_from(&newlik.u);
     }
 
@@ -743,7 +746,7 @@ pub(crate) fn survreg6(
         beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
         newlik.imat
     } else {
-        kernel.evaluate(&beta, false).imat
+        kernel.evaluate(&beta, false)?.imat
     };
     Ok(Survreg6Fit {
         var: invert_information(&information, tol_chol)?,

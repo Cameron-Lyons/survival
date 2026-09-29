@@ -699,7 +699,11 @@ error; none silently falls back to other behaviour.
 - **User-written survreg distributions**: a distribution list that supplies its
   own density, init, deviance and quantile functions (R's `survregc2`
   callback path) raises "custom densities are not supported"; the built-in
-  families, including `t` with `parms`, are supported.
+  families, including `t` with `parms`, are supported. The internal Rust
+  likelihood now supports batched density sources for both ordinary and
+  penalized fitting; public registration, initialization, transforms,
+  post-fit callbacks and serialization remain to be connected. See
+  [the density callback implementation notes](survreg-density.md).
 - **R-style print and format methods**: `survival.r` returns data objects and
   `as_data_frame` tables instead of printed output. Only
   `print_survreg_penal` ports R's printed table, and `format_surv` formats a

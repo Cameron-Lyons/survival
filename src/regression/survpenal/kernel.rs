@@ -184,14 +184,14 @@ pub(super) fn ensure_jj(
     scratch: &mut Option<BlockLikelihood>,
     jj_penalty: &JjPenalty,
     shape: PenaltyShape,
-) {
+) -> SurvivalResult<()> {
     if lik.has_jj {
-        return;
+        return Ok(());
     }
     let nf = lik.fdiag.len();
     let nvar = kernel.nvar();
     let scratch = scratch.get_or_insert_with(|| BlockLikelihood::new(nf, lik.hmat.nrows()));
-    kernel.evaluate_blocks(&lik.at, frailty, true, scratch);
+    kernel.evaluate_blocks(&lik.at, frailty, true, scratch)?;
     lik.jj.assign(&scratch.jj);
     lik.jdiag.copy_from_slice(&scratch.jdiag);
     if shape.sparse {
@@ -207,6 +207,7 @@ pub(super) fn ensure_jj(
         add_dense_second(&mut lik.jj, nf, nvar, &jj_penalty.second2, shape.full_imat);
     }
     lik.has_jj = true;
+    Ok(())
 }
 
 /// The penalised log likelihood at `beta + u * x`, written into `trial`
@@ -228,7 +229,7 @@ fn loglik_along(
         trial[i] = b + step * x;
     }
     let nf = frailty.map_or(0, |f| f.nf);
-    let loglik = kernel.loglik_at(trial, frailty);
+    let loglik = kernel.loglik_at(trial, frailty)?;
     let penalty = add_penalty(
         Case::LoglikOnly,
         nf,
@@ -270,7 +271,7 @@ pub(super) fn survreg7(
     let mut newbeta = beta.clone();
     let mut step = vec![0.0; nvar3];
 
-    kernel.evaluate_blocks(&beta, frailty, false, &mut lik);
+    kernel.evaluate_blocks(&beta, frailty, false, &mut lik)?;
     let mut penalty = add_penalty(
         Case::Full,
         nf,
@@ -292,7 +293,7 @@ pub(super) fn survreg7(
         let flag = cholesky3(&mut lik.hmat, nf, &mut lik.fdiag, tol_chol);
         step.copy_from_slice(&lik.u);
         if flag < 0 {
-            ensure_jj(kernel, frailty, &mut lik, &mut scratch, &jj_penalty, shape);
+            ensure_jj(kernel, frailty, &mut lik, &mut scratch, &jj_penalty, shape)?;
             cholesky3(&mut lik.jj, nf, &mut lik.jdiag, tol_chol);
             chsolve3(&lik.jj, nf, &lik.jdiag, &mut step);
         } else {
@@ -301,7 +302,7 @@ pub(super) fn survreg7(
         for i in 0..nvar3 {
             newbeta[i] = beta[i] + step[i];
         }
-        kernel.evaluate_blocks(&newbeta, frailty, false, &mut lik);
+        kernel.evaluate_blocks(&newbeta, frailty, false, &mut lik)?;
         let mut newpen = add_penalty(
             Case::Full,
             nf,
@@ -394,7 +395,7 @@ pub(super) fn survreg7(
             for i in 0..nvar3 {
                 newbeta[i] = beta[i] + step[i] * x;
             }
-            kernel.evaluate_blocks(&newbeta, frailty, false, &mut lik);
+            kernel.evaluate_blocks(&newbeta, frailty, false, &mut lik)?;
             newpen = add_penalty(
                 Case::Full,
                 nf,
